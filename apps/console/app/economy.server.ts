@@ -474,12 +474,14 @@ async function build(): Promise<ConsoleEngine> {
     },
   };
 
-  // Exchange rates from VRChat's published Creator Economy model, not a 1:1 placeholder. par is the
-  // backing rate ($0.01/credit, 100 = $1); payout is the cash-out rate ($0.005/credit, 200 = $1).
-  // The gap is the platform's cut, ~50%.
+  // Exchange rates from VRChat's published Creator Economy model, not a 1:1 placeholder. buy is what
+  // a user pays per credit (~120 credits/USD, $0.00833); par is the backing/cash-out value
+  // (~200/USD, $0.005); payout equals par. The buy-vs-par gap is the platform's ~40% purchase fee.
   const rates = configuredRates({
-    parRate: 1n,
-    parScale: 2,
+    buyRate: 8333n,
+    buyScale: 6,
+    parRate: 5n,
+    parScale: 3,
     payoutRate: 5n,
     payoutScale: 3,
   });
@@ -552,12 +554,12 @@ async function build(): Promise<ConsoleEngine> {
       return memoryStore({ digest, clock });
     }
     if (url.startsWith('postgres://') || url.startsWith('postgresql://')) {
-      const { postgresStore } = await import('#src/adapters/postgres.ts');
+      const { postgresStore } = await import('#src/engines/postgres.ts');
       return postgresStore({ url, digest });
     }
     if (url.startsWith('mysql://')) {
       const { createMysqlPool, mysqlStore } =
-        await import('#src/adapters/mysql.ts');
+        await import('#src/engines/mysql.ts');
       const pool = await createMysqlPool(url);
       return mysqlStore({ pool, digest, clock });
     }
@@ -863,10 +865,11 @@ async function build(): Promise<ConsoleEngine> {
   // a provider outage reversing a payout). Ends with settled/failed/in-flight payouts and the clock
   // a couple of days in. Payout amounts are fractions of each seller's actual earned balance.
   async function seed(): Promise<void> {
-    // Day 0 — everyday operations. At $0.01/credit the two deposits put $80 of real cash into trust;
-    // the purchases leave nova and pixel with earned credits to cash out.
-    await api.deposit({ userId: 'usr_alice', credits: 5000 }); // a $50 credit bundle
-    await api.deposit({ userId: 'usr_bjorn', credits: 3000 }); // a $30 credit bundle
+    // Day 0 — everyday operations. At par ($0.005/credit) the two deposits back $40 of real cash in
+    // trust, with the buy-vs-par spread booked as revenue; the purchases leave nova and pixel with
+    // earned credits to cash out.
+    await api.deposit({ userId: 'usr_alice', credits: 5000 }); // ~$41.67 at the buy rate
+    await api.deposit({ userId: 'usr_bjorn', credits: 3000 }); // ~$25.00 at the buy rate
     await api.grantPromo({ userId: 'usr_alice', credits: 500 }); // alice spends hers below
     await api.grantPromo({ userId: 'usr_pixel', credits: 600 }); // a creator incentive, left unspent
     await api.purchase({
