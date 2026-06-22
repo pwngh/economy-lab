@@ -15,14 +15,12 @@ import assert from 'node:assert/strict';
 
 import { redisCacheFrom } from '#src/adapters/redis.ts';
 
-// A stand-in for the real Redis client (ioredis), with just the few methods the adapter
-// calls, backed by an in-memory map instead of a real server. Using a fake lets these
-// tests check the adapter's own behavior — adding a key prefix, forwarding the
-// expiry option, converting errors — without needing a running Redis.
+// In-memory stand-in for the ioredis client, with only the methods the adapter calls.
+// Lets tests check adapter behavior (key prefix, expiry forwarding, error conversion)
+// without a running Redis.
 //
-// `store` is where the fake keeps its key/value pairs, so a test can inspect what
-// landed there. `setCalls` records the exact argument list of every `set` call, so a
-// test can confirm the expiry option was passed through unchanged.
+// `store` holds the fake's key/value pairs for inspection. `setCalls` records the exact
+// argument list of every `set` call, to confirm the expiry option passed through unchanged.
 interface FakeRedis {
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<unknown>;
@@ -51,8 +49,8 @@ function fakeRedis(): FakeRedis {
   return fake;
 }
 
-// A fake whose every command throws, so a test can check that the adapter turns a
-// driver error into the project's own error type.
+// Fake whose every command throws, to check the adapter converts a driver error into
+// the project's own error type.
 function failingRedis(cause: Error): FakeRedis {
   let base = fakeRedis();
   return {

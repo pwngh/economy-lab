@@ -38,11 +38,9 @@ import { spendable, SYSTEM } from '#src/accounts.ts';
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
 
-// Build the per-call dependencies the adjust handler reads from (clock, id generator,
-// hasher, signer, config, pricing, exchange rates, and so on). Every dependency here is a
-// fake or fixed-seed test double, so each run produces the same ids, timestamps, and hashes.
-// We hand these to adjust directly; the production routing that would dispatch to it is not
-// built yet and is out of scope for these tests.
+// Per-call deps for the adjust handler (clock, ids, digest, signer, config, pricing, rates...).
+// All fakes/fixed-seed doubles, so runs are deterministic (same ids, timestamps, hashes).
+// Passed to adjust directly; production routing isn't built yet, out of scope here.
 function makeCtx(): Ctx {
   let digest = seededDigest(1);
   let clock = fixedClock(0);
@@ -66,15 +64,12 @@ function makeStore(): Store {
   return memoryStore({ digest, clock });
 }
 
-// A brand-new store and context for one test. Nothing is shared between tests, so one
-// test's writes can never leak into another.
+// Fresh store and context per test; nothing shared, so writes can't leak between tests.
 function fixture(): { store: Store; ctx: Ctx } {
   return { store: makeStore(), ctx: makeCtx() };
 }
 
-// Run adjust inside a database transaction that commits, and return its result (the
-// Outcome object the handler produces, which says whether it committed and carries the
-// ledger entry it posted).
+// Run adjust in a committing transaction; return its Outcome (commit status + posted entry).
 async function applyAdjust(
   store: Store,
   ctx: Ctx,
@@ -83,10 +78,8 @@ async function applyAdjust(
   return store.transaction((unit) => adjust(operation, unit, ctx));
 }
 
-// Give a user a real starting balance by running a top-up (the operation that adds credits
-// to a spendable account in exchange for money paid in). Tests that lower a balance need
-// some balance there first; without it, the downward correction would push the account
-// below zero and be rejected as an overdraft.
+// Seed a starting balance via top-up. Tests that lower a balance need one first, else the
+// downward correction goes below zero and is rejected as an overdraft.
 async function issue(
   store: Store,
   ctx: Ctx,
@@ -98,9 +91,8 @@ async function issue(
   );
 }
 
-// Make a check that a test passes to assert.rejects: it returns true when the thrown error
-// is an Error carrying the given `code` string. Tests match on this stable code rather than
-// on the error's message or stack, which are not guaranteed to stay the same.
+// Predicate for assert.rejects: true when the error is an Error with the given `code`.
+// Match on the stable code, not message/stack, which can change.
 function hasCode(code: string): (error: unknown) => boolean {
   return (error) =>
     error instanceof Error && (error as { code?: string }).code === code;
@@ -160,9 +152,8 @@ describe('Adjust Direction', () => {
       }),
     );
 
-    // RECEIVABLE is an account that goes up when debited, so a positive adjustment raises
-    // its balance, and OPENING_EQUITY (the account adjust balances every change against)
-    // takes the equal and opposite amount so the two cancel out.
+    // RECEIVABLE goes up when debited, so a positive adjustment raises it; OPENING_EQUITY
+    // (the offset account adjust balances against) takes the opposite amount and they cancel.
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.RECEIVABLE),
       credit('3.00'),

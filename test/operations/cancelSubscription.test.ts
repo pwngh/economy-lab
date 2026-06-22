@@ -31,10 +31,8 @@ import {
 import type { Ctx, Outcome } from '#src/contract.ts';
 import type { Store, Subscription, SubscriptionState } from '#src/ports.ts';
 
-// Builds a clean in-memory store and the bundle of fixed, predictable dependencies (the Ctx:
-// clock, id generator, pricing, and so on) that the handler reads. Everything is deterministic,
-// so each test run produces the same result. These tests call the handler directly rather than
-// going through any request router.
+// Fresh in-memory store plus a deterministic Ctx (clock, ids, pricing, etc). Tests call the
+// handler directly, not through a request router.
 function makeContext(): { store: Store; ctx: Ctx } {
   let store = memoryStore();
   let ctx: Ctx = {
@@ -52,8 +50,7 @@ function makeContext(): { store: Store; ctx: Ctx } {
   return { store, ctx };
 }
 
-// Builds a subscription record in the given state. A test passes this to the store's `open`
-// method to save it before the handler runs, so the handler has something to find and cancel.
+// Subscription record in the given state, saved via store.open before the handler runs.
 function activeSubscription(
   id: string,
   state: SubscriptionState = 'ACTIVE',
@@ -73,10 +70,8 @@ function activeSubscription(
   };
 }
 
-// Runs the cancel handler inside a single store transaction, then reloads the subscription from
-// the store. Returns both the handler's outcome (did it commit or get rejected?) and the saved
-// record afterward, so a test can check the returned outcome and the subscription's new state in
-// one place.
+// Runs the cancel handler in one transaction, then reloads the subscription. Returns the outcome
+// (committed/rejected) and the record afterward so a test can check both.
 async function cancel(
   store: Store,
   ctx: Ctx,

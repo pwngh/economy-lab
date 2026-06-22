@@ -19,13 +19,11 @@ import {
 
 let url = process.env.MYSQL_TEST_URL;
 
-// The shared Store conformance suite checks that this adapter behaves like every other
-// adapter. It can only be proven against a real database, so it runs only when
-// MYSQL_TEST_URL points at a live MySQL. With no URL the suite registers nothing and the
-// run is empty, rather than reporting a pass it never actually checked.
+// Shared Store conformance suite, run against this adapter. Requires a real database, so it
+// only runs when MYSQL_TEST_URL points at a live MySQL; with no URL it registers nothing
+// (an empty run, not a false pass).
 //
-// The factory builds a fresh store for the suite: open a connection pool, create the
-// tables, then wrap the pool in the MySQL-backed store.
+// Factory builds a fresh store per run: open a pool, create the tables, wrap the pool.
 if (url) {
   runStoreConformance('mysql', async () => {
     let pool = await createMysqlPool(url);

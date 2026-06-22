@@ -22,27 +22,24 @@ import { spendable, earned } from '#src/accounts.ts';
 
 import type { Economy } from '#src/contract.ts';
 
-// These tests drive the full public `economy.submit` path so the spend handler's two input
-// guards are exercised end to end, the same way entitlements.submit.test.ts exercises the
-// authorization layer. The sibling spend.test.ts calls the handler directly; this file proves
-// the guards reject a bad split before any money moves and let a normal split commit.
-//
-// Both guards protect the same invariant — that a spend can never mint cash-outable EARNED
-// credit out of nothing:
-//   1. Self-dealing: a buyer naming themselves as a recipient would turn their own non-cashable
-//      spendable/promo balance into withdrawable EARNED credit funded by platform REVENUE.
-//   2. Per-recipient bounds: shares like [-5000, 15000] still sum to 10000 but assign one
-//      recipient a negative cut and another more than the whole net; each share must be
-//      strictly positive and at most 10000 bps on its own.
-// A malformed split is thrown as a fault (OP.MALFORMED), surfacing through submit as a rejected
-// promise, not as a returned business rejection.
+// Drive the spend handler's two input guards through the full public economy.submit path, the way
+// entitlements.submit.test.ts exercises the authorization layer (spend.test.ts calls the handler
+// directly). Both guards protect one invariant: a spend can never mint cash-outable earned credit
+// out of nothing.
+//   1. Self-dealing: a buyer naming themselves as recipient would turn their non-cashable
+//      spendable/promo balance into withdrawable earned credit funded by platform revenue.
+//   2. Per-recipient bounds: shares like [-5000, 15000] sum to 10000 but assign one recipient
+//      a negative cut and another more than the whole net; each share must be strictly positive
+//      and at most 10000 bps.
+// A malformed split throws a fault (OP.MALFORMED), surfacing through submit as a rejected
+// promise rather than a returned business rejection.
 
 function isMalformed(error: unknown): boolean {
   return (error as { code?: string }).code === 'OP.MALFORMED';
 }
 
-// Seed a buyer's spendable balance through the public economy, asserting the top-up committed,
-// so a following spend has real money to draw on.
+// Seed a buyer's spendable balance through the public economy, asserting the top-up committed, so
+// a following spend has real money to draw on.
 async function fund(economy: Economy, userId: string): Promise<void> {
   const outcome = await economy.submit(
     buildTopUp({ userId, amount: credit('10.00') }),
@@ -61,15 +58,15 @@ describe('Spend Input Guards Through economy.submit', () => {
           buyerId: 'usr_buyer',
           sku: 'wrld_pass',
           price: credit('4.00'),
-          // The buyer names themselves as the sole recipient: this would mint cash-outable
-          // EARNED credit for them out of their own non-cashable balance.
+          // Buyer as sole recipient: would mint cash-outable earned credit from their own
+          // non-cashable balance.
           recipients: [{ sellerId: 'usr_buyer', shareBps: 10_000 }],
         }),
       ),
       isMalformed,
     );
 
-    // Thrown before posting: the buyer's spendable balance is untouched and they earned nothing.
+    // Thrown before posting: spendable untouched, earned nothing.
     assert.deepEqual(
       await economy.read.balance(spendable('usr_buyer')),
       credit('10.00'),
@@ -90,8 +87,8 @@ describe('Spend Input Guards Through economy.submit', () => {
           buyerId: 'usr_buyer',
           sku: 'wrld_pass',
           price: credit('4.00'),
-          // -5000 + 15000 == 10000, so the sum check alone would pass; a negative share and a
-          // >100% share must still be rejected by the per-recipient bounds check.
+          // -5000 + 15000 == 10000, so the sum check passes; the negative and >100% shares must
+          // still be rejected by the per-recipient bounds check.
           recipients: [
             { sellerId: 'usr_a', shareBps: -5_000 },
             { sellerId: 'usr_b', shareBps: 15_000 },
@@ -125,12 +122,12 @@ describe('Spend Input Guards Through economy.submit', () => {
     );
 
     assert.equal(outcome.status, 'committed');
-    // The buyer paid the full price: spendable drops from 10.00 to 6.00.
+    // Buyer paid full price: spendable drops 10.00 → 6.00.
     assert.deepEqual(
       await economy.read.balance(spendable('usr_buyer')),
       credit('6.00'),
     );
-    // Both distinct sellers accrued earned credit, so the valid split really paid out.
+    // Both sellers accrued earned credit, so the valid split paid out.
     assert.equal(
       (await economy.read.balance(earned('usr_a'))).minor > 0n,
       true,

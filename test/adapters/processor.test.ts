@@ -19,8 +19,8 @@ import { EconomyError } from '#src/errors.ts';
 
 import type { FetchLike } from '#src/adapters/processor.ts';
 
-// One captured `fetch` call: the URL plus the options it was given. A test stores these
-// so it can check exactly what the adapter sent (which method, headers, body, and signal).
+// One captured `fetch` call (URL + options), so a test can assert what the adapter sent:
+// method, headers, body, signal.
 interface Recorded {
   input: string;
   init?: {
@@ -31,9 +31,8 @@ interface Recorded {
   };
 }
 
-// Build a fake `fetch` that always returns the given response and appends each call it
-// receives to `calls`. The adapter accepts a `fetch` as an argument, so passing this fake
-// in means the test never touches the real global `fetch` or calls a live payment provider.
+// Fake `fetch` that returns the given response and records each call into `calls`.
+// The adapter takes `fetch` as an argument, so this never hits the global fetch or a live provider.
 function stubFetch(
   response: { ok: boolean; status: number; body: string },
   calls: Recorded[],
@@ -48,19 +47,16 @@ function stubFetch(
   };
 }
 
-// Build a fake `fetch` that always throws, simulating a request that never completes:
-// a failed DNS lookup, a dropped connection, or a cancelled request.
+// Fake `fetch` that always throws: failed DNS, dropped connection, or cancelled request.
 function throwingFetch(error: unknown): FetchLike {
   return async () => {
     throw error;
   };
 }
 
-// Build the USD payout request each test submits. The `key` is an idempotency key: a value
-// that makes a retried request run at most once, since the provider recognizes a repeat with
-// the same key and does not pay out twice. Most tests care about how the adapter handles the
-// provider's response, not the request, so they reuse this default shape and only override
-// the key or amount when that field is what the test checks.
+// Default USD payout request. `key` is an idempotency key: the provider recognizes a repeat
+// and won't pay out twice, so a retry runs at most once. Tests reuse this shape and override
+// key or amount only when that field is what's under test.
 function payout(over?: { key?: string; amount?: string }): {
   key: string;
   userId: string;

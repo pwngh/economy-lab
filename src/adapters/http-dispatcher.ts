@@ -20,28 +20,24 @@ export interface HttpDispatcherConfig {
   url: string;
 
   /**
-   * The fetch implementation to use. Defaults to the platform's global `fetch`, so the
-   * adapter pulls in no node-specific dependency; a test passes a stand-in here.
+   * fetch implementation. Defaults to the global `fetch` (no node-specific dependency);
+   * tests pass a stand-in.
    */
   fetch?: typeof fetch;
 }
 
 /**
- * Build the function that sends one economy event to a remote endpoint over HTTP.
+ * Build the function that POSTs one economy event to a remote endpoint over HTTP.
  *
- * Events are first saved to a database table (the "outbox") in the same transaction as the
- * money move that produced them; a background worker (the "relay") then reads that table and
- * calls this function to deliver each one. This is the HTTP delivery path; the SQS adapter is
- * an alternative path the relay can use instead, chosen by the `DISPATCHER_URL` setting. Each
- * call POSTs one event as JSON, in the same field layout the SQS adapter uses so the receiver
- * sees one shape regardless of which path delivered it.
+ * Events land in an outbox table in the same transaction as the money move that produced them;
+ * the relay worker reads that table and calls this to deliver each. HTTP is one delivery path;
+ * SQS is the alternative, chosen by `DISPATCHER_URL`. Each call POSTs one event as JSON in the
+ * same field layout the SQS adapter uses, so the receiver sees one shape either way.
  *
- * On a network error or any non-2xx response, this throws a `PROVIDER.FAILURE` error marked
- * retryable, which tells the relay to deliver it again later (with increasing delays between
- * tries). Because the relay can retry, the same event may arrive more than once; to let the
- * receiver drop a repeat, the event's id is sent in an `Idempotency-Key` header — the receiver
- * remembers ids it has already handled and ignores a second copy. (The SQS path achieves the
- * same de-duplication with its `MessageDeduplicationId`.)
+ * A network error or non-2xx response throws a retryable `PROVIDER.FAILURE`, so the relay
+ * redelivers later with backoff. Since retries can duplicate, the event id goes in an
+ * `Idempotency-Key` header for the receiver to dedupe (SQS does the same via
+ * `MessageDeduplicationId`).
  */
 export function httpDispatcher(config: HttpDispatcherConfig): Dispatcher {
   let send = config.fetch ?? fetch;
@@ -70,9 +66,8 @@ export function httpDispatcher(config: HttpDispatcherConfig): Dispatcher {
   };
 }
 
-// Turn an event into the JSON text sent in the request body. The selected fields and their
-// names are kept identical to the SQS adapter's encoding so a receiver sees the same shape no
-// matter which delivery path sent it.
+// Encode the request body. Fields and names match the SQS adapter so the receiver sees the
+// same shape regardless of delivery path.
 function encodeEvent(event: EconomyEvent): string {
   return JSON.stringify({
     id: event.id,
@@ -85,8 +80,8 @@ function encodeEvent(event: EconomyEvent): string {
   });
 }
 
-// Wrap a failed dispatch as a retryable `PROVIDER.FAILURE`, keeping the original error as the
-// `cause` so logs don't lose it. Mirrors the SQS dispatcher's transportFault.
+// Wrap a failed dispatch as a retryable `PROVIDER.FAILURE`, keeping the original error as
+// `cause`. Mirrors the SQS dispatcher's transportFault.
 function transportFault(message: string, error: unknown): Error {
   return fault(ERROR_CODES.PROVIDER_FAILURE, message, {
     cause: normalizeError(error),

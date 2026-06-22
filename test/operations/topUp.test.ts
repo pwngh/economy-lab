@@ -33,11 +33,9 @@ import { toAmount } from '#src/money.ts';
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
 
-// Build the Ctx these tests pass to the topUp handler. Ctx is the bundle of outside
-// services a handler needs (clock, id generator, exchange rates, payment processor, and so
-// on); here every one is a deterministic test double so each run produces identical results.
-// In production an operation reaches the handler through a routing layer that dispatches by
-// kind, but that wiring isn't built yet, so the tests call topUp directly instead.
+// Ctx for the topUp handler: outside services (clock, ids, rates, processor, ...), all
+// deterministic test doubles so runs are reproducible. Production routes operations to the
+// handler by kind, but that wiring isn't built yet, so tests call topUp directly.
 function makeCtx(): Ctx {
   let digest = seededDigest(1);
   let clock = fixedClock(0);
@@ -61,14 +59,12 @@ function makeStore(): Store {
   return memoryStore({ digest, clock });
 }
 
-// Give each test its own brand-new store and Ctx so nothing carries over between tests and
-// they can't interfere with one another.
+// Fresh store and Ctx per test so nothing carries over between them.
 function fixture(): { store: Store; ctx: Ctx } {
   return { store: makeStore(), ctx: makeCtx() };
 }
 
-// Run the topUp handler inside a database transaction (so all its ledger writes commit
-// together) and hand back the result the handler returns.
+// Run the topUp handler in a transaction (ledger writes commit together), return its result.
 async function applyTopUp(
   store: Store,
   ctx: Ctx,
@@ -77,9 +73,8 @@ async function applyTopUp(
   return store.transaction((unit) => topUp(operation, unit, ctx));
 }
 
-// Build a predicate for assert.rejects: it returns true when the thrown value is an Error
-// carrying the given `code`. Tests that expect a failure check only this code, not the
-// error's message or stack.
+// Predicate for assert.rejects: true when the thrown value is an Error with the given `code`.
+// Failure tests check the code only, not message or stack.
 function hasCode(code: string): (error: unknown) => boolean {
   return (error) =>
     error instanceof Error && (error as { code?: string }).code === code;
@@ -115,11 +110,10 @@ describe('topUp Issuance', () => {
       topUpOp({ userId: 'usr_buyer', amount: credit('10.00') }),
     );
 
-    // The buyer paid the gross at the buy rate ($0.01/credit → $0.10), credited to USD_CLEARING
-    // (which grows on debits, so a credit reads -0.10). That gross splits on the debit side: the
-    // backing held in trust at the par rate ($0.005/credit → $0.05 in TRUST_CASH), and the
-    // buy-vs-par spread — the platform's ~40% purchase fee — as USD revenue ($0.05 in REVENUE_USD).
-    // The three sum to zero, leaving the USD books balanced.
+    // Gross at the buy rate ($0.01/credit → $0.10) credits USD_CLEARING (grows on debits, so a
+    // credit reads -0.10). The debit side splits it: par-rate backing held in trust ($0.005/credit
+    // → $0.05 TRUST_CASH) and the buy-vs-par spread (the ~40% purchase fee) as USD revenue ($0.05
+    // REVENUE_USD). The three sum to zero.
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.TRUST_CASH),
       usd('0.05'),
@@ -199,9 +193,9 @@ describe('topUp Validation', () => {
   test('rounds a sub-cent purchase up so the issued credits are always backed', async () => {
     let { store, ctx } = fixture();
 
-    // The backing rounds UP, so even a tiny purchase whose exact backing is a fraction of a cent
-    // still holds at least one cent in trust — credits are never issued unbacked. A 0.50-credit
-    // top-up is 50 minor; backing = ceil(50 × $0.005) = ceil($0.0025) = $0.01.
+    // Backing rounds up, so a sub-cent backing still holds at least one cent in trust; credits are
+    // never issued unbacked. A 0.50-credit top-up is 50 minor; backing = ceil(50 × $0.005) =
+    // ceil($0.0025) = $0.01.
     let outcome = await applyTopUp(
       store,
       ctx,
@@ -222,8 +216,8 @@ describe('topUp Validation', () => {
   test('commits a normal top-up whose backing is at least one cent', async () => {
     let { store, ctx } = fixture();
 
-    // 2.00 credits -> floor(200/200) = $0.01 of real backing: just above the zero-backing floor,
-    // so it must still issue credits and hold the matching cash in trust.
+    // 2.00 credits -> floor(200/200) = $0.01 backing, just above the zero-backing floor: still
+    // issues credits and holds the matching cash in trust.
     let outcome = await applyTopUp(
       store,
       ctx,

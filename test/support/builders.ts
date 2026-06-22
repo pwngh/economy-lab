@@ -20,29 +20,26 @@ import type {
 import type { AccountRef } from '#src/accounts.ts';
 import type { Velocity } from '#src/ports.ts';
 
-// A counter that hands out a fresh idempotency key on every call. An idempotency key
-// is the value the economy uses to recognize a retried request and run it only once.
-// Because each call gets a new key, two builder calls never collide by accident, so a
-// test only acts like a retry when it deliberately reuses a key.
+// Fresh idempotency key per call (the economy uses it to dedupe retried requests). Each
+// call gets a new key, so a test only acts like a retry when it deliberately reuses one.
 let n = 0;
 const claim = (): string => `idem_${n++}`;
 
-// Default "who is acting" stand-ins, used when a test doesn't care about the caller:
-// a trusted internal service, and a human operator running a manual action.
+// Default actors for when a test doesn't care about the caller: a trusted internal
+// service, and a human operator running a manual action.
 const system: Principal = { kind: 'system', service: 'test' };
 const operator: Principal = { kind: 'operator', operatorId: 'op_test' };
 
 /**
- * Build a CREDIT amount from a dollars-and-cents string like `'12.34'`. An `Amount`
- * can only be created by parsing such a string (see `decodeAmount` in money.ts), which
- * is what lets tests write money as plain text.
+ * Build a CREDIT amount from a dollars-and-cents string like `'12.34'`. An `Amount` is
+ * only created by parsing such a string (see `decodeAmount` in money.ts).
  */
 export const credit = (dollars: string): Amount =>
   decodeAmount(dollars, 'CREDIT');
 
-// A blank velocity accumulator for a subject with no spending in the current window — the same
-// shape `windowedVelocity` returns for an empty attempt list. Tests use it to assert that a
-// fresh or fully-aged-out subject reads as zero spent.
+// Blank velocity accumulator for a subject with no spending in the current window; the same
+// shape `windowedVelocity` returns for an empty attempt list. Used to assert a fresh or
+// fully-aged-out subject reads as zero spent.
 export const emptyVelocity = (subject: string): Velocity => ({
   subject,
   windowStart: 0,
@@ -54,18 +51,17 @@ export const emptyVelocity = (subject: string): Velocity => ({
 export const usd = (dollars: string): Amount => decodeAmount(dollars, 'USD');
 
 /**
- * Build the "who is acting" value for an end user. A user may only act on their own
- * accounts, so this is the caller to use when a test exercises a user's own request.
+ * Actor value for an end user. A user may only act on their own accounts, so use this
+ * when a test exercises a user's own request.
  */
 export const principal = (userId: string): Principal => ({
   kind: 'user',
   userId,
 });
 
-// The functions below each build one kind of `Operation` request. They fill in the
-// required-but-uninteresting fields (a fresh idempotency key, a default actor, and any
-// other defaults) so a test only has to pass the values it actually cares about; the
-// `...o` spread lets a test override any of those defaults.
+// Each function below builds one kind of `Operation`, filling in the boilerplate fields
+// (fresh idempotency key, default actor, other defaults) so a test passes only what it
+// cares about. The `...o` spread lets a test override any default.
 export const topUp = (o: {
   userId: string;
   amount: Amount;
@@ -157,9 +153,8 @@ export const subscribe = (o: {
   idempotencyKey: claim(),
   actor: principal(o.userId),
   ...o,
-  // Apply the default AFTER the spread: a caller that destructures and forwards an absent
-  // `periodMs` passes `periodMs: undefined`, which would otherwise clobber the default and
-  // leave the subscription with a NaN period end.
+  // Default applied after the spread: a caller forwarding an absent `periodMs` passes
+  // `periodMs: undefined`, which would otherwise clobber the default and leave a NaN period end.
   periodMs: o.periodMs ?? 30 * 24 * 60 * 60_000,
 });
 

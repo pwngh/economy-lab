@@ -10,10 +10,8 @@
  * @license MIT
  */
 
-// Every storage backend is tested the same way: pass a function that builds a fresh,
-// empty store to the shared Store test suite, which then runs every required behavior
-// against it. This in-memory backend has no behavior of its own beyond what that suite
-// already checks, so the whole file is a single call.
+// Hand a fresh-store factory to the shared Store conformance suite. This backend adds no
+// behavior beyond what that suite checks, so one call covers it.
 
 import { runStoreConformance } from '#test/conformance/store.ts';
 import { memoryStore } from '#src/adapters/memory.ts';

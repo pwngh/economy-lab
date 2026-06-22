@@ -26,18 +26,17 @@ import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
 import type { Economy } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
 
-// These tests drive the full public `economy.submit` path, where the permission check
-// (`authorize`) lives; the sibling topUp.test.ts calls the handler directly and so never reaches
-// it. topUp is now privileged (it mints spendable credits against real cash held in trust), so a
-// `kind:'user'` actor must be turned away before any money moves, while a trusted system actor —
-// the real buy-credits service — must still go through.
+// Drives the full `economy.submit` path, where the `authorize` check lives; sibling topUp.test.ts
+// calls the handler directly and never reaches it. topUp is privileged (mints spendable credits
+// against real cash in trust), so a `kind:'user'` actor must be rejected before money moves, while a
+// trusted system actor (the buy-credits service) must still go through.
 
 function isUnauthorized(error: unknown): boolean {
   return (error as { code?: string }).code === 'AUTH.UNAUTHORIZED';
 }
 
-// A store wired with the same seeded digest + fixed clock the economy uses, returned alongside an
-// economy built over it so a test can both submit operations and read balances.
+// Store wired with the same seeded digest + fixed clock as the economy, returned alongside an
+// economy over it so tests can submit operations and read balances.
 function economyWithStore(): { economy: Economy; store: Store } {
   const store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
   return { economy: makeEconomy(1, store), store };
@@ -68,8 +67,8 @@ describe('topUp authorization through economy.submit', () => {
   test('still commits a topUp run by a trusted system actor', async () => {
     const { economy, store } = economyWithStore();
 
-    // The topUp builder defaults to a system actor; the legitimate buy-credits path must still go
-    // through and both move credits to the buyer and bring the matching cash into trust.
+    // topUp builder defaults to a system actor; the buy-credits path must go through, moving credits
+    // to the buyer and bringing the matching cash into trust.
     const outcome = await economy.submit(
       buildTopUp({ userId: 'usr_buyer', amount: credit('10.00') }),
     );

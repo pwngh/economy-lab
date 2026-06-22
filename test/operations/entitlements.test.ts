@@ -43,9 +43,8 @@ type EntitlementHandler = (
   ctx: Ctx,
 ) => Promise<Outcome>;
 
-// Build the Ctx (the bag of shared services: clock, id generator, signer, config, and so
-// on) that every handler is called with. Each service here is a deterministic fake so the
-// same inputs always produce the same outputs, making test results repeatable.
+// Ctx of shared services (clock, ids, signer, config, ...) passed to every handler. All
+// deterministic fakes, so results are repeatable.
 function makeCtx(): Ctx {
   let digest = seededDigest(1);
   let clock = fixedClock(0);
@@ -69,9 +68,8 @@ function makeStore(): Store {
   return memoryStore({ digest, clock });
 }
 
-// Run one entitlement handler the way production does: inside a store transaction, so all
-// of the handler's writes either commit together or roll back together. Returns the
-// handler's Outcome (committed, rejected, or a thrown error bubbled out).
+// Run one handler inside a store transaction (as production does), so its writes commit or
+// roll back together. Returns the Outcome (committed, rejected, or a thrown error bubbled out).
 function apply(
   store: Store,
   ctx: Ctx,

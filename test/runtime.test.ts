@@ -81,7 +81,7 @@ describe('systemSigner (Ed25519)', () => {
     // Ed25519 signatures are 64 bytes (HMAC-SHA-256 tags were 32).
     assert.equal(sig.length, 64);
 
-    // An external auditor holds ONLY the published public key, never the signing secret.
+    // An external auditor holds just the published public key, never the signing secret.
     let publicKey = await crypto.subtle.importKey(
       'raw',
       fromHex(await signingPublicKeyHex(secret)),

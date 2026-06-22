@@ -289,12 +289,15 @@ create table checkpoints (
 );
 
 -- ============================================================================
--- Stored routines: pure persistence, no business logic. Every decision (which way each account
--- moves, the per-account net delta, the chain hashes, the account kind) is made in the
--- application and passed in as a finished value; the routines only write rows. For scale and
--- stability: a posting that was a dozen-plus network round-trips (one INSERT/UPSERT per leg,
--- link, and balance) collapses to one `call`, and the multi-row writes run as one set-based
--- unit inside the caller's transaction.
+-- Stored routines (persistence) + the engine's invariant enforcement. The application computes the
+-- values a posting needs (which way each account moves, the per-account net delta, the chain hashes,
+-- the account kind) and passes them in finished; these routines write the rows in one `call` rather
+-- than a dozen-plus round-trips, as one set-based unit inside the caller's transaction. But the
+-- ledger invariants are no longer the application's to guarantee — the database is the primary
+-- enforcer, not a safety net: the CHECK constraints above plus the triggers at the end of this file
+-- reject a write that violates conservation, no-overdraft, chain continuity, exactly-once, or balance
+-- integrity, even when it bypasses the application entirely. The app keeps the same checks only as
+-- friendly pre-checks that return a kind error.
 -- ============================================================================
 
 -- Persist one posting and everything derived from it in a single call: ensure any first-time
@@ -360,11 +363,11 @@ as $$
 $$;
 
 -- ============================================================================
--- I3 chain continuity (engine-enforced). The unique index above already blocks a FORK (a second
+-- chain continuity. The unique index above already blocks a FORK (a second
 -- link at the same prev_hash). This blocks a DISCONTINUOUS link: a new link's prev_hash must be the
 -- account's current head — GENESIS (64 zeros) for the first link, or an existing link's hash for the
 -- account thereafter. The legitimate writer (advanceHeads, src/chain.ts) always supplies the current
--- head, so this only rejects a link written around post_entry. See docs/the-right-way.md (I3).
+-- head, so this only rejects a link written around post_entry.
 -- ============================================================================
 create or replace function chain_continuity() returns trigger as $$
 begin
@@ -387,11 +390,11 @@ create or replace trigger chain_links_continuity
   for each row execute function chain_continuity();
 
 -- ============================================================================
--- I1 conservation (engine-enforced, Postgres). A posting's legs must net to zero per currency. A
+-- conservation (Postgres). A posting's legs must net to zero per currency. A
 -- DEFERRABLE INITIALLY DEFERRED constraint trigger checks at COMMIT, so post_entry can insert all of
 -- a posting's (balanced) legs before the check runs, while a lone unbalanced leg written around the
 -- app fails at its commit. This is the engine half of assertBalanced (src/ledger.ts), which the app
--- keeps as the friendly pre-check. See docs/the-right-way.md (I1).
+-- keeps as the friendly pre-check.
 -- ============================================================================
 create or replace function check_conservation() returns trigger as $$
 begin
@@ -412,11 +415,11 @@ create constraint trigger legs_conserve
   for each row execute function check_conservation();
 
 -- ============================================================================
--- I5 balance integrity (engine-enforced, Postgres). account_balances is a cache of the legs: its
+-- balance integrity (Postgres). account_balances is a cache of the legs: its
 -- value must equal the legs' net for the account, signed by the account's normal side — debit-normal
 -- accounts grow on debits (+SUM), credit-normal grow on credits (-SUM). post_entry writes exactly
 -- that, so this only rejects a hand-edited balance that has drifted from the legs. The debit-normal
--- set mirrors isDebitNormal (src/accounts.ts). See docs/the-right-way.md (I5).
+-- set mirrors isDebitNormal (src/accounts.ts).
 -- ============================================================================
 create or replace function check_balance_integrity() returns trigger as $$
 declare

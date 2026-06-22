@@ -32,10 +32,9 @@ import { spendable } from '#src/accounts.ts';
 import type { Economy } from '#src/economy.ts';
 import type { Cache } from '#src/ports.ts';
 
-// A recording in-memory cache. It behaves like a real string store (get/set/invalidate) and
-// also keeps a per-method call log, so a test can assert exactly when serving a balance read
-// hit the cache, populated it, or dropped an entry. This is the only cache the economy ever
-// sees in these tests; the production Redis adapter is exercised elsewhere.
+// In-memory string store (get/set/invalidate) with a per-method call log, so tests can assert
+// when a balance read hit, populated, or dropped a cache entry. The production Redis adapter is
+// exercised elsewhere.
 function recordingCache(): Cache & {
   readonly gets: ReadonlyArray<string>;
   readonly sets: ReadonlyArray<string>;
@@ -64,9 +63,9 @@ function recordingCache(): Cache & {
   };
 }
 
-// Build an economy wired with the standard deterministic test doubles plus the given cache,
-// against a fresh in-memory store. Mirrors `makeEconomy` but injects a `cache` capability,
-// which `makeEconomy` deliberately leaves unset.
+// Economy wired with the standard deterministic test doubles plus the given cache, on a fresh
+// in-memory store. Mirrors `makeEconomy` but injects a `cache` capability, which `makeEconomy`
+// leaves unset.
 function makeCachedEconomy(cache: Cache, seed = 1): Economy {
   let digest = seededDigest(seed);
   let clock = fixedClock(0);
@@ -92,20 +91,19 @@ describe('Read-Through Balance Cache', () => {
     let economy = makeCachedEconomy(cache);
     let account = spendable('usr_buyer');
 
-    // Fund the account so it has a real, non-zero balance to cache.
+    // Fund the account so it has a non-zero balance to cache.
     await economy.submit(
       topUp({ userId: 'usr_buyer', amount: credit('10.00') }),
     );
 
-    // First read is a miss: it asks the cache (get), finds nothing, and populates it (set).
+    // First read misses: get finds nothing, then set populates.
     let first = await economy.read.balance(account);
     assert.deepEqual(first, credit('10.00'));
     assert.deepEqual(cache.gets, [`bal:${account}`]);
     assert.deepEqual(cache.sets, [`bal:${account}`]);
 
-    // Second read is a hit: it asks the cache again and gets the stored value back, with no
-    // new populate. The cache only holds strings, so the balance is serialized on the way in and
-    // parsed back out; this asserts that round-trip returns the exact same amount.
+    // Second read hits: returns the stored value, no new populate. The cache holds strings, so the
+    // balance is serialized in and parsed back out; assert the round-trip returns the same amount.
     let second = await economy.read.balance(account);
     assert.deepEqual(second, credit('10.00'));
     assert.deepEqual(cache.gets, [`bal:${account}`, `bal:${account}`]);
@@ -125,14 +123,14 @@ describe('Read-Through Balance Cache', () => {
     await economy.read.balance(account); // hit
     assert.deepEqual(cache.gets.length, 2);
 
-    // A second committed top-up touches `spendable(usr_buyer)`, so its cache key is invalidated.
+    // Second committed top-up touches `spendable(usr_buyer)`, so its cache key is invalidated.
     await economy.submit(
       topUp({ userId: 'usr_buyer', amount: credit('5.00') }),
     );
     assert.equal(cache.invalidations.includes(`bal:${account}`), true);
 
-    // The next read is therefore a fresh miss that re-derives the balance by summing the
-    // recorded entries, returning the new balance rather than the stale cached 10.00.
+    // Next read is a fresh miss, re-deriving by summing recorded entries: the new balance, not
+    // the stale cached 10.00.
     let after = await economy.read.balance(account);
     assert.deepEqual(after, credit('15.00'));
   });
@@ -147,12 +145,12 @@ describe('Read-Through Balance Cache', () => {
     );
     await economy.read.balance(account); // warm the cache
 
-    // The committed top-up already invalidated its touched accounts; snapshot that count so we
-    // can assert the rejected op below adds nothing on top of it.
+    // The committed top-up already invalidated its touched accounts; snapshot that count to assert
+    // the rejected op below adds nothing.
     let invalidationsBefore = cache.invalidations.length;
 
-    // A spend the buyer can't afford is rejected (a normal "no" that records no ledger entry),
-    // so it changes no balance and must drop no cache entry.
+    // A spend the buyer can't afford is rejected and records no ledger entry, so it changes no
+    // balance and drops no cache entry.
     let outcome = await economy.submit({
       kind: 'spend',
       idempotencyKey: 'idem_overspend',

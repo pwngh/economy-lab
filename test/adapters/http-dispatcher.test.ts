@@ -16,7 +16,7 @@ import { httpDispatcher } from '#src/adapters/http-dispatcher.ts';
 
 import type { EconomyEvent } from '#src/ports.ts';
 
-// A sample economy event for the dispatcher to send.
+// Sample event to dispatch.
 const event: EconomyEvent = {
   id: 'evt_1',
   type: 'economy.sale.completed',
@@ -27,8 +27,7 @@ const event: EconomyEvent = {
   audience: 'internal',
 };
 
-// A fetch stand-in that records each call and returns a canned response (or throws, to model
-// a network failure). Keeps the test free of any real socket.
+// fetch stub: records calls, returns a canned response or throws (network failure). No real socket.
 function stubFetch(outcome: { ok: boolean; status: number } | Error): {
   fetch: typeof fetch;
   calls: Array<{ url: string; init: RequestInit }>;

@@ -20,14 +20,12 @@ import { spendable, earned, SYSTEM } from '#src/accounts.ts';
 import type { Store } from '#src/ports.ts';
 import type { AccountRef } from '#src/accounts.ts';
 
-// A brand-new in-memory store for each test, so balances and history from one test never
-// carry over into the next.
+// Fresh in-memory store per test so balances and history don't carry over.
 function freshStore(): Store {
   return memoryStore();
 }
 
-// Builds a check for assert.rejects: returns true when the thrown error carries the given
-// `code` string. Used to assert that a failure rejected for the expected reason.
+// Predicate for assert.rejects: true when the thrown error's `code` matches.
 function codeIs(code: string) {
   return (error: unknown): boolean =>
     (error as { code?: string }).code === code;
@@ -51,17 +49,14 @@ function signsDebitPositiveAndCreditNegative(): void {
 function appliesNormalBalanceSign(): void {
   let amount = toAmount('CREDIT', 500n);
 
-  // A leg is one debit or credit line of a posting. A user's spendable account grows when
-  // it is credited. Leg amounts are stored with a credit as a negative number (here −500),
-  // but the account's balance goes UP by 500, so balanceDelta flips the stored sign back
-  // to +500.
+  // A spendable account grows on credit. Credits are stored negative (−500), but the balance
+  // moves up by 500, so balanceDelta flips the stored sign back to +500.
   assert.deepEqual(
     balanceDelta(credit(spendable('usr_a'), amount)),
     toAmount('CREDIT', 500n),
   );
-  // The platform's trust-cash account grows when it is debited. A debit is stored as a
-  // positive number (+500), which already matches the direction its balance moves, so
-  // balanceDelta leaves it as +500.
+  // Trust-cash grows on debit. A debit is stored positive (+500), already matching its
+  // balance direction, so balanceDelta leaves it +500.
   assert.deepEqual(
     balanceDelta(debit(SYSTEM.TRUST_CASH, toAmount('USD', 500n))),
     toAmount('USD', 500n),
@@ -109,8 +104,8 @@ async function throwsCurrencyMismatch(store: Store): Promise<void> {
   await assert.rejects(
     store.transaction((unit) =>
       postEntry(unit.ledger, {
-        // Each leg's currency must match its account's currency. A user's spendable account
-        // is denominated in CREDIT, so posting a USD amount to it is rejected.
+        // Each leg's currency must match its account's. Spendable is denominated in CREDIT,
+        // so a USD amount is rejected.
         txnId: 'txn_ledger_currency',
         legs: [
           credit(spendable('usr_a'), toAmount('USD', 100n)),
@@ -144,11 +139,9 @@ async function throwsUnknownAccount(store: Store): Promise<void> {
 async function throwsOverdraftBackstop(store: Store): Promise<void> {
   let amount = toAmount('CREDIT', 100n);
 
-  // Debiting an account with a zero balance would push it below zero. A user account is
-  // never allowed to go negative, so the ledger refuses. This last-resort guard raises its
-  // own LEDGER.OVERDRAFT error: by the time a posting reaches the ledger, an earlier funds
-  // check should already have turned away anyone short on money with INSUFFICIENT_FUNDS, so
-  // reaching this point at all signals a bug and is reported as a separate failure.
+  // Debiting a zero-balance user account would go negative, which the ledger refuses with
+  // LEDGER.OVERDRAFT. An earlier funds check should already have rejected the short caller
+  // with INSUFFICIENT_FUNDS, so hitting this backstop signals a bug; it's a separate error.
   await assert.rejects(
     store.transaction((unit) =>
       postEntry(unit.ledger, {

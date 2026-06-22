@@ -24,15 +24,12 @@ import type {
   Subscription,
 } from '#src/ports.ts';
 
-// Helpers the Postgres and MySQL adapters define identically. They are kept here so each
-// adapter imports the one copy instead of carrying its own. Everything here is pure call
-// mechanics and row→domain decoding — no SQL strings, no driver specifics — so the two
-// backends behave the same way against it.
+// Helpers shared by the Postgres and MySQL adapters. Pure call mechanics and row→domain
+// decoding; no SQL strings, no driver specifics.
 
 // --- Default services -------------------------------------------------------------
 
-// Default hashing implementation: SHA-256 via the standard Web Crypto API, which is
-// available on every JS runtime and gives the same hash for the same bytes everywhere.
+// SHA-256 via Web Crypto, available on every JS runtime.
 export function defaultDigest(): Digest {
   return {
     hash: async (bytes) =>
@@ -40,27 +37,26 @@ export function defaultDigest(): Digest {
   };
 }
 
-// Default clock that always reports time 0. This makes the "posted at" timestamps fixed and
-// predictable in tests; pass a real clock when actual wall-clock times matter.
+// Clock fixed at time 0, so "posted at" timestamps are predictable in tests. Pass a real
+// clock when wall-clock times matter.
 export function defaultClock(): Clock {
   return { now: () => 0 };
 }
 
-// The hash that stands in front of an account's very first entry, as lowercase hex.
-// GENESIS is 32 zero bytes (defined in ledger.ts), so this string is 64 zeros.
+// Hash preceding an account's first entry, as lowercase hex. GENESIS is 32 zero bytes
+// (ledger.ts), so this is 64 zeros.
 export let GENESIS_HEX = toHex(GENESIS);
 
-// Convert a numeric value read from the database into a BigInt. Done explicitly on every
-// amount so this adapter, not whatever the driver happens to return, decides the type.
+// Coerce a DB value to BigInt explicitly, so the adapter decides the type rather than the
+// driver.
 export function readMinor(value: unknown): bigint {
   return BigInt(value as bigint | number | string);
 }
 
 // --- Distinct-account ordering ----------------------------------------------------
 
-// List the distinct accounts named across these entry lines, in the order they first
-// appear. A posting can touch the same account on several lines, but it moves that
-// account's hash chain forward only once, so we need each account exactly once.
+// Distinct accounts across these legs, in first-appearance order. A posting can touch an
+// account on several legs but advances its hash chain only once, so dedupe to one per account.
 export function distinctAccounts(legs: ReadonlyArray<Leg>): AccountRef[] {
   let seen = new Set<AccountRef>();
   let order: AccountRef[] = [];
@@ -73,8 +69,7 @@ export function distinctAccounts(legs: ReadonlyArray<Leg>): AccountRef[] {
   return order;
 }
 
-// One step in an account's hash chain: the account, the hash before this entry, and the
-// hash after it.
+// One step in an account's hash chain: account, hash before this entry, hash after.
 export type Link = { account: AccountRef; prevHash: string; hash: string };
 
 // --- Row decoders -----------------------------------------------------------------

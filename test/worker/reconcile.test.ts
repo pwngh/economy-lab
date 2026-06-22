@@ -32,10 +32,8 @@ import type { ReconcileFeed } from '#src/worker/reconcile.ts';
 import type { ReconcileInputs } from '#src/reconcile.ts';
 import type { Range } from '#src/ports.ts';
 
-// Build the worker's context (clock, id generator, logger, and so on) from the test
-// fakes, which all behave the same way every run so results are reproducible.
-// reconcileDueWindows only actually reads `logger` and `meter`, but we fill in every
-// field so this matches the real WorkerCtx type exactly.
+// Worker context from deterministic test fakes. reconcileDueWindows only reads `logger`
+// and `meter`, but we fill every field to match the real WorkerCtx type.
 function workerCtx(): WorkerCtx {
   return {
     clock: fixedClock(0),
@@ -50,11 +48,9 @@ function workerCtx(): WorkerCtx {
   };
 }
 
-// A fake feed: given a window, it looks up canned inputs for that window in the supplied
-// map (keyed by the window's start, `window.from`) and returns them, or empty processor
-// and ledger lists if there are none. In real use the host fetches both sides from a
-// vendor; here the data is fixed up front so each test controls exactly what one
-// reconciliation run (a "sweep" — comparing both sides across a batch of windows) sees.
+// Fake feed: looks up canned inputs by window start (`window.from`), or returns empty
+// processor/ledger lists. Real hosts fetch both sides from a vendor; here the data is
+// fixed up front so each test controls what one sweep sees.
 function feedOf(byWindow: Map<number, ReconcileInputs>): ReconcileFeed {
   return {
     pull: async (window) => {
@@ -67,9 +63,8 @@ function feedOf(byWindow: Map<number, ReconcileInputs>): ReconcileFeed {
   };
 }
 
-// A fake feed that throws the given error for every window, standing in for a feed the
-// worker can't reach. The sweep is supposed to catch this per window, record it under
-// `failed`, and keep going.
+// Fake feed that throws for every window (unreachable feed). The sweep should catch this
+// per window, record it under `failed`, and keep going.
 function throwingFeed(error: unknown): ReconcileFeed {
   return {
     pull: async () => {
@@ -80,8 +75,8 @@ function throwingFeed(error: unknown): ReconcileFeed {
 
 let WINDOW: Range = { from: 0, to: 1_000 };
 
-// One $5.00 payout that the processor cleared, plus our ledger's record of the same payout
-// for the same amount. The two sides agree exactly, so reconciliation should find no problem.
+// One $5.00 payout, same amount on processor and ledger sides. Both agree, so
+// reconciliation finds no problem.
 let MATCHED: ReconcileInputs = {
   processor: [
     {
@@ -103,8 +98,8 @@ let MATCHED: ReconcileInputs = {
   ],
 };
 
-// The same payout on both sides, but the amounts disagree by one cent ($5.00 vs $4.99).
-// Reconciliation should match them by key and then report the amount mismatch.
+// Same payout on both sides, amounts off by one cent ($5.00 vs $4.99). Reconciliation
+// matches by key, then reports the amount mismatch.
 let DRIFTED: ReconcileInputs = {
   processor: [
     {
@@ -126,9 +121,8 @@ let DRIFTED: ReconcileInputs = {
   ],
 };
 
-// Money the processor cleared that has no matching entry in our ledger (the ledger side is
-// empty). This is the dangerous case: real money moved but nothing on our books accounts for
-// it. Reconciliation should report it as a "processor orphan".
+// Processor-cleared money with no ledger entry (ledger side empty): real money moved but
+// nothing on our books accounts for it. Reconciliation reports a "processor orphan".
 let PROCESSOR_ORPHAN: ReconcileInputs = {
   processor: [
     {

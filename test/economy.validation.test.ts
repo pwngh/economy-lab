@@ -21,9 +21,9 @@ function hasCode(code: string): (error: unknown) => boolean {
     error instanceof Error && (error as { code?: string }).code === code;
 }
 
-// The submit pipeline turns away an operation that names a user wallet account with a blank owner
-// — typically an empty user id from an unvalidated input — before any money work, so a malformed
-// request can never create a phantom, ownerless wallet. See validateOperation in economy.ts.
+// submit rejects an op naming a wallet with a blank owner (e.g. empty user id from unvalidated
+// input) before any money work, so a malformed request can't create an ownerless wallet.
+// See validateOperation in economy.ts.
 describe('Submit Input Validation', () => {
   test('rejects a topUp whose user id is blank', async () => {
     const eco = makeEconomy();
@@ -80,9 +80,9 @@ describe('Submit Input Validation', () => {
   });
 });
 
-// The shared guard also requires a non-empty idempotency key and a sane money amount, so a
-// malformed request can't collapse distinct operations into one "duplicate" or move a
-// zero/negative/absurd amount. See validateOperation in economy.ts.
+// The guard also requires a non-empty idempotency key and a sane amount, so a malformed request
+// can't collapse distinct ops into one "duplicate" or move a zero/negative/absurd amount.
+// See validateOperation in economy.ts.
 describe('Submit Idempotency-Key & Amount Guards', () => {
   test('rejects an operation with an empty idempotencyKey', async () => {
     const eco = makeEconomy();

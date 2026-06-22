@@ -11,7 +11,7 @@
  */
 
 /**
- * Provisioning for the adversarial conformance harness (Phase 1 of docs/the-right-way.md).
+ * Provisioning for the adversarial conformance harness.
  *
  * The adversarial suite proves engine enforcement by writing a VIOLATING row AROUND the app —
  * raw SQL that bypasses `post_entry` for the SQL engines, and the lowest-level store method for
@@ -25,8 +25,8 @@
  * Memory has no layer beneath it (the Maps ARE the database), so "around the app" means calling
  * `store.ledger.append()` directly — the lowest write door, which performs none of the
  * `postEntry` validation — and the `__seedBalance` / `__tamper` back doors. Per the plan, memory
- * is the test oracle and never receives engine enforcement, so its I1/I2/I3/I5 adversarial cases
- * are expected to stay ENFORCEMENT-PENDING.
+ * is the test oracle and never receives engine enforcement, so its conservation, overdraft, chain
+ * continuity, and balance integrity adversarial cases are expected to stay unenforced.
  *
  * Reachability is probed, not assumed: a SQL engine that cannot be reached yields `null`, and the
  * caller skips (never fails) those cases — the same contract as the existing adapter suites.
@@ -190,10 +190,11 @@ function withUserAndDatabase(
   return parsed.toString();
 }
 
-// The restricted role I1 conservation relies on (see adversarialMysql). It may write every ledger
+// The restricted role conservation relies on (see adversarialMysql). It may write every ledger
 // table directly EXCEPT `legs` — which only post_entry (a SECURITY DEFINER routine owned by the
-// admin) may write — so a raw unbalanced-leg insert is refused, while the I3/I5/I2/I4 raw cases
-// still reach their own engine mechanisms rather than a blanket privilege denial.
+// admin) may write — so a raw unbalanced-leg insert is refused, while the chain continuity, balance
+// integrity, overdraft, and exactly-once raw cases still reach their own engine mechanisms rather
+// than a blanket privilege denial.
 let APP_USER = 'el_adv_app';
 let APP_PASSWORD = 'el_adv_app';
 let APP_DML_TABLES = [
@@ -216,12 +217,13 @@ let APP_DML_TABLES = [
 /**
  * Provision MySQL for adversarial testing, or `null` if unreachable (e.g. MYSQL_TEST_URL unset).
  *
- * MySQL's schema file has no `DROP PROCEDURE IF EXISTS`, so re-applying it to the same database
- * (the shared `economy_lab`) fails with "PROCEDURE post_entry already exists" and would collide
- * with test/adapters/mysql.test.ts running in the same process. So this provisions a throwaway
- * DATABASE per call — the MySQL analogue of Postgres's throwaway schema — applies the schema
- * there, and drops it on close. Both the store's pool and our raw pool point at that database, so
- * a raw INSERT lands in the very table `post_entry` writes.
+ * A throwaway DATABASE per call — the MySQL analogue of Postgres's throwaway schema. Two reasons:
+ * it isolates this run from test/adapters/mysql.test.ts sharing the same server, and — because
+ * conservation is enforced by a restricted role that lacks `legs` DML — it gives that role a database
+ * of its own to be GRANTed on. The schema is applied by the admin connection (so post_entry's DEFINER
+ * is privileged and stays the sole writer of `legs`), then the store and raw pools connect as the
+ * restricted role; the database is dropped on close. Both pools point at it, so a raw INSERT lands in
+ * the very table post_entry writes — except `legs`, which the restricted role may not write directly.
  */
 export async function adversarialMysql(): Promise<AdversarialEngine | null> {
   let url = process.env.MYSQL_TEST_URL;
@@ -244,10 +246,11 @@ export async function adversarialMysql(): Promise<AdversarialEngine | null> {
     await applyMysqlSchema(schemaPool);
     await schemaPool.end().catch(() => {});
 
-    // The privilege model that enforces I1 on MySQL: a restricted role that may write every ledger
-    // table directly EXCEPT `legs`, plus EXECUTE on post_entry. Legitimate legs reach the table only
-    // through the procedure (SECURITY DEFINER); a raw leg insert is refused. The other tables keep
-    // direct DML so the I3/I5/I2/I4 raw cases still hit their own triggers/constraints/keys.
+    // The privilege model that enforces conservation on MySQL: a restricted role that may write every
+    // ledger table directly EXCEPT `legs`, plus EXECUTE on post_entry. Legitimate legs reach the table
+    // only through the procedure (SECURITY DEFINER); a raw leg insert is refused. The other tables keep
+    // direct DML so the chain continuity, balance integrity, overdraft, and exactly-once raw cases
+    // still hit their own triggers/constraints/keys.
     await admin.query(
       `CREATE USER IF NOT EXISTS '${APP_USER}'@'%' IDENTIFIED BY '${APP_PASSWORD}'`,
     );

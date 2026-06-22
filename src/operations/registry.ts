@@ -28,19 +28,15 @@ import { reversePayout } from '#src/operations/reversePayout.ts';
 import type { Handler, Operation } from '#src/contract.ts';
 
 /**
- * Lookup table from an operation's `kind` (the string tag that says what the operation is,
- * e.g. `'topUp'` or `'spend'`) to the function that carries it out. When `economy.ts`
- * receives an operation, it reads this table to find the right handler.
+ * Maps an operation's `kind` to its handler; `economy.ts` looks up handlers here.
  *
- * The `satisfies Record<Operation['kind'], Handler>` at the end forces the table to have one
- * entry for every possible operation kind. If someone adds a new kind to the `Operation` type
- * but forgets to register a handler for it, this line fails to compile — so the gap is caught
- * while building rather than as an error at runtime when that operation is first submitted.
+ * `satisfies Record<Operation['kind'], Handler>` forces one entry per kind: add a kind to
+ * `Operation` without registering a handler and this fails to compile rather than throwing at
+ * runtime on first submit.
  *
- * Most keys match the name of the imported handler, so a bare name like `topUp` suffices. A
- * few handlers are exported under `handle…` names (`handleClawback`, `handleSubscribe`,
- * `handleCancelSubscription`); those are written `kind: handler` so the table key is still the
- * operation's kind.
+ * Most keys match the imported handler name. A few handlers are exported as `handle…`
+ * (`handleClawback`, `handleSubscribe`, `handleCancelSubscription`), written `kind: handler` so
+ * the key stays the operation's kind.
  */
 export const REGISTRY = {
   topUp,

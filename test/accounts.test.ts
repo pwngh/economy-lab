@@ -35,15 +35,13 @@ describe('Accounts', () => {
   });
 
   test('classifies a spendable balance as user credits that need USD backing', () => {
-    // `classify` sorts an account into a class. "custodial" means credits the platform must
-    // back with real USD held for users: a user's spendable balance.
+    // "custodial" = credits the platform must back with real USD held for users (a spendable balance).
     assert.equal(classify(spendable('usr_a')), 'custodial');
   });
 
   test('excludes earned, promo, and the payout reserve from the USD-backed total', () => {
-    // "excluded" is the opposite of custodial: these are amounts the platform owes but does NOT
-    // have to hold real USD against, so they stay out of the cash-backing total. earned = what a
-    // seller is owed, promo = a marketing grant, PAYOUT_RESERVE = funds set aside for a payout.
+    // "excluded": amounts the platform owes but needn't hold USD against, so out of the cash-backing
+    // total. earned = owed to a seller, promo = marketing grant, PAYOUT_RESERVE = set aside for payout.
     let cases = [earned('usr_a'), promo('usr_a'), SYSTEM.PAYOUT_RESERVE];
 
     for (let account of cases) {
@@ -52,9 +50,8 @@ describe('Accounts', () => {
   });
 
   test('marks the house accounts that grow on debits', () => {
-    // An account is "debit-normal" when its balance grows on a debit (rather than on a credit).
-    // `isDebitNormal` tells the ledger which sign to give a posted line. These house accounts
-    // grow on debits; REVENUE and a user's spendable balance grow on credits, so they return false.
+    // "debit-normal" = balance grows on a debit; isDebitNormal tells the ledger the line's sign.
+    // These house accounts grow on debits; REVENUE and a spendable balance grow on credits (false).
     let debitNormal = [
       SYSTEM.TRUST_CASH,
       SYSTEM.USD_CLEARING,
@@ -80,11 +77,10 @@ describe('Accounts: Lock Sets & Wallet Classification', () => {
       recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
     });
 
-    // `accountsOf` returns every account this operation might touch. The system locks that whole
-    // set before posting so two operations can't change the same balance at the same time. Each
-    // money movement also needs a matching offsetting entry (its "contra") to keep the books
-    // balanced, so the set includes those too. A spend can draw from the buyer's promo grant and
-    // their spendable balance, and pays the seller, so all of those accounts must be locked.
+    // accountsOf returns every account the operation might touch; the whole set is locked before
+    // posting so two operations can't change a balance concurrently. The set includes each movement's
+    // contra (offsetting entry) too. A spend can draw the buyer's promo grant and spendable balance,
+    // and pays the seller, so all are locked.
     let locked = new Set(accountsOf(operation));
 
     assert.equal(locked.has(promo('usr_buyer')), true);
@@ -105,8 +101,7 @@ describe('Accounts: Lock Sets & Wallet Classification', () => {
   });
 
   test('locks the promo account and its offset account for a grant', () => {
-    // Granting a promo credits the user's promo account; PROMO_FLOAT is the matching offsetting
-    // entry (its contra), so those are the only two accounts the operation touches.
+    // A promo grant credits the user's promo account; PROMO_FLOAT is its contra. Only those two.
     let locked = new Set(
       accountsOf(grantPromo({ userId: 'usr_buyer', amount: credit('5.00') })),
     );
@@ -118,8 +113,8 @@ describe('Accounts: Lock Sets & Wallet Classification', () => {
   });
 
   test('treats every user account as a wallet and house accounts as not', () => {
-    // `isWalletAccount` is the laundering-sensitive test for an instantly-cashable destination:
-    // a user's own account (`usr_…:<kind>`) is a wallet, every `vrchat:` house account is not.
+    // isWalletAccount: laundering-sensitive test for an instantly-cashable destination. A user's own
+    // account (`usr_…:<kind>`) is a wallet; every `vrchat:` house account is not.
     assert.equal(isWalletAccount(spendable('usr_a')), true);
     assert.equal(isWalletAccount(earned('usr_a')), true);
     assert.equal(isWalletAccount(promo('usr_a')), true);

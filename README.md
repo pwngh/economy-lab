@@ -1,30 +1,29 @@
 # economy-lab
 
-![tests](https://img.shields.io/badge/tests-509_passing-3fb950)
+![tests](https://img.shields.io/badge/tests-533_passing-3fb950)
 ![runtime deps](https://img.shields.io/badge/runtime_deps-0-3fb950)
 ![node](https://img.shields.io/badge/node-%E2%89%A522.18-1f6feb)
 ![license](https://img.shields.io/badge/license-MIT-1f6feb)
 
-A small, runnable lab for the application layer of a credits economy — the backend
-systems behind how users transact and creators earn: **wallets, payouts,
-subscriptions, digital ownership, and a marketplace.** The kind of money-moving code
-where correctness, auditability, reliability, and compliance are non-negotiable.
+A small, runnable lab for the application layer of a credits economy: the backend behind
+how users transact and creators earn — **wallets, payouts, subscriptions, digital
+ownership, and a marketplace** — where correctness, auditability, reliability, and
+compliance are non-negotiable.
 
-A money transmitter gives you the regulated plumbing — KYC, AML, sanctions screening,
-payout rails. This is the layer that sits on top: the wallets, entitlements, and
-marketplace logic, and the invariants that keep it honest.
+A money transmitter provides the regulated plumbing (KYC, AML, sanctions screening, payout
+rails). This is the layer on top: wallets, entitlements, marketplace logic, and the
+invariants that hold them together.
 
 It runs entirely in memory with zero infrastructure and zero runtime dependencies
-(`npm test`). The exact same logic runs on Postgres, MySQL, Redis, and SQS through
-swappable adapters — one conformance suite runs against each.
+(`npm test`). The same logic runs on Postgres, MySQL, Redis, and SQS through swappable
+adapters, with one conformance suite against each.
 
 ## The economy surface
 
 You build an economy, then drive it through a single `submit` entry point. The in-memory
 build needs no infrastructure; `compose` instead picks adapters from the environment (see
-[Configuration](#configuration)). Either way you supply the four external integrations the
-economy can't fake — a `signer`, a payout `processor`, an FX `rates` source, and a fee
-`pricing` policy:
+[Configuration](#configuration)). Either way you supply the four external integrations — a
+`signer`, a payout `processor`, an FX `rates` source, and a fee `pricing` policy:
 
 ```ts
 import { composeInMemory } from './src/index.ts';
@@ -273,8 +272,8 @@ The same proof engine also runs inside `npm test` as a property test over severa
 
 ### The same flows, seen by an adversary
 
-The money paths that pay creators are the ones bad actors probe — so the defenses read
-the ledger's own postings instead of a system bolted alongside it:
+The money paths that pay creators are the ones bad actors probe, so the defenses read the
+ledger's own postings rather than a separate system alongside it:
 
 - **Chargeback fraud** — spend or cash out, then dispute the original charge so the
   credits are gone before the reversal lands. Defended at both ends: spend velocity and

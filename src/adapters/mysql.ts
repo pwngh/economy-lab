@@ -1349,16 +1349,10 @@ export async function applyMysqlSchema(pool: MysqlPool): Promise<void> {
     new URL('../../db/mysql-schema.sql', import.meta.url),
   );
   let sql = await readFile(path, 'utf8');
-  // The tables below declare no per-table collation, so each inherits the database default. On a
-  // database created as utf8mb4_unicode_ci, that clashes with the utf8mb4_0900_ai_ci strings
-  // JSON_TABLE produces inside post_entry: every `ab.account_id = d.account` join then raises
-  // "Illegal mix of collations (utf8mb4_0900_ai_ci,IMPLICIT) and (utf8mb4_unicode_ci,IMPLICIT)".
-  // Pin the database default to utf8mb4_0900_ai_ci first so the freshly (re)created tables share one
-  // collation with the JSON side. Runs only in the migrate/setup path, never on the runtime
-  // connection.
-  await pool.query(
-    'ALTER DATABASE CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci',
-  );
+  // The schema file pins the database collation (its leading ALTER DATABASE) before any DROP/CREATE,
+  // so the freshly created tables match the utf8mb4_0900_ai_ci strings JSON_TABLE produces inside
+  // post_entry — the same pin `mysql < db/mysql-schema.sql` (scripts/migrate.sh) applies. This just
+  // runs the file statement by statement.
   for (let statement of splitSqlStatements(sql)) {
     await pool.query(statement);
   }

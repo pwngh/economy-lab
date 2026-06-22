@@ -26,31 +26,30 @@ import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
 import type { Economy } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
 
-// These tests drive the full public `economy.submit` path, where the permission check (`authorize`)
-// lives; the sibling clawback.test.ts calls the handler directly and so never reaches it.
+// Drive the full public `economy.submit` path, where the permission check (`authorize`) lives; the
+// sibling clawback.test.ts calls the handler directly and never reaches it.
 //
 // Regression tests for an authorization bypass of the same shape as the revokeEntitlement one:
-// clawback — a bank chargeback / fraud recovery — was missing from the privileged-only list, and
-// because the ownership rule only blocks DEBITING an account you own (and clawback's target isn't
-// counted there), a `kind:'user'` actor could reclaim credits from ANY user's spendable balance and
-// poison a later refund of an order they don't own (clawback claims the shared `reversed:${orderId}`
-// key). It is now system/operator-only, which is what these tests pin. Each test builds the economy
-// over a store it also holds, so it can confirm the victim's balance is untouched after a rejected
-// attempt — proof the request was stopped before it could move any money.
+// clawback (a bank chargeback / fraud recovery) was missing from the privileged-only list, and since
+// the ownership rule only blocks debiting an account you own (clawback's target isn't counted there),
+// a `kind:'user'` actor could reclaim credits from any user's spendable balance and poison a later
+// refund of an order they don't own (clawback claims the shared `reversed:${orderId}` key). It's now
+// system/operator-only, which these tests pin. Each test holds the store it builds the economy over,
+// so it can confirm the victim's balance is untouched after a rejected attempt.
 
 function isUnauthorized(error: unknown): boolean {
   return (error as { code?: string }).code === 'AUTH.UNAUTHORIZED';
 }
 
-// A store wired with the same seeded digest + fixed clock the economy uses, returned alongside an
-// economy built over it so a test can both submit operations and read balances.
+// Store wired with the same seeded digest + fixed clock as the economy, returned alongside an economy
+// built over it so a test can both submit operations and read balances.
 function economyWithStore(): { economy: Economy; store: Store } {
   const store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
   return { economy: makeEconomy(1, store), store };
 }
 
-// Give usr_victim a real spendable balance (as a trusted system actor, the way a real top-up runs)
-// so there is something for an attacker to try to claw back.
+// Give usr_victim a spendable balance via a trusted system actor (how a real top-up runs) so there's
+// something for an attacker to try to claw back.
 async function fundVictim(economy: Economy): Promise<void> {
   const outcome = await economy.submit(
     buildTopUp({ userId: 'usr_victim', amount: credit('20.00') }),
@@ -74,7 +73,7 @@ describe('Clawback authorization through economy.submit', () => {
       isUnauthorized,
     );
 
-    // Stopped before it ran: the victim's balance is untouched.
+    // Stopped before it ran; victim's balance untouched.
     assert.deepEqual(
       await store.ledger.balance(spendable('usr_victim')),
       credit('20.00'),
@@ -85,8 +84,8 @@ describe('Clawback authorization through economy.submit', () => {
     const { economy, store } = economyWithStore();
     await fundVictim(economy);
 
-    // Clawback is system/operator-only regardless of whose account it names, so a user acting on
-    // their own balance is still unauthorized — the same rule that protects a foreign account.
+    // System/operator-only regardless of whose account it names, so a user acting on their own
+    // balance is still unauthorized.
     await assert.rejects(
       economy.submit(
         buildClawback({
@@ -107,8 +106,7 @@ describe('Clawback authorization through economy.submit', () => {
     const { economy, store } = economyWithStore();
     await fundVictim(economy);
 
-    // The clawback builder defaults to an operator actor; the legitimate fraud-recovery path must
-    // still go through.
+    // Builder defaults to an operator actor; the legitimate fraud-recovery path must still go through.
     const outcome = await economy.submit(
       buildClawback({ userId: 'usr_victim', amount: credit('5.00') }),
     );

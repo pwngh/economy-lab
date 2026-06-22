@@ -27,21 +27,18 @@ import {
 } from '#test/support/capabilities.ts';
 
 /**
- * Build a fresh in-memory economy for one test, wired with fake versions of everything it
- * needs from the outside world (storage, clock, id generator, hashing, and so on).
+ * Build a fresh in-memory economy for one test with fake adapters (storage, clock, ids, digest, etc.).
  *
- * Every fake is driven only by `seed`, so a test never touches the real clock, real randomness,
- * or the network. The same seed always produces the same result, and on any runtime (Node, Bun,
- * Deno). Each call returns a brand-new economy with its own storage, so tests share no state.
+ * Fakes are driven only by `seed`: no real clock, randomness, or network. Same seed → same result on
+ * any runtime (Node, Bun, Deno). Each call gets its own storage, so tests share no state.
  *
- * Pass a `store` to drive the economy against a specific backend (for example one adapter from
- * the adapter matrix). The store MUST be built with the same seeded digest + fixed clock as
- * this economy, or hashes will diverge. With no `store`, a fresh in-memory one is created here,
- * so every existing `makeEconomy()` / `makeEconomy(seed)` call keeps its current behaviour.
+ * Pass `store` to run against a specific backend (e.g. one adapter from the matrix). It must use the
+ * same seeded digest + fixed clock as this economy or hashes diverge. Omitted, a fresh in-memory one
+ * is created, so existing `makeEconomy()` / `makeEconomy(seed)` calls are unchanged.
  *
- * Pass `config` to override individual fields of the default test config — for example a small
- * `velocityLimitMinor` so a fraud-throttling test can reach the ceiling without funding a user
- * to seven figures. Unspecified fields keep their `testConfig()` defaults.
+ * Pass `config` to override individual default-test-config fields, e.g. a small `velocityLimitMinor`
+ * so a fraud-throttling test reaches the ceiling without funding a user to seven figures. Unspecified
+ * fields keep their `testConfig()` defaults.
  */
 export function makeEconomy(
   seed = 1,
@@ -56,9 +53,8 @@ export function makeEconomy(
     ids: sequentialIds(),
     digest,
     signer: seededSigner(seed),
-    // Fixed exchange rates: how much one CREDIT is worth in US dollars. Two rates are exposed: the
-    // "payout" rate used when paying a seller out ($0.005), and the "par" rate — the peg used to
-    // check the platform holds enough real cash to cover users' credit balances ($0.01).
+    // Fixed CREDIT-to-USD rates. "payout" ($0.005) is used when paying a seller out; "par" ($0.01) is
+    // the peg used to check the platform holds enough real cash to cover users' credit balances.
     rates: fixedRates(),
     logger: testLogger(),
     meter: noopMeter(),

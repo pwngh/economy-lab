@@ -496,6 +496,11 @@ function planSpend(price: Amount, promoBalance: Amount): SpendPlan {
  * Walk every account once and report whether the ledger still holds its core guarantees; see the
  * {@link ProveReport} fields for what each flag means.
  *
+ * This is now an independent AUDIT, not the primary guard. The database enforces conservation,
+ * no-overdraft, chain continuity, and balance integrity at write time (db/*-schema.sql), so a
+ * violation should be unrepresentable; prove() re-derives every balance from the legs and re-checks
+ * regardless — an out-of-band cross-check that also catches a bug in the engine enforcement itself.
+ *
  * `backed` checks the platform holds enough real cash to cover what it owes users: sums the custodial
  * credit balances (accounts `classify` labels "custodial", excluding earned, promo, and the payout
  * reserve), converts to USD at the fixed CREDIT-to-USD rate, and checks the cash account holds at

@@ -23,12 +23,12 @@ import type {
   ReconcileKind,
 } from '#src/reconcile.ts';
 
-// A time window wide enough to include every record in these tests, so window filtering
-// never gets in the way. The window logic itself has its own dedicated test below.
+// Wide enough to include every record here, so window filtering is a no-op. Window logic
+// has its own test below.
 let ALL_TIME = { from: 0, to: 1_000_000 };
 
-// Builds a processor record (one settled payment the processor reports), filling in the
-// fields a test does not care about so each case only has to set what it is testing.
+// Processor record (one settled payment the processor reports), with defaults for fields a
+// test doesn't care about.
 function processorRecord(o: {
   kind?: ReconcileKind;
   matchKey: string;
@@ -44,9 +44,8 @@ function processorRecord(o: {
   };
 }
 
-// Builds a ledger record (our own record of the same settled payment), again filling in
-// the fields a test does not care about. Defaults line up with processorRecord above so a
-// matching pair is easy to construct.
+// Ledger record (our own record of the same payment). Defaults line up with
+// processorRecord so a matching pair is easy to build.
 function ledgerRecord(o: {
   kind?: ReconcileKind;
   matchKey: string;
@@ -137,9 +136,8 @@ function flagsAmountDrift(): void {
 function neverMatchesABuyToAPayout(): void {
   let amount = usd('5.00');
 
-  // The two records share a match key and amount, but one is a buy and the other a
-  // payout. The matcher pairs records only when their kind matches too, so a buy and a
-  // payout stay separate instead of pairing up.
+  // Same match key and amount, but one is a buy and the other a payout. Matcher pairs only
+  // when kind matches too, so these stay separate.
   let report = reconcile(ALL_TIME, {
     processor: [processorRecord({ kind: 'buy', matchKey: 'ref_1', amount })],
     ledger: [ledgerRecord({ kind: 'payout', matchKey: 'ref_1', amount })],
@@ -153,9 +151,8 @@ function neverMatchesABuyToAPayout(): void {
 function scopesTheHalfOpenWindow(): void {
   let amount = usd('1.00');
 
-  // The window covers times from 10 up to (but not including) 20: a record at exactly 10
-  // is inside the window, but one at exactly 20 falls outside it (it belongs to the next
-  // window). So the "in" records count and the "out" records are dropped.
+  // Window is [10, 20): 10 is inside, 20 belongs to the next window. So "in" records count
+  // and "out" records are dropped.
   let report = reconcile(
     { from: 10, to: 20 },
     {
@@ -177,9 +174,8 @@ function scopesTheHalfOpenWindow(): void {
 }
 
 function treatsCrossCurrencyAsDrift(): void {
-  // The two records share a match key, but their amounts are in different currencies
-  // (USD vs CREDIT). Amounts in different currencies cannot be compared, so the pair is
-  // reported as a mismatch (amount drift) rather than quietly treated as equal.
+  // Same match key, but amounts are in different currencies (USD vs CREDIT). Cross-currency
+  // amounts can't be compared, so report drift rather than treat them as equal.
   let report = reconcile(ALL_TIME, {
     processor: [processorRecord({ matchKey: 'pay_3', amount: usd('5.00') })],
     ledger: [ledgerRecord({ matchKey: 'pay_3', amount: credit('5.00') })],

@@ -10,13 +10,11 @@
  */
 
 /**
- * Type declarations for the small set of global APIs the core library is allowed
- * to use — only the ones that exist on every modern JavaScript runtime
- * (Node 22+, Bun, Deno, Cloudflare Workers). The build is configured with no DOM
- * types and no Node types, so without this file these globals would be unknown to
- * the type checker. Declaring exactly this subset here means a Node-only global can
- * never slip into the core by accident. Adapter code that genuinely needs Node APIs
- * imports them from `node:*` directly, which the lint rules permit only there.
+ * Globals the core library may use: the subset present on every modern runtime
+ * (Node 22+, Bun, Deno, Cloudflare Workers). The build has no DOM and no Node types,
+ * so without this file these globals are unknown to the type checker. Declaring only
+ * this subset keeps Node-only globals out of the core. Adapter code that needs Node
+ * APIs imports from `node:*` directly, which lint permits only there.
  */
 
 // --- Bytes / text -----------------------------------------------------------------
@@ -77,8 +75,8 @@ interface CryptoKey {
 
 type BufferSource = ArrayBufferView | ArrayBuffer;
 
-// The subset of JWK fields this codebase reads/writes (Ed25519 keys: `x` is the public
-// coordinate, `d` the private). A full JWK has more, but these are all the signer touches.
+// JWK fields this codebase reads/writes (Ed25519 keys: `x` public coordinate, `d` private).
+// A full JWK has more, but these are all the signer touches.
 interface JsonWebKey {
   kty?: string;
   crv?: string;

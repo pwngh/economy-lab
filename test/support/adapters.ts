@@ -28,8 +28,7 @@ export type AdapterCase = {
   makeStore: () => Promise<Store>;
 };
 
-// Where to reach the test Postgres. Prefer either environment variable if set; otherwise
-// fall back to a Postgres running on the local machine with the default port and database.
+// Test Postgres URL. DATABASE_URL or PG_URL if set, else local default port/database.
 // Mirrors test/adapters/postgres.test.ts.
 function postgresUrl(): string {
   return (
@@ -39,11 +38,9 @@ function postgresUrl(): string {
   );
 }
 
-// Builds a name that no other run will reuse, so suites running at the same time (or a rerun
-// of one) each get their own isolated set of tables and never collide. Combines this
-// process's id, a base-36 timestamp (the milliseconds-since-epoch time written in base 36 to
-// keep it short), and a counter bumped on each call. Used here for the Postgres throwaway
-// schema (the temporary, named group of tables that is dropped when the store closes).
+// Unique name so concurrent suites (or reruns) get isolated tables. Combines pid, a base-36
+// timestamp (ms-since-epoch in base 36 to keep it short), and a per-call counter. Used for the
+// Postgres throwaway schema, dropped when the store closes.
 let run = 0;
 function freshName(prefix: string): string {
   run += 1;
@@ -52,21 +49,19 @@ function freshName(prefix: string): string {
 }
 
 /**
- * The known store adapters (memory, postgres, mysql, http), each with a factory that builds a
- * FRESH, ISOLATED store. A test runs the SAME sequence of operations against every adapter and
- * checks that they all produce the same results, so each factory wires its store with the SAME
- * seeded digest (the hashing capability, fixed via {@link seededDigest}) and the SAME fixed
- * clock — that way the identical inputs hash to identical outputs on every backend.
+ * Store adapters (memory, postgres, mysql, http), each a factory for a fresh, isolated store.
+ * A test runs the same operations against every adapter and expects identical results, so each
+ * factory wires the same seeded digest ({@link seededDigest}) and fixed clock; identical inputs
+ * then hash identically on every backend.
  *
- * - memory: `memoryStore({ digest, clock })` — always available.
- * - postgres: `postgresStore({ url, schema, digest, clock })` with a unique throwaway schema
- *   that loads db/postgresql-schema.sql and is dropped on close (mirrors postgres.test.ts).
- * - mysql: a throwaway database created on a fresh pool, schema applied, dropped on close
- *   (mirrors mysql.test.ts).
- * - http: in-process server over a memory backing store built with the same digest + clock,
- *   so the HTTP path hashes identically to the others.
+ * - memory: `memoryStore({ digest, clock })`, always available.
+ * - postgres: `postgresStore({ url, schema, digest, clock })` with a unique throwaway schema that
+ *   loads db/postgresql-schema.sql and is dropped on close (mirrors postgres.test.ts).
+ * - mysql: throwaway database on a fresh pool, schema applied, dropped on close (mirrors
+ *   mysql.test.ts).
+ * - http: in-process server over a memory backing store with the same digest + clock.
  *
- * Reachability is deliberately NOT probed here; prove.ts / fuzz.ts probe each backend themselves.
+ * Reachability is not probed here; prove.ts / fuzz.ts probe each backend themselves.
  */
 export function adapterMatrix(): AdapterCase[] {
   return [
@@ -104,8 +99,8 @@ export function adapterMatrix(): AdapterCase[] {
     {
       name: 'http',
       makeStore: async () => {
-        // In-process: a memory backing store carries the seeded digest + fixed clock, and the
-        // HTTP client talks to a server over it, so the HTTP path hashes like every other.
+        // In-process: memory backing store carries the seeded digest + fixed clock; the HTTP
+        // client talks to a server over it, so the HTTP path hashes like the others.
         let backing = memoryStore({
           digest: seededDigest(1),
           clock: fixedClock(0),

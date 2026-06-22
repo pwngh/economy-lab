@@ -22,10 +22,9 @@ import type { Amount } from '#src/money.ts';
 import type { Recipient } from '#src/contract.ts';
 import type { Leg } from '#src/ports.ts';
 
-// Adds up the signed amounts of every ledger line in a sale. The split function returns
-// only the credit lines, and credits are stored as negative amounts, so a balanced split
-// sums to the negative of the price. Every test here uses one currency, so a plain sum is
-// enough.
+// Sums the signed amounts of every ledger line. Split returns only credit lines, stored as
+// negative amounts, so a balanced split sums to −price. Single currency throughout, so a
+// plain sum suffices.
 function signedSum(legs: ReadonlyArray<Leg>): bigint {
   let total = 0n;
   for (let leg of legs) {
@@ -34,10 +33,8 @@ function signedSum(legs: ReadonlyArray<Leg>): bigint {
   return total;
 }
 
-// Finds the line that credits the given account and returns the amount as a positive value.
-// Credits are stored as negative amounts, so this flips the sign back to make the expected
-// dollar value easy to compare against. Fails the test if the account was never credited, so
-// a missing line is caught loudly instead of silently passing.
+// Returns the amount crediting the given account as a positive value (credits are stored
+// negative, so the sign is flipped). Fails if the account was never credited.
 function creditedTo(legs: ReadonlyArray<Leg>, account: string): Amount {
   let leg = legs.find((l) => l.account === account);
   assert.ok(leg, `expected a leg crediting ${account}`);
@@ -49,16 +46,14 @@ function codeIs(code: string) {
     (error as { code?: string }).code === code;
 }
 
-// One seller who takes the entire amount left after the fee. shareBps is in basis points,
-// where 10000 means 100%. This is the ordinary one-seller sale used across the tests.
+// One seller taking the whole net after fee. shareBps is basis points (10000 = 100%).
 let soloSeller: Recipient[] = [{ sellerId: 'usr_seller', shareBps: 10_000 }];
 
 // --- The conservation property ----------------------------------------------------
 
-// Cases that check the price is fully accounted for. Some prices and splits divide evenly,
-// others leave a remainder that rounding can drop; the awkward ones are the real test,
-// since the split has to park the leftover somewhere. Each case checks the credit lines add
-// up to the negative of the price (credits are stored negative).
+// Cases checking the price is fully accounted for. Some divide evenly, others leave a
+// rounding remainder the split must park somewhere. Each checks the credit lines sum to
+// −price.
 let CONSERVATION_CASES: ReadonlyArray<{
   name: string;
   price: Amount;
@@ -146,9 +141,8 @@ function conservesPriceAcrossPricesAndSplits(): void {
 }
 
 function splitsFeeOffGrossAndShareOffNet(): void {
-  // A 10.00 sale at a 30% fee: take the 3.00 fee off the full price, leaving 7.00 for the
-  // one seller; the 3.00 fee goes to the platform's revenue. This price divides evenly, so
-  // there is no leftover to park.
+  // 10.00 sale at 30% fee: 3.00 fee off the gross goes to revenue, 7.00 net to the seller.
+  // Divides evenly, no leftover.
   let legs = flatFee()({
     price: credit('10.00'),
     recipients: soloSeller,
@@ -160,9 +154,8 @@ function splitsFeeOffGrossAndShareOffNet(): void {
 }
 
 function postsRoundingResidualToRevenue(): void {
-  // 10.01 split three ways does not divide evenly, so each seller's share is rounded down.
-  // The few cents that rounding drops are credited to the platform's revenue instead of
-  // disappearing, which is what keeps the whole price accounted for.
+  // 10.01 split three ways doesn't divide evenly, so each share rounds down. The dropped
+  // cents go to REVENUE rather than vanishing, keeping the whole price accounted for.
   let price = credit('10.01');
   let recipients: Recipient[] = [
     { sellerId: 'usr_a', shareBps: 3_334 },
@@ -181,9 +174,8 @@ function postsRoundingResidualToRevenue(): void {
 }
 
 function sendsWholePriceToRevenueWhenNoRecipients(): void {
-  // With no sellers to pay, the amount left after the fee has nowhere to go, so the fee plus
-  // that leftover (together the whole price) all goes to the platform's revenue as a single
-  // credit line that still sums to the negative of the price.
+  // No sellers, so fee plus the leftover net (together the whole price) goes to REVENUE as a
+  // single credit line that still sums to −price.
   let legs = flatFee()({
     price: credit('4.00'),
     recipients: [],
@@ -195,9 +187,8 @@ function sendsWholePriceToRevenueWhenNoRecipients(): void {
 }
 
 function rejectsSharesThatDoNotSumToTotal(): void {
-  // These shares add up to 9000 basis points (90%), not the required 10000 (100%). The split
-  // refuses such a list with an OP.MALFORMED error. The spend handler already checks this
-  // before calling, so this is a backstop that makes a wiring mistake fail loudly.
+  // Shares sum to 9000 bps (90%), not the required 10000. Split rejects with OP.MALFORMED.
+  // The spend handler checks this before calling; this is a backstop for wiring mistakes.
   assert.throws(
     () =>
       flatFee()({

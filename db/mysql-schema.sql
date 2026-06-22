@@ -7,16 +7,21 @@
 --
 -- @license MIT
 
--- The MySQL counterpart to db/postgresql-schema.sql (Postgres). It is applied by
--- `applyMysqlSchema` (src/adapters/mysql.ts), which a DELIMITER-aware splitter
--- reads and runs one statement at a time (mysql2 sends one statement per query).
--- It includes the DROP TABLEs up front, so it is safe to re-run as a reset.
--- Stored routines below use `DELIMITER $$` the same way the mysql CLI does;
--- the loader understands that directive.
+-- MySQL counterpart to db/postgresql-schema.sql. Applied by `applyMysqlSchema`
+-- (src/adapters/mysql.ts) via a DELIMITER-aware splitter that runs one statement
+-- at a time (mysql2 sends one per query). Drops everything up front, so re-running
+-- resets. Stored routines use `DELIMITER $$` as the mysql CLI does; the loader
+-- handles that directive.
 
--- Stored routines first: unlike DROP TABLE they have no IF-EXISTS-on-CREATE form, so the schema
--- must drop them explicitly or a re-apply fails with ER_SP_ALREADY_EXISTS. (CREATE TABLE below is
--- guarded by the DROP TABLEs; the routines need this.) This is what makes the file truly re-runnable.
+-- Pin the database default collation FIRST, so every table below (none declare their own) inherits
+-- it. The strings JSON_TABLE produces inside post_entry are utf8mb4_0900_ai_ci; matching the tables
+-- to that avoids "Illegal mix of collations" on the `ab.account_id = d.account` joins. Applied the
+-- same way by `applyMysqlSchema` and by `mysql < db/mysql-schema.sql` (scripts/migrate.sh).
+ALTER DATABASE CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
+
+-- Drop stored routines first: unlike DROP TABLE they have no IF-EXISTS-on-CREATE form, so re-apply
+-- fails with ER_SP_ALREADY_EXISTS without an explicit drop. (CREATE TABLE below is guarded by the
+-- DROP TABLEs.)
 DROP PROCEDURE IF EXISTS post_entry;
 
 DROP FUNCTION IF EXISTS account_balance;
@@ -238,24 +243,27 @@ CREATE TABLE seen_webhooks (
    );
 
 -- ============================================================================
--- Stored routines (MySQL). The counterpart to the Postgres routines in db/postgresql-schema.sql, and like
--- those they are PURE PERSISTENCE — no business logic. Every decision is made in the application
--- (the single source of truth) and passed in as a finished value; the routines only write rows.
--- They are wrapped in `DELIMITER $$` so the semicolons inside each body are not read as statement
--- ends by the loader (and by the mysql CLI).
+-- Stored routines (MySQL) + the engine's invariant enforcement. Counterpart to the Postgres routines
+-- in db/postgresql-schema.sql. The application computes the values and passes them in; the routines
+-- write the rows. But the database — not the application — is the primary enforcer of the ledger
+-- invariants here, not a safety net: post_entry asserts conservation and is the SOLE writer of
+-- `legs` (direct DML is revoked from the app role; see adversarial-engines.ts), and the triggers
+-- below enforce chain continuity and balance integrity; the CHECK constraints above cover
+-- no-overdraft and the primary keys cover exactly-once. Wrapped in `DELIMITER $$` so the
+-- loader (and the mysql CLI) don't read the semicolons inside each body as statement ends.
 --
--- NOTE: on a MySQL server with binary logging enabled, creating a stored FUNCTION can require a
--- one-time `SET GLOBAL log_bin_trust_function_creators = 1` (or SUPER / SYSTEM_VARIABLES_ADMIN).
--- The PROCEDURE has no such requirement.
+-- NOTE: with binary logging enabled, creating a stored FUNCTION can require a one-time
+-- `SET GLOBAL log_bin_trust_function_creators = 1` (or SUPER / SYSTEM_VARIABLES_ADMIN). The
+-- PROCEDURE has no such requirement.
 -- ============================================================================
 DELIMITER $$
 
 -- Persist one posting and everything derived from it in a single CALL: ensure any first-time user
--- accounts (system accounts are seeded above), insert the posting row, all of its legs, one chain
--- link per account, and apply each account's net balance delta. bigint amounts arrive as JSON
--- strings (so no precision is lost past 2^53) and are cast here. The balance step UPDATEs existing
--- rows first — so the non-negative CHECK is tested against the new total, not the delta alone —
--- then INSERTs first-time accounts, whose first movement is always a positive credit.
+-- accounts (system accounts are seeded above), insert the posting row, its legs, one chain link per
+-- account, and apply each account's net balance delta. bigint amounts arrive as JSON strings (no
+-- precision lost past 2^53) and are cast here. The balance step UPDATEs existing rows first, so the
+-- non-negative CHECK tests the new total rather than the delta alone, then INSERTs first-time
+-- accounts, whose first movement is always a positive credit.
 CREATE PROCEDURE post_entry(
   IN p_txn          VARCHAR(64),
   IN p_posted_at    BIGINT,
@@ -283,6 +291,18 @@ BEGIN
         currency VARCHAR(8)  PATH '$.currency',
         amount   VARCHAR(32) PATH '$.amount'
       )) AS l;
+
+  -- conservation (MySQL). With direct DML on `legs` revoked, this procedure is
+  -- the only writer of legs, so this assert makes it refuse an unbalanced posting: legs that don't
+  -- net to zero per currency can't be committed by any route, the content half of what the Postgres
+  -- deferred constraint trigger enforces. Legitimate postings always balance (assertBalanced in
+  -- src/ledger.ts), so this fires only on malformed input.
+  IF EXISTS (
+    SELECT 1 FROM legs WHERE posting_id = p_txn GROUP BY currency HAVING SUM(amount) <> 0
+  ) THEN
+    SIGNAL SQLSTATE '45000'
+      SET MESSAGE_TEXT = 'conservation: posting legs do not net to zero per currency';
+  END IF;
 
   INSERT INTO chain_links (posting_id, account_id, prev_hash, hash)
     SELECT p_txn, c.account, c.prev_hash, c.hash
@@ -312,9 +332,9 @@ BEGIN
     ON DUPLICATE KEY UPDATE balance = balance + VALUES(balance);
 END$$
 
--- Return one account's cached balance (0 when it has no row yet). The MySQL counterpart to the
--- Postgres `account_balance` function — the fast read model the statement and prove paths build
--- on, behind one named, tunable access path.
+-- Return one account's cached balance (0 when it has no row yet). MySQL counterpart to the Postgres
+-- `account_balance` function: the fast read model the statement and prove paths build on, behind one
+-- named, tunable access path.
 CREATE FUNCTION account_balance(p_account VARCHAR(96))
 RETURNS BIGINT
 READS SQL DATA
@@ -324,7 +344,7 @@ BEGIN
   RETURN COALESCE(v_balance, 0);
 END$$
 
--- I3 chain continuity (engine-enforced): a new link's prev_hash must be the account's current head —
+-- chain continuity: a new link's prev_hash must be the account's current head,
 -- GENESIS for the first link, else an existing link's hash for that account. Blocks a discontinuous
 -- link written around post_entry; the unique index already blocks a fork. (DROP at top for re-runs.)
 CREATE TRIGGER chain_links_continuity BEFORE INSERT ON chain_links
@@ -339,7 +359,7 @@ BEGIN
   END IF;
 END$$
 
--- I5 balance integrity (engine-enforced): account_balances must equal the legs' net for the account,
+-- balance integrity: account_balances must equal the legs' net for the account,
 -- signed by its normal side (debit-normal +SUM, else -SUM). post_entry writes exactly that, so this
 -- rejects only a hand-edited (drifted) balance. Debit-normal set mirrors isDebitNormal (accounts.ts).
 CREATE TRIGGER account_balances_integrity_ins BEFORE INSERT ON account_balances

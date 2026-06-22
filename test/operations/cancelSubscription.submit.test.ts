@@ -30,17 +30,17 @@ function hasCode(code: string): (error: unknown) => boolean {
     error instanceof Error && (error as { code?: string }).code === code;
 }
 
-// Build an economy plus the store it runs on, sharing the same seeded digest and fixed clock so
-// their hashes agree (see the makeEconomy doc). Returning the store too lets a test pre-seed a
-// subscription with a known id and owner before driving cancel through the full submit pipeline —
-// the path where authorize() runs and where the handler's ownership guard takes effect.
+// Economy plus its store, sharing one seeded digest and fixed clock so their hashes agree (see the
+// makeEconomy doc). Returning the store lets a test pre-seed a subscription with a known id and
+// owner, then drive cancel through the full submit pipeline (where authorize() and the handler's
+// ownership guard run).
 function makeEconomyWithStore(): { eco: Economy; store: Store } {
   let store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
   return { eco: makeEconomy(1, store), store };
 }
 
-// An ACTIVE subscription owned by `userId`, saved so a cancel has something to find. The price
-// sits inside subscribe's allowed band, though nothing here charges money — cancel only flips state.
+// An ACTIVE subscription owned by `userId`. Price sits inside subscribe's allowed band, though
+// nothing here charges money: cancel only flips state.
 function activeSubscription(id: string, userId: string): Subscription {
   return {
     id,
@@ -58,10 +58,10 @@ function activeSubscription(id: string, userId: string): Subscription {
 }
 
 // The cancelSubscription handler enforces ownership on the loaded subscription: an end user may
-// cancel only their OWN subscription, while a system or operator principal may cancel anyone's.
-// The central authorize() can't catch a cross-user cancel — cancel debits no account it could
-// check, and it is deliberately not privileged-only — so these tests drive the full submit
-// pipeline to prove the in-handler guard holds.
+// cancel only their own, while a system or operator principal may cancel anyone's. Central
+// authorize() can't catch a cross-user cancel (cancel debits no account it could check, and it's
+// deliberately not privileged-only), so these tests drive the full submit pipeline to prove the
+// in-handler guard holds.
 describe('cancelSubscription ownership (via submit)', () => {
   test("a user cannot cancel another user's subscription (IDOR) and it stays ACTIVE", async () => {
     let { eco, store } = makeEconomyWithStore();

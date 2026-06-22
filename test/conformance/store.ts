@@ -16,6 +16,7 @@
  */
 
 import { describe, test, before, after } from 'node:test';
+import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { credit, debit, postEntry } from '#src/ledger.ts';
@@ -433,42 +434,59 @@ export function runStoreConformance(
   makeStore: () => Promise<Store> | Store,
 ): void {
   describe(`Store Conformance: ${name}`, () => {
-    let store: Store;
+    // The backend may be unreachable (CI's no-services `check` job, or a missing local database).
+    // Probe it once here; if makeStore throws, every test below skips rather than this before hook
+    // throwing and cancelling the whole suite — the graceful contract the standalone describes use
+    // and the one ci.yml's `check` job relies on ("conformance tests skip when no backend reachable").
+    let store: Store | null = null;
 
     before(async () => {
-      store = await makeStore();
+      try {
+        store = await makeStore();
+      } catch {
+        store = null;
+      }
     });
     after(async () => {
-      await store.close();
+      if (store) {
+        await store.close();
+      }
     });
 
-    test('appends a posting and round-trips the balance as a bigint Amount', () =>
-      appendRoundTripsBalance(store));
-    test('commits a transaction durably and leaves no trace when one throws', () =>
-      commitsDurablyAndRollsBack(store));
-    test('claims an idempotency key once and replays the recorded transaction', () =>
-      claimsOnceAndReplays(store));
-    test('frees an idempotency key when its claiming transaction rolls back', () =>
-      freesKeyOnRollback(store));
-    test('grants account locks without deadlocking', () =>
-      grantsLocksWithoutDeadlock(store));
-    test('enqueues the outbox in the posting tx and relays once with consumer dedup', () =>
-      relaysOutboxOnce(store));
-    test('drops the outbox row when its enqueuing transaction rolls back', () =>
-      dropsOutboxOnRollback(store));
-    test('recomputes a per-account chain head deterministically over the digest', () =>
-      recomputesChainHead(store));
-    test('stores a posting with multiple debit/credit lines to one account', () =>
-      storesMultipleLegsToOneAccount(store));
-    test('reverses a promo grant exactly once after it is due', () =>
-      reversesPromoGrantExactlyOnce(store));
-    test('claims due promo grants oldest first up to the limit', () =>
-      claimsDuePromosOldestFirstUpToLimit(store));
-    test('claims a webhook event id once and dedups every redelivery', () =>
-      claimsWebhookEventIdOnce(store));
-    test('enumerates an account that has a stored balance row', () =>
-      balanceAccountsEnumeratesBalanceRow(store));
-    test('bills a subscription via compare-and-set so a stale renewal run is rejected', () =>
-      markBilledIsCompareAndSet(store));
+    // Run one conformance body against the live store, or skip when the backend was unreachable.
+    let withStore = (
+      t: TestContext,
+      body: (s: Store) => Promise<void> | void,
+    ): Promise<void> | void =>
+      store ? body(store) : t.skip(`${name} backend unreachable`);
+
+    test('appends a posting and round-trips the balance as a bigint Amount', (t) =>
+      withStore(t, appendRoundTripsBalance));
+    test('commits a transaction durably and leaves no trace when one throws', (t) =>
+      withStore(t, commitsDurablyAndRollsBack));
+    test('claims an idempotency key once and replays the recorded transaction', (t) =>
+      withStore(t, claimsOnceAndReplays));
+    test('frees an idempotency key when its claiming transaction rolls back', (t) =>
+      withStore(t, freesKeyOnRollback));
+    test('grants account locks without deadlocking', (t) =>
+      withStore(t, grantsLocksWithoutDeadlock));
+    test('enqueues the outbox in the posting tx and relays once with consumer dedup', (t) =>
+      withStore(t, relaysOutboxOnce));
+    test('drops the outbox row when its enqueuing transaction rolls back', (t) =>
+      withStore(t, dropsOutboxOnRollback));
+    test('recomputes a per-account chain head deterministically over the digest', (t) =>
+      withStore(t, recomputesChainHead));
+    test('stores a posting with multiple debit/credit lines to one account', (t) =>
+      withStore(t, storesMultipleLegsToOneAccount));
+    test('reverses a promo grant exactly once after it is due', (t) =>
+      withStore(t, reversesPromoGrantExactlyOnce));
+    test('claims due promo grants oldest first up to the limit', (t) =>
+      withStore(t, claimsDuePromosOldestFirstUpToLimit));
+    test('claims a webhook event id once and dedups every redelivery', (t) =>
+      withStore(t, claimsWebhookEventIdOnce));
+    test('enumerates an account that has a stored balance row', (t) =>
+      withStore(t, balanceAccountsEnumeratesBalanceRow));
+    test('bills a subscription via compare-and-set so a stale renewal run is rejected', (t) =>
+      withStore(t, markBilledIsCompareAndSet));
   });
 }

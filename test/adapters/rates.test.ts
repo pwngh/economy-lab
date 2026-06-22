@@ -14,11 +14,9 @@ import assert from 'node:assert/strict';
 
 import { configuredRates } from '#src/adapters/rates.ts';
 
-// Three CREDIT-to-USD rates, each stored as an integer `rate` and a `scale` whose real value is
-// rate / 10^scale. The buy rate (what a user pays per credit) is 1 / 10^2 = $0.01. The par rate
-// (the credit's backing / cash-out value) is 5 / 10^3 = $0.005, and the payout rate equals par.
-// `buy` is set above `par` so a credit costs more to buy than it backs/pays out — the gap is the
-// platform's purchase-spread cut.
+// CREDIT-to-USD rates, each `rate`/10^`scale`. buy = 1/10^2 = $0.01 (user pays per credit),
+// par = 5/10^3 = $0.005 (backing / cash-out value), payout = par. buy > par, the gap is the
+// platform's purchase spread.
 const RATES = {
   buyRate: 1n,
   buyScale: 2,
