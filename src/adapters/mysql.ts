@@ -1466,5 +1466,6 @@ export async function createMysqlPool(url: string): Promise<MysqlPool> {
     supportBigNumbers: true,
     bigNumberStrings: true,
     namedPlaceholders: false,
+    charset: 'UTF8MB4_0900_AI_CI',
   });
 }

@@ -20,7 +20,7 @@ import {
 } from '#test/support/builders.ts';
 import { spendable, earned } from '#src/accounts.ts';
 
-import type { Economy, Outcome } from '#src/contract.ts';
+import type { Economy } from '#src/contract.ts';
 
 // These tests drive the full public `economy.submit` path so the spend handler's two input
 // guards are exercised end to end, the same way entitlements.submit.test.ts exercises the
