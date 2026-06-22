@@ -24,8 +24,10 @@ import type {
   Subscription,
 } from '#src/ports.ts';
 
-// Helpers shared by the Postgres and MySQL adapters. Pure call mechanics and row→domain
-// decoding; no SQL strings, no driver specifics.
+// Helpers shared by the Postgres and MySQL engines: default services, the genesis-hash hex,
+// distinct-account ordering, and row→domain decoders. No SQL strings, no driver specifics. (The
+// generic posting-meta readers moved to src/meta.ts, so a non-SQL store can read meta without
+// importing engine code.)
 
 // --- Default services -------------------------------------------------------------
 
@@ -114,22 +116,3 @@ export function rowToCheckpoint(row: Record<string, unknown>): Checkpoint {
   };
 }
 
-// --- Local helpers ----------------------------------------------------------------
-
-export function metaString(
-  meta: Record<string, unknown>,
-  key: string,
-  fallback: string,
-): string {
-  let value = meta[key];
-  return typeof value === 'string' ? value : fallback;
-}
-
-export function metaNumber(
-  meta: Record<string, unknown>,
-  key: string,
-  fallback: number,
-): number {
-  let value = meta[key];
-  return typeof value === 'number' ? value : fallback;
-}

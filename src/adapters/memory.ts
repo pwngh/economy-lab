@@ -14,7 +14,7 @@ import { toAmount } from '#src/money.ts';
 import { currency, SYSTEM } from '#src/accounts.ts';
 import { windowedVelocity } from '#src/trust.ts';
 import { fromHex, toHex } from '#src/bytes.ts';
-import { metaString, metaNumber } from '#src/adapters/sql-shared.ts';
+import { metaString, metaNumber } from '#src/meta.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';

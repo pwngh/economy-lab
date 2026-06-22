@@ -46,11 +46,10 @@ import {
   rowToSaga,
   rowToSubscription,
   rowToCheckpoint,
-  metaString,
-  metaNumber,
-} from '#src/adapters/sql-shared.ts';
+} from '#src/engines/sql-shared.ts';
+import { metaString, metaNumber } from '#src/meta.ts';
 
-import type { Link } from '#src/adapters/sql-shared.ts';
+import type { Link } from '#src/engines/sql-shared.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';

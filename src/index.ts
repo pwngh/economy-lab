@@ -165,7 +165,15 @@ function noopMeter(): Meter {
   return { count: () => {}, observe: () => {} };
 }
 
-// --- The production composition (selects adapters from env) ------------------------
+// --- The production composition (selects the store + capabilities from env) --------
+//
+// The layers this composes from, since the directory split only half-expresses them:
+//   - src/engines/  — the systems of record that enforce the ledger invariants natively (Postgres,
+//                     MySQL). The database is not an adapter; it is the source of truth.
+//   - src/adapters/ — everything pluggable that does not enforce invariants: the in-memory and HTTP
+//                     stores (records too, but the zero-infra / in-process transports), plus the
+//                     genuine capabilities you don't own — Redis cache, SQS dispatcher, payout
+//                     processor, FX rates.
 
 /**
  * Wire an {@link Economy} whose Store (and optional Redis cache / SQS dispatcher) are chosen from
