@@ -5,11 +5,23 @@ on:
     branches: [master, main]
   pull_request:
 
+# Least privilege: CI only needs to read the repo. (Default tokens are broader.)
+permissions:
+  contents: read
+
+# A newer push to the same ref cancels the in-flight run for it, so a rapid series of pushes doesn't
+# pile up — and the Postgres/MySQL service containers stop spinning for commits already superseded.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  # Fast feedback with no database: type-check, lint, and the suite (the pg/mysql conformance
-  # tests skip themselves when no backend is reachable, so this stays green without services).
+  # Fast feedback with no database: `npm run check` is type-check + lint + format + the suite. The
+  # pg/mysql conformance tests skip themselves when no backend is reachable, so this stays green
+  # without services. The ceiling turns a hang into a clean failure rather than the default 6h.
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,10 +31,12 @@ jobs:
       - run: npm ci
       - run: npm run check
 
-  # The full differential matrix: stand up Postgres and MySQL, then run the suite + prove + fuzz
-  # so memory, postgres, mysql, and http are all proven byte-identical in CI.
+  # The full differential matrix: stand up Postgres and MySQL, then migrate + run the suite + prove
+  # + fuzz so memory, postgres, mysql, and http are all proven byte-identical in CI. The ceiling
+  # bounds a deadlock or stuck connection to a clean failure instead of the default six-hour timeout.
   matrix:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16-alpine
@@ -59,6 +73,8 @@ jobs:
           node-version: '22.18'
           cache: npm
       - run: npm ci
+      # Applies the Postgres schema via scripts/migrate.sh (psql is preinstalled on the runner) and
+      # so doubles as a smoke test of the migrate tooling; the suites self-apply their own schemas.
       - run: npm run db:migrate
       - run: npm test
       - run: npm run prove
