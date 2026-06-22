@@ -14,6 +14,19 @@
 -- Stored routines below use `DELIMITER $$` the same way the mysql CLI does;
 -- the loader understands that directive.
 
+-- Stored routines first: unlike DROP TABLE they have no IF-EXISTS-on-CREATE form, so the schema
+-- must drop them explicitly or a re-apply fails with ER_SP_ALREADY_EXISTS. (CREATE TABLE below is
+-- guarded by the DROP TABLEs; the routines need this.) This is what makes the file truly re-runnable.
+DROP PROCEDURE IF EXISTS post_entry;
+
+DROP FUNCTION IF EXISTS account_balance;
+
+DROP TRIGGER IF EXISTS chain_links_continuity;
+
+DROP TRIGGER IF EXISTS account_balances_integrity_ins;
+
+DROP TRIGGER IF EXISTS account_balances_integrity_upd;
+
 DROP TABLE IF EXISTS seen_webhooks;
 
 DROP TABLE IF EXISTS checkpoints;
@@ -309,6 +322,52 @@ BEGIN
   DECLARE v_balance BIGINT;
   SELECT balance INTO v_balance FROM account_balances WHERE account_id = p_account;
   RETURN COALESCE(v_balance, 0);
+END$$
+
+-- I3 chain continuity (engine-enforced): a new link's prev_hash must be the account's current head —
+-- GENESIS for the first link, else an existing link's hash for that account. Blocks a discontinuous
+-- link written around post_entry; the unique index already blocks a fork. (DROP at top for re-runs.)
+CREATE TRIGGER chain_links_continuity BEFORE INSERT ON chain_links
+FOR EACH ROW
+BEGIN
+  IF NEW.prev_hash = REPEAT('0', 64) THEN
+    IF EXISTS (SELECT 1 FROM chain_links WHERE account_id = NEW.account_id) THEN
+      SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'chain continuity: genesis link on a non-empty chain';
+    END IF;
+  ELSEIF NOT EXISTS (SELECT 1 FROM chain_links WHERE account_id = NEW.account_id AND hash = NEW.prev_hash) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'chain continuity: prev_hash is not the current head';
+  END IF;
+END$$
+
+-- I5 balance integrity (engine-enforced): account_balances must equal the legs' net for the account,
+-- signed by its normal side (debit-normal +SUM, else -SUM). post_entry writes exactly that, so this
+-- rejects only a hand-edited (drifted) balance. Debit-normal set mirrors isDebitNormal (accounts.ts).
+CREATE TRIGGER account_balances_integrity_ins BEFORE INSERT ON account_balances
+FOR EACH ROW
+BEGIN
+  DECLARE expected BIGINT;
+  SET expected = (CASE WHEN NEW.account_id IN (
+      'vrchat:trust_cash','vrchat:usd_clearing','vrchat:revenue_usd',
+      'vrchat:stored_value','vrchat:receivable','vrchat:promo_float','vrchat:opening_equity'
+    ) THEN 1 ELSE -1 END)
+    * COALESCE((SELECT SUM(amount) FROM legs WHERE account_id = NEW.account_id), 0);
+  IF NEW.balance <> expected THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'balance integrity: cached balance <> signed leg sum';
+  END IF;
+END$$
+
+CREATE TRIGGER account_balances_integrity_upd BEFORE UPDATE ON account_balances
+FOR EACH ROW
+BEGIN
+  DECLARE expected BIGINT;
+  SET expected = (CASE WHEN NEW.account_id IN (
+      'vrchat:trust_cash','vrchat:usd_clearing','vrchat:revenue_usd',
+      'vrchat:stored_value','vrchat:receivable','vrchat:promo_float','vrchat:opening_equity'
+    ) THEN 1 ELSE -1 END)
+    * COALESCE((SELECT SUM(amount) FROM legs WHERE account_id = NEW.account_id), 0);
+  IF NEW.balance <> expected THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'balance integrity: cached balance <> signed leg sum';
+  END IF;
 END$$
 
 DELIMITER ;

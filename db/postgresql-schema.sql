@@ -358,3 +358,83 @@ as $$
     0
   );
 $$;
+
+-- ============================================================================
+-- I3 chain continuity (engine-enforced). The unique index above already blocks a FORK (a second
+-- link at the same prev_hash). This blocks a DISCONTINUOUS link: a new link's prev_hash must be the
+-- account's current head — GENESIS (64 zeros) for the first link, or an existing link's hash for the
+-- account thereafter. The legitimate writer (advanceHeads, src/chain.ts) always supplies the current
+-- head, so this only rejects a link written around post_entry. See docs/the-right-way.md (I3).
+-- ============================================================================
+create or replace function chain_continuity() returns trigger as $$
+begin
+  if new.prev_hash = repeat('0', 64) then
+    if exists (select 1 from chain_links where account_id = new.account_id) then
+      raise exception 'chain continuity: genesis link for account % on a non-empty chain', new.account_id;
+    end if;
+  elsif not exists (
+    select 1 from chain_links where account_id = new.account_id and hash = new.prev_hash
+  ) then
+    raise exception 'chain continuity: prev_hash % is not the current head of account %',
+      new.prev_hash, new.account_id;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create or replace trigger chain_links_continuity
+  before insert on chain_links
+  for each row execute function chain_continuity();
+
+-- ============================================================================
+-- I1 conservation (engine-enforced, Postgres). A posting's legs must net to zero per currency. A
+-- DEFERRABLE INITIALLY DEFERRED constraint trigger checks at COMMIT, so post_entry can insert all of
+-- a posting's (balanced) legs before the check runs, while a lone unbalanced leg written around the
+-- app fails at its commit. This is the engine half of assertBalanced (src/ledger.ts), which the app
+-- keeps as the friendly pre-check. See docs/the-right-way.md (I1).
+-- ============================================================================
+create or replace function check_conservation() returns trigger as $$
+begin
+  if (select coalesce(sum(amount), 0)
+        from legs
+       where posting_id = new.posting_id and currency = new.currency) <> 0 then
+    raise exception 'conservation: posting % legs in % do not net to zero',
+      new.posting_id, new.currency;
+  end if;
+  return null;
+end;
+$$ language plpgsql;
+
+drop trigger if exists legs_conserve on legs;
+create constraint trigger legs_conserve
+  after insert on legs
+  deferrable initially deferred
+  for each row execute function check_conservation();
+
+-- ============================================================================
+-- I5 balance integrity (engine-enforced, Postgres). account_balances is a cache of the legs: its
+-- value must equal the legs' net for the account, signed by the account's normal side — debit-normal
+-- accounts grow on debits (+SUM), credit-normal grow on credits (-SUM). post_entry writes exactly
+-- that, so this only rejects a hand-edited balance that has drifted from the legs. The debit-normal
+-- set mirrors isDebitNormal (src/accounts.ts). See docs/the-right-way.md (I5).
+-- ============================================================================
+create or replace function check_balance_integrity() returns trigger as $$
+declare
+  expected bigint;
+begin
+  expected := (case when new.account_id in (
+      'vrchat:trust_cash','vrchat:usd_clearing','vrchat:revenue_usd',
+      'vrchat:stored_value','vrchat:receivable','vrchat:promo_float','vrchat:opening_equity'
+    ) then 1 else -1 end)
+    * coalesce((select sum(amount) from legs where account_id = new.account_id), 0);
+  if new.balance <> expected then
+    raise exception 'balance integrity: account % cached balance % <> signed leg sum %',
+      new.account_id, new.balance, expected;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create or replace trigger account_balances_integrity
+  before insert or update on account_balances
+  for each row execute function check_balance_integrity();
