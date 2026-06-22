@@ -135,7 +135,10 @@ function requireSource(source: string): void {
 // floor the backing check uses; see the call sites for why under-rounding the backing breaks it.
 function convertCeil(amount: Amount, rate: Rate, to: Currency): Amount {
   let denominator = 10n ** BigInt(rate.scale);
-  return toAmount(to, (amount.minor * rate.rate + denominator - 1n) / denominator);
+  return toAmount(
+    to,
+    (amount.minor * rate.rate + denominator - 1n) / denominator,
+  );
 }
 
 // Operations are routed to this handler by their `kind`, so if one arrives whose kind is not

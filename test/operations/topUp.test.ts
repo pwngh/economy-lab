@@ -120,7 +120,10 @@ describe('topUp Issuance', () => {
     // backing held in trust at the par rate ($0.005/credit → $0.05 in TRUST_CASH), and the
     // buy-vs-par spread — the platform's ~40% purchase fee — as USD revenue ($0.05 in REVENUE_USD).
     // The three sum to zero, leaving the USD books balanced.
-    assert.deepEqual(await store.ledger.balance(SYSTEM.TRUST_CASH), usd('0.05'));
+    assert.deepEqual(
+      await store.ledger.balance(SYSTEM.TRUST_CASH),
+      usd('0.05'),
+    );
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.REVENUE_USD),
       usd('0.05'),
@@ -210,7 +213,10 @@ describe('topUp Validation', () => {
       await store.ledger.balance(spendable('usr_buyer')),
       credit('0.50'),
     );
-    assert.deepEqual(await store.ledger.balance(SYSTEM.TRUST_CASH), usd('0.01'));
+    assert.deepEqual(
+      await store.ledger.balance(SYSTEM.TRUST_CASH),
+      usd('0.01'),
+    );
   });
 
   test('commits a normal top-up whose backing is at least one cent', async () => {

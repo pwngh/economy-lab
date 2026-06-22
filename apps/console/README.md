@@ -10,14 +10,12 @@ npm run dev        # http://localhost:5173
 
 ### Scripts
 
-
 | script              | what it does                                            |
 | ------------------- | ------------------------------------------------------- |
 | `npm run dev`       | `react-router dev` — HMR dev server                     |
 | `npm run build`     | `react-router build` — production client + server build |
 | `npm run start`     | serve the build (`react-router-serve`)                  |
 | `npm run typecheck` | generate route types, then type-check the app           |
-
 
 ### Run against a real database
 
