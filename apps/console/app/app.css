@@ -1,0 +1,980 @@
+/*
+ * Economy Console — visual design system.
+ *
+ * The console is dressed as a financial document, not a dashboard: a light page, hairline rules
+ * instead of boxed-and-shadowed panels everywhere, dense tables, figures that line up column to
+ * column, and a single restrained ink-blue accent spent sparingly. Color is rationed — most of
+ * the surface is paper, ink, and rules. One small set of custom properties drives the whole look,
+ * so it stays consistent and retunes from one place. Plain CSS, no framework.
+ */
+
+:root {
+  /* Paper and ink. The page is a warm off-white; panels and tables sit on plain white a shade
+     brighter; ink is a softened near-black rather than pure #000, which reads heavy on paper. */
+  --paper: #f6f6f3;
+  --surface: #ffffff;
+  --inset: #f1f0ea; /* a recessed fill for inputs, table headers, and nested blocks */
+  --ink: #1b1d22; /* primary text */
+  --ink-2: #565a63; /* secondary text — labels, descriptions */
+  --ink-3: #8a8e98; /* tertiary text — timestamps, units, hints */
+
+  --rule: #e5e4dd; /* the hairline that does most of the structural work */
+  --rule-2: #d6d5cc; /* a heavier rule for section boundaries */
+
+  /* One accent — a deep, desaturated ink-blue — for the active page, links, and a single point
+     of emphasis. `wash` is the same hue at a whisper, for a selected row or the active nav. */
+  --accent: #2f4a7c;
+  --accent-ink: #25304a; /* the accent darkened, for a primary button's hover */
+  --accent-wash: #eceff5;
+
+  /* Status colors, document-grade: deep and legible on paper, never neon. They appear as text
+     and thin rules, not as filled blocks, so the page stays calm. */
+  --pos: #11704a; /* healthy / settled / credit */
+  --neg: #a52a1f; /* failure / shortfall / debit */
+  --warn: #8a5a06; /* in progress / caution */
+
+  /* Spacing scale, 4px base. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+  --s8: 32px;
+  --s10: 44px;
+
+  /* Radius: small and restrained. Rules and tables stay square; controls get a hair of softening. */
+  --r: 4px;
+  --r-2: 6px;
+
+  /* Type scale. The base is small (13px) for a dense, document feel. */
+  --t-xs: 11px;
+  --t-sm: 12px;
+  --t-base: 13px;
+  --t-md: 15px;
+  --t-lg: 18px;
+  --t-xl: 21px;
+  --t-2xl: 28px;
+
+  --sans:
+    ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    Helvetica, Arial, sans-serif;
+  --mono:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono',
+    monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--t-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* This is a light UI: render native chrome (scrollbars, number-input spinners) light, and
+     tint native controls with the accent rather than the browser default blue. */
+  color-scheme: light;
+  accent-color: var(--accent);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+::selection {
+  background: var(--accent-wash);
+}
+
+/* A precise focus ring for keyboard users, on every interactive element. */
+:where(a, button, input, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Figures line up column to column: every digit takes the same width, so balances and amounts
+   read as a clean vertical rhythm — the basic discipline of a ledger. */
+.num,
+.right,
+.mono,
+.amt,
+.stat-value,
+.kc-amt,
+input[type='number'] {
+  font-variant-numeric: tabular-nums;
+}
+
+/* A figure: the numeral leads, the unit ($ / Cr / a currency code) trails (or precedes) it muted
+   and a touch smaller, and the whole thing never breaks across lines — so "150.00 Cr" stays one
+   token and decimals line up down a right-aligned column. */
+.amt {
+  white-space: nowrap;
+}
+.amt-unit {
+  color: var(--ink-3);
+  font-size: 0.82em;
+  font-weight: 500;
+}
+.amt-pre {
+  margin-right: 0.12em;
+}
+.amt-suf {
+  margin-left: 0.34em;
+}
+/* On a hero stat the numeral is already large, so the unit drops further back to a small marker. */
+.stat-value .amt-unit {
+  font-size: 0.5em;
+}
+
+/* --- Shell: a fixed sidebar beside a single scrolling page column. --- */
+.app {
+  display: grid;
+  grid-template-columns: 236px 1fr;
+  min-height: 100vh;
+}
+
+/* --- Sidebar. --- */
+.sidebar {
+  border-right: 1px solid var(--rule);
+  background: var(--surface);
+  padding: var(--s6) var(--s4);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+.brand {
+  padding: 0 var(--s2) var(--s5);
+  margin-bottom: var(--s3);
+  border-bottom: 1px solid var(--rule);
+}
+.brand-title {
+  font-weight: 600;
+  font-size: var(--t-md);
+  letter-spacing: -0.01em;
+}
+.brand-sub {
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  color: var(--ink-3);
+  margin-top: 3px;
+  letter-spacing: 0.02em;
+}
+/* Nav items read as quiet text until the page is active, when an ink-weight, a faint accent
+   wash, and a thin accent edge mark it — no pills, no fills competing for attention. */
+.nav-item {
+  padding: 7px var(--s2) 7px 9px;
+  border-radius: var(--r);
+  color: var(--ink-2);
+  font-weight: 500;
+  cursor: pointer;
+  /* A 3px transparent edge in the resting state, so going active swaps in the accent rule without
+     nudging the label sideways. */
+  border-left: 3px solid transparent;
+  transition:
+    color 0.1s ease,
+    background 0.1s ease;
+}
+.nav-item:hover {
+  color: var(--ink);
+  background: var(--inset);
+}
+.nav-item.active {
+  color: var(--ink);
+  font-weight: 600;
+  background: var(--accent-wash);
+  border-left-color: var(--accent);
+}
+.nav-foot {
+  margin-top: auto;
+  padding-top: var(--s4);
+  border-top: 1px solid var(--rule);
+  font-size: var(--t-xs);
+  font-family: var(--mono);
+  line-height: 1.65;
+  color: var(--ink-3);
+}
+.nav-foot strong {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+/* --- Page column. --- */
+.main {
+  padding: var(--s8) var(--s10) 72px;
+  max-width: 1060px;
+  width: 100%;
+}
+.view-head {
+  margin-bottom: var(--s6);
+  padding-bottom: var(--s4);
+  border-bottom: 1px solid var(--rule);
+}
+.view-head h2 {
+  margin: 0 0 6px;
+  font-size: var(--t-xl);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.view-head p {
+  margin: 0;
+  color: var(--ink-2);
+  max-width: 74ch;
+}
+.toolbar {
+  display: flex;
+  gap: var(--s3);
+  align-items: center;
+  margin-bottom: var(--s5);
+  flex-wrap: wrap;
+}
+
+/* --- Cards and grids. A card is a plain white panel set off by a hairline — no drop shadow,
+   no heavy rounding. Sections lean on rules and whitespace before they reach for a box. --- */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  padding: var(--s5);
+}
+.cards {
+  display: grid;
+  gap: var(--s4);
+}
+.grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.grid-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+/* Overview's table-beside-form row: the table holds priority width (so its columns never get
+   crushed into wrapping), the form takes the rest, and below a comfortable width they stack. */
+.split-table {
+  grid-template-columns: minmax(440px, 1.6fr) minmax(280px, 1fr);
+}
+@media (max-width: 900px) {
+  .split-table {
+    grid-template-columns: 1fr;
+  }
+}
+/* A nested card drops its border and sits on the recessed fill, so the outer card reads as the
+   container and the inner block as content within it. */
+.card .card {
+  background: var(--inset);
+  border-color: transparent;
+}
+.card h3 {
+  margin: 0 0 var(--s1);
+  font-size: var(--t-md);
+  font-weight: 600;
+}
+.card-sub {
+  color: var(--ink-2);
+  font-size: var(--t-sm);
+  margin: 0 0 var(--s3);
+  line-height: 1.5;
+  max-width: 70ch;
+}
+.stat-label {
+  font-size: var(--t-xs);
+  color: var(--ink-3);
+  margin-bottom: 6px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.stat-value {
+  font-size: var(--t-2xl);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+.stat-sub {
+  font-size: var(--t-sm);
+  color: var(--ink-3);
+  margin-top: 6px;
+  line-height: 1.45;
+}
+/* A figure can be keyed to a credit type by a thin left edge — the only place the four credit
+   types take a hue, and even then a quiet one. */
+.card[data-wallet] {
+  border-left: 2px solid var(--rule-2);
+}
+.card[data-wallet='purchased'] {
+  border-left-color: var(--accent);
+}
+.card[data-wallet='earned'] {
+  border-left-color: var(--pos);
+}
+.card[data-wallet='promo'] {
+  border-left-color: var(--warn);
+}
+.card[data-wallet='total'] {
+  border-left-color: var(--ink);
+}
+
+/* --- Tables: the workhorse of a financial document. Hairline row rules, a quiet header in
+   small caps, numbers right-aligned and tabular. --- */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.table th {
+  text-align: left;
+  font-size: var(--t-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+  font-weight: 600;
+  padding: var(--s2) var(--s3);
+  border-bottom: 1px solid var(--rule-2);
+  background: var(--inset);
+}
+.table th.right,
+.table th.num {
+  text-align: right;
+}
+/* A figure column is held to a stable width — sized to a full credit amount — so values never
+   reflow the column and decimals stay in one vertical line as numbers change. */
+.table th.num,
+.table td.num {
+  min-width: 116px;
+}
+.table td {
+  padding: 10px var(--s3);
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+.table tr:last-child td {
+  border-bottom: none;
+}
+/* Number cells: right-aligned so they sit under their right-aligned headers, in mono so a
+   column of money is a clean stack of digits. */
+.table td.num {
+  text-align: right;
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+}
+.table tr.clickable {
+  cursor: pointer;
+}
+.table tr.clickable:hover td {
+  background: var(--accent-wash);
+}
+/* A denser table for long feeds (the ledger): shorter rows so more history is in view at once. */
+.table-tight td {
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+/* A summary row at the foot of a table — a heavier top rule sets the totals apart from the rows. */
+.table tr.row-total td {
+  border-top: 1px solid var(--rule-2);
+  border-bottom: none;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--inset);
+}
+/* The primary line of a two-line cell sits on the ink; its secondary detail drops to a quieter,
+   smaller line directly beneath, so the row reads as one fact with a footnote, not two equals. */
+.cell-main {
+  line-height: 1.35;
+}
+.cell-sub {
+  color: var(--ink-3);
+  font-size: var(--t-xs);
+  margin-top: 1px;
+  line-height: 1.35;
+}
+/* A dated section heading inside a feed, so a long log reads as day-by-day chunks instead of one
+   undifferentiated list. Quiet small caps on the recessed fill, set off by a hairline. */
+.table tr.row-group td {
+  padding: var(--s2) var(--s3);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  background: var(--inset);
+  border-bottom: 1px solid var(--rule);
+}
+/* The per-row conservation marker: a quiet check when a posting balances (the normal case, so it
+   stays calm), a loud mono flag only when it doesn't. */
+.bal-ok {
+  color: var(--pos);
+  font-weight: 600;
+}
+.bal-bad {
+  color: var(--neg);
+  font-weight: 600;
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+
+/* A small dot that color-codes a credit type beside its number. */
+.swatch {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 7px;
+  vertical-align: middle;
+}
+.swatch.purchased {
+  background: var(--accent);
+}
+.swatch.earned {
+  background: var(--pos);
+}
+.swatch.promo {
+  background: var(--warn);
+}
+
+/* --- Tags (formerly "pills"): a small uppercase label in mono, set off by a thin rule and a
+   status color carried by the text — not a filled, rounded badge. --- */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: var(--r);
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid var(--rule-2);
+  background: var(--surface);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.pill.green {
+  color: var(--pos);
+  border-color: color-mix(in srgb, var(--pos) 35%, var(--rule));
+}
+.pill.amber {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 35%, var(--rule));
+}
+.pill.red {
+  color: var(--neg);
+  border-color: color-mix(in srgb, var(--neg) 35%, var(--rule));
+}
+.pill.blue {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--rule));
+}
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+/* --- Buttons and form controls. Quiet by default — a hairline outline on the surface — with a
+   single solid accent button for the primary action on a panel. --- */
+button,
+.btn {
+  font: inherit;
+  border: 1px solid var(--rule-2);
+  background: var(--surface);
+  color: var(--ink);
+  padding: 7px 13px;
+  border-radius: var(--r);
+  cursor: pointer;
+  font-weight: 500;
+  transition:
+    background 0.1s ease,
+    border-color 0.1s ease;
+}
+button:hover,
+.btn:hover {
+  background: var(--inset);
+  border-color: var(--ink-3);
+}
+button:active,
+.btn:active {
+  transform: translateY(0.5px);
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+button.primary:hover {
+  background: var(--accent-ink, #25304a);
+  border-color: var(--accent-ink, #25304a);
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+input,
+select {
+  font: inherit;
+  background: var(--surface);
+  border: 1px solid var(--rule-2);
+  color: var(--ink);
+  padding: 7px 10px;
+  border-radius: var(--r);
+  width: 100%;
+}
+input:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash);
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: var(--s3);
+}
+.field label {
+  font-size: var(--t-sm);
+  color: var(--ink-2);
+  font-weight: 500;
+}
+.field .hint {
+  font-size: var(--t-xs);
+  color: var(--ink-3);
+}
+
+/* --- Notices: an inline message, set off by a left rule in the status color over a faint
+   wash — calm, not a shouting banner. --- */
+.notice {
+  padding: var(--s3) var(--s4);
+  border-radius: var(--r);
+  font-size: var(--t-base);
+  line-height: 1.5;
+  margin-bottom: var(--s4);
+  border: 1px solid var(--rule);
+  border-left-width: 3px;
+}
+.notice code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+.notice.ok {
+  color: var(--pos);
+  border-left-color: var(--pos);
+  background: color-mix(in srgb, var(--pos) 6%, var(--surface));
+}
+.notice.warn {
+  color: var(--warn);
+  border-left-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 7%, var(--surface));
+}
+.notice.err {
+  color: var(--neg);
+  border-left-color: var(--neg);
+  background: color-mix(in srgb, var(--neg) 6%, var(--surface));
+}
+
+/* --- Utility text. --- */
+.mono {
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+}
+.muted {
+  color: var(--ink-2);
+}
+.dim {
+  color: var(--ink-3);
+}
+.small {
+  font-size: var(--t-sm);
+}
+.right {
+  text-align: right;
+}
+.num {
+  text-align: right;
+}
+.debit {
+  color: var(--neg);
+}
+.credit {
+  color: var(--pos);
+}
+.empty {
+  padding: var(--s10);
+  text-align: center;
+  color: var(--ink-3);
+  font-size: var(--t-base);
+}
+
+/* --- Layout helpers: small primitives so components carry no inline styles. --- */
+/* A page stacks its sections with one consistent gap, so no section needs its own margin. */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+}
+.items-start {
+  align-items: start;
+}
+.full {
+  width: 100%;
+}
+/* A card whose body is a flush table: the card drops its own padding, and `.card-head` carries
+   the title's padding so the table can run edge to edge beneath it. */
+.card-flush {
+  padding: 0;
+}
+.card-head {
+  padding: var(--s5) var(--s5) var(--s3);
+}
+/* Fields placed side by side in a `.row` share the width and drop their stacking margin. */
+.row .field {
+  flex: 1;
+  margin-bottom: 0;
+}
+/* The quiet placeholder shown in an empty payout column. */
+.kanban-empty {
+  padding: var(--s4) 2px;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: var(--t-sm);
+}
+/* A text link that should read as a link: the accent color, underlined on hover. */
+.link {
+  color: var(--accent);
+  font-weight: 500;
+}
+.link:hover {
+  text-decoration: underline;
+}
+/* The centered fallback the root error boundary renders when a page throws. */
+.error-page {
+  max-width: 620px;
+  margin: 0 auto;
+  padding: var(--s10) var(--s5);
+}
+/* Push the two ends of a flex row apart — a title on the left, its action on the right. */
+.between {
+  justify-content: space-between;
+}
+/* The expanded ledger row: a recessed cell holding one posting's debit/credit legs. */
+.leg-cell {
+  background: var(--inset);
+}
+.leg-id {
+  margin-bottom: var(--s2);
+}
+/* A leg's side tag and account label, kept together on one baseline. */
+.leg-side {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+}
+/* A card whose whole body is one row: a heading block on the left, a status tag on the right. */
+.card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s4);
+}
+/* Spacing one-offs, for the rare element that needs to break the default rhythm. */
+.m-0 {
+  margin: 0;
+}
+.mt-2 {
+  margin-top: var(--s2);
+}
+.mt-3 {
+  margin-top: var(--s3);
+}
+
+/* --- Payout board. Four columns, one per state, each headed by a small caps label and a count;
+   the state's color is a thin top rule, not a fill. --- */
+.kanban {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s4);
+}
+.kanban-col {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-top: 2px solid var(--rule-2);
+  border-radius: var(--r-2);
+  padding: var(--s3);
+  min-height: 132px;
+}
+.kanban-col[data-state='reserved'] {
+  border-top-color: var(--accent);
+}
+.kanban-col[data-state='submitted'] {
+  border-top-color: var(--warn);
+}
+.kanban-col[data-state='settled'] {
+  border-top-color: var(--pos);
+}
+.kanban-col[data-state='failed'] {
+  border-top-color: var(--neg);
+}
+.kanban-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--s3);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-2);
+}
+.kanban-card {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  padding: var(--s3);
+  margin-bottom: var(--s2);
+}
+.kanban-card:last-child {
+  margin-bottom: 0;
+}
+.kanban-card .kc-id {
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  color: var(--ink-3);
+}
+.kanban-card .kc-amt {
+  font-family: var(--mono);
+  font-weight: 600;
+  font-size: var(--t-md);
+  margin: 3px 0;
+}
+.kc-meta {
+  font-size: var(--t-xs);
+  color: var(--ink-2);
+  margin-top: var(--s2);
+  padding-top: var(--s2);
+  border-top: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* --- Ledger row expansion: the debit/credit lines of one posting, shown as an indented
+   two-column block under the row. --- */
+.legs {
+  margin-top: var(--s2);
+  border-top: 1px solid var(--rule);
+  padding-top: var(--s2);
+  /* Reserve the rightmost (Balanced) column's width so each leg's amount lands in the same vertical
+     line as its parent row's Credits figure, not out at the table edge. Matches the .num min-width
+     plus a cell's worth of horizontal padding. */
+  padding-right: 140px;
+}
+.leg-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--s2);
+  align-items: center;
+  padding: 3px 0;
+  font-size: var(--t-sm);
+}
+.leg-row .mono {
+  font-family: var(--mono);
+}
+/* The leg amount carries the same mono figure treatment as the column above it. */
+.leg-row .amt {
+  font-family: var(--mono);
+  text-align: right;
+}
+/* A plain-English gloss above the legs, for postings whose meaning isn't obvious from the lines
+   alone — chiefly the worker's settlements and failure reversals. */
+.leg-note {
+  margin: 0 0 var(--s3);
+  color: var(--ink-2);
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  max-width: 80ch;
+}
+/* The link under an expanded payout posting, back to its card on the board. */
+.leg-foot {
+  margin-top: var(--s2);
+  padding-top: var(--s2);
+  border-top: 1px solid var(--rule);
+  font-size: var(--t-sm);
+}
+
+/* --- Simulation panel: the engine's control surface, sitting at the foot of every page. It is a
+   large panel rather than a thin toolbar, so it flows with the page (no overlap) and is set off
+   from the content above by space and a heavier top rule, in keeping with the rest. --- */
+.sim {
+  margin-top: var(--s8);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-top: 2px solid var(--rule-2);
+  border-radius: var(--r-2);
+}
+/* Collapsed, the panel is just this bar; clicking it reveals or hides the controls below. */
+.sim-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s4);
+  flex-wrap: wrap;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-2);
+  padding: var(--s4) var(--s5);
+  font-size: var(--t-md);
+  font-weight: 600;
+  cursor: pointer;
+}
+.sim-toggle:hover {
+  background: var(--inset);
+}
+.sim-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.sim-chevron {
+  width: 12px;
+  color: var(--ink-3);
+  font-size: var(--t-sm);
+}
+.sim-body {
+  padding: 0 var(--s5) var(--s5);
+}
+.sim-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(208px, 1fr));
+  gap: var(--s3);
+}
+.sim-block {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  padding: var(--s3);
+}
+.sim-block .sb-title {
+  font-size: var(--t-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--s2);
+  color: var(--ink-2);
+}
+.row {
+  display: flex;
+  gap: var(--s2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  cursor: pointer;
+}
+/* A one-line note under a sim control, explaining what the control does. */
+.sb-note {
+  margin-top: var(--s2);
+  font-size: var(--t-xs);
+  color: var(--ink-3);
+  line-height: 1.5;
+}
+/* The sim panel's number inputs are short (a day count, an attempt cap), not full width. */
+.sim-block input[type='number'] {
+  width: 84px;
+}
+
+/* --- Developer prose. --- */
+.prose h3 {
+  font-size: var(--t-lg);
+  margin: 0 0 var(--s2);
+  letter-spacing: -0.01em;
+}
+.prose p {
+  color: var(--ink);
+  margin: 0 0 var(--s3);
+  max-width: 74ch;
+}
+.prose .lede {
+  font-size: var(--t-md);
+  color: var(--ink);
+}
+.prose ul {
+  margin: 0 0 var(--s3);
+  padding-left: var(--s5);
+  color: var(--ink);
+  max-width: 74ch;
+}
+.prose li {
+  margin-bottom: 6px;
+}
+.prose li::marker {
+  color: var(--ink-3);
+}
+.prose b {
+  font-weight: 600;
+}
+.prose code,
+code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  background: var(--inset);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* --- Responsive: collapse the multi-column grids, then the sidebar, as width drops. --- */
+@media (max-width: 1000px) {
+  .grid-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .kanban {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 760px) {
+  .app {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s2);
+  }
+  .brand {
+    border: none;
+    margin: 0;
+    padding: 0 var(--s3) 0 0;
+  }
+  .nav-foot {
+    width: 100%;
+    border: none;
+    padding-top: var(--s2);
+  }
+  .main {
+    padding: var(--s5) var(--s4) 56px;
+  }
+  .grid-2,
+  .grid-3,
+  .grid-4,
+  .kanban {
+    grid-template-columns: 1fr;
+  }
+}

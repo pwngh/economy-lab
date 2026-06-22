@@ -1,0 +1,74 @@
+/**
+ * @pwngh/economy-lab
+ *
+ * Copyright (c) Preston Neal
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE.md file in the root directory of this source tree.
+ *
+ * @license MIT
+ */
+
+import {
+  Links,
+  Meta,
+  Outlet,
+  Scripts,
+  ScrollRestoration,
+  isRouteErrorResponse,
+} from 'react-router';
+
+import type { ReactNode } from 'react';
+import type { Route } from './+types/root';
+import './app.css';
+
+// The HTML document shell every page renders into.
+export function Layout({ children }: { children: ReactNode }) {
+  return (
+    <html lang="en">
+      <head>
+        <meta charSet="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Economy Console</title>
+        <Meta />
+        <Links />
+      </head>
+      <body>
+        {children}
+        <ScrollRestoration />
+        <Scripts />
+      </body>
+    </html>
+  );
+}
+
+export default function App() {
+  return <Outlet />;
+}
+
+// The catch-all error boundary: if any loader or action throws, render a plain message rather than
+// blanking the page. A thrown HTTP response (a 404, say) shows its status; any other error shows
+// its message.
+export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
+  let title = 'Something went wrong';
+  let detail = 'This page could not be loaded. Please try again.';
+  if (isRouteErrorResponse(error)) {
+    title = `${error.status} ${error.statusText}`;
+    detail = error.data ?? detail;
+  } else if (error instanceof Error) {
+    detail = error.message;
+  }
+  return (
+    <main className="error-page">
+      <div className="view-head">
+        <h2>{title}</h2>
+      </div>
+      <div className="notice err">{detail}</div>
+      <p>
+        <a className="link" href="/">
+          Back to overview
+        </a>
+      </p>
+    </main>
+  );
+}

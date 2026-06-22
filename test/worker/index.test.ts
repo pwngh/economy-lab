@@ -1,0 +1,429 @@
+/// <reference types="node" />
+/**
+ * @pwngh/economy-lab
+ *
+ * Copyright (c) Preston Neal
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE.md file in the root directory of this source tree.
+ *
+ * @license MIT
+ */
+
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { runSweeps, createWorker } from '#src/worker/index.ts';
+import { memoryStore } from '#src/adapters/memory.ts';
+import { credit, debit, postEntry } from '#src/ledger.ts';
+import { toAmount } from '#src/money.ts';
+import { fault } from '#src/errors.ts';
+import { spendable, SYSTEM } from '#src/accounts.ts';
+import {
+  fixedClock,
+  sequentialIds,
+  seededDigest,
+  seededSigner,
+  fixedRates,
+  testLogger,
+  noopMeter,
+  fakeProcessor,
+  testConfig,
+} from '#test/support/capabilities.ts';
+
+import type { SweepInput } from '#src/worker/index.ts';
+import type { ReconcileFeed } from '#src/worker/reconcile.ts';
+import type { WorkerCtx } from '#src/contract.ts';
+import type {
+  Digest,
+  Dispatcher,
+  Posting,
+  Scheduler,
+  Store,
+} from '#src/ports.ts';
+
+// The bundle of capabilities (clock, id generator, hasher, signer, and so on) every
+// background job is handed. They are all the deterministic test fakes, so each run behaves
+// the same way. Takes the same `digest` (hasher) the seed posting used, so the checkpoint
+// job hashes the same bytes that were recorded when the ledger was seeded.
+function workerCtx(digest: Digest): WorkerCtx {
+  return {
+    clock: fixedClock(0),
+    ids: sequentialIds(),
+    digest,
+    signer: seededSigner(1),
+    processor: fakeProcessor(),
+    rates: fixedRates(),
+    logger: testLogger(),
+    meter: noopMeter(),
+    config: testConfig(),
+  };
+}
+
+// A reconciliation source that returns nothing on both sides (processor and ledger). With
+// both empty there is nothing to mismatch, so the reconcile job runs to a clean result. This
+// lets a test confirm the reconcile job ran without standing up a real processor record.
+function emptyFeed(): ReconcileFeed {
+  return { pull: async () => ({ processor: [], ledger: [] }) };
+}
+
+// An event dispatcher that silently discards every event. The job that delivers outgoing
+// events needs one, but no event is ever queued here, so it is never actually invoked. It is
+// only present so the input object is complete.
+function nullDispatcher(): Dispatcher {
+  return async () => {};
+}
+
+// The full set of arguments the runner passes to all eight jobs: the current time `now` and a
+// per-pass cap `limit` for the jobs that scan for due items, a `dispatcher` for the
+// event-delivery job, and a `feed` plus `windows` for the reconciliation job. Callers can
+// override any field for a specific test.
+function sweepInput(overrides?: Partial<SweepInput>): SweepInput {
+  return {
+    now: 1_000,
+    limit: 10,
+    dispatcher: nullDispatcher(),
+    feed: emptyFeed(),
+    windows: [{ from: 0, to: 1_000 }],
+    ...overrides,
+  };
+}
+
+// A balanced posting that moves 500 credits from the platform's revenue account to a user's
+// spendable balance. Posting it gives the ledger two real accounts, so the checkpoint job has
+// something to snapshot instead of skipping an empty ledger.
+function seedPosting(): Posting {
+  let amount = toAmount('CREDIT', 500n);
+  return {
+    txnId: 'txn_seed',
+    legs: [credit(spendable('usr_a'), amount), debit(SYSTEM.REVENUE, amount)],
+    meta: { kind: 'test', source: 'card' },
+  };
+}
+
+// An in-memory store with the one seed posting already committed, so the checkpoint and
+// treasury jobs read genuine accounts. Returns the store along with the hasher it was built
+// with, so the same hasher can be passed to the worker context.
+async function seededStore(): Promise<{ store: Store; digest: Digest }> {
+  let digest = seededDigest(1);
+  let store = memoryStore({ digest });
+  await store.transaction((unit) => postEntry(unit.ledger, seedPosting()));
+  return { store, digest };
+}
+
+// One boolean per job, flipped to true when that job makes its first store read. A test
+// checks every flag is true to prove every job was reached.
+//
+// Three jobs do not get a read of their own to watch:
+//   - The checkpoint job reads the same per-account latest entries (`ledger.heads`) the
+//     treasury job already reads, so it cannot be told apart on that read. It is tracked by
+//     its later `checkpoints.put` write instead.
+//   - The checkpointVerify job is tracked by its `checkpoints.latest` read.
+//   - The reconcile job is tracked on its feed (see `recordingFeed`), not in this store.
+type Touched = {
+  payouts: boolean;
+  subscriptions: boolean;
+  treasury: boolean;
+  checkpoint: boolean;
+  checkpointVerify: boolean;
+  relay: boolean;
+  promos: boolean;
+};
+
+// Wrap a store so each job's first store call flips its flag in `touched`, and optionally
+// throws a supplied error from one chosen job. This is the shared setup behind both the
+// "every job ran" test and the "one job's throw is isolated" tests.
+function recordingStore(
+  store: Store,
+  touched: Touched,
+  faults?: Partial<Record<keyof Touched, Error>>,
+): Store {
+  let trip = (key: keyof Touched): void => {
+    touched[key] = true;
+    let error = faults?.[key];
+    if (error !== undefined) {
+      throw error;
+    }
+  };
+  return {
+    ...store,
+    sagas: {
+      ...store.sagas,
+      claimDue: probe(store.sagas.claimDue, () => trip('payouts')),
+    },
+    subscriptions: {
+      ...store.subscriptions,
+      claimDue: probe(store.subscriptions.claimDue, () =>
+        trip('subscriptions'),
+      ),
+    },
+    promos: {
+      ...store.promos,
+      claimDue: probe(store.promos.claimDue, () => trip('promos')),
+    },
+    outbox: {
+      ...store.outbox,
+      claimBatch: probe(store.outbox.claimBatch, () => trip('relay')),
+    },
+    checkpoints: {
+      ...store.checkpoints,
+      put: probe(store.checkpoints.put, () => trip('checkpoint')),
+      latest: probe(store.checkpoints.latest, () => trip('checkpointVerify')),
+    },
+    ledger: {
+      ...store.ledger,
+      heads: () => {
+        trip('treasury');
+        return store.ledger.heads();
+      },
+    },
+  };
+}
+
+// Wrap one async store method so it runs `before` (which flips the flag and may throw) and
+// only then calls the real method. Running `before` first means the flag is recorded even
+// when the real call returns an empty result.
+function probe<TArgs extends unknown[], TResult>(
+  method: (...args: TArgs) => Promise<TResult>,
+  before: () => void,
+): (...args: TArgs) => Promise<TResult> {
+  return (...args: TArgs) => {
+    before();
+    return method(...args);
+  };
+}
+
+// A reconciliation source that flips its flag when pulled, so the reconcile job's run can be
+// observed the same way the store-backed jobs' runs are.
+function recordingFeed(touched: { reconcile: boolean }): ReconcileFeed {
+  return {
+    pull: async () => {
+      touched.reconcile = true;
+      return { processor: [], ledger: [] };
+    },
+  };
+}
+
+function freshTouched(): Touched {
+  return {
+    payouts: false,
+    subscriptions: false,
+    treasury: false,
+    checkpoint: false,
+    checkpointVerify: false,
+    relay: false,
+    promos: false,
+  };
+}
+
+// --- runSweeps invokes every sweep ------------------------------------------------
+
+async function invokesAllEightSweeps(): Promise<void> {
+  let { store, digest } = await seededStore();
+  let touched = freshTouched();
+  let reconcileTouched = { reconcile: false };
+  let recording = recordingStore(store, touched);
+
+  await runSweeps(
+    recording,
+    workerCtx(digest),
+    sweepInput({ feed: recordingFeed(reconcileTouched) }),
+  );
+
+  assert.deepEqual(touched, {
+    payouts: true,
+    subscriptions: true,
+    treasury: true,
+    checkpoint: true,
+    checkpointVerify: true,
+    relay: true,
+    promos: true,
+  });
+  assert.equal(reconcileTouched.reconcile, true);
+  await store.close();
+}
+
+async function reportsEverySweepUnderItsName(): Promise<void> {
+  let { store, digest } = await seededStore();
+
+  let batch = await runSweeps(store, workerCtx(digest), sweepInput());
+
+  for (let name of [
+    'payouts',
+    'subscriptions',
+    'treasury',
+    'checkpoint',
+    'checkpointVerify',
+    'relay',
+    'reconcile',
+    'promos',
+  ] as const) {
+    assert.equal(batch[name].ok, true, `${name} should have run cleanly`);
+  }
+  await store.close();
+}
+
+// --- isolation: a thrown sweep lands in its own slot ------------------------------
+
+async function isolatesAThrownSweepFromTheBatch(): Promise<void> {
+  let { store, digest } = await seededStore();
+  let touched = freshTouched();
+  let recording = recordingStore(store, touched, {
+    payouts: fault('STORE.FAILURE', 'sagas down', { retryable: true }),
+  });
+
+  let batch = await runSweeps(recording, workerCtx(digest), sweepInput());
+
+  assert.equal(batch.payouts.ok, false);
+  // The jobs that run after the failing one all completed and reported success.
+  assert.equal(batch.subscriptions.ok, true);
+  assert.equal(batch.treasury.ok, true);
+  assert.equal(batch.checkpoint.ok, true);
+  assert.equal(batch.checkpointVerify.ok, true);
+  assert.equal(batch.relay.ok, true);
+  assert.equal(batch.reconcile.ok, true);
+  assert.equal(batch.promos.ok, true);
+  assert.equal(touched.subscriptions, true);
+  await store.close();
+}
+
+async function classifiesTheIsolatedFaultOnItsRetryVerdict(): Promise<void> {
+  let { store, digest } = await seededStore();
+  let recording = recordingStore(store, freshTouched(), {
+    subscriptions: fault('LEDGER.UNBALANCED', 'terminal', { retryable: false }),
+  });
+
+  let batch = await runSweeps(recording, workerCtx(digest), sweepInput());
+
+  assert.equal(batch.subscriptions.ok, false);
+  assert.equal(
+    batch.subscriptions.ok === false && batch.subscriptions.code,
+    'LEDGER.UNBALANCED',
+  );
+  assert.equal(
+    batch.subscriptions.ok === false && batch.subscriptions.retryable,
+    false,
+  );
+  await store.close();
+}
+
+async function wrapsANonEconomyThrowAsRetryableStoreFailure(): Promise<void> {
+  let { store, digest } = await seededStore();
+  let recording = recordingStore(store, freshTouched(), {
+    relay: new Error('raw boom'),
+  });
+
+  let batch = await runSweeps(recording, workerCtx(digest), sweepInput());
+
+  assert.equal(batch.relay.ok, false);
+  assert.equal(batch.relay.ok === false && batch.relay.code, 'STORE.FAILURE');
+  assert.equal(batch.relay.ok === false && batch.relay.retryable, true);
+  await store.close();
+}
+
+// --- createWorker composition root ------------------------------------------------
+
+async function runOnceDrivesOneBatch(): Promise<void> {
+  let { store, digest } = await seededStore();
+  let worker = createWorker(store, workerCtx(digest));
+
+  let batch = await worker.runOnce(sweepInput());
+
+  assert.equal(batch.payouts.ok, true);
+  assert.equal(worker.start, undefined); // no scheduler injected
+  await store.close();
+}
+
+async function startSchedulesTheBatchOnTheInjectedScheduler(): Promise<void> {
+  let { store, digest } = await seededStore();
+  let scheduled: { ms: number; task: () => Promise<void> } | null = null;
+  let canceled = false;
+  let scheduler: Scheduler = {
+    every: (ms, task) => {
+      scheduled = { ms, task };
+      return () => {
+        canceled = true;
+      };
+    },
+  };
+  let worker = createWorker(store, workerCtx(digest), scheduler);
+
+  assert.notEqual(worker.start, undefined);
+  let stop = worker.start!(5_000, sweepInput());
+  // start registered the interval with the scheduler and got back a cancel function.
+  assert.equal(scheduled!.ms, 5_000);
+  // Running the registered task once executes a full batch of all eight jobs without throwing.
+  await scheduled!.task();
+  stop();
+  assert.equal(canceled, true);
+  await store.close();
+}
+
+// When no dispatcher is configured, the relay sweep must skip cleanly: report success with an
+// empty summary, never touch the outbox, and leave any pending events queued for a later run.
+async function skipsTheRelaySweepWhenNoDispatcherIsConfigured(): Promise<void> {
+  let { store, digest } = await seededStore();
+  // Queue one event, so a relay run that DID happen would deliver and mark it (changing the
+  // outbox); a skipped run must leave it pending and untouched.
+  await store.transaction((unit) =>
+    unit.outbox.enqueue({
+      id: 'obx_skip',
+      event: {
+        id: 'evt_skip',
+        type: 'economy.sale.completed',
+        version: 1,
+        occurredAt: 0,
+        subject: 'usr_buyer',
+        data: {},
+        audience: 'internal',
+      },
+      status: 'pending',
+      attempts: 0,
+    }),
+  );
+
+  // dispatcher: undefined is the no-dispatcher deployment (see selectDispatcher in src/index.ts).
+  let batch = await runSweeps(
+    store,
+    workerCtx(digest),
+    sweepInput({ dispatcher: undefined }),
+  );
+
+  // The relay slot is a clean success carrying the empty summary, not a caught error.
+  assert.equal(batch.relay.ok, true);
+  assert.deepEqual(batch.relay.ok === true && batch.relay.summary, {
+    relayed: [],
+    failed: [],
+    deadLettered: [],
+  });
+  // Every other sweep still ran.
+  assert.equal(batch.payouts.ok, true);
+  assert.equal(batch.reconcile.ok, true);
+  // The queued event was not dropped: it is still pending and claimable by a future run.
+  let pending = await store.outbox.claimBatch(10);
+  assert.deepEqual(
+    pending.map((m) => m.id),
+    ['obx_skip'],
+  );
+  assert.equal(pending[0]?.attempts, 0);
+  await store.close();
+}
+
+describe('Worker Composition Root', () => {
+  test('invokes all eight sweeps once', () => invokesAllEightSweeps());
+  test('reports every sweep under its name', () =>
+    reportsEverySweepUnderItsName());
+  test('skips the relay sweep cleanly when no dispatcher is configured', () =>
+    skipsTheRelaySweepWhenNoDispatcherIsConfigured());
+
+  test('isolates a thrown sweep from the batch', () =>
+    isolatesAThrownSweepFromTheBatch());
+  test('keeps the isolated fault code and its retryable flag', () =>
+    classifiesTheIsolatedFaultOnItsRetryVerdict());
+  test('wraps a raw thrown Error as a retryable STORE.FAILURE', () =>
+    wrapsANonEconomyThrowAsRetryableStoreFailure());
+
+  test('runOnce drives one batch', () => runOnceDrivesOneBatch());
+  test('start schedules the batch on the injected scheduler', () =>
+    startSchedulesTheBatchOnTheInjectedScheduler());
+});

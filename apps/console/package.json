@@ -1,0 +1,27 @@
+{
+  "name": "economy-console-app",
+  "private": true,
+  "type": "module",
+  "description": "Economy Console",
+  "scripts": {
+    "dev": "react-router dev",
+    "build": "react-router build",
+    "start": "react-router-serve ./build/server/index.js",
+    "typecheck": "react-router typegen && node ./scripts/typecheck.mjs"
+  },
+  "dependencies": {
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-router": "7.18.0"
+  },
+  "devDependencies": {
+    "@react-router/dev": "7.18.0",
+    "@react-router/node": "7.18.0",
+    "@react-router/serve": "7.18.0",
+    "@types/node": "22.20.0",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.9.3",
+    "vite": "7.3.5"
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "name": "@pwngh/economy-lab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#src/*": "./src/*",
+    "#test/*": "./test/*",
+    "#scripts/*": "./scripts/*"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "description": "Economy Lab",
+  "author": "Preston Neal",
+  "license": "MIT",
+  "repository": "git+https://github.com/pwngh/economy-lab.git",
+  "scripts": {
+    "dev": "node --watch --env-file-if-exists=.env scripts/main.ts dev",
+    "start": "node --env-file-if-exists=.env scripts/main.ts serve",
+    "worker": "node --env-file-if-exists=.env scripts/main.ts worker",
+    "test": "node --test --test-reporter=./test/support/numbered.reporter.mjs --test-reporter-destination=stdout \"test/**/*.test.ts\"",
+    "check": "npm run typecheck && npm run lint && npm run pret && npm run test",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "pret": "prettier -c .",
+    "db:migrate": "node --env-file-if-exists=.env scripts/migrate.ts",
+    "prove": "node scripts/prove.ts",
+    "fuzz": "node scripts/fuzz.ts",
+    "trace": "node scripts/trace.ts",
+    "trace:check": "node scripts/trace.ts --check",
+    "demo": "node --env-file-if-exists=.env scripts/compose-demo.ts"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-sqs": "^3.1073.0",
+    "@eslint/js": "^9.13.0",
+    "@types/node": "^22.0.0",
+    "eslint": "^9.13.0",
+    "eslint-plugin-n": "^17.0.0",
+    "ioredis": "^5.11.1",
+    "jiti": "^2.0.0",
+    "mysql2": "^3.22.5",
+    "pg": "^8.22.0",
+    "prettier": "^3.3.3",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.0.0"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-sqs": "^3.0.0",
+    "ioredis": "^5.0.0",
+    "mysql2": "^3.0.0",
+    "pg": "^8.22.0"
+  },
+  "peerDependenciesMeta": {
+    "@aws-sdk/client-sqs": {
+      "optional": true
+    },
+    "ioredis": {
+      "optional": true
+    },
+    "mysql2": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "ledger",
+    "double-entry",
+    "idempotency",
+    "exactly-once",
+    "outbox",
+    "saga",
+    "payouts",
+    "marketplace",
+    "postgres",
+    "mysql",
+    "virtual-currency",
+    "economy"
+  ],
+  "engines": {
+    "node": ">=22.18.0"
+  }
+}

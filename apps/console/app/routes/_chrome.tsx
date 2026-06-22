@@ -1,0 +1,253 @@
+/**
+ * @pwngh/economy-lab
+ *
+ * Copyright (c) Preston Neal
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE.md file in the root directory of this source tree.
+ *
+ * @license MIT
+ */
+
+// The frame every page sits in: a sidebar of links on the left, the active page in the middle, and
+// a collapsible Simulation panel at the foot. The panel lives in the frame (not a page) so its
+// controls — which drive the shared state every page reads from — stay reachable wherever you are.
+
+import { NavLink, Outlet, useFetcher } from 'react-router';
+
+import { useState, type ReactNode } from 'react';
+import type { Route } from './+types/_chrome';
+import { getEconomy } from '~/economy.server';
+import { StatusPill, dayLabel } from '~/ui';
+
+// The data the frame itself needs, loaded on every page: the simulation settings (so the panel's
+// controls show their current values) and the headline solvency figure (shown in the panel). Both
+// are reads; nothing here changes state.
+export async function loader(_: Route.LoaderArgs) {
+  const eco = await getEconomy();
+  return { settings: eco.settings(), solvency: await eco.solvency() };
+}
+
+const NAV = [
+  { to: '/', label: 'Overview', end: true },
+  { to: '/accounts', label: 'Accounts' },
+  { to: '/ledger', label: 'Ledger' },
+  { to: '/payouts', label: 'Payouts' },
+  { to: '/integrity', label: 'Integrity' },
+  { to: '/developers', label: 'Developers' },
+];
+
+export default function Chrome({ loaderData }: Route.ComponentProps) {
+  const { settings, solvency } = loaderData;
+  return (
+    <div className="app">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-title">Economy Console</div>
+          <div className="brand-sub">Double-entry credits ledger</div>
+        </div>
+
+        {NAV.map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            end={item.end}
+            className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+          >
+            {item.label}
+          </NavLink>
+        ))}
+
+        <div className="nav-foot">Clock · {dayLabel(settings.now)}</div>
+      </aside>
+
+      <main className="main">
+        <Outlet />
+        <SimulationPanel settings={settings} solvency={solvency} />
+      </main>
+    </div>
+  );
+}
+
+// The control panel that drives the shared state. Collapsed by default; clicking the bar reveals
+// the controls. Each control posts to /actions/simulate through a fetcher; when it returns, React
+// Router re-runs the active page's loader so the whole view reflects the change. A one-line result
+// (what ran, or why an action was refused) comes back in `fx.data` and shows as a notice.
+function SimulationPanel({
+  settings,
+  solvency,
+}: {
+  settings: Route.ComponentProps['loaderData']['settings'];
+  solvency: Route.ComponentProps['loaderData']['solvency'];
+}) {
+  const fx = useFetcher<{ note?: string; error?: string }>();
+  const busy = fx.state !== 'idle';
+  const [open, setOpen] = useState(false);
+
+  return (
+    <section className="sim">
+      <button
+        className="sim-toggle"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <span className="sim-toggle-label">
+          <span className="sim-chevron" aria-hidden="true">
+            {open ? '▾' : '▸'}
+          </span>
+          Simulation
+        </span>
+        <StatusPill tone={solvency.backed ? 'green' : 'red'} dot>
+          Backing {solvency.backed ? 'covered' : 'short'} · trust $
+          {solvency.trustCashUsd.toFixed(2)}
+        </StatusPill>
+      </button>
+
+      {open ? (
+        <div className="sim-body">
+          {fx.data?.note ? (
+            <div className="notice ok">{fx.data.note}</div>
+          ) : null}
+          {fx.data?.error ? (
+            <div className="notice err">{fx.data.error}</div>
+          ) : null}
+
+          <div className="sim-grid">
+            <div className="sim-block">
+              <div className="sb-title">Time &amp; jobs</div>
+              <div className="row">
+                <SimButton
+                  fx={fx}
+                  op="advance"
+                  extra={{ days: '1' }}
+                  busy={busy}
+                >
+                  Advance 1 day
+                </SimButton>
+                <SimButton
+                  fx={fx}
+                  op="advance"
+                  extra={{ days: '7' }}
+                  busy={busy}
+                >
+                  +7 days
+                </SimButton>
+                <SimButton fx={fx} op="runJobs" busy={busy} primary>
+                  Run jobs
+                </SimButton>
+              </div>
+              <div className="sb-note">
+                Advance the clock, then run jobs to move payouts forward.
+              </div>
+            </div>
+
+            <div className="sim-block">
+              <div className="sb-title">Payout provider (Tilia)</div>
+              <fx.Form method="post" action="/actions/simulate">
+                <input
+                  type="hidden"
+                  name="op"
+                  value={settings.faultMode ? 'faultOff' : 'faultOn'}
+                />
+                <label className="toggle">
+                  <StatusPill tone={settings.faultMode ? 'red' : 'green'} dot>
+                    {settings.faultMode ? 'down' : 'up'}
+                  </StatusPill>
+                  <button disabled={busy}>
+                    {settings.faultMode
+                      ? 'Bring Tilia back up'
+                      : 'Take Tilia down'}
+                  </button>
+                </label>
+              </fx.Form>
+              <div className="sb-note">
+                While down, every payout submit fails.
+              </div>
+            </div>
+
+            <div className="sim-block">
+              <div className="sb-title">Maturity hold (days)</div>
+              <fx.Form method="post" action="/actions/simulate" className="row">
+                <input type="hidden" name="op" value="setMaturity" />
+                <input
+                  type="number"
+                  name="days"
+                  min={0}
+                  defaultValue={settings.maturityHorizonDays}
+                />
+                <button disabled={busy}>Set</button>
+              </fx.Form>
+              <div className="sb-note">
+                How long earned credits must mature before they can be paid out.
+              </div>
+            </div>
+
+            <div className="sim-block">
+              <div className="sb-title">Payout retry limit</div>
+              <fx.Form method="post" action="/actions/simulate" className="row">
+                <input type="hidden" name="op" value="setMaxAttempts" />
+                <input
+                  type="number"
+                  name="n"
+                  min={1}
+                  defaultValue={settings.maxPayoutAttempts}
+                />
+                <button disabled={busy}>Set</button>
+              </fx.Form>
+              <div className="sb-note">
+                Failed attempts before a payout is abandoned and its reserve
+                returned.
+              </div>
+            </div>
+
+            <div className="sim-block">
+              <div className="sb-title">Sample data</div>
+              <div className="row">
+                <SimButton fx={fx} op="reset" busy={busy}>
+                  Reset
+                </SimButton>
+                <SimButton fx={fx} op="clear" busy={busy}>
+                  Clear
+                </SimButton>
+              </div>
+              <div className="sb-note">
+                Reset restores the sample data. Clear empties everything.
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+// A one-button form that posts a single simulation op (plus any fixed hidden fields). Most of the
+// panel's controls are exactly this — a labelled button that triggers one op — so they share it
+// rather than repeating the form boilerplate.
+function SimButton({
+  fx,
+  op,
+  extra,
+  busy,
+  primary,
+  children,
+}: {
+  fx: ReturnType<typeof useFetcher>;
+  op: string;
+  extra?: Record<string, string>;
+  busy: boolean;
+  primary?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <fx.Form method="post" action="/actions/simulate">
+      <input type="hidden" name="op" value={op} />
+      {Object.entries(extra ?? {}).map(([name, value]) => (
+        <input key={name} type="hidden" name={name} value={value} />
+      ))}
+      <button className={primary ? 'primary' : undefined} disabled={busy}>
+        {children}
+      </button>
+    </fx.Form>
+  );
+}

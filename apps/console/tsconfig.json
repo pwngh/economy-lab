@@ -1,0 +1,40 @@
+{
+  "include": ["**/*.ts", "**/*.tsx", ".react-router/types/**/*"],
+  // The frozen engine source (../../src) is deliberately NOT in `include`: it is type-checked at
+  // the repo root under its own tsconfig (lib: esnext, types: []), and re-checking it here under
+  // this app's DOM lib produces false ArrayBuffer/SharedArrayBuffer mismatches against code that is
+  // correct as authored. Vite/esbuild still COMPILES the engine for the build (verified), and
+  // `skipLibCheck` keeps the imported `.d`-equivalent types from re-erroring.
+  "exclude": ["build"],
+  "compilerOptions": {
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "types": ["@react-router/node", "vite/client"],
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+
+    // The engine source imports siblings with explicit `.ts` specifiers; allow that here too
+    // (Vite/esbuild resolve them at build time).
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+
+    "rootDirs": [".", "./.react-router/types"],
+    "paths": {
+      "~/*": ["./app/*"],
+      // The engine core is imported with the repo-wide `#*` alias (root
+      // package.json "imports": { "#*": "./*" }), e.g. `#src/contract.ts`.
+      // That `#`-map is scoped to the repo-root package.json, which TS does not
+      // consult from this app, so mirror it here: `#<path>` -> `<repoRoot>/<path>`.
+      "#*": ["../../*"]
+    }
+  }
+}

@@ -1,0 +1,12 @@
+# Prettier has no SQL parser; db/schema.sql is kept formatted by hand.
+*.sql
+
+node_modules
+coverage
+
+# Generated browser bundle (built by `npm run console:build`).
+console/engine.js
+package-lock.json
+db/migrations
+Dockerfile
+.dockerignore

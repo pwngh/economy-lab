@@ -1,0 +1,1412 @@
+/**
+ * @pwngh/economy-lab
+ *
+ * Copyright (c) Preston Neal
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE.md file in the root directory of this source tree.
+ *
+ * @license MIT
+ */
+
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+
+// The `pg` package ships no TypeScript types and this project disables auto-loaded
+// @types, so its default import has no type. The @ts-expect-error silences that, and the
+// binding below is immediately re-typed as PgModule, so no code here falls back to `any`.
+// @ts-expect-error -- untyped default import; typed at the binding via PgModule.
+import pgUntyped from 'pg';
+
+// The slice of the `pg` package this adapter actually uses: a Pool constructor, and the
+// types.setTypeParser hook that overrides how a Postgres column type is converted to a JS
+// value. Declaring only what we call means we don't depend on the full vendor types.
+interface PgModule {
+  Pool: new (config: { connectionString: string; options?: string }) => PgPool;
+  types: {
+    setTypeParser(oid: number, parse: (value: string) => unknown): void;
+  };
+}
+let pg = pgUntyped as PgModule;
+
+import { chainHash, balanceDelta, GENESIS } from '#src/ledger.ts';
+import { toAmount, encodeAmount, decodeAmount } from '#src/money.ts';
+import { currency } from '#src/accounts.ts';
+import { fromHex } from '#src/bytes.ts';
+import {
+  callProcedure,
+  callFunction,
+  postEntryArgs,
+} from '#src/adapters/sql-routines.ts';
+import {
+  defaultDigest,
+  defaultClock,
+  GENESIS_HEX,
+  readMinor,
+  distinctAccounts,
+  rowToSaga,
+  rowToSubscription,
+  rowToCheckpoint,
+  metaString,
+  metaNumber,
+} from '#src/adapters/sql-shared.ts';
+
+import type { Link } from '#src/adapters/sql-shared.ts';
+
+import type { Amount } from '#src/money.ts';
+import type { AccountRef } from '#src/accounts.ts';
+import type { Transaction } from '#src/contract.ts';
+import type {
+  Attempt,
+  CheckpointStore,
+  Clock,
+  Digest,
+  EntitlementStore,
+  IdempotencyStore,
+  Leg,
+  Ledger,
+  Lot,
+  OutboxMessage,
+  OutboxStore,
+  Posting,
+  PromoGrant,
+  PromoStore,
+  Range,
+  ReplayStore,
+  SaleStore,
+  Sale,
+  SagaStore,
+  Statement,
+  Store,
+  StoredLink,
+  SubscriptionStore,
+  TrustStore,
+  Unit,
+  Velocity,
+} from '#src/ports.ts';
+
+// The two runtime shapes the sub-stores run queries against: a checked-out client (one
+// connection you must release when done) and a pool (which hands clients out).
+interface PgClient {
+  query(text: string, values?: ReadonlyArray<unknown>): Promise<PgResult>;
+  release(): void;
+}
+interface PgResult {
+  rows: Array<Record<string, unknown>>;
+}
+interface PgPool {
+  connect(): Promise<PgClient>;
+  query(text: string, values?: ReadonlyArray<unknown>): Promise<PgResult>;
+  end(): Promise<void>;
+}
+
+// Anything you can run a query on: either the pool (used for queries outside a
+// transaction) or a single checked-out client (used inside one). Every sub-store is
+// written against this, so the exact same code works in both cases.
+type Queryable = Pick<PgPool, 'query'>;
+
+// Make `pg` return Postgres BIGINT and NUMERIC columns as JS BigInt instead of its
+// default of plain strings. Balances can grow past 2^53 (the largest integer a JS Number
+// holds exactly), so a Number would silently lose precision; BigInt does not. The type
+// parsers are global per process, but setting them again is harmless, so calling
+// postgresStore more than once is safe.
+function configureBigIntParsers(): void {
+  // 20 is the internal id (OID) for the int8/BIGINT column type, 1700 for NUMERIC.
+  pg.types.setTypeParser(20, (value: string) => BigInt(value));
+  pg.types.setTypeParser(1700, (value: string) => BigInt(value));
+}
+
+// --- Schema isolation -------------------------------------------------------------
+
+// Read db/postgresql-schema.sql, the project's single SQL file that defines all the tables. The path
+// is resolved relative to this module's own location so it works no matter what directory
+// the process was started from.
+async function loadSchemaSql(): Promise<string> {
+  let path = fileURLToPath(
+    new URL('../../db/postgresql-schema.sql', import.meta.url),
+  );
+  return readFile(path, 'utf8');
+}
+
+// Postgres won't let a schema name be passed as a query parameter in CREATE SCHEMA or SET
+// search_path, so it has to be pasted directly into the SQL text. To keep that safe from
+// injection, accept only lowercase letters, digits, and underscores; reject anything else.
+function safeSchemaName(name: string): string {
+  if (!/^[a-z_][a-z0-9_]*$/.test(name)) {
+    throw new Error(`Unsafe Postgres schema name: ${name}.`);
+  }
+  return name;
+}
+
+// --- The ledger store -------------------------------------------------------------
+
+// True if the account id ends in one of the three user-account kinds (spendable, earned,
+// or promo). An account id looks like `usr_123:spendable`; the part after the last colon
+// is the kind. Used to tell a real user account apart from a platform account.
+function isKnownSuffix(account: AccountRef): boolean {
+  let colon = account.lastIndexOf(':');
+  if (colon < 0) {
+    return false;
+  }
+  let suffix = account.slice(colon + 1);
+  return suffix === 'spendable' || suffix === 'earned' || suffix === 'promo';
+}
+
+// The hash at the tip of each given account's chain, read in ONE query. Each entry posted to an
+// account stores a hash of itself plus the previous entry's hash, forming a tamper-evident chain;
+// the tip is the most recent such hash (the entry with the highest posting sequence number — a
+// unique index guarantees the chain never branches, so there is exactly one). `distinct on` keeps
+// one row per account. Accounts with no entries yet are simply absent from the result, and the
+// caller treats a missing account as the genesis hash. Reading every head at once turns what was
+// one round-trip per account into one round-trip per posting.
+async function headsForAccounts(
+  q: Queryable,
+  accounts: ReadonlyArray<AccountRef>,
+): Promise<Map<string, string>> {
+  let heads = new Map<string, string>();
+  if (accounts.length === 0) {
+    return heads;
+  }
+  let result = await q.query(
+    `select distinct on (c.account_id) c.account_id, c.hash
+       from chain_links c
+       join postings p on p.id = c.posting_id
+      where c.account_id = any($1::text[])
+      order by c.account_id, p.seq desc`,
+    [accounts],
+  );
+  for (let row of result.rows) {
+    heads.set(row.account_id as string, row.hash as string);
+  }
+  return heads;
+}
+
+// Compute the new chain hash for each account this posting touches. Read every account's current
+// tip hash in one query, then for each account decode that hex back to bytes (or use the raw
+// genesis bytes when the account is brand new) and hand it plus the posting to chainHash (in
+// ledger.ts), which produces the next hash. The result pairs each account with its old and new
+// hash so writePosting can store them. The hashes are independent across accounts, so reading the
+// heads in a batch and computing the hashes after changes nothing about the result.
+async function advanceChain(
+  q: Queryable,
+  digest: Digest,
+  posting: Posting,
+): Promise<ReadonlyArray<Link>> {
+  let accounts = distinctAccounts(posting.legs);
+  let heads = await headsForAccounts(q, accounts);
+  let links: Link[] = [];
+  for (let account of accounts) {
+    let prevHex = heads.get(account) ?? GENESIS_HEX;
+    let accountPrevHash = prevHex === GENESIS_HEX ? GENESIS : fromHex(prevHex);
+    let hash = await chainHash(digest, {
+      accountPrevHash,
+      txnId: posting.txnId,
+      account,
+      legs: posting.legs,
+      meta: posting.meta,
+    });
+    links.push({ account, prevHash: prevHex, hash });
+  }
+  return links;
+}
+
+// Create a user account row if it doesn't exist yet, so the first entry posted to it has
+// something to reference. Platform accounts (ids starting `vrchat:`) are created up front
+// by the schema and their kind column is `system`, which the schema's CHECK constraint
+// wouldn't accept on an insert here, so we skip them. Only user accounts are inserted, and
+// `on conflict do nothing` makes calling this repeatedly safe.
+async function ensureAccount(q: Queryable, account: AccountRef): Promise<void> {
+  if (!isKnownSuffix(account)) {
+    return;
+  }
+  let kind = account.slice(account.lastIndexOf(':') + 1);
+  await q.query(
+    `insert into accounts (id, kind, currency) values ($1, $2, $3)
+       on conflict (id) do nothing`,
+    [account, kind, currency(account)],
+  );
+}
+
+// NOTE: the per-leg balance fold (UPDATE existing row first so the non-negative CHECK is tested
+// against the new total, then INSERT a first-time row) now lives inside the `post_entry` stored
+// procedure (db/postgresql-schema.sql), which applies every account's net delta in one set-based step. The
+// application still decides each delta via `balanceDelta` (see postEntryArgs in sql-routines.ts);
+// the procedure only persists it.
+
+// Write a posting to the database: the posting row, ALL of its entry lines, exactly one
+// chain-link row per distinct account it touched (carrying that account's old and new chain
+// hashes), and the running-balance updates. Every write goes through the one queryable
+// passed in, so when that is a transaction client they all commit or roll back together.
+//
+// Legs and the chain are stored at different granularities on purpose: a posting may have
+// several legs to one account (e.g. a promo-funded spend), but it advances that account's
+// hash chain only once.
+//
+// Two reasons for splitting them this way. First, we store every leg so that the set of
+// legs lineageOf later reads back (and feeds into recomputing the hash) is identical to what
+// the in-memory adapter would have. Second, we store the chain link just once per account
+// (not once per leg); the chain_links table is keyed by (posting, account), which allows
+// only one link per account per posting, so storing one link per leg would clash on that key
+// and wrongly reject a legitimate second same-account leg. advanceChain already yields one
+// Link per distinct account, so `links` has exactly the rows chain_links needs.
+async function writePosting(
+  q: Queryable,
+  posting: Posting,
+  postedAt: number,
+  links: ReadonlyArray<Link>,
+): Promise<void> {
+  // One round-trip persists the whole posting. The application has already done every decision
+  // (the chain hashes, the per-account net balance deltas, which user accounts are new); the
+  // `post_entry` procedure receives those finished values and writes the posting, its legs, its
+  // chain links, and the balance changes as one set-based unit inside this transaction. This
+  // replaces a per-leg loop that cost a dozen-plus round-trips per posting. JSON arrays carry the
+  // bigint amounts as strings so nothing is lost past 2^53.
+  let query = (sql: string, params: ReadonlyArray<unknown>) =>
+    q.query(sql, params);
+  let args = postEntryArgs(posting, links);
+  await callProcedure(query, 'postgres', 'post_entry', [
+    posting.txnId,
+    postedAt,
+    JSON.stringify(posting.meta),
+    JSON.stringify(args.legs),
+    JSON.stringify(args.links),
+    JSON.stringify(args.balances),
+    JSON.stringify(args.newAccounts),
+  ]);
+}
+
+function createLedgerStore(q: Queryable, digest: Digest, clock: Clock): Ledger {
+  return {
+    hasAccount: async (account) => {
+      if (isKnownSuffix(account)) {
+        return true;
+      }
+      let result = await q.query(`select 1 from accounts where id = $1`, [
+        account,
+      ]);
+      return result.rows.length > 0;
+    },
+
+    // Does nothing here. Account locking only makes sense inside a transaction, so the
+    // real implementation lives in lockingLedger below, which runs on a transaction client.
+    lock: async () => {},
+
+    append: async (posting) => {
+      let postedAt = clock.now();
+      let links = await advanceChain(q, digest, posting);
+      await writePosting(q, posting, postedAt, links);
+      return { id: posting.txnId, postedAt, legs: posting.legs, links };
+    },
+
+    balance: async (account) => {
+      // The cached balance comes back through the `account_balance` function (0 when the account
+      // has no row yet), giving the read one named, tunable access path on the database side.
+      let raw = await callFunction(
+        (sql, params) => q.query(sql, params),
+        'postgres',
+        'account_balance',
+        [account],
+      );
+      return toAmount(currency(account), readMinor(raw));
+    },
+
+    statement: async (account, range) => buildStatement(q, account, range),
+
+    balanceAccounts: () => balanceAccountsOf(q),
+
+    timeline: (account) => timelineOf(q, account),
+
+    heads: () => headsOf(q),
+
+    lineage: (account) => lineageOf(q, account),
+
+    posting: async (txnId) => postingOf(q, txnId),
+  };
+}
+
+// Same ledger as createLedgerStore, but with a working `lock`. Locking grabs a row-level
+// lock on the account's balance row (the `for update` clause), so two transactions writing
+// the same account take turns instead of interleaving. It changes no data and advances no
+// hash chain. Only used on a transaction client, where the lock is released at commit.
+function lockingLedger(q: Queryable, digest: Digest, clock: Clock): Ledger {
+  let base = createLedgerStore(q, digest, clock);
+  return {
+    ...base,
+    lock: async (account) => {
+      await ensureAccount(q, account);
+      await q.query(
+        `select 1 from account_balances where account_id = $1 for update`,
+        [account],
+      );
+    },
+  };
+}
+
+// Build the list of an account's entries between two times (including `from`, excluding
+// `to`). Each entry's amount is shown the way it changed this account's balance, so adding
+// money to a user account reads as a positive number. The cursor is always null because
+// everything fits in one page for the cases this adapter is tested against.
+async function buildStatement(
+  q: Queryable,
+  account: AccountRef,
+  range: Range,
+): Promise<Statement> {
+  let result = await q.query(
+    `select l.posting_id, l.amount, l.currency, p.posted_at
+       from legs l
+       join postings p on p.id = l.posting_id
+      where l.account_id = $1 and p.posted_at >= $2 and p.posted_at < $3
+      order by p.seq asc`,
+    [account, range.from, range.to],
+  );
+  let entries = result.rows.map((row) => ({
+    txnId: row.posting_id as string,
+    amount: balanceDelta({
+      account,
+      amount: toAmount(
+        row.currency as Amount['currency'],
+        readMinor(row.amount),
+      ),
+    }),
+    postedAt: Number(row.posted_at),
+  }));
+  return { account, entries, cursor: null };
+}
+
+// Stream an account's incoming funds oldest-first, one "lot" per entry that increased the
+// account. Each lot records when the money arrived and when it becomes withdrawable, so
+// other code (maturity.ts) can decide how much has matured. The when/where details come
+// from the entry's stored metadata; if an entry is missing them, fall back to "unknown"
+// source and treat the money as available immediately.
+async function* timelineOf(
+  q: Queryable,
+  account: AccountRef,
+): AsyncIterable<Lot> {
+  let result = await q.query(
+    `select l.posting_id, l.amount, l.currency, p.posted_at, p.meta
+       from legs l
+       join postings p on p.id = l.posting_id
+      where l.account_id = $1
+      order by p.seq asc`,
+    [account],
+  );
+  for (let row of result.rows) {
+    let delta = balanceDelta({
+      account,
+      amount: toAmount(
+        row.currency as Amount['currency'],
+        readMinor(row.amount),
+      ),
+    });
+    if (delta.minor <= 0n) {
+      continue;
+    }
+    let meta = (row.meta ?? {}) as Record<string, unknown>;
+    let postedAt = Number(row.posted_at);
+    yield {
+      txnId: row.posting_id as string,
+      amount: delta,
+      source: metaString(meta, 'source', 'unknown'),
+      toppedUpAt: postedAt,
+      maturesAt: metaNumber(meta, 'maturesAt', postedAt),
+    };
+  }
+}
+
+// Stream every account paired with the hash at the tip of its chain — that is, the hash of
+// its most recent entry. (Postgres `distinct on` keeps one row per account; ordering newest
+// first within each account picks the latest.)
+async function* headsOf(
+  q: Queryable,
+): AsyncIterable<readonly [AccountRef, string]> {
+  let result = await q.query(
+    `select distinct on (c.account_id) c.account_id, c.hash
+       from chain_links c
+       join postings p on p.id = c.posting_id
+      order by c.account_id, p.seq desc`,
+  );
+  for (let row of result.rows) {
+    yield [row.account_id as AccountRef, row.hash as string] as const;
+  }
+}
+
+// Stream every account that has a row in account_balances, the table that caches each
+// account's running total so balance() can be one quick read. That cached total is supposed
+// to match the balance you get by summing the account's entry lines, but it can be wrong;
+// the entry lines are the source of truth and the cached total is just a copy. This pass
+// lets the integrity checker catch a cached balance that has no entry lines behind it at all
+// — heads() (built from the hash chain) never lists such an account, so enumerating this
+// table is the only way to find it. Reads account_balances directly, the one place those
+// cached totals live in this adapter.
+async function* balanceAccountsOf(q: Queryable): AsyncIterable<AccountRef> {
+  let result = await q.query(
+    `select account_id from account_balances order by account_id asc`,
+  );
+  for (let row of result.rows) {
+    yield row.account_id as AccountRef;
+  }
+}
+
+// Stream an account's full chain history, oldest entry first, so an auditor can recompute
+// each hash and confirm nothing was tampered with. For every entry it yields exactly what
+// the hash was computed from when the entry was written (all the entry's lines, its
+// metadata, and the previous hash) plus the hash that was stored, so the two can be checked
+// against each other.
+async function* lineageOf(
+  q: Queryable,
+  account: AccountRef,
+): AsyncIterable<StoredLink> {
+  // One chain_links row per posting that touched this account (a posting advances the
+  // account's chain exactly once, however many legs it has to the account), so this yields
+  // one StoredLink per such posting — exactly what the in-memory adapter does.
+  let result = await q.query(
+    `select c.posting_id, c.prev_hash, c.hash, p.meta
+       from chain_links c
+       join postings p on p.id = c.posting_id
+      where c.account_id = $1
+      order by p.seq asc`,
+    [account],
+  );
+  for (let row of result.rows) {
+    // The whole posting's legs (not just this account's): chainPreimage filters to the
+    // account's own legs itself, so the recompute matches the in-memory reference exactly.
+    let legs = await legsOf(q, row.posting_id as string);
+    yield {
+      txnId: row.posting_id as string,
+      legs,
+      meta: (row.meta ?? {}) as Record<string, unknown>,
+      prevHash: row.prev_hash as string,
+      hash: row.hash as string,
+    };
+  }
+}
+
+// Load a whole posting by its transaction id: its metadata and ALL of its entry lines (not
+// just one account's, the way lineageOf works). Code that undoes a transaction needs every
+// line so it can post the exact opposite. Returns null when no posting has that id, so the
+// caller can report an error instead of acting on a guess.
+async function postingOf(q: Queryable, txnId: string): Promise<Posting | null> {
+  let result = await q.query(`select meta from postings where id = $1`, [
+    txnId,
+  ]);
+  let row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  let legs = await legsOf(q, txnId);
+  return {
+    txnId,
+    legs,
+    meta: (row.meta ?? {}) as Record<string, unknown>,
+  };
+}
+
+// Load all the entry lines of one posting, in the order they were stored, each rebuilt as a
+// signed Leg (account plus signed amount). Both postingOf and lineageOf use this; the hash
+// is computed from the whole posting, so every line is needed, not just one account's.
+async function legsOf(q: Queryable, txnId: string): Promise<Leg[]> {
+  let result = await q.query(
+    `select account_id, amount, currency from legs
+      where posting_id = $1 order by id asc`,
+    [txnId],
+  );
+  return result.rows.map((row) => ({
+    account: row.account_id as AccountRef,
+    amount: toAmount(row.currency as Amount['currency'], readMinor(row.amount)),
+  }));
+}
+
+// --- Idempotency store ------------------------------------------------------------
+
+// Lets a request that is sent twice run only once. Each request carries a unique key.
+//
+// `claim` decides whether this caller does the work or replays an earlier result. If a row
+// already exists for the key, the work was done before, so it returns that stored result.
+// Otherwise it takes a lock tied to the key (pg_advisory_xact_lock) and rechecks. The lock
+// makes a second caller with the same key wait until the first caller's transaction
+// finishes: if the first committed, a row now exists and the waiter replays it; if it rolled
+// back, no row exists and the waiter does the work itself.
+//
+// `record` inserts the result row, and runs inside the same transaction as the posting it
+// records. Because of that, a transaction that fails and rolls back leaves no row, so the
+// key stays usable for a real retry rather than being permanently consumed.
+function createIdempotencyStore(q: Queryable): IdempotencyStore {
+  return {
+    claim: async (key) => {
+      let existing = await q.query(
+        `select transaction from idempotency where key = $1`,
+        [key],
+      );
+      let prior = existing.rows[0];
+      if (prior) {
+        return {
+          claimed: false,
+          transaction: decodeTransaction(
+            prior.transaction as EncodedTransaction,
+          ),
+        };
+      }
+      await q.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+        key,
+      ]);
+      let recheck = await q.query(
+        `select transaction from idempotency where key = $1`,
+        [key],
+      );
+      let recorded = recheck.rows[0];
+      if (recorded) {
+        return {
+          claimed: false,
+          transaction: decodeTransaction(
+            recorded.transaction as EncodedTransaction,
+          ),
+        };
+      }
+      return { claimed: true };
+    },
+    record: async (key, transaction) => {
+      await q.query(
+        `insert into idempotency (key, transaction) values ($1, $2::jsonb)`,
+        [key, JSON.stringify(encodeTransaction(transaction))],
+      );
+    },
+  };
+}
+
+// The JSON-safe form a Transaction is stored as in the idempotency row. A Transaction's
+// amounts are BigInt, and JSON.stringify throws on BigInt, so each amount is first turned
+// into a string (encodeAmount). The other fields (id, postedAt, the chain links) are
+// already plain JSON values and pass through unchanged. Decoding reverses the amount step,
+// rebuilding a Transaction equal to the original so a replay returns the same result.
+interface EncodedLeg {
+  account: string;
+  amount: string;
+}
+interface EncodedTransaction {
+  id: string;
+  postedAt: number;
+  legs: ReadonlyArray<EncodedLeg>;
+  links: Transaction['links'];
+}
+
+function encodeTransaction(transaction: Transaction): EncodedTransaction {
+  return {
+    id: transaction.id,
+    postedAt: transaction.postedAt,
+    legs: transaction.legs.map((leg) => ({
+      account: leg.account,
+      amount: encodeAmount(leg.amount),
+    })),
+    links: transaction.links,
+  };
+}
+
+function decodeTransaction(encoded: EncodedTransaction): Transaction {
+  return {
+    id: encoded.id,
+    postedAt: encoded.postedAt,
+    legs: encoded.legs.map((leg) => ({
+      account: leg.account as AccountRef,
+      amount: decodeAmountString(leg.amount),
+    })),
+    links: encoded.links,
+  };
+}
+
+// Turn one encoded amount back into an Amount. encodeAmount produces a string like
+// `CREDIT:12.34`; split off the currency before the colon and parse the decimal after it.
+function decodeAmountString(encoded: string): Amount {
+  let colon = encoded.indexOf(':');
+  let currency = encoded.slice(0, colon) as Amount['currency'];
+  let decimal = encoded.slice(colon + 1);
+  return decodeAmount(decimal, currency);
+}
+
+// --- Replay store -----------------------------------------------------------------
+
+// Dedups raw inbound provider webhooks by the provider's own event id, kept separate from
+// the domain idempotency key space. `claim` is an atomic insert-if-absent over the
+// seen_webhooks table: `on conflict do nothing` plus `returning event_id` lets one statement
+// both insert the id and report whether it was new — a returned row means this is the first
+// sighting (claimed), no returned row means the id was already present (a redelivery). This
+// is run as the last webhook gate (after the signature check that proves the payload came from
+// the provider and the freshness check that rejects stale ones), so a rejected delivery that
+// never reaches it does not burn the id and a later genuine redelivery still processes.
+function createReplayStore(q: Queryable): ReplayStore {
+  return {
+    claim: async (eventId) => {
+      let result = await q.query(
+        `insert into seen_webhooks (event_id) values ($1)
+           on conflict (event_id) do nothing
+           returning event_id`,
+        [eventId],
+      );
+      return { claimed: result.rows.length > 0 };
+    },
+  };
+}
+
+// --- Sale store -------------------------------------------------------------------
+
+// Stores a record of each completed sale, looked up by its order id. A refund reads the
+// matching record so it can reverse exactly what the original purchase posted. The entry
+// lines are stored as JSON with each amount kept as its integer minor-units string, since
+// JSON can't hold BigInt directly.
+function createSaleStore(q: Queryable): SaleStore {
+  return {
+    put: async (sale) => {
+      await q.query(
+        `insert into sales (order_id, buyer_id, recipient_id, sku, price, fee, legs, txn_id, posted_at)
+           values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+           on conflict (order_id) do update set
+             buyer_id = excluded.buyer_id, recipient_id = excluded.recipient_id,
+             sku = excluded.sku, price = excluded.price, fee = excluded.fee,
+             legs = excluded.legs, txn_id = excluded.txn_id, posted_at = excluded.posted_at`,
+        [
+          sale.orderId,
+          sale.buyerId,
+          sale.recipientId ?? null,
+          sale.sku,
+          sale.price.minor,
+          sale.fee.minor,
+          JSON.stringify(encodeLegs(sale.legs)),
+          sale.txnId,
+          sale.postedAt,
+        ],
+      );
+    },
+    get: async (orderId) => {
+      let result = await q.query(`select * from sales where order_id = $1`, [
+        orderId,
+      ]);
+      let row = result.rows[0];
+      return row ? rowToSale(row) : null;
+    },
+  };
+}
+
+// Convert entry lines into a JSON-safe array, turning each BigInt amount into a string so
+// JSON.stringify won't choke on it. rowToSale reverses this.
+function encodeLegs(
+  legs: ReadonlyArray<Leg>,
+): Array<{ account: string; currency: string; minor: string }> {
+  return legs.map((leg) => ({
+    account: leg.account,
+    currency: leg.amount.currency,
+    minor: leg.amount.minor.toString(),
+  }));
+}
+
+function rowToSale(row: Record<string, unknown>): Sale {
+  let raw = row.legs as Array<{
+    account: string;
+    currency: string;
+    minor: string;
+  }>;
+  let legs: Leg[] = raw.map((leg) => ({
+    account: leg.account as AccountRef,
+    amount: toAmount(leg.currency as Amount['currency'], BigInt(leg.minor)),
+  }));
+  let priceCurrency = (legs[0]?.amount.currency ??
+    'CREDIT') as Amount['currency'];
+  return {
+    orderId: row.order_id as string,
+    buyerId: row.buyer_id as string,
+    recipientId: (row.recipient_id as string | null) ?? undefined,
+    sku: row.sku as string,
+    price: toAmount(priceCurrency, readMinor(row.price)),
+    fee: toAmount(priceCurrency, readMinor(row.fee)),
+    legs,
+    txnId: row.txn_id as string,
+    postedAt: Number(row.posted_at),
+  };
+}
+
+// --- Outbox store -----------------------------------------------------------------
+
+// Holds events that need to be sent out, so sending can happen reliably after the data is
+// committed. `enqueue` writes the event in the same transaction as the work that produced
+// it, so an event exists if and only if its work committed. A separate relay process later
+// reads a batch (`claimBatch`), sends each event, and calls `markRelayed`. `claimBatch`
+// uses `for update skip locked` so several relay workers can run at once without two of them
+// grabbing the same row.
+function createOutboxStore(q: Queryable): OutboxStore {
+  return {
+    enqueue: async (message) => {
+      await q.query(
+        `insert into outbox (id, event, status, attempts)
+           values ($1, $2::jsonb, $3, $4)`,
+        [
+          message.id,
+          JSON.stringify(message.event),
+          message.status,
+          message.attempts,
+        ],
+      );
+    },
+    claimBatch: async (limit) => {
+      let result = await q.query(
+        `select id, event, status, attempts from outbox
+          where status = 'pending'
+          order by created_at asc
+          limit $1
+          for update skip locked`,
+        [limit],
+      );
+      return result.rows.map(rowToOutbox);
+    },
+    markRelayed: async (ids) => {
+      if (ids.length === 0) {
+        return;
+      }
+      await q.query(
+        `update outbox set status = 'relayed' where id = any($1::text[])`,
+        [[...ids]],
+      );
+    },
+    // Record a failed delivery: bump attempts by one but keep the row 'pending' so the
+    // next sweep retries it. The `and status = 'pending'` guard makes this a no-op on a
+    // missing, already-relayed, or already-dead-lettered row, matching memory.
+    recordFailure: async (id) => {
+      await q.query(
+        `update outbox set attempts = attempts + 1
+          where id = $1 and status = 'pending'`,
+        [id],
+      );
+    },
+    // Give up on a poison message: flip it to 'failed' (so claimBatch never returns it
+    // again) and persist the reason. Same `and status = 'pending'` guard, so it no-ops on
+    // a missing or already-terminal row, exactly like the saga store's deadLetter.
+    deadLetter: async (id, reason) => {
+      await q.query(
+        `update outbox set status = 'failed', dead_letter_reason = $2
+          where id = $1 and status = 'pending'`,
+        [id, reason],
+      );
+    },
+  };
+}
+
+function rowToOutbox(row: Record<string, unknown>): OutboxMessage {
+  return {
+    id: row.id as string,
+    event: row.event as OutboxMessage['event'],
+    status: row.status as OutboxMessage['status'],
+    attempts: Number(row.attempts),
+  };
+}
+
+// --- Saga store -------------------------------------------------------------------
+
+// Tracks the multi-step payout process for paying a user out in real money, where each
+// payout moves through states (requested, reserved, submitted, settled, failed). `advance`
+// moves a payout from one state to the next only if it is still in the state the caller
+// expected (the `where ... and state = $2` clause). It returns whether the update happened,
+// so if two background sweeps try to move the same payout at once, only one succeeds and the
+// step never runs twice.
+function createSagaStore(q: Queryable): SagaStore {
+  return {
+    open: async (saga) => {
+      await q.query(
+        `insert into payout_sagas
+           (id, user_id, reserve, rate_id, state, provider_ref, attempts, due_at, updated_at)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           on conflict (id) do nothing`,
+        [
+          saga.id,
+          saga.userId,
+          saga.reserve.minor,
+          saga.rateId,
+          saga.state,
+          saga.providerRef,
+          saga.attempts,
+          saga.dueAt,
+          saga.updatedAt,
+        ],
+      );
+    },
+    load: async (id) => {
+      let result = await q.query(`select * from payout_sagas where id = $1`, [
+        id,
+      ]);
+      let row = result.rows[0];
+      return row ? rowToSaga(row) : null;
+    },
+    // Find payouts that are due and still in progress. A payout reaches RESERVED in the
+    // same step that first creates it, so a row left in the earlier REQUESTED state means
+    // that creating step crashed partway. Such a stuck row is skipped here on purpose: this
+    // query only picks up RESERVED and SUBMITTED rows, so a REQUESTED one is never claimed.
+    // (The matching index in db/postgresql-schema.sql excludes REQUESTED the same way, so this query
+    // can use it.) This matches the in-memory and mysql adapters.
+    claimDue: async (now, limit) => {
+      let result = await q.query(
+        `select * from payout_sagas
+          where due_at <= $1 and state in ('RESERVED', 'SUBMITTED')
+          order by due_at asc
+          limit $2
+          for update skip locked`,
+        [now, limit],
+      );
+      return result.rows.map(rowToSaga);
+    },
+    advance: async (id, from, to, patch) => {
+      let result = await q.query(
+        `update payout_sagas
+            set state = $3,
+                provider_ref = coalesce($4, provider_ref),
+                attempts = coalesce($5, attempts),
+                due_at = coalesce($6, due_at),
+                updated_at = coalesce($7, updated_at)
+          where id = $1 and state = $2
+          returning id`,
+        [
+          id,
+          from,
+          to,
+          patch.providerRef ?? null,
+          patch.attempts ?? null,
+          patch.dueAt ?? null,
+          patch.updatedAt ?? null,
+        ],
+      );
+      return result.rows.length > 0;
+    },
+    deadLetter: async (id, reason) => {
+      await advanceToFailed(q, id, reason);
+    },
+    // The user's most recent payout activity: MAX(updated_at) across ALL of their sagas
+    // in any state (a saga's updated_at starts at its request time and only moves forward).
+    // Null when the user has no sagas, so their first request always passes the min-interval
+    // gate. updated_at is a bigint, so coerce the aggregate to a JS Number.
+    lastPayoutAt: async (userId) => {
+      let result = await q.query(
+        `select max(updated_at) as last from payout_sagas where user_id = $1`,
+        [userId],
+      );
+      let value = result.rows[0]?.last;
+      return value === null || value === undefined ? null : Number(value);
+    },
+  };
+}
+
+async function advanceToFailed(
+  q: Queryable,
+  id: string,
+  reason: string,
+): Promise<void> {
+  await q.query(
+    `update payout_sagas set state = 'FAILED', dead_letter_reason = $2 where id = $1`,
+    [id, reason],
+  );
+}
+
+// --- Entitlement store ------------------------------------------------------------
+
+// Tracks which users own which products (an "entitlement" is a record of ownership, e.g. a
+// purchased item or subscription perk). This is plain ownership data, not a money entry.
+// revoke is a soft delete (sets revoked=true, keeps the row for audit), so a later owns()
+// check returns false but refund/clawback ownership history survives. The clock is passed in
+// here so owns() can tell whether an entitlement has expired without taking a clock argument
+// of its own — the owns() signature is fixed and must not change.
+function createEntitlementStore(q: Queryable, clock: Clock): EntitlementStore {
+  return {
+    grant: async (userId, sku, attrs) => {
+      await q.query(
+        `insert into entitlements (user_id, sku, quantity, version, expires_at, source)
+           values ($1, $2, $3, $4, $5, $6)
+           on conflict (user_id, sku) do update set
+             quantity = excluded.quantity, version = excluded.version,
+             expires_at = excluded.expires_at, source = excluded.source,
+             revoked = false`,
+        [
+          userId,
+          sku,
+          attrs.quantity ?? 1,
+          attrs.version ?? 1,
+          attrs.expiresAt ?? null,
+          attrs.source ?? null,
+        ],
+      );
+    },
+    revoke: async (userId, sku) => {
+      // Soft delete: keep the row for audit (refund/clawback ownership history) and flip the
+      // revoked flag the schema already carries. A later re-grant clears it via grant()'s
+      // on-conflict upsert, so a re-buy re-activates the same row.
+      await q.query(
+        `update entitlements set revoked = true where user_id = $1 and sku = $2`,
+        [userId, sku],
+      );
+    },
+    owns: async (userId, sku) => {
+      // Owned only if not revoked and not expired. The boundary is inclusive (legacy:
+      // owned while now <= expiresAt, lapsed once now > expiresAt), so `expires_at >= now`.
+      // A null expires_at never lapses. The read is side-effect-free (no auto-purge).
+      let result = await q.query(
+        `select 1 from entitlements
+          where user_id = $1 and sku = $2 and revoked = false
+            and (expires_at is null or expires_at >= $3)`,
+        [userId, sku, clock.now()],
+      );
+      return result.rows.length > 0;
+    },
+  };
+}
+
+// --- Subscription store -----------------------------------------------------------
+
+// Tracks recurring subscriptions. A subscription is opened, then a background sweep finds
+// the ones whose next charge is due (claimDue), bills them (markBilled, which moves the due
+// date forward), and ends them when needed (cancel by the user, or markLapsed when a
+// renewal can't be paid).
+function createSubscriptionStore(q: Queryable): SubscriptionStore {
+  return {
+    // The worker re-opens a subscription to persist a bumped retry attempt
+    // (`open({ ...sub, attempts: next })`), so this must UPSERT, not `do nothing`: a plain
+    // insert-on-conflict-do-nothing would silently keep the old attempts count and the retry
+    // cap would never advance, diverging from the in-memory reference's full-row overwrite.
+    // The identity columns (user_id/seller_id/sku/price/period_ms) never change for a given
+    // id, so the update set covers only the mutable lifecycle fields.
+    open: async (sub) => {
+      await q.query(
+        `insert into subscriptions
+           (id, user_id, seller_id, sku, price, period_ms, state, period, attempts, next_due_at, updated_at)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           on conflict (id) do update set
+             state = excluded.state, period = excluded.period,
+             attempts = excluded.attempts, next_due_at = excluded.next_due_at,
+             updated_at = excluded.updated_at`,
+        [
+          sub.id,
+          sub.userId,
+          sub.sellerId,
+          sub.sku,
+          sub.price.minor,
+          sub.periodMs,
+          sub.state,
+          sub.period,
+          sub.attempts,
+          sub.nextDueAt,
+          sub.updatedAt,
+        ],
+      );
+    },
+    load: async (id) => {
+      let result = await q.query(`select * from subscriptions where id = $1`, [
+        id,
+      ]);
+      let row = result.rows[0];
+      return row ? rowToSubscription(row) : null;
+    },
+    // The one ACTIVE subscription for this (user, sku, seller) triple, or null. The subscribe
+    // handler reads this to refuse a duplicate active subscription that would double-bill.
+    activeFor: async (userId, sku, sellerId) => {
+      let result = await q.query(
+        `select * from subscriptions
+          where user_id = $1 and sku = $2 and seller_id = $3 and state = 'ACTIVE'
+          limit 1`,
+        [userId, sku, sellerId],
+      );
+      let row = result.rows[0];
+      return row ? rowToSubscription(row) : null;
+    },
+    cancel: async (id) => {
+      await q.query(
+        `update subscriptions set state = 'CANCELED' where id = $1`,
+        [id],
+      );
+    },
+    // `for update skip locked` (mirroring the saga claimDue) lets overlapping sweepers each
+    // grab a disjoint batch instead of two of them fighting over — and double-billing — the
+    // same due row.
+    claimDue: async (now, limit) => {
+      let result = await q.query(
+        `select * from subscriptions
+          where state = 'ACTIVE' and next_due_at <= $1
+          order by next_due_at asc
+          limit $2
+          for update skip locked`,
+        [now, limit],
+      );
+      return result.rows.map(rowToSubscription);
+    },
+    // A successful renewal clears the retry counter (attempts = 0) so a recovered subscription
+    // starts fresh, advances the period, and sets the next due date — but only as a
+    // compare-and-set against the period the sweeper claimed (next_due_at = expectedDueAt).
+    // If another overlapping sweeper already billed this period and moved next_due_at on, no
+    // row matches and this returns false, so the loser treats it as a no-op and never
+    // double-charges. SagaStore.advance guards its state change the same way: it only updates
+    // when the row is still in the state the caller expected.
+    markBilled: async (id, nextDueAt, expectedDueAt) => {
+      let result = await q.query(
+        `update subscriptions
+            set next_due_at = $2, period = period + 1, attempts = 0
+          where id = $1 and next_due_at = $3
+          returning id`,
+        [id, nextDueAt, expectedDueAt],
+      );
+      return result.rows.length > 0;
+    },
+    // End a subscription because a renewal charge couldn't be paid, as opposed to the user
+    // canceling it. Setting the state to LAPSED takes it out of the "active and due" set the
+    // billing sweep picks up, so it won't be charged again.
+    markLapsed: async (id) => {
+      await q.query(`update subscriptions set state = 'LAPSED' where id = $1`, [
+        id,
+      ]);
+    },
+  };
+}
+
+// --- Promo store ------------------------------------------------------------------
+
+// Tracks each marketing promo grant so the promo-expiry sweep can reverse whatever the user
+// hasn't spent once the grant expires. `grantPromo` records the grant here in the SAME
+// transaction as the credit posting, sharing that posting's id, so the grant only persists
+// if the posting commits. `open` is idempotent on the id (`on conflict do nothing`, like
+// SagaStore.open) and must NOT overwrite an existing grant. `claimDue` hands
+// the sweep up to `limit` grants that have expired and aren't yet reversed, oldest first,
+// taking a `for update skip locked` lock so concurrent sweeps don't grab the same row.
+// `markReversed`'s `and reversed = false` guard makes it a no-op on a missing or
+// already-reversed row, so re-running the sweep over the same grant is harmless.
+function createPromoStore(q: Queryable): PromoStore {
+  return {
+    open: async (grant) => {
+      await q.query(
+        `insert into promo_grants (id, user_id, amount, currency, expires_at, reversed)
+           values ($1, $2, $3, $4, $5, $6) on conflict (id) do nothing`,
+        [
+          grant.id,
+          grant.userId,
+          grant.amount.minor,
+          grant.amount.currency,
+          grant.expiresAt,
+          grant.reversed,
+        ],
+      );
+    },
+    claimDue: async (now, limit) => {
+      let result = await q.query(
+        `select * from promo_grants
+           where expires_at <= $1 and reversed = false
+           order by expires_at asc
+           limit $2
+           for update skip locked`,
+        [now, limit],
+      );
+      return result.rows.map(rowToPromoGrant);
+    },
+    markReversed: async (id) => {
+      await q.query(
+        `update promo_grants set reversed = true where id = $1 and reversed = false`,
+        [id],
+      );
+    },
+  };
+}
+
+function rowToPromoGrant(row: Record<string, unknown>): PromoGrant {
+  return {
+    id: row.id as string,
+    userId: row.user_id as string,
+    amount: toAmount(row.currency as Amount['currency'], readMinor(row.amount)),
+    expiresAt: Number(row.expires_at),
+    reversed: row.reversed as boolean,
+  };
+}
+
+// --- Trust store (not part of a transaction) --------------------------------------
+
+// Records each spend attempt by a user so a fraud check can see how much they've tried to
+// spend recently and cap it. These writes go through the pool, not a transaction client, on
+// purpose: even an attempt that gets rejected (and whose money transaction rolls back) must
+// still be counted, so it must not be undone by that rollback. `bump` inserts keyed on the
+// attempt's idempotency key (the primary key), so resending the same attempt doesn't count
+// it twice. `read` sums up a user's recorded attempts.
+function createTrustStore(
+  pool: PgPool,
+  clock: Clock,
+  windowMs: number,
+): TrustStore {
+  return {
+    // The risk check reads the subject's spend inside the sliding window ending now: only attempts
+    // newer than `now - windowMs` are summed, so each ages out of the limit on its own. The cutoff
+    // is computed from the injected clock (not SQL `now()`) so tests stay deterministic.
+    read: async (subject) =>
+      readVelocity(pool, subject, clock.now() - windowMs),
+    bump: async (subject, attempt) => bumpVelocity(pool, subject, attempt),
+    // Record-and-measure atomically. The insert and the windowed SUM run in ONE transaction
+    // guarded by a per-subject advisory lock, so two concurrent same-subject calls are serialized:
+    // the second waits, then sums a total that already includes the first's insert. That is what
+    // closes the velocity-limit TOCTOU the separate read+bump left open.
+    record: async (subject, attempt) =>
+      recordVelocity(pool, subject, attempt, clock.now() - windowMs),
+  };
+}
+
+async function readVelocity(
+  pool: PgPool,
+  subject: string,
+  cutoff: number,
+): Promise<Velocity> {
+  let result = await pool.query(
+    `select coalesce(min(at), 0) as window_start,
+            coalesce(sum(amount), 0) as spent,
+            count(*)::int as attempts
+       from trust_attempts where subject = $1 and at > $2`,
+    [subject, cutoff],
+  );
+  let row = result.rows[0]!;
+  return {
+    subject,
+    windowStart: Number(row.window_start),
+    spent: toAmount('CREDIT', readMinor(row.spent)),
+    attempts: Number(row.attempts),
+  };
+}
+
+async function bumpVelocity(
+  pool: PgPool,
+  subject: string,
+  attempt: Attempt,
+): Promise<void> {
+  await pool.query(
+    `insert into trust_attempts (idempotency_key, subject, amount, outcome, at)
+       values ($1, $2, $3, $4, $5)
+       on conflict (idempotency_key) do nothing`,
+    [
+      attempt.idempotencyKey,
+      subject,
+      attempt.amount.minor,
+      attempt.outcome,
+      attempt.at,
+    ],
+  );
+}
+
+// The atomic record-then-measure behind `record`. Check out one client, BEGIN, take a
+// transaction-scoped advisory lock keyed on the subject so same-subject calls run one at a time
+// (the lock auto-releases at COMMIT/ROLLBACK), insert the attempt deduped on its idempotency key
+// (mirroring `bumpVelocity`'s column list and `on conflict do nothing`), then run the same
+// windowed SUM `readVelocity` uses — now seeing this attempt — and COMMIT. The returned Velocity
+// is byte-identical to what `read` would return for the same rows, so every adapter agrees.
+async function recordVelocity(
+  pool: PgPool,
+  subject: string,
+  attempt: Attempt,
+  cutoff: number,
+): Promise<Velocity> {
+  let client = await pool.connect();
+  try {
+    await client.query('begin');
+    await client.query(
+      `select pg_advisory_xact_lock(hashtextextended($1, 0))`,
+      [subject],
+    );
+    await client.query(
+      `insert into trust_attempts (idempotency_key, subject, amount, outcome, at)
+         values ($1, $2, $3, $4, $5)
+         on conflict (idempotency_key) do nothing`,
+      [
+        attempt.idempotencyKey,
+        subject,
+        attempt.amount.minor,
+        attempt.outcome,
+        attempt.at,
+      ],
+    );
+    let result = await client.query(
+      `select coalesce(min(at), 0) as window_start,
+              coalesce(sum(amount), 0) as spent,
+              count(*)::int as attempts
+         from trust_attempts where subject = $1 and at > $2`,
+      [subject, cutoff],
+    );
+    await client.query('commit');
+    let row = result.rows[0]!;
+    return {
+      subject,
+      windowStart: Number(row.window_start),
+      spent: toAmount('CREDIT', readMinor(row.spent)),
+      attempts: Number(row.attempts),
+    };
+  } catch (error) {
+    await client.query('rollback').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// --- Checkpoint store -------------------------------------------------------------
+
+// Stores periodic signed snapshots of the ledger's state (used to detect later tampering);
+// `latest` returns the most recent one. Rows are only ever added, never changed or removed,
+// and the writes go through the pool rather than a transaction, so a money transaction
+// rolling back can never erase a snapshot that was already taken.
+function createCheckpointStore(pool: PgPool): CheckpointStore {
+  return {
+    put: async (checkpoint) => {
+      await pool.query(
+        `insert into checkpoints (id, root, signature, count, at)
+           values ($1, $2, $3, $4, $5)`,
+        [
+          checkpoint.id,
+          checkpoint.root,
+          checkpoint.signature,
+          checkpoint.count,
+          checkpoint.at,
+        ],
+      );
+    },
+    latest: async () => {
+      let result = await pool.query(
+        `select * from checkpoints order by seq desc limit 1`,
+      );
+      let row = result.rows[0];
+      return row ? rowToCheckpoint(row) : null;
+    },
+  };
+}
+
+// --- The transaction unit ---------------------------------------------------------
+
+// Bundle the sub-stores a request handler is allowed to use inside one transaction, all
+// bound to the same single client, so every write they do commits or rolls back together.
+// The trust and checkpoint stores are deliberately left out, because their writes must
+// survive even when the transaction rolls back.
+function buildUnit(q: Queryable, digest: Digest, clock: Clock): Unit {
+  return {
+    ledger: lockingLedger(q, digest, clock),
+    idempotency: createIdempotencyStore(q),
+    sales: createSaleStore(q),
+    outbox: createOutboxStore(q),
+    sagas: createSagaStore(q),
+    entitlements: createEntitlementStore(q, clock),
+    subscriptions: createSubscriptionStore(q),
+    promos: createPromoStore(q),
+  };
+}
+
+// --- The assembled store ----------------------------------------------------------
+
+/** Options for {@link postgresStore}: the connection string and optional overrides. */
+export interface PostgresStoreOptions {
+  url: string;
+
+  // Name of a dedicated Postgres schema to create, load db/postgresql-schema.sql into, and drop again
+  // when the store closes. Giving each test run its own schema keeps parallel runs from
+  // stepping on each other. Leave it out to use whatever schema the connection already
+  // points at (in which case the tables must already exist there).
+  schema?: string;
+
+  digest?: Digest;
+
+  clock?: Clock;
+
+  // The rolling window (in ms) the trust store applies when summing a subject's recent spending
+  // attempts for the velocity check. Defaults to one hour; the composition passes
+  // config.velocityWindowMs.
+  velocityWindowMs?: number;
+}
+
+/**
+ * Build a {@link Store} backed by Postgres, using real database transactions. The returned
+ * `transaction(work)` checks out one connection, runs `work` between BEGIN and COMMIT, and
+ * rolls back if `work` throws. The trust and checkpoint stores hang off the pool directly,
+ * not off a transaction, so their writes are never rolled back. If `schema` is given, a
+ * fresh schema with that name is created, loaded with db/postgresql-schema.sql, and used for all
+ * queries; `close()` drops it. The hashing and clock dependencies default to standard,
+ * reproducible implementations so the store works out of the box.
+ */
+export async function postgresStore(
+  options: PostgresStoreOptions,
+): Promise<Store> {
+  configureBigIntParsers();
+  let digest = options.digest ?? defaultDigest();
+  let clock = options.clock ?? defaultClock();
+  let velocityWindowMs = options.velocityWindowMs ?? 60 * 60_000;
+  let schema = options.schema ? safeSchemaName(options.schema) : null;
+
+  // Point every connection the pool opens at the dedicated schema by setting its
+  // search_path (where Postgres looks up unqualified table names) through the connection
+  // options. That way table names without a schema prefix resolve to our schema on every
+  // connection the pool hands out, whether for a plain read or a transaction.
+  let pool = new pg.Pool({
+    connectionString: options.url,
+    ...(schema ? { options: `-c search_path=${schema}` } : {}),
+  });
+  if (schema) {
+    await applyIsolatedSchema(pool, schema);
+  }
+
+  let ledger = createLedgerStore(pool, digest, clock);
+
+  return {
+    ledger,
+    idempotency: createIdempotencyStore(pool),
+    sales: createSaleStore(pool),
+    outbox: createOutboxStore(pool),
+    sagas: createSagaStore(pool),
+    entitlements: createEntitlementStore(pool, clock),
+    subscriptions: createSubscriptionStore(pool),
+    promos: createPromoStore(pool),
+    trust: createTrustStore(pool, clock, velocityWindowMs),
+    checkpoints: createCheckpointStore(pool),
+    replay: createReplayStore(pool),
+    transaction: async (work) => runInTransaction(pool, digest, clock, work),
+    close: async () => {
+      if (schema) {
+        await pool
+          .query(`drop schema if exists ${schema} cascade`)
+          .catch(() => {});
+      }
+      await pool.end();
+    },
+  };
+}
+
+// Create the dedicated schema from scratch and load db/postgresql-schema.sql into it. Drop any
+// leftover schema of the same name first, recreate it, point this connection at it, then
+// run the table-creation SQL. The connections the pool hands out are already aimed at this
+// schema, so the unqualified `create table` statements in db/postgresql-schema.sql land inside it.
+async function applyIsolatedSchema(
+  pool: PgPool,
+  schema: string,
+): Promise<void> {
+  let sql = await loadSchemaSql();
+  let client = await pool.connect();
+  try {
+    await client.query(`drop schema if exists ${schema} cascade`);
+    await client.query(`create schema ${schema}`);
+    await client.query(`set search_path to ${schema}`);
+    await client.query(sql);
+  } finally {
+    client.release();
+  }
+}
+
+// Run `work` inside a single database transaction. Check out one connection, BEGIN, build a
+// unit whose sub-stores all share that connection, run `work`, then COMMIT. If `work`
+// throws, roll back instead and re-throw. Because every store in the unit uses the same
+// connection, all their writes commit or roll back as one. The connection is always
+// returned to the pool at the end.
+async function runInTransaction<T>(
+  pool: PgPool,
+  digest: Digest,
+  clock: Clock,
+  work: (tx: Unit) => Promise<T>,
+): Promise<T> {
+  let client = await pool.connect();
+  try {
+    await client.query('begin');
+    let unit = buildUnit(client, digest, clock);
+    let result = await work(unit);
+    await client.query('commit');
+    return result;
+  } catch (error) {
+    await client.query('rollback').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}

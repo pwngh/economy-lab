@@ -1,0 +1,17 @@
+.DS_Store
+.idea/
+/node_modules
+/coverage
+*.log
+/trace.ndjson
+.env
+.env.*
+!.env.example
+
+# Generated visualization traces — large; regenerate with `npm run viz:trace`
+viz/*.ndjson
+
+# apps/console (Remix) — its own deps + build output; the library stays no-build
+apps/*/node_modules
+apps/*/build
+apps/*/.react-router
