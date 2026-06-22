@@ -16,12 +16,9 @@ import type { Dispatcher, EconomyEvent, Options } from '#src/ports.ts';
 // --- The @aws-sdk/client-sqs surface, typed structurally --------------------------
 
 /**
- * The one method this adapter calls on an AWS SQS client. We describe it by its shape
- * here, rather than importing the `@aws-sdk/client-sqs` package, so this file still
- * compiles when that package isn't installed (it is an optional dependency). The real
- * `SQSClient.send` accepts many command types; this captures just what we use — a
- * command object holding an `input`, plus an optional `abortSignal` to cancel the call.
- * A real `SQSClient` satisfies this shape, so callers can pass one (or a test stand-in).
+ * Structural shape of the one SQS client method this adapter calls, so the file compiles
+ * without `@aws-sdk/client-sqs` installed (optional dependency). Captures only what we use:
+ * a command holding `input` plus an optional `abortSignal`. A real `SQSClient` satisfies it.
  */
 export interface SqsCommand {
   readonly input: Record<string, unknown>;
@@ -33,9 +30,8 @@ export interface SqsClient {
   ): Promise<Record<string, unknown>>;
 }
 
-// Wraps the SQS SendMessage request body in the `{ input }` shape `send` expects, standing
-// in for the SDK's `new SendMessageCommand(input)` so this file never imports the SDK. The
-// field names (QueueUrl, MessageBody, ...) are SQS's own request parameter names.
+// Wraps the SendMessage body in the `{ input }` shape `send` expects, replacing the SDK's
+// `new SendMessageCommand(input)`. Field names (QueueUrl, MessageBody, ...) are SQS's own.
 function sendMessageCommand(input: {
   QueueUrl: string;
   MessageBody: string;
@@ -56,21 +52,16 @@ export interface SqsDispatcherConfig {
 }
 
 /**
- * Build the function that publishes events to SQS. Each call turns one event into JSON
- * and sends it as an SQS message.
+ * Build the dispatcher that publishes events to SQS as JSON messages.
  *
- * If the send fails, it throws a `PROVIDER.FAILURE` error marked retryable, so the
- * caller's retry-with-backoff wrapper will try again later. The event's id is attached
- * to the message so the receiver can recognize and drop a duplicate (SQS may deliver the
- * same message more than once).
+ * On failure throws a retryable `PROVIDER.FAILURE` so the caller's backoff wrapper retries.
+ * The event id is attached so the receiver can drop duplicates (SQS may deliver twice).
  */
 export function sqsDispatcher(config: SqsDispatcherConfig): Dispatcher {
   let client = config.client;
-  // FIFO-only request params (MessageGroupId/MessageDeduplicationId) are rejected by
-  // SQS with InvalidParameterValue on a standard queue, so decide once at build time
-  // from the queue URL suffix and only attach them when the queue is FIFO. The
-  // documented deployment uses a standard queue (.env.example), so omitting them there
-  // is what keeps events deliverable.
+  // FIFO-only params (MessageGroupId/MessageDeduplicationId) draw InvalidParameterValue on a
+  // standard queue, so decide once from the URL suffix and attach them only for FIFO queues.
+  // The documented deployment (.env.example) uses a standard queue.
   let fifo = config.queueUrl.endsWith('.fifo');
 
   return async (event: EconomyEvent, options?: Options): Promise<void> => {
@@ -79,10 +70,9 @@ export function sqsDispatcher(config: SqsDispatcherConfig): Dispatcher {
         sendMessageCommand({
           QueueUrl: config.queueUrl,
           MessageBody: encodeEvent(event),
-          // FIFO only: SQS drops a second message that carries the same dedup id, so
-          // tagging each message with the event id means a resend of the same event is
-          // ignored rather than delivered twice. Messages sharing a group id are delivered
-          // in order, so we group by the subject the event is about.
+          // FIFO only: SQS drops a second message with the same dedup id, so tagging by event
+          // id makes a resend a no-op. Messages sharing a group id deliver in order; group by
+          // subject.
           ...(fifo && {
             MessageDeduplicationId: event.id,
             MessageGroupId: event.subject,
@@ -98,11 +88,9 @@ export function sqsDispatcher(config: SqsDispatcherConfig): Dispatcher {
 
 // --- Serialization ----------------------------------------------------------------
 
-// Turn an event into the JSON string sent as the message body. The fields are written in
-// a fixed order so the same event always produces the same bytes, which lets a receiver
-// recognize a duplicate by comparing message contents. Money amounts inside `data` were
-// already converted to strings before reaching here, so this never has to serialize a
-// bigint (JSON.stringify would throw on one, which is preferable to sending a broken body).
+// Event → JSON message body. Fixed field order means the same event yields the same bytes,
+// so a receiver can dedupe by content. Money amounts in `data` are already strings by here,
+// so we never serialize a bigint (JSON.stringify throws on one).
 function encodeEvent(event: EconomyEvent): string {
   return JSON.stringify({
     id: event.id,
@@ -117,9 +105,8 @@ function encodeEvent(event: EconomyEvent): string {
 
 // --- Local helpers ----------------------------------------------------------------
 
-// Wrap any failed SQS call as a `PROVIDER.FAILURE` error marked retryable, so the
-// caller's retry logic tries it again. `normalizeError` keeps the original SQS error
-// attached as the `cause` so it isn't lost.
+// Wrap a failed SQS call as a retryable `PROVIDER.FAILURE`. `normalizeError` keeps the
+// original error as `cause`.
 function transportFault(message: string, error: unknown): Error {
   let normalized = normalizeError(error);
   return fault(ERROR_CODES.PROVIDER_FAILURE, message, {

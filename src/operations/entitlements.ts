@@ -21,13 +21,11 @@ import type {
 import type { Unit } from '#src/ports.ts';
 
 /**
- * Record that a user now owns an item or feature (named by a `sku`, a product code such
- * as `'wrld_pass'`). This only tracks who owns what; no money moves and the ledger is
- * not touched. The grant always succeeds: it overwrites any previous record for that
- * user and sku, and there is nothing the user must already own first.
+ * Record that a user owns an item or feature (named by `sku`, a product code such as
+ * `'wrld_pass'`). Tracks ownership only; no money moves, the ledger is untouched. Always
+ * succeeds: overwrites any previous record for that user/sku, with no prerequisite.
  *
- * Restricting grants to `system` and `operator` callers is enforced by an outer layer
- * before this runs, not here.
+ * Restricting grants to `system` and `operator` callers is enforced by an outer layer.
  *
  * @example
  *   let outcome = await grantEntitlement(
@@ -59,10 +57,9 @@ export async function grantEntitlement(
 }
 
 /**
- * Take away a user's ownership of an item or feature (named by a `sku`). If the user does
- * not own it, that is a normal "no" returned to the caller as a `NOT_ENTITLED` rejection
- * rather than an error that gets thrown and alerted on. Otherwise the ownership record is
- * removed. Either way no money moves, since ownership has no balance attached to it.
+ * Remove a user's ownership of an item or feature (named by `sku`). If the user doesn't own
+ * it, return a `NOT_ENTITLED` rejection rather than throwing. Otherwise drop the ownership
+ * record. No money moves either way; ownership has no balance.
  */
 export async function revokeEntitlement(
   operation: Operation,
@@ -88,11 +85,10 @@ export async function revokeEntitlement(
   return { status: 'committed', transaction: lifecycleMarker(ctx) };
 }
 
-// An entitlement names a user and a sku but moves no money, so it touches no accounts and
-// the central blank-owner guard (which only inspects the wallet accounts an operation posts
-// to) never sees these two fields. Check them here: a blank or whitespace-only userId would
-// record ownership against a phantom user, and a blank sku an ownership of nothing, so either
-// is a malformed request rather than a normal "no" answer.
+// Entitlements move no money, so they post to no accounts and the central blank-owner guard
+// (which only inspects wallet accounts an operation posts to) never sees these fields. Check
+// them here: a blank/whitespace userId records ownership against a phantom user, a blank sku
+// records ownership of nothing. Both are malformed requests, not a normal "no".
 function assertIdentified(userId: string, sku: string): void {
   if (userId.trim() === '') {
     throw fault(
@@ -110,12 +106,11 @@ function assertIdentified(userId: string, sku: string): void {
   }
 }
 
-// The optional grant attributes come straight off the wire, so a number field can arrive as
-// NaN, Infinity, or a fraction. Only the two fields with a meaning that breaks under those
-// values are checked: `expiresAt` is an instant, so it must be a finite number when present
-// (null is allowed — it means "never expires"), and `quantity` is a count, so it must be a
-// positive integer when present. Either being malformed is a client/programming error, so it
-// throws a fault rather than returning a rejection.
+// Grant attributes come off the wire, so a number field can arrive as NaN, Infinity, or a
+// fraction. Only the two fields whose meaning breaks under those values are checked:
+// `expiresAt` (an instant) must be finite when present (null means "never expires"), and
+// `quantity` (a count) must be a positive integer when present. Malformed values are
+// client/programming errors, so throw a fault rather than rejecting.
 function assertAttrs(attrs: EntitlementAttrs | undefined): void {
   if (attrs === undefined) {
     return;
@@ -143,14 +138,13 @@ function assertAttrs(attrs: EntitlementAttrs | undefined): void {
   }
 }
 
-// Used when a grant comes in with no details (no quantity, version, etc.). Recording an
-// empty set keeps the ownership fact while avoiding made-up defaults the caller never gave.
+// For a grant with no details (no quantity, version, etc.). Records the ownership fact
+// without inventing defaults the caller never gave.
 const EMPTY_ATTRS: EntitlementAttrs = {};
 
-// Builds the Transaction returned when an operation changes ownership but moves no money.
-// A committed result must always include a Transaction, so this stands in as a receipt: it
-// has a fresh id and the time it committed, but its lists of debit/credit lines and of
-// per-account history updates are empty, because nothing was posted to the ledger.
+// Transaction for an operation that changes ownership but moves no money. A committed result
+// must include a Transaction, so this is a receipt with a fresh id and commit time but empty
+// leg and link lists, since nothing was posted to the ledger.
 function lifecycleMarker(ctx: Ctx): Transaction {
   return {
     id: ctx.ids.next('txn'),
@@ -160,9 +154,8 @@ function lifecycleMarker(ctx: Ctx): Transaction {
   };
 }
 
-// Each handler is registered to one operation kind and should only ever be called with that
-// kind. Getting the wrong one means the dispatch tables are wired wrong, so we throw a fault
-// loudly rather than try to process an operation this handler doesn't understand.
+// Each handler is registered to one operation kind. A wrong kind means the dispatch tables
+// are miswired, so throw a fault rather than process an operation this handler can't.
 function kindMismatch(operation: Operation): ReturnType<typeof fault> {
   return fault(
     ERROR_CODES.MALFORMED_OPERATION,

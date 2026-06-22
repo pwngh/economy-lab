@@ -283,11 +283,9 @@ describe('reversePayout — Refusals & Validation', () => {
     let store = newStore();
     await openReservedSaga(store, { id: 'pay_8', state: 'RESERVED' });
 
-    // The payout's seller is usr_seller. Before running, the framework locks the earned account
-    // named by the operation's userId so no other write can touch it mid-operation, but the
-    // reversal always credits the seller named on the payout. If an operator passes a userId that
-    // does not match the payout's seller, the account being credited would be one that was never
-    // locked, so the operation is refused up front.
+    // The payout's seller is usr_seller. The framework locks the earned account named by the
+    // operation's userId, but the reversal always credits the seller named on the payout. A
+    // mismatched userId would credit an account that was never locked, so it's refused up front.
     await assert.rejects(
       run(
         store,
@@ -343,15 +341,15 @@ describe('reversePayout Through Submit', () => {
       (error: unknown) => codeOf(error) === 'AUTH.UNAUTHORIZED',
     );
 
-    // The saga was never advanced and nothing was returned: the permission check runs first, so a
-    // refused caller never reaches the state change or the posting.
+    // The permission check runs first, so a refused caller never reaches the state change or the
+    // posting; the saga was never advanced.
     assert.equal(await stateOf(store, 'pay_7'), 'RESERVED');
   });
 });
 
-// Pull the events a committed operation queued for delivery and return them. Events are written
-// into an outbox table as part of the same transaction, then handed to subscribers later; this
-// claims a batch and marks it delivered so a second call would not see the same events again.
+// Pull the events a committed operation queued for delivery. Events go into an outbox table in the
+// same transaction, then to subscribers later; this claims a batch and marks it delivered, so a
+// second call won't see the same events.
 async function drainEvents(store: Store): Promise<EconomyEvent[]> {
   let batch = await store.outbox.claimBatch(100);
   await store.outbox.markRelayed(batch.map((message) => message.id));

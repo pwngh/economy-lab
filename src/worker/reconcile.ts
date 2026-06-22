@@ -17,27 +17,25 @@ import type { ReconcileInputs, ReconcileReport } from '#src/reconcile.ts';
 import type { Options, Range } from '#src/ports.ts';
 
 /**
- * Supplies the two sides reconciliation compares for one time window: the payment
- * processor's settled records and our own ledger's records of the same events. The host
- * implements this (typically a data-warehouse or processor adapter) and returns plain
- * data — the exact `ReconcileInputs` the matching function consumes — so this worker never
- * talks to a vendor API directly.
+ * Supplies both sides of reconciliation for one window: the processor's settled records and
+ * our ledger's records of the same events. The host implements this (data-warehouse or
+ * processor adapter) and returns the `ReconcileInputs` the matching function consumes, so
+ * this worker never talks to a vendor API directly.
  *
- * We need a feed here because neither the processor port (settlements arrive as inbound
- * webhooks) nor the ledger store offers a "list everything settled in this window" read,
- * which is what the comparison requires.
+ * Needed because neither the processor port (settlements arrive as inbound webhooks) nor
+ * the ledger store offers a "list everything settled in this window" read.
  */
 export type ReconcileFeed = {
   pull(window: Range, options?: Options): Promise<ReconcileInputs>;
 };
 
 /**
- * The outcome of one sweep, with every window sorted into one of three buckets:
- *   - `reconciled` — the two sides matched with no discrepancies.
- *   - `drifted` — the comparison ran fine and found discrepancies (mismatched or missing
- *     records). This is a normal result that carries data, not a failure.
- *   - `failed` — pulling that window's feed threw, so the comparison never ran. Each entry
- *     keeps the error code and whether it's worth retrying.
+ * Outcome of one sweep, each window sorted into one bucket:
+ *   - `reconciled`: the two sides matched, no discrepancies.
+ *   - `drifted`: comparison ran and found discrepancies (mismatched or missing records). A
+ *     normal result that carries data, not a failure.
+ *   - `failed`: the feed pull threw, so the comparison never ran. Keeps the error code and
+ *     whether it's retryable.
  */
 export type ReconcileSummary = {
   reconciled: ReadonlyArray<ReconcileReport>;
@@ -45,8 +43,8 @@ export type ReconcileSummary = {
   failed: ReadonlyArray<{ window: Range; code: string; retryable: boolean }>;
 };
 
-// Same shape as ReconcileSummary but with mutable arrays, so the sweep can push results
-// into it as it goes; the public summary type just exposes it as read-only.
+// ReconcileSummary with mutable arrays so the sweep can push as it goes; the public type
+// exposes it read-only.
 type ReconcileTally = {
   reconciled: ReconcileReport[];
   drifted: ReconcileReport[];
@@ -54,13 +52,10 @@ type ReconcileTally = {
 };
 
 /**
- * Run reconciliation over a batch of time windows: for each one, pull both sides from the
- * feed, compare them, and sort the result into the summary.
- *
- * A window that matches cleanly goes to `reconciled`; one with mismatches goes to
- * `drifted` (a normal result — the comparison ran and found differences); one whose feed
- * pull throws goes to `failed`. Each window is handled independently, so a single
- * unreachable feed fails only its own window and the rest of the batch still runs.
+ * Reconcile a batch of windows: for each, pull both sides, compare, sort into the summary.
+ * Clean match → `reconciled`; mismatches → `drifted` (normal result); feed pull throws →
+ * `failed`. Windows are handled independently, so one unreachable feed fails only its own
+ * window and the rest of the batch still runs.
  */
 export async function reconcileDueWindows(
   feed: ReconcileFeed,
@@ -78,16 +73,14 @@ export async function reconcileDueWindows(
   return tally;
 }
 
-// The inputs that stay the same across every window in one sweep — the feed, the worker's
-// capabilities, and the optional cancellation signal — grouped into one value so the
-// per-window function takes fewer arguments.
+// Inputs constant across a sweep (feed, worker capabilities, optional cancellation signal),
+// grouped so the per-window function takes fewer arguments.
 type Sweep = { feed: ReconcileFeed; ctx: WorkerCtx; options?: Options };
 
-// Reconcile a single window, catching any error from its feed pull so it can't stop the
-// other windows. A caught error is recorded in `failed` along with whether it's retryable
-// (a transient storage/provider failure can be retried on the next sweep; anything else is
-// terminal). A successful pull is compared and handed to `record`, which decides whether it
-// reconciled or drifted — drift is not an error and is never caught here.
+// Reconcile a single window, catching feed-pull errors so they can't stop other windows.
+// Caught errors go to `failed` with their retryable flag (transient storage/provider
+// failures retry next sweep; anything else is terminal). A successful pull is compared and
+// handed to `record`. Drift is not an error and is never caught here.
 async function reconcileOne(
   sweep: Sweep,
   window: Range,
@@ -112,11 +105,10 @@ async function reconcileOne(
   }
 }
 
-// File the comparison result into the tally and report what happened. Every window records
-// its number of discrepancies as a metric. A clean window goes to `reconciled` and logs at
-// `info`; a window with discrepancies goes to `drifted`, logs at `warn`, and includes the
-// per-kind counts so monitoring can alert on reconciliation drift. The report object is
-// passed through unchanged for the caller to forward on.
+// File the comparison result into the tally and report it. Every window records its
+// discrepancy count as a metric. Clean → `reconciled`, logs `info`; discrepancies →
+// `drifted`, logs `warn` with per-kind counts so monitoring can alert on drift. The report
+// is passed through unchanged for the caller.
 function record(
   ctx: WorkerCtx,
   window: Range,

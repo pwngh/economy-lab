@@ -160,9 +160,8 @@ export function postEntryArgs(
   return { legs, links: linkRows, balances, newAccounts };
 }
 
-// The kind of a user account (`usr_…:spendable|earned|promo`), or null for a platform account
-// (which the schema already seeded, so it is never created here). The same suffix rule the
-// adapters' account-ensure used.
+// Kind of a user account (`usr_…:spendable|earned|promo`), or null for a platform account (seeded
+// by the schema, never created here). Same suffix rule as the adapters' account-ensure.
 function userAccountKind(
   account: string,
 ): 'spendable' | 'earned' | 'promo' | null {

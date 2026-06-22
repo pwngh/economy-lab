@@ -163,13 +163,12 @@ async function keyBalances(economy: Economy): Promise<Record<string, unknown>> {
   return out;
 }
 
-// --- Comparing against (or rewriting) the saved reference output -------------------
+// --- Comparing against (or rewriting) the golden -------------------
 //
-// The "golden" file is a saved copy of the expected trace, checked into the repo. A run
-// either compares fresh output against it (to catch unintended changes) or overwrites it
-// (to accept an intended change).
+// The golden file is the checked-in expected trace. A run either compares fresh output against
+// it (catch unintended changes) or overwrites it (accept an intended change).
 
-// Reads the saved golden file, or returns null if it doesn't exist yet.
+// Read the golden file, or null if it doesn't exist yet.
 async function readGolden(): Promise<string | null> {
   try {
     return await readFile(GOLDEN, 'utf8');
@@ -178,16 +177,15 @@ async function readGolden(): Promise<string | null> {
   }
 }
 
-// Writes the golden file, creating its directory first if needed.
+// Write the golden file, creating its directory if needed.
 async function writeGolden(content: string): Promise<void> {
   await mkdir(dirname(GOLDEN), { recursive: true });
   await writeFile(GOLDEN, content, 'utf8');
 }
 
-// Entry point. Picks a mode from the command-line flags: `--check` compares fresh output
-// against the saved golden and fails (sets a non-zero exit code) if they differ, `--update`
-// overwrites the golden with the fresh output, and with no flag it just writes the file.
-// The `--check` mode is what CI runs to catch unintended changes to the trace.
+// Entry point. Mode from flags: `--check` compares fresh output against the golden and exits
+// non-zero on difference (this is what CI runs), `--update` overwrites the golden, no flag
+// just writes the file.
 async function main(): Promise<void> {
   let mode = process.argv.includes('--check')
     ? 'check'
@@ -220,9 +218,8 @@ async function main(): Promise<void> {
   console.warn('trace: byte-clean against the golden.');
 }
 
-// Finds the first line where the saved golden and the fresh output differ, and reports just
-// that line from each side. This points the failure report straight at the change instead of
-// printing the entire document.
+// First line where golden and fresh output differ, reporting just that line from each side
+// instead of the whole document.
 function firstDiff(expected: string, actual: string): string {
   let a = expected.split('\n');
   let b = actual.split('\n');

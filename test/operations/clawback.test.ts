@@ -35,12 +35,10 @@ import type { AccountRef } from '#src/accounts.ts';
 import type { Ctx, Operation, Outcome, Transaction } from '#src/contract.ts';
 import type { Leg, Store, Unit } from '#src/ports.ts';
 
-// In production the clawback handler is reached through the full request pipeline, but that
-// pipeline does not yet wire it up, so these tests call the handler directly. Each test wraps
-// the call in a real `store.transaction`, the same single-database-transaction unit the
-// pipeline would hand it. This Fixture bundles a fresh store and context plus five short
-// helpers (set up a balance, drain it, run a clawback, reverse an order the way a refund would,
-// read a balance) so each test only has to spell out the one thing it is checking.
+// The pipeline doesn't wire up the clawback handler yet, so these tests call it directly, each
+// wrapped in a real `store.transaction` (the same single-db-transaction unit the pipeline would
+// hand it). Fixture bundles a fresh store + context and five helpers (issue a balance, drain it,
+// run a clawback, reverse an order like a refund would, read a balance).
 type Fixture = {
   issue(userId: string, amount: Amount): Promise<void>;
   burn(userId: string, amount: Amount): Promise<void>;
@@ -70,19 +68,17 @@ function setup(): Fixture {
       postEntry(unit.ledger, { txnId: ctx.ids.next('txn'), legs, meta }),
     );
   return {
-    // Post the same entry a top-up would: add `amount` to the user's spendable balance, and
-    // record the matching debit against the platform's STORED_VALUE account (the running count
-    // of all credits in circulation, which rises every time credits are issued). This gives the
-    // user a real balance for a later clawback to pull back out.
+    // Post the same entry a top-up would: credit `amount` to spendable, debit STORED_VALUE (the
+    // running count of credits in circulation, which rises on each issue). Gives the user a real
+    // balance for a later clawback to pull back.
     issue: async (userId, amount) => {
       await post(
         [debit(SYSTEM.STORED_VALUE, amount), credit(spendable(userId), amount)],
         { kind: 'topUp', source: 'card' },
       );
     },
-    // Move money out of the user's spendable balance into REVENUE, standing in for the buyer
-    // having already spent it. A later clawback then finds less there than it wants to reclaim,
-    // i.e. a shortfall.
+    // Move money from spendable into REVENUE, standing in for the buyer having already spent it,
+    // so a later clawback finds a shortfall.
     burn: async (userId, amount) => {
       await post(
         [debit(spendable(userId), amount), credit(SYSTEM.REVENUE, amount)],
@@ -91,12 +87,11 @@ function setup(): Fixture {
     },
     claw: (operation) =>
       store.transaction((unit: Unit) => handleClawback(operation, unit, ctx)),
-    // Stand in for a refund of `orderId`. A refund and a clawback of the same order both stake
-    // the same one-time marker, `reversed:${orderId}`, so only one of them can ever reverse a
-    // given order. This helper takes that marker, posts a balanced reversing entry (all CREDIT,
-    // summing to zero), and files the entry under the marker — the same steps a clawback of this
-    // order would race against and lose. Returns the reversing transaction so a later test can
-    // confirm a duplicate clawback hands back this exact transaction.
+    // Stand in for a refund of `orderId`. A refund and a clawback of the same order both stake the
+    // one-time marker `reversed:${orderId}`, so only one can reverse a given order. This claims the
+    // marker, posts a balanced reversing entry (all CREDIT, summing to zero), and files it under the
+    // marker. Returns the reversing transaction so a later test can confirm a duplicate clawback
+    // hands back this exact transaction.
     reverseOrder: (orderId) =>
       store.transaction(async (unit: Unit) => {
         await unit.idempotency.claim(`reversed:${orderId}`);
@@ -181,9 +176,8 @@ async function neverOverdrawsSpendable(): Promise<void> {
 async function balancesPostingRetiringToStoredValue(): Promise<void> {
   let fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
-  // The top-up in `issue` debited STORED_VALUE by 10.00. STORED_VALUE goes up when it is debited,
-  // so its balance now reads +10.00 — it counts the 10.00 of credits currently in circulation.
-  // Reclaiming 4.00 of those credits later un-issues them, bringing the count back down to +6.00.
+  // `issue` debited STORED_VALUE by 10.00, and STORED_VALUE rises when debited, so it now reads
+  // +10.00 (the credits in circulation). Reclaiming 4.00 later un-issues them, dropping it to +6.00.
   assert.deepEqual(await fx.balanceOf(SYSTEM.STORED_VALUE), creditOf('10.00'));
 
   let outcome = await fx.claw(
@@ -201,17 +195,15 @@ async function balancesPostingRetiringToStoredValue(): Promise<void> {
   for (let leg of outcome.transaction.legs) {
     assert.equal(leg.amount.currency, 'CREDIT');
   }
-  // The reclaimed credits are un-issued by crediting them back to STORED_VALUE (the same account
-  // the top-up raised when it issued them), not recorded as platform earnings in REVENUE:
-  // STORED_VALUE moves from +10.00 to +6.00 and REVENUE is never touched.
+  // Reclaimed credits are un-issued back to STORED_VALUE (the account the top-up raised), not
+  // booked as REVENUE: STORED_VALUE goes +10.00 → +6.00 and REVENUE stays untouched.
   assert.deepEqual(await fx.balanceOf(SYSTEM.STORED_VALUE), creditOf('6.00'));
   assert.deepEqual(await fx.balanceOf(SYSTEM.REVENUE), creditOf('0.00'));
 }
 
-// A refund and a clawback of the same order both stake the same one-time marker, so the order
-// can be reversed only once. Here the refund runs first and takes the marker. The later clawback
-// of that order must then find the marker already taken, post nothing, and hand back the refund's
-// transaction as a duplicate, leaving the buyer's balance untouched.
+// Refund and clawback of the same order share a one-time marker, so an order reverses only once.
+// Refund runs first and takes the marker; the later clawback finds it taken, posts nothing, and
+// hands back the refund's transaction as a duplicate, leaving the buyer's balance untouched.
 async function duplicateWhenOrderAlreadyRefunded(): Promise<void> {
   let fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
@@ -247,9 +239,8 @@ async function throwsMalformedForNonPositiveAmount(): Promise<void> {
   );
 }
 
-// A present-but-blank `orderId` is malformed: every blank id collapses onto the single shared
-// `reversed:` marker, which would falsely tie unrelated chargebacks together, so it is thrown
-// rather than claimed.
+// A present-but-blank `orderId` is malformed: every blank id collapses onto the shared `reversed:`
+// marker, falsely tying unrelated chargebacks together, so it throws rather than claims.
 async function throwsMalformedForBlankOrderId(): Promise<void> {
   let fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));

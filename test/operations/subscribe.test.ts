@@ -271,10 +271,10 @@ function deniesSubscribeOverTheVelocityLimit(): void {
   );
 }
 
-// Once a subscribe commits, its price is added to the user's running spending total for the
-// current window (the figure the recent-spending limit checks against). The live pipeline does
-// this after the charge commits by building a record of the attempt and writing it to the trust
-// store. This test runs that same path against the real trust store, then reads the total back.
+// Once a subscribe commits, its price is added to the user's running spending total for the window
+// (what the recent-spending limit checks against). The pipeline does this post-commit by building
+// an attempt record and writing it to the trust store. This runs that path against the real trust
+// store and reads the total back.
 async function committedSubscribeAccruesPriceMinor(
   harness: Harness,
 ): Promise<void> {
@@ -296,8 +296,7 @@ async function committedSubscribeAccruesPriceMinor(
   await harness.store.trust.bump('usr_buyer', attempt!);
 
   let velocity = await harness.store.trust.read('usr_buyer');
-  // The amount added equals the subscribe's price in minor units (the smallest unit; here the
-  // 100.00-credit price is 10,000 minor, since one credit is 100 minor).
+  // Amount added equals the price in minor units (100.00 credits = 10,000 minor; 1 credit = 100 minor).
   assert.equal(velocity.spent.minor - before, attemptMinor(operation));
   assert.equal(velocity.spent.minor - before, credit('100.00').minor);
 }
@@ -343,9 +342,8 @@ async function preservesConservation(harness: Harness): Promise<void> {
   let report = await harness.economy.read.prove();
   // `conserved`: in every currency, the debits and credits across the whole ledger cancel to zero.
   assert.equal(report.conserved, true);
-  // `backed`: the real cash the platform holds for users covers the dollar value of every
-  // spendable balance and every balance set aside for a pending purchase. Each credit is
-  // converted to dollars at par, the fixed credits-to-dollars rate.
+  // `backed`: the cash the platform holds covers the dollar value of every spendable balance and
+  // every balance reserved for a pending purchase, each credit converted at the fixed par rate.
   assert.equal(report.backed, true);
 }
 

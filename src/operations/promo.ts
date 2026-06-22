@@ -19,14 +19,12 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Unit } from '#src/ports.ts';
 
 /**
- * Issue marketing promo credits to a user. This posts one balanced entry: it raises the
- * user's promo balance by the granted amount, and matches that with an equal entry on the
- * platform's PROMO_FLOAT account so the books still balance.
+ * Issue marketing promo credits to a user. Posts one balanced entry: raise the user's promo
+ * balance by the granted amount, offset by an equal entry on the platform's PROMO_FLOAT account.
  *
- * Promo credits never need real USD backing the way topped-up money does, so a grant can't
- * increase the cash the platform must hold in trust. They can be spent but never cashed out
- * (only earned credits are paid out). The grant's `expiresAt` is saved in the entry's
- * metadata so the background worker can later reverse any of it the user hasn't spent.
+ * Promo credits need no USD backing (unlike topped-up money), so a grant can't increase the cash
+ * held in trust. Spendable but never cashed out (only earned credits pay out). `expiresAt` is
+ * stored in the entry metadata so the background worker can later reverse any unspent portion.
  *
  * @example
  *   let outcome = await grantPromo(
@@ -51,11 +49,9 @@ export async function grantPromo(
     'grantPromo.expiresAt',
   );
 
-  // Post the two matching lines: debit PROMO_FLOAT and credit the user's promo account,
-  // both for the same amount, so the entry balances. The credit raises the user's promo
-  // balance; the debit to PROMO_FLOAT (which goes up when debited) records the platform's
-  // matching side. The `expiresAt` goes into the entry's metadata so the background
-  // worker's expiry job can later find this grant and reverse whatever the user hasn't spent.
+  // Debit PROMO_FLOAT, credit the user's promo account, same amount, so the entry balances.
+  // PROMO_FLOAT goes up when debited. `expiresAt` lives in the entry metadata so the expiry
+  // job can find this grant and reverse whatever the user hasn't spent.
   let transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs: [
@@ -65,10 +61,9 @@ export async function grantPromo(
     meta: { kind: 'grantPromo', expiresAt },
   });
 
-  // Record the grant alongside the posting, inside the same unit of work, so it commits or
-  // rolls back together with the credit. The grant reuses the posting's id, so the
-  // promo-expiry sweep can find it and reverse whatever the user hasn't spent once it
-  // expires. `open` is idempotent on that id, so a retried grant never duplicates the row.
+  // Record the grant in the same unit of work so it commits/rolls back with the credit. It
+  // reuses the posting's id so the promo-expiry sweep can find and reverse the unspent portion
+  // once it expires. `open` is idempotent on that id, so a retried grant never duplicates the row.
   await unit.promos.open({
     id: transaction.id,
     userId: operation.userId,
@@ -80,10 +75,9 @@ export async function grantPromo(
   return { status: 'committed', transaction };
 }
 
-// Check the grant amount before posting: it must be in CREDIT and greater than zero. A
-// grant that fails either check is a programming or caller mistake, so this throws a fault
-// rather than returning a "rejected" outcome (which is reserved for normal business "no"
-// answers like insufficient funds).
+// Amount must be CREDIT and positive. A failure here is a caller/programming mistake, so throw
+// a fault rather than a "rejected" outcome (rejected is for business "no" answers like
+// insufficient funds).
 function positiveCredit(amount: Amount, label: string): Amount {
   if (amount.currency !== 'CREDIT') {
     throw fault(ERROR_CODES.MALFORMED_OPERATION, `${label} must be CREDIT.`, {
@@ -98,18 +92,16 @@ function positiveCredit(amount: Amount, label: string): Amount {
   return amount;
 }
 
-// How far in the future a promo grant may be set to expire, in milliseconds. A grant must
-// expire so the promo-expiry sweep can later reclaim whatever the user hasn't spent; this
-// ceiling (five years out) stops a caller from minting an effectively never-expiring grant by
-// passing an absurd far-future timestamp.
+// Max expiry distance for a grant, in ms. Every grant must expire so the sweep can reclaim
+// unspent credit; this ceiling (five years) stops a caller from minting an effectively
+// never-expiring grant via an absurd far-future timestamp.
 let MAX_EXPIRY_AHEAD_MS = 5 * 365 * 24 * 60 * 60_000;
 
-// Check the grant's expiry before posting: it must be a finite, whole-millisecond timestamp
-// that lands strictly after now and no further out than the ceiling above. A value off the
-// wire can arrive as NaN, Infinity, or a fraction, and a zero/negative/past expiry would be
-// dead on arrival — it would poison the promo-expiry reclaim sweep, which claims any grant
-// whose `expiresAt` has already passed. All of these are caller/programming mistakes, so this
-// throws a fault (a MALFORMED operation) rather than returning a "rejected" business outcome.
+// Expiry must be a finite, whole-ms timestamp strictly after now and no further out than the
+// ceiling above. Off-the-wire values can be NaN, Infinity, or fractional; a zero/negative/past
+// expiry would immediately poison the reclaim sweep, which claims any grant whose `expiresAt`
+// has already passed. All caller/programming mistakes, so throw a MALFORMED fault, not a
+// "rejected" outcome.
 function futureExpiresAt(expiresAt: number, ctx: Ctx, label: string): number {
   let now = ctx.clock.now();
   if (!Number.isInteger(expiresAt) || expiresAt <= now) {
@@ -129,9 +121,8 @@ function futureExpiresAt(expiresAt: number, ctx: Ctx, label: string): number {
   return expiresAt;
 }
 
-// Operations are dispatched to handlers by their `kind` field, so this handler should only
-// ever receive a 'grantPromo' operation. Getting any other kind means the dispatch table is
-// wired wrong, so this builds a loud fault instead of trying to process it.
+// Operations dispatch to handlers by `kind`, so this one should only ever see 'grantPromo'.
+// Any other kind means the dispatch table is wired wrong, so build a loud fault.
 function kindMismatch(operation: Operation): ReturnType<typeof fault> {
   return fault(
     ERROR_CODES.MALFORMED_OPERATION,

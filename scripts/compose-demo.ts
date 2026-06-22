@@ -162,15 +162,13 @@ console.warn(
   '\n--- flow: top up, buy from two creators, request a payout, prove ---',
 );
 
-// 1. The platform credits the buyer's wallet after a card charge clears (a trusted service does
-//    this, not the user).
+// 1. Platform credits the buyer's wallet after a card charge clears (trusted service, not the user).
 const r1 = await economy.submit(
   topUp({ userId: buyer, amount: credit('50.00'), source: 'card' }),
 );
 console.warn(`topUp 50.00 → buyer:            ${r1.status}`);
 
-// 2. The buyer spends 12.00 on a listing; the price splits 60/40 between two creators and the
-//    platform keeps its fee.
+// 2. Buyer spends 12.00 on a listing; price splits 60/40 between two creators, platform keeps its fee.
 const r2 = await economy.submit(
   spend({
     buyerId: buyer,
@@ -184,11 +182,10 @@ const r2 = await economy.submit(
 );
 console.warn(`spend 12.00 (60/40 split):      ${r2.status}`);
 
-// 3. A creator requests a payout. This sets aside the credits the creator earned and starts a
-//    multi-step payout workflow that a background worker finishes later. The request must clear a
-//    minimum amount and the earnings must be old enough to pay out (a hold period after the sale,
-//    in case the buyer's card charge is later reversed), so on brand-new earnings it can come back
-//    'rejected' — the accounts still add up to zero either way.
+// 3. Creator requests a payout: sets aside earned credits and starts a multi-step workflow a
+//    background worker finishes later. Must clear a minimum amount, and earnings must be old enough
+//    (a post-sale hold in case the card charge is reversed), so brand-new earnings can come back
+//    'rejected'. Accounts still net to zero either way.
 const r3 = await economy.submit(
   requestPayout({ userId: creatorA, amount: credit('5.00') }),
 );
@@ -211,11 +208,10 @@ console.warn(
   `REVENUE (platform)  = ${fmt(await economy.read.balance(SYSTEM.REVENUE))}`,
 );
 
-// 4. Whatever happened above, the ledger still checks out on every rule: debits equal credits,
-//    every credit a user can spend is covered by real USD held against it, no user wallet went
-//    negative, the per-account chain of hashes (each entry hashes in the one before it) is
-//    unbroken, and each account's cached running balance matches the sum of its debit and credit
-//    lines.
+// 4. Regardless of the above, the ledger holds on every rule: debits equal credits, every spendable
+//    credit is backed by real USD held against it, no wallet went negative, the per-account hash
+//    chain (each entry hashes in the prior one) is unbroken, and each account's cached running
+//    balance matches the sum of its debit and credit lines.
 const report = await economy.read.prove();
 console.warn(
   `\nprove(): conserved=${report.conserved} backed=${report.backed} ` +
@@ -223,8 +219,7 @@ console.warn(
     `consistent=${report.consistent}`,
 );
 
-// The postgres/mysql connection pools stay open in the background, which would keep Node.js
-// running forever. compose() created and holds those connections, so this script has no handle
-// to close them. Since this is a run-once demo, exit the process explicitly once the flow is done.
+// compose() holds the postgres/mysql connection pools; this script has no handle to close them, and
+// open pools keep Node.js running forever. Run-once demo, so exit explicitly once the flow is done.
 // eslint-disable-next-line n/no-process-exit
 process.exit(0);

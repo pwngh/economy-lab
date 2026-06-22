@@ -131,14 +131,12 @@ export default tseslint.config(
       'n/no-missing-import': 'off',
       'n/no-unpublished-import': 'off',
       'n/no-extraneous-import': 'off',
-      // This rule treats the standard cross-runtime `crypto` global (which the core
-      // uses on purpose) as Node's experimental node:crypto and warns it may be
-      // unsupported. We know it is available: the TypeScript types and a runtime smoke
-      // test confirm it, and the ban further down already blocks Node-only globals.
-      // So turn this rule off to stop the false positive.
+      // This rule treats the cross-runtime `crypto` global (used by the core on purpose) as Node's
+      // experimental node:crypto and warns it may be unsupported. It's available (TS types and a
+      // runtime smoke test confirm it; the ban below already blocks Node-only globals). Off to stop
+      // the false positive.
       'n/no-unsupported-features/node-builtins': 'off',
-      // Limits that keep each function readable: small enough to follow top to bottom
-      // and fit on one screen. complexity caps the number of branching paths.
+      // Keep functions small enough to read top to bottom on one screen; complexity caps branches.
       complexity: ['error', 15],
       'max-depth': ['error', 4],
       'max-lines-per-function': [
@@ -150,12 +148,11 @@ export default tseslint.config(
     },
   },
 
-  // Core library under src/, excluding the adapter layer (src/adapters/). The core targets the
-  // portable WinterCG surface, so Node-only globals and node:* imports are banned here; tests and
-  // adapters are not matched and stay free to use Node APIs. The two layering invariants above also
-  // apply: no test/dev-script code, and no static imports of the optional drivers. (The drivers and
-  // the wire codec that index.ts/server.ts legitimately reach for are not on these lists, so those
-  // seams stay valid.)
+  // Core library under src/, excluding src/adapters/. Targets the WinterCG surface, so Node-only
+  // globals and node:* imports are banned here; tests and adapters aren't matched and may use Node
+  // APIs. Both layering invariants apply: no test/dev-script code, no static imports of the optional
+  // drivers. (The drivers and the wire codec that index.ts/server.ts reach for aren't on these
+  // lists, so those seams stay valid.)
   {
     files: ['src/**/*.ts'],
     ignores: ['src/adapters/**'],
@@ -171,9 +168,9 @@ export default tseslint.config(
     },
   },
 
-  // The adapter layer (src/adapters/) wraps Node-only APIs, so the node:* and Node-global bans do
-  // not apply. But it is still shipped library code, so the layering invariants do: no adapter may
-  // import test/dev-script code, and the optional drivers must stay behind dynamic import().
+  // The adapter layer (src/adapters/) wraps Node-only APIs, so the node:* and Node-global bans don't
+  // apply. It's still shipped code, so the layering invariants do: no test/dev-script imports, and
+  // the optional drivers stay behind dynamic import().
   {
     files: ['src/adapters/**/*.ts'],
     rules: {
@@ -184,12 +181,9 @@ export default tseslint.config(
     },
   },
 
-  // Test files (test/**) are linear arrange-act-assert narratives, and the differential/conformance
-  // suites iterate over the adapter matrix (each engine × each invariant), so a single test() body
-  // legitimately runs long and nests a few callbacks deep. The function-size and nesting limits above
-  // are tuned for production code in src/; relaxing only those two here keeps a scenario readable as one
-  // piece instead of fragmenting it to satisfy a heuristic. Every correctness rule (no-unused-vars,
-  // complexity, no-restricted-* etc.) still applies to tests unchanged.
+  // Tests run long and nest a few callbacks deep (AAA narratives; the conformance suites iterate the
+  // adapter matrix), so relax only the function-size and nesting limits here. Every other rule still
+  // applies to tests.
   {
     files: ['test/**/*.ts'],
     rules: {
