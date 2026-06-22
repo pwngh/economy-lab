@@ -9,12 +9,9 @@
  * @license MIT
  */
 
-// Converts the records the HTTP store adapter sends over the network into plain JSON and
-// back. A money amount is stored as a `bigint`, and `JSON.stringify` cannot serialize a
-// `bigint`, so every amount travels as a decimal string (like `'CREDIT:12.34'`) and is
-// parsed back into an amount on arrival, letting records survive a round trip unchanged
-// on any runtime. Both the client and the server import this one file, so the two ends
-// can never disagree on the format.
+// Wire (de)serialization for the HTTP store adapter. `JSON.stringify` can't serialize the
+// `bigint` an amount is stored as, so amounts travel as decimal strings (e.g. `'CREDIT:12.34'`)
+// and parse back on arrival. Client and server both import this file, so the format stays in sync.
 
 import { decodeAmount, encodeAmount } from '#src/money.ts';
 
@@ -35,16 +32,13 @@ import type {
   Velocity,
 } from '#src/ports.ts';
 
-// One debit-or-credit line of a posting, in its over-the-network form: the account it
-// touches, plus its amount written as a decimal string (the string also names the
-// currency, e.g. `'CREDIT:12.34'`).
+// Wire form of one posting leg: the account, plus its amount as a decimal string that also
+// names the currency (e.g. `'CREDIT:12.34'`).
 type WireLeg = { account: string; amount: string };
 
-// Each account keeps a tamper-evident chain of its postings, where every entry's hash is
-// computed from the previous entry's hash plus the new contents, so any later edit breaks
-// the chain. This is one account's place in that chain for a single transaction, in its
-// over-the-network form: the account, that account's chain hash just before this
-// transaction, and its hash just after.
+// Each account keeps a tamper-evident hash chain over its postings (each entry's hash covers
+// the previous hash plus the new contents, so a later edit breaks the chain). Wire form of one
+// account's link for a single transaction: the account, its chain hash before, and after.
 type WireLink = { account: string; prevHash: string; hash: string };
 
 function encodeLeg(leg: Leg): WireLeg {
@@ -56,10 +50,8 @@ function decodeLeg(wire: unknown): Leg {
   return { account: row.account as AccountRef, amount: amountFrom(row.amount) };
 }
 
-// Parse an encoded amount string back into an `Amount`. The encoding puts the currency
-// before a colon and the decimal value after it (`'CREDIT:12.34'`), so the string alone
-// carries everything needed — no separate currency field has to travel with it. Split on
-// that colon and hand the two parts to `decodeAmount`.
+// Parse an encoded amount string back into an `Amount`. Currency before the colon, decimal
+// value after (`'CREDIT:12.34'`), so the string is self-contained. Split and pass to `decodeAmount`.
 function amountFrom(wire: string): Amount {
   let colon = wire.indexOf(':');
   let currency = wire.slice(0, colon) as Amount['currency'];
@@ -67,9 +59,8 @@ function amountFrom(wire: string): Amount {
 }
 
 /**
- * Converts each kind of domain record into a plain, JSON-friendly shape for sending
- * over the network. Every money amount becomes a decimal string; everything else is
- * copied through unchanged. There is one function per record type the adapter sends.
+ * Encode each domain record into a JSON-friendly wire shape. Amounts become decimal strings;
+ * everything else copies through unchanged. One function per record type the adapter sends.
  */
 export let encodeWire = {
   amount: encodeAmount,
@@ -123,12 +114,10 @@ export let encodeWire = {
 };
 
 /**
- * Turns each received JSON shape back into its typed domain record — the reverse of
- * `encodeWire`. Every decimal-string amount is parsed back into an `Amount`. Some fields
- * are plain strings on the wire but the domain types treat them as distinct id types
- * (for example an account reference, which the type system refuses to mix with an ordinary
- * string), so those are cast back to their id type on arrival. There is one function per
- * record type the adapter receives.
+ * Decode each received JSON shape back into its typed domain record (reverse of `encodeWire`).
+ * Decimal-string amounts parse back into `Amount`. Fields that are plain strings on the wire but
+ * distinct id types in the domain (e.g. an account reference) are cast back on arrival. One
+ * function per record type the adapter receives.
  */
 export let decodeWire = {
   amount: (wire: unknown): Amount => amountFrom(wire as string),
@@ -160,11 +149,10 @@ export let decodeWire = {
     };
   },
 
-  // Result of trying to claim an idempotency key — the value attached to a request so a
-  // retry runs at most once: a repeat with the same key is recognized and not re-applied.
-  // Either this caller got the key first (`claimed: true`, so it should do the work), or
-  // the key was already used and the reply carries the transaction that the earlier
-  // request recorded (`claimed: false`), which needs decoding like any other transaction.
+  // Result of trying to claim an idempotency key (so a retry runs at most once). Either this
+  // caller got the key first (`claimed: true`, do the work), or the key was already used and the
+  // reply carries the transaction the earlier request recorded (`claimed: false`), which decodes
+  // like any other transaction.
   claim: (
     wire: unknown,
   ): { claimed: true } | { claimed: false; transaction: Transaction } => {

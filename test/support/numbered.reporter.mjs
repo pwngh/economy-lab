@@ -10,26 +10,23 @@
  */
 
 /**
- * A custom `node:test` reporter that prints a spec-style tree with hierarchical
- * numbers: each top-level suite gets a whole number (1, 2, 3, ...) and each test
- * under it gets a dotted sub-number (1.1, 1.2, ...; deeper nesting keeps extending
- * the dots). The numbers are assigned here at print time — nothing in the test
- * files changes — so you can say "1.3 failed" and find it.
+ * Custom `node:test` reporter that prints a spec-style tree with hierarchical
+ * numbers: top-level suites get whole numbers (1, 2, 3, ...), tests under them get
+ * dotted sub-numbers (1.1, 1.2, ...; deeper nesting extends the dots). Numbers are
+ * assigned at print time, so you can say "1.3 failed" and find it.
  *
- * Why it buffers the whole run before printing: `node --test` runs test files in
- * parallel worker processes, so their events arrive interleaved and in a different
- * order each run. To make the numbers stable, this collects every event, groups
- * them back together by file, sorts the files by path, and only then walks the
- * tree assigning numbers. The trade-off is that output appears once at the end
- * rather than streaming live — fine for a suite that finishes in a second or two.
+ * Buffers the whole run before printing because `node --test` runs files in parallel
+ * workers, so events arrive interleaved and in a different order each run. To keep
+ * numbers stable, collect every event, group by file, sort files by path, then walk
+ * the tree numbering. Trade-off: output appears once at the end rather than streaming,
+ * fine for a suite that finishes in a second or two.
  *
  * Wire it up in package.json:
  *   node --test --test-reporter=./test/support/numbered.reporter.mjs \
  *        --test-reporter-destination=stdout "test/**\/*.test.ts"
  */
 
-// ANSI colors, but only when writing straight to a terminal. When the output is
-// piped or captured (no TTY), everything is plain text so logs stay clean.
+// ANSI colors only on a TTY; piped or captured output stays plain text.
 const tty = process.stdout.isTTY;
 const paint = (open, close) => (s) =>
   tty ? `\x1b[${open}m${s}\x1b[${close}m` : String(s);
@@ -40,15 +37,15 @@ const red = paint(31, 39);
 const yellow = paint(33, 39);
 const cyan = paint(36, 39);
 
-// One node in a file's test tree: a suite (has `children`) or a single test (none).
+// One node in a file's test tree: a suite (has `children`) or a single test.
 // `status` is filled in when the matching test:pass / test:fail event arrives.
 function makeNode(name) {
   return { name, children: [], status: null, duration: null, error: null };
 }
 
 export default async function* numberedReporter(source) {
-  // Group structural events by the file they came from, preserving each file's own
-  // order (which IS reliable — only the order ACROSS files is shuffled by parallelism).
+  // Group structural events by source file, preserving each file's own order (which is
+  // reliable; only the order across files is shuffled by parallelism).
   const eventsByFile = new Map();
   for await (const event of source) {
     const file = event.data?.file;
@@ -57,9 +54,9 @@ export default async function* numberedReporter(source) {
     eventsByFile.get(file).push(event);
   }
 
-  // Rebuild each file's tree. Within a file, test:start fires top-down (a parent
-  // before its children) and test:pass/fail closes the innermost open node, so a
-  // simple depth-indexed stack reconstructs the hierarchy exactly.
+  // Rebuild each file's tree. Within a file, test:start fires top-down (parent before
+  // children) and test:pass/fail closes the innermost open node, so a depth-indexed
+  // stack reconstructs the hierarchy exactly.
   const rootsByFile = new Map();
   for (const [file, events] of eventsByFile) {
     const roots = [];
@@ -137,7 +134,7 @@ export default async function* numberedReporter(source) {
 
   yield lines.join('\n') + '\n';
 
-  // Failure details, so the report stands on its own without a second reporter.
+  // Failure details, so the report needs no second reporter.
   if (failures.length > 0) {
     yield `\n${red(bold('Failures:'))}\n`;
     for (const f of failures) {
@@ -150,7 +147,7 @@ export default async function* numberedReporter(source) {
     }
   }
 
-  // Summary line, computed from the tree so it always matches what was printed above.
+  // Summary line, computed from the tree so it matches what was printed above.
   const verdict =
     counts.fail > 0 ? red(`${counts.fail} failed`) : green('all passed');
   yield `\n${bold('Summary')}  ${verdict}  ·  ${counts.suites} suites  ·  ${counts.tests} tests` +

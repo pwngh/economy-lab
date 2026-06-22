@@ -11,25 +11,22 @@
  */
 
 /**
- * These tests assert no behavior of their own — they lock in three design decisions so a
- * future edit can't silently undo one. Each was raised as a review objection (the O-numbers
- * below are those objection ids, reused as the test group names). If a decision is ever
- * reversed, the matching test here fails and forces the reversal to be deliberate.
+ * Lock in three design decisions so a future edit can't silently undo one. Each was a review
+ * objection; the O-numbers are those objection ids, reused as the test group names. Reverse a
+ * decision and the matching test fails, forcing the reversal to be deliberate.
  *
- *  - O5: the three event types the request path emits must equal an agreed set of exact
- *    strings. These names are the public contract other systems read off the event stream,
- *    so they were renamed away from older names (`purchase.completed`, `marketplace.sale`)
- *    and must not drift back.
+ *  - O5: the three event types the request path emits must equal an agreed set of exact strings.
+ *    These names are the public contract other systems read off the event stream; renamed away
+ *    from older names (`purchase.completed`, `marketplace.sale`) and must not drift back.
  *
- *  - O11: detecting money-laundering rings is intentionally not built. The background worker
- *    runs a fixed list of periodic jobs (`SWEEP_NAMES`); this guards that no `laundering`
- *    job has crept into that list.
+ *  - O11: money-laundering-ring detection is intentionally not built. The worker runs a fixed
+ *    job list (`SWEEP_NAMES`); guard that no `laundering` job crept in.
  *
- *  - O7: serving signed asset downloads is out of scope, so the HTTP server has no
- *    asset/download route and any download-style URL returns 404.
+ *  - O7: signed asset downloads are out of scope, so the server has no asset/download route and
+ *    any download-style URL returns 404.
  *
- * Two related objections are covered elsewhere: the binary risk-denial decision (O4) by the
- * subscribe velocity test, and O12/O14 by the shared store conformance suite.
+ * Related objections covered elsewhere: risk-denial (O4) by the subscribe velocity test, O12/O14
+ * by the shared store conformance suite.
  */
 
 import { describe, test } from 'node:test';
@@ -45,20 +42,18 @@ import { createServer } from '#src/server.ts';
 import type { Economy } from '#src/contract.ts';
 import type { Store, EconomyEvent } from '#src/ports.ts';
 
-// Build a fresh store and an economy wired onto it. Both share one fixed-seed hash function
-// and one frozen clock, which makes every hash and timestamp deterministic across runs. The
-// store is returned as well so a test can read back the events the request wrote (those events
-// land in the store's outbox — a table written in the same transaction as the money move, so
-// an event is never sent for a move that rolled back nor lost for one that committed).
+// Fresh store + economy wired onto it, sharing one fixed-seed hash and one frozen clock so hashes
+// and timestamps are deterministic. Store is returned too so a test can read back the events the
+// request wrote. Events land in the store's outbox, a table written in the same transaction as the
+// money move, so an event is never sent for a rolled-back move nor lost for a committed one.
 function makePair(): { economy: Economy; store: Store } {
   let store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
   let economy = makeEconomy(1, store);
   return { economy, store };
 }
 
-// Take every pending event out of the outbox and return just the events. Each one is marked
-// delivered so a later call in the same test doesn't see it again. The limit of 100 is well
-// above the handful of events any one request can produce, so this always drains the lot.
+// Drain pending outbox events, marking each delivered so a later call in the same test won't see
+// it again. The limit of 100 is well above what any one request produces, so this drains the lot.
 async function eventsOf(store: Store): Promise<EconomyEvent[]> {
   let batch = await store.outbox.claimBatch(100);
   await store.outbox.markRelayed(batch.map((message) => message.id));

@@ -37,11 +37,8 @@ import { toAmount } from '#src/money.ts';
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
 
-// The grantPromo handler expects a Ctx: the bag of dependencies (clock, id generator,
-// hashing, pricing, etc.) it reads from while running. This builds one from the
-// deterministic test fakes so every run behaves identically. These tests call the handler
-// directly instead of going through the code that would normally route an operation to it,
-// because that routing layer isn't built yet.
+// Ctx (clock, ids, hashing, pricing, ...) built from deterministic fakes for repeatable runs.
+// Tests call grantPromo directly; the routing layer that would normally dispatch to it isn't built yet.
 function makeCtx(): Ctx {
   let digest = seededDigest(1);
   let clock = fixedClock(0);
@@ -65,13 +62,12 @@ function makeStore(): Store {
   return memoryStore({ digest, clock });
 }
 
-// A brand-new store and Ctx for each test, so no test can see state left behind by another.
+// Fresh store and Ctx per test to isolate state.
 function fixture(): { store: Store; ctx: Ctx } {
   return { store: makeStore(), ctx: makeCtx() };
 }
 
-// Run the handler inside a database transaction that commits on success, and return its
-// result (an Outcome: either a committed transaction or a declined operation).
+// Run the handler in a transaction (commits on success); returns an Outcome (committed txn or declined op).
 async function applyGrantPromo(
   store: Store,
   ctx: Ctx,
@@ -80,8 +76,7 @@ async function applyGrantPromo(
   return store.transaction((unit) => grantPromo(operation, unit, ctx));
 }
 
-// Build a matcher for assert.rejects that passes only when the thrown error carries a given
-// `code` string. Tests use it to check which specific error a bad operation raised.
+// assert.rejects matcher: passes only when the thrown error's `code` matches.
 function hasCode(code: string): (error: unknown) => boolean {
   return (error) =>
     error instanceof Error && (error as { code?: string }).code === code;
@@ -113,10 +108,8 @@ describe('grantPromo Issuance', () => {
       grantPromoOp({ userId: 'usr_buyer', amount: credit('5.00') }),
     );
 
-    // PROMO_FLOAT is the platform's matching account for promo grants: it grows when debited,
-    // and the grant debits it by 5.00. balance() always reports an account as a positive
-    // magnitude in its own direction, so this debited account reads as +5.00 — the same size
-    // as the credit the user received.
+    // PROMO_FLOAT is the matching account for grants; it grows when debited, and the grant debits it 5.00.
+    // balance() reports magnitude in the account's own direction, so this reads +5.00, matching the user's credit.
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.PROMO_FLOAT),
       credit('5.00'),
@@ -132,10 +125,8 @@ describe('grantPromo Issuance', () => {
       grantPromoOp({ userId: 'usr_buyer', amount: credit('5.00') }),
     );
 
-    // The grant is one balanced entry: the user's promo account is credited 5.00 and
-    // PROMO_FLOAT is debited 5.00. Each grows in its own direction, so balance() reports both
-    // as +5.00 (in minor units, 500 cents). Subtracting one from the other gives zero, which
-    // confirms the two halves of the entry are equal and opposite.
+    // One balanced entry: promo credited 5.00, PROMO_FLOAT debited 5.00. Both read +5.00 (500 minor),
+    // so their difference is zero, confirming the halves are equal and opposite.
     let promoBalance = await store.ledger.balance(promo('usr_buyer'));
     let floatBalance = await store.ledger.balance(SYSTEM.PROMO_FLOAT);
     assert.equal(promoBalance.minor - floatBalance.minor, 0n);
@@ -173,9 +164,8 @@ describe('grantPromo Issuance', () => {
       }),
     );
 
-    // The grant shows up as one entry in the account's statement (its list of postings).
-    // The grant carries an `expiresAt`, which is stored on that entry so the background job
-    // that later reverses any unspent grants can find when this one expires.
+    // The grant is one statement entry. Its `expiresAt` is stored on that entry so the background job
+    // that reverses unspent grants can find when it expires.
     assert.equal(outcome.status, 'committed');
     let statement = await store.ledger.statement(promo('usr_buyer'), {
       from: 0,
@@ -199,9 +189,8 @@ describe('grantPromo Recording For The Expiry Background Job', () => {
       }),
     );
 
-    // The grant was written to the promo store inside the same unit of work as the posting,
-    // so a sweep run at or after `expiresAt` can claim it. The stored grant reuses the
-    // posting's id, carries the full granted amount and the same expiry, and starts unreversed.
+    // Grant written to the promo store in the same unit of work as the posting, so a sweep at or after
+    // `expiresAt` can claim it. Stored grant reuses the posting id, carries the full amount and expiry, starts unreversed.
     assert.equal(outcome.status, 'committed');
     let txnId =
       outcome.status === 'committed' ? outcome.transaction.id : 'unreachable';
@@ -227,8 +216,7 @@ describe('grantPromo Recording For The Expiry Background Job', () => {
       }),
     );
 
-    // claimDue only returns grants whose `expiresAt` has passed (`expiresAt <= now`); one
-    // millisecond before expiry the grant is not yet claimable.
+    // claimDue returns only grants with `expiresAt <= now`; one ms before expiry it isn't claimable.
     assert.deepEqual(await store.promos.claimDue(172_799_999, 10), []);
   });
 });
@@ -243,10 +231,8 @@ describe('grantPromo Backing', () => {
       grantPromoOp({ userId: 'usr_buyer', amount: credit('5.00') }),
     );
 
-    // A promo grant only touches the promo and PROMO_FLOAT accounts. It never adds to the real
-    // USD the platform holds in trust (TRUST_CASH) or to the count of spendable credits in
-    // circulation (STORED_VALUE), so both stay at zero. That is why a free marketing grant can
-    // never raise how much real cash the platform is required to keep on hand.
+    // A grant touches only promo and PROMO_FLOAT. It never adds to USD held in trust (TRUST_CASH) or to
+    // spendable credits in circulation (STORED_VALUE), so both stay zero: a free grant can't raise required reserves.
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.TRUST_CASH),
       toAmount('USD', 0n),
@@ -288,8 +274,8 @@ describe('grantPromo Validation', () => {
   test('throws MALFORMED_OPERATION when expiresAt is in the past', async () => {
     let { store, ctx } = fixture();
 
-    // The clock reads now = 0, so any non-positive timestamp is at or before now: a dead-on-
-    // arrival expiry that would let the promo-expiry sweep reclaim the grant immediately.
+    // Clock reads now = 0, so any non-positive timestamp is at or before now: a dead-on-arrival
+    // expiry the sweep would reclaim immediately.
     await assert.rejects(
       applyGrantPromo(
         store,
@@ -361,8 +347,7 @@ describe('grantPromo Validation', () => {
   test('throws MALFORMED_OPERATION when expiresAt is absurdly far in the future', async () => {
     let { store, ctx } = fixture();
 
-    // Beyond the sane ceiling (years out): refusing it stops a non-expiring grant the
-    // promo-expiry sweep would never reclaim.
+    // Beyond the sane ceiling (years out): refusing it stops an effectively non-expiring grant the sweep would never reclaim.
     await assert.rejects(
       applyGrantPromo(
         store,

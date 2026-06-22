@@ -13,17 +13,17 @@ import type { Currency } from '#src/money.ts';
 import type { Rate, Rates, Options } from '#src/ports.ts';
 
 /**
- * The three CREDIT-to-USD rates a deployment configures. A credit's value is fixed by the platform,
- * so all are business constants, not a live market feed:
- * - `buy` is what a user pays per credit when buying (VRChat ≈120 credits/USD = $0.00833);
- * - `par` is what one credit is worth for backing — its cash-out floor (VRChat ≈200/USD = $0.005),
- *   used to check the platform holds enough real USD to back users' spendable credits;
- * - `payout` is the rate a creator's earned credits convert to USD at when cashing out (= `par`).
+ * The three CREDIT-to-USD rates a deployment configures. Credit value is platform-fixed, so all are
+ * business constants, not a live market feed:
+ * - `buy`: what a user pays per credit when buying (VRChat ≈120 credits/USD = $0.00833);
+ * - `par`: a credit's backing value / cash-out floor (VRChat ≈200/USD = $0.005), used to check the
+ *   platform holds enough real USD to back users' spendable credits;
+ * - `payout`: rate a creator's earned credits convert to USD at when cashing out (= `par`).
  *
- * Each rate is stored as two integers, `rate` and `scale`, where the real multiplier is
- * `rate / 10^scale` (e.g. rate 5, scale 3 → $0.005 per credit) — integers avoid floating-point
- * error. The gap between `buy` and `par` is the platform's purchase-spread revenue — VRChat's ~40%
- * "purchase fee" (the buy-vs-cash-out spread, not a separate deduction). See docs/vrchat-grounding.md.
+ * Each rate is two integers, `rate` and `scale`; the multiplier is `rate / 10^scale` (e.g. rate 5,
+ * scale 3 → $0.005 per credit). Integers avoid floating-point error. The `buy`/`par` gap is the
+ * platform's purchase-spread revenue: VRChat's ~40% "purchase fee" (the buy-vs-cash-out spread, not
+ * a separate deduction). See docs/vrchat-grounding.md.
  */
 export interface RatesConfig {
   buyRate: bigint;
@@ -40,16 +40,15 @@ function identityRate(from: Currency, to: Currency): Rate {
 }
 
 /**
- * The production source of CREDIT-to-USD exchange rates, for real deployments to use in place of
- * the 1:1 placeholder used in development. The rates are fixed business constants a deployment
- * configures, not a live market feed.
+ * Production CREDIT-to-USD exchange rates, replacing the 1:1 dev placeholder. Fixed business
+ * constants a deployment configures, not a live market feed.
  *
- * It returns three rates: `buy` (what a user pays per credit), `par` (the credit's backing/cash-out
- * value), and `payout` (the rate a creator's earned credits convert to USD at). Each carries a
- * `rateId` string naming that exact rate, so a transaction can record which rate it used.
+ * Returns three rates: `buy` (paid per credit), `par` (backing/cash-out value), and `payout`
+ * (creator earned-credit conversion). Each carries a `rateId` naming the exact rate so a
+ * transaction can record which it used.
  *
- * Converting a currency to itself returns a 1:1 rate. Only CREDIT and USD exist, so any other
- * currency pair is a bug in how this was wired up and throws.
+ * Same-currency conversion returns 1:1. Only CREDIT and USD exist, so any other pair is a wiring bug
+ * and throws.
  *
  * @example
  *   // VRChat: buy ≈120 credits/USD ($0.00833), backed/cashed at ≈200/USD ($0.005) — a ~40% spread:
@@ -96,8 +95,8 @@ export function configuredRates(config: RatesConfig): Rates {
       if (from === 'CREDIT' && to === 'USD') {
         return payout;
       }
-      // `async`, so this surfaces as a rejected promise (the port returns `Promise<Rate>`), not a
-      // synchronous throw a caller's `await` would miss.
+      // `async`, so this rejects the promise (port returns `Promise<Rate>`) rather than throwing
+      // synchronously, which a caller's `await` would miss.
       throw new Error(
         `configuredRates has no ${from}->${to} rate (only CREDIT->USD and same-currency are configured).`,
       );

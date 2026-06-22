@@ -24,9 +24,8 @@ import { fixedClock, testConfig } from '#test/support/capabilities.ts';
 import type { Economy } from '#src/contract.ts';
 import type { WebhookHandler } from '#src/server.ts';
 
-// Sign raw bytes with HMAC-SHA256 under `secret` and return the lowercase hex digest, exactly the
-// form the server expects in the `x-signature` header. Uses Web Crypto so the test runs unchanged
-// on every target runtime.
+// HMAC-SHA256 over body under `secret`, lowercase hex digest (the `x-signature` form). Web Crypto so
+// it runs on every target runtime.
 async function signHex(body: string, secret: string): Promise<string> {
   let key = await crypto.subtle.importKey(
     'raw',
@@ -43,8 +42,7 @@ async function signHex(body: string, secret: string): Promise<string> {
   return toHex(new Uint8Array(signature));
 }
 
-// Build a POST request to a webhook endpoint with an optional signature and timestamp header, so a
-// test can send a correctly-signed, forged, or stale callback.
+// POST to a webhook endpoint with optional signature/timestamp headers (signed, forged, or stale).
 function webhookRequest(
   provider: string,
   body: string,
@@ -57,9 +55,8 @@ function webhookRequest(
   });
 }
 
-// Build a POST request to the server's /submit endpoint from an operation body. The body's
-// money fields must already be encoded as decimal strings (the form the server decodes),
-// since that is exactly what a real client would put on the wire.
+// POST to /submit from an operation body. Money fields must already be decimal strings (the form the
+// server decodes), as a real client would send.
 function submitRequest(body: Record<string, unknown>): Request {
   return new Request('https://economy.test/submit', {
     method: 'POST',
@@ -68,9 +65,8 @@ function submitRequest(body: Record<string, unknown>): Request {
   });
 }
 
-// A "add money to a user's balance" (topUp) request body. Only `amount` is encoded as a
-// decimal string (the one money field the server decodes); every other field is plain JSON,
-// just as a client would serialize it.
+// topUp request body. Only `amount` is a decimal string (the one money field the server decodes);
+// the rest is plain JSON.
 function topUpBody(userId: string, dollars: string): Record<string, unknown> {
   return {
     kind: 'topUp',
@@ -82,9 +78,8 @@ function topUpBody(userId: string, dollars: string): Record<string, unknown> {
   };
 }
 
-// A "buy something" (spend) request body for a buyer who has never added money. With no
-// balance, the server checks up front and returns a normal "no" (a rejected outcome with
-// reason INSUFFICIENT_FUNDS) instead of treating it as a server error.
+// spend request body for a buyer with no balance. The server checks up front and returns a rejected
+// outcome (reason INSUFFICIENT_FUNDS), not a server error.
 function spendBody(buyerId: string, dollars: string): Record<string, unknown> {
   return {
     kind: 'spend',
@@ -109,8 +104,8 @@ describe('createServer /submit', () => {
 
     assert.equal(response.status, 200);
     assert.equal(payload.status, 'committed');
-    // Each line of the transaction reports its amount as a decimal string like
-    // 'CREDIT:10.00' (currency, then dollars), so no raw integer ever crosses the wire.
+    // Each leg reports its amount as a decimal string like 'CREDIT:10.00' (currency, then dollars);
+    // no raw integer on the wire.
     assert.equal(
       payload.transaction.legs.some((leg) => leg.amount === 'CREDIT:10.00'),
       true,
@@ -123,8 +118,8 @@ describe('createServer /submit', () => {
     let response = await server(submitRequest(spendBody('usr_broke', '5.00')));
     let payload = (await response.json()) as { status: string; reason: string };
 
-    // Declining a valid request (here, not enough money) is a normal result, not a server
-    // error: the server answers 200 and the body says why it was rejected.
+    // Declining a valid request (here, not enough money) is a normal result, not a server error: 200
+    // with the rejection reason in the body.
     assert.equal(response.status, 200);
     assert.equal(payload.status, 'rejected');
     assert.equal(payload.reason, 'INSUFFICIENT_FUNDS');
@@ -138,15 +133,14 @@ describe('createServer /submit', () => {
 
     assert.equal(response.status, 400);
     assert.equal(typeof payload.error, 'string');
-    // The error response carries only the human-readable message. Internal fields such as
-    // `detail` or `cause` are kept server-side so they never leak to the client.
+    // Error response carries only the message; `detail`/`cause` stay server-side.
     assert.equal('detail' in payload, false);
     assert.equal('cause' in payload, false);
   });
 
   test('a thrown EconomyError carrying detail/cause leaks only { error: message }', async () => {
-    // A submit that faults with a richly-populated EconomyError — internal detail, an
-    // underlying cause, and the implicit stack. The boundary must surface none of them.
+    // Submit faults with a fully-populated EconomyError (detail, cause, implicit stack). The boundary
+    // must surface none of them.
     let economy = {
       submit: async () => {
         throw fault(ERROR_CODES.STORE_FAILURE, 'A storage layer failed.', {
@@ -177,7 +171,7 @@ describe('createServer /submit', () => {
     // Retryable fault → 503, but the body is just the human-readable message.
     assert.equal(response.status, 503);
     assert.equal(payload.error, 'A storage layer failed.');
-    // The body has exactly one key — no detail, cause, or stack rode along.
+    // Exactly one key; no detail, cause, or stack.
     assert.deepEqual(Object.keys(payload), ['error']);
     assert.equal('detail' in payload, false);
     assert.equal('cause' in payload, false);
@@ -258,9 +252,9 @@ describe('createServer /webhooks HMAC Verification', () => {
     let payload = (await response.json()) as { error: string };
 
     assert.equal(response.status, 401);
-    // The handler — the only thing that would mutate the ledger — was never reached.
+    // The handler (the only thing that would mutate the ledger) was never reached.
     assert.equal(invoked, false);
-    // Only the human-readable message escapes; internal detail stays server-side.
+    // Only the message escapes; internal detail stays server-side.
     assert.equal(typeof payload.error, 'string');
     assert.equal('detail' in payload, false);
   });
@@ -319,8 +313,8 @@ describe('createServer /webhooks Freshness', () => {
     );
     let payload = (await response.json()) as { status: string };
 
-    // A request that arrives too late to be fresh is treated like a repeat that was already
-    // handled: the server answers 200 with status 'duplicate' and changes nothing.
+    // A request too late to be fresh is treated as an already-handled repeat: 200, status
+    // 'duplicate', nothing changed.
     assert.equal(response.status, 200);
     assert.equal(payload.status, 'duplicate');
     assert.equal(invoked, false);
@@ -410,8 +404,8 @@ describe('createServer Health And Readiness', () => {
   });
 
   test('GET /readyz returns 503 when the store read throws', async () => {
-    // A minimal economy whose readiness probe (read.balance) fails, standing in for an
-    // unreachable store. Only the surface /readyz touches needs to be real.
+    // Minimal economy whose readiness probe (read.balance) fails, for an unreachable store. Only what
+    // /readyz touches needs to be real.
     let economy = {
       submit: async () => {
         throw new Error('not used');

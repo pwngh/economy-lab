@@ -28,19 +28,17 @@ import type { Economy } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
 
 // These tests drive the full public `economy.submit` path, where the permission check (`authorize`)
-// lives; the sibling refund.test.ts calls the handler directly and so never reaches it.
+// lives; the sibling refund.test.ts calls the handler directly and never reaches it.
 //
 // Regression tests for an authorization bypass of the same shape as the revokeEntitlement and
-// clawback ones: refund — undoing a sale, returning the buyer's money and revoking the SKU it
-// granted — was missing from the privileged-only list. The ownership rule only blocks DEBITING an
-// account the caller owns, and a refund only ever CREDITS the buyer (returning their money) while
-// debiting other people's accounts (the seller, REVENUE), so the ownership rule never fires for the
-// caller — meaning a `kind:'user'` actor could refund ANY order, reversing a sale they don't own,
-// handing the buyer their money back, revoking the buyer's item, and burning the shared
-// `reversed:${orderId}` claim so the real refund/clawback path can never run. refund is now
-// system/operator-only, which is what these tests pin. Each test builds the economy over a store it
-// also holds, so it can confirm the order's state is untouched after a rejected attempt — proof the
-// request was stopped before it could reverse anything.
+// clawback ones: refund (undoing a sale, returning the buyer's money and revoking the granted SKU)
+// was missing from the privileged-only list. The ownership rule only blocks debiting an account the
+// caller owns, and a refund only credits the buyer while debiting other accounts (the seller,
+// REVENUE), so the rule never fires for the caller. A kind:'user' actor could thus refund any order:
+// reverse a sale they don't own, hand the buyer their money back, revoke the buyer's item, and burn
+// the shared `reversed:${orderId}` claim so the real refund/clawback path can never run. refund is
+// now system/operator-only, which is what these tests pin. Each test builds the economy over a store
+// it also holds, so it can confirm the order is untouched after a rejected attempt.
 
 function isUnauthorized(error: unknown): boolean {
   return (error as { code?: string }).code === 'AUTH.UNAUTHORIZED';
@@ -53,11 +51,10 @@ function economyWithStore(): { economy: Economy; store: Store } {
   return { economy: makeEconomy(1, store), store };
 }
 
-// Seed a real prior sale the way the live system does: fund the buyer with a top-up (as a trusted
+// Seed a real prior sale the way the live system does: fund the buyer via top-up (as a trusted
 // system actor), then run a purchase through `economy.submit`. The spend records a Sale under
-// `orderId` and grants the buyer the SKU, so there is a genuine order — with money moved and an
-// entitlement held — for a refund to reverse. Returns the buyer's spendable balance left after the
-// purchase, so a test can prove a rejected refund did not credit it back.
+// `orderId` and grants the buyer the SKU, so there's a genuine order (money moved, entitlement held)
+// for a refund to reverse.
 async function seedSale(economy: Economy, orderId: string): Promise<void> {
   const funded = await economy.submit(
     buildTopUp({ userId: 'usr_buyer', amount: credit('10.00') }),
@@ -98,8 +95,7 @@ describe('Refund authorization through economy.submit', () => {
       isUnauthorized,
     );
 
-    // Stopped before it ran: the buyer's balance was not credited back, the SKU was not revoked,
-    // and the sale is still on file — so the order is exactly as the purchase left it.
+    // Stopped before it ran: balance not credited back, SKU not revoked, sale still on file.
     assert.deepEqual(
       await store.ledger.balance(spendable('usr_buyer')),
       credit('6.00'),
@@ -113,7 +109,7 @@ describe('Refund authorization through economy.submit', () => {
     await seedSale(economy, 'ord_self');
 
     // Refund is system/operator-only regardless of whose order it names, so even the buyer who paid
-    // cannot refund their own purchase — the same rule that protects a foreign order.
+    // cannot refund their own purchase.
     await assert.rejects(
       economy.submit(
         buildRefund({ orderId: 'ord_self', actor: principal('usr_buyer') }),
@@ -136,8 +132,7 @@ describe('Refund authorization through economy.submit', () => {
     const outcome = await economy.submit(buildRefund({ orderId: 'ord_legit' }));
 
     assert.equal(outcome.status, 'committed');
-    // The buyer is made whole — their full 10.00 top-up is back — and the SKU the sale granted is
-    // revoked, the proof the reversal actually ran end to end.
+    // Buyer made whole (full 10.00 top-up back) and the granted SKU revoked: the reversal ran.
     assert.deepEqual(
       await store.ledger.balance(spendable('usr_buyer')),
       credit('10.00'),

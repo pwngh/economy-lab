@@ -10,13 +10,10 @@
  */
 
 /**
- * These tests call `economy.submit` (the public entry point for one money operation) and
- * then check the event it queued for delivery. Each operation, when it commits, saves one
- * event into the store's outbox (the table of events waiting to be sent to clients); these
- * tests confirm the right event type, audience, and payload fields for each operation kind.
- *
- * The store is built here in the test, rather than created internally by `makeEconomy`, so
- * the test holds a reference to it and can read `store.outbox` after a submit.
+ * Call `economy.submit` and check the event it queues. A committed operation writes one event
+ * to the store's outbox; these tests assert the event type, audience, and payload fields per
+ * operation kind. The store is built here (not inside `makeEconomy`) so the test can read
+ * `store.outbox` after a submit.
  */
 
 import { describe, test } from 'node:test';
@@ -42,21 +39,17 @@ import type { Economy } from '#src/contract.ts';
 import type { Store, EconomyEvent } from '#src/ports.ts';
 import type { Amount } from '#src/money.ts';
 
-// Build a fresh store plus an economy that writes to it. Both share one fixed hash function
-// (a digest seeded from a constant) and one clock stuck at time 0, so every run produces the
-// same ledger hashes and the tests are repeatable. The store is returned too, so a test can
-// read back the events a submit queued into it.
+// Fresh store plus an economy writing to it, sharing a seeded digest and a clock fixed at 0 so
+// ledger hashes are deterministic. The store is returned so tests can read back queued events.
 function makePair(): { economy: Economy; store: Store } {
   let store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
   let economy = makeEconomy(1, store);
   return { economy, store };
 }
 
-// Take every queued event out of the outbox and return just the events themselves. The
-// limit of 100 is more than enough, since one submit queues at most one event. claimBatch
-// only reads the still-unsent rows without removing them, so the events are then marked as
-// sent ("relayed") to take them out of the queue; without that, a later call here would
-// hand back the same events again.
+// Drain the outbox and return the events. Limit 100 is plenty (one submit queues at most one
+// event). claimBatch reads unsent rows without removing them, so mark them relayed afterward;
+// otherwise a later call hands back the same events.
 async function eventsOf(store: Store): Promise<EconomyEvent[]> {
   let batch = await store.outbox.claimBatch(100);
   await store.outbox.markRelayed(batch.map((message) => message.id));
@@ -75,9 +68,9 @@ async function fund(
   assert.equal(outcome.status, 'committed');
 }
 
-// Give a seller a balance of earned credits by posting the entries directly, the way a real
-// sale would. Earned credits normally have to age before they can be paid out; the test
-// config sets that waiting period to zero, so this balance can be paid out right away.
+// Seed a seller's earned-credit balance by posting the entries directly, as a real sale would.
+// Earned credits normally age before payout; the test config sets that period to zero, so this
+// balance is immediately payable.
 async function fundEarned(
   store: Store,
   userId: string,
@@ -126,8 +119,8 @@ describe('Submit-Path Domain Events', () => {
     let event = await onlyEvent(store);
     assert.equal(event.type, 'economy.sale.refunded');
     assert.equal(event.audience, 'client');
-    // The refund request named only an orderId. The buyer is worked out instead from the
-    // debit/credit lines that reverse the original sale (those lines name the buyer's account).
+    // The refund request named only an orderId; the buyer is derived from the reversing
+    // debit/credit lines, which name the buyer's account.
     assert.equal(event.subject, 'usr_buyer');
     assert.equal(event.data.buyerId, 'usr_buyer');
     assert.equal(event.data.orderId, 'ord_refund_1');
@@ -212,8 +205,8 @@ describe('Submit-Path Domain Events (Payouts & Subscriptions)', () => {
       }),
     );
     assert.equal(started.status, 'committed');
-    // The subscribe handler generates the subscription's id internally, so read it back from
-    // the stored subscription record; that way the cancel below targets a real subscription.
+    // The subscribe handler generates the subscription id internally; read it back from the
+    // stored record so the cancel below targets a real subscription.
     let subscriptionId = await onlySubscriptionId(store, 'usr_buyer');
     await eventsOf(store); // discard topUp + started events
 
@@ -221,10 +214,9 @@ describe('Submit-Path Domain Events (Payouts & Subscriptions)', () => {
       buildCancelSubscription({ subscriptionId }),
     );
     assert.equal(outcome.status, 'committed');
-    // A cancel commits without moving any money, so it records no debit/credit lines. The
-    // event still gets emitted, because emitting is triggered by the outcome being committed,
-    // not by money actually moving. This is the behavior under test: an operation that commits
-    // without posting any entries must still produce its event.
+    // A cancel commits without moving money, so it records no debit/credit lines. Emission is
+    // triggered by the committed outcome, not by money moving, so the event still fires. That's
+    // the behavior under test: a commit with no entries must still produce its event.
     assert.deepEqual(
       (outcome as Extract<typeof outcome, { status: 'committed' }>).transaction
         .legs,
@@ -239,8 +231,8 @@ describe('Submit-Path Domain Events (Payouts & Subscriptions)', () => {
   });
 });
 
-// Find the user's one active subscription and return its id. Lets the cancel test use the
-// actual id the subscribe handler generated, rather than guessing it.
+// Return the user's one active subscription id, so the cancel test uses the id the subscribe
+// handler actually generated.
 async function onlySubscriptionId(
   store: Store,
   userId: string,

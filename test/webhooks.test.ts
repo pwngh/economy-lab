@@ -37,7 +37,7 @@ import type { WebhookHandler } from '#src/server.ts';
 import type { ReplayStore } from '#src/ports.ts';
 
 // Sign raw bytes with HMAC-SHA256 under `secret`, returning the lowercase hex digest the server
-// expects in the `x-signature` header. Web Crypto so the test runs unchanged on every runtime.
+// expects in `x-signature`. Web Crypto so the test runs unchanged on every runtime.
 async function signHex(body: string, secret: string): Promise<string> {
   let key = await crypto.subtle.importKey(
     'raw',
@@ -54,8 +54,8 @@ async function signHex(body: string, secret: string): Promise<string> {
   return toHex(new Uint8Array(signature));
 }
 
-// Build a POST to a webhook endpoint carrying an optional signature/timestamp, so a test can send
-// a correctly-signed, forged, or stale callback.
+// POST to a webhook endpoint with an optional signature/timestamp, for sending a correctly-signed,
+// forged, or stale callback.
 function webhookRequest(
   provider: string,
   body: string,
@@ -68,8 +68,7 @@ function webhookRequest(
   });
 }
 
-// The wire body a provider POSTs: the money field travels as a decimal string (the same codec the
-// server decodes), exactly as a real client would serialize it.
+// Wire body a provider POSTs: the money field is a decimal string (same codec the server decodes).
 function purchaseBody(o: {
   eventId: string;
   userId: string;
@@ -101,19 +100,17 @@ describe('Webhooks toTopUp / Idempotency', () => {
 
     assert.equal(op.kind, 'topUp');
     assert.equal(op.idempotencyKey, webhookIdempotencyKey('evt_provider_1'));
-    // The idempotency key is the value that makes a retried request run at most once: a repeat
-    // with the same key is recognized and skipped. Prefixing it with `whk:` keeps the webhook's
-    // key from ever colliding with a key an ordinary API caller chose for one of their own
-    // operations.
+    // The idempotency key makes a retry run at most once: a repeat with the same key is skipped.
+    // The `whk:` prefix keeps webhook keys from colliding with keys an ordinary API caller chose.
     assert.equal(op.idempotencyKey, 'whk:evt_provider_1');
   });
 
   test('copies eventId / sku / provider as origin info onto the posting metadata', () => {
     let op = toTopUp(SAMPLE) as unknown as { meta?: Record<string, unknown> };
 
-    // The origin details (which provider, which event, which item) ride on the operation so the
-    // topUp handler can stamp them onto the meta of the ledger posting that creates the credits.
-    // That gives each created-credits entry a back-pointer to the provider callback that caused it.
+    // Origin details (provider, event, item) ride on the operation so the topUp handler can stamp
+    // them onto the meta of the ledger posting, giving each created-credits entry a back-pointer to
+    // the provider callback that caused it.
     assert.deepEqual(op.meta, {
       eventId: 'evt_provider_1',
       provider: 'billing',
@@ -170,9 +167,9 @@ describe('Webhooks handlePurchaseWebhook (Exactly-Once topUp)', () => {
       'CREDIT:10.00',
     );
 
-    // Same eventId again: its idempotency key is the same, so the second call is recognized as a
-    // duplicate and the balance does not move. The buyer is credited exactly once no matter how
-    // many times the provider redelivers the event, with no help needed from the server layer.
+    // Same eventId again: same idempotency key, so the second call is a duplicate and the balance
+    // doesn't move. Credited exactly once however many times the provider redelivers, with no help
+    // from the server layer.
     let second = await handlePurchaseWebhook(economy, SAMPLE);
     assert.equal(second.status, 'duplicate');
     assert.equal(
@@ -182,11 +179,10 @@ describe('Webhooks handlePurchaseWebhook (Exactly-Once topUp)', () => {
   });
 });
 
-// Stand up the real HTTP server in front of one shared store, so three things all read and write
-// the same ledger: the replay store (which records each eventId the first time it is seen so a
-// redelivery can be recognized and skipped), the economy the handler posts into, and the balance
-// the assertions check. The store needs a hash function and a clock; here both are deterministic
-// (a fixed-seed digest and a clock frozen at time 0) so the test gives the same result every run.
+// Real HTTP server over one shared store, so three things read/write the same ledger: the replay
+// store (records each eventId on first sight so a redelivery is skipped), the economy the handler
+// posts into, and the balance the assertions check. The store's digest and clock are deterministic
+// (fixed-seed digest, clock frozen at 0) for a stable result every run.
 function gatedServer(secret: string): {
   server: (request: Request) => Promise<Response>;
   economy: ReturnType<typeof makeEconomy>;
@@ -234,8 +230,8 @@ describe('createServer /webhooks Replay Dedup', () => {
       'committed',
     );
 
-    // The replay store has now claimed the eventId; the redelivery is acknowledged 200 duplicate
-    // and the handler never runs, so the balance stays put.
+    // Replay store has claimed the eventId; the redelivery gets 200 duplicate, the handler never
+    // runs, the balance stays put.
     let second = await server(webhookRequest('billing', body, headers));
     assert.equal(second.status, 200);
     assert.equal(
@@ -260,9 +256,9 @@ describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin I
       amount: '10.00',
     });
 
-    // A forged delivery: signed with the wrong secret. The signature check runs before the replay
-    // store records the eventId, so a rejected forgery never causes the id to be recorded — and
-    // therefore can't block a later genuine delivery of that same id from being processed.
+    // Forged delivery, signed with the wrong secret. The signature check runs before the replay
+    // store records the eventId, so a rejected forgery never records the id and can't block a later
+    // genuine delivery of the same id.
     let forged = await signHex(body, 'wrong-secret');
     let rejected = await server(
       webhookRequest('billing', body, {
@@ -276,7 +272,7 @@ describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin I
       'CREDIT:0.00',
     );
 
-    // The genuine delivery of that SAME eventId is recorded for the first time and credits the
+    // The genuine delivery of that same eventId is recorded for the first time and credits the
     // buyer, proving the earlier forgery did not use up the id.
     let valid = await signHex(body, secret);
     let ok = await server(
@@ -316,8 +312,7 @@ describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin I
       'CREDIT:25.00',
     );
 
-    // Check the origin details the posting should carry, built by the same `toTopUp` mapper the
-    // handler runs internally.
+    // Origin details the posting should carry, built by the same `toTopUp` mapper the handler runs.
     let op = toTopUp({
       provider: 'billing',
       eventId: 'evt_prov',
