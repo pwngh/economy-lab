@@ -115,4 +115,3 @@ export function rowToCheckpoint(row: Record<string, unknown>): Checkpoint {
     at: Number(row.at),
   };
 }
-
