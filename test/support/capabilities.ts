@@ -32,9 +32,8 @@ import type { Config } from '#src/config.ts';
 // --- Clock & ids ------------------------------------------------------------------
 
 /**
- * A test clock whose time never moves on its own. It reports `start` until you call
- * `advance(ms)`, which jumps it forward by `ms` and returns the new time. Tests use this
- * so time only changes when they make it change, keeping each run reproducible.
+ * Test clock that only moves when you call `advance(ms)` (jumps forward by `ms`, returns the
+ * new time). Reports `start` until then. Keeps runs reproducible.
  */
 export function fixedClock(
   start = 0,
@@ -50,9 +49,8 @@ export function fixedClock(
 }
 
 /**
- * A fake id generator that hands out predictable ids. Instead of random uuids, it counts
- * up from `seed` and returns `<prefix>_<n>` (for example `txn_1`, then `txn_2`). Because
- * the sequence is fixed, the same ids appear every run.
+ * Deterministic id generator: counts up from `seed` and returns `<prefix>_<n>` (e.g. `txn_1`,
+ * `txn_2`). Same ids every run.
  */
 export function sequentialIds(seed = 0): { next: (prefix: string) => string } {
   let n = seed;
@@ -66,11 +64,9 @@ export function sequentialIds(seed = 0): { next: (prefix: string) => string } {
 
 // --- Digest & signer (seeded, deterministic) --------------------------------------
 
-// Mix the seed into the bytes before hashing them. Two different seeds produce two
-// different hashes for the same input, but a given seed always produces the same hash.
-// We do this by gluing `seed:<seed>:` onto the front of the bytes, then hashing the
-// combined buffer with the platform's built-in SHA-256, which gives identical results on
-// every JavaScript runtime.
+// Prefix the bytes with `seed:<seed>:` before hashing. Different seeds give different hashes for
+// the same input; a given seed is stable. Hashed with the platform's SHA-256, so results match
+// across runtimes.
 let ENCODER = new TextEncoder();
 function withSeed(seed: number, bytes: Uint8Array): Uint8Array {
   let prefix = ENCODER.encode(`seed:${seed}:`);
@@ -81,9 +77,8 @@ function withSeed(seed: number, bytes: Uint8Array): Uint8Array {
 }
 
 /**
- * A test hasher. It returns the SHA-256 hash of the input (with the seed mixed in first,
- * see `withSeed`), using the platform's built-in `crypto.subtle` rather than Node's
- * `crypto` module so the same hash comes out on Node, Bun, and Deno.
+ * Test hasher: SHA-256 of the input (seed mixed in first, see `withSeed`), via `crypto.subtle`
+ * rather than Node's `crypto` so the hash matches on Node, Bun, and Deno.
  */
 export function seededDigest(seed = 1): Digest {
   return {
@@ -95,10 +90,9 @@ export function seededDigest(seed = 1): Digest {
 }
 
 /**
- * A test signer where the `seed` plays the part of the secret key. `sign` produces a
- * predictable "signature" (a SHA-256 hash with the seed mixed in), and `verify` re-signs
- * the same bytes and checks the result matches. This is not real cryptography; it is just
- * enough to exercise the code path that signs a value and then verifies that signature.
+ * Test signer with `seed` as the stand-in secret key. `sign` returns a SHA-256 hash (seed mixed
+ * in); `verify` re-signs and compares. Not real crypto, just enough to exercise the sign/verify
+ * path.
  */
 export function seededSigner(seed = 1): Signer {
   let sign = async (bytes: Uint8Array): Promise<Uint8Array> =>
@@ -129,13 +123,12 @@ function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
 
 // --- Rates (fixed-point, audited) -------------------------------------------------
 
-// Three fixed CREDIT-to-USD rates, one for each place a rate is read. Round test values (not
-// VRChat's exact $0.00833 buy rate, which is not a clean cent) chosen so the topUp split lands on
-// whole cents: `buy` is what a user pays per credit ($0.01, so 100 credits = $1); `par` is the
-// credit's backing/cash-out value the backing check uses ($0.005, so 200 credits = $1); `payout`
-// equals `par`. The buy-vs-par gap (50% here) is the platform's purchase-spread cut. (A separate
-// test pins VRChat's real ~40% spread + creator-nets-50% with the exact 120/200 rates.) A rate is
-// stored as exact integers (multiplier `rate / 10^scale`) plus a `rateId` naming which it is.
+// Three fixed CREDIT-to-USD rates, one per read site. Round values (not VRChat's exact $0.00833
+// buy rate, which isn't a clean cent) so the topUp split lands on whole cents: `buy` = what a user
+// pays per credit ($0.01, 100 credits = $1); `par` = backing/cash-out value the backing check uses
+// ($0.005, 200 credits = $1); `payout` = `par`. The buy-vs-par gap (50%) is the platform's
+// purchase-spread cut. (A separate test pins VRChat's real ~40% spread + creator-nets-50% with the
+// exact 120/200 rates.) Each rate is exact integers (multiplier `rate / 10^scale`) plus a `rateId`.
 let BUY_CREDIT: Rate = { rate: 1n, scale: 2, rateId: 'buy:CREDIT->USD:1/2' };
 let PAR_CREDIT: Rate = { rate: 5n, scale: 3, rateId: 'par:CREDIT->USD:5/3' };
 let PAYOUT_CREDIT: Rate = {
@@ -170,7 +163,7 @@ export function fixedRates(): Rates {
 
 // --- logger, meter, processor -----------------------------------------------------
 
-// A logger that throws every line away, so tests produce no log noise.
+// Logger that discards every line, so tests produce no log noise.
 export function testLogger(): Logger {
   return { log: () => {} };
 }

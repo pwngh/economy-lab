@@ -17,45 +17,36 @@ import type { Ctx, Operation, Outcome, Transaction } from '#src/contract.ts';
 import type { Saga, Unit } from '#src/ports.ts';
 
 /**
- * Undo a payout that has not yet paid out real money. An operator runs this by hand to pull
- * back a single in-flight payout; it is the manual version of the undo the background payout
- * worker performs automatically when it gives up on a payout.
+ * Undo an in-flight payout by hand. Manual version of the undo the background payout worker
+ * does automatically when it gives up.
  *
- * Each payout is tracked by a saga — a small state record (REQUESTED, RESERVED, SUBMITTED,
- * SETTLED, FAILED) that the background worker steps forward one stage at a time. Requesting a
- * payout moved the seller's earned credits (the money the platform owes them as a seller) out
- * of their account into PAYOUT_RESERVE, the escrow holding pending payouts. Left alone, the
- * background worker would eventually pay those credits out to the platform. To pull a payout
- * back, two things must happen together: the saga must move to its final FAILED state (so the
- * worker never pays it out), and the reserved credits must return to the seller's earned
- * account. This handler does both in one transaction, using the same guarded state change the
- * worker uses to give up, so the credits are returned only if the saga is also stopped — never
- * one without the other.
+ * A payout is tracked by a saga (REQUESTED, RESERVED, SUBMITTED, SETTLED, FAILED). Requesting
+ * a payout moved the seller's earned credits into PAYOUT_RESERVE; left alone the worker pays
+ * them out. To pull it back, the saga must reach FAILED (so the worker never pays it) and the
+ * reserve must return to the seller's earned account. Both happen in one transaction via the
+ * same guarded state change the worker uses, so the credits return only if the saga also stops.
  *
- * Why this is NOT the generic `reverse` operation: `reverse` posts the opposite entry of a
- * named transaction but does not touch saga state, so reversing the reservation entry of a
- * RESERVED payout would leave the saga RESERVED and the worker would still pay it out — the
- * seller would get the money back AND the payout would go through. This operation moves the
- * saga to FAILED and posts the undo together, in one transaction, so that cannot happen.
+ * Not the generic `reverse`: `reverse` posts the opposite entry of a named transaction but
+ * leaves saga state alone, so reversing a RESERVED payout's reservation would leave it RESERVED
+ * and the worker would still pay it (seller gets the money back and the payout goes through).
+ * Here the FAILED transition and the undo posting commit together.
  *
  * Refusals and edge cases:
- * - SETTLED → throws `INVALID_TRANSITION`: the payout already paid out real money, so there is
- *   no reserve left to return; undoing it would credit the seller a second time. Posts nothing.
- * - SUBMITTED but not yet aged past `config.maxPayoutAgeMs` (measured from `updatedAt`, set when
- *   it entered SUBMITTED) → throws `INVALID_TRANSITION`: the disbursement is in the provider's
- *   hands and may STILL settle externally, so handing the reserve back now risks a double-pay.
- *   This mirrors the worker's own SUBMITTED-timeout cutoff; once a payout ages past it the
- *   provider is presumed never to have paid and the reverse is allowed. Posts nothing.
+ * - SETTLED → throws `INVALID_TRANSITION`: already paid out real money, no reserve left to
+ *   return; undoing would credit the seller twice. Posts nothing.
+ * - SUBMITTED not yet aged past `config.maxPayoutAgeMs` (from `updatedAt`, set on entering
+ *   SUBMITTED) → throws `INVALID_TRANSITION`: disbursement is in the provider's hands and may
+ *   still settle externally, so returning the reserve now risks a double-pay. Mirrors the
+ *   worker's SUBMITTED-timeout cutoff; past it, the provider is presumed never to have paid and
+ *   the reverse is allowed. Posts nothing.
  * - RESERVED, or SUBMITTED aged past the cutoff → moves the saga to FAILED and posts the undo
- *   (debit PAYOUT_RESERVE, credit the seller's earned account, for the full reserved amount).
- * - The guarded state change can fail if another worker already moved this saga forward between
- *   our read and now → returns `duplicate`, posting nothing, since the reserve was already
- *   spent or returned by whoever moved it first.
- * - An unknown sagaId means the operator mistyped it, so this throws a fault rather than
- *   returning a quiet "nothing to do" — the same way `reverse` treats an unknown transaction id.
+ *   (debit PAYOUT_RESERVE, credit the seller's earned account, full reserved amount).
+ * - Guarded state change loses to a concurrent worker → returns `duplicate`, posts nothing; the
+ *   reserve was already spent or returned by whoever moved it first.
+ * - Unknown sagaId is operator typo → throws a fault rather than a quiet "nothing to do", as
+ *   `reverse` does for an unknown transaction id.
  *
- * The `economy.payout.reversed` event (what observers see when a payout is reversed) is emitted
- * elsewhere, by the submit pipeline when this transaction commits, not by this handler.
+ * The `economy.payout.reversed` event is emitted by the submit pipeline on commit, not here.
  *
  * @example
  *   let outcome = await reversePayout(
@@ -81,19 +72,16 @@ export async function reversePayout(
   refuseSettled(saga);
   refuseLiveSubmitted(saga, ctx);
 
-  // Only a payout still in flight (RESERVED or SUBMITTED) has credits sitting in PAYOUT_RESERVE
-  // to return. A FAILED saga was already undone (by the worker or an earlier call), so doing it
-  // again would be a repeat — report it as already-handled. Any other state (such as REQUESTED,
-  // before the credits were ever moved into reserve) has nothing in reserve to give back, so
-  // undoing it would pull out money that isn't there — treat it as nothing to do.
+  // Only RESERVED or SUBMITTED has credits in PAYOUT_RESERVE to return. FAILED was already undone
+  // (worker or an earlier call); any other state (e.g. REQUESTED, before credits hit reserve) has
+  // nothing to give back. Treat both as already-handled.
   if (saga.state !== 'RESERVED' && saga.state !== 'SUBMITTED') {
     return { status: 'duplicate', transaction: noopTransaction() };
   }
 
-  // Move the saga from its current state to the final FAILED state, but only if it is still in
-  // that current state — the same guarded change the worker uses when it gives up on a payout.
-  // A false return means another worker already moved this saga forward between our read and now,
-  // so there is nothing left for us to undo.
+  // Move the saga to FAILED only if still in its current state (the worker's give-up change).
+  // A false return means another worker advanced it between our read and now, leaving nothing to
+  // undo.
   let advanced = await unit.sagas.advance(saga.id, saga.state, 'FAILED', {
     updatedAt: ctx.clock.now(),
   });
@@ -101,10 +89,9 @@ export async function reversePayout(
     return { status: 'duplicate', transaction: noopTransaction() };
   }
 
-  // Post the exact same undo the worker posts when it gives up: move the reserved amount out of
-  // PAYOUT_RESERVE and back into the seller's earned account. The two lines below (a debit and a
-  // credit, the entries that make up one posting) are in CREDIT and cancel out. This posting
-  // commits in the same transaction as the state change above, so the two cannot come apart.
+  // Same undo the worker posts: move the reserved amount out of PAYOUT_RESERVE back into the
+  // seller's earned account. Debit + credit balance in CREDIT. Commits in the same transaction
+  // as the state change above, so the two can't come apart.
   let transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs: [
@@ -121,8 +108,8 @@ export async function reversePayout(
   return { status: 'committed', transaction };
 }
 
-// Load the saga to reverse, by its id. The operator typed this id, so a missing saga is operator
-// error: throw a fault rather than return a normal "no" (matching `reverse`'s unknown-txnId).
+// Load the saga by id. The operator typed it, so a missing saga is operator error: throw a fault
+// rather than a normal "no" (matching `reverse`'s unknown-txnId).
 async function loadSaga(unit: Unit, sagaId: string): Promise<Saga> {
   let saga = await unit.sagas.load(sagaId);
   if (saga === null) {
@@ -135,13 +122,10 @@ async function loadSaga(unit: Unit, sagaId: string): Promise<Saga> {
   return saga;
 }
 
-// The operation names both the sagaId and the userId whose earned account the reserve returns to.
-// Before running, the framework locks the accounts named by operation.userId so no other write
-// can touch them mid-operation — but the undo posting below credits the account from saga.userId.
-// If an operator passes a userId that does not match the saga's seller, the account we credit
-// would be one that was never locked, leaving it open to a concurrent write. Reject the mismatch
-// up front so the locked account is guaranteed to be the one we credit; the posting always uses
-// saga.userId either way.
+// The framework locks the accounts named by operation.userId, but the undo posting credits
+// saga.userId. If they differ, we'd credit an unlocked account, open to a concurrent write.
+// Reject the mismatch so the locked account is the one we credit; the posting uses saga.userId
+// either way.
 function assertUserMatchesSaga(userId: string, saga: Saga): void {
   if (userId !== saga.userId) {
     throw fault(
@@ -152,9 +136,8 @@ function assertUserMatchesSaga(userId: string, saga: Saga): void {
   }
 }
 
-// Refuse to reverse a settled payout: it already disbursed real money, so its reserve was
-// consumed into REVENUE and there is nothing of ours to return. Reversing anyway would credit the
-// seller a second time, so this is a thrown fault, never a routine "no".
+// A settled payout already disbursed real money; its reserve was consumed into REVENUE, leaving
+// nothing to return. Reversing would credit the seller twice, so throw rather than return "no".
 function refuseSettled(saga: Saga): void {
   if (saga.state === 'SETTLED') {
     throw fault(
@@ -165,17 +148,14 @@ function refuseSettled(saga: Saga): void {
   }
 }
 
-// Refuse to hand the reserve back while a SUBMITTED payout may STILL settle externally. Once a
-// payout enters SUBMITTED the disbursement is already in the provider's hands; if an operator
-// reverses it now and the provider then pays out, the seller gets the money twice — a double-pay.
-// The background worker treats a SUBMITTED payout as live until it has been waiting longer than
-// `maxPayoutAgeMs` (measured from `updatedAt`, set when it entered SUBMITTED in submitToProvider),
-// only then force-failing it. Mirror that exact cutoff here: reject a manual reverse of a
-// SUBMITTED payout that has not yet aged past `maxPayoutAgeMs`, using the same `now - updatedAt`
-// comparison the worker uses, so a hand-run reverse can't race a live provider settlement. Once a
-// payout has aged past the cutoff the provider is presumed never to have paid, so reversing it is
-// allowed (and matches what the worker would itself do). A RESERVED payout was never handed to the
-// provider, so it has no live settlement to race and is not gated here.
+// A SUBMITTED payout's disbursement is in the provider's hands and may still settle externally;
+// reversing now and then having the provider pay would double-pay the seller. The worker treats
+// SUBMITTED as live until it ages past `maxPayoutAgeMs` (from `updatedAt`, set on entering
+// SUBMITTED in submitToProvider), then force-fails it. Mirror that cutoff with the same
+// `now - updatedAt` comparison: reject a manual reverse before the payout ages past it. Past the
+// cutoff the provider is presumed never to have paid, so reversing is allowed (and matches the
+// worker). RESERVED was never handed to the provider, so it has no live settlement to race and
+// isn't gated here.
 function refuseLiveSubmitted(saga: Saga, ctx: Ctx): void {
   if (
     saga.state === 'SUBMITTED' &&
@@ -196,8 +176,8 @@ function refuseLiveSubmitted(saga: Saga, ctx: Ctx): void {
   }
 }
 
-// A reversal must record why it happened, so an audit can see who pulled back which payout and on
-// what grounds. A missing or whitespace-only reason is operator error (matching `reverse`).
+// A reversal must record its reason for audit. Missing or whitespace-only is operator error
+// (matching `reverse`).
 function assertReason(reason: string): void {
   if (reason.trim() === '') {
     throw fault(
@@ -208,17 +188,14 @@ function assertReason(reason: string): void {
   }
 }
 
-// When the guarded state change loses to another worker, this handler posts no ledger entry —
-// but the `duplicate` result still has to carry a transaction. There is no real posting to
-// return, since whoever won already did the work, so this returns an empty placeholder
-// transaction with no entries of its own.
+// On a lost guarded state change there's no ledger posting, but the `duplicate` result still has
+// to carry a transaction. Return an empty placeholder with no entries.
 function noopTransaction(): Transaction {
   return { id: '', postedAt: 0, legs: [], links: [] };
 }
 
-// Operations are routed to handlers by their `kind`, so reaching this handler with any other kind
-// means the routing is wired wrong; throw a loud fault rather than act on an operation this code
-// wasn't built for.
+// Operations route to handlers by `kind`, so a wrong kind here means broken routing; throw rather
+// than act on an operation this code wasn't built for.
 function kindMismatch(operation: Operation): ReturnType<typeof fault> {
   return fault(
     ERROR_CODES.MALFORMED_OPERATION,

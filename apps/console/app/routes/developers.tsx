@@ -12,9 +12,7 @@
 import type { Route } from './+types/developers';
 import { DataTable } from '~/ui';
 
-// No loader needed — this page is static developer copy. It ports the vanilla console's rewritten
-// Developers content and adds a section on what "remote mode" means for THIS app (engine on the
-// server) vs. the in-browser sibling.
+// No loader: static developer copy.
 export function meta(_: Route.MetaArgs) {
   return [{ title: 'Developers — Economy Console' }];
 }

@@ -23,10 +23,8 @@ export async function loader(_: Route.LoaderArgs) {
 
 type PayoutView = Route.ComponentProps['loaderData']['payouts'][number];
 
-// The four columns of the saga lifecycle. RESERVED (credits set aside) → SUBMITTED (handed to the
-// provider) → SETTLED (paid). FAILED is the dead-letter terminal, where the reserve was reversed
-// back to the seller's earned account. REQUESTED is folded into RESERVED for display since
-// requestPayout opens the saga directly in RESERVED.
+// The saga lifecycle columns: RESERVED → SUBMITTED → SETTLED, plus FAILED (dead-letter, reserve
+// reversed to the seller). REQUESTED folds into RESERVED, since requestPayout opens directly in it.
 const COLUMNS: {
   state: PayoutView['state'];
   title: string;

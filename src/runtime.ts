@@ -21,19 +21,16 @@ import type {
 } from '#src/ports.ts';
 
 /**
- * The real clock for production: it reads the current wall-clock time. The code
- * reads time only through a clock like this one (never by calling `Date.now`
- * directly elsewhere), so tests can swap in a fake clock and control time.
+ * Production clock reading wall-clock time. Time is read only through a clock,
+ * never `Date.now` directly elsewhere, so tests can swap in a fake.
  */
 export function systemClock(): Clock {
   return { now: () => Date.now() };
 }
 
 /**
- * A fake clock for tests. It starts frozen at `start` (in epoch milliseconds)
- * and never moves on its own; time only changes when you call `advance(ms)`,
- * which pushes it forward by that many milliseconds and returns the new time.
- * Freezing time this way makes a test's outcome repeatable.
+ * Fake clock for tests. Frozen at `start` (epoch ms); only `advance(ms)` moves
+ * it forward, returning the new time. Keeps test outcomes repeatable.
  */
 export function fixedClock(
   start = 0,
@@ -49,18 +46,16 @@ export function fixedClock(
 }
 
 /**
- * The real id generator for production. Each id is the given prefix, an
- * underscore, and a random UUID (for example `txn_3f2a...`), so ids are
- * effectively unique without coordinating across machines.
+ * Production id generator. Each id is `prefix_<random UUID>` (e.g. `txn_3f2a...`),
+ * so ids are effectively unique without cross-machine coordination.
  */
 export function randomIds(): Ids {
   return { next: (prefix: IdPrefix) => `${prefix}_${crypto.randomUUID()}` };
 }
 
 /**
- * A predictable id generator for tests. Instead of random UUIDs it counts up
- * from `seed`, handing out `prefix_1`, `prefix_2`, and so on, so the same test
- * produces the same ids every run.
+ * Predictable id generator for tests. Counts up from `seed` (`prefix_1`,
+ * `prefix_2`, ...), so a test produces the same ids every run.
  */
 export function sequentialIds(seed = 0): Ids {
   let n = seed;
@@ -73,9 +68,8 @@ export function sequentialIds(seed = 0): Ids {
 }
 
 /**
- * The real hasher for production. It takes bytes and returns their SHA-256 hash
- * (a fixed-size fingerprint of the input) using the platform's built-in web
- * crypto, so the same bytes always hash to the same value on every runtime.
+ * Production hasher. Returns the SHA-256 of the input bytes via platform web
+ * crypto; the same bytes hash to the same value on every runtime.
  */
 export function systemDigest(): Digest {
   return {
@@ -84,20 +78,18 @@ export function systemDigest(): Digest {
   };
 }
 
-// The fixed PKCS#8 DER header for an Ed25519 private key, immediately followed by the 32-byte seed.
-// WebCrypto imports an Ed25519 private key in PKCS#8 form, so a bare seed is wrapped in this header
-// to import it.
+// Fixed PKCS#8 DER header for an Ed25519 private key, followed by the 32-byte seed. WebCrypto
+// imports Ed25519 private keys in PKCS#8 form, so a bare seed gets wrapped in this header.
 let ED25519_PKCS8_HEADER = new Uint8Array([
   0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04,
   0x22, 0x04, 0x20,
 ]);
 
 // Derive a deterministic Ed25519 key pair from secret key material. The secret (any length) is
-// SHA-256'd to a uniform 32-byte seed and imported as the private (signing) key; the matching
-// public (verifying) key is recovered by exporting the private key's JWK and re-importing just its
-// public coordinate. The same secret always yields the same pair, so a checkpoint verifies
-// reproducibly, and the public key can be published so an external auditor can verify a checkpoint
-// WITHOUT the secret.
+// SHA-256'd to a 32-byte seed and imported as the private (signing) key; the public (verifying)
+// key is recovered by exporting the private key's JWK and re-importing just its public coordinate.
+// The same secret always yields the same pair, so checkpoints verify reproducibly, and the public
+// key can be published so an external auditor can verify a checkpoint without the secret.
 async function ed25519KeyPair(
   secret: string,
 ): Promise<{ privateKey: CryptoKey; publicKey: CryptoKey }> {

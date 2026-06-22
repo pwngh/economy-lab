@@ -46,9 +46,8 @@ export default function App() {
   return <Outlet />;
 }
 
-// The catch-all error boundary: if any loader or action throws, render a plain message rather than
-// blanking the page. A thrown HTTP response (a 404, say) shows its status; any other error shows
-// its message.
+// Catch-all error boundary: render a message instead of a blank page. A thrown HTTP response shows
+// its status; any other error shows its message.
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   let title = 'Something went wrong';
   let detail = 'This page could not be loaded. Please try again.';

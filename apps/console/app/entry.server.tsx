@@ -16,9 +16,8 @@ import { createReadableStreamFromReadable } from '@react-router/node';
 import { ServerRouter } from 'react-router';
 import { renderToPipeableStream } from 'react-dom/server';
 
-// Providing this entry explicitly (rather than relying on the default) lets the @react-router/node
-// runtime be detected for typegen/build, and keeps the SSR render dependency-free (the stock entry
-// pulls in `isbot`, which we don't need for this console).
+// Provided explicitly so @react-router/node is detected for typegen/build, and to keep the SSR
+// render dependency-free (the stock entry pulls in `isbot`, which we don't need).
 export const streamTimeout = 5_000;
 
 export default function handleRequest(

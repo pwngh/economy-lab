@@ -69,17 +69,14 @@ import type {
   Velocity,
 } from '#src/ports.ts';
 
-// --- The mysql2/promise driver, described here by hand ----------------------------
+// --- mysql2/promise driver shape, declared by hand --------------------------------
 
-// We declare only the few methods this file calls instead of importing the real types
-// from `mysql2`. `mysql2` is an optional dependency a consumer may not have installed, so
-// importing it would break type-checking when it is absent. Describing the shape here lets
-// the file type-check on its own.
+// Only the methods this file calls. mysql2 is an optional dependency that may be absent, so
+// importing its types would break type-checking when it isn't installed.
 //
-// The driver's `query` returns a two-element array: a SELECT puts its rows in the first
-// slot; an INSERT/UPDATE/DELETE puts a result-summary object there instead, which reports
-// how many rows the statement changed (`affectedRows`). Both are typed `unknown` here and
-// each caller casts to whichever shape it expects.
+// `query` returns a two-element array: a SELECT puts rows in the first slot, an
+// INSERT/UPDATE/DELETE puts a result-summary object with `affectedRows`. Both are typed
+// `unknown`; each caller casts to the shape it expects.
 type Row = Record<string, unknown>;
 interface ResultHeader {
   affectedRows?: number;
@@ -98,17 +95,15 @@ export interface MysqlPool extends MysqlExecutor {
   end(): Promise<void>;
 }
 
-// What each store-building function needs: something it can run SQL on (either the pool
-// for standalone statements or a single connection inside a transaction), plus the
-// injected hashing and clock services.
+// What each store-building function needs: something to run SQL on (the pool for standalone
+// statements, or a connection inside a transaction) plus the injected hash and clock.
 interface ExecDeps {
   exec: MysqlExecutor;
   digest: Digest;
   clock: Clock;
 }
 
-// Run a SELECT and return just its rows. The driver also returns a column-metadata object,
-// which we don't use and drop here.
+// Run a SELECT and return just its rows, dropping the column-metadata object.
 async function rows(
   exec: MysqlExecutor,
   sql: string,
@@ -118,10 +113,8 @@ async function rows(
   return result as Row[];
 }
 
-// Run an INSERT/UPDATE/DELETE and return how many rows it changed. MySQL can't return the
-// changed rows themselves (no RETURNING clause), so this count is the only way to tell
-// whether a conditional UPDATE actually matched a row: an UPDATE whose WHERE matched
-// nothing reports 0.
+// Run an INSERT/UPDATE/DELETE and return affectedRows. MySQL has no RETURNING, so this count
+// is the only signal of whether a conditional UPDATE matched: a WHERE matching nothing reports 0.
 async function execWrite(
   exec: MysqlExecutor,
   sql: string,
@@ -133,10 +126,9 @@ async function execWrite(
 
 // --- The ledger store -------------------------------------------------------------
 
-// Whether an account is allowed to appear in a posting. Two ways to qualify: a user
-// account, recognized by its id ending in ':spendable', ':earned', or ':promo'; or a
-// platform account already present in the `accounts` table (those are inserted when the
-// schema is set up). A leg against anything else makes postEntry raise UNKNOWN_ACCOUNT.
+// Whether an account may appear in a posting: either a user account (id ending ':spendable',
+// ':earned', or ':promo') or a platform account already in `accounts` (inserted at schema setup).
+// Anything else makes postEntry raise UNKNOWN_ACCOUNT.
 async function isKnownAccount(
   exec: MysqlExecutor,
   account: AccountRef,
@@ -154,13 +146,12 @@ async function isKnownAccount(
   return found.length > 0;
 }
 
-// The head hash of each given account's chain, read in ONE query. Each account's entries are
-// linked into a tamper-evident chain where each entry's hash is built from the previous entry's,
-// and the head is the latest such hash. Each posting that touches an account writes one chain_links
-// row, so the most recent link — the one with the highest posting sequence number — carries the
-// head; a window function (ROW_NUMBER per account, newest first) picks it. Accounts with no entries
-// yet are simply absent from the result, and the caller treats a missing account as the genesis
-// hash. Reading every head at once turns one round-trip per account into one round-trip per posting.
+// Head hash of each account's chain, in one query. Entries form a tamper-evident chain (each hash
+// built from the previous); the head is the latest. Each posting touching an account writes one
+// chain_links row, so the link with the highest posting seq carries the head; ROW_NUMBER per
+// account (newest first) picks it. Accounts with no entries are absent from the result; the caller
+// treats a missing account as the genesis hash. Batching turns one round-trip per account into one
+// per posting.
 async function headsForAccounts(
   exec: MysqlExecutor,
   accounts: ReadonlyArray<AccountRef>,
@@ -190,12 +181,11 @@ async function headsForAccounts(
   return heads;
 }
 
-// Compute the new chain link for every account a posting touches. Read every account's current
-// head hash in one query, then for each account ask chainHash (in ledger.ts) for this posting's
-// new hash, derived from that previous hash plus the posting's details. The previous hash comes in
-// as hex and is decoded back to bytes — except for a first-ever posting, whose predecessor is the
-// raw genesis bytes. The hashes are independent across accounts, so batching the reads and
-// computing the hashes after changes nothing about the result.
+// Compute the new chain link for every account a posting touches. Read all current head hashes in
+// one query, then chainHash (ledger.ts) derives each account's new hash from that previous hash
+// plus the posting details. The previous hash arrives as hex and is decoded back to bytes, except
+// a first-ever posting whose predecessor is the raw genesis bytes. Hashes are independent across
+// accounts, so batching the reads doesn't change the result.
 async function advanceChain(
   deps: ExecDeps,
   posting: Posting,
@@ -218,20 +208,17 @@ async function advanceChain(
   return links;
 }
 
-// Write a posting and everything derived from it: the posting row, ALL of its legs, exactly
-// one chain-link row per distinct account it touched (carrying that account's old and new
-// chain hashes), and the running-balance update per leg.
+// Write a posting and everything derived from it: the posting row, all legs, one chain-link row
+// per distinct account touched (old and new chain hashes), and the per-leg balance update.
 //
-// Legs and chain links are stored at different levels of detail on purpose: a posting may
-// have several legs to one account (e.g. a promo-funded spend), but it advances that
-// account's hash chain only once. We store every leg because re-deriving an account's hash
-// later (in lineageOf) needs the account's full set of legs, and storing them all keeps that
-// set identical to the in-memory adapter. We store the chain link once per account (not once
-// per leg) because the database enforces a rule that a given previous-hash may be extended
-// only once — if each leg wrote its own link, a posting's legitimate second leg to the same
-// account would look like a second link extending the same previous hash and be rejected.
-// advanceChain already returns one link per distinct account, so `links` has exactly the
-// rows chain_links needs.
+// Legs and chain links are stored at different granularity on purpose. A posting may have several
+// legs to one account (e.g. a promo-funded spend) but advances that account's chain only once.
+// Every leg is stored because re-deriving an account's hash later (lineageOf) needs the full leg
+// set, kept identical to the in-memory adapter. The chain link is stored once per account, not per
+// leg, because the database enforces that a given previous-hash may be extended only once: per-leg
+// links would make a legitimate second leg to the same account look like a second extension of the
+// same previous hash and be rejected. advanceChain already returns one link per distinct account,
+// so `links` matches chain_links exactly.
 async function insertPosting(
   deps: ExecDeps,
   posting: Posting,
@@ -239,12 +226,11 @@ async function insertPosting(
   let postedAt = deps.clock.now();
   let links = await advanceChain(deps, posting);
 
-  // One CALL persists the whole posting. The application has already done every decision (the
-  // chain hashes, the per-account net balance deltas, which user accounts are new); the
-  // `post_entry` procedure receives those finished values and writes the posting, its legs, its
-  // chain links, and the balance changes as one set-based unit inside this transaction. This
-  // replaces a per-leg loop that cost a dozen-plus round-trips per posting. JSON arrays carry the
-  // bigint amounts as strings so nothing is lost past 2^53.
+  // One CALL persists the whole posting. The application has already decided everything (chain
+  // hashes, per-account net balance deltas, which user accounts are new); `post_entry` writes the
+  // posting, legs, chain links, and balance changes as one set-based unit in this transaction,
+  // replacing a per-leg loop that cost a dozen-plus round-trips. JSON arrays carry the bigint
+  // amounts as strings to keep values past 2^53.
   let args = postEntryArgs(posting, links);
   await callProcedure(mysqlQuery(deps.exec), 'mysql', 'post_entry', [
     posting.txnId,
@@ -258,8 +244,8 @@ async function insertPosting(
   return { id: posting.txnId, postedAt, legs: posting.legs, links };
 }
 
-// Wrap the MySQL executor as the normalized query function the shared routine surface expects:
-// run the SQL with positional `?` params and return the rows under a `rows` key.
+// Adapt the executor to the query function the shared routine surface expects: positional `?`
+// params, rows returned under a `rows` key.
 function mysqlQuery(exec: MysqlExecutor) {
   return async (sql: string, params: ReadonlyArray<unknown>) => ({
     rows: (await rows(exec, sql, params)) as ReadonlyArray<
@@ -268,26 +254,24 @@ function mysqlQuery(exec: MysqlExecutor) {
   });
 }
 
-// NOTE: creating a first-time user account's `accounts` row now happens inside the `post_entry`
-// stored procedure (db/mysql-schema.sql), from the new-accounts list the application computes
-// (see postEntryArgs in sql-routines.ts). MySQL's `lock` uses a named lock (GET_LOCK), not a row,
-// so it needs no account row up front the way the Postgres adapter's row lock does.
+// NOTE: creating a first-time user account's `accounts` row happens inside the `post_entry` stored
+// procedure (db/mysql-schema.sql), from the new-accounts list the application computes (see
+// postEntryArgs in sql-routines.ts). MySQL's `lock` uses a named lock (GET_LOCK), not a row, so it
+// needs no account row up front the way the Postgres adapter's row lock does.
 
-// NOTE: the per-account balance fold (UPDATE existing rows first so the non-negative CHECK is
-// tested against the new total, then INSERT first-time rows) now lives inside the `post_entry`
-// stored procedure (db/mysql-schema.sql), which applies every account's net delta in one
-// set-based step. The application still decides each delta via `balanceDelta` (see postEntryArgs
-// in sql-routines.ts); the procedure only persists it.
+// NOTE: the per-account balance fold (UPDATE existing rows first so the non-negative CHECK tests
+// the new total, then INSERT first-time rows) lives inside the `post_entry` stored procedure
+// (db/mysql-schema.sql), which applies every account's net delta in one set-based step. The
+// application decides each delta via `balanceDelta` (see postEntryArgs in sql-routines.ts); the
+// procedure only persists it.
 
 function createLedgerStore(deps: ExecDeps): Ledger {
   return {
     hasAccount: async (account) => isKnownAccount(deps.exec, account),
 
-    // Take a named lock on an account so concurrent transactions touching the same
-    // account run one at a time. The lock name is derived from the account id.
-    // MySQL lets the same connection take the same named lock more than once without
-    // blocking on itself, so locking one account twice in a row is safe. The lock is
-    // dropped when the transaction commits or rolls back.
+    // Named lock on an account so concurrent transactions touching it run one at a time. Lock name
+    // derived from the account id. The same connection can re-take the same named lock without
+    // blocking on itself, so locking one account twice is safe. Dropped on commit or rollback.
     lock: async (account) => {
       await rows(deps.exec, 'SELECT GET_LOCK(?, 10)', [lockName(account)]);
     },
@@ -295,8 +279,7 @@ function createLedgerStore(deps: ExecDeps): Ledger {
     append: async (posting) => insertPosting(deps, posting),
 
     balance: async (account) => {
-      // The cached balance comes back through the `account_balance` function (0 when the account
-      // has no row yet), giving the read one named, tunable access path on the database side.
+      // Cached balance via the `account_balance` function (0 when the account has no row yet).
       let raw = await callFunction(
         mysqlQuery(deps.exec),
         'mysql',
@@ -312,10 +295,9 @@ function createLedgerStore(deps: ExecDeps): Ledger {
     timeline: (account) => timelineOf(deps.exec, account),
 
     heads: async function* () {
-      // One row per account paired with the hash at the tip of its chain. The tip is the
-      // chain_links row with the highest posting sequence number for that account; the
-      // subquery finds that max seq per account and the join pulls back its hash. MySQL has
-      // no DISTINCT ON, so this is the portable equivalent.
+      // One row per account paired with its chain-tip hash: the chain_links row with the highest
+      // posting seq for that account. The subquery finds max seq per account; the join pulls its
+      // hash. MySQL has no DISTINCT ON, so this is the portable equivalent.
       for (let row of await rows(
         deps.exec,
         `SELECT c.account_id, c.hash FROM chain_links c
@@ -332,14 +314,11 @@ function createLedgerStore(deps: ExecDeps): Ledger {
     },
 
     balanceAccounts: async function* () {
-      // Every account that has a cached balance row. The store keeps a running per-account
-      // balance in `account_balances` as a cache; the entries (legs) it is summed from are the
-      // real source of truth. This lists accounts straight from that cache, not from the
-      // postings — so a stale or phantom balance row that has NO entries behind it is still
-      // surfaced, which an account-from-postings scan (`heads`, below) would never reach. The
-      // integrity checker sums each account's entries first, then treats anything seen only
-      // here as "should be zero" — so a balance row with no entries shows up as a mismatch
-      // between the cached balance and what the entries actually sum to.
+      // Every account with a cached balance row. `account_balances` is a cache; the legs it sums
+      // from are the source of truth. Listing from the cache (not postings) surfaces a stale or
+      // phantom balance row with no entries behind it, which a postings scan (`heads`, below) would
+      // never reach. The integrity checker sums each account's entries first, then treats anything
+      // seen only here as "should be zero", so such a row shows up as a cached-vs-summed mismatch.
       for (let row of await rows(
         deps.exec,
         'SELECT account_id FROM account_balances',
@@ -354,20 +333,18 @@ function createLedgerStore(deps: ExecDeps): Ledger {
   };
 }
 
-// Turn an account id into a name for MySQL's named lock. MySQL caps lock names at 64
-// bytes, and an account id can be longer, so for long ids we use a fixed-length prefix
-// followed by the id's full length. Including the length keeps two different ids that
-// share a prefix from colliding on the same lock.
+// Account id → MySQL named-lock name. MySQL caps lock names at 64 bytes; for longer ids use a
+// fixed-length prefix plus the id's full length. The length keeps two ids sharing a prefix from
+// colliding on one lock.
 function lockName(account: AccountRef): string {
   return account.length <= 56
     ? account
     : `${account.slice(0, 48)}#${account.length}`;
 }
 
-// Build a statement for an account over a time range (start inclusive, end exclusive).
-// Each entry's amount is shown as the effect on this account's balance, so money coming
-// into a user account reads as a positive number. The conformance fixtures always fit in
-// one page, so there is no next-page cursor.
+// Statement for an account over a time range (start inclusive, end exclusive). Each entry's
+// amount is the effect on this account's balance, so money into a user account reads positive.
+// Conformance fixtures fit one page, so there's no next-page cursor.
 async function buildStatement(
   exec: MysqlExecutor,
   account: AccountRef,
@@ -390,12 +367,11 @@ async function buildStatement(
   return { account, entries, cursor: null };
 }
 
-// Stream an account's funds as dated lots, oldest first, for the maturity logic that
-// decides when funds become spendable. It yields one lot for every posting that increased
-// the account's balance; legs that decreased it are skipped. The "when does this mature"
-// rule lives in maturity.ts — here we just carry over what each posting recorded. If a
-// posting didn't record a source or a maturity time, we fall back to "unknown" and to
-// treating it as mature right away (the safe default).
+// Stream an account's funds as dated lots, oldest first, for the maturity logic that decides
+// when funds become spendable. Yields one lot per posting that increased the balance; legs that
+// decreased it are skipped. The maturity rule lives in maturity.ts; here we carry over what each
+// posting recorded. A posting with no source or maturity time falls back to "unknown" and to
+// mature-now (the safe default).
 async function* timelineOf(
   exec: MysqlExecutor,
   account: AccountRef,
@@ -424,18 +400,16 @@ async function* timelineOf(
   }
 }
 
-// Stream an account's history in a form the chain verifier can re-hash to confirm nothing
-// was tampered with. For each posting that touched the account, in commit order, it yields
-// the posting's legs and metadata exactly as they were written, alongside the two hashes
-// recorded at the time: the account's head before this posting and after. The verifier
-// recomputes the "after" hash from the legs and metadata and checks it still matches.
+// Stream an account's history in a form the chain verifier can re-hash. For each posting that
+// touched the account, in commit order, yields the posting's legs and metadata as written plus the
+// account's head hash before and after. The verifier recomputes the "after" hash from legs and
+// metadata and checks it still matches.
 async function* lineageOf(
   exec: MysqlExecutor,
   account: AccountRef,
 ): AsyncIterable<StoredLink> {
-  // One chain_links row per posting that touched this account (a posting advances the
-  // account's chain exactly once, however many legs it has to the account), so this yields
-  // one StoredLink per such posting — exactly what the in-memory adapter does.
+  // One chain_links row per posting that touched this account (a posting advances the chain once,
+  // however many legs it has), so this yields one StoredLink per posting, like the in-memory adapter.
   let postings = await rows(
     exec,
     `SELECT c.posting_id AS txn_id, p.meta AS meta,
@@ -445,8 +419,8 @@ async function* lineageOf(
     [account],
   );
   for (let posting of postings) {
-    // The whole posting's legs (not just this account's): chainPreimage filters to the
-    // account's own legs itself, so the recompute matches the in-memory reference exactly.
+    // The whole posting's legs, not just this account's: chainPreimage filters them itself, so the
+    // recompute matches the in-memory reference.
     let legs = await legsOf(exec, posting.txn_id as string);
     yield {
       txnId: posting.txn_id as string,
@@ -458,9 +432,8 @@ async function* lineageOf(
   }
 }
 
-// Every leg of one posting, in a stable order. The hash recomputation needs all of a
-// posting's legs, not just the ones for the account being verified, because it selects the
-// relevant legs itself when rebuilding the hash input.
+// Every leg of one posting, in stable order. The hash recomputation needs all legs, not just
+// the verified account's, since it selects the relevant ones itself when rebuilding the input.
 async function legsOf(
   exec: MysqlExecutor,
   txnId: string,
@@ -476,11 +449,9 @@ async function legsOf(
   }));
 }
 
-// Load one whole posting by its transaction id, with all of its legs (not filtered to one
-// account, unlike lineageOf). The `reverse` operation reads this to post the exact
-// opposite entry and undo a posting. The metadata comes from the posting row and the legs
-// from legsOf. Returns null when no posting has that id, so the caller can fail loudly
-// instead of guessing.
+// Load one whole posting by txn id with all its legs (not filtered to one account, unlike
+// lineageOf). `reverse` reads this to post the exact opposite entry. Metadata comes from the
+// posting row, legs from legsOf. Returns null when no posting has that id.
 async function postingOf(
   exec: MysqlExecutor,
   txnId: string,
@@ -497,10 +468,9 @@ async function postingOf(
   return { txnId, legs, meta: parseMeta(found[0]!.meta) };
 }
 
-// How much a stored leg changed its account's balance. Leg amounts are all stored in one
-// shared sign convention (positive for a debit). To get the effect on this particular
-// account's balance, rebuild the leg and apply that account's sign rule: some accounts go
-// up on a debit, others go up on a credit.
+// How much a stored leg changed its account's balance. Leg amounts use a shared sign convention
+// (positive for a debit). Rebuild the leg and apply the account's sign rule: some accounts go up on
+// a debit, others on a credit.
 function naturalDelta(account: AccountRef, row: Row): Amount {
   let leg: Leg = {
     account,
@@ -511,19 +481,17 @@ function naturalDelta(account: AccountRef, row: Row): Amount {
 
 // --- Idempotency store ------------------------------------------------------------
 
-// Makes a request safe to retry: the same idempotency key is processed at most once, and a
-// retry returns the original result instead of doing the work again.
+// Makes a request safe to retry: a given idempotency key is processed at most once, and a retry
+// returns the original result.
 //
-// `claim` is the gate. The key is the primary key of the `idempotency` table, so the
-// database allows only one row per key. The first caller inserts a placeholder row (no
-// result yet) and is told to proceed. A later caller with the same key finds that row:
-//   - If the first call has finished and saved its result, the later caller gets that
-//     result back instead of running again.
-//   - If the first call is still in progress, the later caller blocks on the placeholder
-//     row (it is locked by the unfinished transaction) until that call commits or rolls
-//     back.
-// If the first call rolls back, its placeholder row disappears with it, so a failed
-// attempt does not consume the key — the request can be retried cleanly.
+// `claim` is the gate. The key is the `idempotency` primary key, so one row per key. The first
+// caller inserts a placeholder row (no result yet) and proceeds. A later caller with the same key
+// finds that row:
+//   - If the first call finished and saved its result, the later caller gets that result back.
+//   - If the first call is still in progress, the later caller blocks on the placeholder row
+//     (locked by the unfinished transaction) until that call commits or rolls back.
+// If the first call rolls back, its placeholder row disappears with it, so a failed attempt doesn't
+// consume the key and the request can be retried.
 function createIdempotencyStore(exec: MysqlExecutor): IdempotencyStore {
   return {
     claim: async (key) => {
@@ -563,10 +531,9 @@ function createIdempotencyStore(exec: MysqlExecutor): IdempotencyStore {
 
 // --- Sale store -------------------------------------------------------------------
 
-// Records each completed sale, keyed by its order id. This is separate from the
-// idempotency key above: it stores the sale's details (including the exact ledger legs)
-// so that a later refund can look the sale up by order id and reverse precisely what was
-// posted.
+// Records each completed sale, keyed by order id. Separate from the idempotency key above: it
+// stores the sale's details (including the exact ledger legs) so a later refund can look it up
+// by order id and reverse precisely what was posted.
 function createSaleStore(exec: MysqlExecutor): SaleStore {
   return {
     put: async (sale) => {
@@ -604,12 +571,11 @@ function createSaleStore(exec: MysqlExecutor): SaleStore {
 
 // --- Outbox store -----------------------------------------------------------------
 
-// Reliable event publishing using the "transactional outbox" pattern. The event is saved
-// (`enqueue`) in the same transaction as the money posting, so the event exists exactly
-// when the posting does. A separate relay process later picks up a batch of pending events
-// to publish (`claimBatch`); FOR UPDATE SKIP LOCKED lets several relay workers grab
-// different rows at once without stepping on each other. The downstream consumer
-// de-duplicates by event id, so an event published more than once is delivered once.
+// Reliable event publishing via the transactional-outbox pattern. The event is saved
+// (`enqueue`) in the same transaction as the money posting, so it exists exactly when the
+// posting does. A relay process later picks up a batch of pending events (`claimBatch`); FOR
+// UPDATE SKIP LOCKED lets several relay workers grab different rows at once. The consumer
+// de-duplicates by event id, so an event published twice is delivered once.
 function createOutboxStore(exec: MysqlExecutor): OutboxStore {
   return {
     enqueue: async (message) => {
@@ -645,10 +611,9 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
         [...ids],
       );
     },
-    // Record a failed delivery attempt: bump `attempts` by one and leave the row pending so
-    // the next sweep retries it. The `AND status = 'pending'` guard makes this a no-op on a
-    // row that is missing, already relayed, or already dead-lettered — matching the in-memory
-    // reference, which silently skips a non-'pending' row.
+    // Record a failed delivery: bump `attempts` and leave the row pending so the next sweep
+    // retries it. The `AND status = 'pending'` guard makes this a no-op on a missing, relayed,
+    // or dead-lettered row, matching the in-memory reference (which skips a non-'pending' row).
     recordFailure: async (id) => {
       await rows(
         exec,
@@ -656,9 +621,9 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
         [id],
       );
     },
-    // Give up on a poison message: flip it to 'failed' so claimBatch never hands it back, and
-    // keep the reason for operators. The same `AND status = 'pending'` guard makes a missing or
-    // already-terminal row a no-op, mirroring the saga store and the in-memory reference.
+    // Give up on a poison message: flip to 'failed' so claimBatch never hands it back, keep the
+    // reason for operators. The `AND status = 'pending'` guard makes a missing or already-terminal
+    // row a no-op, mirroring the saga store and the in-memory reference.
     deadLetter: async (id, reason) => {
       await rows(
         exec,
@@ -671,11 +636,10 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
 
 // --- Saga store -------------------------------------------------------------------
 
-// Tracks each payout as a small state machine that advances over several steps (a "saga").
-// `advance` only changes the saga's state if it is still in the state the caller expected:
-// the UPDATE's WHERE clause requires the current state to equal `from`. If two workers try
-// to advance the same saga at once, only one matches a row and succeeds; the other changes
-// zero rows and learns it lost the race, so a payout can't be advanced twice.
+// Tracks each payout as a small state machine ("saga"). `advance` changes state only if the
+// saga is still in the state the caller expected (the UPDATE's WHERE requires current state =
+// `from`). If two workers advance the same saga at once, only one matches a row; the other
+// changes zero rows and learns it lost, so a payout can't advance twice.
 function createSagaStore(exec: MysqlExecutor): SagaStore {
   return {
     open: async (saga) => {
@@ -720,9 +684,8 @@ function createSagaStore(exec: MysqlExecutor): SagaStore {
       );
       return result.map(rowToSaga);
     },
-    // The store methods omit the interface's optional trailing `options` param: it is never
-    // read here, and structural typing satisfies each Store interface without it (a function
-    // with fewer trailing optional params is still assignable).
+    // Store methods omit the interface's optional trailing `options` param: never read here, and
+    // structural typing accepts a function with fewer trailing optional params.
     advance: async (id, from, to, patch) => {
       let next = { ...(await loadSagaOrThrow(exec, id)), ...patch, state: to };
       let affected = await execWrite(
@@ -756,10 +719,10 @@ function createSagaStore(exec: MysqlExecutor): SagaStore {
   };
 }
 
-// The time of a user's most recent payout request, as the MAX(updated_at) over ALL of their
-// sagas in any state (the requestPayout min-interval check reads this). MySQL's MAX over no
-// matching rows yields NULL, so a user with no sagas reads back null and their first request
-// always passes — exactly the in-memory reference's behavior.
+// Time of a user's most recent payout request: MAX(updated_at) over all their sagas in any
+// state (read by the requestPayout min-interval check). MAX over no rows yields NULL, so a user
+// with no sagas reads back null and their first request always passes, like the in-memory
+// reference.
 async function lastPayoutOf(
   exec: MysqlExecutor,
   userId: string,
@@ -773,10 +736,9 @@ async function lastPayoutOf(
   return last === null || last === undefined ? null : Number(last);
 }
 
-// Load a saga, throwing if it doesn't exist. `advance` calls this to get the saga's
-// current field values, then overlays the few fields it is changing. A missing saga here
-// means a bug in the caller; under normal use the saga always exists by the time advance
-// runs.
+// Load a saga, throwing if absent. `advance` calls this to get current field values, then
+// overlays the few it's changing. A missing saga here means a caller bug; under normal use the
+// saga exists by the time advance runs.
 async function loadSagaOrThrow(exec: MysqlExecutor, id: string): Promise<Saga> {
   let found = await rows(
     exec,
@@ -793,14 +755,11 @@ async function loadSagaOrThrow(exec: MysqlExecutor, id: string): Promise<Saga> {
 
 // --- Entitlement store ------------------------------------------------------------
 
-// Tracks what each user owns (entitlements), which is ownership state rather than money
-// movement, so it touches no ledger. `revoke` is a soft delete: rather than deleting the
-// row it sets `revoked = true` and keeps the row, so the ownership history a refund or
-// clawback may need survives for auditing; a later re-grant clears `revoked` through the
-// on-conflict path, so buying the same thing again re-activates it. `owns` also honors an
-// entitlement's expiry: a user still owns it up to and including `expiresAt` (owned while
-// now <= expiresAt, lost once now > expiresAt), checked against the injected clock, matching
-// the older reference implementation.
+// Tracks what each user owns (entitlements): ownership state, not money movement, so it touches
+// no ledger. `revoke` is a soft delete (set `revoked = true`, keep the row) so audit history a
+// refund or clawback may need survives; a later re-grant clears `revoked` via the on-conflict
+// path, so re-buying re-activates. `owns` honors expiry: owned while now <= expiresAt, lost once
+// now > expiresAt, checked against the injected clock, matching the older reference.
 function createEntitlementStore(deps: ExecDeps): EntitlementStore {
   let exec = deps.exec;
   return {
@@ -823,7 +782,7 @@ function createEntitlementStore(deps: ExecDeps): EntitlementStore {
       );
     },
     // Soft-revoke: keep the row, flip the flag. `owns` filters on `revoked = false`, so this
-    // takes ownership away while preserving the audit trail; a later re-grant clears it.
+    // removes ownership while preserving the audit trail; a later re-grant clears it.
     revoke: async (userId, sku) => {
       await rows(
         exec,
@@ -832,8 +791,8 @@ function createEntitlementStore(deps: ExecDeps): EntitlementStore {
       );
     },
     owns: async (userId, sku) => {
-      // `expires_at IS NULL` means a perpetual grant; otherwise it stays owned up to and
-      // including `expiresAt` (>= now), expiring only once the clock has passed it.
+      // `expires_at IS NULL` is a perpetual grant; otherwise owned up to and including
+      // `expiresAt` (>= now), expiring only once the clock passes it.
       let found = await rows(
         exec,
         `SELECT 1 FROM entitlements
@@ -849,10 +808,9 @@ function createEntitlementStore(deps: ExecDeps): EntitlementStore {
 
 // --- Subscription store -----------------------------------------------------------
 
-// Tracks recurring subscriptions and supports the background job that renews them: it
-// finds subscriptions whose next charge is due (`claimDue`), records a successful charge
-// and schedules the next one (`markBilled`), or ends a subscription that can't be funded
-// (`markLapsed`) or that the user cancels.
+// Tracks recurring subscriptions for the renewal job: find subscriptions whose next charge is
+// due (`claimDue`), record a successful charge and schedule the next (`markBilled`), or end one
+// that can't be funded (`markLapsed`) or that the user cancels.
 function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
   return {
     open: async (sub) => {
@@ -921,13 +879,12 @@ function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
     },
     markBilled: async (id, nextDueAt, expectedDueAt) => {
       // Update the due date only if it still holds the value this caller expects (the UPDATE's
-      // WHERE requires next_due_at to equal `expectedDueAt`). This guards against two renewal
-      // workers acting on the same subscription at once: whichever updates first changes the due
-      // date, so the second — which expected the now-stale old date — matches no row
-      // (affectedRows = 0) and returns false, treats the renewal as already done, and never
-      // double-charges. The saga store's `advance` guards itself the same way. A successful
-      // renewal also resets `attempts` (the count of consecutive failed charges) to 0, so a
-      // subscription that recovered starts fresh against the retry limit.
+      // WHERE requires next_due_at = `expectedDueAt`). Guards against two renewal workers acting on
+      // the same subscription at once: whichever updates first changes the due date, so the second
+      // (which expected the now-stale old date) matches no row (affectedRows = 0), returns false,
+      // and treats the renewal as already done, never double-charging. The saga store's `advance`
+      // guards itself the same way. A successful renewal also resets `attempts` (consecutive failed
+      // charges) to 0, so a recovered subscription starts fresh against the retry limit.
       let affected = await execWrite(
         exec,
         `UPDATE subscriptions SET next_due_at = ?, period = period + 1, attempts = 0
@@ -936,11 +893,9 @@ function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
       );
       return affected > 0;
     },
-    // End a subscription because a renewal charge couldn't be funded. This is a
-    // different ending from the user choosing to cancel. The UPDATE only applies when the
-    // subscription is still active, so it moves it from active to lapsed exactly once; once
-    // lapsed it no longer matches the renewal job (which looks only for active ones), so it
-    // stops being billed.
+    // End a subscription because a renewal charge couldn't be funded (distinct from the user
+    // canceling). The UPDATE only applies while still active, so it moves active → lapsed exactly
+    // once; once lapsed it no longer matches the renewal job (active-only), so billing stops.
     markLapsed: async (id) => {
       await rows(
         exec,
@@ -953,19 +908,17 @@ function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
 
 // --- Promo store ------------------------------------------------------------------
 
-// Tracks each marketing promo grant so the promo-expiry sweep can reverse whatever the
-// user hasn't spent once the grant expires. `grantPromo` records the grant here in the
-// same transaction as the credit posting; the sweep later claims due grants oldest-first
-// and reverses the unspent remainder, then marks each reversed so it is never reversed
-// twice.
+// Tracks each marketing promo grant so the promo-expiry sweep can reverse whatever the user hasn't
+// spent once the grant expires. `grantPromo` records the grant here in the same transaction as the
+// credit posting; the sweep later claims due grants oldest-first, reverses the unspent remainder,
+// then marks each reversed so it isn't reversed twice.
 function createPromoStore(exec: MysqlExecutor): PromoStore {
   return {
-    // Idempotent on `id`: opening the same grant twice is a no-op and never overwrites or
-    // duplicates the first row. `ON DUPLICATE KEY UPDATE id = id` is the MySQL idempotent-
-    // insert idiom — a no-op assignment that swallows the duplicate-key conflict without
-    // touching any column, so a second open() of the same grant leaves the original row
-    // exactly as it was. This differs from the saga/subscription `open` upserts above, which
-    // overwrite on conflict; a promo grant must NOT be clobbered.
+    // Idempotent on `id`: opening the same grant twice is a no-op, never overwriting or duplicating
+    // the first row. `ON DUPLICATE KEY UPDATE id = id` is the MySQL idempotent-insert idiom, a
+    // no-op assignment that swallows the duplicate-key conflict without touching any column, so a
+    // second open() leaves the original row untouched. Unlike the saga/subscription `open` upserts
+    // above (which overwrite on conflict), a promo grant must not be clobbered.
     open: async (grant) => {
       await rows(
         exec,
@@ -1011,12 +964,11 @@ function createPromoStore(exec: MysqlExecutor): PromoStore {
 
 // --- Trust store (kept outside money transactions) --------------------------------
 
-// Records spending attempts per subject (a user or similar) so spending-velocity limits
-// can be enforced. These rows are written on the pool directly, outside the money
-// transaction, so that even an attempt that gets rejected still counts toward the limit
-// (it isn't rolled back along with the money). `bump` uses each attempt's idempotency key
-// as the primary key (with INSERT IGNORE), so retrying the same attempt doesn't count it
-// twice. `read` sums up a subject's recorded attempts.
+// Records spending attempts per subject (a user or similar) to enforce spending-velocity limits.
+// Rows are written on the pool directly, outside the money transaction, so a rejected attempt still
+// counts toward the limit (it isn't rolled back with the money). `bump` uses each attempt's
+// idempotency key as the primary key (INSERT IGNORE), so retrying the same attempt doesn't
+// double-count. `read` sums a subject's recorded attempts.
 function createTrustStore(
   pool: MysqlPool,
   clock: Clock,
@@ -1024,8 +976,8 @@ function createTrustStore(
 ): TrustStore {
   return {
     // Read the subject's spend inside the sliding window ending now: only attempts newer than
-    // `now - windowMs` are summed, so each ages out of the limit on its own. The cutoff uses the
-    // injected clock (not SQL NOW()) so tests stay deterministic.
+    // `now - windowMs` are summed, so each ages out on its own. The cutoff uses the injected clock
+    // (not SQL NOW()) so tests stay deterministic.
     read: async (subject) => {
       let cutoff = clock.now() - windowMs;
       let found = await rows(
@@ -1059,11 +1011,11 @@ function createTrustStore(
       );
     },
     // Record-and-measure atomically. Borrow one connection, take a per-subject named lock so two
-    // concurrent same-subject calls run one at a time, insert the attempt (INSERT IGNORE, deduped
-    // on the idempotency-key primary key, exactly as `bump` does), then run the same windowed SUM
-    // `read` uses — now including this attempt. The named lock is released and the connection
-    // returned in `finally`, so a borrower never inherits a stale lock. Serializing the insert and
-    // the SUM behind one lock is what closes the velocity-limit TOCTOU the separate read+bump left.
+    // concurrent same-subject calls serialize, insert the attempt (INSERT IGNORE, deduped on the
+    // idempotency-key primary key like `bump`), then run the same windowed SUM `read` uses, now
+    // including this attempt. The lock is released and the connection returned in `finally`, so a
+    // borrower never inherits a stale lock. Serializing the insert and SUM behind one lock closes
+    // the velocity-limit TOCTOU that separate read+bump left.
     record: async (subject, attempt) => {
       let cutoff = clock.now() - windowMs;
       let connection = await pool.getConnection();
@@ -1106,9 +1058,9 @@ function createTrustStore(
   };
 }
 
-// Turn a risk subject (a user id) into a name for MySQL's named lock, so same-subject `record`
-// calls serialize. Same 64-byte cap and prefix#length scheme as `lockName`, kept separate so a
-// subject lock can never collide with an account lock of the same string.
+// Risk subject (a user id) → MySQL named-lock name, so same-subject `record` calls serialize. Same
+// 64-byte cap and prefix#length scheme as `lockName`, kept separate so a subject lock can't collide
+// with an account lock of the same string.
 function subjectLockName(subject: string): string {
   let tagged = `trust:${subject}`;
   return tagged.length <= 56
@@ -1118,10 +1070,9 @@ function subjectLockName(subject: string): string {
 
 // --- Checkpoint store (used only by background workers) ---------------------------
 
-// Stores checkpoints (periodic signed snapshots of the ledger's state). Writes append a
-// new row and never take part in a money transaction: a checkpoint, once recorded, must
-// survive even if some money transaction later rolls back, so it is written on the pool
-// directly (committed on its own).
+// Stores checkpoints (periodic signed snapshots of ledger state). Writes append a new row and never
+// join a money transaction: once recorded, a checkpoint must survive even if a later money
+// transaction rolls back, so it is written on the pool directly (committed on its own).
 function createCheckpointStore(pool: MysqlPool): CheckpointStore {
   return {
     put: async (checkpoint) => {
@@ -1150,19 +1101,17 @@ function createCheckpointStore(pool: MysqlPool): CheckpointStore {
 
 // --- Webhook replay store (kept outside money transactions) -----------------------
 
-// Makes processing an inbound provider webhook happen at most once, keyed by the provider's
-// own event id. This is a separate set of ids from the application's own idempotency keys.
-// The webhook handler claims the `eventId` here only after it has already checked the
-// delivery is authentic and recent, and it does so as a standalone write on the pool — not
-// inside a money transaction. That ordering means a rejected or forged delivery that never
-// reaches this point cannot use up the id, while a claim that does land stays recorded even
-// if some later money posting rolls back.
+// Makes processing an inbound provider webhook happen at most once, keyed by the provider's own
+// event id (a separate id space from the application's idempotency keys). The webhook handler claims
+// the `eventId` here only after checking the delivery is authentic and recent, as a standalone write
+// on the pool, not inside a money transaction. So a rejected or forged delivery that never reaches
+// this point can't use up the id, while a claim that does land stays recorded even if a later money
+// posting rolls back.
 //
-// `claim` inserts the id only if it is not already present: `INSERT IGNORE` adds the row the
-// first time and quietly does nothing on a redelivery, instead of raising a duplicate-key
-// error (the same effect as the postgres adapter's `on conflict do nothing`). The driver
-// reports affectedRows = 1 on the call that inserted and 0 on every later one, so that count
-// alone distinguishes a first delivery from a duplicate.
+// `claim` inserts the id only if not already present: `INSERT IGNORE` adds the row the first time
+// and does nothing on a redelivery, rather than raising a duplicate-key error (same effect as the
+// postgres adapter's `on conflict do nothing`). The driver reports affectedRows = 1 on the call
+// that inserted and 0 on every later one, so the count distinguishes first delivery from duplicate.
 function createReplayStore(pool: MysqlPool): ReplayStore {
   return {
     claim: async (eventId) => {
@@ -1215,10 +1164,9 @@ function rowToPromoGrant(row: Row): PromoGrant {
 
 // --- Converting money and JSON to and from stored form ----------------------------
 
-// Serialize a transaction to a JSON string for storage. Money amounts are turned into
-// decimal strings first, for two reasons: JSON.stringify can't handle bigint values
-// directly, and encoding them as strings means a stored transaction reads back byte-for-
-// byte identical, so a replayed duplicate request returns exactly the original result.
+// Serialize a transaction to a JSON string for storage. Money amounts become decimal strings first:
+// JSON.stringify can't handle bigint, and string-encoding makes a stored transaction read back
+// byte-for-byte identical, so a replayed duplicate request returns the original result.
 function encodeTransaction(transaction: Transaction): string {
   return JSON.stringify({
     id: transaction.id,
@@ -1243,9 +1191,9 @@ function parseTransaction(value: unknown): Transaction {
   };
 }
 
-// Turn legs into a plain JSON-friendly form for storage. Each leg's money amount becomes a
-// "CURRENCY:minor" string (for example "CREDIT:500"), which both records the currency and
-// keeps the exact integer value across the round-trip.
+// Turn legs into JSON-friendly form for storage. Each leg's amount becomes a "CURRENCY:minor"
+// string (e.g. "CREDIT:500"), recording the currency and keeping the exact integer value across the
+// round-trip.
 function encodeLegs(
   legs: ReadonlyArray<Leg>,
 ): ReadonlyArray<{ account: string; amount: string }> {
@@ -1269,9 +1217,8 @@ function decodeLegs(
   });
 }
 
-// Read a JSON column's value. The mysql2 driver normally hands back JSON columns already
-// parsed into objects, so we use the value as-is; if some driver configuration returns it
-// as a raw string instead, parse it. Either way the caller gets parsed data.
+// Read a JSON column's value. mysql2 normally returns JSON columns already parsed into objects, so
+// use the value as-is; if a driver config returns a raw string instead, parse it.
 function parseJson(value: unknown): unknown {
   return typeof value === 'string' ? JSON.parse(value) : value;
 }
@@ -1285,10 +1232,9 @@ function parseMeta(value: unknown): Record<string, unknown> {
 
 // --- Grouping the stores into one transactional unit ------------------------------
 
-// Bundle the stores a request handler may use, all sharing one database connection, so
-// every write a handler makes commits or rolls back together as one transaction. The
-// trust and checkpoint stores are deliberately left out: they are written outside the
-// money transaction (see their comments above).
+// Bundle the stores a request handler may use, all sharing one database connection, so every write
+// commits or rolls back together as one transaction. The trust and checkpoint stores are left out:
+// they're written outside the money transaction (see their comments above).
 function buildUnit(deps: ExecDeps): Unit {
   return {
     ledger: createLedgerStore(deps),
@@ -1305,17 +1251,16 @@ function buildUnit(deps: ExecDeps): Unit {
 // --- The assembled store ----------------------------------------------------------
 
 /**
- * Build the full MySQL-backed store on top of a `mysql2` connection pool the caller
- * creates and owns.
+ * Build the full MySQL-backed store on a `mysql2` connection pool the caller creates and owns.
  *
- * `transaction(work)` borrows one connection, wraps `work` in START TRANSACTION ... COMMIT,
- * and rolls back if `work` throws. On the way out it releases any named locks the
- * connection acquired, so a connection returned to the pool never carries leftover locks.
- * Anything done outside a transaction (plain reads and writes, plus the trust and
- * checkpoint stores) runs directly on the pool and commits on its own.
+ * `transaction(work)` borrows one connection, wraps `work` in START TRANSACTION ... COMMIT, and
+ * rolls back if `work` throws. On the way out it releases any named locks the connection acquired,
+ * so a returned connection carries no leftover locks. Anything outside a transaction (plain
+ * reads/writes, plus the trust and checkpoint stores) runs directly on the pool and commits on its
+ * own.
  *
- * The hashing and clock services default to the deterministic web-standard ones, so
- * creating a store with just a pool, `mysqlStore({ pool })`, produces reproducible results.
+ * The hashing and clock services default to the deterministic web-standard ones, so `mysqlStore({
+ * pool })` produces reproducible results.
  */
 export function mysqlStore(deps: {
   pool: MysqlPool;
@@ -1367,9 +1312,8 @@ export function mysqlStore(deps: {
   };
 }
 
-// Roll back, ignoring any error from the rollback itself. We get here because `work`
-// already threw, and that original error is the one to report; if the rollback also fails,
-// we don't want it to replace the original error.
+// Roll back, ignoring any error from the rollback itself. We're here because `work` threw; that
+// original error is the one to report, so a failing rollback must not replace it.
 async function safeRollback(connection: MysqlConnection): Promise<void> {
   try {
     await connection.query('ROLLBACK');
@@ -1378,9 +1322,9 @@ async function safeRollback(connection: MysqlConnection): Promise<void> {
   }
 }
 
-// Drop every named lock the connection holds before it goes back to the pool. MySQL's
-// named locks stay held until explicitly released or the connection closes, so without
-// this a later borrower of the same connection would inherit locks it never asked for.
+// Drop every named lock the connection holds before it returns to the pool. MySQL named locks stay
+// held until explicitly released or the connection closes, so without this a later borrower would
+// inherit locks it never asked for.
 async function releaseLocks(connection: MysqlConnection): Promise<void> {
   try {
     await connection.query('SELECT RELEASE_ALL_LOCKS()');
@@ -1392,20 +1336,26 @@ async function releaseLocks(connection: MysqlConnection): Promise<void> {
 // --- Creating the database schema -------------------------------------------------
 
 /**
- * Create all the tables and stored routines this adapter needs, from the canonical schema
- * file `db/mysql-schema.sql` (the MySQL counterpart to `db/postgresql-schema.sql`). The file drops the
- * tables first and recreates them, so running this resets to a clean schema — convenient for
- * tests. Run it once during setup (by operations tooling or CI), never automatically at app
- * startup.
+ * Create all tables and stored routines this adapter needs, from the canonical schema file
+ * `db/mysql-schema.sql` (the MySQL counterpart to `db/postgresql-schema.sql`). The file drops and
+ * recreates the tables, so running this resets to a clean schema (convenient for tests). Run once
+ * during setup (operations tooling or CI), never automatically at app startup.
  *
- * mysql2 sends one statement per `query`, so the file is split into its individual
- * statements first (see {@link splitSqlStatements}), then each is run in order.
+ * mysql2 sends one statement per `query`, so the file is split into individual statements first
+ * (see {@link splitSqlStatements}), then each is run in order.
  */
 export async function applyMysqlSchema(pool: MysqlPool): Promise<void> {
   let path = fileURLToPath(
     new URL('../../db/mysql-schema.sql', import.meta.url),
   );
   let sql = await readFile(path, 'utf8');
+  // The tables below declare no per-table collation, so each inherits the database default. On a
+  // database created as utf8mb4_unicode_ci, that clashes with the utf8mb4_0900_ai_ci strings
+  // JSON_TABLE produces inside post_entry: every `ab.account_id = d.account` join then raises
+  // "Illegal mix of collations (utf8mb4_0900_ai_ci,IMPLICIT) and (utf8mb4_unicode_ci,IMPLICIT)".
+  // Pin the database default to utf8mb4_0900_ai_ci first so the freshly (re)created tables share one
+  // collation with the JSON side. Runs only in the migrate/setup path, never on the runtime
+  // connection.
   await pool.query(
     'ALTER DATABASE CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci',
   );
@@ -1414,13 +1364,13 @@ export async function applyMysqlSchema(pool: MysqlPool): Promise<void> {
   }
 }
 
-// Split a `.sql` file into its individual statements so each can be sent on its own (mysql2
-// runs one statement per `query`). Statements are separated by the current delimiter — `;` by
-// default. A `DELIMITER xxx` line changes it (the same directive the mysql CLI uses), which is
-// how a stored routine whose body contains `;` is kept as one statement: it is wrapped in
-// `DELIMITER $$ … $$` so the inner semicolons are not read as statement ends. The directive line
-// itself is not sent to the server. Blank lines and `--` comment lines between statements are
-// skipped; a comment inside a statement stays with it.
+// Split a `.sql` file into individual statements so each can be sent on its own (mysql2 runs one
+// statement per `query`). Statements are separated by the current delimiter, `;` by default. A
+// `DELIMITER xxx` line changes it (the same directive the mysql CLI uses); that's how a stored
+// routine whose body contains `;` stays one statement: wrapped in `DELIMITER $$ … $$` so the inner
+// semicolons aren't read as statement ends. The directive line itself isn't sent to the server.
+// Blank lines and `--` comment lines between statements are skipped; a comment inside a statement
+// stays with it.
 function splitSqlStatements(sql: string): string[] {
   let statements: string[] = [];
   let delimiter = ';';
@@ -1448,15 +1398,15 @@ function splitSqlStatements(sql: string): string[] {
 }
 
 /**
- * Create a `mysql2` connection pool from a connection URL. `mysql2` is imported here, only
- * when this function runs, because it is an optional dependency the rest of the code never
- * needs. The pool is configured to return large integer columns (the money columns, stored
- * as 64-bit integers) as strings, which the adapter then converts to bigint exactly.
+ * Create a `mysql2` connection pool from a connection URL. `mysql2` is imported here, only when
+ * this function runs, since it's an optional dependency the rest of the code never needs. The pool
+ * returns large integer columns (the money columns, stored as 64-bit integers) as strings, which
+ * the adapter then converts to bigint exactly.
  */
 export async function createMysqlPool(url: string): Promise<MysqlPool> {
   // Hold the module name in a variable instead of writing it directly in import(), so the
-  // type-checker doesn't try to resolve this optional dependency at build time. It only
-  // needs to be installed wherever this adapter actually runs.
+  // type-checker doesn't try to resolve this optional dependency at build time. It only needs to be
+  // installed wherever this adapter runs.
   let specifier = 'mysql2/promise';
   let mysql = (await import(specifier)) as unknown as {
     createPool(config: unknown): MysqlPool;
@@ -1466,6 +1416,12 @@ export async function createMysqlPool(url: string): Promise<MysqlPool> {
     supportBigNumbers: true,
     bigNumberStrings: true,
     namedPlaceholders: false,
+    // Pin the connection collation to MySQL 8's utf8mb4 default. Strings produced by JSON_TABLE in
+    // post_entry take their collation from the connection; left at mysql2's default the connection is
+    // utf8mb4_unicode_ci, which clashes with the utf8mb4_0900_ai_ci table columns on every
+    // `ab.account_id = d.account` join ("Illegal mix of collations (utf8mb4_0900_ai_ci,IMPLICIT) and
+    // (utf8mb4_unicode_ci,IMPLICIT)"). Matching the connection to the table/JSON side keeps every `=`
+    // in a single collation. (applyMysqlSchema pins the database default to the same collation.)
     charset: 'UTF8MB4_0900_AI_CI',
   });
 }

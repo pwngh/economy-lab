@@ -11,9 +11,8 @@
  */
 
 /**
- * An Amount (a money value) is an object, not a number, so two equal amounts are not the
- * same reference. Every money check in this file therefore compares values with
- * `assert.deepEqual`, never `assert.equal` (which would compare object identity).
+ * Amount is an object, not a number, so equal amounts aren't the same reference. Money checks
+ * use `assert.deepEqual` (value), never `assert.equal` (identity).
  */
 
 import { describe, test, before, after } from 'node:test';
@@ -26,18 +25,16 @@ import { spendable, SYSTEM } from '#src/accounts.ts';
 import type { Store, Unit } from '#src/ports.ts';
 import type { Transaction } from '#src/contract.ts';
 
-// Returns a different user id on every call, so each test works on its own fresh user
-// and one test's balances and hash-chain history never affect another's.
+// Fresh user id per call, so tests don't share balances or hash-chain history.
 let userSeq = 0;
 function freshUser(): string {
   userSeq += 1;
   return `usr_conf_${userSeq}`;
 }
 
-// Adds money to a user's spendable balance with one balanced posting: a credit line that
-// raises the user's account and a matching debit line against a platform account, so the
-// two lines cancel to zero (every posting must balance). Both accounts already exist, so
-// `postEntry`'s check that all named accounts are known will pass.
+// Funds a user's spendable balance with one balanced posting: credit the user, debit a
+// platform account so the lines cancel to zero. Both accounts exist, so postEntry's
+// known-account check passes.
 async function fundSpendable(
   unit: Unit,
   userId: string,
@@ -52,8 +49,8 @@ async function fundSpendable(
   });
 }
 
-// Builds one outbox message (an event saved to be delivered later). The caller passes a
-// distinct message id so a test can check exactly which message it added to the outbox.
+// Builds one outbox message. Caller passes a distinct message id so a test can assert
+// which message it enqueued.
 function outboxRow(
   userId: string,
   messageId: string,
@@ -237,15 +234,12 @@ async function recomputesChainHead(store: Store): Promise<void> {
   assert.equal(link!.prevHash, '0'.repeat(64));
 }
 
-// Guards against a bug that once broke the SQL-backed stores: a single posting that touches the
-// SAME account with TWO lines at once. The SQL adapters insert one row per line and key each row
-// on (account, previous-hash); the second line for that account repeats the same pair, which
-// their insert rejected. This test posts two credits into one user's spendable account, each
-// matched by a debit to a platform account so the whole posting still cancels to zero in every
-// currency, while the user's account ends up with two lines in the one posting. Every store must
-// accept it, add both lines together into a single balance, and extend that account's
-// tamper-evident hash chain by exactly one valid step. It's pinned here for ALL stores, not just
-// for whatever postings the `prove` fuzzer happens to generate.
+// Regression: a posting that touches the same account with two lines at once. SQL adapters
+// insert one row per line keyed on (account, previous-hash); the second line for that account
+// repeats the pair and the insert rejected it. Posts two credits into one user's spendable
+// account, each matched by a debit so the posting still cancels to zero. Every store must accept
+// it, sum both lines into one balance, and extend the account's hash chain by exactly one step.
+// Pinned for all stores, not just whatever the `prove` fuzzer generates.
 async function storesMultipleLegsToOneAccount(store: Store): Promise<void> {
   let userId = freshUser();
   let first = decodeAmount('3.00', 'CREDIT');
@@ -264,16 +258,14 @@ async function storesMultipleLegsToOneAccount(store: Store): Promise<void> {
     }),
   );
 
-  // The stored running balance must equal the two lines added together (3.00 + 5.00 = 8.00),
-  // which proves the store combined both lines rather than dropping one.
+  // Stored balance must equal both lines summed (3.00 + 5.00 = 8.00), proving neither was dropped.
   assert.deepEqual(
     await store.ledger.balance(spendable(userId)),
     toAmount('CREDIT', 800n),
   );
 
-  // The account's latest chain hash (its "head") must match the one hash the posting reports for
-  // this account: the account grew by exactly ONE step from the all-zeros starting point, and the
-  // stored head equals that step's hash (the same hash-chain check as recomputesChainHead above).
+  // The account's chain head must match the hash the posting reports: it grew by one step from the
+  // all-zeros start, and the stored head equals that step's hash (same check as recomputesChainHead).
   let heads = new Map<string, string>();
   for await (let [account, head] of store.ledger.heads()) {
     heads.set(account, head);
@@ -287,15 +279,13 @@ async function storesMultipleLegsToOneAccount(store: Store): Promise<void> {
   assert.equal(link!.prevHash, '0'.repeat(64));
 }
 
-// Holds every Store adapter to the same promo-grant behaviour, so the in-memory store and
-// the database-backed ones can't diverge. Three rules are checked. Opening the same grant
-// twice must leave exactly one row: a repeat open with the same id is recognized and not
-// re-applied, never overwriting the first. claimDue hands back a grant once its expiry time
-// is at or before `now`, oldest expiry first. markReversed takes a grant out of the due set
-// and does nothing if run again on a grant that was already reversed.
+// Same promo-grant behaviour across adapters. Three rules: opening the same grant twice leaves
+// one row (repeat open by id is a no-op, doesn't overwrite); claimDue returns a grant once its
+// expiry is at or before `now`, oldest expiry first; markReversed removes a grant from the due
+// set and is a no-op if rerun on an already-reversed grant.
 //
-// claimDue and markReversed are called directly on the top-level store here, not inside a
-// `store.transaction(...)` block, because the background worker calls them that way too.
+// claimDue and markReversed run on the top-level store, not inside store.transaction(...),
+// matching how the background worker calls them.
 async function reversesPromoGrantExactlyOnce(store: Store): Promise<void> {
   let userId = freshUser();
   let id = `txn_conf_promo_${userId}`;
@@ -317,10 +307,9 @@ async function reversesPromoGrantExactlyOnce(store: Store): Promise<void> {
   await store.promos.markReversed(id); // no-op on already-reversed
 }
 
-// Pins claimDue's ordering and cap, the two subtle points of the contract: "oldest
-// expiresAt first" must hold ACROSS the whole table (sorted before the limit cap, not in
-// insertion order), and the cap is the literal `limit`. Three grants are opened newest
-// first; claimDue with limit 2 must hand back the two oldest, in ascending expiresAt order.
+// Pins claimDue's ordering and cap: "oldest expiresAt first" holds across the whole table
+// (sorted before the limit, not insertion order), and the cap is the literal `limit`. Opens
+// three grants newest first; claimDue limit 2 returns the two oldest in ascending expiresAt.
 async function claimsDuePromosOldestFirstUpToLimit(
   store: Store,
 ): Promise<void> {
@@ -347,16 +336,13 @@ async function claimsDuePromosOldestFirstUpToLimit(
   );
 }
 
-// Holds every Store adapter to the same webhook-dedup behaviour: an inbound payment-provider
-// webhook must be processed at most once even if the provider delivers it more than once. The
-// replay store does this with a single atomic "insert this event id only if it isn't already
-// there" step: the FIRST claim of an id returns `{ claimed: true }` (process it), and every
-// later claim of the same id returns `{ claimed: false }` (a redelivery — skip it). A different
-// id is unaffected and still claims.
+// Same webhook-dedup behaviour across adapters: an inbound provider webhook is processed at most
+// once even on redelivery. The replay store uses an atomic insert-if-absent on the event id: the
+// first claim returns `{ claimed: true }` (process), later claims of the same id return
+// `{ claimed: false }` (skip). A different id is unaffected.
 //
-// claim is called directly on the top-level store, not inside a `store.transaction(...)` block,
-// because the webhook entry point checks it on its own as a final gate, not as part of a
-// domain transaction.
+// claim runs on the top-level store, not inside store.transaction(...), since the webhook entry
+// point checks it as a standalone final gate, not part of a domain transaction.
 async function claimsWebhookEventIdOnce(store: Store): Promise<void> {
   let eventId = `evt_replay_${freshUser()}`;
   let other = `evt_replay_${freshUser()}`;
@@ -370,14 +356,12 @@ async function claimsWebhookEventIdOnce(store: Store): Promise<void> {
   assert.equal(different.claimed, true); // an unrelated id is unaffected
 }
 
-// Holds every Store adapter to the same behaviour for `balanceAccounts`, the method that lists
-// every account the store keeps a cached running-balance row for. (The store caches a per-account
-// balance so reads don't have to re-add every entry; the entries are still the source of truth,
-// so a cached row can be wrong — even left behind with no entries under it.) Every account with
-// such a cached row must show up in this list. That lets the integrity checker also inspect cached
-// rows that walking the accounts-with-entries (`heads()`) would never reach — a stray or stale
-// row with no posting behind it. Funding a fresh user creates its cached balance row, so that user
-// must then appear in the list.
+// Same behaviour across adapters for `balanceAccounts`, which lists every account with a cached
+// running-balance row. (The cache lets reads skip re-summing entries; entries remain the source of
+// truth, so a cached row can be wrong or even orphaned with no entries.) Every account with a
+// cached row must appear, letting the integrity checker inspect rows that walking `heads()`
+// (accounts-with-entries) would miss, e.g. a stale row with no posting behind it. Funding a fresh
+// user creates its cached row, so that user must appear.
 async function balanceAccountsEnumeratesBalanceRow(
   store: Store,
 ): Promise<void> {
@@ -394,13 +378,11 @@ async function balanceAccountsEnumeratesBalanceRow(
   assert.equal(seen.has(spendable(userId)), true);
 }
 
-// Holds every Store adapter to the same markBilled behaviour, which stops two background renewal
-// sweeps running at once from charging the same subscription twice in one period. markBilled
-// updates the row only if the due date the caller expected still matches the row's current
-// next_due_at. The first sweeper passes the real current due date, so its update applies (returns
-// true and moves the due date forward). A second sweeper that started from the same now-stale due
-// date finds no row matching it, so its update does nothing (returns false). Net effect: a
-// subscription is billed at most once per period.
+// Same markBilled behaviour across adapters: stops two concurrent renewal sweeps from charging a
+// subscription twice in one period. markBilled updates the row only if the caller's expected due
+// date still matches next_due_at. The first sweeper passes the current due date, so its update
+// applies (returns true, advances the due date). A second sweeper starting from the now-stale due
+// date matches no row and does nothing (returns false). Net: billed at most once per period.
 async function markBilledIsCompareAndSet(store: Store): Promise<void> {
   let userId = freshUser();
   let id = `sub_conf_cas_${userId}`;
@@ -424,12 +406,12 @@ async function markBilledIsCompareAndSet(store: Store): Promise<void> {
     }),
   );
 
-  // The winning sweeper claimed next_due_at=firstDue and bills with that expected value.
+  // Winning sweeper claimed next_due_at=firstDue and bills with that expected value.
   let won = await store.subscriptions.markBilled(id, secondDue, firstDue);
   assert.equal(won, true);
 
-  // A second sweeper that also claimed the old firstDue loses: the row has already advanced to
-  // secondDue, so its conditional update finds no row still matching firstDue and bills nothing.
+  // Second sweeper also claimed firstDue, but the row has advanced to secondDue, so its
+  // conditional update matches no row and bills nothing.
   let lost = await store.subscriptions.markBilled(id, thirdDue, firstDue);
   assert.equal(lost, false);
 
@@ -439,10 +421,9 @@ async function markBilledIsCompareAndSet(store: Store): Promise<void> {
 }
 
 /**
- * Registers the shared set of tests that every Store implementation (the in-memory one,
- * and each database-backed adapter) must pass. Each adapter calls this once, passing its
- * own name and a factory that builds a fresh Store, so all adapters are held to the same
- * behaviour instead of each one defining its own idea of correct.
+ * Registers the shared tests every Store implementation (in-memory and each db-backed adapter)
+ * must pass. Each adapter calls this once with its name and a factory, holding all adapters to
+ * the same behaviour.
  *
  * @param name - Label for this adapter, used in the test group title.
  * @param makeStore - Builds a fresh Store to run the tests against.

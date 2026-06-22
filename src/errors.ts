@@ -12,17 +12,14 @@
 import type { Outcome } from '#src/contract.ts';
 
 /**
- * The reasons an operation can be turned down even though the request itself was
- * well-formed and the system is healthy. A rejection is normal, expected data: it
- * comes back as a `rejected` Outcome that the caller inspects and handles (for
- * example, showing the user "not enough funds"), not as a thrown error.
+ * Reasons a well-formed request is declined on a healthy system. A rejection is normal,
+ * expected data: returned as a `rejected` Outcome the caller handles (e.g. "not enough
+ * funds"), not thrown.
  *
- * This is deliberately kept separate from the thrown faults in `ERROR_CODES`. For
- * example, "the user can't afford this" is checked up front and returned here as
- * INSUFFICIENT_FUNDS; it never reaches the deeper OVERDRAFT fault, which only fires
- * if a balance somehow went negative anyway. Keeping ordinary "no" answers like
- * UNKNOWN_ORDER and UNKNOWN_SUBSCRIPTION out of the thrown-error path keeps them
- * from cluttering error dashboards and alerts.
+ * Kept separate from the thrown faults in `ERROR_CODES`. Affordability is checked up front
+ * and returned as INSUFFICIENT_FUNDS; it never reaches the deeper OVERDRAFT fault, which
+ * only fires if a balance went negative anyway. Keeping ordinary "no" answers (UNKNOWN_ORDER,
+ * UNKNOWN_SUBSCRIPTION) off the thrown-error path keeps them out of error dashboards and alerts.
  */
 export type RejectionCode =
   // The account doesn't have enough money to cover the request.
@@ -35,12 +32,11 @@ export type RejectionCode =
   | 'NOT_ENTITLED'
   // No sale was found for the order the request refers to.
   | 'UNKNOWN_ORDER'
-  // A spend reused an orderId that already has a completed sale, but carried a different
-  // idempotencyKey (the value that lets a retried request run at most once: a repeat with
-  // the same key is recognized and not re-applied). The orderId is what identifies a unique
-  // purchase, so a second charge for the same order is declined as a normal "no" (returned),
-  // not a thrown fault — it is an expected client mistake (a retry that lost its original
-  // idempotency key), not a bug.
+  // A spend reused an orderId that already has a completed sale but carried a different
+  // idempotencyKey (the value that lets a retried request run at most once: a repeat with the
+  // same key is recognized and not re-applied). The orderId identifies a unique purchase, so a
+  // second charge for the same order is returned as a normal "no", not thrown. Expected client
+  // mistake (a retry that lost its idempotency key), not a bug.
   | 'DUPLICATE_ORDER'
   // No subscription was found matching the request.
   | 'UNKNOWN_SUBSCRIPTION'
@@ -49,17 +45,16 @@ export type RejectionCode =
   // A payout was requested for less than the smallest amount that's allowed to be
   // paid out (the minimum is set in config).
   | 'BELOW_MINIMUM'
-  // A payout was requested before enough time had passed since the user's previous
-  // request (the minimum gap is the config value payoutMinIntervalMs). Returned as a
-  // normal declined Outcome, not thrown — the caller shows the user when they may retry.
+  // A payout was requested before enough time had passed since the user's previous request
+  // (minimum gap is config payoutMinIntervalMs). Returned as a declined Outcome, not thrown;
+  // the caller shows the user when they may retry.
   | 'PAYOUT_TOO_SOON';
 
 /**
- * The codes for thrown faults — things that genuinely went wrong, as opposed to the
- * expected "no" answers in {@link RejectionCode}. Each value is a stable, namespaced
- * string (like `LEDGER.OVERDRAFT`) so callers and dashboards can match on a fixed code
- * instead of on a free-text message. Code in this project always uses these constants;
- * it never writes the bare strings inline.
+ * Codes for thrown faults (genuine failures), as opposed to the expected "no" answers in
+ * {@link RejectionCode}. Each value is a stable, namespaced string (e.g. `LEDGER.OVERDRAFT`)
+ * so callers and dashboards match on a fixed code, not free-text. Always reference these
+ * constants; never write the bare strings inline.
  */
 export const ERROR_CODES = {
   // The request was structurally wrong (missing or invalid fields).
@@ -81,9 +76,9 @@ export const ERROR_CODES = {
   // The caller isn't permitted to perform this action.
   UNAUTHORIZED: 'AUTH.UNAUTHORIZED',
 
-  // A cryptographic signature didn't verify. Thrown in src/server.ts when an inbound
-  // webhook's HMAC signature (a keyed hash proving the sender holds the shared secret)
-  // fails to match, before any state is changed; outer layers map this to HTTP 401.
+  // A cryptographic signature didn't verify. Thrown in src/server.ts when an inbound webhook's
+  // HMAC signature (a keyed hash proving the sender holds the shared secret) fails to match,
+  // before any state is changed; outer layers map this to HTTP 401.
   INVALID_SIGNATURE: 'AUTH.INVALID_SIGNATURE',
 
   // The underlying storage layer (database, etc.) failed.
@@ -92,10 +87,10 @@ export const ERROR_CODES = {
   // An external service we depend on (such as a payment processor) failed.
   PROVIDER_FAILURE: 'PROVIDER.FAILURE',
 
-  // A balance that's never supposed to go negative did. This is a last-resort safety
-  // check deep in the posting code, not the user-facing "not enough funds" answer:
-  // affordability is checked up front and returned as the INSUFFICIENT_FUNDS rejection,
-  // so reaching this fault means a bug let a balance slip below zero.
+  // A balance that's never supposed to go negative did. Last-resort safety check deep in the
+  // posting code, not the user-facing "not enough funds" answer: affordability is checked up
+  // front and returned as INSUFFICIENT_FUNDS, so reaching this fault means a bug let a balance
+  // slip below zero.
   OVERDRAFT: 'LEDGER.OVERDRAFT',
 
   // A single posting tried to combine two different currencies, which isn't allowed.
@@ -105,32 +100,31 @@ export const ERROR_CODES = {
   // the service immediately rather than failing later.
   CONFIG_INVALID: 'CONFIG.INVALID',
 
-  // A payout was requested before the minimum interval since the user's last request had
-  // elapsed. This is the namespaced, status-mappable code that mirrors the PAYOUT_TOO_SOON
-  // rejection; the request path RETURNS the rejection (it is an expected "no"), so this code
-  // is for status mapping/observability, not for throwing on the affordability path.
+  // A payout was requested before the minimum interval since the user's last request elapsed.
+  // Namespaced, status-mappable code mirroring the PAYOUT_TOO_SOON rejection; the request path
+  // returns the rejection (an expected "no"), so this code is for status mapping/observability,
+  // not for throwing on the affordability path.
   PAYOUT_TOO_SOON: 'PAYOUT.TOO_SOON',
 
-  // The hash chain failed to verify: a stored hash no longer matches the one recomputed from
-  // its posting, so the ledger has been tampered with. Thrown before a checkpoint is signed so
-  // an attestation is never produced over a broken chain. A last-resort integrity fault, never
-  // an expected "no", so it is a thrown fault rather than a RejectionCode.
+  // The hash chain failed to verify: a stored hash no longer matches the one recomputed from its
+  // posting, so the ledger has been tampered with. Thrown before a checkpoint is signed, so no
+  // attestation is produced over a broken chain. Last-resort integrity fault, never an expected
+  // "no", hence a thrown fault rather than a RejectionCode.
   CHAIN_BROKEN: 'CHAIN.BROKEN',
 
-  // A posting tried to mix funds the platform actually owes its users and must hold real money
-  // against (custodial funds) with funds it does not owe them, such as revenue. Those two kinds
-  // of money must stay in separate accounts, so this is a thrown safety fault deep in the
-  // treasury path, never an expected "no".
+  // A posting tried to mix custodial funds (money the platform owes users and must hold real money
+  // against) with funds it does not owe, such as revenue. Those two kinds must stay in separate
+  // accounts, so this is a thrown safety fault deep in the treasury path, never an expected "no".
   COMMINGLING: 'LEDGER.COMMINGLING',
 } as const;
 
 /**
- * The thrown-error type for every fault in this system. It carries one of the stable
- * {@link ERROR_CODES} codes, which outer layers use to decide an HTTP status, whether
+ * Thrown-error type for every fault in this system. Carries one of the stable
+ * {@link ERROR_CODES} codes, which outer layers use to pick an HTTP status, decide whether
  * to retry, and what to log.
  *
- * Only `message` is considered safe to show to a caller. `detail` and `cause` may hold
- * internal information, so they are for logging only — don't surface them in a response.
+ * Only `message` is safe to show a caller. `detail` and `cause` may hold internal info, so
+ * they are for logging only; don't surface them in a response.
  */
 export class EconomyError extends Error {
   readonly code: string;
@@ -185,12 +179,11 @@ export function rejected(
 }
 
 /**
- * Turn anything caught in a `catch` block into an {@link EconomyError}. If it's already
- * one, return it unchanged — this matters because re-wrapping could overwrite its
- * retryable flag and wrongly mark a non-retryable failure as safe to retry. Anything
- * else (a raw exception from a library, the storage layer, etc.) is wrapped as a
- * retryable STORE.FAILURE, with the original kept in `cause` for logs so the caller
- * never sees the raw error or its stack trace.
+ * Turn anything caught in a `catch` into an {@link EconomyError}. If it's already one, return
+ * it unchanged: re-wrapping could overwrite its retryable flag and wrongly mark a non-retryable
+ * failure as safe to retry. Anything else (a raw exception from a library, the storage layer,
+ * etc.) is wrapped as a retryable STORE.FAILURE, with the original kept in `cause` for logs so
+ * the caller never sees the raw error or its stack trace.
  */
 export function normalizeError(error: unknown): EconomyError {
   if (error instanceof EconomyError) {

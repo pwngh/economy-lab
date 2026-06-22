@@ -10,10 +10,9 @@
  */
 
 /**
- * The client half of the HTTP storage backend: it builds a Store (the data-access object
- * the rest of the system uses) whose every call becomes an HTTP request answered by a
- * server handler. This is the only file that uses the fetch API (Request, Response); the
- * rest of the system stays unaware that HTTP is involved.
+ * Client half of the HTTP storage backend: builds a Store whose every call becomes an
+ * HTTP request answered by a server handler. Only file that uses the fetch API (Request,
+ * Response); the rest of the system stays unaware HTTP is involved.
  */
 
 import { memoryStore } from '#src/adapters/memory.ts';
@@ -43,35 +42,32 @@ import type {
 } from '#src/ports.ts';
 
 /**
- * A function that takes an HTTP request and returns a response — the same shape as the
- * standard `fetch`. This is how the client talks to the server. When you don't supply
- * one, the default points at an in-process server, so no actual network call happens.
+ * Same shape as standard `fetch`: takes a Request, returns a Response. How the client
+ * talks to the server. The default points at an in-process server, so no network call.
  */
 export type FetchLike = (request: Request) => Promise<Response>;
 
 /** Options for {@link httpStore}. */
 export type HttpStoreOptions = {
-  // The function used to send requests. Defaults to an in-process server running over a
-  // fresh in-memory store, so requests stay inside this process.
+  // Sends requests. Defaults to an in-process server over a fresh in-memory store, so
+  // requests stay inside this process.
   fetch?: FetchLike;
 
-  // The origin (scheme + host) that request URLs are built against. Only matters when
-  // requests go over a real network; ignored for the in-process default.
+  // Origin (scheme + host) request URLs are built against. Only matters over a real
+  // network; ignored for the in-process default.
   baseUrl?: string;
 };
 
-// The shape of every response body. Either a successful result, or a failure carrying the
-// server's error message. On failure the client re-throws that message as an Error, so a
-// handler that fails on the server fails the same way it would have in-process — which
-// lets the transaction roll back.
+// Every response body: a successful result, or a failure carrying the server's error
+// message. On failure the client re-throws it as an Error, so a server-side handler
+// failure looks the same as in-process, which lets the transaction roll back.
 type WireResult = { ok: true; body: unknown } | { ok: false; error: string };
 
 // --- The transport call -----------------------------------------------------------
 
-// Make one request and get one result back. POST the JSON arguments to `path`, read the
-// response, and if the server reported a failure, throw it as an Error here so the caller
-// sees the same failure it would from an in-process store (which is what makes a failed
-// transaction roll back).
+// One request, one result. POST the JSON args to `path`, read the response, and re-throw
+// any server failure as an Error so the caller sees the same failure it would in-process
+// (which makes a failed transaction roll back).
 async function call(
   transport: { fetch: FetchLike; baseUrl: string },
   path: string,
@@ -94,10 +90,10 @@ async function call(
 
 // --- The ledger, scoped to one transaction ----------------------------------------
 
-// Build the ledger interface for one open transaction. A transaction lives on the server
-// as a "session" identified by `session`; every method here puts that id in the request
-// path, so all of these calls run inside the one transaction the server is holding open.
-// The special id 'root' means "not in a transaction": each such call runs on its own.
+// Ledger interface for one open transaction. A transaction lives on the server as a
+// "session" identified by `session`; every method puts that id in the request path, so
+// the calls run inside the transaction the server holds open. Id 'root' means "not in a
+// transaction": each such call runs on its own.
 function sessionLedger(
   transport: { fetch: FetchLike; baseUrl: string },
   session: string,
@@ -146,12 +142,12 @@ function sessionLedger(
 
 // --- Streamed reads ---------------------------------------------------------------
 
-// heads, timeline, and lineage are declared as async iterables (you loop over them with
-// `for await`) so a real backend could stream large result sets a page at a time. This
-// in-process version doesn't paginate: the server returns everything in one response, and
-// these generators just hand back the rows one by one.
-// Streams each account paired with the hash of its most recent entry — every account has a
-// hash-chain of entries, and that latest hash is its "head".
+// heads, timeline, and lineage are async iterables (loop with `for await`) so a real
+// backend could stream large result sets a page at a time. This in-process version
+// doesn't paginate: the server returns everything in one response and these generators
+// yield the rows one by one.
+// Streams each account paired with the hash of its most recent entry. Each account has a
+// hash-chain of entries; that latest hash is its "head".
 async function* streamHeads(
   transport: { fetch: FetchLike; baseUrl: string },
   session: string,
@@ -166,12 +162,11 @@ async function* streamHeads(
   }
 }
 
-// Every account that has a cached running balance, streamed one at a time. (The store keeps a
-// per-account balance as a cache; the individual entries are the source of truth, and this
-// cached figure can fall out of sync.) Like `heads`, the in-process server returns all rows in
-// one response and this generator hands them back one by one; the account ids are plain strings
-// re-branded as AccountRef on arrival (no money amount crosses the wire here, so no amount codec
-// is needed).
+// Every account with a cached running balance, one at a time. (The per-account balance is
+// a cache; the entries are the source of truth, and the cached figure can fall out of
+// sync.) Like `heads`, all rows come in one response and are yielded one by one; account
+// ids are plain strings re-branded as AccountRef on arrival (no amount crosses the wire,
+// so no amount codec needed).
 async function* streamBalanceAccounts(
   transport: { fetch: FetchLike; baseUrl: string },
   session: string,
@@ -219,11 +214,10 @@ async function* streamLineage(
 }
 
 // --- The sub-stores, scoped to one transaction ------------------------------------
-// Each builder below returns one sub-store's interface for a given session id, turning
-// every method into a request to that session (or to 'root' for calls outside a
-// transaction). Arguments and results that contain money amounts are run through the wire
-// codec, which carries each amount as a decimal string (plain JSON can't serialize the
-// bigint the amounts are made of).
+// Each builder returns one sub-store's interface for a session id, turning every method
+// into a request to that session (or 'root' for calls outside a transaction). Args and
+// results containing money amounts run through the wire codec, which carries each amount
+// as a decimal string (plain JSON can't serialize the underlying bigint).
 
 function sessionIdempotency(
   transport: { fetch: FetchLike; baseUrl: string },
@@ -317,11 +311,10 @@ function sessionSagas(
       )) as unknown[];
       return rows.map(decodeWire.saga);
     },
-    // SagaStore.advance is declared as advance(id, from, to, patch, options?). This arrow
-    // accepts only the first four arguments and leaves out the optional `options` (which
-    // would carry a cancellation signal). That's fine: a function taking fewer arguments is
-    // still a valid implementation, and the only caller — the background sweep that retries
-    // sagas — never passes a signal, so nothing relies on it here.
+    // SagaStore.advance is advance(id, from, to, patch, options?). This arrow takes only
+    // the first four and omits the optional `options` (a cancellation signal). Fine: fewer
+    // args is still a valid implementation, and the only caller (the background saga-retry
+    // sweep) never passes a signal.
     advance: (id, from, to, patch) =>
       call(transport, at('advance'), {
         id,
@@ -396,7 +389,7 @@ function sessionSubscriptions(
       return rows.map(decodeWire.subscription);
     },
     // markBilled is a compare-and-set: the server returns whether the row still matched
-    // `expectedDueAt`, and that boolean must survive the round trip so an overlapping sweeper
+    // `expectedDueAt`. That boolean must survive the round trip so an overlapping sweeper
     // that lost the race sees `false` and treats its renewal as a no-op.
     markBilled: (id, nextDueAt, expectedDueAt, options) =>
       call(
@@ -440,10 +433,9 @@ function sessionPromos(
   };
 }
 
-// The trust store: it tracks how much each subject has spent recently, which is the input the
-// risk check reads. It is never part of a transaction; its writes happen on their own, so even a
-// denied attempt still counts toward the spending limit. Because of that it has its own
-// endpoints with no session id.
+// Trust store: tracks how much each subject has spent recently, the input the risk check
+// reads. Never part of a transaction; its writes happen on their own, so even a denied
+// attempt counts toward the spending limit. Hence its own endpoints with no session id.
 function rootTrust(transport: {
   fetch: FetchLike;
   baseUrl: string;
@@ -462,9 +454,9 @@ function rootTrust(transport: {
         options,
       );
     },
-    // Proxy the atomic record-and-measure: send the same {subject, attempt} payload `bump` does,
-    // and decode the Velocity the server returns (the server runs the real backing store's
-    // `record`, so the atomicity lives there, not on the wire). Same amount codecs as read+bump.
+    // Proxy the atomic record-and-measure: send the same {subject, attempt} payload as
+    // `bump`, decode the Velocity the server returns. The server runs the backing store's
+    // `record`, so atomicity lives there, not on the wire. Same amount codecs as read+bump.
     record: async (subject, attempt, options) =>
       decodeWire.velocity(
         await call(
@@ -477,8 +469,8 @@ function rootTrust(transport: {
   };
 }
 
-// The checkpoint store (signed snapshots of the ledger). Only the background worker uses
-// it, and like trust it is never part of a transaction, so it too has session-less endpoints.
+// Checkpoint store (signed snapshots of the ledger). Only the background worker uses it,
+// and like trust it is never part of a transaction, so it too has session-less endpoints.
 function rootCheckpoints(transport: {
   fetch: FetchLike;
   baseUrl: string;
@@ -495,11 +487,10 @@ function rootCheckpoints(transport: {
   };
 }
 
-// The webhook replay store: it records each inbound provider event by the event id the provider
-// gave it, so the same webhook delivered twice is only processed once. Like trust and
-// checkpoints it is never part of a domain transaction — the webhook entry point claims the
-// event id on its own, as a final duplicate check before processing — so it has its own
-// session-less endpoint.
+// Webhook replay store: records each inbound provider event by the provider's event id, so
+// the same webhook delivered twice is processed once. Never part of a domain transaction;
+// the webhook entry point claims the event id on its own as a final duplicate check before
+// processing. Hence its own session-less endpoint.
 function rootReplay(transport: {
   fetch: FetchLike;
   baseUrl: string;
@@ -515,10 +506,10 @@ function rootReplay(transport: {
 
 // --- The transaction --------------------------------------------------------------
 
-// Run `work` inside a transaction. Ask the server to begin one (it replies with a session
-// id), run the caller's `work` against a Unit bound to that session, then tell the server to
-// commit if `work` succeeded or roll back if it threw. The actual begin/commit/rollback
-// happens in the server's backing store, so this client adds no transaction logic of its own.
+// Run `work` inside a transaction. Ask the server to begin one (replies with a session
+// id), run `work` against a Unit bound to that session, then commit if it succeeded or
+// roll back if it threw. The actual begin/commit/rollback happens in the server's backing
+// store, so this client adds no transaction logic of its own.
 async function runTransaction<T>(
   transport: { fetch: FetchLike; baseUrl: string },
   work: (tx: Unit) => Promise<T>,
@@ -538,9 +529,8 @@ async function runTransaction<T>(
   }
 }
 
-// Bundle the sub-stores a handler is allowed to use inside a transaction, all bound to the
-// same session. Trust and checkpoints are deliberately left out, because they are never part
-// of a transaction.
+// Bundle the sub-stores a handler may use inside a transaction, all bound to the same
+// session. Trust and checkpoints are left out: they are never part of a transaction.
 function sessionUnit(
   transport: { fetch: FetchLike; baseUrl: string },
   session: string,
@@ -560,10 +550,10 @@ function sessionUnit(
 // --- The assembled client Store ---------------------------------------------------
 
 /**
- * Build a {@link Store} that does all its work over HTTP requests. If you don't pass your
- * own `fetch`, it creates an in-process server ({@link createStoreServer}) backed by a fresh
- * in-memory store and points the client at it — so a bare `httpStore()` is a complete,
- * working Store that needs no running service or network.
+ * Build a {@link Store} that does all its work over HTTP requests. Without a `fetch`, it
+ * creates an in-process server ({@link createStoreServer}) over a fresh in-memory store
+ * and points the client at it, so a bare `httpStore()` is a complete, working Store that
+ * needs no running service or network.
  */
 export function httpStore(options?: HttpStoreOptions): Store {
   let backing = memoryStore();
@@ -592,6 +582,5 @@ export function httpStore(options?: HttpStoreOptions): Store {
 }
 
 // Re-exported so a host can attach the server side to a real HTTP listener. The in-process
-// server is only the default; exporting it here means both the client and server halves are
-// available from this one module.
+// server is only the default; exporting it here makes both halves available from this module.
 export { createStoreServer } from '#src/adapters/http-server.ts';

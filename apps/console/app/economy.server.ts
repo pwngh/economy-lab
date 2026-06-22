@@ -10,47 +10,20 @@
  */
 
 /**
- * economy.server.ts — the bridge between the web UI and the real economy-lab engine.
+ * economy.server.ts — bridges the web UI and the economy-lab engine.
  *
- * Its job: give the page loaders and form actions one simple set of functions to read from and
- * write to the engine, while keeping the engine (and its database wiring) entirely on the server.
+ * The `.server` suffix keeps this module (and the db/crypto it imports) off the client: the engine
+ * runs on the Node server. Loaders read through the facade below; actions call the mutating ones.
  *
- * The engine runs HERE, on the Node server, not in the browser — the project calls this "remote
- * mode". The `.server` suffix is a React Router rule: a module named `*.server.ts` is never sent to
- * the browser, so the database and crypto code it pulls in stays server-side. Page loaders read
- * through the functions below; form actions call the ones that change state.
- *
- * What this file exposes (the "console facade"): the four operations a user can record
- * (deposit / purchase / request a payout / grant promotional credits); read views the pages render
- * (wallet balances, the ledger feed, the integrity report, a solvency summary); a live payout board
- * (every payout's saga is loaded straight from the store — see below for what a "saga" is); and the
- * simulation controls (advance the clock, run the background worker, simulate a payment-provider
- * outage, change settings, reset or clear the demo).
- *
- * Two deliberate design choices:
- *
- *  1. All state lives in a single long-lived object on the server (a module singleton). Because it
- *     is not in the browser page, a browser refresh keeps everything — there is no client-side log
- *     of actions to replay. "Reset" rebuilds the engine and re-seeds the demo; "Clear" rebuilds it
- *     empty.
- *  2. The data store is chosen from an environment variable: an in-memory store by default, or a
- *     real Postgres/MySQL database when DATABASE_URL is set. Running against a real database is the
- *     same engine with real database adapters, and it keeps its data across server restarts.
- *
- * The engine is imported by relative path from the frozen project source (`../../../src/index.ts`).
- * Vite compiles that TypeScript for the server, and the engine's core is written to run on the
- * server unchanged. The database driver is loaded only when DATABASE_URL is set, so the default
- * in-memory path pulls in nothing extra.
+ * Two things to know:
+ *  - State lives in one long-lived server-side singleton, so a browser refresh keeps it. Reset
+ *    rebuilds and re-seeds; clear rebuilds empty.
+ *  - The store comes from DATABASE_URL: in-memory by default, Postgres/MySQL when set (same engine,
+ *    real adapters, survives restarts). The db driver is imported only when that var is set.
  */
 
-// Why this file wires the engine by hand instead of calling the library's one-shot host helpers
-// (compose / composeWorker): each of those helpers builds its OWN data store from the environment,
-// and a fresh in-memory store is created on every call. This app needs the economy AND the
-// background worker to share ONE store, so the worker can see the payouts the economy created. If
-// we called the two helpers separately they would each get a different, empty store and never see
-// each other's data. So we reuse the helpers' store-selection rule (selectStore below copies it
-// from src/index.ts), pick the store once, and wire both sides over that single store through the
-// public createEconomy / createWorker entry points.
+// We wire createEconomy + createWorker by hand rather than using compose()/composeWorker(), so the
+// economy and worker share one store (see rebuild()).
 import {
   createEconomy,
   memoryStore,
@@ -92,16 +65,11 @@ import type {
 import type { Worker } from '#src/worker/index.ts';
 import type { Amount } from '#src/money.ts';
 
-// --- Public view types: the plain, render-ready shapes the pages receive --------------
+// --- Public view types: render-ready shapes the pages receive ---
 
-// Everything the ledger feed can show. The first four are the operations a user records directly
-// (a top-up — buying credits with cash; a spend — a purchase; a payout request — cashing earned
-// credits out to real money; and a promotional grant). The rest are postings the BACKGROUND WORKER
-// makes on its own as payouts and promos run their course — a payout settling, a failed payout
-// returning its reserve to the seller, the cash leaving trust on a settlement, an expired promo
-// being reclaimed. The engine records these as real ledger transactions; the feed surfaces them so
-// the books shown here match the books the engine keeps. `other` is the catch-all for any future
-// worker posting, so nothing is ever silently dropped from the feed.
+// Everything the ledger feed can show. The first four are user operations; the rest are postings
+// the background worker makes (payout settled/reversed, cash leg, fee sweep, promo expiry). `other`
+// is the catch-all for any future worker posting.
 export type TxnKind =
   | 'topUp'
   | 'spend'
@@ -114,8 +82,7 @@ export type TxnKind =
   | 'promoExpiry'
   | 'other';
 
-// One line of a double-entry posting, ready to show. Every posting has at least two lines that
-// cancel out: a "debit" line and a "credit" line of equal size, so the books always balance.
+// One leg of a posting, ready to render.
 export interface LegView {
   account: string;
   label: string;
@@ -124,8 +91,7 @@ export interface LegView {
   currency: string;
 }
 
-// One recorded transaction, ready for the ledger feed: what kind it was, when, who was involved,
-// and the lines that make it up.
+// One recorded transaction, ready for the ledger feed.
 export interface TxnView {
   id: string;
   at: number;
@@ -134,21 +100,17 @@ export interface TxnView {
   paymentType: string;
   listing: string;
   priceCredits: number;
-  // The currency the headline amount is in. Most postings move credits; a payout's cash leg moves
-  // USD. The feed renders the amount with the matching unit (Cr / $) so the column never lies.
+  // Currency of the headline amount. Most postings are credits; a payout's cash leg is USD.
   priceCurrency: 'CREDIT' | 'USD';
   buyer: string;
   seller: string;
   legs: LegView[];
-  // A plain-English note for postings whose meaning isn't obvious from the legs alone — chiefly the
-  // worker's own postings (why a payout reversed, what a settlement did). Empty for the everyday
-  // user operations, whose legs already tell the whole story.
+  // Plain-English note for postings whose legs don't explain themselves (mostly worker postings).
+  // Empty for ordinary user operations.
   note?: string;
-  // The payout saga this posting belongs to, when it is one — lets the feed link a row back to the
-  // payout board.
+  // The payout saga this posting belongs to, if any; lets the feed link back to the payout board.
   sagaId?: string;
-  // The sum of all the lines. It is 0 when the transaction balances (every debit matched by an
-  // equal credit); any other number would mean money was created or lost, which never happens.
+  // Sum of all the legs; 0 when the transaction balances.
   balancedTo: number;
 }
 
@@ -162,8 +124,7 @@ export interface WalletView {
   total: number;
 }
 
-// The result of the engine's integrity check ("prove"): for each property the books are meant to
-// hold, whether it currently holds. See the Integrity page for what each property means.
+// Result of the engine's integrity check ("prove"): which properties currently hold.
 export interface ProveView {
   conserved: boolean;
   backed: boolean;
@@ -175,8 +136,8 @@ export interface ProveView {
   allGreen: boolean;
 }
 
-// A summary of whether real cash on hand covers what the platform owes its users. "Trust cash" is
-// real USD the platform holds in reserve to back the credits users can spend.
+// Whether real cash on hand covers what the platform owes users. Trust cash is the USD held in
+// reserve to back spendable credits.
 export interface SolvencyView {
   userCredits: number;
   backed: boolean;
@@ -187,9 +148,7 @@ export interface SolvencyView {
   promotional: number;
 }
 
-// One of the platform's own "house" ledger accounts, for the Overview's platform balances: the
-// credits the platform has issued, set aside, or earned, and the real USD it holds. These are the
-// counterparts to users' wallets — read straight from the ledger, the same numbers the books keep.
+// One of the platform's own "house" ledger accounts, for the Overview's platform balances.
 export interface PlatformAccountView {
   key: string;
   label: string;
@@ -203,18 +162,16 @@ export interface PlatformAccountView {
 export interface PayoutView {
   id: string;
   userId: string;
-  // The seller's credits set aside the moment the payout was requested, waiting to be paid out.
+  // Seller's credits set aside when the payout was requested.
   reserveCredits: number;
   state: Saga['state'];
   providerRef: string | null;
-  // How many times the worker has tried to push this payout to its next step. The engine raises
-  // this on both a successful AND a failed provider submit, so a provider that stays down climbs to
-  // the cap and the payout is given up on (see runJobs / the Payouts page).
+  // Times the worker has tried to advance this payout. Raised on both success and failure, so a
+  // provider that stays down climbs to the cap and the payout is abandoned.
   attempts: number;
   dueAt: number;
-  // Set once the saga reaches a terminal state, read back from the worker's own ledger postings
-  // (the saga itself doesn't retain them): the failure reason for a FAILED payout, and the USD
-  // actually disbursed for a SETTLED one. Null while the payout is still in flight.
+  // Set at a terminal state, read back from the worker's ledger postings: failure reason (FAILED)
+  // or USD disbursed (SETTLED). Null while in flight.
   reason: string | null;
   payoutUsd: number | null;
 }
@@ -248,9 +205,8 @@ const LABELS: Record<TxnKind, string> = {
   other: 'Ledger posting',
 };
 
-// Turn a raw failure code (as the engine records it in a dead-letter posting's metadata) into a
-// short human phrase for the feed and the payout board. Unknown codes fall back to a tidied form of
-// the code itself, so a new failure mode still reads sensibly rather than as a raw constant.
+// Turn a raw failure code into a short human phrase. Unknown codes fall back to a tidied version
+// of the code itself.
 function humanReason(code: string): string {
   const known: Record<string, string> = {
     [ERROR_CODES.PROVIDER_FAILURE]: 'provider failure',
@@ -259,9 +215,8 @@ function humanReason(code: string): string {
   return known[code] ?? code.replace(/[._]/g, ' ').toLowerCase();
 }
 
-// Make a readable title out of a posting's raw metadata kind, for any background posting the feed
-// doesn't give bespoke wording (e.g. a treasury fee sweep). A trailing ".cash" — the USD companion
-// many movements post — becomes a "(cash)" suffix; the rest becomes spaced, sentence-cased words.
+// Readable title for a background posting kind the feed doesn't word specially. A trailing ".cash"
+// becomes a "(cash)" suffix; the rest becomes spaced, sentence-cased words.
 function humanizeKind(kind: string): string {
   if (!kind) {
     return 'Background posting';
@@ -275,7 +230,6 @@ function humanizeKind(kind: string): string {
 }
 
 // Friendly names for the platform's internal accounts, so the ledger never shows a raw account id.
-// These are the platform-wide accounts that money flows through (as opposed to a user's own wallet).
 const ACCOUNT_LABELS: Record<string, string> = {
   'vrchat:stored_value': 'Stored value (spendable credits in circulation)',
   'vrchat:revenue': 'Platform revenue',
@@ -289,10 +243,9 @@ const ACCOUNT_LABELS: Record<string, string> = {
   'vrchat:opening_equity': 'Opening equity (starting balance)',
 };
 
-// The platform's own ledger accounts shown on the Overview, in reading order: what the platform has
-// issued and owes, what it has set aside, what it has earned, and the real cash behind it all. Each
-// is read live from the ledger by `platformAccounts()` below. (Receivable and opening-equity are
-// left off — they stay at zero in the normal demo flow and would only add noise.)
+// The platform's own ledger accounts shown on the Overview, in reading order; read live by
+// platformAccounts() below. (Receivable and opening-equity are omitted: they stay at zero in the
+// demo flow.)
 const PLATFORM_ACCOUNTS: {
   key: string;
   account: AccountRef;
@@ -345,9 +298,8 @@ function toCredits(a: Amount): number {
   return Number(a.minor) / SCALE;
 }
 
-// Turn an account id into a readable label. A platform account has a fixed name (see above). A
-// user account is written as "<userId>:<kind>" — for example "usr_nova:earned" — so we split off
-// the kind and show it as "<userId> · Earned".
+// Readable label for an account id. Platform accounts have fixed names (above); a user account
+// "<userId>:<kind>" is split into "<userId> · <Kind>".
 function accountLabel(account: string): string {
   if (ACCOUNT_LABELS[account]) {
     return ACCOUNT_LABELS[account];
@@ -366,10 +318,8 @@ function accountLabel(account: string): string {
   return `${user} · ${kindLabel}`;
 }
 
-// A clock the simulation controls. Time does not advance on its own — it only moves when the
-// Simulation panel advances it — so the demos play out the same way every time. The economy, the
-// store, and the background worker all share this one clock object, so advancing it is seen
-// everywhere at once.
+// A clock the simulation controls. Time only advances when the panel advances it; the economy,
+// store, and worker all share this one clock object.
 function makeClock(): Clock & {
   advance: (ms: number) => void;
   set: (t: number) => void;
@@ -386,12 +336,10 @@ function makeClock(): Clock & {
   };
 }
 
-// The configuration for the demo, expressed the way the engine reads it: as environment variables.
-// Most limits are relaxed so the everyday flow always goes through. The one knob the demo plays
-// with is the "maturity horizon" — a waiting period before earned credits can be cashed out (it
-// models the delay before a sale is final enough to pay out on). Only the `default` horizon is
-// raised, because that is the one a seller's earned credits fall under; the card and crypto
-// horizons stay at 0, so deposits and purchases always clear and only the payout side is gated.
+// Demo config, as the engine reads it (env vars). Most limits are relaxed so the everyday flow
+// always goes through. The maturity horizon is the one knob the demo exercises: only the default
+// horizon is raised (the one earned credits fall under), so card/crypto clear at once and only
+// payouts are gated.
 function demoEnv(
   maturityDays: number,
   maxAttempts: number,
@@ -479,30 +427,25 @@ async function build(): Promise<ConsoleEngine> {
   let maxAttempts = 5;
   let idSeq = 0;
 
-  // Every payout id the engine mints, recorded by the id generator below. The payout board uses
-  // this list to load each saga from the store and show it as a card. Cleared on every rebuild.
+  // Every payout id the engine mints (recorded by the id generator below); the payout board loads
+  // each saga from the store to render a card. Cleared on rebuild.
   let sagaIds: string[] = [];
 
-  // Every ledger transaction id the engine mints (prefix "txn"), recorded by the id generator
-  // below — both the ones a user operation produces AND the ones the background worker produces on
-  // its own. `capturedTxnIds` marks the ones already in the feed (user operations, recorded inline);
-  // after each worker run we read back any minted-but-not-yet-captured ids straight from the ledger
-  // (see captureWorkerPostings) so settlements and failure reversals appear in the feed too. Both
-  // are cleared on every rebuild.
+  // Every "txn" id the engine mints, from user operations and worker postings alike. capturedTxnIds
+  // marks the ones already in the feed; after a worker run we read back the rest from the ledger
+  // (see captureWorkerPostings) so settlements and reversals show up too. Cleared on rebuild.
   let mintedTxnIds: string[] = [];
   let capturedTxnIds = new Set<string>();
 
-  // What became of each payout once it reached a terminal state, harvested from the worker's own
-  // ledger postings (the saga record itself keeps neither): the failure reason for a reversal and
-  // the USD disbursed for a settlement. The payout board reads this to caption its cards.
+  // What became of each terminal payout, harvested from the worker's ledger postings (the saga
+  // record keeps neither): failure reason for a reversal, USD disbursed for a settlement. Used to
+  // caption the payout cards.
   let sagaInfo = new Map<string, { reason?: string; usd?: number }>();
 
-  // The SHA-256 hashing service the engine uses to seal ledger entries — the engine's own default
-  // hasher (Web Crypto SHA-256), reused here so the console hashes exactly as the engine does.
+  // The engine's default SHA-256 hasher (Web Crypto), reused so the console hashes as the engine does.
   const digest: Digest = systemDigest();
 
-  // The id generator. It mints ids like "txn_1", "pay_2", and also records every payout id (the
-  // "pay_" ones) into sagaIds, so the payout board can later load each one from the store.
+  // Mints ids like "txn_1"/"pay_2", and records every "pay_" id into sagaIds for the payout board.
   const ids: Ids = {
     next: (prefix) => {
       const id = `${prefix}_${++idSeq}`;
@@ -516,12 +459,10 @@ async function build(): Promise<ConsoleEngine> {
     },
   };
 
-  // A stand-in for the outside payment provider (the demo calls it Tilia), with an outage switch.
-  // When the "Tilia down" toggle is on, every attempt to send a payout throws a retryable failure —
-  // exactly the kind of error the worker is built to handle: it retries, then, once a payout has
-  // failed too many times, gives up on it and returns the set-aside credits to the seller. When the
-  // toggle is off, it returns a fake provider reference for the payment. The switch is read live, so
-  // flipping it takes effect on the very next worker run without rebuilding the engine.
+  // Stand-in for the payment provider (the demo calls it Tilia), with an outage switch. While
+  // faultMode is on, every submit throws a retryable failure (what the worker retries, then
+  // abandons at the cap, returning the reserve to the seller); off, it returns a fake providerRef.
+  // The switch is read live, so flipping it takes effect on the next worker run.
   const processor = {
     submitPayout: async (input: { key: string }) => {
       if (faultMode) {
@@ -533,10 +474,9 @@ async function build(): Promise<ConsoleEngine> {
     },
   };
 
-  // Exchange rates, set to VRChat's published Creator Economy model rather than a 1:1 placeholder.
-  // `par` is what one credit is worth in USD when checking that real cash backs spendable credits:
-  // $0.01, so 100 credits = $1. `payout` is the less favourable rate earned credits cash out at:
-  // $0.005, so 200 credits = $1. The gap between the two is the platform's cut, about 50%.
+  // Exchange rates from VRChat's published Creator Economy model, not a 1:1 placeholder. par is the
+  // backing rate ($0.01/credit, 100 = $1); payout is the cash-out rate ($0.005/credit, 200 = $1).
+  // The gap is the platform's cut, ~50%.
   const rates = configuredRates({
     parRate: 1n,
     parScale: 2,
@@ -549,27 +489,16 @@ async function build(): Promise<ConsoleEngine> {
     signingKey: '00112233445566778899aabbccddeeff',
   });
 
-  // A logger that throws its output away, so the dev terminal isn't flooded by background diagnostic
-  // lines (the demo injects faults on purpose, which would otherwise log on every worker run). We
-  // still use the library's real logger type rather than an empty stub, to match how production runs.
+  // A logger that discards its output, so the demo's injected faults don't flood the dev terminal.
+  // Still the library's real logger type, not an empty stub.
   const logger = jsonlLogger({ out: () => {}, err: () => {} });
-  // A metrics sink that throws its output away — the demo doesn't collect metrics.
+  // A metrics sink that discards everything; the demo collects no metrics.
   const meter = { count: () => {}, observe: () => {} };
 
-  // Build (or rebuild) the engine + worker over ONE env-selected store, so both read identical
-  // state. memoryStore by default; a real pg/mysql adapter when DATABASE_URL is set ("remote mode
-  // = real adapters on the server"). The controllable clock, the id-capturing ids, the SHA-256
-  // digest, and the toggleable processor/rates/vault/signer are injected so the demos drive the
-  // engine deterministically.
-  //
-  // Why not call the library's compose()/composeWorker() directly here? Each of them selects its
-  // OWN store from env, and the memory store is a fresh instance per call — so composing the
-  // economy and the worker separately would hand them two different (empty) stores, and the worker
-  // would never see the economy's sagas. We use compose()'s own selection LOGIC (mirrored in
-  // selectStore below, identical to src/index.ts) to pick the store once, then wire BOTH the
-  // economy (via createEconomy, the public entry point that takes the full Capabilities) and the
-  // worker (via createWorker) over that single instance. compose()/composeWorker() stay imported
-  // and remain the right call for a single-purpose host; this app needs the shared-store assembly.
+  // Build (or rebuild) the engine + worker over one env-selected store, so both read identical
+  // state — compose()/composeWorker() would each pick their own store, leaving the worker blind to
+  // the economy's sagas. selectStore (below) mirrors compose()'s selection logic. The injected
+  // clock/ids/digest/processor/rates/signer let the demo drive the engine deterministically.
   async function rebuild(): Promise<void> {
     idSeq = 0;
     clock.set(0);
@@ -613,10 +542,8 @@ async function build(): Promise<ConsoleEngine> {
     workerRef = createWorker(store, workerCtx);
   }
 
-  // Build the env-selected store exactly as compose() does (mirrors selectStore in src/index.ts),
-  // so the economy and the worker share one instance. memoryStore by default; pg/mysql when
-  // DATABASE_URL is set — and the driver is imported ONLY then, so the default path pulls in
-  // nothing extra.
+  // Pick the store from env the way compose() does. memoryStore by default; pg/mysql when
+  // DATABASE_URL is set, with the driver imported only then.
   async function selectStore(
     env: Record<string, string | undefined>,
   ): Promise<Store> {
@@ -655,9 +582,8 @@ async function build(): Promise<ConsoleEngine> {
     return [];
   }
 
-  // Turn a posting's raw legs into the render-ready leg views the feed shows: each line labelled,
-  // tagged debit or credit (a debit carries a positive minor amount), and signed for display.
-  // Shared by user operations (record) and worker postings (viewFromPosting) so both read alike.
+  // Posting legs -> render-ready leg views: labelled, tagged debit/credit (debit is positive minor),
+  // signed for display. Shared by record() and viewFromPosting().
   function toLegViews(legs: ReadonlyArray<Leg>): LegView[] {
     return legs.map((leg: Leg): LegView => {
       const value = toCredits(leg.amount);
@@ -671,21 +597,19 @@ async function build(): Promise<ConsoleEngine> {
     });
   }
 
-  // The sum of a posting's lines in minor units. 0 means the posting balances; anything else would
-  // mean money was created or lost (it never is).
+  // Sum of a posting's legs in minor units; 0 means it balances.
   function balanceOf(legs: ReadonlyArray<Leg>): number {
     return legs.reduce((sum, leg) => sum + Number(leg.amount.minor), 0);
   }
 
-  // The monotonic sequence number inside a "txn_N" id — the order the engine committed it, used to
-  // sort the feed newest-first regardless of when each row was added.
+  // The N in a "txn_N" id: commit order, used to sort the feed newest-first.
   function txnSeq(id: string): number {
     const n = Number(id.slice(id.lastIndexOf('_') + 1));
     return Number.isFinite(n) ? n : 0;
   }
 
-  // The first user account a posting touches (a "<user>:<kind>" account, not a "vrchat:" platform
-  // account), so a worker posting can name the user it concerns. Null when it touches none.
+  // The first user account a posting touches (not a "vrchat:" one), so a worker posting can name
+  // the user it concerns. Null if none.
   function userInLegs(legs: ReadonlyArray<Leg>): string | null {
     for (const leg of legs) {
       if (!leg.account.startsWith('vrchat:')) {
@@ -696,8 +620,8 @@ async function build(): Promise<ConsoleEngine> {
     return null;
   }
 
-  // Record a committed user operation into the ledger feed, and mark its transaction id captured so
-  // the worker-posting sweep below doesn't add it a second time.
+  // Record a committed user operation into the feed, and mark its txn id captured so the worker
+  // sweep doesn't add it again.
   function record(outcome: Outcome, meta: RecordMeta): void {
     if (outcome.status !== 'committed') {
       return;
@@ -721,10 +645,8 @@ async function build(): Promise<ConsoleEngine> {
     });
   }
 
-  // Build a feed row from a posting the background worker made on its own (a payout settling or
-  // failing, an expired promo reclaimed). Read straight from the stored posting, so the amounts and
-  // legs are the engine's own — not reconstructed — and given a plain-English note explaining what
-  // the posting did, which the legs alone don't convey. Returns the seller/user the posting concerns.
+  // Build a feed row from a worker posting (payout settle/fail, promo reclaim), read straight from
+  // the stored posting so the amounts/legs are the engine's own, plus a plain-English note.
   async function viewFromPosting(id: string, p: Posting): Promise<TxnView> {
     const meta = p.meta as { kind?: string; sagaId?: string; reason?: string };
     const metaKind = String(meta.kind ?? '');
@@ -779,8 +701,8 @@ async function build(): Promise<ConsoleEngine> {
         note: `Payout to ${user} settled — the ${cr} reserve was released to platform revenue.`,
       };
     }
-    // The USD companion of a settlement. Normally folded into its settle row by the capture step
-    // (see mergeCashInto); this stands alone only if that pairing ever misses, so it's never lost.
+    // USD companion of a settlement. Normally folded into the settle row (mergeCashInto); this is
+    // the fallback if that pairing misses.
     if (metaKind === 'payout.settle.cash') {
       if (sagaId) {
         sagaInfo.set(sagaId, { ...sagaInfo.get(sagaId), usd: amount });
@@ -814,9 +736,8 @@ async function build(): Promise<ConsoleEngine> {
         note: `${cr} of expired promotional credits was reclaimed from ${user}.`,
       };
     }
-    // Any other background posting the worker makes. Surfaced rather than hidden (the ledger is meant
-    // to be complete), with a humanized title and a system-side detail line, since these move
-    // platform money between platform accounts, not a user's.
+    // Any other worker posting: surfaced with a humanized title and a system-side note, since these
+    // move platform money between platform accounts.
     const title = humanizeKind(metaKind);
     return {
       ...base,
@@ -829,10 +750,9 @@ async function build(): Promise<ConsoleEngine> {
     };
   }
 
-  // Fold a USD "*.cash" posting into the event it completes, so a settlement (or a fee sweep) reads
-  // as ONE feed row whose expansion shows both the credit side and the cash side — instead of two
-  // near-identical rows. The headline amount stays the credit figure; the cash amount goes into the
-  // note (and, for a settled payout, into the payout board's "paid" caption).
+  // Fold a USD "*.cash" posting into the event it completes, so a settlement or fee sweep is one
+  // feed row whose expansion shows both sides. Headline stays the credit figure; the cash amount
+  // goes into the note (and the payout board's "paid" caption for a settlement).
   function mergeCashInto(parent: TxnView, posting: Posting): void {
     parent.legs = [...parent.legs, ...toLegViews(posting.legs)];
     const first = posting.legs[0];
@@ -855,14 +775,10 @@ async function build(): Promise<ConsoleEngine> {
     }
   }
 
-  // After a worker run, pull the ledger transactions the worker just made — and only those — into
-  // the feed (a payout settling, a failed payout returning its reserve, a treasury fee sweep).
-  // `fromIndex` is where the txn-id list stood before the run, so the sweep sees exactly the ids the
-  // run minted: it never re-walks earlier transactions, and it never surfaces the *secondary*
-  // postings of a user operation (e.g. a deposit's USD cash leg), which record() leaves out on
-  // purpose to keep one row per user action. A "*.cash" posting is merged into the event it just
-  // completed rather than shown on its own. Each new posting is read back as the engine committed
-  // it, then the feed is re-sorted newest-first by commit order.
+  // After a worker run, pull the txns it just minted into the feed (settlements, reversals, fee
+  // sweeps). fromIndex is where the id list stood before the run, so we see only this run's ids and
+  // never re-walk earlier ones. "*.cash" postings are merged into the event they complete; the rest
+  // become rows. Then re-sort newest-first.
   async function captureWorkerPostings(fromIndex: number): Promise<void> {
     let added = false;
     let lastEvent: TxnView | null = null;
@@ -920,11 +836,8 @@ async function build(): Promise<ConsoleEngine> {
     return outcome;
   }
 
-  // Run every background job once and return the per-job batch summary (which job ran, and what
-  // it acted on). runJobs() folds this into the one-line note the Simulation panel shows. The
-  // payout board doesn't read this summary — it loads each saga's own attempt count from the
-  // store (see payouts() and PayoutView.attempts), which the engine's worker raises on every
-  // failed retryable submit.
+  // Run every background job once and return the per-job batch summary. runJobs() folds it into the
+  // one-line note the panel shows; the payout board instead reads each saga's own attempt count.
   async function runWorkerOnce(): Promise<
     Record<string, { ok: boolean; summary?: unknown }>
   > {
@@ -945,17 +858,13 @@ async function build(): Promise<ConsoleEngine> {
     >;
   }
 
-  // Seed a demo economy that has already LIVED a little, so the ledger shows the full real-world
-  // lifecycle on first load — not just the operations a user types, but everything the background
-  // worker does in production: payouts settling (the credit + the USD cash legs), the treasury
-  // sweeping its marketplace fees, and a provider outage forcing a payout to reverse its reserve
-  // back to the seller. The board ends with a mix of settled, failed, and in-flight payouts, and
-  // the clock a couple of days in. Amounts are taken as fractions of the seller's ACTUAL earned
-  // balance (read back from the ledger), so the script can't outrun what a seller has to cash out.
+  // Seed a demo economy that has already run a bit, so the first load shows the full lifecycle:
+  // user operations plus the worker's own postings (settlements with their cash legs, a fee sweep,
+  // a provider outage reversing a payout). Ends with settled/failed/in-flight payouts and the clock
+  // a couple of days in. Payout amounts are fractions of each seller's actual earned balance.
   async function seed(): Promise<void> {
-    // Day 0 — the everyday operations. At the demo's par rate a credit is worth $0.01, so the two
-    // deposits put $80 of real cash into trust; purchases are priced like real marketplace items and
-    // leave the two sellers (nova, pixel) with earned credits to cash out.
+    // Day 0 — everyday operations. At $0.01/credit the two deposits put $80 of real cash into trust;
+    // the purchases leave nova and pixel with earned credits to cash out.
     await api.deposit({ userId: 'usr_alice', credits: 5000 }); // a $50 credit bundle
     await api.deposit({ userId: 'usr_bjorn', credits: 3000 }); // a $30 credit bundle
     await api.grantPromo({ userId: 'usr_alice', credits: 500 }); // alice spends hers below
@@ -985,10 +894,9 @@ async function build(): Promise<ConsoleEngine> {
     const fraction = async (userId: string, f: number) =>
       Math.max(1, Math.floor((await earnedOf(userId)) * f));
 
-    // Two payouts that go all the way through. Request both, then run the worker twice with a day in
-    // between: the first run hands them to the provider (RESERVED → SUBMITTED), the second settles
-    // them (SUBMITTED → SETTLED), posting the reserve→revenue credit leg, the trust→bank USD cash
-    // leg, and triggering the treasury fee sweep — exactly the postings a real settlement makes.
+    // Two payouts that settle fully. Run the worker twice, a day apart: first run RESERVED →
+    // SUBMITTED, second SUBMITTED → SETTLED, posting the reserve→revenue and trust→bank legs and
+    // triggering the fee sweep.
     await api.requestPayout({
       userId: 'usr_nova',
       credits: await fraction('usr_nova', 0.35),
@@ -1001,8 +909,8 @@ async function build(): Promise<ConsoleEngine> {
     api.advanceTime(DAY_MS);
     await api.runJobs();
 
-    // A payout that fails. With the provider down and the retry cap at 1, the next run abandons it
-    // and reverses the reserve back to nova's earned balance — the failure path, on the ledger.
+    // A payout that fails: provider down, retry cap 1, so the next run abandons it and reverses the
+    // reserve back to nova's earned balance.
     api.setFault(true);
     await api.setMaxAttempts(1);
     await api.requestPayout({
@@ -1014,8 +922,7 @@ async function build(): Promise<ConsoleEngine> {
     api.setFault(false);
     await api.setMaxAttempts(5);
 
-    // One more payout left mid-flight (RESERVED), so the board isn't all terminal — the user can run
-    // the jobs themselves and watch it move.
+    // One more left mid-flight (RESERVED) so the board isn't all terminal.
     await api.requestPayout({
       userId: 'usr_nova',
       credits: await fraction('usr_nova', 0.3),
@@ -1188,9 +1095,8 @@ async function build(): Promise<ConsoleEngine> {
       };
     },
 
-    // The platform's own account balances, read live from the ledger. Shown as magnitudes (each
-    // account has a natural side — trust cash is held as a positive figure, revenue accrues on the
-    // credit side — and the Overview reads as "how much sits in each account", not signed postings).
+    // Platform account balances, read live from the ledger and shown as magnitudes (the Overview
+    // reads as "how much sits in each account", not signed postings).
     platformAccounts: async () => {
       const out: PlatformAccountView[] = [];
       for (const a of PLATFORM_ACCOUNTS) {
@@ -1222,11 +1128,9 @@ async function build(): Promise<ConsoleEngine> {
       faultMode = on;
     },
 
-    // A knob change to maturity/attempts means a new config. Because createEconomy snapshots
-    // config at construction, the simplest honest path is to rebuild the engine and replay the
-    // recorded ledger feed back in — but that loses saga state. Instead we mutate the live config
-    // object in place (the running engine and worker both hold it by reference), exactly like the
-    // in-browser console does, so the change takes effect on the next submit / worker run.
+    // createEconomy snapshots config at construction, but the engine and worker hold the config
+    // object by reference, so we mutate it in place; the change takes effect on the next submit or
+    // worker run, without a rebuild that would lose saga state.
     setMaturityDays: async (days) => {
       maturityDays = Math.max(0, Math.round(days));
       workerCtx.config.maturityHorizonMs = {
@@ -1263,12 +1167,10 @@ async function build(): Promise<ConsoleEngine> {
     },
 
     runJobs: async () => {
-      // Mark where the minted-txn list stands, so the capture below sees only the postings THIS
-      // run creates (settlements, failure reversals) and not any earlier secondary postings.
+      // Mark where the txn-id list stands, so the capture below sees only this run's postings.
       const fromIndex = mintedTxnIds.length;
       const batch = await runWorkerOnce();
-      // The worker just posted any settlements / failure reversals straight to the ledger; fold
-      // those new postings into the feed so the Ledger page reflects what the run did.
+      // Fold the run's new postings (settlements, reversals) into the feed.
       await captureWorkerPostings(fromIndex);
       const notes: string[] = [];
       for (const [name, result] of Object.entries(batch)) {
@@ -1293,11 +1195,10 @@ async function build(): Promise<ConsoleEngine> {
   return api;
 }
 
-// --- module singleton --------------------------------------------------------------
+// --- module singleton ---
 
-// The facade is built once per server process and reused across requests, so state survives a
-// browser refresh for free (it lives here, not in the page). A `globalThis` slot keeps the single
-// instance across Vite dev hot-reloads of this module, so an HMR update doesn't silently re-seed.
+// Built once per server process and reused across requests, so state survives a browser refresh.
+// The globalThis slot keeps the instance across Vite dev hot-reloads, so HMR doesn't re-seed.
 declare global {
   // eslint-disable-next-line no-var
   var __economyConsole: Promise<ConsoleEngine> | undefined;

@@ -9,10 +9,8 @@
  * @license MIT
  */
 
-// Shared display primitives for the console. Three jobs are done here, once, so every page renders
-// them identically: figures (a numeral that dominates over a quiet unit, never wrapping), status
-// tags, stat tiles, and the table header. Keeping these in one place is what makes a column of
-// money line up the same way on Overview as it does on Accounts.
+// Shared display primitives: money figures, status pills, stat tiles, and the table header, kept
+// here so every page renders them the same way.
 
 import type { ReactNode } from 'react';
 
@@ -24,17 +22,15 @@ export function fmtAmount(n: number): string {
   });
 }
 
-// One day in milliseconds, and a short label for a simulated-clock time: "day 0", or "day 2.5"
-// for a fractional day. The console runs on a simulated clock, so times read as elapsed days.
+// A short label for a simulated-clock time: "day 0", "day 2.5". The console runs on a simulated
+// clock, so times read as elapsed days.
 export const DAY_MS = 86_400_000;
 export function dayLabel(at: number): string {
   return at === 0 ? 'day 0' : `day ${Math.round((at / DAY_MS) * 10) / 10}`;
 }
 
-// The atom every figure is built from: an optional prefix unit ($), the numeral, an optional suffix
-// unit (Cr / a currency code). The whole thing is tabular and non-wrapping, and the unit is muted
-// and a touch smaller so the number reads first. `num` is taken as-is so a pre-formatted, signed
-// leg amount ("+50.00") flows through unchanged.
+// A figure: optional prefix unit ($), the numeral, optional suffix unit (Cr / currency code).
+// Tabular and non-wrapping; `num` is passed through as-is, so a pre-formatted "+50.00" is unchanged.
 export function Amount({
   pre,
   num,
@@ -63,10 +59,8 @@ export function Usd({ value }: { value: number }) {
   return <Amount pre="$" num={fmtAmount(value)} />;
 }
 
-// One tag for every badge on the surface. `tone` carries the status color through the text and rule
-// (green = healthy/covered/ok, amber = in-flight/pending, red = failed/shortfall, blue = a neutral
-// point of emphasis, neutral = a plain label). `dot` adds the leading status dot used by live
-// state; a plain count or kind label leaves it off.
+// Status pill. `tone` sets the color (green = ok, amber = pending, red = failed, blue = emphasis,
+// neutral = plain label); `dot` adds a leading status dot for live state.
 type Tone = 'green' | 'amber' | 'red' | 'blue' | 'neutral';
 export function StatusPill({
   tone,
@@ -85,9 +79,8 @@ export function StatusPill({
   );
 }
 
-// A stat tile: a small uppercase label, one large value, an optional caption. `wallet` keys the
-// thin colored left edge to a credit type (purchased / earned / promo / total); omit it for a
-// figure that isn't credit-type-specific.
+// A stat tile: small label, large value, optional caption. `wallet` colors the left edge by credit
+// type (purchased/earned/promo/total); omit for a non-credit figure.
 export function StatCard({
   label,
   value,
@@ -108,11 +101,8 @@ export function StatCard({
   );
 }
 
-// The one table shape: a quiet small-caps header with numeric columns right-aligned and held to a
-// stable width, over rows each page supplies. `num` marks a figure column (right-aligned, held to a
-// stable width); `className` sets the header class for anything else (e.g. a narrow right-aligned
-// marker column). The body is the page's own rows so expansion, links, and per-cell formatting stay
-// with the page.
+// The shared table shape: a small-caps header over rows each page supplies. `num` marks a figure
+// column (right-aligned, stable width); `className` sets the header class for anything else.
 export type Column = {
   key: string;
   label: ReactNode;

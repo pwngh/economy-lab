@@ -26,6 +26,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "pret": "prettier -c .",
+    "docker": "sh scripts/docker.sh",
     "db:migrate": "node --env-file-if-exists=.env scripts/migrate.ts",
     "prove": "node scripts/prove.ts",
     "fuzz": "node scripts/fuzz.ts",

@@ -52,13 +52,11 @@ import type {
 } from '#src/ports.ts';
 import type { EntitlementAttrs } from '#src/contract.ts';
 
-// --- The per-store undo log -------------------------------------------------------
+// --- Per-store undo log -----------------------------------------------------------
 
-// Lets a store undo its writes if a transaction fails. While a transaction is open,
-// every change records a function that reverses it; with no transaction open, nothing
-// is recorded, so an ordinary write costs nothing extra. To roll back, the recorded
-// reversers run in last-to-first order, so the work is proportional to how many writes
-// happened, not to how much data the store holds.
+// Undoes a store's writes when a transaction fails. While a transaction is open, every change
+// records a reverser; with none open, nothing is recorded. Rollback runs the reversers
+// last-to-first, so cost is proportional to writes, not to stored data.
 interface Journal {
   begin(): void;
   commit(): void;
@@ -95,17 +93,16 @@ function createJournal(): Journal {
   };
 }
 
-// A store that takes part in transactions exposes its journal, so the top-level store can
-// start, commit, or roll back every taking-part store together.
+// A store that joins transactions exposes its journal, so the top-level store can begin,
+// commit, or roll back every participant together.
 interface Participant {
   journal: Journal;
 }
 
 // --- Default capabilities ---------------------------------------------------------
 
-// The default hash function: SHA-256 from the platform's built-in `crypto.subtle`. The
-// same input bytes hash to the same output on every runtime, so a plain `memoryStore()`
-// gives reproducible results with no random seed and no Node-specific import.
+// Default hash: SHA-256 via the platform `crypto.subtle`. Deterministic across runtimes, so a
+// plain `memoryStore()` is reproducible with no seed and no Node-specific import.
 function defaultDigest(): Digest {
   return {
     hash: async (bytes) =>
@@ -113,20 +110,20 @@ function defaultDigest(): Digest {
   };
 }
 
-// The default clock: always returns time 0. This keeps each posting's `postedAt`
-// predictable in tests. Pass a real clock when actual wall-clock time matters.
+// Default clock: always returns time 0, keeping each posting's `postedAt` predictable in
+// tests. Pass a real clock when wall-clock time matters.
 function defaultClock(): Clock {
   return { now: () => 0 };
 }
 
-// The hash value a brand-new account's chain starts from, as lowercase hex. GENESIS is
-// 32 zero bytes, so this string is 64 zeros.
+// Starting hash for a new account's chain, as lowercase hex. GENESIS is 32 zero bytes, so
+// this is 64 zeros.
 let GENESIS_HEX = toHex(GENESIS);
 
-// --- The ledger store -------------------------------------------------------------
+// --- Ledger store -----------------------------------------------------------------
 
-// One posting (a single recorded transaction) as stored in the in-memory log. The log is
-// append-only and is the source of truth that statement and timeline reads are built from.
+// One posting as stored in the append-only log, the source of truth for statement and
+// timeline reads.
 interface StoredPosting {
   txnId: string;
   legs: ReadonlyArray<Leg>;
@@ -135,10 +132,10 @@ interface StoredPosting {
   links: ReadonlyArray<{ account: AccountRef; prevHash: string; hash: string }>;
 }
 
-// Whether an account is one the ledger will accept a posting against. True for a
-// registered platform account, or for a user account whose id ends in a known kind
-// (`:spendable`, `:earned`, or `:promo`). Anything else is rejected upstream: `postEntry`
-// raises an UNKNOWN_ACCOUNT fault. This function only reports whether the account exists.
+// Whether the ledger accepts a posting against this account: true for a registered platform
+// account, or a user account whose id ends in a known kind (`:spendable`, `:earned`,
+// `:promo`). Anything else is rejected upstream (`postEntry` raises UNKNOWN_ACCOUNT). Reports
+// existence only.
 function isKnownAccount(account: AccountRef, registered: Set<string>): boolean {
   if (registered.has(account)) {
     return true;
@@ -151,57 +148,51 @@ function isKnownAccount(account: AccountRef, registered: Set<string>): boolean {
   return suffix === 'spendable' || suffix === 'earned' || suffix === 'promo';
 }
 
-// All the mutable state of one ledger store, grouped into a single object so the helper
-// functions below can live at module scope (taking this state as a parameter) instead of
-// being nested inside the factory function.
+// Mutable state of one ledger store, grouped so the helpers below can live at module scope
+// (taking it as a parameter) rather than nested in the factory.
 interface LedgerState {
   journal: Journal;
 
   // Every posting, in the order it was appended.
   log: StoredPosting[];
 
-  // Each account's current balance in minor units (cents), kept up to date as postings
-  // are applied so reading a balance is a single map lookup.
+  // Balance per account in minor units (cents), kept current as postings apply so a balance
+  // read is a single map lookup.
   balances: Map<AccountRef, bigint>;
 
-  // Each account's postings are linked into a per-account hash chain: every posting carries a
-  // hash computed from the previous posting's hash plus its own contents, so altering an old
-  // posting changes every hash after it and the tampering shows up. This map holds the latest
-  // hash in each account's chain (its "head") as lowercase hex. A missing entry means the
-  // account has no postings yet, so its head is the genesis hash (the chain's fixed start value).
+  // Per-account hash chain: each posting's hash covers the previous hash plus its own
+  // contents, so altering an old posting changes every later hash. Holds the latest hash (the
+  // head) per account as lowercase hex; a missing entry means no postings yet, so the head is
+  // the genesis hash.
   heads: Map<AccountRef, string>;
 
-  // The set of platform account ids the ledger accepts directly. User accounts are not
-  // listed here; they are recognized by their kind suffix instead.
+  // Platform account ids the ledger accepts directly. User accounts aren't listed; they are
+  // recognized by their kind suffix.
   registered: Set<string>;
 }
 
-// One account's hash-chain step for a posting: the account, its head hash before this
-// posting (prevHash), and its head hash after (hash).
+// One account's hash-chain step for a posting: the account, its head before (prevHash) and
+// after (hash).
 type Link = { account: AccountRef; prevHash: string; hash: string };
 
 /**
- * The in-memory ledger. Beyond the standard `Ledger` interface it adds `__tamper`, a
- * test-only back door (the `__` prefix marks it as not part of the real interface). It
- * edits a stored posting's entries in place but does NOT recompute the chain head, which
- * lets a test simulate an attacker who altered stored data while leaving the old hash
- * behind — exactly the corruption the chain check is meant to detect.
+ * In-memory ledger. Adds `__tamper`, a test-only back door (the `__` prefix marks it as not
+ * part of the real interface): edits a stored posting's entries in place without recomputing
+ * the chain head, simulating an attacker who altered stored data and left the old hash behind,
+ * the corruption the chain check detects.
  */
 export type MemoryLedger = Ledger &
   Participant & {
     __tamper(txnId: string, mutate: (legs: Leg[]) => void): void;
-    // Plant a stored balance for an account that has no posting behind it and no entry in the
-    // hash chain. The account then shows up when you list every stored balance
-    // (`balanceAccounts()`) but never when you walk the accounts that have postings
-    // (`heads()`). This fakes a stray balance row — one a direct database edit or a
-    // half-finished write could leave behind — that the integrity checker must catch and report
-    // as drift (a stored balance that no longer matches the balance its entries add up to).
+    // Plant a stored balance for an account with no posting and no chain entry. It then shows
+    // up in `balanceAccounts()` but never in `heads()`, faking a stray balance row (direct DB
+    // edit or half-finished write) the integrity checker must report as drift: a stored
+    // balance no longer matching the sum of its entries.
     __seedBalance(account: AccountRef, amount: Amount): void;
   };
 
-// The distinct accounts a posting touches, in first-seen order. A posting can list the
-// same account more than once; we want each account once, because appending a posting
-// advances exactly one chain head per distinct account.
+// Distinct accounts a posting touches, in first-seen order. A posting may list an account more
+// than once; each is wanted once, since appending advances one chain head per distinct account.
 function distinctAccounts(legs: ReadonlyArray<Leg>): AccountRef[] {
   let seen = new Set<AccountRef>();
   let order: AccountRef[] = [];
@@ -214,11 +205,10 @@ function distinctAccounts(legs: ReadonlyArray<Leg>): AccountRef[] {
   return order;
 }
 
-// Compute the new chain-head hash for each account a posting touches, without yet writing
-// anything. For each account, this hashes the account's previous head together with the
-// posting's contents (`chainHash` in ledger.ts does the actual hashing). The previous head
-// is decoded from the stored hex string, except for an account's very first posting, where
-// the predecessor is the raw genesis bytes.
+// Compute the new chain-head hash for each touched account, without writing. Hashes the
+// account's previous head with the posting's contents (`chainHash` in ledger.ts). The previous
+// head is decoded from the stored hex, except an account's first posting, where the
+// predecessor is the raw genesis bytes.
 async function advanceChain(
   state: LedgerState,
   digest: Digest,
@@ -240,11 +230,9 @@ async function advanceChain(
   return links;
 }
 
-// Apply a posting to the ledger state: record it in the log, advance each touched
-// account's chain head, and adjust each touched account's balance. Also registers an undo
-// with the journal so a transaction can reverse it. The undo must delete any account this
-// posting brought into existence, so that rolling back leaves no leftover zero-balance
-// account (the same way a database ROLLBACK would leave no trace).
+// Apply a posting: record it in the log, advance each touched account's chain head, adjust each
+// touched balance. Registers an undo so a transaction can reverse it. The undo deletes any
+// account this posting first created, so rollback leaves no leftover zero-balance account.
 function commitPosting(state: LedgerState, stored: StoredPosting): void {
   let priorHeads = stored.links.map((link) => ({
     account: link.account,
@@ -271,10 +259,9 @@ function commitPosting(state: LedgerState, stored: StoredPosting): void {
   state.journal.record(() => undoPosting(state, stored, priorHeads, created));
 }
 
-// The inverse of `commitPosting`: drop the posting from the log, restore each account's
-// previous chain head, and undo each balance change. An account that this posting first
-// created is removed (rather than left sitting at a zero balance) once its balance is back
-// to zero.
+// Inverse of `commitPosting`: drop the posting from the log, restore each previous chain
+// head, undo each balance change. An account this posting first created is removed (not left
+// at zero) once its balance is back to zero.
 function undoPosting(
   state: LedgerState,
   stored: StoredPosting,
@@ -307,14 +294,13 @@ function createLedgerStore(deps: {
   let state: LedgerState = {
     journal: createJournal(),
     log: [],
-    // Kept up to date as postings are applied (using `balanceDelta` from ledger.ts to find
-    // how each entry changes an account), so reading a balance is a single map lookup.
+    // Kept current as postings apply (`balanceDelta` from ledger.ts gives each entry's effect),
+    // so a balance read is a single map lookup.
     balances: new Map(),
-    // Per-account chain head as lowercase hex; a missing entry means genesis (no postings
-    // yet).
+    // Per-account chain head as lowercase hex; missing means genesis (no postings yet).
     heads: new Map(),
-    // Seeded from the list of platform accounts so they are accepted immediately. User
-    // accounts are not listed here; they are recognized by their kind suffix instead.
+    // Seeded from the platform accounts so they're accepted immediately. User accounts aren't
+    // listed; they are recognized by their kind suffix.
     registered: new Set<string>(Object.values(SYSTEM)),
   };
 
@@ -323,9 +309,9 @@ function createLedgerStore(deps: {
 
     hasAccount: async (account) => isKnownAccount(account, state.registered),
 
-    // Does nothing: this store runs one operation at a time, so there is nothing to lock
-    // against. It exists only so callers can issue the same `lock` call against every adapter,
-    // whether or not that adapter actually needs locking.
+    // No-op: this store runs one operation at a time, so there's nothing to lock against.
+    // Present so callers can issue the same `lock` against every adapter, whether or not that
+    // adapter needs it.
     lock: async () => {},
 
     append: async (posting) => {
@@ -356,11 +342,10 @@ function createLedgerStore(deps: {
       }
     },
 
-    // Every account that has a stored balance, read from the `state.balances` keys rather than
-    // from the postings — so an account that has a stored balance but no posting behind it (one
-    // that walking `heads` would never reach) still gets reported to the integrity checker,
-    // which flags it as a stored balance that should not exist. Copy the keys into a fresh array
-    // first so iterating stays safe even if `state.balances` changes underneath us.
+    // Every account with a stored balance, read from `state.balances` keys rather than from
+    // postings, so an account with a balance but no posting (which walking `heads` would never
+    // reach) still reaches the integrity checker, which flags it as a balance that shouldn't
+    // exist. Copy the keys first so iteration is safe if `state.balances` changes underneath.
     balanceAccounts: async function* () {
       for (let account of [...state.balances.keys()]) {
         yield account;
@@ -378,11 +363,10 @@ function createLedgerStore(deps: {
   };
 }
 
-// Build an account's statement: every entry in the time range whose posting touched this
-// account. The range is half-open: postings at or after `from` and strictly before `to`.
-// Each entry's amount is shown the way it changed this account's balance, so money coming
-// into a user account reads as a positive number. This in-memory store returns everything
-// in one page, so the next-page cursor is always null.
+// An account's statement: every entry in the range whose posting touched this account. The
+// range is half-open (postedAt >= from, < to). Each amount is signed by how it changed this
+// account's balance, so money into a user account reads positive. Everything fits one page, so
+// the cursor is always null.
 function buildStatement(
   log: ReadonlyArray<StoredPosting>,
   account: AccountRef,
@@ -406,12 +390,10 @@ function buildStatement(
   return { account, entries, cursor: null };
 }
 
-// Stream this account's incoming funds as lots, oldest first, for first-in-first-out
-// settlement. Emit one lot for each posting entry that increased the account's balance.
-// When a posting does not say where the money came from or when it becomes spendable
-// (`source` / `maturesAt` in its metadata), fall back to "unknown" and "already mature
-// now" — the safe defaults. The maturity rules themselves live in maturity.ts; this store
-// just reports what each posting recorded.
+// Stream this account's incoming funds as lots, oldest first, for FIFO settlement. One lot per
+// posting entry that increased the balance. When a posting's metadata omits `source` or
+// `maturesAt`, fall back to "unknown" and mature-now. Maturity rules live in maturity.ts; this
+// store reports what each posting recorded.
 async function* timelineOf(
   log: ReadonlyArray<StoredPosting>,
   account: AccountRef,
@@ -436,12 +418,10 @@ async function* timelineOf(
   }
 }
 
-// Stream every posting that touched this account, in order, with the exact data the chain
-// verifier needs to recompute and check each chain-head hash. For each posting it yields
-// the entries and metadata as originally appended, plus the head hash before (prevHash)
-// and after (hash) that posting. Those are precisely the inputs `chainHash` was fed, so if
-// `__tamper` later alters the stored entries, recomputing the hash from this data no longer
-// matches the stored one — which is how tampering is caught.
+// Stream every posting that touched this account, in order, with the data the chain verifier
+// needs to recompute and check each head hash: the entries and metadata as appended, plus the
+// head before (prevHash) and after (hash). These are the inputs `chainHash` was fed, so if
+// `__tamper` alters the stored entries, the recomputed hash no longer matches the stored one.
 async function* lineageOf(
   log: ReadonlyArray<StoredPosting>,
   account: AccountRef,
@@ -460,10 +440,9 @@ async function* lineageOf(
   }
 }
 
-// Look up a whole posting by its transaction id and return all of its entries — unlike
-// `lineage`, this is not narrowed to one account. The `reverse` operation uses this to
-// build the exact opposite of an earlier posting. Returns null when no posting has that id,
-// so the caller can fail cleanly instead of guessing.
+// Look up a whole posting by transaction id and return all its entries (unlike `lineage`,
+// not narrowed to one account). `reverse` uses this to build the opposite of an earlier
+// posting. Returns null when no posting has that id.
 function postingOf(
   log: ReadonlyArray<StoredPosting>,
   txnId: string,
@@ -475,10 +454,9 @@ function postingOf(
   return { txnId: row.txnId, legs: row.legs, meta: row.meta };
 }
 
-// Test-only; never call this in production. It edits a stored posting's entries in place
-// but leaves the recorded chain links (and their stored hashes) unchanged. Recomputing the
-// hash from the altered entries then no longer matches the stored hash — the exact kind of
-// corruption the chain check is designed to catch.
+// Test-only. Edits a stored posting's entries in place but leaves the recorded chain links
+// (and their hashes) unchanged, so the hash recomputed from the altered entries no longer
+// matches the stored one, the corruption the chain check detects.
 function tamperPosting(
   log: ReadonlyArray<StoredPosting>,
   txnId: string,
@@ -493,12 +471,11 @@ function tamperPosting(
 // --- Idempotency store ------------------------------------------------------------
 
 // Makes a repeated request safe to run once. `claim` either grants a first-time caller the
-// right to proceed, or replays the result of a previous identical request. A brand-new
-// key is marked "pending" through the journal, so if the operation rolls back, the key
-// goes back to unused and a later retry can still succeed — a failed attempt never
-// permanently consumes the key. Because this store is single-threaded, "pending" is the
-// whole notion of "claimed but not yet finished"; `record` turns a pending key into a
-// committed result once the operation succeeds.
+// right to proceed or replays a prior identical request's result. A new key is marked pending
+// through the journal, so a rollback returns it to unused and a later retry can still succeed; a
+// failed attempt never permanently consumes the key. Single-threaded, so pending is the only
+// "claimed but not finished" state; `record` turns a pending key into a committed result on
+// success.
 function createIdempotencyStore(): IdempotencyStore & Participant {
   let journal = createJournal();
   let committed = new Map<string, Transaction>();
@@ -530,9 +507,8 @@ function createIdempotencyStore(): IdempotencyStore & Participant {
 
 // --- Sale store -------------------------------------------------------------------
 
-// Records each completed sale, keyed by its order id (a separate key from the idempotency
-// key). Keeping the sale lets a later refund reverse exactly what the original purchase
-// posted.
+// Records each completed sale, keyed by order id (separate from the idempotency key), so a
+// later refund can reverse what the original purchase posted.
 function createSaleStore(): SaleStore & Participant {
   let journal = createJournal();
   let rows = new Map<string, Sale>();
@@ -552,18 +528,16 @@ function createSaleStore(): SaleStore & Participant {
 
 // --- Outbox store -----------------------------------------------------------------
 
-// Holds outgoing events so they are saved in the same transaction as the money movement
-// that produced them — if that transaction rolls back, the event is never sent. A separate
-// relay later picks up pending messages (`claimBatch`) and marks them sent (`markRelayed`);
-// the receiver drops duplicates by message id, so each event is delivered at least once but
-// acted on once.
+// Holds outgoing events so they're saved in the same transaction as the money movement that
+// produced them; if it rolls back, the event is never sent. A separate relay picks up pending
+// messages (`claimBatch`) and marks them sent (`markRelayed`); the receiver drops duplicates
+// by message id, so each event is delivered at least once but acted on once.
 function createOutboxStore(): OutboxStore & Participant {
   let journal = createJournal();
   let rows = new Map<string, OutboxMessage>();
   let order: string[] = [];
-  // Why a message was dead-lettered (given up on after too many delivery attempts),
-  // stored separately because the outbox row itself has no field for it — the same
-  // pattern the saga store uses for its dead-letter reasons.
+  // Why a message was dead-lettered (given up after too many delivery attempts), stored
+  // separately because the outbox row has no field for it; same pattern as the saga store.
   let reasons = new Map<string, string>();
 
   return {
@@ -583,8 +557,8 @@ function createOutboxStore(): OutboxStore & Participant {
           break;
         }
         let message = rows.get(id);
-        // Only 'pending' rows are ever handed back: a 'relayed' or 'failed' row is
-        // terminal, so this `=== 'pending'` test is what excludes both of them.
+        // Only 'pending' rows are handed back; 'relayed' and 'failed' are terminal, both
+        // excluded by this `=== 'pending'` test.
         if (message && message.status === 'pending') {
           batch.push({ ...message });
         }
@@ -605,9 +579,9 @@ function createOutboxStore(): OutboxStore & Participant {
     },
     recordFailure: async (id, _options?: Options) => {
       let message = rows.get(id);
-      // No-op on a missing or already-terminal row: only a still-'pending' message
-      // gets its attempt counted. This never changes the status — that is deadLetter's
-      // job — it only bumps the retry counter so the next sweep can try again.
+      // No-op on a missing or already-terminal row; only a still-'pending' message gets its
+      // attempt counted. Doesn't change status (deadLetter's job), only bumps the retry counter
+      // so the next sweep can try again.
       if (!message || message.status !== 'pending') {
         return;
       }
@@ -619,9 +593,8 @@ function createOutboxStore(): OutboxStore & Participant {
     },
     deadLetter: async (id, reason, _options?: Options) => {
       let message = rows.get(id);
-      // No-op on a missing or already-terminal row, mirroring the saga store. Flipping
-      // the status to 'failed' is what keeps `claimBatch` from ever handing this poison
-      // message back again.
+      // No-op on a missing or already-terminal row, mirroring the saga store. Flipping status
+      // to 'failed' keeps `claimBatch` from handing this poison message back again.
       if (!message || message.status !== 'pending') {
         return;
       }
@@ -644,15 +617,14 @@ function createOutboxStore(): OutboxStore & Participant {
 
 // --- Saga store -------------------------------------------------------------------
 
-// Tracks each multi-step payout as it moves through its states. `advance` only changes a
-// saga if it is still in the state the caller expected (`from`); otherwise it returns false
-// and changes nothing. This guards against two background runs advancing the same saga
-// twice.
+// Tracks each multi-step payout through its states. `advance` changes a saga only if it's still
+// in the expected state (`from`); otherwise returns false and changes nothing, guarding against
+// two background runs advancing the same saga twice.
 function createSagaStore(): SagaStore & Participant {
   let journal = createJournal();
   let rows = new Map<string, Saga>();
-  // The reason a saga was given up on (dead-lettered), stored separately because the saga
-  // record itself has no field for it.
+  // Why a saga was dead-lettered, stored separately because the saga record has no field for
+  // it.
   let reasons = new Map<string, string>();
 
   return {
@@ -685,12 +657,10 @@ function createSagaStore(): SagaStore & Participant {
       }
       return due;
     },
-    // The `options?` 5th param from the SagaStore.advance signature is intentionally
-    // omitted here: a 4-param implementation still structurally satisfies the interface
-    // (TypeScript lets an implementation ignore trailing params), and adding it would trip
-    // the repo's lint rule that caps any function at four parameters. The other sub-store
-    // methods, which each take four parameters or fewer, carry their `options?` for
-    // signature parity.
+    // Omits the 5th `options?` param of SagaStore.advance: a 4-param implementation still
+    // structurally satisfies the interface (TS lets an implementation drop trailing params), and
+    // adding it would trip the repo's four-parameter cap. The other sub-store methods take four
+    // params or fewer, so they keep `options?` for signature parity.
     advance: async (id, from, to, patch) => {
       let saga = rows.get(id);
       if (!saga || saga.state !== from) {
@@ -702,10 +672,9 @@ function createSagaStore(): SagaStore & Participant {
       return true;
     },
     lastPayoutAt: async (userId, _options?: Options) => {
-      // The largest `updatedAt` across ALL of this user's sagas in any state (a saga's
-      // `updatedAt` is its request time at open() and only moves forward), or null when
-      // the user has no sagas at all so their first request is always allowed. Read-only,
-      // so it records no journal undo.
+      // Largest `updatedAt` across this user's sagas in any state (`updatedAt` is the request
+      // time at open() and only moves forward), or null when the user has no sagas, so their
+      // first request is always allowed. Read-only, records no journal undo.
       let max: number | null = null;
       for (let saga of rows.values()) {
         if (saga.userId === userId) {
@@ -738,20 +707,18 @@ function createSagaStore(): SagaStore & Participant {
 
 // --- Entitlement store ------------------------------------------------------------
 
-// One stored ownership row: the attributes the grant carried, plus a `revoked` flag. When
-// ownership is revoked the row is kept and the flag is set instead of deleting the row (a
-// soft delete), so the history of who owned what survives for auditing after a refund or
-// clawback.
+// One ownership row: the grant's attributes plus a `revoked` flag. Revoke is a soft delete
+// (keep the row, set the flag), so the history of who owned what survives auditing after a
+// refund or clawback.
 interface EntitlementRow {
   attrs: EntitlementAttrs;
   revoked: boolean;
 }
 
-// Tracks who owns what (for example, which user owns which item) — plain ownership records,
-// not money movements. `revoke` does a soft delete: it keeps the row and sets its `revoked`
-// flag, so `owns` reports false while the row still survives for auditing. `owns` also checks
-// the grant's `expiresAt` against the clock, so a rental or trial that has passed its expiry
-// stops counting as owned.
+// Tracks who owns what (e.g. which user owns which item): plain ownership records, not money
+// movements. `revoke` soft-deletes (keep the row, set `revoked`), so `owns` reports false
+// while the row survives for auditing. `owns` also checks `expiresAt` against the clock, so an
+// expired rental or trial stops counting as owned.
 function createEntitlementStore(deps: {
   clock: Clock;
 }): EntitlementStore & Participant {
@@ -768,15 +735,15 @@ function createEntitlementStore(deps: {
   return {
     journal,
     grant: async (userId, sku, attrs, _options?: Options) => {
-      // Insert or overwrite the row, clearing any earlier revoke (`revoked: false`), so buying
-      // the same item again after a refund makes the user own it once more.
+      // Insert or overwrite, clearing any earlier revoke (`revoked: false`), so re-buying after
+      // a refund makes the user own the item again.
       let key = keyOf(userId, sku);
       recordUndo(key);
       rows.set(key, { attrs: { ...attrs }, revoked: false });
     },
     revoke: async (userId, sku, _options?: Options) => {
-      // Soft delete: keep the row, flip `revoked`. A no-op (and never an undo) on an absent
-      // or already-revoked row, so refund/clawback can call it idempotently.
+      // Soft delete: keep the row, flip `revoked`. No-op (and no undo) on an absent or
+      // already-revoked row, so refund/clawback can call it idempotently.
       let key = keyOf(userId, sku);
       let row = rows.get(key);
       if (!row || row.revoked) {
@@ -787,9 +754,9 @@ function createEntitlementStore(deps: {
     },
     owns: async (userId, sku, _options?: Options) => {
       // Ownership requires a live (non-revoked) row that has not expired. The expiry check is
-      // inclusive of `expiresAt`: still owned exactly AT that time, no longer owned once the clock
-      // is past it. A row with no `expiresAt` never expires. Read-only — no auto-purge of expired
-      // rows.
+      // inclusive of `expiresAt`: still owned exactly at that time, no longer owned once the
+      // clock is past it. A row with no `expiresAt` never expires. Read-only; no auto-purge of
+      // expired rows.
       let row = rows.get(keyOf(userId, sku));
       if (!row || row.revoked) {
         return false;
@@ -803,8 +770,8 @@ function createEntitlementStore(deps: {
 // --- Subscription store -----------------------------------------------------------
 
 // Tracks each subscription through its life: active, then billed period after period, until
-// it is canceled by the user or lapses (a renewal couldn't be funded). `claimDue` finds the
-// active subscriptions whose next charge is due, for the recurring billing sweep.
+// canceled by the user or lapsed (a renewal couldn't be funded). `claimDue` finds the active
+// subscriptions whose next charge is due, for the recurring billing sweep.
 function createSubscriptionStore(): SubscriptionStore & Participant {
   let journal = createJournal();
   let rows = new Map<string, Subscription>();
@@ -858,21 +825,21 @@ function createSubscriptionStore(): SubscriptionStore & Participant {
       return due;
     },
     markBilled: async (id, nextDueAt, expectedDueAt, _options?: Options) => {
-      // Only advance the subscription if its current `nextDueAt` still equals the `expectedDueAt`
-      // the billing sweep saw when it picked this row up; otherwise return false and change
-      // nothing. If two billing sweeps overlap and both grab the same due date, the first one to
-      // run moves `nextDueAt` forward, so the second one no longer matches and bails out — which
-      // is how a single billing period gets charged at most once. SagaStore.advance guards itself
-      // the same way (check the expected state, then update).
+      // Advance only if the current `nextDueAt` still equals the `expectedDueAt` the billing
+      // sweep saw when it picked this row up; otherwise return false and change nothing. If two
+      // sweeps overlap and both grab the same due date, the first to run moves `nextDueAt`
+      // forward, so the second no longer matches and bails out, charging a billing period at most
+      // once. SagaStore.advance guards itself the same way (check the expected state, then
+      // update).
       let sub = rows.get(id);
       if (!sub || sub.nextDueAt !== expectedDueAt) {
         return false;
       }
       let prior = { ...sub };
       journal.record(() => rows.set(id, prior));
-      // A successful renewal resets the retryable-failure counter to 0, so a
-      // subscription that recovered after a few transient failures starts fresh and
-      // doesn't carry old failures toward the lapse cap. markLapsed leaves attempts as-is.
+      // A successful renewal resets the retryable-failure counter to 0, so a subscription that
+      // recovered after a few transient failures doesn't carry old failures toward the lapse cap.
+      // markLapsed leaves attempts as-is.
       rows.set(id, { ...sub, nextDueAt, period: sub.period + 1, attempts: 0 });
       return true;
     },
@@ -902,10 +869,10 @@ function createPromoStore(): PromoStore & Participant {
   return {
     journal,
     open: async (grant, _options?: Options) => {
-      // Opening the same grant twice does nothing the second time and never overwrites the
-      // first row. SagaStore.open and SubscriptionStore.open instead replace an existing row
-      // with the same id, but here the grant id is the same as its posting's transaction id, so
-      // re-opening must leave the existing grant untouched.
+      // Opening the same grant twice does nothing the second time, never overwriting the first
+      // row. SagaStore.open and SubscriptionStore.open replace an existing row with the same id,
+      // but here the grant id equals its posting's transaction id, so re-opening must leave the
+      // existing grant untouched.
       if (rows.has(grant.id)) {
         return;
       }
@@ -913,9 +880,9 @@ function createPromoStore(): PromoStore & Participant {
       rows.set(grant.id, { ...grant });
     },
     claimDue: async (now, limit, _options?: Options) => {
-      // Every still-live grant whose `expiresAt` has passed, sorted oldest first ACROSS the
-      // whole table before the `limit` cap, so "oldest first" holds globally rather than in
-      // map-iteration order. Read-only, so it records no journal undo.
+      // Every still-live grant whose `expiresAt` has passed, sorted oldest first across the whole
+      // table before the `limit` cap, so oldest-first holds globally rather than in map-iteration
+      // order. Read-only, records no journal undo.
       let due: PromoGrant[] = [];
       for (let grant of rows.values()) {
         if (grant.reversed === false && grant.expiresAt <= now) {
@@ -942,20 +909,20 @@ function createPromoStore(): PromoStore & Participant {
 // --- Trust store (written outside transactions) -----------------------------------
 
 // Counts how much a subject has spent and tried to spend recently, for rate/abuse limiting. Its
-// writes deliberately sit OUTSIDE the money transaction, so even a rejected attempt still counts
-// toward the limit (a rollback must not erase the attempt). `bump` ignores a repeat of an attempt
-// it has already seen (matched by idempotency key), so a retry never gets counted twice.
+// writes sit outside the money transaction, so even a rejected attempt counts toward the limit
+// (a rollback must not erase the attempt). `bump` ignores a repeat of an attempt it has already
+// seen (matched by idempotency key), so a retry isn't counted twice.
 //
 // Attempts are kept as a per-subject list, not a single running total, so `read` can apply the
 // sliding window: it sums only the attempts inside the last `windowMs` (via `windowedVelocity`),
-// the same rolling window the SQL adapters get from `SUM(amount) WHERE at > cutoff`. The store
-// once kept a grow-forever running total that never aged out, so the limit stuck once first hit.
+// the same rolling window the SQL adapters get from `SUM(amount) WHERE at > cutoff`. An earlier
+// grow-forever running total never aged out, so the limit stuck once first hit.
 function createTrustStore(clock: Clock, windowMs: number): TrustStore {
   let attemptsBySubject = new Map<string, Attempt[]>();
   let seenAttempts = new Set<string>();
 
   // Append an attempt to its subject's list, deduplicated on idempotency key so a genuine retry
-  // is never counted twice. Returns nothing — both `bump` and `record` use it to apply the write.
+  // isn't counted twice. Both `bump` and `record` use it to apply the write.
   let insert = (subject: string, attempt: Attempt): void => {
     if (seenAttempts.has(attempt.idempotencyKey)) {
       return;
@@ -979,10 +946,10 @@ function createTrustStore(clock: Clock, windowMs: number): TrustStore {
       ),
     bump: async (subject, attempt, _options?: Options) =>
       insert(subject, attempt),
-    // Record-and-measure in one step. Because JS is single-threaded, the dedup-insert and the
+    // Record-and-measure in one step. JS being single-threaded, the dedup-insert and the
     // windowing below run with no `await` between them, so two concurrent same-subject `record`
-    // calls can't interleave: each one sees its own attempt already in the list when it measures.
-    // That atomicity is what closes the velocity-limit TOCTOU the old separate read+bump left open.
+    // calls can't interleave: each sees its own attempt already in the list when it measures.
+    // That atomicity closes the velocity-limit TOCTOU the old separate read+bump left open.
     record: async (subject, attempt, _options?: Options) => {
       insert(subject, attempt);
       return windowedVelocity(
@@ -997,9 +964,9 @@ function createTrustStore(clock: Clock, windowMs: number): TrustStore {
 
 // --- Checkpoint store -------------------------------------------------------------
 
-// Stores checkpoints (periodic signed snapshots of the ledger's state). It is append-only
-// and never takes part in a money transaction, so rolling back a transaction can never
-// delete a checkpoint that was already recorded.
+// Stores checkpoints (periodic signed snapshots of the ledger's state). Append-only and never
+// part of a money transaction, so a rollback can't delete a checkpoint that was already
+// recorded.
 function createCheckpointStore(): CheckpointStore {
   let rows: Checkpoint[] = [];
   return {
@@ -1015,13 +982,12 @@ function createCheckpointStore(): CheckpointStore {
 
 // --- Replay store -----------------------------------------------------------------
 
-// Drops duplicate incoming webhooks from a payment provider, matching each one by the event id
-// the provider assigned. This is a separate id space from the idempotency keys our own callers
-// send (the value that makes a retried request run at most once). When a webhook arrives, the
-// handler records its event id here as the final check — after it has verified the signature and
-// that the event is recent — and does so on its own, not inside a money transaction. Because it
-// is outside the transaction, this store does not register undo steps and is never rolled back.
-// In SQL adapters this is the `seen_webhooks` table; here it is just a Set.
+// Drops duplicate incoming webhooks from a payment provider, matching each by the event id the
+// provider assigned. Separate id space from the idempotency keys our own callers send. When a
+// webhook arrives, the handler records its event id here as the final check (after verifying the
+// signature and that the event is recent), outside any money transaction. Being outside the
+// transaction, this store registers no undo steps and is never rolled back. In SQL adapters this
+// is the `seen_webhooks` table; here a Set.
 function createReplayStore(): ReplayStore {
   let seen = new Set<string>();
   return {
@@ -1038,15 +1004,15 @@ function createReplayStore(): ReplayStore {
   };
 }
 
-// --- The assembled store ----------------------------------------------------------
+// --- Assembled store --------------------------------------------------------------
 
 /**
- * Build an in-memory {@link Store} with working transaction rollback, suitable for tests
- * and development. If the work inside a `transaction` throws, every store that joined the
- * transaction is rolled back, each independently so that one store's failing rollback can't
- * stop the others from rolling back. The trust and checkpoint stores are written outside
- * transactions and so are not rolled back. The hash function and clock default to
- * deterministic versions, so a plain `memoryStore()` produces reproducible results.
+ * Build an in-memory {@link Store} with working transaction rollback, for tests and
+ * development. If the work inside a `transaction` throws, every store that joined the
+ * transaction is rolled back, each independently so one store's failing rollback can't stop the
+ * others. The trust and checkpoint stores are written outside transactions and aren't rolled
+ * back. The hash function and clock default to deterministic versions, so a plain
+ * `memoryStore()` is reproducible.
  */
 export function memoryStore(deps?: {
   digest?: Digest;
@@ -1055,8 +1021,8 @@ export function memoryStore(deps?: {
 }): Store {
   let digest = deps?.digest ?? defaultDigest();
   let clock = deps?.clock ?? defaultClock();
-  // The rolling window the trust store applies when it sums a subject's recent attempts. Defaults
-  // to one hour (matching config's default); the real composition passes config.velocityWindowMs.
+  // Rolling window the trust store applies when summing a subject's recent attempts. Defaults to
+  // one hour (matching config's default); the real composition passes config.velocityWindowMs.
   let velocityWindowMs = deps?.velocityWindowMs ?? 60 * 60_000;
 
   let ledger = createLedgerStore({ digest, clock });
@@ -1069,14 +1035,13 @@ export function memoryStore(deps?: {
   let promos = createPromoStore();
   let trust = createTrustStore(clock, velocityWindowMs);
   let checkpoints = createCheckpointStore();
-  // The webhook duplicate check runs outside any money transaction (it is the final check when a
-  // webhook arrives), so it does not take part in rollback and is not handed to operation
-  // handlers — it lives only on the top-level store.
+  // The webhook duplicate check runs outside any money transaction (the final check when a
+  // webhook arrives), so it takes no part in rollback and isn't handed to operation handlers; it
+  // lives only on the top-level store.
   let replay = createReplayStore();
 
-  // The set of stores a handler is allowed to use inside a transaction. The trust and
-  // checkpoint stores are deliberately left out, because they are written outside
-  // transactions.
+  // Stores a handler may use inside a transaction. The trust and checkpoint stores are left out
+  // because they are written outside transactions.
   let unit: Unit = {
     ledger,
     idempotency,
@@ -1131,9 +1096,9 @@ export function memoryStore(deps?: {
   };
 }
 
-// Roll back only the stores that actually started this transaction (the first `begun` of
-// them), newest first. Each rollback is wrapped so that if one throws, the rest still roll
-// back — otherwise a leftover open transaction could corrupt the next one.
+// Roll back only the stores that started this transaction (the first `begun` of them), newest
+// first. Each rollback is wrapped so that if one throws, the rest still roll back; otherwise a
+// leftover open transaction could corrupt the next one.
 function rollbackAll(participants: Participant[], begun: number): void {
   for (let i = begun - 1; i >= 0; i -= 1) {
     try {

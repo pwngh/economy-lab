@@ -25,19 +25,14 @@ import type {
 } from '#src/ports.ts';
 
 /**
- * The outcome of running the renewal sweep once. Each due subscription lands in exactly one
- * of these lists, by id:
+ * Result of one renewal sweep. Each due subscription lands in exactly one list, by id:
  *
- * - `charged` — the renewal was funded and posted, and the next due date advanced.
- * - `lapsed` — the buyer couldn't cover the price, so the subscription was marked LAPSED
- *   and nothing was charged.
- * - `deadLettered` — billing this one threw an error that won't get better on retry, so it
- *   was given up on (with the reason recorded).
- * - `retrying` — billing threw a temporary infrastructure error, so it's left untouched for
- *   the next sweep to try again (with the error code recorded).
+ * - `charged` — renewal funded and posted, due date advanced.
+ * - `lapsed` — buyer couldn't cover the price; marked LAPSED, nothing charged.
+ * - `deadLettered` — billing threw a non-retryable error; given up on, reason recorded.
+ * - `retrying` — billing threw a temporary error; left for the next sweep, code recorded.
  *
- * This is the same shape worker/payouts.ts returns from its own sweep, so every worker sweep
- * reports results the same way.
+ * Same shape worker/payouts.ts returns from its sweep.
  */
 export type SweepSummary = {
   charged: ReadonlyArray<string>;
@@ -46,8 +41,8 @@ export type SweepSummary = {
   retrying: ReadonlyArray<{ id: string; code: string }>;
 };
 
-// The mutable version of SweepSummary that the sweep fills in as it goes. Each helper pushes
-// the id it handled onto the matching list; the finished tally is returned as the summary.
+// Mutable SweepSummary the sweep fills in. Each helper pushes its handled id onto the matching
+// list; the finished tally is returned as the summary.
 type SweepTally = {
   charged: string[];
   lapsed: string[];
@@ -56,13 +51,11 @@ type SweepTally = {
 };
 
 /**
- * Bill every subscription whose next renewal is due, one at a time. For each one: if the buyer
- * can afford it, charge the renewal and move its due date one period forward; if they can't,
- * mark it lapsed and charge nothing. Each subscription is billed inside its own try/catch, so
- * an error on one never stops the rest of the batch — it gets recorded and the sweep moves on.
+ * Bill every due subscription, one at a time. If the buyer can afford it, charge and advance the
+ * due date one period; if not, mark lapsed and charge nothing. Each is billed in its own try/catch
+ * so an error on one is recorded and the sweep moves on.
  *
- * `now` is the current time in epoch milliseconds; `limit` caps how many due subscriptions
- * this run will claim.
+ * `now` is epoch ms; `limit` caps how many due subscriptions this run claims.
  */
 export async function sweepDueSubscriptions(
   store: Store,
@@ -84,21 +77,16 @@ export async function sweepDueSubscriptions(
   return tally;
 }
 
-// Bill one subscription, catching any error so it can't break the batch. The error decides
-// what happens next:
+// Bill one subscription, catching any error so it can't break the batch. The error decides next:
 //
-// - A temporary infrastructure error (flagged `retryable`) is normally left for the next
-//   sweep to try again, but only up to a point: each retryable failure bumps the row's
-//   `attempts` counter, and once that count would reach the configured cap the sweep stops
-//   retrying and LAPSES the subscription instead of re-billing a row that keeps failing
-//   forever. Below the cap, the bumped count is persisted (via an `open` upsert) so it
-//   survives to the next sweep, and the row is recorded under `retrying`.
-// - Any other error is permanent, so the subscription is given up on (dead-lettered) right
-//   away — retrying can't help.
+// - A retryable error is left for the next sweep, up to a cap: each retryable failure bumps the
+//   row's `attempts` counter, and once it would reach the configured cap the sweep LAPSES the row
+//   instead of re-billing forever. Below the cap, the bumped count is persisted (via an `open`
+//   upsert) and the row recorded under `retrying`.
+// - Any other error is permanent: dead-letter the subscription right away.
 //
-// The cap test is `next >= cap`, where `next` is the failure count after this failure
-// (`attempts + 1`). So with the default cap of 10, the 10th failure in a row is the one that
-// gives up and lapses the row.
+// Cap test is `next >= cap`, next = `attempts + 1`. With the default cap of 10, the 10th
+// consecutive failure lapses the row.
 async function billOne(
   store: Store,
   ctx: WorkerCtx,
@@ -117,15 +105,10 @@ async function billOne(
   }
 }
 
-// Handle a retryable billing failure that is still below the attempt cap. Raise the failure
-// count `attempts` to `next`. If that reaches the cap, this latest failure is the last one
-// allowed, so give up: flip the subscription from ACTIVE to LAPSED to stop the sweep from
-// re-billing a row that keeps failing forever, and record it under `lapsed`. Otherwise save the
-// raised count so it carries into the next sweep -- `open` writes the subscription row, inserting
-// it or overwriting the existing one with the same id, which is how the new `attempts` value is
-// stored back -- and record the row under `retrying` to be tried again next sweep. A successful
-// renewal resets `attempts` back to 0 via `markBilled`, so the cap only counts failures that
-// happen back to back with no success in between.
+// Handle a retryable failure. Raise `attempts` to `next`. If that reaches the cap, give up: flip
+// ACTIVE -> LAPSED and record under `lapsed`. Otherwise persist the raised count (`open` upserts
+// the row by id, storing the new `attempts`) and record under `retrying`. A successful renewal
+// resets `attempts` to 0 via `markBilled`, so the cap only counts consecutive failures.
 async function recordRetry(args: {
   store: Store;
   ctx: WorkerCtx;
@@ -143,10 +126,9 @@ async function recordRetry(args: {
   tally.retrying.push({ id: sub.id, code });
 }
 
-// Give up on a renewal that failed with a permanent error. A subscription has no dedicated
-// "failed" state, so the closest thing is to mark it LAPSED (ACTIVE -> LAPSED), which stops
-// the sweep from re-billing this broken row. The reason is recorded on the summary so the
-// failure is visible rather than silently swallowed.
+// Give up on a renewal that failed with a permanent error. No dedicated "failed" state exists, so
+// mark it LAPSED (ACTIVE -> LAPSED) to stop re-billing the broken row. The reason is recorded on
+// the summary.
 async function deadLetter(args: {
   store: Store;
   ctx: WorkerCtx;
@@ -155,16 +137,15 @@ async function deadLetter(args: {
   tally: SweepTally;
 }): Promise<void> {
   let { store, ctx, sub, reason, tally } = args;
-  // Revoke the buyer's perk and announce the lapse in the same transaction as the state flip
-  // to LAPSED, so a given-up subscription never leaves the buyer holding a perk they are no
-  // longer being billed for. Recorded under `deadLettered`, not `lapsed`.
+  // Revoke the perk and emit the lapse in the same transaction as the flip to LAPSED, so a
+  // given-up subscription doesn't leave the buyer holding an unbilled perk. Recorded under
+  // `deadLettered`, not `lapsed`.
   await lapseAtomically(store, ctx, sub);
   tally.deadLettered.push({ id: sub.id, reason });
 }
 
-// Lapse a subscription and record it under `lapsed`. This is the shared exit used both when the
-// buyer can't afford the charge and when the retry cap is hit. Revoking the perk and emitting the
-// lapsed event happen in the same transaction as the flip to LAPSED.
+// Lapse a subscription and record it under `lapsed`. Shared exit for both the unaffordable charge
+// and the retry-cap cases. Revoke and lapsed event share the transaction with the flip to LAPSED.
 async function lapse(
   store: Store,
   ctx: WorkerCtx,
@@ -175,12 +156,9 @@ async function lapse(
   tally.lapsed.push(sub.id);
 }
 
-// Flip a subscription to LAPSED, revoke its perk, and queue the economy.subscription.lapsed
-// event -- all in one database transaction so the three either all take effect or none do. The
-// three calls are wrapped in store.transaction (which runs them against a single transaction,
-// the `unit` handle) so the revoke and the event can't land without the lapse, or vice versa.
-// This lapse path is reached three ways: the buyer can't afford a renewal, the retry cap is
-// hit, or a renewal failed with a permanent error (dead-letter).
+// Flip to LAPSED, revoke the perk, and queue the economy.subscription.lapsed event in one
+// transaction (the `unit` handle) so all three take effect or none do. Reached three ways: buyer
+// can't afford a renewal, retry cap hit, or a renewal failed permanently (dead-letter).
 async function lapseAtomically(
   store: Store,
   ctx: WorkerCtx,
@@ -198,25 +176,24 @@ async function lapseAtomically(
   });
 }
 
-// Renew one due subscription inside a single database transaction. Read the buyer's spendable
-// balance (real money they topped up). If it can't cover the price, mark the subscription
-// lapsed and charge nothing. Otherwise post the renewal charge and advance the next due date
-// together, so a billed period always ends up with both recorded, or neither. `markBilled`
-// also resets the row's retryable-failure `attempts` counter to 0, so a renewal that finally
-// succeeds clears any earlier strikes and the cap only ever counts *consecutive* failures.
+// Renew one due subscription in a single transaction. Read the buyer's spendable balance (real
+// topped-up money). If it can't cover the price, lapse and charge nothing. Otherwise post the
+// charge and advance the due date together, so a billed period records both or neither.
+// `markBilled` also resets the `attempts` counter to 0, so a successful renewal clears earlier
+// strikes and the cap only counts consecutive failures.
 async function renew(
   store: Store,
   ctx: WorkerCtx,
   sub: Subscription,
   tally: SweepTally,
 ): Promise<void> {
-  // The revoke + lapsed event need their own transaction, and they run only after this renewal
-  // transaction has already committed the underfunded outcome (one transaction can't both post a
-  // charge and revoke a perk), so remember the underfunded result here and lapse afterward.
+  // The revoke + lapsed event need their own transaction, run only after this renewal transaction
+  // commits the underfunded outcome (one transaction can't both post a charge and revoke a perk).
+  // Remember the underfunded result here and lapse afterward.
   let lapsed = false;
   await store.transaction(async (unit) => {
-    // Lock the buyer's account before reading its balance, so two sweeps running at once take
-    // turns on this account instead of both reading the same pre-charge balance and both charging.
+    // Lock the buyer's account before reading its balance, so concurrent sweeps take turns instead
+    // of both reading the same pre-charge balance and both charging.
     await unit.ledger.lock(spendable(sub.userId));
     let have = await unit.ledger.balance(spendable(sub.userId));
     if (compare(have, sub.price) < 0) {
@@ -224,23 +201,22 @@ async function renew(
       return;
     }
 
-    // Make sure this period is charged at most once, no matter how the due-date timing lines up.
-    // The key combines the subscription id and the period being billed; claiming it inside the
-    // transaction (after the balance check) reserves that period for this sweep. If the claim is
-    // lost, another sweep already billed this period, so stop and post nothing. period+1 is the
-    // period this renewal bills into (the period counter is bumped as part of billing).
+    // Charge this period at most once. The key combines the subscription id and the period being
+    // billed; claiming it inside the transaction (after the balance check) reserves the period for
+    // this sweep. A lost claim means another sweep already billed it, so stop and post nothing.
+    // period+1 is the period this renewal bills into (the period counter bumps as part of billing).
     let key = 'sub:' + sub.id + ':p' + (sub.period + 1);
     let claim = await unit.idempotency.claim(key);
     if (!claim.claimed) {
       return;
     }
 
-    // markBilled advances the due date, but only if the row still has the due date this sweep
-    // started from -- it compares the stored due date and updates it in one step, returning false
-    // if it had already changed. A false return means another sweep already advanced this row, so
-    // stop. Do this BEFORE posting the charge: if we lost the race, returning from the callback
-    // without throwing commits the transaction, and we want that commit to contain no charge. The
-    // period claim above already prevents a double charge; this is the second, independent guard.
+    // markBilled advances the due date only if the row still holds the due date this sweep started
+    // from: it compares and updates in one step, returning false if it already changed. A false
+    // return means another sweep advanced this row, so stop. Do this before posting the charge: if
+    // we lost the race, returning without throwing commits the transaction, and that commit must
+    // contain no charge. The period claim above already blocks a double charge; this is a second,
+    // independent guard.
     let newDueAt = sub.nextDueAt + sub.periodMs;
     let billed = await unit.subscriptions.markBilled(
       sub.id,
@@ -254,10 +230,9 @@ async function renew(
     let transaction = await postRenewal(unit, ctx, sub);
     await unit.idempotency.record(key, transaction);
 
-    // Re-grant the perk through the new period end (re-granting clears any earlier revoke) and
-    // announce the renewal -- both inside the renewal transaction so they commit together with the
-    // charge. The grant's source is the subscription id so a later cancel or lapse can find and
-    // revoke this exact grant.
+    // Re-grant the perk through the new period end (clears any earlier revoke) and emit the
+    // renewal, both inside the renewal transaction so they commit with the charge. The grant's
+    // source is the subscription id so a later cancel or lapse can find and revoke this grant.
     await unit.entitlements.grant(sub.userId, sub.sku, {
       expiresAt: newDueAt,
       source: sub.id,
@@ -271,17 +246,16 @@ async function renew(
     tally.charged.push(sub.id);
   });
 
-  // The buyer couldn't afford the renewal: lapse it (revoke the perk, emit the lapsed event) in
-  // its own transaction, now that the renewal transaction above has closed without posting.
+  // Buyer couldn't afford the renewal: lapse it (revoke perk, emit lapsed event) in its own
+  // transaction, now that the renewal transaction above closed without posting.
   if (lapsed) {
     await lapse(store, ctx, sub, tally);
   }
 }
 
-// Build the economy.subscription.renewed event, which tells the buyer their subscription billed
-// for a new period. The event names the buyer (subject) and is meant for their app (audience
-// 'client'). Its data carries the ids the receiver needs so it doesn't have to look them up --
-// the new period being entered is sub.period + 1.
+// Build the economy.subscription.renewed event: subscription billed for a new period. Subject is
+// the buyer, audience 'client'. Data carries the ids the receiver needs; the new period entered is
+// sub.period + 1.
 function renewedEvent(ctx: WorkerCtx, sub: Subscription): EconomyEvent {
   return {
     id: ctx.ids.next('evt'),
@@ -299,9 +273,8 @@ function renewedEvent(ctx: WorkerCtx, sub: Subscription): EconomyEvent {
   };
 }
 
-// Build the economy.subscription.lapsed event, which tells the buyer their subscription stopped
-// (they couldn't afford it, the retry cap was hit, or a permanent failure). The event names the
-// buyer (subject) and is meant for their app (audience 'client').
+// Build the economy.subscription.lapsed event: subscription stopped (couldn't afford it, retry cap
+// hit, or permanent failure). Subject is the buyer, audience 'client'.
 function lapsedEvent(ctx: WorkerCtx, sub: Subscription): EconomyEvent {
   return {
     id: ctx.ids.next('evt'),
@@ -319,21 +292,18 @@ function lapsedEvent(ctx: WorkerCtx, sub: Subscription): EconomyEvent {
   };
 }
 
-// Post the renewal charge as one balanced ledger entry, made of three debit/credit lines
-// (legs) that add up to zero. Take the full price out of the buyer's spendable account, give
-// the seller the amount left after the platform fee, and give the platform's revenue account
-// the fee. Net plus fee equal the price exactly, so no money is created or lost. Renewals are
-// paid only from spendable (real) money — unlike the first month, none of the charge is paid
-// from the buyer's promo grant.
+// Post the renewal charge as one balanced ledger entry of three legs summing to zero: debit the
+// full price from the buyer's spendable account, credit the seller the post-fee net, credit the
+// platform revenue account the fee. Net + fee = price exactly. Renewals draw only from spendable
+// (real) money; unlike the first month, none comes from the buyer's promo grant.
 async function postRenewal(
   unit: Unit,
   ctx: WorkerCtx,
   sub: Subscription,
 ): Promise<Transaction> {
-  // `feeForPrice` (pricing.ts) is the single source of truth for the transaction fee: it rounds
-  // the exact basis-point fee UP to a whole credit (VRChat's documented rule), capped at the
-  // charge. Spend, the first month (operations/subscribe.ts), and every renewal all call it, so
-  // they compute the fee identically.
+  // `feeForPrice` (pricing.ts) is the single source of truth for the fee: rounds the exact
+  // basis-point fee up to a whole credit (VRChat's documented rule), capped at the charge. Spend,
+  // the first month (operations/subscribe.ts), and every renewal call it, so the fee is identical.
   let feeMinor = feeForPrice(sub.price.minor, ctx.config.platformFeeBps);
   let netMinor = sub.price.minor - feeMinor;
   let legs: Leg[] = [

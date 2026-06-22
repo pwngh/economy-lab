@@ -32,9 +32,9 @@ import type { Config } from '#src/config.ts';
 import type { Leg } from '#src/ports.ts';
 
 /**
- * Optional details attached to an entitlement grant (a user owning an item or feature).
- * Defined here, not in the entitlements module, because it is part of the data callers pass
- * in with an operation; the entitlements module imports it back.
+ * Optional details on an entitlement grant (a user owning an item or feature). Lives here rather
+ * than in the entitlements module because callers pass it in with an operation; entitlements
+ * imports it back.
  */
 export type EntitlementAttrs = {
   quantity?: number;
@@ -59,9 +59,8 @@ export type Principal =
 export type Recipient = { sellerId: string; shareBps: number };
 
 /**
- * Every kind of request a caller can submit. Each variant is one action, tagged by `kind`,
- * and every variant carries an `idempotencyKey` (so a retried request runs at most once) and
- * an `actor` (who is asking). This is the full set of things the economy can be told to do.
+ * Every request a caller can submit. Each variant is one action tagged by `kind`, carrying an
+ * `idempotencyKey` (a retried request runs at most once) and an `actor` (who is asking).
  */
 export type Operation =
   | {
@@ -82,11 +81,11 @@ export type Operation =
       price: Amount;
       recipients?: Recipient[];
       ageRestricted?: boolean;
-      // A gift: the buyer still pays and is the one screened for funds and velocity, but the
-      // purchased SKU is granted to this recipient user id instead of the buyer. This mirrors
-      // VRChat, where a gift is an ordinary purchase carrying an `isGift` flag (not a separate
-      // transaction type) — there is no wallet-to-wallet credit or ownership transfer. Omitted
-      // (or equal to `buyerId`) for an ordinary self-purchase.
+      // A gift: the buyer still pays and is screened for funds and velocity, but the SKU is
+      // granted to this recipient user id instead of the buyer. Mirrors VRChat, where a gift is an
+      // ordinary purchase with an `isGift` flag (not a separate transaction type), with no
+      // wallet-to-wallet credit or ownership transfer. Omitted (or equal to `buyerId`) for a
+      // self-purchase.
       giftTo?: string;
     }
   | {
@@ -123,8 +122,8 @@ export type Operation =
       sku: string;
       price: Amount;
       periodMs: number;
-    } // No `ageRestricted` field: age-gating is spend-only (see the spend variant). Subscribe
-  // intentionally omits it — there is no in-core age gate, only the spend-side audit tag.
+    } // No `ageRestricted` field: age-gating is spend-only (see the spend variant). There is no
+  // in-core age gate, only the spend-side audit tag.
   | {
       kind: 'cancelSubscription';
       idempotencyKey: string;
@@ -179,19 +178,17 @@ export type Operation =
       userId: string;
       sagaId: string;
       reason: string;
-    }; // A correction an operator runs by hand to undo a payout that has not paid out yet;
-// ordinary users can't run it. It marks the multi-step payout (the "saga") as FAILED — but only
-// if it is still in its pre-paid state, so two attempts can't both undo it — and returns the
-// credits that were set aside back to the seller's earned account. A payout that has already
-// disbursed real USD is refused. `userId` names the seller behind the payout so the engine knows
-// which account to lock before changing it: the operation is identified only by its payout id and
-// names no account directly.
+    }; // Operator-only correction to undo a payout that hasn't paid out yet. Marks the multi-step
+// payout (the "saga") as FAILED, but only if still in its pre-paid state so two attempts can't both
+// undo it, and returns the set-aside credits to the seller's earned account. A payout that has
+// already disbursed real USD is refused. `userId` names the seller so the engine knows which
+// account to lock; the operation is identified only by its payout id and names no account directly.
 
 /**
- * The result of submitting an operation. Either it went through (`committed`), it was a repeat
- * of one already done and the earlier result is returned unchanged (`duplicate`), or the
- * economy declined it for an ordinary business reason the caller can handle (`rejected`).
- * Note: rejection is a normal "no" returned as data; a genuine fault is thrown instead.
+ * The result of submitting an operation: it went through (`committed`), it repeated one already
+ * done and the earlier result is returned unchanged (`duplicate`), or it was declined for a
+ * business reason the caller can handle (`rejected`). Rejection is a normal "no" returned as data;
+ * a genuine fault is thrown instead.
  */
 export type Outcome =
   | { status: 'committed'; transaction: Transaction }
@@ -230,15 +227,15 @@ export type Ctx = {
   rates: Rates;
   logger: Logger;
   meter: Meter;
-  // An optional read-through balance cache. Present only when a cache capability was
-  // injected; when absent every balance read goes straight to the ledger, unchanged.
+  // Optional read-through balance cache. Present only when a cache capability was injected;
+  // when absent, every balance read goes straight to the ledger.
   cache?: Cache;
 };
 
 /**
- * The capabilities the background worker is given. Payout settlement and periodic checkpoint
- * jobs run on their own schedule rather than inside a caller's submit, so they get their own
- * bundle. It includes `rates` because settling a payout converts credits to USD.
+ * Capabilities for the background worker. Payout settlement and periodic checkpoint jobs run on
+ * their own schedule rather than inside a caller's submit, so they get their own bundle. Includes
+ * `rates` because settling a payout converts credits to USD.
  */
 export type WorkerCtx = {
   clock: Clock;
@@ -263,11 +260,10 @@ export type Handler = (
 export type Middleware = (next: Handler) => Handler;
 
 /**
- * Splits a sale's `price` across the recipients and the platform, turning it into the set of
- * debit/credit lines (legs) to post. Every minor unit of the price is accounted for, with no
- * money lost to rounding: it takes the platform fee off the top (rounding down), gives each
- * recipient their rounded-down share of what is left, and posts any leftover penny from the
- * rounding to the platform's revenue. Implemented in `pricing.ts`.
+ * Splits a sale's `price` across recipients and the platform into the debit/credit lines (legs) to
+ * post. Accounts for every minor unit with no rounding loss: platform fee off the top (rounded
+ * down), each recipient their rounded-down share of the rest, leftover rounding penny to platform
+ * revenue. Implemented in `pricing.ts`.
  */
 export type FeePolicy = (input: {
   price: Amount;
@@ -278,9 +274,8 @@ export type FeePolicy = (input: {
 }) => ReadonlyArray<Leg>;
 
 /**
- * The public surface of a running economy: submit operations that change money, read balances
- * and statements, run the integrity check, and shut down. Built by `createEconomy` in
- * `economy.ts`.
+ * Public surface of a running economy: submit operations that change money, read balances and
+ * statements, run the integrity check, shut down. Built by `createEconomy` in `economy.ts`.
  */
 export interface Economy {
   submit(operation: Operation, options?: Options): Promise<Outcome>;
@@ -313,18 +308,18 @@ export interface ProveReport {
   // was tampered with after the fact.
   chainIntact: boolean;
 
-  // True when, for every account, the running balance the store keeps as a cache still matches the
-  // balance re-added from its individual debit and credit lines — i.e. `drift` is empty. The lines
-  // are the source of truth; the cached figure can be wrong. A cached balance that diverged (a
-  // mis-saved or directly-edited balance row) shows up here even when the books still balance.
+  // True when, for every account, the cached running balance matches the balance re-added from its
+  // debit and credit lines (i.e. `drift` is empty). The lines are the source of truth; the cached
+  // figure can be wrong. A diverged cached balance (mis-saved or directly-edited row) shows up here
+  // even when the books still balance.
   consistent: boolean;
 
   // Every account whose cached balance disagrees with the balance re-added from its debit and
   // credit lines; empty when `consistent` is true. Each entry names the account and both figures so
-  // an operator can see the size and direction of the gap. This catches two cases: an account that
-  // has real postings but whose cached total drifted away from them, and a leftover balance row
-  // that has NO postings behind it at all (its lines say it should not exist, so any non-zero
-  // cached figure is wrong — such a row is compared against a re-added balance of zero).
+  // an operator sees the size and direction of the gap. Catches two cases: an account with real
+  // postings whose cached total drifted, and a leftover balance row with no postings behind it (its
+  // lines say it shouldn't exist, so any non-zero cached figure is wrong; compared against a
+  // re-added balance of zero).
   drift: ReadonlyArray<{
     account: AccountRef;
     materialized: Amount;

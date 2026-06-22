@@ -10,20 +10,20 @@
  */
 
 import type { Currency } from '#src/money.ts';
-// Imported for its type only. This file and contract.ts refer to each other, but a type-only
-// import is erased when TypeScript compiles to JavaScript, so no circular import exists at runtime.
+// Type-only import. This file and contract.ts reference each other, but type-only imports are
+// erased at compile time, so there's no runtime circular import.
 import type { Operation } from '#src/contract.ts';
 
 /**
- * The three kinds of account a single user can have. This names a category of account,
- * not a currency — the currency of any money movement comes from the amount's own `Currency`.
+ * The three kinds of account a single user can have. A category, not a currency; the currency
+ * of any money movement comes from the amount's own `Currency`.
  */
 export type AccountKind = 'spendable' | 'earned' | 'promo';
 
 /**
- * An account identifier string, "branded" so the type system won't let a plain string be
- * used as an account. The only way to get one is through the functions in this file and the
- * `SYSTEM` accounts below, so every account id is well-formed by construction.
+ * A branded account identifier string, so a plain string can't be used as an account. The only
+ * sources are the functions in this file and the `SYSTEM` accounts below, so every id is
+ * well-formed by construction.
  */
 export type AccountRef = string & { readonly __brand: 'AccountRef' };
 
@@ -50,29 +50,29 @@ export function promo(userId: string): AccountRef {
 }
 
 /**
- * The platform's own ("house") accounts. Each id starts with `vrchat:` to set it apart from
- * a real user's account. The comments note each account's currency and which side it grows on
- * ("debit-normal" = goes up when debited; "credit-normal" = goes up when credited).
+ * The platform's own ("house") accounts. Each id starts with `vrchat:` to distinguish it from a
+ * user account. Per-account comments note currency and normal side ("debit-normal" = goes up when
+ * debited; "credit-normal" = goes up when credited).
  */
 export const SYSTEM = {
   // The real USD the platform holds in trust on behalf of users. Debit-normal, in USD.
   TRUST_CASH: 'vrchat:trust_cash' as AccountRef,
 
   // The platform's earnings: fees plus the rounding leftover from splitting a sale. Credit-normal.
-  // It must NEVER hold the offsetting entry for newly issued credits on a top-up (that goes to
+  // Must not hold the offsetting entry for newly issued credits on a top-up (that goes to
   // STORED_VALUE instead).
   REVENUE: 'vrchat:revenue' as AccountRef,
 
-  // A running count of all credits in circulation. When a user tops up, the newly issued credits
-  // are recorded against this account as the offsetting entry. Debit-normal.
+  // Running count of all credits in circulation. On top-up, the newly issued credits post here as
+  // the offsetting entry. Debit-normal.
   STORED_VALUE: 'vrchat:stored_value' as AccountRef,
 
   // Money set aside in escrow for a pending payout, funded from sellers' earned balances.
   // Credit-normal.
   PAYOUT_RESERVE: 'vrchat:payout_reserve' as AccountRef,
 
-  // A shortfall the platform is owed back — for example after reclaiming money from a user (a
-  // "clawback") left that user's balance negative. Debit-normal.
+  // A shortfall the platform is owed back, e.g. after a clawback left a user's balance negative.
+  // Debit-normal.
   RECEIVABLE: 'vrchat:receivable' as AccountRef,
 
   // The offsetting entry for marketing grants in users' promo accounts. Debit-normal.
@@ -81,13 +81,13 @@ export const SYSTEM = {
   // An external counter mirroring cash that has cleared in or out of TRUST_CASH. Debit-normal, in USD.
   USD_CLEARING: 'vrchat:usd_clearing' as AccountRef,
 
-  // The platform's USD profit from the purchase spread: when a user buys credits, they pay the
-  // buy rate (≈120 credits/USD) but each credit is only backed at its payout-floor value (the par
-  // rate, ≈200 credits/USD). The difference — VRChat's documented ~40% "purchase fee", which is
-  // really the buy-vs-payout exchange spread — is recognized here at top-up. It is the platform's
-  // own money, NOT held in trust for users, so it is kept out of the backing total. Debit-normal,
-  // in USD. (The external app-store cut and VAT are NOT modelled here — they happen at the
-  // cash-in rail before VRChat's ledger sees the purchase; see docs/vrchat-grounding.md.)
+  // The platform's USD profit from the purchase spread. A user buys at the buy rate
+  // (≈120 credits/USD) but each credit is backed only at its payout-floor (par) value
+  // (≈200 credits/USD). The difference (VRChat's documented ~40% "purchase fee", really the
+  // buy-vs-payout exchange spread) is recognized here at top-up. It's the platform's own money,
+  // not held in trust, so it stays out of the backing total. Debit-normal, in USD. (App-store cut
+  // and VAT aren't modelled here; they happen at the cash-in rail before VRChat's ledger sees the
+  // purchase. See docs/vrchat-grounding.md.)
   REVENUE_USD: 'vrchat:revenue_usd' as AccountRef,
 
   // The offsetting entry used when seeding starting balances on a fresh (cold-start) system.
@@ -95,17 +95,15 @@ export const SYSTEM = {
 } as const;
 
 /**
- * Whether `ref` is a user's spendable-style account rather than a platform ("house") account.
- * A user account id is `usr_…:<kind>` (it has a `:kind` suffix and does NOT start with the
- * `vrchat:` house prefix); every house account starts with `vrchat:`.
+ * Whether `ref` is a user wallet account rather than a platform ("house") account. A user id is
+ * `usr_…:<kind>` (has a `:kind` suffix, no `vrchat:` prefix); every house account starts with
+ * `vrchat:`.
  *
- * This test guards against money laundering. Money put aside in escrow for a pending purchase
- * must come back out only by releasing or expiring the hold; turning that escrow directly into a
- * user's balance would create fresh, immediately-spendable money that skips the normal settlement
- * and the waiting period before earnings can be cashed out. So the code that manages escrow uses
- * this check to refuse moving held funds straight into a user account. `economy.ts` and
- * `integrity.ts` each have their own copy of this same user-vs-house test; new callers should
- * import this one instead of writing the rule again.
+ * Guards against money laundering: escrow for a pending purchase must come back out only by
+ * releasing or expiring the hold. Moving it straight into a user's balance would mint fresh,
+ * immediately-spendable money that skips settlement and the payout waiting period, so the escrow
+ * code uses this check to refuse such moves. `economy.ts` and `integrity.ts` each carry their own
+ * copy of this user-vs-house test; new callers should import this one.
  */
 export function isWalletAccount(ref: AccountRef): boolean {
   return ref.includes(':') && !ref.startsWith('vrchat:');
@@ -113,9 +111,9 @@ export function isWalletAccount(ref: AccountRef): boolean {
 
 /**
  * The user id a wallet account belongs to: the part before its `:kind` suffix. For
- * `usr_alice:spendable` this is `usr_alice`; for a malformed `:spendable` (built from an empty
- * user id) it is the empty string, which the submit pipeline rejects. Only meaningful for the
- * user wallet accounts {@link isWalletAccount} identifies.
+ * `usr_alice:spendable` this is `usr_alice`; for a malformed `:spendable` (empty user id) it's the
+ * empty string, which the submit pipeline rejects. Only meaningful for the wallet accounts
+ * {@link isWalletAccount} identifies.
  */
 export function ownerOf(ref: AccountRef): string {
   let colon = ref.lastIndexOf(':');
@@ -138,16 +136,15 @@ export function currency(ref: AccountRef): Currency {
 }
 
 /**
- * Sort every account into one of four classes. The database schema and the check that proves the
- * platform holds enough real USD to cover what it owes users both rely on these classes.
+ * Sort every account into one of four classes. The DB schema and the USD-backing solvency check
+ * both rely on these.
  *
- * - `custodial` — credits the platform must back with real USD: users' spendable balances.
- *   Only these count toward the total USD the platform is required to hold in trust.
- * - `excluded` — platform obligations that do NOT need USD backing (earned, promo,
- *   PAYOUT_RESERVE), deliberately kept out of the backing total so they can't raise the
- *   amount of cash required.
- * - `house-asset` — accounts that represent value the platform holds or is owed.
- * - `house-liability` — accounts that represent value the platform owes out.
+ * - `custodial`: credits the platform must back with real USD (users' spendable balances). Only
+ *   these count toward the trust total.
+ * - `excluded`: platform obligations that need no USD backing (earned, promo, PAYOUT_RESERVE),
+ *   kept out of the backing total so they can't raise the cash required.
+ * - `house-asset`: value the platform holds or is owed.
+ * - `house-liability`: value the platform owes out.
  */
 export function classify(
   ref: AccountRef,
@@ -167,8 +164,8 @@ export function classify(
     ref === SYSTEM.PROMO_FLOAT ||
     ref === SYSTEM.PAYOUT_RESERVE
   ) {
-    // PAYOUT_RESERVE is marked `excluded`, not `house-liability`, so that neither it nor promo
-    // ever enters the backing total and can never increase the USD the platform must hold.
+    // PAYOUT_RESERVE is `excluded`, not `house-liability`, so neither it nor promo ever enters the
+    // backing total or raises the USD the platform must hold.
     return ref === SYSTEM.PAYOUT_RESERVE ? 'excluded' : 'house-liability';
   }
   if (kindOf(ref) === 'spendable') {
@@ -178,9 +175,8 @@ export function classify(
 }
 
 /**
- * Whether the account grows on a debit (true) rather than a credit (false). The ledger uses
- * this to give a posted line the right sign, and the check that no account goes negative uses
- * it to read each account's balance the right way up.
+ * Whether the account grows on a debit (true) rather than a credit (false). The ledger uses this
+ * to sign a posted line; the no-negative-balance check uses it to read each balance right-way-up.
  */
 export function isDebitNormal(ref: AccountRef): boolean {
   return (
@@ -195,24 +191,22 @@ export function isDebitNormal(ref: AccountRef): boolean {
 }
 
 /**
- * The set of accounts an operation might touch, which the middleware locks before posting so
- * concurrent operations can't race on the same balances.
+ * The accounts an operation might touch, which the middleware locks before posting so concurrent
+ * operations can't race on the same balances.
  *
- * It returns a superset on purpose: locking a few extra accounts is harmless, but locking too
- * few would let two operations interleave. Because the full set is locked up front, the funds
- * pre-check sees a consistent view, and the overdraft guard deep in `postEntry` becomes a
- * safety net that should never actually trigger.
+ * Returns a superset on purpose: a few extra locks are harmless, too few would let operations
+ * interleave. Locking the full set up front gives the funds pre-check a consistent view and makes
+ * the overdraft guard in `postEntry` a safety net that shouldn't fire.
  *
- * `refund` and `reverse` are special: the accounts from the original transaction aren't in the
- * incoming request, so this returns only the system accounts those operations always touch.
- * The handler then loads the original transaction and adds its accounts to the lock set before
- * posting, so the locked set still covers everything the posting will read.
+ * `refund` and `reverse`: the original transaction's accounts aren't in the request, so this
+ * returns only the system accounts those operations always touch. The handler loads the original
+ * transaction and adds its accounts before posting, covering everything the posting reads.
  */
 export function accountsOf(operation: Operation): AccountRef[] {
-  // TypeScript can't see that each builder in LOCK_SETS reads only the fields valid for its own
-  // operation kind, so we widen the looked-up builder to a plain function via this cast. The
-  // LOCK_SETS type still forces every operation kind to have an entry, so a forgotten kind is a
-  // compile error rather than a silently empty lock set that would race the pre-check.
+  // TypeScript can't see that each LOCK_SETS builder reads only the fields valid for its own kind,
+  // so widen the looked-up builder to a plain function via this cast. The LOCK_SETS type still
+  // requires an entry per operation kind, so a forgotten kind is a compile error, not an empty
+  // lock set that races the pre-check.
   let touched = LOCK_SETS[operation.kind] as (
     operation: Operation,
   ) => AccountRef[];
@@ -261,8 +255,7 @@ let LOCK_SETS: {
     SYSTEM.REVENUE,
     earned(o.sellerId),
   ],
-  // These operations only change subscription or entitlement state; they post no money, so
-  // there are no accounts to lock.
+  // Only change subscription/entitlement state; post no money, so no accounts to lock.
   cancelSubscription: () => [],
   grantEntitlement: () => [],
   revokeEntitlement: () => [],
@@ -270,17 +263,15 @@ let LOCK_SETS: {
   // The adjusted account plus OPENING_EQUITY, which holds the offsetting entry so the books balance.
   adjust: (o) => [o.account, SYSTEM.OPENING_EQUITY],
   reverse: () => [...REVERSAL_CONTRAS],
-  // Undoing a payout by hand reverses the original payout: it debits PAYOUT_RESERVE and credits
-  // the seller's earned account, the same two accounts the background payout worker touches when it
-  // gives up on a payout. So those two are the only accounts to lock. The request identifies the
-  // seller by `userId` rather than naming accounts directly, so these two cover it exactly rather
-  // than being a deliberate over-estimate.
+  // Undoing a payout by hand reverses the original: debit PAYOUT_RESERVE, credit the seller's
+  // earned account, the same two the background payout worker touches when it gives up. Those two
+  // are the only locks. The request names the seller by `userId`, so these cover it exactly (not an
+  // over-estimate).
   reversePayout: (o) => [SYSTEM.PAYOUT_RESERVE, earned(o.userId)],
 };
 
-// Pull the account kind out of an id like `usr_123:spendable`. Returns null if the id has no
-// `:kind` suffix or the suffix isn't a known kind. This is the only place that parses the raw
-// `usr_…:<kind>` string shape.
+// Pull the account kind out of an id like `usr_123:spendable`. Returns null if there's no `:kind`
+// suffix or it isn't a known kind. The only place that parses the raw `usr_…:<kind>` string shape.
 function kindOf(ref: AccountRef): AccountKind | null {
   let colon = ref.lastIndexOf(':');
   if (colon < 0) {

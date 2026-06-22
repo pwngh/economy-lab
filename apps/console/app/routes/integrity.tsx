@@ -50,8 +50,7 @@ const CHECKS: {
   },
 ];
 
-// The integrity (prove) report: the five properties the ledger guarantees, read live. This is the
-// proof the headline numbers elsewhere are trustworthy.
+// The integrity (prove) report: the five properties the ledger guarantees, read live.
 export default function Integrity({ loaderData }: Route.ComponentProps) {
   const { prove, solvency } = loaderData;
 

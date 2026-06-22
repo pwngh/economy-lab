@@ -33,32 +33,29 @@ import type {
 } from '#src/contract.ts';
 import type { Leg, Sale, Unit } from '#src/ports.ts';
 
-// How a buyer's payment splits across their two balances. The price is drawn from the
-// promo (marketing-grant) balance first, then the rest from the spendable balance.
+// How a payment splits across the buyer's two balances: promo (marketing-grant) first,
+// remainder from spendable.
 type SpendPlan = { promoPart: Amount; spendablePart: Amount };
 
 /**
- * Run a marketplace purchase: charge the buyer and pay the sellers, as one balanced
+ * Run a marketplace purchase: charge the buyer and pay the sellers as one balanced
  * ledger posting.
  *
- * The buyer pays first from their promo (marketing-grant) balance, then from their
- * spendable balance. Each part is recorded as its own set of debit/credit lines, the
- * whole thing is appended as one transaction, a summary of the sale is saved under its
- * `orderId` so a later refund can reverse exactly what posted, and the SKU entitlement is
- * granted in the same transaction so paying always confers ownership. The entitlement goes
- * to the buyer, or — when the request carries a `giftTo` recipient — to that recipient: a
- * gift is an ordinary purchase the buyer pays for and the recipient receives (VRChat's
- * `isGift` model), not a wallet-to-wallet transfer.
+ * Buyer pays from promo (marketing-grant) balance first, then spendable; each part is its own
+ * set of debit/credit lines in one transaction. A sale summary is saved under `orderId` so a
+ * later refund can reverse exactly what posted, and the SKU entitlement is granted in the same
+ * transaction so paying always confers ownership. Entitlement goes to the buyer, or to `giftTo`
+ * when present: a gift is an ordinary purchase the buyer pays for and the recipient receives
+ * (VRChat's `isGift` model), not a wallet-to-wallet transfer.
  *
- * The `orderId` is unique per purchase: if a Sale already exists for it (a second request
- * reusing the same `orderId` under a different idempotency key), the spend is refused with
+ * `orderId` is unique per purchase. If a Sale already exists for it (a second request reusing
+ * the same `orderId` under a different idempotency key), the spend is refused with
  * `DUPLICATE_ORDER` so the buyer is never double-charged for one order.
  *
- * By the time this runs, the surrounding middleware has already authorized the buyer,
- * handled retry-deduplication, checked the buyer can afford it, run the risk check, and
- * locked the affected accounts. So this function only needs to validate its own inputs
- * and post. A price that is not positive CREDIT, or recipient shares that do not add up
- * correctly, is a malformed request and is thrown as a fault, not returned as a refusal.
+ * Middleware has already authorized the buyer, deduplicated retries, checked affordability, run
+ * the risk check, and locked the affected accounts, so this function only validates its own
+ * inputs and posts. A non-positive or non-CREDIT price, or recipient shares that don't add up,
+ * is a malformed request thrown as a fault, not a refusal.
  *
  * @example
  *   let outcome = await spend(
@@ -85,15 +82,12 @@ export async function spend(
 
   // Refuse a second purchase that reuses an orderId already on file.
   //
-  // The request carries an idempotency key (the value that makes a retried request run at most
-  // once) and the pipeline uses it to drop an exact retry of the SAME request. But two DIFFERENT
-  // requests can carry the same orderId under different idempotency keys; both would pass the
-  // retry check and both would post, charging the buyer twice. And because a refund finds a sale
-  // by its orderId, only the last-written sale's debit and credit lines would be reversible,
-  // stranding the first charge. spend runs while the affected accounts are locked, so reading the
-  // stored sale here cannot race another writer: if one already exists for this orderId, return a
-  // normal business rejection (not a thrown fault — the same shape as FUNDS_IMMATURE below) so a
-  // second debit is never posted.
+  // The idempotency key drops exact retries, but two different requests can carry the same orderId
+  // under different keys; both pass the retry check and post, charging the buyer twice. Since a
+  // refund finds a sale by orderId, only the last-written sale's lines would be reversible,
+  // stranding the first charge. spend runs with the affected accounts locked, so reading the stored
+  // sale here can't race another writer. If one exists, return a business rejection (not a fault,
+  // same shape as FUNDS_IMMATURE below) so no second debit posts.
   let existing = await unit.sales.get(operation.orderId);
   if (existing !== null) {
     return rejected('DUPLICATE_ORDER', { orderId: operation.orderId });
@@ -102,16 +96,13 @@ export async function spend(
   let promoBalance = await unit.ledger.balance(promo(operation.buyerId));
   let plan = planSpend(price, promoBalance);
 
-  // Make sure the spendable-funded part is covered by funds that have finished clearing.
+  // Require the spendable-funded part to be covered by cleared (matured) funds.
   //
-  // Promo credits are drawn first and are spendable immediately, so only the part of the price
-  // paid from the buyer's spendable balance has to come from cleared funds. Some spendable
-  // credit may still be inside a settlement wait (a holding period before it can be spent). The
-  // pipeline's earlier affordability check looks at the raw balance and so can pass even when part
-  // of it has not cleared; this stricter check looks only at the cleared (matured) amount and
-  // turns the purchase down with FUNDS_IMMATURE if the spendable part would dip into funds that
-  // have not yet cleared. Like INSUFFICIENT_FUNDS, this is returned as a normal rejection rather
-  // than thrown as a fault.
+  // Promo credits draw first, so only the spendable-funded part must come from cleared funds; some
+  // spendable credit may still be inside a settlement wait. The pipeline's affordability check
+  // looks at the raw balance and can pass even when part hasn't cleared. This stricter check looks
+  // only at the matured amount and refuses with FUNDS_IMMATURE if the spendable part would dip into
+  // uncleared funds. Like INSUFFICIENT_FUNDS, returned as a rejection, not a fault.
   let matured = await maturedBalance(
     unit.ledger,
     spendable(operation.buyerId),
@@ -130,12 +121,9 @@ export async function spend(
 
   let legs = buildSpendLegs(operation, plan, ctx);
 
-  // Record an age-restricted flag on the posting's metadata when the item is age-restricted.
-  // This ledger does NOT block the purchase on age; checking the buyer's identity and age is the
-  // job of the external payments/identity provider, not this code. Recording the flag on the
-  // posting (which can never be edited after it is written) leaves an audit trail a later review
-  // can rely on, without needing a new interface or store. The flag is only added when true, so an
-  // ordinary purchase keeps its metadata minimal.
+  // Flag age-restricted items on the posting metadata. This ledger doesn't block on age; the
+  // external payments/identity provider checks identity and age. Recording the flag on the
+  // immutable posting leaves an audit trail without a new interface or store. Only added when true.
   let meta: Record<string, unknown> = {
     kind: 'spend',
     orderId: operation.orderId,
@@ -143,9 +131,8 @@ export async function spend(
   if (operation.ageRestricted) {
     meta.ageRestricted = true;
   }
-  // Record the gift on the posting's metadata (which can never be edited after it is written),
-  // matching VRChat's `isGift` flag, so an audit can see the buyer paid for someone else. Only
-  // added for a real gift (recipient differs from the buyer), so an ordinary purchase stays clean.
+  // Flag a gift on the immutable posting metadata (matching VRChat's `isGift`) so an audit can see
+  // the buyer paid for someone else. Only added when the recipient differs from the buyer.
   if (recipientId !== operation.buyerId) {
     meta.isGift = true;
     meta.giftTo = recipientId;
@@ -160,14 +147,12 @@ export async function spend(
     saleOf(operation, plan, transaction, ctx.config.platformFeeBps),
   );
 
-  // Give the recipient ownership of the item in the SAME transaction as the charge, so paying
-  // always confers ownership and a charge that gets rolled back grants nothing. For an ordinary
-  // purchase the recipient is the buyer; for a gift it is `giftTo`, so the buyer pays but the gift
-  // recipient owns the item. The grant is tagged with this order so a later audit or refund can
-  // trace the ownership record back to its sale. The store's grant writes (or overwrites) the
-  // ownership row and clears any prior revoked mark on it, so re-buying an item after a refund (a
-  // refund marks the old ownership revoked) makes ownership active again instead of leaving a
-  // stale revoked row behind.
+  // Grant the recipient ownership in the same transaction as the charge, so paying always confers
+  // ownership and a rolled-back charge grants nothing. Recipient is the buyer for an ordinary
+  // purchase, `giftTo` for a gift. Tagged with this order so an audit or refund can trace the
+  // ownership record back to its sale. grant writes (or overwrites) the ownership row and clears
+  // any prior revoked mark, so re-buying after a refund (which marks the old ownership revoked)
+  // makes ownership active again instead of leaving a stale revoked row.
   await unit.entitlements.grant(recipientId, operation.sku, {
     source: 'sale:' + operation.orderId,
   });
@@ -175,10 +160,9 @@ export async function spend(
   return { status: 'committed', transaction };
 }
 
-// Decide how much of the price comes from each balance: take as much as possible from
-// the promo balance first (but never more than the price), and charge the remainder to
-// the spendable balance. The middleware's earlier affordability check uses this same
-// rule, so the up-front check and the actual posting always agree on the split.
+// Split the price across balances: take as much as possible from promo first (capped at the
+// price), charge the remainder to spendable. The middleware's affordability check uses this same
+// rule, so the up-front check and the posting agree on the split.
 function planSpend(price: Amount, promoBalance: Amount): SpendPlan {
   let available = promoBalance.minor > 0n ? promoBalance.minor : 0n;
   let promoMinor = available < price.minor ? available : price.minor;
@@ -188,9 +172,8 @@ function planSpend(price: Amount, promoBalance: Amount): SpendPlan {
   };
 }
 
-// Build all the debit/credit lines for the posting: one set for the promo-funded part,
-// one set for the spendable-funded part. Each set balances on its own (its debits and
-// credits add up to zero), so the whole posting balances too.
+// Build the debit/credit lines: one set for the promo-funded part, one for the spendable-funded
+// part. Each set balances on its own (debits and credits sum to zero), so the whole posting does.
 function buildSpendLegs(
   operation: Extract<Operation, { kind: 'spend' }>,
   plan: SpendPlan,
@@ -202,17 +185,15 @@ function buildSpendLegs(
   return legs;
 }
 
-// The lines for the promo-funded part of the price. Two things happen, each as its own
-// balanced pair:
-//   1. Spend down the buyer's promo grant: debit the buyer's promo account, credit the
-//      house PROMO_FLOAT account that offsets it.
-//   2. Pay the sellers for real, out of platform revenue: debit the house REVENUE
-//      account, credit each seller's earned balance.
-// Because a promo grant isn't real money the buyer paid, the sellers are funded from
-// REVENUE rather than from the buyer. This funding pair is separate from the price the
-// buyer owes, so it never enters the check that the buyer's outflow equals the price.
-// When seller shares don't divide evenly, the leftover (promoPart minus what was paid
-// out) is simply not debited from REVENUE, so the house keeps it.
+// Lines for the promo-funded part, two balanced pairs:
+//   1. Spend down the buyer's promo grant: debit the buyer's promo account, credit the house
+//      PROMO_FLOAT account that offsets it.
+//   2. Pay the sellers out of platform revenue: debit house REVENUE, credit each seller's earned
+//      balance.
+// A promo grant isn't real money the buyer paid, so the sellers are funded from REVENUE rather
+// than the buyer. This funding pair is separate from the price the buyer owes, so it never enters
+// the check that buyer outflow equals the price. When seller shares don't divide evenly, the
+// leftover (promoPart minus what was paid out) is not debited from REVENUE, so the house keeps it.
 function appendPromoLegs(
   legs: Leg[],
   operation: Extract<Operation, { kind: 'spend' }>,
@@ -232,11 +213,10 @@ function appendPromoLegs(
   legs.push(debit(SYSTEM.REVENUE, distributed));
 }
 
-// The lines for the spendable-funded part of the price: debit the buyer's spendable
-// balance for that part, then add the credit lines from the injected fee policy. The
-// fee policy splits the part across the sellers' earned balances and the house REVENUE
-// account (which keeps the platform fee plus any rounding leftover), so this part of
-// the price is fully accounted for down to the last minor unit.
+// Lines for the spendable-funded part: debit the buyer's spendable balance for that part, then add
+// the credit lines from the injected fee policy. The policy splits the part across the sellers'
+// earned balances and house REVENUE (which keeps the platform fee plus any rounding leftover), so
+// the part is fully accounted for to the last minor unit.
 function appendSpendableLegs(
   legs: Leg[],
   operation: Extract<Operation, { kind: 'spend' }>,
@@ -258,11 +238,9 @@ function appendSpendableLegs(
   }
 }
 
-// Credit each seller's earned balance with its share of `amount`, rounding each share
-// down, and return the total actually paid out. The leftover (amount minus the paid-out
-// total) is the caller's to handle: the caller debits REVENUE by only this returned
-// total, so the unpaid leftover stays with the house and the promo funding pair still
-// balances.
+// Credit each seller's earned balance with its share of `amount`, rounding each share down, and
+// return the total paid out. The caller debits REVENUE by only this returned total, so the unpaid
+// leftover (amount minus the total) stays with the house and the promo funding pair still balances.
 function distributeEarned(
   legs: Leg[],
   amount: Amount,
@@ -272,8 +250,7 @@ function distributeEarned(
   for (let recipient of recipients) {
     let share = (amount.minor * BigInt(recipient.shareBps)) / 10_000n;
     distributed += share;
-    // A share that rounds down to zero credits the seller nothing, so add no leg for it. A
-    // zero-amount leg is a no-op the ledger drops anyway; skipping it keeps the entry clean.
+    // A share that rounds down to zero adds no leg (a zero-amount leg is a no-op the ledger drops).
     if (share > 0n) {
       legs.push(
         credit(earned(recipient.sellerId), toAmount(amount.currency, share)),
@@ -283,16 +260,15 @@ function distributeEarned(
   return toAmount(amount.currency, distributed);
 }
 
-// Build the sale summary to save, keyed by `orderId` (a different key from the idempotency key
-// used for retry-deduplication) so a later refund can look it up and reverse exactly these debit
-// and credit lines. The recorded fee is the platform's cut of the spendable-funded part of the
-// price — the slice the platform's REVENUE account keeps off that part.
+// Build the sale summary, keyed by `orderId` (distinct from the idempotency key used for
+// retry-dedup) so a later refund can look it up and reverse exactly these lines. The recorded fee
+// is the platform's cut of the spendable-funded part, the slice REVENUE keeps off that part.
 //
-// The fee comes from `feeForPrice`, the SAME helper the pricing policy uses when it posts the
-// REVENUE credit, so the fee recorded here always equals the fee actually credited to REVENUE.
-// Computing the fee independently here (as the old code did) understated it whenever the exact
-// cut was not a whole credit, because posting rounds the fee UP to a whole credit. The
-// promo-funded part is charged no fee, so the recorded fee covers only the spendable part.
+// The fee comes from `feeForPrice`, the same helper the pricing policy uses to post the REVENUE
+// credit, so the recorded fee always equals the fee credited to REVENUE. Computing it independently
+// here (as the old code did) understated it whenever the exact cut wasn't a whole credit, since
+// posting rounds the fee up to a whole credit. The promo-funded part is charged no fee, so the
+// recorded fee covers only the spendable part.
 function saleOf(
   operation: Extract<Operation, { kind: 'spend' }>,
   plan: SpendPlan,
@@ -303,8 +279,8 @@ function saleOf(
   return {
     orderId: operation.orderId,
     buyerId: operation.buyerId,
-    // Whoever received the item — the buyer, or the gift recipient — so a refund revokes the right
-    // user's ownership. `giftTo` was already validated non-blank in the handler.
+    // Whoever received the item (buyer or gift recipient), so a refund revokes the right user's
+    // ownership. `giftTo` was already validated non-blank in the handler.
     recipientId: operation.giftTo ?? operation.buyerId,
     sku: operation.sku,
     price: operation.price,
@@ -315,9 +291,9 @@ function saleOf(
   };
 }
 
-// Who should receive the purchased SKU: the gift recipient (`giftTo`) if this is a gift,
-// otherwise the buyer. A `giftTo` that is present but blank is a malformed request — it would
-// grant ownership to an empty user id — so it is thrown as a fault, the same way a bad price is.
+// Who receives the purchased SKU: `giftTo` if this is a gift, otherwise the buyer. A `giftTo` that
+// is present but blank would grant ownership to an empty user id, so it's a malformed request
+// thrown as a fault, like a bad price.
 function entitlementRecipient(
   operation: Extract<Operation, { kind: 'spend' }>,
 ): string {
@@ -334,9 +310,8 @@ function entitlementRecipient(
   return operation.giftTo;
 }
 
-// Require the price to be a positive amount in CREDIT. A spend is always priced in
-// CREDIT, so a non-CREDIT or non-positive price is a malformed request, thrown as a
-// fault rather than returned as an ordinary refusal.
+// Require a positive CREDIT price. A spend is always priced in CREDIT, so a non-CREDIT or
+// non-positive price is a malformed request thrown as a fault, not an ordinary refusal.
 function positiveCredit(amount: Amount, label: string): Amount {
   if (amount.currency !== 'CREDIT') {
     throw fault(ERROR_CODES.MALFORMED_OPERATION, `${label} must be CREDIT.`, {
@@ -351,19 +326,19 @@ function positiveCredit(amount: Amount, label: string): Amount {
   return amount;
 }
 
-// Validate the structured shape of the spend request — the fields the central guard cannot know
-// about. These are programming/client errors (a well-formed client never sends them), so each is
-// thrown as a fault, not returned as an ordinary refusal:
-//   - `sku` must name an item to buy; a blank one would grant ownership of nothing.
-//   - `orderId` must be present; it is the unique key for duplicate-order protection (the
-//     DUPLICATE_ORDER guard reads the stored Sale by it), and a blank one collapses that — two
-//     different purchases sharing a blank order id would both look like one order.
-//   - No two recipients may name the same `sellerId`: a duplicate would split the same seller's
-//     cut across two earned-credit lines under one id, double-counting them in the share math.
+// Validate the structured shape of the spend request, the fields the central guard can't know
+// about. These are programming/client errors, so each is thrown as a fault, not an ordinary
+// refusal:
+//   - `sku` must name an item; a blank one would grant ownership of nothing.
+//   - `orderId` must be present; it's the unique key for duplicate-order protection (the
+//     DUPLICATE_ORDER guard reads the stored Sale by it), and a blank one collapses that: two
+//     different purchases sharing a blank order id would look like one order.
+//   - No two recipients may name the same `sellerId`: a duplicate would split the seller's cut
+//     across two earned-credit lines under one id, double-counting in the share math.
 //   - No recipient may be a house/system account. Recipients are credited to their EARNED
-//     (cash-outable) balance; only a real user wallet may receive that. `earned(sellerId)` must
-//     therefore be a user wallet account (NOT a `vrchat:`-prefixed house account), and its owner
-//     must be non-blank. (Self-dealing and share-bounds are checked separately and left intact.)
+//     (cash-outable) balance, which only a real user wallet may receive, so `earned(sellerId)` must
+//     be a user wallet account (not a `vrchat:`-prefixed house account) with a non-blank owner.
+//     (Self-dealing and share-bounds are checked separately.)
 function assertSpendShape(
   operation: Extract<Operation, { kind: 'spend' }>,
 ): void {
@@ -403,8 +378,8 @@ function assertSpendShape(
     seen.add(recipient.sellerId);
 
     // A recipient is paid into its EARNED (cash-outable) balance, so its sellerId must resolve to a
-    // real user wallet account. A house/system account (e.g. `vrchat:revenue`) is not a wallet
-    // owner; routing a sale's earnings there would credit a platform account as if it were a seller.
+    // real user wallet. A house/system account (e.g. `vrchat:revenue`) isn't a wallet owner; routing
+    // earnings there would credit a platform account as if it were a seller.
     let account = earned(recipient.sellerId);
     if (!isWalletAccount(account) || ownerOf(account).trim() === '') {
       throw fault(
@@ -422,17 +397,15 @@ function assertSpendShape(
   }
 }
 
-// Require the recipient shares to add up to exactly 10000 basis points (100%), and each
-// individual share to be a sane fraction of the net. An empty recipient list is allowed and
-// means the platform keeps the whole net (REVENUE takes everything). Any other total is a
-// malformed request, caught here so a miswired split can never silently leave part of the
-// price stuck with nobody.
+// Require recipient shares to sum to exactly 10000 basis points (100%), each a sane fraction of the
+// net. An empty list is allowed and means the platform keeps the whole net (REVENUE takes
+// everything). Any other total is a malformed request, caught here so a miswired split can't leave
+// part of the price stuck with nobody.
 //
-// The sum check alone is not enough: shares like [-5000, 15000] still sum to 10000, but a
-// negative share would credit a seller a negative amount (a hidden debit) and a >100% share
-// would try to pay out more of the part than exists. Each share must therefore be strictly
-// positive and at most the whole 10000 bps on its own, so a single recipient can never be
-// handed more than the full net and no recipient can be assigned a negative cut.
+// The sum check alone isn't enough: shares like [-5000, 15000] still sum to 10000, but a negative
+// share would credit a seller a negative amount (a hidden debit) and a >100% share would pay out
+// more of the part than exists. So each share must be strictly positive and at most 10000 bps on
+// its own.
 function assertShares(operation: Extract<Operation, { kind: 'spend' }>): void {
   let recipients = operation.recipients ?? [];
   if (recipients.length === 0) {
@@ -466,12 +439,12 @@ function assertShares(operation: Extract<Operation, { kind: 'spend' }>): void {
   }
 }
 
-// Refuse a spend in which the buyer names themselves as a sale recipient. A spend pays each
-// recipient's earned (cash-outable) balance out of platform REVENUE for the promo-funded part
-// and out of the buyer's payment for the spendable part. If the buyer is also a recipient, the
-// buyer converts their own non-cashable spendable/promo credit into cash-outable EARNED credit
-// — laundering grant/top-up balance into withdrawable money funded by the house. The buyer and
-// the seller must always be different parties, so this is a malformed request thrown as a fault.
+// Refuse a spend where the buyer names themselves as a recipient. A spend pays each recipient's
+// earned (cash-outable) balance out of platform REVENUE for the promo-funded part and out of the
+// buyer's payment for the spendable part. If the buyer is also a recipient, they convert their own
+// non-cashable spendable/promo credit into cash-outable EARNED credit, laundering grant/top-up
+// balance into withdrawable money funded by the house. Buyer and seller must be different parties,
+// so this is a malformed request thrown as a fault.
 function assertNoSelfDealing(
   operation: Extract<Operation, { kind: 'spend' }>,
 ): void {
@@ -488,9 +461,8 @@ function assertNoSelfDealing(
   }
 }
 
-// The middleware routes each request to the handler for its `kind`, so this handler
-// being called with anything other than a spend is a wiring bug. Throw a loud fault
-// instead of silently mishandling the request.
+// Middleware routes each request to the handler for its `kind`, so a non-spend reaching this
+// handler is a wiring bug. Throw a loud fault rather than mishandle it.
 function kindMismatch(operation: Operation): ReturnType<typeof fault> {
   return fault(
     ERROR_CODES.MALFORMED_OPERATION,

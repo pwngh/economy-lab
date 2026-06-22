@@ -12,9 +12,8 @@
 import type { Route } from './+types/actions.record';
 import { getEconomy } from '~/economy.server';
 
-// Plain-English text for a rejection code, so the UI never shows a raw code. A rejection is the
-// engine declining a valid request for an ordinary business reason (immature funds, below minimum)
-// — it comes back as data, not a thrown fault, and is surfaced as an inline notice.
+// Plain-English text for a rejection code. A rejection is the engine declining a valid request for
+// a business reason (immature funds, below minimum); it comes back as data, not a thrown fault.
 const REJECTION_TEXT: Record<string, string> = {
   FUNDS_IMMATURE:
     'Those earned credits have not matured yet. Advance time past the maturity horizon, then try again.',
@@ -27,9 +26,8 @@ function rejectionText(code: string): string {
   return REJECTION_TEXT[code] ?? `Declined: ${code}.`;
 }
 
-// The record action: submit one operation (deposit / purchase / payout / promo) through the real
-// engine. A rejected outcome renders as an inline notice; a thrown fault (malformed input) is
-// caught and returned the same way — the UI never crashes. On success the page revalidates.
+// The record action: submit one operation through the engine. A rejection renders as an inline
+// notice; a thrown fault (malformed input) is caught and returned the same way.
 export async function action({ request }: Route.ActionArgs) {
   const eco = await getEconomy();
   const form = await request.formData();

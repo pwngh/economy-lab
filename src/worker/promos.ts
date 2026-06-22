@@ -18,60 +18,47 @@ import type { Amount } from '#src/money.ts';
 import type { WorkerCtx } from '#src/contract.ts';
 import type { Options, PromoGrant, Store, Unit } from '#src/ports.ts';
 
-// Name of the metrics counter this background job adds to after each run. The job is a
-// "sweep": a periodic pass that scans for expired promo grants and reverses them. After a
-// run it bumps this counter twice, once for each outcome ("reversed", "failed"), so a
-// dashboard can graph the two numbers separately.
+// Metrics counter for the sweep (periodic pass that reverses expired promo grants). Bumped
+// twice per run, once per outcome ("reversed", "failed"), so each can be graphed separately.
 let SWEEP_METRIC = 'economy.worker.promo.expiry';
 
 /**
- * Result of running the promo-expiry sweep once. A promo grant gives a user free credits that
- * expire; when they expire, the credits the user never spent are taken back. Each grant that
- * was due this run ends up in exactly one of these two lists, keyed by grant id:
+ * Result of one promo-expiry sweep. A promo grant gives a user credits that expire; on expiry
+ * the unspent part is clawed back. Each due grant lands in one of two lists, keyed by grant id:
  *
- * - `reversed` — the grant was processed successfully. Whatever the user had NOT already spent
- *   was moved back to the platform's promo-funding account `SYSTEM.PROMO_FLOAT` (or nothing
- *   moved, if the user had already spent it all), and the grant was flagged so a later sweep
- *   skips it. The recorded `amount` is how much actually moved back (0 for a fully-spent grant).
+ * - `reversed`: processed successfully. The unspent part moved back to `SYSTEM.PROMO_FLOAT` (0
+ *   if fully spent) and the grant was flagged so later sweeps skip it. `amount` is what moved.
  *
- * - `failed` — processing this grant raised an error, so it was skipped and left for a later
- *   sweep or a human operator. The error code is recorded so logs can show why. The grant is
- *   still eligible to be picked up again, because the database transaction that would have
- *   flagged it as reversed was rolled back (undone) together with the failed money movement.
+ * - `failed`: processing raised an error, so the grant was skipped for a later sweep or operator.
+ *   The error code is recorded. The grant stays eligible: the transaction that would have flagged
+ *   it reversed was rolled back along with the failed money movement.
  */
 export type PromoExpirySummary = {
   reversed: ReadonlyArray<{ id: string; amount: Amount }>;
   failed: ReadonlyArray<{ id: string; code: string }>;
 };
 
-// The writable counterpart of PromoExpirySummary that the sweep builds up as it runs. Each
-// grant is appended to whichever list matches its outcome; the finished object is returned
-// as the (read-only) summary.
+// Writable counterpart of PromoExpirySummary, built up as the sweep runs and returned as the
+// read-only summary.
 type PromoExpiryTally = {
   reversed: Array<{ id: string; amount: Amount }>;
   failed: Array<{ id: string; code: string }>;
 };
 
 /**
- * Take back the unspent part of every promo grant that has expired, handling them one at a time.
+ * Claw back the unspent part of every expired promo grant, one at a time.
  *
- * When a grant is created it adds free credits to the user's promo account up front; until the
- * grant expires the user may spend any part of those credits. Once it expires, only the part
- * they did NOT spend should be clawed back. For each expired grant this reads the user's
- * CURRENT promo balance and takes back the smaller of the original grant amount and that
- * balance — that smaller number is the unspent remainder, since spending lowers the balance.
- * Reading the balance fresh for each grant is what stops two grants for the same user from
- * taking back too much: the first grant's reversal lowers the balance the second one then sees.
+ * For each grant, read the user's current promo balance and take back min(grant amount, balance):
+ * that is the unspent remainder, since spending lowers the balance. Reading the balance fresh per
+ * grant stops two grants for the same user from clawing back too much, since the first reversal
+ * lowers the balance the second sees.
  *
- * Each grant is handled in its own database transaction so that the money movement and the
- * "mark this grant reversed" write either both commit or both undo together. If the money
- * movement is undone, the grant stays eligible and a later sweep can retry it, rather than
- * being flagged reversed with no money having moved. A grant the user already spent in full has
- * nothing to take back, so it moves no money but is still flagged reversed so it stops getting
- * picked up. An error on any single grant is caught and recorded, so it can't halt the rest.
+ * Each grant runs in its own transaction so the money movement and the "mark reversed" write
+ * commit or roll back together. If undone, the grant stays eligible for retry rather than being
+ * flagged reversed with no money moved. A fully-spent grant moves nothing but is still flagged.
+ * Errors on a single grant are caught and recorded so they can't halt the rest.
  *
- * `now` is the current time in epoch milliseconds (milliseconds since 1970). `limit` caps how
- * many expired grants this one run will pick up.
+ * `now` is epoch milliseconds. `limit` caps how many grants this run picks up.
  */
 export async function sweepExpiredPromos(
   store: Store,
@@ -90,12 +77,11 @@ export async function sweepExpiredPromos(
   return tally;
 }
 
-// Process one expired grant, catching any error so a single bad grant can't break the whole
-// run. On success the amount taken back is recorded under `reversed`. On error, the error is
-// passed through `normalizeError` (which maps it to one of our standard error codes) and the
-// grant id plus that code go under `failed`. Either way the grant is simply left eligible for
-// a later sweep: the transaction that would have flagged it reversed was undone along with the
-// money movement, so there is no separate cleanup to do here.
+// Process one expired grant, catching errors so one bad grant can't break the run. On success
+// the amount taken back goes under `reversed`. On error, normalizeError maps it to a standard
+// code and the grant id plus code go under `failed`. Either way the grant stays eligible for a
+// later sweep, since the transaction was rolled back along with the money movement; no cleanup
+// needed here.
 async function reverseOne(args: {
   store: Store;
   ctx: WorkerCtx;

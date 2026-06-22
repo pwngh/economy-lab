@@ -1,20 +1,11 @@
 /**
  * typecheck wrapper.
  *
- * tsc type-checks the app AND every file it can reach by import — including the frozen engine
- * source under ../../src, which is checked at the repo ROOT under its own (correct) tsconfig
- * (lib: esnext, types: [], plus its ambient wintercg.d.ts). Re-checking that frozen source here,
- * under this app's DOM lib, surfaces a couple of artifacts that are NOT real defects in this app:
- *
- *   - crypto/Uint8Array buffer-generic mismatches (DOM's stricter BufferSource) — mostly fixed by
- *     app/engine-shim.d.ts, which declaration-merges the WinterCG-compatible overloads.
- *   - an "unused @ts-expect-error" in the OPTIONAL redis adapter (src/adapters/redis.ts), reached
- *     only via a dynamic import in src/index.ts. This app never uses Redis, and that directive is
- *     correct under the engine's own config.
- *
- * So: run tsc, then report only errors that originate in THIS app's files. An error anywhere under
- * the frozen ../../src tree is filtered out (it is the root project's responsibility and is green
- * there). Any app-file error fails the check, exactly as a plain `tsc` would for app code.
+ * tsc also checks the engine source it can reach under ../../src, which is validated separately at
+ * the repo root (its own tsconfig: lib esnext, types [], wintercg.d.ts). Re-checking it here under
+ * this app's DOM lib throws a couple of false positives — crypto/Uint8Array buffer-generic
+ * mismatches (mostly handled by engine-shim.d.ts) and an unused @ts-expect-error in the optional
+ * redis adapter. So: run tsc, then report only errors in this app's own files.
  */
 import { spawnSync } from 'node:child_process';
 
@@ -26,8 +17,7 @@ const res = spawnSync('npx', ['tsc', '--pretty', 'false'], {
 const out = `${res.stdout ?? ''}${res.stderr ?? ''}`;
 const lines = out.split('\n');
 
-// Keep only TS diagnostic lines that point at an app-owned file (anything not under the frozen
-// engine source). Non-diagnostic lines (blank, summaries) are dropped.
+// Keep only diagnostics pointing at an app-owned file (not the engine source under ../../src).
 const appErrors = lines.filter((line) => {
   const m = /^(.*?)\(\d+,\d+\): error TS\d+/.exec(line);
   if (!m) return false;

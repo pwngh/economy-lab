@@ -9,25 +9,20 @@
  * @license MIT
  */
 
-// Turns an inbound purchase callback from a billing provider into a ledger credit. A verified
-// callback means "this user paid real money"; this module maps it to a `topUp` (the operation
-// that grants new credits to a user) that credits the buyer's spendable balance once and only
-// once, no matter how many times the provider redelivers the same callback.
+// Maps an inbound purchase callback from a billing provider to a ledger credit. A verified
+// callback means the user paid real money; this module turns it into a `topUp` that credits
+// the buyer's spendable balance exactly once, regardless of provider redeliveries.
 //
-// The typed `WebhookEvent` and the code that consumes it both live here: the server's HTTP
-// edge decodes the raw request body into a `WebhookEvent`, and `handlePurchaseWebhook` turns
-// that into the topUp operation it submits to the economy.
+// The HTTP edge decodes the raw body into a `WebhookEvent`; `handlePurchaseWebhook` turns that
+// into the topUp it submits to the economy.
 //
-// Stopping duplicate deliveries is split across two layers. The server's edge claims the
-// provider's `eventId` in a replay store so a redelivery is recognized and dropped before it
-// reaches this module; it runs that claim only AFTER checking the request's signature and
-// freshness, so a forged or stale delivery can never consume (and waste) a real eventId. This
-// module assumes the event handed to it has already passed those checks, and adds a second
-// guard of its own (see `webhookIdempotencyKey`).
+// Duplicate suppression spans two layers. The edge claims the provider's `eventId` in a replay
+// store to drop redeliveries before they reach here, running that claim only after checking
+// signature and freshness so a forged/stale delivery can't waste a real eventId. This module
+// assumes those checks already passed and adds a second guard (see `webhookIdempotencyKey`).
 //
-// A purchase never increases "revenue". Crediting a user for cash is a topUp against the
-// platform's stored-value pool (the credits it owes users), so "revenue" keeps meaning
-// platform fee income only, and is never inflated by money a user paid in.
+// A purchase never increases "revenue": crediting a user for cash is a topUp against the
+// stored-value pool (credits owed to users), so "revenue" stays platform fee income only.
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { decodeAmount } from '#src/money.ts';
@@ -38,19 +33,17 @@ import type { Options } from '#src/ports.ts';
 
 /**
  * A verified inbound purchase event from a billing provider (Steam / Meta / Apple / Google, or
- * any payment processor). The provider's own `eventId` is the key used to recognize and drop
- * duplicate deliveries; `amount` is a real {@link Amount} rather than a plain number, so it
- * carries its currency and stays an exact integer (money is never held in a floating-point or
- * JSON number). `sku` is optional — a plain credit-pack purchase carries none, a product
+ * any payment processor). `eventId` keys duplicate-delivery detection. `amount` is an
+ * {@link Amount}, not a number, so it carries its currency and stays an exact integer (money is
+ * never a float or JSON number). `sku` is optional: a credit-pack purchase has none, a product
  * purchase carries the product id.
  */
 export type WebhookEvent = {
   // Which provider sent the callback (the `:provider` path segment, e.g. 'steam', 'billing').
   provider: string;
 
-  // The provider's globally-unique id for this delivery, and the basis for crediting at most
-  // once: the server claims it in its replay store, and the topUp's deduplication key (the
-  // value that makes a retried operation apply only once) is derived from it.
+  // Provider's globally-unique id for this delivery, and the basis for crediting at most once:
+  // the server claims it in its replay store, and the topUp's dedup key is derived from it.
   eventId: string;
 
   // The end user whose spendable balance the purchase credits.
@@ -68,33 +61,27 @@ export type WebhookEvent = {
 };
 
 /**
- * Builds the deduplication key for a webhook-driven topUp — the value the ledger uses to apply
- * a retried operation at most once. It is derived purely from the provider `eventId`, so the
- * credit happens only once even if the calling code forgets to pass its own key. The `whk:`
- * prefix keeps it in a separate namespace so it can never collide with a key a caller supplied
- * for some other operation.
+ * Builds the dedup key for a webhook-driven topUp. Derived purely from the provider `eventId`,
+ * so the credit applies once even if the caller forgets its own key. The `whk:` prefix
+ * namespaces it so it can't collide with a caller-supplied key for another operation.
  *
- * This is a SECOND guard behind the server's replay store. The replay store usually drops a
- * redelivery before it reaches the handler, but because that store can lag (a claim may not be
- * visible yet to a concurrent request), two deliveries can occasionally slip through at once;
- * this key catches the duplicate again at the ledger so only one credit is posted.
+ * Second guard behind the server's replay store. The store usually drops a redelivery first,
+ * but it can lag (a claim may not be visible yet to a concurrent request), so two deliveries
+ * can slip through at once; this key catches the duplicate at the ledger.
  */
 export function webhookIdempotencyKey(eventId: string): string {
   return `whk:${eventId}`;
 }
 
 /**
- * Builds the `topUp` operation that credits the buyer from a verified {@link WebhookEvent}.
- * The operation's deduplication key comes from the provider `eventId`, so the credit applies
- * at most once. The event's `eventId` / `sku` / `provider` are carried along as a record of
- * origin, so the ledger entry this produces can later be traced back to the callback that
- * caused it. The amount and user pass straight through. The credit is issued against the
- * platform's stored-value pool (the credits it owes users), not its fee revenue.
+ * Builds the `topUp` that credits the buyer from a verified {@link WebhookEvent}. The dedup key
+ * comes from `eventId`, so the credit applies at most once. `eventId` / `sku` / `provider` ride
+ * along as provenance so the ledger entry can be traced back to the callback. Amount and user
+ * pass straight through. The credit hits the stored-value pool, not fee revenue.
  */
 export function toTopUp(event: WebhookEvent): Operation {
-  // The origin details to record alongside the credit. Carried on the operation so the topUp
-  // handler can attach them (eventId/sku/provider) to the ledger entry it writes, giving each
-  // entry a pointer back to the provider callback that caused it for later reconciliation.
+  // Provenance carried on the operation so the topUp handler can attach eventId/sku/provider to
+  // the ledger entry, pointing each entry back to its provider callback for reconciliation.
   let provenance: Record<string, unknown> = {
     eventId: event.eventId,
     provider: event.provider,
@@ -107,22 +94,19 @@ export function toTopUp(event: WebhookEvent): Operation {
     userId: event.userId,
     amount: event.amount,
     source: event.source,
-    // The origin details, to be recorded on the ledger entry. The `topUp` operation type does
-    // not declare a `meta` field yet, so it is attached here and the type is loosened with a
-    // cast (below); the topUp handler reads it back off and writes it onto the entry. See the
-    // matching note in contract.ts / operations/topUp.ts.
+    // Provenance for the ledger entry. The `topUp` type has no `meta` field yet, so attach it
+    // here and loosen the type with the cast below; the topUp handler reads it back and writes
+    // it onto the entry. See the matching note in contract.ts / operations/topUp.ts.
     meta: provenance,
   } as unknown as Operation;
 }
 
 /**
- * Handles a verified purchase webhook: builds the topUp and submits it to the economy,
- * returning the resulting {@link Outcome}. The caller (the server edge) has already verified
- * the request's signature, checked that it is recent, and claimed its `eventId` in the replay
- * store, so by the time this runs the event is trusted and is normally a first-time delivery.
- * Should a duplicate delivery still reach here, it credits at most once, because the topUp's
- * deduplication key is derived from the same `eventId`: the economy recognizes the repeat and
- * returns a `duplicate` Outcome without posting anything further.
+ * Handles a verified purchase webhook: builds the topUp, submits it, returns the {@link Outcome}.
+ * The server edge has already checked signature and freshness and claimed `eventId` in the
+ * replay store, so the event is trusted and normally a first-time delivery. A duplicate that
+ * still reaches here credits at most once: the topUp's dedup key derives from the same
+ * `eventId`, so the economy returns a `duplicate` Outcome without posting anything.
  */
 export async function handlePurchaseWebhook(
   economy: Economy,
@@ -133,12 +117,11 @@ export async function handlePurchaseWebhook(
 }
 
 /**
- * Decodes an already-parsed webhook request body into a typed {@link WebhookEvent}. It decodes
- * the money field with the same decimal-string encoder/decoder the rest of the API uses, so the
- * amount survives the trip exactly and no money ever passes through a JSON number. `provider`
- * comes from the URL (the `:provider` part of the route), not from the body, so it cannot be
- * spoofed by the caller. A body of the wrong shape, or with a missing/invalid amount, throws,
- * letting the server reply 400 — a malformed callback never reaches the ledger.
+ * Decodes an already-parsed webhook body into a typed {@link WebhookEvent}. Decodes the money
+ * field with the same decimal-string codec the rest of the API uses, so the amount survives
+ * exactly and never passes through a JSON number. `provider` comes from the URL route, not the
+ * body, so the caller can't spoof it. A wrong-shape body or missing/invalid amount throws,
+ * letting the server reply 400 before anything reaches the ledger.
  */
 export function decodeWebhookEvent(
   provider: string,
@@ -163,8 +146,8 @@ export function decodeWebhookEvent(
   };
 }
 
-// Pull a required string field off the body, or throw a malformed-event error naming the field
-// so the wrong shape is rejected at the edge rather than coerced into a bad event.
+// Required string field, or throw a malformed-event error naming the field. Rejects wrong shapes
+// at the edge rather than coercing them into a bad event.
 function requireString(value: unknown, field: string): string {
   if (typeof value !== 'string') {
     throw malformedEvent(`Webhook field '${field}' must be a string.`);
@@ -172,11 +155,10 @@ function requireString(value: unknown, field: string): string {
   return value;
 }
 
-// Decode the `amount` field from its on-the-wire string (e.g. 'CREDIT:10.00') into an Amount.
-// The string puts the currency before the colon and the decimal value after it, the same
-// format the rest of the API uses, so the value decodes identically on any runtime. A value
-// that is not a string, or that the money decoder cannot parse, throws — keeping "wrong shape"
-// and "wrong amount" as two distinct errors, the latter raised by the money decoder itself.
+// Decode the `amount` field from its wire string (e.g. 'CREDIT:10.00') into an Amount: currency
+// before the colon, decimal after, the same format the rest of the API uses. A non-string or
+// unparseable value throws, keeping "wrong shape" and "wrong amount" distinct (the latter raised
+// by the money decoder).
 function decodeAmountField(value: unknown): Amount {
   if (typeof value !== 'string') {
     throw malformedEvent(
@@ -193,10 +175,8 @@ function decodeAmountField(value: unknown): Amount {
   );
 }
 
-// Builds the error thrown for a webhook body of the wrong shape — treated as a bad client
-// request, the same way a malformed /submit body is. It returns an EconomyError carrying the
-// MALFORMED_OPERATION code so the server, which chooses the HTTP status from that code, answers
-// 400 (client error) rather than treating it as a 500 (server fault).
+// Error for a wrong-shape webhook body, treated as a bad client request like a malformed /submit
+// body. Carries the MALFORMED_OPERATION code so the server maps it to 400, not 500.
 function malformedEvent(message: string): ReturnType<typeof fault> {
   return fault(ERROR_CODES.MALFORMED_OPERATION, message);
 }

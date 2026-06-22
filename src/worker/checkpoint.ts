@@ -16,23 +16,20 @@ import type { WorkerCtx } from '#src/contract.ts';
 import type { Checkpoint, Store } from '#src/ports.ts';
 
 /**
- * The result of one run of the checkpoint sweep. Exactly one outcome applies: a checkpoint
- * was sealed, the run was skipped because the ledger is empty, or the attempt failed and
- * was recorded in one of the two failure lists below.
+ * Result of one checkpoint sweep. One outcome applies: sealed a checkpoint, skipped (empty
+ * ledger), or failed (recorded in a failure list below).
  */
 export type CheckpointSummary = {
-  // The checkpoint that was written this run, or null if none was (skipped or failed).
+  // Checkpoint written this run, or null (skipped or failed).
   sealed: Checkpoint | null;
 
-  // True when the run did nothing because the ledger has no accounts yet.
+  // True when the ledger has no accounts yet.
   skipped: boolean;
 
-  // Failures that won't be retried automatically. Each gives the error code that ended
-  // the attempt; an operator has to look into these.
+  // Failures not retried automatically; operator must investigate. Each carries the error code.
   deadLettered: ReadonlyArray<{ reason: string }>;
 
-  // Failures the next scheduled run will retry on its own — typically a temporary storage
-  // outage. Each gives the error code so logs can show why.
+  // Failures the next run retries (typically a temporary storage outage). Each carries the code.
   retrying: ReadonlyArray<{ code: string }>;
 };
 
@@ -44,17 +41,15 @@ type CheckpointTally = {
 };
 
 /**
- * Take one tamper-evident snapshot of the whole ledger and save it. This is a background
- * job meant to run on a schedule.
+ * Take one tamper-evident snapshot of the ledger and save it. Scheduled background job.
  *
- * Each account has a running hash chain whose latest hash is its "head". This job collects
- * every account's head, combines them into a single hash (a Merkle root) that changes if
- * any account changes, signs it, and stores the signed snapshot (a checkpoint). Anchoring
- * it somewhere outside this system later lets anyone prove the ledger hasn't been altered.
+ * Each account has a hash chain whose latest hash is its "head". Collects every head, combines
+ * them into a Merkle root (changes if any account changes), signs it, and stores the signed
+ * snapshot (checkpoint). Anchoring that root externally later proves the ledger is unaltered.
  *
- * Any error is caught here so one bad run can't stop future runs. A temporary failure is
- * left for the next run to retry; any other failure is set aside for an operator. If the
- * ledger has no accounts yet, the run is skipped instead of saving an empty snapshot.
+ * Errors are caught so one bad run can't stop future runs: retryable failures are left for the
+ * next run, others are set aside for an operator. An empty ledger is skipped rather than sealing
+ * an empty snapshot.
  */
 export async function sealCheckpoint(
   store: Store,
@@ -72,10 +67,8 @@ export async function sealCheckpoint(
   return tally;
 }
 
-// Run the seal and catch anything it throws, so one failure can't stop future runs. A
-// caught error is sorted once: if it's the temporary kind (marked retryable, e.g. a
-// storage outage), record it for the next run to retry; otherwise set it aside for an
-// operator to look into.
+// Run the seal and catch what it throws so one failure can't stop future runs. Retryable errors
+// (e.g. storage outage) go to the next run; anything else is set aside for an operator.
 async function sealOne(
   store: Store,
   ctx: WorkerCtx,
@@ -93,10 +86,8 @@ async function sealOne(
   }
 }
 
-// Build and save the checkpoint, unless the ledger is empty. `recordCheckpoint` (chain.ts)
-// does the actual work: it collects the heads, combines them into the signed root, and
-// stores the snapshot. An empty ledger has no accounts to snapshot, so the run is skipped
-// rather than saving a meaningless empty snapshot.
+// Build and save the checkpoint unless the ledger is empty. `recordCheckpoint` (chain.ts) collects
+// the heads, combines them into the signed root, and stores the snapshot. Empty ledger → skip.
 async function driveSeal(
   store: Store,
   ctx: WorkerCtx,
@@ -117,8 +108,7 @@ async function driveSeal(
   });
 }
 
-// True when the ledger has no accounts yet, meaning there's nothing to snapshot. It stops
-// after seeing the first account, so it never loads the whole list just to check for one.
+// True when the ledger has no accounts. Stops after the first head, so it never loads the full list.
 async function isEmpty(store: Store): Promise<boolean> {
   for await (let _head of store.ledger.heads()) {
     return false;

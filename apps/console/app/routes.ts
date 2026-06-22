@@ -16,10 +16,8 @@ import {
   route,
 } from '@react-router/dev/routes';
 
-// Every page lives under one chrome layout (sidebar nav + persistent Simulation panel).
-// The layout owns the shared loader (sim settings + a few headline figures) and hosts the
-// <Outlet/> each page renders into. The simulation + record actions are their own resource
-// routes the panel/forms post to with fetchers, then revalidate.
+// Every page lives under one chrome layout (sidebar nav + Simulation panel), which owns the shared
+// loader and hosts the <Outlet/>. The simulate/record actions are resource routes the forms post to.
 export default [
   layout('routes/_chrome.tsx', [
     index('routes/overview.tsx'),
@@ -29,8 +27,7 @@ export default [
     route('integrity', 'routes/integrity.tsx'),
     route('developers', 'routes/developers.tsx'),
   ]),
-  // Resource routes (no UI of their own): the persistent panel and the record modal post
-  // here, then the page revalidates so the live engine state re-renders.
+  // Resource routes (no UI): the panel and record form post here, then the page revalidates.
   route('actions/simulate', 'routes/actions.simulate.tsx'),
   route('actions/record', 'routes/actions.record.tsx'),
 ] satisfies RouteConfig;

@@ -32,19 +32,16 @@ import type { Economy, Operation, Outcome } from '#src/contract.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Store } from '#src/ports.ts';
 
-// Pairs a running economy with its storage. We keep the store here so the link check
-// below can read each account's latest hash directly from storage and compare it against
-// what the committed operations said the hash should be.
+// Running economy plus its storage. The link check below reads each account's latest hash
+// from the store and compares it against what the committed operations reported.
 type Provable = { economy: Economy; store: Store };
 
-// Build a runnable { economy, store } over one adapter's storage. The store comes from the
-// adapter's `makeStore()`, which is already set up to hash with seededDigest(1) and timestamp
-// with fixedClock(0); the economy MUST use the SAME digest and clock. This matters because the
-// integrity check (`read.prove()`) recomputes each account's chain hash with the economy's
-// digest and compares it against the hash the store recorded. If the two used different digests
-// or clocks, the recomputed hash would differ and the check would report the chain as broken
-// even on correct data. So the digest and clock are held fixed; the only thing that varies from
-// seed to seed is the signer, which never feeds the chain hash.
+// Build a runnable { economy, store } over one adapter's storage. The adapter's makeStore()
+// hashes with seededDigest(1) and timestamps with fixedClock(0); the economy must use the same
+// digest and clock. read.prove() recomputes each account's chain hash with the economy's digest
+// and compares against the store's recorded hash, so a mismatched digest or clock would report a
+// broken chain on correct data. Digest and clock stay fixed; only the signer varies per seed,
+// and it never feeds the chain hash.
 async function makeProvable(
   adapter: AdapterCase,
   seed: number,
@@ -68,10 +65,8 @@ async function makeProvable(
   return { economy, store };
 }
 
-// A small pseudo-random number generator (the "mulberry32" algorithm). Returns a function
-// that yields the next number in [0, 1) each time it is called. Because the math is fully
-// fixed, the same seed produces the exact same sequence on every JavaScript runtime, which
-// is what makes a whole proof run repeatable and identical everywhere.
+// mulberry32 PRNG. Returns a function yielding the next number in [0, 1). The same seed
+// produces the identical sequence on every JS runtime, which makes a proof run repeatable.
 function rng(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -83,27 +78,23 @@ function rng(seed: number): () => number {
   };
 }
 
-// The generator's own running tally of one user's two balances, in minor units (cents):
-// `spendable` is money they topped up, `promo` is a marketing grant. We keep this tally so
-// the generator only ever produces spends the user can actually afford. That way every
-// generated operation succeeds, so the proof exercises the path where money really moves
-// rather than the path where an operation is declined.
+// Generator's running tally of one user's two balances, in minor units (cents): `spendable`
+// is topped-up money, `promo` is a marketing grant. Tracked so the generator only produces
+// affordable spends, keeping the proof on the path where money moves rather than declines.
 type Wallet = { spendable: bigint; promo: bigint };
 
-// Format a count of minor units (cents) as a two-decimal string like "12.34". This is the
-// text form `decodeAmount` expects when building an Amount.
+// Format minor units (cents) as a two-decimal string like "12.34", the form decodeAmount
+// expects when building an Amount.
 function dollars(minor: bigint): string {
   let whole = minor / 100n;
   let frac = (minor % 100n).toString().padStart(2, '0');
   return `${whole}.${frac}`;
 }
 
-// Pick one random-but-valid operation for the next step, and update our local balance
-// tally so the operation after it also stays valid. The idempotency key (the value that
-// makes a retried request run at most once: a repeat carrying the same key is recognized
-// and not applied again) and the ids come only from the step number, so re-running the
-// program later produces the byte-identical operation, which is what lets the replay check
-// resubmit the exact same request.
+// Pick one random-but-valid operation and update the local tally so the next one stays valid.
+// The idempotency key (makes a retried request run at most once: a repeat with the same key
+// is recognized and not reapplied) and the ids derive only from the step number, so a re-run
+// produces the byte-identical operation, letting the replay check resubmit the exact request.
 function nextOperation(
   next: () => number,
   step: number,
@@ -130,11 +121,9 @@ function nextOperation(
   return spendOperation(next, step, userId, wallet);
 }
 
-// Build a spend operation and subtract the price from our local balance tally. The real
-// spend handler always charges the promo balance first and only then the spendable
-// balance, so this tally must drain them in that same order; otherwise our copy of the
-// balances would drift away from the economy's and we would start generating spends the
-// user can't afford.
+// Build a spend operation and subtract the price from the local tally. The real spend handler
+// charges promo before spendable, so the tally drains in that order; otherwise the local copy
+// drifts from the economy's and we'd generate unaffordable spends.
 function spendOperation(
   next: () => number,
   step: number,

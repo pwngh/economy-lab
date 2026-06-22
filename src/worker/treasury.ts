@@ -20,66 +20,56 @@ import type { Transaction, WorkerCtx } from '#src/contract.ts';
 import type { Rate, Store, Unit } from '#src/ports.ts';
 
 /**
- * The result of one backing check: how much real USD the platform must hold against
- * users' spendable credits, how much it actually holds, and whether that's enough.
- *
- * "Backing" means every spendable credit a user holds is covered by real USD set aside
- * in trust. The platform promises that it always holds at least enough cash to redeem
- * every spendable credit at the fixed credit-to-USD conversion rate (called the "par"
- * rate); this type records whether that promise currently holds.
+ * One backing check: USD required against users' spendable credits, USD held, and whether
+ * that covers it. Backing = every spendable credit redeemable at the fixed credit-to-USD
+ * "par" rate from cash held in trust.
  */
 export type BackingPosition = {
-  // Total credits the platform actually owes its users and must hold real USD against:
-  // every user's spendable balance plus the credits held in escrow for pending purchases
-  // (the HELD accounts). These are the only balances that count toward the cash the
-  // platform must hold; revenue it has earned, promotional grants, and payout reserves are
-  // deliberately left out, because none of those are credits a user can spend.
+  // Credits the platform owes users and must hold USD against: every user's spendable
+  // balance plus escrow for pending purchases (HELD accounts). Excludes earned revenue,
+  // promo grants, and payout reserves, none of which a user can spend.
   custodialCredit: Amount;
 
-  // The USD that must be held to back `custodialCredit`: the credit total converted to
-  // USD at the fixed credit-to-USD conversion rate (the "par" rate), rounded down.
+  // USD required to back `custodialCredit`: the credit total converted to USD at par,
+  // rounded down.
   required: Amount;
 
-  // The USD actually held in trust right now (the TRUST_CASH account's balance).
+  // USD held in trust right now (TRUST_CASH balance).
   trustCash: Amount;
 
-  // The amount of USD the platform is short, i.e. `required − trustCash` when it holds
-  // too little, otherwise zero.
+  // USD short: `required − trustCash` when underheld, else zero.
   shortfall: Amount;
 
-  // True when the held cash covers the requirement (shortfall is zero).
+  // Held cash covers the requirement (shortfall is zero).
   backed: boolean;
 };
 
 /**
- * What one run of the treasury sweep produced. Each run does exactly one backing check,
- * so at most one entry lands in each of the lists below. The lists separate a detected
- * under-backing from an error that happened while checking, so the worker can re-run only
- * the cases worth retrying. This mirrors the summary shape the other worker sweeps return.
+ * One treasury sweep run. A run does one backing check, so each list below holds at most one
+ * entry. Lists separate a detected under-backing from a check-time error so the worker
+ * re-runs only retryable cases. Mirrors the other worker sweep summaries.
  */
 export type TreasurySummary = {
-  // The backing check's result, or null if the check could not complete (an error was
-  // thrown before it finished).
+  // Backing check result, or null if the check threw before finishing.
   position: BackingPosition | null;
 
-  // Recorded once when the platform is under-backed: the USD gap, the USD required, and
-  // the USD actually held, each as a text amount.
+  // Recorded once when under-backed: USD gap, USD required, USD held, as text amounts.
   breaches: ReadonlyArray<{
     shortfall: string;
     required: string;
     held: string;
   }>;
 
-  // Errors that look transient (e.g. a temporary store failure) and so are worth a retry
-  // on the next sweep. `code` is the error's classification code.
+  // Transient errors (e.g. a temporary store failure) worth retrying next sweep. `code` is
+  // the classification code.
   retrying: ReadonlyArray<{ code: string }>;
 
-  // Errors that are permanent and not worth retrying, recorded so they're visible.
+  // Permanent errors, not retried, recorded for visibility.
   failed: ReadonlyArray<{ code: string }>;
 };
 
-// The mutable form of TreasurySummary the sweep builds up as it runs, before returning
-// it as the read-only summary above.
+// Mutable form of TreasurySummary built up during the sweep, returned as the read-only
+// summary above.
 type TreasuryTally = {
   position: BackingPosition | null;
   breaches: Array<{ shortfall: string; required: string; held: string }>;
@@ -88,13 +78,12 @@ type TreasuryTally = {
 };
 
 /**
- * Check that the platform holds enough real USD to back every spendable credit, and
- * report the result. Run periodically by the background worker (not inside a user
- * request). If the cash held falls short, that is logged as an error and counted, but
- * nothing is posted to the ledger — the check only measures and reports.
+ * Check that held USD backs every spendable credit and report the result. Run periodically
+ * by the background worker, not inside a user request. A shortfall is logged at error and
+ * counted; nothing is posted (measure only).
  *
- * Any error thrown while checking is caught and turned into an entry in the returned
- * summary instead of propagating, so one bad run can never crash the worker loop.
+ * Errors thrown while checking are caught into the summary rather than propagated, so one bad
+ * run can't crash the worker loop.
  *
  * @example
  *   let summary = await sweepTreasury(store, ctx, { now: ctx.clock.now() });
@@ -117,11 +106,9 @@ export async function sweepTreasury(
   return tally;
 }
 
-// Run the single backing check and record its outcome into the tally. The whole thing
-// is wrapped in one try/catch: if an error is thrown, it is classified once — a transient
-// error (e.g. a temporary store failure) goes to `retrying` so the next sweep retries it,
-// and any other error goes to `failed`. Either way nothing is re-thrown, so one bad read
-// never crashes the worker loop.
+// Run the backing check and record its outcome. One try/catch: a thrown error is classified
+// once; transient (e.g. a temporary store failure) goes to `retrying`, anything else to
+// `failed`. Nothing is re-thrown.
 async function assess(
   store: Store,
   ctx: WorkerCtx,
@@ -145,12 +132,10 @@ async function assess(
   }
 }
 
-// Compute the backing position. Walk every account in the ledger, add up the balances of
-// the ones that must be backed (users' spendable balances and the escrow funded from
-// them, HELD — these are the accounts `classify` calls 'custodial'), convert that credit
-// total to the USD it requires at the par rate, and compare against the USD actually held
-// in TRUST_CASH. Using `classify` here means earned, promo, and payout-reserve balances
-// are never counted, exactly as in the deep integrity check.
+// Compute the backing position. Walk every ledger account, sum the balances that must be
+// backed (custodial CREDIT accounts: users' spendable balances and HELD escrow funded from
+// them), convert to required USD at par, compare against TRUST_CASH. Keying on `classify`
+// excludes earned, promo, and payout-reserve balances, same as the deep integrity check.
 async function measureBacking(
   store: Store,
   ctx: WorkerCtx,
@@ -178,18 +163,16 @@ async function measureBacking(
   };
 }
 
-// Convert a credit amount to the USD needed to back it, rounding down: multiply by the
-// par rate and divide out its scale. The rate is stored as a whole number scaled by
-// 10^scale, so dividing by 10^scale recovers the real multiplier. This is the same
-// conversion the integrity check and the top-up/payout paths use.
+// Credit amount to backing USD, rounding down: multiply by par.rate, divide by 10^scale
+// (the rate is stored scaled by 10^scale). Same conversion as the integrity check and the
+// top-up/payout paths.
 function requiredBackingMinor(custodialCreditMinor: bigint, par: Rate): bigint {
   return (custodialCreditMinor * par.rate) / 10n ** BigInt(par.scale);
 }
 
-// Emit the position as metrics and a debug log on every run, so the credit total, cash
-// held, and any shortfall are visible over time. This logs at `debug`, not `error`,
-// because a normal run is not an incident and should not show up on the error dashboard;
-// an actual shortfall is logged separately at `error` by `raiseBreach`.
+// Emit the position as metrics plus a debug log every run, so credit total, cash held, and
+// shortfall are visible over time. Logs at `debug`, not `error`: a normal run isn't an
+// incident. An actual shortfall is logged at `error` by `raiseBreach`.
 function record(ctx: WorkerCtx, position: BackingPosition, now: number): void {
   ctx.meter.observe(
     'economy.treasury.custodial_credit',
@@ -209,12 +192,9 @@ function record(ctx: WorkerCtx, position: BackingPosition, now: number): void {
   });
 }
 
-// Record a detected shortfall: add it to the tally, bump a counter, and log it at
-// `error` so it is surfaced loudly rather than passed over. A shortfall is exactly the
-// failure the backing guarantee exists to prevent. Nothing is posted to the ledger to
-// fix it — there is no ledger entry that could move USD into the trust account, and that
-// gap is settled elsewhere (from platform revenue), so raising this signal is all this
-// function does. Operators and the payout path act on it.
+// Record a detected shortfall: add to the tally, bump a counter, log at `error`. Nothing is
+// posted to fix it; no ledger entry moves USD into the trust account. That gap is settled
+// elsewhere (from platform revenue); operators and the payout path act on this signal.
 function raiseBreach(
   ctx: WorkerCtx,
   position: BackingPosition,
@@ -234,11 +214,9 @@ function raiseBreach(
   });
 }
 
-// Convert a bigint minor-unit amount to a number for the metrics API, which only accepts
-// numbers. A credit total at platform scale can exceed what a number represents exactly
-// (about 2^53), so this conversion can lose precision. That is acceptable for a metric,
-// but the result must never flow back into a ledger entry, a hash, or a trace, where the
-// exact value matters.
+// bigint minor units to number for the metrics API (numbers only). A platform-scale credit
+// total can exceed 2^53, so this can lose precision. Fine for a metric; the result must
+// never flow back into a ledger entry, hash, or trace.
 function toNumber(minor: bigint): number {
   return Number(minor);
 }
@@ -246,56 +224,45 @@ function toNumber(minor: bigint): number {
 // --- Fee sweep: realizing earned platform fees as cash ----------------------------
 
 /**
- * What one fee sweep produced. Each sweep carries an idempotency key — a value that makes a
- * retried request take effect only once. `duplicate` is true when that key was already
- * claimed by an earlier run, meaning this run is a retry: nothing was posted and `swept` is
- * zero. On a fresh run `swept` is the CREDIT amount turned into cash and `transaction` is
- * the CREDIT posting that did it.
+ * One fee sweep. Each sweep carries an idempotency key so a retried request takes effect
+ * once. `duplicate` is true when the key was already claimed by an earlier run (a retry:
+ * nothing posted, `swept` zero). On a fresh run `swept` is the CREDIT turned into cash and
+ * `transaction` is the CREDIT posting that did it.
  */
 export type FeeSweepResult =
   | { duplicate: true; swept: Amount }
   | { duplicate: false; swept: Amount; transaction: Transaction };
 
 /**
- * Turn earned platform fees into spendable cash for the platform: move `amount` of CREDIT
- * out of the platform's REVENUE account and move the matching USD out of the trust account
- * that holds users' money. This is the only path that converts the platform's accrued fees
- * into cash it can keep. It is the read-and-write counterpart to {@link sweepTreasury},
- * which only checks backing and never posts anything.
+ * Realize earned platform fees as platform cash: move `amount` of CREDIT out of REVENUE and
+ * the matching USD out of the trust account holding users' money. Only path that converts
+ * accrued fees into cash the platform keeps. Read-write counterpart to {@link sweepTreasury},
+ * which only checks backing.
  *
- * Three checks stand between the request and the posting. They all run inside one database
- * transaction with the touched accounts locked, so another sweep running at the same time
- * can never change the numbers between the check and the post:
+ * Three checks gate the posting, all inside one DB transaction with the touched accounts
+ * locked, so a concurrent sweep can't move the numbers between check and post:
  *
- *  - No dipping into users' money: the platform may only ever take its own surplus — the
- *    cash it holds beyond what it currently owes users. That liability is every user's
- *    spendable balance plus everything in escrow (the HELD accounts), converted to USD at
- *    the par rate. A draw that would push the trust-cash account below that liability throws
- *    COMMINGLING (the error code for mixing the platform's money with users') and posts
+ *  - Don't dip into users' money: take only the surplus, cash held beyond what is owed users.
+ *    That liability is every user's spendable balance plus HELD escrow, converted to USD at
+ *    par. A draw pushing trust-cash below it throws COMMINGLING and posts nothing.
+ *  - Refund window not yet closed: a fee on a still-refundable sale isn't yet the platform's,
+ *    so the take is also capped at the matured portion of REVENUE (`maturedBalance(REVENUE)`).
+ *  - Run at most once: an idempotency key is claimed inside the transaction, so a re-run does
  *    nothing.
- *  - Refund window not yet passed: a fee earned on a sale that can still be refunded is not
- *    yet the platform's to keep, so the amount it may take is also capped at the portion of
- *    REVENUE whose refund windows have already closed (`maturedBalance(REVENUE)`).
- *  - Run at most once: an idempotency key is claimed inside the transaction, so a re-run of
- *    the same sweep does nothing instead of posting a second time.
  *
- * Because REVENUE is denominated in CREDIT and the trust-cash account in USD, the two
- * sides cannot sit in one ledger entry — a single entry mixing currencies would be
- * rejected. So the move is split into two coupled entries, the same way a payout settles:
- * one CREDIT entry retires the swept amount out of REVENUE (offsetting it against
- * STORED_VALUE, the account that tracks total credit ever issued), and one USD entry moves
- * the matching cash out of the trust account into the clearing account. The two entries are
- * tied together by a shared rate id recording the conversion rate used.
+ * REVENUE is CREDIT and trust-cash is USD, and a single entry can't mix currencies, so the
+ * move splits into two coupled entries (same as a payout settle): one CREDIT entry retires
+ * the swept amount from REVENUE (offset against STORED_VALUE, total credit ever issued), one
+ * USD entry moves the cash from trust into clearing. The two share a rate id recording the
+ * conversion rate.
  *
  * @throws {EconomyError} INVALID_AMOUNT for a non-positive `amount`; COMMINGLING when the
  *   draw would exceed the surplus the platform is allowed to take.
  */
-// Enforce, before a sweep posts, that the platform takes only its own money: the amount may
-// never exceed `sweepable` — the most it is allowed to take, which is the smaller of its cash
-// surplus and the revenue whose refund windows have closed. Taking more would pull the
-// trust-cash account below what the platform owes users. This throws COMMINGLING as a hard
-// error (not a normal "no" returned to the caller), so the worker loop sets the run aside as
-// failed rather than quietly leaving users under-backed.
+// Before posting, enforce that the platform takes only its own money: `amount` may not exceed
+// `sweepable` (smaller of cash surplus and matured revenue). Taking more would pull trust-cash
+// below what is owed users. Throws COMMINGLING (a hard error, not a returned "no"), so the
+// worker loop marks the run failed rather than leaving users under-backed.
 function assertWithinSweepable(amount: Amount, sweepable: bigint): void {
   if (amount.minor <= sweepable) {
     return;
@@ -329,8 +296,8 @@ export async function sweepFees(
   }
 
   return store.transaction(async (unit) => {
-    // Claim the idempotency key first, before any read or posting, so a retry of the same sweep
-    // stops right here. Failing to claim it means another run already swept this same request.
+    // Claim the idempotency key before any read or posting, so a retry stops here. A failed
+    // claim means another run already swept this request.
     if (key !== undefined) {
       let claim = await unit.idempotency.claim(`sweep:${key}`);
       if (!claim.claimed) {
@@ -348,11 +315,10 @@ export async function sweepFees(
 
     assertWithinSweepable(amount, await sweepableCredit(store, ctx, unit));
 
-    // Convert the swept credits to USD at the par rate — the peg the trust-cash account is held
-    // against, and the same rate the surplus check above uses, so the cash side and the credit
-    // side stay reconciled. (The payout rate is for paying sellers out, not for the platform
-    // realizing its own surplus.) Remember which rate was used so the CREDIT entry and the USD
-    // entry below can be matched up as one move later.
+    // Convert swept credits to USD at par, the peg trust-cash is held against and the rate the
+    // surplus check uses, so the cash and credit sides stay reconciled. (The payout rate is for
+    // paying sellers, not for realizing the platform's surplus.) Keep the rate so the CREDIT and
+    // USD entries below can be matched as one move.
     let rate = ctx.rates.par('CREDIT');
     let usd = convertToUsd(amount, rate);
 
@@ -378,19 +344,17 @@ export async function sweepFees(
       },
     });
 
-    // Record the claim against the realizing posting so a replay of this window resolves to a
-    // no-op. Recorded inside the unit, so it only takes effect if the postings commit — a
-    // rolled-back sweep never burns its key.
+    // Record the claim against the posting so a replay resolves to a no-op. Recorded inside the
+    // unit, so it takes effect only if the postings commit; a rolled-back sweep never burns its
+    // key.
     if (key !== undefined) {
       await unit.idempotency.record(`sweep:${key}`, transaction);
     }
 
-    // Queue the "fees swept" event on the outbox inside this same transaction, so the event,
-    // the two postings, and the idempotency record all commit together or not at all. A
-    // rolled-back sweep leaves no stray event; a committed one is guaranteed to have queued
-    // exactly one. Audience is `internal` — this is a treasury/operator concern, not something
-    // pushed to a client. The subject is the CREDIT posting's transaction id, so whatever reads
-    // the event can tie it back to the ledger entry it came from.
+    // Queue the "fees swept" event on the outbox in this same transaction, so event, postings,
+    // and idempotency record commit together or not at all. Audience `internal`: a
+    // treasury/operator concern, not pushed to a client. Subject is the CREDIT posting's txn id
+    // so a reader can tie the event back to its ledger entry.
     await unit.outbox.enqueue({
       id: ctx.ids.next('obx'),
       event: {
@@ -411,10 +375,10 @@ export async function sweepFees(
 }
 
 /**
- * What one fee-realization sweep produced over a worker cycle. `swept` is the CREDIT amount
- * realized this cycle (`'CREDIT:0.00'` when there was no sweepable surplus, or when the
- * per-cycle key was already claimed by an earlier overlapping run). `skipped` is true when the
- * available surplus was zero, so nothing was posted or emitted.
+ * One fee-realization sweep over a worker cycle. `swept` is the CREDIT realized this cycle
+ * (`'CREDIT:0.00'` when no sweepable surplus, or the per-cycle key was already claimed by an
+ * overlapping run). `skipped` is true when available surplus was zero, so nothing posted or
+ * emitted.
  */
 export type FeeRealizationSummary = {
   swept: string;
@@ -423,26 +387,23 @@ export type FeeRealizationSummary = {
 };
 
 /**
- * The action {@link sweepTreasury} cannot take, since that one only measures: on each
- * scheduled worker run, turn the full amount the platform is currently allowed to take into
- * cash. That amount is the smaller of two figures — the platform's cash surplus, and the
- * revenue whose refund windows have already closed — and this realizes all of it.
+ * The write {@link sweepTreasury} doesn't do: on each scheduled run, realize the full amount
+ * the platform is currently allowed to take, the smaller of its cash surplus and matured
+ * revenue.
  *
- * The policy is simply: take everything available, and skip cleanly when there is nothing.
- * The available amount is read once inside a transaction (the same surplus and refund-window
- * math {@link sweepFees} re-checks while holding its locks). A zero read stops before any
- * write; a positive read passes the exact amount to {@link sweepFees}, whose own checks are
- * the real gate at the moment of posting. The key passed to that call is built from this
- * run's timestamp (`fees:<run time>`), so a retry of the same run does nothing the second
- * time.
+ * Policy: take everything available, skip cleanly when there's nothing. The amount is read
+ * once inside a transaction ({@link sweepFees} re-checks the surplus and refund-window math
+ * under its locks). A zero read stops before any write; a positive read passes the exact
+ * amount to {@link sweepFees}, whose checks gate at post time. The key is built from this
+ * run's timestamp (`fees:<run time>`), so a retry does nothing.
  */
 export async function realizeFees(
   store: Store,
   ctx: WorkerCtx,
   input: { now: number },
 ): Promise<FeeRealizationSummary> {
-  // Read the available sweepable surplus first, outside the posting path: if it is zero there
-  // is nothing to realize this cycle, so skip without claiming a key or posting an entry.
+  // Read sweepable surplus first, outside the posting path: if zero, skip without claiming a
+  // key or posting anything.
   let available = await store.transaction((unit) =>
     sweepableCredit(store, ctx, unit),
   );
@@ -465,11 +426,10 @@ export async function realizeFees(
   };
 }
 
-// The most credits the platform may turn into cash on this run: the smaller of two ceilings.
-// One is the cash surplus — the cash it holds beyond what it owes users — converted into
-// CREDIT at the par rate so both ceilings are in the same units. The other is the revenue
-// whose refund windows have already closed. Taking the smaller of the two keeps a fee earned
-// on a sale that could still be refunded off-limits until that sale can no longer be undone.
+// Most credits realizable this run: smaller of two ceilings. One is the cash surplus (cash
+// held beyond what is owed users), converted to CREDIT at par so both ceilings share units.
+// The other is revenue whose refund windows have closed. The smaller keeps a fee on a
+// still-refundable sale off-limits until that sale can't be undone.
 async function sweepableCredit(
   store: Store,
   ctx: WorkerCtx,
@@ -488,12 +448,10 @@ async function sweepableCredit(
   return ceiling < 0n ? 0n : ceiling;
 }
 
-// The platform's surplus, expressed in CREDIT: take the trust cash it holds, convert it to
-// CREDIT at the par rate, and subtract what it owes users — every user's spendable balance
-// plus everything in escrow (the HELD accounts), added up. A positive result is cash the
-// platform holds beyond what it owes; only that much may ever be turned into its own cash.
-// The "what it owes" total here counts exactly the same accounts as the backing check above,
-// so revenue, promotional grants, and payout reserves are never counted as owed to users.
+// Platform surplus in CREDIT: trust cash converted to CREDIT at par, minus what is owed users
+// (every user's spendable balance plus HELD escrow). A positive result is cash held beyond
+// what is owed; only that much may be realized. The owed total counts the same accounts as the
+// backing check above, so revenue, promo grants, and payout reserves aren't counted as owed.
 async function surplusCredit(
   store: Store,
   ctx: WorkerCtx,
@@ -512,9 +470,8 @@ async function surplusCredit(
   return trustInCredit - custodialCreditMinor;
 }
 
-// Convert a CREDIT amount to USD at the given rate, rounding down. The rate is stored as a
-// whole number scaled up by a power of ten (its `scale`), so multiply by that number and then
-// divide by ten-to-the-scale to undo the scaling and get the true conversion.
+// CREDIT to USD at the given rate, rounding down. The rate is stored scaled by 10^scale, so
+// multiply by rate.rate then divide by 10^scale to undo the scaling.
 function convertToUsd(amount: Amount, rate: Rate): Amount {
   return toAmount(
     'USD',
@@ -522,9 +479,9 @@ function convertToUsd(amount: Amount, rate: Rate): Amount {
   );
 }
 
-// Convert a USD amount back into CREDIT at the par rate, rounding down — the reverse of
-// `requiredBackingMinor`, which goes from CREDIT to USD. Because both round down, a round trip
-// (credits to USD and back) can only ever land at or below where it started, never above.
+// USD back to CREDIT at par, rounding down. Reverse of `requiredBackingMinor` (CREDIT to USD).
+// Both round down, so a round trip (credits to USD and back) lands at or below where it
+// started.
 function usdToCredit(usdMinor: bigint, par: Rate): bigint {
   let factor = par.rate;
   if (factor === 0n) {

@@ -14,10 +14,8 @@ import { getEconomy } from '~/economy.server';
 
 const DAY = 86_400_000;
 
-// The Simulation panel posts every knob here. Each branch mutates the live engine, then returns a
-// short note (or an inline error) the panel renders. React Router revalidates the active page's
-// loader after the action resolves, so the whole UI reflects the new engine state. This action
-// never throws to the user: any failure is caught and returned as { error }.
+// The Simulation panel posts every knob here. Each branch mutates the live engine and returns a
+// short note (or an inline error). Any failure is caught and returned as { error }.
 export async function action({ request }: Route.ActionArgs) {
   const eco = await getEconomy();
   const form = await request.formData();

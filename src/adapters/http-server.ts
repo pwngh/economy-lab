@@ -14,29 +14,25 @@ import { decodeWire, encodeWire } from '#src/adapters/http-wire.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Store, Unit } from '#src/ports.ts';
 
-// A transaction that the server opened and is holding open between requests. The real
-// database transaction is paused mid-flight, waiting on a promise (the "gate"), so later
-// requests can keep using it before it finally commits or rolls back.
+// A transaction held open between requests. The db transaction is paused mid-flight, waiting
+// on a promise (the "gate"), so later requests reuse it before it commits or rolls back.
 type Session = {
-  // The transaction-scoped set of stores (ledger, sagas, etc.) this transaction writes to.
-  // Every write through this unit commits or rolls back together.
+  // Transaction-scoped stores (ledger, sagas, etc.); all writes commit or roll back together.
   unit: Unit;
 
-  // Call this to end the transaction: true tells the paused work to commit, false to roll
-  // back. It does so by resolving or rejecting the gate promise the transaction is waiting on.
+  // End the transaction: true commits, false rolls back, by resolving/rejecting the gate.
   settle: (commit: boolean) => void;
 
-  // Resolves once the database transaction has finished committing or rolling back. Awaiting
-  // it surfaces any error that only happens at commit time.
+  // Resolves once the db transaction has committed or rolled back. Awaiting surfaces any
+  // commit-time error.
   done: Promise<void>;
 };
 
 // --- Session lifecycle ------------------------------------------------------------
 
-// Open a database transaction and pause it so later requests can use it. We start the
-// transaction, grab the per-transaction stores it hands us, then make the transaction body
-// wait on a promise (the gate). The commit and rollback routes later resolve or reject that
-// gate to finish it. Returns the new session id callers pass on every follow-up request.
+// Open a db transaction and pause its body on the gate promise so later requests can use it.
+// The commit/rollback routes resolve or reject the gate to finish it. Returns the session id
+// callers pass on every follow-up request.
 function beginSession(backing: Store, sessions: Map<string, Session>): string {
   let id = `sess_${sessions.size}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   let settle!: (commit: boolean) => void;
@@ -44,10 +40,9 @@ function beginSession(backing: Store, sessions: Map<string, Session>): string {
     settle = (commit) =>
       commit ? resolve() : reject(new Error('transaction rolled back'));
   });
-  // Record the session from inside the transaction body, saving the per-transaction stores
-  // (the unit) we were handed. We fill in `done` with a placeholder here and overwrite it
-  // just below, because the transaction promise we want to store doesn't exist yet at this
-  // point. Nothing reads `done` before the real value is set.
+  // Record the session from inside the transaction body, saving its unit. `done` is a
+  // placeholder here, overwritten just below, since the transaction promise doesn't exist yet.
+  // Nothing reads `done` before the real value is set.
   let done = backing
     .transaction(async (unit) => {
       sessions.set(id, {
@@ -59,9 +54,9 @@ function beginSession(backing: Store, sessions: Map<string, Session>): string {
     })
     .then(() => undefined);
   sessions.get(id)!.done = done;
-  // A rollback rejects this promise, which would otherwise be reported as an unhandled
-  // rejection. Catch and ignore it here: the rollback route succeeds either way, and a real
-  // commit-time error is still seen because the commit route awaits `done` directly.
+  // A rollback rejects this promise; catch it here to avoid an unhandled rejection. The
+  // rollback route succeeds either way, and commit-time errors still surface because the
+  // commit route awaits `done` directly.
   done.catch(() => {});
   return id;
 }

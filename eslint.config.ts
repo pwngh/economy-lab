@@ -194,6 +194,12 @@ export default tseslint.config(
     },
   },
 
+  // Test files (test/**) are linear arrange-act-assert narratives, and the differential/conformance
+  // suites iterate over the adapter matrix (each engine × each invariant), so a single test() body
+  // legitimately runs long and nests a few callbacks deep. The function-size and nesting limits above
+  // are tuned for production code in src/; relaxing only those two here keeps a scenario readable as one
+  // piece instead of fragmenting it to satisfy a heuristic. Every correctness rule (no-unused-vars,
+  // complexity, no-restricted-* etc.) still applies to tests unchanged.
   {
     files: ['test/**/*.ts'],
     rules: {

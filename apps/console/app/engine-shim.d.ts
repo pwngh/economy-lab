@@ -10,20 +10,13 @@
  */
 
 /**
- * Type-only shim for consuming the frozen economy-lab engine source under THIS app's DOM lib.
+ * Type-only shim for the engine source under this app's DOM lib.
  *
- * The engine is WinterCG: it ships its own ambient `wintercg.d.ts` whose `SubtleCrypto` and
- * `BufferSource` accept a plain `Uint8Array`, and it is type-checked at the repo root under that
- * config (lib: esnext, types: []). That ambient file is NOT part of this app's program — here the
- * DOM lib's stricter `SubtleCrypto` is in scope, and since TS 5.7 a `Uint8Array` is generic over
- * its backing buffer (`Uint8Array<ArrayBufferLike>`), which DOM's `BufferSource` (ArrayBuffer-only)
- * rejects. That produces false errors in the engine's crypto calls, even though the code is correct
- * and builds + runs fine (Vite/esbuild transpiles it without type-checking).
- *
- * Declaration-merging an overload onto `SubtleCrypto` that accepts the generic `Uint8Array` makes
- * the engine's calls type-check here, without touching the frozen `src/` and without weakening the
- * app's own DOM types. This is the documented way to reconcile two compatible-at-runtime crypto
- * typings across a compilation boundary.
+ * The engine is WinterCG and type-checks at the repo root (lib esnext, its own wintercg.d.ts). Here
+ * the DOM lib's stricter SubtleCrypto is in scope, and since TS 5.7 Uint8Array is generic over its
+ * buffer (Uint8Array<ArrayBufferLike>), which DOM's BufferSource rejects — false errors on the
+ * engine's crypto calls, though it builds and runs fine. Declaration-merging Uint8Array overloads
+ * onto SubtleCrypto makes those calls type-check without touching src/ or weakening the app's types.
  */
 
 interface SubtleCrypto {

@@ -28,9 +28,8 @@ function dayHeading(at: number) {
   return d.charAt(0).toUpperCase() + d.slice(1);
 }
 
-// The tone each row's type tag carries: money coming in is blue, a marketplace sale green, the
-// payout lifecycle amber→green→red by outcome. Background plumbing (a fee sweep) is left neutral
-// so the eye lands on the economic events first.
+// Type-tag tone per row: money in blue, a sale green, the payout lifecycle amber→green→red. A fee
+// sweep is left neutral.
 const KIND_TONE: Record<string, 'blue' | 'green' | 'amber' | 'red'> = {
   topUp: 'blue',
   spend: 'green',
@@ -43,8 +42,7 @@ const KIND_TONE: Record<string, 'blue' | 'green' | 'amber' | 'red'> = {
 };
 
 // The ledger feed: every committed posting, newest first, grouped by day and expandable to its
-// double-entry legs. The worker's settlements and sweeps are folded to one row per event (their USD
-// cash leg lives in the expansion), so the feed reads as a list of events rather than raw postings.
+// legs. Worker settlements and sweeps are folded to one row per event (the cash leg in the expansion).
 export default function Ledger({ loaderData }: Route.ComponentProps) {
   const { txns } = loaderData;
   const [open, setOpen] = useState<Set<string>>(new Set());

@@ -43,7 +43,7 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store, Unit } from '#src/ports.ts';
 import type { Config } from '#src/config.ts';
 
-// A gift is an ordinary purchase carrying a `giftTo` recipient (VRChat's isGift), NOT a
+// A gift is an ordinary purchase carrying a `giftTo` recipient (VRChat's isGift), not a
 // wallet-to-wallet move: the buyer pays and is screened, the recipient receives the item.
 async function giftsToRecipientWhileChargingBuyer(): Promise<void> {
   const store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });

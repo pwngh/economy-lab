@@ -28,48 +28,45 @@ import type {
 } from '#src/ports.ts';
 
 /**
- * One step in an account's hash chain. Each account's postings are linked together by
- * hashing each posting onto the hash of the one before it; the most recent hash is called
- * that account's "head". This link records the new head after a posting, together with the
- * head it followed. Each account has its own separate chain of these links.
+ * One step in an account's hash chain. Each posting is hashed onto the hash of the previous
+ * one; the latest hash is the account's "head". This records the new head after a posting and
+ * the head it followed. Each account has its own chain.
  */
 export type ChainLink = {
   account: AccountRef;
 
-  // The account's head hash BEFORE this posting, as lowercase hex. For an account's very
-  // first posting this is the genesis value (64 zeros), meaning "nothing came before".
+  // Head hash before this posting, lowercase hex. For an account's first posting this is the
+  // genesis value (64 zeros).
   prevHash: string;
 
-  // The account's head hash AFTER this posting, as lowercase hex.
+  // Head hash after this posting, lowercase hex.
   hash: string;
 };
 
-// The hash that stands in for "no previous posting", as lowercase hex: 32 zero bytes
-// written out as 64 zero characters. Matches GENESIS in ledger.ts.
+// "No previous posting" hash, lowercase hex: 32 zero bytes as 64 zero chars. Matches GENESIS
+// in ledger.ts.
 let GENESIS_HEX = '0'.repeat(64);
 
 /**
- * A description of the first broken link the prover finds in an account's chain. The
- * prover returns this rich record (rather than just true/false) so a caller can see
- * exactly which posting failed and how.
+ * The first broken link the prover finds in an account's chain. Returned instead of a bare
+ * boolean so a caller can see which posting failed and how.
  */
 export type ChainBreak = {
   account: AccountRef;
 
   txnId: string;
 
-  // What went wrong:
-  // - 'broken-link': this posting's stored "previous head" does not match the head we
-  //   reached by walking the chain so far, so the chain is not continuous.
-  // - 'tampered-hash': re-hashing this posting's stored entries and metadata no longer
-  //   produces the head hash that was recorded, so its contents were changed after the fact.
+  // - 'broken-link': stored "previous head" doesn't match the head reached by walking the
+  //   chain so far; the chain isn't continuous.
+  // - 'tampered-hash': re-hashing the stored entries and metadata no longer produces the
+  //   recorded head hash; contents were changed after the fact.
   reason: 'broken-link' | 'tampered-hash';
 
-  // The hash we expected: the head reached by walking the chain (for 'broken-link') or the
-  // freshly recomputed hash (for 'tampered-hash').
+  // Expected hash: the head reached by walking the chain ('broken-link') or the recomputed
+  // hash ('tampered-hash').
   expected: string;
 
-  // The hash actually stored that failed to match `expected`.
+  // The stored hash that failed to match `expected`.
   actual: string;
 };
 
@@ -86,17 +83,15 @@ export type ChainReport = {
 };
 
 /**
- * Compute the new head hash for each account a posting touches. This is what the write
- * path calls when appending a posting.
+ * Compute the new head hash for each account a posting touches. Called by the write path when
+ * appending a posting.
  *
- * A posting has many entries (called legs), and several can name the same account; this
- * produces exactly one new link per distinct account, in the order the accounts first
- * appear. Because each account hashes only its own entries onto its own prior head,
- * different users never share a chain.
+ * A posting has many entries (legs), several of which can name the same account; this produces
+ * one link per distinct account, in the order accounts first appear. Each account hashes only
+ * its own entries onto its own prior head, so chains never mix across accounts.
  *
- * `prevHeadOf` returns an account's current head hash, or undefined if the account has
- * never been posted to before; either undefined or the genesis value means the new link
- * starts from genesis ("nothing came before").
+ * `prevHeadOf` returns an account's current head, or undefined if never posted to. Undefined or
+ * the genesis value means the new link starts from genesis.
  */
 export async function advanceHeads(
   digest: Digest,
@@ -121,21 +116,20 @@ export async function advanceHeads(
 }
 
 /**
- * Re-check every account's chain: walk each account's postings from the start, recompute
- * the head hash at each step, and stop at the first thing that doesn't add up.
+ * Re-check every account's chain: walk each account's postings from the start, recompute the
+ * head hash at each step, stop at the first mismatch.
  *
- * Accounts are checked in a fixed order (by comparing their id strings character by
- * character), so the same tampering is always reported the same way regardless of which
- * runtime or database returns the accounts in which order. The recompute uses the very
- * same hashing the write path used, so an untampered ledger always reproduces its stored
- * hashes exactly.
+ * Accounts are checked in a fixed order (by id string, char by char), so the same tampering is
+ * reported the same way regardless of the order a runtime or database returns accounts. The
+ * recompute uses the same hashing as the write path, so an untampered ledger reproduces its
+ * stored hashes exactly.
  */
 export async function proveChain(
   deps: { ledger: Ledger; digest: Digest },
   options?: Options,
 ): Promise<ChainReport> {
-  // Read every account's head, sorted by account id (character by character, the same on every
-  // machine), so proveChain checks accounts in the same sequence everywhere.
+  // Read every account's head, sorted by account id (char by char), so proveChain checks
+  // accounts in the same sequence everywhere.
   let heads = [...(await collectHeadPairs(deps.ledger))].sort((a, b) =>
     byCodeUnit(a[0], b[0]),
   );
@@ -149,11 +143,10 @@ export async function proveChain(
   return { intact: true, firstBreak: null, count };
 }
 
-// Walk one account's postings in order and check each link. `prev` tracks the head hash
-// reached so far (the genesis value before the first posting). Two ways a link can fail:
-// its stored "previous head" doesn't match `prev` (the chain isn't continuous), or
-// re-hashing its contents doesn't reproduce its stored hash (its contents were changed).
-// Returns the first failure, or null if the whole account checks out.
+// Walk one account's postings in order, check each link. `prev` is the head reached so far
+// (genesis before the first posting). A link fails if its stored "previous head" doesn't match
+// `prev` (not continuous) or re-hashing its contents doesn't reproduce its stored hash
+// (contents changed). Returns the first failure, or null if the account checks out.
 async function recomputeAccount(
   deps: { ledger: Ledger; digest: Digest },
   account: AccountRef,
@@ -185,10 +178,9 @@ async function recomputeAccount(
   return null;
 }
 
-// Re-hash one stored posting exactly the way the write path did: feed its stored previous
-// head (decoded from hex back to bytes) plus its entries and metadata through the same
-// hash function. The result should equal the head hash recorded for that posting; if any
-// entry was altered after the fact, it won't.
+// Re-hash one stored posting the way the write path did: feed its stored previous head (hex
+// decoded back to bytes) plus entries and metadata through the same hash function. The result
+// should equal the recorded head hash; if any entry was altered, it won't.
 function recomputeLink(
   digest: Digest,
   account: AccountRef,
@@ -204,19 +196,15 @@ function recomputeLink(
 }
 
 /**
- * Reduce every account's head hash down to one single hash that stands for all of them at
- * once. This is a Merkle root: hash each account's head into a "leaf", then repeatedly
- * hash leaves together in pairs until only one hash is left. That final hash changes if
- * any single head changes, so signing it (see `recordCheckpoint`) vouches for every
- * account's chain in one signature.
+ * Reduce every account's head into one hash, a Merkle root: hash each head into a leaf, then
+ * hash leaves in pairs until one remains. The root changes if any head changes, so signing it
+ * (see `recordCheckpoint`) covers every account's chain in one signature.
  *
- * Two rules make the result identical on every machine. First, the leaves are sorted by
- * comparing account id strings character by character (a fixed order, unlike a
- * locale-sensitive sort). Second, the building blocks are pinned: each leaf is the hash of
- * `account + ":" + head`, and each pair of hashes is combined by hashing the two joined
- * left-then-right (so swapping the order would change the result). With no accounts at
- * all, the root is the genesis value (32 zero bytes), so even a brand-new ledger has a
- * stable hash to sign.
+ * Two rules pin the result across machines. Leaves are sorted by account id char by char (not
+ * locale-sensitive). The building blocks are fixed: each leaf is the hash of `account + ":" +
+ * head`, and each pair is combined by hashing the two joined left-then-right, so swapping order
+ * changes the result. With no accounts, the root is the genesis value (32 zero bytes), so a new
+ * ledger still has a stable hash to sign.
  */
 export async function merkleRoot(
   digest: Digest,
@@ -237,20 +225,18 @@ export async function merkleRoot(
 }
 
 /**
- * Take a tamper-evident snapshot of the whole ledger right now: prove the chain re-derives,
- * then collect every account's head hash, reduce them to one Merkle root (see `merkleRoot`),
- * sign that root, and save the signed snapshot (a "checkpoint").
+ * Take a tamper-evident snapshot of the ledger now: prove the chain re-derives, collect every
+ * account's head, reduce to one Merkle root (see `merkleRoot`), sign the root, and save the
+ * signed snapshot (a "checkpoint").
  *
- * The proof must come first: signing the root attests that the ledger is intact, so it would
- * be a false attestation to sign over a chain whose stored hashes no longer re-derive from
- * their postings. So before building anything, `proveChain` re-walks every account; if it
- * finds a break, this throws a non-retryable CHAIN_BROKEN fault and persists no checkpoint
- * (the caller treats a non-retryable fault as a dead end: it does not retry, and sets the
- * job aside for an operator to investigate rather than failing silently).
+ * The proof comes first: a signed root attests the ledger is intact, so signing over a chain
+ * that no longer re-derives would be a false attestation. `proveChain` re-walks every account;
+ * on a break this throws a non-retryable CHAIN_BROKEN fault and persists no checkpoint. The
+ * caller treats a non-retryable fault as a dead end: no retry, sets the job aside for an
+ * operator.
  *
- * The save goes through the checkpoint store, which is deliberately separate from the
- * database transaction that posts money. So if a money operation is rolled back, an
- * already-recorded checkpoint is not undone with it.
+ * The save goes through the checkpoint store, kept separate from the database transaction that
+ * posts money, so a rolled-back money operation doesn't undo an already-recorded checkpoint.
  */
 export async function recordCheckpoint(
   deps: {
@@ -289,25 +275,21 @@ export async function recordCheckpoint(
 }
 
 /**
- * Check a saved checkpoint against the ledger as it stands now. Recompute the Merkle root
- * over the current account heads and compare it to the one in the checkpoint, then confirm
- * the checkpoint's signature really covers that root.
+ * Check a saved checkpoint against the current ledger. Recompute the Merkle root over current
+ * heads, compare to the checkpoint's root, then confirm the signature covers that root.
  *
- * The signature check accepts the current signing key plus any still-valid older keys, so
- * a checkpoint signed before a key rotation keeps verifying afterward.
+ * The signature check accepts the current signing key plus any still-valid older keys, so a
+ * checkpoint signed before a key rotation keeps verifying.
  *
- * Returns false on a normal "doesn't match" outcome: the recomputed root differs (the
- * ledger has changed or been tampered with), the live head count dropped below the count
- * recorded in the checkpoint (accounts were truncated or deleted), or the signature isn't
- * authentic. It throws
- * only if the stored hex itself is malformed, which means the saved row is corrupt rather
- * than that verification simply failed.
+ * Returns false on a normal mismatch: recomputed root differs (ledger changed or tampered),
+ * live head count dropped below the recorded count (accounts truncated or deleted), or the
+ * signature isn't authentic. Throws only if the stored hex is malformed, meaning the saved row
+ * is corrupt rather than verification just failing.
  *
- * The head-count check exists to catch deleted accounts. The root is computed over whatever
- * heads exist now, so if accounts vanished the root simply reflects the smaller set and a
- * root-only check would still match its own (shrunken) input. Comparing the live head count
- * against the count recorded in the checkpoint catches that deletion — a healthy ledger only
- * ever grows, so fewer heads than were recorded is a tamper signal, while equal or more is fine.
+ * The head-count check catches deleted accounts. The root is computed over whatever heads exist
+ * now, so if accounts vanished the root reflects the smaller set and a root-only check would
+ * still match its shrunken input. A healthy ledger only grows, so fewer heads than recorded is a
+ * tamper signal; equal or more is fine.
  */
 export async function verifyCheckpoint(
   deps: { ledger: Ledger; digest: Digest; signer: Signer },
@@ -321,8 +303,8 @@ export async function verifyCheckpoint(
   if (toHex(root) !== checkpoint.root) {
     return false;
   }
-  // Decode the stored hex back to bytes so the signature is checked over the exact same
-  // root bytes that recordCheckpoint signed.
+  // Decode stored hex back to bytes so the signature is checked over the same root bytes
+  // recordCheckpoint signed.
   return deps.signer.verify(
     fromHex(checkpoint.root),
     fromHex(checkpoint.signature),
@@ -331,9 +313,9 @@ export async function verifyCheckpoint(
 
 // --- Internals --------------------------------------------------------------------
 
-// List the accounts a posting touches, each once, in the order they first appear in the
-// posting's entries (legs). One posting can have several entries on the same account; this
-// collapses those so each account advances its chain by a single step, not one per entry.
+// Accounts a posting touches, each once, in the order they first appear in the legs. Several
+// legs can name the same account; collapsing them advances each account's chain one step, not
+// one per leg.
 function distinctAccounts(posting: Posting): AccountRef[] {
   let seen = new Set<AccountRef>();
   let order: AccountRef[] = [];
@@ -346,18 +328,16 @@ function distinctAccounts(posting: Posting): AccountRef[] {
   return order;
 }
 
-// Build the bytes that get hashed into one Merkle leaf: the text "account:head" encoded as
-// UTF-8. There's no length marker between the two parts, but they still can't run together
-// ambiguously, because an account id uses ":" only inside itself and a head hash is pure
-// hex digits, so the joining ":" is always the one that splits account from head.
+// Bytes hashed into one Merkle leaf: "account:head" as UTF-8. No length marker, but the parts
+// can't run together ambiguously: an account id may contain ":" while a head hash is pure hex,
+// so the joining ":" is always the one that splits account from head.
 function leafPreimage(account: AccountRef, head: string): Uint8Array {
   return ENCODER.encode(`${account}:${head}`);
 }
 
-// Take one row of hashes in the Merkle tree and produce the row above it: hash each
-// adjacent pair together into a single hash. If the row has an odd count, the last,
-// unpaired hash is carried up unchanged. Each pair is hashed as left-bytes followed by
-// right-bytes, so order matters and a swapped pair would change the final root.
+// One row of Merkle hashes to the row above it: hash each adjacent pair into one hash. On an odd
+// count the last unpaired hash carries up unchanged. Each pair is hashed left-bytes then
+// right-bytes, so order matters; a swapped pair changes the root.
 async function combineLevel(
   digest: Digest,
   level: ReadonlyArray<Uint8Array>,
@@ -371,9 +351,8 @@ async function combineLevel(
   return next;
 }
 
-// Join two hashes end to end (left, then right) into one byte array for the pair-hash
-// above. Both inputs are hashes of the same fixed length, so there's no ambiguity about
-// where one ends and the other begins.
+// Join two hashes end to end (left, then right) into one byte array for the pair-hash above.
+// Both inputs are the same fixed length, so the split point is unambiguous.
 function concat(left: Uint8Array, right: Uint8Array): Uint8Array {
   let out = new Uint8Array(left.length + right.length);
   out.set(left, 0);
@@ -381,9 +360,8 @@ function concat(left: Uint8Array, right: Uint8Array): Uint8Array {
   return out;
 }
 
-// Drain the ledger's stream of (account, head) pairs into a plain array. Loading them all
-// at once is fine here: the number of pairs is just the number of accounts, and a
-// checkpoint is meant to cover all of them anyway.
+// Drain the ledger's stream of (account, head) pairs into an array. Loading all at once is fine:
+// one pair per account, and a checkpoint covers all of them anyway.
 async function collectHeadPairs(
   ledger: Ledger,
 ): Promise<ReadonlyArray<readonly [AccountRef, string]>> {

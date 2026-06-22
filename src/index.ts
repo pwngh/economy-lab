@@ -36,18 +36,16 @@ import type {
 
 // --- Public surface (re-exports only) ---------------------------------------------
 
-// createEconomy is the main entry point that builds an economy from its services;
-// memoryStore is the in-memory storage backend that lets you run one with no database.
+// createEconomy: builds an economy from its services. memoryStore: in-memory backend, runs with no database.
 export { createEconomy } from '#src/economy.ts';
 export { memoryStore } from '#src/adapters/memory.ts';
 
-// Helpers for naming accounts. spendable/earned/promo/currency build account ids, and
-// SYSTEM holds the platform's own accounts. A host re-exports these so it can refer to an
-// account without hand-writing the id string (a user account id looks like `usr_…:<kind>`).
+// Account-naming helpers. spendable/earned/promo/currency build account ids; SYSTEM holds the
+// platform's own accounts. Lets a host refer to an account without hand-writing the id string
+// (a user account id looks like `usr_…:<kind>`).
 export { spendable, earned, promo, currency, SYSTEM } from '#src/accounts.ts';
 
-// loadConfig reads settings out of environment variables and validates them; Config is the
-// resulting settings object the rest of the library is handed.
+// loadConfig reads and validates settings from env vars; Config is the resulting settings object.
 export { loadConfig } from '#src/config.ts';
 
 export type { Economy } from '#src/economy.ts';
@@ -69,10 +67,10 @@ export type { Capabilities, Options, Range, Statement } from '#src/ports.ts';
 // --- The in-memory composition helper ---------------------------------------------
 
 /**
- * The external services that have no honest in-memory stand-in, so the caller must supply
- * a real one. `pricing` decides how a sale's money is split (platform fee vs. seller share);
- * the rest are outside integrations an adapter owns: `processor` is the payout provider
- * (Tilia/Steam), `signer` holds the signing key, and `rates` supplies currency-exchange rates.
+ * External services with no in-memory stand-in; the caller supplies a real one. `pricing` splits
+ * a sale's money (platform fee vs. seller share). The rest are outside integrations: `processor`
+ * is the payout provider (Tilia/Steam), `signer` holds the signing key, `rates` supplies
+ * currency-exchange rates.
  */
 export type InMemoryPorts = {
   signer: Signer;
@@ -85,9 +83,8 @@ export type InMemoryPorts = {
 };
 
 /**
- * The runtime services {@link composeInMemory} can fill in for you using web-standard
- * browser/runtime primitives. Pass any of these to override the default — for example, a
- * fixed clock and a counting id generator so a test produces the same output every run.
+ * Runtime services {@link composeInMemory} fills in from web-standard primitives. Pass any to
+ * override the default, e.g. a fixed clock and counting id generator for reproducible test output.
  */
 export type InMemoryDefaults = {
   clock?: Clock;
@@ -102,12 +99,11 @@ export type InMemoryDefaults = {
 };
 
 /**
- * Wire up an {@link Economy} backed entirely by the in-memory store — the simplest setup
- * that still runs the real code, useful for tests and demos. It reads settings from `env`,
- * supplies default runtime services (current-time clock, random-id generator, SHA-256 hash,
- * do-nothing logger and metrics), and uses the external services you pass in `ports`.
- * If `env` is misconfigured, this throws at startup with a single combined `CONFIG.INVALID`
- * error rather than failing later inside a request.
+ * Wire an {@link Economy} backed by the in-memory store: simplest setup that still runs the real
+ * code, for tests and demos. Reads settings from `env`, supplies default runtime services
+ * (wall clock, random-id generator, SHA-256 hash, no-op logger and metrics), and uses the
+ * external services from `ports`. A misconfigured `env` throws at startup with one combined
+ * `CONFIG.INVALID` error rather than failing later inside a request.
  */
 export function composeInMemory(
   env: Record<string, string | undefined>,
@@ -139,8 +135,7 @@ export function composeInMemory(
 
 // --- Default runtime services -----------------------------------------------------
 
-// A clock that reports the current wall-clock time in epoch milliseconds. Pass your own
-// clock instead when you need timing to be reproducible (for example, in a test).
+// Wall-clock time in epoch milliseconds. Pass your own clock for reproducible timing (e.g. tests).
 function wallClock(): Clock {
   return { now: () => Date.now() };
 }

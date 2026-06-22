@@ -9,9 +9,8 @@
  * @license MIT
  */
 
-// The frame every page sits in: a sidebar of links on the left, the active page in the middle, and
-// a collapsible Simulation panel at the foot. The panel lives in the frame (not a page) so its
-// controls — which drive the shared state every page reads from — stay reachable wherever you are.
+// The frame every page sits in: sidebar nav, the active page, and a collapsible Simulation panel.
+// The panel lives in the frame, not a page, so its controls are reachable everywhere.
 
 import { NavLink, Outlet, useFetcher } from 'react-router';
 
@@ -20,9 +19,8 @@ import type { Route } from './+types/_chrome';
 import { getEconomy } from '~/economy.server';
 import { StatusPill, dayLabel } from '~/ui';
 
-// The data the frame itself needs, loaded on every page: the simulation settings (so the panel's
-// controls show their current values) and the headline solvency figure (shown in the panel). Both
-// are reads; nothing here changes state.
+// What the frame needs on every page: the sim settings (for the panel's controls) and the headline
+// solvency figure. Both reads.
 export async function loader(_: Route.LoaderArgs) {
   const eco = await getEconomy();
   return { settings: eco.settings(), solvency: await eco.solvency() };
@@ -69,10 +67,9 @@ export default function Chrome({ loaderData }: Route.ComponentProps) {
   );
 }
 
-// The control panel that drives the shared state. Collapsed by default; clicking the bar reveals
-// the controls. Each control posts to /actions/simulate through a fetcher; when it returns, React
-// Router re-runs the active page's loader so the whole view reflects the change. A one-line result
-// (what ran, or why an action was refused) comes back in `fx.data` and shows as a notice.
+// The control panel that drives the shared state. Each control posts to /actions/simulate via a
+// fetcher; on return, React Router revalidates the active page's loader. The one-line result comes
+// back in fx.data as a notice.
 function SimulationPanel({
   settings,
   solvency,
@@ -221,9 +218,7 @@ function SimulationPanel({
   );
 }
 
-// A one-button form that posts a single simulation op (plus any fixed hidden fields). Most of the
-// panel's controls are exactly this — a labelled button that triggers one op — so they share it
-// rather than repeating the form boilerplate.
+// A one-button form posting a single sim op (plus any hidden fields). Most panel controls are this.
 function SimButton({
   fx,
   op,

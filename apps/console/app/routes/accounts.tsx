@@ -15,8 +15,7 @@ import type { Route } from './+types/accounts';
 import { getEconomy } from '~/economy.server';
 import { Credits, DataTable, StatCard } from '~/ui';
 
-// Wallets list, with an optional ?user= detail. The detail re-reads the same wallet figures and
-// shows the per-account breakdown the engine exposes (purchased / earned / promotional).
+// Wallets list, with an optional ?user= detail showing the per-account breakdown.
 export async function loader({ request }: Route.LoaderArgs) {
   const eco = await getEconomy();
   const wallets = await eco.wallets();
