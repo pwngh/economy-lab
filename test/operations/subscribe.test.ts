@@ -41,11 +41,9 @@ import {
 import type { Economy, Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
 
-// The public `Economy` only routes a few operations (topUp, grantPromo, spend); subscribe
-// isn't one of them, so a test can't reach `handleSubscribe` through `economy.submit`.
-// This harness gives a test both halves it needs: the public `economy` to seed the buyer's
-// funds, and a direct `run` that calls `handleSubscribe` inside a transaction on the SAME
-// store, which is the only way to drive the handler.
+// The public `Economy` only routes topUp/grantPromo/spend, not subscribe, so `economy.submit`
+// can't reach `handleSubscribe`. This harness exposes both: the public `economy` to seed the
+// buyer's funds, and a direct `run` that calls `handleSubscribe` in a transaction on the same store.
 type Harness = {
   economy: Economy;
   store: Store;
@@ -109,8 +107,8 @@ function rejectionOf(
   return outcome as Extract<Outcome, { status: 'rejected' }>;
 }
 
-// True when the thrown value is the handler's "malformed operation" error (an out-of-range
-// or wrong-currency price), used as the predicate for `assert.rejects`.
+// Predicate for `assert.rejects`: the handler's "malformed operation" error (out-of-range
+// or wrong-currency price).
 function isMalformed(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -118,7 +116,7 @@ function isMalformed(error: unknown): boolean {
   );
 }
 
-// --- Test bodies (one helper per case, so the describe block below stays short) -----
+// --- Test bodies (one helper per case; keeps the describe block short) -----
 
 async function chargesFirstMonthFromSpendable(harness: Harness): Promise<void> {
   await harness.economy.submit(
@@ -145,11 +143,10 @@ async function roundsTheFeeUpToAWholeCredit(harness: Harness): Promise<void> {
 
   await harness.run(subscribeOf('100.01'));
 
-  // The 30% fee on 100.01 is 30.003 credits — a fee that lands BETWEEN whole credits. VRChat's
-  // rule rounds the fee UP to the next whole credit, so 31.00 (not 30.00) lands in REVENUE. This
-  // price is chosen because the fee is fractional in minor units (3000.3): a fee path that floored
-  // to minor units before rounding up would drop the 0.3 and wrongly settle on 30.00, so this
-  // pins that subscribe shares pricing.ts `feeForPrice` (round the exact fee up in one step).
+  // 30% fee on 100.01 is 30.003 credits, between whole credits. The rule rounds up, so 31.00 (not
+  // 30.00) lands in REVENUE. Price chosen because the fee is fractional in minor units (3000.3): a
+  // path that floored to minor units before rounding up would drop the 0.3 and settle on 30.00.
+  // Pins that subscribe shares pricing.ts `feeForPrice` (round the exact fee up in one step).
   assert.deepEqual(
     await harness.economy.read.balance(SYSTEM.REVENUE),
     credit('31.00'),
@@ -188,8 +185,8 @@ async function keepsPromoFloatSummingToZero(harness: Harness): Promise<void> {
 
   await harness.run(subscribeOf('100.00'));
 
-  // PROMO_FLOAT is the platform account that offsets outstanding promo grants: every credit in a
-  // user's promo balance is matched by an opposite entry there, so the two always cancel to zero.
+  // PROMO_FLOAT offsets outstanding promo grants: every credit in a user's promo balance has an
+  // opposite entry there, so the two cancel to zero.
   let promoBalance = await harness.economy.read.balance(promo('usr_buyer'));
   let promoFloat = await harness.economy.read.balance(SYSTEM.PROMO_FLOAT);
   assert.equal(promoBalance.minor + promoFloat.minor, 0n);
@@ -244,20 +241,18 @@ async function grantsTheSkuEntitlement(harness: Harness): Promise<void> {
   let outcome = await harness.run(subscribeOf('100.00'));
 
   assert.equal(outcome.status, 'committed');
-  // The purchased item (the SKU) is granted inside the same database transaction that takes the
-  // first-month charge, so any subscriber who paid owns it. Ownership lives in the entitlement
-  // store, which is only reachable inside a transaction, so we open one to read it back.
+  // The SKU is granted in the same transaction as the first-month charge. Ownership lives in the
+  // entitlement store, reachable only inside a transaction, so open one to read it back.
   let owned = await harness.store.transaction((unit) =>
     unit.entitlements.owns('usr_buyer', 'club_pass'),
   );
   assert.equal(owned, true);
 }
 
-// A subscribe charge counts toward the same recent-spending limit (the "velocity window" — the
-// running total of how much a user has spent in the current time window) as an ordinary spend.
-// If a subscribe's price would push that total over the configured limit, it is denied.
-// `assessRisk` is the pure function that makes this decision; the live request pipeline calls it
-// the same way, so testing `assessRisk` directly checks the rule everything else relies on.
+// A subscribe charge counts toward the same recent-spending limit (the velocity window: running
+// total spent in the current time window) as an ordinary spend, and is denied if its price would
+// push the total over the configured limit. `assessRisk` is the pure decision function the live
+// pipeline calls, so testing it directly checks the shared rule.
 function deniesSubscribeOverTheVelocityLimit(): void {
   let config = testConfig();
   // A limit low enough that one max-band subscribe (10,000 credits = 1,000,000 minor) trips it

@@ -35,10 +35,8 @@ import { testConfig } from '#test/support/capabilities.ts';
 import type { Operation, Outcome, Transaction } from '#src/contract.ts';
 import type { Attempt, Velocity } from '#src/ports.ts';
 
-// Build a config with a small spending limit so each test spells out the exact limit it
-// is checking against, instead of relying on the larger default limit. `limitMinor` is
-// the limit in CREDIT minor units (the smallest CREDIT unit, like cents for dollars), and
-// `windowMs` is how long the spending window lasts in milliseconds.
+// Small spending limit so each test states its own limit instead of the larger default.
+// `limitMinor` is the limit in CREDIT minor units (cents); `windowMs` is the window length in ms.
 function gateConfig(limitMinor: bigint, windowMs = 3_600_000) {
   return {
     ...testConfig(),
@@ -47,9 +45,8 @@ function gateConfig(limitMinor: bigint, windowMs = 3_600_000) {
   };
 }
 
-// Build a spending record for one subject whose time window is currently open: it began at
-// `windowStart` and has `spentMinor` spent so far (in CREDIT minor units, the smallest
-// CREDIT unit). This is the shape the risk check receives once the store has brought the
+// Spending record for one subject with an open window: started at `windowStart`, `spentMinor`
+// spent so far (CREDIT minor units). The shape the risk check receives after the store brings the
 // record up to date for the current time.
 function velocityAt(windowStart: number, spentMinor: bigint): Velocity {
   return {
@@ -60,14 +57,13 @@ function velocityAt(windowStart: number, spentMinor: bigint): Velocity {
   };
 }
 
-// An operation that finished but was turned down by the risk check. A denied attempt must
-// still be recorded toward the spending limit, so this is the outcome those tests use.
+// An operation that finished but was denied by the risk check. Denied attempts still count
+// toward the spending limit, so denial-path tests use this outcome.
 let REJECTED: Outcome = { status: 'rejected', reason: 'RISK_DENIED' };
 
-// Build an outcome that carries a transaction. The transaction's contents don't matter
-// here: the attempt builder only looks at the outcome's status and the operation's key, so
-// the detail fields are left empty (legs are the debit/credit lines that moved money, and
-// links are the per-account hash-chain entries).
+// Outcome carrying a transaction. Contents don't matter: the attempt builder only reads the
+// outcome's status and the operation's key, so detail fields are left empty (legs are the
+// debit/credit lines; links are the per-account hash-chain entries).
 function withTransaction(status: 'committed' | 'duplicate'): Outcome {
   let transaction: Transaction = {
     id: 'txn_test',
@@ -114,8 +110,7 @@ function allowsAtExactlyTheCeiling(): void {
     price: credit('3.00'),
   });
 
-  // 7.00 already spent plus 3.00 lands exactly on the 10.00 limit. The check only denies
-  // when the total goes strictly over the limit, so landing right on it is still allowed.
+  // 7.00 + 3.00 lands exactly on the 10.00 limit. Denial is strictly over, so on the limit is allowed.
   let decision = assessRisk(velocity, operation, gateConfig(1_000n));
 
   assert.deepEqual(decision, { allow: true });
@@ -137,12 +132,12 @@ function allowsAnOperationOutsideTheRiskSurface(): void {
 }
 
 // --- The spending window: windowedVelocity (a sliding window) -----------------------
-// The window slides with the clock. `windowedVelocity` sums only the attempts whose time `at`
-// is within the last `windowMs` of now (`at > now - windowMs`); older attempts age out one at a
-// time on their own, rather than the whole total snapping back to zero at a fixed boundary.
+// Window slides with the clock. `windowedVelocity` sums only attempts whose `at` is within the
+// last `windowMs` of now (`at > now - windowMs`); older attempts age out individually rather than
+// the whole total resetting to zero at a fixed boundary.
 
 function readsAnEmptyWindowForAFreshSubject(): void {
-  // No attempts at all — a subject we've never tracked reads as nothing spent.
+  // No attempts: an untracked subject reads as nothing spent.
   let velocity = windowedVelocity('usr_new', [], 5_000, 3_600_000);
 
   assert.deepEqual(velocity, emptyVelocity('usr_new'));
@@ -164,8 +159,8 @@ function sumsAttemptsInsideTheWindow(): void {
     },
   ];
 
-  // now (2_500) is within an hour of both attempts, so both count toward the total. windowStart
-  // comes back as the earliest `at` still in the window.
+  // now (2_500) is within an hour of both attempts, so both count. windowStart comes back as the
+  // earliest `at` still in the window.
   let velocity = windowedVelocity('usr_buyer', attempts, 2_500, 3_600_000);
 
   assert.deepEqual(velocity, {
@@ -222,9 +217,9 @@ function agesAttemptsOutOneAtATimeAsTheWindowSlides(): void {
     },
   ];
 
-  // Read at a moment when the first attempt has just aged out but the second is still inside the
-  // window. The total reflects only the second — proving attempts drop individually as the window
-  // slides, NOT all at once at a fixed reset boundary (which would zero both).
+  // Read when the first attempt has just aged out but the second is still inside the window. The
+  // total reflects only the second, so attempts drop individually as the window slides rather than
+  // all at once at a fixed reset boundary (which would zero both).
   let now = 1_000 + 3_600_001;
   let velocity = windowedVelocity('usr_buyer', attempts, now, 3_600_000);
 
@@ -245,10 +240,9 @@ function buildsARejectedAttemptKeyedOnTheOperationKey(): void {
     price: credit('4.00'),
   });
 
-  // A denied operation still gets recorded: many declines in a row is itself a fraud signal,
-  // so each one counts toward the spending limit. The record is keyed on the operation's
-  // idempotency key (the value that identifies a retried request) so a true retry of this
-  // same request won't be counted twice.
+  // A denied operation still gets recorded: many declines in a row is itself a fraud signal, so
+  // each counts toward the limit. Keyed on the operation's idempotency key so a true retry of the
+  // same request isn't counted twice.
   let attempt = riskAttempt(operation, REJECTED, 9_000);
 
   assert.deepEqual(attempt, {
@@ -279,8 +273,8 @@ function recordsNoAttemptForADuplicate(): void {
     price: credit('4.00'),
   });
 
-  // A duplicate outcome means this request already ran once and was counted then. Replaying
-  // it must not add a second record, so the builder returns null.
+  // A duplicate outcome means the request already ran and was counted. Replaying it must not add a
+  // second record, so the builder returns null.
   let attempt = riskAttempt(operation, withTransaction('duplicate'), 9_000);
 
   assert.equal(attempt, null);
@@ -301,9 +295,8 @@ function recordsNoAttemptOutsideTheRiskSurface(): void {
 }
 
 // --- Picking the subject and size of an attempt: riskSubject + attemptMinor --------
-// riskSubject returns the user whose spending total an operation counts against (or null
-// when the operation moves no money). attemptMinor returns how much that operation adds to
-// the total, in CREDIT minor units (the smallest CREDIT unit, like cents for dollars).
+// riskSubject returns the user whose total an operation counts against (null when it moves no
+// money). attemptMinor returns how much it adds to the total, in CREDIT minor units (cents).
 
 function keysFundsMovingOperationsOnTheirSubject(): void {
   let cases: ReadonlyArray<{
@@ -374,7 +367,7 @@ function accumulatesUntilTheCeilingThenClearsAsTheWindowSlides(): void {
   });
 
   // Two prior 4.00 attempts inside the window, each under its own idempotency key so both count
-  // (a repeated key would be treated as a retry and ignored).
+  // (a repeated key is treated as a retry and ignored).
   let attempts: Attempt[] = [
     {
       idempotencyKey: 'a1',
@@ -405,8 +398,8 @@ function accumulatesUntilTheCeilingThenClearsAsTheWindowSlides(): void {
     reason: 'RISK_DENIED',
   });
 
-  // Once both attempts have aged out of the window, the subject is allowed again. The limit does
-  // NOT stick forever — the bug this fixes was a running total that never reset.
+  // Once both attempts age out, the subject is allowed again. The limit doesn't stick forever; the
+  // bug this fixes was a running total that never reset.
   let later = windowedVelocity(
     'usr_buyer',
     attempts,
@@ -417,9 +410,9 @@ function accumulatesUntilTheCeilingThenClearsAsTheWindowSlides(): void {
 }
 
 // --- The wired store: the memory trust store applies the window on read -------------
-// The helper tests above are pure; this proves the store actually calls `windowedVelocity` with
-// its clock, so a bumped attempt ages out of `read` once the clock passes the window. This is the
-// regression lock for the original bug, where the store kept a running total that never reset.
+// The helpers above are pure; this checks the store calls `windowedVelocity` with its clock, so a
+// bumped attempt ages out of `read` once the clock passes the window. Regression lock for the
+// original bug, where the store kept a running total that never reset.
 async function theStoreAgesAttemptsOutOfReadOnceTheWindowPasses(): Promise<void> {
   let nowMs = 0;
   let store = memoryStore({
@@ -437,7 +430,7 @@ async function theStoreAgesAttemptsOutOfReadOnceTheWindowPasses(): Promise<void>
   // While the attempt is fresh it counts toward the total.
   assert.deepEqual((await store.trust.read('usr_buyer')).spent, credit('5.00'));
 
-  // Advance the clock past the window: the same attempt has now aged out, so the total is zero.
+  // Advance the clock past the window: the attempt has aged out, so the total is zero.
   nowMs = 3_600_000 + 1;
   assert.deepEqual((await store.trust.read('usr_buyer')).spent, credit('0.00'));
 

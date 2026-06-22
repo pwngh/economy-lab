@@ -99,16 +99,13 @@ async function reverseOne(args: {
   }
 }
 
-// Take back one grant's unspent credits inside a single database transaction. First lock the
-// user's promo account (so no concurrent spend changes the balance mid-reversal), then read
-// its current balance. The amount to take back is the smaller of the original grant amount and
-// that balance: that is the unspent remainder, since any spending has already lowered the
-// balance below the original grant. If that amount is more than zero, record a ledger entry
-// that exactly undoes the original grant — take the credits out of the user's promo account
-// and put them back into PROMO_FLOAT (see postReversal). A grant the user spent in full takes
-// back zero and records no entry. Either way, flag the grant as reversed in this same
-// transaction, so that if the ledger entry is undone the grant stays eligible to retry.
-// Returns how much was actually taken back.
+// Claw back one grant's unspent credits in a single transaction. Lock the user's promo account
+// (so no concurrent spend shifts the balance mid-reversal), read its balance, take back
+// min(grant amount, balance) (the unspent remainder). If positive, post a ledger entry undoing
+// the original grant: credits out of the user's promo account, back into PROMO_FLOAT (see
+// postReversal). A fully-spent grant takes back zero and posts no entry. Either way flag the
+// grant reversed in this same transaction, so if the entry is undone the grant stays eligible to
+// retry. Returns the amount taken back.
 async function settle(args: {
   store: Store;
   ctx: WorkerCtx;
@@ -130,14 +127,10 @@ async function settle(args: {
   }, options);
 }
 
-// Record the reversal as one ledger entry that moves the unspent credits out of the user's
-// promo account and back into the platform's promo-funding account, PROMO_FLOAT. The entry has
-// two sides that must net to zero (the accounting rule that no money is created or destroyed, a
-// "balanced" entry): a debit takes the credits off the user's promo account and a credit adds
-// the same amount to PROMO_FLOAT. This is the exact mirror image of the original grant, which
-// debited PROMO_FLOAT and credited the user's promo account, so grant and reversal cancel out.
-// The grant id is stored on the entry's metadata (tag fields) so the reversal can later be
-// traced back to the grant it undid.
+// Post the reversal as one balanced ledger entry (debit and credit net to zero): debit the
+// user's promo account, credit PROMO_FLOAT. This mirrors the original grant (which debited
+// PROMO_FLOAT and credited the user), so grant and reversal cancel out. The grant id goes on the
+// entry metadata so the reversal can be traced back to the grant it undid.
 async function postReversal(args: {
   unit: Unit;
   ctx: WorkerCtx;
@@ -160,12 +153,10 @@ async function postReversal(args: {
   );
 }
 
-// Report what one sweep did, using the logger and the metrics recorder (`meter`) supplied on
-// the worker's context. It writes one info-level log line carrying the two counts and the ids
-// that failed, then adds to the metrics counter twice — once with the number reversed and once
-// with the number that failed — so each can be tracked on its own. Reversing an expired grant
-// is internal worker housekeeping, not a change the rest of the system needs to react to, so
-// nothing is published onto the event stream other code subscribes to.
+// Report one sweep via the context logger and meter. Writes one info log line with the two
+// counts and the failed ids, then bumps the counter twice (reversed count, failed count) so each
+// is tracked separately. Expiry reversal is internal worker housekeeping, so nothing is published
+// to the event stream.
 function tally2(ctx: WorkerCtx, summary: PromoExpirySummary): void {
   ctx.logger.log('info', 'worker.promo.expiry', {
     reversed: summary.reversed.length,

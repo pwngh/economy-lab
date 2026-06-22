@@ -24,32 +24,23 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Leg, Unit } from '#src/ports.ts';
 
 /**
- * Reclaim credits after a bank chargeback. When a buyer disputes a top-up and the bank
- * reverses the charge, the dollars are clawed back from the platform at the payment
- * processor; that USD movement happens outside this ledger. This handler books only the
- * credit side of that loss.
+ * Reclaim credits after a bank chargeback. The USD movement (dollars clawed back at the payment
+ * processor) happens outside this ledger; this handler books only the credit side of the loss.
  *
- * It tries to pull `operation.amount` of credits back out of the user's spendable balance.
- * If the user has already spent some, only what is still there can be reclaimed
- * (the smaller of the requested amount and the current balance); the rest becomes a debt
- * the platform is now owed, recorded in the RECEIVABLE account. The full amount is credited
- * to STORED_VALUE, the account that tracks how many credits are in circulation: the original
- * top-up raised that count when it issued these credits, so reversing the top-up lowers it
- * again. That way the loss un-issues the credits instead of being booked into REVENUE as
- * earnings the platform never made; REVENUE is never touched. Every line in the posting is in
- * CREDIT (no mixing of currencies), and the two debits add up to exactly the STORED_VALUE
- * credit, so the posting nets to zero.
+ * Pulls `operation.amount` of credits from the user's spendable balance, capped at what's still
+ * there (smaller of requested and current balance). The rest becomes a debt to the platform in
+ * RECEIVABLE. The full amount is credited to STORED_VALUE (credits in circulation), which the
+ * original top-up raised when it issued these credits, so the loss un-issues them rather than
+ * booking REVENUE the platform never earned. REVENUE is untouched. Every line is in CREDIT (no
+ * currency mixing) and the two debits sum to the STORED_VALUE credit, so the posting nets to zero.
  *
- * When the operation carries an `orderId`, this is an order-tied chargeback that must be
- * mutually exclusive with a refund of the same order. Before posting, it claims the shared
- * `reversed:${orderId}` key; if a refund (or an earlier clawback) already reversed that
- * order, the claim is lost and it returns the recorded reversing transaction as a
- * `duplicate` rather than reversing the order a second time. The same key is recorded after
- * a successful post, so a later refund of that order is in turn blocked.
+ * With an `orderId`, the chargeback is mutually exclusive with a refund of the same order via the
+ * shared `reversed:${orderId}` key. Claim it before posting; a lost claim means a refund (or earlier
+ * clawback) already reversed the order, so return that transaction as a `duplicate`. The key is
+ * recorded after a successful post, blocking a later refund of the order.
  *
- * Returns a `committed` Outcome with the posted transaction, or a `duplicate` Outcome on a
- * lost order claim. An amount that is not in CREDIT or is not positive is a programming
- * error, thrown as a fault, never returned as a normal "no" answer.
+ * Returns a `committed` Outcome, or `duplicate` on a lost claim. A non-CREDIT or non-positive
+ * amount is a programming error, thrown as a fault.
  */
 export async function handleClawback(
   operation: Operation,
@@ -61,10 +52,9 @@ export async function handleClawback(
   }
   let amount = positiveCredit(operation.amount, 'clawback.amount');
 
-  // An order-tied clawback shares the `reversed:${orderId}` key with refund, so at most one
-  // of the two can ever reverse a given order. Claiming it inside this transaction makes the
-  // two paths mutually exclusive: a lost claim means the order was already reversed, so return
-  // that reversal's transaction as a duplicate instead of double-reversing.
+  // Claim the shared `reversed:${orderId}` key so clawback and refund are mutually exclusive. A
+  // lost claim means the order was already reversed; return that reversal's transaction as a
+  // duplicate instead of double-reversing.
   if (operation.orderId !== undefined) {
     let orderId = presentOrderId(operation.orderId);
     let claim = await unit.idempotency.claim(reversalKey(orderId));
@@ -83,9 +73,9 @@ export async function handleClawback(
     meta: clawbackMeta(operation, split),
   });
 
-  // Record the reversal under the shared order key so a later refund of the same order finds
-  // it claimed and returns this transaction as its duplicate. Done inside the posting's
-  // transaction, so a rollback leaves the order un-reversed and freely retryable.
+  // Record the reversal under the shared order key so a later refund finds it claimed and returns
+  // this transaction as its duplicate. Inside the posting's transaction, so a rollback leaves the
+  // order un-reversed and retryable.
   if (operation.orderId !== undefined) {
     await unit.idempotency.record(reversalKey(operation.orderId), transaction);
   }
@@ -93,17 +83,16 @@ export async function handleClawback(
   return { status: 'committed', transaction };
 }
 
-// The order-scoped idempotency key a clawback and a refund of the same order both stake, so
-// reversing an order once (by either path) blocks the other. Kept identical to refund's key so
-// the two are genuinely mutually exclusive.
+// Order-scoped idempotency key staked by both clawback and refund, so reversing an order once
+// blocks the other. Must stay identical to refund's key.
 function reversalKey(orderId: string): string {
   return `reversed:${orderId}`;
 }
 
-// `orderId` is optional — an untied chargeback simply omits it — but a present-but-blank value
-// is a malformed request, not an untied one. Every blank id collapses to the same `reversed:`
-// key, so it would falsely tie unrelated chargebacks to one shared marker. Rejected as a fault
-// so the bad key never reaches `claim`. Returned unchanged so it can be used inline.
+// `orderId` is optional (an untied chargeback omits it), but a present-but-blank value is
+// malformed: every blank id collapses to the same `reversed:` key, falsely tying unrelated
+// chargebacks to one marker. Reject as a fault so the bad key never reaches `claim`. Returned
+// unchanged for inline use.
 function presentOrderId(orderId: string): string {
   if (orderId.trim() === '') {
     throw fault(
@@ -114,10 +103,9 @@ function presentOrderId(orderId: string): string {
   return orderId;
 }
 
-// Split the amount being clawed back into the part we can still take from the user's
-// spendable balance and the part they already spent. `recovered` is capped at what the user
-// actually has (treating a negative balance as zero), so the later debit can never drive the
-// balance below zero; `shortfall` is whatever is left over, which the platform is now owed.
+// Split the clawback into the part still recoverable from spendable balance and the part already
+// spent. `recovered` is capped at what the user has (negative balance treated as zero), so the
+// later debit can't drive the balance below zero; `shortfall` is the leftover the platform is owed.
 function splitClawback(
   amount: Amount,
   held: Amount,
@@ -130,14 +118,12 @@ function splitClawback(
   };
 }
 
-// Build the debit and credit lines for the posting. Take `recovered` out of the user's
-// spendable balance, record `shortfall` as a debt in RECEIVABLE, and credit the full amount
-// to STORED_VALUE — the account that counts credits in circulation, which the matching top-up
-// raised when it issued these credits — so the reclaimed credits are un-issued rather than
-// booked as house earnings. The two debits add up to the amount and STORED_VALUE is credited
-// that same amount, so the lines net to zero, and every line is in CREDIT (no currency mixing).
-// A piece that is zero (nothing left to reclaim, or no shortfall) is left out rather than
-// posted as a zero line.
+// Build the debit and credit lines. Debit `recovered` from spendable balance, record `shortfall`
+// as a debt in RECEIVABLE, and credit the full amount to STORED_VALUE (credits in circulation,
+// raised by the matching top-up) so the reclaimed credits are un-issued rather than booked as
+// earnings. The two debits sum to the amount and STORED_VALUE is credited that amount, so the
+// lines net to zero, all in CREDIT (no currency mixing). A zero piece (nothing to reclaim, or no
+// shortfall) is omitted rather than posted as a zero line.
 function buildClawbackLegs(
   userId: string,
   amount: Amount,
@@ -154,10 +140,9 @@ function buildClawbackLegs(
   return legs;
 }
 
-// Build the metadata stored with the posting: the two split amounts plus any chargeback
-// references the caller passed (order id, idempotency key, reason). Amounts are turned into
-// their text form with `encodeAmount` rather than stored as raw bigints, so this record can
-// be re-read and re-hashed later and come out byte-for-byte the same every time.
+// Metadata stored with the posting: the two split amounts plus any chargeback references the caller
+// passed (order id, idempotency key, reason). Amounts use `encodeAmount` text form rather than raw
+// bigints, so the record re-reads and re-hashes byte-for-byte the same every time.
 function clawbackMeta(
   operation: Extract<Operation, { kind: 'clawback' }>,
   split: { recovered: Amount; shortfall: Amount },
@@ -179,9 +164,8 @@ function clawbackMeta(
   return meta;
 }
 
-// Check the amount is in CREDIT and positive, returning it unchanged so it can be used
-// inline. A wrong currency or a zero/negative amount is a malformed request, not a normal
-// "no" answer, so each throws a fault rather than returning a rejection.
+// Check the amount is CREDIT and positive, returning it unchanged for inline use. A wrong currency
+// or zero/negative amount is malformed, so each throws a fault rather than returning a rejection.
 function positiveCredit(amount: Amount, label: string): Amount {
   if (amount.currency !== 'CREDIT') {
     throw fault(ERROR_CODES.MALFORMED_OPERATION, `${label} must be CREDIT.`, {
@@ -196,8 +180,7 @@ function positiveCredit(amount: Amount, label: string): Amount {
   return amount;
 }
 
-// Reaching this handler with any kind other than `clawback` can only mean the dispatcher
-// that routes operations to handlers sent it to the wrong place. Fail loudly with a fault
+// A kind other than `clawback` here means the dispatcher misrouted the operation. Fail loudly
 // rather than quietly posting the wrong thing.
 function kindMismatch(operation: Operation): ReturnType<typeof fault> {
   return fault(

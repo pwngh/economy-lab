@@ -118,17 +118,16 @@ async function ed25519KeyPair(
 }
 
 /**
- * The real signer for production. It signs bytes with Ed25519 (asymmetric): the secret derives a
- * private key that produces 64-byte signatures, and the matching public key verifies them — so an
- * external auditor can confirm a checkpoint was not rewritten using only the published public key,
- * never the signing secret.
+ * Production signer. Signs bytes with Ed25519: the secret derives a private key producing 64-byte
+ * signatures, and the public key verifies them, so an auditor can confirm a checkpoint wasn't
+ * rewritten using only the published public key.
  *
- * `sign` always uses the current key. `verify` accepts a signature made by the current key OR by
- * any of the prior keys passed in, so when the signing key is rotated a checkpoint signed under the
- * old key still verifies during the changeover instead of suddenly being rejected.
+ * `sign` always uses the current key. `verify` accepts a signature from the current key or any
+ * prior key passed in, so a checkpoint signed under the old key still verifies across a key
+ * rotation.
  *
- * `sign` and `verify` work on raw bytes. Turning keys and stored signatures into hex text, and
- * back, happens where the data is read from or written to storage, not here.
+ * Both work on raw bytes. Hex encoding of keys and stored signatures happens at the storage
+ * boundary, not here.
  */
 export function systemSigner(options: {
   signingKey: string;
@@ -170,9 +169,8 @@ export function systemSigner(options: {
 }
 
 /**
- * The hex-encoded Ed25519 public key derived from `signingKey` — publish this so an external party
- * can verify the signed checkpoints without holding the signing secret. Returns the raw 32-byte
- * public key as hex.
+ * Hex-encoded Ed25519 public key derived from `signingKey`. Publish it so an external party can
+ * verify signed checkpoints without the signing secret. Returns the raw 32-byte public key as hex.
  */
 export async function signingPublicKeyHex(signingKey: string): Promise<string> {
   let { publicKey } = await ed25519KeyPair(signingKey);
@@ -180,12 +178,12 @@ export async function signingPublicKeyHex(signingKey: string): Promise<string> {
 }
 
 /**
- * Bundles the four real capabilities — clock, id generator, hasher, and signer —
- * into one object for a production host to wire into the rest of the system.
+ * Bundles the four capabilities (clock, id generator, hasher, signer) into one
+ * object for a production host to wire in.
  *
- * `signingKey` (and any `priorKeys`) are hex-encoded secret key bytes that the
- * host loads from its own configuration and passes in here; this module never
- * reads them from a global or the environment.
+ * `signingKey` and any `priorKeys` are hex-encoded secret key bytes the host
+ * loads from its own config and passes in; this module never reads them from a
+ * global or the environment.
  */
 export function systemCapabilities(options: {
   signingKey: string;
@@ -200,16 +198,15 @@ export function systemCapabilities(options: {
 }
 
 /**
- * A structured logger for production hosts. Each call writes exactly one JSON
- * object on its own line — the format log collectors parse line by line — shaped
- * `{ts, level, service, event, ...fields}`. info/debug/warn lines go to stdout
- * (via `console.warn`) and error lines go to stderr (via `console.error`). It
- * implements the same `Logger` interface as the do-nothing default logger, so a
- * host can swap this in wherever that default was wired without other changes.
+ * Structured logger for production hosts. Each call writes one JSON object per
+ * line (JSONL, parsed line by line by log collectors), shaped
+ * `{ts, level, service, event, ...fields}`. info/debug/warn go to stdout (via
+ * `console.warn`), error to stderr (via `console.error`). Implements the same
+ * `Logger` interface as the no-op default, so a host can swap it in directly.
  *
- * The timestamp source can be supplied (`now`, in epoch milliseconds) so a test
- * can freeze it and check the exact line; it defaults to the current wall-clock
- * time. The `service` tag names the emitting process and appears on every line.
+ * `now` (epoch ms) can be supplied so a test can freeze the timestamp and check
+ * the exact line; defaults to wall-clock time. `service` names the emitting
+ * process and appears on every line.
  */
 export function jsonlLogger(
   options: {
@@ -231,7 +228,6 @@ export function jsonlLogger(
   };
 }
 
-// Re-export the bytes-to-hex helper so the code that writes chains and
-// checkpoints can store raw signatures as hex text without importing bytes.ts
-// separately.
+// Re-export toHex so chain/checkpoint writers can store raw signatures as hex
+// without importing bytes.ts separately.
 export { toHex };

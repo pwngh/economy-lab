@@ -139,10 +139,10 @@ function spendOperation(
   let fromPromo = wallet.promo < priceMinor ? wallet.promo : priceMinor;
   wallet.promo -= fromPromo;
   wallet.spendable -= priceMinor - fromPromo;
-  // A spend's `orderId` is required by the contract and is the primary key of the sale row.
-  // Deriving it from the step keeps it byte-identical on replay (like the idempotency key) and
-  // unique per spend, so adapters that enforce a NOT-NULL/unique order key (e.g. postgres) take
-  // the same path as memory rather than diverging on a null key.
+  // `orderId` is required by the contract and is the sale row's primary key. Deriving it from
+  // the step keeps it byte-identical on replay (like the idempotency key) and unique per spend,
+  // so adapters enforcing a not-null/unique order key (e.g. postgres) take the same path as
+  // memory rather than diverging on a null key.
   return op('spend', step, {
     orderId: `ord_p_${step}`,
     buyerId: userId,
@@ -161,10 +161,9 @@ function walletOf(wallets: Map<string, Wallet>, userId: string): Wallet {
   return wallet;
 }
 
-// Assemble an Operation object, stamping in the per-step idempotency key and a fixed actor.
-// We mark every request as coming from an internal "system" service: this proof is checking
-// the ledger's accounting rules, not who is allowed to do what, so it bypasses the
-// permission checks rather than modeling real users.
+// Assemble an Operation, stamping in the per-step idempotency key and a fixed actor. Every
+// request comes from an internal "system" service: this proof checks accounting rules, not
+// authorization, so it bypasses permission checks rather than modeling real users.
 function op(
   kind: Operation['kind'],
   step: number,
@@ -194,13 +193,11 @@ function program(seed: number, length: number): Operation[] {
 
 type Failure = { invariant: string; detail: Record<string, unknown> };
 
-// Check every ledger property after a single operation, returning the first one that fails
-// (or null if they all hold). Four of them come straight from the economy's built-in
-// integrity report: money is neither created nor destroyed, real USD still covers what the
-// platform owes users, no account went negative, and every account's hash chain is
-// well-formed. The fifth, the chain-link check, is done separately below: it confirms that
-// each account the operation touched now records, as its latest hash, the exact hash the
-// committed operation said it produced.
+// Check every ledger property after one operation, returning the first failure (or null).
+// Four come from the economy's integrity report: money is neither created nor destroyed,
+// real USD still covers what the platform owes users, no account went negative, and every
+// hash chain is well-formed. The fifth, the chain-link check below, confirms each touched
+// account's latest hash matches the hash the committed operation reported.
 async function checkInvariants(
   provable: Provable,
   outcome: Outcome,
@@ -225,11 +222,10 @@ async function checkInvariants(
   return verifyChainLinks(provable, outcome, heads);
 }
 
-// Each account keeps a tamper-evident chain of postings, and the "head" is the latest hash
-// in that chain. This builds up what every head should be — for each account the committed
-// operation touched, the new hash it reported — and remembers it across steps in `heads`.
-// It then reads the actual current head of every account from storage and fails if any one
-// does not match the hash we expected.
+// Each account keeps a tamper-evident chain of postings; the "head" is its latest hash. This
+// accumulates the expected head per touched account (the hash the committed operation reported)
+// across steps in `heads`, then reads each account's actual head from storage and fails on any
+// mismatch.
 async function verifyChainLinks(
   provable: Provable,
   outcome: Outcome,
@@ -255,11 +251,10 @@ async function verifyChainLinks(
   return null;
 }
 
-// Check that submitting the same operation twice runs it only once: the second submit must
-// come back as `duplicate`, not run again. This is the guarantee that a client safely
-// retrying a request never double-charges. To test it without disturbing the main run, this
-// rebuilds the program in a brand-new economy, replays operations up to the target step,
-// then submits that last operation a second time and expects a `duplicate` result.
+// Check that submitting the same operation twice runs it once: the second submit must return
+// `duplicate`, guaranteeing a safely retried request never double-charges. To avoid disturbing
+// the main run, this rebuilds the program in a fresh economy, replays up to the target step,
+// then resubmits that operation and expects `duplicate`.
 async function replayIsDuplicate(
   adapter: AdapterCase,
   seed: number,
@@ -288,9 +283,8 @@ async function replayIsDuplicate(
   }
 }
 
-// Submit the operations one at a time, and after each one run the full set of checks. The
-// moment a check fails, stop and return that step's index together with what failed. If the
-// whole program runs with every check passing, return null.
+// Submit operations one at a time, running the full checks after each. On the first failure,
+// stop and return the step index plus what failed. If every check passes, return null.
 async function runSeed(
   adapter: AdapterCase,
   seed: number,
@@ -316,10 +310,9 @@ async function runSeed(
   }
 }
 
-// Once a run has failed, find the shortest beginning slice of the program that still fails,
-// so the report can point at the smallest example that reproduces the bug. It tries the
-// first 1 operation, then the first 2, and so on, and stops at the first slice that fails;
-// `at` is the step where the full run broke, so the search never needs to look past it.
+// After a failure, find the shortest leading slice that still fails, so the report points at
+// the smallest reproducer. Tries the first 1 op, then 2, etc., stopping at the first failing
+// slice; `at` is where the full run broke, so the search never looks past it.
 async function shrink(
   adapter: AdapterCase,
   seed: number,
@@ -337,10 +330,9 @@ async function shrink(
   return minimal;
 }
 
-// Probe one adapter's backend by opening a store and closing it again. memory and the
-// in-process http server always answer; postgres/mysql throw here when their backend is
-// unreachable (or their URL is unset). An adapter that can't be reached is SKIPPED, which is
-// correct for local work — it is not a failure.
+// Probe an adapter's backend by opening and closing a store. memory and the in-process http
+// server always answer; postgres/mysql throw when their backend is unreachable (or URL unset).
+// An unreachable adapter is skipped, not failed, which is correct for local work.
 async function reachable(adapter: AdapterCase): Promise<boolean> {
   try {
     let probe = await adapter.makeStore();
@@ -351,11 +343,10 @@ async function reachable(adapter: AdapterCase): Promise<boolean> {
   }
 }
 
-// Run the full proof against ONE storage adapter: for every seed, generate a fixed-length
-// program of operations and check all the ledger properties hold after each one. Prints one
-// summary line for this adapter. Returns false on the first property that fails, and before
-// returning it narrows the failure to the shortest run that still reproduces it and sets a
-// non-zero process exit code so the script reports failure to the shell.
+// Run the full proof against one storage adapter: for every seed, generate a fixed-length
+// program and check all ledger properties after each operation. Prints one summary line.
+// Returns false on the first failing property, first narrowing it to the shortest reproducing
+// run and setting a non-zero process exit code so the script reports failure to the shell.
 async function proveAdapter(
   adapter: AdapterCase,
   seeds: number[],
@@ -364,8 +355,8 @@ async function proveAdapter(
   for (let seed of seeds) {
     let operations = program(seed, length);
     // A backend can also reject a posting outright (a thrown DB error), not just return a
-    // failing invariant. Treat that as a per-adapter failure so one backend's hard error is
-    // reported and exits non-zero, instead of crashing the process and masking the rest.
+    // failing invariant. Treat that as a per-adapter failure, reporting it and exiting non-zero
+    // instead of crashing the process and masking the rest.
     let result: { at: number; failure: Failure } | null;
     try {
       result = await runSeed(adapter, seed, operations);
@@ -398,14 +389,13 @@ async function proveAdapter(
 }
 
 async function main(): Promise<void> {
-  // Run 8 seeds, each a program of 60 operations. Every adapter runs this same workload, so
-  // adding more adapters does not change how much work each one does.
+  // 8 seeds, each a 60-operation program. Every adapter runs this same workload.
   let seeds = Array.from({ length: 8 }, (_, i) => 0x1000 + i);
   let length = 60;
 
   for (let adapter of adapterMatrix()) {
-    // memory is the always-on fast path; every other adapter is gated on its backend being
-    // reachable and skipped (not failed) when it is not.
+    // memory always runs; every other adapter is gated on its backend being reachable and
+    // skipped (not failed) when it isn't.
     if (adapter.name !== 'memory' && !(await reachable(adapter))) {
       console.warn(`prove [${adapter.name}]: backend unreachable — skipped.`);
       continue;

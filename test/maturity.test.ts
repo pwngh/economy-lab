@@ -34,11 +34,9 @@ import type { Clock, Ledger, Lot } from '#src/ports.ts';
 
 const DAY = 24 * 60 * 60_000;
 
-// A config whose funding sources have different wait times, so a test can tell which
-// source's wait was applied. The `default` entry is the wait an unrecognized source
-// falls back to; here it matches the card wait (the cautious, longer one). The shared
-// testConfig() instead sets every wait to 0, which the zero-wait test reuses to drive
-// the same code with no waiting at all.
+// Distinct per-source wait times so a test can tell which wait was applied. `default` is
+// the fallback for unrecognized sources; matches the longer card wait here. (testConfig()
+// sets every wait to 0, reused by the zero-wait test.)
 function horizonConfig(): Config {
   return {
     ...testConfig(),
@@ -46,9 +44,8 @@ function horizonConfig(): Config {
   };
 }
 
-// A clock that only moves forward when `advance` is called. The ledger stamps each
-// top-up with the current clock time, so this lets a test set exactly when a batch of
-// credits (a "lot") was topped up rather than depending on real wall-clock time.
+// Clock that only moves when `advance` is called. The ledger stamps each top-up with the
+// current clock time, so a test can set exactly when a lot was topped up.
 function fixedClock(start = 0): Clock & { advance: (ms: number) => void } {
   let t = start;
   return {
@@ -59,10 +56,9 @@ function fixedClock(start = 0): Clock & { advance: (ms: number) => void } {
   };
 }
 
-// Add credits to a user, which the ledger records as one settlement batch (a "lot").
-// The funding source (such as 'card' or 'crypto') is attached in the posting's metadata,
-// the same way the real top-up handler attaches it, because the maturity wait is chosen
-// from that source. The clock time when this posts becomes the lot's top-up time.
+// Credit a user; the ledger records it as one lot. Source ('card', 'crypto', ...) goes in
+// the posting meta like the real top-up handler does, since the maturity wait is chosen
+// from it. The clock time at posting becomes the lot's top-up time.
 async function topUpLot(
   ledger: Ledger,
   userId: string,
@@ -76,10 +72,9 @@ async function topUpLot(
   });
 }
 
-// Take credits out of a user's spendable balance. Spending creates no new lot (only
-// balance-increasing postings do), it just lowers the balance. The maturity code treats
-// that drop as consuming the oldest lots first, so spending eats into the earliest
-// top-ups before the later ones.
+// Spend from a user's spendable balance. Spending creates no lot (only balance-increasing
+// postings do), it just lowers the balance. The maturity code treats that drop as FIFO
+// consumption: oldest lots first.
 async function spendSpendable(
   ledger: Ledger,
   userId: string,
@@ -117,9 +112,8 @@ describe('maturityHorizonMs', () => {
   test('treats the in-memory default source marker as unknown', () => {
     const config = horizonConfig();
 
-    // When a top-up records no funding source, the in-memory ledger fills in the literal
-    // string 'unknown'. The config has no entry named 'unknown', so the lookup must fall
-    // back to the default wait instead of failing.
+    // A top-up with no source gets the literal 'unknown' from the in-memory ledger. The
+    // config has no 'unknown' entry, so the lookup must fall back to the default.
     const horizonMs = maturityHorizonMs('unknown', config);
 
     assert.equal(horizonMs, config.maturityHorizonMs.default);
@@ -260,8 +254,8 @@ describe('maturedBalance FIFO Consumption', () => {
     await spendSpendable(store.ledger, 'usr_a', credit('4.00'));
     const options: MaturityOptions = { config: horizonConfig() };
 
-    // At day 3 the crypto lot would have matured, but the spend already consumed it, and
-    // the card lot that remains does not mature until day 9 — so nothing is cashable yet.
+    // At day 3 the crypto lot would have matured, but the spend already consumed it; the
+    // remaining card lot doesn't mature until day 9, so nothing is cashable yet.
     const matured = await maturedBalance(
       store.ledger,
       spendable('usr_a'),

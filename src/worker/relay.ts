@@ -15,17 +15,13 @@ import type { WorkerCtx } from '#src/contract.ts';
 import type { Dispatcher, OutboxMessage, Options, Store } from '#src/ports.ts';
 
 /**
- * The result of one relay run. `relayed` lists the ids of the events that were
- * delivered and marked done this run. `failed` lists the events whose delivery threw but
- * are still under the attempt cap: each carries its error code and whether the error was
- * transient (`retryable`), which the caller reports as metrics. A failed event was left
- * 'pending' (its `attempts` bumped) and will be tried again on the next run. `deadLettered`
- * lists the events whose delivery failed for the last allowed time: they hit the attempt cap
- * (`config.maxOutboxAttempts`), so they were set to 'failed' and will never be re-claimed —
- * this is what stops a single event that always fails ("poison") from blocking every event
- * behind it. Each dead-lettered entry carries the event id and the error code that stopped it
- * (its `reason`) — the same id-plus-reason shape the other background sweeps in this codebase
- * use for their own dead-letter lists, so callers can report them uniformly.
+ * Result of one relay run.
+ * - `relayed`: ids delivered and marked done this run.
+ * - `failed`: delivery threw but still under the attempt cap; each carries error code and
+ *   `retryable` (for caller metrics). Left 'pending' with `attempts` bumped, retried next run.
+ * - `deadLettered`: hit the attempt cap (`config.maxOutboxAttempts`), set to 'failed', never
+ *   re-claimed, so a poison event can't block events behind it. Each carries event id and the
+ *   error code (`reason`) — same id+reason shape the other background sweeps use.
  */
 export type RelaySummary = {
   relayed: ReadonlyArray<string>;
@@ -41,16 +37,13 @@ type RelayTally = {
 };
 
 /**
- * Delivers a batch of pending outbox events. Events were saved to the outbox in the same
- * database transaction as the money move they describe, so each one needs to be sent on to
- * subscribers. This grabs up to `limit` of them, sends each through the given `dispatcher`,
- * and marks the ones that went out so they aren't picked up again.
+ * Delivers a batch of pending outbox events. Events were written in the same DB transaction as
+ * the money move they describe. Claims up to `limit`, sends each through `dispatcher`, and marks
+ * the ones that went out so they aren't re-claimed.
  *
- * Each event is sent inside its own try/catch, so one event whose delivery throws can't
- * stop the rest of the batch. An event that fails is left undelivered and gets retried on
- * the next run. Because a delivered event can therefore be sent more than once (e.g. if
- * delivery succeeded but marking it done did not), the receiving side is expected to drop
- * duplicates by event id.
+ * Each event is sent in its own try/catch, so one failure can't stop the batch; a failed event
+ * is left undelivered and retried next run. Delivery can therefore happen more than once (e.g.
+ * delivery succeeded but marking done did not), so the receiver must drop duplicates by event id.
  */
 export async function relayOutbox(
   store: Store,
@@ -75,21 +68,19 @@ export async function relayOutbox(
   return tally;
 }
 
-// Sends one event and records the outcome in the running tally. On success, the event id is
-// added to `relayed`. If the dispatcher throws, the error is logged and the failure is
-// persisted (rather than re-thrown), so the rest of the batch keeps going.
+// Sends one event and records the outcome in the tally. On success the id goes to `relayed`. If
+// the dispatcher throws, the failure is logged and persisted (not re-thrown) so the batch keeps
+// going.
 //
-// The persisted bump is what bounds retries. This failure would make the row's attempt count
-// `message.attempts + 1`; if that reaches the configured cap, the row is dead-lettered — set
-// to 'failed' so `claimBatch` never hands it back again — and recorded in `deadLettered`.
-// That is what keeps one poison event (whose delivery always throws) from being re-claimed
-// forever and wedging the queue. Otherwise the row's `attempts` is bumped via `recordFailure`
-// (it stays 'pending'), the event lands in `failed`, and the next run retries it.
+// The persisted bump bounds retries. This failure makes the row's attempt count
+// `message.attempts + 1`; at the cap the row is dead-lettered (set to 'failed' so `claimBatch`
+// won't hand it back) and recorded in `deadLettered`, keeping a poison event from wedging the
+// queue. Otherwise `recordFailure` bumps `attempts` (row stays 'pending'), the event lands in
+// `failed`, and the next run retries it.
 //
-// The cap is `>=` so the default `maxOutboxAttempts` of 10 dead-letters on the 10th failure
-// (the failure that takes `attempts` to 10). That is the single off-by-one decision for the
-// outbox, deliberately stated here so every adapter only has to agree on the stored count;
-// it mirrors the payout sweep's own `attempts + 1 < cap` boundary in payouts.ts.
+// Cap is `>=` so the default `maxOutboxAttempts` of 10 dead-letters on the 10th failure (the one
+// that takes `attempts` to 10). Single off-by-one for the outbox, stated here so every adapter
+// only agrees on the stored count; mirrors the payout sweep's `attempts + 1 < cap` in payouts.ts.
 async function dispatchOne(
   store: Store,
   ctx: WorkerCtx,
@@ -128,10 +119,9 @@ async function dispatchOne(
   }
 }
 
-// Marks this run's delivered events as done, in a single write, so the next run doesn't pick
-// them up again. If that write itself fails, the events stay marked undelivered and will be
-// delivered again on the next run; that's acceptable (the receiver drops duplicates), so the
-// failure is recorded as a metric and logged rather than thrown.
+// Marks this run's delivered events as done in a single write so the next run skips them. If the
+// write fails, the events stay undelivered and get re-delivered next run; acceptable (receiver
+// drops duplicates), so the failure is metered and logged rather than thrown.
 async function markRelayed(
   store: Store,
   ctx: WorkerCtx,

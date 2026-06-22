@@ -9,20 +9,18 @@
  * @license MIT
  */
 
-// Runnable demo of `compose` in src/index.ts, the function that wires up the economy from
-// environment variables. This script reads the same environment a real deployment would, prints
-// which backend each env var picked (the database, the optional cache, and where outgoing events
-// are sent), runs a small money flow through the wired-up economy, then reads the balances back
-// out of whichever backend was selected. Change the env vars to switch backends:
+// Runnable demo of `compose` (src/index.ts), which wires up the economy from env vars. Reads the
+// same env a real deployment would, prints which backend each var picked (db, optional cache, event
+// dispatcher), runs a small money flow, then reads balances back from the selected backend. Switch
+// backends via env:
 //
 //   node scripts/compose-demo.ts                                              # memory
 //   DATABASE_URL=postgres://economy:economy@localhost:5432/economy_lab  ...    # postgres
 //   DATABASE_URL=mysql://root:economy@localhost:3306/economy_lab        ...    # mysql
 //   REDIS_URL=redis://localhost:6379 ...                                       # + cache in front of reads
 //
-// On the in-memory backend the script is self-contained. For a SQL backend it uses the schema
-// already there (run `npm run db:migrate` first); set DEMO_RESET=1 to drop & recreate it for a
-// clean run, which DESTROYS all data — a demo convenience a real deployment never does (issue #20).
+// In-memory backend is self-contained. SQL backends use the existing schema (run `npm run db:migrate`
+// first); DEMO_RESET=1 drops & recreates it, which DESTROYS all data — a demo convenience (issue #20).
 
 import { readFile } from 'node:fs/promises';
 
@@ -38,8 +36,8 @@ import {
 
 import type { Amount } from '#src/money.ts';
 
-// The few methods of the `pg` (PostgreSQL driver) package this demo's schema reset calls. The
-// driver ships no TypeScript types, so we declare just the parts we use here.
+// The `pg` (PostgreSQL driver) methods the schema reset calls. Driver ships no types, so declare
+// just the parts used here.
 interface PgDemoClient {
   connect(): Promise<void>;
   query(sql: string): Promise<unknown>;
@@ -49,9 +47,8 @@ interface PgDemoModule {
   Client: new (config: { connectionString: string }) => PgDemoClient;
 }
 
-// Work out which backend each env var would pick, and return a human-readable label for each.
-// This repeats the choices compose() makes internally, only so the demo can print them; compose()
-// itself returns just the wired-up economy, not these labels.
+// Human-readable label for which backend each env var picks. Mirrors compose()'s internal choices so
+// the demo can print them; compose() returns the wired-up economy, not these labels.
 function selection(env: Record<string, string | undefined>): {
   store: string;
   cache: string;
@@ -77,9 +74,9 @@ function selection(env: Record<string, string | undefined>): {
   return { store, cache, dispatcher };
 }
 
-// For a SQL backend, optionally reset the database to a clean schema. This is a DESTRUCTIVE
-// drop-and-recreate, so it runs only when DEMO_RESET=1 is set; otherwise the demo uses whatever
-// schema is already there (run `npm run db:migrate` first). Does nothing for the in-memory backend.
+// SQL backend only: optionally reset the database to a clean schema. Destructive drop-and-recreate,
+// runs only when DEMO_RESET=1; otherwise uses the existing schema (run `npm run db:migrate` first).
+// No-op for the in-memory backend.
 async function ensureSchema(
   env: Record<string, string | undefined>,
 ): Promise<void> {
@@ -120,8 +117,8 @@ async function ensureSchema(
   }
 }
 
-// Format an Amount for display. Amounts store value as an integer count of minor units (cents),
-// so divide by 100 to get whole currency units, e.g. { currency: 'USD', minor: 5000n } -> "USD 50.00".
+// Format an Amount for display. Value is an integer count of minor units (cents); divide by 100 for
+// whole units, e.g. { currency: 'USD', minor: 5000n } -> "USD 50.00".
 function fmt(a: Amount): string {
   return `${a.currency} ${(Number(a.minor) / 100).toFixed(2)}`;
 }
@@ -129,10 +126,10 @@ function fmt(a: Amount): string {
 const env = {
   WEBHOOK_SECRET: 'demo-webhook-secret',
   SIGNING_SECRET: 'demo-signing-secret',
-  // Demo-only policy so the whole flow runs in one shot. A deployment sets these from real policy:
-  //   - 0-ms maturity so a just-topped-up balance is immediately spendable and earnings are
-  //     immediately payable (real default: a 7-day card chargeback window, so funds are held).
-  //   - a tiny payout minimum so the demo's modest earnings clear the gate (real default: 20,000).
+  // Demo-only policy so the flow runs in one shot. A deployment sets these from real policy:
+  //   - 0-ms maturity: just-topped-up balance is immediately spendable, earnings immediately payable
+  //     (real default: 7-day card chargeback window, so funds are held).
+  //   - tiny payout minimum so the demo's modest earnings clear the gate (real default: 20,000).
   MATURITY_HORIZON_CARD_MS: '0',
   MATURITY_HORIZON_DEFAULT_MS: '0',
   PAYOUT_MIN_EARNED_MINOR: '100',

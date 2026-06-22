@@ -21,13 +21,11 @@ import { spendable, SYSTEM } from '#src/accounts.ts';
 
 import type { OutboxMessage, Saga, Store, Subscription } from '#src/ports.ts';
 
-// Where to reach the test database. Prefer either environment variable if set; otherwise
-// fall back to a Postgres running on the local machine with the default port and database.
+// Test database DSN: env var if set, else local Postgres on the default port/database.
 let url = process.env.DATABASE_URL ?? process.env.PG_URL ?? testDsn();
 
-// Builds a Postgres schema name that no other run will reuse, so suites running at the same
-// time (or a rerun of this one) each get their own isolated set of tables and never collide.
-// The name combines this process's id, a base-36 timestamp, and a counter bumped per call.
+// Unique schema name per run so concurrent suites (or a rerun) get isolated tables and don't
+// collide. Combines pid, base-36 timestamp, and a per-call counter.
 let run = 0;
 function freshSchema(): string {
   run += 1;
@@ -35,34 +33,29 @@ function freshSchema(): string {
   return `el_conf_${process.pid}_${stamp}_${run}`;
 }
 
-// The default connection string when neither environment variable is set: a local Postgres.
+// Default DSN when no env var is set: local Postgres.
 function testDsn(): string {
   return 'postgresql://localhost:5432/economy_lab';
 }
 
-// Run the shared Store test suite (defined once in conformance/store.ts and reused by every
-// adapter) against the Postgres adapter. Each new store gets its own freshly created schema,
-// which postgresStore loads db/postgresql-schema.sql into and drops again when the store closes.
+// Run the shared Store suite (conformance/store.ts) against the Postgres adapter. Each store gets
+// a fresh schema, into which postgresStore loads db/postgresql-schema.sql, dropped again on close.
 runStoreConformance('postgres', () =>
   postgresStore({ url, schema: freshSchema() }),
 );
 
-// Regression test for adding a second amount onto an account that already has a balance
-// ("folding" = accumulating the new amount into the stored running total).
+// Regression: folding a second amount onto an account that already has a balance ("folding" =
+// accumulating into the stored running total).
 //
-// The shared conformance suite only ever posts once per account, so it never exercised the case
-// where a debit (a subtraction) lands on an account that is already positive. Postgres broke on
-// that case: the store updated the balance with a single `insert ... on conflict do update`, and
-// Postgres checked the `user_account_non_negative` rule (balance must stay >= 0) against the row
-// it was about to insert -- a row carrying just the change amount, which was negative -- BEFORE
-// the on-conflict step folded that change into the existing balance. So the check saw a negative
-// number and rejected the write, even though the final balance was positive. The store was
-// changed to fold with a plain UPDATE first, so the rule is checked against the already-summed
-// balance.
+// The conformance suite only posts once per account, so it never hit a debit landing on an
+// already-positive account. Postgres broke here: the store folded with `insert ... on conflict do
+// update`, and the `user_account_non_negative` check (balance >= 0) ran against the to-be-inserted
+// row, which carried only the negative change amount, before the on-conflict step folded it into
+// the existing balance. The check saw a negative number and rejected a write whose final balance
+// was positive. Fixed by folding with a plain UPDATE first, so the check sees the summed balance.
 //
-// This test fails (constraint violation) without that fix and passes with it. It connects in a
-// `before` hook the same way the conformance suite does; if Postgres is unreachable the suite is
-// skipped rather than reported as failing.
+// Fails (constraint violation) without the fix, passes with it. Connects in a `before` hook like
+// the conformance suite; skips rather than fails when Postgres is unreachable.
 describe('Store Conformance: postgres (Posting Onto A Funded Account)', () => {
   let store: Store | null = null;
 
@@ -88,10 +81,9 @@ describe('Store Conformance: postgres (Posting Onto A Funded Account)', () => {
     let userId = 'usr_fold_regression';
     let account = spendable(userId);
 
-    // First posting: credit 500.00 into the user's spendable (top-up) account. Every entry is made
-    // of debit and credit lines that cancel out; here the other line debits a platform-owned
-    // account (SYSTEM.REVENUE). Amounts are stored in minor units (cents), so 500.00 is 50000, and
-    // this creates the account row at that balance.
+    // First posting: credit 500.00 into the user's spendable (top-up) account. Each entry is debit
+    // and credit lines that cancel; the other line here debits SYSTEM.REVENUE. Amounts are minor
+    // units (cents), so 500.00 is 50000, which creates the account row at that balance.
     let funded = decodeAmount('500.00', 'CREDIT');
     await live.transaction((unit) =>
       postEntry(unit.ledger, {
@@ -105,9 +97,8 @@ describe('Store Conformance: postgres (Posting Onto A Funded Account)', () => {
       toAmount('CREDIT', 50_000n),
     );
 
-    // Second posting to the SAME account: debit 120.00 out. This is the path the bug broke —
-    // before the fix the fold rejected this on the non-negative CHECK even though the result
-    // (38000) is comfortably positive.
+    // Second posting to the same account: debit 120.00 out. The path the bug broke; before the fix
+    // the fold rejected this on the non-negative check even though the result (38000) is positive.
     let spent = decodeAmount('120.00', 'CREDIT');
     await live.transaction((unit) =>
       postEntry(unit.ledger, {
@@ -125,8 +116,8 @@ describe('Store Conformance: postgres (Posting Onto A Funded Account)', () => {
   });
 });
 
-// Build one pending outbox row (an event queued for later delivery) with a distinct id,
-// mirroring the conformance helper but reusable from the outbox tests further down this file.
+// Build one pending outbox row (event queued for later delivery) with a distinct id. Mirrors the
+// conformance helper, reusable from the outbox tests below.
 function outboxMessage(id: string): OutboxMessage {
   return {
     id,
@@ -181,10 +172,9 @@ function subscriptionRow(
   };
 }
 
-// Wave B: tests for the newer outbox / saga / subscription methods on the Store. Each test
-// connects the same way the conformance suite does and skips (rather than fails) when Postgres
-// is unreachable, so these can run in CI without a database. They assert the same behaviors the
-// simpler in-memory Store already passes, so the Postgres adapter behaves identically to it.
+// Wave B: the newer outbox / saga / subscription Store methods. Each test connects like the
+// conformance suite and skips (not fails) when Postgres is unreachable, so CI runs without a
+// database. Asserts the same behaviors the in-memory Store already passes.
 describe('Store Conformance: postgres (Outbox)', () => {
   let store: Store | null = null;
 
@@ -230,15 +220,15 @@ describe('Store Conformance: postgres (Outbox)', () => {
     // Missing row: nothing to update, must not throw.
     await live.outbox.recordFailure('obx_does_not_exist');
 
-    // A dead-lettered row has been given up on (moved to a final 'failed' state and no longer
-    // retried); recordFailure must leave its attempts untouched.
+    // A dead-lettered row is in the final 'failed' state, no longer retried; recordFailure must
+    // leave its attempts untouched.
     let id = 'obx_record_failure_terminal';
     await live.outbox.enqueue(outboxMessage(id));
     await live.outbox.deadLetter(id, 'DISPATCH.FAILURE');
     await live.outbox.recordFailure(id);
 
-    // The row is 'failed', so claimBatch never returns it; load attempts via a fresh claim
-    // would miss it, so assert by exhaustion: a pending claim cannot see a failed row.
+    // The row is 'failed', so claimBatch never returns it. Assert by exhaustion: a pending claim
+    // cannot see a failed row.
     let batch = await live.outbox.claimBatch(100);
     assert.equal(
       batch.some((message) => message.id === id),
@@ -297,8 +287,8 @@ describe('Store Conformance: postgres (Sagas)', () => {
     // No sagas yet: the user's first request is always allowed.
     assert.equal(await live.sagas.lastPayoutAt(userId), null);
 
-    // One settled saga at t=100 and one failed saga at t=300: the max wins, regardless of
-    // terminal state, so a completed/failed payout still starts the clock on the next one.
+    // One settled saga at t=100 and one failed at t=300: the max wins regardless of terminal state,
+    // so a completed/failed payout still starts the clock on the next one.
     await live.sagas.open(
       sagaRow({ id: 'pay_last_a', userId, state: 'SETTLED', updatedAt: 100 }),
     );
@@ -360,16 +350,16 @@ describe('Store Conformance: postgres (Subscriptions)', () => {
     await live.subscriptions.open(subscriptionRow({ id, attempts: 2 }));
     assert.equal((await live.subscriptions.load(id))!.attempts, 2);
 
-    // Re-open with a bumped attempt (the worker's retry-persist path): open must UPSERT,
-    // not silently keep the old count.
+    // Re-open with a bumped attempt (the worker's retry-persist path): open must upsert, not keep
+    // the old count.
     let prior = (await live.subscriptions.load(id))!;
     await live.subscriptions.open({ ...prior, attempts: prior.attempts + 1 });
     assert.equal((await live.subscriptions.load(id))!.attempts, 3);
 
-    // A successful renewal resets attempts to 0 and advances the period. markBilled only applies
-    // if the row's current next_due_at still equals the value we pass as expected (0, from
-    // subscriptionRow) -- it compares that field and updates only on a match. The prior re-open
-    // above did not touch next_due_at, so the comparison still matches and the update lands.
+    // A successful renewal resets attempts to 0 and advances the period. markBilled only applies if
+    // the row's current next_due_at still equals the expected value we pass (0, from
+    // subscriptionRow). The prior re-open didn't touch next_due_at, so it still matches and the
+    // update lands.
     await live.subscriptions.markBilled(id, 1_000, 0);
     let billed = (await live.subscriptions.load(id))!;
     assert.equal(billed.attempts, 0);

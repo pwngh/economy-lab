@@ -26,13 +26,12 @@ let SCENARIO = 'phase1';
 let HERE = dirname(fileURLToPath(import.meta.url));
 let GOLDEN = join(HERE, '..', 'test', 'golden', `${SCENARIO}.trace`);
 
-// --- Turning a value into a stable shape for output --------------------------------
+// --- Stable output shape --------------------------------
 
-// Rewrites a value so it serializes to the exact same bytes on every machine and run:
-// object keys are sorted into a fixed order, and every money Amount is turned into its
-// decimal-string form via encodeAmount (an Amount holds a bigint, which JSON can't print
-// directly). A bare bigint that reaches here means some Amount was missed and would have
-// serialized wrong, so we throw instead of quietly converting it to a string.
+// Make a value serialize to identical bytes on every machine/run: keys sorted, every Amount
+// encoded to its decimal string via encodeAmount (Amount wraps a bigint, which JSON can't
+// print). A bare bigint here means an Amount was missed and would serialize wrong, so throw
+// rather than convert it.
 function canonical(value: unknown): unknown {
   if (isAmount(value)) {
     return encodeAmount(value);
@@ -56,21 +55,17 @@ function canonical(value: unknown): unknown {
   return value;
 }
 
-// Turns a value into the final text written to (or compared against) the saved reference
-// output (the "golden" file, a checked-in copy of the expected trace): pretty-printed JSON
-// with a two-space indent and a trailing newline, so the output is readable and a diff can
-// point at the exact line that changed.
+// Final text written to (or compared against) the golden file: pretty-printed JSON, two-space
+// indent, trailing newline, so a diff points at the exact changed line.
 function render(value: unknown): string {
   return `${JSON.stringify(canonical(value), null, 2)}\n`;
 }
 
 // --- The fixed scenario -----------------------------------------------------------
 
-// Turns the result of one submitted operation into the plain object recorded in the trace.
-// A rejected operation records only why it was declined; a successful one records the
-// transaction's id, its post time, and each money line (account plus amount). The output is
-// the same on every run because the test economy hands out ids in a fixed sequence and uses
-// a frozen clock, so id and post time never vary.
+// One operation's outcome as a plain trace record. Rejected: just the reason. Successful:
+// transaction id, post time, and each leg (account + amount). Stable across runs because the
+// test economy issues ids in a fixed sequence and uses a frozen clock.
 function recordStep(kind: string, outcome: Outcome): Record<string, unknown> {
   if (outcome.status === 'rejected') {
     return { kind, status: outcome.status, reason: outcome.reason };
@@ -89,9 +84,8 @@ function recordStep(kind: string, outcome: Outcome): Record<string, unknown> {
   };
 }
 
-// Submits one operation, appends a record of what happened to the running list of steps,
-// and returns the result. Keeping every step in one flat list means the trace reads
-// top-to-bottom in the same order the operations ran.
+// Submit one operation, append its record to steps, return the outcome. One flat list keeps
+// the trace in operation order.
 async function step(
   economy: Economy,
   steps: Record<string, unknown>[],
@@ -102,15 +96,13 @@ async function step(
   return outcome;
 }
 
-// Runs the whole fixed scenario against a fresh test economy and returns everything that
-// goes into the trace: the ordered list of steps, the integrity report from prove() (which
-// checks money was conserved and that real cash still covers what users are owed), and a
-// pinned set of key account balances. Recording all three means any change in the money
-// lines, the integrity checks, or a balance shows up as a difference in the output.
+// Run the scenario against a fresh test economy and return the trace contents: the ordered
+// steps, the prove() integrity report (money conserved, cash covers what users are owed), and
+// a pinned set of key balances. Any change in money lines, integrity checks, or a balance
+// shows up in the diff.
 //
-// The scenario walks through: a top-up, a promo grant, a purchase split between two sellers,
-// the exact same purchase submitted again to confirm it isn't charged twice, and an
-// over-priced purchase that should be declined for insufficient funds.
+// Scenario: top-up, promo grant, purchase split between two sellers, the same purchase again
+// (must not double-charge), and an over-priced purchase that's declined for insufficient funds.
 async function buildTrace(): Promise<Record<string, unknown>> {
   let economy = makeEconomy();
   let steps: Record<string, unknown>[] = [];
@@ -150,10 +142,9 @@ async function buildTrace(): Promise<Record<string, unknown>> {
   };
 }
 
-// Reads the balance of a hand-picked set of accounts under stable labels: the buyer's
-// spendable and promo balances, each seller's earnings, and the platform's own accounts.
-// Recording these means a bug in how a purchase is split, how promo credit is drawn down,
-// or how cash is tracked will change one of these numbers and show up in the trace.
+// Balances for a hand-picked set of accounts under stable labels: buyer spendable/promo, each
+// seller's earnings, platform accounts. A bug in purchase splitting, promo drawdown, or cash
+// tracking changes one of these numbers.
 async function keyBalances(economy: Economy): Promise<Record<string, unknown>> {
   let accounts: ReadonlyArray<readonly [string, AccountRef]> = [
     ['buyer.spendable', spendable('usr_buyer')],

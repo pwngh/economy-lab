@@ -16,31 +16,27 @@ import type { Config } from '#src/config.ts';
 import type { Attempt, Velocity } from '#src/ports.ts';
 import type { RejectionCode } from '#src/errors.ts';
 
-// The spending limit is set in CREDIT minor units (the smallest CREDIT unit, like
-// cents for dollars). Every running total here is therefore in CREDIT, so the total
-// and the limit are always compared in the same currency.
+// Limit and every running total are in CREDIT minor units, so total and limit compare
+// in the same currency.
 export let VELOCITY_CURRENCY = 'CREDIT' as const;
 
 /**
- * The result of a risk check: either allow, or deny with a reason. When denied, the
- * `screenRisk` middleware turns this into a normal "no" answer the caller receives
- * (`rejected(reason, …)`); the reason is never raised as an error.
+ * Risk check result: allow, or deny with a reason. On deny, `screenRisk` middleware turns
+ * this into `rejected(reason, …)` for the caller; the reason is never raised as an error.
  */
 export type RiskDecision =
   | { allow: true }
   | { allow: false; reason: RejectionCode };
 
 /**
- * Total a subject's spending inside the sliding window that ends at `now`: sum every attempt
- * whose time `at` falls within the last `windowMs` milliseconds (`at > now - windowMs`), and
- * drop the rest. The window slides with the clock, so an attempt counts toward the limit only
- * for `windowMs` after it happens, then ages out on its own — there is no fixed reset boundary
- * where the whole total snaps back to zero at once.
+ * Sum a subject's spending in the sliding window ending at `now`: every attempt with
+ * `at > now - windowMs`, dropping the rest. The window slides with the clock, so an attempt
+ * counts for `windowMs` after it happens then ages out; there is no fixed reset boundary.
  *
- * This is the in-memory twin of the SQL stores' windowed `SUM(amount) WHERE at > cutoff`, so
- * every backend enforces the same rolling limit. Attempts are deduplicated by the store (each
- * idempotency key counts once) before they reach here. `windowStart` comes back as the earliest
- * `at` still in the window (0 when the window is empty); only `spent` feeds the risk check.
+ * In-memory twin of the SQL stores' windowed `SUM(amount) WHERE at > cutoff`, so every backend
+ * enforces the same rolling limit. The store deduplicates attempts (each idempotency key counts
+ * once) before they reach here. `windowStart` is the earliest `at` still in the window (0 when
+ * empty); only `spent` feeds the risk check.
  */
 export function windowedVelocity(
   subject: string,
@@ -71,12 +67,10 @@ export function windowedVelocity(
 }
 
 /**
- * Decide whether to allow this operation. Deny it when the subject's spend inside the current
- * window, plus the amount this operation moves, would go over `config.velocityLimitMinor`. The
- * caller passes the `velocity` the store already windowed on read (the store applies
- * `config.velocityWindowMs` when it sums the subject's attempts), so the comparison here is
- * always against the live window. Operations that don't move a tracked subject's funds
- * (`riskSubject` returns null) are always allowed.
+ * Allow unless the subject's windowed spend plus this operation's amount exceeds
+ * `config.velocityLimitMinor`. The caller passes the `velocity` the store windowed on read
+ * (applying `config.velocityWindowMs`), so the comparison is against the live window. Operations
+ * that don't move a tracked subject's funds (`riskSubject` returns null) are always allowed.
  */
 export function assessRisk(
   velocity: Velocity,
@@ -95,16 +89,14 @@ export function assessRisk(
 }
 
 /**
- * Build the attempt record to add to a subject's running total once an operation has
- * finished, or null when there's nothing to record: the operation doesn't move a
- * tracked subject's funds, or it was a duplicate that was already counted. The record
- * carries `idempotencyKey` so the store won't count a genuine retry twice. A `rejected`
- * outcome is still recorded (denied attempts count toward the limit, since a burst of
- * them is itself a fraud signal); a `duplicate` is not (the original attempt already
- * counted). The caller runs this after the operation is submitted and writes it through
- * `Store.trust.bump` outside the database transaction, so even an operation that rolled
- * back still records that it was attempted. An operation that threw an error is a bug,
- * not an attempt, and never reaches here.
+ * Build the attempt record to add to a subject's running total after an operation finishes, or
+ * null when there's nothing to record (untracked subject, or a duplicate already counted). The
+ * record carries `idempotencyKey` so the store won't count a genuine retry twice. A `rejected`
+ * outcome is still recorded (denied attempts count toward the limit; a burst of them is itself a
+ * fraud signal); a `duplicate` is not (the original already counted). The caller runs this after
+ * submit and writes it through `Store.trust.bump` outside the DB transaction, so even a rolled-back
+ * operation records that it was attempted. An operation that threw is a bug, not an attempt, and
+ * never reaches here.
  */
 export function riskAttempt(
   operation: Operation,
@@ -123,9 +115,9 @@ export function riskAttempt(
 }
 
 /**
- * The id (a user or account) whose running total this operation counts against, or null
- * when the operation isn't subject to the risk check. This is the one place that rule
- * lives, so `assessRisk`, `riskAttempt`, and the middleware all pick the same subject.
+ * The id (user or account) whose running total this operation counts against, or null when the
+ * operation isn't subject to the risk check. Single source of this rule, so `assessRisk`,
+ * `riskAttempt`, and the middleware all pick the same subject.
  */
 export function riskSubject(operation: Operation): string | null {
   if (operation.kind === 'spend') {
@@ -135,9 +127,9 @@ export function riskSubject(operation: Operation): string | null {
     operation.kind === 'topUp' ||
     operation.kind === 'grantPromo' ||
     operation.kind === 'requestPayout' ||
-    // subscribe moves the user's credit just like a spend, so it must count against the same
-    // running-total window. Without it, each subscribe could move up to the maximum allowed
-    // price unchecked and repeated subscribes would never add to the total.
+    // subscribe moves the user's credit like a spend, so it must count against the same window.
+    // Without it, each subscribe could move up to the max price unchecked and repeated subscribes
+    // would never add to the total.
     operation.kind === 'subscribe'
   ) {
     return operation.userId;
@@ -146,15 +138,14 @@ export function riskSubject(operation: Operation): string | null {
 }
 
 /**
- * How much this operation adds to its subject's running total, in CREDIT minor units
- * (the smallest CREDIT unit), or 0 for an operation that moves no tracked funds.
+ * How much this operation adds to its subject's running total, in CREDIT minor units, or 0
+ * for an operation that moves no tracked funds.
  */
 export function attemptMinor(operation: Operation): bigint {
   if (operation.kind === 'spend') {
     return operation.price.minor;
   }
-  // A subscribe charges its `price`, so it adds the price's smallest-unit amount to the total,
-  // just like the spend case above.
+  // subscribe charges its `price`, same as the spend case above.
   if (operation.kind === 'subscribe') {
     return operation.price.minor;
   }

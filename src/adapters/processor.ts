@@ -16,11 +16,9 @@ import type { Amount } from '#src/money.ts';
 import type { Options, Processor } from '#src/ports.ts';
 
 /**
- * The shape of the `fetch` function this adapter needs. It is described by its signature
- * rather than the built-in `fetch` type so the function can be passed in: production
- * passes the platform's real `fetch`, and tests pass a stand-in. Keeping it structural
- * also lets the same code run on any JavaScript runtime (Node, Bun, Deno, Cloudflare
- * Workers) without depending on a runtime-specific `fetch` type.
+ * Structural `fetch` signature this adapter needs. Described by shape rather than the
+ * built-in type so it can be injected (production passes the real `fetch`, tests pass a
+ * stand-in) and runs on any runtime (Node, Bun, Deno, Cloudflare Workers).
  */
 export type FetchLike = (
   input: string,
@@ -41,36 +39,27 @@ export interface HttpProcessorConfig {
   endpoint: string;
 
   /**
-   * Optional secret token sent in the Authorization header on every request to prove
-   * who we are to the provider. It is never written to logs or error details.
+   * Optional secret token sent in the Authorization header on every request. Never
+   * written to logs or error details.
    */
   apiKey?: string;
 
-  /**
-   * The `fetch` function to make requests with. Defaults to the runtime's built-in
-   * `fetch`, so production code does not have to supply one; tests pass a stand-in.
-   */
+  /** `fetch` to make requests with. Defaults to the runtime's built-in `fetch`. */
   fetch?: FetchLike;
 }
 
 /**
- * Build a {@link Processor} that pays creators by calling an external payment provider
- * (such as Tilia, Steam, or Meta) over HTTP. A Processor's one job is to ask the
- * provider to send real money; it does not touch our own ledger.
+ * Build a {@link Processor} that pays creators via an external provider (Tilia, Steam,
+ * Meta) over HTTP. It asks the provider to send money; it does not touch our ledger.
  *
- * Its `submitPayout` method POSTs a payout request carrying:
- * - `key`, an idempotency key the provider uses to ensure that if we send the same
- *   request twice (for example after a retry), it pays out only once;
- * - `userId`, an opaque token that identifies the recipient without revealing any
- *   personal information; and
- * - `amount`, the USD to pay, sent as a decimal string.
+ * `submitPayout` POSTs a request carrying:
+ * - `key`, idempotency key so a resend (e.g. after a retry) pays out only once;
+ * - `userId`, opaque recipient token, no personal information;
+ * - `amount`, USD to pay, as a decimal string.
  *
- * It then reads back the provider's reference id for the payout. If the request fails
- * to send or the provider answers with a non-2xx status, that is reported as a
- * retryable failure so the caller can try again. But if the provider answers 2xx yet
- * the body has no reference id, that is reported as a non-retryable failure: the money
- * may already have been sent, so retrying could pay twice — sorting out that ambiguity
- * is left to a later reconciliation step, not a blind retry.
+ * It reads back the provider's reference id. A failed send or non-2xx status is a
+ * retryable failure. A 2xx with no reference id is non-retryable: the money may already
+ * have been sent, so retrying could pay twice; reconciliation resolves the ambiguity.
  */
 export function httpProcessor(config: HttpProcessorConfig): Processor {
   let doFetch = config.fetch ?? (globalThis.fetch as unknown as FetchLike);
@@ -87,10 +76,8 @@ async function submitPayout(
   input: { key: string; userId: string; amount: Amount },
   options?: Options,
 ): Promise<{ providerRef: string }> {
-  // Make the single HTTP request that submits the payout. If `fetch` itself throws (DNS
-  // lookup failed, the connection was reset, the request was aborted), wrap it as a retryable
-  // failure that keeps the original error attached, so the caller can try again instead of
-  // treating a temporary network glitch as permanent.
+  // Submit the payout. If `fetch` throws (DNS failure, connection reset, abort), wrap it as
+  // a retryable failure with the original error attached.
   let response: { ok: boolean; status: number; text(): Promise<string> };
   try {
     response = await doFetch(config.endpoint, {
@@ -105,9 +92,8 @@ async function submitPayout(
     });
   }
 
-  // Read the body as text before checking the status, so a non-2xx error can carry it.
-  // Reading can fail partway through (the connection drops mid-download); that is the same kind
-  // of temporary network problem as the request failing, so report it as a retryable failure.
+  // Read the body before checking status, so a non-2xx error can carry it. A mid-download
+  // drop is the same kind of network problem as a failed request: retryable.
   let body: string;
   try {
     body = await response.text();
@@ -128,11 +114,10 @@ async function submitPayout(
 
 // --- Turning the request and response into and out of JSON ------------------------
 
-// Build the JSON request body sent to the provider. It carries the idempotency key, the
-// opaque user token (never any personal data — only a `usr_`-style token reaches a
-// provider), and the USD amount. The amount goes through `encodeAmount`, which turns it
-// into a decimal string like `"USD:12.34"`, because the amount is stored as a `bigint`
-// and `JSON.stringify` cannot serialize a `bigint` directly.
+// JSON request body: idempotency key, opaque user token (only a `usr_`-style token reaches
+// a provider, never personal data), and USD amount. The amount goes through `encodeAmount`
+// to a decimal string like `"USD:12.34"`, since it's a `bigint` and `JSON.stringify` can't
+// serialize a `bigint`.
 function encodeRequest(input: {
   key: string;
   userId: string;
@@ -145,11 +130,9 @@ function encodeRequest(input: {
   });
 }
 
-// Pull the provider's reference id out of a successful (2xx) response body. The body must
-// be JSON containing a non-empty `providerRef` string. If it is not valid JSON, or that
-// field is missing or blank, report a non-retryable failure: the payout may already have
-// gone through, so retrying could pay the recipient twice. Resolving that uncertainty is
-// a job for the separate reconciliation step, not a blind retry here.
+// Pull the provider's reference id out of a 2xx body. Must be JSON with a non-empty
+// `providerRef` string. Invalid JSON or a missing/blank field is non-retryable: the payout
+// may already have gone through, so retrying could pay twice; reconciliation resolves it.
 function parseProviderRef(body: string): string {
   let parsed: unknown;
   try {
@@ -178,9 +161,8 @@ function parseProviderRef(body: string): string {
 
 // --- Local helpers ----------------------------------------------------------------
 
-// Build the request headers: declare the body is JSON, and, if an API key is configured,
-// add an Authorization header carrying it. The key is only ever placed here; it is never
-// copied into an error's detail, which must stay free of secrets.
+// Request headers: JSON content-type, plus an Authorization header when an API key is
+// configured. The key goes only here, never into an error's detail.
 function headersFor(config: HttpProcessorConfig): Record<string, string> {
   let headers: Record<string, string> = { 'content-type': 'application/json' };
   if (config.apiKey !== undefined) {
@@ -189,11 +171,9 @@ function headersFor(config: HttpProcessorConfig): Record<string, string> {
   return headers;
 }
 
-// Build the error thrown when a payout request fails for an infrastructure reason (the
-// request couldn't be sent, the body couldn't be read, or the provider returned a non-2xx
-// status). It is always marked retryable so the caller will try again. The optional
-// underlying error is run through `normalizeError` and kept attached as the `cause`; the
-// HTTP status and response body, when present, are recorded for diagnostics.
+// Error for an infrastructure failure (request couldn't be sent, body couldn't be read, or
+// non-2xx status). Always retryable. The underlying error is normalized and attached as
+// `cause`; status and body, when present, are recorded for diagnostics.
 function transportFault(
   message: string,
   options: { cause?: unknown; status?: number; body?: string },

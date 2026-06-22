@@ -36,10 +36,9 @@ import type { Config } from '#src/config.ts';
 import type { WorkerCtx } from '#src/contract.ts';
 import type { Logger, Meter, Rates, Store, Unit } from '#src/ports.ts';
 
-// These tests pin their OWN par rate of $0.01 per credit (the shared `fixedRates()` now uses
-// VRChat's $0.005), so the round-number surplus and shortfall assertions below stay clean. The
-// fee-sweep mechanism under test reads par from `rates` and works at any value, so the specific
-// peg is just a convenient fixture, not part of what is being verified.
+// These tests pin a par rate of $0.01 per credit (shared `fixedRates()` uses VRChat's $0.005), so
+// the surplus/shortfall assertions stay round. The fee sweep reads par from `rates` and works at any
+// value; the peg is just a fixture.
 function treasuryRates(): Rates {
   let credCons = (kind: string, rate: bigint, scale: number) => ({
     rate,
@@ -61,11 +60,9 @@ function treasuryRates(): Rates {
   };
 }
 
-// Build the bundle of capabilities the sweep runs with. The sweep actually uses `rates`
-// (to value users' credits in USD at the peg rate — the fixed conversion rate between a
-// CREDIT and a USD, here 1 credit = $1) and `logger`/`meter` (to report a shortfall); the
-// others are present only so the bundle is complete. Pass `overrides` to swap in a logger
-// or meter a test can inspect.
+// Capability bundle the sweep runs with. The sweep uses `rates` (to value credits in USD at the
+// peg) and `logger`/`meter` (to report a shortfall); the rest are present for completeness. Pass
+// `overrides` to swap in an inspectable logger or meter.
 function workerCtx(overrides?: {
   logger?: Logger;
   meter?: Meter;
@@ -84,11 +81,9 @@ function workerCtx(overrides?: {
   };
 }
 
-// Set up a fully-backed starting state, like a real top-up would. Post two balanced
-// entries: one issues `amount` of spendable credits to the user, the other moves the
-// `cash` of real USD into the trust account. Because the par peg is $0.01 per credit, pass
-// `cash` equal to the credits' par value (credits × $0.01) for an exactly-backed state, so the
-// backing check sees no shortfall.
+// Fully-backed starting state. Two balanced entries: issue `amount` spendable credits to the user,
+// move `cash` of USD into trust. At the $0.01 peg, pass `cash` equal to par value (credits × $0.01)
+// for an exactly-backed state.
 async function seedBacked(
   unit: Unit,
   userId: string,
@@ -113,9 +108,8 @@ async function seedBacked(
   });
 }
 
-// Set up an under-backed starting state: issue `amount` of spendable credits but move no
-// matching USD into trust. The credits that must be backed now exceed the cash held, so
-// the backing check finds a shortfall — the case the sweep is meant to flag.
+// Under-backed starting state: issue `amount` spendable credits but move no USD into trust. Credits
+// owed exceed cash held, so the backing check finds a shortfall.
 async function seedUnbacked(
   unit: Unit,
   userId: string,
@@ -131,13 +125,12 @@ async function seedUnbacked(
   });
 }
 
-// Seed a state with a house surplus and accrued revenue, the precondition a fee sweep
-// realizes. Issue `spendableCredit` of credits to a user — a custodial balance, meaning one
-// the platform actually owes the user and must hold real USD against. Move `trustCash` of
-// real USD into custody, and accrue `revenue` of platform fees into the REVENUE account.
-// At the par peg ($0.01/credit) the surplus is the trust cash valued in credits beyond what users
-// are owed — e.g. $1.30 of trust is 130 credits, minus 100 owed leaves 30. A sweep may move at most
-// the lesser of that surplus and the matured revenue (revenue past its refund window).
+// Seed a house surplus plus accrued revenue, the precondition a fee sweep realizes. Issue
+// `spendableCredit` to a user (a custodial balance: owed to the user, must be backed by USD), move
+// `trustCash` of USD into custody, accrue `revenue` of platform fees into REVENUE. At the $0.01 peg
+// the surplus is trust cash valued in credits beyond what users are owed (e.g. $1.30 trust = 130
+// credits, minus 100 owed = 30). A sweep moves at most min(surplus, matured revenue) where matured
+// means past the refund window.
 async function seedSurplus(
   unit: Unit,
   amounts: { spendableCredit: Amount; trustCash: Amount; revenue: Amount },
@@ -168,8 +161,7 @@ async function seedSurplus(
   });
 }
 
-// A logger that keeps every line it is handed, so a test can check the shortfall was
-// logged at the `error` level.
+// Logger that keeps every line, so a test can check the shortfall was logged at `error` level.
 function capturingLogger(): Logger & {
   lines: Array<{ level: string; event: string }>;
 } {
@@ -182,10 +174,9 @@ function capturingLogger(): Logger & {
   };
 }
 
-// Return a copy of the store whose `ledger.heads` (the call that lists every account)
-// throws `error` instead of returning. The sweep reads the accounts through `heads` to
-// total up balances, so this forces a failure mid-check, letting a test see how the sweep
-// classifies the error (retry vs. give up).
+// Copy of the store whose `ledger.heads` (lists every account) throws `error`. The sweep totals
+// balances through `heads`, so this forces a failure mid-check to test error classification (retry
+// vs. give up).
 function poisonHeads(store: Store, error: Error): Store {
   return {
     ...store,
@@ -310,9 +301,8 @@ describe('sweepFees', () => {
 
     assert.equal(result.duplicate, false);
     assert.deepEqual(result.swept, credit('30.00'));
-    // A posting is made of legs — its individual debit and credit lines. Here the CREDIT
-    // leg retired REVENUE; the paired USD leg lowered custody cash by the same amount valued
-    // at the peg. The user's owed balance (spendable) is untouched.
+    // The CREDIT leg retired REVENUE; the paired USD leg lowered custody cash by the same
+    // peg-valued amount. The user's spendable balance is untouched.
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.REVENUE),
       credit('0.00'),
@@ -337,8 +327,8 @@ describe('sweepFees', () => {
       }),
     );
 
-    // $1.30 of trust is 130 credits at the $0.01 par; minus the 100 owed, the surplus is 30
-    // credits, so a 31-credit sweep would dip into custodial cash.
+    // $1.30 trust = 130 credits at $0.01 par; minus 100 owed, surplus is 30, so a 31-credit sweep
+    // dips into custodial cash.
     await assert.rejects(
       () => sweepFees(store, workerCtx(), { amount: credit('31.00') }),
       (error: unknown) =>
@@ -368,12 +358,10 @@ describe('sweepFees: Caps, Idempotency & Validation', () => {
       }),
     );
 
-    // Revenue can only be swept once it has matured — sat long enough past the window in
-    // which the original charge could still be refunded. That window's length comes from the
-    // funding source; this revenue was posted at time 0 with no recorded source, so it uses
-    // the card window (set to 1000ms below). With the clock still at 0, no time has passed,
-    // none of the revenue has matured, and the sweepable ceiling is 0 even though the surplus
-    // is 30.
+    // Revenue is sweepable only once matured: past the window in which the original charge could be
+    // refunded. The window length comes from the funding source; this revenue was posted at time 0
+    // with no source, so it uses the card window (1000ms below). Clock still at 0, so nothing has
+    // matured and the sweepable ceiling is 0 even though surplus is 30.
     let config: Config = {
       ...testConfig(),
       maturityHorizonMs: { card: 1000, default: 1000 },
@@ -484,8 +472,8 @@ describe('sweepFees: Event Emission', () => {
 describe('realizeFees: The Per-Cycle Policy', () => {
   test('sweeps the full available surplus and emits one economy.fees.swept', async () => {
     let store = memoryStore();
-    // $1.30 of trust is 130 credits at par; minus the 100 owed, the surplus is 30 credits, and
-    // matured REVENUE is 30 — so the sweepable amount this cycle is the full 30 credits.
+    // $1.30 trust = 130 credits at par; minus 100 owed, surplus is 30, and matured REVENUE is 30, so
+    // the cycle sweeps the full 30.
     await store.transaction((unit) =>
       seedSurplus(unit, {
         spendableCredit: credit('100.00'),
@@ -517,8 +505,8 @@ describe('realizeFees: The Per-Cycle Policy', () => {
 
   test('caps the cycle sweep at the lesser of surplus and matured revenue', async () => {
     let store = memoryStore();
-    // The surplus is 30 credits ($1.30 trust = 130 credits at par, minus the 100 owed) but
-    // REVENUE is only 20, so the matured-revenue cap binds: the cycle realizes 20, not 30.
+    // Surplus is 30 ($1.30 trust = 130 credits at par, minus 100 owed) but REVENUE is only 20, so the
+    // matured-revenue cap binds: the cycle realizes 20, not 30.
     await store.transaction((unit) =>
       seedSurplus(unit, {
         spendableCredit: credit('100.00'),
@@ -583,10 +571,9 @@ describe('realizeFees: Skip And Idempotency', () => {
 
     let ctx = workerCtx();
     let first = await realizeFees(store, ctx, { now: 1_000 });
-    // Each cycle derives a dedup key from its time, so the same time gives the same key — and a
-    // sweep that has already run under a key is recognized and not re-applied. Here we never even
-    // reach that check: the first run realized all 30, so the second sees surplus 0 and the read
-    // short-circuits to skip first.
+    // Each cycle derives a dedup key from its time, so the same time gives the same key, and a sweep
+    // already run under a key is not re-applied. This test never reaches that check: the first run
+    // realized all 30, so the second sees surplus 0 and short-circuits to skip.
     let second = await realizeFees(store, ctx, { now: 1_000 });
 
     assert.equal(first.swept, 'CREDIT:30.00');
@@ -599,10 +586,9 @@ describe('realizeFees: Skip And Idempotency', () => {
 });
 
 describe('runSweeps: Fee Realization Is Wired Into The Worker Cycle', () => {
-  // A full cycle runs several jobs; we only care about the fee sweep here. The reconcile job
-  // needs a feed (given empty below), and with no event dispatcher configured the event-relay
-  // step just no-ops without error. The fee-sweep job needs neither, so this bare input is
-  // enough to drive it through one cycle.
+  // A full cycle runs several jobs; only the fee sweep matters here. The reconcile job needs a feed
+  // (empty below), and with no event dispatcher the event-relay step no-ops. The fee-sweep job needs
+  // neither, so this bare input drives one cycle.
   function cycleInput(now: number) {
     return {
       now,

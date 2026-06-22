@@ -117,30 +117,26 @@ async function isEmpty(store: Store): Promise<boolean> {
 }
 
 /**
- * The result of one run of the re-verification sweep. Exactly one outcome applies: there was
- * no checkpoint to check, the latest checkpoint was checked and matched the live ledger, or
- * it was checked and did NOT match (the chains have changed since it was sealed).
+ * Result of one re-verification sweep. One outcome applies: nothing to check, the latest
+ * checkpoint matched the live ledger, or it did not match (chains changed since it was sealed).
  */
 export type CheckpointVerifySummary = {
-  // The id of the checkpoint that was checked, or null when there was none to check yet.
+  // Id of the checkpoint checked, or null when there was none.
   verified: string | null;
 
-  // True when the run did nothing because no checkpoint has been sealed yet.
+  // True when no checkpoint has been sealed yet.
   skipped: boolean;
 
-  // True when the latest checkpoint's signed root no longer matches the live ledger's heads,
-  // the live head count dropped below the sealed count (accounts were truncated/deleted), or
-  // its signature didn't verify — a tamper signal an operator must look into. False on a
-  // healthy match (and also false when skipped).
+  // True when the latest checkpoint's signed root no longer matches the live heads, the live head
+  // count dropped below the sealed count (accounts truncated/deleted), or its signature failed to
+  // verify, a tamper signal for an operator. False on a healthy match (and when skipped).
   mismatch: boolean;
 
-  // Failures that won't be retried automatically. A thrown error (e.g. corrupt stored hex)
-  // ends the attempt here; an operator has to look into these. A normal "doesn't match"
-  // outcome is NOT a failure — it sets `mismatch` instead.
+  // Failures not retried automatically; operator must investigate. A thrown error (e.g. corrupt
+  // stored hex) ends the attempt here. A normal "doesn't match" sets `mismatch` instead.
   deadLettered: ReadonlyArray<{ reason: string }>;
 
-  // Failures the next scheduled run will retry on its own — typically a temporary storage
-  // outage. Each gives the error code so logs can show why.
+  // Failures the next run retries (typically a temporary storage outage). Each carries the code.
   retrying: ReadonlyArray<{ code: string }>;
 };
 
@@ -153,20 +149,16 @@ type VerifyTally = {
 };
 
 /**
- * Re-check the most recent checkpoint against the ledger as it stands now. This is a
- * background audit meant to run on a schedule, separate from sealing: sealing writes a fresh
- * snapshot, this one confirms the last snapshot still matches the live data.
+ * Re-check the most recent checkpoint against the current ledger. Scheduled background audit,
+ * separate from sealing: sealing writes a snapshot, this confirms the last one still matches.
  *
- * It loads the latest checkpoint and re-derives the Merkle root over the current account
- * heads (via `verifyCheckpoint` in chain.ts), comparing it to the signed root in the
- * checkpoint, checking the live head count has not dropped below the sealed count (which
- * catches truncation/deletion a root-over-current-heads check alone would miss), and
- * confirming the signature. A `false` result is a NORMAL mismatch — the ledger has diverged
- * from what was sealed (tampering, truncation, or a checkpoint that was never refreshed) — so
- * it is recorded on the summary (and logged at error level), not thrown. Only a thrown error,
- * meaning the stored row itself is corrupt or storage is unavailable, is sorted into the same
- * retry/dead-letter split that sealing uses. If no checkpoint has been sealed yet, the run is
- * skipped.
+ * Loads the latest checkpoint and re-derives the Merkle root over current heads (via
+ * `verifyCheckpoint` in chain.ts), comparing it to the signed root, checking the live head count
+ * hasn't dropped below the sealed count (catches truncation/deletion a root-over-current-heads
+ * check alone would miss), and confirming the signature. A `false` result is a normal mismatch
+ * (tampering, truncation, or a stale checkpoint), so it's recorded on the summary and logged at
+ * error level, not thrown. Only a thrown error (corrupt stored row, storage unavailable) goes
+ * through the same retry/dead-letter split as sealing. Skipped if no checkpoint exists yet.
  */
 export async function reverifyCheckpoint(
   store: Store,
@@ -185,11 +177,9 @@ export async function reverifyCheckpoint(
   return tally;
 }
 
-// Run the re-verification and catch anything it throws, so one failure can't stop future
-// runs. A caught error is sorted exactly like `sealOne`: the temporary kind (marked
-// retryable) is recorded for the next run to retry; any other error is set aside for an
-// operator. A normal mismatch does NOT come through here — `verifyCheckpoint` returns false
-// for that rather than throwing, and `driveVerify` records it as `mismatch`.
+// Run the re-verification and catch what it throws so one failure can't stop future runs. Sorted
+// like `sealOne`: retryable errors go to the next run, others to an operator. A normal mismatch
+// doesn't reach here, `verifyCheckpoint` returns false and `driveVerify` records it as `mismatch`.
 async function verifyOne(
   store: Store,
   ctx: WorkerCtx,
@@ -207,11 +197,10 @@ async function verifyOne(
   }
 }
 
-// Load the latest checkpoint and verify it against the current heads. With no checkpoint yet,
-// the run is skipped. Otherwise `verifyCheckpoint` (chain.ts) returns whether the signed root
-// still matches the live ledger; a false result is recorded as a mismatch and logged at error
-// level so an operator notices, while a true result leaves `mismatch` false. Either way the
-// checked checkpoint's id is recorded.
+// Load the latest checkpoint and verify it against current heads. No checkpoint → skip. Otherwise
+// `verifyCheckpoint` (chain.ts) returns whether the signed root still matches; false is recorded as
+// a mismatch and logged at error level, true leaves `mismatch` false. The checked id is recorded
+// either way.
 async function driveVerify(
   store: Store,
   ctx: WorkerCtx,

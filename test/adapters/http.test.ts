@@ -22,23 +22,21 @@ import type { AccountRef } from '#src/accounts.ts';
 import type { FetchLike } from '#src/adapters/http.ts';
 import type { PromoGrant, Saga, Subscription } from '#src/ports.ts';
 
-// Run the shared storage-backend test suite (the same set of cases every backend must pass)
-// against the HTTP backend. A bare `httpStore()` wires its HTTP client to a server running in
-// this same process, so it is a complete, working backend with no live service to start.
+// Run the shared conformance suite against the HTTP backend. A bare `httpStore()` wires its
+// HTTP client to a server in this same process, so it's a complete backend with no live
+// service to start.
 runStoreConformance('http', () => httpStore());
 
-// Wrap the in-process server `fetch` so a test can see the `signal` the client attached to
-// each request. Requests whose path ends in `path` have their signal appended to `signals`;
-// every request (matched or not) is still forwarded to the real server, so the call behaves
-// exactly as it would in production. This is how we assert a cancellation signal threaded
-// through a Ledger method actually reaches the transport, rather than being silently dropped.
+// Wrap the in-process server `fetch` so a test can see the `signal` the client attached to each
+// request. Requests whose path ends in `path` get their signal pushed to `signals`; every
+// request is still forwarded to the real server. Used to assert a cancellation signal threaded
+// through a Ledger method actually reaches the transport.
 //
-// The `Request` constructor wraps the caller's signal in a fresh `AbortSignal` that *follows*
-// the original (it cannot expose the very same object), and it manufactures a signal even
-// when none is supplied — so neither identity (`===`) nor presence distinguishes a forwarded
-// signal from a dropped one. What does distinguish them is whether the request's signal
-// tracks the caller's: a forwarded signal aborts when the caller's controller aborts; a
-// dropped one (the request's own auto-created signal) does not.
+// The `Request` constructor wraps the caller's signal in a fresh `AbortSignal` that follows the
+// original (it can't expose the same object), and manufactures one even when none is supplied,
+// so neither identity (`===`) nor presence distinguishes a forwarded signal from a dropped one.
+// The tell is whether the request's signal tracks the caller's: a forwarded signal aborts when
+// the caller's controller aborts; a dropped one (the auto-created signal) does not.
 function captureSignals(
   inner: FetchLike,
   path: string,
@@ -52,9 +50,9 @@ function captureSignals(
   };
 }
 
-// The HTTP ledger exposes `lineage` (used by chain verification, which passes a real
-// cancellation signal) as a streamed read whose generator only runs once it is iterated, so
-// the test drives it with `for await` to force the underlying request to be sent.
+// `lineage` (used by chain verification, which passes a real cancellation signal) is a streamed
+// read whose generator only runs once iterated, so the test drives it with `for await` to force
+// the request to be sent.
 describe('http Ledger Streamed Reads Forward Options', () => {
   test('lineage forwards the abort signal to the transport', async () => {
     let signals: AbortSignal[] = [];
@@ -70,9 +68,8 @@ describe('http Ledger Streamed Reads Forward Options', () => {
     let controller = new AbortController();
     controller.abort();
 
-    // Iterate the stream so the request is actually sent. An unknown account just yields no
-    // links, which is all this test needs; the in-process server ignores the abort and still
-    // answers, so the iteration completes either way.
+    // Iterate so the request is sent. An unknown account yields no links; the in-process server
+    // ignores the abort and still answers, so iteration completes either way.
     for await (let _link of store.ledger.lineage('acct_missing' as AccountRef, {
       signal: controller.signal,
     })) {
@@ -84,14 +81,13 @@ describe('http Ledger Streamed Reads Forward Options', () => {
   });
 });
 
-// The HTTP store must be a complete substitute for the in-process one, so every store method
-// added in this wave has to survive the round trip to the server and back. These cases drive
-// the new outbox/saga/subscription methods through the wire and assert the same observable
-// behavior the in-process reference (memory) store produces, since `httpStore()` is backed by
-// a fresh memory store on the server side.
+// The HTTP store must be a complete substitute for the in-process one, so every method has to
+// survive the round trip. These cases drive the outbox/saga/subscription methods over the wire
+// and assert the same behavior the memory store produces (`httpStore()` is backed by a fresh
+// memory store server-side).
 
-// Build one outbox message (an event saved to be delivered later) in the pending state with no
-// attempts yet, matching the shape the conformance suite uses.
+// Outbox message (an event saved for later delivery) in pending state, no attempts, matching
+// the shape the conformance suite uses.
 function outboxRow(
   messageId: string,
 ): Parameters<ReturnType<typeof httpStore>['outbox']['enqueue']>[0] {
@@ -218,9 +214,9 @@ describe('http Replay Dedup Forwards Over HTTP', () => {
   test('claim returns the boolean dedup result across the transport', async () => {
     let store = httpStore();
 
-    // The first sighting of an event id wins; a redelivery of the same id is a no-op, and an
-    // unrelated id is unaffected — the same contract the conformance suite pins, asserted here
-    // to prove the boolean survives the round trip on the session-less /replay route.
+    // First sighting of an event id wins; a redelivery is a no-op; an unrelated id is
+    // unaffected. Same contract the conformance suite pins, asserted here to prove the boolean
+    // survives the round trip on the session-less /replay route.
     assert.deepEqual(await store.replay.claim('evt_http_dedup'), {
       claimed: true,
     });
@@ -239,9 +235,9 @@ describe('http balanceAccounts Streams Over HTTP', () => {
   test('enumerates an account that has a stored balance row', async () => {
     let store = httpStore();
 
-    // Append a balanced posting (its two lines cancel to zero) through the root ledger so the
-    // store records a cached per-account balance for each account it touched. balanceAccounts
-    // lists those accounts, and the test checks both touched accounts come back over the wire.
+    // Append a balanced posting (two lines cancel to zero) through the root ledger so the store
+    // records a cached per-account balance for each touched account. balanceAccounts lists those;
+    // the test checks both touched accounts come back over the wire.
     await store.ledger.append({
       txnId: 'txn_http_balacct',
       legs: [
@@ -272,11 +268,11 @@ describe('http markBilled Compare-And-Set Forwards Over HTTP', () => {
     let store = httpStore();
     await store.subscriptions.open(subscriptionRow('sub_http_cas', 0));
 
-    // markBilled only updates the row if its current due date still matches the one the caller
-    // expected — a guard against two writers racing. The row opened with nextDueAt=1_000 (see
-    // subscriptionRow). The first call expects 1_000, matches, and updates (returns true). The
-    // second still expects 1_000, but the due date already moved, so it does nothing (returns
-    // false). That boolean must come back across the transport, not be swallowed.
+    // markBilled only updates the row if its current due date still matches the caller's
+    // expected one, guarding against two racing writers. The row opened with nextDueAt=1_000 (see
+    // subscriptionRow). First call expects 1_000, matches, updates (true). Second still expects
+    // 1_000 but the due date already moved, so no-op (false). The boolean must survive the
+    // transport.
     assert.equal(
       await store.subscriptions.markBilled('sub_http_cas', 2_000, 1_000),
       true,

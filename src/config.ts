@@ -12,91 +12,86 @@
 import { ERROR_CODES, fault } from '#src/errors.ts';
 
 /**
- * Every tunable setting the library needs, gathered into one object.
+ * All tunable settings in one object.
  *
- * No module reads environment variables on its own. The program that starts the
- * library builds this object once (via {@link loadConfig}) and passes it in, so a
- * misconfigured deploy is caught at startup instead of failing deep inside a request.
+ * No module reads env vars itself; the startup program builds this once (via
+ * {@link loadConfig}) and passes it in, so a misconfigured deploy fails at startup
+ * rather than deep inside a request.
  */
 export interface Config {
-  /** Secret key used to verify that an incoming webhook or settlement message really came from the expected sender (it checks an HMAC signature on the request). */
+  /** Secret for verifying the HMAC signature on incoming webhook/settlement messages. */
   webhookSecret: string;
 
   /**
-   * Secret key used to sign each checkpoint: a checkpoint is a snapshot that reduces the
-   * whole ledger's current state to one hash and signs it, so the signature later proves the
-   * ledger has not been tampered with. The signing component is this key's only consumer.
+   * Secret for signing checkpoints. A checkpoint hashes the ledger's current state and signs
+   * it, so the signature later proves the ledger wasn't tampered with. Only the signing
+   * component consumes this key.
    */
   signingSecret: string;
 
-  /** How long, in milliseconds, a signed request stays valid; older requests are rejected as possible replays. */
+  /** How long (ms) a signed request stays valid; older ones are rejected as possible replays. */
   replayWindowMs: number;
 
-  /** How many times the payment provider may be tried for a single payout before the system gives up and reverses it. */
+  /** Max provider attempts for a single payout before the system gives up and reverses it. */
   maxPayoutAttempts: number;
 
-  /** How many delivery attempts an outbox message gets before the relay dead-letters it (sets status 'failed'), so a poison event can't wedge the queue. The relay dead-letters once `attempts` reaches this cap. */
+  /** Delivery attempts an outbox message gets before the relay dead-letters it (status 'failed'), so a poison event can't wedge the queue. Dead-letters once `attempts` reaches this cap. */
   maxOutboxAttempts: number;
 
-  /** How many consecutive retryable renewal failures a subscription gets before the renewal sweep stops retrying and LAPSES it instead of re-billing forever. The sweep lapses once `attempts` reaches this cap. */
+  /** Consecutive retryable renewal failures before the renewal sweep lapses a subscription instead of re-billing forever. Lapses once `attempts` reaches this cap. */
   maxSubscriptionAttempts: number;
 
-  /** The longest, in milliseconds, a payout may sit in SUBMITTED before the worker force-fails it as timed out (the provider never reported back). Distinct from `payoutSla.SUBMITTED`, which only schedules the next settle check. */
+  /** Longest (ms) a payout may sit in SUBMITTED before the worker force-fails it as timed out (provider never reported back). Distinct from `payoutSla.SUBMITTED`, which only schedules the next settle check. */
   maxPayoutAgeMs: number;
 
-  /** The platform's cut, in basis points (hundredths of a percent), so 10000 means 100% and 1530 means 15.3%. */
+  /** Platform's cut in basis points (hundredths of a percent); 10000 = 100%, 1530 = 15.3%. */
   platformFeeBps: number;
 
-  /** The payout-rail fee, in basis points, charged on the USD a creator cashes out — VRChat's
-   *  third fee point (≈1.5% for PayPal, varies by destination). It is the rail's (e.g. PayPal's)
-   *  cut, deducted from the disbursement so the creator receives the net; it is NOT VRChat revenue. */
+  /** Payout-rail fee in basis points, charged on the USD a creator cashes out. VRChat's third
+   *  fee point (≈1.5% for PayPal, varies by destination). The rail's cut (e.g. PayPal's), deducted
+   *  from the disbursement so the creator receives the net; not VRChat revenue. */
   payoutFeeBps: number;
 
-  /** The most a user may spend within one time window before the risk check steps in, measured in CREDIT minor units (the smallest CREDIT unit). */
+  /** Most a user may spend within one window before the risk check steps in, in CREDIT minor units. */
   velocityLimitMinor: bigint;
 
-  /** The length of the rolling (sliding) spending window for `velocityLimitMinor`, in
-   *  milliseconds: only a subject's attempts within the last `velocityWindowMs` count toward the
-   *  limit, and each one ages out of the total on its own once it is older than the window. */
+  /** Length (ms) of the rolling spending window for `velocityLimitMinor`. Only a subject's attempts
+   *  within the last `velocityWindowMs` count toward the limit; each ages out once older than the window. */
   velocityWindowMs: number;
 
   /**
-   * How long topped-up funds must wait before they can be spent or paid out,
-   * in milliseconds, keyed by how the money was funded (for example "card" or
-   * "crypto"). A funding source not listed here uses the "default" entry.
+   * How long (ms) topped-up funds must wait before they can be spent or paid out, keyed by
+   * funding source ("card", "crypto"). Sources not listed use the "default" entry.
    */
   maturityHorizonMs: Record<string, number>;
 
-  /** Time budgets in milliseconds for each step of processing a payout, keyed by the step's state name (such as PENDING or SUBMITTED); a background worker uses these to decide when a step has been stuck too long. */
+  /** Time budget (ms) per payout-processing step, keyed by state name (PENDING, SUBMITTED). A background worker uses these to decide when a step has been stuck too long. */
   payoutSla: Record<string, number>;
 
   /**
-   * The smallest payout a user may request, counted only against CREDIT the user earned
-   * (not credit they bought or were granted as a promotion), in minor units (the smallest
-   * CREDIT unit). The default of 20,000 credits (about $100) matches VRChat's published floor.
+   * Smallest payout a user may request, counted only against earned CREDIT (not bought or
+   * promo-granted), in minor units. Default 20,000 credits (≈$100) matches VRChat's published floor.
    */
   payoutMinimumEarnedMinor: bigint;
 
-  /** The minimum time, in milliseconds, a user must wait between payout requests. Defaults to 24h to match the live docs; the legal requirement is 14 days (1_209_600_000). */
+  /** Min time (ms) between payout requests. Defaults to 24h to match the live docs; the legal requirement is 14 days (1_209_600_000). */
   payoutMinIntervalMs: number;
 }
 
-// True when running in production, where a missing secret must fail rather than fall
-// back to an empty-string default.
+// True in production, where a missing secret must fail rather than default to empty string.
 function isProduction(env: EnvMap): boolean {
   return env.NODE_ENV === 'production';
 }
 
-// The raw environment: variable names mapped to their string values (or undefined if unset).
+// Raw environment: variable names to string values (or undefined if unset).
 type EnvMap = Record<string, string | undefined>;
 
 /**
- * Build the {@link Config} from environment variables, applying a default for any
- * value that is unset or invalid.
+ * Build {@link Config} from env vars, defaulting any value that is unset or invalid.
  *
- * If any required secret is missing in production, this throws a single
- * CONFIG.INVALID fault that lists all of the missing keys at once, so the program
- * fails at startup instead of one key at a time during requests.
+ * If any required secret is missing in production, throws a single CONFIG.INVALID fault
+ * listing all missing keys at once, so the program fails at startup rather than one key
+ * at a time during requests.
  */
 export function loadConfig(env: EnvMap): Config {
   let cardHorizonMs = toInt(env.MATURITY_HORIZON_CARD_MS, 7 * 24 * 60 * 60_000);
@@ -143,8 +138,7 @@ export function loadConfig(env: EnvMap): Config {
     maturityHorizonMs: {
       card: cardHorizonMs,
       crypto: toInt(env.MATURITY_HORIZON_CRYPTO_MS, 24 * 60 * 60_000),
-      // A funding source not listed above falls back to this entry, which itself
-      // defaults to the longer (more cautious) card horizon.
+      // Fallback for unlisted funding sources; defaults to the longer (more cautious) card horizon.
       default: toInt(env.MATURITY_HORIZON_DEFAULT_MS, cardHorizonMs),
     },
     payoutSla: {
@@ -157,10 +151,9 @@ export function loadConfig(env: EnvMap): Config {
   };
 }
 
-// Check one required value. Instead of throwing right away, this reports whether the
-// value is missing via a `missing` flag, so loadConfig can collect all the missing
-// keys and report them together. An empty value is tolerated outside production but
-// counts as missing in production.
+// Check one required value. Reports absence via a `missing` flag instead of throwing, so
+// loadConfig can collect and report all missing keys together. Empty values are tolerated
+// outside production but count as missing in production.
 function required(
   value: string | undefined,
   key: string,
@@ -172,16 +165,15 @@ function required(
   return { key, value, missing: false };
 }
 
-// Parse a value as an integer, returning the fallback when it is unset or not a valid
-// whole number, so a bad override can never leave the config partly applied.
+// Parse an integer, returning the fallback when unset or not a valid whole number, so a
+// bad override can never leave the config partly applied.
 function toInt(value: string | undefined, fallback: number): number {
   let parsed = Number.parseInt(String(value), 10);
   return Number.isSafeInteger(parsed) ? parsed : fallback;
 }
 
-// Parse a value as a bigint (used for minor-unit amounts that can exceed the largest
-// integer a regular JavaScript number can hold exactly, 2^53). Returns the fallback
-// unless the value is a string of digits.
+// Parse a bigint (for minor-unit amounts that can exceed 2^53, the largest exact JS number).
+// Returns the fallback unless the value is a string of digits.
 function toBigInt(value: string | undefined, fallback: bigint): bigint {
   if (value === undefined || !/^\d+$/.test(value)) {
     return fallback;

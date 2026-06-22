@@ -140,14 +140,12 @@ function wallClock(): Clock {
   return { now: () => Date.now() };
 }
 
-// Generates ids of the form `${prefix}_${uuid}` using the built-in crypto.randomUUID, so
-// each id is unique without pulling in any Node-specific module.
+// Ids of the form `${prefix}_${uuid}` via crypto.randomUUID, no Node-specific module.
 function uuidIds(): Ids {
   return { next: (prefix) => `${prefix}_${crypto.randomUUID()}` };
 }
 
-// Hashes bytes with SHA-256 using the built-in crypto.subtle. This is the same hash the
-// in-memory store uses by default, and it produces the same result on every runtime.
+// SHA-256 via crypto.subtle. Same hash the in-memory store defaults to; identical result on every runtime.
 function subtleDigest(): Digest {
   return {
     hash: async (bytes) =>
@@ -155,16 +153,14 @@ function subtleDigest(): Digest {
   };
 }
 
-// A logger that discards everything, so the code can always call the logger even when the
-// host hasn't supplied one. Tests pass this explicitly to keep their output clean; the
-// production `compose`/`composeWorker` default to the concrete `jsonlLogger` instead, so
-// background diagnostics aren't silently dropped.
+// Discards everything, so code can always call the logger even with no host-supplied one. Tests
+// pass this to keep output clean; production `compose`/`composeWorker` default to `jsonlLogger` so
+// background diagnostics still surface.
 function noopLogger(): Logger {
   return { log: () => {} };
 }
 
-// A metrics sink that discards everything, so the code can always record metrics even when
-// the host hasn't supplied one.
+// Metrics sink that discards everything, so code can always record metrics with no host-supplied one.
 function noopMeter(): Meter {
   return { count: () => {}, observe: () => {} };
 }
@@ -172,11 +168,11 @@ function noopMeter(): Meter {
 // --- The production composition (selects adapters from env) ------------------------
 
 /**
- * Wire an {@link Economy} whose Store — and optional Redis cache / SQS dispatcher — are chosen
- * from `env`, falling back to the in-memory store when `DATABASE_URL` is unset. Each driver is
- * imported DYNAMICALLY (loaded on demand, only if selected), so a deployment installs only the
- * one it uses: selecting Postgres never pulls in `mysql2` or `@aws-sdk`. Config is read once and
- * fails fast on a bad env, exactly like {@link composeInMemory}.
+ * Wire an {@link Economy} whose Store (and optional Redis cache / SQS dispatcher) are chosen from
+ * `env`, falling back to the in-memory store when `DATABASE_URL` is unset. Each driver is imported
+ * dynamically (only if selected), so a deployment installs only the one it uses: selecting Postgres
+ * never pulls in `mysql2` or `@aws-sdk`. Config is read once and fails fast on a bad env, like
+ * {@link composeInMemory}.
  */
 export async function compose(
   env: Record<string, string | undefined>,
@@ -211,16 +207,14 @@ export async function compose(
 }
 
 /**
- * Wire a background {@link Worker}: the loop that periodically does the deferred, time-driven
- * work — releasing payouts, renewing subscriptions, expiring promo grants, delivering queued
- * events, writing periodic integrity checkpoints, and so on. It runs over the SAME
- * env-selected store and dispatcher as {@link compose}. Returns the worker plus the store and
- * dispatcher, so a host entry point can call `worker.runOnce(input)` on a timer and pass the
- * dispatcher into each run's input.
+ * Wire a background {@link Worker}: the loop that periodically does deferred, time-driven work
+ * (releasing payouts, renewing subscriptions, expiring promo grants, delivering queued events,
+ * writing integrity checkpoints, etc.). Runs over the same env-selected store and dispatcher as
+ * {@link compose}. Returns the worker plus store and dispatcher, so a host can call
+ * `worker.runOnce(input)` on a timer and pass the dispatcher into each run's input.
  *
- * The worker is given a narrower set of services than a full economy: no pricing rule, because
- * each background pass writes its own debit/credit lines that already balance and so never needs
- * to split a price.
+ * The worker gets a narrower service set than a full economy: no pricing rule, since each
+ * background pass writes its own debit/credit lines that already balance.
  */
 export async function composeWorker(
   env: Record<string, string | undefined>,
@@ -254,9 +248,8 @@ export async function composeWorker(
   return { worker: createWorker(store, ctx), store, dispatcher };
 }
 
-// `DATABASE_URL` picks the storage backend: a connection string starting with `postgres://` or
-// `mysql://` selects that database adapter (and only then loads its driver); unset uses the
-// in-memory store. Any other scheme throws right here instead of failing later.
+// `DATABASE_URL` picks the storage backend: a `postgres://` or `mysql://` DSN selects that adapter
+// (and only then loads its driver); unset uses the in-memory store. Any other scheme throws here.
 async function selectStore(
   env: Record<string, string | undefined>,
   deps: { digest: Digest; clock: Clock; velocityWindowMs: number },
@@ -277,11 +270,10 @@ async function selectStore(
   if (url.startsWith('mysql://')) {
     let { createMysqlPool, mysqlStore } =
       await import('#src/adapters/mysql.ts');
-    // Build the pool through the adapter's helper, which sets supportBigNumbers + bigNumberStrings
-    // so a BIGINT money column comes back as a string (then a bigint), not a lossy JS number. The
-    // raw `mysql2` `createPool` leaves those off, so wiring it directly here would silently round
-    // any amount above what a JS number can represent exactly (about 9 quadrillion, 2 to the 53rd
-    // power). This is the same pool `migrate.ts` and the adapter's tests use.
+    // Build the pool via the adapter's helper, which sets supportBigNumbers + bigNumberStrings so a
+    // BIGINT money column comes back as a string (then a bigint), not a lossy JS number. Raw `mysql2`
+    // `createPool` leaves those off, so wiring it directly would silently round any amount above
+    // 2^53 (~9 quadrillion). Same pool `migrate.ts` and the adapter's tests use.
     let pool = await createMysqlPool(url);
     return mysqlStore({
       pool,
@@ -297,8 +289,8 @@ async function selectStore(
   );
 }
 
-// `REDIS_URL` adds a Redis-backed cache (via the ioredis client) that the store consults before
-// hitting the database and fills on a miss. Unset means no cache: every cache read does nothing.
+// `REDIS_URL` adds a Redis-backed cache (ioredis) the store consults before the database, filling
+// on a miss. Unset means no cache: every cache read does nothing.
 async function selectCache(
   env: Record<string, string | undefined>,
 ): Promise<Cache | undefined> {
@@ -315,12 +307,11 @@ async function selectCache(
   return redisCacheFrom(new Redis(url));
 }
 
-// Picks how outgoing events get delivered, based on env. Events are first written to the
-// database alongside the money move; the dispatcher this returns is what actually ships them
-// out. `SQS_QUEUE_URL` sends them through an Amazon SQS queue; otherwise `DISPATCHER_URL` posts
-// them over HTTP; with neither set, this returns nothing and events are delivered in-process.
-// SQS wins if both are set. Each driver is loaded on demand, only when chosen. The worker's
-// delivery loop is what reads from whichever dispatcher this returns.
+// Picks how outgoing events get delivered, from env. Events are first written to the database
+// alongside the money move; the returned dispatcher ships them out. `SQS_QUEUE_URL` sends via an
+// Amazon SQS queue; else `DISPATCHER_URL` posts over HTTP; with neither, returns nothing and events
+// are delivered in-process. SQS wins if both are set. Each driver loads on demand. The worker's
+// delivery loop reads from whichever dispatcher this returns.
 async function selectDispatcher(
   env: Record<string, string | undefined>,
 ): Promise<Dispatcher | undefined> {

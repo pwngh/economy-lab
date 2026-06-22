@@ -35,11 +35,8 @@ import type { Meter } from '#src/ports.ts';
 import type { WorkerCtx } from '#src/contract.ts';
 import type { PromoGrant, Store, Unit } from '#src/ports.ts';
 
-// Build the bundle of injected dependencies (clock, id generator, logger, metrics meter, etc.)
-// that the sweep runs against. Every piece is a fake test stand-in that behaves the same way on
-// every run. The sweep only actually uses three of them: `ids` (to generate the transaction id
-// for the reversal it posts), `logger`, and `meter`. A test can pass its own `meter` to observe
-// what the sweep counts.
+// Injected deps for the sweep, all deterministic fakes. The sweep only uses `ids` (txn id for the
+// reversal it posts), `logger`, and `meter`; pass a custom `meter` to observe what it counts.
 function workerCtx(overrides?: { meter?: Meter }): WorkerCtx {
   return {
     clock: fixedClock(0),
@@ -54,8 +51,8 @@ function workerCtx(overrides?: { meter?: Meter }): WorkerCtx {
   };
 }
 
-// A metrics meter that remembers every `count` call instead of sending it anywhere, so a test
-// can read back how many grants the sweep reported as reversed versus failed.
+// Meter that records every `count` call instead of emitting, so a test can read back how many
+// grants the sweep reported as reversed versus failed.
 function capturingMeter(): {
   meter: Meter;
   counts: Array<{ name: string; n: number; outcome: string | undefined }>;
@@ -72,13 +69,10 @@ function capturingMeter(): {
   };
 }
 
-// Give a user a promotional credit, exactly the way operations/promo.ts does. A promo is a
-// marketing freebie the platform hands out; it lives in the user's "promo" account and expires.
-// In double-entry bookkeeping every movement is recorded twice, once on each side, so this
-// records the grant as a balanced pair: it adds `amount` to the user's promo account (a credit)
-// and records the same `amount` leaving PROMO_FLOAT, the house pool the platform funds promos
-// from (a debit). It also writes a grant row, all in one transaction. The result: the user has
-// `amount` of promo balance, and the sweep has a grant it can later claim and reverse.
+// Issue a promo credit the way operations/promo.ts does. Promos live in the user's "promo"
+// account and expire. Records a balanced pair in one transaction: credit `amount` to the user's
+// promo account, debit the same from PROMO_FLOAT (the house pool funding promos), plus a grant
+// row. After this the user has `amount` of promo balance and the sweep has a claimable grant.
 async function issueGrant(store: Store, grant: PromoGrant): Promise<void> {
   await store.transaction(async (unit) => {
     await postEntry(unit.ledger, {
@@ -93,12 +87,10 @@ async function issueGrant(store: Store, grant: PromoGrant): Promise<void> {
   });
 }
 
-// Spend `minor` units of a user's promo balance, the way a real purchase spends promo credit
-// before touching real money. This records the spend as a balanced pair: it removes `minor`
-// from the user's promo account and adds the same `minor` to the platform's revenue account
-// (the test just needs somewhere balanced for the money to land — revenue is an arbitrary
-// choice here). After this the user's current promo balance is below the original grant, so
-// when the grant expires the sweep should reverse only the leftover, not the full grant.
+// Spend `minor` units of promo balance, as a purchase spends promo credit before real money.
+// Balanced pair: debit `minor` from the user's promo account, credit it to REVENUE (arbitrary
+// balanced destination). Drops the live balance below the original grant, so on expiry the sweep
+// reverses only the leftover.
 async function spendPromo(
   unit: Unit,
   userId: string,
@@ -131,8 +123,8 @@ function grantOf(
 
 async function reversesAnUnspentExpiredGrantToPromoFloat(): Promise<void> {
   let store = memoryStore({ digest: seededDigest(1) });
-  // Record the PROMO_FLOAT pool's balance before any grant is issued (it starts at zero), so a
-  // later assert can confirm the reversal returns it to exactly this starting point.
+  // PROMO_FLOAT balance before any grant (starts at zero); a later assert confirms the reversal
+  // returns it here.
   let floatBeforeGrant = await store.ledger.balance(SYSTEM.PROMO_FLOAT);
   let grant = grantOf('usr_a', 'txn_grant_a', 500n, 1_000);
   await issueGrant(store, grant);
@@ -152,9 +144,8 @@ async function reversesAnUnspentExpiredGrantToPromoFloat(): Promise<void> {
   let promoBal = await store.ledger.balance(promo('usr_a'));
   assert.deepEqual(promoBal, toAmount('CREDIT', 0n));
 
-  // The PROMO_FLOAT pool is back to where it stood before the grant. Issuing the grant moved
-  // 500 out of the pool; reversing it moves the same 500 back in, so the two cancel out and the
-  // pool nets to zero change.
+  // PROMO_FLOAT is back to its pre-grant balance: the grant moved 500 out, the reversal moves 500
+  // back, netting to zero change.
   let floatAfter = await store.ledger.balance(SYSTEM.PROMO_FLOAT);
   assert.deepEqual(floatAfter, floatBeforeGrant);
 
@@ -205,8 +196,8 @@ async function reversesNothingWhenTheGrantIsFullySpent(): Promise<void> {
     limit: 10,
   });
 
-  // The grant still shows up in the result (the sweep claimed and processed it), but the amount
-  // reversed is 0 because the user had already spent all of it.
+  // The grant still appears in the result (claimed and processed), but reversed amount is 0 since
+  // the user had spent all of it.
   assert.deepEqual(summary.reversed, [
     { id: 'txn_grant_c', amount: toAmount('CREDIT', 0n) },
   ]);
@@ -216,8 +207,7 @@ async function reversesNothingWhenTheGrantIsFullySpent(): Promise<void> {
   let floatAfter = await store.ledger.balance(SYSTEM.PROMO_FLOAT);
   assert.deepEqual(floatAfter, floatBefore);
 
-  // Even though no money moved, the grant is still marked reversed, so a later sweep won't pick
-  // it up again. This second sweep confirms that: it finds nothing to do.
+  // No money moved, but the grant is still marked reversed; a second sweep finds nothing.
   let again = await sweepExpiredPromos(store, workerCtx(), {
     now: 1_000,
     limit: 10,
@@ -241,10 +231,9 @@ async function neverOverReversesWhenOneUserHasTwoGrants(): Promise<void> {
     limit: 10,
   });
 
-  // The sweep handles the two grants one at a time, re-reading the user's current promo balance
-  // each time. The first grant sees the 200 that is left and reverses it; the second grant then
-  // re-reads the now-zero balance and reverses nothing. So the total reversed is exactly the 200
-  // that was left over, never the full 1000 that was granted.
+  // Grants are handled one at a time, re-reading the live promo balance each time. First grant
+  // reverses the leftover 200; second re-reads the now-zero balance and reverses nothing. Total
+  // reversed is 200, not the full 1000 granted.
   let total = summary.reversed.reduce((sum, r) => sum + r.amount.minor, 0n);
   assert.equal(total, 200n);
   assert.equal(summary.reversed.length, 2);
@@ -283,8 +272,7 @@ async function skipsGrantsThatHaveNotYetExpired(): Promise<void> {
   let store = memoryStore({ digest: seededDigest(1) });
   await issueGrant(store, grantOf('usr_h', 'txn_grant_h', 500n, 2_000));
 
-  // The grant expires at 2000 but we sweep at time 1000, before its expiry, so nothing is due
-  // to be reversed yet.
+  // Grant expires at 2000 but we sweep at 1000, before expiry, so nothing is due yet.
   let summary = await sweepExpiredPromos(store, workerCtx(), {
     now: 1_000,
     limit: 10,
@@ -303,10 +291,9 @@ async function recordsAFailedGrantWithoutMarkingItReversed(): Promise<void> {
   let store = memoryStore({ digest: seededDigest(1) });
   await issueGrant(store, grantOf('usr_i', 'txn_grant_i', 500n, 1_000));
 
-  // Wrap the store so that opening a database transaction always throws. The sweep reverses each
-  // grant inside one transaction, so this makes reversing the grant fail. Marking the grant
-  // reversed happens in that same transaction, so when it rolls back the grant is left unmarked
-  // and still claimable.
+  // Wrap the store so opening a transaction always throws. The sweep reverses each grant (and
+  // marks it reversed) inside one transaction, so the rollback leaves the grant unmarked and
+  // still claimable.
   let failing: Store = {
     ...store,
     transaction: async () => {
@@ -324,8 +311,7 @@ async function recordsAFailedGrantWithoutMarkingItReversed(): Promise<void> {
     { id: 'txn_grant_i', code: 'STORE.FAILURE' },
   ]);
 
-  // Because the grant was never marked reversed, the real (unwrapped) store still reports it as
-  // due, ready for a later sweep to retry.
+  // Never marked reversed, so the unwrapped store still reports it as due for a later retry.
   let stillDue = await store.promos.claimDue(1_000, 10);
   assert.equal(stillDue.length, 1);
   assert.equal(stillDue[0]!.id, 'txn_grant_i');
@@ -352,9 +338,8 @@ async function countsReversedAndFailedOnTheMeter(): Promise<void> {
   await store.close();
 }
 
-// Confirm the sweep only ever touches promo accounts and leaves a user's spendable balance
-// (real money they topped up) alone. The test first funds a spendable account, then issues and
-// expires a promo grant, and checks the spendable balance is exactly as funded afterward.
+// The sweep touches only promo accounts, never a user's spendable balance (topped-up real money).
+// Fund a spendable account, issue and expire a promo grant, then check spendable is unchanged.
 async function leavesSpendableBalancesUntouched(): Promise<void> {
   let store = memoryStore({ digest: seededDigest(1) });
   await store.transaction((unit) =>

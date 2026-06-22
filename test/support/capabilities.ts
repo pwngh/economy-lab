@@ -168,8 +168,7 @@ export function testLogger(): Logger {
   return { log: () => {} };
 }
 
-// A metrics sink that records nothing. It exists only so code that emits metrics has
-// something to call.
+// Metrics sink that records nothing; exists so code emitting metrics has something to call.
 export function noopMeter(): Meter {
   return { count: () => {}, observe: () => {} };
 }
@@ -186,21 +185,18 @@ export function fakeProcessor(): Processor {
 
 // --- Pricing (a flat-percentage split, expressed in basis points) -----------------
 
-// Take `bps` basis points (hundredths of a percent) of `minor` and round down to a whole
-// minor unit: minor * bps / 10000. Everything is bigint so even the platform's largest
-// totals stay exact (a regular JavaScript number would lose precision at that size).
+// `bps` basis points (hundredths of a percent) of `minor`, rounded down: minor * bps / 10000.
+// All bigint so large totals stay exact (a JS number would lose precision at that size).
 function applyBps(minor: bigint, bps: number): bigint {
   return (minor * BigInt(bps)) / 10_000n;
 }
 
-// Split a sale's `price` into the individual credit lines — the legs — that pay each party.
-// First take the platform fee off the top, using the SAME `feeForPrice` the production pricing
-// uses: it rounds the fee UP to a whole credit and posts it to the REVENUE account, so this
-// fixture never disagrees with the fee `saleOf` records. Then give each recipient their
-// rounded-down share of what is left, paid into that seller's `earned` account (the credits the
-// platform owes that seller). Any rounding leftover goes to the platform's REVENUE account along
-// with the fee, so the legs add up to exactly `price` with nothing lost. This only covers who
-// gets paid; the operation handler adds the matching line that takes the money from the buyer.
+// Split a sale's `price` into the credit legs that pay each party. Take the platform fee off the
+// top via the same `feeForPrice` production uses (rounds the fee up to a whole credit, posts to
+// REVENUE), so this fixture agrees with the fee `saleOf` records. Each recipient gets a
+// rounded-down share of the rest, into that seller's `earned` account. Rounding leftover goes to
+// REVENUE with the fee, so the legs sum to exactly `price`. Covers payouts only; the operation
+// handler adds the matching line that debits the buyer.
 function splitLegs(
   price: Amount,
   recipients: ReadonlyArray<Recipient>,
@@ -225,8 +221,8 @@ function splitLegs(
 }
 
 /**
- * The test fee policy: a flat-percentage split (see `splitLegs`). It keeps no state of its
- * own, so the legs it returns depend only on the inputs it is handed.
+ * Test fee policy: a flat-percentage split (see `splitLegs`). Stateless, so the legs depend only
+ * on the inputs.
  */
 export function defaultPricing(): FeePolicy {
   return (input) => splitLegs(input.price, input.recipients, input.feeBps);
@@ -235,9 +231,8 @@ export function defaultPricing(): FeePolicy {
 // --- Config -----------------------------------------------------------------------
 
 /**
- * A ready-made test config with throwaway secrets. The real `loadConfig` startup check
- * that rejects missing secrets is tested on its own in the config tests, not here, so
- * these placeholder values are fine.
+ * Test config with throwaway secrets. `loadConfig`'s startup check for missing secrets is covered
+ * in the config tests, so placeholder values are fine here.
  */
 export function testConfig(): Config {
   return {

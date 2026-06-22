@@ -42,10 +42,8 @@ import type {
   Store,
 } from '#src/ports.ts';
 
-// The bundle of capabilities (clock, id generator, hasher, signer, and so on) every
-// background job is handed. They are all the deterministic test fakes, so each run behaves
-// the same way. Takes the same `digest` (hasher) the seed posting used, so the checkpoint
-// job hashes the same bytes that were recorded when the ledger was seeded.
+// Deterministic fake capabilities handed to every background job. Takes the same `digest`
+// (hasher) the seed posting used, so the checkpoint job hashes the bytes recorded at seed time.
 function workerCtx(digest: Digest): WorkerCtx {
   return {
     clock: fixedClock(0),
@@ -60,24 +58,21 @@ function workerCtx(digest: Digest): WorkerCtx {
   };
 }
 
-// A reconciliation source that returns nothing on both sides (processor and ledger). With
-// both empty there is nothing to mismatch, so the reconcile job runs to a clean result. This
-// lets a test confirm the reconcile job ran without standing up a real processor record.
+// Reconciliation source empty on both sides (processor and ledger): nothing to mismatch, so
+// the reconcile job runs clean without a real processor record.
 function emptyFeed(): ReconcileFeed {
   return { pull: async () => ({ processor: [], ledger: [] }) };
 }
 
-// An event dispatcher that silently discards every event. The job that delivers outgoing
-// events needs one, but no event is ever queued here, so it is never actually invoked. It is
-// only present so the input object is complete.
+// Event dispatcher that discards everything. Never invoked (no event is queued); present only
+// to complete the input object.
 function nullDispatcher(): Dispatcher {
   return async () => {};
 }
 
-// The full set of arguments the runner passes to all eight jobs: the current time `now` and a
-// per-pass cap `limit` for the jobs that scan for due items, a `dispatcher` for the
-// event-delivery job, and a `feed` plus `windows` for the reconciliation job. Callers can
-// override any field for a specific test.
+// Arguments the runner passes to all eight jobs: `now`, a per-pass `limit` for due-item scans,
+// a `dispatcher` for event delivery, and `feed` plus `windows` for reconciliation. Override any
+// field per test.
 function sweepInput(overrides?: Partial<SweepInput>): SweepInput {
   return {
     now: 1_000,
@@ -89,9 +84,8 @@ function sweepInput(overrides?: Partial<SweepInput>): SweepInput {
   };
 }
 
-// A balanced posting that moves 500 credits from the platform's revenue account to a user's
-// spendable balance. Posting it gives the ledger two real accounts, so the checkpoint job has
-// something to snapshot instead of skipping an empty ledger.
+// Balanced posting: 500 credits from platform revenue to a user's spendable balance. Gives the
+// ledger two real accounts so the checkpoint job has something to snapshot.
 function seedPosting(): Posting {
   let amount = toAmount('CREDIT', 500n);
   return {
@@ -101,9 +95,8 @@ function seedPosting(): Posting {
   };
 }
 
-// An in-memory store with the one seed posting already committed, so the checkpoint and
-// treasury jobs read genuine accounts. Returns the store along with the hasher it was built
-// with, so the same hasher can be passed to the worker context.
+// In-memory store with the seed posting committed, so checkpoint and treasury jobs read real
+// accounts. Returns the store plus its hasher, for passing into the worker context.
 async function seededStore(): Promise<{ store: Store; digest: Digest }> {
   let digest = seededDigest(1);
   let store = memoryStore({ digest });
@@ -111,15 +104,14 @@ async function seededStore(): Promise<{ store: Store; digest: Digest }> {
   return { store, digest };
 }
 
-// One boolean per job, flipped to true when that job makes its first store read. A test
-// checks every flag is true to prove every job was reached.
+// One boolean per job, flipped on the job's first store read; a test asserts all true to prove
+// every job ran.
 //
-// Three jobs do not get a read of their own to watch:
-//   - The checkpoint job reads the same per-account latest entries (`ledger.heads`) the
-//     treasury job already reads, so it cannot be told apart on that read. It is tracked by
-//     its later `checkpoints.put` write instead.
-//   - The checkpointVerify job is tracked by its `checkpoints.latest` read.
-//   - The reconcile job is tracked on its feed (see `recordingFeed`), not in this store.
+// Three jobs lack a distinct read to watch:
+//   - checkpoint reads the same `ledger.heads` (per-account latest entries) as treasury, so it
+//     can't be told apart there; tracked by its later `checkpoints.put` write instead.
+//   - checkpointVerify is tracked by its `checkpoints.latest` read.
+//   - reconcile is tracked on its feed (see `recordingFeed`), not in this store.
 type Touched = {
   payouts: boolean;
   subscriptions: boolean;
@@ -130,9 +122,8 @@ type Touched = {
   promos: boolean;
 };
 
-// Wrap a store so each job's first store call flips its flag in `touched`, and optionally
-// throws a supplied error from one chosen job. This is the shared setup behind both the
-// "every job ran" test and the "one job's throw is isolated" tests.
+// Wrap a store so each job's first call flips its flag in `touched`, optionally throwing a
+// supplied error from one chosen job. Shared by the "every job ran" and "throw is isolated" tests.
 function recordingStore(
   store: Store,
   touched: Touched,
@@ -180,9 +171,8 @@ function recordingStore(
   };
 }
 
-// Wrap one async store method so it runs `before` (which flips the flag and may throw) and
-// only then calls the real method. Running `before` first means the flag is recorded even
-// when the real call returns an empty result.
+// Wrap an async store method to run `before` (flips the flag, may throw) and only then call the
+// real method. Running `before` first records the flag even when the real call returns empty.
 function probe<TArgs extends unknown[], TResult>(
   method: (...args: TArgs) => Promise<TResult>,
   before: () => void,
@@ -193,8 +183,8 @@ function probe<TArgs extends unknown[], TResult>(
   };
 }
 
-// A reconciliation source that flips its flag when pulled, so the reconcile job's run can be
-// observed the same way the store-backed jobs' runs are.
+// Reconciliation source that flips its flag when pulled, so the reconcile job's run is observable
+// like the store-backed jobs.
 function recordingFeed(touched: { reconcile: boolean }): ReconcileFeed {
   return {
     pull: async () => {
@@ -359,12 +349,12 @@ async function startSchedulesTheBatchOnTheInjectedScheduler(): Promise<void> {
   await store.close();
 }
 
-// When no dispatcher is configured, the relay sweep must skip cleanly: report success with an
-// empty summary, never touch the outbox, and leave any pending events queued for a later run.
+// No dispatcher: relay sweep skips cleanly. Reports success with an empty summary, never touches
+// the outbox, leaves pending events queued for a later run.
 async function skipsTheRelaySweepWhenNoDispatcherIsConfigured(): Promise<void> {
   let { store, digest } = await seededStore();
-  // Queue one event, so a relay run that DID happen would deliver and mark it (changing the
-  // outbox); a skipped run must leave it pending and untouched.
+  // Queue one event: a relay run that happened would deliver and mark it (changing the outbox);
+  // a skipped run leaves it pending and untouched.
   await store.transaction((unit) =>
     unit.outbox.enqueue({
       id: 'obx_skip',

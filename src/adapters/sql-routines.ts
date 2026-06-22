@@ -15,28 +15,26 @@ import { currency } from '#src/accounts.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Posting } from '#src/ports.ts';
 
-// One account's chain step for a posting: the account, its head hash before this posting, and
-// its head hash after. The adapters compute these (the hash is SHA-256, done in application code)
-// and hand them in; this module only shuttles them into the database.
+// One account's chain step for a posting: account, head hash before, head hash after. Adapters
+// compute these (hash is SHA-256, in application code) and pass them in; this module only writes
+// them to the database.
 type Link = { account: AccountRef; prevHash: string; hash: string };
 
 /** Which SQL dialect's placeholder style to emit: Postgres `$1,$2,…` or MySQL `?,?,…`. */
 export type SqlDialect = 'postgres' | 'mysql';
 
 /**
- * A query primitive normalized to "run this SQL with these positional params and hand back the
- * rows". Each adapter wraps its own driver to match this shape (Postgres `pool.query`, the MySQL
- * `rows()` helper), so the routine surface below is written once and works for both backends.
+ * Run SQL with positional params, return the rows. Each adapter wraps its driver to this shape
+ * (Postgres `pool.query`, MySQL `rows()`), so the routines below are written once for both backends.
  */
 export type SqlQuery = (
   sql: string,
   params: ReadonlyArray<unknown>,
 ) => Promise<{ rows: ReadonlyArray<Record<string, unknown>> }>;
 
-// A routine's name is interpolated into the SQL text (a bound parameter can't name a routine), so
-// it is restricted to a plain SQL identifier as a hard guard against injection. Every call site
-// passes a hard-coded constant, so this never legitimately fires — it is a backstop against a
-// future caller building a name from input.
+// A routine name is interpolated into the SQL (a bound param can't name a routine), so restrict it
+// to a plain SQL identifier against injection. Every call site passes a hard-coded constant, so
+// this never fires today; it's a backstop against a future caller building a name from input.
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 
 function safeName(name: string): string {
@@ -52,12 +50,10 @@ function placeholders(dialect: SqlDialect, count: number): string {
   ).join(', ');
 }
 
-// Invoke a stored PROCEDURE for its side effects (it returns no value the caller reads). The
-// caller passes the backend's query function and dialect, the routine name, and positional args;
-// this builds the right `CALL` in the backend's placeholder style and runs it. It holds NO
-// business logic — it is purely the call mechanics, shared by the Postgres and MySQL adapters so a
-// routine is invoked the same way from both. The values a routine acts on are prepared by the
-// application (see {@link postEntryArgs}); the routine only persists them.
+// Invoke a stored procedure for its side effects (no value read back). Builds the `CALL` in the
+// backend's placeholder style and runs it. No business logic, just call mechanics shared by the
+// Postgres and MySQL adapters. Values are prepared by the application (see {@link postEntryArgs});
+// the routine only persists them.
 export async function callProcedure(
   query: SqlQuery,
   dialect: SqlDialect,
@@ -68,7 +64,7 @@ export async function callProcedure(
   await query(sql, args);
 }
 
-// Invoke a stored FUNCTION and return its single scalar result (selected as `result`). Same call
+// Invoke a stored function and return its single scalar result (selected as `result`). Same
 // mechanics as {@link callProcedure}, in a `SELECT` shape.
 export async function callFunction(
   query: SqlQuery,
@@ -84,12 +80,10 @@ export async function callFunction(
 // --- post_entry: preparing its arguments from a posting ---------------------------
 
 /**
- * The finished, persistence-only arguments for the `post_entry` procedure. Every business
- * decision that produces these stays in TS (the single source of truth): which way each account
- * moves (`balanceDelta`), summing a posting's several legs to one account into a single net delta,
- * the kind of a first-time user account, and the currency. The procedure receives only these
- * values and writes rows — it makes no decisions. bigints are carried as strings so the JSON keeps
- * full precision past 2^53.
+ * Persistence-only arguments for the `post_entry` procedure. The business decisions live in TS:
+ * direction per account (`balanceDelta`), summing a posting's legs to one account into a net delta,
+ * first-time user-account kind, and currency. The procedure just writes rows. bigints are carried
+ * as strings so the JSON keeps full precision past 2^53.
  */
 export interface PostEntryArgs {
   // The raw legs (signed: debit +, credit −), one row per leg.
@@ -109,9 +103,9 @@ export interface PostEntryArgs {
 
 /**
  * Turn a posting and its pre-computed chain links into the {@link PostEntryArgs} the `post_entry`
- * procedure persists. This is the one place the per-account math lives, mirroring exactly what the
- * old per-leg `foldBalance` / `ensureAccount` path did — so routing a write through the procedure
- * is behavior-identical, just one round-trip instead of many.
+ * procedure persists. The one place the per-account math lives; mirrors the old per-leg
+ * `foldBalance` / `ensureAccount` path, so the procedure write is behavior-identical in one
+ * round-trip instead of many.
  */
 export function postEntryArgs(
   posting: Posting,
@@ -131,7 +125,7 @@ export function postEntryArgs(
 
   // Net balance delta per account: a posting can touch one account in several legs (e.g. a
   // promo-funded spend credits a seller twice), so sum each account's `balanceDelta` into one
-  // figure — the same total the per-leg `foldBalance` would have reached.
+  // figure, the same total the per-leg `foldBalance` would reach.
   let deltaByAccount = new Map<string, bigint>();
   let currencyByAccount = new Map<string, string>();
   for (let leg of posting.legs) {

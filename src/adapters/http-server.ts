@@ -73,9 +73,8 @@ async function rollbackSession(session: Session): Promise<void> {
 
 // --- Ledger routes ----------------------------------------------------------------
 
-// Pick the ledger a request should run against. The literal id 'root' means a plain read
-// outside any transaction, so use the backing store's own ledger; otherwise look up the held
-// transaction by its session id and use that transaction's ledger.
+// Pick the ledger for a request. Session id 'root' means a read outside any transaction, so
+// use the backing store's ledger; otherwise use the held transaction's ledger.
 function ledgerFor(
   backing: Store,
   sessions: Map<string, Session>,
@@ -113,12 +112,11 @@ async function ledgerRoute(
   return ledgerReadRoute(ledger, method, body);
 }
 
-// The remaining ledger reads, split into a second function only to keep each one short.
-// These are a page of an account's entries (`statement`) plus three reads that stream their
-// rows one at a time rather than returning a whole array: `heads` (every account paired with
-// the latest hash in its tamper-evident chain), `timeline` (an account's settlement lots —
-// chunks of funds with the date each becomes payable), and `lineage` (every posting that
-// touched an account, with its hashes, used to verify the chain was not altered).
+// Remaining ledger reads, split out to keep each function short. `statement` is a page of an
+// account's entries; the rest stream rows one at a time instead of returning an array:
+// `heads` (each account with the latest hash in its tamper-evident chain), `timeline` (an
+// account's settlement lots: funds with the date each becomes payable), and `lineage` (every
+// posting that touched an account, with hashes, to verify the chain was not altered).
 async function ledgerReadRoute(
   ledger: Store['ledger'],
   method: string,
@@ -175,10 +173,9 @@ async function collect<T>(
 
 // --- Sub-store routes -------------------------------------------------------------
 
-// Pick the per-transaction store set (the unit) a request should run against. The id 'root'
-// means a call outside any transaction; the backing store exposes all the same sub-stores a
-// unit does, so it can stand in directly. Any other id is a held transaction, so use the
-// unit captured for that session.
+// Pick the unit for a request. Session id 'root' means a call outside any transaction; the
+// backing store exposes the same sub-stores a unit does, so it stands in directly. Otherwise
+// use the unit captured for that session.
 function unitFor(
   backing: Store,
   sessions: Map<string, Session>,
@@ -187,9 +184,8 @@ function unitFor(
   return session === 'root' ? backing : sessions.get(session)!.unit;
 }
 
-// Run one non-ledger sub-store call (sagas, idempotency, entitlements, and the rest). Looks up a
-// handler in the route table by the "<store>/<method>" key from the request path and calls
-// it; throws if the path names no such route.
+// Run one non-ledger sub-store call (sagas, idempotency, entitlements, etc.). Looks up the
+// handler by "<store>/<method>" key from the path; throws if no such route.
 async function subStoreRoute(
   unit: Unit,
   store: string,
@@ -208,10 +204,9 @@ type SubHandler = (
   body: Record<string, unknown>,
 ) => Promise<unknown>;
 
-// Every non-ledger sub-store call lives here, one entry per method. Each handler does the
-// same three steps: turn the request body's wire form back into domain values, call the
-// store method, and turn the result back into wire form. The client has a matching call for
-// every entry in this table.
+// Every non-ledger sub-store call, one entry per method. Each handler decodes the body's wire
+// form to domain values, calls the store method, and encodes the result back. The client has
+// a matching call for every entry.
 let SUBSTORE_ROUTES: Record<string, SubHandler> = {
   'idempotency/claim': async (unit, body) => {
     let result = await unit.idempotency.claim(body.key as string);
@@ -353,10 +348,9 @@ let SUBSTORE_ROUTES: Record<string, SubHandler> = {
   },
 };
 
-// Decode the fields being changed on a saga (a long-running multi-step payout the server
-// tracks across states). The change set updates only some of a saga's fields, so its one
-// money field, `reserve`, may be absent; decode that field from its wire string only when it
-// is present, and otherwise pass the change set through unchanged.
+// Decode a saga patch (a saga is a long-running multi-step payout tracked across states). The
+// patch updates only some fields, so its one money field `reserve` may be absent; decode it
+// from the wire string only when present, otherwise pass the patch through unchanged.
 function decodeSagaPatch(
   patch: unknown,
 ): Parameters<Unit['sagas']['advance']>[3] {
@@ -369,9 +363,9 @@ function decodeSagaPatch(
 }
 
 // --- Routes that bypass transactions (trust, checkpoints) -------------------------
-// The trust store (which keeps a running per-subject tally of recent spend used for risk
-// checks) and the checkpoints are written directly on the backing store, not inside a held
-// transaction, so these routes take the store rather than a session's unit.
+// The trust store (a running per-subject tally of recent spend, used for risk checks) and the
+// checkpoints write directly on the backing store, not inside a held transaction, so these
+// routes take the store rather than a session's unit.
 
 async function trustRoute(
   backing: Store,
@@ -387,9 +381,8 @@ async function trustRoute(
     ...wireAttempt,
     amount: decodeWire.amount(wireAttempt.amount),
   } as Parameters<typeof backing.trust.bump>[1];
-  // `record` is the atomic record-and-measure the risk gate uses: run it on the backing store
-  // (which is where the per-subject serialization actually happens) and send back the resulting
-  // velocity wire-encoded, exactly as `read` encodes its result.
+  // `record` is the atomic record-and-measure the risk gate uses. Run it on the backing store
+  // (where per-subject serialization happens) and return the velocity wire-encoded, same as `read`.
   if (method === 'record') {
     let velocity = await backing.trust.record(body.subject as string, attempt);
     return { ...velocity, spent: encodeWire.amount(velocity.spent) };
@@ -412,12 +405,10 @@ async function checkpointRoute(
   return backing.checkpoints.latest();
 }
 
-// The webhook replay store deduplicates incoming webhook events: claiming an event id
-// succeeds the first time and fails on any repeat, so the same event is never processed
-// twice. It is claimed directly on the backing store, never inside a held transaction (the
-// webhook ingress checks it on its own before doing any work), so this route takes the store
-// rather than a session's unit. Only `claim` exists; its `{ claimed }` result is a plain JSON
-// object, so no codec is needed.
+// The webhook replay store dedups incoming events: claiming an event id succeeds the first
+// time and fails on repeats. Claimed directly on the backing store, never inside a held
+// transaction (webhook ingress checks it before doing work), so this route takes the store.
+// Only `claim` exists; its `{ claimed }` result is plain JSON, no codec needed.
 async function replayRoute(
   backing: Store,
   method: string,
@@ -499,14 +490,12 @@ async function txDispatch(
 // --- The Fetch handler ------------------------------------------------------------
 
 /**
- * Build the server side of the HTTP store adapter: a function that takes a {@link Request}
- * and returns a {@link Response}, answering each request against the given backing
- * {@link Store}.
+ * Server side of the HTTP store adapter: a {@link Request} → {@link Response} function
+ * answering each request against the backing {@link Store}.
  *
- * A successful result is sent as `{ ok: true, body }`. If the handler throws, the response
- * is `{ ok: false, error }` with the error message — always HTTP 200, never an error status
- * code. The client reads that shape and re-throws the error, so a failed call rolls its
- * transaction back just as a normal in-process call would.
+ * Success sends `{ ok: true, body }`; a thrown handler sends `{ ok: false, error }` with the
+ * message, always HTTP 200. The client re-throws on that shape, so a failed call rolls its
+ * transaction back like an in-process call would.
  */
 export function createStoreServer(
   backing: Store,

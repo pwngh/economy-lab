@@ -44,14 +44,11 @@ import type {
   Store,
 } from '#src/ports.ts';
 
-// The "previous hash" reported for an account's very first posting, when nothing came
-// before it: 64 zero characters (32 zero bytes written out in lowercase hexadecimal).
+// prevHash for an account's first posting: 64 zero chars (32 zero bytes, lowercase hex).
 let GENESIS_HEX = '0'.repeat(64);
 
-// Build one balanced double-entry posting: add 500 to the user's spendable balance and
-// take the same amount from the platform's REVENUE account, so the two sides cancel. The
-// two different accounts (the user's and REVENUE) are what let advanceHeads produce two
-// separate chain links to assert on.
+// Balanced double-entry posting: +500 to the user's spendable, -500 from REVENUE. Two
+// distinct accounts, so advanceHeads produces two separate chain links to assert on.
 function balancedPosting(txnId: string, user: string): Posting {
   let amount = toAmount('CREDIT', 500n);
   return {
@@ -61,10 +58,9 @@ function balancedPosting(txnId: string, user: string): Posting {
   };
 }
 
-// A stand-in for the place checkpoints are saved (the CheckpointStore). It records nothing
-// real — it just counts how many times `put` was called, via `rows()`, so a test can check
-// that recordCheckpoint actually saved one. The production store lives in the database
-// adapter and is saved outside the money-posting transaction on purpose.
+// Fake CheckpointStore that just counts put() calls via rows(), so a test can assert
+// recordCheckpoint saved one. The production store lives in the db adapter and writes
+// outside the money-posting transaction by design.
 function captureCheckpoints(): CheckpointStore & { rows: () => number } {
   let rows: number[] = [];
   return {
@@ -76,11 +72,9 @@ function captureCheckpoints(): CheckpointStore & { rows: () => number } {
   };
 }
 
-// Set up a real in-memory store with one balanced posting already written through the
-// normal write path (postEntry). Writing it that way means each account's hash chain is
-// extended for real, so proveChain has genuine history to re-check. Returns the same hash
-// function (digest) the write used, so any later verify re-hashes with the identical
-// function and reproduces the same hashes.
+// In-memory store with one balanced posting written through the normal path (postEntry),
+// so each account's hash chain is extended for real and proveChain has history to re-check.
+// Returns the same digest the write used, so later verifies re-hash identically.
 async function populatedStore(): Promise<{ store: Store; digest: Digest }> {
   let digest = seededDigest(1);
   let store = memoryStore({ digest });
@@ -121,9 +115,8 @@ async function agreesWithTheChainHashSeam(): Promise<void> {
 
   let links = await advanceHeads(digest, posting, () => undefined);
 
-  // advanceHeads must compute the link hash by calling the shared chainHash function, not
-  // by re-implementing the hashing itself. To prove that, call chainHash directly with the
-  // same inputs and require the link's hash to match it exactly.
+  // advanceHeads must hash via the shared chainHash, not its own copy. Call chainHash
+  // directly with the same inputs and require the link's hash to match exactly.
   let expected = await chainHash(digest, {
     accountPrevHash: new Uint8Array(32),
     txnId: posting.txnId,
@@ -158,9 +151,8 @@ async function threadsThePriorHeadForward(): Promise<void> {
 async function reportsIntactOverAHealthyLedger(): Promise<void> {
   let { store, digest } = await populatedStore();
 
-  // proveChain re-hashes every account's chain from its start, using the same hash function
-  // the original write used. An untampered ledger must reproduce its stored hashes exactly,
-  // so if this reports a break, the verifier (not the data) is broken.
+  // proveChain re-hashes every chain from its start with the same digest the write used. An
+  // untampered ledger reproduces its stored hashes, so a break here means the verifier is broken.
   let report = await proveChain({ ledger: store.ledger, digest });
 
   assert.equal(report.intact, true);
@@ -169,9 +161,9 @@ async function reportsIntactOverAHealthyLedger(): Promise<void> {
 }
 
 async function detectsATamperedLegOnACommittedPosting(): Promise<void> {
-  // Simulate an attacker editing stored data directly: __tamper changes an already-written
-  // entry but leaves the recorded hash untouched. Because the entry changed, re-hashing it
-  // no longer produces the stored hash, so proveChain should catch the mismatch.
+  // __tamper edits a written entry but leaves its recorded hash untouched, mimicking an
+  // attacker editing stored data. Re-hashing no longer matches the stored hash, so proveChain
+  // catches it.
   let { store, digest } = await populatedStore();
   let ledger = store.ledger as MemoryLedger;
   ledger.__tamper('txn_seed', (legs: Leg[]) => {
@@ -189,9 +181,8 @@ async function detectsATamperedLegOnACommittedPosting(): Promise<void> {
 }
 
 async function pinpointsTheTamperedAccountAcrossAMultiPostingChain(): Promise<void> {
-  // Write two postings to the same account, then tamper only the second one. proveChain
-  // should pin the break to the second posting's transaction, not the first (which is still
-  // valid), proving it reports exactly where the chain first fails.
+  // Two postings to one account, tamper only the second. proveChain should pin the break to
+  // txn_2, not the still-valid txn_1, reporting where the chain first fails.
   let digest = seededDigest(1);
   let store = memoryStore({ digest });
   await store.transaction((unit) =>
@@ -222,9 +213,8 @@ async function rootsAnEmptyHeadSetToGenesis(): Promise<void> {
 }
 
 async function producesTheSameRootForTheSameHeadsOnEveryRuntime(): Promise<void> {
-  // The summary hash must not depend on the order the accounts arrive in. merkleRoot sorts
-  // the accounts first, so feeding it the same set in two different orders must give the
-  // exact same bytes. This is what lets a checkpoint reproduce identically on any runtime.
+  // merkleRoot sorts accounts first, so the root is order-independent: the same set in two
+  // orders gives identical bytes, letting a checkpoint reproduce on any runtime.
   let heads: ReadonlyArray<readonly [AccountRef, string]> = [
     [spendable('usr_a'), 'a'.repeat(64)],
     [SYSTEM.REVENUE, 'c'.repeat(64)],
@@ -234,7 +224,7 @@ async function producesTheSameRootForTheSameHeadsOnEveryRuntime(): Promise<void>
   let rootA = await merkleRoot(seededDigest(7), heads);
   let rootB = await merkleRoot(seededDigest(7), [...heads].reverse());
 
-  assert.deepEqual(rootA, rootB); // same set in reversed order yields the same root, because merkleRoot sorts it
+  assert.deepEqual(rootA, rootB); // reversed order, same root: merkleRoot sorts it
 }
 
 async function changesTheRootWhenAnyHeadChanges(): Promise<void> {
@@ -277,11 +267,9 @@ async function recordsASignedCheckpointOverTheCurrentHeads(): Promise<void> {
 }
 
 async function refusesToCheckpointATamperedChainAndWritesNothing(): Promise<void> {
-  // recordCheckpoint must re-verify the whole chain before it signs anything. Tamper a committed posting's
-  // stored leg (leaving its recorded hash untouched, so re-hashing no longer reproduces it),
-  // then attempt to checkpoint. proveChain finds the break, so recordCheckpoint throws
-  // CHAIN.BROKEN and never reaches the store — no checkpoint is persisted over a tampered
-  // ledger.
+  // recordCheckpoint re-verifies the whole chain before signing. Tamper a committed leg
+  // (hash left intact, so re-hashing no longer matches), then checkpoint. proveChain finds
+  // the break, so recordCheckpoint throws CHAIN.BROKEN and never reaches the store.
   let { store, digest } = await populatedStore();
   (store.ledger as MemoryLedger).__tamper('txn_seed', (legs: Leg[]) => {
     legs[0] = { account: legs[0]!.account, amount: toAmount('CREDIT', 999n) };
@@ -358,9 +346,8 @@ async function rejectsACheckpointWhenTheLedgerMoved(): Promise<void> {
     ids: sequentialIds(),
   });
 
-  // Write another posting after the checkpoint was taken. That changes an account's head
-  // hash, so the root recomputed now differs from the one signed into the checkpoint, and
-  // verify must report a mismatch.
+  // Post again after the checkpoint. That changes an account's head hash, so the recomputed
+  // root differs from the one signed into the checkpoint and verify reports a mismatch.
   await store.transaction((unit) =>
     postEntry(unit.ledger, balancedPosting('txn_after', 'usr_a')),
   );
@@ -384,8 +371,8 @@ async function rejectsAForgedSignature(): Promise<void> {
     ids: sequentialIds(),
   });
 
-  // Verify with a different signing key (seed 2) than the one that signed the checkpoint
-  // (seed 1). Since key 2 never produced this signature, verify must reject it.
+  // Verify with seed 2, but the checkpoint was signed with seed 1. Key 2 never produced this
+  // signature, so verify rejects it.
   let ok = await verifyCheckpoint(
     { ledger: store.ledger, digest, signer: seededSigner(2) },
     checkpoint,
@@ -395,11 +382,9 @@ async function rejectsAForgedSignature(): Promise<void> {
 }
 
 async function verifiesAcrossAKeyRotation(): Promise<void> {
-  // After the signing key is rotated, a checkpoint signed with the old key must still
-  // verify. The point: when the new signer is given the new key plus the old key as a
-  // still-accepted prior key, verify tries the prior key and accepts the old signature.
-  // This uses the real production signer (Ed25519, a public-key signature scheme where a
-  // separate public key verifies what a private key signed), not the seeded test stand-in.
+  // A checkpoint signed with the old key must still verify after rotation: given the new key
+  // plus the old key as a still-accepted prior key, verify tries the prior key and accepts.
+  // Uses the real production Ed25519 signer, not the seeded test stand-in.
   let oldKey = 'aa'.repeat(32);
   let newKey = 'bb'.repeat(32);
   let { store } = await populatedStore();

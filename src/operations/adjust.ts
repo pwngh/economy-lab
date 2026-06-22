@@ -20,18 +20,15 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Leg, Unit } from '#src/ports.ts';
 
 /**
- * Post a manual correction that an operator runs by hand to set an account's balance
- * right when no ordinary operation can — for example, to close a gap found during
- * reconciliation. Ordinary users cannot run it.
+ * Operator-only manual correction, for cases no ordinary operation covers (e.g. closing
+ * a gap found during reconciliation).
  *
- * It moves `operation.account` up or down by the signed `operation.amount` (a negative
- * amount corrects the balance downward), and books the matching opposite entry to the
- * platform's opening-equity account so the two entries cancel and the books stay
- * balanced. Returns a `committed` Outcome carrying the posted transaction.
+ * Moves `operation.account` by the signed `operation.amount` (negative corrects downward)
+ * and books the opposite entry to the platform opening-equity account so the two cancel
+ * and the books stay balanced. Returns a `committed` Outcome with the posted transaction.
  *
- * Bad input is reported by throwing a fault, not by returning a `rejected` Outcome:
- * the actor must be an operator, the amount must be a non-zero CREDIT amount, and the
- * reason must be non-empty.
+ * Bad input throws a fault rather than returning a `rejected` Outcome: actor must be an
+ * operator, amount a non-zero CREDIT amount, reason non-empty.
  *
  * @example
  *   let outcome = await adjust(
@@ -64,32 +61,28 @@ export async function adjust(
   return { status: 'committed', transaction };
 }
 
-// Build the two entries (legs) that make up the adjustment: one moves `account`'s
-// balance by the signed amount, and the other posts the exact opposite to the
-// opening-equity account, so the two amounts cancel and the posting balances. We do
-// not use the `credit`/`debit` helpers here, because the move must read correctly
-// whether `account` grows on a debit or on a credit.
+// Two legs: one moves `account` by the signed amount, the other posts the opposite to
+// opening-equity so they cancel. Avoid the `credit`/`debit` helpers since the move must
+// read correctly whether `account` grows on a debit or a credit.
 function buildAdjustLegs(account: AccountRef, amount: Amount): Leg[] {
-  // Every leg amount is stored debit-positive (a debit is positive, a credit is
-  // negative). For an account that grows on a debit, that stored amount IS the change
-  // to its balance; for an account that grows on a credit, the change is the opposite
-  // sign. So to raise `account`'s balance by `amount.minor`, store +amount.minor when
-  // it grows on a debit and -amount.minor when it grows on a credit.
+  // Leg amounts are stored debit-positive (debit positive, credit negative). For a
+  // debit-normal account the stored amount is the balance change; for a credit-normal
+  // account it's the opposite sign. So to raise `account` by `amount.minor`, store
+  // +amount.minor when debit-normal and -amount.minor when credit-normal.
   let accountMinor = isDebitNormal(account) ? amount.minor : -amount.minor;
   return [
     { account, amount: toAmount(amount.currency, accountMinor) },
     {
-      // The opposite entry carries the negated amount, so the two legs add up to zero.
+      // Negated amount, so the two legs sum to zero.
       account: SYSTEM.OPENING_EQUITY,
       amount: toAmount(amount.currency, -accountMinor),
     },
   ];
 }
 
-// The data stored alongside the posting: the (encoded) signed amount and the operator's
-// reason. The amount is written through `encodeAmount` rather than as a raw bigint, so
-// the bytes hashed into the tamper-evident chain come out the same on every replay and
-// the audit trail shows exactly what the operator changed and why.
+// Data stored with the posting: encoded signed amount and operator reason. Encode via
+// `encodeAmount` rather than raw bigint so the bytes hashed into the tamper-evident chain
+// are stable across replays, and the audit trail records what changed and why.
 function adjustMeta(
   operation: Extract<Operation, { kind: 'adjust' }>,
 ): Record<string, unknown> {
@@ -100,10 +93,9 @@ function adjustMeta(
   };
 }
 
-// Only an operator may run an adjustment. The middleware that wraps this handler
-// already checks the actor, but re-checking here means that calling the handler
-// directly (for instance from a test) with the wrong actor fails loudly instead of
-// quietly writing a privileged correction.
+// Only an operator may adjust. The wrapping middleware already checks the actor;
+// re-checking here means calling the handler directly (e.g. from a test) with the wrong
+// actor fails loudly instead of quietly writing a privileged correction.
 function assertOperator(
   operation: Extract<Operation, { kind: 'adjust' }>,
 ): void {
@@ -116,8 +108,8 @@ function assertOperator(
   }
 }
 
-// A manual correction must record why it was made, so it is auditable. A missing or
-// blank reason is treated as malformed and rejected before anything is posted.
+// A correction must record why, for auditability. Missing or blank reason is malformed
+// and rejected before anything posts.
 function assertReason(reason: string): void {
   if (reason.trim() === '') {
     throw fault(
@@ -128,11 +120,10 @@ function assertReason(reason: string): void {
   }
 }
 
-// Check the adjustment amount and return it unchanged. It must be in CREDIT (the
-// opening-equity account it balances against is a CREDIT account), and it must be
-// non-zero (an adjustment that moves nothing is malformed). The amount is signed: a
-// negative value is a valid downward correction, so we do NOT require it to be
-// positive, only that money actually moves.
+// Validate the amount and return it unchanged. Must be CREDIT (the opening-equity account
+// it balances against is CREDIT) and non-zero (an adjustment that moves nothing is
+// malformed). Signed: a negative value is a valid downward correction, so positivity
+// isn't required, only that money moves.
 function creditDelta(amount: Amount, label: string): Amount {
   if (amount.currency !== 'CREDIT') {
     throw fault(ERROR_CODES.MALFORMED_OPERATION, `${label} must be CREDIT.`, {
@@ -147,8 +138,8 @@ function creditDelta(amount: Amount, label: string): Amount {
   return amount;
 }
 
-// Each operation is routed to its handler by `kind`, so reaching this handler with a
-// different kind means the wiring is wrong. Fail loudly rather than mishandle it.
+// Operations route to handlers by `kind`, so a different kind here means the wiring is
+// wrong. Fail loudly rather than mishandle it.
 function kindMismatch(operation: Operation): ReturnType<typeof fault> {
   return fault(
     ERROR_CODES.MALFORMED_OPERATION,

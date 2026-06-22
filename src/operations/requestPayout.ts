@@ -20,27 +20,21 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Saga, Unit } from '#src/ports.ts';
 
 /**
- * Start a payout for a seller: set aside `amount` of the credits they have earned, then
- * open a record (a "saga") that a background worker later finishes by paying the seller
- * in real USD.
+ * Start a payout for a seller: reserve `amount` of their earned credits and open a saga
+ * that a background worker later finishes by paying real USD.
  *
- * This function is the only part a caller drives directly. It does just the bookkeeping:
- * move the earned credits into the PAYOUT_RESERVE account and open the saga in the
- * RESERVED state. A background worker takes it from there — submitting to the payment
- * provider, then settling and posting the USD side. (PAYOUT_RESERVE is the platform's
- * holding account for credits owed out as a payout; it is separate from HELD, which holds
- * funds for in-app purchases.)
+ * Caller-driven bookkeeping only: move earned credits into PAYOUT_RESERVE and open the saga
+ * RESERVED. The worker submits to the payment provider, settles, and posts the USD side.
+ * (PAYOUT_RESERVE holds credits owed out as a payout; separate from HELD, which holds funds
+ * for in-app purchases.)
  *
- * Two outcomes a caller must handle:
- * - The seller doesn't have enough earned credit: a returned `rejected` result, not an
- *   exception. The caller inspects it.
- * - The request itself is wrong (amount isn't CREDIT, or isn't positive): a thrown fault,
- *   because that's a programming error, not a normal "no".
+ * Two outcomes the caller handles:
+ * - Not enough earned credit: a returned `rejected` result to inspect, not an exception.
+ * - Malformed request (amount isn't CREDIT, or isn't positive): a thrown fault, since that's
+ *   a programming error.
  *
- * Only earned credit can be paid out. It's paid as USD when the worker settles, and is
- * never made spendable inside the app. The two ledger lines this function posts are both
- * in CREDIT and cancel out, so the books stay balanced; the USD side is posted later by
- * the worker.
+ * Only earned credit is payable; it's paid as USD on settle and never made spendable in-app.
+ * The two ledger lines posted here are both CREDIT and cancel out; the worker posts USD later.
  */
 export async function requestPayout(
   operation: Operation,
@@ -61,14 +55,13 @@ export async function requestPayout(
       requested: encodeAmount(amount),
     });
   }
-  // Enforce the shortest gap allowed between one user's payout requests
-  // (ctx.config.payoutMinIntervalMs; default 24h, legal limit 14 days). lastPayoutAt is the
-  // maximum `updatedAt` over all of this user's sagas in any state — equal to their most
-  // recent request time. `null` means no prior payout, so a first request always passes.
-  // The boundary is strict `<`: a request exactly `payoutMinIntervalMs` later is allowed.
-  // This is checked before the balance read so a cheap rejection comes first, matching the
-  // minimum-before-balance ordering above. It RETURNS a rejection (an expected "no") rather
-  // than throwing, so the caller can surface `retryAfter`.
+  // Minimum gap between one user's payout requests (ctx.config.payoutMinIntervalMs; default
+  // 24h, legal limit 14 days). lastPayoutAt is the max `updatedAt` over this user's sagas in
+  // any state, i.e. their most recent request time; `null` means no prior payout, so a first
+  // request passes. Strict `<`: a request exactly `payoutMinIntervalMs` later is allowed.
+  // Checked before the balance read so the cheap rejection comes first, matching the
+  // minimum-before-balance ordering above. Returns a rejection rather than throwing, so the
+  // caller can surface `retryAfter`.
   let last = await unit.sagas.lastPayoutAt(operation.userId);
   if (
     last !== null &&
@@ -90,11 +83,10 @@ export async function requestPayout(
     });
   }
 
-  // Only earned credit that has cleared its settlement wait can be paid out: a chargeback
-  // window must elapse before the platform pays real USD against those credits. The raw
-  // balance above can be enough while part of it is still maturing, so this is a second,
-  // stricter gate. Like INSUFFICIENT_FUNDS it RETURNS a rejection (a normal "no") rather
-  // than throwing. No `signal` is threaded here, matching the raw balance read just above.
+  // Only earned credit past its settlement wait is payable: a chargeback window must elapse
+  // before paying real USD against it. The raw balance above can pass while part is still
+  // maturing, so this is a second, stricter gate. Like INSUFFICIENT_FUNDS it returns a
+  // rejection rather than throwing. No `signal` threaded here, matching the raw balance read.
   let matured = await maturedBalance(
     unit.ledger,
     earned(operation.userId),
@@ -125,15 +117,13 @@ export async function requestPayout(
   return { status: 'committed', transaction };
 }
 
-// Build the saga record for this payout. It opens in the RESERVED state because the
-// credits were already set aside in the same database transaction as this record.
-// Fields worth calling out:
-// - `reserve`: the earned credits held in PAYOUT_RESERVE for this payout.
-// - `rateId`: identifies the audited CREDIT-to-USD rate to use, so the worker pays out at
-//   the rate that applied when the request was made.
-// - `dueAt`: when the worker should first try to submit this to the payment provider.
-// The worker's periodic sweep picks up due sagas and moves them on to SUBMITTED, then
-// SETTLED.
+// Build the saga record. Opens RESERVED because the credits were set aside in the same DB
+// transaction as this record.
+// - `reserve`: earned credits held in PAYOUT_RESERVE for this payout.
+// - `rateId`: audited CREDIT-to-USD rate, so the worker pays at the rate that applied when
+//   the request was made.
+// - `dueAt`: when the worker should first try submitting to the provider.
+// The worker's periodic sweep picks up due sagas and advances them to SUBMITTED, then SETTLED.
 function sagaOf(
   operation: Extract<Operation, { kind: 'requestPayout' }>,
   reserve: Amount,
@@ -154,19 +144,16 @@ function sagaOf(
   };
 }
 
-// How long to wait before the worker's first attempt to submit this payout to the
-// provider, in milliseconds. Read from config: use the PENDING delay if set, otherwise the
-// DEFAULT. Falling back to DEFAULT (rather than 0) keeps an unset config from making the
-// payout due immediately and flooding the worker's sweep.
+// Delay (ms) before the worker's first submit attempt. PENDING if set, else DEFAULT. Falling
+// back to DEFAULT rather than 0 keeps an unset config from making the payout due immediately
+// and flooding the worker's sweep.
 function pendingSlaMs(ctx: Ctx): number {
   let sla = ctx.config.payoutSla;
   return sla.PENDING ?? sla.DEFAULT ?? 0;
 }
 
-// Check that the requested amount is payable and return it unchanged. Only earned credit
-// can be paid out, so the amount must be in CREDIT and must be positive. A USD amount or a
-// zero/negative amount is a malformed request, so this throws a fault rather than returning
-// a declined result.
+// Validate the requested amount and return it unchanged. Must be CREDIT and positive; a USD
+// or zero/negative amount is a malformed request, so throw a fault rather than declining.
 function payableCredit(amount: Amount): Amount {
   if (amount.currency !== 'CREDIT') {
     throw fault(
@@ -185,9 +172,8 @@ function payableCredit(amount: Amount): Amount {
   return amount;
 }
 
-// Build the fault thrown when this handler is somehow called with the wrong kind of
-// operation. That can only happen through a wiring mistake in the code, so it's a thrown
-// fault, not a declined result.
+// Fault thrown when this handler is called with the wrong operation kind. Only happens via a
+// wiring mistake, so it's a thrown fault, not a declined result.
 function kindMismatch(operation: Operation): ReturnType<typeof fault> {
   return fault(
     ERROR_CODES.MALFORMED_OPERATION,

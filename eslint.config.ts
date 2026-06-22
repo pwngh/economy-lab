@@ -13,12 +13,9 @@ import eslint from '@eslint/js';
 import n from 'eslint-plugin-n';
 import tseslint from 'typescript-eslint';
 
-// Globals that exist only in Node, banned from the core library code. The core
-// targets the APIs common to every modern JS runtime (Node, Bun, Deno, Cloudflare
-// Workers) so it stays portable, so each of these has a portable replacement that
-// is passed in instead: time comes from an injected Clock, randomness and hashing
-// from the standard crypto.subtle, and raw bytes from Uint8Array. Each entry below
-// names the forbidden global and the error message ESLint shows when it is used.
+// Node-only globals banned from the core. The core targets the cross-runtime surface (Node, Bun,
+// Deno, CF Workers), so each has an injected replacement: time via Clock, randomness/hashing via
+// crypto.subtle, raw bytes via Uint8Array. Each entry: forbidden global + ESLint message.
 let BANNED_GLOBALS = [
   {
     name: 'Buffer',
@@ -47,9 +44,8 @@ let BANNED_GLOBALS = [
   },
 ];
 
-// Node-only module imports banned from the core library code. Only the adapter
-// layer (src/adapters/) is allowed to import these directly; it wraps each one
-// behind a portable interface that the rest of the code depends on instead.
+// Node-only module imports banned from the core. Only the adapter layer (src/adapters/) imports
+// these directly, wrapping each behind a portable interface.
 let BANNED_IMPORTS = {
   paths: [
     {
@@ -71,12 +67,10 @@ let BANNED_IMPORTS = {
   ],
 };
 
-// Layering invariant 1 — the shipped library (src/) must never import test or dev-script code.
-// Those trees exist only to exercise and operate the library; importing them would drag test-only
-// helpers and CLI wiring into a production bundle. Only static `import`/`export from` are matched
-// (the intent is to keep this code out of the module graph entirely). These use `regex` rather than
-// `group`: group patterns are gitignore-style, where a leading `#` is a comment and matches nothing,
-// so a glob like `#test/**` would silently never fire — `regex` matches the alias literally.
+// Layering invariant 1: src/ must not import test or dev-script code, which would drag test helpers
+// and CLI wiring into the production bundle. Matches static import/export from only. Uses `regex`,
+// not `group`: group patterns are gitignore-style where a leading `#` is a comment matching nothing,
+// so `#test/**` would never fire; `regex` matches the alias literally.
 let NON_SHIPPED_IMPORTS = [
   {
     regex: '^#test/',
@@ -90,11 +84,11 @@ let NON_SHIPPED_IMPORTS = [
   },
 ];
 
-// Layering invariant 2 — the optional database/cache/queue drivers (pg, mysql2, ioredis,
-// @aws-sdk/client-sqs) are marked optional in peerDependenciesMeta and are loaded ONLY via dynamic
-// import() in the composition root (src/index.ts), so an unused driver is never required or bundled.
-// Forbid STATIC imports of them across the shipped library to keep that guarantee — `no-restricted-
-// imports` does not flag dynamic import(), so the legitimate `await import(...)` sites stay valid.
+// Layering invariant 2: the optional db/cache/queue drivers (pg, mysql2, ioredis,
+// @aws-sdk/client-sqs) are optional in peerDependenciesMeta and loaded via dynamic import() in the
+// composition root (src/index.ts), so an unused driver is never required or bundled. Forbid static
+// imports across the library to keep that guarantee; no-restricted-imports does not flag dynamic
+// import(), so legitimate `await import(...)` sites stay valid.
 let OPTIONAL_DRIVER_IMPORTS = [
   '#src/adapters/postgres.ts',
   '#src/adapters/mysql.ts',
@@ -107,9 +101,8 @@ let OPTIONAL_DRIVER_IMPORTS = [
 }));
 
 export default tseslint.config(
-  // `apps/` holds standalone front-end apps (the Remix console) with their own build and lint
-  // tooling, separate from the library's core and test code, so they stay outside this lint
-  // gate alongside the other non-core UI/asset dirs.
+  // `apps/` holds standalone front-end apps (the Remix console) with their own build/lint tooling,
+  // so they stay outside this gate alongside the other non-core UI/asset dirs.
   {
     ignores: ['legacy/**', 'node_modules/**', 'assets/**', 'viz/**', 'apps/**'],
   },
@@ -118,8 +111,7 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   n.configs['flat/recommended-module'],
 
-  // Shared rules applied to every .ts file in the project: coding-style
-  // conventions plus limits that keep functions small and readable.
+  // Shared rules for every .ts file: style conventions plus function-size limits.
   {
     files: ['**/*.ts'],
     languageOptions: {
@@ -134,10 +126,8 @@ export default tseslint.config(
         'error',
         { argsIgnorePattern: '^_' },
       ],
-      // eslint-plugin-n cannot resolve imports written with a `.ts` extension, so it
-      // would wrongly report them as missing. The TypeScript compiler handles
-      // resolution here (via its allowImportingTsExtensions option), so turn off the
-      // plugin's import-resolution rules that would otherwise conflict.
+      // eslint-plugin-n can't resolve `.ts`-extension imports and reports them as missing. TS handles
+      // resolution (allowImportingTsExtensions), so turn off the plugin's import-resolution rules.
       'n/no-missing-import': 'off',
       'n/no-unpublished-import': 'off',
       'n/no-extraneous-import': 'off',
