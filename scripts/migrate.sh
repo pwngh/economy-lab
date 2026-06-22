@@ -11,6 +11,10 @@
 # `public` schema is reset first and the file applied — safe to re-run. MySQL: db/mysql-schema.sql
 # drops every table and routine up front, so it is self-resetting. No DATABASE_URL: nothing to do
 # (the in-memory store builds its tables in code).
+#
+# This is a lab tool: it resets by dropping the schema — right for a throwaway dev/lab database,
+# catastrophic for one holding real money. As a guard it refuses a non-local host unless
+# MIGRATE_FORCE=1. A real deployment wants additive, versioned migrations instead, not this.
 set -eu
 
 # Run from the repo root so the db/*.sql paths resolve regardless of caller cwd.
@@ -25,6 +29,24 @@ if [ -z "${DATABASE_URL:-}" ] && [ -f .env ]; then
 fi
 
 url="${DATABASE_URL:-}"
+
+# Destructive-reset guard. This DROPS the schema, so refuse a non-local host unless explicitly
+# forced. A throwaway dev/lab database on localhost is always allowed; anything else (a staging or
+# production host reached by a stray DATABASE_URL) needs MIGRATE_FORCE=1.
+host="${url#*://}"
+host="${host#*@}"
+host="${host%%/*}"
+host="${host%%:*}"
+case "$host" in
+localhost | 127.0.0.1 | ::1 | "") ;; # local, or no host at all — allowed
+*)
+  [ "${MIGRATE_FORCE:-}" = "1" ] || {
+    echo "scripts/migrate.sh: refusing to reset a non-local database ($host) — this DROPS the schema." >&2
+    echo "  This is a lab tool. If you truly mean it, re-run with MIGRATE_FORCE=1." >&2
+    exit 1
+  }
+  ;;
+esac
 
 case "$url" in
 postgres* | postgresql*)
