@@ -268,8 +268,7 @@ async function selectStore(
     });
   }
   if (url.startsWith('mysql://')) {
-    let { createMysqlPool, mysqlStore } =
-      await import('#src/engines/mysql.ts');
+    let { createMysqlPool, mysqlStore } = await import('#src/engines/mysql.ts');
     // Build the pool via the engine's helper, which sets supportBigNumbers + bigNumberStrings so a
     // BIGINT money column comes back as a string (then a bigint), not a lossy JS number. Raw `mysql2`
     // `createPool` leaves those off, so wiring it directly would silently round any amount above
