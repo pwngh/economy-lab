@@ -1406,6 +1406,9 @@ export async function applyMysqlSchema(pool: MysqlPool): Promise<void> {
     new URL('../../db/mysql-schema.sql', import.meta.url),
   );
   let sql = await readFile(path, 'utf8');
+  await pool.query(
+    'ALTER DATABASE CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci',
+  );
   for (let statement of splitSqlStatements(sql)) {
     await pool.query(statement);
   }

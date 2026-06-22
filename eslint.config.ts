@@ -193,4 +193,12 @@ export default tseslint.config(
       ],
     },
   },
+
+  {
+    files: ['test/**/*.ts'],
+    rules: {
+      'max-lines-per-function': 'off',
+      'max-nested-callbacks': 'off',
+    },
+  },
 );
