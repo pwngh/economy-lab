@@ -1,9 +1,30 @@
-# economy-lab
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img src="assets/logo.svg" width="96" alt="economy-lab">
+  </picture>
+</p>
 
-![tests](https://img.shields.io/badge/tests-533_passing-3fb950)
-![runtime deps](https://img.shields.io/badge/runtime_deps-0-3fb950)
-![node](https://img.shields.io/badge/node-%E2%89%A522.18-1f6feb)
-![license](https://img.shields.io/badge/license-MIT-1f6feb)
+<h1 align="center" style="margin-top: -25px;">economy-lab</h4>
+
+<p align="center">
+  <em>A provably-solvent credits economy — wallets, payouts, subscriptions, and a marketplace, on one double-entry ledger.</em>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/tests-533_passing-3fb950" alt="tests">
+  <img src="https://img.shields.io/badge/runtime_deps-0-3fb950" alt="runtime deps">
+  <img src="https://img.shields.io/badge/node-%E2%89%A522.18-1f6feb" alt="node">
+  <img src="https://img.shields.io/badge/license-MIT-1f6feb" alt="license">
+</p>
+
+<p align="center">
+  <a href="#the-economy-surface">Economy surface</a> ·
+  <a href="#prove-it-yourself">Prove it</a> ·
+  <a href="#what-it-demonstrates">What it demonstrates</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#run-it">Run it</a>
+</p>
 
 A small, runnable lab for the application layer of a credits economy: the backend behind
 how users transact and creators earn — **wallets, payouts, subscriptions, digital
@@ -17,6 +38,14 @@ invariants that hold them together.
 It runs entirely in memory with zero infrastructure and zero runtime dependencies
 (`npm test`). The same logic runs on Postgres, MySQL, Redis, and SQS through swappable
 adapters, with one conformance suite against each.
+
+It is a **lab**, not a deployable money system. The ledger invariants are enforced to a
+production standard — pushed down into the database and proven by an adversarial suite that
+attacks the tables directly rather than trusting the app — while the operational edges (the
+payout provider, FX rates, schema migrations, concurrency at scale) are deliberately stubbed
+or simplified. The subject of study is the application layer and the invariants that hold it
+together, not the rails underneath. (So, e.g., `db:migrate` resets by dropping the schema —
+right for a throwaway database, never for one holding real money.)
 
 ## The economy surface
 
