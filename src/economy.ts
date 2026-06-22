@@ -364,6 +364,11 @@ function debitedUserAccounts(operation: Operation): AccountRef[] {
 // outcome (not throw) if one falls short, before any money is posted. The required amount per account
 // comes from the same calculation the handler uses to post, so pre-check and posting can't disagree.
 // Returns null when funds are fine.
+//
+// Courtesy pre-check, not the enforcer. No-overdraft is enforced by the database (the
+// user_account_non_negative CHECK in db/*-schema.sql). This exists so an overspend returns a clean
+// `rejected` outcome — submit()'s ordinary "no" — instead of the engine throwing a constraint
+// violation. The engine is the backstop; this is the kind error.
 async function screenFunds(step: Step): Promise<Outcome | null> {
   let { unit, operation, options } = step;
   for (let need of await fundsNeeded(unit, operation)) {
@@ -433,6 +438,14 @@ async function screenRisk(step: Step): Promise<Outcome | null> {
 // raw character-code order is identical on every machine, unlike a locale-aware comparison), so
 // operations sharing an account grab locks in the same order. That prevents a deadlock where each
 // operation waits on a lock the other holds.
+//
+// This is app-side concurrency control, deliberately, and the one invariant the database is not the
+// primary enforcer of. The write runs at the engine's default isolation, not SERIALIZABLE, so this
+// fixed-order locking — not the engine — is what serializes contending operations. The engine
+// enforces each invariant's content (conservation, balances, continuity); this enforces their
+// interleaving. The pairing is exercised by test/conformance/concurrency.adversarial.test.ts (N
+// parallel same-account spends still conserve and never overdraw). We may replace this with SERIALIZABLE
+// + retry-on-conflict in the future.
 async function lockAccounts(step: Step): Promise<void> {
   let { unit, operation, options } = step;
   let sorted = [...new Set(accountsOf(operation))].sort();
@@ -496,7 +509,7 @@ function planSpend(price: Amount, promoBalance: Amount): SpendPlan {
  * Walk every account once and report whether the ledger still holds its core guarantees; see the
  * {@link ProveReport} fields for what each flag means.
  *
- * This is now an independent AUDIT, not the primary guard. The database enforces conservation,
+ * This is now an independent audit, not the primary guard. The database enforces conservation,
  * no-overdraft, chain continuity, and balance integrity at write time (db/*-schema.sql), so a
  * violation should be unrepresentable; prove() re-derives every balance from the legs and re-checks
  * regardless — an out-of-band cross-check that also catches a bug in the engine enforcement itself.

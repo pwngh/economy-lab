@@ -173,6 +173,11 @@ function assertSingleCurrencyPerLeg(posting: Posting): void {
 
 // A posting balances when leg amounts sum to zero per currency (debit-positive, so debits
 // and credits cancel). Any nonzero currency total means it's unbalanced; reject.
+//
+// Courtesy pre-check, not the enforcer. Conservation is enforced by the database (PG: a deferred
+// constraint trigger on legs; MySQL: the assert inside post_entry plus revoked direct DML — see
+// db/*-schema.sql). The app never constructs an unbalanced posting, so this exists only to fail fast
+// with a clear fault rather than a raw engine error. It cannot let through anything the engine would.
 function assertBalanced(posting: Posting): void {
   let sums = new Map<Currency, bigint>();
   for (let leg of posting.legs) {
