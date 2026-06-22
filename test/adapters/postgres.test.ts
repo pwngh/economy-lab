@@ -14,7 +14,7 @@ import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { runStoreConformance } from '#test/conformance/store.ts';
-import { postgresStore } from '#src/adapters/postgres.ts';
+import { postgresStore } from '#src/engines/postgres.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { decodeAmount, toAmount } from '#src/money.ts';
 import { spendable, SYSTEM } from '#src/accounts.ts';

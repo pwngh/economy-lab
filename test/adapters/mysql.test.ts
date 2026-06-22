@@ -15,7 +15,7 @@ import {
   applyMysqlSchema,
   createMysqlPool,
   mysqlStore,
-} from '#src/adapters/mysql.ts';
+} from '#src/engines/mysql.ts';
 
 let url = process.env.MYSQL_TEST_URL;
 

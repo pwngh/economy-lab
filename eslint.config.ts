@@ -44,8 +44,8 @@ let BANNED_GLOBALS = [
   },
 ];
 
-// Node-only module imports banned from the core. Only the adapter layer (src/adapters/) imports
-// these directly, wrapping each behind a portable interface.
+// Node-only module imports banned from the core. Only the Node-using layers (src/adapters/,
+// src/engines/) import these directly, wrapping each behind a portable interface.
 let BANNED_IMPORTS = {
   paths: [
     {
@@ -90,8 +90,8 @@ let NON_SHIPPED_IMPORTS = [
 // imports across the library to keep that guarantee; no-restricted-imports does not flag dynamic
 // import(), so legitimate `await import(...)` sites stay valid.
 let OPTIONAL_DRIVER_IMPORTS = [
-  '#src/adapters/postgres.ts',
-  '#src/adapters/mysql.ts',
+  '#src/engines/postgres.ts',
+  '#src/engines/mysql.ts',
   '#src/adapters/redis.ts',
   '#src/adapters/sqs.ts',
 ].map((name) => ({
@@ -148,14 +148,14 @@ export default tseslint.config(
     },
   },
 
-  // Core library under src/, excluding src/adapters/. Targets the WinterCG surface, so Node-only
-  // globals and node:* imports are banned here; tests and adapters aren't matched and may use Node
-  // APIs. Both layering invariants apply: no test/dev-script code, no static imports of the optional
-  // drivers. (The drivers and the wire codec that index.ts/server.ts reach for aren't on these
-  // lists, so those seams stay valid.)
+  // Core library under src/, excluding the Node-using layers src/adapters/ and src/engines/. Targets
+  // the WinterCG surface, so Node-only globals and node:* imports are banned here; tests, adapters,
+  // and the database engines aren't matched and may use Node APIs. Both layering invariants apply: no
+  // test/dev-script code, no static imports of the optional drivers. (The drivers and the wire codec
+  // that index.ts/server.ts reach for aren't on these lists, so those seams stay valid.)
   {
     files: ['src/**/*.ts'],
-    ignores: ['src/adapters/**'],
+    ignores: ['src/adapters/**', 'src/engines/**'],
     rules: {
       'no-restricted-globals': ['error', ...BANNED_GLOBALS],
       'no-restricted-imports': [
@@ -168,11 +168,12 @@ export default tseslint.config(
     },
   },
 
-  // The adapter layer (src/adapters/) wraps Node-only APIs, so the node:* and Node-global bans don't
-  // apply. It's still shipped code, so the layering invariants do: no test/dev-script imports, and
-  // the optional drivers stay behind dynamic import().
+  // The Node-using layers — adapters (cache/queue/transport) and engines (Postgres/MySQL) — wrap
+  // Node-only APIs, so the node:* and Node-global bans don't apply. They're still shipped code, so
+  // the layering invariants do: no test/dev-script imports, and the optional drivers stay behind
+  // dynamic import().
   {
-    files: ['src/adapters/**/*.ts'],
+    files: ['src/adapters/**/*.ts', 'src/engines/**/*.ts'],
     rules: {
       'no-restricted-imports': [
         'error',

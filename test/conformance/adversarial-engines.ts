@@ -33,22 +33,22 @@
  */
 
 // `pg` ships no types and this project disables auto-loaded @types, so its default import is
-// untyped. Re-typed as PgModule at the binding below (mirrors src/adapters/postgres.ts).
+// untyped. Re-typed as PgModule at the binding below (mirrors src/engines/postgres.ts).
 // @ts-expect-error -- untyped default import; typed at the binding via PgModule.
 import pgUntyped from 'pg';
 
 import { memoryStore } from '#src/adapters/memory.ts';
-import { postgresStore } from '#src/adapters/postgres.ts';
+import { postgresStore } from '#src/engines/postgres.ts';
 import {
   applyMysqlSchema,
   createMysqlPool,
   mysqlStore,
-} from '#src/adapters/mysql.ts';
+} from '#src/engines/mysql.ts';
 import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
 
 import type { Store } from '#src/ports.ts';
 import type { MemoryLedger } from '#src/adapters/memory.ts';
-import type { MysqlPool } from '#src/adapters/mysql.ts';
+import type { MysqlPool } from '#src/engines/mysql.ts';
 
 // The `pg` driver ships no types; the file annotates the few members it uses.
 interface PgPoolLike {

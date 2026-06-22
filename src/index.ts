@@ -259,7 +259,7 @@ async function selectStore(
     return memoryStore(deps);
   }
   if (url.startsWith('postgres://') || url.startsWith('postgresql://')) {
-    let { postgresStore } = await import('#src/adapters/postgres.ts');
+    let { postgresStore } = await import('#src/engines/postgres.ts');
     return postgresStore({
       url,
       digest: deps.digest,
@@ -269,11 +269,11 @@ async function selectStore(
   }
   if (url.startsWith('mysql://')) {
     let { createMysqlPool, mysqlStore } =
-      await import('#src/adapters/mysql.ts');
-    // Build the pool via the adapter's helper, which sets supportBigNumbers + bigNumberStrings so a
+      await import('#src/engines/mysql.ts');
+    // Build the pool via the engine's helper, which sets supportBigNumbers + bigNumberStrings so a
     // BIGINT money column comes back as a string (then a bigint), not a lossy JS number. Raw `mysql2`
     // `createPool` leaves those off, so wiring it directly would silently round any amount above
-    // 2^53 (~9 quadrillion). Same pool `migrate.ts` and the adapter's tests use.
+    // 2^53 (~9 quadrillion) — the same createMysqlPool the engine's conformance and adversarial tests use.
     let pool = await createMysqlPool(url);
     return mysqlStore({
       pool,

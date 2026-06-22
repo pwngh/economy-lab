@@ -110,7 +110,7 @@ async function ensureSchema(
     await client.end();
   } else if (url.startsWith('mysql')) {
     const { createMysqlPool, applyMysqlSchema } =
-      await import('#src/adapters/mysql.ts');
+      await import('#src/engines/mysql.ts');
     const pool = await createMysqlPool(url);
     await applyMysqlSchema(pool);
     await (pool as { end?: () => Promise<void> }).end?.();

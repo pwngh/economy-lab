@@ -36,7 +36,7 @@ import {
   callProcedure,
   callFunction,
   postEntryArgs,
-} from '#src/adapters/sql-routines.ts';
+} from '#src/engines/sql-routines.ts';
 import {
   defaultDigest,
   defaultClock,

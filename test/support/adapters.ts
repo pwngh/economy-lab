@@ -11,12 +11,12 @@
  */
 
 import { memoryStore } from '#src/adapters/memory.ts';
-import { postgresStore } from '#src/adapters/postgres.ts';
+import { postgresStore } from '#src/engines/postgres.ts';
 import {
   applyMysqlSchema,
   createMysqlPool,
   mysqlStore,
-} from '#src/adapters/mysql.ts';
+} from '#src/engines/mysql.ts';
 import { httpStore, createStoreServer } from '#src/adapters/http.ts';
 import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
 
