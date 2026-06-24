@@ -139,7 +139,6 @@ async function build(): Promise<ConsoleEngine> {
   let workerCtx: WorkerCtx;
 
   let txns: TxnView[] = [];
-  let users = new Set<string>();
 
   let faultMode = false;
   let maturityDays = 0;
@@ -241,19 +240,20 @@ async function build(): Promise<ConsoleEngine> {
     workerRef = createWorker(caps.store, workerCtx);
   }
 
-  function usersOf(op: Operation): string[] {
-    if (op.kind === 'spend') {
-      const sellers = (op.recipients ?? []).map((r) => r.sellerId);
-      return [op.buyerId, ...sellers];
+  // Distinct user ids that hold an account on the ledger, derived live from read.accounts() rather
+  // than tracked by hand. Account ids are `<userId>:<kind>`; only the user wallet kinds
+  // (spendable/earned/promo) name a user, so system accounts (vrchat:*) are skipped.
+  async function userIds(): Promise<string[]> {
+    const ids = new Set<string>();
+    for await (const account of economy.read.accounts()) {
+      const colon = account.lastIndexOf(':');
+      if (colon < 0) continue;
+      const kind = account.slice(colon + 1);
+      if (kind === 'spendable' || kind === 'earned' || kind === 'promo') {
+        ids.add(account.slice(0, colon));
+      }
     }
-    if (
-      op.kind === 'topUp' ||
-      op.kind === 'requestPayout' ||
-      op.kind === 'grantPromo'
-    ) {
-      return [op.userId];
-    }
-    return [];
+    return [...ids];
   }
 
   // Posting legs -> render-ready leg views: labelled, tagged debit/credit (debit is positive minor),
@@ -497,14 +497,6 @@ async function build(): Promise<ConsoleEngine> {
   async function submit(op: Operation, meta: RecordMeta): Promise<Outcome> {
     const outcome = await economy.submit(op);
     record(outcome, meta);
-    // Only remember a user once they have a committed transaction. Tracking before the outcome —
-    // or for a rejected one — would leave a phantom, empty-balance wallet row behind (for example
-    // from a declined or malformed request), since wallets() and solvency() iterate this set.
-    if (outcome.status === 'committed') {
-      for (const u of usersOf(op)) {
-        users.add(u);
-      }
-    }
     return outcome;
   }
 
@@ -686,7 +678,7 @@ async function build(): Promise<ConsoleEngine> {
 
     wallets: async () => {
       const out: WalletView[] = [];
-      for (const userId of users) {
+      for (const userId of await userIds()) {
         const p = toCredits(await economy.read.balance(spendable(userId)));
         const e = toCredits(await economy.read.balance(earned(userId)));
         const m = toCredits(await economy.read.balance(promo(userId)));
@@ -750,7 +742,7 @@ async function build(): Promise<ConsoleEngine> {
       let purchased = 0;
       let earnedTotal = 0;
       let promotional = 0;
-      for (const userId of users) {
+      for (const userId of await userIds()) {
         purchased += toCredits(await economy.read.balance(spendable(userId)));
         earnedTotal += toCredits(await economy.read.balance(earned(userId)));
         promotional += toCredits(await economy.read.balance(promo(userId)));
@@ -823,7 +815,6 @@ async function build(): Promise<ConsoleEngine> {
       maturityDays = 0;
       maxAttempts = 5;
       txns = [];
-      users = new Set<string>();
       opSeq = 0;
       await rebuild();
       await seed();
@@ -834,7 +825,6 @@ async function build(): Promise<ConsoleEngine> {
       maturityDays = 0;
       maxAttempts = 5;
       txns = [];
-      users = new Set<string>();
       opSeq = 0;
       await rebuild();
     },
