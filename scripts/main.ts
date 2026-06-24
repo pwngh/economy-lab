@@ -370,7 +370,7 @@ async function runWorker(env: Env): Promise<RunningWorker> {
     }
     inFlight = (async () => {
       try {
-        const batch = await worker.runOnce({
+        const { batch } = await worker.runOnce({
           now: Date.now(),
           limit,
           dispatcher,

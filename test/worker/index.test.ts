@@ -320,9 +320,9 @@ async function runOnceDrivesOneBatch(): Promise<void> {
   let { store, digest } = await seededStore();
   let worker = createWorker(store, workerCtx(digest));
 
-  let batch = await worker.runOnce(sweepInput());
+  let run = await worker.runOnce(sweepInput());
 
-  assert.equal(batch.payouts.ok, true);
+  assert.equal(run.batch.payouts.ok, true);
   assert.equal(worker.start, undefined); // no scheduler injected
   await store.close();
 }

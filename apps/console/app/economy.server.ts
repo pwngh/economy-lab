@@ -149,10 +149,8 @@ async function build(): Promise<ConsoleEngine> {
   // each saga from the store to render a card. Cleared on rebuild.
   let sagaIds: string[] = [];
 
-  // Every "txn" id the engine mints, from user operations and worker postings alike. capturedTxnIds
-  // marks the ones already in the feed; after a worker run we read back the rest from the ledger
-  // (see captureWorkerPostings) so settlements and reversals show up too. Cleared on rebuild.
-  let mintedTxnIds: string[] = [];
+  // Marks txn ids already in the feed — user ops (added on submit) and worker postings (folded in
+  // from each worker run, see captureWorkerPostings) — so neither is added twice. Cleared on rebuild.
   let capturedTxnIds = new Set<string>();
 
   // What became of each terminal payout, harvested from the worker's ledger postings (the saga
@@ -169,9 +167,6 @@ async function build(): Promise<ConsoleEngine> {
       const id = `${prefix}_${++idSeq}`;
       if (prefix === 'pay') {
         sagaIds.push(id);
-      }
-      if (prefix === 'txn') {
-        mintedTxnIds.push(id);
       }
       return id;
     },
@@ -226,7 +221,6 @@ async function build(): Promise<ConsoleEngine> {
     idSeq = 0;
     clock.set(0);
     sagaIds = [];
-    mintedTxnIds = [];
     capturedTxnIds = new Set<string>();
     sagaInfo = new Map<string, { reason?: string; usd?: number }>();
 
@@ -447,15 +441,15 @@ async function build(): Promise<ConsoleEngine> {
     }
   }
 
-  // After a worker run, pull the txns it just minted into the feed (settlements, reversals, fee
-  // sweeps). fromIndex is where the id list stood before the run, so we see only this run's ids and
-  // never re-walk earlier ones. "*.cash" postings are merged into the event they complete; the rest
-  // become rows. Then re-sort newest-first.
-  async function captureWorkerPostings(fromIndex: number): Promise<void> {
+  // After a worker run, pull the txns it minted into the feed (settlements, reversals, fee sweeps).
+  // `postings` is the run's txn ids, straight from worker.runOnce — no id-list bookkeeping. "*.cash"
+  // postings are merged into the event they complete; the rest become rows. Then re-sort newest-first.
+  async function captureWorkerPostings(
+    postings: ReadonlyArray<string>,
+  ): Promise<void> {
     let added = false;
     let lastEvent: TxnView | null = null;
-    for (let i = fromIndex; i < mintedTxnIds.length; i++) {
-      const id = mintedTxnIds[i];
+    for (const id of postings) {
       if (capturedTxnIds.has(id)) {
         continue;
       }
@@ -502,10 +496,11 @@ async function build(): Promise<ConsoleEngine> {
 
   // Run every background job once and return the per-job batch summary. runJobs() folds it into the
   // one-line note the panel shows; the payout board instead reads each saga's own attempt count.
-  async function runWorkerOnce(): Promise<
-    Record<string, { ok: boolean; summary?: unknown }>
-  > {
-    const batch = await workerRef.runOnce({
+  async function runWorkerOnce(): Promise<{
+    batch: Record<string, { ok: boolean; summary?: unknown }>;
+    postings: ReadonlyArray<string>;
+  }> {
+    const run = await workerRef.runOnce({
       now: clock.now(),
       limit: 100,
       dispatcher: undefined,
@@ -516,10 +511,13 @@ async function build(): Promise<ConsoleEngine> {
       },
       windows: [],
     });
-    return batch as unknown as Record<
-      string,
-      { ok: boolean; summary?: unknown }
-    >;
+    return {
+      batch: run.batch as unknown as Record<
+        string,
+        { ok: boolean; summary?: unknown }
+      >,
+      postings: run.postings,
+    };
   }
 
   // Seed a demo economy that has already run a bit, so the first load shows the full lifecycle:
@@ -830,11 +828,9 @@ async function build(): Promise<ConsoleEngine> {
     },
 
     runJobs: async () => {
-      // Mark where the txn-id list stands, so the capture below sees only this run's postings.
-      const fromIndex = mintedTxnIds.length;
-      const batch = await runWorkerOnce();
+      const { batch, postings } = await runWorkerOnce();
       // Fold the run's new postings (settlements, reversals) into the feed.
-      await captureWorkerPostings(fromIndex);
+      await captureWorkerPostings(postings);
       const notes: string[] = [];
       for (const [name, result] of Object.entries(batch)) {
         if (!result.ok) {

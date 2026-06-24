@@ -21,6 +21,7 @@ import { reconcileDueWindows } from '#src/worker/reconcile.ts';
 import type { WorkerCtx } from '#src/contract.ts';
 import type {
   Dispatcher,
+  Ids,
   Options,
   Range,
   Scheduler,
@@ -108,13 +109,20 @@ export type SweepBatch = {
   promos: SweepResult<PromoExpirySummary>;
 };
 
+// runOnce's result: the per-job batch plus the txn id of every ledger posting the run committed, so
+// a host can fold the run's settlements/reversals/sweeps into a feed without intercepting the id
+// generator itself. A rolled-back job can mint an id that never commits; resolve each via
+// read.posting and skip a null. `postings` sits beside `batch`, not merged into it, so iterating the
+// batch's job results (e.g. to collect failures) never trips over the postings list.
+export type SweepRun = { batch: SweepBatch; postings: ReadonlyArray<string> };
+
 /**
  * Handle the host program uses to drive the background jobs. `runOnce` runs every job once.
  * `start` runs them on a timer and returns a stop function; present only when a Scheduler was
  * supplied at creation (without one there's nothing to drive the loop).
  */
 export type Worker = {
-  runOnce(input: SweepInput): Promise<SweepBatch>;
+  runOnce(input: SweepInput): Promise<SweepRun>;
   start?(intervalMs: number, input: SweepInput): () => void;
 };
 
@@ -206,8 +214,24 @@ export function createWorker(
   ctx: WorkerCtx,
   scheduler?: Scheduler,
 ): Worker {
-  let runOnce = (input: SweepInput): Promise<SweepBatch> =>
-    runSweeps(store, ctx, input);
+  let runOnce = async (input: SweepInput): Promise<SweepRun> => {
+    // Record every txn id minted this run via a wrapped id generator, so the host gets the run's
+    // ledger postings without intercepting `ctx.ids` itself. `start` below doesn't need this, so
+    // it stays on the bare runSweeps.
+    let postings: string[] = [];
+    let recordingCtx: WorkerCtx = {
+      ...ctx,
+      ids: {
+        next: (prefix) => {
+          let id = ctx.ids.next(prefix);
+          if (prefix === 'txn') postings.push(id);
+          return id;
+        },
+      } satisfies Ids,
+    };
+    let batch = await runSweeps(store, recordingCtx, input);
+    return { batch, postings };
+  };
   if (scheduler === undefined) {
     return { runOnce };
   }
