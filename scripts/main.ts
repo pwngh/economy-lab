@@ -38,7 +38,7 @@ import { configuredRates } from '#src/adapters/rates.ts';
 import { decodeWebhookEvent, handlePurchaseWebhook } from '#src/webhooks.ts';
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { InMemoryDefaults, InMemoryPorts } from '#src/index.ts';
+import type { ExternalPorts, RuntimeDefaults } from '#src/index.ts';
 import type { Logger, Processor, Rates, Store } from '#src/ports.ts';
 import type { Currency } from '#src/money.ts';
 import type { Economy } from '#src/contract.ts';
@@ -203,8 +203,8 @@ function devExternals(env: Env): { rates: Rates; processor: Processor } {
 // `requireSecrets`); rates and payout provider are real-and-required in production, dev stand-ins
 // otherwise.
 function wiring(env: Env): {
-  ports: InMemoryPorts;
-  defaults: InMemoryDefaults;
+  ports: ExternalPorts;
+  defaults: RuntimeDefaults;
 } {
   requireSecrets(env);
   const caps = systemCapabilities({ signingKey: signingKeyHex(env) });

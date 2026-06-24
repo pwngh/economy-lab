@@ -22,27 +22,25 @@
  *    real adapters, survives restarts). The db driver is imported only when that var is set.
  */
 
-// We wire createEconomy + createWorker by hand rather than using compose()/composeWorker(), so the
-// economy and worker share one store (see rebuild()).
+// The economy and worker share one store: capabilitiesFromEnv() selects it once from env, then
+// createEconomy + createWorker(caps.store, workerCtxFrom(caps)) wire both halves over it. In a
+// single process, two separate compose()/composeWorker() calls would each select their own store,
+// leaving the worker blind to the economy's in-memory state.
 import {
   createEconomy,
-  memoryStore,
+  createWorker,
+  capabilitiesFromEnv,
+  workerCtxFrom,
   spendable,
   earned,
   promo,
   SYSTEM,
 } from '#src/index.ts';
-
-import { createWorker } from '#src/worker/index.ts';
 import { systemSigner, jsonlLogger, systemDigest } from '#src/runtime.ts';
 import { flatFee } from '#src/pricing.ts';
-import { toAmount } from '#src/money.ts';
 import { currency } from '#src/accounts.ts';
 import { fault, ERROR_CODES } from '#src/errors.ts';
-import { loadConfig as loadConfigImpl } from '#src/config.ts';
 import { configuredRates } from '#src/adapters/rates.ts';
-
-import type { AccountRef } from '#src/accounts.ts';
 
 import type {
   Economy,
@@ -50,9 +48,8 @@ import type {
   Outcome,
   ProveReport,
   Capabilities,
+  WorkerCtx,
 } from '#src/index.ts';
-// WorkerCtx lives in contract.ts (not re-exported from the root index), so import it from there.
-import type { WorkerCtx } from '#src/contract.ts';
 import type {
   Clock,
   Ids,
@@ -63,311 +60,42 @@ import type {
   Store,
 } from '#src/ports.ts';
 import type { Worker } from '#src/worker/index.ts';
-import type { Amount } from '#src/money.ts';
 
-// --- Public view types: render-ready shapes the pages receive ---
+import {
+  LABELS,
+  PLATFORM_ACCOUNTS,
+  humanReason,
+  humanizeKind,
+  credits,
+  toCredits,
+  accountLabel,
+} from '~/views.server';
+import { DAY_MS, makeClock, demoEnv } from '~/demo.server';
 
-// Everything the ledger feed can show. The first four are user operations; the rest are postings
-// the background worker makes (payout settled/reversed, cash leg, fee sweep, promo expiry). `other`
-// is the catch-all for any future worker posting.
-export type TxnKind =
-  | 'topUp'
-  | 'spend'
-  | 'requestPayout'
-  | 'grantPromo'
-  | 'payoutSettled'
-  | 'payoutReversed'
-  | 'payoutCash'
-  | 'feeSweep'
-  | 'promoExpiry'
-  | 'other';
+import type {
+  TxnKind,
+  LegView,
+  TxnView,
+  WalletView,
+  ProveView,
+  SolvencyView,
+  PlatformAccountView,
+  PayoutView,
+  SimSettings,
+} from '~/views.server';
 
-// One leg of a posting, ready to render.
-export interface LegView {
-  account: string;
-  label: string;
-  side: 'debit' | 'credit';
-  amount: string; // already formatted with a leading sign, e.g. "+50.00"
-  currency: string;
-}
-
-// One recorded transaction, ready for the ledger feed.
-export interface TxnView {
-  id: string;
-  at: number;
-  kind: TxnKind;
-  label: string;
-  paymentType: string;
-  listing: string;
-  priceCredits: number;
-  // Currency of the headline amount. Most postings are credits; a payout's cash leg is USD.
-  priceCurrency: 'CREDIT' | 'USD';
-  buyer: string;
-  seller: string;
-  legs: LegView[];
-  // Plain-English note for postings whose legs don't explain themselves (mostly worker postings).
-  // Empty for ordinary user operations.
-  note?: string;
-  // The payout saga this posting belongs to, if any; lets the feed link back to the payout board.
-  sagaId?: string;
-  // Sum of all the legs; 0 when the transaction balances.
-  balancedTo: number;
-}
-
-// One user's three credit balances, plus their total. "Purchased" credits were bought with cash;
-// "earned" credits are a seller's revenue from sales; "promotional" credits are marketing grants.
-export interface WalletView {
-  userId: string;
-  purchased: number;
-  earned: number;
-  promotional: number;
-  total: number;
-}
-
-// Result of the engine's integrity check ("prove"): which properties currently hold.
-export interface ProveView {
-  conserved: boolean;
-  backed: boolean;
-  noOverdraft: boolean;
-  chainIntact: boolean;
-  consistent: boolean;
-  shortfallUsd: number;
-  driftCount: number;
-  allGreen: boolean;
-}
-
-// Whether real cash on hand covers what the platform owes users. Trust cash is the USD held in
-// reserve to back spendable credits.
-export interface SolvencyView {
-  userCredits: number;
-  backed: boolean;
-  shortfallUsd: number;
-  trustCashUsd: number;
-  purchased: number;
-  earned: number;
-  promotional: number;
-}
-
-// One of the platform's own "house" ledger accounts, for the Overview's platform balances.
-export interface PlatformAccountView {
-  key: string;
-  label: string;
-  sublabel: string;
-  value: number;
-  currency: 'CREDIT' | 'USD';
-}
-
-// One payout, as a card on the board. A payout runs as a "saga": one request tracked across several
-// steps over time (reserve the credits, hand them to the payment provider, then settle, or give up).
-export interface PayoutView {
-  id: string;
-  userId: string;
-  // Seller's credits set aside when the payout was requested.
-  reserveCredits: number;
-  state: Saga['state'];
-  providerRef: string | null;
-  // Times the worker has tried to advance this payout. Raised on both success and failure, so a
-  // provider that stays down climbs to the cap and the payout is abandoned.
-  attempts: number;
-  dueAt: number;
-  // Set at a terminal state, read back from the worker's ledger postings: failure reason (FAILED)
-  // or USD disbursed (SETTLED). Null while in flight.
-  reason: string | null;
-  payoutUsd: number | null;
-}
-
-// The current state of the simulation controls, for the Simulation panel to render.
-export interface SimSettings {
-  faultMode: boolean;
-  maturityHorizonDays: number;
-  maxPayoutAttempts: number;
-  now: number;
-}
-
-// --- constants ---------------------------------------------------------------------
-
-// Amounts are stored as whole "minor units" to stay exact (no floating-point rounding). One credit
-// is 100 minor units, the same way one dollar is 100 cents.
-const SCALE = 100;
-const DAY_MS = 86_400_000;
-
-// The human label shown for each kind of operation in the ledger feed.
-const LABELS: Record<TxnKind, string> = {
-  topUp: 'Deposit',
-  spend: 'Purchase',
-  requestPayout: 'Payout',
-  grantPromo: 'Promotional grant',
-  payoutSettled: 'Payout settled',
-  payoutReversed: 'Payout reversed',
-  payoutCash: 'Payout cash-out',
-  feeSweep: 'Fee sweep',
-  promoExpiry: 'Promo expired',
-  other: 'Ledger posting',
-};
-
-// Turn a raw failure code into a short human phrase. Unknown codes fall back to a tidied version
-// of the code itself.
-function humanReason(code: string): string {
-  const known: Record<string, string> = {
-    [ERROR_CODES.PROVIDER_FAILURE]: 'provider failure',
-    'payout.timeout': 'provider timeout',
-  };
-  return known[code] ?? code.replace(/[._]/g, ' ').toLowerCase();
-}
-
-// Readable title for a background posting kind the feed doesn't word specially. A trailing ".cash"
-// becomes a "(cash)" suffix; the rest becomes spaced, sentence-cased words.
-function humanizeKind(kind: string): string {
-  if (!kind) {
-    return 'Background posting';
-  }
-  const cash = kind.endsWith('.cash');
-  const base = (cash ? kind.slice(0, -'.cash'.length) : kind)
-    .replace(/[._]/g, ' ')
-    .trim();
-  const titled = base.charAt(0).toUpperCase() + base.slice(1);
-  return cash ? `${titled} (cash)` : titled;
-}
-
-// Friendly names for the platform's internal accounts, so the ledger never shows a raw account id.
-const ACCOUNT_LABELS: Record<string, string> = {
-  'vrchat:stored_value': 'Stored value (spendable credits in circulation)',
-  'vrchat:revenue': 'Platform revenue',
-  'vrchat:held': 'Escrow (funds held until a sale completes)',
-  'vrchat:payout_reserve':
-    'Payout reserve (credits set aside for a pending payout)',
-  'vrchat:promo_float': 'Promotional float (credits granted, not yet spent)',
-  'vrchat:trust_cash': 'Trust cash (USD backing user credits)',
-  'vrchat:receivable': 'Receivable (money owed to the platform)',
-  'vrchat:usd_clearing': 'USD clearing (cash in transit to or from the bank)',
-  'vrchat:opening_equity': 'Opening equity (starting balance)',
-};
-
-// The platform's own ledger accounts shown on the Overview, in reading order; read live by
-// platformAccounts() below. (Receivable and opening-equity are omitted: they stay at zero in the
-// demo flow.)
-const PLATFORM_ACCOUNTS: {
-  key: string;
-  account: AccountRef;
-  label: string;
-  sublabel: string;
-}[] = [
-  {
-    key: 'storedValue',
-    account: SYSTEM.STORED_VALUE,
-    label: 'Stored value',
-    sublabel: 'Spendable credits in circulation',
-  },
-  {
-    key: 'reserve',
-    account: SYSTEM.PAYOUT_RESERVE,
-    label: 'Payout reserve',
-    sublabel: 'Credits set aside for pending payouts',
-  },
-  {
-    key: 'promoFloat',
-    account: SYSTEM.PROMO_FLOAT,
-    label: 'Promotional float',
-    sublabel: 'Granted promo credits not yet spent',
-  },
-  {
-    key: 'revenue',
-    account: SYSTEM.REVENUE,
-    label: 'Platform revenue',
-    sublabel: 'Fees awaiting the periodic treasury sweep',
-  },
-  {
-    key: 'trustCash',
-    account: SYSTEM.TRUST_CASH,
-    label: 'Trust cash',
-    sublabel: 'Real USD held to back user credits',
-  },
-  {
-    key: 'usdClearing',
-    account: SYSTEM.USD_CLEARING,
-    label: 'USD clearing',
-    sublabel: 'Cash in transit to or from the bank',
-  },
-];
-
-function credits(n: number): Amount {
-  return toAmount('CREDIT', BigInt(Math.round(n * SCALE)));
-}
-
-function toCredits(a: Amount): number {
-  return Number(a.minor) / SCALE;
-}
-
-// Readable label for an account id. Platform accounts have fixed names (above); a user account
-// "<userId>:<kind>" is split into "<userId> · <Kind>".
-function accountLabel(account: string): string {
-  if (ACCOUNT_LABELS[account]) {
-    return ACCOUNT_LABELS[account];
-  }
-  const colon = account.lastIndexOf(':');
-  const user = colon >= 0 ? account.slice(0, colon) : account;
-  const kind = colon >= 0 ? account.slice(colon + 1) : '';
-  const kindLabel =
-    kind === 'spendable'
-      ? 'Purchased'
-      : kind === 'earned'
-        ? 'Earned'
-        : kind === 'promo'
-          ? 'Promotional'
-          : kind;
-  return `${user} · ${kindLabel}`;
-}
-
-// A clock the simulation controls. Time only advances when the panel advances it; the economy,
-// store, and worker all share this one clock object.
-function makeClock(): Clock & {
-  advance: (ms: number) => void;
-  set: (t: number) => void;
-} {
-  let t = 0;
-  return {
-    now: () => t,
-    advance: (ms) => {
-      t += ms;
-    },
-    set: (v) => {
-      t = v;
-    },
-  };
-}
-
-// Demo config, as the engine reads it (env vars). Most limits are relaxed so the everyday flow
-// always goes through. The maturity horizon is the one knob the demo exercises: only the default
-// horizon is raised (the one earned credits fall under), so card/crypto clear at once and only
-// payouts are gated.
-function demoEnv(
-  maturityDays: number,
-  maxAttempts: number,
-): Record<string, string> {
-  return {
-    WEBHOOK_SECRET: 'console',
-    SIGNING_SECRET: 'console',
-    REPLAY_WINDOW_MS: String(5 * 60_000),
-    MAX_PAYOUT_ATTEMPTS: String(maxAttempts),
-    PLATFORM_FEE_BPS: '1530', // ~15.3%, VRChat's real marketplace transaction fee
-    VELOCITY_LIMIT_MINOR: String(100_000_000),
-    VELOCITY_WINDOW_MS: String(60 * 60_000),
-    MATURITY_HORIZON_CARD_MS: '0',
-    MATURITY_HORIZON_CRYPTO_MS: '0',
-    MATURITY_HORIZON_DEFAULT_MS: String(maturityDays * DAY_MS),
-    SLA_PENDING_MS: String(30_000),
-    SLA_SUBMITTED_MS: String(120_000),
-    SLA_DEFAULT_MS: String(60_000),
-    PAYOUT_MIN_EARNED_MINOR: '0',
-    PAYOUT_MIN_INTERVAL_MS: '0',
-    MAX_OUTBOX_ATTEMPTS: '10',
-    MAX_SUBSCRIPTION_ATTEMPTS: '10',
-    MAX_PAYOUT_AGE_MS: String(86_400_000),
-    ...(process.env.DATABASE_URL
-      ? { DATABASE_URL: process.env.DATABASE_URL }
-      : {}),
-  };
-}
+// Re-export the view shapes so route modules keep importing them from `~/economy.server`.
+export type {
+  TxnKind,
+  LegView,
+  TxnView,
+  WalletView,
+  ProveView,
+  SolvencyView,
+  PlatformAccountView,
+  PayoutView,
+  SimSettings,
+} from '~/views.server';
 
 type RecordMeta = {
   kind: TxnKind;
@@ -500,9 +228,10 @@ async function build(): Promise<ConsoleEngine> {
   const meter = { count: () => {}, observe: () => {} };
 
   // Build (or rebuild) the engine + worker over one env-selected store, so both read identical
-  // state — compose()/composeWorker() would each pick their own store, leaving the worker blind to
-  // the economy's sagas. selectStore (below) mirrors compose()'s selection logic. The injected
-  // clock/ids/digest/processor/rates/signer let the demo drive the engine deterministically.
+  // state. capabilitiesFromEnv() selects the store once and assembles the bundle from env plus the
+  // demo's injected clock/ids/digest/signer/processor/rates; createEconomy and createWorker then
+  // wire both halves over caps.store. workerCtxFrom(caps) shares the same config object, so
+  // setMaturityDays/setMaxAttempts can mutate it in place (below) without a rebuild.
   async function rebuild(): Promise<void> {
     idSeq = 0;
     clock.set(0);
@@ -511,64 +240,15 @@ async function build(): Promise<ConsoleEngine> {
     capturedTxnIds = new Set<string>();
     sagaInfo = new Map<string, { reason?: string; usd?: number }>();
 
-    const env = demoEnv(maturityDays, maxAttempts);
-    const config = loadConfigImpl(env);
-
-    const store = await selectStore(env);
-    storeRef = store;
-
-    const caps: Capabilities = {
-      store,
-      clock,
-      ids,
-      digest,
-      signer,
-      processor,
-      rates,
-      logger,
-      meter,
-      pricing: flatFee(),
-      config,
-    };
-    economy = createEconomy(caps);
-
-    workerCtx = {
-      clock,
-      ids,
-      digest,
-      signer,
-      processor,
-      rates,
-      logger,
-      meter,
-      config,
-    };
-    workerRef = createWorker(store, workerCtx);
-  }
-
-  // Pick the store from env the way compose() does. memoryStore by default; pg/mysql when
-  // DATABASE_URL is set, with the driver imported only then.
-  async function selectStore(
-    env: Record<string, string | undefined>,
-  ): Promise<Store> {
-    const url = env.DATABASE_URL;
-    if (url === undefined || url === '') {
-      return memoryStore({ digest, clock });
-    }
-    if (url.startsWith('postgres://') || url.startsWith('postgresql://')) {
-      const { postgresStore } = await import('#src/engines/postgres.ts');
-      return postgresStore({ url, digest });
-    }
-    if (url.startsWith('mysql://')) {
-      const { createMysqlPool, mysqlStore } =
-        await import('#src/engines/mysql.ts');
-      const pool = await createMysqlPool(url);
-      return mysqlStore({ pool, digest, clock });
-    }
-    throw fault(
-      ERROR_CODES.CONFIG_INVALID,
-      'DATABASE_URL must be a postgres:// or mysql:// DSN.',
+    const caps: Capabilities = await capabilitiesFromEnv(
+      demoEnv(maturityDays, maxAttempts),
+      { signer, processor, rates, pricing: flatFee() },
+      { clock, ids, digest, logger, meter },
     );
+    storeRef = caps.store;
+    economy = createEconomy(caps);
+    workerCtx = workerCtxFrom(caps);
+    workerRef = createWorker(caps.store, workerCtx);
   }
 
   function usersOf(op: Operation): string[] {

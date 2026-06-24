@@ -40,6 +40,9 @@ import type {
 export { createEconomy } from '#src/economy.ts';
 export { memoryStore } from '#src/adapters/memory.ts';
 
+// createWorker builds the background sweep loop from a store + worker context.
+export { createWorker } from '#src/worker/index.ts';
+
 // Account-naming helpers. spendable/earned/promo/currency build account ids; SYSTEM holds the
 // platform's own accounts. Lets a host refer to an account without hand-writing the id string
 // (a user account id looks like `usr_…:<kind>`).
@@ -49,6 +52,8 @@ export { spendable, earned, promo, currency, SYSTEM } from '#src/accounts.ts';
 export { loadConfig } from '#src/config.ts';
 
 export type { Economy } from '#src/economy.ts';
+export type { Worker } from '#src/worker/index.ts';
+export type { WorkerCtx } from '#src/contract.ts';
 export type { Config } from '#src/config.ts';
 export type {
   Operation,
@@ -64,15 +69,23 @@ export type { Amount, Currency } from '#src/money.ts';
 export type { AccountRef } from '#src/accounts.ts';
 export type { Capabilities, Options, Range, Statement } from '#src/ports.ts';
 
-// --- The in-memory composition helper ---------------------------------------------
+// --- Composition from env ---------------------------------------------------------
+//
+// The layers this composes from, since the directory split only half-expresses them:
+//   - src/engines/  — the systems of record that enforce the ledger invariants natively (Postgres,
+//                     MySQL). The database is not an adapter; it is the source of truth.
+//   - src/adapters/ — everything pluggable that does not enforce invariants: the in-memory and HTTP
+//                     stores (records too, but the zero-infra / in-process transports), plus the
+//                     genuine capabilities you don't own — Redis cache, SQS or HTTP dispatcher, payout
+//                     processor, FX rates.
 
 /**
- * External services with no in-memory stand-in; the caller supplies a real one. `pricing` splits
+ * External services with no built-in stand-in; the caller supplies a real one. `pricing` splits
  * a sale's money (platform fee vs. seller share). The rest are outside integrations: `processor`
  * is the payout provider (Tilia/Steam), `signer` holds the signing key, `rates` supplies
  * currency-exchange rates.
  */
-export type InMemoryPorts = {
+export type ExternalPorts = {
   signer: Signer;
 
   processor: Processor;
@@ -83,10 +96,10 @@ export type InMemoryPorts = {
 };
 
 /**
- * Runtime services {@link composeInMemory} fills in from web-standard primitives. Pass any to
+ * Runtime services {@link capabilitiesFromEnv} fills in from web-standard primitives. Pass any to
  * override the default, e.g. a fixed clock and counting id generator for reproducible test output.
  */
-export type InMemoryDefaults = {
+export type RuntimeDefaults = {
   clock?: Clock;
 
   ids?: Ids;
@@ -99,22 +112,29 @@ export type InMemoryDefaults = {
 };
 
 /**
- * Wire an {@link Economy} backed by the in-memory store: simplest setup that still runs the real
- * code, for tests and demos. Reads settings from `env`, supplies default runtime services
- * (wall clock, random-id generator, SHA-256 hash, no-op logger and metrics), and uses the
- * external services from `ports`. A misconfigured `env` throws at startup with one combined
- * `CONFIG.INVALID` error rather than failing later inside a request.
+ * Assemble the full {@link Capabilities} bundle from `env`: the Store (Postgres/MySQL/in-memory,
+ * chosen by `DATABASE_URL`), an optional Redis cache and SQS/HTTP dispatcher, the external `ports`,
+ * and default runtime services (wall clock, uuid ids, SHA-256, jsonl logger, no-op metrics) unless
+ * overridden in `defaults`. Each driver is imported dynamically (only if selected), so a deployment
+ * installs only what it uses. Config is read once and fails fast on a bad env with one combined
+ * `CONFIG.INVALID`.
+ *
+ * This is the one place env becomes capabilities. {@link compose} builds an economy from it;
+ * {@link composeWorker} builds a worker. A single-process host that wants both over one store calls
+ * it once and passes the result to `createEconomy` and `createWorker(caps.store, workerCtxFrom(caps))`.
  */
-export function composeInMemory(
+export async function capabilitiesFromEnv(
   env: Record<string, string | undefined>,
-  ports: InMemoryPorts,
-  defaults: InMemoryDefaults = {},
-): Economy {
+  ports: ExternalPorts,
+  defaults: RuntimeDefaults = {},
+): Promise<Capabilities> {
   let config = loadConfig(env);
   let clock = defaults.clock ?? wallClock();
   let digest = defaults.digest ?? subtleDigest();
-  let capabilities: Capabilities = {
-    store: memoryStore({
+  let cache = await selectCache(env);
+  let dispatcher = await selectDispatcher(env);
+  return {
+    store: await selectStore(env, {
       digest,
       clock,
       velocityWindowMs: config.velocityWindowMs,
@@ -125,12 +145,76 @@ export function composeInMemory(
     signer: ports.signer,
     processor: ports.processor,
     rates: ports.rates,
-    logger: defaults.logger ?? noopLogger(),
+    logger: defaults.logger ?? jsonlLogger(),
     meter: defaults.meter ?? noopMeter(),
     pricing: ports.pricing,
     config,
+    ...(cache === undefined ? {} : { cache }),
+    ...(dispatcher === undefined ? {} : { dispatcher }),
   };
-  return createEconomy(capabilities);
+}
+
+/**
+ * Derive a worker context from a capability bundle: the runtime services a background pass needs,
+ * minus the request-path-only pieces (no pricing rule — each sweep writes its own balanced legs —
+ * and no cache/dispatcher, which the worker takes separately). Lets one process build an economy
+ * and a worker over the exact same store and clock.
+ */
+export function workerCtxFrom(caps: Capabilities): WorkerCtx {
+  return {
+    clock: caps.clock,
+    ids: caps.ids,
+    digest: caps.digest,
+    signer: caps.signer,
+    processor: caps.processor,
+    rates: caps.rates,
+    logger: caps.logger,
+    meter: caps.meter,
+    config: caps.config,
+  };
+}
+
+/**
+ * Wire an {@link Economy} whose Store (and optional Redis cache / SQS dispatcher) are chosen from
+ * `env`, falling back to the in-memory store when `DATABASE_URL` is unset. Thin over
+ * {@link capabilitiesFromEnv}.
+ */
+export async function compose(
+  env: Record<string, string | undefined>,
+  ports: ExternalPorts,
+  defaults: RuntimeDefaults = {},
+): Promise<Economy> {
+  return createEconomy(await capabilitiesFromEnv(env, ports, defaults));
+}
+
+/**
+ * Wire a background {@link Worker}: the loop that periodically does deferred, time-driven work
+ * (releasing payouts, renewing subscriptions, expiring promo grants, delivering queued events,
+ * writing integrity checkpoints, etc.) over the same env-selected store and dispatcher as
+ * {@link compose}. Returns the worker plus store and dispatcher, so a host can call
+ * `worker.runOnce(input)` on a timer and pass the dispatcher into each run's input.
+ *
+ * Two processes pointed at the same database can each call this (and {@link compose}) with their own
+ * store handle. A single process that wants the economy and worker to share one store instance —
+ * required for the in-memory backend, where two stores are two separate maps — should instead call
+ * {@link capabilitiesFromEnv} once and pass the result to both `createEconomy` and
+ * `createWorker(caps.store, workerCtxFrom(caps))`.
+ */
+export async function composeWorker(
+  env: Record<string, string | undefined>,
+  ports: ExternalPorts,
+  defaults: RuntimeDefaults = {},
+): Promise<{
+  worker: Worker;
+  store: Store;
+  dispatcher: Dispatcher | undefined;
+}> {
+  let caps = await capabilitiesFromEnv(env, ports, defaults);
+  return {
+    worker: createWorker(caps.store, workerCtxFrom(caps)),
+    store: caps.store,
+    dispatcher: caps.dispatcher,
+  };
 }
 
 // --- Default runtime services -----------------------------------------------------
@@ -153,107 +237,9 @@ function subtleDigest(): Digest {
   };
 }
 
-// Discards everything, so code can always call the logger even with no host-supplied one. Tests
-// pass this to keep output clean; production `compose`/`composeWorker` default to `jsonlLogger` so
-// background diagnostics still surface.
-function noopLogger(): Logger {
-  return { log: () => {} };
-}
-
 // Metrics sink that discards everything, so code can always record metrics with no host-supplied one.
 function noopMeter(): Meter {
   return { count: () => {}, observe: () => {} };
-}
-
-// --- The production composition (selects the store + capabilities from env) --------
-//
-// The layers this composes from, since the directory split only half-expresses them:
-//   - src/engines/  — the systems of record that enforce the ledger invariants natively (Postgres,
-//                     MySQL). The database is not an adapter; it is the source of truth.
-//   - src/adapters/ — everything pluggable that does not enforce invariants: the in-memory and HTTP
-//                     stores (records too, but the zero-infra / in-process transports), plus the
-//                     genuine capabilities you don't own — Redis cache, SQS or HTTP dispatcher, payout
-//                     processor, FX rates.
-
-/**
- * Wire an {@link Economy} whose Store (and optional Redis cache / SQS dispatcher) are chosen from
- * `env`, falling back to the in-memory store when `DATABASE_URL` is unset. Each driver is imported
- * dynamically (only if selected), so a deployment installs only the one it uses: selecting Postgres
- * never pulls in `mysql2` or `@aws-sdk`. Config is read once and fails fast on a bad env, like
- * {@link composeInMemory}.
- */
-export async function compose(
-  env: Record<string, string | undefined>,
-  ports: InMemoryPorts,
-  defaults: InMemoryDefaults = {},
-): Promise<Economy> {
-  let config = loadConfig(env);
-  let clock = defaults.clock ?? wallClock();
-  let digest = defaults.digest ?? subtleDigest();
-  let cache = await selectCache(env);
-  let dispatcher = await selectDispatcher(env);
-  let capabilities: Capabilities = {
-    store: await selectStore(env, {
-      digest,
-      clock,
-      velocityWindowMs: config.velocityWindowMs,
-    }),
-    clock,
-    ids: defaults.ids ?? uuidIds(),
-    digest,
-    signer: ports.signer,
-    processor: ports.processor,
-    rates: ports.rates,
-    logger: defaults.logger ?? jsonlLogger(),
-    meter: defaults.meter ?? noopMeter(),
-    pricing: ports.pricing,
-    config,
-    ...(cache === undefined ? {} : { cache }),
-    ...(dispatcher === undefined ? {} : { dispatcher }),
-  };
-  return createEconomy(capabilities);
-}
-
-/**
- * Wire a background {@link Worker}: the loop that periodically does deferred, time-driven work
- * (releasing payouts, renewing subscriptions, expiring promo grants, delivering queued events,
- * writing integrity checkpoints, etc.). Runs over the same env-selected store and dispatcher as
- * {@link compose}. Returns the worker plus store and dispatcher, so a host can call
- * `worker.runOnce(input)` on a timer and pass the dispatcher into each run's input.
- *
- * The worker gets a narrower service set than a full economy: no pricing rule, since each
- * background pass writes its own debit/credit lines that already balance.
- */
-export async function composeWorker(
-  env: Record<string, string | undefined>,
-  ports: InMemoryPorts,
-  defaults: InMemoryDefaults = {},
-): Promise<{
-  worker: Worker;
-  store: Store;
-  dispatcher: Dispatcher | undefined;
-}> {
-  let config = loadConfig(env);
-  let clock = defaults.clock ?? wallClock();
-  let digest = defaults.digest ?? subtleDigest();
-  let store = await selectStore(env, {
-    digest,
-    clock,
-    velocityWindowMs: config.velocityWindowMs,
-  });
-  let dispatcher = await selectDispatcher(env);
-  let ctx: WorkerCtx = {
-    clock,
-    ids: defaults.ids ?? uuidIds(),
-    digest,
-    signer: ports.signer,
-    processor: ports.processor,
-    rates: ports.rates,
-    logger: defaults.logger ?? jsonlLogger(),
-    meter: defaults.meter ?? noopMeter(),
-    config,
-  };
-  return { worker: createWorker(store, ctx), store, dispatcher };
 }
 
 // `DATABASE_URL` picks the storage backend: a `postgres://` or `mysql://` DSN selects that engine

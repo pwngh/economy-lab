@@ -55,9 +55,9 @@ build needs no infrastructure; `compose` instead picks adapters from the environ
 `signer`, a payout `processor`, an FX `rates` source, and a fee `pricing` policy:
 
 ```ts
-import { composeInMemory } from './src/index.ts';
+import { compose } from './src/index.ts';
 
-const economy = composeInMemory(process.env, {
+const economy = await compose(process.env, {
   signer,
   processor,
   rates,
@@ -188,11 +188,11 @@ proven to still balance. A fully-wired runnable version is
 [scripts/compose-demo.ts](scripts/compose-demo.ts), which `make demo` runs.
 
 ```ts
-import { composeInMemory } from './src/index.ts';
+import { compose } from './src/index.ts';
 import { decodeAmount } from './src/money.ts';
 import { spendable, earned, SYSTEM } from './src/accounts.ts';
 
-const economy = composeInMemory(process.env, {
+const economy = await compose(process.env, {
   signer,
   processor,
   rates,
