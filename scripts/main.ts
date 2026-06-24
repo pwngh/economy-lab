@@ -377,9 +377,14 @@ async function runWorker(env: Env): Promise<RunningWorker> {
           feed: noReconcileFeed,
           windows: [],
         });
-        const failed = Object.entries(batch)
-          .filter(([, result]) => !result.ok)
-          .map(([name]) => name);
+        // Surface each failed sweep's error code and retry flag, not just its name: the SweepResult
+        // carries why it failed (STORE.FAILURE, COMMINGLING, …) and whether the next tick retries it
+        // — what an operator needs to act. flatMap narrows `result` to the failure variant, so no cast.
+        const failed = Object.entries(batch).flatMap(([sweep, result]) =>
+          result.ok
+            ? []
+            : [{ sweep, code: result.code, retryable: result.retryable }],
+        );
         if (failed.length === 0) {
           log.log('info', 'worker.sweep', { ok: true });
         } else {
