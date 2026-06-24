@@ -1400,10 +1400,12 @@ function splitSqlStatements(sql: string): string[] {
  */
 export async function createMysqlPool(url: string): Promise<MysqlPool> {
   // Hold the module name in a variable instead of writing it directly in import(), so the
-  // type-checker doesn't try to resolve this optional dependency at build time. It only needs to be
-  // installed wherever this adapter runs.
+  // type-checker doesn't try to resolve this optional dependency at build time (it need only be
+  // installed wherever this adapter runs). `@vite-ignore` tells a bundler (Vite/Rollup) the same
+  // thing — leave it a runtime import: mysql2 is a server-only optional driver consumers externalize,
+  // never bundled — rather than warning that it can't statically analyze the variable specifier.
   let specifier = 'mysql2/promise';
-  let mysql = (await import(specifier)) as unknown as {
+  let mysql = (await import(/* @vite-ignore */ specifier)) as unknown as {
     createPool(config: unknown): MysqlPool;
   };
   return mysql.createPool({
