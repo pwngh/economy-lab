@@ -12,17 +12,18 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-546_passing-3fb950" alt="tests">
+  <img src="https://img.shields.io/badge/tests-553_passing-3fb950" alt="tests">
   <img src="https://img.shields.io/badge/runtime_deps-0-3fb950" alt="runtime deps">
   <img src="https://img.shields.io/badge/node-%E2%89%A522.18-1f6feb" alt="node">
   <img src="https://img.shields.io/badge/license-MIT-1f6feb" alt="license">
 </p>
 
 <p align="center">
+  <a href="#architecture">Architecture</a> ·
   <a href="#the-economy-surface">Economy surface</a> ·
   <a href="#prove-it-yourself">Prove it</a> ·
+  <a href="#how-its-verified">How it's verified</a> ·
   <a href="#what-it-demonstrates">What it demonstrates</a> ·
-  <a href="#configuration">Configuration</a> ·
   <a href="#run-it">Run it</a>
 </p>
 
@@ -46,6 +47,50 @@ payout provider, FX rates, schema migrations, concurrency at scale) are delibera
 or simplified. The subject of study is the application layer and the invariants that hold it
 together, not the rails underneath. (So, e.g., `db:migrate` resets by dropping the schema —
 right for a throwaway database, never for one holding real money.)
+
+## Architecture
+
+Balances are not stored and mutated; they are **derived**. Every economic action becomes a
+balanced double-entry posting in an append-only, hash-chained ledger — the book of record —
+and balances and statements are projections folded back from those postings, re-derivable at
+any time. The slow, recurring work runs off the request path in a background worker.
+
+```mermaid
+flowchart TB
+    subgraph sync["request path · synchronous"]
+        Client(["`**submit(operation)**`"]):::entry
+        Ops["`**Operations**
+        validate · authorize · post`"]:::proc
+        Client --> Ops
+    end
+
+    Ledger[("`**Ledger**
+    the book of record
+    append-only · hash-chained · double-entry`")]:::truth
+    Reads["`**Projections**
+    balances · statements · derived`"]:::derived
+    Outbox[["`**Outbox**
+    domain events`"]]:::evt
+    Worker{{"`**Worker** · asynchronous
+    payouts · subscriptions · fees · checkpoints · relay`"}}:::worker
+
+    Ops -- "debit = credit" --> Ledger
+    Ledger -- "re-folded on read" --> Reads
+    Ledger -- "same transaction" --> Outbox
+    Worker -. "settle · sweep · checkpoint" .-> Ledger
+
+    classDef entry fill:#ffffff,stroke:#1f6feb,stroke-width:1.5px,color:#1f2328;
+    classDef proc fill:#f6f8fa,stroke:#57606a,stroke-width:1px,color:#1f2328;
+    classDef truth fill:#1f6feb,stroke:#0b4fc4,stroke-width:2px,color:#ffffff;
+    classDef derived fill:#eaf6ec,stroke:#3fb950,stroke-width:1.5px,color:#1f2328;
+    classDef evt fill:#f3eefb,stroke:#8957e5,stroke-width:1.5px,color:#1f2328;
+    classDef worker fill:#f3eefb,stroke:#8957e5,stroke-width:1.5px,color:#1f2328;
+    style sync fill:#f0f6ff,stroke:#1f6feb,stroke-width:1px,color:#57606a;
+```
+
+The same logic runs in-memory and on Postgres or MySQL through swappable **engines**
+(databases that enforce the invariants natively) and **adapters** (pluggable cache and event
+transports) — one conformance suite holds them to identical behavior (below).
 
 ## The economy surface
 
@@ -101,63 +146,6 @@ service, or an `operator`).
 Entity ids use VRChat's `prefix_<uuid>` form — `usr_…` for a user, `prod_…` for a
 marketplace listing, `pur_…` for a purchase. `idempotencyKey` is any string the caller
 chooses (often a plain UUID); a retry reuses it.
-
-### Example operations
-
-```ts
-const buyer = 'usr_c1644b5b-3ca4-45b4-97c6-a2a0de70d469';
-const sellerA = 'usr_2b9d5e74-1f0a-4c3b-9e8d-6a1f2c3d4e5f';
-const sellerB = 'usr_7d3e1a92-8c4b-4f6d-a1e2-3b4c5d6e7f80';
-const bundle = 'prod_bfbc2315-247a-44d7-bfea-5237f8d56cb4'; // a marketplace listing
-
-// Credit a wallet with 50.00 after the buyer's card charge clears (a top-up is run by a
-// trusted service, not by the user).
-await economy.submit({
-  kind: 'topUp',
-  idempotencyKey: '550e8400-e29b-41d4-a716-446655440001',
-  actor: { kind: 'system', service: 'payments' },
-  userId: buyer,
-  amount: decodeAmount('50.00', 'CREDIT'),
-  source: 'card',
-});
-
-// A marketplace sale: charge the buyer, split the price across sellers, platform keeps
-// its fee. recipients[].shareBps are basis points and must total 10000 (100%).
-await economy.submit({
-  kind: 'spend',
-  idempotencyKey: '550e8400-e29b-41d4-a716-446655440002',
-  actor: { kind: 'user', userId: buyer },
-  orderId: 'pur_f0446b91-e0f7-403e-8932-609d5057898c',
-  buyerId: buyer,
-  sku: bundle,
-  price: decodeAmount('12.00', 'CREDIT'),
-  recipients: [
-    { sellerId: sellerA, shareBps: 6_000 }, // 60%
-    { sellerId: sellerB, shareBps: 4_000 }, // 40%
-  ],
-});
-
-// Start a monthly subscription to a creator.
-await economy.submit({
-  kind: 'subscribe',
-  idempotencyKey: '550e8400-e29b-41d4-a716-446655440003',
-  actor: { kind: 'user', userId: buyer },
-  userId: buyer,
-  sellerId: sellerA,
-  sku: bundle,
-  price: decodeAmount('9.99', 'CREDIT'),
-  periodMs: 30 * 24 * 60 * 60 * 1000, // 30 days
-});
-
-// A creator cashes earned credits out to real money.
-await economy.submit({
-  kind: 'requestPayout',
-  idempotencyKey: '550e8400-e29b-41d4-a716-446655440004',
-  actor: { kind: 'user', userId: sellerA },
-  userId: sellerA,
-  amount: decodeAmount('20.00', 'CREDIT'),
-});
-```
 
 ### Handling the result
 
@@ -268,7 +256,7 @@ backend that drifts from the others is caught. `make fuzz` goes further: it asse
 that every backend produces _identical_ balances, chain heads, and proof reports for the
 same inputs. Both exit non-zero on the first violation, so they double as CI gates.
 
-The proof checks four properties, after every committed operation (these are the four
+The proof checks five properties, after every committed operation (these are the five
 flags `read.prove()` returns):
 
 - **conserved** — every credit is matched by an equal debit, so value is never minted or
@@ -280,8 +268,29 @@ flags `read.prove()` returns):
 - **chain intact** — each posting is hashed together with the one before it, so any
   rewrite of history is detectable; a periodic signed checkpoint catches a wholesale
   re-seal.
+- **consistent** — every account's cached balance equals the sum of its posted lines, so
+  the derived read model can't silently drift from the ledger it summarizes.
 
 The same proof engine also runs inside `make test` as a property test over several seeds.
+
+## How it's verified
+
+Correctness here is attacked, not asserted — four independent layers:
+
+- **Invariants live in the database, not the app.** Conservation, no-overdraft, chain
+  continuity, and balance integrity are pushed down into Postgres triggers and MySQL's
+  least-privilege stored procedures. The app's matching checks are a courtesy that returns a
+  kind error first; the engine is the wall.
+- **An adversarial suite attacks the tables directly.** Rather than trust the app's own
+  writes, the tests write violating rows straight into the database and assert the engine
+  rejects them — a guard only the application performs isn't enforcement.
+- **Concurrency is checked against a model.** A linearizability harness oversubscribes
+  concurrent spends with the in-memory store as an executable reference; every interleaving
+  the engine commits under contention must replay serially to identical balances.
+- **Every backend must agree.** One conformance suite runs against all four backends
+  (in-memory, in-process HTTP, Postgres, MySQL), and `make fuzz` asserts they produce
+  byte-identical balances, chain heads, and proof reports for the same seeded inputs — so a
+  backend that drifts from the reference is caught at once.
 
 ## What it demonstrates
 
@@ -420,15 +429,24 @@ curl -sX POST localhost:3000/submit -H 'content-type: application/json' -d '{
 
 ### Background worker
 
-`make worker` runs the recurring work that doesn't belong on the request path. It does
-one sweep immediately, then repeats every `WORKER_INTERVAL_MS` (default 60s), handling up to
-`WORKER_BATCH` rows per job. Each tick runs nine jobs, each isolated so one failure can't
-stop the rest: **payouts** (advance due payout sagas a step), **subscriptions** (bill or
-lapse due renewals), **treasury** (re-check that trust cash backs the liability),
-**fees** (sweep the platform's matured fee surplus), **checkpoint** + **checkpoint-verify** (seal and re-verify
-a signed ledger checkpoint), **relay** (deliver pending outbox events), **reconcile**
-(compare against the processor), and **promos** (claw back unspent expired grants). With no
-dispatcher or reconcile feed configured, relay and reconcile are no-ops.
+`make worker` runs the recurring work that doesn't belong on the request path. It does one
+sweep immediately, then repeats every `WORKER_INTERVAL_MS` (default 60s), handling up to
+`WORKER_BATCH` rows per job. Each tick runs nine jobs in order, each isolated so one failing
+can't stop the rest:
+
+| Job                   | What it does                                            |
+| --------------------- | ------------------------------------------------------- |
+| **payouts**           | advance each due payout saga one step                   |
+| **subscriptions**     | bill or lapse due renewals                              |
+| **treasury**          | re-check that trust cash still backs the liability      |
+| **fees**              | sweep the platform's matured fee surplus into cash      |
+| **checkpoint-verify** | re-verify the last signed checkpoint against the ledger |
+| **checkpoint**        | seal a fresh signed checkpoint of the ledger            |
+| **relay**             | deliver pending outbox events through the dispatcher    |
+| **reconcile**         | compare the ledger against the payment processor        |
+| **promos**            | claw back unspent, expired promo grants                 |
+
+`relay` and `reconcile` are no-ops when no dispatcher or reconcile feed is configured.
 
 ```bash
 make worker                                     # every 60s, batch 100
