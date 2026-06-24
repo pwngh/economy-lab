@@ -260,6 +260,7 @@ let SUBSTORE_ROUTES: Record<string, SubHandler> = {
     let saga = await unit.sagas.load(body.id as string);
     return saga === null ? null : encodeWire.saga(saga);
   },
+  'sagas/list': (unit) => collect(unit.sagas.list(), encodeWire.saga),
   'sagas/claimDue': async (unit, body) => {
     let due = await unit.sagas.claimDue(
       body.now as number,

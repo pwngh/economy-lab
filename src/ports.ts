@@ -391,6 +391,13 @@ export interface SagaStore {
 
   load(id: string, options?: Options): Promise<Saga | null>;
 
+  // Every saga regardless of state, newest `updatedAt` first, streamed one at a time like
+  // `LedgerStore.balanceAccounts`. Unlike `claimDue` (only due, in-progress sagas), this is the
+  // whole board — settled and failed payouts included — for a UI to render. Ties on `updatedAt`
+  // come back in an unspecified order (it varies with each backend's collation), so a caller must
+  // not depend on it.
+  list(options?: Options): AsyncIterable<Saga>;
+
   // Grab up to `limit` sagas whose `dueAt` has passed, for the background sweep to advance.
   // Each is locked so concurrent sweeps take different sagas.
   claimDue(

@@ -614,6 +614,17 @@ function createOutboxStore(): OutboxStore & Participant {
 
 // --- Saga store -------------------------------------------------------------------
 
+// Whole board, newest `updatedAt` first (see SagaStore.list). Snapshot the values first so
+// iteration is safe if `rows` changes underneath, sort to match the SQL engines' `order by
+// updated_at desc` (a stable sort leaves ties in insertion order), and copy each saga so a consumer
+// can't mutate stored state. Module-level (like lineageOf) to keep createSagaStore short.
+async function* listSagasOf(rows: Map<string, Saga>): AsyncIterable<Saga> {
+  let snapshot = [...rows.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+  for (let saga of snapshot) {
+    yield { ...saga };
+  }
+}
+
 // Tracks each multi-step payout through its states. `advance` changes a saga only if it's still
 // in the expected state (`from`); otherwise returns false and changes nothing, guarding against
 // two background runs advancing the same saga twice.
@@ -638,6 +649,7 @@ function createSagaStore(): SagaStore & Participant {
       let saga = rows.get(id);
       return saga ? { ...saga } : null;
     },
+    list: () => listSagasOf(rows),
     claimDue: async (now, limit, _options?: Options) => {
       let due: Saga[] = [];
       for (let saga of rows.values()) {

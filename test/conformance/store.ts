@@ -23,7 +23,7 @@ import { credit, debit, postEntry } from '#src/ledger.ts';
 import { decodeAmount, toAmount } from '#src/money.ts';
 import { spendable, SYSTEM } from '#src/accounts.ts';
 
-import type { Store, Unit } from '#src/ports.ts';
+import type { Saga, SagaState, Store, Unit } from '#src/ports.ts';
 import type { Transaction } from '#src/contract.ts';
 
 // Fresh user id per call, so tests don't share balances or hash-chain history.
@@ -337,6 +337,41 @@ async function claimsDuePromosOldestFirstUpToLimit(
   );
 }
 
+// SagaStore.list returns the whole payout board — every saga regardless of state, newest
+// `updatedAt` first — not just the due, in-progress sagas claimDue hands the worker. Opens three
+// out of updatedAt order (one settled, one failed, one in flight) and asserts list re-sorts them
+// newest first. Filtered to this test's user so a future saga test sharing the store can't perturb
+// it.
+async function listsSagasNewestFirst(store: Store): Promise<void> {
+  let userId = freshUser();
+  let mk = (suffix: string, updatedAt: number, state: SagaState): Saga => ({
+    id: `pay_conf_list_${userId}_${suffix}`,
+    userId,
+    reserve: toAmount('CREDIT', 100n),
+    rateId: 'rate_conf_list',
+    state,
+    providerRef: null,
+    attempts: 0,
+    dueAt: updatedAt,
+    updatedAt,
+  });
+  let oldest = mk('a', 1_000, 'SETTLED');
+  let middle = mk('b', 2_000, 'FAILED');
+  let newest = mk('c', 3_000, 'RESERVED');
+  // Open out of updatedAt order so insertion order isn't the expected list order.
+  await store.transaction((unit) => unit.sagas.open(middle));
+  await store.transaction((unit) => unit.sagas.open(oldest));
+  await store.transaction((unit) => unit.sagas.open(newest));
+
+  let mine: string[] = [];
+  for await (let saga of store.sagas.list()) {
+    if (saga.userId === userId) {
+      mine.push(saga.id);
+    }
+  }
+  assert.deepEqual(mine, [newest.id, middle.id, oldest.id]);
+}
+
 // Same webhook-dedup behaviour across adapters: an inbound provider webhook is processed at most
 // once even on redelivery. The replay store uses an atomic insert-if-absent on the event id: the
 // first claim returns `{ claimed: true }` (process), later claims of the same id return
@@ -488,5 +523,7 @@ export function runStoreConformance(
       withStore(t, balanceAccountsEnumeratesBalanceRow));
     test('bills a subscription via compare-and-set so a stale renewal run is rejected', (t) =>
       withStore(t, markBilledIsCompareAndSet));
+    test('lists every saga newest-first regardless of state', (t) =>
+      withStore(t, listsSagasNewestFirst));
   });
 }

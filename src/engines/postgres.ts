@@ -73,6 +73,7 @@ import type {
   ReplayStore,
   SaleStore,
   Sale,
+  Saga,
   SagaStore,
   Statement,
   Store,
@@ -771,6 +772,18 @@ function rowToOutbox(row: Record<string, unknown>): OutboxMessage {
 
 // --- Saga store -------------------------------------------------------------------
 
+// Whole payout board, newest first (see SagaStore.list). No `for update`: a read-only enumeration,
+// not a claim. `q.query` returns the rows in one round trip; they are yielded one at a time so a
+// consumer can stop early. Module-level like balanceAccountsOf to keep createSagaStore short.
+async function* listSagasOf(q: Queryable): AsyncIterable<Saga> {
+  let result = await q.query(
+    `select * from payout_sagas order by updated_at desc`,
+  );
+  for (let row of result.rows) {
+    yield rowToSaga(row);
+  }
+}
+
 // Tracks the multi-step payout process for paying a user out in real money. Each payout moves
 // through states (requested, reserved, submitted, settled, failed). `advance` moves a payout to
 // the next state only if it is still in the state the caller expected (the `where ... and state
@@ -804,6 +817,7 @@ function createSagaStore(q: Queryable): SagaStore {
       let row = result.rows[0];
       return row ? rowToSaga(row) : null;
     },
+    list: () => listSagasOf(q),
     // Find payouts that are due and still in progress. A payout reaches RESERVED in the same
     // step that first creates it, so a row left in the earlier REQUESTED state means that step
     // crashed partway. Such a stuck row is skipped on purpose: this query picks up only RESERVED

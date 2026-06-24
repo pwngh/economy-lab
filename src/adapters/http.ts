@@ -301,6 +301,14 @@ function sessionSagas(
       let row = await call(transport, at('load'), { id }, options);
       return row === null ? null : decodeWire.saga(row);
     },
+    // Whole payout board (see SagaStore.list). Like the ledger stream reads, the in-process server
+    // returns every row in one response; yield them one at a time to honor the AsyncIterable.
+    list: async function* (options) {
+      let rows = (await call(transport, at('list'), {}, options)) as unknown[];
+      for (let row of rows) {
+        yield decodeWire.saga(row);
+      }
+    },
     claimDue: async (now, limit, options) => {
       let rows = (await call(
         transport,

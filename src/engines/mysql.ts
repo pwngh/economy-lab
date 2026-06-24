@@ -638,6 +638,18 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
 
 // --- Saga store -------------------------------------------------------------------
 
+// Whole payout board, newest first (see SagaStore.list). Read-only enumeration, so no FOR UPDATE;
+// mirrors postgres. `rows` returns everything in one round trip, yielded one at a time so a
+// consumer can stop early. Module-level (like loadSagaOrThrow) to keep createSagaStore short.
+async function* listSagasOf(exec: MysqlExecutor): AsyncIterable<Saga> {
+  for (let row of await rows(
+    exec,
+    'SELECT * FROM payout_sagas ORDER BY updated_at DESC',
+  )) {
+    yield rowToSaga(row);
+  }
+}
+
 // Tracks each payout as a small state machine ("saga"). `advance` changes state only if the
 // saga is still in the state the caller expected (the UPDATE's WHERE requires current state =
 // `from`). If two workers advance the same saga at once, only one matches a row; the other
@@ -676,6 +688,7 @@ function createSagaStore(exec: MysqlExecutor): SagaStore {
       );
       return found.length ? rowToSaga(found[0]!) : null;
     },
+    list: () => listSagasOf(exec),
     claimDue: async (now, limit) => {
       let result = await rows(
         exec,

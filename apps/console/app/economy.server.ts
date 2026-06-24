@@ -145,10 +145,6 @@ async function build(): Promise<ConsoleEngine> {
   let maxAttempts = 5;
   let idSeq = 0;
 
-  // Every payout id the engine mints (recorded by the id generator below); the payout board loads
-  // each saga from the store to render a card. Cleared on rebuild.
-  let sagaIds: string[] = [];
-
   // Marks txn ids already in the feed — user ops (added on submit) and worker postings (folded in
   // from each worker run, see captureWorkerPostings) — so neither is added twice. Cleared on rebuild.
   let capturedTxnIds = new Set<string>();
@@ -161,15 +157,10 @@ async function build(): Promise<ConsoleEngine> {
   // The engine's default SHA-256 hasher (Web Crypto), reused so the console hashes as the engine does.
   const digest: Digest = systemDigest();
 
-  // Mints ids like "txn_1"/"pay_2", and records every "pay_" id into sagaIds for the payout board.
+  // Deterministic sequential ids (txn_1, pay_2, …) so the demo replays identically; the default
+  // uuidIds() would be random. idSeq resets to zero on rebuild.
   const ids: Ids = {
-    next: (prefix) => {
-      const id = `${prefix}_${++idSeq}`;
-      if (prefix === 'pay') {
-        sagaIds.push(id);
-      }
-      return id;
-    },
+    next: (prefix) => `${prefix}_${++idSeq}`,
   };
 
   // Stand-in for the payment provider (the demo calls it Tilia), with an outage switch. While
@@ -220,7 +211,6 @@ async function build(): Promise<ConsoleEngine> {
   async function rebuild(): Promise<void> {
     idSeq = 0;
     clock.set(0);
-    sagaIds = [];
     capturedTxnIds = new Set<string>();
     sagaInfo = new Map<string, { reason?: string; usd?: number }>();
 
@@ -691,12 +681,11 @@ async function build(): Promise<ConsoleEngine> {
     ledger: () => txns.slice(),
 
     payouts: async () => {
+      // Enumerate the board straight from the engine (newest first) rather than replaying minted
+      // payout ids. sagaInfo still supplies each terminal caption (reason / USD) the saga record
+      // doesn't carry — see captureWorkerPostings.
       const out: PayoutView[] = [];
-      for (const id of sagaIds) {
-        const saga = await economy.read.saga(id);
-        if (!saga) {
-          continue;
-        }
+      for await (const saga of economy.read.payouts()) {
         const info = sagaInfo.get(saga.id);
         out.push({
           id: saga.id,

@@ -83,6 +83,7 @@ export function createEconomy(capabilities: Capabilities): Economy {
       posting: (txnId, options) => store.ledger.posting(txnId, options),
       saga: (id, options) => store.sagas.load(id, options),
       accounts: (options) => store.ledger.balanceAccounts(options),
+      payouts: (options) => store.sagas.list(options),
       prove: (options) => proveEconomy(store, ctx, options),
     },
     close: () => store.close(),

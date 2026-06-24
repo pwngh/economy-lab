@@ -304,6 +304,10 @@ export interface Economy {
     // stop when you've seen enough rather than collecting blindly. Lets a reader enumerate accounts
     // (and derive users) without tracking them itself; this is the prover's own enumeration.
     accounts(options?: Options): AsyncIterable<AccountRef>;
+    // Every payout saga, newest first, streamed (a busy economy can have many): the whole board —
+    // settled and failed payouts included, not only the due ones the worker claims. Lets a UI render
+    // payout status without tracking minted payout ids itself. Delegates to `SagaStore.list`.
+    payouts(options?: Options): AsyncIterable<Saga>;
     prove(options?: Options): Promise<ProveReport>;
   };
   close(): Promise<void>;
