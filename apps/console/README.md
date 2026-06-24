@@ -25,8 +25,8 @@ memory path pulls in nothing extra.
 
 ```bash
 # Postgres
-DATABASE_URL=postgresql://user@localhost:5432/economy_lab npm run dev
+DATABASE_URL=postgres://economy:economy@localhost:5432/economy_lab npm run dev
 
 # MySQL
-DATABASE_URL=mysql://user@localhost:3306/economy_lab npm run dev
+DATABASE_URL=mysql://root:economy@localhost:3306/economy_lab npm run dev
 ```

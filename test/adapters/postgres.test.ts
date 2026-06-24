@@ -35,7 +35,7 @@ function freshSchema(): string {
 
 // Default DSN when no env var is set: local Postgres.
 function testDsn(): string {
-  return 'postgresql://localhost:5432/economy_lab';
+  return 'postgres://economy:economy@localhost:5432/economy_lab';
 }
 
 // Run the shared Store suite (conformance/store.ts) against the Postgres engine. Each store gets

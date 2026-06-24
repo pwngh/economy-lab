@@ -34,7 +34,7 @@ function postgresUrl(): string {
   return (
     process.env.DATABASE_URL ??
     process.env.PG_URL ??
-    'postgresql://localhost:5432/economy_lab'
+    'postgres://economy:economy@localhost:5432/economy_lab'
   );
 }
 

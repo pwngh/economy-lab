@@ -3,8 +3,8 @@
 # (psql / mysql). Replaced the former TypeScript migrate script. Run by hand or in CI before the SQL
 # conformance suites; the running server never creates tables on startup.
 #
-#   DATABASE_URL=postgres://user@localhost:5432/economy_lab  sh scripts/migrate.sh
-#   DATABASE_URL=mysql://root:pw@localhost:3306/economy_lab  sh scripts/migrate.sh
+#   DATABASE_URL=postgres://economy:economy@localhost:5432/economy_lab  sh scripts/migrate.sh
+#   DATABASE_URL=mysql://root:economy@localhost:3306/economy_lab        sh scripts/migrate.sh
 #   make db-migrate        # reads DATABASE_URL from the environment, falling back to .env
 #
 # Postgres: db/postgresql-schema.sql declares its tables outright (no IF NOT EXISTS), so the
