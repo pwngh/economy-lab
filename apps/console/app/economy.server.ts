@@ -38,7 +38,7 @@ import {
 } from '#src/index.ts';
 import { systemSigner, jsonlLogger, systemDigest } from '#src/runtime.ts';
 import { flatFee } from '#src/pricing.ts';
-import { currency } from '#src/accounts.ts';
+import { currency, isWalletAccount, ownerOf } from '#src/accounts.ts';
 import { fault, ERROR_CODES } from '#src/errors.ts';
 import { configuredRates } from '#src/adapters/rates.ts';
 
@@ -235,16 +235,13 @@ async function build(): Promise<ConsoleEngine> {
   }
 
   // Distinct user ids that hold an account on the ledger, derived live from read.accounts() rather
-  // than tracked by hand. Account ids are `<userId>:<kind>`; only the user wallet kinds
-  // (spendable/earned/promo) name a user, so system accounts (vrchat:*) are skipped.
+  // than tracked by hand. isWalletAccount/ownerOf are the lab's own definition of a user wallet
+  // (spendable/earned/promo) and its owner, so this never re-encodes the account-id shape.
   async function userIds(): Promise<string[]> {
     const ids = new Set<string>();
     for await (const account of economy.read.accounts()) {
-      const colon = account.lastIndexOf(':');
-      if (colon < 0) continue;
-      const kind = account.slice(colon + 1);
-      if (kind === 'spendable' || kind === 'earned' || kind === 'promo') {
-        ids.add(account.slice(0, colon));
+      if (isWalletAccount(account)) {
+        ids.add(ownerOf(account));
       }
     }
     return [...ids];

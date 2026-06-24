@@ -22,7 +22,7 @@
  *
  * Reference it from a DOM consumer rather than re-declaring it:
  *   /// <reference path=".../dom-interop.d.ts" />
- * (or, once published, `/// <reference types="@pwngh/economy-lab/dom-interop" />`). It must NOT be in
+ * (or, once published, `/// <reference types="@pwngh/economy-lab/dom-interop" />`). It must not be in
  * the engine's own root tsconfig include — it names DOM-only types (AlgorithmIdentifier, CryptoKey)
  * that the no-DOM root build does not have.
  */

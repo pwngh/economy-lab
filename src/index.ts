@@ -194,11 +194,9 @@ export async function compose(
  * {@link compose}. Returns the worker plus store and dispatcher, so a host can call
  * `worker.runOnce(input)` on a timer and pass the dispatcher into each run's input.
  *
- * Two processes pointed at the same database can each call this (and {@link compose}) with their own
- * store handle. A single process that wants the economy and worker to share one store instance —
- * required for the in-memory backend, where two stores are two separate maps — should instead call
- * {@link capabilitiesFromEnv} once and pass the result to both `createEconomy` and
- * `createWorker(caps.store, workerCtxFrom(caps))`.
+ * Two processes on the same database each call this (and {@link compose}) with their own store
+ * handle. For a single process sharing one store — required for the in-memory backend, where two
+ * stores are two separate maps — call {@link capabilitiesFromEnv} once instead (see its note).
  */
 export async function composeWorker(
   env: Record<string, string | undefined>,
