@@ -50,15 +50,7 @@ import type {
   Capabilities,
   WorkerCtx,
 } from '#src/index.ts';
-import type {
-  Clock,
-  Ids,
-  Digest,
-  Leg,
-  Posting,
-  Saga,
-  Store,
-} from '#src/ports.ts';
+import type { Clock, Ids, Digest, Leg, Posting, Saga } from '#src/ports.ts';
 import type { Worker } from '#src/worker/index.ts';
 
 import {
@@ -143,7 +135,6 @@ async function build(): Promise<ConsoleEngine> {
   const clock = makeClock();
 
   let economy: Economy;
-  let storeRef: Store;
   let workerRef: Worker;
   let workerCtx: WorkerCtx;
 
@@ -245,7 +236,6 @@ async function build(): Promise<ConsoleEngine> {
       { signer, processor, rates, pricing: flatFee() },
       { clock, ids, digest, logger, meter },
     );
-    storeRef = caps.store;
     economy = createEconomy(caps);
     workerCtx = workerCtxFrom(caps);
     workerRef = createWorker(caps.store, workerCtx);
@@ -339,9 +329,7 @@ async function build(): Promise<ConsoleEngine> {
     const priceCurrency =
       first && currency(first.account) === 'USD' ? 'USD' : 'CREDIT';
     const sagaId = meta.sagaId ? String(meta.sagaId) : undefined;
-    const sagaUser = sagaId
-      ? (await storeRef.sagas.load(sagaId))?.userId
-      : null;
+    const sagaUser = sagaId ? (await economy.read.saga(sagaId))?.userId : null;
     const user = sagaUser ?? userInLegs(p.legs) ?? 'user';
     // Grouped, two-decimal amount to match how the feed's figures read in the table.
     const money = amount.toLocaleString('en-US', {
@@ -472,7 +460,7 @@ async function build(): Promise<ConsoleEngine> {
         continue;
       }
       capturedTxnIds.add(id);
-      const posting = await storeRef.ledger.posting(id);
+      const posting = await economy.read.posting(id);
       if (!posting) {
         continue;
       }
@@ -718,7 +706,7 @@ async function build(): Promise<ConsoleEngine> {
     payouts: async () => {
       const out: PayoutView[] = [];
       for (const id of sagaIds) {
-        const saga = await storeRef.sagas.load(id);
+        const saga = await economy.read.saga(id);
         if (!saga) {
           continue;
         }

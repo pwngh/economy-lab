@@ -80,6 +80,8 @@ export function createEconomy(capabilities: Capabilities): Economy {
         cachedBalance(ctx, store.ledger, account, options),
       statement: (account, range, options) =>
         store.ledger.statement(account, range, options),
+      posting: (txnId, options) => store.ledger.posting(txnId, options),
+      saga: (id, options) => store.sagas.load(id, options),
       prove: (options) => proveEconomy(store, ctx, options),
     },
     close: () => store.close(),

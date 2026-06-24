@@ -21,9 +21,11 @@ import type {
   Logger,
   Meter,
   Options,
+  Posting,
   Processor,
   Range,
   Rates,
+  Saga,
   Signer,
   Statement,
   Unit,
@@ -292,6 +294,12 @@ export interface Economy {
       range: Range,
       options?: Options,
     ): Promise<Statement>;
+    // One committed posting by transaction id (its legs and meta), or null if unknown. Lets a reader
+    // resolve a posting without reaching past `read` into the raw Store.
+    posting(txnId: string, options?: Options): Promise<Posting | null>;
+    // One payout saga by id (state, provider ref, attempts), or null if unknown. The background
+    // worker advances these; a UI reads them to render payout status.
+    saga(id: string, options?: Options): Promise<Saga | null>;
     prove(options?: Options): Promise<ProveReport>;
   };
   close(): Promise<void>;
