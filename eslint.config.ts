@@ -101,7 +101,7 @@ let OPTIONAL_DRIVER_IMPORTS = [
 }));
 
 export default tseslint.config(
-  // `apps/` holds standalone front-end apps (the Remix console) with their own build/lint tooling,
+  // `apps/` holds standalone front-end apps (the React Router console) with their own build/lint tooling,
   // so they stay outside this gate alongside the other non-core UI/asset dirs.
   {
     ignores: ['legacy/**', 'node_modules/**', 'assets/**', 'viz/**', 'apps/**'],

@@ -91,12 +91,12 @@ export function assessRisk(
 /**
  * Build the attempt record to add to a subject's running total after an operation finishes, or
  * null when there's nothing to record (untracked subject, or a duplicate already counted). The
- * record carries `idempotencyKey` so the store won't count a genuine retry twice. A `rejected`
- * outcome is still recorded (denied attempts count toward the limit; a burst of them is itself a
- * fraud signal); a `duplicate` is not (the original already counted). The caller runs this after
- * submit and writes it through `Store.trust.bump` outside the DB transaction, so even a rolled-back
- * operation records that it was attempted. An operation that threw is a bug, not an attempt, and
- * never reaches here.
+ * record carries `idempotencyKey` so the store won't count a genuine retry twice. This is the pure
+ * reference implementation of the attempt-record rule, exercised by the tests and the in-memory
+ * trust adapter. The live pipeline does not call this; it records equivalently via
+ * `store.trust.record` inside the transaction (see economy.ts screenRisk). A `rejected` outcome is
+ * still recorded (denied attempts count toward the limit; a burst is itself a fraud signal); a
+ * `duplicate` is not (the original already counted).
  */
 export function riskAttempt(
   operation: Operation,
@@ -116,8 +116,10 @@ export function riskAttempt(
 
 /**
  * The id (user or account) whose running total this operation counts against, or null when the
- * operation isn't subject to the risk check. Single source of this rule, so `assessRisk`,
- * `riskAttempt`, and the middleware all pick the same subject.
+ * operation isn't subject to the risk check. Single source of this subject rule, so the shared
+ * logic is identical wherever it is applied: the live middleware (economy.ts screenRisk) calls
+ * `riskSubject` + `attemptMinor` directly, while `assessRisk` and `riskAttempt` are the test-facing
+ * pure twins. The guarantee is shared logic, not a shared call path.
  */
 export function riskSubject(operation: Operation): string | null {
   if (operation.kind === 'spend') {

@@ -171,10 +171,12 @@ function sumMatured(
 // --- Why this module computes maturity instead of trusting the lot ----------------
 //
 // The ledger fills a lot's `source` from the original posting's funding info, defaulting
-// to 'unknown' (the card horizon) when missing. So any handler issuing spendable credits
-// must record the funding source on the posting (the top-up handler already does), or its
-// credits fall back to the card horizon: still safe (never instantly cashable), just less
-// precise than the real source.
+// to the source value 'unknown' when missing, which resolves through the 'default' horizon
+// entry (configurable via MATURITY_HORIZON_DEFAULT_MS, and equal to the card horizon only
+// under the shipped defaults). So any handler issuing spendable credits must record the
+// funding source on the posting (the top-up handler already does), or its credits fall back
+// to the default horizon: still safe (never instantly cashable), just less precise than the
+// real source.
 //
 // Maturity is computed as (top-up time) + (source's required wait). We deliberately
 // don't trust the lot's own `maturesAt`, which the ledger defaults to the top-up time

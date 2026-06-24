@@ -121,7 +121,7 @@ function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
   return true;
 }
 
-// --- Rates (fixed-point, audited) -------------------------------------------------
+// --- Rates (fixed-point) -------------------------------------------------------------
 
 // Three fixed CREDIT-to-USD rates, one per read site. Round values (not VRChat's exact $0.00833
 // buy rate, which isn't a clean cent) so the topUp split lands on whole cents: `buy` = what a user
@@ -129,6 +129,7 @@ function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
 // ($0.005, 200 credits = $1); `payout` = `par`. The buy-vs-par gap (50%) is the platform's
 // purchase-spread cut. (A separate test pins VRChat's real ~40% spread + creator-nets-50% with the
 // exact 120/200 rates.) Each rate is exact integers (multiplier `rate / 10^scale`) plus a `rateId`.
+// The rateId's trailing "r/s" is rate/scale, not a fraction: 1/2 = 1·10^-2 = $0.01, 5/3 = 5·10^-3 = $0.005.
 let BUY_CREDIT: Rate = { rate: 1n, scale: 2, rateId: 'buy:CREDIT->USD:1/2' };
 let PAR_CREDIT: Rate = { rate: 5n, scale: 3, rateId: 'par:CREDIT->USD:5/3' };
 let PAYOUT_CREDIT: Rate = {

@@ -85,7 +85,7 @@ create table chain_links (
   account_id text        not null references accounts (id),
   prev_hash  text        not null,                          -- previous hash, 64 lowercase hex; the first link uses 32 zero bytes
   hash       text        not null,                          -- the new hash, 64 lowercase hex
-  -- One link per account per posting: a posting advances an account's chain exactly once.
+  -- The composite PK enforces the one-link-per-(posting,account) invariant stated above.
   primary key (posting_id, account_id)
 );
 create index chain_links_account_idx on chain_links (account_id);
@@ -116,7 +116,7 @@ create table account_balances (
 -- ============================================================================
 create table idempotency (
   key         text        primary key,
-  transaction jsonb       not null,                         -- the recorded result, replayed verbatim on a duplicate
+  transaction jsonb       not null,                         -- the recorded result, replayed verbatim on a duplicate; NOT NULL because PG claims via an advisory lock (pg_advisory_xact_lock), so the row is only ever written with a result, never a placeholder
   created_at  timestamptz not null default now()
 );
 

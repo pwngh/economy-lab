@@ -8,7 +8,7 @@
 -- @license MIT
 
 -- MySQL counterpart to db/postgresql-schema.sql. Applied by `applyMysqlSchema`
--- (src/adapters/mysql.ts) via a DELIMITER-aware splitter that runs one statement
+-- (src/engines/mysql.ts) via a DELIMITER-aware splitter that runs one statement
 -- at a time (mysql2 sends one per query). Drops everything up front, so re-running
 -- resets. Stored routines use `DELIMITER $$` as the mysql CLI does; the loader
 -- handles that directive.
@@ -116,6 +116,8 @@ CREATE TABLE chain_links (
      KEY chain_links_account_idx (account_id)
    );
 
+-- account_balances: cached per-account balance read model. Rationale/invariants (non-negative
+-- overdraft guard, always re-derivable from legs) documented in db/postgresql-schema.sql.
 CREATE TABLE account_balances (
      account_id VARCHAR(96) PRIMARY KEY,
      currency   VARCHAR(8)  NOT NULL,
@@ -125,9 +127,11 @@ CREATE TABLE account_balances (
      CONSTRAINT account_balances_account_fk FOREIGN KEY (account_id) REFERENCES accounts (id)
    );
 
+-- idempotency: exactly-once retry guard. Rationale/invariants documented in
+-- db/postgresql-schema.sql (idempotency banner).
 CREATE TABLE idempotency (
      `key`     VARCHAR(255) PRIMARY KEY,
-     transaction JSON        NULL,
+     transaction JSON        NULL,  -- the recorded result, replayed verbatim on a duplicate; NULL while a row is claimed-but-not-yet-recorded (claim inserts a placeholder to hold the row lock; record fills it)
      created_at  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP
    );
 
@@ -146,6 +150,8 @@ CREATE TABLE sales (
      CONSTRAINT sales_txn_fk FOREIGN KEY (txn_id) REFERENCES postings (id)
    );
 
+-- outbox: events awaiting publish via the transactional outbox relay. Rationale/invariants
+-- documented in db/postgresql-schema.sql (outbox banner).
 CREATE TABLE outbox (
      id                 VARCHAR(64) PRIMARY KEY,
      event              JSON        NOT NULL,
@@ -154,9 +160,12 @@ CREATE TABLE outbox (
      dead_letter_reason TEXT        NULL,
      created_at         TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
      CHECK (status IN ('pending', 'relayed', 'failed')),
+     -- MySQL has no partial index; the PG WHERE-predicate (status/state/reversed) becomes the leading composite-key column so the sweep/relay scan stays narrow.
      KEY outbox_pending_idx (status, created_at)
    );
 
+-- payout_sagas: multi-step payout saga state. Rationale/invariants documented in
+-- db/postgresql-schema.sql (payout_sagas banner).
 CREATE TABLE payout_sagas (
      id                 VARCHAR(64) PRIMARY KEY,
      user_id            VARCHAR(64) NOT NULL,
@@ -170,9 +179,12 @@ CREATE TABLE payout_sagas (
      dead_letter_reason VARCHAR(255),
      CHECK (reserve > 0),
      CHECK (state IN ('REQUESTED', 'RESERVED', 'SUBMITTED', 'SETTLED', 'FAILED')),
+     -- MySQL has no partial index; the PG WHERE-predicate (status/state/reversed) becomes the leading composite-key column so the sweep/relay scan stays narrow.
      KEY payout_sagas_due_idx (state, due_at)
    );
 
+-- promo_grants: one row per promotional credit handed out; swept for expired, not-yet-reversed
+-- grants. Rationale/invariants documented in db/postgresql-schema.sql (promo_grants banner).
 CREATE TABLE promo_grants (
      id         VARCHAR(64) PRIMARY KEY,
      user_id    VARCHAR(64) NOT NULL,
@@ -182,7 +194,8 @@ CREATE TABLE promo_grants (
      reversed   BOOLEAN     NOT NULL DEFAULT FALSE,
      CHECK (amount >= 0),
      CHECK (currency IN ('CREDIT', 'USD')),
-     KEY promo_grants_due_idx (expires_at)
+     -- MySQL has no partial index; the PG WHERE-predicate (status/state/reversed) becomes the leading composite-key column so the sweep/relay scan stays narrow.
+     KEY promo_grants_due_idx (reversed, expires_at)
    );
 
 CREATE TABLE entitlements (
@@ -198,6 +211,8 @@ CREATE TABLE entitlements (
      CHECK (quantity >= 0)
    );
 
+-- subscriptions: recurring-charge state read by the renewal sweep. Rationale/invariants
+-- documented in db/postgresql-schema.sql (subscriptions banner).
 CREATE TABLE subscriptions (
      id          VARCHAR(64) PRIMARY KEY,
      user_id     VARCHAR(64) NOT NULL,
@@ -213,6 +228,7 @@ CREATE TABLE subscriptions (
      CHECK (price > 0),
      CHECK (period_ms > 0),
      CHECK (state IN ('ACTIVE', 'LAPSED', 'CANCELED')),
+     -- MySQL has no partial index; the PG WHERE-predicate (status/state/reversed) becomes the leading composite-key column so the sweep/relay scan stays narrow.
      KEY subscriptions_due_idx (state, next_due_at)
    );
 
@@ -226,6 +242,8 @@ CREATE TABLE trust_attempts (
      KEY trust_attempts_subject_at_idx (subject, at)
    );
 
+-- checkpoints: signed Merkle-root snapshots of ledger state. Rationale/invariants documented in
+-- db/postgresql-schema.sql (checkpoints banner).
 CREATE TABLE checkpoints (
      id         VARCHAR(64) PRIMARY KEY,
      root       CHAR(64)    NOT NULL,
@@ -236,9 +254,12 @@ CREATE TABLE checkpoints (
      created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP
    );
 
+-- seen_webhooks: exactly-once replay dedup for inbound provider callbacks, claimed as the last
+-- gate (after HMAC and freshness). Only PK presence is used, so a duplicate delivery finds the row
+-- and does no work. Rationale/invariants documented in db/postgresql-schema.sql (seen_webhooks
+-- banner). The metadata column name differs cosmetically (created_at here vs seen_at in PG).
 CREATE TABLE seen_webhooks (
      event_id   VARCHAR(255) PRIMARY KEY,
-     response   JSON         NULL,
      created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
    );
 
@@ -255,6 +276,33 @@ CREATE TABLE seen_webhooks (
 -- NOTE: with binary logging enabled, creating a stored FUNCTION can require a one-time
 -- `SET GLOBAL log_bin_trust_function_creators = 1` (or SUPER / SYSTEM_VARIABLES_ADMIN). The
 -- PROCEDURE has no such requirement.
+-- ============================================================================
+
+-- ============================================================================
+-- Least-privilege app role (a deploy requirement; this file does not run it).
+-- post_entry's claim to be the SOLE writer of `legs` is, on MySQL, a privilege fact rather than a
+-- constraint. Postgres rejects an unbalanced leg written around the procedure with the deferred
+-- legs_conserve trigger (it checks at COMMIT); MySQL has no deferred constraint triggers, so the
+-- conservation check lives inside post_entry and only binds if nothing else can INSERT into `legs`.
+-- The application must therefore connect as a role that can CALL the procedure but cannot write
+-- `legs` directly:
+--
+--   CREATE ROLE economy_app;
+--   GRANT SELECT, EXECUTE        ON `economy_lab`.*       TO economy_app;  -- read all + CALL post_entry
+--   GRANT INSERT, UPDATE, DELETE ON `economy_lab`.<table> TO economy_app;  -- every ledger table EXCEPT `legs`
+--   GRANT economy_app TO '<app_login>'@'<host>';                          -- then have the app connect as <app_login>
+--
+-- DML stays granted on every other table on purpose: chain continuity, balance integrity, overdraft,
+-- and exactly-once must each be reachable by a raw write so their own triggers, CHECKs, and keys do
+-- the rejecting; only `legs` is sealed. post_entry declares no SQL SECURITY clause, so it runs as
+-- DEFINER: invoked by economy_app it still writes `legs` with the schema owner's rights, balanced by
+-- construction. That assumes the DEFINER (whoever applies this file) keeps `legs` DML and is a
+-- different identity from economy_app.
+--
+-- Not executed here: the schema is applied by one privileged connection (scripts/migrate.sh), the
+-- database name isn't known statically, and provisioning a second login is a deployment rail this lab
+-- stubs. test/conformance/adversarial-engines.ts builds exactly this role and proves a raw
+-- unbalanced-leg INSERT is refused while balanced legs still post through post_entry.
 -- ============================================================================
 DELIMITER $$
 

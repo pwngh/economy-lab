@@ -164,8 +164,8 @@ describe('grantPromo Issuance', () => {
       }),
     );
 
-    // The grant is one statement entry. Its `expiresAt` is stored on that entry so the background job
-    // that reverses unspent grants can find when it expires.
+    // The grant posts exactly one statement entry. (That its `expiresAt` is recorded for the expiry
+    // job is verified by the next test, via promos.claimDue.)
     assert.equal(outcome.status, 'committed');
     let statement = await store.ledger.statement(promo('usr_buyer'), {
       from: 0,

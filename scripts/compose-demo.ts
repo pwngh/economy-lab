@@ -19,7 +19,7 @@
 //   DATABASE_URL=mysql://root:economy@localhost:3306/economy_lab        ...    # mysql
 //   REDIS_URL=redis://localhost:6379 ...                                       # + cache in front of reads
 //
-// In-memory backend is self-contained. SQL backends use the existing schema (run `npm run db:migrate`
+// In-memory backend is self-contained. SQL backends use the existing schema (run `make db-migrate`
 // first); DEMO_RESET=1 drops & recreates it, which DESTROYS all data — a demo convenience (issue #20).
 
 import { readFile } from 'node:fs/promises';
@@ -75,7 +75,7 @@ function selection(env: Record<string, string | undefined>): {
 }
 
 // SQL backend only: optionally reset the database to a clean schema. Destructive drop-and-recreate,
-// runs only when DEMO_RESET=1; otherwise uses the existing schema (run `npm run db:migrate` first).
+// runs only when DEMO_RESET=1; otherwise uses the existing schema (run `make db-migrate` first).
 // No-op for the in-memory backend.
 async function ensureSchema(
   env: Record<string, string | undefined>,
@@ -87,8 +87,8 @@ async function ensureSchema(
   }
   if (env.DEMO_RESET !== '1') {
     console.warn(
-      'demo: DATABASE_URL is set but DEMO_RESET!=1 — using the EXISTING schema (run `npm run\n' +
-        '      db:migrate` first). Set DEMO_RESET=1 to drop & recreate it, which DESTROYS all data.',
+      'demo: DATABASE_URL is set but DEMO_RESET!=1 — using the EXISTING schema ' +
+        '(run `make db-migrate` first). Set DEMO_RESET=1 to drop & recreate it, which DESTROYS all data.',
     );
     return;
   }

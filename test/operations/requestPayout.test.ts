@@ -168,7 +168,7 @@ async function reservesEarnedCreditIntoPayoutReserve(): Promise<void> {
   );
 }
 
-async function reservesFromEarnedAloneNeverFromHeld(): Promise<void> {
+async function reservesFullEarnedBalanceIntoReserve(): Promise<void> {
   const store = newStore();
   await fundEarned(store, 'usr_seller', credit('20.00'));
 
@@ -447,8 +447,8 @@ async function firstPayoutPassesWhenAnIntervalIsConfigured(): Promise<void> {
 describe('requestPayout', () => {
   test('reserves earned credit into PAYOUT_RESERVE', () =>
     reservesEarnedCreditIntoPayoutReserve());
-  test('reserves from earned alone, never from HELD', () =>
-    reservesFromEarnedAloneNeverFromHeld());
+  test('reserves the full earned balance into PAYOUT_RESERVE, never from spendable', () =>
+    reservesFullEarnedBalanceIntoReserve());
   test('opens a payout saga in RESERVED that locks in the payout rate', () =>
     opensPayoutSagaInReservedPinningRate());
   test('rejects and leaves earned untouched when earned is insufficient', () =>

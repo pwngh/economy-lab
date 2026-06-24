@@ -70,7 +70,7 @@ function nullDispatcher(): Dispatcher {
   return async () => {};
 }
 
-// Arguments the runner passes to all eight jobs: `now`, a per-pass `limit` for due-item scans,
+// Arguments the runner passes to every job: `now`, a per-pass `limit` for due-item scans,
 // a `dispatcher` for event delivery, and `feed` plus `windows` for reconciliation. Override any
 // field per test.
 function sweepInput(overrides?: Partial<SweepInput>): SweepInput {
@@ -112,6 +112,8 @@ async function seededStore(): Promise<{ store: Store; digest: Digest }> {
 //     can't be told apart there; tracked by its later `checkpoints.put` write instead.
 //   - checkpointVerify is tracked by its `checkpoints.latest` read.
 //   - reconcile is tracked on its feed (see `recordingFeed`), not in this store.
+//   - feeSweep shares treasury's `ledger.heads` read, so it has no distinct flag in this
+//     roll-up; it is asserted instead in treasury.test.ts.
 type Touched = {
   payouts: boolean;
   subscriptions: boolean;
@@ -208,7 +210,7 @@ function freshTouched(): Touched {
 
 // --- runSweeps invokes every sweep ------------------------------------------------
 
-async function invokesAllEightSweeps(): Promise<void> {
+async function invokesEverySweep(): Promise<void> {
   let { store, digest } = await seededStore();
   let touched = freshTouched();
   let reconcileTouched = { reconcile: false };
@@ -242,6 +244,7 @@ async function reportsEverySweepUnderItsName(): Promise<void> {
     'payouts',
     'subscriptions',
     'treasury',
+    'feeSweep',
     'checkpoint',
     'checkpointVerify',
     'relay',
@@ -342,7 +345,7 @@ async function startSchedulesTheBatchOnTheInjectedScheduler(): Promise<void> {
   let stop = worker.start!(5_000, sweepInput());
   // start registered the interval with the scheduler and got back a cancel function.
   assert.equal(scheduled!.ms, 5_000);
-  // Running the registered task once executes a full batch of all eight jobs without throwing.
+  // Running the registered task once executes a full batch of every job without throwing.
   await scheduled!.task();
   stop();
   assert.equal(canceled, true);
@@ -400,7 +403,7 @@ async function skipsTheRelaySweepWhenNoDispatcherIsConfigured(): Promise<void> {
 }
 
 describe('Worker Composition Root', () => {
-  test('invokes all eight sweeps once', () => invokesAllEightSweeps());
+  test('invokes every sweep once', () => invokesEverySweep());
   test('reports every sweep under its name', () =>
     reportsEverySweepUnderItsName());
   test('skips the relay sweep cleanly when no dispatcher is configured', () =>

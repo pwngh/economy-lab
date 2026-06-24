@@ -38,8 +38,9 @@ type ChargePlan = { promoPart: Amount; spendablePart: Amount };
  * confirms enough spendable money, posts the charge (seller earns, platform takes its fee),
  * then saves the `Subscription` the background worker renews each later month.
  *
- * Returns a `committed` outcome on success, or `rejected('INSUFFICIENT_FUNDS')` when the
- * buyer's spendable balance can't cover its share.
+ * Returns a `committed` outcome on success, `rejected('ALREADY_SUBSCRIBED')` when an active
+ * subscription to the same (userId, sku, sellerId) already exists, or
+ * `rejected('INSUFFICIENT_FUNDS')` when the buyer's spendable balance can't cover its share.
  *
  * @example
  *   // Inside an open transaction (`unit`), bill month one and open the record:
@@ -201,6 +202,10 @@ function planCharge(price: Amount, promoBalance: Amount): ChargePlan {
 // Confirm enough spendable money for the spendable share. The middleware's up-front funds check
 // only runs for `spend`, so subscribe checks here. Short balance returns an INSUFFICIENT_FUNDS
 // rejection (business "no", as data); otherwise null and posting proceeds.
+//
+// Courtesy funds pre-check, not the enforcer. The database's per-user non-negative CHECK is what
+// actually blocks an overdraft; this exists to return a kind INSUFFICIENT_FUNDS rejection before
+// the engine would.
 async function screenSpendable(
   unit: Unit,
   userId: string,
@@ -285,9 +290,8 @@ function appendSpendableLegs(
 
 // --- The subscription record ------------------------------------------------------
 
-// Save the subscription record for the background worker to renew. Starts ACTIVE at period 1
-// (month one was just billed); next charge falls due one period later. From then on the worker
-// bills each period; this handler only ever charges the first month.
+// Save the subscription record for the background worker to renew. This handler only charges the
+// first month (month one was just billed); the worker bills every period after.
 async function openSubscription(
   operation: Extract<Operation, { kind: 'subscribe' }>,
   transaction: Transaction,

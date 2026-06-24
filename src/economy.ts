@@ -485,8 +485,6 @@ async function emitEvents(
   );
 }
 
-// --- Operation registry ------------------------------------------------------------
-
 // --- Funds plan (shared by screenFunds and the spend handler) ----------------------
 
 type SpendPlan = { promoPart: Amount; spendablePart: Amount };
@@ -514,10 +512,10 @@ function planSpend(price: Amount, promoBalance: Amount): SpendPlan {
  * violation should be unrepresentable; prove() re-derives every balance from the legs and re-checks
  * regardless — an out-of-band cross-check that also catches a bug in the engine enforcement itself.
  *
- * `backed` checks the platform holds enough real cash to cover what it owes users: sums the custodial
- * credit balances (accounts `classify` labels "custodial", excluding earned, promo, and the payout
- * reserve), converts to USD at the fixed CREDIT-to-USD rate, and checks the cash account holds at
- * least that much.
+ * `backed` checks the platform holds enough real cash to cover what it owes users: sums the
+ * custodial credit balances — the credits in users' spendable accounts (classify() labels only these
+ * "custodial") — converts to USD at the fixed CREDIT-to-USD rate, and checks the cash account holds
+ * at least that much.
  *
  * `chainIntact` here is only a shape check on each account's latest hash; the full replay
  * re-verifying every posting lives in integrity.ts.
@@ -558,6 +556,7 @@ type LedgerFold = {
   drift: LedgerDrift[];
 };
 
+// Lighter twin of integrity.ts foldLedger/accumulateLegs (the thorough prover); keep the two in sync.
 // Visit every account ever posted to (the ledger lists them by the latest hash in each account's
 // hash-chain) and gather the figures the integrity check needs in one pass.
 //
@@ -604,9 +603,10 @@ async function foldLedger(store: Store): Promise<LedgerFold> {
       chainIntact = false;
     }
   }
-  // TODO: only accounts that have been posted to (the ones `heads()` returns) are checked. A
-  // stored balance row that has no backing posting at all would slip through; catching it would
-  // need a separate store method that enumerates every balance row, which does not exist yet.
+  // TODO: only accounts that have been posted to (the ones heads() returns) are checked here. A
+  // stored balance row with no backing posting would slip through. The thorough prover already
+  // covers this via ledger.balanceAccounts() (see integrity.ts foldLedger, R33); port that pass
+  // here if this prover needs the same guarantee.
   return {
     signedByCurrency,
     custodialCredit,
@@ -616,6 +616,7 @@ async function foldLedger(store: Store): Promise<LedgerFold> {
   };
 }
 
+// Mirrors integrity.ts's per-account leg sum; the thorough prover's accumulateLegs is the fuller twin.
 // Recompute an account's balance in minor units by summing every statement entry, each already
 // signed the way it changed this account. Reproduces what `ledger.balance` should return; comparing
 // the two detects a stale cached balance.
@@ -649,12 +650,8 @@ function backingRequired(custodialCredit: bigint, par: Rate): bigint {
 
 // --- Small helpers ----------------------------------------------------------------
 
-// Velocity rule pieces live in trust.ts: `riskSubject` picks the subject a limit tracks against,
-// `attemptMinor` says how much an operation adds to its subject's running total. `screenRisk` builds
-// the attempt from those two, then records it and reads back the windowed total in one atomic step
-// (`trust.record`), comparing against `config.velocityLimitMinor`. The same call records and
-// measures, so the check can't disagree with what was counted. The store applies the window length
-// (`config.velocityWindowMs`) when summing a subject's attempts.
+// Velocity pieces (riskSubject, attemptMinor, trust.record) are documented at screenRisk above; the
+// store applies config.velocityWindowMs when summing a subject's windowed attempts.
 
 // Find the handler for this operation's kind. A missing entry throws a malformed-operation fault.
 function resolveHandler(registry: Registry, operation: Operation): Handler {
@@ -694,16 +691,13 @@ let RESTRICTED_TO_PRIVILEGED = new Set<Operation['kind']>([
   'grantPromo',
   'grantEntitlement',
   'revokeEntitlement',
-  // Credit issuance: a top-up mints spendable credits and records the matching trust cash, driven
-  // only by the trusted payment path (a verified processor webhook run as a system service). An end
-  // user must never self-issue credits, so system/operator-only.
+  // topUp mints spendable credits — only the trusted payment path (verified processor webhook) may
+  // issue; never an end user.
   'topUp',
   'adjust',
   'reverse',
-  // Refunding a sale makes the buyer whole and debits the seller's earned balance. Self-serve is a
-  // theft/fraud vector and no end-user refund path exists today, so platform-initiated only (system
-  // or operator). For a seller-self-refund model, loosen to a seller-ownership check rather than
-  // opening it to all users.
+  // refund makes the buyer whole by debiting the seller's earned balance — self-serve is a fraud
+  // vector; platform-initiated only.
   'refund',
   // A bank chargeback / fraud recovery: reclaims credits from a user's spendable balance and, for an
   // order-tied chargeback, claims the shared `reversed:${orderId}` key (which would block a later

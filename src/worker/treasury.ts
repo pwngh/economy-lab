@@ -233,6 +233,28 @@ export type FeeSweepResult =
   | { duplicate: true; swept: Amount }
   | { duplicate: false; swept: Amount; transaction: Transaction };
 
+// Before posting, enforce that the platform takes only its own money: `amount` may not exceed
+// `sweepable` (smaller of cash surplus and matured revenue). Taking more would pull trust-cash
+// below what is owed users. Throws COMMINGLING (a hard error, not a returned "no"), so the
+// worker loop marks the run failed rather than leaving users under-backed.
+function assertWithinSweepable(amount: Amount, sweepable: bigint): void {
+  if (amount.minor <= sweepable) {
+    return;
+  }
+  throw fault(
+    ERROR_CODES.COMMINGLING,
+    `Sweeping ${encodeAmount(amount)} exceeds the sweepable revenue ${encodeAmount(
+      toAmount('CREDIT', sweepable),
+    )}.`,
+    {
+      detail: {
+        amount: encodeAmount(amount),
+        sweepable: encodeAmount(toAmount('CREDIT', sweepable)),
+      },
+    },
+  );
+}
+
 /**
  * Realize earned platform fees as platform cash: move `amount` of CREDIT out of REVENUE and
  * the matching USD out of the trust account holding users' money. Only path that converts
@@ -259,28 +281,6 @@ export type FeeSweepResult =
  * @throws {EconomyError} INVALID_AMOUNT for a non-positive `amount`; COMMINGLING when the
  *   draw would exceed the surplus the platform is allowed to take.
  */
-// Before posting, enforce that the platform takes only its own money: `amount` may not exceed
-// `sweepable` (smaller of cash surplus and matured revenue). Taking more would pull trust-cash
-// below what is owed users. Throws COMMINGLING (a hard error, not a returned "no"), so the
-// worker loop marks the run failed rather than leaving users under-backed.
-function assertWithinSweepable(amount: Amount, sweepable: bigint): void {
-  if (amount.minor <= sweepable) {
-    return;
-  }
-  throw fault(
-    ERROR_CODES.COMMINGLING,
-    `Sweeping ${encodeAmount(amount)} exceeds the sweepable revenue ${encodeAmount(
-      toAmount('CREDIT', sweepable),
-    )}.`,
-    {
-      detail: {
-        amount: encodeAmount(amount),
-        sweepable: encodeAmount(toAmount('CREDIT', sweepable)),
-      },
-    },
-  );
-}
-
 export async function sweepFees(
   store: Store,
   ctx: WorkerCtx,

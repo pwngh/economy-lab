@@ -38,7 +38,7 @@ function testDsn(): string {
   return 'postgresql://localhost:5432/economy_lab';
 }
 
-// Run the shared Store suite (conformance/store.ts) against the Postgres adapter. Each store gets
+// Run the shared Store suite (conformance/store.ts) against the Postgres engine. Each store gets
 // a fresh schema, into which postgresStore loads db/postgresql-schema.sql, dropped again on close.
 runStoreConformance('postgres', () =>
   postgresStore({ url, schema: freshSchema() }),

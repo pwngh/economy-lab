@@ -148,8 +148,7 @@ describe('Spend', () => {
     assert.equal(report.conserved, true);
 
     // Credits owed to users are backed by cash: trust_cash holds at least the USD to cover every
-    // user's spendable balance plus money escrowed for pending purchases (HELD account), at the
-    // credit-to-USD rate.
+    // user's spendable balance, at the credit-to-USD rate.
     assert.equal(report.backed, true);
   });
 });
@@ -418,7 +417,7 @@ async function rejectsDuplicateOrderId(): Promise<void> {
 
 async function recordsFeeEqualToRevenuePosted(): Promise<void> {
   // Platform fee of 1530 bps (15.30%) on the 400.00 price is 61.20. Not a whole credit, so the
-  // fee charged rounds up to 62.00 (an earlier version rounded down to 61.20). The fee in the
+  // fee charged rounds up to 62.00 (an earlier version kept the un-rounded 61.20). The fee in the
   // Sale record must equal the fee moved into REVENUE, not the un-rounded figure.
   let { store, ctx } = spendFixture(1530);
   await runOp(

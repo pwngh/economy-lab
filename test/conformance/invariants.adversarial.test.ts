@@ -14,38 +14,39 @@
  * Adversarial conformance harness.
  *
  * The thesis: the SQL database is the system of record and must enforce the ledger invariants
- * NATIVELY. The only way to prove that is to attempt each violation by writing a raw, violating
- * row AROUND the app — bypassing `post_entry` for the SQL engines, and going straight to the
- * lowest store method for the memory oracle — and assert the engine REJECTS it. A check that
+ * natively. The only way to prove that is to attempt each violation by writing a raw, violating
+ * row around the app — bypassing `post_entry` for the SQL engines, and going straight to the
+ * lowest store method for the memory oracle — and assert the engine rejects it. A check that
  * only the app performs is not enforcement; this suite refuses to take the app's word for it.
  *
  * The ordering rule: add engine enforcement first, then prove it with an adversarial test that
  * writes the violation around the app, and only then delete the app-side duplicate.
- * This file is the "prove it" step built BEFORE any enforcement. It changes no enforcement; it
- * only records, per (invariant, engine), whether the violation is caught TODAY:
+ * Built as the keystone "prove it" step; the enforcement it called for has since landed, and this
+ * file now holds the engine to account for them. It changes no enforcement; it asserts, per (invariant, engine),
+ * that the violation is caught:
  *
- *   - Where the engine already rejects the violation, the case is a HARD assertion now. Those
- *     are the invariants whose enforcement is already in the engine: exactly-once (idempotency
- *     and seen_webhooks primary keys), the no-fork unique index, and the non-negative
+ *   - On the SQL engines (postgres + mysql) every invariant below is a hard assertion: a raw
+ *     violating row written around the app is rejected. I1 conservation, I3 chain continuity, and
+ *     I5 balance integrity are enforced natively (mechanisms listed below), alongside exactly-once
+ *     (idempotency and seen_webhooks primary keys), the no-fork unique index, and the non-negative
  *     CHECK on user balances.
- *   - Where the engine does NOT yet reject it, the case is recorded with a `t.todo(...)` that
- *     states which invariant and engine is still pending, plus a one-line note of the mechanism
- *     that will close it (PG: a constraint/trigger; MySQL: the procedure as sole write door +
- *     revoked DML). A todo keeps the suite GREEN while naming the debt.
+ *   - The memory oracle has no native enforcement to attack, so its violation cases are recorded
+ *     with a `t.todo(...)` naming what memory leaves to the SQL engines. A todo keeps the suite
+ *     GREEN while naming what the reference store cannot enforce.
  *
  * What is still pending:
- *   conservation, postgres        deferred constraint trigger on legs (sum=0 per currency)
- *   conservation, mysql           assert in post_entry + REVOKE direct DML on legs
  *   conservation, memory          oracle only — no engine enforcement is planned
  *   overdraft, memory             oracle only — no engine enforcement is planned
- *   chain continuity, postgres    BEFORE INSERT trigger: prev_hash = account's current head
- *   chain continuity, mysql       continuity check inside post_entry + REVOKE direct DML
  *   chain continuity, memory      oracle only — append auto-computes prev_hash, no fork path
- *   balance integrity, postgres   trigger-maintained account_balances (= SUM(legs))
- *   balance integrity, mysql      trigger/proc-maintained account_balances + REVOKE DML
  *   balance integrity, memory     oracle only — no engine enforcement is planned
  *
- * Already in the engine and asserted HARD today:
+ * Already in the engine and asserted hard today:
+ *   conservation (PG): deferred constraint trigger on legs (sum=0 per currency).
+ *   conservation (MySQL): assert inside post_entry + REVOKE direct DML on legs.
+ *   chain continuity (PG): constraint trigger ties prev_hash to the account's current head.
+ *   chain continuity (MySQL): continuity check inside post_entry + REVOKE direct DML on legs.
+ *   balance integrity (PG): trigger-maintained account_balances (= SUM(legs)).
+ *   balance integrity (MySQL): trigger/proc-maintained account_balances + REVOKE direct DML on legs.
  *   overdraft (PG + MySQL): the user_account_non_negative CHECK rejects a negative user row.
  *   no-fork  (PG + MySQL): unique (account_id, prev_hash) rejects a second link at one point.
  *   exactly-once (PG + MySQL + memory): duplicate idempotency key / webhook event id rejected.
@@ -154,8 +155,9 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
     });
 
     // --- conservation: a leg set that does not sum to zero must be rejected -------------------
-    // Today: NO engine rejects it (the conservation check is app-only, in src/ledger.ts
-    // assertBalanced). Recorded as pending; becomes a hard assertion once the engine enforces it.
+    // Enforced natively on both engines (PG: deferred constraint trigger on legs asserting sum=0
+    // per currency at commit; MySQL: the assert inside post_entry, with direct DML on legs revoked
+    // so the procedure is the only write door) → hard.
     test('conservation: a raw unbalanced leg is refused', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
       let live = engine;
@@ -171,28 +173,15 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
       let txn = `txn_adv_i1_${userId}`;
       await live.raw(rawInsertPosting(txn));
       // One lone credit leg (sum != 0 for CREDIT): a balanced posting must pair it with a debit.
-      let writeOneSidedLeg = () =>
-        live.raw(
-          `insert into legs (posting_id, account_id, currency, amount) values ('${txn}', '${account}', 'CREDIT', -500)`,
-        );
-
-      let rejected = await writeOneSidedLeg().then(
-        () => false,
-        () => true,
+      await assertRawRejected(
+        live,
+        'an unbalanced leg set (sum != 0 per currency)',
+        `insert into legs (posting_id, account_id, currency, amount) values ('${txn}', '${account}', 'CREDIT', -500)`,
       );
-      if (!rejected) {
-        // Mechanism pending — PG: deferred constraint trigger on legs; MySQL: assert in
-        // post_entry + REVOKE direct DML so the proc is the only write door.
-        t.todo(
-          `not enforced on ${name}: engine accepts an unbalanced leg today`,
-        );
-        return;
-      }
-      assert.ok(rejected);
     });
 
     // --- overdraft: a negative USER balance must be rejected; a system one is exempt ----------
-    // Today: the user_account_non_negative CHECK already rejects this on BOTH engines → HARD.
+    // Today: the user_account_non_negative CHECK already rejects this on both engines → hard.
     test('overdraft: a raw negative user balance is refused', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
       let live = engine;
@@ -214,14 +203,10 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
       );
     });
 
-    // The non-negative CHECK must EXEMPT system accounts — several hold negative balances by design.
-    // With balance integrity enforcing balance = signed leg sum, a system account can no longer be
-    // slammed negative by a hand-written balance (balance integrity would refuse it); the negative
-    // must come from real legs. So post a balanced entry that CREDITS RECEIVABLE (debit-normal → its
-    // balance falls to -100), satisfying conservation (legs net to zero) and balance integrity
-    // (cached balance equals the legs), leaving only the non-negative rule in question — which must
-    // let this 'vrchat:%' system balance stand. A user account driven negative the same way is
-    // rejected by that very CHECK; see the case above.
+    // The non-negative CHECK must exempt system accounts (several are negative by design). RECEIVABLE is
+    // debit-normal, so a balanced credit drives its cached balance to -100 via real legs (conservation +
+    // balance integrity both hold); only the non-negative rule is under test, and it must let this vrchat:%
+    // system balance stand. A user account driven negative the same way is rejected — see the case above.
     test('overdraft: a legitimately negative SYSTEM balance is allowed (exempt)', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
       let live = engine;
@@ -245,7 +230,7 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
     });
 
     // --- chain continuity: no fork (two links at one point) and no discontinuity -------------
-    // No-fork is enforced by unique (account_id, prev_hash) on BOTH engines → HARD today.
+    // No-fork is enforced by unique (account_id, prev_hash) on both engines → hard today.
     test('continuity: a raw forked chain link (same prev_hash) is refused', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
       let live = engine;
@@ -259,7 +244,7 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
       );
 
       // The funding posting already wrote one link from GENESIS for this account. A second link
-      // claiming the SAME previous hash would fork the chain into two branches.
+      // claiming the same previous hash would fork the chain into two branches.
       let txn = `txn_adv_i3fork2_${userId}`;
       await live.raw(rawInsertPosting(txn));
       await assertRawRejected(
@@ -269,8 +254,10 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
       );
     });
 
-    // Discontinuity (a link whose prev_hash is NOT the account's current head) is NOT yet
-    // rejected by either engine; the unique index blocks a duplicate point, not a wrong one.
+    // Discontinuity (a link whose prev_hash is NOT the account's current head) is rejected natively
+    // on both engines (PG: a constraint trigger asserting prev_hash = the account's current head;
+    // MySQL: the same check inside post_entry, direct DML on chain_links revoked) → hard. The unique
+    // index blocks a duplicate point; this trigger blocks a wrong one.
     test('continuity: a raw discontinuous chain link (wrong prev_hash) is refused', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
       let live = engine;
@@ -290,28 +277,15 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
 
       let txn = `txn_adv_i3disc2_${userId}`;
       await live.raw(rawInsertPosting(txn));
-      let writeDiscontinuous = () =>
-        live.raw(
-          `insert into chain_links (posting_id, account_id, prev_hash, hash) values ('${txn}', '${account}', '${bogusPrev}', '${'e'.repeat(64)}')`,
-        );
-
-      let rejected = await writeDiscontinuous().then(
-        () => false,
-        () => true,
+      await assertRawRejected(
+        live,
+        'a discontinuous chain link (prev_hash != current head)',
+        `insert into chain_links (posting_id, account_id, prev_hash, hash) values ('${txn}', '${account}', '${bogusPrev}', '${'e'.repeat(64)}')`,
       );
-      if (!rejected) {
-        // Mechanism pending — PG: BEFORE INSERT trigger asserting prev_hash = current head;
-        // MySQL: the same check inside post_entry + REVOKE direct DML on chain_links.
-        t.todo(
-          `not enforced on ${name}: engine accepts a discontinuous link today`,
-        );
-        return;
-      }
-      assert.ok(rejected);
     });
 
     // --- exactly-once: a duplicate idempotency key / webhook event id must be rejected --------
-    // Enforced by the primary keys on idempotency and seen_webhooks on BOTH engines → HARD.
+    // Enforced by the primary keys on idempotency and seen_webhooks on both engines → hard.
     test('exactly-once: a duplicate idempotency key is refused', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
       let live = engine;
@@ -359,8 +333,9 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
     });
 
     // --- balance integrity: cached balance must equal SUM(legs) -------------------------------
-    // Today: NO engine enforces the equality; account_balances is hand-maintained, drift is an
-    // app-side audit only. Recorded pending; becomes hard once the projection is trigger-maintained.
+    // Enforced natively on both engines: a trigger checks account_balances equals the signed sum of
+    // the account's legs (PG and MySQL), so a hand-edited balance that drifts from the legs is
+    // rejected → hard.
     test('balance integrity: a raw drifted balance (≠ SUM legs) is refused', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
       let live = engine;
@@ -369,26 +344,13 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
       await fundSpendable(live.store, userId, '5.00', `txn_adv_i5_${userId}`);
 
       // Inflate the cached balance to a value the legs do not sum to (500 → 999), staying
-      // non-negative so the overdraft CHECK can't be what rejects it. A trigger-maintained
-      // projection would refuse this hand-edit (or make it unrepresentable).
-      let drift = () =>
-        live.raw(
-          `update account_balances set balance = 999 where account_id = '${account}'`,
-        );
-
-      let rejected = await drift().then(
-        () => false,
-        () => true,
+      // non-negative so the overdraft CHECK can't be what rejects it; the balance-integrity trigger
+      // is what must refuse this hand-edit.
+      await assertRawRejected(
+        live,
+        'a cached balance that drifts from SUM(legs)',
+        `update account_balances set balance = 999 where account_id = '${account}'`,
       );
-      if (!rejected) {
-        // Mechanism pending — PG/MySQL: replace the hand-maintained account_balances with a
-        // trigger-maintained projection of legs (or derive on read), + REVOKE direct DML.
-        t.todo(
-          `not enforced on ${name}: engine accepts a drifted cached balance today`,
-        );
-        return;
-      }
-      assert.ok(rejected);
     });
   });
 }
@@ -397,12 +359,10 @@ runSqlAdversarial('postgres', adversarialPostgres);
 runSqlAdversarial('mysql', adversarialMysql);
 
 // ============================================================================
-// The memory oracle. There is no layer beneath it, so "around the app" means the lowest write
-// door (`ledger.append`, which performs NONE of post_entry's checks) and the documented
-// `__seedBalance` / `__tamper` back doors. Per the plan, memory is the test oracle and receives
-// no engine enforcement, so conservation, overdraft, chain continuity, and balance integrity are
-// expected to stay pending here. Exactly-once IS real on memory: the idempotency and replay stores
-// dedupe natively.
+// The memory oracle. See the file header for why memory stays unenforced: the cases reach around
+// the app through the lowest write door (`ledger.append`, which performs none of post_entry's
+// checks) and the documented `__seedBalance` back door. Exactly-once IS real on memory: the
+// idempotency and replay stores dedupe natively.
 // ============================================================================
 describe('Adversarial: memory (oracle)', () => {
   let oracle: AdversarialMemory;
@@ -424,7 +384,7 @@ describe('Adversarial: memory (oracle)', () => {
 
     let accepted = await oracle.store
       .transaction((unit: Unit) =>
-        // ONE leg only — sum != 0. postEntry would throw; append does not check.
+        // one leg only — sum != 0. postEntry would throw; append does not check.
         unit.ledger.append({
           txnId: `txn_mem_i1_${userId}`,
           legs: [{ account, amount: toAmount('CREDIT', -amount.minor) }],

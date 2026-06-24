@@ -194,9 +194,10 @@ function program(seed: number, length: number): Operation[] {
 type Failure = { invariant: string; detail: Record<string, unknown> };
 
 // Check every ledger property after one operation, returning the first failure (or null).
-// Four come from the economy's integrity report: money is neither created nor destroyed,
-// real USD still covers what the platform owes users, no account went negative, and every
-// hash chain is well-formed. The fifth, the chain-link check below, confirms each touched
+// Five come from the economy's integrity report: money is neither created nor destroyed,
+// real USD still covers what the platform owes users, no account went negative, every
+// hash chain is well-formed, and each account's cached balance equals the sum of its
+// debit/credit lines. The sixth, the chain-link check below, confirms each touched
 // account's latest hash matches the hash the committed operation reported.
 async function checkInvariants(
   provable: Provable,
@@ -218,6 +219,12 @@ async function checkInvariants(
   }
   if (!report.chainIntact) {
     return { invariant: 'chainVerifies', detail: { reason: 'malformed head' } };
+  }
+  if (!report.consistent) {
+    return {
+      invariant: 'balanceConsistent',
+      detail: { drift: report.drift.length },
+    };
   }
   return verifyChainLinks(provable, outcome, heads);
 }

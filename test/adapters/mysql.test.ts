@@ -19,7 +19,7 @@ import {
 
 let url = process.env.MYSQL_TEST_URL;
 
-// Shared Store conformance suite, run against this adapter. Requires a real database, so it
+// Shared Store conformance suite, run against this SQL engine. Requires a real database, so it
 // only runs when MYSQL_TEST_URL points at a live MySQL; with no URL it registers nothing
 // (an empty run, not a false pass).
 //

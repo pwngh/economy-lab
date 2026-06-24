@@ -62,12 +62,14 @@ function mulberry32(seed: number): () => number {
 }
 
 // One deliberately oversubscribed batch: 1–2 buyers funded a few credits each, then exactly 4 spends
-// scattered across them (price 1–3). Total demand routinely exceeds the funds, so the engine must
-// reject some, and several spends landing on one wallet are the same-account race. Spends draw only
-// spendable (no promo grant), so a committed set is admissible in any order, which is what lets a
-// fresh in-memory replay stand in as the sequential model. 4 is the ceiling: each in-flight spend
-// holds a transaction connection plus a velocity-record connection, so the batch stays under half
-// the pool (see the oversell test's note).
+// scattered across them (price 1–3). After routing, one price is bumped so total demand strictly
+// exceeds total funding — by pigeonhole at least one wallet is then oversubscribed, so a correct
+// engine must reject at least one spend (assertLinearizable asserts exactly that, so no seed can pass
+// the linearizability checks without actually contending). Several spends landing on one wallet are
+// the same-account race. Spends draw only spendable (no promo grant), so a committed set is
+// admissible in some serial order, which is what lets a fresh in-memory replay stand in as the
+// sequential model. 4 is the ceiling: each in-flight spend holds a transaction connection plus a
+// velocity-record connection, so the batch stays under half the pool (see the oversell test's note).
 function batch(
   rng: () => number,
   tag: string,
@@ -80,23 +82,36 @@ function batch(
   let seller = `usr_lin_seller_${tag}`;
   let buyers: string[] = [];
   let fundingOps: Operation[] = [];
+  let funding: number[] = [];
   let buyerCount = 1 + Math.floor(rng() * 2);
   for (let b = 0; b < buyerCount; b += 1) {
     let buyer = `usr_lin_b${b}_${tag}`;
-    buyers.push(buyer);
     let fund = 2 + Math.floor(rng() * 3);
+    buyers.push(buyer);
+    funding.push(fund);
     fundingOps.push(topUp({ userId: buyer, amount: credit(`${fund}.00`) }));
   }
-  let spendOps = Array.from({ length: 4 }, () => {
-    let buyer = buyers[Math.floor(rng() * buyers.length)]!;
-    let price = 1 + Math.floor(rng() * 3);
-    return spend({
-      buyerId: buyer,
+
+  let plan = Array.from({ length: 4 }, () => ({
+    buyer: buyers[Math.floor(rng() * buyers.length)]!,
+    price: 1 + Math.floor(rng() * 3),
+  }));
+  // Guarantee oversubscription: make total demand exceed total funding so at least one wallet must
+  // turn a spend away. Bumping a single price keeps the seed reproducible and the workload varied.
+  let totalFunding = funding.reduce((sum, f) => sum + f, 0);
+  let totalDemand = plan.reduce((sum, p) => sum + p.price, 0);
+  if (totalDemand <= totalFunding) {
+    plan[0]!.price += totalFunding - totalDemand + 1;
+  }
+
+  let spendOps = plan.map((p) =>
+    spend({
+      buyerId: p.buyer,
       sku: 'wrld_pass',
-      price: credit(`${price}.00`),
+      price: credit(`${p.price}.00`),
       recipients: [{ sellerId: seller, shareBps: 10_000 }],
-    });
-  });
+    }),
+  );
   return { seller, buyers, fundingOps, spendOps };
 }
 
@@ -128,6 +143,14 @@ async function assertLinearizable(
         () => {}, // a thrown overdraft fault is simply "not committed"
       ),
     ),
+  );
+
+  // The batch is oversubscribed by construction, so a correct engine must decline at least one spend.
+  // All four committing means either nothing contended or the engine oversold — both are failures
+  // this check exists to catch, and they would otherwise slip through as a vacuous pass.
+  assert.ok(
+    committed.length < spendOps.length,
+    `${tag}: all ${spendOps.length} spends committed on an oversubscribed batch — the engine oversold or never contended`,
   );
 
   let model = makeEconomy(1);

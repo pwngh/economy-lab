@@ -495,6 +495,8 @@ async function build(): Promise<ConsoleEngine> {
   // Still the library's real logger type, not an empty stub.
   const logger = jsonlLogger({ out: () => {}, err: () => {} });
   // A metrics sink that discards everything; the demo collects no metrics.
+  // A hand-rolled object satisfying the Meter interface, not a library factory (there is no metrics
+  // counterpart to jsonlLogger).
   const meter = { count: () => {}, observe: () => {} };
 
   // Build (or rebuild) the engine + worker over one env-selected store, so both read identical

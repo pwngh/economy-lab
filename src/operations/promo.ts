@@ -49,9 +49,8 @@ export async function grantPromo(
     'grantPromo.expiresAt',
   );
 
-  // Debit PROMO_FLOAT, credit the user's promo account, same amount, so the entry balances.
-  // PROMO_FLOAT goes up when debited. `expiresAt` lives in the entry metadata so the expiry
-  // job can find this grant and reverse whatever the user hasn't spent.
+  // PROMO_FLOAT is debit-normal, so debiting it raises its balance to offset the user's credit.
+  // expiresAt lives in the entry metadata so the expiry job can find this grant and reverse the unspent portion.
   let transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs: [

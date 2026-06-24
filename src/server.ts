@@ -58,7 +58,7 @@ export interface ServerOptions {
   replay?: ReplayStore;
 }
 
-// HMAC-SHA256 over the raw body, as hex. Recomputed and compared to authenticate the body.
+// The signature header: hex-encoded HMAC-SHA256 of the raw body (see verifyHmac).
 let SIGNATURE_HEADER = 'x-signature';
 
 // Provider's send time (ms since 1 Jan 1970 UTC). Used to reject stale deliveries (replay of a
@@ -251,12 +251,11 @@ async function webhookRoute(
   }
 }
 
-// Stops an already-processed provider event from being applied twice. Runs last (after signature and
-// freshness) so a forged or stale delivery never reaches it and burns an event id. Active only when
-// a replay store is wired; without one the path is a bare pass-through and the host dedups. The body
-// is parsed into a typed WebhookEvent (reusing the decimal-string money encoding, so a money
-// `amount` survives the round trip) only to read and claim its `eventId`; the handler still gets the
-// raw verified bytes. Returns a Response to send immediately (200 "duplicate" or an error), or null
+// Stops an already-processed provider event from being applied twice. Active only when a replay
+// store is wired; without one the path is a bare pass-through and the host dedups. The body is
+// parsed into a typed WebhookEvent (reusing the decimal-string money encoding, so a money `amount`
+// survives the round trip) only to read and claim its `eventId`; the handler still gets the raw
+// verified bytes. Returns a Response to send immediately (200 "duplicate" or an error), or null
 // when the event is new (or no store is configured) and the caller runs the handler.
 async function replayGate(
   options: ServerOptions,
@@ -386,7 +385,6 @@ const AMOUNT_FIELDS: Record<string, ReadonlyArray<string>> = {
   grantPromo: ['amount'],
   adjust: ['amount'],
   reverse: [],
-  // No money fields: sagaId and reason are plain strings, so the body needs no amount decoding.
   reversePayout: [],
 };
 

@@ -128,7 +128,7 @@ async function loadSchemaSql(): Promise<string> {
 // only.
 function safeSchemaName(name: string): string {
   if (!/^[a-z_][a-z0-9_]*$/.test(name)) {
-    throw new Error(`Unsafe Postgres schema name: ${name}.`);
+    throw new Error(`Unsafe Postgres schema name: ${JSON.stringify(name)}`);
   }
   return name;
 }
@@ -330,7 +330,8 @@ function lockingLedger(q: Queryable, digest: Digest, clock: Clock): Ledger {
 
 // An account's entries between two times (including `from`, excluding `to`). Each amount is
 // signed by how it changed this account's balance, so a credit to a user account reads
-// positive. Cursor is always null: everything fits in one page for the tested cases.
+// positive. Cursor is always null: the conformance fixtures fit one page, so there's no
+// next-page cursor.
 async function buildStatement(
   q: Queryable,
   account: AccountRef,
@@ -898,9 +899,6 @@ function createEntitlementStore(q: Queryable, clock: Clock): EntitlementStore {
       );
     },
     revoke: async (userId, sku) => {
-      // Soft delete: keep the row for audit (refund/clawback ownership history) and set the
-      // revoked flag. A later re-grant clears it via grant()'s on-conflict upsert, so a re-buy
-      // re-activates the same row.
       await q.query(
         `update entitlements set revoked = true where user_id = $1 and sku = $2`,
         [userId, sku],

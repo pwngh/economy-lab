@@ -1,11 +1,11 @@
 #!/bin/sh
 # Apply the database schema for the engine named by DATABASE_URL, using its native client
-# (psql / mysql). Replaces the old scripts/migrate.ts. Run by hand or in CI before the SQL
+# (psql / mysql). Replaced the former TypeScript migrate script. Run by hand or in CI before the SQL
 # conformance suites; the running server never creates tables on startup.
 #
 #   DATABASE_URL=postgres://user@localhost:5432/economy_lab  sh scripts/migrate.sh
 #   DATABASE_URL=mysql://root:pw@localhost:3306/economy_lab  sh scripts/migrate.sh
-#   npm run db:migrate     # reads DATABASE_URL from the environment, falling back to .env
+#   make db-migrate        # reads DATABASE_URL from the environment, falling back to .env
 #
 # Postgres: db/postgresql-schema.sql declares its tables outright (no IF NOT EXISTS), so the
 # `public` schema is reset first and the file applied — safe to re-run. MySQL: db/mysql-schema.sql

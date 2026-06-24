@@ -56,12 +56,10 @@ export function isAmount(value: unknown): value is Amount {
   );
 }
 
-/** True when the amount is exactly zero. */
 export function isZero(amount: Amount): boolean {
   return amount.minor === 0n;
 }
 
-/** True when the amount is less than zero. */
 export function isNegative(amount: Amount): boolean {
   return amount.minor < 0n;
 }

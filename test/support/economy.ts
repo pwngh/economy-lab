@@ -53,8 +53,8 @@ export function makeEconomy(
     ids: sequentialIds(),
     digest,
     signer: seededSigner(seed),
-    // Fixed CREDIT-to-USD rates. "payout" ($0.005) is used when paying a seller out; "par" ($0.01) is
-    // the peg used to check the platform holds enough real cash to cover users' credit balances.
+    // Fixed CREDIT-to-USD rates. "payout" ($0.005) is paid when cashing a seller out; "par" ($0.005) is
+    // the backing peg the cash-cover check uses; "buy" ($0.01) is what a user pays per credit at top-up.
     rates: fixedRates(),
     logger: testLogger(),
     meter: noopMeter(),

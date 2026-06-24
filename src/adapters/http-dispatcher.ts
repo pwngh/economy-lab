@@ -31,7 +31,8 @@ export interface HttpDispatcherConfig {
  *
  * Events land in an outbox table in the same transaction as the money move that produced them;
  * the relay worker reads that table and calls this to deliver each. HTTP is one delivery path;
- * SQS is the alternative, chosen by `DISPATCHER_URL`. Each call POSTs one event as JSON in the
+ * SQS is the alternative; `SQS_QUEUE_URL` selects SQS and wins if both are set, otherwise
+ * `DISPATCHER_URL` selects this HTTP path. Each call POSTs one event as JSON in the
  * same field layout the SQS adapter uses, so the receiver sees one shape either way.
  *
  * A network error or non-2xx response throws a retryable `PROVIDER.FAILURE`, so the relay

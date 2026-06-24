@@ -172,7 +172,7 @@ function noopMeter(): Meter {
 //                     MySQL). The database is not an adapter; it is the source of truth.
 //   - src/adapters/ — everything pluggable that does not enforce invariants: the in-memory and HTTP
 //                     stores (records too, but the zero-infra / in-process transports), plus the
-//                     genuine capabilities you don't own — Redis cache, SQS dispatcher, payout
+//                     genuine capabilities you don't own — Redis cache, SQS or HTTP dispatcher, payout
 //                     processor, FX rates.
 
 /**
@@ -256,7 +256,7 @@ export async function composeWorker(
   return { worker: createWorker(store, ctx), store, dispatcher };
 }
 
-// `DATABASE_URL` picks the storage backend: a `postgres://` or `mysql://` DSN selects that adapter
+// `DATABASE_URL` picks the storage backend: a `postgres://` or `mysql://` DSN selects that engine
 // (and only then loads its driver); unset uses the in-memory store. Any other scheme throws here.
 async function selectStore(
   env: Record<string, string | undefined>,

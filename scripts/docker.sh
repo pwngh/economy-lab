@@ -66,8 +66,8 @@ bootstrap() {
   echo "==> waiting for services to report healthy"
   wait_healthy
   echo "==> migrating: $DATABASE_URL"
-  npm run db:migrate
-  echo "==> ready — start the app with 'npm start' (or 'npm run worker')"
+  sh scripts/migrate.sh
+  echo "==> ready — start the app with 'make start' (or 'make worker')"
 }
 
 # Default action: bring the stack up in the background.

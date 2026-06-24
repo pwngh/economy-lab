@@ -149,10 +149,8 @@ export interface Logger {
 
 /** Emits metrics. */
 export interface Meter {
-  // Add `n` to a running counter named `name`.
   count(name: string, n: number, tags?: Record<string, string>): void;
 
-  // Record a single measurement of `value` for `name`.
   observe(name: string, value: number, tags?: Record<string, string>): void;
 }
 
@@ -187,14 +185,10 @@ export interface Ledger {
   // account's tamper-evident chain).
   heads(): AsyncIterable<readonly [AccountRef, string]>;
 
-  // Every account with a cached running-balance row, streamed one at a time. The store keeps a
-  // materialized per-account total so reads don't re-add every entry; entries remain the source
-  // of truth, so the cached figure can be wrong. This list comes from that cache (SQL:
-  // `account_balances`; memory: keys of `state.balances`), not the postings, so it surfaces a
-  // cached row with no posting behind it, which `heads` never visits (it only sees accounts with
-  // entries). The prover walks `heads` first, then treats any account seen only here as having a
-  // summed-from-entries balance of 0, so a cached balance with no entries behind it shows up as
-  // a mismatch to report.
+  // Every account with a cached running-balance row, streamed one at a time (SQL:
+  // `account_balances`; memory: keys of `state.balances`). Entries are the source of truth, so a
+  // cached row can exist with no posting behind it — `heads` never visits those, so the prover
+  // relies on this list to surface them as a mismatch.
   balanceAccounts(options?: Options): AsyncIterable<AccountRef>;
 
   // Every posting that touched `account`, in commit order, with each recorded hash. The integrity
@@ -418,14 +412,11 @@ export interface SagaStore {
   // Give up on a saga that can't make progress, recording why.
   deadLetter(id: string, reason: string, options?: Options): Promise<void>;
 
-  // Time of `userId`'s most recent payout request, used to enforce the minimum gap between
-  // requests (config.payoutMinIntervalMs). The maximum `updatedAt` over all of that user's sagas
-  // regardless of state: `updatedAt` equals the request time at open() (requestPayout sets
-  // updatedAt = now when it opens the saga in RESERVED) and only moves forward as the worker
-  // advances it, so the maximum is always >= the latest request and never lets a user slip a
-  // second request through the window. Null when the user has no sagas (first request always
-  // allowed). Counts every state including FAILED/SETTLED, so a failed or completed payout still
-  // starts the clock on the next one.
+  // Time of `userId`'s most recent payout request, used to enforce config.payoutMinIntervalMs
+  // between requests. Returns the max `updatedAt` over all of this user's sagas in any state:
+  // `updatedAt` is set to the request time at open() and only advances, so the max is always >=
+  // the latest request and never lets a second request slip through the window. Null when the
+  // user has no sagas (first request always allowed).
   lastPayoutAt(userId: string, options?: Options): Promise<number | null>;
 }
 

@@ -102,7 +102,6 @@ export interface ReconcileReport {
   // The time window that was reconciled.
   window: Range;
 
-  // True when no discrepancies were found.
   reconciled: boolean;
 
   // How many events matched on both sides with equal amounts.

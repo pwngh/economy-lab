@@ -297,10 +297,8 @@ function createLedgerStore(deps: {
     // Kept current as postings apply (`balanceDelta` from ledger.ts gives each entry's effect),
     // so a balance read is a single map lookup.
     balances: new Map(),
-    // Per-account chain head as lowercase hex; missing means genesis (no postings yet).
     heads: new Map(),
-    // Seeded from the platform accounts so they're accepted immediately. User accounts aren't
-    // listed; they are recognized by their kind suffix.
+    // Seeded from the platform accounts so they're accepted immediately.
     registered: new Set<string>(Object.values(SYSTEM)),
   };
 
@@ -454,9 +452,8 @@ function postingOf(
   return { txnId: row.txnId, legs: row.legs, meta: row.meta };
 }
 
-// Test-only. Edits a stored posting's entries in place but leaves the recorded chain links
-// (and their hashes) unchanged, so the hash recomputed from the altered entries no longer
-// matches the stored one, the corruption the chain check detects.
+// Test-only. Implements `__tamper`; see the MemoryLedger type JSDoc for why this is the
+// corruption the chain check detects.
 function tamperPosting(
   log: ReadonlyArray<StoredPosting>,
   txnId: string,

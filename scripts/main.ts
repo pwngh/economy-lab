@@ -14,7 +14,7 @@
 // argv[2]:
 //
 //   scripts/main.ts serve   # HTTP API on $PORT (default 3000); store/cache/dispatcher come from env
-//   scripts/main.ts dev     # same API, forced in-memory with dev secrets — no infra, `npm run dev`
+//   scripts/main.ts dev     # same API, forced in-memory with dev secrets — no infra, `make dev`
 //   scripts/main.ts worker  # background loop running the maintenance sweep every $WORKER_INTERVAL_MS
 //
 // serve/dev run the src/server.ts handler, written against web Request/Response. Bun and Deno run it
@@ -477,7 +477,7 @@ async function runServe(env: Env): Promise<void> {
 }
 
 // Env for `dev` mode: force in-memory adapters (ignore any DATABASE_URL / REDIS_URL / queue from
-// .env or the shell) and supply dev secrets when none are set, so `npm run dev` boots with no
+// .env or the shell) and supply dev secrets when none are set, so `make dev` boots with no
 // database and no configured secrets, and under `node --watch` reloads on edit. Not for prod.
 function devEnv(env: Env): Env {
   return {

@@ -110,9 +110,10 @@ export type Operation =
       idempotencyKey: string;
       actor: Principal;
       userId: string;
+      // amount is the seller's earned credits. It is set aside in the payout-reserve account
+      // and ultimately paid out to them as real USD.
       amount: Amount;
-    } // amount is the seller's earned credits. It is set aside in the payout-reserve account
-  // and ultimately paid out to them as real USD.
+    }
   | {
       kind: 'subscribe';
       idempotencyKey: string;
@@ -122,8 +123,9 @@ export type Operation =
       sku: string;
       price: Amount;
       periodMs: number;
-    } // No `ageRestricted` field: age-gating is spend-only (see the spend variant). There is no
-  // in-core age gate, only the spend-side audit tag.
+      // No `ageRestricted` field: age-gating is spend-only (see the spend variant). There is no
+      // in-core age gate, only the spend-side audit tag.
+    }
   | {
       kind: 'cancelSubscription';
       idempotencyKey: string;
@@ -161,16 +163,18 @@ export type Operation =
       account: AccountRef;
       amount: Amount;
       reason: string;
-    } // A manual correction an operator posts by hand; ordinary users can't run it. The
-  // offsetting entry goes to the opening-equity account so the books still balance.
+      // A manual correction an operator posts by hand; ordinary users can't run it. The
+      // offsetting entry goes to the opening-equity account so the books still balance.
+    }
   | {
       kind: 'reverse';
       idempotencyKey: string;
       actor: Principal;
       txnId: string;
       reason: string;
-    } // A manual undo an operator runs by hand; ordinary users can't run it. It posts the
-  // exact opposite of the transaction named by txnId, cancelling it out.
+      // A manual undo an operator runs by hand; ordinary users can't run it. It posts the
+      // exact opposite of the transaction named by txnId, cancelling it out.
+    }
   | {
       kind: 'reversePayout';
       idempotencyKey: string;
@@ -178,11 +182,13 @@ export type Operation =
       userId: string;
       sagaId: string;
       reason: string;
-    }; // Operator-only correction to undo a payout that hasn't paid out yet. Marks the multi-step
-// payout (the "saga") as FAILED, but only if still in its pre-paid state so two attempts can't both
-// undo it, and returns the set-aside credits to the seller's earned account. A payout that has
-// already disbursed real USD is refused. `userId` names the seller so the engine knows which
-// account to lock; the operation is identified only by its payout id and names no account directly.
+      // Operator-only correction to undo a payout that hasn't paid out yet. Marks the multi-step
+      // payout (the "saga") as FAILED, but only if still in its pre-paid state so two attempts
+      // can't both undo it, and returns the set-aside credits to the seller's earned account. A
+      // payout that has already disbursed real USD is refused. `userId` names the seller so the
+      // engine knows which account to lock; the operation is identified only by its payout id and
+      // names no account directly.
+    };
 
 /**
  * The result of submitting an operation: it went through (`committed`), it repeated one already

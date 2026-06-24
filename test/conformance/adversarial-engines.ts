@@ -13,20 +13,17 @@
 /**
  * Provisioning for the adversarial conformance harness.
  *
- * The adversarial suite proves engine enforcement by writing a VIOLATING row AROUND the app —
+ * The adversarial suite proves engine enforcement by writing a violating row around the app —
  * raw SQL that bypasses `post_entry` for the SQL engines, and the lowest-level store method for
  * memory — and asserting the write is rejected. To write around the app a test needs RAW access
  * to the very same tables the {@link Store} uses, which the adapters do not expose. So each SQL
  * engine here provisions its own isolated namespace (a Postgres schema / a MySQL database),
  * applies db/*-schema.sql into it, builds a {@link Store} pointed at that namespace, AND hands
- * back a `raw(sql, params)` function pointed at the SAME namespace. Clean state is set up through
+ * back a `raw(sql, params)` function pointed at the same namespace. Clean state is set up through
  * the app (`store.transaction(postEntry(...))`); the violation is then attempted through `raw`.
  *
- * Memory has no layer beneath it (the Maps ARE the database), so "around the app" means calling
- * `store.ledger.append()` directly — the lowest write door, which performs none of the
- * `postEntry` validation — and the `__seedBalance` / `__tamper` back doors. Per the plan, memory
- * is the test oracle and never receives engine enforcement, so its conservation, overdraft, chain
- * continuity, and balance integrity adversarial cases are expected to stay unenforced.
+ * Memory's lowest write door is `append` / `__seedBalance`; see the invariants.adversarial.test.ts
+ * header for why memory stays unenforced.
  *
  * Reachability is probed, not assumed: a SQL engine that cannot be reached yields `null`, and the
  * caller skips (never fails) those cases — the same contract as the existing adapter suites.
@@ -191,7 +188,7 @@ function withUserAndDatabase(
 }
 
 // The restricted role conservation relies on (see adversarialMysql). It may write every ledger
-// table directly EXCEPT `legs` — which only post_entry (a SECURITY DEFINER routine owned by the
+// table directly except `legs` — which only post_entry (a SECURITY DEFINER routine owned by the
 // admin) may write — so a raw unbalanced-leg insert is refused, while the chain continuity, balance
 // integrity, overdraft, and exactly-once raw cases still reach their own engine mechanisms rather
 // than a blanket privilege denial.
@@ -217,7 +214,7 @@ let APP_DML_TABLES = [
 /**
  * Provision MySQL for adversarial testing, or `null` if unreachable (e.g. MYSQL_TEST_URL unset).
  *
- * A throwaway DATABASE per call — the MySQL analogue of Postgres's throwaway schema. Two reasons:
+ * A throwaway database per call — the MySQL analogue of Postgres's throwaway schema. Two reasons:
  * it isolates this run from test/adapters/mysql.test.ts sharing the same server, and — because
  * conservation is enforced by a restricted role that lacks `legs` DML — it gives that role a database
  * of its own to be GRANTed on. The schema is applied by the admin connection (so post_entry's DEFINER
@@ -237,7 +234,7 @@ export async function adversarialMysql(): Promise<AdversarialEngine | null> {
   let rawPool: MysqlPool;
   let store: Store;
   try {
-    // Create the throwaway database, then apply the schema as the ADMIN connection so post_entry's
+    // Create the throwaway database, then apply the schema as the admin connection so post_entry's
     // DEFINER is the privileged admin: it stays the only writer of `legs` even when invoked by the
     // restricted role below.
     admin = await createMysqlPool(url);
@@ -247,7 +244,7 @@ export async function adversarialMysql(): Promise<AdversarialEngine | null> {
     await schemaPool.end().catch(() => {});
 
     // The privilege model that enforces conservation on MySQL: a restricted role that may write every
-    // ledger table directly EXCEPT `legs`, plus EXECUTE on post_entry. Legitimate legs reach the table
+    // ledger table directly except `legs`, plus EXECUTE on post_entry. Legitimate legs reach the table
     // only through the procedure (SECURITY DEFINER); a raw leg insert is refused. The other tables keep
     // direct DML so the chain continuity, balance integrity, overdraft, and exactly-once raw cases
     // still hit their own triggers/constraints/keys.

@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-533_passing-3fb950" alt="tests">
+  <img src="https://img.shields.io/badge/tests-546_passing-3fb950" alt="tests">
   <img src="https://img.shields.io/badge/runtime_deps-0-3fb950" alt="runtime deps">
   <img src="https://img.shields.io/badge/node-%E2%89%A522.18-1f6feb" alt="node">
   <img src="https://img.shields.io/badge/license-MIT-1f6feb" alt="license">
@@ -36,8 +36,8 @@ rails). This is the layer on top: wallets, entitlements, marketplace logic, and 
 invariants that hold them together.
 
 It runs entirely in memory with zero infrastructure and zero runtime dependencies
-(`npm test`). The same logic runs on Postgres, MySQL, Redis, and SQS through swappable
-adapters, with one conformance suite against each.
+(`make test`). The same logic runs on Postgres, MySQL, Redis, and SQS through swappable
+engines and adapters, with one conformance suite against each.
 
 It is a **lab**, not a deployable money system. The ledger invariants are enforced to a
 production standard — pushed down into the database and proven by an adversarial suite that
@@ -185,7 +185,7 @@ that's down) is thrown.
 
 A buyer tops up, buys from two creators, and a creator cashes out — then the books are
 proven to still balance. A fully-wired runnable version is
-[scripts/compose-demo.ts](scripts/compose-demo.ts), which `npm run demo` runs.
+[scripts/compose-demo.ts](scripts/compose-demo.ts), which `make demo` runs.
 
 ```ts
 import { composeInMemory } from './src/index.ts';
@@ -259,12 +259,12 @@ sweeps.
 
 ## Prove it yourself
 
-`npm run prove` drives the real economy through seeded-random operations — top-ups,
+`make prove` drives the real economy through seeded-random operations — top-ups,
 purchases, gifts, refunds, subscriptions — and re-checks the money invariants after
 _every single one_. It runs the same program against each storage backend it can reach
 (in-memory, the in-process HTTP adapter, Postgres if `DATABASE_URL` is set, and MySQL if
 `MYSQL_TEST_URL` is set), so a
-backend that drifts from the others is caught. `npm run fuzz` goes further: it asserts
+backend that drifts from the others is caught. `make fuzz` goes further: it asserts
 that every backend produces _identical_ balances, chain heads, and proof reports for the
 same inputs. Both exit non-zero on the first violation, so they double as CI gates.
 
@@ -281,7 +281,7 @@ flags `read.prove()` returns):
   rewrite of history is detectable; a periodic signed checkpoint catches a wholesale
   re-seal.
 
-The same proof engine also runs inside `npm test` as a property test over several seeds.
+The same proof engine also runs inside `make test` as a property test over several seeds.
 
 ## What it demonstrates
 
@@ -297,7 +297,7 @@ The same proof engine also runs inside `npm test` as a property test over severa
 | Settlement maturity gate     | [maturity.ts](src/maturity.ts)                                                                                 | Payouts and sweeps release only funds settled past the chargeback window; fresh credits are held back until they mature.                      |
 | Spend-velocity risk gate     | [trust.ts](src/trust.ts)                                                                                       | Recent spend is summed over a sliding window and checked against a limit, producing an allow/deny decision before any money moves.            |
 | Processor reconciliation     | [reconcile.ts](src/reconcile.ts)                                                                               | The ledger is matched against the payment processor's own records to surface anything present on one side but not the other.                  |
-| Swappable storage            | [adapters/](src/adapters)                                                                                      | The same logic runs in-memory and on Postgres, MySQL, Redis, and SQS; one conformance suite runs against every backend.                       |
+| Swappable storage            | [engines/](src/engines), [adapters/](src/adapters)                                                             | The same logic runs in-memory and on Postgres, MySQL, Redis, and SQS; one conformance suite runs against every backend.                       |
 
 ### The same flows, seen by an adversary
 
@@ -314,7 +314,7 @@ ledger's own postings rather than a separate system alongside it:
 
 The core logic talks to a few narrow ports (a `Store`, an optional read-through `Cache`, an
 optional event `Dispatcher`, a payout `Processor`). Each has interchangeable adapters,
-chosen from the environment at startup — the in-memory ones need nothing, so `npm test`
+chosen from the environment at startup — the in-memory ones need nothing, so `make test`
 runs with no infrastructure. The database/queue drivers are **optional** dependencies,
 imported only when the matching variable selects them.
 
@@ -381,20 +381,20 @@ default to empty so local runs need nothing:
 ## Run it
 
 ```bash
-npm run dev      # local HTTP server — in-memory, dev secrets, hot reload; zero setup (see below)
-npm start        # HTTP service against the configured environment (see below)
-npm run worker   # background sweep loop (see below)
-npm test         # the full suite, zero infra, all in-memory
-npm run check    # typecheck + eslint + prettier + test (the CI gate)
-npm run demo     # compose an economy from the environment and run a sample money flow
-npm run prove    # randomized invariant proof; exits non-zero on any leak or drift
-npm run fuzz     # cross-backend differential — every backend must produce identical results
+make dev         # local HTTP server — in-memory, dev secrets, hot reload; zero setup (see below)
+make start       # HTTP service against the configured environment (see below)
+make worker      # background sweep loop (see below)
+make test        # the full suite, zero infra, all in-memory
+make check       # typecheck + eslint + prettier + test (the CI gate)
+make demo        # compose an economy from the environment and run a sample money flow
+make prove       # randomized invariant proof; exits non-zero on any leak or drift
+make fuzz        # cross-backend differential — every backend must produce identical results
 ```
 
 ### HTTP service
 
-`npm start` runs the economy as an HTTP service on `PORT` (default 3000), with the Store, cache,
-and dispatcher chosen from the environment. `npm run dev` runs the same service forced in-memory
+`make start` runs the economy as an HTTP service on `PORT` (default 3000), with the Store, cache,
+and dispatcher chosen from the environment. `make dev` runs the same service forced in-memory
 with dev secrets and hot reload (via `node --watch`), so a local loop needs no database and no
 configured secrets. It serves `GET /healthz` and `GET /readyz` (liveness/readiness probes) plus two
 write routes — everything else is a 404:
@@ -407,7 +407,7 @@ write routes — everything else is a 404:
   top-up; a forged or stale callback is refused before any money moves.
 
 ```bash
-PORT=3000 npm start
+PORT=3000 make start
 curl -sX POST localhost:3000/submit -H 'content-type: application/json' -d '{
   "kind": "topUp",
   "idempotencyKey": "550e8400-e29b-41d4-a716-446655440001",
@@ -420,7 +420,7 @@ curl -sX POST localhost:3000/submit -H 'content-type: application/json' -d '{
 
 ### Background worker
 
-`npm run worker` runs the recurring work that doesn't belong on the request path. It does
+`make worker` runs the recurring work that doesn't belong on the request path. It does
 one sweep immediately, then repeats every `WORKER_INTERVAL_MS` (default 60s), handling up to
 `WORKER_BATCH` rows per job. Each tick runs nine jobs, each isolated so one failure can't
 stop the rest: **payouts** (advance due payout sagas a step), **subscriptions** (bill or
@@ -431,15 +431,15 @@ a signed ledger checkpoint), **relay** (deliver pending outbox events), **reconc
 dispatcher or reconcile feed configured, relay and reconcile are no-ops.
 
 ```bash
-npm run worker                                  # every 60s, batch 100
-WORKER_INTERVAL_MS=5000 WORKER_BATCH=500 npm run worker
+make worker                                     # every 60s, batch 100
+WORKER_INTERVAL_MS=5000 WORKER_BATCH=500 make worker
 ```
 
 ### With Docker (Postgres, MySQL, Redis, SQS)
 
 `docker compose up -d` brings up Postgres (`5432`), MySQL (`3306`), Redis (`6379`), and
 LocalStack/SQS (`4566`). Point the app at them, run the schema migration first, then
-`npm start` or `npm run worker`:
+`make start` or `make worker`:
 
 ```bash
 docker compose up -d
@@ -447,16 +447,16 @@ docker compose up -d
 # Postgres + a read-through Redis cache
 export DATABASE_URL='postgres://economy:economy@localhost:5432/economy_lab'
 export REDIS_URL='redis://localhost:6379'
-npm run db:migrate
-npm start         # or: npm run worker
+make db-migrate
+make start        # or: make worker
 
 # …or MySQL instead
 export DATABASE_URL='mysql://root:economy@localhost:3306/economy_lab'
-npm run db:migrate && npm start
+make db-migrate && make start
 ```
 
 Without Docker, any local Postgres works — `createdb economy_lab`, point `DATABASE_URL` at
-it, `npm run db:migrate`, then `npm test` (its Postgres conformance suite runs only when
+it, `make db-migrate`, then `make test` (its Postgres conformance suite runs only when
 `DATABASE_URL` is set, and is skipped otherwise). CI runs the gate on every push.
 
 ## License

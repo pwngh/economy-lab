@@ -67,6 +67,10 @@ type LedgerFold = {
  *
  * Read-only, through `store`, `ctx.rates`, and `chain.ts` `proveChain`.
  *
+ * Independent audit, not the enforcer. The database enforces conservation, no-overdraft, and
+ * balance integrity (see db/*-schema.sql); this re-derives them from the legs to catch a bug in
+ * the enforcement itself. Run by an auditor/worker, never as the write-path guard.
+ *
  * @example
  *   let report = await proveEconomy(store, { rates: fixedRates(), digest });
  *   report.conserved && report.chainIntact; // the books balance and no entry was altered

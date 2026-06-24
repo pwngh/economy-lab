@@ -125,6 +125,9 @@ async function execWrite(
 
 // --- The ledger store -------------------------------------------------------------
 
+// Store methods below omit the interface's optional trailing `options` params: never read here,
+// and structural typing accepts a function with fewer trailing optional params.
+
 // Whether an account may appear in a posting: either a user account (id ending ':spendable',
 // ':earned', or ':promo') or a platform account already in `accounts` (inserted at schema setup).
 // Anything else makes postEntry raise UNKNOWN_ACCOUNT.
@@ -683,8 +686,6 @@ function createSagaStore(exec: MysqlExecutor): SagaStore {
       );
       return result.map(rowToSaga);
     },
-    // Store methods omit the interface's optional trailing `options` param: never read here, and
-    // structural typing accepts a function with fewer trailing optional params.
     advance: async (id, from, to, patch) => {
       let next = { ...(await loadSagaOrThrow(exec, id)), ...patch, state: to };
       let affected = await execWrite(
@@ -780,8 +781,7 @@ function createEntitlementStore(deps: ExecDeps): EntitlementStore {
         ],
       );
     },
-    // Soft-revoke: keep the row, flip the flag. `owns` filters on `revoked = false`, so this
-    // removes ownership while preserving the audit trail; a later re-grant clears it.
+    // owns() filters on revoked = false, so this removes ownership while keeping the row.
     revoke: async (userId, sku) => {
       await rows(
         exec,
@@ -867,11 +867,13 @@ function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
         [id],
       );
     },
+    // FOR UPDATE SKIP LOCKED, like the saga/promo claimDue, lets overlapping sweepers grab
+    // disjoint batches instead of contending over the same due rows.
     claimDue: async (now, limit) => {
       let result = await rows(
         exec,
         `SELECT * FROM subscriptions WHERE state = 'ACTIVE' AND next_due_at <= ?
-          ORDER BY next_due_at LIMIT ?`,
+          ORDER BY next_due_at LIMIT ? FOR UPDATE SKIP LOCKED`,
         [now, limit],
       );
       return result.map(rowToSubscription);

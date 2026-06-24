@@ -112,7 +112,7 @@ describe('topUp Issuance', () => {
 
     // Gross at the buy rate ($0.01/credit → $0.10) credits USD_CLEARING (grows on debits, so a
     // credit reads -0.10). The debit side splits it: par-rate backing held in trust ($0.005/credit
-    // → $0.05 TRUST_CASH) and the buy-vs-par spread (the ~40% purchase fee) as USD revenue ($0.05
+    // → $0.05 TRUST_CASH) and the buy-vs-par spread (50% at these test rates) as USD revenue ($0.05
     // REVENUE_USD). The three sum to zero.
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.TRUST_CASH),

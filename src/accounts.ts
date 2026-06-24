@@ -102,8 +102,8 @@ export const SYSTEM = {
  * Guards against money laundering: escrow for a pending purchase must come back out only by
  * releasing or expiring the hold. Moving it straight into a user's balance would mint fresh,
  * immediately-spendable money that skips settlement and the payout waiting period, so the escrow
- * code uses this check to refuse such moves. `economy.ts` and `integrity.ts` each carry their own
- * copy of this user-vs-house test; new callers should import this one.
+ * code uses this check to refuse such moves. This is the single user-vs-house test; `economy.ts`
+ * and `integrity.ts` import it.
  */
 export function isWalletAccount(ref: AccountRef): boolean {
   return ref.includes(':') && !ref.startsWith('vrchat:');

@@ -21,7 +21,7 @@ import type { Rate, Saga, SagaState, Store, Unit } from '#src/ports.ts';
 /**
  * Which payouts moved this run, bucketed by outcome. A failed payout lands in `deadLettered`
  * if it can never succeed, or `retrying` if it hit a temporary problem (flaky network/database)
- * and gets another go next run. The escrow-release worker (holds.ts) returns the same shape.
+ * and gets another go next run.
  */
 export type SettleSummary = {
   settled: ReadonlyArray<string>;

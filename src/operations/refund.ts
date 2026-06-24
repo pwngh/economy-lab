@@ -115,11 +115,8 @@ async function extendLocks(unit: Unit, sale: Sale): Promise<void> {
   }
 }
 
-// Net balance change the sale made to one account, positive meaning the balance went up (a
-// seller's earned balance rose, the buyer's spendable balance fell, REVENUE rose by the fee
-// minus any promo funding). The reversal undoes each. A sale can post several lines to the same
-// account (REVENUE gets both a fee credit and a promo-funding debit), so these are summed per
-// account to get the net effect collectability is judged against.
+// Net balance change the sale made to one account, positive meaning the balance went up;
+// collectability is judged against this net.
 type AccountDelta = {
   account: AccountRef;
   delta: bigint;
@@ -214,16 +211,17 @@ function raiseLeg(account: AccountRef, amount: Amount): Leg {
   return { account, amount: toAmount(amount.currency, amount.minor * sign) };
 }
 
-// A leg that lowers `account`'s balance by `amount`, the mirror of `raiseLeg`.
+// Mirror of raiseLeg: lowers `account`'s balance by `amount` (opposite side).
 function lowerLeg(account: AccountRef, amount: Amount): Leg {
   let sign = isDebitNormal(account) ? -1n : 1n;
   return { account, amount: toAmount(amount.currency, amount.minor * sign) };
 }
 
 // Sum the sale's lines into one balance change per account, positive meaning the balance went
-// up. Lines are stored as raw amounts where a debit is positive; `balanceDelta` converts each
-// into its effect on that account's balance (depending on whether it grows on a debit or credit)
-// before summing.
+// up. A sale can post several lines to the same account (REVENUE gets both a fee credit and a
+// promo-funding debit), so lines are summed per account. Lines are stored as raw amounts where a
+// debit is positive; `balanceDelta` converts each into its effect on that account's balance
+// (depending on whether it grows on a debit or credit) before summing.
 function foldDeltas(legs: ReadonlyArray<Leg>): AccountDelta[] {
   let byAccount = new Map<AccountRef, AccountDelta>();
   for (let leg of legs) {

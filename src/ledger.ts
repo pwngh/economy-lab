@@ -152,6 +152,10 @@ export async function chainHash(
 // Each leg's amount must match its account's currency. Two currencies exist, USD and the
 // in-app CREDIT; a USD amount on a CREDIT account (or vice versa) mixes currencies in one
 // posting and is rejected with CURRENCY_MISMATCH.
+//
+// App-side input validation, not one of the engine-enforced ledger invariants: the schema's only
+// currency constraint is the value-domain CHECK (currency IN ('CREDIT','USD')); it does not verify
+// a leg's currency matches its account's currency, so this rule lives only here.
 function assertSingleCurrencyPerLeg(posting: Posting): void {
   for (let leg of posting.legs) {
     if (leg.amount.currency !== currency(leg.account)) {
@@ -205,6 +209,11 @@ function assertBalanced(posting: Posting): void {
 
 // Every account named in the posting must already exist, so a typo can't create a new
 // account and strand a balance on it.
+//
+// App-side input validation: the legs->accounts foreign key would also reject a leg on a
+// truly-unknown account, but the app checks first to return a clear UNKNOWN_ACCOUNT fault rather
+// than a raw FK error. `post_entry` legitimately creates first-use accounts from `p_new_accounts`;
+// this guards a typo'd account that was neither pre-existing nor being created.
 async function assertKnownAccounts(
   ledger: Ledger,
   posting: Posting,
@@ -223,7 +232,9 @@ async function assertKnownAccounts(
   }
 }
 
-// Last-resort guard against a negative user balance. An up-front funds check (`screenFunds`)
+// Last-resort guard against a negative user balance. The database's per-user non-negative CHECK
+// is the real enforcer; this app guard is a last-resort backstop that converts what would be a
+// raw engine rejection into a distinct OVERDRAFT fault. An up-front funds check (`screenFunds`)
 // should already have rejected anyone short with INSUFFICIENT_FUNDS, so this normally never
 // trips. If it does, something earlier went wrong (typically a missing lock let two ops race);
 // throw a distinct OVERDRAFT fault rather than a quiet rejection. Only user accounts are

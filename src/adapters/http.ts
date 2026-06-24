@@ -142,10 +142,9 @@ function sessionLedger(
 
 // --- Streamed reads ---------------------------------------------------------------
 
-// heads, timeline, and lineage are async iterables (loop with `for await`) so a real
-// backend could stream large result sets a page at a time. This in-process version
-// doesn't paginate: the server returns everything in one response and these generators
-// yield the rows one by one.
+// These are async iterables so a real backend could paginate; this in-process version returns
+// everything in one response and yields rows one by one.
+
 // Streams each account paired with the hash of its most recent entry. Each account has a
 // hash-chain of entries; that latest hash is its "head".
 async function* streamHeads(

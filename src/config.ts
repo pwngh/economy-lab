@@ -138,7 +138,8 @@ export function loadConfig(env: EnvMap): Config {
     maturityHorizonMs: {
       card: cardHorizonMs,
       crypto: toInt(env.MATURITY_HORIZON_CRYPTO_MS, 24 * 60 * 60_000),
-      // Fallback for unlisted funding sources; defaults to the longer (more cautious) card horizon.
+      // Fallback for unlisted funding sources; defaults to the card horizon (the longest under the
+      // shipped defaults; overridable via MATURITY_HORIZON_DEFAULT_MS).
       default: toInt(env.MATURITY_HORIZON_DEFAULT_MS, cardHorizonMs),
     },
     payoutSla: {
