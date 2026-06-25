@@ -90,6 +90,7 @@ export function createEconomy(capabilities: Capabilities): Economy {
       status: () => economyStatus(ctx),
       accounts: (options) => store.ledger.balanceAccounts(options),
       payouts: (options) => store.sagas.list(options),
+      postings: (options) => store.ledger.list(options),
       prove: (options) => proveEconomy(store, ctx, options),
     },
     close: () => store.close(),
@@ -554,7 +555,7 @@ async function emitEvents(
     audience: descriptor.audience,
   };
   await unit.outbox.enqueue(
-    { id: ctx.ids.next('obx'), event, status: 'pending', attempts: 0 },
+    { id: ctx.ids.next('obx'), event, status: 'pending', attempts: 0, reason: null },
     options,
   );
 }
@@ -783,6 +784,10 @@ let RESTRICTED_TO_PRIVILEGED = new Set<Operation['kind']>([
   // already in flight. An emergency action run by hand, never by an end user, so like adjust and
   // reverse it is restricted to a system service or human operator.
   'reversePayout',
+  // Settling a payout disburses real USD out of trust and converts the seller's reserve into
+  // platform revenue — the SUBMITTED -> SETTLED step. Driven by a verified inbound provider webhook
+  // (actor 'system') or an operator, never by an end user, who must never settle their own payout.
+  'settlePayout',
 ]);
 
 // The committed outcome an event builder is handed: events emit only after the posting committed, so

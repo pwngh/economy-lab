@@ -87,9 +87,11 @@ function saga(overrides: Partial<Saga> & Pick<Saga, 'id' | 'state'>): Saga {
     reserve: credit('4.00'),
     rateId: 'payout:CREDIT->USD:1',
     providerRef: null,
+    reason: null,
     attempts: 0,
     dueAt: 0,
     updatedAt: 0,
+    payoutUsd: null,
     ...overrides,
   };
 }
@@ -119,25 +121,6 @@ function failingProcessor(): Processor {
   };
 }
 
-// Wrap a store so the first transaction the job opens simulates another worker settling
-// this saga out from under it. The job advances with a guarded move that only succeeds if
-// the saga is still in its expected state (SUBMITTED); by then the saga has already left
-// SUBMITTED, so the move matches no row, reports nothing updated, and returns false. This
-// is the race the settle path must roll back from instead of paying the seller twice.
-function raceSettleOnce(store: Store, id: string): Store {
-  let raced = false;
-  return {
-    ...store,
-    transaction: async (work, options) => {
-      if (!raced) {
-        raced = true;
-        await store.sagas.advance(id, 'SUBMITTED', 'SETTLED', { updatedAt: 0 });
-      }
-      return store.transaction(work, options);
-    },
-  };
-}
-
 // --- The cases (one behaviour each) ---
 
 async function submitsAReservedSagaToTheProvider(store: Store): Promise<void> {
@@ -159,7 +142,6 @@ async function submitsAReservedSagaToTheProvider(store: Store): Promise<void> {
   });
 
   assert.deepEqual(summary.submitted, ['pay_1']);
-  assert.deepEqual(summary.settled, []);
   // The provider is asked to pay in USD: the reserved credits converted at the payout
   // rate, rounded down.
   assert.equal(recorded.length, 1);
@@ -172,9 +154,12 @@ async function submitsAReservedSagaToTheProvider(store: Store): Promise<void> {
   assert.equal(advanced!.providerRef, 'prov_pay_1');
 }
 
-async function settlesASubmittedSagaWithBothCoupledPostings(
+async function leavesAWithinWindowSubmittedSagaForTheWebhook(
   store: Store,
 ): Promise<void> {
+  // The worker no longer self-settles a SUBMITTED payout; settlement arrives through the provider's
+  // settlement webhook (src/operations/settlePayout.ts), not the sweep. A SUBMITTED saga still inside
+  // the timeout window is therefore left untouched this run: no state change, no ledger postings.
   await openSaga(
     store,
     saga({ id: 'pay_1', state: 'SUBMITTED', reserve: credit('4.00') }),
@@ -185,25 +170,26 @@ async function settlesASubmittedSagaWithBothCoupledPostings(
     limit: 10,
   });
 
-  assert.deepEqual(summary.settled, ['pay_1']);
+  // Nothing submitted (already SUBMITTED), nothing dead-lettered (within the window), nothing
+  // retried.
+  assert.deepEqual(summary.submitted, []);
   assert.deepEqual(summary.deadLettered, []);
-  // The credit-side entry empties the reserve into REVENUE: the seller's set-aside credits
-  // become platform earnings, since the platform now owes the seller real money instead.
+  assert.deepEqual(summary.retrying, []);
+  // No settle posting ran: the reserve is untouched and no cash left custody. The reserve waits for
+  // the webhook to empty it into REVENUE.
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
-    credit('0.00'),
+    credit('4.00'),
   );
-  assert.deepEqual(await store.ledger.balance(SYSTEM.REVENUE), credit('4.00'));
-  // The USD-side entry records cash leaving custody through USD_CLEARING. TRUST_CASH (real
-  // cash held for users) grows on a debit, so crediting it lowers it; that drop is the cash
-  // the buyer already gave up when they spent these credits.
-  assert.deepEqual(await store.ledger.balance(SYSTEM.TRUST_CASH), usd('-0.02'));
+  assert.deepEqual(await store.ledger.balance(SYSTEM.REVENUE), credit('0.00'));
+  assert.deepEqual(await store.ledger.balance(SYSTEM.TRUST_CASH), usd('0.00'));
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.USD_CLEARING),
-    usd('0.02'),
+    usd('0.00'),
   );
-  let settled = await store.sagas.load('pay_1');
-  assert.equal(settled!.state, 'SETTLED');
+  // The saga stays SUBMITTED, waiting on the settlement webhook.
+  let stillSubmitted = await store.sagas.load('pay_1');
+  assert.equal(stillSubmitted!.state, 'SUBMITTED');
 }
 
 async function forceFailsASubmittedSagaPastTheMaxAgeAndReturnsTheReserve(
@@ -231,13 +217,16 @@ async function forceFailsASubmittedSagaPastTheMaxAgeAndReturnsTheReserve(
     { now: 120_000, limit: 10 },
   );
 
-  // Force-failed, not settled; reported under deadLettered with the timeout reason.
-  assert.deepEqual(summary.settled, []);
+  // Force-failed; reported under deadLettered with the timeout reason.
   assert.equal(summary.deadLettered.length, 1);
   assert.equal(summary.deadLettered[0]!.id, 'pay_1');
   assert.equal(summary.deadLettered[0]!.reason, 'payout.timeout');
   let failed = await store.sagas.load('pay_1');
   assert.equal(failed!.state, 'FAILED');
+  // The terminal failure reason is persisted on the saga record itself (read straight from it by the
+  // console, no posting-meta harvest), and the settle never ran so payoutUsd stays null.
+  assert.equal(failed!.reason, 'payout.timeout');
+  assert.equal(failed!.payoutUsd, null);
   // Force-failing posts the exact reverse of the request-time reservation in the same
   // transaction as the FAILED flip: reserve drains to zero, seller's earned credits restored,
   // so a timed-out payout never strands the escrowed reserve. No USD left custody, since the
@@ -257,12 +246,13 @@ async function forceFailsASubmittedSagaPastTheMaxAgeAndReturnsTheReserve(
   );
 }
 
-async function settlesASubmittedSagaStillWithinTheMaxAge(
+async function leavesASubmittedSagaAtTheAgeBoundaryForTheWebhook(
   store: Store,
 ): Promise<void> {
-  // Mirror of the timeout case: same saga, checked while still inside the age window, settles
-  // normally. Cap at one minute, clock at exactly the cap (age 60_000, not strictly greater),
-  // so the boundary is inclusive and it settles.
+  // Mirror of the timeout case at the inclusive boundary: same saga, checked at exactly the cap (age
+  // 60_000, not strictly greater than maxPayoutAgeMs), so it is NOT force-failed. The worker no
+  // longer self-settles either, so at the boundary the saga is simply left untouched for the
+  // settlement webhook. Only a strictly-past-cap age (the timeout test) force-fails it.
   let config: Config = { ...testConfig(), maxPayoutAgeMs: 60_000 };
   await openSaga(
     store,
@@ -281,11 +271,17 @@ async function settlesASubmittedSagaStillWithinTheMaxAge(
     { now: 60_000, limit: 10 },
   );
 
-  assert.deepEqual(summary.settled, ['pay_1']);
+  // Not force-failed (boundary is inclusive) and not settled (the webhook does that): left untouched.
   assert.deepEqual(summary.deadLettered, []);
-  let settled = await store.sagas.load('pay_1');
-  assert.equal(settled!.state, 'SETTLED');
-  assert.deepEqual(await store.ledger.balance(SYSTEM.REVENUE), credit('4.00'));
+  assert.deepEqual(summary.submitted, []);
+  let stillSubmitted = await store.sagas.load('pay_1');
+  assert.equal(stillSubmitted!.state, 'SUBMITTED');
+  // No settle posting ran, so the reserve is intact and REVENUE is still empty.
+  assert.deepEqual(
+    await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
+    credit('4.00'),
+  );
+  assert.deepEqual(await store.ledger.balance(SYSTEM.REVENUE), credit('0.00'));
 }
 
 async function deadLettersAProviderFaultPastTheAttemptCeiling(
@@ -317,6 +313,9 @@ async function deadLettersAProviderFaultPastTheAttemptCeiling(
   assert.equal(summary.deadLettered[0]!.reason, 'PROVIDER.FAILURE');
   let failed = await store.sagas.load('pay_1');
   assert.equal(failed!.state, 'FAILED');
+  // The failure reason is persisted on the saga's own terminal-outcome field, payoutUsd left null.
+  assert.equal(failed!.reason, 'PROVIDER.FAILURE');
+  assert.equal(failed!.payoutUsd, null);
   // Dead-lettering posts the exact reverse of the request-time reservation in the same
   // transaction as the FAILED flip: PAYOUT_RESERVE drains to zero, seller's earned credits
   // restored, nothing stranded in the reserve account.
@@ -434,91 +433,6 @@ async function isolatesAPerItemFaultAndContinuesTheBatch(): Promise<void> {
   await store.close();
 }
 
-async function rollsBackTheSettlementOnALostCasRatherThanDoublePaying(): Promise<void> {
-  let store = memoryStore();
-  await openSaga(
-    store,
-    saga({ id: 'pay_1', state: 'SUBMITTED', reserve: credit('4.00') }),
-  );
-
-  // Another worker settles this saga first (see `raceSettleOnce`), so this run's guarded
-  // state change finds nothing in SUBMITTED to advance and fails, rolling back the settlement
-  // ledger entries it just wrote in the same transaction.
-  let summary = await settleDuePayouts(
-    raceSettleOnce(store, 'pay_1'),
-    workerCtx(),
-    {
-      now: 1_000,
-      limit: 10,
-    },
-  );
-
-  assert.deepEqual(summary.settled, []);
-  assert.equal(summary.deadLettered.length, 1);
-  assert.equal(summary.deadLettered[0]!.reason, 'SAGA.INVALID_TRANSITION');
-  // No double pay: the entries rolled back, so the books are untouched. Credits still in the
-  // reserve account and no USD left custody.
-  assert.deepEqual(
-    await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
-    credit('4.00'),
-  );
-  assert.deepEqual(await store.ledger.balance(SYSTEM.TRUST_CASH), usd('0.00'));
-  assert.deepEqual(
-    await store.ledger.balance(SYSTEM.USD_CLEARING),
-    usd('0.00'),
-  );
-  await store.close();
-}
-
-async function settlingEmitsOnePayoutSettledEvent(store: Store): Promise<void> {
-  await openSaga(
-    store,
-    saga({ id: 'pay_1', state: 'SUBMITTED', reserve: credit('4.00') }),
-  );
-
-  await settleDuePayouts(store, workerCtx(), { now: 1_000, limit: 10 });
-
-  // The settled event is enqueued in the same transaction as the ledger postings and guarded
-  // state advance, so a settled payout leaves exactly one such event on the outbox (the table
-  // where events wait to be delivered), carrying money amounts as formatted strings, not raw
-  // numbers.
-  let messages = await store.outbox.claimBatch(10);
-  let settled = messages.filter(
-    (m) => m.event.type === 'economy.payout.settled',
-  );
-  assert.equal(settled.length, 1);
-  let event = settled[0]!.event;
-  assert.equal(event.audience, 'internal');
-  assert.equal(event.subject, 'usr_seller');
-  assert.equal(event.data.sagaId, 'pay_1');
-  assert.equal(event.data.userId, 'usr_seller');
-  assert.equal(event.data.reserve, 'CREDIT:4.00');
-  assert.equal(event.data.usd, 'USD:0.02');
-}
-
-async function aRolledBackSettleEmitsNoSettledEvent(): Promise<void> {
-  let store = memoryStore();
-  await openSaga(
-    store,
-    saga({ id: 'pay_1', state: 'SUBMITTED', reserve: credit('4.00') }),
-  );
-
-  // The settle whose guarded state change lost the race (see `raceSettleOnce`) throws, rolling
-  // back its postings and the enqueued event together, so no settled event is left behind for
-  // a settle that never took.
-  await settleDuePayouts(raceSettleOnce(store, 'pay_1'), workerCtx(), {
-    now: 1_000,
-    limit: 10,
-  });
-
-  let messages = await store.outbox.claimBatch(10);
-  assert.deepEqual(
-    messages.filter((m) => m.event.type === 'economy.payout.settled'),
-    [],
-  );
-  await store.close();
-}
-
 async function deadLetteringEmitsOnePayoutReversedEvent(
   store: Store,
 ): Promise<void> {
@@ -554,38 +468,15 @@ async function deadLetteringEmitsOnePayoutReversedEvent(
   assert.equal(event.data.reason, 'PROVIDER.FAILURE');
 }
 
-async function aLostCasDeadLetterEmitsNoReversedEvent(): Promise<void> {
-  let store = memoryStore();
-  await openSaga(
-    store,
-    saga({ id: 'pay_1', state: 'SUBMITTED', reserve: credit('4.00') }),
-  );
-
-  // When the guarded state change loses the race, the saga is dead-lettered with an
-  // INVALID_TRANSITION reason and posts no reversing entry, because the reserve was already
-  // consumed by the settle that won the race, so it must emit no reversed event.
-  await settleDuePayouts(raceSettleOnce(store, 'pay_1'), workerCtx(), {
-    now: 1_000,
-    limit: 10,
-  });
-
-  let messages = await store.outbox.claimBatch(10);
-  assert.deepEqual(
-    messages.filter((m) => m.event.type === 'economy.payout.reversed'),
-    [],
-  );
-  await store.close();
-}
-
 describe('settleDuePayouts', () => {
   test('submits a reserved saga to the provider as USD with no ledger posting', () =>
     submitsAReservedSagaToTheProvider(memoryStore()));
-  test('settles a submitted saga with both the credit-side and USD-side postings', () =>
-    settlesASubmittedSagaWithBothCoupledPostings(memoryStore()));
+  test('leaves a within-window submitted saga untouched for the settlement webhook', () =>
+    leavesAWithinWindowSubmittedSagaForTheWebhook(memoryStore()));
   test('force-fails a submitted saga past the max age and returns the reserve', () =>
     forceFailsASubmittedSagaPastTheMaxAgeAndReturnsTheReserve(memoryStore()));
-  test('settles a submitted saga still within the max age', () =>
-    settlesASubmittedSagaStillWithinTheMaxAge(memoryStore()));
+  test('leaves a submitted saga at the age boundary untouched for the settlement webhook', () =>
+    leavesASubmittedSagaAtTheAgeBoundaryForTheWebhook(memoryStore()));
   test('dead-letters a provider fault past the attempt limit', () =>
     deadLettersAProviderFaultPastTheAttemptCeiling(memoryStore()));
   test('leaves a retryable fault under the limit for the next run', () =>
@@ -594,14 +485,6 @@ describe('settleDuePayouts', () => {
     climbsAttemptsEachRunThenDeadLettersAndReturnsTheReserve(memoryStore()));
   test('isolates a per-item fault and continues the batch', () =>
     isolatesAPerItemFaultAndContinuesTheBatch());
-  test('rolls back the settlement on a lost compare-and-set rather than double-paying', () =>
-    rollsBackTheSettlementOnALostCasRatherThanDoublePaying());
-  test('a settled payout holds one economy.payout.settled event', () =>
-    settlingEmitsOnePayoutSettledEvent(memoryStore()));
-  test('a rolled-back settle holds no economy.payout.settled event', () =>
-    aRolledBackSettleEmitsNoSettledEvent());
   test('a dead-lettered payout holds one economy.payout.reversed event with the reason', () =>
     deadLetteringEmitsOnePayoutReversedEvent(memoryStore()));
-  test('a lost compare-and-set dead-letter holds no economy.payout.reversed event', () =>
-    aLostCasDeadLetterEmitsNoReversedEvent());
 });

@@ -11,6 +11,7 @@
 
 import { createEconomy } from '#src/economy.ts';
 import { loadConfig } from '#src/config.ts';
+import { assertSchemaCurrent } from '#src/schema.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { createWorker } from '#src/worker/index.ts';
 import { jsonlLogger } from '#src/runtime.ts';
@@ -262,12 +263,17 @@ async function selectStore(
     });
   }
   if (url.startsWith('mysql://')) {
-    let { createMysqlPool, mysqlStore } = await import('#src/engines/mysql.ts');
+    let { createMysqlPool, mysqlStore, readSchemaVersion } = await import(
+      '#src/engines/mysql.ts'
+    );
     // Build the pool via the engine's helper, which sets supportBigNumbers + bigNumberStrings so a
     // BIGINT money column comes back as a string (then a bigint), not a lossy JS number. Raw `mysql2`
     // `createPool` leaves those off, so wiring it directly would silently round any amount above
     // 2^53 (~9 quadrillion) — the same createMysqlPool the engine's conformance and adversarial tests use.
     let pool = await createMysqlPool(url);
+    // Fail fast if the database schema has drifted from this code (postgresStore does the same for
+    // its branch). Postgres makes its own pool inside the store; MySQL's pool is created here.
+    assertSchemaCurrent(await readSchemaVersion(pool), 'MySQL');
     return mysqlStore({
       pool,
       digest: deps.digest,

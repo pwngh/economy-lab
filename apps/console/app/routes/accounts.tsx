@@ -12,22 +12,31 @@
 import { Link } from 'react-router';
 
 import type { Route } from './+types/accounts';
-import { getEconomy } from '~/economy.server';
-import { Credits, DataTable, StatCard } from '~/ui';
+import { getEconomy, PAGE_SIZE } from '~/economy.server';
+import { Credits, DataTable, Pager, StatCard, pageOffset } from '~/ui';
 
-// Wallets list, with an optional ?user= detail showing the per-account breakdown.
+// One bounded page of wallets, with an optional ?user= detail showing the per-account breakdown.
+// The detail wallet is read directly (eco.wallet) rather than searched within the page, so a user
+// who isn't on the current page still resolves.
 export async function loader({ request }: Route.LoaderArgs) {
   const eco = await getEconomy();
-  const wallets = await eco.wallets();
+  const offset = pageOffset(request.url, PAGE_SIZE);
   const selected = new URL(request.url).searchParams.get('user');
-  const detail = selected
-    ? (wallets.find((w) => w.userId === selected) ?? null)
-    : null;
-  return { wallets, detail, selected };
+  const [page, detail] = await Promise.all([
+    eco.wallets({ offset, limit: PAGE_SIZE }),
+    selected ? eco.wallet(selected) : Promise.resolve(null),
+  ]);
+  return { page, detail, selected };
 }
 
 export default function Accounts({ loaderData }: Route.ComponentProps) {
-  const { wallets, detail } = loaderData;
+  const { page, detail, selected } = loaderData;
+  const { rows: wallets, offset, limit, total } = page;
+  // Keep ?user= across page navigation so the open detail panel survives paging.
+  const baseSearch = new URLSearchParams();
+  if (selected) {
+    baseSearch.set('user', selected);
+  }
 
   return (
     <div className="page">
@@ -114,6 +123,12 @@ export default function Accounts({ loaderData }: Route.ComponentProps) {
             ))}
           </DataTable>
         )}
+        <Pager
+          offset={offset}
+          limit={limit}
+          total={total}
+          baseSearch={baseSearch}
+        />
       </div>
     </div>
   );

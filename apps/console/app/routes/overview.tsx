@@ -9,33 +9,38 @@
  * @license MIT
  */
 
-import { useFetcher } from 'react-router';
+import { Link, useFetcher } from 'react-router';
 
 import type { Route } from './+types/overview';
 import { getEconomy } from '~/economy.server';
 import { Credits, DataTable, Usd } from '~/ui';
 
+// A short, bounded preview of wallets for the Overview — the full, paged list lives on the Accounts
+// page. The "what the platform owes" footer comes from the (cached) solvency aggregate, not from
+// summing the page, so it stays correct and the figures don't shift as you'd page.
+const PREVIEW = 8;
+
 export async function loader(_: Route.LoaderArgs) {
   const eco = await getEconomy();
-  const [wallets, accounts] = await Promise.all([
-    eco.wallets(),
+  const [walletPage, accounts, solvency] = await Promise.all([
+    eco.wallets({ offset: 0, limit: PREVIEW }),
     eco.platformAccounts(),
+    eco.solvency(),
   ]);
-  return { wallets, accounts };
+  return { walletPage, accounts, solvency };
 }
 
 export default function Overview({ loaderData }: Route.ComponentProps) {
-  const { wallets, accounts } = loaderData;
-  // The bottom line of the wallets table: what the platform owes users in total, split by kind.
-  const owed = wallets.reduce(
-    (t, w) => ({
-      purchased: t.purchased + w.purchased,
-      earned: t.earned + w.earned,
-      promotional: t.promotional + w.promotional,
-      total: t.total + w.total,
-    }),
-    { purchased: 0, earned: 0, promotional: 0, total: 0 },
-  );
+  const { walletPage, accounts, solvency } = loaderData;
+  const wallets = walletPage.rows;
+  // What the platform owes users in total, split by kind — the ledger-wide aggregate, independent
+  // of how many wallets the preview shows.
+  const owed = {
+    purchased: solvency.purchased,
+    earned: solvency.earned,
+    promotional: solvency.promotional,
+    total: solvency.userCredits,
+  };
 
   return (
     <div className="page">
@@ -49,7 +54,18 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
           <div className="card-head">
             <h3>User wallets</h3>
             <p className="card-sub">
-              What each user holds, and the total the platform owes them.
+              {walletPage.total > wallets.length ? (
+                <>
+                  A preview of {wallets.length} of {walletPage.total} wallets —
+                  see the full list on{' '}
+                  <Link to="/accounts" className="link">
+                    Accounts
+                  </Link>
+                  .
+                </>
+              ) : (
+                <>What each user holds, and the total the platform owes them.</>
+              )}
             </p>
           </div>
           {wallets.length === 0 ? (
@@ -84,7 +100,7 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
                 </tr>
               ))}
               <tr className="row-total">
-                <td>All users ({wallets.length})</td>
+                <td>All users ({walletPage.total})</td>
                 <td className="num">
                   <Credits value={owed.purchased} />
                 </td>

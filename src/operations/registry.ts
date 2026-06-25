@@ -24,6 +24,7 @@ import { grantPromo } from '#src/operations/promo.ts';
 import { adjust } from '#src/operations/adjust.ts';
 import { reverse } from '#src/operations/reverse.ts';
 import { reversePayout } from '#src/operations/reversePayout.ts';
+import { settlePayout } from '#src/operations/settlePayout.ts';
 
 import type { Handler, Operation } from '#src/contract.ts';
 
@@ -52,4 +53,5 @@ export const REGISTRY = {
   adjust,
   reverse,
   reversePayout,
+  settlePayout,
 } satisfies Record<Operation['kind'], Handler>;

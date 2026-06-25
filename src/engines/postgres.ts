@@ -29,8 +29,9 @@ interface PgModule {
 let pg = pgUntyped as PgModule;
 
 import { chainHash, balanceDelta, GENESIS } from '#src/ledger.ts';
-import { toAmount, encodeAmount, decodeAmount } from '#src/money.ts';
+import { toAmount, encodeAmount, decodeAmount, isAmount } from '#src/money.ts';
 import { currency } from '#src/accounts.ts';
+import { assertSchemaCurrent } from '#src/schema.ts';
 import { fromHex } from '#src/bytes.ts';
 import {
   callProcedure,
@@ -53,7 +54,7 @@ import type { Link } from '#src/engines/sql-shared.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
-import type { Transaction } from '#src/contract.ts';
+import type { Operation, Transaction } from '#src/contract.ts';
 import type {
   Attempt,
   CheckpointStore,
@@ -61,6 +62,8 @@ import type {
   Digest,
   EntitlementStore,
   IdempotencyStore,
+  InboxEntry,
+  InboxStore,
   Leg,
   Ledger,
   Lot,
@@ -124,6 +127,19 @@ async function loadSchemaSql(): Promise<string> {
   return readFile(path, 'utf8');
 }
 
+// Read the database's stamped schema version from schema_meta, or null when that table is absent —
+// an un-migrated or pre-versioning database. Lets the store fail fast (see assertSchemaCurrent)
+// rather than silently query a schema that doesn't match this code.
+async function readSchemaVersion(pool: PgPool): Promise<string | null> {
+  try {
+    let result = await pool.query('select version from schema_meta limit 1');
+    let row = result.rows[0] as { version?: string } | undefined;
+    return row?.version ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // A schema name can't be a query parameter in CREATE SCHEMA or SET search_path, so it's
 // pasted into the SQL text. Guard against injection: lowercase letters, digits, underscores
 // only.
@@ -148,11 +164,13 @@ function isKnownSuffix(account: AccountRef): boolean {
   return suffix === 'spendable' || suffix === 'earned' || suffix === 'promo';
 }
 
-// Tip hash of each given account's chain, in one query. Each entry hashes itself plus the
-// previous entry's hash (tamper-evident chain); the tip is the hash with the highest posting
-// seq (a unique index keeps the chain from branching). `distinct on` keeps one row per
-// account. Accounts with no entries are absent; the caller treats a missing account as the
-// genesis hash. Batching makes this one round-trip per posting instead of one per account.
+// Tip hash of each given account's chain, in one query. `account_balances.head_hash` is the
+// maintained head pointer: post_entry advances it to the account's new link hash in the same
+// transaction it writes chain_links, so this is an O(1) primary-key read per account instead of the
+// old join-to-postings + DISTINCT ON + sort scan over the whole chain. Accounts with no balance row
+// are absent; the caller treats a missing account as the genesis hash (a new account's head). The
+// chain_links table stays the source of truth — prove() still re-walks it — so a head pointer
+// drifting from the chain surfaces there.
 async function headsForAccounts(
   q: Queryable,
   accounts: ReadonlyArray<AccountRef>,
@@ -162,15 +180,13 @@ async function headsForAccounts(
     return heads;
   }
   let result = await q.query(
-    `select distinct on (c.account_id) c.account_id, c.hash
-       from chain_links c
-       join postings p on p.id = c.posting_id
-      where c.account_id = any($1::text[])
-      order by c.account_id, p.seq desc`,
+    `select account_id, head_hash
+       from account_balances
+      where account_id = any($1::text[])`,
     [accounts],
   );
   for (let row of result.rows) {
-    heads.set(row.account_id as string, row.hash as string);
+    heads.set(row.account_id as string, row.head_hash as string);
   }
   return heads;
 }
@@ -308,6 +324,8 @@ function createLedgerStore(q: Queryable, digest: Digest, clock: Clock): Ledger {
     lineage: (account) => lineageOf(q, account),
 
     posting: async (txnId) => postingOf(q, txnId),
+
+    list: () => listPostingsOf(q),
   };
 }
 
@@ -479,6 +497,25 @@ async function postingOf(q: Queryable, txnId: string): Promise<Posting | null> {
     legs,
     meta: (row.meta ?? {}) as Record<string, unknown>,
   };
+}
+
+// Stream every posting, newest commit first (see Ledger.list). Orders by `seq` desc — the
+// ever-increasing commit number (`bigserial unique`, a single indexed access path), giving a total
+// order with no tie to break, the SQL mirror of `payout_sagas order by updated_at desc`. Each
+// posting carries its full legs, the same way postingOf returns them, so a reader can expand a row
+// without a second round-trip.
+async function* listPostingsOf(q: Queryable): AsyncIterable<Posting> {
+  let result = await q.query(
+    `select id, meta from postings order by seq desc`,
+  );
+  for (let row of result.rows) {
+    let legs = await legsOf(q, row.id as string);
+    yield {
+      txnId: row.id as string,
+      legs,
+      meta: (row.meta ?? {}) as Record<string, unknown>,
+    };
+  }
 }
 
 // Load all entry lines of one posting in stored order, each rebuilt as a signed Leg (account
@@ -720,7 +757,7 @@ function createOutboxStore(q: Queryable): OutboxStore {
     },
     claimBatch: async (limit) => {
       let result = await q.query(
-        `select id, event, status, attempts from outbox
+        `select id, event, status, attempts, dead_letter_reason from outbox
           where status = 'pending'
           order by created_at asc
           limit $1
@@ -767,7 +804,187 @@ function rowToOutbox(row: Record<string, unknown>): OutboxMessage {
     event: row.event as OutboxMessage['event'],
     status: row.status as OutboxMessage['status'],
     attempts: Number(row.attempts),
+    reason: (row.dead_letter_reason as string | null) ?? null,
   };
+}
+
+// --- Inbox store ------------------------------------------------------------------
+
+// The inbound mirror of the outbox. Holds verified provider events already mapped to the
+// Operation they apply, so applying happens after the webhook ingress commits. `enqueueInbound`
+// writes the row in the same transaction as the ingress that claimed it, so a row exists iff its
+// ingress committed; it dedupes on `key` (the provider event id, UNIQUE in SQL) so a redelivered
+// event is a no-op that returns the existing row rather than a second insert, mirroring the
+// idempotency story. A separate apply worker reads a batch (`claimInbound`), submits each
+// operation, and calls `markApplied`. `claimInbound` uses `for update skip locked` so several
+// apply workers run at once without two grabbing the same row.
+function createInboxStore(q: Queryable): InboxStore {
+  return {
+    // Dedupe on the provider event id with `on conflict (key) do nothing`: a first sighting
+    // inserts and `returning` hands the new row back; a redelivery inserts nothing and returns no
+    // row, so a follow-up read fetches the row already stored under that key. Either way the caller
+    // gets the canonical row for the key, applied at most once. The operation's bigint amounts are
+    // carried as decimal strings (encodeOperation) since jsonb can't hold a BigInt.
+    enqueueInbound: async (entry) => {
+      let inserted = await q.query(
+        `insert into inbox (id, key, operation, status, attempts, received_at)
+           values ($1, $2, $3::jsonb, $4, $5, $6)
+           on conflict (key) do nothing
+           returning id, key, operation, status, attempts, received_at, dead_letter_reason`,
+        [
+          entry.id,
+          entry.key,
+          JSON.stringify(encodeOperation(entry.operation)),
+          entry.status,
+          entry.attempts,
+          entry.receivedAt,
+        ],
+      );
+      let row = inserted.rows[0];
+      if (row) {
+        return rowToInbox(row);
+      }
+      let existing = await q.query(
+        `select id, key, operation, status, attempts, received_at, dead_letter_reason from inbox
+          where key = $1`,
+        [entry.key],
+      );
+      return rowToInbox(existing.rows[0]!);
+    },
+    // Pending rows oldest `received_at` first, capped at `input.limit`, each row-locked for this
+    // worker. Only 'pending' rows are returned; an 'applied' or 'dead' row is terminal and never
+    // re-claimed, so a poison event can't wedge the queue. `input.now` is accepted for parity with
+    // the saga/relay claim; the inbox has no due-time gate.
+    claimInbound: async (input) => {
+      let result = await q.query(
+        `select id, key, operation, status, attempts, received_at, dead_letter_reason from inbox
+          where status = 'pending'
+          order by received_at asc
+          limit $1
+          for update skip locked`,
+        [input.limit],
+      );
+      return result.rows.map(rowToInbox);
+    },
+    // Mark a row applied once its operation has committed: flip 'pending' to 'applied' so
+    // `claimInbound` never returns it again. The `and status = 'pending'` guard makes this a no-op
+    // on a missing or already-terminal row, mirroring the outbox's `markRelayed`/saga semantics.
+    markApplied: async (id) => {
+      await q.query(
+        `update inbox set status = 'applied' where id = $1 and status = 'pending'`,
+        [id],
+      );
+    },
+    // Record a failed apply: bump attempts by one but keep the row 'pending' so the next sweep
+    // retries it. The `and status = 'pending'` guard makes this a no-op on a missing, already-
+    // applied, or already-dead-lettered row, matching OutboxStore.recordFailure.
+    bumpAttempt: async (id) => {
+      await q.query(
+        `update inbox set attempts = attempts + 1
+          where id = $1 and status = 'pending'`,
+        [id],
+      );
+    },
+    // Give up on a poison event: flip it to 'dead' (so claimInbound never returns it again) and
+    // persist the reason. Same `and status = 'pending'` guard, so it no-ops on a missing or
+    // already-terminal row, like OutboxStore.deadLetter.
+    deadLetter: async (id, reason) => {
+      await q.query(
+        `update inbox set status = 'dead', dead_letter_reason = $2
+          where id = $1 and status = 'pending'`,
+        [id, reason],
+      );
+    },
+  };
+}
+
+function rowToInbox(row: Record<string, unknown>): InboxEntry {
+  return {
+    id: row.id as string,
+    key: row.key as string,
+    operation: decodeOperation(row.operation as EncodedOperation),
+    status: row.status as InboxEntry['status'],
+    attempts: Number(row.attempts),
+    receivedAt: Number(row.received_at),
+    reason: (row.dead_letter_reason as string | null) ?? null,
+  };
+}
+
+// JSON-safe form of the Operation stored in the inbox row's jsonb column. JSON.stringify throws on
+// the BigInt inside each Amount, so encodeOperation walks the operation and swaps every branded
+// Amount for its `CREDIT:12.34` string (encodeAmount); decodeOperation reverses it, rebuilding an
+// Operation with real Amounts equal to the original so the apply worker submits the same money
+// move. Same approach as encodeTransaction/decodeTransaction above, generalized over the Operation
+// union: walking by the Amount brand keeps the codec working whichever variant (and whichever
+// amount-bearing fields) the operation has, with no per-kind branch to drift.
+type EncodedOperation = Record<string, unknown>;
+
+function encodeOperation(operation: Operation): EncodedOperation {
+  return encodeAmounts(operation) as EncodedOperation;
+}
+
+function decodeOperation(encoded: EncodedOperation): Operation {
+  return decodeAmounts(encoded) as Operation;
+}
+
+// Deep-copy a value, replacing every branded Amount with its encoded string. Recurses through
+// plain objects and arrays; leaves all other scalars untouched. The Amount test comes first so an
+// Amount (itself an object) is encoded rather than walked field-by-field.
+function encodeAmounts(value: unknown): unknown {
+  if (isAmount(value)) {
+    return encodeAmount(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(encodeAmounts);
+  }
+  if (value !== null && typeof value === 'object') {
+    let out: Record<string, unknown> = {};
+    for (let [key, inner] of Object.entries(value)) {
+      out[key] = encodeAmounts(inner);
+    }
+    return out;
+  }
+  return value;
+}
+
+// Reverse of encodeAmounts: deep-copy a parsed jsonb value, turning every encoded-amount string
+// back into an Amount. A string is an encoded amount only when it parses as `CURRENCY:decimal`
+// (decodeAmountString); any other string passes through unchanged, so plain string fields
+// (idempotencyKey, sku, reason, …) are left alone.
+function decodeAmounts(value: unknown): unknown {
+  if (typeof value === 'string') {
+    let amount = tryDecodeAmountString(value);
+    return amount ?? value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(decodeAmounts);
+  }
+  if (value !== null && typeof value === 'object') {
+    let out: Record<string, unknown> = {};
+    for (let [key, inner] of Object.entries(value)) {
+      out[key] = decodeAmounts(inner);
+    }
+    return out;
+  }
+  return value;
+}
+
+// Decode an encoded-amount string (`CREDIT:12.34`) back into an Amount, or null if it isn't one.
+// An encoded amount is exactly `CURRENCY:decimal`; a colon alone isn't enough, so the decimal part
+// must parse (decodeAmount throws on a non-numeric tail) — caught here so an ordinary string that
+// merely contains a colon falls through to "not an amount" instead of throwing.
+function tryDecodeAmountString(encoded: string): Amount | null {
+  let colon = encoded.indexOf(':');
+  if (colon < 0) {
+    return null;
+  }
+  let currency = encoded.slice(0, colon) as Amount['currency'];
+  let decimal = encoded.slice(colon + 1);
+  try {
+    return decodeAmount(decimal, currency);
+  } catch {
+    return null;
+  }
 }
 
 // --- Saga store -------------------------------------------------------------------
@@ -835,13 +1052,16 @@ function createSagaStore(q: Queryable): SagaStore {
       return result.rows.map(rowToSaga);
     },
     advance: async (id, from, to, patch) => {
+      // `payout_usd` is the terminal settle outcome: written when settlePayout marks the saga
+      // SETTLED (patch carries the USD Amount), left as-is on every other advance via coalesce.
       let result = await q.query(
         `update payout_sagas
             set state = $3,
                 provider_ref = coalesce($4, provider_ref),
                 attempts = coalesce($5, attempts),
                 due_at = coalesce($6, due_at),
-                updated_at = coalesce($7, updated_at)
+                updated_at = coalesce($7, updated_at),
+                payout_usd = coalesce($8, payout_usd)
           where id = $1 and state = $2
           returning id`,
         [
@@ -852,6 +1072,7 @@ function createSagaStore(q: Queryable): SagaStore {
           patch.attempts ?? null,
           patch.dueAt ?? null,
           patch.updatedAt ?? null,
+          patch.payoutUsd?.minor ?? null,
         ],
       );
       return result.rows.length > 0;
@@ -879,8 +1100,12 @@ async function advanceToFailed(
   id: string,
   reason: string,
 ): Promise<void> {
+  // Record the failure reason on the saga's terminal-outcome `reason` field, so it's read straight
+  // off the record instead of re-derived from posting meta.
   await q.query(
-    `update payout_sagas set state = 'FAILED', dead_letter_reason = $2 where id = $1`,
+    `update payout_sagas
+        set state = 'FAILED', reason = $2
+      where id = $1`,
     [id, reason],
   );
 }
@@ -1256,6 +1481,7 @@ function buildUnit(q: Queryable, digest: Digest, clock: Clock): Unit {
     idempotency: createIdempotencyStore(q),
     sales: createSaleStore(q),
     outbox: createOutboxStore(q),
+    inbox: createInboxStore(q),
     sagas: createSagaStore(q),
     entitlements: createEntitlementStore(q, clock),
     subscriptions: createSubscriptionStore(q),
@@ -1313,6 +1539,11 @@ export async function postgresStore(
     await applyIsolatedSchema(pool, schema);
   }
 
+  // Refuse to run against a database whose schema has drifted from this code (e.g. an old `vrchat:`
+  // database the engine would otherwise read `platform:` accounts out of, returning $0.00). For an
+  // isolated test schema we just applied the current SQL, so this passes by construction.
+  assertSchemaCurrent(await readSchemaVersion(pool), 'Postgres');
+
   let ledger = createLedgerStore(pool, digest, clock);
 
   return {
@@ -1320,6 +1551,7 @@ export async function postgresStore(
     idempotency: createIdempotencyStore(pool),
     sales: createSaleStore(pool),
     outbox: createOutboxStore(pool),
+    inbox: createInboxStore(pool),
     sagas: createSagaStore(pool),
     entitlements: createEntitlementStore(pool, clock),
     subscriptions: createSubscriptionStore(pool),

@@ -83,9 +83,11 @@ async function openReservedSaga(
     reserve: credit('4.00'),
     rateId: 'payout:CREDIT->USD:1',
     providerRef: null,
+    reason: null,
     attempts: 0,
     dueAt: 0,
     updatedAt: 0,
+    payoutUsd: null,
     ...overrides,
   };
   await store.transaction(async (unit) => {

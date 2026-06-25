@@ -32,6 +32,7 @@ DROP TRIGGER IF EXISTS account_balances_integrity_ins;
 
 DROP TRIGGER IF EXISTS account_balances_integrity_upd;
 
+DROP TABLE IF EXISTS schema_meta;
 DROP TABLE IF EXISTS seen_webhooks;
 
 DROP TABLE IF EXISTS checkpoints;
@@ -45,6 +46,8 @@ DROP TABLE IF EXISTS subscriptions;
 DROP TABLE IF EXISTS entitlements;
 
 DROP TABLE IF EXISTS payout_sagas;
+
+DROP TABLE IF EXISTS inbox;
 
 DROP TABLE IF EXISTS outbox;
 
@@ -109,11 +112,22 @@ CREATE TABLE chain_links (
      account_id VARCHAR(96) NOT NULL,
      prev_hash  CHAR(64)    NOT NULL,
      hash       CHAR(64)    NOT NULL,
+     -- The account's signed running balance immediately after this link, the same figure post_entry
+     -- writes into account_balances.balance for this account in the same CALL. Lets balance integrity
+     -- compare a cached balance to its chain head in O(1) instead of re-summing the whole leg history
+     -- on every balance write. Maintained projection of the legs, not the source of truth (prove()
+     -- still re-sums). Defaults to 0 so a link written around post_entry carries the genesis balance.
+     -- Rationale documented in db/postgresql-schema.sql (chain_links.balance_after).
+     balance_after BIGINT   NOT NULL DEFAULT 0,
      PRIMARY KEY (posting_id, account_id),
      CONSTRAINT chain_links_posting_fk FOREIGN KEY (posting_id) REFERENCES postings (id),
      CONSTRAINT chain_links_account_fk FOREIGN KEY (account_id) REFERENCES accounts (id),
      UNIQUE KEY chain_links_account_prev_uq (account_id, prev_hash),
-     KEY chain_links_account_idx (account_id)
+     KEY chain_links_account_idx (account_id),
+     -- The continuity trigger's non-genesis branch looks up an account's current head by
+     -- (account_id, hash); without this it scans every link for the account, so the trigger's
+     -- cost grows with that account's chain length on each new posting.
+     KEY chain_links_account_hash_idx (account_id, hash)
    );
 
 -- account_balances: cached per-account balance read model. Rationale/invariants (non-negative
@@ -122,6 +136,12 @@ CREATE TABLE account_balances (
      account_id VARCHAR(96) PRIMARY KEY,
      currency   VARCHAR(8)  NOT NULL,
      balance    BIGINT      NOT NULL DEFAULT 0,
+     -- Maintained chain-head pointer: the hash of this account's latest chain_links row, updated in
+     -- the same transaction as the balance (post_entry writes both). A maintained projection
+     -- alongside `balance`, same trust model -- chain_links stays the source of truth (prove() still
+     -- re-walks it). Lets headsForAccounts read each account's head by primary key instead of
+     -- scanning chain_links and sorting. Defaults to the genesis hash (64 zeros).
+     head_hash  CHAR(64)    NOT NULL DEFAULT '0000000000000000000000000000000000000000000000000000000000000000',
      CHECK (currency IN ('CREDIT', 'USD')),
      CHECK (account_id LIKE 'platform:%' OR balance >= 0),
      CONSTRAINT account_balances_account_fk FOREIGN KEY (account_id) REFERENCES accounts (id)
@@ -164,6 +184,24 @@ CREATE TABLE outbox (
      KEY outbox_pending_idx (status, created_at)
    );
 
+-- inbox: the inbound mirror of `outbox`; verified provider events awaiting apply via the
+-- transactional inbox worker. `key` is the provider event id (UNIQUE -> redelivery is a no-op
+-- insert, applied at most once). Rationale/invariants documented in db/postgresql-schema.sql
+-- (inbox banner).
+CREATE TABLE inbox (
+     id                 VARCHAR(64) PRIMARY KEY,
+     `key`              VARCHAR(255) NOT NULL UNIQUE,
+     operation          JSON         NOT NULL,
+     status             VARCHAR(16)  NOT NULL DEFAULT 'pending',
+     attempts           INT          NOT NULL DEFAULT 0,
+     dead_letter_reason TEXT         NULL,
+     received_at        BIGINT       NOT NULL,
+     created_at         TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+     CHECK (status IN ('pending', 'applied', 'dead')),
+     -- MySQL has no partial index; the PG WHERE-predicate (status/state/reversed) becomes the leading composite-key column so the sweep/relay scan stays narrow.
+     KEY inbox_pending_idx (status, received_at)
+   );
+
 -- payout_sagas: multi-step payout saga state. Rationale/invariants documented in
 -- db/postgresql-schema.sql (payout_sagas banner).
 CREATE TABLE payout_sagas (
@@ -176,11 +214,19 @@ CREATE TABLE payout_sagas (
      attempts           INT         NOT NULL DEFAULT 0,
      due_at             BIGINT      NOT NULL,
      updated_at         BIGINT      NOT NULL,
-     dead_letter_reason VARCHAR(255),
+     -- The payout's terminal outcome, stored on the saga (see db/postgresql-schema.sql). `reason` is
+     -- the worker's failure reason (FAILED); `payout_usd` is the gross USD disbursed (SETTLED). Both
+     -- null until the saga reaches its terminal state.
+     reason             VARCHAR(255),
+     payout_usd         BIGINT,
      CHECK (reserve > 0),
      CHECK (state IN ('REQUESTED', 'RESERVED', 'SUBMITTED', 'SETTLED', 'FAILED')),
      -- MySQL has no partial index; the PG WHERE-predicate (status/state/reversed) becomes the leading composite-key column so the sweep/relay scan stays narrow.
-     KEY payout_sagas_due_idx (state, due_at)
+     KEY payout_sagas_due_idx (state, due_at),
+     -- requestPayout's min-interval gate reads MAX(updated_at) for one user across all their sagas,
+     -- without this it scans every saga that user has ever had, so the check's cost grows with their
+     -- payout history on each new request.
+     KEY payout_sagas_user_updated_idx (user_id, updated_at)
    );
 
 -- promo_grants: one row per promotional credit handed out; swept for expired, not-yet-reversed
@@ -229,7 +275,11 @@ CREATE TABLE subscriptions (
      CHECK (period_ms > 0),
      CHECK (state IN ('ACTIVE', 'LAPSED', 'CANCELED')),
      -- MySQL has no partial index; the PG WHERE-predicate (status/state/reversed) becomes the leading composite-key column so the sweep/relay scan stays narrow.
-     KEY subscriptions_due_idx (state, next_due_at)
+     KEY subscriptions_due_idx (state, next_due_at),
+     -- subscribe's activeFor lookup filters by (user_id, sku, seller_id) to find the one ACTIVE row,
+     -- without this it scans every subscription a user holds, so the duplicate-guard's cost grows with
+     -- their subscription count on each new subscribe.
+     KEY subscriptions_user_sku_seller_idx (user_id, sku, seller_id)
    );
 
 CREATE TABLE trust_attempts (
@@ -352,32 +402,57 @@ BEGIN
       SET MESSAGE_TEXT = 'conservation: posting legs do not net to zero per currency';
   END IF;
 
-  INSERT INTO chain_links (posting_id, account_id, prev_hash, hash)
-    SELECT p_txn, c.account, c.prev_hash, c.hash
+  -- One link per distinct account, carrying the account's signed running balance after this posting:
+  -- its current cached balance (0 if it has no row yet) plus this posting's net delta. account_balances
+  -- still holds the OLD balance here (the balance step below runs after), so this equals the value that
+  -- step writes into account_balances.balance, by construction. Balance integrity later compares a
+  -- cached balance to this figure at the account's head.
+  INSERT INTO chain_links (posting_id, account_id, prev_hash, hash, balance_after)
+    SELECT p_txn, c.account, c.prev_hash, c.hash,
+           COALESCE(ab.balance, 0) + CAST(d.delta AS SIGNED)
       FROM JSON_TABLE(p_links, '$[*]' COLUMNS (
         account   VARCHAR(96) PATH '$.account',
         prev_hash VARCHAR(64) PATH '$.prev_hash',
         hash      VARCHAR(64) PATH '$.hash'
-      )) AS c;
+      )) AS c
+      JOIN JSON_TABLE(p_balances, '$[*]' COLUMNS (
+        account VARCHAR(96) PATH '$.account',
+        delta   VARCHAR(32) PATH '$.delta'
+      )) AS d ON d.account = c.account
+      LEFT JOIN account_balances ab ON ab.account_id = c.account;
 
+  -- Apply each account's net balance delta and advance its maintained head_hash to that account's
+  -- new link hash in the same step. p_links carries one row per distinct account (the same set as
+  -- p_balances), so the join pairs each balance row with its new head. UPDATE existing rows first so
+  -- the non-negative CHECK tests the new total, not the delta alone.
   UPDATE account_balances ab
     JOIN JSON_TABLE(p_balances, '$[*]' COLUMNS (
       account VARCHAR(96) PATH '$.account',
       delta   VARCHAR(32) PATH '$.delta'
     )) AS d ON ab.account_id = d.account
-    SET ab.balance = ab.balance + CAST(d.delta AS SIGNED);
+    JOIN JSON_TABLE(p_links, '$[*]' COLUMNS (
+      account VARCHAR(96) PATH '$.account',
+      hash    VARCHAR(64) PATH '$.hash'
+    )) AS c ON c.account = d.account
+    SET ab.balance = ab.balance + CAST(d.delta AS SIGNED),
+        ab.head_hash = c.hash;
 
-  INSERT INTO account_balances (account_id, currency, balance)
-    SELECT d.account, d.currency, CAST(d.delta AS SIGNED)
+  INSERT INTO account_balances (account_id, currency, balance, head_hash)
+    SELECT d.account, d.currency, CAST(d.delta AS SIGNED), c.hash
       FROM JSON_TABLE(p_balances, '$[*]' COLUMNS (
         account  VARCHAR(96) PATH '$.account',
         currency VARCHAR(8)  PATH '$.currency',
         delta    VARCHAR(32) PATH '$.delta'
       )) AS d
+      JOIN JSON_TABLE(p_links, '$[*]' COLUMNS (
+        account VARCHAR(96) PATH '$.account',
+        hash    VARCHAR(64) PATH '$.hash'
+      )) AS c ON c.account = d.account
      WHERE NOT EXISTS (
        SELECT 1 FROM account_balances ab WHERE ab.account_id = d.account
      )
-    ON DUPLICATE KEY UPDATE balance = balance + VALUES(balance);
+    ON DUPLICATE KEY UPDATE balance = balance + VALUES(balance),
+                            head_hash = VALUES(head_hash);
 END$$
 
 -- Return one account's cached balance (0 when it has no row yet). MySQL counterpart to the Postgres
@@ -407,20 +482,26 @@ BEGIN
   END IF;
 END$$
 
--- balance integrity: account_balances must equal the legs' net for the account,
--- signed by its normal side (debit-normal +SUM, else -SUM). post_entry writes exactly that, so this
--- rejects only a hand-edited (drifted) balance. Debit-normal set mirrors isDebitNormal (accounts.ts).
+-- balance integrity: account_balances must equal the running total post_entry wrote into both
+-- account_balances.balance and the new chain_links row's balance_after in the same CALL, so this checks
+-- the cheap equivalent: a cached balance must equal the balance_after recorded at the account's head
+-- (the chain_links row whose hash is the row's head_hash). An O(1) keyed read (chain_links_account_hash_idx)
+-- instead of re-summing the whole leg history on every balance write, yet it still rejects a hand-edited
+-- balance: a raw UPDATE that bumps balance leaves head_hash and that link's balance_after untouched, so
+-- the two disagree. balance_after is itself the signed leg sum through that posting, the same invariant
+-- the prover re-checks by re-summing the legs. A head_hash with no matching link yields expected = 0,
+-- so only a zero balance passes (the genesis state). Rationale documented in db/postgresql-schema.sql.
 CREATE TRIGGER account_balances_integrity_ins BEFORE INSERT ON account_balances
 FOR EACH ROW
 BEGIN
   DECLARE expected BIGINT;
-  SET expected = (CASE WHEN NEW.account_id IN (
-      'platform:trust_cash','platform:usd_clearing','platform:revenue_usd',
-      'platform:stored_value','platform:receivable','platform:promo_float','platform:opening_equity'
-    ) THEN 1 ELSE -1 END)
-    * COALESCE((SELECT SUM(amount) FROM legs WHERE account_id = NEW.account_id), 0);
+  SET expected = COALESCE(
+    (SELECT balance_after FROM chain_links
+      WHERE account_id = NEW.account_id AND hash = NEW.head_hash),
+    0
+  );
   IF NEW.balance <> expected THEN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'balance integrity: cached balance <> signed leg sum';
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'balance integrity: cached balance <> chain head balance';
   END IF;
 END$$
 
@@ -428,14 +509,19 @@ CREATE TRIGGER account_balances_integrity_upd BEFORE UPDATE ON account_balances
 FOR EACH ROW
 BEGIN
   DECLARE expected BIGINT;
-  SET expected = (CASE WHEN NEW.account_id IN (
-      'platform:trust_cash','platform:usd_clearing','platform:revenue_usd',
-      'platform:stored_value','platform:receivable','platform:promo_float','platform:opening_equity'
-    ) THEN 1 ELSE -1 END)
-    * COALESCE((SELECT SUM(amount) FROM legs WHERE account_id = NEW.account_id), 0);
+  SET expected = COALESCE(
+    (SELECT balance_after FROM chain_links
+      WHERE account_id = NEW.account_id AND hash = NEW.head_hash),
+    0
+  );
   IF NEW.balance <> expected THEN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'balance integrity: cached balance <> signed leg sum';
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'balance integrity: cached balance <> chain head balance';
   END IF;
 END$$
 
 DELIMITER ;
+
+-- Schema version stamp — the engine reads this on startup and refuses to run if it does not match
+-- SCHEMA_VERSION in src/schema.ts. Keep the value in lockstep with the Postgres schema and src/schema.ts.
+CREATE TABLE schema_meta (version VARCHAR(32) NOT NULL);
+INSERT INTO schema_meta (version) VALUES ('3');

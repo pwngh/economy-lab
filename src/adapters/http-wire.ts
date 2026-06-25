@@ -13,13 +13,14 @@
 // `bigint` an amount is stored as, so amounts travel as decimal strings (e.g. `'CREDIT:12.34'`)
 // and parse back on arrival. Client and server both import this file, so the format stays in sync.
 
-import { decodeAmount, encodeAmount } from '#src/money.ts';
+import { decodeAmount, encodeAmount, isAmount } from '#src/money.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
-import type { Transaction } from '#src/contract.ts';
+import type { Operation, Transaction } from '#src/contract.ts';
 import type {
   Attempt,
+  InboxEntry,
   Leg,
   Lot,
   Posting,
@@ -58,6 +59,64 @@ function amountFrom(wire: string): Amount {
   return decodeAmount(wire.slice(colon + 1), currency);
 }
 
+// Like `amountFrom` but returns null instead of throwing when the string isn't an encoded amount,
+// so the generic walk below can tell a `CREDIT:12.34` from an ordinary string that merely contains
+// a colon. The decimal tail must parse (decodeAmount throws otherwise), caught here.
+function tryAmountFrom(wire: string): Amount | null {
+  let colon = wire.indexOf(':');
+  if (colon < 0) {
+    return null;
+  }
+  let currency = wire.slice(0, colon) as Amount['currency'];
+  try {
+    return decodeAmount(wire.slice(colon + 1), currency);
+  } catch {
+    return null;
+  }
+}
+
+// The inbox row carries a whole {@link Operation}, whose money fields differ by `kind` (topUp.amount,
+// spend.price, clawback.amount, …) and hold a `bigint` JSON.stringify can't serialize. Rather than a
+// per-kind branch that would drift as the union grows, these walk the operation generically and swap
+// every branded Amount for its `CREDIT:12.34` string on the way out, reversing it on the way in —
+// the same Amount-brand walk the SQL engines use to store an Operation in a jsonb column.
+function encodeAmounts(value: unknown): unknown {
+  if (isAmount(value)) {
+    return encodeAmount(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(encodeAmounts);
+  }
+  if (value !== null && typeof value === 'object') {
+    let out: Record<string, unknown> = {};
+    for (let [key, inner] of Object.entries(value)) {
+      out[key] = encodeAmounts(inner);
+    }
+    return out;
+  }
+  return value;
+}
+
+// Reverse of `encodeAmounts`: turn every encoded-amount string back into an Amount. A string is an
+// encoded amount only when it parses as `CURRENCY:decimal`; any other string (idempotencyKey, sku,
+// source, …) passes through unchanged.
+function decodeAmounts(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return tryAmountFrom(value) ?? value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(decodeAmounts);
+  }
+  if (value !== null && typeof value === 'object') {
+    let out: Record<string, unknown> = {};
+    for (let [key, inner] of Object.entries(value)) {
+      out[key] = decodeAmounts(inner);
+    }
+    return out;
+  }
+  return value;
+}
+
 /**
  * Encode each domain record into a JSON-friendly wire shape. Amounts become decimal strings;
  * everything else copies through unchanged. One function per record type the adapter sends.
@@ -90,12 +149,24 @@ export let encodeWire = {
   saga: (saga: Saga): unknown => ({
     ...saga,
     reserve: encodeAmount(saga.reserve),
+    // The terminal settle outcome rides the wire as an encoded amount (or null before settlement),
+    // decoded back to an Amount in decodeWire.saga below.
+    payoutUsd: saga.payoutUsd === null ? null : encodeAmount(saga.payoutUsd),
   }),
 
-  sagaPatch: (patch: Partial<Saga>): unknown =>
-    patch.reserve === undefined
-      ? patch
-      : { ...patch, reserve: encodeAmount(patch.reserve) },
+  // Only re-encode the amount-typed fields actually present on the patch (reserve, payoutUsd); the
+  // rest pass through untouched.
+  sagaPatch: (patch: Partial<Saga>): unknown => {
+    let out: Record<string, unknown> = { ...patch };
+    if (patch.reserve !== undefined) {
+      out.reserve = encodeAmount(patch.reserve);
+    }
+    if (patch.payoutUsd !== undefined) {
+      out.payoutUsd =
+        patch.payoutUsd === null ? null : encodeAmount(patch.payoutUsd);
+    }
+    return out;
+  },
 
   subscription: (sub: Subscription): unknown => ({
     ...sub,
@@ -110,6 +181,11 @@ export let encodeWire = {
   attempt: (attempt: Attempt): unknown => ({
     ...attempt,
     amount: encodeAmount(attempt.amount),
+  }),
+
+  inboxEntry: (entry: InboxEntry): unknown => ({
+    ...entry,
+    operation: encodeAmounts(entry.operation),
   }),
 };
 
@@ -176,8 +252,12 @@ export let decodeWire = {
   },
 
   saga: (wire: unknown): Saga => {
-    let row = wire as Saga & { reserve: string };
-    return { ...row, reserve: amountFrom(row.reserve) };
+    let row = wire as Saga & { reserve: string; payoutUsd: string | null };
+    return {
+      ...row,
+      reserve: amountFrom(row.reserve),
+      payoutUsd: row.payoutUsd === null ? null : amountFrom(row.payoutUsd),
+    };
   },
 
   subscription: (wire: unknown): Subscription => {
@@ -188,6 +268,11 @@ export let decodeWire = {
   promoGrant: (wire: unknown): PromoGrant => {
     let row = wire as PromoGrant & { amount: string };
     return { ...row, amount: amountFrom(row.amount) };
+  },
+
+  inboxEntry: (wire: unknown): InboxEntry => {
+    let row = wire as InboxEntry & { operation: unknown };
+    return { ...row, operation: decodeAmounts(row.operation) as Operation };
   },
 
   velocity: (wire: unknown): Velocity => {

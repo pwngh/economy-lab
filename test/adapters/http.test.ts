@@ -104,6 +104,7 @@ function outboxRow(
     },
     status: 'pending',
     attempts: 0,
+    reason: null,
   };
 }
 
@@ -117,9 +118,11 @@ function sagaRow(id: string, userId: string, updatedAt: number): Saga {
     rateId: 'rate_http',
     state: 'RESERVED',
     providerRef: null,
+    reason: null,
     attempts: 0,
     dueAt: updatedAt,
     updatedAt,
+    payoutUsd: null,
   };
 }
 

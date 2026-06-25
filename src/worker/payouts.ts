@@ -9,22 +9,23 @@
  * @license MIT
  */
 
-import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
+import { ERROR_CODES, normalizeError } from '#src/errors.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { encodeAmount, toAmount } from '#src/money.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { WorkerCtx } from '#src/contract.ts';
-import type { Rate, Saga, SagaState, Store, Unit } from '#src/ports.ts';
+import type { Rate, Saga, Store } from '#src/ports.ts';
 
 /**
- * Which payouts moved this run, bucketed by outcome. A failed payout lands in `deadLettered`
- * if it can never succeed, or `retrying` if it hit a temporary problem (flaky network/database)
- * and gets another go next run.
+ * Which payouts moved this run, bucketed by outcome. The worker submits RESERVED payouts to the
+ * provider and force-fails SUBMITTED payouts that have timed out; settlement itself no longer runs
+ * here — it arrives through the provider's settlement webhook (see src/operations/settlePayout.ts).
+ * A failed payout lands in `deadLettered` if it can never succeed (including a timed-out submit),
+ * or `retrying` if it hit a temporary problem (flaky network/database) and gets another go next run.
  */
 export type SettleSummary = {
-  settled: ReadonlyArray<string>;
   submitted: ReadonlyArray<string>;
   deadLettered: ReadonlyArray<{ id: string; reason: string }>;
   retrying: ReadonlyArray<{ id: string; code: string }>;
@@ -32,7 +33,6 @@ export type SettleSummary = {
 
 // Mutable SettleSummary the run fills in, returned read-only at the end.
 type SettleTally = {
-  settled: string[];
   submitted: string[];
   deadLettered: Array<{ id: string; reason: string }>;
   retrying: Array<{ id: string; code: string }>;
@@ -53,7 +53,6 @@ export async function settleDuePayouts(
 ): Promise<SettleSummary> {
   let due = await store.sagas.claimDue(input.now, input.limit);
   let tally: SettleTally = {
-    settled: [],
     submitted: [],
     deadLettered: [],
     retrying: [],
@@ -122,9 +121,10 @@ async function bumpAttempt(
 //
 // Exception: when the state change is rejected because another worker got there first
 // (`INVALID_TRANSITION`). The step change only succeeds if the saga is still in the expected state,
-// so a rejection means another worker already settled this saga and moved its reserve into REVENUE.
-// The books are already correct; posting the reversal would return the credits twice, so we only
-// flip the state and leave the ledger untouched. (See `assertAdvanced`.)
+// so a rejection means the saga already settled (via the settlement webhook, see
+// src/operations/settlePayout.ts) and its reserve moved into REVENUE. The books are already correct;
+// posting the reversal would return the credits twice, so we only flip the state and leave the
+// ledger untouched.
 async function deadLetter(
   store: Store,
   ctx: WorkerCtx,
@@ -166,6 +166,7 @@ async function deadLetter(
       },
       status: 'pending',
       attempts: 0,
+      reason: null,
     });
   });
 }
@@ -176,9 +177,11 @@ async function deadLetter(
 const PAYOUT_TIMEOUT_REASON = 'payout.timeout';
 
 // Do the one step the payout is up to, chosen by its current state. 'RESERVED' gets submitted to
-// the provider, moving to 'SUBMITTED'; 'SUBMITTED' gets settled, unless it has waited past
-// `maxPayoutAgeMs`, in which case it is force-failed (see below). Any other state a due batch hands
-// back (e.g. a leftover 'REQUESTED', or one already finished) is left untouched this run.
+// the provider, moving to 'SUBMITTED'. 'SUBMITTED' is left for the provider's settlement webhook to
+// settle (see src/operations/settlePayout.ts), with one exception: if it has waited past
+// `maxPayoutAgeMs` for a settlement that never arrived, it is force-failed here (see below). Any
+// other state a due batch hands back (e.g. a leftover 'REQUESTED', or one already finished) is left
+// untouched this run.
 async function driveTransition(
   store: Store,
   ctx: WorkerCtx,
@@ -191,19 +194,19 @@ async function driveTransition(
     return;
   }
   if (saga.state === 'SUBMITTED') {
-    // A payout submitted to the provider that never came back can't settle; without a cutoff it
-    // would sit in SUBMITTED forever, stranding the seller's reserved credits. Once it has waited
-    // longer than `maxPayoutAgeMs` (from `updatedAt`, set on entry to SUBMITTED in submitToProvider),
-    // force-fail it. The shared dead-letter helper flips it to FAILED and, in the same transaction,
-    // posts the compensating reversal returning the reserve to the seller, so a timed-out payout is
-    // never paid and never strands the reserve.
+    // The worker no longer self-settles a SUBMITTED payout; settlement arrives through the
+    // provider's settlement webhook instead (src/operations/settlePayout.ts). The sweep only steps
+    // in when the webhook never comes: a payout submitted to the provider that never reports back
+    // can't settle, and without a cutoff it would sit in SUBMITTED forever, stranding the seller's
+    // reserved credits. Once it has waited longer than `maxPayoutAgeMs` (from `updatedAt`, set on
+    // entry to SUBMITTED in submitToProvider), force-fail it. The shared dead-letter helper flips it
+    // to FAILED and, in the same transaction, posts the compensating reversal returning the reserve
+    // to the seller, so a timed-out payout is never paid and never strands the reserve. A SUBMITTED
+    // payout still within the age window is left untouched this run, waiting on the webhook.
     if (ctx.clock.now() - saga.updatedAt > ctx.config.maxPayoutAgeMs) {
       await deadLetter(store, ctx, saga, PAYOUT_TIMEOUT_REASON);
       tally.deadLettered.push({ id: saga.id, reason: PAYOUT_TIMEOUT_REASON });
-      return;
     }
-    await settle(store, ctx, saga);
-    tally.settled.push(saga.id);
   }
 }
 
@@ -235,110 +238,6 @@ async function submitToProvider(
   });
 }
 
-// Step 'SUBMITTED' -> 'SETTLED': record the money movement once the provider has paid. The two
-// ledger entries and the step change commit together in one transaction, so a settled payout has
-// both entries or neither. The step change only succeeds if still in 'SUBMITTED'; if another worker
-// already settled it, the change returns false and the whole transaction (entries included) rolls
-// back via the throw in assertAdvanced, so the seller is never paid twice.
-async function settle(store: Store, ctx: WorkerCtx, saga: Saga): Promise<void> {
-  let rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
-  let usd = convert(saga.reserve, rate, 'USD');
-  // The payout-rail fee (the rail's processing cut, e.g. a payment processor at ≈1.5%, see
-  // config.payoutFeeBps) is the rail's cut of the disbursement, not the platform's revenue: the
-  // gross `usd` leaves the trust account, the rail keeps `fee`, the creator receives `net`. Fee +
-  // net are recorded for the audit trail; the split happens at the external rail, downstream of
-  // USD_CLEARING.
-  let fee = payoutFee(usd, ctx.config.payoutFeeBps);
-  let net = toAmount('USD', usd.minor - fee.minor);
-
-  await store.transaction(async (unit) => {
-    await postSettlementEntries(unit, ctx, {
-      saga,
-      usd,
-      fee,
-      net,
-      rateId: rate.rateId,
-    });
-    let advanced = await unit.sagas.advance(saga.id, 'SUBMITTED', 'SETTLED', {
-      updatedAt: ctx.clock.now(),
-    });
-    assertAdvanced(advanced, saga, 'SETTLED');
-    // Queue the "payout settled" event in the same transaction as the postings and state change,
-    // so it is saved iff the payout actually settled. If the change was rejected because another
-    // worker settled first, assertAdvanced above throws and rolls back this event with the entries,
-    // so no event emits for a settle that didn't take. Internal-only: carries the money detail
-    // downstream consumers need.
-    await unit.outbox.enqueue({
-      id: ctx.ids.next('obx'),
-      event: {
-        id: ctx.ids.next('evt'),
-        type: 'economy.payout.settled',
-        version: 1,
-        occurredAt: ctx.clock.now(),
-        subject: saga.userId,
-        data: {
-          sagaId: saga.id,
-          userId: saga.userId,
-          reserve: encodeAmount(saga.reserve),
-          usd: encodeAmount(usd),
-          payoutFee: encodeAmount(fee),
-          netUsd: encodeAmount(net),
-          rateId: rate.rateId,
-        },
-        audience: 'internal',
-      },
-      status: 'pending',
-      attempts: 0,
-    });
-  });
-}
-
-// Payout-rail fee on a gross USD disbursement, rounded down to whole minor units. `feeBps` is in
-// basis points (150 = 1.5%); the rail's cut (e.g. a payment processor's), deducted so the creator gets the net.
-function payoutFee(gross: Amount, feeBps: number): Amount {
-  return toAmount('USD', (gross.minor * BigInt(feeBps)) / 10_000n);
-}
-
-// Post the two ledger entries recording a settled payout, one per currency. Each balances within
-// its single currency.
-//
-// CREDIT entry: empty the reserve into REVENUE. The seller's set-aside credits become platform
-// earnings, since the platform now owes the seller real money instead.
-//
-// USD entry: cash leaving the platform. Debit USD_CLEARING (mirrors money in/out of the trust
-// account), credit TRUST_CASH (real cash held for users). TRUST_CASH grows on a debit, so crediting
-// lowers it; that drop is the cash the buyer gave up when they spent those credits, so the cash
-// backing spendable money is never touched.
-async function postSettlementEntries(
-  unit: Unit,
-  ctx: WorkerCtx,
-  entry: { saga: Saga; usd: Amount; fee: Amount; net: Amount; rateId: string },
-): Promise<void> {
-  let { saga, usd, fee, net, rateId } = entry;
-  await postEntry(unit.ledger, {
-    txnId: ctx.ids.next('txn'),
-    legs: [
-      debit(SYSTEM.PAYOUT_RESERVE, saga.reserve),
-      credit(SYSTEM.REVENUE, saga.reserve),
-    ],
-    meta: { kind: 'payout.settle', sagaId: saga.id, rateId },
-  });
-  // Gross `usd` leaves the trust account. The rail keeps `payoutFee` and the creator receives
-  // `netUsd`; that split is downstream at the external rail, recorded here on the posting for the
-  // audit trail rather than posted as ledger legs.
-  await postEntry(unit.ledger, {
-    txnId: ctx.ids.next('txn'),
-    legs: [debit(SYSTEM.USD_CLEARING, usd), credit(SYSTEM.TRUST_CASH, usd)],
-    meta: {
-      kind: 'payout.settle.cash',
-      sagaId: saga.id,
-      rateId,
-      payoutFee: encodeAmount(fee),
-      netUsd: encodeAmount(net),
-    },
-  });
-}
-
 // Convert a CREDIT amount to USD at the given rate, rounding down. The rate is stored as integers
 // for exactness (`rate` scaled by 10^scale), so the real multiplier is `rate / 10^scale`: multiply
 // the credit amount by `rate`, then divide by 10^scale.
@@ -346,24 +245,12 @@ function convert(amount: Amount, rate: Rate, to: Amount['currency']): Amount {
   return toAmount(to, (amount.minor * rate.rate) / 10n ** BigInt(rate.scale));
 }
 
-// Milliseconds to wait after submitting before trying to settle. Configured SUBMITTED delay,
-// falling back to DEFAULT; the final `?? 0` guards against both being unset. (requestPayout reads
-// the config the same way.)
+// Milliseconds to wait after submitting before the sweep next checks on the payout. Configured
+// SUBMITTED delay, falling back to DEFAULT; the final `?? 0` guards against both being unset.
+// (requestPayout reads the config the same way.) The sweep no longer settles a SUBMITTED payout —
+// that arrives via the settlement webhook — but it still re-examines it on this cadence to apply the
+// `maxPayoutAgeMs` timeout if no settlement ever lands.
 function submittedSlaMs(ctx: WorkerCtx): number {
   let sla = ctx.config.payoutSla;
   return sla.SUBMITTED ?? sla.DEFAULT ?? 0;
-}
-
-// Fail loudly when the step change in `settle` didn't take, meaning another worker already settled
-// this payout. Throwing rolls back the ledger entries posted alongside it instead of paying the
-// seller twice. A permanent error, so advanceOne sets the payout aside rather than retrying a settle
-// that would post the entries again.
-function assertAdvanced(advanced: boolean, saga: Saga, to: SagaState): void {
-  if (!advanced) {
-    throw fault(
-      ERROR_CODES.INVALID_TRANSITION,
-      `payout saga ${saga.id} lost the CAS advancing ${saga.state} → ${to}.`,
-      { detail: { sagaId: saga.id, from: saga.state, to } },
-    );
-  }
 }

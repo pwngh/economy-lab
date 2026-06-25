@@ -23,8 +23,8 @@ import { credit, debit, postEntry } from '#src/ledger.ts';
 import { decodeAmount, toAmount } from '#src/money.ts';
 import { spendable, SYSTEM } from '#src/accounts.ts';
 
-import type { Saga, SagaState, Store, Unit } from '#src/ports.ts';
-import type { Transaction } from '#src/contract.ts';
+import type { InboxEntry, Saga, SagaState, Store, Unit } from '#src/ports.ts';
+import type { Operation, Transaction } from '#src/contract.ts';
 
 // Fresh user id per call, so tests don't share balances or hash-chain history.
 let userSeq = 0;
@@ -68,6 +68,7 @@ function outboxRow(
   };
   status: 'pending';
   attempts: number;
+  reason: string | null;
 } {
   return {
     id: messageId,
@@ -82,6 +83,30 @@ function outboxRow(
     },
     status: 'pending',
     attempts: 0,
+    reason: null,
+  };
+}
+
+// Builds one inbox row: a verified inbound event already mapped to the topUp it applies. The inbound
+// mirror of `outboxRow`. `key` is the provider event id (the dedupe key on enqueue, doubling as the
+// operation's idempotencyKey); the caller passes a distinct row id so a test can assert which row it
+// enqueued.
+function inboxRow(userId: string, rowId: string, key: string): InboxEntry {
+  return {
+    id: rowId,
+    key,
+    operation: {
+      kind: 'topUp',
+      idempotencyKey: key,
+      actor: { kind: 'system', service: 'webhook:billing' },
+      userId,
+      amount: toAmount('CREDIT', 1_000n),
+      source: 'card',
+    } as Operation,
+    status: 'pending',
+    attempts: 0,
+    receivedAt: 0,
+    reason: null,
   };
 }
 
@@ -214,6 +239,185 @@ async function dropsOutboxOnRollback(store: Store): Promise<void> {
     batch.some((message) => message.id === messageId),
     false,
   );
+}
+
+// Same retry-and-dead-letter behaviour across adapters, the outbound twin of
+// bumpsInboxAttemptThenDeadLetters. `recordFailure` counts one failed delivery (bumps `attempts`,
+// leaves the row 'pending', no reason yet); `deadLetter` then gives up on the poison message,
+// flipping it to 'failed' and persisting the reason ON the record so `claimBatch` never hands it
+// back. Like the relay worker, recordFailure/deadLetter run on the top-level store, not inside
+// store.transaction(...).
+async function recordsFailureThenDeadLettersOutbox(store: Store): Promise<void> {
+  let userId = freshUser();
+  let messageId = `obx_conf_dead_${userId}`;
+  await store.transaction((unit) =>
+    unit.outbox.enqueue(outboxRow(userId, messageId)),
+  );
+
+  // One failed delivery: attempts goes 0 -> 1, the row stays pending and is re-claimable. A still-
+  // pending row carries no dead-letter reason yet ('null otherwise').
+  await store.outbox.recordFailure(messageId);
+  let afterFail = await store.outbox.claimBatch(10);
+  let failed = afterFail.find((message) => message.id === messageId);
+  assert.notEqual(failed, undefined);
+  assert.equal(failed!.attempts, 1);
+  assert.equal(failed!.status, 'pending');
+  assert.equal(failed!.reason, null);
+
+  // Give up on the poison message: dead-letter it, and it's never claimed again. The reason is
+  // persisted ON the 'failed' record (not a side-channel), mirroring the saga terminal-outcome test;
+  // claimBatch never returns a terminal row, so it can't ride back here, but the SQL decoders carry
+  // dead_letter_reason -> reason off the row.
+  await store.outbox.deadLetter(messageId, 'poison');
+  let afterDead = await store.outbox.claimBatch(10);
+  assert.equal(
+    afterDead.some((message) => message.id === messageId),
+    false,
+  );
+
+  // recordFailure / markRelayed / deadLetter on the now-terminal row are all no-ops (no throw).
+  await store.outbox.recordFailure(messageId);
+  await store.outbox.markRelayed([messageId]);
+  await store.outbox.deadLetter(messageId, 'again');
+  let stillDead = await store.outbox.claimBatch(10);
+  assert.equal(
+    stillDead.some((message) => message.id === messageId),
+    false,
+  );
+}
+
+// Inbound mirror of relaysOutboxOnce: a verified event enqueued in the webhook's transaction is
+// claimed once, marked applied, then never re-claimed. `claimInbound` hands back only 'pending'
+// rows; `markApplied` flips the row to 'applied' (terminal), so the second claim is empty — the
+// inbox applies each event at most once, just as the outbox relays each at most once.
+async function appliesInboxOnce(store: Store): Promise<void> {
+  let userId = freshUser();
+  let rowId = `ibx_conf_${userId}`;
+  await store.transaction(async (unit) => {
+    await fundSpendable(unit, userId, '1.00', 'txn_conf_inbox');
+    await unit.inbox.enqueueInbound(inboxRow(userId, rowId, `evt_${rowId}`));
+  });
+
+  let batch = await store.inbox.claimInbound({ now: 0, limit: 10 });
+  await store.inbox.markApplied(rowId);
+  let afterApply = await store.inbox.claimInbound({ now: 0, limit: 10 });
+
+  assert.deepEqual(
+    batch.map((entry) => entry.id),
+    [rowId],
+  );
+  assert.deepEqual(afterApply, []);
+}
+
+// Inbound mirror of dropsOutboxOnRollback: an enqueue inside a transaction that throws leaves no
+// inbox row, so a rolled-back webhook ingress never queues an apply. Same all-or-nothing contract
+// the outbox holds for a rolled-back money move.
+async function dropsInboxOnRollback(store: Store): Promise<void> {
+  let userId = freshUser();
+  let rowId = `ibx_conf_rollback_${userId}`;
+
+  await assert.rejects(
+    store.transaction(async (unit) => {
+      await unit.inbox.enqueueInbound(inboxRow(userId, rowId, `evt_${rowId}`));
+      throw new Error('roll back the enqueue');
+    }),
+  );
+
+  let batch = await store.inbox.claimInbound({ now: 0, limit: 100 });
+
+  assert.equal(
+    batch.some((entry) => entry.id === rowId),
+    false,
+  );
+}
+
+// Same dedupe-by-key behaviour across adapters: enqueuing the same provider event id twice inserts
+// one row and the duplicate returns the existing row (mirroring the idempotency story), so a
+// redelivered provider event is applied at most once. The two enqueues use different row ids but
+// share one `key`; only the first row id is ever stored or claimed.
+async function dedupesInboxByKey(store: Store): Promise<void> {
+  let userId = freshUser();
+  let key = `evt_conf_dedupe_${userId}`;
+  let firstId = `ibx_conf_dedupe_a_${userId}`;
+  let secondId = `ibx_conf_dedupe_b_${userId}`;
+
+  let first = await store.transaction((unit) =>
+    unit.inbox.enqueueInbound(inboxRow(userId, firstId, key)),
+  );
+  // Redelivery: same provider event id, fresh row id. A no-op that returns the already-stored row.
+  let duplicate = await store.transaction((unit) =>
+    unit.inbox.enqueueInbound(inboxRow(userId, secondId, key)),
+  );
+
+  assert.equal(first.id, firstId);
+  assert.equal(duplicate.id, firstId); // the existing row, not the second id
+  assert.equal(duplicate.key, key);
+
+  // Only the first row exists, so a claim returns exactly one entry, under the first id.
+  let batch = await store.inbox.claimInbound({ now: 0, limit: 10 });
+  let mine = batch.filter((entry) => entry.key === key);
+  assert.deepEqual(
+    mine.map((entry) => entry.id),
+    [firstId],
+  );
+}
+
+// Same retry-and-dead-letter behaviour across adapters. `bumpAttempt` counts one failed apply: it
+// increments `attempts` but leaves the row 'pending', so the next sweep re-claims it (it never flips
+// the status — only `deadLetter` does). `deadLetter` then gives up on the poison event, flipping it
+// to 'dead' so `claimInbound` never hands it back again. The inbound mirror of the outbox's
+// recordFailure/deadLetter pair.
+//
+// bumpAttempt and deadLetter run on the top-level store, not inside store.transaction(...), matching
+// how the apply worker calls them.
+async function bumpsInboxAttemptThenDeadLetters(store: Store): Promise<void> {
+  let userId = freshUser();
+  let rowId = `ibx_conf_dead_${userId}`;
+  await store.transaction((unit) =>
+    unit.inbox.enqueueInbound(inboxRow(userId, rowId, `evt_${rowId}`)),
+  );
+
+  // One failed apply: attempts goes 0 -> 1, the row stays pending and is re-claimable. A still-
+  // pending row carries no dead-letter reason yet ('null otherwise').
+  await store.inbox.bumpAttempt(rowId);
+  let afterBump = await store.inbox.claimInbound({ now: 0, limit: 10 });
+  let bumped = afterBump.find((entry) => entry.id === rowId);
+  assert.notEqual(bumped, undefined);
+  assert.equal(bumped!.attempts, 1);
+  assert.equal(bumped!.status, 'pending');
+  assert.equal(bumped!.reason, null);
+
+  // Give up on the poison event: dead-letter it, and it's never claimed again.
+  await store.inbox.deadLetter(rowId, 'poison');
+  let afterDead = await store.inbox.claimInbound({ now: 0, limit: 10 });
+  assert.equal(
+    afterDead.some((entry) => entry.id === rowId),
+    false,
+  );
+
+  // The failure reason is persisted ON the dead row (not a side-channel), so re-resolving the row
+  // by its key reads it back on every backend, mirroring the saga terminal-outcome test. A duplicate
+  // enqueue on the same key returns the stored row, terminal status and all.
+  let resolved = await store.transaction((unit) =>
+    unit.inbox.enqueueInbound(inboxRow(userId, rowId, `evt_${rowId}`)),
+  );
+  assert.equal(resolved.status, 'dead');
+  assert.equal(resolved.reason, 'poison');
+
+  // markApplied / bumpAttempt / deadLetter on the now-terminal row are all no-ops (no throw), so the
+  // first dead-letter reason stands; a second deadLetter('again') doesn't overwrite it.
+  await store.inbox.markApplied(rowId);
+  await store.inbox.bumpAttempt(rowId);
+  await store.inbox.deadLetter(rowId, 'again');
+  let stillDead = await store.inbox.claimInbound({ now: 0, limit: 10 });
+  assert.equal(
+    stillDead.some((entry) => entry.id === rowId),
+    false,
+  );
+  let stillResolved = await store.transaction((unit) =>
+    unit.inbox.enqueueInbound(inboxRow(userId, rowId, `evt_${rowId}`)),
+  );
+  assert.equal(stillResolved.reason, 'poison');
 }
 
 async function recomputesChainHead(store: Store): Promise<void> {
@@ -351,9 +555,11 @@ async function listsSagasNewestFirst(store: Store): Promise<void> {
     rateId: 'rate_conf_list',
     state,
     providerRef: null,
+    reason: null,
     attempts: 0,
     dueAt: updatedAt,
     updatedAt,
+    payoutUsd: null,
   });
   let oldest = mk('a', 1_000, 'SETTLED');
   let middle = mk('b', 2_000, 'FAILED');
@@ -370,6 +576,93 @@ async function listsSagasNewestFirst(store: Store): Promise<void> {
     }
   }
   assert.deepEqual(mine, [newest.id, middle.id, oldest.id]);
+}
+
+// Same terminal-outcome persistence across adapters: a payout's SETTLED/FAILED outcome is stored on
+// the saga record (not a side-channel), so a later load reads it back. `advance` to SETTLED carries
+// the gross USD disbursed in its patch (payoutUsd, a USD Amount); `deadLetter` records the failure
+// reason. Opens two sagas, drives one to each terminal state, and asserts load round-trips the
+// stored outcome — and that a still-in-flight saga carries neither.
+async function persistsTerminalOutcomeOnTheSaga(store: Store): Promise<void> {
+  let userId = freshUser();
+  let mk = (suffix: string, state: SagaState): Saga => ({
+    id: `pay_conf_term_${userId}_${suffix}`,
+    userId,
+    reserve: toAmount('CREDIT', 400n),
+    rateId: 'rate_conf_term',
+    state,
+    providerRef: 'prov_conf_term',
+    reason: null,
+    attempts: 1,
+    dueAt: 0,
+    updatedAt: 0,
+    payoutUsd: null,
+  });
+  let settling = mk('settle', 'SUBMITTED');
+  let failing = mk('fail', 'SUBMITTED');
+  await store.transaction((unit) => unit.sagas.open(settling));
+  await store.transaction((unit) => unit.sagas.open(failing));
+
+  // Before any terminal step, neither outcome field is set.
+  let inflight = await store.sagas.load(settling.id);
+  assert.equal(inflight!.reason, null);
+  assert.equal(inflight!.payoutUsd, null);
+
+  // SETTLED: the USD disbursed is persisted on the record, failure reason stays null.
+  let paid = toAmount('USD', 2n);
+  let advanced = await store.transaction((unit) =>
+    unit.sagas.advance(settling.id, 'SUBMITTED', 'SETTLED', {
+      updatedAt: 1,
+      payoutUsd: paid,
+    }),
+  );
+  assert.equal(advanced, true);
+  let settled = await store.sagas.load(settling.id);
+  assert.equal(settled!.state, 'SETTLED');
+  assert.deepEqual(settled!.payoutUsd, paid);
+  assert.equal(settled!.reason, null);
+
+  // FAILED: the failure reason is persisted on the record, payoutUsd stays null.
+  await store.transaction((unit) =>
+    unit.sagas.deadLetter(failing.id, 'PROVIDER.FAILURE'),
+  );
+  let failed = await store.sagas.load(failing.id);
+  assert.equal(failed!.state, 'FAILED');
+  assert.equal(failed!.reason, 'PROVIDER.FAILURE');
+  assert.equal(failed!.payoutUsd, null);
+}
+
+// Ledger.list returns the whole journal — every committed posting, newest commit first — not just
+// the ones a given reader minted, the way SagaStore.list returns the whole payout board. Funds
+// three users with separate postings, then asserts list streams them back newest-first (the commit
+// sequence, the reverse of the order they were appended) with each posting's full legs intact.
+// Filtered to this test's txn ids so other postings already in the store can't perturb it.
+async function listsPostingsNewestFirst(store: Store): Promise<void> {
+  let userId = freshUser();
+  let ids = [
+    `txn_conf_list_${userId}_a`,
+    `txn_conf_list_${userId}_b`,
+    `txn_conf_list_${userId}_c`,
+  ];
+  // Append in order a, b, c so insertion order isn't the expected list order (which is its reverse).
+  for (let id of ids) {
+    await store.transaction((unit) => fundSpendable(unit, userId, '1.00', id));
+  }
+
+  let mine: string[] = [];
+  let legsById = new Map<string, number>();
+  for await (let posting of store.ledger.list()) {
+    if (ids.includes(posting.txnId)) {
+      mine.push(posting.txnId);
+      legsById.set(posting.txnId, posting.legs.length);
+    }
+  }
+  // Newest commit first: the reverse of the append order.
+  assert.deepEqual(mine, [ids[2], ids[1], ids[0]]);
+  // Each posting carries its full legs (the funding posting has two), not just an id and meta.
+  for (let id of ids) {
+    assert.equal(legsById.get(id), 2);
+  }
 }
 
 // Same webhook-dedup behaviour across adapters: an inbound provider webhook is processed at most
@@ -509,6 +802,16 @@ export function runStoreConformance(
       withStore(t, relaysOutboxOnce));
     test('drops the outbox row when its enqueuing transaction rolls back', (t) =>
       withStore(t, dropsOutboxOnRollback));
+    test('records an outbox delivery failure then dead-letters a poison message', (t) =>
+      withStore(t, recordsFailureThenDeadLettersOutbox));
+    test('enqueues the inbox in the webhook tx and applies once, never re-claiming', (t) =>
+      withStore(t, appliesInboxOnce));
+    test('drops the inbox row when its enqueuing transaction rolls back', (t) =>
+      withStore(t, dropsInboxOnRollback));
+    test('dedupes the inbox by provider event id, returning the existing row', (t) =>
+      withStore(t, dedupesInboxByKey));
+    test('bumps an inbox apply attempt then dead-letters a poison event', (t) =>
+      withStore(t, bumpsInboxAttemptThenDeadLetters));
     test('recomputes a per-account chain head deterministically over the digest', (t) =>
       withStore(t, recomputesChainHead));
     test('stores a posting with multiple debit/credit lines to one account', (t) =>
@@ -525,5 +828,9 @@ export function runStoreConformance(
       withStore(t, markBilledIsCompareAndSet));
     test('lists every saga newest-first regardless of state', (t) =>
       withStore(t, listsSagasNewestFirst));
+    test('persists a payout terminal outcome (settled USD / failed reason) on the saga', (t) =>
+      withStore(t, persistsTerminalOutcomeOnTheSaga));
+    test('lists every posting newest-first with its full legs', (t) =>
+      withStore(t, listsPostingsNewestFirst));
   });
 }

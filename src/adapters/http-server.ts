@@ -115,8 +115,9 @@ async function ledgerRoute(
 // Remaining ledger reads, split out to keep each function short. `statement` is a page of an
 // account's entries; the rest stream rows one at a time instead of returning an array:
 // `heads` (each account with the latest hash in its tamper-evident chain), `timeline` (an
-// account's settlement lots: funds with the date each becomes payable), and `lineage` (every
-// posting that touched an account, with hashes, to verify the chain was not altered).
+// account's settlement lots: funds with the date each becomes payable), `lineage` (every
+// posting that touched an account, with hashes, to verify the chain was not altered), and `list`
+// (every posting in the ledger, newest first, with its full legs).
 async function ledgerReadRoute(
   ledger: Store['ledger'],
   method: string,
@@ -138,6 +139,9 @@ async function ledgerReadRoute(
       ...lot,
       amount: encodeWire.amount(lot.amount),
     }));
+  }
+  if (method === 'list') {
+    return collect(ledger.list(), (posting) => encodeWire.posting(posting));
   }
   return collect(ledger.lineage(body.account as AccountRef), (link) => ({
     ...link,
@@ -252,6 +256,30 @@ let SUBSTORE_ROUTES: Record<string, SubHandler> = {
     await unit.outbox.deadLetter(body.id as string, body.reason as string);
     return null;
   },
+  'inbox/enqueueInbound': async (unit, body) => {
+    let stored = await unit.inbox.enqueueInbound(
+      decodeWire.inboxEntry(body.entry),
+    );
+    return encodeWire.inboxEntry(stored);
+  },
+  'inbox/claimInbound': async (unit, body) => {
+    let pending = await unit.inbox.claimInbound(
+      body as Parameters<typeof unit.inbox.claimInbound>[0],
+    );
+    return pending.map(encodeWire.inboxEntry);
+  },
+  'inbox/markApplied': async (unit, body) => {
+    await unit.inbox.markApplied(body.id as string);
+    return null;
+  },
+  'inbox/bumpAttempt': async (unit, body) => {
+    await unit.inbox.bumpAttempt(body.id as string);
+    return null;
+  },
+  'inbox/deadLetter': async (unit, body) => {
+    await unit.inbox.deadLetter(body.id as string, body.reason as string);
+    return null;
+  },
   'sagas/open': async (unit, body) => {
     await unit.sagas.open(decodeWire.saga(body.saga));
     return null;
@@ -355,12 +383,17 @@ let SUBSTORE_ROUTES: Record<string, SubHandler> = {
 function decodeSagaPatch(
   patch: unknown,
 ): Parameters<Unit['sagas']['advance']>[3] {
-  let row = patch as Record<string, unknown>;
-  return typeof row.reserve === 'string'
-    ? ({ ...row, reserve: decodeWire.amount(row.reserve) } as Parameters<
-        Unit['sagas']['advance']
-      >[3])
-    : (row as Parameters<Unit['sagas']['advance']>[3]);
+  let row = { ...(patch as Record<string, unknown>) };
+  // Decode the amount-typed fields that ride the wire as encoded strings (reserve, payoutUsd) back
+  // to Amounts; everything else passes through. payoutUsd is null before settlement, so only decode
+  // an actual encoded-amount string.
+  if (typeof row.reserve === 'string') {
+    row.reserve = decodeWire.amount(row.reserve);
+  }
+  if (typeof row.payoutUsd === 'string') {
+    row.payoutUsd = decodeWire.amount(row.payoutUsd);
+  }
+  return row as Parameters<Unit['sagas']['advance']>[3];
 }
 
 // --- Routes that bypass transactions (trust, checkpoints) -------------------------

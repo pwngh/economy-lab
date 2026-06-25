@@ -38,6 +38,9 @@ export interface Config {
   /** Delivery attempts an outbox message gets before the relay dead-letters it (status 'failed'), so a poison event can't wedge the queue. Dead-letters once `attempts` reaches this cap. */
   maxOutboxAttempts: number;
 
+  /** Apply attempts an inbox event gets before the apply worker dead-letters it (status 'dead'), so a poison inbound event can't wedge the queue. Dead-letters once `attempts` reaches this cap. The inbound mirror of `maxOutboxAttempts`. */
+  maxInboxAttempts: number;
+
   /** Consecutive retryable renewal failures before the renewal sweep lapses a subscription instead of re-billing forever. Lapses once `attempts` reaches this cap. */
   maxSubscriptionAttempts: number;
 
@@ -137,6 +140,7 @@ export function loadConfig(env: EnvMap): Config {
     replayWindowMs: toInt(env.REPLAY_WINDOW_MS, 5 * 60_000),
     maxPayoutAttempts: toInt(env.MAX_PAYOUT_ATTEMPTS, 5),
     maxOutboxAttempts: toInt(env.MAX_OUTBOX_ATTEMPTS, 10),
+    maxInboxAttempts: toInt(env.MAX_INBOX_ATTEMPTS, 10),
     maxSubscriptionAttempts: toInt(env.MAX_SUBSCRIPTION_ATTEMPTS, 10),
     // One day: a payout stuck in SUBMITTED longer than this is force-failed as timed out.
     maxPayoutAgeMs: toInt(env.MAX_PAYOUT_AGE_MS, 24 * 60 * 60_000),

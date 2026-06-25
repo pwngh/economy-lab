@@ -40,12 +40,88 @@ function postgresUrl(): string {
 
 // Unique name so concurrent suites (or reruns) get isolated tables. Combines pid, a base-36
 // timestamp (ms-since-epoch in base 36 to keep it short), and a per-call counter. Used for the
-// Postgres throwaway schema, dropped when the store closes.
+// Postgres throwaway schema and the MySQL throwaway database, each dropped when the store closes.
 let run = 0;
 function freshName(prefix: string): string {
   run += 1;
   let stamp = Date.now().toString(36);
   return `${prefix}_${process.pid}_${stamp}_${run}`;
+}
+
+// Reject any database name that isn't plain identifier characters before pasting it into DDL.
+// A MySQL database name can't be a bound parameter in CREATE/DROP DATABASE, so it goes into the
+// SQL text; this keeps it injection-safe. freshName only ever produces such names, so this just
+// guards the assumption.
+function safeDatabaseName(name: string): string {
+  if (!/^[a-z_][a-z0-9_]*$/.test(name)) {
+    throw new Error(`Unsafe MySQL database name: ${JSON.stringify(name)}`);
+  }
+  return name;
+}
+
+// Swap the database in a MySQL connection URL for `database` (or strip it when null, to connect
+// with no default database — used for the admin pool that runs CREATE/DROP DATABASE). Keeps host,
+// port, and credentials intact.
+function withDatabase(url: string, database: string | null): string {
+  let parsed = new URL(url);
+  parsed.pathname = database ? `/${database}` : '/';
+  return parsed.toString();
+}
+
+/**
+ * Build a MySQL store on its own throwaway database, mirroring the Postgres case's
+ * unique-schema-per-store + drop-on-close discipline.
+ *
+ * prove.ts / fuzz.ts build a fresh store for every probe, seed, and replay. Pointing them all at
+ * the one shared database named in MYSQL_TEST_URL meant re-running the whole DROP-everything +
+ * CREATE-everything schema repeatedly against it; overlapping DDL could leave it half-applied (a
+ * trigger created before its table is visible), so a later statement saw a missing table. Giving
+ * each store its own freshly created database removes the sharing entirely.
+ *
+ * An admin pool with no default database runs `CREATE DATABASE <unique>`; the store's own pool is
+ * pointed at `<unique>` (so applyMysqlSchema's unqualified CREATEs land there). `close()` closes
+ * the store pool, drops the database via the admin pool, then ends the admin pool. If setup throws
+ * partway, the same teardown runs so no pool or database leaks.
+ */
+async function makeMysqlStore(url: string): Promise<Store> {
+  let database = safeDatabaseName(freshName('el_matrix'));
+  let admin = await createMysqlPool(withDatabase(url, null));
+  await admin.query(`CREATE DATABASE \`${database}\``);
+
+  // Drop the throwaway database and tear down the admin pool. Tolerates a missing database and a
+  // failed drop so cleanup on a half-built store still ends every pool.
+  let dropDatabase = async () => {
+    try {
+      await admin.query(`DROP DATABASE IF EXISTS \`${database}\``);
+    } finally {
+      await admin.end();
+    }
+  };
+
+  let pool;
+  try {
+    pool = await createMysqlPool(withDatabase(url, database));
+    await applyMysqlSchema(pool);
+  } catch (error) {
+    if (pool) {
+      await pool.end().catch(() => {});
+    }
+    await dropDatabase().catch(() => {});
+    throw error;
+  }
+
+  let store = mysqlStore({
+    pool,
+    digest: seededDigest(1),
+    clock: fixedClock(0),
+  });
+  return {
+    ...store,
+    close: async () => {
+      await store.close();
+      await dropDatabase();
+    },
+  };
 }
 
 /**
@@ -87,13 +163,7 @@ export function adapterMatrix(): AdapterCase[] {
         if (!url) {
           throw new Error('MYSQL_TEST_URL not set');
         }
-        let pool = await createMysqlPool(url);
-        await applyMysqlSchema(pool);
-        return mysqlStore({
-          pool,
-          digest: seededDigest(1),
-          clock: fixedClock(0),
-        });
+        return makeMysqlStore(url);
       },
     },
     {

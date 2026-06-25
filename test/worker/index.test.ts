@@ -372,6 +372,7 @@ async function skipsTheRelaySweepWhenNoDispatcherIsConfigured(): Promise<void> {
       },
       status: 'pending',
       attempts: 0,
+      reason: null,
     }),
   );
 

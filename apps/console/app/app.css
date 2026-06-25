@@ -751,6 +751,12 @@ select:focus {
   font-family: var(--mono);
   font-size: var(--t-xs);
   color: var(--ink-3);
+  /* The id is one long unbreakable token (pay_<uuid>); keep it to a single tidy line and ellipsize
+     rather than letting it wrap mid-token or push the card wider than its grid column. Full id is on
+     hover (title attribute). Same treatment for the provider ref in .kc-meta below. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .kanban-card .kc-amt {
   font-family: var(--mono);
@@ -767,6 +773,14 @@ select:focus {
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+/* The provider ref (tilia_…) is the other long token on the card — ellipsize it too so it can't
+   spill past the card edge; the full ref is on hover. */
+.kc-meta .mono {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* --- Ledger row expansion: the debit/credit lines of one posting, shown as an indented
@@ -977,4 +991,29 @@ code {
   .kanban {
     grid-template-columns: 1fr;
   }
+}
+
+/* Pager: a quiet footer under a bounded list — "M–N of TOTAL" on the left, Prev/Next on the
+   right. Shown only when a list spills past one page (see the Pager component). Sits flush in a
+   `.card-flush`, so it carries its own padding and a top rule to separate it from the last row. */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s3) var(--s5);
+  border-top: 1px solid var(--rule);
+}
+.pager-info {
+  white-space: nowrap;
+}
+.pager-controls {
+  display: flex;
+  gap: var(--s2);
+}
+/* A pager arrow at the end of the range: looks like a button but isn't clickable. */
+.pager .btn.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
 }

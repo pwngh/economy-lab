@@ -16,9 +16,10 @@ import { realizeFees, sweepTreasury } from '#src/worker/treasury.ts';
 import { reverifyCheckpoint, sealCheckpoint } from '#src/worker/checkpoint.ts';
 import { sweepExpiredPromos } from '#src/worker/promos.ts';
 import { relayOutbox } from '#src/worker/relay.ts';
+import { drainInbox } from '#src/worker/inbox.ts';
 import { reconcileDueWindows } from '#src/worker/reconcile.ts';
 
-import type { WorkerCtx } from '#src/contract.ts';
+import type { Economy, WorkerCtx } from '#src/contract.ts';
 import type {
   Dispatcher,
   Ids,
@@ -39,6 +40,7 @@ import type {
 } from '#src/worker/checkpoint.ts';
 import type { PromoExpirySummary } from '#src/worker/promos.ts';
 import type { RelaySummary } from '#src/worker/relay.ts';
+import type { InboxSummary } from '#src/worker/inbox.ts';
 import type { ReconcileFeed, ReconcileSummary } from '#src/worker/reconcile.ts';
 
 /**
@@ -57,6 +59,10 @@ import type { ReconcileFeed, ReconcileSummary } from '#src/worker/reconcile.ts';
  * fresh one overwrites it; checking the old snapshot catches tampering since it was sealed,
  * whereas a just-taken snapshot always passes (built from the ledger it's compared against).
  * `promos` runs with the other due-item sweeps.
+ *
+ * `drainInbox` is the inbound mirror of `relay` (outbound event delivery vs. inbound event apply),
+ * placed next to it. It submits each received provider event through the economy, so it can post
+ * money — but it's never gated on the pause, so settlements keep flowing during a maintenance window.
  */
 export const SWEEP_NAMES = [
   'payouts',
@@ -66,6 +72,7 @@ export const SWEEP_NAMES = [
   'checkpointVerify',
   'checkpoint',
   'relay',
+  'drainInbox',
   'reconcile',
   'promos',
 ] as const;
@@ -83,6 +90,11 @@ export type SweepInput = {
   // runs every other job. When absent the relay job is skipped; pending rows stay in the outbox
   // (the table of not-yet-delivered events) for a later run once a dispatcher is wired up.
   dispatcher?: Dispatcher;
+  // Economy the inbox-apply job submits each stored inbound Operation through, so the money move runs
+  // through the same invariants and idempotency a direct caller hits. Optional, mirroring
+  // `dispatcher`: a worker process built without an economy handle skips `drainInbox`, leaving pending
+  // inbox rows for a later run once one is wired up.
+  economy?: Economy;
   feed: ReconcileFeed;
   windows: ReadonlyArray<Range>;
   options?: Options;
@@ -105,6 +117,7 @@ export type SweepBatch = {
   checkpoint: SweepResult<CheckpointSummary>;
   checkpointVerify: SweepResult<CheckpointVerifySummary>;
   relay: SweepResult<RelaySummary>;
+  drainInbox: SweepResult<InboxSummary>;
   reconcile: SweepResult<ReconcileSummary>;
   promos: SweepResult<PromoExpirySummary>;
 };
@@ -168,6 +181,23 @@ export async function runSweeps(
               store,
               ctx,
               { dispatcher: input.dispatcher!, limit },
+              options,
+            ),
+          ),
+    // The inbound mirror of relay, and likewise the only other sweep with an optional capability.
+    // With no economy handle there's nothing to submit through, so it short-circuits to an empty
+    // successful summary; pending inbox rows stay put for a later run. Unlike a user write this is
+    // never gated on the economy pause — see drainInbox's note: settlements must keep flowing through
+    // a maintenance window. (The job is still wrapped in `isolate`, so a store/submit failure is
+    // reported as a failed result rather than escaping the run.)
+    drainInbox:
+      input.economy === undefined
+        ? { ok: true, summary: { applied: [], failed: [], deadLettered: [] } }
+        : await isolate(() =>
+            drainInbox(
+              store,
+              ctx,
+              { economy: input.economy!, now, limit },
               options,
             ),
           ),

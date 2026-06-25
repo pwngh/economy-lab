@@ -141,6 +141,20 @@ export const requestPayout = (o: {
   ...o,
 });
 
+export const settlePayout = (o: {
+  sagaId: string;
+  providerRef?: string;
+  providerAmount?: Amount;
+  actor?: Principal;
+}): Operation => ({
+  kind: 'settlePayout',
+  idempotencyKey: claim(),
+  actor: system,
+  providerRef: `prov_${o.sagaId}`,
+  providerAmount: usd('0.02'),
+  ...o,
+});
+
 export const subscribe = (o: {
   userId: string;
   sellerId: string;

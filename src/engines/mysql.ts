@@ -13,7 +13,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { chainHash, balanceDelta, GENESIS } from '#src/ledger.ts';
-import { toAmount } from '#src/money.ts';
+import { toAmount, encodeAmount, decodeAmount, isAmount } from '#src/money.ts';
 import { currency } from '#src/accounts.ts';
 import { fromHex } from '#src/bytes.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
@@ -38,13 +38,15 @@ import type { Link } from '#src/engines/sql-shared.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
-import type { Transaction } from '#src/contract.ts';
+import type { Operation, Transaction } from '#src/contract.ts';
 import type {
   CheckpointStore,
   Clock,
   Digest,
   EntitlementStore,
   IdempotencyStore,
+  InboxEntry,
+  InboxStore,
   Leg,
   Ledger,
   Lot,
@@ -148,12 +150,13 @@ async function isKnownAccount(
   return found.length > 0;
 }
 
-// Head hash of each account's chain, in one query. Entries form a tamper-evident chain (each hash
-// built from the previous); the head is the latest. Each posting touching an account writes one
-// chain_links row, so the link with the highest posting seq carries the head; ROW_NUMBER per
-// account (newest first) picks it. Accounts with no entries are absent from the result; the caller
-// treats a missing account as the genesis hash. Batching turns one round-trip per account into one
-// per posting.
+// Head hash of each account's chain, in one query. `account_balances.head_hash` is the maintained
+// head pointer: post_entry advances it to the account's new link hash in the same transaction it
+// writes chain_links, so this is an O(1) primary-key read per account instead of the old
+// ROW_NUMBER-over-the-whole-chain join-and-sort. Accounts with no balance row are absent from the
+// result; the caller treats a missing account as the genesis hash (a new account's head). The
+// chain_links table stays the source of truth — prove() still re-walks it — so a head pointer
+// drifting from the chain surfaces there.
 async function headsForAccounts(
   exec: MysqlExecutor,
   accounts: ReadonlyArray<AccountRef>,
@@ -165,20 +168,12 @@ async function headsForAccounts(
   let marks = accounts.map(() => '?').join(', ');
   let found = await rows(
     exec,
-    `SELECT t.account_id, t.hash FROM (
-       SELECT c.account_id, c.hash,
-              ROW_NUMBER() OVER (
-                PARTITION BY c.account_id ORDER BY p.seq DESC
-              ) AS rn
-         FROM chain_links c
-         JOIN postings p ON p.id = c.posting_id
-        WHERE c.account_id IN (${marks})
-     ) t
-      WHERE t.rn = 1`,
+    `SELECT account_id, head_hash FROM account_balances
+      WHERE account_id IN (${marks})`,
     accounts,
   );
   for (let row of found) {
-    heads.set(row.account_id as string, row.hash as string);
+    heads.set(row.account_id as string, row.head_hash as string);
   }
   return heads;
 }
@@ -332,6 +327,8 @@ function createLedgerStore(deps: ExecDeps): Ledger {
     lineage: (account) => lineageOf(deps.exec, account),
 
     posting: (txnId) => postingOf(deps.exec, txnId),
+
+    list: () => listPostingsOf(deps.exec),
   };
 }
 
@@ -470,6 +467,23 @@ async function postingOf(
   return { txnId, legs, meta: parseMeta(found[0]!.meta) };
 }
 
+// Stream every posting, newest commit first (see Ledger.list). Orders by `seq` DESC — the
+// ever-increasing commit number (`AUTO_INCREMENT UNIQUE`, a single indexed access path), a total
+// order with no tie to break, the SQL mirror of `payout_sagas ORDER BY updated_at DESC`. Each
+// posting carries its full legs, the way postingOf returns them, so a reader can expand a row
+// without a second round-trip.
+async function* listPostingsOf(
+  exec: MysqlExecutor,
+): AsyncIterable<Posting> {
+  for (let row of await rows(
+    exec,
+    'SELECT id, meta FROM postings ORDER BY seq DESC',
+  )) {
+    let legs = await legsOf(exec, row.id as string);
+    yield { txnId: row.id as string, legs, meta: parseMeta(row.meta) };
+  }
+}
+
 // How much a stored leg changed its account's balance. Leg amounts use a shared sign convention
 // (positive for a debit). Rebuild the leg and apply the account's sign rule: some accounts go up on
 // a debit, others on a credit.
@@ -595,7 +609,7 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
     claimBatch: async (limit) => {
       let result = await rows(
         exec,
-        `SELECT id, event, status, attempts FROM outbox
+        `SELECT id, event, status, attempts, dead_letter_reason FROM outbox
           WHERE status = 'pending' ORDER BY created_at, id
           LIMIT ? FOR UPDATE SKIP LOCKED`,
         [limit],
@@ -630,6 +644,91 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
       await rows(
         exec,
         "UPDATE outbox SET status = 'failed', dead_letter_reason = ? WHERE id = ? AND status = 'pending'",
+        [reason, id],
+      );
+    },
+  };
+}
+
+// --- Inbox store ------------------------------------------------------------------
+
+// The inbound mirror of the outbox: a verified provider event, already mapped to the Operation it
+// applies, is saved (`enqueueInbound`) in the same transaction as the webhook ingress that claimed
+// it, so it exists exactly when that ingress commits. A separate apply worker later claims a batch
+// of pending rows (`claimInbound`); FOR UPDATE SKIP LOCKED lets several workers grab different rows
+// at once. Dedupe is on `key` (the provider event id, UNIQUE in SQL): a redelivered event is a
+// no-op insert and returns the existing row, so the event is applied at most once.
+function createInboxStore(exec: MysqlExecutor): InboxStore {
+  return {
+    // INSERT IGNORE swallows the duplicate-key conflict on the UNIQUE `key`, so a redelivered event
+    // adds no second row. Either way the row stored under that key is read back and returned, so a
+    // duplicate enqueue is a no-op that resolves to the existing row (the idempotency story),
+    // mirroring the in-memory reference. MySQL has no RETURNING, so the row is fetched in a second
+    // read rather than handed back from the insert the way the postgres twin does. The operation's
+    // bigint amounts are carried as decimal strings (encodeOperation) since JSON.stringify can't hold
+    // a BigInt.
+    enqueueInbound: async (entry) => {
+      await rows(
+        exec,
+        `INSERT IGNORE INTO inbox (id, \`key\`, operation, status, attempts, received_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          entry.id,
+          entry.key,
+          JSON.stringify(encodeOperation(entry.operation)),
+          entry.status,
+          entry.attempts,
+          entry.receivedAt,
+        ],
+      );
+      let found = await rows(
+        exec,
+        'SELECT id, `key`, operation, status, attempts, received_at, dead_letter_reason FROM inbox WHERE `key` = ? LIMIT 1',
+        [entry.key],
+      );
+      return rowToInbox(found[0]!);
+    },
+    // Pending rows oldest received_at first, capped at `limit`, row-locked for this worker. FOR
+    // UPDATE SKIP LOCKED lets overlapping apply workers grab disjoint batches. `input.now` is
+    // accepted for parity with the saga/relay claim; the inbox has no due-time gate, so every
+    // pending row is immediately claimable.
+    claimInbound: async (input) => {
+      let result = await rows(
+        exec,
+        `SELECT id, \`key\`, operation, status, attempts, received_at, dead_letter_reason FROM inbox
+          WHERE status = 'pending' ORDER BY received_at, id
+          LIMIT ? FOR UPDATE SKIP LOCKED`,
+        [input.limit],
+      );
+      return result.map(rowToInbox);
+    },
+    // Flip a still-pending row to 'applied' so claimInbound never hands it back. The
+    // `AND status = 'pending'` guard makes this a no-op on a missing or already-terminal
+    // (applied/dead) row, matching the in-memory reference.
+    markApplied: async (id) => {
+      await rows(
+        exec,
+        "UPDATE inbox SET status = 'applied' WHERE id = ? AND status = 'pending'",
+        [id],
+      );
+    },
+    // Record a failed apply: bump `attempts` and leave the row pending so the next sweep retries it.
+    // The `AND status = 'pending'` guard makes this a no-op on a missing or already-terminal row,
+    // and (like the outbox) it never touches status — only deadLetter does that.
+    bumpAttempt: async (id) => {
+      await rows(
+        exec,
+        "UPDATE inbox SET attempts = attempts + 1 WHERE id = ? AND status = 'pending'",
+        [id],
+      );
+    },
+    // Give up on a poison event: flip to 'dead' so claimInbound never hands it back, keep the reason
+    // for operators. The `AND status = 'pending'` guard makes a missing or already-terminal row a
+    // no-op, mirroring the outbox/saga dead-letter guards and the in-memory reference.
+    deadLetter: async (id, reason) => {
+      await rows(
+        exec,
+        "UPDATE inbox SET status = 'dead', dead_letter_reason = ? WHERE id = ? AND status = 'pending'",
         [reason, id],
       );
     },
@@ -700,12 +799,15 @@ function createSagaStore(exec: MysqlExecutor): SagaStore {
       return result.map(rowToSaga);
     },
     advance: async (id, from, to, patch) => {
+      // Read-modify-write the whole row (MySQL has no partial UPDATE the way the postgres twin
+      // coalesces), overlaying the patch's fields. `payout_usd` is the terminal settle outcome,
+      // carried as a USD Amount when settlePayout marks the saga SETTLED and null otherwise.
       let next = { ...(await loadSagaOrThrow(exec, id)), ...patch, state: to };
       let affected = await execWrite(
         exec,
         `UPDATE payout_sagas SET
            reserve = ?, rate_id = ?, state = ?, provider_ref = ?,
-           attempts = ?, due_at = ?, updated_at = ?
+           attempts = ?, due_at = ?, updated_at = ?, payout_usd = ?
          WHERE id = ? AND state = ?`,
         [
           next.reserve.minor.toString(),
@@ -715,6 +817,7 @@ function createSagaStore(exec: MysqlExecutor): SagaStore {
           next.attempts,
           next.dueAt,
           next.updatedAt,
+          next.payoutUsd === null ? null : next.payoutUsd.minor.toString(),
           id,
           from,
         ],
@@ -722,9 +825,11 @@ function createSagaStore(exec: MysqlExecutor): SagaStore {
       return affected > 0;
     },
     deadLetter: async (id, reason) => {
+      // Record the failure reason on the saga's terminal-outcome `reason` field, so it's read straight
+      // off the record instead of re-derived from posting meta.
       await rows(
         exec,
-        "UPDATE payout_sagas SET state = 'FAILED', dead_letter_reason = ? WHERE id = ?",
+        "UPDATE payout_sagas SET state = 'FAILED', reason = ? WHERE id = ?",
         [reason, id],
       );
     },
@@ -1163,7 +1268,98 @@ function rowToOutbox(row: Row): OutboxMessage {
     event: parseJson(row.event) as OutboxMessage['event'],
     status: row.status as OutboxMessage['status'],
     attempts: Number(row.attempts),
+    reason: (row.dead_letter_reason as string | null) ?? null,
   };
+}
+
+function rowToInbox(row: Row): InboxEntry {
+  return {
+    id: row.id as string,
+    key: row.key as string,
+    operation: decodeOperation(parseJson(row.operation) as EncodedOperation),
+    status: row.status as InboxEntry['status'],
+    attempts: Number(row.attempts),
+    receivedAt: Number(row.received_at),
+    reason: (row.dead_letter_reason as string | null) ?? null,
+  };
+}
+
+// JSON-safe form of the Operation stored in the inbox row's `operation` JSON column. JSON.stringify
+// throws on the BigInt inside each Amount, so encodeOperation walks the operation and swaps every
+// branded Amount for its `CREDIT:12.34` string (encodeAmount); decodeOperation reverses it,
+// rebuilding an Operation with real Amounts equal to the original so the apply worker submits the
+// same money move. Same approach as encodeTransaction/decodeTransaction below, generalized over the
+// Operation union: walking by the Amount brand keeps the codec working whichever variant (and
+// whichever amount-bearing fields) the operation has, with no per-kind branch to drift. Kept local
+// here for engine symmetry with the postgres twin (which carries its own copy), not shared.
+type EncodedOperation = Record<string, unknown>;
+
+function encodeOperation(operation: Operation): EncodedOperation {
+  return encodeAmounts(operation) as EncodedOperation;
+}
+
+function decodeOperation(encoded: EncodedOperation): Operation {
+  return decodeAmounts(encoded) as Operation;
+}
+
+// Deep-copy a value, replacing every branded Amount with its encoded string. Recurses through plain
+// objects and arrays; leaves all other scalars untouched. The Amount test comes first so an Amount
+// (itself an object) is encoded rather than walked field-by-field.
+function encodeAmounts(value: unknown): unknown {
+  if (isAmount(value)) {
+    return encodeAmount(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(encodeAmounts);
+  }
+  if (value !== null && typeof value === 'object') {
+    let out: Record<string, unknown> = {};
+    for (let [key, inner] of Object.entries(value)) {
+      out[key] = encodeAmounts(inner);
+    }
+    return out;
+  }
+  return value;
+}
+
+// Reverse of encodeAmounts: deep-copy a parsed JSON value, turning every encoded-amount string back
+// into an Amount. A string is an encoded amount only when it parses as `CURRENCY:decimal`
+// (tryDecodeAmountString); any other string passes through unchanged, so plain string fields
+// (idempotencyKey, sku, reason, …) are left alone.
+function decodeAmounts(value: unknown): unknown {
+  if (typeof value === 'string') {
+    let amount = tryDecodeAmountString(value);
+    return amount ?? value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(decodeAmounts);
+  }
+  if (value !== null && typeof value === 'object') {
+    let out: Record<string, unknown> = {};
+    for (let [key, inner] of Object.entries(value)) {
+      out[key] = decodeAmounts(inner);
+    }
+    return out;
+  }
+  return value;
+}
+
+// Decode an encoded-amount string (`CREDIT:12.34`) back into an Amount, or null if it isn't one. An
+// encoded amount is exactly `CURRENCY:decimal`; a colon alone isn't enough, so the decimal part must
+// parse (decodeAmount throws on a non-numeric tail) — caught here so an ordinary string that merely
+// contains a colon falls through to "not an amount" instead of throwing.
+function tryDecodeAmountString(encoded: string): Amount | null {
+  let colon = encoded.indexOf(':');
+  if (colon < 0) {
+    return null;
+  }
+  let currencyTag = encoded.slice(0, colon) as Amount['currency'];
+  let decimal = encoded.slice(colon + 1);
+  try {
+    return decodeAmount(decimal, currencyTag);
+  } catch {
+    return null;
+  }
 }
 
 function rowToPromoGrant(row: Row): PromoGrant {
@@ -1255,6 +1451,7 @@ function buildUnit(deps: ExecDeps): Unit {
     idempotency: createIdempotencyStore(deps.exec),
     sales: createSaleStore(deps.exec),
     outbox: createOutboxStore(deps.exec),
+    inbox: createInboxStore(deps.exec),
     sagas: createSagaStore(deps.exec),
     entitlements: createEntitlementStore(deps),
     subscriptions: createSubscriptionStore(deps.exec),
@@ -1295,6 +1492,7 @@ export function mysqlStore(deps: {
     idempotency: auto.idempotency,
     sales: auto.sales,
     outbox: auto.outbox,
+    inbox: auto.inbox,
     sagas: auto.sagas,
     entitlements: auto.entitlements,
     subscriptions: auto.subscriptions,
@@ -1348,6 +1546,21 @@ async function releaseLocks(connection: MysqlConnection): Promise<void> {
 }
 
 // --- Creating the database schema -------------------------------------------------
+
+/**
+ * Read the database's stamped schema version from `schema_meta`, or `null` when that table is
+ * absent — an un-migrated or pre-versioning database. The composition layer (selectStore) passes the
+ * result to {@link assertSchemaCurrent} to fail fast on a schema that has drifted from this code.
+ */
+export async function readSchemaVersion(pool: MysqlPool): Promise<string | null> {
+  try {
+    let [rows] = await pool.query('SELECT version FROM schema_meta LIMIT 1');
+    let row = (rows as Array<{ version?: string }>)[0];
+    return row?.version ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Create all tables and stored routines this adapter needs, from the canonical schema file

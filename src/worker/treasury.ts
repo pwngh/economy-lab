@@ -368,6 +368,7 @@ export async function sweepFees(
       },
       status: 'pending',
       attempts: 0,
+      reason: null,
     });
 
     return { duplicate: false, swept: amount, transaction };

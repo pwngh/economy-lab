@@ -243,6 +243,7 @@ export function testConfig(): Config {
     replayWindowMs: 5 * 60_000,
     maxPayoutAttempts: 5,
     maxOutboxAttempts: 10,
+    maxInboxAttempts: 10,
     maxSubscriptionAttempts: 3,
     maxPayoutAgeMs: 24 * 60 * 60_000,
     platformFeeBps: 3000,

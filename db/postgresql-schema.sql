@@ -85,6 +85,15 @@ create table chain_links (
   account_id text        not null references accounts (id),
   prev_hash  text        not null,                          -- previous hash, 64 lowercase hex; the first link uses 32 zero bytes
   hash       text        not null,                          -- the new hash, 64 lowercase hex
+  -- The account's signed running balance immediately after this link (cents/credits), the same
+  -- figure post_entry writes into account_balances.balance for this account in the same call. Lets
+  -- the balance-integrity check below compare a cached balance to its chain head in O(1) instead of
+  -- re-summing the whole leg history on every balance write. A maintained projection of the legs
+  -- (= isDebitNormal-signed sum of the account's legs through this posting), never the source of
+  -- truth: prove()/the integrity checker still re-sum the legs and win on disagreement. Defaults to
+  -- 0 so a link written around post_entry (which supplies no balance_after) carries the genesis
+  -- balance, which a subsequent balance write then has to match.
+  balance_after bigint   not null default 0,
   -- The composite PK enforces the one-link-per-(posting,account) invariant stated above.
   primary key (posting_id, account_id)
 );
@@ -92,6 +101,10 @@ create index chain_links_account_idx on chain_links (account_id);
 -- A previous-hash can be used only once per account, so two postings can't both attach at
 -- the same point and fork the chain into two branches.
 create unique index chain_links_account_prev_uq on chain_links (account_id, prev_hash);
+-- The continuity trigger's non-genesis branch looks up an account's current head by
+-- (account_id, hash); without this it scans every link for the account, so the trigger's
+-- cost grows with that account's chain length on each new posting.
+create index chain_links_account_hash_idx on chain_links (account_id, hash);
 
 -- ============================================================================
 -- Cached per-account balances: the fast read model, updated in the same transaction as the
@@ -103,6 +116,13 @@ create table account_balances (
   account_id text   not null primary key references accounts (id),
   currency   text   not null check (currency in ('CREDIT', 'USD')),
   balance    bigint not null default 0,
+  -- Maintained chain-head pointer: the hash of this account's latest chain_links row, updated in the
+  -- same transaction as the balance (post_entry writes both). A maintained projection alongside
+  -- `balance`, same trust model — chain_links stays the source of truth (prove() still re-walks it).
+  -- Lets headsForAccounts read each account's head by primary key instead of scanning chain_links and
+  -- sorting. Defaults to the genesis hash (64 zeros), so an account that ever held a balance row but
+  -- somehow has no link reads as genesis, matching a missing row.
+  head_hash  text   not null default repeat('0', 64),
   -- A user account (`usr_…:<kind>`) may never go negative; a system account may.
   constraint user_account_non_negative
     check (account_id like 'platform:%' or balance >= 0)
@@ -171,6 +191,30 @@ create table outbox (
 create index outbox_pending_idx on outbox (created_at) where status = 'pending';
 
 -- ============================================================================
+-- Inbox: the inbound mirror of `outbox`. A verified provider event, already mapped to the
+-- operation it should apply, is written in the same transaction as the webhook ingress that
+-- claimed it, so a received event and its record always exist together. A background apply worker
+-- grabs a batch of pending rows oldest-first (locking them so workers don't collide), submits each
+-- operation, and marks them applied; `attempts` and dead-lettering give a poison event somewhere
+-- to stop. `key` is the provider's event id: a UNIQUE constraint makes a redelivered event a no-op
+-- insert, so it applies at most once. The partial index keeps the pending-rows scan fast.
+-- ============================================================================
+create table inbox (
+  id                 text        primary key,                -- ibx_<uuid>
+  key                text        not null unique,            -- the provider's event id: dedupe + the operation's idempotencyKey
+  operation          jsonb       not null,                   -- the serialized Operation to submit (e.g. a topUp/clawback)
+  status             text        not null default 'pending'
+                       check (status in ('pending', 'applied', 'dead')),
+  attempts           int         not null default 0,
+  -- If the worker gives up after repeated failures it marks the row 'dead' and stores the last
+  -- error code here; null while the row is still pending or already applied.
+  dead_letter_reason text,
+  received_at        bigint      not null,                   -- when the verified event was enqueued, epoch ms
+  created_at         timestamptz not null default now()
+);
+create index inbox_pending_idx on inbox (received_at) where status = 'pending';
+
+-- ============================================================================
 -- Payouts: a multi-step saga that moves a creator's earned credits out to real money. Only the
 -- background worker advances it, never a normal request. `reserve` is the earned credit set
 -- aside for this payout; `rate_id` pins the credit-to-USD rate so the settlement can be
@@ -185,9 +229,12 @@ create table payout_sagas (
                        check (state in ('REQUESTED', 'RESERVED', 'SUBMITTED', 'SETTLED', 'FAILED')),
   provider_ref       text,
   attempts           int    not null default 0,
-  -- Why the worker gave up on this payout (when state is 'FAILED'); null otherwise. Stored
-  -- here too so it matches the in-memory and MySQL adapters.
-  dead_letter_reason text,
+  -- The payout's terminal outcome, stored on the saga so any reader takes it straight off the
+  -- record instead of re-deriving it from posting meta. `reason` is the failure reason set when the worker
+  -- dead-letters a payout (FAILED); `payout_usd` is the gross USD disbursed, set when settlePayout
+  -- marks it SETTLED. Both null until the saga reaches its terminal state.
+  reason             text,
+  payout_usd         bigint,
   due_at             bigint not null,
   updated_at         bigint not null
 );
@@ -198,6 +245,10 @@ create table payout_sagas (
 -- it to the two scannable ones.
 create index payout_sagas_due_idx on payout_sagas (due_at)
   where state in ('RESERVED', 'SUBMITTED');
+-- requestPayout's min-interval gate reads max(updated_at) for one user across all their sagas;
+-- without this it scans every saga that user has ever had, so the check's cost grows with their
+-- payout history on each new request.
+create index payout_sagas_user_updated_idx on payout_sagas (user_id, updated_at);
 
 -- ============================================================================
 -- Promo grants: one row per promotional credit handed out. Shares the id of the posting that
@@ -255,6 +306,10 @@ create table subscriptions (
   updated_at   bigint not null
 );
 create index subscriptions_due_idx on subscriptions (next_due_at) where state = 'ACTIVE';
+-- subscribe's activeFor lookup filters by (user_id, sku, seller_id) to find the one ACTIVE row;
+-- without this it scans every subscription a user holds, so the duplicate-guard's cost grows with
+-- their subscription count on each new subscribe.
+create index subscriptions_user_sku_seller_idx on subscriptions (user_id, sku, seller_id);
 
 -- ============================================================================
 -- Velocity / risk log: one row per attempt, used to sum how much a subject has tried to spend
@@ -329,23 +384,42 @@ begin
     select p_txn, l.account, l.currency, l.amount::bigint
       from jsonb_to_recordset(p_legs) as l(account text, currency text, amount text);
 
-  insert into chain_links (posting_id, account_id, prev_hash, hash)
-    select p_txn, c.account, c.prev_hash, c.hash
-      from jsonb_to_recordset(p_links) as c(account text, prev_hash text, hash text);
+  -- One link per distinct account, carrying the account's signed running balance after this posting:
+  -- its current cached balance (0 if it has no row yet — a first-time account) plus this posting's
+  -- net delta. account_balances still holds the OLD balance here (the balance step below runs after),
+  -- so this is exactly the value that step writes into account_balances.balance, by construction. The
+  -- balance-integrity trigger later compares a cached balance to this figure at the account's head.
+  insert into chain_links (posting_id, account_id, prev_hash, hash, balance_after)
+    select p_txn, c.account, c.prev_hash, c.hash,
+           coalesce(ab.balance, 0) + d.delta::bigint
+      from jsonb_to_recordset(p_links) as c(account text, prev_hash text, hash text)
+      join jsonb_to_recordset(p_balances) as d(account text, currency text, delta text)
+        on d.account = c.account
+      left join account_balances ab on ab.account_id = c.account;
 
+  -- Apply each account's net balance delta and advance its maintained head_hash to that account's
+  -- new link hash in the same step. p_links carries one row per distinct account (the same set as
+  -- p_balances), so the join pairs each balance row with its new head. UPDATE existing rows first so
+  -- the non-negative CHECK tests the new total, not the delta alone.
   update account_balances ab
-     set balance = ab.balance + d.delta::bigint
+     set balance = ab.balance + d.delta::bigint,
+         head_hash = c.hash
     from jsonb_to_recordset(p_balances) as d(account text, currency text, delta text)
+    join jsonb_to_recordset(p_links) as c(account text, prev_hash text, hash text)
+      on c.account = d.account
    where ab.account_id = d.account;
 
-  insert into account_balances (account_id, currency, balance)
-    select d.account, d.currency, d.delta::bigint
+  insert into account_balances (account_id, currency, balance, head_hash)
+    select d.account, d.currency, d.delta::bigint, c.hash
       from jsonb_to_recordset(p_balances) as d(account text, currency text, delta text)
+      join jsonb_to_recordset(p_links) as c(account text, prev_hash text, hash text)
+        on c.account = d.account
      where not exists (
        select 1 from account_balances ab where ab.account_id = d.account
      )
     on conflict (account_id)
-      do update set balance = account_balances.balance + excluded.balance;
+      do update set balance = account_balances.balance + excluded.balance,
+                    head_hash = excluded.head_hash;
 end;
 $$;
 
@@ -416,22 +490,31 @@ create constraint trigger legs_conserve
 
 -- ============================================================================
 -- balance integrity (Postgres). account_balances is a cache of the legs: its
--- value must equal the legs' net for the account, signed by the account's normal side — debit-normal
--- accounts grow on debits (+SUM), credit-normal grow on credits (-SUM). post_entry writes exactly
--- that, so this only rejects a hand-edited balance that has drifted from the legs. The debit-normal
--- set mirrors isDebitNormal (src/accounts.ts).
+-- value must equal the legs' net for the account, signed by the account's normal side. post_entry
+-- writes that running total into both account_balances.balance and the new chain_links row's
+-- balance_after in the same call, so this trigger checks the cheap, equivalent thing: a cached
+-- balance must equal the balance_after recorded at the account's head (the chain_links row whose
+-- hash is the row's head_hash). That is an O(1) keyed read (chain_links_account_hash_idx) instead of
+-- re-summing the account's whole leg history on every balance write, yet it still rejects a
+-- hand-edited balance that has drifted: a raw UPDATE that bumps balance leaves head_hash and that
+-- link's balance_after untouched, so the two no longer agree. balance_after is itself the signed leg
+-- sum through that posting (post_entry derives both from the same delta), so this is the same
+-- invariant the prover re-checks by re-summing the legs (the legs stay the source of truth).
+--
+-- A head_hash with no matching chain_links row (e.g. the genesis default on an account that somehow
+-- has no link) yields expected = 0, so only a zero balance passes — matching the genesis state.
 -- ============================================================================
 create or replace function check_balance_integrity() returns trigger as $$
 declare
   expected bigint;
 begin
-  expected := (case when new.account_id in (
-      'platform:trust_cash','platform:usd_clearing','platform:revenue_usd',
-      'platform:stored_value','platform:receivable','platform:promo_float','platform:opening_equity'
-    ) then 1 else -1 end)
-    * coalesce((select sum(amount) from legs where account_id = new.account_id), 0);
+  expected := coalesce(
+    (select balance_after from chain_links
+      where account_id = new.account_id and hash = new.head_hash),
+    0
+  );
   if new.balance <> expected then
-    raise exception 'balance integrity: account % cached balance % <> signed leg sum %',
+    raise exception 'balance integrity: account % cached balance % <> chain head balance %',
       new.account_id, new.balance, expected;
   end if;
   return new;
@@ -441,3 +524,12 @@ $$ language plpgsql;
 create or replace trigger account_balances_integrity
   before insert or update on account_balances
   for each row execute function check_balance_integrity();
+
+-- ============================================================================
+-- Schema version stamp. The engine reads this row on startup and refuses to run if it does not match
+-- SCHEMA_VERSION in src/schema.ts — so a database left on an older schema (e.g. the pre-rename
+-- `vrchat:` accounts) fails loudly instead of being silently misread. Bump the value here, in the
+-- MySQL schema's matching insert, and in src/schema.ts together, whenever this file changes.
+-- ============================================================================
+create table schema_meta (version text not null);
+insert into schema_meta (version) values ('3');

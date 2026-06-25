@@ -14,6 +14,7 @@ import type {
   Transaction,
   EntitlementAttrs,
   FeePolicy,
+  Operation,
 } from '#src/contract.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Config } from '#src/config.ts';
@@ -25,16 +26,17 @@ export type Options = { signal?: AbortSignal };
  * Allowed id prefixes. Every minted id is `<prefix>_<uuid>` (e.g. `txn_…`, `usr_…`).
  */
 export type IdPrefix =
-  | 'usr'
-  | 'txn'
-  | 'evt'
-  | 'obx'
-  | 'pay'
-  | 'sub'
-  | 'chk'
-  | 'ent'
-  | 'rec'
-  | 'adj';
+  | 'usr' // a user — host-supplied (not minted here); owns the wallet accounts
+  | 'txn' // a ledger transaction: one posting of balanced legs
+  | 'evt' // a domain event (EconomyEvent), emitted on commit
+  | 'obx' // an outbox row: a pending event awaiting relay
+  | 'ibx' // an inbox row: a verified inbound event awaiting apply
+  | 'pay' // a payout saga
+  | 'sub' // a subscription
+  | 'chk' // a signed integrity checkpoint
+  | 'ent' // an entitlement — reserved (declared, not currently minted)
+  | 'rec' // a record, e.g. reconciliation/receivable — reserved (not currently minted)
+  | 'adj'; // an operator adjustment — reserved (not currently minted)
 
 /** Reads the current wall-clock time. */
 export interface Clock {
@@ -215,6 +217,14 @@ export interface Ledger {
   // operator-reversal handler fail loudly. Unlike `lineage`, not scoped to one account: returns
   // the one transaction with all its lines.
   posting(txnId: string, options?: Options): Promise<Posting | null>;
+
+  // Every committed posting, newest commit first, streamed one at a time like
+  // `SagaStore.list`. Unlike `posting` (one txn by id) or `lineage` (one account's chain), this is
+  // the whole ledger — all transaction types, every account touched — so a UI can render the
+  // journal without tracking minted txn ids itself. Each posting carries its full legs (like
+  // `posting`), so a reader can expand a row without a second lookup. "Newest first" is the commit
+  // sequence (the postings PK/seq), so the order is total and ties never reorder a page.
+  list(options?: Options): AsyncIterable<Posting>;
 }
 
 /**
@@ -226,6 +236,7 @@ export interface Store {
   idempotency: IdempotencyStore;
   sales: SaleStore;
   outbox: OutboxStore;
+  inbox: InboxStore;
   sagas: SagaStore;
   entitlements: EntitlementStore;
   subscriptions: SubscriptionStore;
@@ -306,13 +317,17 @@ export type StoredLink = {
  * `Store.trust`), `checkpoints` (written only by the background worker), and a separate balance
  * reader (the funds pre-check reads via `ledger.balance`). `promos` is included so `grantPromo`
  * records the grant in the same transaction as the money posting; a rolled-back grant leaves no
- * promo-expiry row.
+ * promo-expiry row. `inbox` is included for the mirror reason: the webhook handler persists a
+ * verified inbound event in the same transaction it claims it (`enqueueInbound`), and the apply
+ * worker marks a row applied (`markApplied`) in the same transaction as the money posting it
+ * drives, so a rolled-back apply leaves the row pending for the next sweep.
  */
 export interface Unit {
   ledger: Ledger;
   idempotency: IdempotencyStore;
   sales: SaleStore;
   outbox: OutboxStore;
+  inbox: InboxStore;
   sagas: SagaStore;
   entitlements: EntitlementStore;
   subscriptions: SubscriptionStore;
@@ -393,6 +408,49 @@ export interface OutboxStore {
   // Give up on a poison message: set status to 'failed' so `claimBatch` never returns it
   // again, recording `reason` (the last failure's error code) for operators. Mirrors
   // SagaStore.deadLetter. A non-existent or already-terminal row is left untouched.
+  deadLetter(id: string, reason: string, options?: Options): Promise<void>;
+}
+
+/**
+ * A transactional inbox: the inbound mirror of {@link OutboxStore}. A verified provider event,
+ * already mapped to the {@link Operation} it should apply, is saved in the same database
+ * transaction as the webhook ingress that claimed it, then a separate apply worker submits each
+ * pending operation and marks the row applied. An inbound event is never applied without being
+ * recorded, nor recorded without eventually being applied (or dead-lettered). Where the outbox is
+ * outbound — a committed money move emits an event to deliver — the inbox is inbound: a received
+ * event drives a money move to post.
+ */
+export interface InboxStore {
+  // Save a verified inbound event to apply later. Called inside the webhook handler's transaction.
+  // Dedupes on `entry.key` (the provider's event id): a duplicate is a no-op that returns the
+  // existing row rather than inserting a second, mirroring the idempotency story so a redelivered
+  // provider event is applied at most once.
+  enqueueInbound(entry: InboxEntry, options?: Options): Promise<InboxEntry>;
+
+  // Grab up to `limit` pending rows for the apply worker, oldest `receivedAt` first. Each is locked
+  // so a concurrent worker skips it and picks different ones. Only 'pending' rows are returned; an
+  // 'applied' or 'dead' (dead-lettered) row is terminal and never re-claimed, so a poison event
+  // can't wedge the queue. Mirrors OutboxStore.claimBatch and the saga/relay claim.
+  claimInbound(
+    input: { now: number; limit: number },
+    options?: Options,
+  ): Promise<ReadonlyArray<InboxEntry>>;
+
+  // Mark a row applied once its operation has been submitted and committed. Called inside the
+  // apply's transaction, so it only takes effect if the money posting actually commits; a
+  // rolled-back apply leaves the row 'pending' for the next sweep. A non-existent or
+  // already-terminal row is left untouched.
+  markApplied(id: string, options?: Options): Promise<void>;
+
+  // Record that applying `id` failed: bump `attempts` by one and leave it 'pending' so the next
+  // sweep retries it. A non-existent row (already applied, dead-lettered, or never enqueued) is
+  // left untouched. Mirrors OutboxStore.recordFailure; must not flip the status, only `deadLetter`
+  // does that.
+  bumpAttempt(id: string, options?: Options): Promise<void>;
+
+  // Give up on a poison event: set status to 'dead' so `claimInbound` never returns it again,
+  // recording `reason` (the last failure's error code) for operators. Mirrors
+  // OutboxStore.deadLetter. A non-existent or already-terminal row is left untouched.
   deadLetter(id: string, reason: string, options?: Options): Promise<void>;
 }
 
@@ -611,6 +669,45 @@ export interface OutboxMessage {
   // How many delivery attempts have been made. Incremented by `recordFailure` each time a dispatch
   // throws; once it reaches the configured cap the relay dead-letters the row.
   attempts: number;
+
+  // Why the relay gave up on this message, set when it reaches the terminal 'failed' status; null
+  // otherwise. The message's dead-letter outcome, read straight from the record. Mirrors
+  // Saga.reason.
+  reason: string | null;
+}
+
+/** One stored inbox row: a verified inbound event mapped to the operation it applies (see InboxStore). */
+export interface InboxEntry {
+  // Unique row id, of the form ibx_<uuid>.
+  id: string;
+
+  // The provider's event id. Doubles as the dedupe key on enqueue (a duplicate provider event is a
+  // no-op that returns the existing row) and as the submitted operation's idempotencyKey, so a
+  // redelivered event resolves to the same money move at most once.
+  key: string;
+
+  // The operation to submit when this row is applied (e.g. a topUp or clawback), already mapped
+  // from the verified provider event.
+  operation: Operation;
+
+  // Where the event is in its apply lifecycle:
+  // - 'pending': still needs applying; the only status `claimInbound` ever hands back.
+  // - 'applied': submitted and committed (set by `markApplied`); never re-claimed.
+  // - 'dead':    dead-lettered after too many attempts (set by `deadLetter`); a terminal, poison
+  //   state that `claimInbound` must skip so it can't wedge the queue.
+  status: 'pending' | 'applied' | 'dead';
+
+  // How many apply attempts have been made. Incremented by `bumpAttempt` each time an apply
+  // throws; once it reaches the configured cap the worker dead-letters the row.
+  attempts: number;
+
+  // When the verified event was received and enqueued, in epoch milliseconds. `claimInbound`
+  // returns pending rows oldest `receivedAt` first.
+  receivedAt: number;
+
+  // Why the worker gave up on this row, set when it reaches the terminal 'dead' status; null
+  // otherwise. The row's dead-letter outcome, read straight from the record. Mirrors Saga.reason.
+  reason: string | null;
 }
 
 /**
@@ -674,6 +771,11 @@ export interface Saga {
   // The payment provider's reference once submitted, null before then.
   providerRef: string | null;
 
+  // Why the worker gave up on this payout, set when it reaches FAILED; null otherwise. The saga's
+  // terminal failure outcome lives on the record itself, so a reader takes it straight off the saga
+  // instead of re-deriving it from posting meta.
+  reason: string | null;
+
   // How many times the worker has tried to advance this saga.
   attempts: number;
 
@@ -681,6 +783,11 @@ export interface Saga {
   dueAt: number;
 
   updatedAt: number;
+
+  // The gross USD disbursed, set when settlePayout marks this payout SETTLED; null otherwise. The
+  // saga's terminal settlement outcome lives on the record itself, so a reader takes it straight off
+  // the saga instead of re-deriving it from posting meta.
+  payoutUsd: Amount | null;
 }
 
 /** The states a subscription can be in. */

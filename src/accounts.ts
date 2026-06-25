@@ -268,6 +268,16 @@ let LOCK_SETS: {
   // are the only locks. The request names the seller by `userId`, so these cover it exactly (not an
   // over-estimate).
   reversePayout: (o) => [SYSTEM.PAYOUT_RESERVE, earned(o.userId)],
+  // Settling a payout posts two platform-only entries (the worker's settle): the credit side empties
+  // PAYOUT_RESERVE into REVENUE, the USD side debits USD_CLEARING / credits TRUST_CASH. No user
+  // wallet account is touched, so these four platform accounts are the full lock set. Named only by
+  // `sagaId`; the reserve amount and seller come off the loaded saga inside the handler.
+  settlePayout: () => [
+    SYSTEM.PAYOUT_RESERVE,
+    SYSTEM.REVENUE,
+    SYSTEM.USD_CLEARING,
+    SYSTEM.TRUST_CASH,
+  ],
 };
 
 // Pull the account kind out of an id like `usr_123:spendable`. Returns null if there's no `:kind`

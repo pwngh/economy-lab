@@ -74,12 +74,12 @@ flowchart TB
     Outbox[["`**Outbox**
     domain events`"]]:::evt
     Worker{{"`**Worker** · asynchronous
-    payouts · subscriptions · fees · checkpoints · relay`"}}:::worker
+    payouts · subscriptions · fees · checkpoints · relay · inbox`"}}:::worker
 
     Ops -- "debit = credit" --> Ledger
     Ledger -- "re-folded on read" --> Reads
     Ledger -- "same transaction" --> Outbox
-    Worker -. "settle · sweep · checkpoint" .-> Ledger
+    Worker -. "submit · sweep · checkpoint · apply" .-> Ledger
 
     classDef entry fill:#ffffff,stroke:#1f6feb,stroke-width:1.5px,color:#1f2328;
     classDef proc fill:#f6f8fa,stroke:#57606a,stroke-width:1px,color:#1f2328;
@@ -219,7 +219,8 @@ await economy.close();
 - **money** — `topUp`, `spend` (a marketplace sale that splits the price buyer → sellers
   → platform fee; pass `giftTo` to gift the item — the buyer pays, the recipient receives
   ownership via an `isGift` purchase flag), `refund`, `clawback`
-- **payouts** — `requestPayout` (cash earned credits out through a provider), `reversePayout`
+- **payouts** — `requestPayout` (cash earned credits out through a provider), `settlePayout`
+  (system: the `SUBMITTED → SETTLED` step, driven by the provider's settlement webhook), `reversePayout`
   (system or operator: undo a reserved payout before it pays out real money)
 - **subscriptions** — `subscribe`, `cancelSubscription`
 - **ownership** — `grantEntitlement`, `revokeEntitlement`
@@ -228,9 +229,9 @@ await economy.close();
   audited; normal users can't call them)
 
 `read` exposes `balance`, `statement` (one account's history), `entitled` (whether a user owns a
-given SKU), and `prove` (the integrity check below). The slower, recurring work — settling payouts, billing renewals, expiring
-promo grants, sweeping fees, relaying events — runs in a separate
-[background worker](#background-worker), not on the request path.
+given SKU), and `prove` (the integrity check below). The slower, recurring work — submitting payouts,
+billing renewals, expiring promo grants, sweeping fees, relaying events, applying inbound provider
+callbacks — runs in a separate [background worker](#background-worker), not on the request path.
 
 ### Building values
 
@@ -372,25 +373,31 @@ mid-flight resumes where it left off, and a step that runs twice still counts on
 
 Cashing a creator out reaches a system the ledger doesn't control — an external payout rail that
 answers in its own time — so `requestPayout` doesn't pay. It reserves the credits (`debit earned →
-credit payout_reserve`) and opens a **saga**, a small record the worker drives forward one step per
-sweep:
+credit payout_reserve`) and opens a **saga**, a small record advanced one step at a time:
 
 ```text
 RESERVED ──▶ SUBMITTED ──▶ SETTLED
+  worker sweep      provider webhook
 
 RESERVED    credits locked in payout_reserve; nothing sent yet
-SUBMITTED   the worker converts the reserve to USD and calls your payout rail
-SETTLED     the rail confirms; the reserve clears to revenue and an equal sum
-            of real dollars leaves trust_cash for the creator
+SUBMITTED   the worker sweep converts the reserve to USD and calls your payout rail
+SETTLED     the rail's "payout settled" webhook confirms; the reserve clears to
+            revenue and an equal sum of real dollars leaves trust_cash for the creator
 ```
 
-Because each sweep advances one state, a fresh payout settles after two: one to submit, one to settle.
+The two steps run on different triggers. The worker's payout sweep does only the first — it **submits**
+a `RESERVED` payout to the rail and moves it to `SUBMITTED`. It no longer self-settles. Settlement
+arrives **on the provider's settlement webhook**: the rail's verified "payout settled" callback maps to
+a `settlePayout` operation that the [background worker](#background-worker)'s inbox drain applies off the
+request path, and that operation runs the `SUBMITTED → SETTLED` step.
+
 Three guards make that safe to re-drive. The call to your rail is **idempotent** (keyed by the saga
-id), so a retried submit pays once. Each state change is a **compare-and-set**, so two workers racing
-the same saga can't both settle it. And a payout that keeps failing or sits unconfirmed too long is
-given up on — past `MAX_PAYOUT_ATTEMPTS` attempts or `MAX_PAYOUT_AGE_MS` of silence it fails and the
-reserve returns to the creator's `earned`. An operator can force that same reversal early with
-`reversePayout`, as long as the money hasn't already left.
+id), so a retried submit pays once; the webhook is deduped on the provider event id, so a redelivered
+settlement settles once. Each state change is a **compare-and-set**, so two settles racing the same
+saga can't both clear it. And a payout that keeps failing, or sits in `SUBMITTED` with no settlement
+webhook for too long, is given up on — past `MAX_PAYOUT_ATTEMPTS` attempts or `MAX_PAYOUT_AGE_MS` of
+silence the sweep fails it and the reserve returns to the creator's `earned`. An operator can force
+that same reversal early with `reversePayout`, as long as the money hasn't already left.
 
 ### Subscriptions
 
@@ -507,19 +514,19 @@ Correctness here is attacked, not asserted — four independent layers:
 
 ## What it demonstrates
 
-| Capability                   | Where                                                                                                          | What it guarantees                                                                                                                                |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Double-entry ledger          | [ledger.ts](src/ledger.ts)                                                                                     | A posting is rejected unless its debit and credit lines net to zero per currency; an account's balance is the sum of its lines.                   |
-| Tamper-evident history       | [chain.ts](src/chain.ts), [integrity.ts](src/integrity.ts)                                                     | Each posting is hash-chained to the previous one per account; `proveChain` recomputes the chain and locates any altered entry.                    |
-| Idempotent requests + outbox | [economy.ts](src/economy.ts), [worker/relay.ts](src/worker/relay.ts)                                           | A retried request runs once — the idempotency key, the postings, and the outbound event all commit in one transaction; duplicates replay.         |
-| Marketplace + fee policy     | [operations/spend.ts](src/operations/spend.ts), [pricing.ts](src/pricing.ts)                                   | A sale charges the buyer and pays the sellers in one balanced transaction; shares must sum to 100%; the fee is injected policy, not a branch.     |
-| Payout saga + retries        | [operations/requestPayout.ts](src/operations/requestPayout.ts), [worker/payouts.ts](src/worker/payouts.ts)     | A provider that fails then succeeds pays once; a stuck payout re-drives on a schedule, with the credits reserved meanwhile.                       |
-| Recurring subscriptions      | [operations/subscribe.ts](src/operations/subscribe.ts), [worker/subscriptions.ts](src/worker/subscriptions.ts) | Each period bills once; an underfunded renewal lapses instead of overdrawing; a due-sweep drives renewals.                                        |
-| Refunds & clawback           | [operations/refund.ts](src/operations/refund.ts), [operations/clawback.ts](src/operations/clawback.ts)         | A refund restores each account the sale touched, booking any uncollectable remainder to a receivable; a clawback pulls credits back the same way. |
-| Settlement maturity gate     | [maturity.ts](src/maturity.ts)                                                                                 | Payouts and sweeps release only funds settled past the chargeback window; fresh credits are held back until they mature.                          |
-| Spend-velocity risk gate     | [trust.ts](src/trust.ts)                                                                                       | Recent spend is summed over a sliding window and checked against a limit, producing an allow/deny decision before any money moves.                |
-| Processor reconciliation     | [reconcile.ts](src/reconcile.ts)                                                                               | The ledger is matched against the payment processor's own records to surface anything present on one side but not the other.                      |
-| Swappable storage            | [engines/](src/engines), [adapters/](src/adapters)                                                             | The same logic runs in-memory and on Postgres, MySQL, Redis, and SQS; one conformance suite runs against every backend.                           |
+| Capability                   | Where                                                                                                                                                                    | What it guarantees                                                                                                                                                                                                                           |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Double-entry ledger          | [ledger.ts](src/ledger.ts)                                                                                                                                               | A posting is rejected unless its debit and credit lines net to zero per currency; an account's balance is the sum of its lines.                                                                                                              |
+| Tamper-evident history       | [chain.ts](src/chain.ts), [integrity.ts](src/integrity.ts)                                                                                                               | Each posting is hash-chained to the previous one per account; `proveChain` recomputes the chain and locates any altered entry.                                                                                                               |
+| Idempotent requests + outbox | [economy.ts](src/economy.ts), [worker/relay.ts](src/worker/relay.ts)                                                                                                     | A retried request runs once — the idempotency key, the postings, and the outbound event all commit in one transaction; duplicates replay.                                                                                                    |
+| Marketplace + fee policy     | [operations/spend.ts](src/operations/spend.ts), [pricing.ts](src/pricing.ts)                                                                                             | A sale charges the buyer and pays the sellers in one balanced transaction; shares must sum to 100%; the fee is injected policy, not a branch.                                                                                                |
+| Payout saga + retries        | [operations/requestPayout.ts](src/operations/requestPayout.ts), [worker/payouts.ts](src/worker/payouts.ts), [operations/settlePayout.ts](src/operations/settlePayout.ts) | The worker submits a payout to the rail; the rail's settlement webhook settles it (deduped, so it settles once); a provider that fails then succeeds pays once; a stuck payout re-drives then reverses, with the credits reserved meanwhile. |
+| Recurring subscriptions      | [operations/subscribe.ts](src/operations/subscribe.ts), [worker/subscriptions.ts](src/worker/subscriptions.ts)                                                           | Each period bills once; an underfunded renewal lapses instead of overdrawing; a due-sweep drives renewals.                                                                                                                                   |
+| Refunds & clawback           | [operations/refund.ts](src/operations/refund.ts), [operations/clawback.ts](src/operations/clawback.ts)                                                                   | A refund restores each account the sale touched, booking any uncollectable remainder to a receivable; a clawback pulls credits back the same way.                                                                                            |
+| Settlement maturity gate     | [maturity.ts](src/maturity.ts)                                                                                                                                           | Payouts and sweeps release only funds settled past the chargeback window; fresh credits are held back until they mature.                                                                                                                     |
+| Spend-velocity risk gate     | [trust.ts](src/trust.ts)                                                                                                                                                 | Recent spend is summed over a sliding window and checked against a limit, producing an allow/deny decision before any money moves.                                                                                                           |
+| Processor reconciliation     | [reconcile.ts](src/reconcile.ts)                                                                                                                                         | The ledger is matched against the payment processor's own records to surface anything present on one side but not the other.                                                                                                                 |
+| Swappable storage            | [engines/](src/engines), [adapters/](src/adapters)                                                                                                                       | The same logic runs in-memory and on Postgres, MySQL, Redis, and SQS; one conformance suite runs against every backend.                                                                                                                      |
 
 ### The same flows, seen by an adversary
 
@@ -653,9 +660,11 @@ write routes — everything else is a 404:
 - `POST /submit` — the JSON body is one operation; the result comes back as JSON. Money
   fields travel as currency-tagged decimal strings (e.g. `"CREDIT:50.00"`), and a business
   decline returns `200` with the rejection, not an error status.
-- `POST /webhooks/:provider` — the bundled purchase-webhook handler verifies the provider's
-  HMAC signature and timestamp freshness, then maps a verified callback to an exactly-once
-  top-up; a forged or stale callback is refused before any money moves.
+- `POST /webhooks/:provider` — the inbound-callback handler verifies the provider's HMAC
+  signature and timestamp freshness, then maps a verified callback to the exactly-once
+  operation it applies — a purchase to a `topUp`, a **payout settled to a `settlePayout`** (the
+  `SUBMITTED → SETTLED` step), a dispute to a `clawback` — and persists it to the inbox for the
+  worker to drain off the request path. A forged or stale callback is refused before any money moves.
 
 ```bash
 PORT=3000 make start
@@ -673,22 +682,25 @@ curl -sX POST localhost:3000/submit -H 'content-type: application/json' -d '{
 
 `make worker` runs the recurring work that doesn't belong on the request path. It does one
 sweep immediately, then repeats every `WORKER_INTERVAL_MS` (default 60s), handling up to
-`WORKER_BATCH` rows per job. Each tick runs nine jobs in order, each isolated so one failing
+`WORKER_BATCH` rows per job. Each tick runs ten jobs in order, each isolated so one failing
 can't stop the rest:
 
-| Job                   | What it does                                            |
-| --------------------- | ------------------------------------------------------- |
-| **payouts**           | advance each due payout saga one step                   |
-| **subscriptions**     | bill or lapse due renewals                              |
-| **treasury**          | re-check that trust cash still backs the liability      |
-| **fees**              | sweep the platform's matured fee surplus into cash      |
-| **checkpoint-verify** | re-verify the last signed checkpoint against the ledger |
-| **checkpoint**        | seal a fresh signed checkpoint of the ledger            |
-| **relay**             | deliver pending outbox events through the dispatcher    |
-| **reconcile**         | compare the ledger against the payment processor        |
-| **promos**            | claw back unspent, expired promo grants                 |
+| Job                   | What it does                                                       |
+| --------------------- | ------------------------------------------------------------------ |
+| **payouts**           | submit each due `RESERVED` payout to the rail; fail timed-out ones |
+| **subscriptions**     | bill or lapse due renewals                                         |
+| **treasury**          | re-check that trust cash still backs the liability                 |
+| **fees**              | sweep the platform's matured fee surplus into cash                 |
+| **checkpoint-verify** | re-verify the last signed checkpoint against the ledger            |
+| **checkpoint**        | seal a fresh signed checkpoint of the ledger                       |
+| **relay**             | deliver pending outbox events through the dispatcher               |
+| **drain-inbox**       | apply received provider callbacks (e.g. settle a SUBMITTED payout) |
+| **reconcile**         | compare the ledger against the payment processor                   |
+| **promos**            | claw back unspent, expired promo grants                            |
 
-`relay` and `reconcile` are no-ops when no dispatcher or reconcile feed is configured.
+`relay`, `drain-inbox`, and `reconcile` are no-ops when no dispatcher, economy handle, or reconcile
+feed is configured. Unlike the others, `drain-inbox` runs even during a maintenance pause: a provider
+settlement the rail already confirmed must keep flowing.
 
 ```bash
 make worker                                     # every 60s, batch 100

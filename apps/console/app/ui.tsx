@@ -13,6 +13,7 @@
 // here so every page renders them the same way.
 
 import type { ReactNode } from 'react';
+import { Link } from 'react-router';
 
 // Two decimal places with grouping — the house format for every credit and USD figure.
 export function fmtAmount(n: number): string {
@@ -132,4 +133,76 @@ export function DataTable({
       <tbody>{children}</tbody>
     </table>
   );
+}
+
+// A page window over a bounded list: a "M–N of TOTAL" caption and Prev/Next links. Paging is
+// URL-driven (the loader reads `?page=`), so each link is a real GET that re-runs the loader and
+// holds the DOM to one page of rows — no client-side accumulation. `baseSearch` carries any other
+// query params (e.g. the accounts page's `?user=`) so they survive paging. Rendered only when the
+// list spills past one page; a single-page list shows nothing.
+export function Pager({
+  offset,
+  limit,
+  total,
+  baseSearch,
+}: {
+  offset: number;
+  limit: number;
+  total: number;
+  baseSearch?: URLSearchParams;
+}) {
+  if (total <= limit) {
+    return null;
+  }
+  const page = Math.floor(offset / limit);
+  const lastPage = Math.max(0, Math.ceil(total / limit) - 1);
+  const first = total === 0 ? 0 : offset + 1;
+  const last = Math.min(total, offset + limit);
+
+  const href = (p: number) => {
+    const params = new URLSearchParams(baseSearch);
+    if (p <= 0) {
+      params.delete('page');
+    } else {
+      params.set('page', String(p));
+    }
+    const qs = params.toString();
+    return qs ? `?${qs}` : '?';
+  };
+
+  return (
+    <div className="pager">
+      <span className="pager-info dim small">
+        {first}–{last} of {total}
+      </span>
+      <div className="pager-controls">
+        {page > 0 ? (
+          <Link className="btn" to={href(page - 1)} preventScrollReset>
+            ← Prev
+          </Link>
+        ) : (
+          <span className="btn disabled" aria-disabled="true">
+            ← Prev
+          </span>
+        )}
+        {page < lastPage ? (
+          <Link className="btn" to={href(page + 1)} preventScrollReset>
+            Next →
+          </Link>
+        ) : (
+          <span className="btn disabled" aria-disabled="true">
+            Next →
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Parse `?page=` (zero-based) into a bounded offset for a given page size. A missing or junk value
+// is page 0. The facade re-clamps, so this only has to be roughly sane.
+export function pageOffset(url: string, limit: number): number {
+  const raw = Number(new URL(url).searchParams.get('page') ?? 0);
+  const page = Number.isInteger(raw) && raw > 0 ? raw : 0;
+  return page * limit;
 }

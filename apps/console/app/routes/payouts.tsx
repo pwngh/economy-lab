@@ -10,18 +10,20 @@
  */
 
 import type { Route } from './+types/payouts';
-import { getEconomy } from '~/economy.server';
-import { Credits, StatusPill, dayLabel } from '~/ui';
+import { getEconomy, PAGE_SIZE } from '~/economy.server';
+import { Credits, Pager, StatusPill, dayLabel, pageOffset } from '~/ui';
 
-export async function loader(_: Route.LoaderArgs) {
+export async function loader({ request }: Route.LoaderArgs) {
   const eco = await getEconomy();
-  return {
-    payouts: await eco.payouts(),
-    settings: eco.settings(),
-  };
+  const offset = pageOffset(request.url, PAGE_SIZE);
+  const [page, counts] = await Promise.all([
+    eco.payouts({ offset, limit: PAGE_SIZE }),
+    eco.payoutCounts(),
+  ]);
+  return { page, counts, settings: eco.settings() };
 }
 
-type PayoutView = Route.ComponentProps['loaderData']['payouts'][number];
+type PayoutView = Route.ComponentProps['loaderData']['page']['rows'][number];
 
 // The saga lifecycle columns: RESERVED → SUBMITTED → SETTLED, plus FAILED (dead-letter, reserve
 // reversed to the seller). REQUESTED folds into RESERVED, since requestPayout opens directly in it.
@@ -37,14 +39,26 @@ const COLUMNS: {
 ];
 
 export default function Payouts({ loaderData }: Route.ComponentProps) {
-  const { payouts, settings } = loaderData;
+  const { page, counts, settings } = loaderData;
+  const { rows: payouts, offset, limit, total } = page;
 
+  // The cards on this page, bucketed by column. The board is paged newest-first across all states,
+  // so a given page may not fill every column — the *true* per-column total comes from `counts`
+  // (a single streaming tally), shown in the header, while only this page's cards are rendered.
   const byState = (s: PayoutView['state']) =>
     payouts.filter((p) =>
       s === 'RESERVED'
         ? p.state === 'RESERVED' || p.state === 'REQUESTED'
         : p.state === s,
     );
+  const countFor = (s: PayoutView['state']): number =>
+    s === 'RESERVED'
+      ? counts.RESERVED
+      : s === 'SUBMITTED'
+        ? counts.SUBMITTED
+        : s === 'SETTLED'
+          ? counts.SETTLED
+          : counts.FAILED;
 
   return (
     <div className="page">
@@ -65,14 +79,17 @@ export default function Payouts({ loaderData }: Route.ComponentProps) {
       <div className="kanban">
         {COLUMNS.map((col) => {
           const items = byState(col.state);
+          const colTotal = countFor(col.state);
           return (
             <div className="kanban-col" key={col.state}>
               <div className="kanban-head">
                 <span>{col.title}</span>
-                <StatusPill tone={col.tone}>{items.length}</StatusPill>
+                <StatusPill tone={col.tone}>{colTotal}</StatusPill>
               </div>
               {items.length === 0 ? (
-                <div className="kanban-empty">No payouts</div>
+                <div className="kanban-empty">
+                  {colTotal === 0 ? 'No payouts' : 'None on this page'}
+                </div>
               ) : (
                 items.map((p) => (
                   <Card key={p.id} p={p} cap={settings.maxPayoutAttempts} />
@@ -82,6 +99,8 @@ export default function Payouts({ loaderData }: Route.ComponentProps) {
           );
         })}
       </div>
+
+      <Pager offset={offset} limit={limit} total={total} />
 
       <div className="card">
         <h3>How a card moves</h3>
@@ -101,7 +120,9 @@ function Card({ p, cap }: { p: PayoutView; cap: number }) {
   const failed = p.state === 'FAILED';
   return (
     <div className="kanban-card">
-      <div className="kc-id">{p.id}</div>
+      <div className="kc-id" title={p.id}>
+        {p.id}
+      </div>
       <div className="kc-amt">
         <Credits value={p.reserveCredits} />
       </div>
@@ -121,7 +142,7 @@ function Card({ p, cap }: { p: PayoutView; cap: number }) {
           <span className="debit">reason · {p.reason}</span>
         ) : null}
         {!terminal ? <span>due {dayLabel(p.dueAt)}</span> : null}
-        <span className="mono">
+        <span className="mono" title={p.providerRef ?? undefined}>
           {p.providerRef ? `ref ${p.providerRef}` : 'no provider ref yet'}
         </span>
       </div>

@@ -172,6 +172,7 @@ async function lapseAtomically(
       event: lapsedEvent(ctx, sub),
       status: 'pending',
       attempts: 0,
+      reason: null,
     });
   });
 }
@@ -242,6 +243,7 @@ async function renew(
       event: renewedEvent(ctx, sub),
       status: 'pending',
       attempts: 0,
+      reason: null,
     });
     tally.charged.push(sub.id);
   });

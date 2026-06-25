@@ -29,7 +29,8 @@
 
 import { createServer as nodeHttpServer } from 'node:http';
 
-import { compose, composeWorker, loadConfig } from '#src/index.ts';
+import { capabilitiesFromEnv, composeWorker, loadConfig } from '#src/index.ts';
+import { createEconomy } from '#src/economy.ts';
 import { createServer } from '#src/server.ts';
 import { jsonlLogger, systemCapabilities, toHex } from '#src/runtime.ts';
 import { flatFee } from '#src/pricing.ts';
@@ -39,9 +40,15 @@ import { decodeWebhookEvent, handlePurchaseWebhook } from '#src/webhooks.ts';
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ExternalPorts, RuntimeDefaults } from '#src/index.ts';
-import type { Logger, Processor, Rates, Store } from '#src/ports.ts';
+import type {
+  Clock,
+  Ids,
+  Logger,
+  Processor,
+  Rates,
+  Store,
+} from '#src/ports.ts';
 import type { Currency } from '#src/money.ts';
-import type { Economy } from '#src/contract.ts';
 import type { WebhookHandler } from '#src/server.ts';
 import type { ReconcileFeed } from '#src/worker/reconcile.ts';
 
@@ -229,19 +236,20 @@ function wiring(env: Env): {
 // the provider's signature, checked the timestamp is recent, and (when a seen-events store is wired)
 // recorded the event id so the same event isn't processed twice. So the body is trusted and first-seen.
 //
-// The handler decodes the body to a typed event and credits via the economy's "topUp". That credit
-// carries an idempotency key derived from the event id, so a retry with the same key isn't applied
-// again — even a duplicate delivery that slips past the seen-events check credits the user once.
+// The handler decodes the body to a typed event and persists the resulting "topUp" to the inbox,
+// rather than posting it inline: it acknowledges fast and the apply worker (`drainInbox`) settles the
+// credit off the request path. The inbox dedupes on the provider event id, so a redelivery that slips
+// past the seen-events check enqueues no second row and credits the user once.
 //
 // On a malformed body or any thrown error, the response carries only the error message and mapped
 // status code, never internal details.
-function purchaseWebhook(economy: Economy): WebhookHandler {
+function purchaseWebhook(store: Store, ids: Ids, clock: Clock): WebhookHandler {
   return async (provider, request) => {
     try {
       let body = await request.json();
       let event = decodeWebhookEvent(provider, body);
-      let outcome = await handlePurchaseWebhook(economy, event);
-      return new Response(JSON.stringify({ status: outcome.status }), {
+      let ack = await handlePurchaseWebhook(store, { ids, clock }, event);
+      return new Response(JSON.stringify({ status: ack.status }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
@@ -462,15 +470,19 @@ function onShutdown(env: Env, drain: () => Promise<void>): void {
 // they pass: `dev` forces in-memory adapters and dev secrets (see `devEnv`).
 async function runServe(env: Env): Promise<void> {
   const { ports, defaults } = wiring(env);
-  const economy = await compose(env, ports, defaults);
+  // Build the capability bundle once so the economy and the webhook handler share one store, id
+  // generator, and clock: the handler persists each verified callback into the very store the apply
+  // worker (`drainInbox`) later drains. `compose` would return only the economy (not its store), but
+  // the webhook now writes to the inbox, so we need the store handle.
+  const caps = await capabilitiesFromEnv(env, ports, defaults);
+  const economy = createEconomy(caps);
   const config = loadConfig(env);
   // Mount the purchase-webhook handler with the checks that activate webhook security: config and
-  // clock let the server verify each callback's signature and timestamp, so a genuine callback
-  // becomes a topUp and a forged or stale one is rejected before it changes anything. No seen-events
-  // store is passed here, since `compose` returns the economy but not its underlying store. The
-  // topUp's idempotency key (derived from the event id) still credits each event at most once.
+  // clock let the server verify each callback's signature and timestamp, so a genuine callback is
+  // persisted to the inbox as a topUp and a forged or stale one is rejected before it changes
+  // anything. The inbox dedupes on the provider event id, so each event is enqueued at most once.
   const handler = createServer(economy, {
-    webhook: purchaseWebhook(economy),
+    webhook: purchaseWebhook(caps.store, caps.ids, caps.clock),
     config,
     clock: defaults.clock,
   });

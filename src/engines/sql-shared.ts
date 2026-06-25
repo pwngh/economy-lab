@@ -84,6 +84,14 @@ export function rowToSaga(row: Record<string, unknown>): Saga {
     rateId: row.rate_id as string,
     state: row.state as SagaState,
     providerRef: (row.provider_ref as string | null) ?? null,
+    // Terminal-outcome fields, both null until the saga reaches its terminal state: `reason` is the
+    // worker's failure reason (FAILED), `payoutUsd` the gross USD disbursed (SETTLED, decoded as a
+    // USD Amount the way `reserve` decodes a CREDIT one).
+    reason: (row.reason as string | null) ?? null,
+    payoutUsd:
+      row.payout_usd === null || row.payout_usd === undefined
+        ? null
+        : toAmount('USD', readMinor(row.payout_usd)),
     attempts: Number(row.attempts),
     dueAt: Number(row.due_at),
     updatedAt: Number(row.updated_at),

@@ -132,6 +132,7 @@ function outboxMessage(id: string): OutboxMessage {
     },
     status: 'pending',
     attempts: 0,
+    reason: null,
   };
 }
 
@@ -146,9 +147,11 @@ function sagaRow(
     rateId: 'rate_test',
     state: 'RESERVED',
     providerRef: null,
+    reason: null,
     attempts: 0,
     dueAt: 0,
     updatedAt: overrides.dueAt ?? 0,
+    payoutUsd: null,
     ...overrides,
   };
 }

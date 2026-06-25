@@ -189,6 +189,25 @@ export type Operation =
       // payout that has already disbursed real USD is refused. `userId` names the seller so the
       // engine knows which account to lock; the operation is identified only by its payout id and
       // names no account directly.
+    }
+  | {
+      kind: 'settlePayout';
+      idempotencyKey: string;
+      actor: Principal;
+      sagaId: string;
+      // The provider's settlement reference for this payout (the rail's own id for the
+      // disbursement), recorded for the audit trail. Carried from the inbound provider webhook that
+      // drives the settle.
+      providerRef: string;
+      // The USD amount the provider reported settling. Recorded for the audit trail / reconciliation;
+      // the figures actually posted are the rate-derived ones the worker computes (gross USD from the
+      // reserve at the payout rate, less the rail fee), kept byte-for-byte identical so a settle
+      // driven by a webhook moves exactly what the worker's settle moved.
+      providerAmount: Amount;
+      // System- or operator-only (RESTRICTED_TO_PRIVILEGED in economy.ts): the SUBMITTED -> SETTLED
+      // step that empties the seller's reserve into REVENUE and moves the gross USD out of trust.
+      // An end user must never settle their own payout. Named only by its payout id (`sagaId`); the
+      // postings touch platform accounts only, no user wallet account is named directly.
     };
 
 /**
@@ -330,6 +349,13 @@ export interface Economy {
     // settled and failed payouts included, not only the due ones the worker claims. Lets a UI render
     // payout status without tracking minted payout ids itself. Delegates to `SagaStore.list`.
     payouts(options?: Options): AsyncIterable<Saga>;
+    // Every committed posting, newest first, streamed (a busy ledger can have many): the whole
+    // journal — user operations and the worker's own postings alike, every account touched, not
+    // only the ones a given reader minted. Each posting carries its full legs, so a UI can render
+    // and expand a row without a second lookup. Lets the journal be read from the engine itself
+    // instead of a side-channel that only sees the writes one process happened to make. Delegates
+    // to `Ledger.list`.
+    postings(options?: Options): AsyncIterable<Posting>;
     prove(options?: Options): Promise<ProveReport>;
   };
   close(): Promise<void>;

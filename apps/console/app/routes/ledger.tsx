@@ -13,14 +13,24 @@ import { Fragment, useState } from 'react';
 import { Link } from 'react-router';
 
 import type { Route } from './+types/ledger';
-import { getEconomy } from '~/economy.server';
-import { Amount, Credits, DataTable, StatusPill, Usd, dayLabel } from '~/ui';
+import { getEconomy, PAGE_SIZE } from '~/economy.server';
+import {
+  Amount,
+  Credits,
+  DataTable,
+  Pager,
+  StatusPill,
+  Usd,
+  dayLabel,
+  pageOffset,
+} from '~/ui';
 
-type Txn = Route.ComponentProps['loaderData']['txns'][number];
+type Txn = Route.ComponentProps['loaderData']['page']['rows'][number];
 
-export async function loader(_: Route.LoaderArgs) {
+export async function loader({ request }: Route.LoaderArgs) {
   const eco = await getEconomy();
-  return { txns: eco.ledger() };
+  const offset = pageOffset(request.url, PAGE_SIZE);
+  return { page: await eco.ledger({ offset, limit: PAGE_SIZE }) };
 }
 
 function dayHeading(at: number) {
@@ -44,7 +54,8 @@ const KIND_TONE: Record<string, 'blue' | 'green' | 'amber' | 'red'> = {
 // The ledger feed: every committed posting, newest first, grouped by day and expandable to its
 // legs. Worker settlements and sweeps are folded to one row per event (the cash leg in the expansion).
 export default function Ledger({ loaderData }: Route.ComponentProps) {
-  const { txns } = loaderData;
+  const { page } = loaderData;
+  const { rows: txns, offset, limit, total } = page;
   const [open, setOpen] = useState<Set<string>>(new Set());
 
   function toggle(id: string) {
@@ -107,6 +118,7 @@ export default function Ledger({ loaderData }: Route.ComponentProps) {
             ))}
           </DataTable>
         )}
+        <Pager offset={offset} limit={limit} total={total} />
       </div>
     </div>
   );

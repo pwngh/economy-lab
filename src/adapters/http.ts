@@ -25,12 +25,14 @@ import type {
   Lot,
   Options,
   OutboxMessage,
+  Posting,
   StoredLink,
   Store,
   Unit,
   CheckpointStore,
   EntitlementStore,
   IdempotencyStore,
+  InboxStore,
   Ledger,
   OutboxStore,
   PromoStore,
@@ -137,6 +139,7 @@ function sessionLedger(
       streamBalanceAccounts(transport, session, options),
     lineage: (account, options) =>
       streamLineage(transport, account, session, options),
+    list: (options) => streamPostings(transport, session, options),
   };
 }
 
@@ -212,6 +215,26 @@ async function* streamLineage(
   }
 }
 
+// Every committed posting, newest first, one at a time. Like the other streamed reads, the server
+// returns them in one response and this yields them in order; each row carries its legs' amounts,
+// so it runs back through the wire codec (decodeWire.posting), unlike the amount-free `heads` and
+// `balanceAccounts` streams.
+async function* streamPostings(
+  transport: { fetch: FetchLike; baseUrl: string },
+  session: string,
+  options?: Options,
+): AsyncIterable<Posting> {
+  let rows = (await call(
+    transport,
+    `/tx/${session}/ledger/list`,
+    {},
+    options,
+  )) as unknown[];
+  for (let row of rows) {
+    yield decodeWire.posting(row);
+  }
+}
+
 // --- The sub-stores, scoped to one transaction ------------------------------------
 // Each builder returns one sub-store's interface for a session id, turning every method
 // into a request to that session (or 'root' for calls outside a transaction). Args and
@@ -276,6 +299,41 @@ function sessionOutbox(
     },
     recordFailure: async (id, options) => {
       await call(transport, at('recordFailure'), { id }, options);
+    },
+    deadLetter: async (id, reason, options) => {
+      await call(transport, at('deadLetter'), { id, reason }, options);
+    },
+  };
+}
+
+function sessionInbox(
+  transport: { fetch: FetchLike; baseUrl: string },
+  session: string,
+): InboxStore {
+  let at = (method: string): string => `/tx/${session}/inbox/${method}`;
+  return {
+    // Dedupes on `key`: the server returns the existing row for a duplicate provider event, so the
+    // resolved entry must survive the round trip. Unlike the outbox message, an InboxEntry carries a
+    // whole Operation whose money fields hold a bigint JSON can't serialize, so it rides through the
+    // `inboxEntry` codec (amounts as decimal strings) both ways.
+    enqueueInbound: async (entry, options) =>
+      decodeWire.inboxEntry(
+        await call(
+          transport,
+          at('enqueueInbound'),
+          { entry: encodeWire.inboxEntry(entry) },
+          options,
+        ),
+      ),
+    claimInbound: async (input, options) =>
+      (
+        (await call(transport, at('claimInbound'), input, options)) as unknown[]
+      ).map(decodeWire.inboxEntry),
+    markApplied: async (id, options) => {
+      await call(transport, at('markApplied'), { id }, options);
+    },
+    bumpAttempt: async (id, options) => {
+      await call(transport, at('bumpAttempt'), { id }, options);
     },
     deadLetter: async (id, reason, options) => {
       await call(transport, at('deadLetter'), { id, reason }, options);
@@ -547,6 +605,7 @@ function sessionUnit(
     idempotency: sessionIdempotency(transport, session),
     sales: sessionSales(transport, session),
     outbox: sessionOutbox(transport, session),
+    inbox: sessionInbox(transport, session),
     sagas: sessionSagas(transport, session),
     entitlements: sessionEntitlements(transport, session),
     subscriptions: sessionSubscriptions(transport, session),
@@ -573,6 +632,7 @@ export function httpStore(options?: HttpStoreOptions): Store {
     idempotency: sessionIdempotency(transport, 'root'),
     sales: sessionSales(transport, 'root'),
     outbox: sessionOutbox(transport, 'root'),
+    inbox: sessionInbox(transport, 'root'),
     sagas: sessionSagas(transport, 'root'),
     entitlements: sessionEntitlements(transport, 'root'),
     subscriptions: sessionSubscriptions(transport, 'root'),

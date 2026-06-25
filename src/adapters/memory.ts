@@ -27,6 +27,8 @@ import type {
   Digest,
   EntitlementStore,
   IdempotencyStore,
+  InboxEntry,
+  InboxStore,
   Leg,
   Ledger,
   Lot,
@@ -354,6 +356,8 @@ function createLedgerStore(deps: {
 
     posting: async (txnId) => postingOf(state.log, txnId),
 
+    list: () => listPostingsOf(state.log),
+
     __tamper: (txnId, mutate) => tamperPosting(state.log, txnId, mutate),
 
     __seedBalance: (account, amount) =>
@@ -452,6 +456,20 @@ function postingOf(
   return { txnId: row.txnId, legs: row.legs, meta: row.meta };
 }
 
+// Whole ledger, newest commit first (see Ledger.list). The append-only `log` already holds postings
+// in commit order (its array index is the in-memory analogue of the SQL engines' `seq`), so reverse
+// a snapshot rather than sort — the same total order `order by seq desc` gives, with no tie to break.
+// Snapshot first so iteration is safe if `log` changes underneath, and copy each posting's fields so
+// a consumer can't mutate stored state. Module-level (like postingOf) to keep createLedgerStore short.
+async function* listPostingsOf(
+  log: ReadonlyArray<StoredPosting>,
+): AsyncIterable<Posting> {
+  let snapshot = [...log].reverse();
+  for (let posting of snapshot) {
+    yield { txnId: posting.txnId, legs: posting.legs, meta: posting.meta };
+  }
+}
+
 // Test-only. Implements `__tamper`; see the MemoryLedger type JSDoc for why this is the
 // corruption the chain check detects.
 function tamperPosting(
@@ -533,9 +551,6 @@ function createOutboxStore(): OutboxStore & Participant {
   let journal = createJournal();
   let rows = new Map<string, OutboxMessage>();
   let order: string[] = [];
-  // Why a message was dead-lettered (given up after too many delivery attempts), stored
-  // separately because the outbox row has no field for it; same pattern as the saga store.
-  let reasons = new Map<string, string>();
 
   return {
     journal,
@@ -595,19 +610,105 @@ function createOutboxStore(): OutboxStore & Participant {
       if (!message || message.status !== 'pending') {
         return;
       }
-      let priorStatus = message.status;
-      let hadReason = reasons.has(id);
-      let priorReason = reasons.get(id);
+      let prior = { ...message };
+      journal.record(() => rows.set(id, prior));
+      // Flip to 'failed' and record the failure reason on the message itself, so the dead-letter
+      // outcome travels with the row instead of a side map.
+      rows.set(id, { ...message, status: 'failed', reason });
+    },
+  };
+}
+
+// --- Inbox store ------------------------------------------------------------------
+
+// The inbound mirror of the outbox: holds verified provider events (each already mapped to the
+// operation it applies) so they're saved in the same transaction as the webhook ingress that
+// claimed them; a separate apply worker picks up pending rows (`claimInbound`), submits each
+// operation, and marks them applied (`markApplied`). Dedupes on `key` (the provider event id) at
+// enqueue, returning the existing row for a redelivered event so it's applied at most once.
+function createInboxStore(): InboxStore & Participant {
+  let journal = createJournal();
+  let rows = new Map<string, InboxEntry>();
+  let order: string[] = [];
+  // Maps a provider event id (`key`) to the row id it was first enqueued under, so a redelivered
+  // event resolves to the existing row instead of inserting a duplicate.
+  let byKey = new Map<string, string>();
+
+  return {
+    journal,
+    enqueueInbound: async (entry, _options?: Options) => {
+      // Dedupe on the provider event id: a duplicate is a no-op that returns the row already
+      // stored under that key, mirroring the idempotency story so a redelivered event is applied
+      // at most once. Only a first sighting inserts and records an undo.
+      let existingId = byKey.get(entry.key);
+      if (existingId !== undefined) {
+        return { ...rows.get(existingId)! };
+      }
+      rows.set(entry.id, { ...entry });
+      order.push(entry.id);
+      byKey.set(entry.key, entry.id);
       journal.record(() => {
-        message.status = priorStatus;
-        if (hadReason) {
-          reasons.set(id, priorReason!);
-        } else {
-          reasons.delete(id);
-        }
+        rows.delete(entry.id);
+        order.pop();
+        byKey.delete(entry.key);
       });
-      message.status = 'failed';
-      reasons.set(id, reason);
+      return { ...entry };
+    },
+    claimInbound: async (input, _options?: Options) => {
+      // Pending rows oldest `receivedAt` first, sorted across the whole table before the `limit`
+      // cap so oldest-first holds globally rather than in insertion order. Only 'pending' rows are
+      // handed back; 'applied' and 'dead' are terminal, both excluded by this `=== 'pending'`
+      // test. `input.now` is accepted for parity with the saga/relay claim; the inbox has no
+      // due-time gate, so every pending row is immediately claimable.
+      let pending: InboxEntry[] = [];
+      for (let id of order) {
+        let entry = rows.get(id);
+        if (entry && entry.status === 'pending') {
+          pending.push({ ...entry });
+        }
+      }
+      pending.sort((a, b) => a.receivedAt - b.receivedAt);
+      return pending.slice(0, input.limit);
+    },
+    markApplied: async (id, _options?: Options) => {
+      let entry = rows.get(id);
+      // No-op on a missing or already-terminal row; only a still-'pending' row flips to 'applied',
+      // so `claimInbound` never hands it back again.
+      if (!entry || entry.status !== 'pending') {
+        return;
+      }
+      let prior = entry.status;
+      journal.record(() => {
+        entry.status = prior;
+      });
+      entry.status = 'applied';
+    },
+    bumpAttempt: async (id, _options?: Options) => {
+      let entry = rows.get(id);
+      // No-op on a missing or already-terminal row; only a still-'pending' row gets its attempt
+      // counted. Doesn't change status (deadLetter's job), only bumps the retry counter so the
+      // next sweep can try again.
+      if (!entry || entry.status !== 'pending') {
+        return;
+      }
+      let prior = entry.attempts;
+      journal.record(() => {
+        entry.attempts = prior;
+      });
+      entry.attempts += 1;
+    },
+    deadLetter: async (id, reason, _options?: Options) => {
+      let entry = rows.get(id);
+      // No-op on a missing or already-terminal row, mirroring the outbox and saga stores. Flipping
+      // status to 'dead' keeps `claimInbound` from handing this poison event back again.
+      if (!entry || entry.status !== 'pending') {
+        return;
+      }
+      let prior = { ...entry };
+      journal.record(() => rows.set(id, prior));
+      // Flip to 'dead' and record the failure reason on the row itself, so the dead-letter outcome
+      // travels with the row instead of a side map.
+      rows.set(id, { ...entry, status: 'dead', reason });
     },
   };
 }
@@ -631,9 +732,6 @@ async function* listSagasOf(rows: Map<string, Saga>): AsyncIterable<Saga> {
 function createSagaStore(): SagaStore & Participant {
   let journal = createJournal();
   let rows = new Map<string, Saga>();
-  // Why a saga was dead-lettered, stored separately because the saga record has no field for
-  // it.
-  let reasons = new Map<string, string>();
 
   return {
     journal,
@@ -698,18 +796,10 @@ function createSagaStore(): SagaStore & Participant {
         return;
       }
       let prior = { ...saga };
-      let hadReason = reasons.has(id);
-      let priorReason = reasons.get(id);
-      journal.record(() => {
-        rows.set(id, prior);
-        if (hadReason) {
-          reasons.set(id, priorReason!);
-        } else {
-          reasons.delete(id);
-        }
-      });
-      rows.set(id, { ...saga, state: 'FAILED' });
-      reasons.set(id, reason);
+      journal.record(() => rows.set(id, prior));
+      // Flip to FAILED and record the failure reason on the saga itself, so the terminal outcome
+      // travels with the record instead of a side map.
+      rows.set(id, { ...saga, state: 'FAILED', reason });
     },
   };
 }
@@ -1038,6 +1128,7 @@ export function memoryStore(deps?: {
   let idempotency = createIdempotencyStore();
   let sales = createSaleStore();
   let outbox = createOutboxStore();
+  let inbox = createInboxStore();
   let sagas = createSagaStore();
   let entitlements = createEntitlementStore({ clock });
   let subscriptions = createSubscriptionStore();
@@ -1056,6 +1147,7 @@ export function memoryStore(deps?: {
     idempotency,
     sales,
     outbox,
+    inbox,
     sagas,
     entitlements,
     subscriptions,
@@ -1066,6 +1158,7 @@ export function memoryStore(deps?: {
     idempotency,
     sales,
     outbox,
+    inbox,
     sagas,
     entitlements,
     subscriptions,
@@ -1077,6 +1170,7 @@ export function memoryStore(deps?: {
     idempotency,
     sales,
     outbox,
+    inbox,
     sagas,
     entitlements,
     subscriptions,

@@ -77,6 +77,7 @@ async function enqueue(store: Store, id: string): Promise<void> {
       event: event(id),
       status: 'pending',
       attempts: 0,
+      reason: null,
     }),
   );
 }
