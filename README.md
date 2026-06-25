@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-553_passing-3fb950" alt="tests">
+  <img src="https://img.shields.io/badge/tests-554_passing-3fb950" alt="tests">
   <img src="https://img.shields.io/badge/runtime_deps-0-3fb950" alt="runtime deps">
   <img src="https://img.shields.io/badge/node-%E2%89%A522.18-1f6feb" alt="node">
   <img src="https://img.shields.io/badge/license-MIT-1f6feb" alt="license">
@@ -20,7 +20,9 @@
 
 <p align="center">
   <a href="#architecture">Architecture</a> ·
+  <a href="#the-money-model">The money model</a> ·
   <a href="#the-economy-surface">Economy surface</a> ·
+  <a href="#operations-that-live-over-time">Lifecycles</a> ·
   <a href="#prove-it-yourself">Prove it</a> ·
   <a href="#how-its-verified">How it's verified</a> ·
   <a href="#what-it-demonstrates">What it demonstrates</a> ·
@@ -92,6 +94,102 @@ The same logic runs in-memory and on Postgres or MySQL through swappable **engin
 (databases that enforce the invariants natively) and **adapters** (pluggable cache and event
 transports) — one conformance suite holds them to identical behavior (below).
 
+## The money model
+
+Before the API, the model. Two kinds of value move through the system:
+
+- **Credits** — the in-app currency: what a user buys, spends in the marketplace, and earns as a
+  creator. Always a whole number, never a fraction.
+- **Dollars** — real money. The platform holds dollars in trust to back the credits users can spend,
+  and pays dollars out to creators who cash in.
+
+Every credit a user can spend is matched by real cash set aside in a trust account. That backing,
+checked continuously, is what _provably solvent_ means.
+
+### Two rates, and where the fee lives
+
+Credits convert to dollars at fixed, platform-set rates, not a live market. Two of them carry the
+whole model:
+
+| Rate    | What it is                                  | Roughly                       |
+| ------- | ------------------------------------------- | ----------------------------- |
+| **buy** | what a user pays per credit when purchasing | ~$0.0083 (≈ 120 credits / $1) |
+| **par** | a credit's backing value and cash-out floor | ~$0.005 (≈ 200 credits / $1)  |
+
+A credit costs **more to buy than it pays back at cash-out**. That spread — about 40%, matching
+VRChat's published purchase fee — is the platform's margin: taken once, at purchase, and never mixed
+into the cash held to back users. So a `$10` purchase becomes **1,200 credits**, of which `$6.00`
+(1,200 × par) is set aside as backing and `$4.00` is the platform's to keep. Creators cash out at par,
+so a credit earned is worth exactly the dollars reserved for it.
+
+### The accounts
+
+Every balance lives in a named account, and every operation is a balanced double-entry posting:
+money moves _between_ accounts and the lines always net to zero. A user's accounts hold credits; the
+platform's own "house" accounts hold its cash, its revenue, and the obligations between them.
+
+A user has up to three accounts:
+
+| Account     | Holds                                                                         |
+| ----------- | ----------------------------------------------------------------------------- |
+| `spendable` | credits bought and ready to spend — **the only balance backed by trust cash** |
+| `earned`    | revenue owed to them as a seller, waiting to be paid out                      |
+| `promo`     | a marketing grant that expires if unspent                                     |
+
+The platform's house accounts (each id prefixed `vrchat:`):
+
+| Account          | Cur.   | Holds                                                              |
+| ---------------- | ------ | ------------------------------------------------------------------ |
+| `trust_cash`     | USD    | real dollars held in trust, backing users' spendable credits       |
+| `revenue_usd`    | USD    | the platform's dollar margin from the buy-vs-par spread            |
+| `usd_clearing`   | USD    | mirror of cash that has cleared in or out of trust                 |
+| `revenue`        | credit | platform fee income (the marketplace cut, plus rounding)           |
+| `stored_value`   | credit | running tally of every credit ever issued (the offset on a top-up) |
+| `payout_reserve` | credit | earned credits set aside for a payout in flight                    |
+| `receivable`     | credit | a shortfall a user owes back (e.g. a clawback that went negative)  |
+| `promo_float`    | credit | the offset for credits granted as promos                           |
+| `opening_equity` | credit | the offset used once, to seed balances on a cold start             |
+
+Accounts are debit- or credit-normal: a user's `spendable` rises when it's _credited_ (the platform
+owes them more), while `trust_cash` rises when it's _debited_ (more cash is in). The ledger signs
+each posted line accordingly, so the no-overdraft check reads every balance right-way-up.
+
+### Following the money
+
+The same flow the [complete example](#a-complete-flow) runs in code, watched through the accounts. A
+**top-up** is where the money splits — buy `$10` of credit, and three accounts move:
+
+```text
+spendable     +1,200 credits   the user's, to spend
+trust_cash    +$6.00           held in trust to back those credits
+revenue_usd   +$4.00           the platform's margin, kept
+```
+
+From there a **spend** of 600 credits leaves `spendable`, split across the sellers' `earned` and the
+platform's `revenue`. A **payout** sets a creator's `earned` aside in `payout_reserve`, then settles —
+the credits retire and the matching dollars leave `trust_cash`.
+
+Every step is a balanced posting, and trust cash still covers every spendable credit afterward.
+
+### Solvency
+
+The promise is simple: **a user can always cash out the credits they hold.** For that to be true, the
+platform keeps enough real dollars in trust to redeem every spendable credit at par
+(`trust_cash ≥ spendable credits × par`) and never issues a credit it hasn't backed. Picture
+`trust_cash` as a safe holding users' money — one the platform isn't allowed to open to pay its own
+bills.
+
+Only spendable credits need backing. Credits a creator has _earned_ but not yet cashed out, and promo
+grants, are owed in credits, not dollars — so they don't raise the cash the platform must hold.
+Dollars are reserved only against money the platform is actually holding for someone.
+
+The platform still gets paid: it sweeps its fees and margin into its own accounts — but only from the
+**surplus**, the cash sitting beyond what's owed to users. The trust money is never touched.
+
+The worker re-checks all of this every cycle, and `read.prove()` reports it as the `backed` flag. If
+that flag ever flips to false, credits exist that no dollars stand behind — the quiet failure that
+has sunk more than one custodian — and payouts stop until the gap is filled.
+
 ## The economy surface
 
 You build an economy, then drive it through a single `submit` entry point. The in-memory
@@ -121,15 +219,15 @@ await economy.close();
   → platform fee; pass `giftTo` to gift the item — the buyer pays, the recipient receives
   ownership, matching VRChat's `isGift` purchase flag), `refund`, `clawback`
 - **payouts** — `requestPayout` (cash earned credits out through a provider), `reversePayout`
-  (operator-only: undo a reserved payout before it pays out real money)
+  (system or operator: undo a reserved payout before it pays out real money)
 - **subscriptions** — `subscribe`, `cancelSubscription`
 - **ownership** — `grantEntitlement`, `revokeEntitlement`
 - **promotions** — `grantPromo`
 - **operator** — `adjust`, `reverse` (manual corrections an operator runs by hand, fully
   audited; normal users can't call them)
 
-`read` exposes `balance`, `statement` (one account's history), and `prove` (the integrity
-check below). The slower, recurring work — settling payouts, billing renewals, expiring
+`read` exposes `balance`, `statement` (one account's history), `entitled` (whether a user owns a
+given SKU), and `prove` (the integrity check below). The slower, recurring work — settling payouts, billing renewals, expiring
 promo grants, sweeping fees, relaying events — runs in a separate
 [background worker](#background-worker), not on the request path.
 
@@ -138,8 +236,9 @@ promo grants, sweeping fees, relaying events — runs in a separate
 Amounts are exact integers — a `bigint` of minor units (cents for USD, 1 for a credit), so
 nothing rounds. Build one with `toAmount('CREDIT', 5000n)` or `decodeAmount('50.00',
 'CREDIT')` from [money.ts](src/money.ts). Account ids come from `spendable(userId)`,
-`earned(userId)`, `promo(userId)`, and the house `SYSTEM.*` accounts in
-[accounts.ts](src/accounts.ts). Every operation also carries an `idempotencyKey` (so a
+`earned(userId)`, `promo(userId)`, and the house `SYSTEM.*` accounts (see
+[The money model](#the-money-model) for what each holds). Every operation also carries an
+`idempotencyKey` (so a
 retried request runs at most once) and an `actor` (who is asking: a `user`, a `system`
 service, or an `operator`).
 
@@ -168,6 +267,24 @@ switch (outcome.status) {
 
 Only a malformed request or a genuine fault (bad signature, currency mismatch, a provider
 that's down) is thrown.
+
+### Who can do what
+
+Every operation carries an `actor`, and an authorization gate runs _before_ any work — a denied
+caller never reaches the ledger. There are three kinds of principal:
+
+| Actor          | Who it is                        | What's theirs                                                                                               |
+| -------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **`user`**     | an end user, acting for themself | spend, subscribe, request a payout, cancel a subscription — on their own accounts — and check what they own |
+| **`system`**   | a trusted internal service       | the privileged automated flows: top-ups, refunds, clawbacks, promo & entitlement grants and revokes         |
+| **`operator`** | a human making a manual fix      | the operator-only corrections — `adjust` and `reverse` — plus anything a `system` actor can do              |
+
+The gate enforces two rules. **Privileged operations** — minting credits with a top-up, granting
+promos, granting or revoking entitlements, refunds, clawbacks, and the manual corrections — are closed
+to `user` actors outright. And a `user` **may only debit accounts they own**: the gate pulls out the accounts an
+operation will _drain_ and checks each belongs to the caller, so a request can pay _into_ a seller but
+never _out of_ a stranger. Operations that name a resource the gate can't see in the request — your
+subscription, your payout saga — carry that ownership check inside the handler instead.
 
 ## A complete flow
 
@@ -240,10 +357,82 @@ await economy.submit({
 (await economy.read.prove()).conserved; // true
 ```
 
-The reserved payout is finished off the request path by the [background
-worker](#background-worker): it walks the saga `RESERVED → SUBMITTED` (calls your processor,
-converting credits to USD at the current rate) `→ SETTLED`. A fresh payout settles after two
-sweeps.
+The reserved payout is then finished off the request path — that flow, and the other operations that
+outlive their request, are the next section.
+
+## Operations that live over time
+
+Top-up and spend finish the instant you call them. Others can't: a payout waits on an outside
+provider, a subscription bills period after period, a promo expires on a schedule. Each is modeled as
+a record the [background worker](#background-worker) advances one safe step at a time — so a crash
+mid-flight resumes where it left off, and a step that runs twice still counts once.
+
+### Payouts: the saga
+
+Cashing a creator out reaches a system the ledger doesn't control — an external payout rail that
+answers in its own time — so `requestPayout` doesn't pay. It reserves the credits (`debit earned →
+credit payout_reserve`) and opens a **saga**, a small record the worker drives forward one step per
+sweep:
+
+```text
+RESERVED ──▶ SUBMITTED ──▶ SETTLED
+
+RESERVED    credits locked in payout_reserve; nothing sent yet
+SUBMITTED   the worker converts the reserve to USD and calls your payout rail
+SETTLED     the rail confirms; the reserve clears to revenue and an equal sum
+            of real dollars leaves trust_cash for the creator
+```
+
+Because each sweep advances one state, a fresh payout settles after two: one to submit, one to settle.
+Three guards make that safe to re-drive. The call to your rail is **idempotent** (keyed by the saga
+id), so a retried submit pays once. Each state change is a **compare-and-set**, so two workers racing
+the same saga can't both settle it. And a payout that keeps failing or sits unconfirmed too long is
+given up on — past `MAX_PAYOUT_ATTEMPTS` attempts or `MAX_PAYOUT_AGE_MS` of silence it fails and the
+reserve returns to the creator's `earned`. An operator can force that same reversal early with
+`reversePayout`, as long as the money hasn't already left.
+
+### Subscriptions
+
+`subscribe` charges the first period and grants the buyer an entitlement to the SKU; from there the
+worker bills it. Each period it claims a one-charge-per-period key (so overlapping sweeps can't
+double-bill), debits the subscriber's `spendable`, pays the seller, and pushes out the next due date.
+The subscription is its own small machine:
+
+```text
+ACTIVE ──▶ LAPSED      a renewal it can't pay (or one that keeps failing) ends it;
+                       the SKU entitlement is revoked in the same step
+       ──▶ CANCELED    the user or an operator stops it; the current period is
+                       not refunded
+```
+
+`MAX_SUBSCRIPTION_ATTEMPTS` separates a transient failure from a dead one: a failed charge is retried
+a few times before the subscription lapses, and a success resets the count. The first period may draw
+on promo credit; renewals come only from `spendable`.
+
+### Promo grants
+
+`grantPromo` drops marketing credit into a user's `promo` balance (offset against `promo_float`) with
+an expiry date. The worker's promo sweep reverses whatever is **unspent** when a grant expires —
+reading the live balance, so a partly-spent grant only claws back the remainder and a fully-spent one
+posts nothing. Promo credit spends ahead of a user's own money and carries no maturity hold, so a
+grant is usable the instant it lands.
+
+### Corrections and ownership
+
+The remaining operations finish synchronously, but complete the picture:
+
+- **`refund`** undoes a sale account by account, returning each to where it stood. If a seller has
+  already spent their cut, it claws back only what's left and books the rest to a **receivable** — the
+  platform's IOU — so the reversal still nets to zero, then revokes the buyer's (or gift recipient's)
+  entitlement.
+- **`clawback`** answers a card chargeback: it un-issues the credits, recovering what the user still
+  holds and booking the spent remainder to that same receivable. A refund and a chargeback for one
+  order are mutually exclusive — whichever lands first wins, the other is a no-op.
+- **`adjust`** and **`reverse`** are the operator's manual tools — a hand-posted correction and a full
+  reversal of a past transaction — each requiring a written reason and landing in the audit trail.
+- **`grantEntitlement`** and **`revokeEntitlement`** move no money at all. Ownership of a SKU is a
+  record the ledger never touches, granted at purchase and revoked on refund or lapse, and read back
+  through `read.entitled` — the gate that decides what a user is allowed to access.
 
 ## Prove it yourself
 
@@ -273,6 +462,29 @@ flags `read.prove()` returns):
 
 The same proof engine also runs inside `make test` as a property test over several seeds.
 
+### Tamper-evidence: the chain and the checkpoint
+
+The `chain intact` flag rests on two layers. The first is a **per-account hash chain**: every posting
+that touches an account is hashed together with that account's previous hash — the amount, the
+counterparties, the metadata, all of it — so each entry commits to the whole history before it. Change
+one old amount and its hash changes, which breaks the next link, and the next; the prover walks each
+account from genesis and names the first entry that no longer re-derives. (The chain is per-account,
+not per-posting: a posting that moves three accounts advances three chains by one link each.)
+
+The second layer anchors the entire ledger at a moment. The worker periodically folds every account's
+current head into a single **Merkle root** and signs it (Ed25519) into a **checkpoint** — a
+`checkpoint` job seals new ones, a `checkpoint-verify` job re-checks the latest against the live ledger
+every cycle. The signing key's public half is published, so anyone — an auditor holding nothing but a
+saved checkpoint and that public key — can recompute the root over the ledger and verify the signature
+themselves.
+
+What a mismatch means is the point. The hash chain catches a single edited row that still balances —
+the tamper the money invariants can't see, because conservation is a property of sums, not of the rows
+behind them. The checkpoint catches the harder attack, a _wholesale re-seal_: rewriting history **and**
+recomputing every chain so it looks intact still produces a different root than the one already signed,
+and that signature can't be forged without the key. A failed verification doesn't quietly heal — it's
+logged for an operator, because only a human can tell a legitimate new posting from an attack.
+
 ## How it's verified
 
 Correctness here is attacked, not asserted — four independent layers:
@@ -294,30 +506,42 @@ Correctness here is attacked, not asserted — four independent layers:
 
 ## What it demonstrates
 
-| Capability                   | Where                                                                                                          | What it guarantees                                                                                                                            |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Double-entry ledger          | [ledger.ts](src/ledger.ts)                                                                                     | A posting is rejected unless its debit and credit lines net to zero per currency; an account's balance is the sum of its lines.               |
-| Tamper-evident history       | [chain.ts](src/chain.ts), [integrity.ts](src/integrity.ts)                                                     | Each posting is hash-chained to the previous one per account; `proveChain` recomputes the chain and locates any altered entry.                |
-| Idempotent requests + outbox | [economy.ts](src/economy.ts), [worker/relay.ts](src/worker/relay.ts)                                           | A retried request runs once — the idempotency key, the postings, and the outbound event all commit in one transaction; duplicates replay.     |
-| Marketplace + fee policy     | [operations/spend.ts](src/operations/spend.ts), [pricing.ts](src/pricing.ts)                                   | A sale charges the buyer and pays the sellers in one balanced transaction; shares must sum to 100%; the fee is injected policy, not a branch. |
-| Payout saga + retries        | [operations/requestPayout.ts](src/operations/requestPayout.ts), [worker/payouts.ts](src/worker/payouts.ts)     | A provider that fails then succeeds pays once; a stuck payout re-drives on a schedule, with the credits reserved meanwhile.                   |
-| Recurring subscriptions      | [operations/subscribe.ts](src/operations/subscribe.ts), [worker/subscriptions.ts](src/worker/subscriptions.ts) | Each period bills once; an underfunded renewal lapses instead of overdrawing; a due-sweep drives renewals.                                    |
-| Refunds & clawback           | [operations/refund.ts](src/operations/refund.ts), [operations/clawback.ts](src/operations/clawback.ts)         | A refund reverses the exact lines the sale posted; a clawback pulls credits back, booking any shortfall to a receivable.                      |
-| Settlement maturity gate     | [maturity.ts](src/maturity.ts)                                                                                 | Payouts and sweeps release only funds settled past the chargeback window; fresh credits are held back until they mature.                      |
-| Spend-velocity risk gate     | [trust.ts](src/trust.ts)                                                                                       | Recent spend is summed over a sliding window and checked against a limit, producing an allow/deny decision before any money moves.            |
-| Processor reconciliation     | [reconcile.ts](src/reconcile.ts)                                                                               | The ledger is matched against the payment processor's own records to surface anything present on one side but not the other.                  |
-| Swappable storage            | [engines/](src/engines), [adapters/](src/adapters)                                                             | The same logic runs in-memory and on Postgres, MySQL, Redis, and SQS; one conformance suite runs against every backend.                       |
+| Capability                   | Where                                                                                                          | What it guarantees                                                                                                                                |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Double-entry ledger          | [ledger.ts](src/ledger.ts)                                                                                     | A posting is rejected unless its debit and credit lines net to zero per currency; an account's balance is the sum of its lines.                   |
+| Tamper-evident history       | [chain.ts](src/chain.ts), [integrity.ts](src/integrity.ts)                                                     | Each posting is hash-chained to the previous one per account; `proveChain` recomputes the chain and locates any altered entry.                    |
+| Idempotent requests + outbox | [economy.ts](src/economy.ts), [worker/relay.ts](src/worker/relay.ts)                                           | A retried request runs once — the idempotency key, the postings, and the outbound event all commit in one transaction; duplicates replay.         |
+| Marketplace + fee policy     | [operations/spend.ts](src/operations/spend.ts), [pricing.ts](src/pricing.ts)                                   | A sale charges the buyer and pays the sellers in one balanced transaction; shares must sum to 100%; the fee is injected policy, not a branch.     |
+| Payout saga + retries        | [operations/requestPayout.ts](src/operations/requestPayout.ts), [worker/payouts.ts](src/worker/payouts.ts)     | A provider that fails then succeeds pays once; a stuck payout re-drives on a schedule, with the credits reserved meanwhile.                       |
+| Recurring subscriptions      | [operations/subscribe.ts](src/operations/subscribe.ts), [worker/subscriptions.ts](src/worker/subscriptions.ts) | Each period bills once; an underfunded renewal lapses instead of overdrawing; a due-sweep drives renewals.                                        |
+| Refunds & clawback           | [operations/refund.ts](src/operations/refund.ts), [operations/clawback.ts](src/operations/clawback.ts)         | A refund restores each account the sale touched, booking any uncollectable remainder to a receivable; a clawback pulls credits back the same way. |
+| Settlement maturity gate     | [maturity.ts](src/maturity.ts)                                                                                 | Payouts and sweeps release only funds settled past the chargeback window; fresh credits are held back until they mature.                          |
+| Spend-velocity risk gate     | [trust.ts](src/trust.ts)                                                                                       | Recent spend is summed over a sliding window and checked against a limit, producing an allow/deny decision before any money moves.                |
+| Processor reconciliation     | [reconcile.ts](src/reconcile.ts)                                                                               | The ledger is matched against the payment processor's own records to surface anything present on one side but not the other.                      |
+| Swappable storage            | [engines/](src/engines), [adapters/](src/adapters)                                                             | The same logic runs in-memory and on Postgres, MySQL, Redis, and SQS; one conformance suite runs against every backend.                           |
 
 ### The same flows, seen by an adversary
 
-The money paths that pay creators are the ones bad actors probe, so the defenses read the
-ledger's own postings rather than a separate system alongside it:
+The money paths that pay creators are the ones bad actors probe, so the defenses read the ledger's own
+postings rather than a separate system bolted alongside. The classic attack is **chargeback fraud**:
+top up with a stolen card, move the credits to cash or to an accomplice, then dispute the charge so
+the money is gone before the reversal lands. Three mechanisms close that window, in order:
 
-- **Chargeback fraud** — spend or cash out, then dispute the original charge so the
-  credits are gone before the reversal lands. Defended at both ends: spend velocity and
-  the payout maturity gate up front, the clawback's receivable after.
-- **Cash-out gating** — only funds settled past the chargeback window can leave, so
-  stolen-card value can't reach irreversible cash before the dispute arrives.
+- **Maturity.** Credits are tracked as **lots** — each top-up tagged with its funding source and time
+  — and spent oldest-first (FIFO), so no one can cherry-pick the settled ones. A lot can't be spent or
+  cashed out until it has aged past its source's settlement window: a card top-up holds for the
+  chargeback period (about a week by default), a more final source like crypto clears in a day. Fresh
+  stolen-card value simply can't leave in time.
+- **Velocity.** Every value-moving request is recorded against the actor and summed over a rolling
+  window; past a configured ceiling the next one comes back `RISK_DENIED`. The count is written _at
+  check time_ — even for denied or rolled-back attempts — so a concurrent burst can't slip several
+  past a stale read, and the burst itself is a fraud signal worth keeping.
+- **The receivable.** When a chargeback does land after the user has spent, `clawback` un-issues the
+  credits, recovers what's still in the wallet, and books the rest to a **receivable** — the honest
+  record of what the platform is owed back, rather than a shortfall quietly papered over.
+
+Up front, maturity and velocity keep stolen value from reaching irreversible cash; after the fact, the
+receivable accounts for the gap. Promo credit, which is never purchased, skips the maturity hold.
 
 ## Storage and messaging adapters
 
@@ -414,6 +638,7 @@ make check       # typecheck + eslint + prettier + test (the CI gate)
 make demo        # compose an economy from the environment and run a sample money flow
 make prove       # randomized invariant proof; exits non-zero on any leak or drift
 make fuzz        # cross-backend differential — every backend must produce identical results
+make smoke       # live adapter smoke against real Redis/SQS/HTTP; skips any that aren't running
 ```
 
 ### HTTP service
