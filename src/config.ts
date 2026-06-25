@@ -77,6 +77,15 @@ export interface Config {
 
   /** Min time (ms) between payout requests. Defaults to 24h to match the live docs; the legal requirement is 14 days (1_209_600_000). */
   payoutMinIntervalMs: number;
+
+  /**
+   * Optional scheduled maintenance window (epoch ms) during which end-user discretionary writes are
+   * refused with a clean ECONOMY_PAUSED decline. Both bounds must be set for the pause to be active;
+   * it holds when `pauseStartMs <= now < pauseEndMs`. Settlement (actor 'system') and operator fixes
+   * are never gated, and reads never reach the gate. Either bound null means no window is configured.
+   */
+  pauseStartMs: number | null;
+  pauseEndMs: number | null;
 }
 
 // True in production, where a missing secret must fail rather than default to empty string.
@@ -150,7 +159,28 @@ export function loadConfig(env: EnvMap): Config {
     },
     payoutMinimumEarnedMinor: toBigInt(env.PAYOUT_MIN_EARNED_MINOR, 2_000_000n),
     payoutMinIntervalMs: toInt(env.PAYOUT_MIN_INTERVAL_MS, 24 * 60 * 60_000),
+    // Optional maintenance window. Unset or non-integer leaves the bound null (no pause); both must
+    // parse for the window to be active. Validated like the other numeric tunables (toInt's range
+    // check), only falling to null instead of a numeric default.
+    pauseStartMs: toIntOrNull(env.ECONOMY_PAUSE_START_MS),
+    pauseEndMs: toIntOrNull(env.ECONOMY_PAUSE_END_MS),
   };
+}
+
+/**
+ * Whether the scheduled maintenance window is active at `now`. True only when both bounds are set and
+ * `pauseStartMs <= now < pauseEndMs`; either bound null (no window configured) reads as not paused.
+ * Pure: derives solely from `now` and the two config bounds, so the gate and the read surface agree.
+ */
+export function economyPaused(
+  now: number,
+  config: Pick<Config, 'pauseStartMs' | 'pauseEndMs'>,
+): boolean {
+  let { pauseStartMs, pauseEndMs } = config;
+  if (pauseStartMs === null || pauseEndMs === null) {
+    return false;
+  }
+  return pauseStartMs <= now && now < pauseEndMs;
 }
 
 // Check one required value. Reports absence via a `missing` flag instead of throwing, so
@@ -172,6 +202,14 @@ function required(
 function toInt(value: string | undefined, fallback: number): number {
   let parsed = Number.parseInt(String(value), 10);
   return Number.isSafeInteger(parsed) ? parsed : fallback;
+}
+
+// Parse an optional integer tunable, returning null (not a numeric fallback) when unset or not a
+// valid whole number. Used for the pause-window bounds, where "absent" must stay distinct from any
+// real epoch value so a missing bound leaves the window inactive rather than defaulting to one.
+function toIntOrNull(value: string | undefined): number | null {
+  let parsed = Number.parseInt(String(value), 10);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
 // Parse a bigint (for minor-unit amounts that can exceed 2^53, the largest exact JS number).

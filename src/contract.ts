@@ -281,6 +281,20 @@ export type FeePolicy = (input: {
 }) => ReadonlyArray<Leg>;
 
 /**
+ * The economy's pause state at a moment in time, derived from the configured maintenance window and
+ * the clock. `paused` is true only inside the window; `pauseStart`/`pauseEnd` are the configured
+ * bounds (epoch ms) or null when no window is set; `resumesAt` is `pauseEnd` while paused, else null.
+ * The readable side of the ECONOMY_PAUSED gate: a UI reads this to show a banner without inferring
+ * the state from a declined write.
+ */
+export type EconomyStatus = {
+  paused: boolean;
+  pauseStart: number | null;
+  pauseEnd: number | null;
+  resumesAt: number | null;
+};
+
+/**
  * Public surface of a running economy: submit operations that change money, read balances and
  * statements, run the integrity check, shut down. Built by `createEconomy` in `economy.ts`.
  */
@@ -303,6 +317,11 @@ export interface Economy {
     // Ownership is a record, not a balance, so it has its own reader; this is the readable side of
     // `grantEntitlement`/`revokeEntitlement` that a UI gates access on.
     entitled(userId: string, sku: string, options?: Options): Promise<boolean>;
+    // The economy's current pause state (see EconomyStatus): whether a maintenance window is in
+    // effect right now, its configured bounds, and when writes resume. Derived from config + the
+    // clock, not stored, so it always reflects the live window. Lets a UI render a maintenance banner
+    // without inferring the state from an ECONOMY_PAUSED decline.
+    status(): EconomyStatus;
     // Every account that has a balance row, streamed — a real ledger can hold many, so iterate and
     // stop when you've seen enough rather than collecting blindly. Lets a reader enumerate accounts
     // (and derive users) without tracking them itself; this is the prover's own enumeration.

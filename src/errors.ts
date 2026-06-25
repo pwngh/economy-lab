@@ -48,7 +48,11 @@ export type RejectionCode =
   // A payout was requested before enough time had passed since the user's previous request
   // (minimum gap is config payoutMinIntervalMs). Returned as a declined Outcome, not thrown;
   // the caller shows the user when they may retry.
-  | 'PAYOUT_TOO_SOON';
+  | 'PAYOUT_TOO_SOON'
+  // A scheduled maintenance window is in effect, so an end user's discretionary write is declined.
+  // Settlement (actor 'system') and operator fixes are never paused; the decline carries `resumesAt`
+  // (the window's end) so the caller can tell the user when to retry. Returned, never thrown.
+  | 'ECONOMY_PAUSED';
 
 /**
  * Codes for thrown faults (genuine failures), as opposed to the expected "no" answers in

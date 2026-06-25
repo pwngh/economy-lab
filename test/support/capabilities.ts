@@ -253,5 +253,8 @@ export function testConfig(): Config {
     payoutSla: { PENDING: 30_000, SUBMITTED: 120_000, DEFAULT: 60_000 },
     payoutMinimumEarnedMinor: 0n, // this fixture sets no minimum; the minimum-payout test supplies its own
     payoutMinIntervalMs: 0,
+    // No maintenance window by default; the pause test supplies its own bounds via the config override.
+    pauseStartMs: null,
+    pauseEndMs: null,
   };
 }

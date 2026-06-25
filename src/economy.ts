@@ -35,9 +35,12 @@ import { attemptMinor, riskSubject, VELOCITY_CURRENCY } from '#src/trust.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
 import type { Amount, Currency } from '#src/money.ts';
+import { economyPaused } from '#src/config.ts';
+
 import type {
   Ctx,
   Economy,
+  EconomyStatus,
   Operation,
   Outcome,
   ProveReport,
@@ -84,6 +87,7 @@ export function createEconomy(capabilities: Capabilities): Economy {
       saga: (id, options) => store.sagas.load(id, options),
       entitled: (userId, sku, options) =>
         store.entitlements.owns(userId, sku, options),
+      status: () => economyStatus(ctx),
       accounts: (options) => store.ledger.balanceAccounts(options),
       payouts: (options) => store.sagas.list(options),
       prove: (options) => proveEconomy(store, ctx, options),
@@ -117,6 +121,20 @@ function contextOf(capabilities: Capabilities): Ctx {
     logger: capabilities.logger,
     meter: capabilities.meter,
     cache: capabilities.cache,
+  };
+}
+
+// The economy's pause state right now, derived from the configured maintenance window and the clock
+// (never stored), so the read surface and the submit gate read the same source. `resumesAt` is the
+// window's end while paused, else null. Symmetric with the ECONOMY_PAUSED gate in `submit`.
+function economyStatus(ctx: Ctx): EconomyStatus {
+  let { pauseStartMs, pauseEndMs } = ctx.config;
+  let paused = economyPaused(ctx.clock.now(), ctx.config);
+  return {
+    paused,
+    pauseStart: pauseStartMs,
+    pauseEnd: pauseEndMs,
+    resumesAt: paused ? pauseEndMs : null,
   };
 }
 
@@ -209,6 +227,18 @@ async function submit(
 ): Promise<Outcome> {
   validateOperation(operation);
   authorize(operation);
+
+  // Maintenance window: refuse an end user's discretionary write with a clean decline, but only the
+  // user's. Settlement webhooks (actor 'system') and operator fixes must keep flowing so the economy
+  // stays correct and external money can still settle. Placed before the transaction opens so a
+  // paused user op records no velocity attempt and touches no ledger; reads never reach this path.
+  let ctx = pipeline.ctx;
+  if (
+    operation.actor.kind === 'user' &&
+    economyPaused(ctx.clock.now(), ctx.config)
+  ) {
+    return rejected('ECONOMY_PAUSED', { resumesAt: ctx.config.pauseEndMs });
+  }
 
   let outcome = await pipeline.store.transaction(
     (unit) => runOnion({ pipeline, unit, operation, options }),
