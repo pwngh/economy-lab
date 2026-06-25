@@ -74,6 +74,51 @@ export function distinctAccounts(legs: ReadonlyArray<Leg>): AccountRef[] {
 // One step in an account's hash chain: account, hash before this entry, hash after.
 export type Link = { account: AccountRef; prevHash: string; hash: string };
 
+// --- Transient-conflict retry -----------------------------------------------------
+
+// A unit-of-work that an engine runs between BEGIN and COMMIT. `withTransientRetry` re-runs the
+// whole attempt (which includes the BEGIN, the work, and the COMMIT) on a transient conflict, so
+// each engine passes a single closure that owns one fresh transaction per try.
+type Attempt<T> = () => Promise<T>;
+
+// Decides whether a thrown error is a *transient* lock conflict the database itself raised by
+// breaking a tie — a deadlock or serialization abort that rolled the transaction back without
+// committing anything — as opposed to a domain fault, a CHECK/constraint violation, or any other
+// error. Only the former is safe to retry: the aborted attempt persisted nothing, so re-running the
+// whole transaction either succeeds (the conflict cleared) or reloads the now-terminal state and
+// fails with the clean domain outcome. Each engine supplies its own driver-specific test (pg
+// `error.code`, mysql2 `error.errno`).
+export type IsTransientConflict = (error: unknown) => boolean;
+
+// Run `attempt` (one full transaction) under a bounded transient-conflict retry. On a conflict the
+// caller's own try/catch has already rolled the aborted transaction back, so this just waits a short
+// jittered backoff and runs a fresh attempt. After `maxAttempts` tries it rethrows the last error
+// unchanged, so a persistent conflict still surfaces rather than looping forever. A non-transient
+// error (domain fault, constraint violation, anything else) is rethrown immediately on the first
+// occurrence — it is never retried. Backoff is a few milliseconds with random jitter, fine for
+// runtime engine code (this is a cold path taken only when the database aborts a transaction).
+export async function withTransientRetry<T>(
+  attempt: Attempt<T>,
+  isTransientConflict: IsTransientConflict,
+  maxAttempts = 5,
+): Promise<T> {
+  for (let tries = 1; ; tries += 1) {
+    try {
+      return await attempt();
+    } catch (error) {
+      if (tries >= maxAttempts || !isTransientConflict(error)) {
+        throw error;
+      }
+      // A few ms with jitter so two transactions that just deadlocked don't re-collide in lock-step.
+      await sleep(2 + Math.random() * 8);
+    }
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // --- Row decoders -----------------------------------------------------------------
 
 export function rowToSaga(row: Record<string, unknown>): Saga {

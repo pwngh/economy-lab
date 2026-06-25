@@ -31,6 +31,7 @@ import {
   rowToSaga,
   rowToSubscription,
   rowToCheckpoint,
+  withTransientRetry,
 } from '#src/engines/sql-shared.ts';
 import { metaString, metaNumber } from '#src/meta.ts';
 
@@ -1501,27 +1502,48 @@ export function mysqlStore(deps: {
     checkpoints: createCheckpointStore(pool),
     replay: createReplayStore(pool),
 
-    transaction: async (work) => {
-      let connection = await pool.getConnection();
-      try {
-        await connection.query('START TRANSACTION');
-        let unit = buildUnit({ exec: connection, digest, clock });
-        let result = await work(unit);
-        await connection.query('COMMIT');
-        return result;
-      } catch (error) {
-        await safeRollback(connection);
-        throw error;
-      } finally {
-        await releaseLocks(connection);
-        connection.release();
-      }
-    },
+    // The whole unit of work (the idempotency claim, the postings, the saga advance, the outbox
+    // write) lives inside this one transaction, so when InnoDB aborts it with a transient lock
+    // conflict — ER_LOCK_DEADLOCK, or a lock-wait timeout — nothing committed, and re-running the
+    // entire `work` in a fresh transaction is atomic and idempotency-safe. withTransientRetry does
+    // exactly that: each attempt borrows its own connection, START TRANSACTION ... COMMIT, and the
+    // catch has already rolled the aborted transaction back, so a retry starts clean. A true
+    // settle-vs-reverse conflict thus retries into the clean SAGA.INVALID_TRANSITION (the retried op
+    // reloads a now-terminal saga) instead of escaping as a raw deadlock error; a non-conflicting
+    // deadlock simply succeeds on a later try. Every other error (a domain fault, a CHECK/constraint
+    // violation) is not a transient conflict, so it propagates unchanged on its first occurrence.
+    transaction: async (work) =>
+      withTransientRetry(async () => {
+        let connection = await pool.getConnection();
+        try {
+          await connection.query('START TRANSACTION');
+          let unit = buildUnit({ exec: connection, digest, clock });
+          let result = await work(unit);
+          await connection.query('COMMIT');
+          return result;
+        } catch (error) {
+          await safeRollback(connection);
+          throw error;
+        } finally {
+          await releaseLocks(connection);
+          connection.release();
+        }
+      }, isTransientConflict),
 
     close: async () => {
       await pool.end();
     },
   };
+}
+
+// A transient lock conflict InnoDB raised to break a tie, safe to retry because the aborted
+// transaction committed nothing: errno 1213 (ER_LOCK_DEADLOCK, the engine rolled one side back to
+// resolve a deadlock) or 1205 (ER_LOCK_WAIT_TIMEOUT, a lock wait that timed out without committing).
+// Both surface on mysql2's `error.errno`. Anything else — a domain fault, a CHECK/constraint
+// violation, a connection error — is not retried.
+function isTransientConflict(error: unknown): boolean {
+  let errno = (error as { errno?: unknown } | null)?.errno;
+  return errno === 1213 || errno === 1205;
 }
 
 // Roll back, ignoring any error from the rollback itself. We're here because `work` threw; that

@@ -108,24 +108,16 @@ let SETTLE_USD = usd('0.02');
 let INVALID = 'SAGA.INVALID_TRANSITION';
 let ITERATIONS = 50;
 
-// How a refused loser may surface. The serialized, lock-then-load path turns the loser away cleanly
-// with the domain fault: it took the PAYOUT_RESERVE lock second, reloaded a no-longer-SUBMITTED saga,
-// and threw SAGA.INVALID_TRANSITION at its state guard before posting anything. This is the only
-// acceptable outcome when there is no genuine contention (the memory deterministic path).
+// How a refused loser must surface, on every backend: the clean domain fault. Whoever takes the
+// PAYOUT_RESERVE lock first transitions the saga; the loser reloads a no-longer-SUBMITTED saga and
+// throws SAGA.INVALID_TRANSITION at its state guard before posting anything. Under genuine
+// concurrency the engine's own lock manager may break the tie first by aborting one transaction with
+// a deadlock/serialization conflict (InnoDB ER_LOCK_DEADLOCK, Postgres 40P01/40001), but the SQL
+// engines now retry those transient aborts inside their transaction wrappers — the aborted side
+// rolls back and re-runs the whole transaction, which reloads the terminal saga and is refused with
+// the same SAGA.INVALID_TRANSITION. So no raw DB lock error escapes to the caller, and the loser is
+// the clean domain refusal on memory, Postgres, and MySQL alike.
 let CLEAN_REFUSAL = [INVALID];
-// Under genuine concurrency the engine's own lock manager may instead break the tie by aborting and
-// rolling back one transaction: InnoDB raises ER_LOCK_DEADLOCK, Postgres a deadlock (40P01) or
-// serialization failure (40001). The aborted side commits nothing — so this is still a refusal of the
-// loser with money moving exactly once, not a double-pay. It is the same "a thrown engine fault is
-// also a correct loser" contract concurrency.adversarial documents for the overdraft race. The
-// exactly-one-winner and money-moves-once assertions below hold regardless of WHICH refusal it is, so
-// accepting these codes only widens the recognized refusal — it never lets a double-commit pass.
-let CONCURRENT_REFUSALS = [
-  INVALID,
-  'ER_LOCK_DEADLOCK',
-  '40P01', // postgres deadlock_detected
-  '40001', // postgres serialization_failure
-];
 
 // Seed one payout in SUBMITTED with its reserve already in escrow (credit PAYOUT_RESERVE, debit
 // STORED_VALUE — a platform account exempt from the overdraft rule), exactly as the two op tests do.
@@ -336,10 +328,10 @@ async function oneConcurrentRace(
   );
 
   if (settleWon) {
-    assertLoserRefused(tag, reverseResult, 'reverse', CONCURRENT_REFUSALS);
+    assertLoserRefused(tag, reverseResult, 'reverse', CLEAN_REFUSAL);
     assertSettleWonBooks(tag, saga?.state, before, after);
   } else {
-    assertLoserRefused(tag, settleResult, 'settle', CONCURRENT_REFUSALS);
+    assertLoserRefused(tag, settleResult, 'settle', CLEAN_REFUSAL);
     assertReverseWonBooks(tag, saga?.state, before, after);
   }
   await assertInvariants(engine, tag);
@@ -347,8 +339,9 @@ async function oneConcurrentRace(
 
 // The loser of a race must be a rejection carrying one of the allowed refusal codes — never a
 // `committed`/`duplicate`/`rejected` outcome (which would mean it silently took or no-op'd) and never
-// an unrelated throw. `allowed` is the clean domain refusal for the deterministic path, widened to the
-// engine's deadlock/serialization aborts for the genuine concurrent path (see the code lists above).
+// an unrelated throw. `allowed` is the clean domain refusal (SAGA.INVALID_TRANSITION) on every path:
+// the deterministic memory interleaving and the genuine SQL concurrency both end there, because the
+// SQL engines retry any transient deadlock/serialization abort into that same domain outcome.
 function assertLoserRefused(
   tag: string,
   loser: Settled,

@@ -47,6 +47,7 @@ import {
   rowToSaga,
   rowToSubscription,
   rowToCheckpoint,
+  withTransientRetry,
 } from '#src/engines/sql-shared.ts';
 import { metaString, metaNumber } from '#src/meta.ts';
 
@@ -1595,23 +1596,45 @@ async function applyIsolatedSchema(
 // whose sub-stores all share that connection, run `work`, then COMMIT. If `work` throws, roll
 // back and re-throw. Since every store in the unit uses the same connection, all their writes
 // commit or roll back as one. The connection is always returned to the pool at the end.
+//
+// The whole unit of work (the idempotency claim, the postings, the saga advance, the outbox write)
+// lives inside this one transaction, so when Postgres aborts it with a transient lock conflict —
+// deadlock_detected or serialization_failure — nothing committed, and re-running the entire `work`
+// in a fresh transaction is atomic and idempotency-safe. withTransientRetry does exactly that: each
+// attempt below opens its own connection + BEGIN/COMMIT, and the catch has already rolled the
+// aborted transaction back, so a retry starts clean. A true settle-vs-reverse conflict thus retries
+// into the clean SAGA.INVALID_TRANSITION (the retried op reloads a now-terminal saga) instead of
+// escaping as a raw 40P01 lock error; a non-conflicting deadlock simply succeeds on a later try.
+// Every other error (a domain fault, a CHECK/constraint violation) is not a transient conflict, so
+// it propagates unchanged on its first occurrence.
 async function runInTransaction<T>(
   pool: PgPool,
   digest: Digest,
   clock: Clock,
   work: (tx: Unit) => Promise<T>,
 ): Promise<T> {
-  let client = await pool.connect();
-  try {
-    await client.query('begin');
-    let unit = buildUnit(client, digest, clock);
-    let result = await work(unit);
-    await client.query('commit');
-    return result;
-  } catch (error) {
-    await client.query('rollback').catch(() => {});
-    throw error;
-  } finally {
-    client.release();
-  }
+  return withTransientRetry(async () => {
+    let client = await pool.connect();
+    try {
+      await client.query('begin');
+      let unit = buildUnit(client, digest, clock);
+      let result = await work(unit);
+      await client.query('commit');
+      return result;
+    } catch (error) {
+      await client.query('rollback').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }, isTransientConflict);
+}
+
+// A transient lock conflict Postgres raised to break a tie, safe to retry because the aborted
+// transaction committed nothing: `40P01` deadlock_detected or `40001` serialization_failure (the two
+// SQLSTATEs the `pg` driver surfaces on `error.code`). Anything else — a domain fault, a
+// CHECK/constraint violation, a connection error — is not retried.
+function isTransientConflict(error: unknown): boolean {
+  let code = (error as { code?: unknown } | null)?.code;
+  return code === '40P01' || code === '40001';
 }
