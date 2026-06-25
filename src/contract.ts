@@ -300,6 +300,10 @@ export interface Economy {
     // One payout saga by id (state, provider ref, attempts), or null if unknown. The background
     // worker advances these; a UI reads them to render payout status.
     saga(id: string, options?: Options): Promise<Saga | null>;
+    // Whether a user currently owns an entitlement (a SKU — an item or feature), true or false.
+    // Ownership is a record, not a balance, so it has its own reader; this is the readable side of
+    // `grantEntitlement`/`revokeEntitlement` that a UI gates access on.
+    entitled(userId: string, sku: string, options?: Options): Promise<boolean>;
     // Every account that has a balance row, streamed — a real ledger can hold many, so iterate and
     // stop when you've seen enough rather than collecting blindly. Lets a reader enumerate accounts
     // (and derive users) without tracking them itself; this is the prover's own enumeration.

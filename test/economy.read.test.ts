@@ -13,7 +13,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { makeEconomy } from '#test/support/economy.ts';
-import { topUp, credit } from '#test/support/builders.ts';
+import { topUp, credit, grantEntitlement } from '#test/support/builders.ts';
 import { spendable } from '#src/accounts.ts';
 
 // economy.read.posting / read.saga / read.accounts expose a committed posting, a payout saga by id,
@@ -71,6 +71,34 @@ describe('economy.read.posting / read.saga / read.accounts', () => {
       assert.ok(
         accounts.includes(spendable('usr_acct_1')),
         'includes the funded user account',
+      );
+    } finally {
+      await economy.close();
+    }
+  });
+
+  test('read.entitled reports ownership a grant created, false otherwise', async () => {
+    const economy = makeEconomy(1);
+    try {
+      assert.equal(
+        await economy.read.entitled('usr_ent_1', 'wrld_pass'),
+        false,
+        'unknown ownership reads false',
+      );
+
+      await economy.submit(
+        grantEntitlement({ userId: 'usr_ent_1', sku: 'wrld_pass' }),
+      );
+
+      assert.equal(
+        await economy.read.entitled('usr_ent_1', 'wrld_pass'),
+        true,
+        'reads true once granted',
+      );
+      assert.equal(
+        await economy.read.entitled('usr_ent_1', 'wrld_other'),
+        false,
+        'a SKU they were not granted reads false',
       );
     } finally {
       await economy.close();
