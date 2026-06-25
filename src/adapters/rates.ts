@@ -13,17 +13,16 @@ import type { Currency } from '#src/money.ts';
 import type { Rate, Rates, Options } from '#src/ports.ts';
 
 /**
- * The three CREDIT-to-USD rates a deployment configures. Credit value is platform-fixed, so all are
- * business constants, not a live market feed:
- * - `buy`: what a user pays per credit when buying (VRChat ≈120 credits/USD = $0.00833);
- * - `par`: a credit's backing value / cash-out floor (VRChat ≈200/USD = $0.005), used to check the
- *   platform holds enough real USD to back users' spendable credits;
- * - `payout`: rate a creator's earned credits convert to USD at when cashing out (= `par`).
+ * The three CREDIT-to-USD rates a deployment configures for its {@link Rates} dual-rate credit
+ * economy. Credit value is platform-fixed, so all are business constants, not a live market feed:
+ * - `buy`: the acquisition rate, what a user pays per credit when buying (example: ~120 credits/USD = $0.00833);
+ * - `par`: the redemption/backing & settlement rate, a credit's cash-out floor (example: ~200 credits/USD = $0.005),
+ *   used to check the platform holds enough real USD to back users' spendable credits;
+ * - `payout`: the creator settlement rate, what a creator's earned credits convert to USD at when cashing out (= `par`).
  *
  * Each rate is two integers, `rate` and `scale`; the multiplier is `rate / 10^scale` (e.g. rate 5,
- * scale 3 → $0.005 per credit). Integers avoid floating-point error. The `buy`/`par` gap is the
- * platform's purchase-spread revenue: VRChat's ~40% "purchase fee" (the buy-vs-cash-out spread, not
- * a separate deduction).
+ * scale 3 → $0.005 per credit). Integers avoid floating-point error. The buy-par gap is the platform
+ * spread (example: ~40%), the buy-vs-cash-out margin and not a separate deduction.
  */
 export interface RatesConfig {
   buyRate: bigint;
@@ -40,18 +39,18 @@ function identityRate(from: Currency, to: Currency): Rate {
 }
 
 /**
- * Production CREDIT-to-USD exchange rates, replacing the 1:1 dev placeholder. Fixed business
- * constants a deployment configures, not a live market feed.
+ * Build the production CREDIT-to-USD rate source from a deployment's configured rates, replacing the
+ * 1:1 dev placeholder. Fixed business constants a deployment configures, not a live market feed.
  *
- * Returns three rates: `buy` (paid per credit), `par` (backing/cash-out value), and `payout`
- * (creator earned-credit conversion). Each carries a `rateId` naming the exact rate so a
- * transaction can record which it used.
+ * Returns the three rates of the dual-rate credit economy: `buy` (acquisition rate), `par`
+ * (redemption/backing & settlement rate), and `payout` (creator settlement rate, = `par`). Each
+ * carries a `rateId` naming the exact rate so a transaction can record which it used.
  *
  * Same-currency conversion returns 1:1. Only CREDIT and USD exist, so any other pair is a wiring bug
  * and throws.
  *
  * @example
- *   // VRChat: buy ≈120 credits/USD ($0.00833), backed/cashed at ≈200/USD ($0.005) — a ~40% spread:
+ *   // Example rates: buy ~120 credits/USD ($0.00833), backed/cashed at ~200/USD ($0.005) — a ~40% spread:
  *   let rates = configuredRates({
  *     buyRate: 8333n, buyScale: 6,
  *     parRate: 5n, parScale: 3,

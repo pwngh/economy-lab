@@ -47,9 +47,9 @@ export interface Config {
   /** Platform's cut in basis points (hundredths of a percent); 10000 = 100%, 1530 = 15.3%. */
   platformFeeBps: number;
 
-  /** Payout-rail fee in basis points, charged on the USD a creator cashes out. VRChat's third
-   *  fee point (≈1.5% for PayPal, varies by destination). The rail's cut (e.g. PayPal's), deducted
-   *  from the disbursement so the creator receives the net; not VRChat revenue. */
+  /** Payout-rail fee in basis points, charged on the USD a creator cashes out (≈1.5%, varies by
+   *  destination). This is the payout processor's own cut (e.g. PayPal's), deducted from the
+   *  disbursement so the creator receives the net; it is not platform revenue. */
   payoutFeeBps: number;
 
   /** Most a user may spend within one window before the risk check steps in, in CREDIT minor units. */
@@ -70,7 +70,8 @@ export interface Config {
 
   /**
    * Smallest payout a user may request, counted only against earned CREDIT (not bought or
-   * promo-granted), in minor units. Default 20,000 credits (≈$100) matches VRChat's published floor.
+   * promo-granted), in minor units. The floor keeps tiny disbursements from costing more in rail
+   * fees than they pay out. Default 20,000 credits (≈$100).
    */
   payoutMinimumEarnedMinor: bigint;
 
@@ -130,7 +131,7 @@ export function loadConfig(env: EnvMap): Config {
     maxSubscriptionAttempts: toInt(env.MAX_SUBSCRIPTION_ATTEMPTS, 10),
     // One day: a payout stuck in SUBMITTED longer than this is force-failed as timed out.
     maxPayoutAgeMs: toInt(env.MAX_PAYOUT_AGE_MS, 24 * 60 * 60_000),
-    // Default matches VRChat's real marketplace transaction fee of about 15.3%.
+    // Default is an example marketplace transaction fee of about 15.3%.
     platformFeeBps: toInt(env.PLATFORM_FEE_BPS, 1530),
     payoutFeeBps: toInt(env.PAYOUT_FEE_BPS, 150),
     velocityLimitMinor: toBigInt(env.VELOCITY_LIMIT_MINOR, 100_000n),

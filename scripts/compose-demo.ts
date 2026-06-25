@@ -47,6 +47,13 @@ interface PgDemoModule {
   Client: new (config: { connectionString: string }) => PgDemoClient;
 }
 
+// Postgres is reached by either scheme (the `pg` driver aliases `postgres://` and `postgresql://`);
+// MySQL via `mysql://`. Mirrors the scheme test in src/index.ts so the demo's labels and schema reset
+// agree with what compose() actually selects.
+const isPostgres = (u: string): boolean =>
+  u.startsWith('postgres://') || u.startsWith('postgresql://');
+const isMysql = (u: string): boolean => u.startsWith('mysql://');
+
 // Human-readable label for which backend each env var picks. Mirrors compose()'s internal choices so
 // the demo can print them; compose() returns the wired-up economy, not these labels.
 function selection(env: Record<string, string | undefined>): {
@@ -58,9 +65,9 @@ function selection(env: Record<string, string | undefined>): {
   const store =
     db === ''
       ? 'memory (no DATABASE_URL)'
-      : db.startsWith('postgres')
+      : isPostgres(db)
         ? `postgres (${db})`
-        : db.startsWith('mysql')
+        : isMysql(db)
           ? `mysql (${db})`
           : `?? unsupported scheme: ${db.split(':')[0]}`;
   const cache = env.REDIS_URL
@@ -81,7 +88,7 @@ async function ensureSchema(
   env: Record<string, string | undefined>,
 ): Promise<void> {
   const url = env.DATABASE_URL ?? '';
-  const isSql = url.startsWith('postgres') || url.startsWith('mysql');
+  const isSql = isPostgres(url) || isMysql(url);
   if (!isSql) {
     return;
   }
@@ -95,7 +102,7 @@ async function ensureSchema(
   console.warn(
     'demo: DEMO_RESET=1 — dropping and recreating the schema (DESTROYS all data).',
   );
-  if (url.startsWith('postgres')) {
+  if (isPostgres(url)) {
     // pg ships no type declarations; the binding is typed via PgDemoModule.
     // @ts-expect-error -- untyped dynamic import, typed at the binding.
     const pg: PgDemoModule = (await import('pg')).default;
@@ -108,7 +115,7 @@ async function ensureSchema(
     );
     await client.query(sql);
     await client.end();
-  } else if (url.startsWith('mysql')) {
+  } else if (isMysql(url)) {
     const { createMysqlPool, applyMysqlSchema } =
       await import('#src/engines/mysql.ts');
     const pool = await createMysqlPool(url);

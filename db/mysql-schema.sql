@@ -72,15 +72,15 @@ CREATE TABLE accounts (
    );
 
 INSERT INTO accounts (id, kind, currency) VALUES
-     ('vrchat:trust_cash',     'system', 'USD'),
-     ('vrchat:revenue',        'system', 'CREDIT'),
-     ('vrchat:stored_value',   'system', 'CREDIT'),
-     ('vrchat:payout_reserve', 'system', 'CREDIT'),
-     ('vrchat:receivable',     'system', 'CREDIT'),
-     ('vrchat:promo_float',    'system', 'CREDIT'),
-     ('vrchat:usd_clearing',   'system', 'USD'),
-     ('vrchat:revenue_usd',    'system', 'USD'),
-     ('vrchat:opening_equity', 'system', 'CREDIT');
+     ('platform:trust_cash',     'system', 'USD'),
+     ('platform:revenue',        'system', 'CREDIT'),
+     ('platform:stored_value',   'system', 'CREDIT'),
+     ('platform:payout_reserve', 'system', 'CREDIT'),
+     ('platform:receivable',     'system', 'CREDIT'),
+     ('platform:promo_float',    'system', 'CREDIT'),
+     ('platform:usd_clearing',   'system', 'USD'),
+     ('platform:revenue_usd',    'system', 'USD'),
+     ('platform:opening_equity', 'system', 'CREDIT');
 
 CREATE TABLE postings (
      id         VARCHAR(64) PRIMARY KEY,
@@ -123,7 +123,7 @@ CREATE TABLE account_balances (
      currency   VARCHAR(8)  NOT NULL,
      balance    BIGINT      NOT NULL DEFAULT 0,
      CHECK (currency IN ('CREDIT', 'USD')),
-     CHECK (account_id LIKE 'vrchat:%' OR balance >= 0),
+     CHECK (account_id LIKE 'platform:%' OR balance >= 0),
      CONSTRAINT account_balances_account_fk FOREIGN KEY (account_id) REFERENCES accounts (id)
    );
 
@@ -415,8 +415,8 @@ FOR EACH ROW
 BEGIN
   DECLARE expected BIGINT;
   SET expected = (CASE WHEN NEW.account_id IN (
-      'vrchat:trust_cash','vrchat:usd_clearing','vrchat:revenue_usd',
-      'vrchat:stored_value','vrchat:receivable','vrchat:promo_float','vrchat:opening_equity'
+      'platform:trust_cash','platform:usd_clearing','platform:revenue_usd',
+      'platform:stored_value','platform:receivable','platform:promo_float','platform:opening_equity'
     ) THEN 1 ELSE -1 END)
     * COALESCE((SELECT SUM(amount) FROM legs WHERE account_id = NEW.account_id), 0);
   IF NEW.balance <> expected THEN
@@ -429,8 +429,8 @@ FOR EACH ROW
 BEGIN
   DECLARE expected BIGINT;
   SET expected = (CASE WHEN NEW.account_id IN (
-      'vrchat:trust_cash','vrchat:usd_clearing','vrchat:revenue_usd',
-      'vrchat:stored_value','vrchat:receivable','vrchat:promo_float','vrchat:opening_equity'
+      'platform:trust_cash','platform:usd_clearing','platform:revenue_usd',
+      'platform:stored_value','platform:receivable','platform:promo_float','platform:opening_equity'
     ) THEN 1 ELSE -1 END)
     * COALESCE((SELECT SUM(amount) FROM legs WHERE account_id = NEW.account_id), 0);
   IF NEW.balance <> expected THEN

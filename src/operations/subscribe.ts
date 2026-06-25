@@ -279,8 +279,8 @@ function appendSpendableLegs(
     return;
   }
   // `feeForPrice` (pricing.ts) is the one place the transaction fee is computed: exact basis-point
-  // fee rounded up to a whole credit (VRChat's documented rule), capped at the charge. Spend,
-  // first-month subscribe, and renewal all call it, so they round identically.
+  // fee rounded up to a whole credit (credits are the indivisible billing unit), capped at the
+  // charge. Spend, first-month subscribe, and renewal all call it, so they round identically.
   let feeMinor = feeForPrice(spendablePart.minor, ctx.config.platformFeeBps);
   let netMinor = spendablePart.minor - feeMinor;
   legs.push(debit(spendable(operation.userId), spendablePart));

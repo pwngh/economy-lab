@@ -204,7 +204,7 @@ async function advanceChain(
 }
 
 // Create a user account row if absent, so the first entry posted to it has something to
-// reference. Platform accounts (ids starting `vrchat:`) are created up front by the schema
+// reference. Platform accounts (ids starting `platform:`) are created up front by the schema
 // with kind `system`, which the schema's CHECK constraint would reject on insert here, so
 // skip them. `on conflict do nothing` keeps repeat calls safe.
 async function ensureAccount(q: Queryable, account: AccountRef): Promise<void> {

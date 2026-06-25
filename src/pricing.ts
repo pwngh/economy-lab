@@ -78,10 +78,10 @@ function applyBps(minor: bigint, bps: number): bigint {
 }
 
 /**
- * Platform fee for a price, in minor units, rounded up to a whole credit (VRChat's documented
- * rule). Takes the exact basis-point fee, rounds up to the next whole credit, then caps at the
- * price so the fee can't exceed what was paid. (The cap only matters below one whole credit;
- * real listings are 100+ credits.) The leftover line in splitLegs absorbs the difference.
+ * Platform fee for a price, in minor units, rounded up to a whole credit so the fee is always a
+ * whole spendable unit. Takes the exact basis-point fee, rounds up to the next whole credit, then
+ * caps at the price so the fee can't exceed what was paid. (The cap only matters below one whole
+ * credit; real listings are 100+ credits.) The leftover line in splitLegs absorbs the difference.
  *
  * Single source for the transaction fee. Every charge that takes the fee calls it: a sale
  * (`splitLegs` here, plus `spend.saleOf` recording the same `Sale.fee`), the first month of a

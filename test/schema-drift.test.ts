@@ -47,7 +47,7 @@ function debitNormalIdsInSchema(relativePath: string): string[] {
   let sql = readFileSync(path, 'utf8');
   let ids = new Set<string>();
   for (let list of sql.matchAll(/account_id in \(([\s\S]*?)\)/gi)) {
-    for (let id of list[1]!.matchAll(/'(vrchat:[a-z_]+)'/g)) {
+    for (let id of list[1]!.matchAll(/'(platform:[a-z_]+)'/g)) {
       ids.add(id[1]!);
     }
   }

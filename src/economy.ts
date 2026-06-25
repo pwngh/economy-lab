@@ -899,8 +899,8 @@ function txnData(
 }
 
 // A sale's event payload: the txn id, plus the gift flag and recipient when the buyer bought for
-// someone else (VRChat's `isGift`). Only added for a real gift (recipient differs from the buyer),
-// so a self-purchase keeps the minimal payload.
+// someone else. Only added for a real gift (recipient differs from the buyer), so a self-purchase
+// keeps the minimal payload.
 function spendData(
   operation: Operation,
   outcome: Committed,

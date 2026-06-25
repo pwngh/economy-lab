@@ -205,7 +205,7 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
 
     // The non-negative CHECK must exempt system accounts (several are negative by design). RECEIVABLE is
     // debit-normal, so a balanced credit drives its cached balance to -100 via real legs (conservation +
-    // balance integrity both hold); only the non-negative rule is under test, and it must let this vrchat:%
+    // balance integrity both hold); only the non-negative rule is under test, and it must let this platform:%
     // system balance stand. A user account driven negative the same way is rejected — see the case above.
     test('overdraft: a legitimately negative SYSTEM balance is allowed (exempt)', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);

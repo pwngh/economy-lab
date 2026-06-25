@@ -84,10 +84,9 @@ export type Operation =
       recipients?: Recipient[];
       ageRestricted?: boolean;
       // A gift: the buyer still pays and is screened for funds and velocity, but the SKU is
-      // granted to this recipient user id instead of the buyer. Mirrors VRChat, where a gift is an
-      // ordinary purchase with an `isGift` flag (not a separate transaction type), with no
-      // wallet-to-wallet credit or ownership transfer. Omitted (or equal to `buyerId`) for a
-      // self-purchase.
+      // granted to this recipient user id instead of the buyer. A gift is modelled as an ordinary
+      // purchase carrying a recipient (not a separate transaction type), with no wallet-to-wallet
+      // credit or ownership transfer. Omitted (or equal to `buyerId`) for a self-purchase.
       giftTo?: string;
     }
   | {

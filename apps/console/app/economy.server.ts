@@ -178,9 +178,10 @@ async function build(): Promise<ConsoleEngine> {
     },
   };
 
-  // Exchange rates from VRChat's published Creator Economy model, not a 1:1 placeholder. buy is what
-  // a user pays per credit (~120 credits/USD, $0.00833); par is the backing/cash-out value
-  // (~200/USD, $0.005); payout equals par. The buy-vs-par gap is the platform's ~40% purchase fee.
+  // A dual-rate credit economy, not a 1:1 placeholder. buy is the acquisition rate a user pays per
+  // credit (~120 credits/USD, $0.00833); par is the ledger-backed redemption/settlement rate
+  // (~200/USD, $0.005); payout settles at par. The buy-vs-par gap is the platform spread that funds
+  // fees, processing, reserves, and margin.
   const rates = configuredRates({
     buyRate: 8333n,
     buyScale: 6,
@@ -263,11 +264,11 @@ async function build(): Promise<ConsoleEngine> {
     return Number.isFinite(n) ? n : 0;
   }
 
-  // The first user account a posting touches (not a "vrchat:" one), so a worker posting can name
+  // The first user account a posting touches (not a "platform:" one), so a worker posting can name
   // the user it concerns. Null if none.
   function userInLegs(legs: ReadonlyArray<Leg>): string | null {
     for (const leg of legs) {
-      if (!leg.account.startsWith('vrchat:')) {
+      if (!leg.account.startsWith('platform:')) {
         const colon = leg.account.lastIndexOf(':');
         return colon >= 0 ? leg.account.slice(0, colon) : leg.account;
       }
@@ -325,7 +326,7 @@ async function build(): Promise<ConsoleEngine> {
       paymentType: 'Tilia',
       priceCredits: amount,
       priceCurrency: priceCurrency as 'CREDIT' | 'USD',
-      buyer: 'VRChat',
+      buyer: 'Platform',
       seller: user,
       legs: toLegViews(p.legs),
       balancedTo: balanceOf(p.legs),
@@ -595,7 +596,7 @@ async function build(): Promise<ConsoleEngine> {
           listing: 'Credit top-up',
           priceCredits: amount,
           buyer: userId,
-          seller: 'VRChat',
+          seller: 'Platform',
           paymentType: 'Card',
         },
       ),
@@ -635,7 +636,7 @@ async function build(): Promise<ConsoleEngine> {
           kind: 'requestPayout',
           listing: 'Payout to Tilia',
           priceCredits: amount,
-          buyer: 'VRChat',
+          buyer: 'Platform',
           seller: userId,
           paymentType: 'Tilia',
         },
@@ -656,7 +657,7 @@ async function build(): Promise<ConsoleEngine> {
           listing: 'Promotional credits',
           priceCredits: amount,
           buyer: userId,
-          seller: 'VRChat',
+          seller: 'Platform',
           paymentType: 'Promotion',
         },
       ),

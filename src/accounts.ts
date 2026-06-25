@@ -50,54 +50,54 @@ export function promo(userId: string): AccountRef {
 }
 
 /**
- * The platform's own ("house") accounts. Each id starts with `vrchat:` to distinguish it from a
+ * The platform's own ("house") accounts. Each id starts with `platform:` to distinguish it from a
  * user account. Per-account comments note currency and normal side ("debit-normal" = goes up when
  * debited; "credit-normal" = goes up when credited).
  */
 export const SYSTEM = {
   // The real USD the platform holds in trust on behalf of users. Debit-normal, in USD.
-  TRUST_CASH: 'vrchat:trust_cash' as AccountRef,
+  TRUST_CASH: 'platform:trust_cash' as AccountRef,
 
   // The platform's earnings: fees plus the rounding leftover from splitting a sale. Credit-normal.
   // Must not hold the offsetting entry for newly issued credits on a top-up (that goes to
   // STORED_VALUE instead).
-  REVENUE: 'vrchat:revenue' as AccountRef,
+  REVENUE: 'platform:revenue' as AccountRef,
 
   // Running count of all credits in circulation. On top-up, the newly issued credits post here as
   // the offsetting entry. Debit-normal.
-  STORED_VALUE: 'vrchat:stored_value' as AccountRef,
+  STORED_VALUE: 'platform:stored_value' as AccountRef,
 
   // Money set aside in escrow for a pending payout, funded from sellers' earned balances.
   // Credit-normal.
-  PAYOUT_RESERVE: 'vrchat:payout_reserve' as AccountRef,
+  PAYOUT_RESERVE: 'platform:payout_reserve' as AccountRef,
 
   // A shortfall the platform is owed back, e.g. after a clawback left a user's balance negative.
   // Debit-normal.
-  RECEIVABLE: 'vrchat:receivable' as AccountRef,
+  RECEIVABLE: 'platform:receivable' as AccountRef,
 
   // The offsetting entry for marketing grants in users' promo accounts. Debit-normal.
-  PROMO_FLOAT: 'vrchat:promo_float' as AccountRef,
+  PROMO_FLOAT: 'platform:promo_float' as AccountRef,
 
   // An external counter mirroring cash that has cleared in or out of TRUST_CASH. Debit-normal, in USD.
-  USD_CLEARING: 'vrchat:usd_clearing' as AccountRef,
+  USD_CLEARING: 'platform:usd_clearing' as AccountRef,
 
   // The platform's USD profit from the purchase spread. A user buys at the buy rate
   // (≈120 credits/USD) but each credit is backed only at its payout-floor (par) value
-  // (≈200 credits/USD). The difference (VRChat's documented ~40% "purchase fee", really the
-  // buy-vs-payout exchange spread) is recognized here at top-up. It's the platform's own money,
+  // (≈200 credits/USD). That buy-par gap is the platform spread (≈40% in the example rates;
+  // see {@link Rates}) and is recognized here at top-up. It's the platform's own money,
   // not held in trust, so it stays out of the backing total. Debit-normal, in USD. (App-store cut
-  // and VAT aren't modelled here; they happen at the cash-in rail before VRChat's ledger sees the
+  // and VAT aren't modelled here; they happen at the cash-in rail before the ledger sees the
   // purchase.)
-  REVENUE_USD: 'vrchat:revenue_usd' as AccountRef,
+  REVENUE_USD: 'platform:revenue_usd' as AccountRef,
 
   // The offsetting entry used when seeding starting balances on a fresh (cold-start) system.
-  OPENING_EQUITY: 'vrchat:opening_equity' as AccountRef,
+  OPENING_EQUITY: 'platform:opening_equity' as AccountRef,
 } as const;
 
 /**
  * Whether `ref` is a user wallet account rather than a platform ("house") account. A user id is
- * `usr_…:<kind>` (has a `:kind` suffix, no `vrchat:` prefix); every house account starts with
- * `vrchat:`.
+ * `usr_…:<kind>` (has a `:kind` suffix, no `platform:` prefix); every house account starts with
+ * `platform:`.
  *
  * Guards against money laundering: escrow for a pending purchase must come back out only by
  * releasing or expiring the hold. Moving it straight into a user's balance would mint fresh,
@@ -106,7 +106,7 @@ export const SYSTEM = {
  * and `integrity.ts` import it.
  */
 export function isWalletAccount(ref: AccountRef): boolean {
-  return ref.includes(':') && !ref.startsWith('vrchat:');
+  return ref.includes(':') && !ref.startsWith('platform:');
 }
 
 /**

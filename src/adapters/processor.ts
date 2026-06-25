@@ -49,8 +49,8 @@ export interface HttpProcessorConfig {
 }
 
 /**
- * Build a {@link Processor} that pays creators via an external provider (Tilia, Steam,
- * Meta) over HTTP. It asks the provider to send money; it does not touch our ledger.
+ * Build a {@link Processor} that pays creators via an external provider (e.g. a payment
+ * processor) over HTTP. It asks the provider to send money; it does not touch our ledger.
  *
  * `submitPayout` POSTs a request carrying:
  * - `key`, idempotency key so a resend (e.g. after a retry) pays out only once;

@@ -23,8 +23,8 @@ import type { Rate, Unit } from '#src/ports.ts';
  *
  * Two ledger postings, since one posting can't mix currencies. First raises the buyer's spendable
  * CREDIT balance; second accounts for the USD paid. The cash splits: backing value goes to
- * TRUST_CASH (real cash held to cover the credits), and the buy-vs-backing spread (VRChat's ~40%
- * "purchase fee") is recognized as USD revenue (REVENUE_USD). The CREDIT `REVENUE` account is
+ * TRUST_CASH (real cash held to cover the credits), and the buy-vs-backing gap (the platform spread,
+ * ~40% on the example rates; see {@link Rates}) is recognized as USD revenue (REVENUE_USD). The CREDIT `REVENUE` account is
  * untouched, so it stays meaning transaction fees only. The external app-store cut and VAT happen
  * at the cash-in rail before this ledger sees the purchase and aren't modelled.
  *
@@ -49,7 +49,8 @@ export async function topUp(
 
   // Two rates: `buy` is what the user pays per credit (≈120 credits/USD); `par` is each credit's
   // backing/cash-out value (≈200/USD). The cash splits into the backing (held in trust) and the
-  // buy-vs-par spread (VRChat's ~40% "purchase fee"), recognized as USD revenue.
+  // buy-vs-par gap (the platform spread, ~40% on the example rates; see {@link Rates}), recognized
+  // as USD revenue.
   //
   // Both conversions round up (ceil), for two reasons. (1) Backing must round up: the backing check
   // values the whole spendable balance at par as one floor, `floor(total × par)`, so a per-top-up

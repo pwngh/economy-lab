@@ -46,7 +46,7 @@ type SpendPlan = { promoPart: Amount; spendablePart: Amount };
  * later refund can reverse exactly what posted, and the SKU entitlement is granted in the same
  * transaction so paying always confers ownership. Entitlement goes to the buyer, or to `giftTo`
  * when present: a gift is an ordinary purchase the buyer pays for and the recipient receives
- * (VRChat's `isGift` model), not a wallet-to-wallet transfer.
+ * (modelled as an `isGift` flag on the purchase), not a wallet-to-wallet transfer.
  *
  * `orderId` is unique per purchase. If a Sale already exists for it (a second request reusing
  * the same `orderId` under a different idempotency key), the spend is refused with
@@ -131,7 +131,7 @@ export async function spend(
   if (operation.ageRestricted) {
     meta.ageRestricted = true;
   }
-  // Flag a gift on the immutable posting metadata (matching VRChat's `isGift`) so an audit can see
+  // Flag a gift on the immutable posting metadata (the `isGift` flag) so an audit can see
   // the buyer paid for someone else. Only added when the recipient differs from the buyer.
   if (recipientId !== operation.buyerId) {
     meta.isGift = true;
@@ -337,7 +337,7 @@ function positiveCredit(amount: Amount, label: string): Amount {
 //     across two earned-credit lines under one id, double-counting in the share math.
 //   - No recipient may be a house/system account. Recipients are credited to their EARNED
 //     (cash-outable) balance, which only a real user wallet may receive, so `earned(sellerId)` must
-//     be a user wallet account (not a `vrchat:`-prefixed house account) with a non-blank owner.
+//     be a user wallet account (not a `platform:`-prefixed house account) with a non-blank owner.
 //     (Self-dealing and share-bounds are checked separately.)
 function assertSpendShape(
   operation: Extract<Operation, { kind: 'spend' }>,
@@ -378,7 +378,7 @@ function assertSpendShape(
     seen.add(recipient.sellerId);
 
     // A recipient is paid into its EARNED (cash-outable) balance, so its sellerId must resolve to a
-    // real user wallet. A house/system account (e.g. `vrchat:revenue`) isn't a wallet owner; routing
+    // real user wallet. A house/system account (e.g. `platform:revenue`) isn't a wallet owner; routing
     // earnings there would credit a platform account as if it were a seller.
     let account = earned(recipient.sellerId);
     if (!isWalletAccount(account) || ownerOf(account).trim() === '') {

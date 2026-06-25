@@ -27,7 +27,7 @@
         "id": "txn_1",
         "legs": [
           {
-            "account": "vrchat:stored_value",
+            "account": "platform:stored_value",
             "amount": "CREDIT:20.00"
           },
           {
@@ -45,7 +45,7 @@
         "id": "txn_5",
         "legs": [
           {
-            "account": "vrchat:promo_float",
+            "account": "platform:promo_float",
             "amount": "CREDIT:5.00"
           },
           {
@@ -67,7 +67,7 @@
             "amount": "CREDIT:5.00"
           },
           {
-            "account": "vrchat:promo_float",
+            "account": "platform:promo_float",
             "amount": "CREDIT:-5.00"
           },
           {
@@ -79,7 +79,7 @@
             "amount": "CREDIT:-2.00"
           },
           {
-            "account": "vrchat:revenue",
+            "account": "platform:revenue",
             "amount": "CREDIT:5.00"
           },
           {
@@ -95,7 +95,7 @@
             "amount": "CREDIT:-1.60"
           },
           {
-            "account": "vrchat:revenue",
+            "account": "platform:revenue",
             "amount": "CREDIT:-3.00"
           }
         ],
@@ -113,7 +113,7 @@
             "amount": "CREDIT:5.00"
           },
           {
-            "account": "vrchat:promo_float",
+            "account": "platform:promo_float",
             "amount": "CREDIT:-5.00"
           },
           {
@@ -125,7 +125,7 @@
             "amount": "CREDIT:-2.00"
           },
           {
-            "account": "vrchat:revenue",
+            "account": "platform:revenue",
             "amount": "CREDIT:5.00"
           },
           {
@@ -141,7 +141,7 @@
             "amount": "CREDIT:-1.60"
           },
           {
-            "account": "vrchat:revenue",
+            "account": "platform:revenue",
             "amount": "CREDIT:-3.00"
           }
         ],

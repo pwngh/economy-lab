@@ -302,8 +302,9 @@ async function postRenewal(
   sub: Subscription,
 ): Promise<Transaction> {
   // `feeForPrice` (pricing.ts) is the single source of truth for the fee: rounds the exact
-  // basis-point fee up to a whole credit (VRChat's documented rule), capped at the charge. Spend,
-  // the first month (operations/subscribe.ts), and every renewal call it, so the fee is identical.
+  // basis-point fee up to a whole credit (credits are the indivisible billing unit), capped at the
+  // charge. Spend, the first month (operations/subscribe.ts), and every renewal call it, so the fee
+  // is identical.
   let feeMinor = feeForPrice(sub.price.minor, ctx.config.platformFeeBps);
   let netMinor = sub.price.minor - feeMinor;
   let legs: Leg[] = [

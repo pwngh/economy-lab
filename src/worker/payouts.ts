@@ -243,10 +243,11 @@ async function submitToProvider(
 async function settle(store: Store, ctx: WorkerCtx, saga: Saga): Promise<void> {
   let rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
   let usd = convert(saga.reserve, rate, 'USD');
-  // The payout-rail fee (VRChat's third fee point, PayPal ≈1.5%, see config.payoutFeeBps) is the
-  // rail's cut of the disbursement, not VRChat revenue: the gross `usd` leaves the trust account,
-  // the rail keeps `fee`, the creator receives `net`. Fee + net are recorded for the audit trail;
-  // the split happens at the external rail, downstream of USD_CLEARING.
+  // The payout-rail fee (the rail's processing cut, e.g. a payment processor at ≈1.5%, see
+  // config.payoutFeeBps) is the rail's cut of the disbursement, not the platform's revenue: the
+  // gross `usd` leaves the trust account, the rail keeps `fee`, the creator receives `net`. Fee +
+  // net are recorded for the audit trail; the split happens at the external rail, downstream of
+  // USD_CLEARING.
   let fee = payoutFee(usd, ctx.config.payoutFeeBps);
   let net = toAmount('USD', usd.minor - fee.minor);
 
@@ -293,7 +294,7 @@ async function settle(store: Store, ctx: WorkerCtx, saga: Saga): Promise<void> {
 }
 
 // Payout-rail fee on a gross USD disbursement, rounded down to whole minor units. `feeBps` is in
-// basis points (150 = 1.5%); the rail's cut (e.g. PayPal's), deducted so the creator gets the net.
+// basis points (150 = 1.5%); the rail's cut (e.g. a payment processor's), deducted so the creator gets the net.
 function payoutFee(gross: Amount, feeBps: number): Amount {
   return toAmount('USD', (gross.minor * BigInt(feeBps)) / 10_000n);
 }

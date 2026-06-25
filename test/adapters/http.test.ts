@@ -242,7 +242,7 @@ describe('http balanceAccounts Streams Over HTTP', () => {
       txnId: 'txn_http_balacct',
       legs: [
         {
-          account: 'vrchat:treasury' as AccountRef,
+          account: 'platform:treasury' as AccountRef,
           amount: toAmount('CREDIT', -500n),
         },
         {

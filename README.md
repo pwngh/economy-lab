@@ -116,8 +116,9 @@ whole model:
 | **buy** | what a user pays per credit when purchasing | ~$0.0083 (≈ 120 credits / $1) |
 | **par** | a credit's backing value and cash-out floor | ~$0.005 (≈ 200 credits / $1)  |
 
-A credit costs **more to buy than it pays back at cash-out**. That spread — about 40%, matching
-VRChat's published purchase fee — is the platform's margin: taken once, at purchase, and never mixed
+A credit costs **more to buy than it pays back at cash-out**. That spread — about 40% in the
+example rates above — is the **platform spread**: the platform's margin, funding fees, payment
+processing, reserves, and operating costs. It is taken once, at purchase, and never mixed
 into the cash held to back users. So a `$10` purchase becomes **1,200 credits**, of which `$6.00`
 (1,200 × par) is set aside as backing and `$4.00` is the platform's to keep. Creators cash out at par,
 so a credit earned is worth exactly the dollars reserved for it.
@@ -136,7 +137,7 @@ A user has up to three accounts:
 | `earned`    | revenue owed to them as a seller, waiting to be paid out                      |
 | `promo`     | a marketing grant that expires if unspent                                     |
 
-The platform's house accounts (each id prefixed `vrchat:`):
+The platform's house accounts (each id prefixed `platform:`):
 
 | Account          | Cur.   | Holds                                                              |
 | ---------------- | ------ | ------------------------------------------------------------------ |
@@ -217,7 +218,7 @@ await economy.close();
 
 - **money** — `topUp`, `spend` (a marketplace sale that splits the price buyer → sellers
   → platform fee; pass `giftTo` to gift the item — the buyer pays, the recipient receives
-  ownership, matching VRChat's `isGift` purchase flag), `refund`, `clawback`
+  ownership via an `isGift` purchase flag), `refund`, `clawback`
 - **payouts** — `requestPayout` (cash earned credits out through a provider), `reversePayout`
   (system or operator: undo a reserved payout before it pays out real money)
 - **subscriptions** — `subscribe`, `cancelSubscription`
@@ -242,7 +243,7 @@ nothing rounds. Build one with `toAmount('CREDIT', 5000n)` or `decodeAmount('50.
 retried request runs at most once) and an `actor` (who is asking: a `user`, a `system`
 service, or an `operator`).
 
-Entity ids use VRChat's `prefix_<uuid>` form — `usr_…` for a user, `prod_…` for a
+Entity ids use a typed `prefix_<uuid>` form — `usr_…` for a user, `prod_…` for a
 marketplace listing, `pur_…` for a purchase. `idempotencyKey` is any string the caller
 chooses (often a plain UUID); a retry reuses it.
 
@@ -478,7 +479,7 @@ every cycle. The signing key's public half is published, so anyone — an audito
 saved checkpoint and that public key — can recompute the root over the ledger and verify the signature
 themselves.
 
-What a mismatch means is the point. The hash chain catches a single edited row that still balances —
+The two layers catch different attacks. The hash chain catches a single edited row that still balances —
 the tamper the money invariants can't see, because conservation is a property of sums, not of the rows
 behind them. The checkpoint catches the harder attack, a _wholesale re-seal_: rewriting history **and**
 recomputing every chain so it looks intact still produces a different root than the one already signed,

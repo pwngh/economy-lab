@@ -95,8 +95,8 @@ export type Dispatcher = (
 ) => Promise<void>;
 
 /**
- * External payment provider that pays sellers (e.g. Tilia, Steam, Meta). All money leaving
- * the platform goes through this.
+ * External payment provider that pays sellers (e.g. a payout processor or payment rail). All money
+ * leaving the platform goes through this.
  */
 export interface Processor {
   // Pay a user. `amount` is in real USD. `key` makes the request safe to retry without paying
@@ -110,9 +110,22 @@ export interface Processor {
   // webhooks, which the worker reconciles.
 }
 
-/** Supplies exchange rates from an audited source, never from config or caller input. */
+/**
+ * Dual-Rate Credit Economy.
+ *
+ * Credits are platform-priced, not market-priced: this port supplies fixed CREDIT-to-USD rates from
+ * an audited source, never from config or caller input. Three rates govern the economy:
+ * - `buy`: the acquisition rate, what a user pays per credit (e.g. ~120 credits/USD);
+ * - `par`: the redemption/backing & settlement rate, a credit's cash-out floor and the value used to
+ *   check the platform holds enough real USD to back users' spendable credits (e.g. ~200 credits/USD);
+ * - `payout`: the creator settlement rate, what an earned credit converts to USD at (= `par`).
+ *
+ * The rates hold `buy >= par >= payout`. The buy-par gap is the platform spread (the platform's
+ * margin, e.g. ~40%): it funds platform fees, payment processing, reserves, and operating margin.
+ */
 export interface Rates {
-  // Rate to convert one currency to another at a point in time, mainly CREDIT to USD on payout.
+  // Settlement rate to convert one currency to another at a point in time, mainly CREDIT to USD on
+  // payout (the creator settlement rate, = `par`).
   payout(
     from: Currency,
     to: Currency,
@@ -120,15 +133,13 @@ export interface Rates {
     options?: Options,
   ): Promise<Rate>;
 
-  // Fixed CREDIT-to-USD rate (never market-driven), unlike `payout`. Used by the reconciliation
-  // check that the platform holds enough real USD to cover every user's spendable credits,
-  // valuing those credits in USD at this rate.
+  // The redemption/backing rate. Used by the reconciliation check that the platform holds enough
+  // real USD to cover every user's spendable credits, valuing those credits in USD at this rate.
   par(currency: Currency): Rate;
 
-  // Fixed CREDIT-to-USD rate a user pays when buying credits (≈120 credits/USD at VRChat, less
-  // favourable than `par`/`payout`). `topUp` values the buyer's cash at this rate; the gap
-  // between it and `par` (the credit's backing/cash-out value) is the platform's purchase-spread
-  // revenue, VRChat's documented ~40% "purchase fee". Never market-driven.
+  // The acquisition rate a user pays when buying credits, less favourable than `par`/`payout`.
+  // `topUp` values the buyer's cash at this rate; the gap between it and `par` is the platform
+  // spread (see the type's doc-comment).
   buy(currency: Currency): Rate;
 }
 

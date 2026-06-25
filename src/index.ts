@@ -84,8 +84,8 @@ export type { Capabilities, Options, Range, Statement } from '#src/ports.ts';
 /**
  * External services with no built-in stand-in; the caller supplies a real one. `pricing` splits
  * a sale's money (platform fee vs. seller share). The rest are outside integrations: `processor`
- * is the payout provider (Tilia/Steam), `signer` holds the signing key, `rates` supplies
- * currency-exchange rates.
+ * is the payout provider (e.g. a payment processor), `signer` holds the signing key, `rates`
+ * supplies currency-exchange rates.
  */
 export type ExternalPorts = {
   signer: Signer;

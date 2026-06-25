@@ -35,15 +35,15 @@ create table accounts (
 -- Platform accounts, inserted once. User accounts (`usr_<uuid>:<kind>`) are created on
 -- first posting, so they need no seed row.
 insert into accounts (id, kind, currency) values
-  ('vrchat:trust_cash',     'system', 'USD'),
-  ('vrchat:revenue',        'system', 'CREDIT'),
-  ('vrchat:stored_value',   'system', 'CREDIT'),
-  ('vrchat:payout_reserve', 'system', 'CREDIT'),
-  ('vrchat:receivable',     'system', 'CREDIT'),
-  ('vrchat:promo_float',    'system', 'CREDIT'),
-  ('vrchat:usd_clearing',   'system', 'USD'),
-  ('vrchat:revenue_usd',    'system', 'USD'),
-  ('vrchat:opening_equity', 'system', 'CREDIT');
+  ('platform:trust_cash',     'system', 'USD'),
+  ('platform:revenue',        'system', 'CREDIT'),
+  ('platform:stored_value',   'system', 'CREDIT'),
+  ('platform:payout_reserve', 'system', 'CREDIT'),
+  ('platform:receivable',     'system', 'CREDIT'),
+  ('platform:promo_float',    'system', 'CREDIT'),
+  ('platform:usd_clearing',   'system', 'USD'),
+  ('platform:revenue_usd',    'system', 'USD'),
+  ('platform:opening_equity', 'system', 'CREDIT');
 
 -- ============================================================================
 -- Postings: the append-only record of everything that happened. Each posting splits into
@@ -105,7 +105,7 @@ create table account_balances (
   balance    bigint not null default 0,
   -- A user account (`usr_…:<kind>`) may never go negative; a system account may.
   constraint user_account_non_negative
-    check (account_id like 'vrchat:%' or balance >= 0)
+    check (account_id like 'platform:%' or balance >= 0)
 );
 
 -- ============================================================================
@@ -426,8 +426,8 @@ declare
   expected bigint;
 begin
   expected := (case when new.account_id in (
-      'vrchat:trust_cash','vrchat:usd_clearing','vrchat:revenue_usd',
-      'vrchat:stored_value','vrchat:receivable','vrchat:promo_float','vrchat:opening_equity'
+      'platform:trust_cash','platform:usd_clearing','platform:revenue_usd',
+      'platform:stored_value','platform:receivable','platform:promo_float','platform:opening_equity'
     ) then 1 else -1 end)
     * coalesce((select sum(amount) from legs where account_id = new.account_id), 0);
   if new.balance <> expected then

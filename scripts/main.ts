@@ -87,11 +87,11 @@ function signingKeyHex(env: Env): string {
   return toHex(ENCODER.encode(env.SIGNING_SECRET ?? ''));
 }
 
-// Fixed CREDIT-to-USD rate source for local runs, matching VRChat's published Creator Economy model.
-// Real deployments wire rates from config (see productionExternals). Buy rate (what a user pays per
-// credit) is ≈$0.00833 (120 credits = $1); par rate (credit's backing/cash-out value) and payout
-// rate are both $0.005 (200 credits = $1). The ~40% buy-vs-par gap is VRChat's "purchase fee". Any
-// other pair 1:1.
+// Fixed CREDIT-to-USD rate source for local runs, modeling a dual-rate credit economy. Real
+// deployments wire rates from config (see productionExternals). Buy rate (the acquisition rate a
+// user pays per credit) is ≈$0.00833 (120 credits = $1); par rate (the credit's
+// redemption/settlement value) and payout rate (the settlement rate) are both $0.005 (200 credits
+// = $1). The ~40% buy-par gap is the platform spread. Any other pair 1:1.
 function fixedRates(): Rates {
   return {
     payout: async (from, to) =>

@@ -186,16 +186,16 @@ export function humanizeKind(kind: string): string {
 
 // Friendly names for the platform's internal accounts, so the ledger never shows a raw account id.
 const ACCOUNT_LABELS: Record<string, string> = {
-  'vrchat:stored_value': 'Stored value (spendable credits in circulation)',
-  'vrchat:revenue': 'Platform revenue',
-  'vrchat:held': 'Escrow (funds held until a sale completes)',
-  'vrchat:payout_reserve':
+  'platform:stored_value': 'Stored value (spendable credits in circulation)',
+  'platform:revenue': 'Platform revenue',
+  'platform:held': 'Escrow (funds held until a sale completes)',
+  'platform:payout_reserve':
     'Payout reserve (credits set aside for a pending payout)',
-  'vrchat:promo_float': 'Promotional float (credits granted, not yet spent)',
-  'vrchat:trust_cash': 'Trust cash (USD backing user credits)',
-  'vrchat:receivable': 'Receivable (money owed to the platform)',
-  'vrchat:usd_clearing': 'USD clearing (cash in transit to or from the bank)',
-  'vrchat:opening_equity': 'Opening equity (starting balance)',
+  'platform:promo_float': 'Promotional float (credits granted, not yet spent)',
+  'platform:trust_cash': 'Trust cash (USD backing user credits)',
+  'platform:receivable': 'Receivable (money owed to the platform)',
+  'platform:usd_clearing': 'USD clearing (cash in transit to or from the bank)',
+  'platform:opening_equity': 'Opening equity (starting balance)',
 };
 
 // The platform's own ledger accounts shown on the Overview, in reading order; read live by

@@ -36,7 +36,7 @@ import type { Config } from '#src/config.ts';
 import type { WorkerCtx } from '#src/contract.ts';
 import type { Logger, Meter, Rates, Store, Unit } from '#src/ports.ts';
 
-// These tests pin a par rate of $0.01 per credit (shared `fixedRates()` uses VRChat's $0.005), so
+// These tests pin a par rate of $0.01 per credit (shared `fixedRates()` uses $0.005), so
 // the surplus/shortfall assertions stay round. The fee sweep reads par from `rates` and works at any
 // value; the peg is just a fixture.
 function treasuryRates(): Rates {

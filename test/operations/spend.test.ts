@@ -43,7 +43,7 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store, Unit } from '#src/ports.ts';
 import type { Config } from '#src/config.ts';
 
-// A gift is an ordinary purchase carrying a `giftTo` recipient (VRChat's isGift), not a
+// A gift is an ordinary purchase carrying a `giftTo` recipient (the isGift flag), not a
 // wallet-to-wallet move: the buyer pays and is screened, the recipient receives the item.
 async function giftsToRecipientWhileChargingBuyer(): Promise<void> {
   const store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
@@ -557,7 +557,7 @@ describe('Spend Field Shape', () => {
       buildTopUp({ userId: 'usr_buyer', amount: credit('10.00') }),
     );
 
-    // `vrchat:revenue` is a house account, not a user wallet owner; routing a sale's earnings
+    // `platform:revenue` is a house account, not a user wallet owner; routing a sale's earnings
     // there would credit a platform account as if it were a seller.
     await assert.rejects(
       runOp(
@@ -568,7 +568,7 @@ describe('Spend Field Shape', () => {
           sku: 'wrld_pass',
           price: credit('4.00'),
           orderId: 'ord_house_seller',
-          recipients: [{ sellerId: 'vrchat:revenue', shareBps: 10_000 }],
+          recipients: [{ sellerId: 'platform:revenue', shareBps: 10_000 }],
         }),
       ),
       isCode('OP.MALFORMED'),

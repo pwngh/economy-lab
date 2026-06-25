@@ -47,7 +47,7 @@ export function demoEnv(
     SIGNING_SECRET: 'console',
     REPLAY_WINDOW_MS: String(5 * 60_000),
     MAX_PAYOUT_ATTEMPTS: String(maxAttempts),
-    PLATFORM_FEE_BPS: '1530', // ~15.3%, VRChat's real marketplace transaction fee
+    PLATFORM_FEE_BPS: '1530', // ~15.3%, an example marketplace transaction fee
     VELOCITY_LIMIT_MINOR: String(100_000_000),
     VELOCITY_WINDOW_MS: String(60 * 60_000),
     MATURITY_HORIZON_CARD_MS: '0',
