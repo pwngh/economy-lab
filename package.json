@@ -21,7 +21,7 @@
     "dev": "node --watch --env-file-if-exists=.env scripts/main.ts dev",
     "start": "node --env-file-if-exists=.env scripts/main.ts serve",
     "worker": "node --env-file-if-exists=.env scripts/main.ts worker",
-    "test": "node --test --test-reporter=./test/support/numbered.reporter.mjs --test-reporter-destination=stdout \"test/**/*.test.ts\"",
+    "test": "node --env-file-if-exists=.env --test --test-reporter=./test/support/numbered.reporter.mjs --test-reporter-destination=stdout \"test/**/*.test.ts\"",
     "check": "npm run typecheck && npm run lint && npm run pret && npm run test",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
