@@ -26,8 +26,7 @@ import type { Rate, Unit } from '#src/ports.ts';
  * TRUST_CASH (real cash held to cover the credits), and the buy-vs-backing spread (VRChat's ~40%
  * "purchase fee") is recognized as USD revenue (REVENUE_USD). The CREDIT `REVENUE` account is
  * untouched, so it stays meaning transaction fees only. The external app-store cut and VAT happen
- * at the cash-in rail before this ledger sees the purchase and aren't modelled (see
- * docs/vrchat-grounding.md).
+ * at the cash-in rail before this ledger sees the purchase and aren't modelled.
  *
  * @example
  *   let outcome = await topUp(

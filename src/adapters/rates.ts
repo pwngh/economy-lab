@@ -23,7 +23,7 @@ import type { Rate, Rates, Options } from '#src/ports.ts';
  * Each rate is two integers, `rate` and `scale`; the multiplier is `rate / 10^scale` (e.g. rate 5,
  * scale 3 → $0.005 per credit). Integers avoid floating-point error. The `buy`/`par` gap is the
  * platform's purchase-spread revenue: VRChat's ~40% "purchase fee" (the buy-vs-cash-out spread, not
- * a separate deduction). See docs/vrchat-grounding.md.
+ * a separate deduction).
  */
 export interface RatesConfig {
   buyRate: bigint;

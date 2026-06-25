@@ -19,11 +19,11 @@ import tseslint from 'typescript-eslint';
 let BANNED_GLOBALS = [
   {
     name: 'Buffer',
-    message: 'Use Uint8Array and src/bytes.ts; Buffer is Node-only (§9).',
+    message: 'Use Uint8Array and src/bytes.ts; Buffer is Node-only.',
   },
   {
     name: 'process',
-    message: 'Inject Config at the edge; the core never reads process (§0.21).',
+    message: 'Inject Config at the edge; the core never reads process.',
   },
   {
     name: 'setInterval',
@@ -35,12 +35,12 @@ let BANNED_GLOBALS = [
   },
   {
     name: 'EventEmitter',
-    message: 'The core emits via the Dispatcher port, not EventEmitter (§9).',
+    message: 'The core emits via the Dispatcher port, not EventEmitter.',
   },
   {
     name: 'performance',
     message:
-      'Time via the injected Clock; performance.now diverges across runtimes (§0.12).',
+      'Time via the injected Clock; performance.now diverges across runtimes.',
   },
 ];
 
@@ -61,8 +61,7 @@ let BANNED_IMPORTS = {
   patterns: [
     {
       group: ['node:*'],
-      message:
-        'The core targets the WinterCG surface; node:* is adapter-only (§9).',
+      message: 'The core targets the WinterCG surface; node:* is adapter-only.',
     },
   ],
 };
@@ -97,7 +96,7 @@ let OPTIONAL_DRIVER_IMPORTS = [
 ].map((name) => ({
   name,
   message:
-    'Load optional drivers via dynamic import() so an unused peer dependency never loads (§ peerDependenciesMeta).',
+    'Load optional drivers via dynamic import() so an unused peer dependency never loads.',
 }));
 
 export default tseslint.config(

@@ -87,7 +87,7 @@ export const SYSTEM = {
   // buy-vs-payout exchange spread) is recognized here at top-up. It's the platform's own money,
   // not held in trust, so it stays out of the backing total. Debit-normal, in USD. (App-store cut
   // and VAT aren't modelled here; they happen at the cash-in rail before VRChat's ledger sees the
-  // purchase. See docs/vrchat-grounding.md.)
+  // purchase.)
   REVENUE_USD: 'vrchat:revenue_usd' as AccountRef,
 
   // The offsetting entry used when seeding starting balances on a fresh (cold-start) system.
