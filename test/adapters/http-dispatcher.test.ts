@@ -13,8 +13,10 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { httpDispatcher } from '#src/adapters/http-dispatcher.ts';
+import { runDispatcherConformance } from '#test/conformance/dispatcher.ts';
 
 import type { EconomyEvent } from '#src/ports.ts';
+import type { DispatcherHarness } from '#test/conformance/dispatcher.ts';
 
 // Sample event to dispatch.
 const event: EconomyEvent = {
@@ -90,3 +92,33 @@ describe('httpDispatcher', () => {
     await assert.rejects(dispatch(event), isRetryableProviderFailure);
   });
 });
+
+// The shared Dispatcher contract, against the HTTP adapter over a fake fetch.
+function httpHarness(): DispatcherHarness {
+  const bodies: string[] = [];
+  const signals: Array<AbortSignal | undefined> = [];
+  let fail: Error | null = null;
+  const fetchFn = (async (_url: string, init: RequestInit) => {
+    signals.push(init.signal ?? undefined);
+    if (fail) {
+      const error = fail;
+      fail = null;
+      throw error;
+    }
+    bodies.push(init.body as string);
+    return { ok: true, status: 200 } as unknown as Response;
+  }) as unknown as typeof fetch;
+  return {
+    dispatcher: httpDispatcher({
+      url: 'https://bus.internal/economy',
+      fetch: fetchFn,
+    }),
+    bodies,
+    signals,
+    failNext: (error) => {
+      fail = error;
+    },
+  };
+}
+
+runDispatcherConformance('http', httpHarness);

@@ -10,6 +10,7 @@
  */
 
 import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
+import { encodeEvent } from '#src/adapters/event-wire.ts';
 
 import type { Dispatcher, EconomyEvent, Options } from '#src/ports.ts';
 
@@ -84,23 +85,6 @@ export function sqsDispatcher(config: SqsDispatcherConfig): Dispatcher {
       throw transportFault('SQS SendMessage failed.', error);
     }
   };
-}
-
-// --- Serialization ----------------------------------------------------------------
-
-// Event → JSON message body. Fixed field order means the same event yields the same bytes,
-// so a receiver can dedupe by content. Money amounts in `data` are already strings by here,
-// so we never serialize a bigint (JSON.stringify throws on one).
-function encodeEvent(event: EconomyEvent): string {
-  return JSON.stringify({
-    id: event.id,
-    type: event.type,
-    version: event.version,
-    occurredAt: event.occurredAt,
-    subject: event.subject,
-    data: event.data,
-    audience: event.audience,
-  });
 }
 
 // --- Local helpers ----------------------------------------------------------------

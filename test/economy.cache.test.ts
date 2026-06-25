@@ -63,6 +63,20 @@ function recordingCache(): Cache & {
   };
 }
 
+// A cache whose every operation throws, standing in for an unreachable Redis. The read path must
+// degrade to the ledger and a committed posting must still succeed — the Cache port's best-effort
+// contract (a cache only speeds reads, never breaks them).
+function throwingCache(): Cache {
+  let boom = (): never => {
+    throw new Error('redis unavailable');
+  };
+  return {
+    get: async () => boom(),
+    set: async () => boom(),
+    invalidate: async () => boom(),
+  };
+}
+
 // Economy wired with the standard deterministic test doubles plus the given cache, on a fresh
 // in-memory store. Mirrors `makeEconomy` but injects a `cache` capability, which `makeEconomy`
 // leaves unset.
@@ -162,5 +176,30 @@ describe('Read-Through Balance Cache', () => {
     });
     assert.equal(outcome.status, 'rejected');
     assert.equal(cache.invalidations.length, invalidationsBefore);
+  });
+
+  test('a cache outage degrades to a direct ledger read, never fails the request', async () => {
+    let economy = makeCachedEconomy(throwingCache());
+    let account = spendable('usr_buyer');
+
+    await economy.submit(
+      topUp({ userId: 'usr_buyer', amount: credit('10.00') }),
+    );
+
+    // get throws (absorbed as a miss -> ledger read), then set throws (absorbed) — the read still
+    // returns the right balance instead of propagating the cache failure.
+    let balance = await economy.read.balance(account);
+    assert.deepEqual(balance, credit('10.00'));
+  });
+
+  test('a cache outage during invalidation still commits the posting', async () => {
+    let economy = makeCachedEconomy(throwingCache());
+
+    // The top-up commits; invalidateCache hits the throwing cache after commit, but the failure is
+    // absorbed so the operation reports committed rather than failing post-commit.
+    let outcome = await economy.submit(
+      topUp({ userId: 'usr_buyer', amount: credit('10.00') }),
+    );
+    assert.equal(outcome.status, 'committed');
   });
 });

@@ -14,6 +14,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { redisCacheFrom } from '#src/adapters/redis.ts';
+import { runCacheConformance } from '#test/conformance/cache.ts';
 
 // In-memory stand-in for the ioredis client, with only the methods the adapter calls.
 // Lets tests check adapter behavior (key prefix, expiry forwarding, error conversion)
@@ -142,6 +143,34 @@ describe('redisCacheFrom', () => {
     );
   });
 
+  test('translates a set failure into a retryable STORE.FAILURE fault', async () => {
+    let cache = redisCacheFrom(failingRedis(new Error('ECONNRESET')));
+
+    await assert.rejects(
+      cache.set('balance:usr_1:spendable', 'CREDIT:1.00'),
+      (error: unknown) => {
+        let fault = error as { code?: string; retryable?: boolean };
+        assert.equal(fault.code, 'STORE.FAILURE');
+        assert.equal(fault.retryable, true);
+        return true;
+      },
+    );
+  });
+
+  test('translates an invalidate failure into a retryable STORE.FAILURE fault', async () => {
+    let cache = redisCacheFrom(failingRedis(new Error('ECONNRESET')));
+
+    await assert.rejects(
+      cache.invalidate('balance:usr_1:spendable'),
+      (error: unknown) => {
+        let fault = error as { code?: string; retryable?: boolean };
+        assert.equal(fault.code, 'STORE.FAILURE');
+        assert.equal(fault.retryable, true);
+        return true;
+      },
+    );
+  });
+
   test('closes by quitting the underlying client', async () => {
     let client = fakeRedis();
     let quit = false;
@@ -158,3 +187,6 @@ describe('redisCacheFrom', () => {
     assert.equal(quit, true);
   });
 });
+
+// The shared Cache contract, against the Redis adapter over the fake client.
+runCacheConformance('redis', () => redisCacheFrom(fakeRedis()));

@@ -10,13 +10,17 @@
  */
 
 import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
+import { encodeEvent } from '#src/adapters/event-wire.ts';
 
 import type { Dispatcher, EconomyEvent, Options } from '#src/ports.ts';
 
 // --- Outbound dispatcher (HTTP transport) -----------------------------------------
 
 export interface HttpDispatcherConfig {
-  /** The endpoint each event is POSTed to, e.g. `https://bus.internal/economy`. */
+  /**
+   * The consumer endpoint each event is POSTed to — your event bus or webhook receiver (the lab is
+   * the producer; the receiver is out of scope). `https://bus.internal/economy` is a placeholder.
+   */
   url: string;
 
   /**
@@ -32,8 +36,8 @@ export interface HttpDispatcherConfig {
  * Events land in an outbox table in the same transaction as the money move that produced them;
  * the relay worker reads that table and calls this to deliver each. HTTP is one delivery path;
  * SQS is the alternative; `SQS_QUEUE_URL` selects SQS and wins if both are set, otherwise
- * `DISPATCHER_URL` selects this HTTP path. Each call POSTs one event as JSON in the
- * same field layout the SQS adapter uses, so the receiver sees one shape either way.
+ * `DISPATCHER_URL` selects this HTTP path. Each call POSTs one event as JSON via the shared
+ * `encodeEvent` (event-wire.ts), so HTTP and SQS deliver the identical body either way.
  *
  * A network error or non-2xx response throws a retryable `PROVIDER.FAILURE`, so the relay
  * redelivers later with backoff. Since retries can duplicate, the event id goes in an
@@ -65,20 +69,6 @@ export function httpDispatcher(config: HttpDispatcherConfig): Dispatcher {
       );
     }
   };
-}
-
-// Encode the request body. Fields and names match the SQS adapter so the receiver sees the
-// same shape regardless of delivery path.
-function encodeEvent(event: EconomyEvent): string {
-  return JSON.stringify({
-    id: event.id,
-    type: event.type,
-    version: event.version,
-    occurredAt: event.occurredAt,
-    subject: event.subject,
-    data: event.data,
-    audience: event.audience,
-  });
 }
 
 // Wrap a failed dispatch as a retryable `PROVIDER.FAILURE`, keeping the original error as

@@ -125,6 +125,28 @@ function cacheKey(account: AccountRef): string {
   return `bal:${account}`;
 }
 
+// The cache is best-effort: a Redis blip must degrade to a direct ledger read, never fail a request
+// the ledger can still serve (see the Cache port — every miss is safe). Run a cache op; on any error
+// log it and fall back, so a `get` becomes a miss and a `set`/`invalidate` a no-op rather than an
+// outage. The Redis adapter raises a retryable STORE.FAILURE on a driver error; this is where that
+// is absorbed, so adding a cache can only speed reads, never make them fail.
+async function bestEffortCache<T>(
+  ctx: Ctx,
+  op: 'get' | 'set' | 'invalidate',
+  run: () => Promise<T>,
+  fallback: T,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    ctx.logger.log('warn', 'economy.cache.degraded', {
+      op,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return fallback;
+  }
+}
+
 // Read an account's balance through `ctx.cache` when present, else just `ledger.balance(account,
 // options)`. On a miss, read the ledger, store, and return. Stored as the `encodeAmount` string
 // (which carries the currency), so the exact bigint minor-unit value survives a string-only cache.
@@ -136,16 +158,27 @@ async function cachedBalance(
   account: AccountRef,
   options?: Options,
 ): Promise<Amount> {
-  if (!ctx.cache) {
+  let cache = ctx.cache;
+  if (!cache) {
     return ledger.balance(account, options);
   }
   let key = cacheKey(account);
-  let hit = await ctx.cache.get(key);
+  let hit = await bestEffortCache<string | null>(
+    ctx,
+    'get',
+    () => cache.get(key),
+    null,
+  );
   if (hit !== null) {
     return amountFromCache(hit);
   }
   let fresh = await ledger.balance(account, options);
-  await ctx.cache.set(key, encodeAmount(fresh));
+  await bestEffortCache<void>(
+    ctx,
+    'set',
+    () => cache.set(key, encodeAmount(fresh)),
+    undefined,
+  );
   return fresh;
 }
 
@@ -282,7 +315,12 @@ async function invalidateCache(
     return;
   }
   for (let account of new Set(accountsOf(operation))) {
-    await cache.invalidate(cacheKey(account));
+    await bestEffortCache<void>(
+      pipeline.ctx,
+      'invalidate',
+      () => cache.invalidate(cacheKey(account)),
+      undefined,
+    );
   }
 }
 

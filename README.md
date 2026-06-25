@@ -338,6 +338,22 @@ imported only when the matching variable selects them.
 | HTTP           | Store      | a `fetch` endpoint  | — (`fetch`)           | used by `prove`/tests; in-process  |
 | HTTP processor | Processor  | a provider endpoint | — (`fetch`)           | `PROCESSOR_URL` (else a dev stub)  |
 
+### Event delivery (the outbox)
+
+Some operations emit a **domain event** — a sale completed, a payout settled. Each is written to an
+**outbox** table _in the same transaction_ as the money move (so it can't be lost or double-counted),
+and the background worker's **relay** job ships pending events out through the configured `Dispatcher`:
+
+- **`DISPATCHER_URL`** — the relay `POST`s each event as JSON here, with an
+  `Idempotency-Key: <event id>` header. This is _your_ endpoint — an internal event bus, broker, or
+  webhook receiver; `https://bus.internal/economy` is just an illustrative placeholder. The economy
+  is the **producer**; the receiver is yours to build, out of scope here like the payout provider.
+- **`SQS_QUEUE_URL`** — the same events to an Amazon SQS queue instead (wins if both are set).
+- **neither set** — events stay in the outbox, undelivered; nothing leaves the process.
+
+Delivery is **at-least-once** (a send can succeed while marking it done fails, so it resends), so the
+receiver dedupes by event id; an event that keeps failing is dead-lettered after `MAX_OUTBOX_ATTEMPTS`.
+
 ## Configuration
 
 All configuration is environment variables, read once at startup; a misconfigured deploy

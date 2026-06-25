@@ -39,6 +39,8 @@ import type {
 // createEconomy: builds an economy from its services. memoryStore: in-memory backend, runs with no database.
 export { createEconomy } from '#src/economy.ts';
 export { memoryStore } from '#src/adapters/memory.ts';
+// memoryCache: in-process read-through cache, the zero-infra counterpart to the Redis adapter.
+export { memoryCache } from '#src/adapters/memory-cache.ts';
 
 // createWorker builds the background sweep loop from a store + worker context.
 export { createWorker } from '#src/worker/index.ts';
@@ -308,9 +310,29 @@ async function selectDispatcher(
 ): Promise<Dispatcher | undefined> {
   let queueUrl = env.SQS_QUEUE_URL;
   if (queueUrl !== undefined && queueUrl !== '') {
-    let { SQSClient } = await import('@aws-sdk/client-sqs');
+    let { SQSClient, SendMessageCommand } = await import('@aws-sdk/client-sqs');
     let { sqsDispatcher } = await import('#src/adapters/sqs.ts');
-    return sqsDispatcher({ queueUrl, client: new SQSClient({}) });
+    let raw = new SQSClient({});
+    // The adapter speaks an SDK-free `{ input }` command so it stays importable and unit-testable
+    // without @aws-sdk/client-sqs. Translate it into a real `SendMessageCommand` here — the one
+    // place that imports the SDK. A raw `SQSClient.send` rejects a plain `{ input }`: it needs a
+    // Command instance, so the adapter's structural client is wrapped, not passed through raw.
+    return sqsDispatcher({
+      queueUrl,
+      client: {
+        send: async (command, options) => {
+          await raw.send(
+            new SendMessageCommand(
+              command.input as unknown as ConstructorParameters<
+                typeof SendMessageCommand
+              >[0],
+            ),
+            options,
+          );
+          return {};
+        },
+      },
+    });
   }
   let dispatcherUrl = env.DISPATCHER_URL;
   if (dispatcherUrl !== undefined && dispatcherUrl !== '') {

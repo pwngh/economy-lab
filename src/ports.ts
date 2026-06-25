@@ -64,7 +64,10 @@ export interface Signer {
 }
 
 /**
- * Optional key/value cache. When none is injected, a no-op default is used (every get misses).
+ * Optional read-through key/value cache for hot reads (balances). Best-effort: when none is injected
+ * the read path skips it and goes straight to the ledger, and a cache error degrades to a direct
+ * ledger read rather than failing the request — so a cache only ever speeds reads, never breaks them.
+ * `memoryCache` is the in-process reference; `redisCacheFrom` is the Redis adapter.
  */
 export interface Cache {
   get(key: string): Promise<string | null>;

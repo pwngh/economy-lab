@@ -14,8 +14,11 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { sqsDispatcher } from '#src/adapters/sqs.ts';
+import { runDispatcherConformance } from '#test/conformance/dispatcher.ts';
+
 import type { SqsClient, SqsCommand } from '#src/adapters/sqs.ts';
 import type { EconomyEvent } from '#src/ports.ts';
+import type { DispatcherHarness } from '#test/conformance/dispatcher.ts';
 
 function sampleEvent(): EconomyEvent {
   return {
@@ -30,20 +33,6 @@ function sampleEvent(): EconomyEvent {
     audience: 'internal',
   };
 }
-
-describe('Dispatcher Conformance: sqs', () => {
-  test('dispatches the event envelope as its JSON message body', async () => {
-    let stub = stubClient();
-
-    let dispatch = sqsDispatcher({ queueUrl: 'q', client: stub });
-    await dispatch(sampleEvent());
-
-    // One message sent; its body is the event envelope verbatim (parsing back yields the
-    // original event, the round-trip a receiver performs).
-    assert.equal(stub.sent.length, 1);
-    assert.deepEqual(JSON.parse(stub.sent[0]), sampleEvent());
-  });
-});
 
 describe('sqsDispatcher: FIFO Param Detection', () => {
   test('a standard (non-.fifo) queue omits the FIFO-only params', async () => {
@@ -87,19 +76,35 @@ function captureClient(): SqsClient & { inputs: Record<string, unknown>[] } {
   };
 }
 
-// In-memory SQS client that records every message body sent, so a test can count dispatches
-// and inspect the JSON envelope. The adapter only needs the `SqsClient` shape (a `send`
-// method), so this fits without pulling in `@aws-sdk/client-sqs` (not installed).
-function stubClient(): SqsClient & { sent: string[] } {
-  let sent: string[] = [];
-  return {
-    sent,
-    send: async (command: SqsCommand) => {
+// The shared Dispatcher contract, against the SQS adapter over a fake client that records bodies
+// and abort signals and can fail on demand.
+function sqsHarness(): DispatcherHarness {
+  let bodies: string[] = [];
+  let signals: Array<AbortSignal | undefined> = [];
+  let fail: Error | null = null;
+  let client: SqsClient = {
+    send: async (command: SqsCommand, options) => {
+      signals.push(options?.abortSignal);
+      if (fail) {
+        let error = fail;
+        fail = null;
+        throw error;
+      }
       let input = command.input;
       if ('MessageBody' in input) {
-        sent.push(input.MessageBody as string);
+        bodies.push(input.MessageBody as string);
       }
       return {};
     },
   };
+  return {
+    dispatcher: sqsDispatcher({ queueUrl: 'q', client }),
+    bodies,
+    signals,
+    failNext: (error) => {
+      fail = error;
+    },
+  };
 }
+
+runDispatcherConformance('sqs', sqsHarness);
