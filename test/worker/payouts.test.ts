@@ -251,8 +251,8 @@ async function leavesASubmittedSagaAtTheAgeBoundaryForTheWebhook(
 ): Promise<void> {
   // Mirror of the timeout case at the inclusive boundary: same saga, checked at exactly the cap (age
   // 60_000, not strictly greater than maxPayoutAgeMs), so it is NOT force-failed. The worker no
-  // longer self-settles either, so at the boundary the saga is simply left untouched for the
-  // settlement webhook. Only a strictly-past-cap age (the timeout test) force-fails it.
+  // longer self-settles either, so at the boundary the saga is left untouched for the settlement
+  // webhook. Only a strictly-past-cap age (the timeout test) force-fails it.
   let config: Config = { ...testConfig(), maxPayoutAgeMs: 60_000 };
   await openSaga(
     store,

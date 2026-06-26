@@ -22,7 +22,7 @@ import type { Rate, Saga, Store } from '#src/ports.ts';
  * Which payouts moved this run, bucketed by outcome. The worker submits RESERVED payouts to the
  * provider and force-fails SUBMITTED payouts that have timed out; settlement itself no longer runs
  * here — it arrives through the provider's settlement webhook (see src/operations/settlePayout.ts).
- * A failed payout lands in `deadLettered` if it can never succeed (including a timed-out submit),
+ * A failed payout goes to `deadLettered` if it can never succeed (including a timed-out submit),
  * or `retrying` if it hit a temporary problem (flaky network/database) and gets another go next run.
  */
 export type SettleSummary = {
@@ -249,7 +249,7 @@ function convert(amount: Amount, rate: Rate, to: Amount['currency']): Amount {
 // SUBMITTED delay, falling back to DEFAULT; the final `?? 0` guards against both being unset.
 // (requestPayout reads the config the same way.) The sweep no longer settles a SUBMITTED payout —
 // that arrives via the settlement webhook — but it still re-examines it on this cadence to apply the
-// `maxPayoutAgeMs` timeout if no settlement ever lands.
+// `maxPayoutAgeMs` timeout if no settlement ever arrives.
 function submittedSlaMs(ctx: WorkerCtx): number {
   let sla = ctx.config.payoutSla;
   return sla.SUBMITTED ?? sla.DEFAULT ?? 0;

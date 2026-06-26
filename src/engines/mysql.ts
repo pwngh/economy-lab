@@ -26,6 +26,7 @@ import {
   defaultDigest,
   defaultClock,
   GENESIS_HEX,
+  CHAIN_FORK_INDEX,
   readMinor,
   distinctAccounts,
   rowToSaga,

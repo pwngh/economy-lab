@@ -143,7 +143,7 @@ async function applyOne(
 // failure makes the row's count `entry.attempts + 1`; at the cap the row is dead-lettered (status
 // 'dead' so `claimInbound` won't hand it back) and recorded in `deadLettered`, keeping a poison
 // event from wedging the queue. Otherwise `bumpAttempt` raises `attempts` (row stays 'pending'), the
-// event lands in `failed`, and the next run retries it.
+// event is recorded in `failed`, and the next run retries it.
 //
 // Cap is `>=` so the default `maxInboxAttempts` of 10 dead-letters on the 10th failure (the one that
 // takes `attempts` to 10). Same off-by-one as the outbox's `dispatchOne`, stated at both so every

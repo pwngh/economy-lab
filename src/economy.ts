@@ -555,7 +555,13 @@ async function emitEvents(
     audience: descriptor.audience,
   };
   await unit.outbox.enqueue(
-    { id: ctx.ids.next('obx'), event, status: 'pending', attempts: 0, reason: null },
+    {
+      id: ctx.ids.next('obx'),
+      event,
+      status: 'pending',
+      attempts: 0,
+      reason: null,
+    },
     options,
   );
 }

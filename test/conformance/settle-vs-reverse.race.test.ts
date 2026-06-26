@@ -14,8 +14,8 @@
  * Settle-vs-reverse race — the gap the per-operation suites never cover. settlePayout
  * (SUBMITTED -> SETTLED) and reversePayout (a reversible payout -> FAILED, reserve returned to the
  * seller) both move one saga out of SUBMITTED, but each moves money in an opposite, irreversible
- * direction: settle empties the reserve into REVENUE and ships USD out of trust (the seller is
- * paid), while reverse hands the reserve back to the seller's earned account (the payout is undone).
+ * direction: settle empties the reserve into REVENUE and moves USD out of trust (the seller is
+ * paid), while reverse returns the reserve to the seller's earned account (the payout is undone).
  * settlePayout.test.ts pins settle-vs-settle CAS and the single-actor SETTLED refusal;
  * reversePayout.test.ts pins the SETTLED/live-SUBMITTED refusals. Neither fires settle AND reverse
  * concurrently on the SAME SUBMITTED saga.
@@ -24,7 +24,7 @@
  * either the seller is paid (settle) OR the reserve is returned (reverse), never both, never
  * neither. The two ops share the PAYOUT_RESERVE lock (see accountsOf), so economy.submit serializes
  * them on that account: whoever takes the lock first transitions the saga; the loser then loads a
- * no-longer-SUBMITTED saga and is turned away at its state guard (settle's refuseNotSubmitted /
+ * no-longer-SUBMITTED saga and is refused at its state guard (settle's refuseNotSubmitted /
  * reverse's refuseSettled), throwing SAGA.INVALID_TRANSITION before it can post a second move. The
  * winner commits; the loser's submit() promise rejects with that fault and rolls back its postings.
  *
@@ -48,8 +48,8 @@
  * REVENUE + USD left trust + SETTLED; reverse -> seller earned + FAILED), and prove() still holds
  * (conserved, no overdraft, chain intact, cache consistent) — no double-pay, no lost/minted money.
  *
- * An unreachable SQL engine skips, never fails — the same graceful contract the other conformance
- * suites use.
+ * An unreachable SQL engine skips, never fails — the same connect-or-skip contract the other
+ * conformance suites use.
  */
 
 import { describe, test, before, after } from 'node:test';

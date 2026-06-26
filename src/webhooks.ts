@@ -9,7 +9,7 @@
  * @license MIT
  */
 
-// The inbound-settlement spine: maps any verified provider callback to the ledger Operation it
+// Inbound provider-callback dispatch: maps a verified callback to the ledger Operation it
 // should apply, and persists that Operation to the transactional inbox. A verified callback is the
 // provider telling us a real-world money event happened; this module turns it, by its kind, into
 // the matching economy Operation:
@@ -89,7 +89,7 @@ export type PurchaseEvent = WebhookBase & {
  * submitted payouts. It drives the SUBMITTED -> SETTLED step of the named saga via `settlePayout`,
  * which empties the seller's reserve into REVENUE and moves the gross USD out of trust. The figures
  * actually posted are the rate-derived ones the worker computes; `providerRef`/`providerAmount`
- * ride along on the operation for the audit trail only.
+ * are carried on the operation for the audit trail only.
  */
 export type PayoutSettledEvent = WebhookBase & {
   kind: 'payoutSettled';
@@ -102,7 +102,7 @@ export type PayoutSettledEvent = WebhookBase & {
   providerRef: string;
 
   // The USD the provider reported settling. Recorded for reconciliation; the posted figures are the
-  // rate-derived ones `settlePayout` computes from the reserve, kept byte-for-byte the worker's.
+  // rate-derived ones `settlePayout` computes from the reserve, identical to the worker's.
   providerAmount: Amount;
 };
 
@@ -182,9 +182,9 @@ export function toTopUp(event: PurchaseEvent): Operation {
 /**
  * Builds the `settlePayout` that clears a submitted payout from a verified {@link PayoutSettledEvent}.
  * The dedup key comes from `eventId`, so the settle applies at most once however many times the rail
- * redelivers. `sagaId` names the payout to settle; `providerRef` / `providerAmount` ride along for the
+ * redelivers. `sagaId` names the payout to settle; `providerRef` / `providerAmount` are carried for the
  * audit trail. The figures actually posted are the rate-derived ones `settlePayout` computes from the
- * saga's reserve — byte-for-byte the worker's settle — so the provider's reported amount is recorded
+ * saga's reserve — identical to the worker's settle — so the provider's reported amount is recorded
  * but never trusted as the posted figure. The actor is `system`, which `settlePayout`'s
  * privileged-only gate (RESTRICTED_TO_PRIVILEGED) requires.
  */
@@ -240,8 +240,8 @@ export function toOperation(event: WebhookEvent): Operation {
     case 'dispute':
       return toClawback(event);
     default:
-      // Exhaustiveness guard: a new WebhookEvent variant added without a mapper lands here (the
-      // unhandled kind is `never`), surfacing the gap as a fault at the edge rather than silently
+      // Exhaustiveness guard: a new WebhookEvent variant added without a mapper reaches this branch
+      // (its kind is `never`), surfacing the gap as a fault at the edge rather than silently
       // dropping the callback.
       return unreachableEvent(event);
   }
@@ -256,8 +256,8 @@ function isPurchase(event: WebhookEvent): event is PurchaseEvent {
 
 /**
  * The result of accepting a verified webhook. The callback is persisted, not posted: the mapped
- * Operation lands in the transactional inbox for the apply worker (`drainInbox`) to submit later, so
- * the provider gets a fast acknowledgement and the money move settles off the request path.
+ * Operation is enqueued in the transactional inbox for the apply worker (`drainInbox`) to submit
+ * later, so the provider gets a fast acknowledgement and the money move settles off the request path.
  * - `accepted`: a fresh provider event; its row was enqueued and will be applied by the next sweep.
  * - `duplicate`: a redelivery of an already-seen `eventId`; the existing row stood and no second was
  *   inserted, so the operation still applies at most once. Mirrors the `duplicate` Outcome the inline
@@ -272,7 +272,7 @@ export type WebhookAck = {
 };
 
 /**
- * The inbound-settlement spine: handles ANY verified provider callback. Dispatches the event by its
+ * Inbound provider-callback dispatch: handles any verified callback. Dispatches the event by its
  * kind to the operation it applies (`topUp` / `settlePayout` / `clawback`, via {@link toOperation}),
  * then persists that operation to the inbox in one transaction and returns immediately — it does NOT
  * post to the ledger inline. The apply worker (`drainInbox`) submits the stored Operation through the

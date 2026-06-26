@@ -201,7 +201,7 @@ export type Operation =
       providerRef: string;
       // The USD amount the provider reported settling. Recorded for the audit trail / reconciliation;
       // the figures actually posted are the rate-derived ones the worker computes (gross USD from the
-      // reserve at the payout rate, less the rail fee), kept byte-for-byte identical so a settle
+      // reserve at the payout rate, less the rail fee), computed identically so a settle
       // driven by a webhook moves exactly what the worker's settle moved.
       providerAmount: Amount;
       // System- or operator-only (RESTRICTED_TO_PRIVILEGED in economy.ts): the SUBMITTED -> SETTLED

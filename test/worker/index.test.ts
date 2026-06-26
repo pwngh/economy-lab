@@ -256,7 +256,7 @@ async function reportsEverySweepUnderItsName(): Promise<void> {
   await store.close();
 }
 
-// --- isolation: a thrown sweep lands in its own slot ------------------------------
+// --- isolation: a thrown sweep stays in its own slot ------------------------------
 
 async function isolatesAThrownSweepFromTheBatch(): Promise<void> {
   let { store, digest } = await seededStore();

@@ -99,8 +99,7 @@ export interface PageReq {
 
 // One bounded page of a heavy list. `rows` holds at most `limit` items; `total` is the full count
 // behind the list (for the "N of M" caption and the pager), and `offset` echoes where this page
-// starts. The DOM only ever holds `rows.length` rows, so a million-row ledger renders the same as
-// a ten-row one.
+// starts. The DOM only ever holds `rows.length` rows, so render cost is independent of `total`.
 export interface Page<T> {
   rows: T[];
   total: number;
@@ -659,10 +658,9 @@ async function build(): Promise<ConsoleEngine> {
     // One bounded page of the ledger feed, newest first, read straight from the engine's streaming
     // posting log — the same way `payouts` pages the saga list. We build a view object only for the
     // `limit` postings on the page (between `offset` and `offset+limit`); the rest of the pass just
-    // counts toward `total` for the pager, holding no extra objects, so a million-row ledger renders
-    // the same as a ten-row one. This is the fix for the "ledger shows nothing after a direct-to-DB
-    // load" bug: the journal is the engine's own posting log, not a side feed that only saw the writes
-    // this process happened to make.
+    // counts toward `total` for the pager, holding no extra objects. Reading from the posting log
+    // (not a side feed) is also why a direct-to-DB write — e.g. the bench's — shows up here: the
+    // side feed only ever saw writes made through this process.
     ledger: async (req) => {
       const { offset, limit } = clampPage(req);
       const rows: TxnView[] = [];

@@ -25,7 +25,7 @@ import type {
 } from '#src/ports.ts';
 
 /**
- * Result of one renewal sweep. Each due subscription lands in exactly one list, by id:
+ * Result of one renewal sweep. Each due subscription appears in exactly one list, by id:
  *
  * - `charged` — renewal funded and posted, due date advanced.
  * - `lapsed` — buyer couldn't cover the price; marked LAPSED, nothing charged.

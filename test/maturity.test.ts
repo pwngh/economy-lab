@@ -10,27 +10,40 @@
  * @license MIT
  */
 
-import { describe, test } from 'node:test';
+import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
   immatureBalance,
   isMatured,
   lotMaturesAt,
+  maturedAtLeast,
   maturedBalance,
+  maturedBalanceFullScan,
   maturityHorizonMs,
 } from '#src/maturity.ts';
 import type { MaturityOptions } from '#src/maturity.ts';
 import { credit } from '#test/support/builders.ts';
-import { testConfig } from '#test/support/capabilities.ts';
+import {
+  fixedClock,
+  seededDigest,
+  testConfig,
+} from '#test/support/capabilities.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
+import { postgresStore } from '#src/engines/postgres.ts';
+import {
+  applyMysqlSchema,
+  createMysqlPool,
+  mysqlStore,
+} from '#src/engines/mysql.ts';
 import { credit as creditLeg, debit, postEntry } from '#src/ledger.ts';
 import { SYSTEM, spendable } from '#src/accounts.ts';
 
 import type { Config } from '#src/config.ts';
+import { toAmount } from '#src/money.ts';
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
-import type { Clock, Ledger, Lot } from '#src/ports.ts';
+import type { Clock, Ledger, Lot, Store } from '#src/ports.ts';
 
 const DAY = 24 * 60 * 60_000;
 
@@ -41,18 +54,6 @@ function horizonConfig(): Config {
   return {
     ...testConfig(),
     maturityHorizonMs: { card: 7 * DAY, crypto: 1 * DAY, default: 7 * DAY },
-  };
-}
-
-// Clock that only moves when `advance` is called. The ledger stamps each top-up with the
-// current clock time, so a test can set exactly when a lot was topped up.
-function fixedClock(start = 0): Clock & { advance: (ms: number) => void } {
-  let t = start;
-  return {
-    now: () => t,
-    advance: (ms) => {
-      t += ms;
-    },
   };
 }
 
@@ -313,6 +314,279 @@ describe('maturedBalance FIFO Consumption', () => {
 
     assert.deepEqual(matured, credit('0.00'));
   });
+});
+
+// Deterministic small LCG so the differential test is reproducible across runs (no seed flakiness).
+function lcg(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s * 1_664_525 + 1_013_904_223) >>> 0;
+    return s / 0x1_0000_0000;
+  };
+}
+
+// The differential matrix runs on memory always, and on postgres/mysql when reachable (the subtest
+// skips otherwise, mirroring the conformance suites' connect-or-skip pattern). Each store is wired
+// to a shared advancing clock (so a posting's lot maturity is stamped at the time we choose) and
+// the seeded digest (so the SQL engines' hash chain is deterministic).
+type DiffBackend = 'memory' | 'postgres' | 'mysql';
+
+// One throwaway Postgres schema per store, loaded with the current schema and dropped on close, the
+// same isolation test/adapters/postgres.test.ts uses. The injected clock and digest make the run
+// deterministic and let the test control each top-up time.
+let diffSchemaSeq = 0;
+function postgresDiffStore(clock: Clock): Promise<Store> {
+  diffSchemaSeq += 1;
+  const url =
+    process.env.DATABASE_URL ??
+    process.env.PG_URL ??
+    'postgres://economy:economy@localhost:5432/economy_lab';
+  return postgresStore({
+    url,
+    schema: `el_mat_${process.pid}_${Date.now().toString(36)}_${diffSchemaSeq}`,
+    clock,
+    digest: seededDigest(1),
+  });
+}
+
+// A MySQL store on a fresh pool against MYSQL_TEST_URL, schema applied, with the shared clock and
+// seeded digest. Mirrors test/adapters/mysql.test.ts; the per-run idempotency-free postings here
+// don't need the throwaway-database isolation the broader matrix uses.
+async function mysqlDiffStore(clock: Clock): Promise<Store> {
+  const url = process.env.MYSQL_TEST_URL;
+  if (!url) {
+    throw new Error('MYSQL_TEST_URL not set');
+  }
+  const pool = await createMysqlPool(url);
+  await applyMysqlSchema(pool);
+  return mysqlStore({ pool, clock, digest: seededDigest(1) });
+}
+
+// One step in the randomized timeline: a top-up (records a lot, tagged with its funding source so
+// the maturity wait can be chosen) or a spend (records no lot; the maturity code reads the balance
+// drop as FIFO consumption of the oldest lots). `txnId` is supplied per step for a unique id.
+type Step =
+  | {
+      kind: 'topUp';
+      userId: string;
+      amount: Amount;
+      source: string;
+      txnId: string;
+    }
+  | { kind: 'spend'; userId: string; amount: Amount; txnId: string };
+
+// Post one timeline step's balanced legs inside a store transaction, so the same call works on
+// memory and on the SQL engines (which require post_entry to run in a transaction). The clock time
+// at posting becomes a top-up lot's top-up time.
+function postStep(store: Store, step: Step): Promise<unknown> {
+  let userPart =
+    step.kind === 'topUp'
+      ? creditLeg(spendable(step.userId), step.amount)
+      : debit(spendable(step.userId), step.amount);
+  let systemPart =
+    step.kind === 'topUp'
+      ? debit(SYSTEM.REVENUE, step.amount)
+      : creditLeg(SYSTEM.REVENUE, step.amount);
+  let meta =
+    step.kind === 'topUp'
+      ? { kind: 'topUp', source: step.source }
+      : { kind: 'spend' };
+  return store.transaction((unit) =>
+    postEntry(unit.ledger, {
+      txnId: step.txnId,
+      legs: [systemPart, userPart],
+      meta,
+    }),
+  );
+}
+
+// One differential scenario: which store + clock to drive, the user to act as, the maturity options
+// (config), the seeded RNG, how many postings to emit, and the spend bias that shapes the timeline.
+// Bundled into one object to keep runDifferential under the param-count limit.
+type Scenario = {
+  store: Store;
+  clock: Clock & { advance: (ms: number) => number };
+  userId: string;
+  options: MaturityOptions;
+  rand: () => number;
+  postings: number;
+  // A low bias keeps top-ups dominant (accumulate-heavy, a long open tail); a high one drives the
+  // balance down toward zero between top-ups (consume-heavy, a short tail the FIFO drain repeatedly
+  // splits mid-lot).
+  spendBias: number;
+};
+
+// Drive one user through a long randomized timeline of mixed-source top-ups and interleaved partial
+// spends, then assert the bounded reads equal the full-scan oracle at several `now` cuts:
+//   - maturedBalance == maturedBalanceFullScan (the total), and
+//   - maturedAtLeast(x) == (oracle >= x) for several thresholds x (the early-terminating gate).
+async function runDifferential(scenario: Scenario): Promise<void> {
+  const { store, clock, userId, options, rand, postings, spendBias } = scenario;
+  // Mixed funding sources spanning a 0-wait ('instant'), a 1-day ('crypto'), and a 7-day ('card')
+  // horizon, plus an unrecognized one ('wire') that falls back to the default (7-day) wait.
+  const sources = ['instant', 'crypto', 'card', 'wire'];
+  const account = spendable(userId);
+  let posted = 0n;
+  let seq = 0;
+
+  for (let i = 0; i < postings; i += 1) {
+    // Advance 0..3 days between postings, including 0 so several lots can share a top-up time.
+    clock.advance(Math.floor(rand() * 4) * DAY);
+    seq += 1;
+    const txnId = `txn_${userId}_${seq}`;
+    if (posted === 0n || rand() >= spendBias) {
+      const cents = BigInt(1 + Math.floor(rand() * 5000));
+      const source = sources[Math.floor(rand() * sources.length)]!;
+      await postStep(store, {
+        kind: 'topUp',
+        userId,
+        amount: toAmount('CREDIT', cents),
+        source,
+        txnId,
+      });
+      posted += cents;
+    } else {
+      // Spend a slice of the live balance, often most of it (so the FIFO drain splits a lot mid-way),
+      // never more — a user account can't go negative.
+      const spend = BigInt(1 + Math.floor(rand() * Number(posted)));
+      await postStep(store, {
+        kind: 'spend',
+        userId,
+        amount: toAmount('CREDIT', spend),
+        txnId,
+      });
+      posted -= spend;
+    }
+  }
+
+  for (const now of [
+    0,
+    1 * DAY,
+    3 * DAY,
+    7 * DAY,
+    30 * DAY,
+    Number.MAX_SAFE_INTEGER,
+  ]) {
+    const bounded = await maturedBalance(store.ledger, account, now, options);
+    const oracle = await maturedBalanceFullScan(
+      store.ledger,
+      account,
+      now,
+      options,
+    );
+    assert.deepEqual(
+      bounded,
+      oracle,
+      `${userId} now ${now}: bounded ${bounded.minor} != oracle ${oracle.minor}`,
+    );
+
+    // maturedAtLeast(x) must equal (oracle >= x) for every threshold: at, just under, and just over
+    // the matured total, plus the boundaries (0, the whole live balance, and beyond it).
+    const live = await store.ledger.balance(account);
+    const thresholds = [
+      0n,
+      1n,
+      oracle.minor,
+      oracle.minor + 1n,
+      oracle.minor > 0n ? oracle.minor - 1n : 0n,
+      live.minor,
+      live.minor + 1n,
+    ];
+    for (const x of thresholds) {
+      const atLeast = await maturedAtLeast(store.ledger, account, now, {
+        ...options,
+        amount: toAmount('CREDIT', x),
+      });
+      assert.equal(
+        atLeast,
+        oracle.minor >= x,
+        `${userId} now ${now}: maturedAtLeast(${x}) ${atLeast} != (oracle ${oracle.minor} >= ${x})`,
+      );
+    }
+  }
+}
+
+describe('maturity bounded reads vs full-scan oracle', () => {
+  // The bounded newest-first reads — maturedBalance (the total) and maturedAtLeast (the
+  // early-terminating threshold gate requestPayout/spend use) — must be byte-identical to the
+  // original full-history scan (kept as maturedBalanceFullScan) for every input. Drive each backend
+  // (memory always; postgres/mysql when reachable, skipped otherwise) through thousands of postings
+  // with mixed funding sources and horizons (0, 1-day, 7-day) and interleaved partial spends, in
+  // both an accumulate-heavy and a consume-heavy shape, then assert exact agreement at several `now`
+  // cuts. Zero divergence: the optimization changed cost, not results.
+  const backends: DiffBackend[] = ['memory', 'postgres', 'mysql'];
+
+  for (const backend of backends) {
+    describe(backend, () => {
+      let store: Store | null = null;
+      // Each store is built around its own advancing clock; hold a reference so the timeline driver
+      // can advance it. memoryStore/postgresStore/mysqlStore copy the clock reference, so advancing
+      // this same object moves the time the ledger stamps onto each posting.
+      let clock: Clock & { advance: (ms: number) => number };
+
+      before(async () => {
+        clock = fixedClock(0);
+        try {
+          store =
+            backend === 'memory'
+              ? memoryStore({ clock, digest: seededDigest(1) })
+              : backend === 'postgres'
+                ? await postgresDiffStore(clock)
+                : await mysqlDiffStore(clock);
+        } catch {
+          store = null;
+        }
+      });
+      after(async () => {
+        if (store) {
+          await store.close();
+        }
+      });
+
+      const config: Config = {
+        ...testConfig(),
+        maturityHorizonMs: {
+          instant: 0,
+          crypto: 1 * DAY,
+          card: 7 * DAY,
+          default: 7 * DAY,
+        },
+      };
+      const options: MaturityOptions = { config };
+
+      test('accumulate-heavy timeline (long open tail) agrees exactly', async (t) => {
+        if (!store) {
+          t.skip(`${backend} unreachable`);
+          return;
+        }
+        await runDifferential({
+          store,
+          clock,
+          userId: 'usr_accum',
+          options,
+          rand: lcg(0xacc01),
+          postings: 2000,
+          spendBias: 0.25,
+        });
+      });
+
+      test('consume-heavy timeline (short, frequently-drained tail) agrees exactly', async (t) => {
+        if (!store) {
+          t.skip(`${backend} unreachable`);
+          return;
+        }
+        await runDifferential({
+          store,
+          clock,
+          userId: 'usr_consume',
+          options,
+          rand: lcg(0xc05e),
+          postings: 2000,
+          spendBias: 0.7,
+        });
+      });
+    });
+  }
 });
 
 describe('immatureBalance', () => {

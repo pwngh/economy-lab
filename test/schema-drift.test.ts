@@ -33,7 +33,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-// Account ids named in any `account_id IN (...)` list in the schema. Before D2 this was the
+// Account ids named in any `account_id IN (...)` list in the schema. Earlier this was the
 // balance-integrity trigger's debit-normal CASE; the new trigger derives the signed balance
 // app-side (balanceDelta) and stores it in chain_links.balance_after, so no such list should exist.
 function accountIdInListIds(relativePath: string): string[] {

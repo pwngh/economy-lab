@@ -247,7 +247,9 @@ async function dropsOutboxOnRollback(store: Store): Promise<void> {
 // flipping it to 'failed' and persisting the reason ON the record so `claimBatch` never hands it
 // back. Like the relay worker, recordFailure/deadLetter run on the top-level store, not inside
 // store.transaction(...).
-async function recordsFailureThenDeadLettersOutbox(store: Store): Promise<void> {
+async function recordsFailureThenDeadLettersOutbox(
+  store: Store,
+): Promise<void> {
   let userId = freshUser();
   let messageId = `obx_conf_dead_${userId}`;
   await store.transaction((unit) =>
@@ -265,9 +267,9 @@ async function recordsFailureThenDeadLettersOutbox(store: Store): Promise<void> 
   assert.equal(failed!.reason, null);
 
   // Give up on the poison message: dead-letter it, and it's never claimed again. The reason is
-  // persisted ON the 'failed' record (not a side-channel), mirroring the saga terminal-outcome test;
-  // claimBatch never returns a terminal row, so it can't ride back here, but the SQL decoders carry
-  // dead_letter_reason -> reason off the row.
+  // persisted ON the 'failed' record (not a side-channel), mirroring the saga terminal-outcome test.
+  // claimBatch never returns a terminal row, so this test can't reload it that way, but the SQL
+  // decoders carry dead_letter_reason -> reason off the row.
   await store.outbox.deadLetter(messageId, 'poison');
   let afterDead = await store.outbox.claimBatch(10);
   assert.equal(
@@ -332,7 +334,7 @@ async function dropsInboxOnRollback(store: Store): Promise<void> {
 }
 
 // Same dedupe-by-key behaviour across adapters: enqueuing the same provider event id twice inserts
-// one row and the duplicate returns the existing row (mirroring the idempotency story), so a
+// one row and the duplicate returns the existing row (at most once), so a
 // redelivered provider event is applied at most once. The two enqueues use different row ids but
 // share one `key`; only the first row id is ever stored or claimed.
 async function dedupesInboxByKey(store: Store): Promise<void> {

@@ -751,7 +751,7 @@ select:focus {
   font-family: var(--mono);
   font-size: var(--t-xs);
   color: var(--ink-3);
-  /* The id is one long unbreakable token (pay_<uuid>); keep it to a single tidy line and ellipsize
+  /* The id is one long unbreakable token (pay_<uuid>); keep it to a single line and ellipsize
      rather than letting it wrap mid-token or push the card wider than its grid column. Full id is on
      hover (title attribute). Same treatment for the provider ref in .kc-meta below. */
   overflow: hidden;

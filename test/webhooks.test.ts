@@ -224,7 +224,7 @@ describe('Webhooks handlePurchaseWebhook (Persist To Inbox, Apply Later)', () =>
       'CREDIT:0.00',
     );
 
-    // The apply worker submits the stored Operation, and only now does the credit land.
+    // The apply worker submits the stored Operation; the credit posts here, not at handler return.
     let summary = await drainOnce(store, economy);
     assert.deepEqual(summary.applied, [ack.entry.id]);
     assert.deepEqual(summary.failed, []);
@@ -416,7 +416,7 @@ describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin I
       }),
     );
     assert.equal(response.status, 200);
-    // Persisted, not posted: the credit lands only after the apply sweep runs.
+    // Persisted, not posted: the credit posts only after the apply sweep runs.
     await drainOnce(store, economy);
     assert.equal(
       encodeAmount(await economy.read.balance(spendable('usr_buyer'))),
