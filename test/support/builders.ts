@@ -9,6 +9,8 @@
  * @license MIT
  */
 
+import { randomUUID } from 'node:crypto';
+
 import { decodeAmount, zero, type Amount } from '#src/money.ts';
 
 import type {
@@ -22,8 +24,16 @@ import type { Velocity } from '#src/ports.ts';
 
 // Fresh idempotency key per call (the economy uses it to dedupe retried requests). Each
 // call gets a new key, so a test only acts like a retry when it deliberately reuses one.
+//
+// The key carries a per-process random prefix, not just a bare counter: the SQL backends persist
+// idempotency rows across runs, so a fixed `idem_<n>` from one run collides with a row a previous
+// run left behind, and the second run's request replays as a duplicate instead of executing. The
+// bench hit exactly this — its requestPayout probe came back `status: 'duplicate'` and the cell
+// read n/a. A run-unique prefix makes every key hermetic to the run that minted it, so a probe
+// never matches a persisted row. The counter still increments so keys are unique within a run too.
 let n = 0;
-const claim = (): string => `idem_${n++}`;
+const RUN_PREFIX = randomUUID();
+const claim = (): string => `idem_${RUN_PREFIX}_${n++}`;
 
 // Default actors for when a test doesn't care about the caller: a trusted internal
 // service, and a human operator running a manual action.
