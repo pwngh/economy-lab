@@ -121,10 +121,9 @@ const SELLER = 'usr_seller';
 function spendOperation(
   next: () => number,
   step: number,
-  userId: string,
-  wallet: Wallet,
-  seller: Wallet,
+  parties: { userId: string; wallet: Wallet; seller: Wallet },
 ): Operation {
+  let { userId, wallet, seller } = parties;
   let available = wallet.spendable + wallet.promo;
   let priceMinor =
     BigInt(1 + Math.floor(next() * Number(available / 100n))) * 100n;
@@ -156,9 +155,9 @@ function payoutOperation(step: number, seller: Wallet): Operation {
   let askMinor =
     seller.earned >= 100n
       ? // Claim a whole-credit slice of what the seller has earned so far.
-        ((seller.earned / 100n / 2n + 1n) * 100n < seller.earned
-          ? (seller.earned / 100n / 2n + 1n) * 100n
-          : seller.earned)
+        (seller.earned / 100n / 2n + 1n) * 100n < seller.earned
+        ? (seller.earned / 100n / 2n + 1n) * 100n
+        : seller.earned
       : 100n; // nothing earned: a token ask the handler will reject, moving no money.
   if (askMinor <= seller.earned) {
     seller.earned -= askMinor;
@@ -204,7 +203,7 @@ function nextOperation(
   if (roll < 0.72) {
     return payoutOperation(step, seller);
   }
-  return spendOperation(next, step, userId, wallet, seller);
+  return spendOperation(next, step, { userId, wallet, seller });
 }
 
 // Assemble an Operation, stamping in the per-step idempotency key and a fixed system actor. This
@@ -261,11 +260,7 @@ async function assertInvariants(
     `(reproduce: program(0x${seed.toString(16)}, ${OPS_PER_SEED}))`;
 
   for (let flag of FLAGS) {
-    assert.equal(
-      report[flag],
-      true,
-      `invariant "${flag}" violated — ${where}`,
-    );
+    assert.equal(report[flag], true, `invariant "${flag}" violated — ${where}`);
   }
   // `drift` empty is the detail behind `consistent`; pin it directly so a regression that left a
   // drifted row while still flipping `consistent` true can't slip through, and so the message names
