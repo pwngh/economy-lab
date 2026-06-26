@@ -11,7 +11,7 @@
 
 import { ERROR_CODES, fault, rejected } from '#src/errors.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
-import { compare, encodeAmount, toAmount } from '#src/money.ts';
+import { encodeAmount, toAmount } from '#src/money.ts';
 import {
   SYSTEM,
   earned,
@@ -20,7 +20,7 @@ import {
   promo,
   spendable,
 } from '#src/accounts.ts';
-import { maturedBalance } from '#src/maturity.ts';
+import { maturedAtLeast } from '#src/maturity.ts';
 import { feeForPrice } from '#src/pricing.ts';
 
 import type { Amount } from '#src/money.ts';
@@ -100,22 +100,20 @@ export async function spend(
   //
   // Promo credits draw first, so only the spendable-funded part must come from cleared funds; some
   // spendable credit may still be inside a settlement wait. The pipeline's affordability check
-  // looks at the raw balance and can pass even when part hasn't cleared. This stricter check looks
-  // only at the matured amount and refuses with FUNDS_IMMATURE if the spendable part would dip into
-  // uncleared funds. Like INSUFFICIENT_FUNDS, returned as a rejection, not a fault.
-  let matured = await maturedBalance(
+  // looks at the raw balance and can pass even when part hasn't cleared. This stricter check asks
+  // only whether the matured amount covers the spendable part — maturedAtLeast stops as soon as the
+  // matured tail reaches it — and refuses with FUNDS_IMMATURE if it would dip into uncleared funds.
+  // Like INSUFFICIENT_FUNDS, returned as a rejection, not a fault.
+  let cleared = await maturedAtLeast(
     unit.ledger,
     spendable(operation.buyerId),
     ctx.clock.now(),
-    {
-      config: ctx.config,
-    },
+    { config: ctx.config, amount: plan.spendablePart },
   );
-  if (compare(matured, plan.spendablePart) < 0) {
+  if (!cleared) {
     return rejected('FUNDS_IMMATURE', {
       account: spendable(operation.buyerId),
       required: encodeAmount(plan.spendablePart),
-      available: encodeAmount(matured),
     });
   }
 

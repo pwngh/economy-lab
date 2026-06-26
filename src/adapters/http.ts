@@ -40,6 +40,7 @@ import type {
   SagaStore,
   SaleStore,
   SubscriptionStore,
+  TimelineOptions,
   TrustStore,
 } from '#src/ports.ts';
 
@@ -133,7 +134,8 @@ function sessionLedger(
       decodeWire.statement(
         await call(transport, at('statement'), { account, range }, options),
       ),
-    timeline: (account) => streamLots(transport, account, session),
+    timeline: (account, options) =>
+      streamLots(transport, account, session, options),
     heads: () => streamHeads(transport, session),
     balanceAccounts: (options) =>
       streamBalanceAccounts(transport, session, options),
@@ -189,9 +191,16 @@ async function* streamLots(
   transport: { fetch: FetchLike; baseUrl: string },
   account: AccountRef,
   session: string,
+  options?: TimelineOptions,
 ): AsyncIterable<Lot> {
+  // Forward the bounded read (order/limit/offset) to the server, which passes it through to the
+  // backing ledger so the bound is honoured at the real engine rather than after fetching all
+  // rows over the wire.
   let rows = (await call(transport, `/tx/${session}/ledger/timeline`, {
     account,
+    order: options?.order,
+    limit: options?.limit,
+    offset: options?.offset,
   })) as unknown[];
   for (let row of rows) {
     yield decodeWire.lot(row);

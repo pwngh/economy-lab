@@ -14,15 +14,15 @@
  *
  * Both SQL schema files (db/postgresql-schema.sql, db/mysql-schema.sql) seed a single `schema_meta`
  * row with this exact value. On startup each SQL engine reads it back and refuses to run if it does
- * not match (see {@link assertSchemaCurrent}). That turns the failure mode we actually hit — the
- * engine reading `platform:` accounts out of a database still on the old `vrchat:` schema, and
- * showing $0.00 instead of erroring — into a loud, actionable startup error.
+ * not match (see {@link assertSchemaCurrent}). That turns a silent drift — the engine reading
+ * `platform:` accounts out of a database still on the old `vrchat:` schema, and showing $0.00
+ * instead of erroring — into a loud, actionable startup error.
  *
  * Bump this AND the matching `insert into schema_meta` in BOTH schema files in the same change,
  * whenever the schema changes: a new column, a renamed account id, an added index. Any edit that a
  * running database would need re-migrated to pick up should bump the version.
  */
-export const SCHEMA_VERSION = '3';
+export const SCHEMA_VERSION = '5';
 
 /**
  * Throw unless the database's stamped schema version matches this build's {@link SCHEMA_VERSION}.
@@ -31,7 +31,10 @@ export const SCHEMA_VERSION = '3';
  * absent — an un-migrated database, or one created before versioning existed. `backend` names the
  * engine ('Postgres' / 'MySQL') for the error message.
  */
-export function assertSchemaCurrent(found: string | null, backend: string): void {
+export function assertSchemaCurrent(
+  found: string | null,
+  backend: string,
+): void {
   if (found === SCHEMA_VERSION) return;
   let state =
     found === null

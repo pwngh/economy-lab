@@ -23,6 +23,14 @@ import type { Ledger, Lot } from '#src/ports.ts';
  */
 export type MaturityOptions = { config: Config; signal?: AbortSignal };
 
+/**
+ * {@link maturedAtLeast}'s options: the maturity config (and optional signal) plus the `amount` the
+ * cashable balance must reach. `amount` rides in the options object rather than as its own argument
+ * so the call stays parallel to {@link maturedBalance}'s `(ledger, account, now, options)` and under
+ * the param-count limit.
+ */
+export type MaturedAtLeastOptions = MaturityOptions & { amount: Amount };
+
 // Horizon lookup key for an unrecognized funding source. loadConfig sets 'default'
 // to the same (long) horizon as a card, so an unknown source never settles faster
 // than a card.
@@ -60,13 +68,24 @@ export function isMatured(lot: Lot, now: number, config: Config): boolean {
   return lotMaturesAt(lot, config) <= now;
 }
 
+// How many lots to read from the ledger per bounded page. Most balances are covered by the newest
+// lot or two, so the first page almost always suffices; a wider tail (many small unspent top-ups)
+// just pulls the next page. Sized to keep the common case to one round-trip while bounding memory.
+let TAIL_PAGE = 64;
+
 /**
  * Cashable part of an account's balance as of `now`: how much a cash-out may draw without
  * dipping into funds still in their settlement wait.
  *
- * Spends draw oldest-first (FIFO), so what's left is the most recent run of lots. Work out
- * that run, then sum only the lots whose wait has elapsed. Currency-agnostic, so the same
- * call covers spendable credits and a seller's earned balance.
+ * Spends draw oldest-first (FIFO), so what's left is the newest run of lots summing to the live
+ * balance. Rather than scan the whole history to find that run (the old O(account history) path,
+ * preserved as {@link maturedBalanceFullScan} for the differential test), read lots NEWEST-first
+ * and stop the instant they cover the balance: that is the identical tail, computed from the new
+ * end, never touching the already-spent history. Sum the matured ones as we go. The oldest lot in
+ * the tail is split by the drain; only its unspent remainder (`remaining`) counts, exactly as the
+ * old `fifoTail` split it.
+ *
+ * Currency-agnostic, so the same call covers spendable credits and a seller's earned balance.
  */
 export async function maturedBalance(
   ledger: Ledger,
@@ -77,6 +96,121 @@ export async function maturedBalance(
   let live = await ledger.balance(account, { signal: options.signal });
   let unit = currency(account);
   // Zero or negative balance: no remaining lots, nothing cashable.
+  if (live.minor <= 0n) {
+    return zero(unit);
+  }
+
+  let remaining = live.minor;
+  let matured = 0n;
+  // Walk the newest lots first, a bounded page at a time. The ledger pushes the `order desc
+  // limit/offset` down to the engine, so each page is bounded DB work and we stop paging the
+  // moment `remaining` hits zero.
+  for (let offset = 0; remaining > 0n; offset += TAIL_PAGE) {
+    let drained = 0;
+    for await (let lot of ledger.timeline(account, {
+      order: 'desc',
+      limit: TAIL_PAGE,
+      offset,
+    })) {
+      drained += 1;
+      // The boundary lot contributes only what's left to cover; a fully-included lot contributes
+      // its whole amount.
+      let take = lot.amount.minor < remaining ? lot.amount.minor : remaining;
+      if (lotMaturesAt(lot, options.config) <= now) {
+        matured += take;
+      }
+      remaining -= take;
+      if (remaining === 0n) {
+        break;
+      }
+    }
+    // The page returned no lots, so the history is exhausted before the balance was covered
+    // (only possible if a balance row outran its lots); stop rather than loop forever.
+    if (drained === 0) {
+      break;
+    }
+  }
+  return toAmount(unit, matured);
+}
+
+/**
+ * Whether an account has at least `amount` of cashable balance as of `now`, without computing the
+ * full matured total. The callers that gate on maturity (requestPayout's payable-funds check,
+ * spend's spendable-funds check) only ask "is matured >= amount?", so this answers exactly that and
+ * stops the instant it can.
+ *
+ * Reads the same newest-first FIFO tail as {@link maturedBalance} — the newest run of lots summing
+ * to the live balance — accumulating each lot's matured contribution, and returns `true` the moment
+ * that running sum reaches `amount`. If the tail is exhausted first (the matured part never covers
+ * `amount`), returns `false`. So a request well within cleared funds stops after a lot or two
+ * (O(amount-worth-of-lots)); the worst case is the maturity horizon's window, never the full
+ * history. By construction this equals `maturedBalance(...).minor >= amount.minor` for every input:
+ * identical lots, identical per-lot maturity, just stopped as soon as the answer is settled.
+ *
+ * `amount` and the account share a currency (the callers pass a CREDIT amount against a CREDIT
+ * balance); only the minor units are compared. A non-positive `amount` is trivially covered.
+ */
+export async function maturedAtLeast(
+  ledger: Ledger,
+  account: AccountRef,
+  now: number,
+  options: MaturedAtLeastOptions,
+): Promise<boolean> {
+  let need = options.amount.minor;
+  if (need <= 0n) {
+    return true;
+  }
+  let live = await ledger.balance(account, { signal: options.signal });
+  if (live.minor <= 0n) {
+    return false;
+  }
+
+  let remaining = live.minor;
+  let matured = 0n;
+  for (let offset = 0; remaining > 0n; offset += TAIL_PAGE) {
+    let drained = 0;
+    for await (let lot of ledger.timeline(account, {
+      order: 'desc',
+      limit: TAIL_PAGE,
+      offset,
+    })) {
+      drained += 1;
+      // Same FIFO-tail split as maturedBalance: the boundary lot contributes only what's left to
+      // cover the live balance, a fully-included lot its whole amount. Only matured lots count.
+      let take = lot.amount.minor < remaining ? lot.amount.minor : remaining;
+      if (lotMaturesAt(lot, options.config) <= now) {
+        matured += take;
+        if (matured >= need) {
+          return true;
+        }
+      }
+      remaining -= take;
+      if (remaining === 0n) {
+        break;
+      }
+    }
+    if (drained === 0) {
+      break;
+    }
+  }
+  return false;
+}
+
+/**
+ * The original full-history implementation, kept verbatim as the oracle the differential test
+ * checks the bounded {@link maturedBalance} against. Reads every lot oldest-first, derives the
+ * spent amount from the total, keeps the FIFO tail, then sums the matured ones. Correct but
+ * O(account history) — the very cost the bounded path removes — so it lives here only for tests,
+ * never on the production read path.
+ */
+export async function maturedBalanceFullScan(
+  ledger: Ledger,
+  account: AccountRef,
+  now: number,
+  options: MaturityOptions,
+): Promise<Amount> {
+  let live = await ledger.balance(account, { signal: options.signal });
+  let unit = currency(account);
   if (live.minor <= 0n) {
     return zero(unit);
   }

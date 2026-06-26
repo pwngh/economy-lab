@@ -103,7 +103,14 @@ CREATE TABLE legs (
      CHECK (currency IN ('CREDIT', 'USD')),
      CONSTRAINT legs_posting_fk FOREIGN KEY (posting_id) REFERENCES postings (id),
      CONSTRAINT legs_account_fk FOREIGN KEY (account_id) REFERENCES accounts (id),
-     KEY legs_account_idx (account_id),
+     -- Composite (account_id, id): the maturity tail reads an account's newest lots with
+     -- `WHERE account_id = ? ORDER BY id DESC LIMIT n` (src/engines, timelineOf). legs.id is an
+     -- AUTO_INCREMENT assigned in commit order, so ordering by it gives the FIFO order the tail
+     -- walks, and this index serves that query as a bounded keyed scan with no filesort over the
+     -- account's whole leg history. The leading account_id column also covers the plain account_id
+     -- lookups (statement, lineage), so this replaces a bare legs(account_id) index. Mirrors the
+     -- Postgres legs_account_idx. (legs.id is the PK, so naming it in the index needs no extra column.)
+     KEY legs_account_idx (account_id, id),
      KEY legs_posting_idx (posting_id)
    );
 
@@ -521,7 +528,18 @@ END$$
 
 DELIMITER ;
 
+-- Give each house (system) account a balance row up front, empty: balance 0, head_hash at the genesis
+-- value (64 zeros). Such a row reads identically to no row at all — headsForAccounts already treats a
+-- missing row as genesis — so it shifts no balance and no hash. Its only job is to exist: lockAccounts
+-- locks an account by taking `FOR UPDATE` on its balance row, and you cannot lock a row that is not
+-- there yet. Without it, the first concurrent writers to a hot shared account (STORED_VALUE is touched
+-- by every top-up) find no row to lock, so none of them wait — they race to extend the chain head and
+-- collide. Pre-planted, they take turns on the lock instead. A user account still creates its row on
+-- its first posting, where the chain-fork retry covers that rarer race.
+INSERT INTO account_balances (account_id, currency, balance, head_hash)
+  SELECT id, currency, 0, REPEAT('0', 64) FROM accounts WHERE kind = 'system';
+
 -- Schema version stamp — the engine reads this on startup and refuses to run if it does not match
 -- SCHEMA_VERSION in src/schema.ts. Keep the value in lockstep with the Postgres schema and src/schema.ts.
 CREATE TABLE schema_meta (version VARCHAR(32) NOT NULL);
-INSERT INTO schema_meta (version) VALUES ('3');
+INSERT INTO schema_meta (version) VALUES ('5');

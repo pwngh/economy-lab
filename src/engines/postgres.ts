@@ -42,6 +42,7 @@ import {
   defaultDigest,
   defaultClock,
   GENESIS_HEX,
+  CHAIN_FORK_INDEX,
   readMinor,
   distinctAccounts,
   rowToSaga,
@@ -83,6 +84,7 @@ import type {
   Store,
   StoredLink,
   SubscriptionStore,
+  TimelineOptions,
   TrustStore,
   Unit,
   Velocity,
@@ -318,7 +320,7 @@ function createLedgerStore(q: Queryable, digest: Digest, clock: Clock): Ledger {
 
     balanceAccounts: () => balanceAccountsOf(q),
 
-    timeline: (account) => timelineOf(q, account),
+    timeline: (account, options) => timelineOf(q, account, options),
 
     heads: () => headsOf(q),
 
@@ -379,43 +381,107 @@ async function buildStatement(
   return { account, entries, cursor: null };
 }
 
-// Stream an account's incoming funds oldest-first, one "lot" per entry that increased it.
-// Each lot records when the money arrived and when it becomes withdrawable, so maturity.ts
-// can decide how much has matured. When/where come from the entry's metadata; if missing,
-// fall back to "unknown" source and treat the money as available immediately.
+// Stream an account's incoming funds as lots, one "lot" per entry that increased it. Each lot
+// records when the money arrived and when it becomes withdrawable, so maturity.ts can decide how
+// much has matured. When/where come from the entry's metadata; if missing, fall back to "unknown"
+// source and treat the money as available immediately.
+//
+// Bounded by `options` (see TimelineOptions): the maturity tail asks for `order: 'desc'` with a
+// small `limit`, so the database does `order by l.id desc limit ...` and returns just the newest
+// page rather than scanning the account's whole history. We fetch the rows in fixed-size DB pages
+// (LIMIT/OFFSET) and stop issuing queries the moment the requested number of lots has been
+// produced, so the DB work is bounded by the tail, not the lifetime.
+//
+// Ordered by `l.id` (legs.id, a bigserial) rather than `p.seq`, so the composite index
+// `legs(account_id, id)` serves `where account_id = ? order by id desc limit n` bounded to that page
+// — usually a backward index scan, though depending on selectivity Postgres may use a bitmap scan
+// plus a bounded top-N sort. Either way it never sorts the account's whole leg history the way an
+// `order by p.seq` did (join every one of the account's legs to postings, then sort). legs.id and
+// postings.seq are both assigned in commit order, so for a single account's legs the two orderings
+// are identical: same FIFO order, now read off the index.
+//
+// One wrinkle: a leg can lower the balance (a spend), and those non-lot rows are filtered out in
+// code, not SQL (the credit/debit sign for an account is a domain rule, not a column predicate).
+// So the lot-granularity `offset`/`limit` are applied after the `delta > 0` filter, while the DB
+// pages walk raw rows; a page that happens to be all spends just triggers the next page.
 async function* timelineOf(
   q: Queryable,
   account: AccountRef,
+  options?: TimelineOptions,
 ): AsyncIterable<Lot> {
-  let result = await q.query(
-    `select l.posting_id, l.amount, l.currency, p.posted_at, p.meta
-       from legs l
-       join postings p on p.id = l.posting_id
-      where l.account_id = $1
-      order by p.seq asc`,
-    [account],
-  );
-  for (let row of result.rows) {
-    let delta = balanceDelta({
-      account,
-      amount: toAmount(
-        row.currency as Amount['currency'],
-        readMinor(row.amount),
-      ),
-    });
-    if (delta.minor <= 0n) {
-      continue;
+  let direction = options?.order === 'desc' ? 'desc' : 'asc';
+  let lotOffset = options?.offset ?? 0;
+  let lotLimit = options?.limit ?? Infinity;
+
+  // Rows scanned per DB round-trip. Most balances are covered by the first page, so the second
+  // query is rarely issued; a finite caller limit caps the page so we never over-fetch.
+  let pageSize = Number.isFinite(lotLimit)
+    ? Math.max(lotOffset + lotLimit, 1)
+    : 256;
+
+  let skipped = 0;
+  let yielded = 0;
+  for (let rowOffset = 0; yielded < lotLimit; rowOffset += pageSize) {
+    let result = await q.query(
+      `select l.posting_id, l.amount, l.currency, p.posted_at, p.meta
+         from legs l
+         join postings p on p.id = l.posting_id
+        where l.account_id = $1
+        order by l.id ${direction}
+        limit $2 offset $3`,
+      [account, pageSize, rowOffset],
+    );
+    if (result.rows.length === 0) {
+      return;
     }
-    let meta = (row.meta ?? {}) as Record<string, unknown>;
-    let postedAt = Number(row.posted_at);
-    yield {
-      txnId: row.posting_id as string,
-      amount: delta,
-      source: metaString(meta, 'source', 'unknown'),
-      toppedUpAt: postedAt,
-      maturesAt: metaNumber(meta, 'maturesAt', postedAt),
-    };
+    for (let row of result.rows) {
+      let lot = rowToLot(account, row);
+      // A balance-lowering leg (a spend) is not a lot; skip it without consuming an offset/limit
+      // slot, so the lot-granularity `offset`/`limit` count only real lots.
+      if (lot === null) {
+        continue;
+      }
+      if (skipped < lotOffset) {
+        skipped += 1;
+        continue;
+      }
+      if (yielded >= lotLimit) {
+        return;
+      }
+      yielded += 1;
+      yield lot;
+    }
+    // A short page means the table is exhausted; no later page can exist.
+    if (result.rows.length < pageSize) {
+      return;
+    }
   }
+}
+
+// Turn one raw legs+postings row into a Lot, or null when the leg lowered the account's balance (a
+// spend), which is not a lot. The credit/debit sign is the account's domain rule, so this filter
+// lives in code, not SQL. Maturity/source come from the posting meta, defaulting to an immediately
+// available 'unknown' source when absent (see the timeline doc-comment).
+function rowToLot(
+  account: AccountRef,
+  row: Record<string, unknown>,
+): Lot | null {
+  let delta = balanceDelta({
+    account,
+    amount: toAmount(row.currency as Amount['currency'], readMinor(row.amount)),
+  });
+  if (delta.minor <= 0n) {
+    return null;
+  }
+  let meta = (row.meta ?? {}) as Record<string, unknown>;
+  let postedAt = Number(row.posted_at);
+  return {
+    txnId: row.posting_id as string,
+    amount: delta,
+    source: metaString(meta, 'source', 'unknown'),
+    toppedUpAt: postedAt,
+    maturesAt: metaNumber(meta, 'maturesAt', postedAt),
+  };
 }
 
 // Stream every account paired with its chain tip hash (the hash of its most recent entry).
@@ -434,14 +500,22 @@ async function* headsOf(
   }
 }
 
-// Stream every account with a row in account_balances, the table caching each account's
-// running total so balance() is one read. That cached total should match the sum of the
-// account's entry lines (the source of truth) but can drift. Lets the integrity checker catch
-// a cached balance with no entry lines behind it: heads() (built from the hash chain) never
-// lists such an account, so enumerating this table is the only way to find it.
+// Stream every account whose account_balances row reflects real activity. The table caches each
+// account's running total so balance() is one read; that cached total should match the sum of the
+// account's entry lines (the source of truth) but can drift. This scan is how the integrity checker
+// finds a cached balance with no entries behind it — heads() (built from the hash chain) never lists
+// such an account, so walking this table is the only way to reach one.
+//
+// Skip the seeded house-account placeholders. We plant an empty row for each house account (genesis
+// head, zero balance) only so lockAccounts' `for update` has something to grab on the first write; it
+// carries no history and reads exactly like no row, so leaving it out keeps this listing matching the
+// pre-seed behavior and the in-memory adapter. The `or balance <> 0` is the exception: a genesis-head
+// row with a non-zero balance is no longer a placeholder, it is the very drift this scan hunts.
 async function* balanceAccountsOf(q: Queryable): AsyncIterable<AccountRef> {
   let result = await q.query(
-    `select account_id from account_balances order by account_id asc`,
+    `select account_id from account_balances
+       where head_hash <> repeat('0', 64) or balance <> 0
+       order by account_id asc`,
   );
   for (let row of result.rows) {
     yield row.account_id as AccountRef;
@@ -506,9 +580,7 @@ async function postingOf(q: Queryable, txnId: string): Promise<Posting | null> {
 // posting carries its full legs, the same way postingOf returns them, so a reader can expand a row
 // without a second round-trip.
 async function* listPostingsOf(q: Queryable): AsyncIterable<Posting> {
-  let result = await q.query(
-    `select id, meta from postings order by seq desc`,
-  );
+  let result = await q.query(`select id, meta from postings order by seq desc`);
   for (let row of result.rows) {
     let legs = await legsOf(q, row.id as string);
     yield {
@@ -1575,7 +1647,7 @@ export async function postgresStore(
 // Create the dedicated schema from scratch and load db/postgresql-schema.sql into it. Drop any
 // leftover schema of the same name first, recreate it, point this connection at it, then run the
 // table-creation SQL. The pool's connections are already aimed at this schema, so the unqualified
-// `create table` statements in db/postgresql-schema.sql land inside it.
+// `create table` statements in db/postgresql-schema.sql resolve into it.
 async function applyIsolatedSchema(
   pool: PgPool,
   schema: string,
@@ -1604,7 +1676,7 @@ async function applyIsolatedSchema(
 // attempt below opens its own connection + BEGIN/COMMIT, and the catch has already rolled the
 // aborted transaction back, so a retry starts clean. A true settle-vs-reverse conflict thus retries
 // into the clean SAGA.INVALID_TRANSITION (the retried op reloads a now-terminal saga) instead of
-// escaping as a raw 40P01 lock error; a non-conflicting deadlock simply succeeds on a later try.
+// escaping as a raw 40P01 lock error; a non-conflicting deadlock succeeds on a later try.
 // Every other error (a domain fault, a CHECK/constraint violation) is not a transient conflict, so
 // it propagates unchanged on its first occurrence.
 async function runInTransaction<T>(
@@ -1635,6 +1707,17 @@ async function runInTransaction<T>(
 // SQLSTATEs the `pg` driver surfaces on `error.code`). Anything else — a domain fault, a
 // CHECK/constraint violation, a connection error — is not retried.
 function isTransientConflict(error: unknown): boolean {
-  let code = (error as { code?: unknown } | null)?.code;
-  return code === '40P01' || code === '40001';
+  let e = error as { code?: unknown; constraint?: unknown } | null;
+  let code = e?.code;
+  // 40P01 (deadlock) and 40001 (serialization failure) are the classic "try again" aborts. The third
+  // case is subtler. Each account's history is a hash chain, and a new link names the current last
+  // link (the head) as its parent; chain_links_account_prev_uq lets only one link claim a given
+  // parent. So when two writers read the same head and both try to attach, one wins and the other gets
+  // a 23505 — not wrong, just late: the head has moved. A retry re-reads it and attaches cleanly.
+  // Scoped to that one index, so a real duplicate (a colliding id or idempotency key) still fails fast.
+  return (
+    code === '40P01' ||
+    code === '40001' ||
+    (code === '23505' && e?.constraint === CHAIN_FORK_INDEX)
+  );
 }

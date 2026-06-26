@@ -232,8 +232,8 @@ describe('settlePayout', () => {
     );
 
     // The winning settle (raceSettleOnce only flips the state, posting nothing) left the reserve in
-    // place, and the losing settle rolled its postings back: the reserve is untouched, nothing landed
-    // in REVENUE, and no USD left custody — the seller is paid once, not twice.
+    // place, and the losing settle rolled its postings back: the reserve is untouched, REVENUE is
+    // empty, and no USD left custody — the seller is paid once, not twice.
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
       credit('4.00'),

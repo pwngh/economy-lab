@@ -23,6 +23,27 @@ import type { Config } from '#src/config.ts';
 export type Options = { signal?: AbortSignal };
 
 /**
+ * Bounds a {@link Ledger.timeline} read. The default (omitted, or `order: 'asc'` with no
+ * `limit`) streams the account's whole lot history oldest-first, as the original signature did.
+ *
+ * - `order`: 'asc' yields oldest-first (the FIFO drain order); 'desc' yields newest-first, the
+ *   order the maturity tail reads so it can stop once it has covered the live balance.
+ * - `limit`: at most this many lots, so a caller that needs only the newest run fetches a small
+ *   page instead of the lifetime.
+ * - `offset`: skip this many lots first, so a caller can page deeper if one page didn't cover the
+ *   balance.
+ *
+ * The SQL engines translate this into `ORDER BY legs.id {ASC|DESC} LIMIT ? OFFSET ?` (legs.id is
+ * assigned in commit order and covered by the legs(account_id, id) index), so the database
+ * materializes only the requested page rather than the whole result set.
+ */
+export type TimelineOptions = {
+  order?: 'asc' | 'desc';
+  limit?: number;
+  offset?: number;
+};
+
+/**
  * Allowed id prefixes. Every minted id is `<prefix>_<uuid>` (e.g. `txn_…`, `usr_…`).
  */
 export type IdPrefix =
@@ -195,7 +216,14 @@ export interface Ledger {
   // The account's settlement lots, each a chunk of funds from a single top-up with the date
   // it becomes eligible to be paid out (see {@link Lot}). Streamed one at a time so a long
   // history doesn't have to fit in memory.
-  timeline(account: AccountRef): AsyncIterable<Lot>;
+  //
+  // `options` bounds the read so a caller that only needs the newest run of lots (the maturity
+  // FIFO tail) never has to touch the whole account history. Default is the full history,
+  // oldest-first (`order: 'asc'`, no limit), preserving the original behaviour. With `order:
+  // 'desc'` lots stream newest-first; `limit`/`offset` page that order, and the SQL engines push
+  // the `ORDER BY legs.id DESC LIMIT ... OFFSET ...` down to the database so the DB work is
+  // bounded by the page, not the account's lifetime. See {@link TimelineOptions}.
+  timeline(account: AccountRef, options?: TimelineOptions): AsyncIterable<Lot>;
 
   // Every account paired with its current chain-head hash (the latest hash in that
   // account's tamper-evident chain).
@@ -423,8 +451,8 @@ export interface OutboxStore {
 export interface InboxStore {
   // Save a verified inbound event to apply later. Called inside the webhook handler's transaction.
   // Dedupes on `entry.key` (the provider's event id): a duplicate is a no-op that returns the
-  // existing row rather than inserting a second, mirroring the idempotency story so a redelivered
-  // provider event is applied at most once.
+  // existing row rather than inserting a second, so a redelivered provider event is applied at
+  // most once.
   enqueueInbound(entry: InboxEntry, options?: Options): Promise<InboxEntry>;
 
   // Grab up to `limit` pending rows for the apply worker, oldest `receivedAt` first. Each is locked
@@ -671,8 +699,7 @@ export interface OutboxMessage {
   attempts: number;
 
   // Why the relay gave up on this message, set when it reaches the terminal 'failed' status; null
-  // otherwise. The message's dead-letter outcome, read straight from the record. Mirrors
-  // Saga.reason.
+  // otherwise. Mirrors Saga.reason.
   reason: string | null;
 }
 
@@ -706,7 +733,7 @@ export interface InboxEntry {
   receivedAt: number;
 
   // Why the worker gave up on this row, set when it reaches the terminal 'dead' status; null
-  // otherwise. The row's dead-letter outcome, read straight from the record. Mirrors Saga.reason.
+  // otherwise. Mirrors Saga.reason.
   reason: string | null;
 }
 
@@ -771,9 +798,9 @@ export interface Saga {
   // The payment provider's reference once submitted, null before then.
   providerRef: string | null;
 
-  // Why the worker gave up on this payout, set when it reaches FAILED; null otherwise. The saga's
-  // terminal failure outcome lives on the record itself, so a reader takes it straight off the saga
-  // instead of re-deriving it from posting meta.
+  // Why the worker gave up on this payout, set when it reaches FAILED; null otherwise. Stored on
+  // the saga so a reader takes it straight off the record instead of re-deriving it from posting
+  // meta.
   reason: string | null;
 
   // How many times the worker has tried to advance this saga.
@@ -784,9 +811,9 @@ export interface Saga {
 
   updatedAt: number;
 
-  // The gross USD disbursed, set when settlePayout marks this payout SETTLED; null otherwise. The
-  // saga's terminal settlement outcome lives on the record itself, so a reader takes it straight off
-  // the saga instead of re-deriving it from posting meta.
+  // The gross USD disbursed, set when settlePayout marks this payout SETTLED; null otherwise. Stored
+  // on the saga so a reader takes it straight off the record instead of re-deriving it from posting
+  // meta.
   payoutUsd: Amount | null;
 }
 

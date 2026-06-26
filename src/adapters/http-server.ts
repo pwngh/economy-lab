@@ -135,10 +135,17 @@ async function ledgerReadRoute(
     return collect(ledger.balanceAccounts(), (account) => account as unknown);
   }
   if (method === 'timeline') {
-    return collect(ledger.timeline(body.account as AccountRef), (lot) => ({
-      ...lot,
-      amount: encodeWire.amount(lot.amount),
-    }));
+    // Pass the bounded read straight through to the backing ledger, so a `desc`/`limit` request
+    // bounds the real engine's DB work rather than being applied after a full fetch.
+    let timelineOptions = {
+      order: body.order as 'asc' | 'desc' | undefined,
+      limit: body.limit as number | undefined,
+      offset: body.offset as number | undefined,
+    };
+    return collect(
+      ledger.timeline(body.account as AccountRef, timelineOptions),
+      (lot) => ({ ...lot, amount: encodeWire.amount(lot.amount) }),
+    );
   }
   if (method === 'list') {
     return collect(ledger.list(), (posting) => encodeWire.posting(posting));

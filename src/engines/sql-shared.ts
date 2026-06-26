@@ -49,6 +49,13 @@ export function defaultClock(): Clock {
 // (ledger.ts), so this is 64 zeros.
 export let GENESIS_HEX = toHex(GENESIS);
 
+// The unique index guarding each account's hash-chain head — chain_links (account_id, prev_hash).
+// A 23505 (Postgres) or 1062 (MySQL) that names this index is a chain-head fork: two writers reached
+// for the same head and one lost. withTransientRetry treats that as transient. Must match the index
+// name in db/postgresql-schema.sql and db/mysql-schema.sql — rename it there without renaming it here
+// and the retry silently stops firing, so the cold-start fork race returns with no error to show for it.
+export let CHAIN_FORK_INDEX = 'chain_links_account_prev_uq';
+
 // Coerce a DB value to BigInt explicitly, so the adapter decides the type rather than the
 // driver.
 export function readMinor(value: unknown): bigint {

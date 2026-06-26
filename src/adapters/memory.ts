@@ -334,7 +334,7 @@ function createLedgerStore(deps: {
     statement: async (account, range) =>
       buildStatement(state.log, account, range),
 
-    timeline: (account) => timelineOf(state.log, account),
+    timeline: (account, options) => timelineOf(state.log, account, options),
 
     heads: async function* () {
       for (let [account, head] of state.heads) {
@@ -392,15 +392,38 @@ function buildStatement(
   return { account, entries, cursor: null };
 }
 
-// Stream this account's incoming funds as lots, oldest first, for FIFO settlement. One lot per
-// posting entry that increased the balance. When a posting's metadata omits `source` or
-// `maturesAt`, fall back to "unknown" and mature-now. Maturity rules live in maturity.ts; this
-// store reports what each posting recorded.
+// Stream this account's incoming funds as lots for FIFO settlement. One lot per posting entry
+// that increased the balance. When a posting's metadata omits `source` or `maturesAt`, fall back
+// to "unknown" and mature-now. Maturity rules live in maturity.ts; this store reports what each
+// posting recorded.
+//
+// `options` mirrors the SQL engines: 'asc' (default) yields oldest-first like the log's commit
+// order; 'desc' yields newest-first. `offset`/`limit` page that order so the maturity tail can
+// pull just the newest run instead of the whole history. The log array index is the in-memory
+// analogue of the SQL `seq`, so reversing it gives the same total order `order by seq desc` does,
+// and `limit` is honoured by stopping early rather than materializing every lot.
 async function* timelineOf(
   log: ReadonlyArray<StoredPosting>,
   account: AccountRef,
+  options?: { order?: 'asc' | 'desc'; limit?: number; offset?: number },
 ): AsyncIterable<Lot> {
-  for (let row of log) {
+  let order = options?.order ?? 'asc';
+  let offset = options?.offset ?? 0;
+  let limit = options?.limit ?? Infinity;
+
+  // Walk the log in the requested direction; the log is already in commit (asc) order.
+  let indices =
+    order === 'desc'
+      ? rangeDown(log.length - 1, 0)
+      : rangeUp(0, log.length - 1);
+
+  let skipped = 0;
+  let yielded = 0;
+  for (let i of indices) {
+    if (yielded >= limit) {
+      break;
+    }
+    let row = log[i]!;
     for (let leg of row.legs) {
       if (leg.account !== account) {
         continue;
@@ -409,6 +432,14 @@ async function* timelineOf(
       if (delta.minor <= 0n) {
         continue;
       }
+      if (skipped < offset) {
+        skipped += 1;
+        continue;
+      }
+      if (yielded >= limit) {
+        break;
+      }
+      yielded += 1;
       yield {
         txnId: row.txnId,
         amount: delta,
@@ -417,6 +448,21 @@ async function* timelineOf(
         maturesAt: metaNumber(row.meta, 'maturesAt', row.postedAt),
       };
     }
+  }
+}
+
+// Ascending index walk [lo..hi]; empty when hi < lo. Kept as a generator so timelineOf can stop
+// early without building an index array.
+function* rangeUp(lo: number, hi: number): Generator<number> {
+  for (let i = lo; i <= hi; i += 1) {
+    yield i;
+  }
+}
+
+// Descending index walk [hi..lo]; empty when hi < lo.
+function* rangeDown(hi: number, lo: number): Generator<number> {
+  for (let i = hi; i >= lo; i -= 1) {
+    yield i;
   }
 }
 
@@ -638,8 +684,8 @@ function createInboxStore(): InboxStore & Participant {
     journal,
     enqueueInbound: async (entry, _options?: Options) => {
       // Dedupe on the provider event id: a duplicate is a no-op that returns the row already
-      // stored under that key, mirroring the idempotency story so a redelivered event is applied
-      // at most once. Only a first sighting inserts and records an undo.
+      // stored under that key, so a redelivered event is applied at most once. Only a first
+      // sighting inserts and records an undo.
       let existingId = byKey.get(entry.key);
       if (existingId !== undefined) {
         return { ...rows.get(existingId)! };

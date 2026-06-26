@@ -66,6 +66,7 @@ import type {
   Store,
   StoredLink,
   SubscriptionStore,
+  TimelineOptions,
   TrustStore,
   Unit,
   Velocity,
@@ -290,7 +291,7 @@ function createLedgerStore(deps: ExecDeps): Ledger {
     statement: async (account, range) =>
       buildStatement(deps.exec, account, range),
 
-    timeline: (account) => timelineOf(deps.exec, account),
+    timeline: (account, options) => timelineOf(deps.exec, account, options),
 
     heads: async function* () {
       // One row per account paired with its chain-tip hash: the chain_links row with the highest
@@ -312,14 +313,19 @@ function createLedgerStore(deps: ExecDeps): Ledger {
     },
 
     balanceAccounts: async function* () {
-      // Every account with a cached balance row. `account_balances` is a cache; the legs it sums
-      // from are the source of truth. Listing from the cache (not postings) surfaces a stale or
-      // phantom balance row with no entries behind it, which a postings scan (`heads`, below) would
-      // never reach. The integrity checker sums each account's entries first, then treats anything
-      // seen only here as "should be zero", so such a row shows up as a cached-vs-summed mismatch.
+      // Every account whose cached balance row reflects real activity. account_balances is a cache;
+      // the legs it sums from are the source of truth. Listing from the cache (not from postings) is
+      // how the integrity checker finds a stale or phantom balance row with no entries behind it — a
+      // postings scan (heads, below) would never reach one.
+      //
+      // Skip the seeded house-account placeholders. We plant an empty row for each house account
+      // (genesis head, zero balance) only so lockAccounts' lock has something to grab on the first
+      // write; it carries no history and reads exactly like no row, so leaving it out keeps this
+      // listing matching the in-memory adapter. The `OR balance <> 0` is the exception: a genesis-head
+      // row with a non-zero balance is no longer a placeholder, it is the very drift this scan hunts.
       for (let row of await rows(
         deps.exec,
-        'SELECT account_id FROM account_balances',
+        `SELECT account_id FROM account_balances WHERE head_hash <> REPEAT('0', 64) OR balance <> 0`,
       )) {
         yield row.account_id as AccountRef;
       }
@@ -367,36 +373,79 @@ async function buildStatement(
   return { account, entries, cursor: null };
 }
 
-// Stream an account's funds as dated lots, oldest first, for the maturity logic that decides
-// when funds become spendable. Yields one lot per posting that increased the balance; legs that
-// decreased it are skipped. The maturity rule lives in maturity.ts; here we carry over what each
-// posting recorded. A posting with no source or maturity time falls back to "unknown" and to
-// mature-now (the safe default).
+// Stream an account's funds as dated lots for the maturity logic that decides when funds become
+// spendable. Yields one lot per posting that increased the balance; legs that decreased it are
+// skipped. The maturity rule lives in maturity.ts; here we carry over what each posting recorded.
+// A posting with no source or maturity time falls back to "unknown" and to mature-now (the safe
+// default).
+//
+// Bounded by `options` (see TimelineOptions): the maturity tail asks for `order: 'desc'` with a
+// small `limit`, so the database does `ORDER BY l.id DESC LIMIT ...` and returns just the
+// newest page instead of scanning the whole account history. We stop issuing queries as soon as
+// the requested number of lots is produced, so the DB work is bounded by the tail, not the
+// lifetime. As in Postgres, the balance-lowering legs (spends) are filtered out in code rather
+// than SQL, so the lot-granularity `offset`/`limit` apply after that filter while the DB pages
+// walk raw rows.
+//
+// Ordered by `l.id` (legs.id, an AUTO_INCREMENT) rather than `p.seq`, so the composite index
+// `legs(account_id, id)` serves `WHERE account_id = ? ORDER BY id DESC LIMIT n` as a bounded keyed
+// scan with no filesort (an `ORDER BY p.seq` had to join every one of the account's legs to
+// postings and sort them). legs.id and postings.seq are both assigned in commit order, so for a
+// single account's legs the two orderings are identical: same FIFO order, now read off the index.
 async function* timelineOf(
   exec: MysqlExecutor,
   account: AccountRef,
+  options?: TimelineOptions,
 ): AsyncIterable<Lot> {
-  let result = await rows(
-    exec,
-    `SELECT p.id AS txn_id, p.meta AS meta, l.currency AS currency,
-            l.amount AS amount, p.posted_at AS posted_at
-       FROM legs l JOIN postings p ON l.posting_id = p.id
-      WHERE l.account_id = ? ORDER BY p.posted_at, l.id`,
-    [account],
-  );
-  for (let row of result) {
-    let delta = naturalDelta(account, row);
-    if (delta.minor <= 0n) {
-      continue;
+  let direction = options?.order === 'desc' ? 'DESC' : 'ASC';
+  let lotOffset = options?.offset ?? 0;
+  let lotLimit = options?.limit ?? Infinity;
+
+  let pageSize = Number.isFinite(lotLimit)
+    ? Math.max(lotOffset + lotLimit, 1)
+    : 256;
+
+  let skipped = 0;
+  let yielded = 0;
+  for (let rowOffset = 0; yielded < lotLimit; rowOffset += pageSize) {
+    let result = await rows(
+      exec,
+      `SELECT p.id AS txn_id, p.meta AS meta, l.currency AS currency,
+              l.amount AS amount, p.posted_at AS posted_at
+         FROM legs l JOIN postings p ON l.posting_id = p.id
+        WHERE l.account_id = ?
+        ORDER BY l.id ${direction}
+        LIMIT ? OFFSET ?`,
+      [account, pageSize, rowOffset],
+    );
+    if (result.length === 0) {
+      return;
     }
-    let meta = parseMeta(row.meta);
-    yield {
-      txnId: row.txn_id as string,
-      amount: delta,
-      source: metaString(meta, 'source', 'unknown'),
-      toppedUpAt: Number(row.posted_at),
-      maturesAt: metaNumber(meta, 'maturesAt', Number(row.posted_at)),
-    };
+    for (let row of result) {
+      let delta = naturalDelta(account, row);
+      if (delta.minor <= 0n) {
+        continue;
+      }
+      if (skipped < lotOffset) {
+        skipped += 1;
+        continue;
+      }
+      if (yielded >= lotLimit) {
+        return;
+      }
+      yielded += 1;
+      let meta = parseMeta(row.meta);
+      yield {
+        txnId: row.txn_id as string,
+        amount: delta,
+        source: metaString(meta, 'source', 'unknown'),
+        toppedUpAt: Number(row.posted_at),
+        maturesAt: metaNumber(meta, 'maturesAt', Number(row.posted_at)),
+      };
+    }
+    if (result.length < pageSize) {
+      return;
+    }
   }
 }
 
@@ -473,9 +522,7 @@ async function postingOf(
 // order with no tie to break, the SQL mirror of `payout_sagas ORDER BY updated_at DESC`. Each
 // posting carries its full legs, the way postingOf returns them, so a reader can expand a row
 // without a second round-trip.
-async function* listPostingsOf(
-  exec: MysqlExecutor,
-): AsyncIterable<Posting> {
+async function* listPostingsOf(exec: MysqlExecutor): AsyncIterable<Posting> {
   for (let row of await rows(
     exec,
     'SELECT id, meta FROM postings ORDER BY seq DESC',
@@ -663,7 +710,7 @@ function createInboxStore(exec: MysqlExecutor): InboxStore {
   return {
     // INSERT IGNORE swallows the duplicate-key conflict on the UNIQUE `key`, so a redelivered event
     // adds no second row. Either way the row stored under that key is read back and returned, so a
-    // duplicate enqueue is a no-op that resolves to the existing row (the idempotency story),
+    // duplicate enqueue is a no-op that resolves to the existing row (applied at most once),
     // mirroring the in-memory reference. MySQL has no RETURNING, so the row is fetched in a second
     // read rather than handed back from the insert the way the postgres twin does. The operation's
     // bigint amounts are carried as decimal strings (encodeOperation) since JSON.stringify can't hold
@@ -1376,8 +1423,8 @@ function rowToPromoGrant(row: Row): PromoGrant {
 // --- Converting money and JSON to and from stored form ----------------------------
 
 // Serialize a transaction to a JSON string for storage. Money amounts become decimal strings first:
-// JSON.stringify can't handle bigint, and string-encoding makes a stored transaction read back
-// byte-for-byte identical, so a replayed duplicate request returns the original result.
+// JSON.stringify can't handle bigint, and string-encoding makes a stored transaction round-trip
+// exactly, so a replayed duplicate request returns the original result.
 function encodeTransaction(transaction: Transaction): string {
   return JSON.stringify({
     id: transaction.id,
@@ -1510,7 +1557,7 @@ export function mysqlStore(deps: {
     // catch has already rolled the aborted transaction back, so a retry starts clean. A true
     // settle-vs-reverse conflict thus retries into the clean SAGA.INVALID_TRANSITION (the retried op
     // reloads a now-terminal saga) instead of escaping as a raw deadlock error; a non-conflicting
-    // deadlock simply succeeds on a later try. Every other error (a domain fault, a CHECK/constraint
+    // deadlock succeeds on a later try. Every other error (a domain fault, a CHECK/constraint
     // violation) is not a transient conflict, so it propagates unchanged on its first occurrence.
     transaction: async (work) =>
       withTransientRetry(async () => {
@@ -1542,8 +1589,26 @@ export function mysqlStore(deps: {
 // Both surface on mysql2's `error.errno`. Anything else — a domain fault, a CHECK/constraint
 // violation, a connection error — is not retried.
 function isTransientConflict(error: unknown): boolean {
-  let errno = (error as { errno?: unknown } | null)?.errno;
-  return errno === 1213 || errno === 1205;
+  let e = error as {
+    errno?: unknown;
+    sqlMessage?: unknown;
+    message?: unknown;
+  } | null;
+  let errno = e?.errno;
+  // 1213 (deadlock) and 1205 (lock-wait timeout) are the classic "try again" aborts. 1062 (duplicate
+  // entry) on chain_links_account_prev_uq is the subtler one. Each account's history is a hash chain,
+  // and a new link names the current head as its parent; that index lets only one link claim a given
+  // parent. So when two writers read the same head and both try to attach, one wins and the other gets
+  // a 1062 — not wrong, just late: the head has moved, and a retry re-reads it and attaches cleanly.
+  // mysql2 surfaces no constraint name, so we match the fork by key name in the message; a real
+  // duplicate (a colliding id or idempotency key) names a different key and still fails fast.
+  // mysql2 puts the key name in sqlMessage (message mirrors it); String() guards the includes() below.
+  let text = String(e?.sqlMessage ?? e?.message ?? '');
+  return (
+    errno === 1213 ||
+    errno === 1205 ||
+    (errno === 1062 && text.includes(CHAIN_FORK_INDEX))
+  );
 }
 
 // Roll back, ignoring any error from the rollback itself. We're here because `work` threw; that
@@ -1574,7 +1639,9 @@ async function releaseLocks(connection: MysqlConnection): Promise<void> {
  * absent — an un-migrated or pre-versioning database. The composition layer (selectStore) passes the
  * result to {@link assertSchemaCurrent} to fail fast on a schema that has drifted from this code.
  */
-export async function readSchemaVersion(pool: MysqlPool): Promise<string | null> {
+export async function readSchemaVersion(
+  pool: MysqlPool,
+): Promise<string | null> {
   try {
     let [rows] = await pool.query('SELECT version FROM schema_meta LIMIT 1');
     let row = (rows as Array<{ version?: string }>)[0];

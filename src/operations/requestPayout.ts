@@ -13,7 +13,7 @@ import { fault, rejected, ERROR_CODES } from '#src/errors.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { compare, encodeAmount, toAmount } from '#src/money.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
-import { maturedBalance } from '#src/maturity.ts';
+import { maturedAtLeast } from '#src/maturity.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
@@ -85,21 +85,20 @@ export async function requestPayout(
 
   // Only earned credit past its settlement wait is payable: a chargeback window must elapse
   // before paying real USD against it. The raw balance above can pass while part is still
-  // maturing, so this is a second, stricter gate. Like INSUFFICIENT_FUNDS it returns a
+  // maturing, so this is a second, stricter gate. The check is purely "is the cleared part at
+  // least `amount`?", so it asks maturedAtLeast — which stops as soon as the matured tail covers
+  // `amount` — rather than summing the whole open tail. Like INSUFFICIENT_FUNDS it returns a
   // rejection rather than throwing. No `signal` threaded here, matching the raw balance read.
-  let matured = await maturedBalance(
+  let cleared = await maturedAtLeast(
     unit.ledger,
     earned(operation.userId),
     ctx.clock.now(),
-    {
-      config: ctx.config,
-    },
+    { config: ctx.config, amount },
   );
-  if (compare(matured, amount) < 0) {
+  if (!cleared) {
     return rejected('FUNDS_IMMATURE', {
       account: earned(operation.userId),
       required: encodeAmount(amount),
-      available: encodeAmount(matured),
     });
   }
 

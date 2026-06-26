@@ -23,11 +23,11 @@ import type { Rate, Saga, SagaState, Unit } from '#src/ports.ts';
  * report instead of the background worker's sweep.
  *
  * This is the worker's `settle` (src/worker/payouts.ts) relocated into a system-actor operation so
- * an inbound provider webhook can trigger it. The money math is byte-for-byte the worker's: the same
+ * an inbound provider webhook can trigger it. The money math is identical to the worker's: the same
  * rate/fee conversion, the same two coupled postings (credit side empties PAYOUT_RESERVE into
  * REVENUE; USD side debits USD_CLEARING / credits TRUST_CASH for the gross USD), the same
  * SUBMITTED -> SETTLED compare-and-set guard, and the same `economy.payout.settled` event enqueued
- * in the same transaction. The provider's settlement ref and reported amount ride along on the
+ * in the same transaction. The provider's settlement ref and reported amount are carried on the
  * operation for the audit trail; the posted figures are still the rate-derived ones, exactly as the
  * worker computes them, so conservation/backing/no-overdraft hold unchanged after a settle.
  *
@@ -53,7 +53,7 @@ export async function settlePayout(
   let saga = await loadSaga(unit, operation.sagaId);
   refuseNotSubmitted(saga);
 
-  // --- The worker's settle, byte-for-byte (src/worker/payouts.ts `settle`). ---
+  // --- The worker's settle, computed identically (src/worker/payouts.ts `settle`). ---
   let rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
   let usd = convert(saga.reserve, rate, 'USD');
   // The payout-rail fee (the rail's processing cut, e.g. a payment processor at ≈1.5%, see
@@ -88,7 +88,7 @@ export async function settlePayout(
   // worker/settle got there first, assertAdvanced above throws and rolls back this event with the
   // entries, so no event emits for a settle that didn't take. Internal-only: carries the money detail
   // downstream consumers need. (settlePayout is not in economy.ts's EVENTS map, so this is enqueued
-  // here rather than by the submit pipeline, keeping the event byte-for-byte the worker's.)
+  // here rather than by the submit pipeline, keeping the event identical to the worker's.)
   await unit.outbox.enqueue({
     id: ctx.ids.next('obx'),
     event: {

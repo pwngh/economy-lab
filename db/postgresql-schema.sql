@@ -71,7 +71,14 @@ create table legs (
   currency   text        not null check (currency in ('CREDIT', 'USD')),
   amount     bigint      not null check (amount <> 0)
 );
-create index legs_account_idx on legs (account_id);
+-- Composite (account_id, id): the maturity tail reads an account's newest lots with
+-- `where account_id = ? order by id desc limit n` (src/engines, timelineOf). legs.id is a bigserial
+-- assigned in commit order, so ordering by it gives the FIFO order the tail walks, and this index
+-- serves that query bounded to the `limit` page — a backward index scan, or for some selectivities a
+-- bitmap scan plus a bounded top-N sort, never a sort over the account's whole leg history.
+-- The leading `account_id` column also covers the plain account_id lookups (statement, lineage), so
+-- this replaces a bare `legs(account_id)` index rather than adding to it.
+create index legs_account_idx on legs (account_id, id);
 create index legs_posting_idx on legs (posting_id);
 
 -- One hash-chain link per (posting, account): each posting advances an account's chain once,
@@ -127,6 +134,17 @@ create table account_balances (
   constraint user_account_non_negative
     check (account_id like 'platform:%' or balance >= 0)
 );
+
+-- Give each house (system) account a balance row up front, empty: balance 0, head_hash at the genesis
+-- value (64 zeros). Such a row reads identically to no row at all — headsForAccounts already treats a
+-- missing row as genesis — so it shifts no balance and no hash. Its only job is to exist: lockAccounts
+-- locks an account by taking `for update` on its balance row, and you cannot lock a row that is not
+-- there yet. Without it, the first concurrent writers to a hot shared account (STORED_VALUE is touched
+-- by every top-up) find no row to lock, so none of them wait — they race to extend the chain head and
+-- collide. Pre-planted, they take turns on the lock instead. A user account still creates its row on
+-- its first posting, where the chain-fork retry covers that rarer race.
+insert into account_balances (account_id, currency, balance, head_hash)
+  select id, currency, 0, repeat('0', 64) from accounts where kind = 'system';
 
 -- ============================================================================
 -- Idempotency: makes a retried request safe to run twice. The key is the primary key, so the
@@ -195,8 +213,8 @@ create index outbox_pending_idx on outbox (created_at) where status = 'pending';
 -- operation it should apply, is written in the same transaction as the webhook ingress that
 -- claimed it, so a received event and its record always exist together. A background apply worker
 -- grabs a batch of pending rows oldest-first (locking them so workers don't collide), submits each
--- operation, and marks them applied; `attempts` and dead-lettering give a poison event somewhere
--- to stop. `key` is the provider's event id: a UNIQUE constraint makes a redelivered event a no-op
+-- operation, and marks them applied; `attempts` and dead-lettering keep a poison event from wedging
+-- the queue. `key` is the provider's event id: a UNIQUE constraint makes a redelivered event a no-op
 -- insert, so it applies at most once. The partial index keeps the pending-rows scan fast.
 -- ============================================================================
 create table inbox (
@@ -532,4 +550,4 @@ create or replace trigger account_balances_integrity
 -- MySQL schema's matching insert, and in src/schema.ts together, whenever this file changes.
 -- ============================================================================
 create table schema_meta (version text not null);
-insert into schema_meta (version) values ('3');
+insert into schema_meta (version) values ('5');

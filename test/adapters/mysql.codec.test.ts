@@ -70,7 +70,7 @@ function fakePool(): MysqlPool {
     let text = sql.trim();
     if (/^INSERT IGNORE INTO inbox/i.test(text)) {
       let [id, key, operation, status, attempts, receivedAt] = params;
-      // INSERT IGNORE: a duplicate `key` is a no-op, so an existing row wins (the dedupe story).
+      // INSERT IGNORE: a duplicate `key` is a no-op, so the existing row wins.
       if (!inbox.has(key as string)) {
         inbox.set(key as string, {
           id,
