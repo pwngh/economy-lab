@@ -202,6 +202,7 @@ let APP_DML_TABLES = [
   'idempotency',
   'seen_webhooks',
   'outbox',
+  'inbox',
   'sales',
   'payout_sagas',
   'promo_grants',
