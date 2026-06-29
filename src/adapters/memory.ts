@@ -857,8 +857,7 @@ function createSagaStore(): SagaStore & Participant {
 // --- Entitlement store ------------------------------------------------------------
 
 // One ownership row: the grant's attributes plus a `revoked` flag. Revoke is a soft delete
-// (keep the row, set the flag), so the history of who owned what survives auditing after a
-// refund or clawback.
+// (keep the row, set the flag), so the row survives for auditing.
 interface EntitlementRow {
   attrs: EntitlementAttrs;
   revoked: boolean;
@@ -1162,6 +1161,8 @@ function createReplayStore(): ReplayStore {
  * others. The trust and checkpoint stores are written outside transactions and aren't rolled
  * back. The hash function and clock default to deterministic versions, so a plain
  * `memoryStore()` is reproducible.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for the store ports this adapter implements.
  */
 export function memoryStore(deps?: {
   digest?: Digest;

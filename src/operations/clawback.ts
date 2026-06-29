@@ -41,6 +41,8 @@ import type { Leg, Unit } from '#src/ports.ts';
  *
  * Returns a `committed` Outcome, or `duplicate` on a lost claim. A non-CREDIT or non-positive
  * amount is a programming error, thrown as a fault.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/clawback/ Clawback} for the chargeback reversal and split accounting.
  */
 export async function handleClawback(
   operation: Operation,
@@ -118,12 +120,11 @@ function splitClawback(
   };
 }
 
-// Build the debit and credit lines. Debit `recovered` from spendable balance, record `shortfall`
-// as a debt in RECEIVABLE, and credit the full amount to STORED_VALUE (credits in circulation,
-// raised by the matching top-up) so the reclaimed credits are un-issued rather than booked as
-// earnings. The two debits sum to the amount and STORED_VALUE is credited that amount, so the
-// lines net to zero, all in CREDIT (no currency mixing). A zero piece (nothing to reclaim, or no
-// shortfall) is omitted rather than posted as a zero line.
+// Build the lines: debit `recovered` from spendable, debit `shortfall` as a debt in RECEIVABLE,
+// credit the full amount to STORED_VALUE so the reclaimed credits are un-issued, not booked as
+// earnings. The two debits sum to the STORED_VALUE credit, so the posting nets to zero, all in
+// CREDIT (no currency mixing). A zero piece (nothing to reclaim, or no shortfall) is omitted
+// rather than posted as a zero line.
 function buildClawbackLegs(
   userId: string,
   amount: Amount,

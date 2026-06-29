@@ -56,6 +56,8 @@ function identityRate(from: Currency, to: Currency): Rate {
  *     parRate: 5n, parScale: 3,
  *     payoutRate: 5n, payoutScale: 3,
  *   });
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/rates/ Rates} for the dual-rate credit economy this rate source feeds.
  */
 export function configuredRates(config: RatesConfig): Rates {
   let buy: Rate = {

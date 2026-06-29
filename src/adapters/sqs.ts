@@ -57,6 +57,8 @@ export interface SqsDispatcherConfig {
  *
  * On failure throws a retryable `PROVIDER.FAILURE` so the caller's backoff wrapper retries.
  * The event id is attached so the receiver can drop duplicates (SQS may deliver twice).
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for how dispatchers deliver events.
  */
 export function sqsDispatcher(config: SqsDispatcherConfig): Dispatcher {
   let client = config.client;

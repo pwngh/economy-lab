@@ -169,11 +169,10 @@ function isKnownSuffix(account: AccountRef): boolean {
 
 // Tip hash of each given account's chain, in one query. `account_balances.head_hash` is the
 // maintained head pointer: post_entry advances it to the account's new link hash in the same
-// transaction it writes chain_links, so this is an O(1) primary-key read per account instead of the
-// old join-to-postings + DISTINCT ON + sort scan over the whole chain. Accounts with no balance row
-// are absent; the caller treats a missing account as the genesis hash (a new account's head). The
-// chain_links table stays the source of truth — prove() still re-walks it — so a head pointer
-// drifting from the chain surfaces there.
+// transaction it writes chain_links, so this is an O(1) primary-key read per account. Accounts with
+// no balance row are absent; the caller treats a missing account as the genesis hash (a new
+// account's head). The chain_links table stays the source of truth — prove() still re-walks it — so
+// a head pointer drifting from the chain surfaces there.
 async function headsForAccounts(
   q: Queryable,
   accounts: ReadonlyArray<AccountRef>,
@@ -265,8 +264,7 @@ async function writePosting(
   // One round-trip persists the whole posting. The application has already decided everything
   // (chain hashes, per-account net balance deltas, which user accounts are new); `post_entry`
   // writes the posting, legs, chain links, and balance changes as one set-based unit in this
-  // transaction, replacing a per-leg loop that cost a dozen-plus round-trips. JSON arrays carry
-  // the bigint amounts as strings to avoid loss past 2^53.
+  // transaction. JSON arrays carry the bigint amounts as strings to avoid loss past 2^53.
   let query = (sql: string, params: ReadonlyArray<unknown>) =>
     q.query(sql, params);
   let args = postEntryArgs(posting, links);
@@ -387,18 +385,10 @@ async function buildStatement(
 // source and treat the money as available immediately.
 //
 // Bounded by `options` (see TimelineOptions): the maturity tail asks for `order: 'desc'` with a
-// small `limit`, so the database does `order by l.id desc limit ...` and returns just the newest
-// page rather than scanning the account's whole history. We fetch the rows in fixed-size DB pages
-// (LIMIT/OFFSET) and stop issuing queries the moment the requested number of lots has been
-// produced, so the DB work is bounded by the tail, not the lifetime.
-//
-// Ordered by `l.id` (legs.id, a bigserial) rather than `p.seq`, so the composite index
-// `legs(account_id, id)` serves `where account_id = ? order by id desc limit n` bounded to that page
-// — usually a backward index scan, though depending on selectivity Postgres may use a bitmap scan
-// plus a bounded top-N sort. Either way it never sorts the account's whole leg history the way an
-// `order by p.seq` did (join every one of the account's legs to postings, then sort). legs.id and
-// postings.seq are both assigned in commit order, so for a single account's legs the two orderings
-// are identical: same FIFO order, now read off the index.
+// small `limit`, so the DB returns just the newest page rather than scanning the account's whole
+// history. Ordered by `l.id` (legs.id, a bigserial) so the composite index `legs(account_id, id)`
+// serves the bounded `order by id desc limit n`. legs.id and postings.seq are both assigned in
+// commit order, so for one account's legs the two orderings are identical (same FIFO order).
 //
 // One wrinkle: a leg can lower the balance (a spend), and those non-lot rows are filtered out in
 // code, not SQL (the credit/debit sign for an account is a domain rule, not a column predicate).
@@ -504,11 +494,10 @@ async function* headsOf(
   }
 }
 
-// Stream every account whose account_balances row reflects real activity. The table caches each
-// account's running total so balance() is one read; that cached total should match the sum of the
-// account's entry lines (the source of truth) but can drift. This scan is how the integrity checker
-// finds a cached balance with no entries behind it — heads() (built from the hash chain) never lists
-// such an account, so walking this table is the only way to reach one.
+// Stream every account whose account_balances row reflects real activity. The cached running total
+// can drift from the sum of the account's entry lines (the source of truth); this scan is how the
+// integrity checker reaches a cached balance with no entries behind it, since heads() (built from
+// the hash chain) never lists such an account.
 //
 // Skip the seeded house-account placeholders. We plant an empty row for each house account (genesis
 // head, zero balance) only so lockAccounts' `for update` has something to grab on the first write; it
@@ -1605,6 +1594,8 @@ export interface PostgresStoreOptions {
  * transaction, so their writes are never rolled back. If `schema` is given, a fresh schema with
  * that name is created, loaded with db/postgresql-schema.sql, and used for all queries; `close()`
  * drops it. The hashing and clock dependencies default to reproducible implementations.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for the port contracts this engine implements.
  */
 export async function postgresStore(
   options: PostgresStoreOptions,
@@ -1685,15 +1676,14 @@ async function applyIsolatedSchema(
 // commit or roll back as one. The connection is always returned to the pool at the end.
 //
 // The whole unit of work (the idempotency claim, the postings, the saga advance, the outbox write)
-// lives inside this one transaction, so when Postgres aborts it with a transient lock conflict —
-// deadlock_detected or serialization_failure — nothing committed, and re-running the entire `work`
-// in a fresh transaction is atomic and idempotency-safe. withTransientRetry does exactly that: each
-// attempt below opens its own connection + BEGIN/COMMIT, and the catch has already rolled the
-// aborted transaction back, so a retry starts clean. A true settle-vs-reverse conflict thus retries
-// into the clean SAGA.INVALID_TRANSITION (the retried op reloads a now-terminal saga) instead of
-// escaping as a raw 40P01 lock error; a non-conflicting deadlock succeeds on a later try.
-// Every other error (a domain fault, a CHECK/constraint violation) is not a transient conflict, so
-// it propagates unchanged on its first occurrence.
+// lives inside this one transaction, so when Postgres aborts it with a transient lock conflict,
+// nothing committed and re-running the entire `work` in a fresh transaction is atomic and
+// idempotency-safe. withTransientRetry does exactly that: each attempt opens its own connection +
+// BEGIN/COMMIT, and the catch has already rolled the aborted transaction back, so a retry starts
+// clean. A true settle-vs-reverse conflict thus retries into the clean SAGA.INVALID_TRANSITION (the
+// retried op reloads a now-terminal saga) instead of escaping as a raw 40P01 lock error. Every
+// other error (a domain fault, a CHECK/constraint violation) is not a transient conflict, so it
+// propagates unchanged on its first occurrence.
 async function runInTransaction<T>(
   pool: PgPool,
   digest: Digest,

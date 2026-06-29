@@ -22,21 +22,17 @@ import type { Leg, Sale, Unit } from '#src/ports.ts';
 /**
  * Undo a past sale, making the buyer whole even when a seller already spent their cut.
  *
- * A naive refund flips the sign of every line. That breaks once a seller has paid out their
- * earned cut: reversing the original credit becomes a debit, and if the seller spent the money
- * the debit drives their earned balance negative. The ledger forbids a user account going
- * negative, so it rejects the whole posting and the refund rolls back, leaving the buyer unpaid
- * for a debt the seller ran up. Instead, always return the buyer the full price and claw back
- * from each seller (and from REVENUE) only up to what each still holds. Anything uncollectable
- * is booked to `SYSTEM.RECEIVABLE` so debits and credits still cancel.
+ * A naive sign-flip breaks once a seller spent their cut: reversing their credit becomes a debit
+ * that drives the earned balance negative, the ledger rejects the posting, and the refund rolls
+ * back leaving the buyer unpaid. Instead return the buyer the full price and claw back from each
+ * seller (and REVENUE) only up to what each still holds; the uncollectable rest is booked to
+ * `SYSTEM.RECEIVABLE` so debits and credits still cancel.
  *
- * A refund and an order-tied clawback both reverse the same sale, so only one may run. The
- * request carries an idempotency key already claimed by the framework. Before posting, this
- * claims a second order-scoped key, `reversed:<orderId>`, which makes the refund and clawback
- * paths mutually exclusive per order. If that claim is lost, the order was already reversed by
- * the other path (or an earlier refund), so return the recorded transaction as `duplicate`.
- * After the reversal commits, revoke the buyer's entitlement to the SKU in the same database
- * transaction; no-op if the buyer was never granted it.
+ * A refund and an order-tied clawback both reverse the same sale, so only one may run: a second
+ * order-scoped idempotency key, `reversed:<orderId>`, makes the two paths mutually exclusive per
+ * order. A lost claim means the order was already reversed, so return the recorded transaction as
+ * `duplicate`. After the reversal commits, revoke the buyer's entitlement to the SKU in the same
+ * database transaction; no-op if the buyer was never granted it.
  *
  * Returns `committed` with the reversing transaction, `duplicate` when already reversed, or
  * `rejected` with `UNKNOWN_ORDER` when no sale was recorded for the order. Any kind other than
@@ -50,6 +46,8 @@ import type { Leg, Sale, Unit } from '#src/ports.ts';
  *   );
  *   // outcome.status === 'committed'; buyer gets the full price back, seller debited only
  *   // up to the balance they still hold.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/refund/ Refund} for the make-the-buyer-whole coverage plan.
  */
 export async function refund(
   operation: Operation,
@@ -122,15 +120,12 @@ type AccountDelta = {
   currency: Amount['currency'];
 };
 
-// Plan for reversing the sale: how much of each clawback is collectable now, with the rest split
-// out as a debt owed to the platform (RECEIVABLE). For an account the reversal would push below
-// zero (a seller's earned balance since paid out, or REVENUE already moved elsewhere), only the
-// part still there is collectable (current balance if positive, else nothing); the rest becomes
-// the debt.
+// Plan for reversing the sale: how much of each clawback is collectable now, with the
+// uncollectable rest split out as a debt owed to the platform (RECEIVABLE).
 type Coverage = {
-  // Accounts the reversal only raises, applied in full with no cap: returning the buyer's money,
-  // and unwinding any platform account allowed to go negative that the sale drew down. Each
-  // carries the amount to add back.
+  // Accounts the reversal only raises, applied in full with no cap (raising never pushes a
+  // balance below zero): the buyer's refund, and unwinding platform accounts the sale drew down.
+  // Each carries the amount to add back.
   uncapped: AccountDelta[];
 
   // Clawbacks pulling money out of an account, each limited to what that account can cover.
@@ -180,11 +175,9 @@ async function coverageOf(unit: Unit, sale: Sale): Promise<Coverage> {
   return { uncapped, capped, shortfall };
 }
 
-// Turn the plan into debit/credit lines to post: raise each uncapped account (return the buyer's
-// money, undo the platform accounts the sale drew down), pull each capped clawback only as far as
-// that account can cover, and credit RECEIVABLE for the uncollectable total so debits and credits
-// cancel. Every amount matches the original sale except where RECEIVABLE stands in for an
-// uncollectable part, so the lines balance to zero as the sale's did.
+// Turn the plan into debit/credit lines: raise each uncapped account, pull each capped clawback,
+// and credit RECEIVABLE for the uncollectable total. RECEIVABLE stands in for exactly the missing
+// amounts, so the lines balance to zero as the original sale's did.
 function reversalLegs(coverage: Coverage): Leg[] {
   let legs: Leg[] = [];
   for (let u of coverage.uncapped) {

@@ -34,6 +34,8 @@ import type { Subscription, Unit } from '#src/ports.ts';
  *
  * Covered by `test/operations/cancelSubscription.test.ts` and
  * `test/operations/cancelSubscription.submit.test.ts`.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/cancel-subscription/ Cancel subscription} for the cancel flow and ownership rules.
  */
 export async function handleCancelSubscription(
   operation: Operation,

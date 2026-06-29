@@ -39,6 +39,8 @@ import type { Leg, Unit } from '#src/ports.ts';
  *     unit, ctx,
  *   );
  *   // outcome.status === 'committed'; spendable(usr_alice) rose by 250, balanced to OPENING_EQUITY.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/adjust/ Adjust} for when and how operators book manual corrections.
  */
 export async function adjust(
   operation: Operation,

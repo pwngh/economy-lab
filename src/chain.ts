@@ -28,9 +28,11 @@ import type {
 } from '#src/ports.ts';
 
 /**
- * One step in an account's hash chain. Each posting is hashed onto the hash of the previous
- * one; the latest hash is the account's "head". This records the new head after a posting and
- * the head it followed. Each account has its own chain.
+ * One step in an account's hash chain: the new head after a posting and the head it followed.
+ * Each account has its own chain, and its latest head summarizes its whole history.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for the
+ * tamper-evidence construction these links and checkpoints implement.
  */
 export type ChainLink = {
   account: AccountRef;
@@ -83,15 +85,11 @@ export type ChainReport = {
 };
 
 /**
- * Compute the new head hash for each account a posting touches. Called by the write path when
- * appending a posting.
- *
- * A posting has many entries (legs), several of which can name the same account; this produces
- * one link per distinct account, in the order accounts first appear. Each account hashes only
- * its own entries onto its own prior head, so chains never mix across accounts.
- *
- * `prevHeadOf` returns an account's current head, or undefined if never posted to. Undefined or
- * the genesis value means the new link starts from genesis.
+ * Compute the new head for each distinct account a posting touches, in first-appearance order —
+ * one link per account, not one per leg, so a posting that names an account in several legs still
+ * advances that account's chain a single step. Each account hashes only its own legs onto its own
+ * prior head, so chains never cross. `prevHeadOf` returns an account's current head; undefined or
+ * the genesis value starts a fresh chain.
  */
 export async function advanceHeads(
   digest: Digest,
@@ -116,13 +114,10 @@ export async function advanceHeads(
 }
 
 /**
- * Re-check every account's chain: walk each account's postings from the start, recompute the
- * head hash at each step, stop at the first mismatch.
- *
- * Accounts are checked in a fixed order (by id string, char by char), so the same tampering is
- * reported the same way regardless of the order a runtime or database returns accounts. The
- * recompute uses the same hashing as the write path, so an untampered ledger reproduces its
- * stored hashes exactly.
+ * Re-check every account's chain: walk its postings from genesis, recompute each head with the
+ * write path's hash function, and stop at the first mismatch. Accounts are checked in a fixed
+ * order (by id, char by char), so a break is reported identically whatever order a runtime or
+ * database returns accounts in.
  */
 export async function proveChain(
   deps: { ledger: Ledger; digest: Digest },
@@ -196,16 +191,11 @@ function recomputeLink(
 }
 
 /**
- * Reduce every account's head into one hash, a Merkle root: hash each head into a leaf, then
- * hash leaves in pairs until one remains. The root changes if any head changes, so signing it
- * (see `recordCheckpoint`) covers every account's chain in one signature.
- *
- * Two rules pin the result across machines. Leaves are sorted by account id char by char (not
- * locale-sensitive). The building blocks are fixed: each leaf is the hash of a 0x00 tag plus
- * `account + ":" + head`, and each pair of children is hashed under a 0x01 tag joined
- * left-then-right, so swapping order changes the result. The two tags (RFC 6962) keep a leaf from
- * ever being reinterpreted as an internal node. With no accounts, the root is the genesis value
- * (32 zero bytes), so a new ledger still has a stable hash to sign.
+ * Reduce every account's head into one Merkle root, so signing the root (see `recordCheckpoint`)
+ * covers every chain in one signature; the root changes if any head changes. Reproducible across
+ * machines: leaves sorted by account id, RFC 6962 domain tags (`MERKLE_LEAF`/`MERKLE_NODE`), each
+ * pair hashed left-then-right so order matters. With no accounts the root is the genesis value
+ * (32 zero bytes), so a fresh ledger still has a stable root to sign.
  */
 export async function merkleRoot(
   digest: Digest,
@@ -226,18 +216,12 @@ export async function merkleRoot(
 }
 
 /**
- * Take a tamper-evident snapshot of the ledger now: prove the chain re-derives, collect every
- * account's head, reduce to one Merkle root (see `merkleRoot`), sign the root, and save the
- * signed snapshot (a "checkpoint").
- *
- * The proof comes first: a signed root attests the ledger is intact, so signing over a chain
- * that no longer re-derives would be a false attestation. `proveChain` re-walks every account;
- * on a break this throws a non-retryable CHAIN_BROKEN fault and persists no checkpoint. The
- * caller treats a non-retryable fault as a dead end: no retry, sets the job aside for an
- * operator.
- *
- * The save goes through the checkpoint store, kept separate from the database transaction that
- * posts money, so a rolled-back money operation doesn't undo an already-recorded checkpoint.
+ * Take a tamper-evident snapshot: prove the chain re-derives, then sign the Merkle root over
+ * every head and save it (a "checkpoint"). Proof comes first — on a break this throws a
+ * non-retryable CHAIN_BROKEN fault and persists nothing, so a signed root never attests to a
+ * tampered ledger, and the caller sets the job aside for an operator rather than retrying. The
+ * save goes through the checkpoint store, outside the money transaction, so a rolled-back
+ * operation can't undo an already-recorded checkpoint.
  */
 export async function recordCheckpoint(
   deps: {
@@ -276,21 +260,16 @@ export async function recordCheckpoint(
 }
 
 /**
- * Check a saved checkpoint against the current ledger. Recompute the Merkle root over current
- * heads, compare to the checkpoint's root, then confirm the signature covers that root.
+ * Check a saved checkpoint against the current ledger: recompute the Merkle root over current
+ * heads, compare to the stored root, then verify the signature covers it. The signature check
+ * accepts the current key plus still-valid rotated-out keys, so a checkpoint signed before a key
+ * rotation keeps verifying.
  *
- * The signature check accepts the current signing key plus any still-valid older keys, so a
- * checkpoint signed before a key rotation keeps verifying.
- *
- * Returns false on a normal mismatch: recomputed root differs (ledger changed or tampered),
- * live head count dropped below the recorded count (accounts truncated or deleted), or the
- * signature isn't authentic. Throws only if the stored hex is malformed, meaning the saved row
- * is corrupt rather than verification just failing.
- *
- * The head-count check catches deleted accounts. The root is computed over whatever heads exist
- * now, so if accounts vanished the root reflects the smaller set and a root-only check would
- * still match its shrunken input. A healthy ledger only grows, so fewer heads than recorded is a
- * tamper signal; equal or more is fine.
+ * Returns false on a normal mismatch — a changed root, an inauthentic signature, or a live head
+ * count below the recorded one. That last check matters: deleting accounts shrinks the set the
+ * root covers, so a root-only comparison would still match its smaller input; a healthy ledger
+ * only grows, so fewer heads than recorded is itself a tamper signal. Throws only when stored hex
+ * is malformed — a corrupt row, not a failed verification.
  */
 export async function verifyCheckpoint(
   deps: { ledger: Ledger; digest: Digest; signer: Signer },

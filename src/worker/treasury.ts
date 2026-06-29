@@ -88,6 +88,8 @@ type TreasuryTally = {
  * @example
  *   let summary = await sweepTreasury(store, ctx, { now: ctx.clock.now() });
  *   summary.position?.backed === true; // every spendable credit is fully cash-backed
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how the treasury sweep checks backing on a schedule.
  */
 export async function sweepTreasury(
   store: Store,
@@ -261,22 +263,14 @@ function assertWithinSweepable(amount: Amount, sweepable: bigint): void {
  * accrued fees into cash the platform keeps. Read-write counterpart to {@link sweepTreasury},
  * which only checks backing.
  *
- * Three checks gate the posting, all inside one DB transaction with the touched accounts
- * locked, so a concurrent sweep can't move the numbers between check and post:
+ * Surplus check, refund-window cap, and idempotency claim all run inside one DB transaction
+ * with the touched accounts locked, so a concurrent sweep can't move the numbers between check
+ * and post (TOCTOU). A draw past the surplus throws COMMINGLING; revenue still inside its
+ * refund window is excluded via `maturedBalance(REVENUE)`; a re-run with the same key no-ops.
  *
- *  - Don't dip into users' money: take only the surplus, cash held beyond what is owed users.
- *    That liability is every user's spendable balance plus HELD escrow, converted to USD at
- *    par. A draw pushing trust-cash below it throws COMMINGLING and posts nothing.
- *  - Refund window not yet closed: a fee on a still-refundable sale isn't yet the platform's,
- *    so the take is also capped at the matured portion of REVENUE (`maturedBalance(REVENUE)`).
- *  - Run at most once: an idempotency key is claimed inside the transaction, so a re-run does
- *    nothing.
- *
- * REVENUE is CREDIT and trust-cash is USD, and a single entry can't mix currencies, so the
- * move splits into two coupled entries (same as a payout settle): one CREDIT entry retires
- * the swept amount from REVENUE (offset against STORED_VALUE, total credit ever issued), one
- * USD entry moves the cash from trust into clearing. The two share a rate id recording the
- * conversion rate.
+ * REVENUE is CREDIT and trust-cash is USD and one entry can't mix currencies, so the move
+ * splits into two coupled entries sharing a rate id (same as a payout settle): a CREDIT entry
+ * retires REVENUE against STORED_VALUE, a USD entry moves cash from trust into clearing.
  *
  * @throws {EconomyError} INVALID_AMOUNT for a non-positive `amount`; COMMINGLING when the
  *   draw would exceed the surplus the platform is allowed to take.

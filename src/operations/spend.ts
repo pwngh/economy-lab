@@ -65,6 +65,9 @@ type SpendPlan = { promoPart: Amount; spendablePart: Amount };
  *     unit, ctx,
  *   );
  *   // outcome.status === 'committed'; the buyer's promo balance was drawn first, then spendable.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/spend/ Spend} for the
+ * purchase flow, balance draw order, and split accounting this handler posts.
  */
 export async function spend(
   operation: Operation,
@@ -96,14 +99,10 @@ export async function spend(
   let promoBalance = await unit.ledger.balance(promo(operation.buyerId));
   let plan = planSpend(price, promoBalance);
 
-  // Require the spendable-funded part to be covered by cleared (matured) funds.
-  //
-  // Promo credits draw first, so only the spendable-funded part must come from cleared funds; some
-  // spendable credit may still be inside a settlement wait. The pipeline's affordability check
-  // looks at the raw balance and can pass even when part hasn't cleared. This stricter check asks
-  // only whether the matured amount covers the spendable part — maturedAtLeast stops as soon as the
-  // matured tail reaches it — and refuses with FUNDS_IMMATURE if it would dip into uncleared funds.
-  // Like INSUFFICIENT_FUNDS, returned as a rejection, not a fault.
+  // Require the spendable-funded part to be covered by cleared (matured) funds. Promo draws first,
+  // so only the spendable part is checked; the pipeline's affordability check sees the raw balance
+  // and can pass on funds still in a settlement wait. Refuse with FUNDS_IMMATURE (a rejection, not a
+  // fault, like INSUFFICIENT_FUNDS) rather than dip into uncleared funds.
   let cleared = await maturedAtLeast(
     unit.ledger,
     spendable(operation.buyerId),
@@ -237,8 +236,8 @@ function appendSpendableLegs(
 }
 
 // Credit each seller's earned balance with its share of `amount`, rounding each share down, and
-// return the total paid out. The caller debits REVENUE by only this returned total, so the unpaid
-// leftover (amount minus the total) stays with the house and the promo funding pair still balances.
+// return the total paid out. The caller debits REVENUE by only this returned total, so the
+// rounding leftover stays with the house and the promo funding pair still balances.
 function distributeEarned(
   legs: Leg[],
   amount: Amount,

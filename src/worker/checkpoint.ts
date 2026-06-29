@@ -43,13 +43,15 @@ type CheckpointTally = {
 /**
  * Take one tamper-evident snapshot of the ledger and save it. Scheduled background job.
  *
- * Each account has a hash chain whose latest hash is its "head". Collects every head, combines
- * them into a Merkle root (changes if any account changes), signs it, and stores the signed
- * snapshot (checkpoint). Anchoring that root externally later proves the ledger is unaltered.
+ * Collects every account's chain head, combines them into a signed Merkle root, and stores it as a
+ * checkpoint; the root changes if any account changes, so anchoring it externally later proves the
+ * ledger is unaltered.
  *
  * Errors are caught so one bad run can't stop future runs: retryable failures are left for the
  * next run, others are set aside for an operator. An empty ledger is skipped rather than sealing
  * an empty snapshot.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how scheduled sweeps are driven and retried.
  */
 export async function sealCheckpoint(
   store: Store,
@@ -152,13 +154,12 @@ type VerifyTally = {
  * Re-check the most recent checkpoint against the current ledger. Scheduled background audit,
  * separate from sealing: sealing writes a snapshot, this confirms the last one still matches.
  *
- * Loads the latest checkpoint and re-derives the Merkle root over current heads (via
- * `verifyCheckpoint` in chain.ts), comparing it to the signed root, checking the live head count
- * hasn't dropped below the sealed count (catches truncation/deletion a root-over-current-heads
- * check alone would miss), and confirming the signature. A `false` result is a normal mismatch
- * (tampering, truncation, or a stale checkpoint), so it's recorded on the summary and logged at
- * error level, not thrown. Only a thrown error (corrupt stored row, storage unavailable) goes
- * through the same retry/dead-letter split as sealing. Skipped if no checkpoint exists yet.
+ * Delegates to `verifyCheckpoint` (chain.ts), which also checks the live head count hasn't dropped
+ * below the sealed count (catches truncation/deletion a root-over-current-heads check alone would
+ * miss). A `false` result is a normal mismatch (tampering, truncation, or a stale checkpoint), so
+ * it's recorded on the summary and logged at error level, not thrown. Only a thrown error (corrupt
+ * stored row, storage unavailable) goes through the same retry/dead-letter split as sealing.
+ * Skipped if no checkpoint exists yet.
  */
 export async function reverifyCheckpoint(
   store: Store,

@@ -51,6 +51,8 @@ type ChargePlan = { promoPart: Amount; spendablePart: Amount };
  *     unit, ctx,
  *   );
  *   // outcome.status === 'committed'; the seller earned the net, the platform took the fee.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/subscribe/ Subscribe} for the first-month charge and renewal handoff.
  */
 export async function handleSubscribe(
   operation: Operation,

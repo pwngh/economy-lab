@@ -23,15 +23,13 @@ import type { Options, PromoGrant, Store, Unit } from '#src/ports.ts';
 let SWEEP_METRIC = 'economy.worker.promo.expiry';
 
 /**
- * Result of one promo-expiry sweep. A promo grant gives a user credits that expire; on expiry
- * the unspent part is clawed back. Each due grant lands in one of two lists, keyed by grant id:
+ * Result of one promo-expiry sweep. Each due grant lands in one of two lists, keyed by grant id:
  *
- * - `reversed`: processed successfully. The unspent part moved back to `SYSTEM.PROMO_FLOAT` (0
- *   if fully spent) and the grant was flagged so later sweeps skip it. `amount` is what moved.
+ * - `reversed`: succeeded. The unspent part moved back to `SYSTEM.PROMO_FLOAT` (0 if fully spent)
+ *   and the grant was flagged so later sweeps skip it. `amount` is what moved.
  *
- * - `failed`: processing raised an error, so the grant was skipped for a later sweep or operator.
- *   The error code is recorded. The grant stays eligible: the transaction that would have flagged
- *   it reversed was rolled back along with the failed money movement.
+ * - `failed`: raised an error; the grant stays eligible because the flag-reversed write was rolled
+ *   back along with the money movement. The error code is recorded.
  */
 export type PromoExpirySummary = {
   reversed: ReadonlyArray<{ id: string; amount: Amount }>;
@@ -59,6 +57,8 @@ type PromoExpiryTally = {
  * Errors on a single grant are caught and recorded so they can't halt the rest.
  *
  * `now` is epoch milliseconds. `limit` caps how many grants this run picks up.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how scheduled sweeps reverse expired promo grants.
  */
 export async function sweepExpiredPromos(
   store: Store,

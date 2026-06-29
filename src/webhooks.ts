@@ -9,23 +9,12 @@
  * @license MIT
  */
 
-// Inbound provider-callback dispatch: maps a verified callback to the ledger Operation it
-// should apply, and persists that Operation to the transactional inbox. A verified callback is the
-// provider telling us a real-world money event happened; this module turns it, by its kind, into
-// the matching economy Operation:
+// Inbound provider-callback dispatch: maps a verified callback to the ledger Operation it should
+// apply, by its kind, and persists that Operation to the transactional inbox (the inbound mirror of
+// the outbox) for the apply worker to submit later:
 //   - a cleared purchase  -> `topUp`        (credit the buyer's spendable balance)
 //   - a settled payout    -> `settlePayout` (the SUBMITTED -> SETTLED step for the named saga)
 //   - a dispute/chargeback -> `clawback`    (reclaim the disputed credits)
-// so the webhook edge is the single inbound counterpart to the outbox, no matter which provider
-// event arrived.
-//
-// The HTTP edge decodes the raw body into a `WebhookEvent`; `handleWebhook` dispatches it by kind
-// to the right mapper and persists the resulting Operation to the inbox, rather than posting it
-// inline. The inbox is the inbound mirror of the outbox: where a committed money move queues an
-// outbound event for the relay to deliver, a verified provider callback queues an inbound Operation
-// for the apply worker (`drainInbox`) to submit. Persisting and returning immediately decouples the
-// provider's latency from the ledger — the callback gets a fast 200 and the money move settles
-// asynchronously through the normal economy path, where invariants and idempotency are enforced.
 //
 // Duplicate suppression spans two layers, identically for every kind. The edge claims the
 // provider's `eventId` in a replay store to drop redeliveries before they reach here, running that
@@ -277,8 +266,6 @@ export type WebhookAck = {
  * then persists that operation to the inbox in one transaction and returns immediately — it does NOT
  * post to the ledger inline. The apply worker (`drainInbox`) submits the stored Operation through the
  * normal economy path on its next sweep, so invariants and idempotency apply there, not here.
- * Decoupling the post from the callback keeps the provider's acknowledgement fast and independent of
- * ledger latency.
  *
  * The server edge has already checked signature and freshness and claimed `eventId` in the replay
  * store, so the event is trusted and normally a first-time delivery. A duplicate that still reaches
@@ -287,6 +274,8 @@ export type WebhookAck = {
  * the redelivery is caught here or later by the operation's idempotency key. The status reports which
  * case happened by comparing the returned row id against the one we minted: a returned row carrying a
  * different id means the key was already present.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for how verified callbacks flow through the inbox.
  */
 export async function handleWebhook(
   store: Store,

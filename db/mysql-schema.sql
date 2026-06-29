@@ -12,6 +12,10 @@
 -- at a time (mysql2 sends one per query). Drops everything up front, so re-running
 -- resets. Stored routines use `DELIMITER $$` as the mysql CLI does; the loader
 -- handles that directive.
+--
+-- MySQL has no partial index, so each Postgres partial-index predicate folds into the leading column
+-- of the composite key here: the *_pending_idx / *_due_idx indexes lead with the status / state /
+-- reversed column the PG `WHERE` filtered on, keeping the sweep and relay scans narrow.
 
 -- Pin the database default collation FIRST, so every table below (none declare their own) inherits
 -- it. The strings JSON_TABLE produces inside post_entry are utf8mb4_0900_ai_ci; matching the tables
@@ -190,7 +194,6 @@ CREATE TABLE outbox (
      dead_letter_reason TEXT        NULL,
      created_at         TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
      CHECK (status IN ('pending', 'relayed', 'failed')),
-     -- MySQL has no partial index; the PG WHERE-predicate (status/state/reversed) becomes the leading composite-key column so the sweep/relay scan stays narrow.
      KEY outbox_pending_idx (status, created_at)
    );
 
@@ -208,7 +211,6 @@ CREATE TABLE inbox (
      received_at        BIGINT       NOT NULL,
      created_at         TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
      CHECK (status IN ('pending', 'applied', 'dead')),
-     -- MySQL has no partial index; the PG WHERE-predicate (status/state/reversed) becomes the leading composite-key column so the sweep/relay scan stays narrow.
      KEY inbox_pending_idx (status, received_at)
    );
 
@@ -231,7 +233,6 @@ CREATE TABLE payout_sagas (
      payout_usd         BIGINT,
      CHECK (reserve > 0),
      CHECK (state IN ('REQUESTED', 'RESERVED', 'SUBMITTED', 'SETTLED', 'FAILED')),
-     -- MySQL has no partial index; the PG WHERE-predicate (status/state/reversed) becomes the leading composite-key column so the sweep/relay scan stays narrow.
      KEY payout_sagas_due_idx (state, due_at),
      -- requestPayout's min-interval gate reads MAX(updated_at) for one user across all their sagas,
      -- without this it scans every saga that user has ever had, so the check's cost grows with their
@@ -250,7 +251,6 @@ CREATE TABLE promo_grants (
      reversed   BOOLEAN     NOT NULL DEFAULT FALSE,
      CHECK (amount >= 0),
      CHECK (currency IN ('CREDIT', 'USD')),
-     -- MySQL has no partial index; the PG WHERE-predicate (status/state/reversed) becomes the leading composite-key column so the sweep/relay scan stays narrow.
      KEY promo_grants_due_idx (reversed, expires_at)
    );
 
@@ -284,7 +284,6 @@ CREATE TABLE subscriptions (
      CHECK (price > 0),
      CHECK (period_ms > 0),
      CHECK (state IN ('ACTIVE', 'LAPSED', 'CANCELED')),
-     -- MySQL has no partial index; the PG WHERE-predicate (status/state/reversed) becomes the leading composite-key column so the sweep/relay scan stays narrow.
      KEY subscriptions_due_idx (state, next_due_at),
      -- subscribe's activeFor lookup filters by (user_id, sku, seller_id) to find the one ACTIVE row,
      -- without this it scans every subscription a user holds, so the duplicate-guard's cost grows with

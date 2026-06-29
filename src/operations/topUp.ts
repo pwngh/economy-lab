@@ -21,12 +21,10 @@ import type { Rate, Unit } from '#src/ports.ts';
 /**
  * Buy-credits flow: user pays real money, gets spendable credits.
  *
- * Two ledger postings, since one posting can't mix currencies. First raises the buyer's spendable
- * CREDIT balance; second accounts for the USD paid. The cash splits: backing value goes to
- * TRUST_CASH (real cash held to cover the credits), and the buy-vs-backing gap (the platform spread,
- * ~40% on the example rates; see {@link Rates}) is recognized as USD revenue (REVENUE_USD). The CREDIT `REVENUE` account is
- * untouched, so it stays meaning transaction fees only. The external app-store cut and VAT happen
- * at the cash-in rail before this ledger sees the purchase and aren't modelled.
+ * Two ledger postings, since one posting can't mix currencies: one raises the buyer's spendable
+ * CREDIT balance, one accounts for the USD paid (backing to TRUST_CASH, buy-vs-par spread to
+ * REVENUE_USD). The CREDIT `REVENUE` account stays untouched, so it keeps meaning transaction fees
+ * only.
  *
  * @example
  *   let outcome = await topUp(
@@ -35,6 +33,8 @@ import type { Rate, Unit } from '#src/ports.ts';
  *     unit, ctx,
  *   );
  *   // outcome.status === 'committed'; spendable(usr_buyer) rose by 1000, REVENUE untouched.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/top-up/ Top-up} for how purchases split into backing and revenue.
  */
 export async function topUp(
   operation: Operation,
@@ -47,17 +47,13 @@ export async function topUp(
   requireSource(operation.source);
   let amount = positiveCredit(operation.amount, 'topUp.amount');
 
-  // Two rates: `buy` is what the user pays per credit (≈120 credits/USD); `par` is each credit's
-  // backing/cash-out value (≈200/USD). The cash splits into the backing (held in trust) and the
-  // buy-vs-par gap (the platform spread, ~40% on the example rates; see {@link Rates}), recognized
-  // as USD revenue.
+  // `buy` is what the user pays per credit; `par` is each credit's backing/cash-out value. The cash
+  // splits into backing (held in trust) and the buy-vs-par spread (recognized as USD revenue).
   //
-  // Both conversions round up (ceil), for two reasons. (1) Backing must round up: the backing check
-  // values the whole spendable balance at par as one floor, `floor(total × par)`, so a per-top-up
-  // floor would under-cover by the dropped fractions and the books would read unbacked
-  // (Σ floor(Nᵢ·par) can be < floor(ΣNᵢ·par)). Ceiling each deposit keeps trust cash covering the
-  // requirement. (2) Gross rounds up to match, so `buy ≥ par` keeps margin ≥ 0. Cost: the buyer
-  // pays at most one minor unit over the exact price.
+  // Both conversions round up (ceil). Backing must: the backing check values the whole spendable
+  // balance at par as one floor, `floor(total × par)`, so a per-top-up floor would under-cover by
+  // the dropped fractions and read unbacked (Σ floor(Nᵢ·par) can be < floor(ΣNᵢ·par)). Gross rounds
+  // up to match so `buy ≥ par` keeps margin ≥ 0; cost is the buyer pays at most one minor unit over.
   let buy = ctx.rates.buy('CREDIT');
   let par = ctx.rates.par('CREDIT');
   let grossUsd = convertCeil(amount, buy, 'USD'); // what the buyer paid

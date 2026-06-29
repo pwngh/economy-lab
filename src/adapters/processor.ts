@@ -60,6 +60,8 @@ export interface HttpProcessorConfig {
  * It reads back the provider's reference id. A failed send or non-2xx status is a
  * retryable failure. A 2xx with no reference id is non-retryable: the money may already
  * have been sent, so retrying could pay twice; reconciliation resolves the ambiguity.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for how the payout port plugs into the ledger.
  */
 export function httpProcessor(config: HttpProcessorConfig): Processor {
   let doFetch = config.fetch ?? (globalThis.fetch as unknown as FetchLike);

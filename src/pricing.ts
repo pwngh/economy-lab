@@ -33,6 +33,8 @@ let BPS_TOTAL_BIG = 10_000n;
  *     recipients: [{ sellerId: 'usr_seller', shareBps: 10000 }] });
  *   // Price 1000, 30% fee: seller credited 700, revenue credited 300. Both are credits
  *   // (stored negative), so the lines sum to -1000 (the full price).
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/pricing/ Pricing} for how fee policies split a sale into ledger lines.
  */
 export function flatFee(): FeePolicy {
   return (input) => splitLegs(input.price, input.recipients, input.feeBps);

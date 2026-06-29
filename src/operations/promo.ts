@@ -19,8 +19,7 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Unit } from '#src/ports.ts';
 
 /**
- * Issue marketing promo credits to a user. Posts one balanced entry: raise the user's promo
- * balance by the granted amount, offset by an equal entry on the platform's PROMO_FLOAT account.
+ * Issue marketing promo credits to a user.
  *
  * Promo credits need no USD backing (unlike topped-up money), so a grant can't increase the cash
  * held in trust. Spendable but never cashed out (only earned credits pay out). `expiresAt` is
@@ -33,6 +32,8 @@ import type { Unit } from '#src/ports.ts';
  *     unit, ctx,
  *   );
  *   // outcome.status === 'committed'; promo(usr_buyer) rose by 500, offset by PROMO_FLOAT.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/grant-promo/ Grant promo} for issuing unbacked, expiring marketing credits.
  */
 export async function grantPromo(
   operation: Operation,

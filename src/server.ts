@@ -77,6 +77,8 @@ let TIMESTAMP_HEADER = 'x-timestamp';
  *
  * On a thrown {@link EconomyError}, {@link statusFor} maps it to a status code and only the error's
  * `message` is returned, never its internals.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for the routes, codec, and webhook gate.
  */
 export function createServer(
   economy: Economy,
@@ -251,12 +253,10 @@ async function webhookRoute(
   }
 }
 
-// Stops an already-processed provider event from being applied twice. Active only when a replay
-// store is wired; without one the path is a bare pass-through and the host dedups. The body is
-// parsed into a typed WebhookEvent (reusing the decimal-string money encoding, so a money `amount`
-// survives the round trip) only to read and claim its `eventId`; the handler still gets the raw
-// verified bytes. Returns a Response to send immediately (200 "duplicate" or an error), or null
-// when the event is new (or no store is configured) and the caller runs the handler.
+// Claim the provider `eventId` so an already-processed event can't run twice (see webhookRoute
+// step 3); a no-op when no replay store is wired. Decodes the body into a typed WebhookEvent only to
+// read its `eventId`; the handler still gets the raw verified bytes. Returns a Response to send
+// immediately (200 "duplicate" or an error), or null when the event is new and the caller runs.
 async function replayGate(
   options: ServerOptions,
   provider: string,

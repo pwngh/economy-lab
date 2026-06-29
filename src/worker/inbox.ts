@@ -63,6 +63,8 @@ type Applier = Pick<Economy, 'submit'>;
  * committed but `markApplied` did not), so exactly-once rests on the stored Operation's
  * idempotencyKey — the provider event id, the same value the row deduped on — which makes a re-apply
  * resolve to the same money move (a `duplicate` Outcome) rather than a second posting.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how inbox draining fits the sweep loop.
  */
 export async function drainInbox(
   store: Store,

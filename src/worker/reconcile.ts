@@ -56,6 +56,8 @@ type ReconcileTally = {
  * Clean match → `reconciled`; mismatches → `drifted` (normal result); feed pull throws →
  * `failed`. Windows are handled independently, so one unreachable feed fails only its own
  * window and the rest of the batch still runs.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how the worker schedules and sweeps reconciliation windows.
  */
 export async function reconcileDueWindows(
   feed: ReconcileFeed,

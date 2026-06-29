@@ -31,16 +31,16 @@ export type MaturityOptions = { config: Config; signal?: AbortSignal };
  */
 export type MaturedAtLeastOptions = MaturityOptions & { amount: Amount };
 
-// Horizon lookup key for an unrecognized funding source. loadConfig sets 'default'
-// to the same (long) horizon as a card, so an unknown source never settles faster
-// than a card.
+// Horizon lookup key for an unrecognized funding source. The 'default' horizon is
+// configured independently (MATURITY_HORIZON_DEFAULT_MS), only coinciding with the card
+// horizon under the shipped defaults, so an unknown source settles on its own conservative wait.
 let DEFAULT_SOURCE: string = 'default';
 
 /**
  * Wait (ms) before credits from a funding source can be cashed out, covering the
  * window in which the payment could still be reversed (e.g. a card chargeback).
- * Sources not in the config fall back to the 'default' (card) horizon, so an
- * unknown or misspelled source is treated cautiously rather than instantly available.
+ * Sources not in the config fall back to the 'default' horizon, so an unknown or
+ * misspelled source is treated cautiously rather than instantly available.
  */
 export function maturityHorizonMs(source: string, config: Config): number {
   let horizons = config.maturityHorizonMs;
@@ -86,6 +86,9 @@ let TAIL_PAGE = 64;
  * old `fifoTail` split it.
  *
  * Currency-agnostic, so the same call covers spendable credits and a seller's earned balance.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/lifecycles/ Lifecycles} for the
+ * settlement window and chargeback maturity model these cleared-funds checks gate on.
  */
 export async function maturedBalance(
   ledger: Ledger,

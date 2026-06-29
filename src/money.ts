@@ -24,6 +24,8 @@ export type Currency = 'CREDIT' | 'USD';
  *
  * `__brand` makes a plain `{ currency, minor }` unassignable to `Amount`, forcing every
  * amount through `toAmount` / `decodeAmount` so the rules here can't be bypassed.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/money-model/ The money model} for the exact-integer minor-unit design.
  */
 export type Amount = {
   readonly currency: Currency;

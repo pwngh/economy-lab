@@ -168,9 +168,8 @@ async function* streamHeads(
 
 // Every account with a cached running balance, one at a time. (The per-account balance is
 // a cache; the entries are the source of truth, and the cached figure can fall out of
-// sync.) Like `heads`, all rows come in one response and are yielded one by one; account
-// ids are plain strings re-branded as AccountRef on arrival (no amount crosses the wire,
-// so no amount codec needed).
+// sync.) Account ids are plain strings re-branded as AccountRef on arrival (no amount
+// crosses the wire, so no amount codec needed).
 async function* streamBalanceAccounts(
   transport: { fetch: FetchLike; baseUrl: string },
   session: string,
@@ -224,10 +223,9 @@ async function* streamLineage(
   }
 }
 
-// Every committed posting, newest first, one at a time. Like the other streamed reads, the server
-// returns them in one response and this yields them in order; each row carries its legs' amounts,
-// so it runs back through the wire codec (decodeWire.posting), unlike the amount-free `heads` and
-// `balanceAccounts` streams.
+// Every committed posting, newest first, one at a time. Each row carries its legs' amounts,
+// so it runs back through the wire codec (decodeWire.posting), unlike the amount-free `heads`
+// and `balanceAccounts` streams.
 async function* streamPostings(
   transport: { fetch: FetchLike; baseUrl: string },
   session: string,
@@ -629,6 +627,8 @@ function sessionUnit(
  * creates an in-process server ({@link createStoreServer}) over a fresh in-memory store
  * and points the client at it, so a bare `httpStore()` is a complete, working Store that
  * needs no running service or network.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for how this HTTP backend implements the storage port.
  */
 export function httpStore(options?: HttpStoreOptions): Store {
   let backing = memoryStore();

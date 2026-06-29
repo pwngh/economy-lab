@@ -120,6 +120,8 @@ function decodeAmounts(value: unknown): unknown {
 /**
  * Encode each domain record into a JSON-friendly wire shape. Amounts become decimal strings;
  * everything else copies through unchanged. One function per record type the adapter sends.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for how the store adapter ports move records over the wire.
  */
 export let encodeWire = {
   amount: encodeAmount,

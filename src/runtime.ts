@@ -85,11 +85,10 @@ let ED25519_PKCS8_HEADER = new Uint8Array([
   0x22, 0x04, 0x20,
 ]);
 
-// Derive a deterministic Ed25519 key pair from secret key material. The secret (any length) is
-// SHA-256'd to a 32-byte seed and imported as the private (signing) key; the public (verifying)
-// key is recovered by exporting the private key's JWK and re-importing just its public coordinate.
-// The same secret always yields the same pair, so checkpoints verify reproducibly, and the public
-// key can be published so an external auditor can verify a checkpoint without the secret.
+// Derive a deterministic Ed25519 key pair from secret key material: the secret (any length) is
+// SHA-256'd to a 32-byte seed for the private key, and the public key is recovered from the
+// private key's JWK. The same secret always yields the same pair, so checkpoints verify
+// reproducibly and the public key can be published for an external auditor.
 async function ed25519KeyPair(
   secret: string,
 ): Promise<{ privateKey: CryptoKey; publicKey: CryptoKey }> {
@@ -118,8 +117,7 @@ async function ed25519KeyPair(
 }
 
 /**
- * Production signer. Signs bytes with Ed25519: the secret derives a private key producing 64-byte
- * signatures, and the public key verifies them, so an auditor can confirm a checkpoint wasn't
+ * Production signer. Signs bytes with Ed25519 so an auditor can confirm a checkpoint wasn't
  * rewritten using only the published public key.
  *
  * `sign` always uses the current key. `verify` accepts a signature from the current key or any
@@ -128,6 +126,8 @@ async function ed25519KeyPair(
  *
  * Both work on raw bytes. Hex encoding of keys and stored signatures happens at the storage
  * boundary, not here.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/signer/ Signer} for the signing and key-rotation contract.
  */
 export function systemSigner(options: {
   signingKey: string;

@@ -34,6 +34,8 @@ import type { Unit } from '#src/ports.ts';
  *     unit, ctx,
  *   );
  *   // outcome.status === 'committed'; unit.entitlements.owns('usr_owner', 'wrld_pass') === true.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/grant-entitlement/ Grant entitlement} for ownership records and grant attributes.
  */
 export async function grantEntitlement(
   operation: Operation,

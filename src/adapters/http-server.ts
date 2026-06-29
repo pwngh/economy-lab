@@ -112,12 +112,9 @@ async function ledgerRoute(
   return ledgerReadRoute(ledger, method, body);
 }
 
-// Remaining ledger reads, split out to keep each function short. `statement` is a page of an
-// account's entries; the rest stream rows one at a time instead of returning an array:
-// `heads` (each account with the latest hash in its tamper-evident chain), `timeline` (an
-// account's settlement lots: funds with the date each becomes payable), `lineage` (every
-// posting that touched an account, with hashes, to verify the chain was not altered), and `list`
-// (every posting in the ledger, newest first, with its full legs).
+// Remaining ledger reads, split out to keep each function short. `statement` returns one page;
+// `heads`, `timeline`, `lineage`, and `list` stream rows one at a time, so each collects into an
+// array here.
 async function ledgerReadRoute(
   ledger: Store['ledger'],
   method: string,
@@ -537,6 +534,8 @@ async function txDispatch(
  * Success sends `{ ok: true, body }`; a thrown handler sends `{ ok: false, error }` with the
  * message, always HTTP 200. The client re-throws on that shape, so a failed call rolls its
  * transaction back like an in-process call would.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for the request protocol and route map.
  */
 export function createStoreServer(
   backing: Store,

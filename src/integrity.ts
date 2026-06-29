@@ -74,6 +74,8 @@ type LedgerFold = {
  * @example
  *   let report = await proveEconomy(store, { rates: fixedRates(), digest });
  *   report.conserved && report.chainIntact; // the books balance and no entry was altered
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/the-proof/ The proof} for how the prover re-derives every invariant.
  */
 export async function proveEconomy(
   store: Store,
@@ -176,12 +178,10 @@ async function foldLedger(
 // Folds one account's entries into the per-currency conservation totals and returns that
 // account's balance re-derived from its legs (the value `ledger.balance` should match).
 //
-// Each statement entry's amount is already signed the way it changed this account's balance, so
-// summing them reproduces the materialized balance; that running sum is the returned derived
-// total. For the conservation fold, each account has a "normal" side it grows on (`isDebitNormal`
-// true for debit-growing accounts): a debit-normal entry already equals the original debit, a
-// credit-normal one needs its sign flipped to recover it. Summed across every account, those
-// signed amounts must come to zero in each currency if the books balance.
+// Each entry's amount is already signed the way it changed this account's balance, so summing
+// them reproduces the materialized balance (the returned derived total). For conservation,
+// recover the original debit by sign: debit-normal accounts (`isDebitNormal`) keep their sign,
+// credit-normal ones flip it; summed across all accounts these must reach zero per currency.
 async function accumulateLegs(
   ledger: Ledger,
   account: AccountRef,

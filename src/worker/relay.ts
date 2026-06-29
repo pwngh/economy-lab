@@ -44,6 +44,8 @@ type RelayTally = {
  * Each event is sent in its own try/catch, so one failure can't stop the batch; a failed event
  * is left undelivered and retried next run. Delivery can therefore happen more than once (e.g.
  * delivery succeeded but marking done did not), so the receiver must drop duplicates by event id.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for outbox relay run semantics and retries.
  */
 export async function relayOutbox(
   store: Store,

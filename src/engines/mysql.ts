@@ -227,14 +227,11 @@ async function advanceChain(
 // Write a posting and everything derived from it: the posting row, all legs, one chain-link row
 // per distinct account touched (old and new chain hashes), and the per-leg balance update.
 //
-// Legs and chain links are stored at different granularity on purpose. A posting may have several
-// legs to one account (e.g. a promo-funded spend) but advances that account's chain only once.
-// Every leg is stored because re-deriving an account's hash later (lineageOf) needs the full leg
-// set, kept identical to the in-memory adapter. The chain link is stored once per account, not per
-// leg, because the database enforces that a given previous-hash may be extended only once: per-leg
-// links would make a legitimate second leg to the same account look like a second extension of the
-// same previous hash and be rejected. advanceChain already returns one link per distinct account,
-// so `links` matches chain_links exactly.
+// Legs are stored per-leg (lineageOf re-derives a hash from the full leg set), but chain links are
+// stored once per distinct account, not per leg: the DB lets a given previous-hash be extended only
+// once, so a per-leg link would make a legitimate second leg to the same account look like a second
+// extension of the same prev-hash and be rejected. advanceChain already returns one link per
+// distinct account, so `links` matches chain_links exactly.
 async function insertPosting(
   deps: ExecDeps,
   posting: Posting,
@@ -1549,6 +1546,8 @@ function buildUnit(deps: ExecDeps): Unit {
  *
  * The hashing and clock services default to the deterministic web-standard ones, so `mysqlStore({
  * pool })` produces reproducible results.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for the store and outbox/inbox ports this backs.
  */
 export function mysqlStore(deps: {
   pool: MysqlPool;

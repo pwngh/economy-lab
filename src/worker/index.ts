@@ -48,21 +48,11 @@ import type { ReconcileFeed, ReconcileSummary } from '#src/worker/reconcile.ts';
  * these literals are the sole definition. `as const` (freezing the array, keeping literal types)
  * rather than an enum.
  *
- * Array order is run order and result order.
- *
- * `feeSweep` follows `treasury`: treasury only reads (measures the platform's surplus, the cash
- * held beyond what it owes users); feeSweep moves that surplus into platform funds. Keep the
- * measure-then-move pair adjacent.
- *
- * `checkpointVerify` runs before `checkpoint`. A checkpoint is a sealed ledger snapshot used to
- * detect tampering. Verify re-checks the previous snapshot against the current ledger before a
- * fresh one overwrites it; checking the old snapshot catches tampering since it was sealed,
- * whereas a just-taken snapshot always passes (built from the ledger it's compared against).
- * `promos` runs with the other due-item sweeps.
- *
- * `drainInbox` is the inbound mirror of `relay` (outbound event delivery vs. inbound event apply),
- * placed next to it. It submits each received provider event through the economy, so it can post
- * money — but it's never gated on the pause, so settlements keep flowing during a maintenance window.
+ * Array order is run order and result order, and the order is load-bearing: `feeSweep` follows
+ * `treasury` (measure surplus, then move it — keep the pair adjacent); `checkpointVerify` runs
+ * before `checkpoint` (re-check the old sealed snapshot before a fresh one overwrites it — a
+ * just-taken snapshot always passes); `drainInbox` sits next to its outbound mirror `relay` and is
+ * never gated on the pause, so settlements keep flowing during a maintenance window.
  */
 export const SWEEP_NAMES = [
   'payouts',
@@ -238,6 +228,8 @@ async function isolate<TSummary>(
  * With a `scheduler`, also gets `start(intervalMs, input)`, which runs the jobs every
  * `intervalMs` ms via that scheduler and returns a stop function. Using the scheduler rather
  * than a built-in timer keeps start and stop on the same code path.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for the sweep cycle, ordering, and isolation model.
  */
 export function createWorker(
   store: Store,

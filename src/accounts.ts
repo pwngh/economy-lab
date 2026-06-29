@@ -17,6 +17,8 @@ import type { Operation } from '#src/contract.ts';
 /**
  * The three kinds of account a single user can have. A category, not a currency; the currency
  * of any money movement comes from the amount's own `Currency`.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/ Accounts & double-entry} for how these accounts and their normal sides balance.
  */
 export type AccountKind = 'spendable' | 'earned' | 'promo';
 
@@ -81,13 +83,9 @@ export const SYSTEM = {
   // An external counter mirroring cash that has cleared in or out of TRUST_CASH. Debit-normal, in USD.
   USD_CLEARING: 'platform:usd_clearing' as AccountRef,
 
-  // The platform's USD profit from the purchase spread. A user buys at the buy rate
-  // (≈120 credits/USD) but each credit is backed only at its payout-floor (par) value
-  // (≈200 credits/USD). That buy-par gap is the platform spread (≈40% in the example rates;
-  // see {@link Rates}) and is recognized here at top-up. It's the platform's own money,
-  // not held in trust, so it stays out of the backing total. Debit-normal, in USD. (App-store cut
-  // and VAT aren't modelled here; they happen at the cash-in rail before the ledger sees the
-  // purchase.)
+  // The platform's USD profit from the buy-par spread (see {@link Rates}), recognized here at
+  // top-up. It's the platform's own money, not held in trust, so it stays out of the backing
+  // total. Debit-normal, in USD.
   REVENUE_USD: 'platform:revenue_usd' as AccountRef,
 
   // The offsetting entry used when seeding starting balances on a fresh (cold-start) system.

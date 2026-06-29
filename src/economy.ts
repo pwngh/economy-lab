@@ -69,6 +69,9 @@ type Registry = Partial<Record<Operation['kind'], Handler>>;
  * @example
  * const economy = createEconomy(capabilities);
  * const outcome = await economy.submit(operation);
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy} for the
+ * construction, the submit/read surface, and the request path.
  */
 export function createEconomy(capabilities: Capabilities): Economy {
   let store = capabilities.store;
@@ -216,11 +219,9 @@ function amountFromCache(encoded: string): Amount {
 // Run one operation end to end. Order matters:
 //   1. authorize first, so a forbidden request is rejected before any work;
 //   2. then do the money work in one all-or-nothing transaction (see `runOnion`).
-// The risk-velocity attempt is recorded inside that transaction's `screenRisk` step (via the trust
-// store's atomic `record`, serialized per subject, not undone by a rollback), so it counts at check
-// time. This closes the velocity-limit TOCTOU: the old design read the windowed total before the
-// work and bumped it after the commit, so N concurrent same-subject submits all read the same
-// pre-bump total and slipped past the limit.
+// The risk-velocity attempt is recorded inside that transaction's `screenRisk` step, where a
+// per-subject atomic record (not undone by a rollback) closes the velocity-limit TOCTOU — see
+// `screenRisk` for why recording at check time, not after the commit, is what prevents the bypass.
 async function submit(
   pipeline: Pipeline,
   operation: Operation,
@@ -692,10 +693,8 @@ async function foldLedger(store: Store): Promise<LedgerFold> {
   for await (let [account, head] of store.ledger.heads()) {
     let bal = await store.ledger.balance(account);
     let cur = currency(account);
-    // Recompute this account's balance by summing its recorded entries (each already signed the way it
-    // changed this account), so the conservation total is built from source-of-truth entries, not the
-    // cached running balance. Compared just below to catch a cached balance that no longer matches its
-    // entries.
+    // Recompute from the recorded entries (the source of truth), not the cached running balance;
+    // compared just below to flag an account whose cached balance has drifted from its entries.
     let derivedMinor = await deriveBalanceMinor(store, account);
     let sign = isDebitNormal(account) ? 1n : -1n;
     signedByCurrency.set(
@@ -719,10 +718,10 @@ async function foldLedger(store: Store): Promise<LedgerFold> {
       chainIntact = false;
     }
   }
-  // TODO: only accounts that have been posted to (the ones heads() returns) are checked here. A
-  // stored balance row with no backing posting would slip through. The thorough prover already
-  // covers this via ledger.balanceAccounts() (see integrity.ts foldLedger, R33); port that pass
-  // here if this prover needs the same guarantee.
+  // This lighter prover only visits accounts that have been posted to (what heads() returns), so a
+  // stored balance row with no backing posting would slip past it. The thorough prover closes that
+  // gap via ledger.balanceAccounts() (integrity.ts foldLedger, R33); read.prove() intentionally
+  // trades that guarantee for speed, so it isn't ported here unless this prover ever needs it.
   return {
     signedByCurrency,
     custodialCredit,
@@ -815,11 +814,9 @@ let RESTRICTED_TO_PRIVILEGED = new Set<Operation['kind']>([
   // refund makes the buyer whole by debiting the seller's earned balance — self-serve is a fraud
   // vector; platform-initiated only.
   'refund',
-  // A bank chargeback / fraud recovery: reclaims credits from a user's spendable balance and, for an
-  // order-tied chargeback, claims the shared `reversed:${orderId}` key (which would block a later
-  // legitimate refund of that order). It takes money out of an account the actor need not own (the
-  // ownership rule below doesn't cover it), so like adjust and reverse it must be a system service or
-  // operator, never an end user.
+  // A bank chargeback / fraud recovery: reclaims credits from a user's spendable balance — money out
+  // of an account the actor need not own, which the ownership rule below can't catch — so like adjust
+  // and reverse it's system-or-operator only, never an end user.
   'clawback',
   // A manual payout reversal hands the reserved credits back to the seller and force-fails a payout
   // already in flight. An emergency action run by hand, never by an end user, so like adjust and

@@ -35,6 +35,8 @@ import type { Saga, Unit } from '#src/ports.ts';
  *
  * Only earned credit is payable; it's paid as USD on settle and never made spendable in-app.
  * The two ledger lines posted here are both CREDIT and cancel out; the worker posts USD later.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/request-payout/ Request payout} for the full payout request lifecycle.
  */
 export async function requestPayout(
   operation: Operation,

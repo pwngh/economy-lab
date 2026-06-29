@@ -56,6 +56,8 @@ type SweepTally = {
  * so an error on one is recorded and the sweep moves on.
  *
  * `now` is epoch ms; `limit` caps how many due subscriptions this run claims.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how this sweep claims, bills, and advances due subscriptions.
  */
 export async function sweepDueSubscriptions(
   store: Store,

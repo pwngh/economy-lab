@@ -72,10 +72,11 @@ export async function lockAll(
 }
 
 /**
- * Validate a posting, then write it. Four checks before the write: each leg's currency
- * matches its account, leg amounts sum to zero per currency, every account exists, and no
- * user account goes negative. The database enforces these too; these are a second line of
- * defense. Only the write advances each account's hash chain and updates running balances.
+ * Validate a posting, then write it. Four pre-write checks (currency match, balanced,
+ * accounts exist, no user overdraft) are a courtesy second line of defense; the database
+ * enforces them too. Only the write advances each account's hash chain and running balances.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/ Accounts & double-entry} for the posting model these checks enforce.
  */
 export async function postEntry(
   ledger: Ledger,
@@ -193,8 +194,7 @@ function assertSingleCurrencyPerLeg(posting: Posting): void {
   }
 }
 
-// A posting balances when leg amounts sum to zero per currency (debit-positive, so debits
-// and credits cancel). Any nonzero currency total means it's unbalanced; reject.
+// A posting balances when leg amounts sum to zero per currency; any nonzero total is rejected.
 //
 // Courtesy pre-check, not the enforcer. Conservation is enforced by the database (PG: a deferred
 // constraint trigger on legs; MySQL: the assert inside post_entry plus revoked direct DML — see

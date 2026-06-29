@@ -77,7 +77,12 @@ export interface Digest {
   hash(bytes: Uint8Array): Promise<Uint8Array>;
 }
 
-/** Signs bytes and checks signatures, used to vouch for ledger checkpoints. */
+/**
+ * Signs bytes and checks signatures, used to vouch for ledger checkpoints.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/signer/ Signer} for the contract,
+ * the reference adapter, and key rotation.
+ */
 export interface Signer {
   sign(bytes: Uint8Array): Promise<Uint8Array>;
 
@@ -120,6 +125,9 @@ export type Dispatcher = (
 /**
  * External payment provider that pays sellers (e.g. a payout processor or payment rail). All money
  * leaving the platform goes through this.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for the seam,
+ * the Thunes adapter, and dispute webhooks.
  */
 export interface Processor {
   // Pay a user. `amount` is in real USD. `key` makes the request safe to retry without paying
@@ -145,6 +153,9 @@ export interface Processor {
  *
  * The rates hold `buy >= par >= payout`. The buy-par gap is the platform spread (the platform's
  * margin, e.g. ~40%): it funds platform fees, payment processing, reserves, and operating margin.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/rates/ Rates} for the port and its
+ * configured adapter.
  */
 export interface Rates {
   // Settlement rate to convert one currency to another at a point in time, mainly CREDIT to USD on
@@ -191,7 +202,12 @@ export interface Meter {
   observe(name: string, value: number, tags?: Record<string, string>): void;
 }
 
-/** The append-only double-entry ledger: records money movements, reads back balances and history. */
+/**
+ * The append-only double-entry ledger: records money movements, reads back balances and history.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/ Accounts & double-entry}
+ * for postings, legs, and the chart of accounts.
+ */
 export interface Ledger {
   hasAccount(account: AccountRef, options?: Options): Promise<boolean>;
 
@@ -258,6 +274,9 @@ export interface Ledger {
 /**
  * The full set of stores the system reads and writes. `transaction` runs a block of work
  * with all of these committing atomically (all or nothing).
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging}
+ * for the sub-stores, the outbox/inbox, and the adapters.
  */
 export interface Store {
   ledger: Ledger;
@@ -769,6 +788,9 @@ export interface Sale {
 /**
  * The states a payout saga moves through, from request to settled (or failed). A plain readonly
  * array of strings rather than a TypeScript enum.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/lifecycles/ Lifecycles} for the
+ * payout saga and subscription state machines.
  */
 export const SAGA_STATES = [
   'REQUESTED',
@@ -909,6 +931,9 @@ export interface Attempt {
  * single Merkle root (one hash that changes if any account's chain changes) and signs that, so
  * the snapshot covers every account at once. Meant to be anchored outside this system for
  * independent proof.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for the
+ * hash chain and signed-checkpoint construction.
  */
 export interface Checkpoint {
   // Unique checkpoint id, of the form chk_<uuid>.

@@ -41,10 +41,10 @@ type SettleTally = {
 /**
  * Advance a batch of due payouts one step each, then report the outcomes.
  *
- * A payout pays out over several steps spread across time, tracked as a "saga". This
- * background job claims the payouts whose next step is due and pushes each one forward.
- * Each runs in its own error boundary, so one broken payout can't stop the others: a
- * permanent failure is set aside and the batch continues.
+ * A payout runs as a multi-step saga; this job claims the ones whose next step is due and pushes
+ * each forward in its own error boundary, so one broken payout can't stop the others.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how this sweep claims and advances due payouts.
  */
 export async function settleDuePayouts(
   store: Store,
@@ -204,15 +204,11 @@ async function driveTransition(
     return;
   }
   if (saga.state === 'SUBMITTED') {
-    // The worker no longer self-settles a SUBMITTED payout; settlement arrives through the
-    // provider's settlement webhook instead (src/operations/settlePayout.ts). The sweep only steps
-    // in when the webhook never comes: a payout submitted to the provider that never reports back
-    // can't settle, and without a cutoff it would sit in SUBMITTED forever, stranding the seller's
-    // reserved credits. Once it has waited longer than `maxPayoutAgeMs` (from `updatedAt`, set on
-    // entry to SUBMITTED in submitToProvider), force-fail it. The shared dead-letter helper flips it
-    // to FAILED and, in the same transaction, posts the compensating reversal returning the reserve
-    // to the seller, so a timed-out payout is never paid and never strands the reserve. A SUBMITTED
-    // payout still within the age window is left untouched this run, waiting on the webhook.
+    // The webhook settles SUBMITTED payouts (src/operations/settlePayout.ts); the sweep only steps
+    // in when it never comes, so the reserve isn't stranded in SUBMITTED forever. Force-fail once it
+    // has waited past `maxPayoutAgeMs` (from `updatedAt`, set on entry to SUBMITTED in
+    // submitToProvider): deadLetter flips to FAILED and posts the compensating reversal in one
+    // transaction, so a timed-out payout is never paid. Within the window, leave it for the webhook.
     if (ctx.clock.now() - saga.updatedAt > ctx.config.maxPayoutAgeMs) {
       if (await deadLetter(store, ctx, saga, PAYOUT_TIMEOUT_REASON)) {
         tally.deadLettered.push({ id: saga.id, reason: PAYOUT_TIMEOUT_REASON });

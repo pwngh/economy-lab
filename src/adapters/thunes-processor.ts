@@ -12,25 +12,15 @@
 /**
  * A {@link Processor} backed by the Thunes Money Transfer v2 API (the cross-border payout rail).
  *
- * economy-lab's payout seam is one call — `submitPayout({ key, userId, amount }) -> { providerRef }`
- * — but Thunes Money Transfer is a three-step flow: create a **quotation** (lock the FX rate), create
- * a **transaction** against it (name the beneficiary / credit party), then **confirm** the
- * transaction (the money-movement boundary). This adapter hides that orchestration behind the single
- * port method, returning the Thunes transaction id as the `providerRef`.
+ * Hides Thunes' three-step flow (quotation -> transaction -> confirm, where confirm is the
+ * money-movement boundary) behind the single port method, returning the transaction id as
+ * `providerRef`. Settlement comes back via {@link decodeThunesPayoutCallback}.
  *
- * Idempotency rides on `external_id`, which Thunes treats as the partner's dedupe handle (a reused id
- * is rejected, doc error `1007001`). The worker passes the payout saga id as `key`, so this sets
- * `external_id = key` on the quotation and transaction; that makes the *whole* flow safe to re-run —
- * the worker (`src/worker/payouts.ts`) owns retry/backoff/attempt-capping, so this adapter is a single
- * attempt that throws a retryable {@link ERROR_CODES.PROVIDER_FAILURE} on a transient failure and lets
- * the worker try the next sweep. On a re-run it recovers the already-created transaction (`1007001`)
- * and treats an already-confirmed transaction (`1007002`) as success, so a retried payout never pays
- * twice and never strands the seller's reserve.
- *
- * Settlement comes back the other way: Thunes POSTs the full transaction object to a callback URL on
- * each status change (it is self-describing, unlike the Collection API's ping-only callback). The
- * webhook edge maps that to the existing `PayoutSettledEvent` -> `settlePayout` path via
- * {@link decodeThunesPayoutCallback}, so the inbound half reuses economy-lab's pipeline unchanged.
+ * Idempotency rides on `external_id = key` (the payout saga id): the worker (`src/worker/payouts.ts`)
+ * owns retry/backoff/attempt-capping, so this is a single attempt that throws a retryable
+ * {@link ERROR_CODES.PROVIDER_FAILURE} on transient failure. On re-run it recovers the already-created
+ * transaction (`1007001`) and treats an already-confirmed transaction (`1007002`) as success, so a
+ * retried payout never pays twice and never strands the seller's reserve.
  */
 
 import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
@@ -122,6 +112,8 @@ const ALREADY_CONFIRMED = '1007002';
 /**
  * Build a {@link Processor} that pays creators over the Thunes Money Transfer v2 rail. It asks Thunes
  * to send money (quotation -> transaction -> confirm); it does not touch our ledger.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for the payout-rail seam and dispute handling.
  */
 export function thunesProcessor(config: ThunesProcessorConfig): Processor {
   let doFetch = config.fetch ?? (globalThis.fetch as unknown as FetchLike);

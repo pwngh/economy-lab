@@ -20,16 +20,11 @@ import type { Saga, Unit } from '#src/ports.ts';
  * Undo an in-flight payout by hand. Manual version of the undo the background payout worker
  * does automatically when it gives up.
  *
- * A payout is tracked by a saga (REQUESTED, RESERVED, SUBMITTED, SETTLED, FAILED). Requesting
- * a payout moved the seller's earned credits into PAYOUT_RESERVE; left alone the worker pays
- * them out. To pull it back, the saga must reach FAILED (so the worker never pays it) and the
- * reserve must return to the seller's earned account. Both happen in one transaction via the
- * same guarded state change the worker uses, so the credits return only if the saga also stops.
- *
- * Not the generic `reverse`: `reverse` posts the opposite entry of a named transaction but
- * leaves saga state alone, so reversing a RESERVED payout's reservation would leave it RESERVED
- * and the worker would still pay it (seller gets the money back and the payout goes through).
- * Here the FAILED transition and the undo posting commit together.
+ * The saga's FAILED transition (so the worker never pays it) and the undo posting (reserve back
+ * to the seller's earned account) commit together in one transaction, so the credits return only
+ * if the saga also stops. Not the generic `reverse`, which posts the opposite entry but leaves
+ * saga state alone: reversing a RESERVED reservation would leave it RESERVED and the worker would
+ * still pay it, so the seller would get the money back and the payout would go through anyway.
  *
  * Refusals and edge cases:
  * - SETTLED → throws `INVALID_TRANSITION`: already paid out real money, no reserve left to
@@ -56,6 +51,8 @@ import type { Saga, Unit } from '#src/ports.ts';
  *     unit, ctx,
  *   );
  *   // outcome.status === 'committed'; the reserve returned to usr_seller's earned, saga FAILED.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/reverse-payout/ Reverse payout} for manually unwinding an in-flight payout saga.
  */
 export async function reversePayout(
   operation: Operation,

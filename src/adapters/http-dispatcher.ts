@@ -43,6 +43,8 @@ export interface HttpDispatcherConfig {
  * redelivers later with backoff. Since retries can duplicate, the event id goes in an
  * `Idempotency-Key` header for the receiver to dedupe (SQS does the same via
  * `MessageDeduplicationId`).
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for how events leave the lab.
  */
 export function httpDispatcher(config: HttpDispatcherConfig): Dispatcher {
   let send = config.fetch ?? fetch;

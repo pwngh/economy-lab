@@ -40,6 +40,8 @@ import type { Rate, Saga, SagaState, Unit } from '#src/ports.ts';
  * - Lost the SUBMITTED -> SETTLED compare-and-set (another worker/settle got there first) →
  *   `assertAdvanced` throws INVALID_TRANSITION, rolling back the two postings and the event so the
  *   seller is never paid twice.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/settle-payout/ Settle payout} for the webhook-driven SUBMITTED to SETTLED settlement step.
  */
 export async function settlePayout(
   operation: Operation,
@@ -56,11 +58,9 @@ export async function settlePayout(
   // --- The worker's settle, computed identically (src/worker/payouts.ts `settle`). ---
   let rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
   let usd = convert(saga.reserve, rate, 'USD');
-  // The payout-rail fee (the rail's processing cut, e.g. a payment processor at ≈1.5%, see
-  // config.payoutFeeBps) is the rail's cut of the disbursement, not the platform's revenue: the
-  // gross `usd` leaves the trust account, the rail keeps `fee`, the creator receives `net`. Fee +
-  // net are recorded for the audit trail; the split happens at the external rail, downstream of
-  // USD_CLEARING.
+  // The payout-rail fee (config.payoutFeeBps) is the rail's cut, not platform revenue: gross `usd`
+  // leaves trust, the rail keeps `fee`, the creator gets `net`. The split happens at the external
+  // rail downstream of USD_CLEARING, so fee/net are recorded for audit, not posted as legs.
   let fee = payoutFee(usd, ctx.config.payoutFeeBps);
   let net = toAmount('USD', usd.minor - fee.minor);
 

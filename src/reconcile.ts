@@ -140,6 +140,8 @@ export interface ReconcileInputs {
  * any surplus on either side surfaces as orphans on that side, so every record is accounted for
  * exactly once. A reconciler exists to catch the "shouldn't happen", so it must never silently drop
  * one — `report` self-checks that the counts reconstruct both sides.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how reconciliation runs on a schedule.
  */
 export function reconcile(
   window: Range,

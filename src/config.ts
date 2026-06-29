@@ -17,6 +17,8 @@ import { ERROR_CODES, fault } from '#src/errors.ts';
  * No module reads env vars itself; the startup program builds this once (via
  * {@link loadConfig}) and passes it in, so a misconfigured deploy fails at startup
  * rather than deep inside a request.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/configuration/ Configuration} for every tunable and its default.
  */
 export interface Config {
   /** Secret for verifying the HMAC signature on incoming webhook/settlement messages. */
