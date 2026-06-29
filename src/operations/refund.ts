@@ -10,7 +10,7 @@
  */
 
 import { fault, rejected, ERROR_CODES } from '#src/errors.ts';
-import { balanceDelta, postEntry } from '#src/ledger.ts';
+import { balanceDelta, lockAll, postEntry } from '#src/ledger.ts';
 import { toAmount } from '#src/money.ts';
 import { SYSTEM, isDebitNormal } from '#src/accounts.ts';
 
@@ -100,19 +100,18 @@ export async function refund(
   return { status: 'committed', transaction };
 }
 
-// Lock every account the reversing posting will touch, so no other writer changes those
-// balances between reading them (to decide how much to claw back) and posting. The request only
-// names an order id, so the framework can only lock the fixed system accounts; this fills the
-// gap by locking each account named in the recorded sale's lines (the buyer's accounts and each
-// seller's earned-balance account). RECEIVABLE is already locked by the framework for a refund.
+// Lock every account the reversing posting will touch, so no other writer changes those balances
+// between reading them (to decide how much to claw back) and posting. The request only names an
+// order id, so the framework can only lock the fixed system accounts; this fills the gap by locking
+// each account named in the recorded sale's lines (the buyer's accounts and each seller's
+// earned-balance account). Through `lockAll`, so they take the same deadlock-free global order as
+// every other lock-set, not the leg order they happen to appear in. RECEIVABLE is already
+// framework-locked here.
 async function extendLocks(unit: Unit, sale: Sale): Promise<void> {
-  let seen = new Set<AccountRef>();
-  for (let leg of sale.legs) {
-    if (!seen.has(leg.account)) {
-      seen.add(leg.account);
-      await unit.ledger.lock(leg.account);
-    }
-  }
+  await lockAll(
+    unit.ledger,
+    sale.legs.map((leg) => leg.account),
+  );
 }
 
 // Net balance change the sale made to one account, positive meaning the balance went up;

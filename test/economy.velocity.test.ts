@@ -78,6 +78,11 @@ function tally(outcomes: ReadonlyArray<Outcome>): {
   return { committed, riskDenied };
 }
 
+// The rejection reason of an outcome, or undefined if it committed or duplicated.
+function reasonOf(outcome: Outcome): string | undefined {
+  return outcome.status === 'rejected' ? outcome.reason : undefined;
+}
+
 // One attempt at the ceiling price, with its own idempotency key so each counts as distinct.
 function attemptAtLimit(i: number): Attempt {
   return {
@@ -167,5 +172,33 @@ describe('Velocity limit under concurrency', () => {
     let { committed, riskDenied } = tally(outcomes);
     assert.equal(committed, 1, 'exactly one sequential spend may commit');
     assert.equal(riskDenied, N - 1, 'the rest must be turned away for risk');
+  });
+
+  // Velocity is a fraud signal that must count "even for denied attempts" (README). screenRisk
+  // records the attempt at check time BEFORE screenFunds, so a burst of UNAFFORDABLE spends still
+  // accrues velocity: the first is turned away for funds (its attempt recorded, window now at the
+  // ceiling), the second trips RISK_DENIED. With the old funds-first order the unaffordable attempts
+  // recorded nothing, and the second was just another INSUFFICIENT_FUNDS — a broke attacker could
+  // hammer forever and never raise a flag.
+  test('unaffordable spends still accrue velocity, so a burst is risk-denied not just under-funded', async () => {
+    let economy = makeEconomy(1, undefined, {
+      velocityLimitMinor: PRICE_MINOR,
+    });
+    // usr_buyer is never funded, so every spend fails the funds check on its own.
+    let first = await economy.submit(spendAtLimit('ord_velocity_broke_1'));
+    let second = await economy.submit(spendAtLimit('ord_velocity_broke_2'));
+
+    assert.equal(
+      reasonOf(first),
+      'INSUFFICIENT_FUNDS',
+      'the first unaffordable spend is turned away for funds — but its attempt is still recorded',
+    );
+    assert.equal(
+      reasonOf(second),
+      'RISK_DENIED',
+      'the second trips velocity: the first unaffordable attempt counted toward the window',
+    );
+
+    await economy.close();
   });
 });

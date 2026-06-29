@@ -29,7 +29,9 @@ create table accounts (
   id         text        primary key,
   kind       text        not null check (kind in ('spendable', 'earned', 'promo', 'system')),
   currency   text        not null check (currency in ('CREDIT', 'USD')),
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  -- Lets legs carry a composite FK to (id, currency), so a leg's currency must match its account's.
+  unique (id, currency)
 );
 
 -- Platform accounts, inserted once. User accounts (`usr_<uuid>:<kind>`) are created on
@@ -67,9 +69,14 @@ create table postings (
 create table legs (
   id         bigserial   primary key,
   posting_id text        not null references postings (id),
-  account_id text        not null references accounts (id),
+  account_id text        not null,
   currency   text        not null check (currency in ('CREDIT', 'USD')),
-  amount     bigint      not null check (amount <> 0)
+  amount     bigint      not null check (amount <> 0),
+  -- A leg's currency must match its account's, enforced natively via a composite FK to
+  -- accounts(id, currency) (which carries a UNIQUE on those columns) — not just app-side. A raw
+  -- cross-currency leg (e.g. a balanced pair of USD legs on CREDIT accounts, which the per-currency
+  -- conservation check would let pass) is rejected here. Subsumes the plain account_id reference.
+  foreign key (account_id, currency) references accounts (id, currency)
 );
 -- Composite (account_id, id): the maturity tail reads an account's newest lots with
 -- `where account_id = ? order by id desc limit n` (src/engines, timelineOf). legs.id is a bigserial
@@ -550,4 +557,4 @@ create or replace trigger account_balances_integrity
 -- MySQL schema's matching insert, and in src/schema.ts together, whenever this file changes.
 -- ============================================================================
 create table schema_meta (version text not null);
-insert into schema_meta (version) values ('5');
+insert into schema_meta (version) values ('7');

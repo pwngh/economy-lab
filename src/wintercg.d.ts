@@ -32,6 +32,10 @@ declare let TextDecoder: { new (label?: string): TextDecoder };
 declare function structuredClone<T>(value: T): T;
 declare function queueMicrotask(callback: () => void): void;
 
+// base64 of a binary string. WinterCG Minimum Common API (Node 16+, Bun, Deno, CF Workers), so it
+// belongs to this cross-runtime subset; the Thunes adapter uses it to build the Basic-auth header.
+declare function btoa(data: string): string;
+
 // --- Cancellation -----------------------------------------------------------------
 
 interface AbortSignal {

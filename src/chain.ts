@@ -201,10 +201,11 @@ function recomputeLink(
  * (see `recordCheckpoint`) covers every account's chain in one signature.
  *
  * Two rules pin the result across machines. Leaves are sorted by account id char by char (not
- * locale-sensitive). The building blocks are fixed: each leaf is the hash of `account + ":" +
- * head`, and each pair is combined by hashing the two joined left-then-right, so swapping order
- * changes the result. With no accounts, the root is the genesis value (32 zero bytes), so a new
- * ledger still has a stable hash to sign.
+ * locale-sensitive). The building blocks are fixed: each leaf is the hash of a 0x00 tag plus
+ * `account + ":" + head`, and each pair of children is hashed under a 0x01 tag joined
+ * left-then-right, so swapping order changes the result. The two tags (RFC 6962) keep a leaf from
+ * ever being reinterpreted as an internal node. With no accounts, the root is the genesis value
+ * (32 zero bytes), so a new ledger still has a stable hash to sign.
  */
 export async function merkleRoot(
   digest: Digest,
@@ -328,11 +329,22 @@ function distinctAccounts(posting: Posting): AccountRef[] {
   return order;
 }
 
-// Bytes hashed into one Merkle leaf: "account:head" as UTF-8. No length marker, but the parts
-// can't run together ambiguously: an account id may contain ":" while a head hash is pure hex,
-// so the joining ":" is always the one that splits account from head.
+// RFC 6962 domain tags: a one-byte prefix that keeps a leaf's preimage out of the internal-node
+// domain, so no leaf can ever be reinterpreted as an interior left||right pair (second-preimage
+// defense). The two values just have to differ; 0x00 for leaves and 0x01 for nodes is the convention.
+const MERKLE_LEAF = 0x00;
+const MERKLE_NODE = 0x01;
+
+// Bytes hashed into one Merkle leaf: a 0x00 leaf tag, then "account:head" as UTF-8. The tag pairs
+// with the node tag (0x01) so the leaf and node domains never overlap. The ":" still splits the
+// parts unambiguously: an account id may contain ":" while a head hash is pure hex, so the joining
+// ":" is the one that separates account from head.
 function leafPreimage(account: AccountRef, head: string): Uint8Array {
-  return ENCODER.encode(`${account}:${head}`);
+  let body = ENCODER.encode(`${account}:${head}`);
+  let out = new Uint8Array(1 + body.length);
+  out[0] = MERKLE_LEAF;
+  out.set(body, 1);
+  return out;
 }
 
 // One row of Merkle hashes to the row above it: hash each adjacent pair into one hash. On an odd
@@ -346,17 +358,20 @@ async function combineLevel(
   for (let i = 0; i < level.length; i += 2) {
     let left = level[i]!;
     let right = level[i + 1];
-    next.push(right ? await digest.hash(concat(left, right)) : left);
+    next.push(right ? await digest.hash(nodePreimage(left, right)) : left);
   }
   return next;
 }
 
-// Join two hashes end to end (left, then right) into one byte array for the pair-hash above.
-// Both inputs are the same fixed length, so the split point is unambiguous.
-function concat(left: Uint8Array, right: Uint8Array): Uint8Array {
-  let out = new Uint8Array(left.length + right.length);
-  out.set(left, 0);
-  out.set(right, left.length);
+// Internal-node preimage: a 0x01 node tag, then the two child hashes end to end (left, then right).
+// The tag pairs with the leaf's 0x00 (RFC 6962) so the two domains never overlap. Both children are
+// the same fixed length, so the left/right split stays unambiguous and order matters: a swapped pair
+// changes the hash. (Odd levels carry the last child up untagged — see combineLevel.)
+function nodePreimage(left: Uint8Array, right: Uint8Array): Uint8Array {
+  let out = new Uint8Array(1 + left.length + right.length);
+  out[0] = MERKLE_NODE;
+  out.set(left, 1);
+  out.set(right, 1 + left.length);
   return out;
 }
 

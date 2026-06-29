@@ -22,7 +22,7 @@
  * whenever the schema changes: a new column, a renamed account id, an added index. Any edit that a
  * running database would need re-migrated to pick up should bump the version.
  */
-export const SCHEMA_VERSION = '5';
+export const SCHEMA_VERSION = '7';
 
 /**
  * Throw unless the database's stamped schema version matches this build's {@link SCHEMA_VERSION}.

@@ -238,6 +238,97 @@ function reportsCountsAndKeepsThemConsistentWithTheList(): void {
   assert.equal(report.reconciled, false);
 }
 
+// --- duplicate match keys: the "shouldn't happen" a reconciler exists to catch ------------------
+// matchKey is meant to be a unique join reference, so a repeat is corruption (e.g. a row double-
+// posted by an idempotency/race bug) — exactly what a reconciler must catch. These pin that each
+// duplicate is matched or orphaned EXACTLY ONCE on both sides, never silently dropped (the bug:
+// keeping only the first ledger record per key, which let a duplicate vanish and the report read
+// `reconciled: true`).
+
+// Two ledger records share a key, one processor record matches: one pairs up, the surplus ledger
+// record surfaces as a ledger orphan — not dropped, and the report is not a false all-clear.
+function surfacesADuplicateLedgerRecordAsAnOrphan(): void {
+  let amount = usd('5.00');
+  let report = reconcile(ALL_TIME, {
+    processor: [processorRecord({ matchKey: 'dup', amount })],
+    ledger: [
+      ledgerRecord({ matchKey: 'dup', amount }),
+      ledgerRecord({ matchKey: 'dup', amount }),
+    ],
+  });
+
+  assert.equal(report.matched, 1);
+  assert.equal(report.ledgerOrphans, 1);
+  assert.equal(report.reconciled, false);
+  // The surplus row is accounted for, not lost: matched + ledgerOrphans reconstruct the count.
+  assert.equal(report.matched + report.ledgerOrphans, report.ledgerCount);
+}
+
+// N duplicate ledger records, no processor side: all N surface as ledger orphans, not collapsed to
+// one (the old index kept only the first).
+function surfacesEveryDuplicateLedgerOrphan(): void {
+  let amount = usd('3.00');
+  let report = reconcile(ALL_TIME, {
+    processor: [],
+    ledger: [
+      ledgerRecord({ matchKey: 'dup', amount }),
+      ledgerRecord({ matchKey: 'dup', amount }),
+      ledgerRecord({ matchKey: 'dup', amount }),
+    ],
+  });
+
+  assert.equal(report.matched, 0);
+  assert.equal(report.ledgerOrphans, 3);
+  assert.equal(report.reconciled, false);
+  assert.equal(report.matched + report.ledgerOrphans, report.ledgerCount);
+}
+
+// The processor side is symmetric: two processor records sharing a key with one ledger record pair
+// one and surface the surplus as a processor orphan.
+function surfacesADuplicateProcessorRecordAsAnOrphan(): void {
+  let amount = usd('4.00');
+  let report = reconcile(ALL_TIME, {
+    processor: [
+      processorRecord({ matchKey: 'dup', amount }),
+      processorRecord({ matchKey: 'dup', amount }),
+    ],
+    ledger: [ledgerRecord({ matchKey: 'dup', amount })],
+  });
+
+  assert.equal(report.matched, 1);
+  assert.equal(report.processorOrphans, 1);
+  assert.equal(report.reconciled, false);
+  assert.equal(report.matched + report.processorOrphans, report.processorCount);
+}
+
+// Duplicates pair up oldest-first; a surplus pair whose amounts disagree is a drift, and every
+// record on both sides is still accounted for exactly once.
+function pairsDuplicatesOldestFirstAndDriftsTheSurplus(): void {
+  let report = reconcile(ALL_TIME, {
+    processor: [
+      processorRecord({ matchKey: 'dup', amount: usd('5.00') }),
+      processorRecord({ matchKey: 'dup', amount: usd('9.99') }),
+    ],
+    ledger: [
+      ledgerRecord({ matchKey: 'dup', amount: usd('5.00') }),
+      ledgerRecord({ matchKey: 'dup', amount: usd('5.00') }),
+    ],
+  });
+
+  assert.equal(report.matched, 1);
+  assert.equal(report.amountDrifts, 1);
+  assert.equal(report.processorOrphans, 0);
+  assert.equal(report.ledgerOrphans, 0);
+  assert.equal(
+    report.matched + report.amountDrifts + report.processorOrphans,
+    report.processorCount,
+  );
+  assert.equal(
+    report.matched + report.amountDrifts + report.ledgerOrphans,
+    report.ledgerCount,
+  );
+}
+
 describe('Reconcile', () => {
   test('reconciles a 1:1 matched pair with zero discrepancies', () =>
     reconcilesAMatchedPair());
@@ -257,4 +348,12 @@ describe('Reconcile', () => {
     emitsAByteStableReportRegardlessOfInputOrder());
   test('reports counts that stay consistent with the discrepancy list', () =>
     reportsCountsAndKeepsThemConsistentWithTheList());
+  test('surfaces a duplicate ledger record (one matched) as a ledger orphan, never dropped', () =>
+    surfacesADuplicateLedgerRecordAsAnOrphan());
+  test('surfaces every duplicate ledger orphan, never collapsing them to one', () =>
+    surfacesEveryDuplicateLedgerOrphan());
+  test('surfaces a duplicate processor record (one matched) as a processor orphan', () =>
+    surfacesADuplicateProcessorRecordAsAnOrphan());
+  test('pairs duplicates oldest-first and drifts the surplus, accounting for every record', () =>
+    pairsDuplicatesOldestFirstAndDriftsTheSurplus());
 });

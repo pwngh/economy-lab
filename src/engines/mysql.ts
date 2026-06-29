@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { chainHash, balanceDelta, GENESIS } from '#src/ledger.ts';
 import { toAmount, encodeAmount, decodeAmount, isAmount } from '#src/money.ts';
 import { currency } from '#src/accounts.ts';
-import { fromHex } from '#src/bytes.ts';
+import { byCodeUnit, fromHex } from '#src/bytes.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import {
   callProcedure,
@@ -126,6 +126,22 @@ async function execWrite(
 ): Promise<number> {
   let [header] = await exec.query(sql, params);
   return (header as ResultHeader).affectedRows ?? 0;
+}
+
+// Take a MySQL named lock, throwing if it is not granted. GET_LOCK returns 1 (acquired), 0 (the wait
+// elapsed), or NULL (error/killed); 0 and NULL mean we do NOT hold the lock, so going on would let
+// two writers touch the same row at once — the corruption the lock exists to prevent. Postgres' `for
+// update` blocks until granted instead, so to keep that "returns only once the lock is held"
+// contract, surface a non-acquire as a transient lock-wait conflict (errno 1205, the code a real
+// InnoDB lock-wait timeout carries) that isTransientConflict classifies and withTransientRetry
+// re-runs in a fresh transaction.
+async function takeGetLock(exec: MysqlExecutor, name: string): Promise<void> {
+  let result = await rows(exec, 'SELECT GET_LOCK(?, 10) AS acquired', [name]);
+  if (Number(result[0]?.acquired) !== 1) {
+    throw Object.assign(new Error(`GET_LOCK did not acquire: ${name}`), {
+      errno: 1205,
+    });
+  }
 }
 
 // --- The ledger store -------------------------------------------------------------
@@ -272,9 +288,7 @@ function createLedgerStore(deps: ExecDeps): Ledger {
     // Named lock on an account so concurrent transactions touching it run one at a time. Lock name
     // derived from the account id. The same connection can re-take the same named lock without
     // blocking on itself, so locking one account twice is safe. Dropped on commit or rollback.
-    lock: async (account) => {
-      await rows(deps.exec, 'SELECT GET_LOCK(?, 10)', [lockName(account)]);
-    },
+    lock: (account) => takeGetLock(deps.exec, lockName(account)),
 
     append: async (posting) => insertPosting(deps, posting),
 
@@ -298,7 +312,7 @@ function createLedgerStore(deps: ExecDeps): Ledger {
       // One row per account paired with its chain-tip hash: the chain_links row with the highest
       // posting seq for that account. The subquery finds max seq per account; the join pulls its
       // hash. MySQL has no DISTINCT ON, so this is the portable equivalent.
-      for (let row of await rows(
+      let result = await rows(
         deps.exec,
         `SELECT c.account_id, c.hash FROM chain_links c
            JOIN postings p ON p.id = c.posting_id
@@ -308,7 +322,12 @@ function createLedgerStore(deps: ExecDeps): Ledger {
                JOIN postings p2 ON p2.id = c2.posting_id
               GROUP BY c2.account_id
            ) tip ON tip.account_id = c.account_id AND tip.max_seq = p.seq`,
-      )) {
+      );
+      // Code-unit order in the app (not the DB's collation) so every engine lists accounts identically.
+      result.sort((a, b) =>
+        byCodeUnit(a.account_id as string, b.account_id as string),
+      );
+      for (let row of result) {
         yield [row.account_id as AccountRef, row.hash as string] as const;
       }
     },
@@ -324,10 +343,15 @@ function createLedgerStore(deps: ExecDeps): Ledger {
       // write; it carries no history and reads exactly like no row, so leaving it out keeps this
       // listing matching the in-memory adapter. The `OR balance <> 0` is the exception: a genesis-head
       // row with a non-zero balance is no longer a placeholder, it is the very drift this scan hunts.
-      for (let row of await rows(
+      let result = await rows(
         deps.exec,
         `SELECT account_id FROM account_balances WHERE head_hash <> REPEAT('0', 64) OR balance <> 0`,
-      )) {
+      );
+      // Code-unit order in the app (not the DB's collation) so every engine lists accounts identically.
+      result.sort((a, b) =>
+        byCodeUnit(a.account_id as string, b.account_id as string),
+      );
+      for (let row of result) {
         yield row.account_id as AccountRef;
       }
     },
@@ -669,10 +693,14 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
       if (ids.length === 0) {
         return;
       }
+      // `AND status = 'pending'` so a stale resend can't flip a row that has since been dead-lettered
+      // (or already relayed) back to 'relayed' — the same terminal-state guard recordFailure uses and
+      // the in-memory reference applies (it skips any non-'pending' row).
       let placeholders = ids.map(() => '?').join(', ');
       await rows(
         exec,
-        `UPDATE outbox SET status = 'relayed' WHERE id IN (${placeholders})`,
+        `UPDATE outbox SET status = 'relayed'
+          WHERE id IN (${placeholders}) AND status = 'pending'`,
         [...ids],
       );
     },
@@ -849,14 +877,15 @@ function createSagaStore(exec: MysqlExecutor): SagaStore {
     },
     advance: async (id, from, to, patch) => {
       // Read-modify-write the whole row (MySQL has no partial UPDATE the way the postgres twin
-      // coalesces), overlaying the patch's fields. `payout_usd` is the terminal settle outcome,
-      // carried as a USD Amount when settlePayout marks the saga SETTLED and null otherwise.
+      // coalesces), overlaying the patch's fields. `payout_usd` (SETTLED) and `reason` (FAILED) are
+      // the terminal outcomes, carried on the advance that reaches that state; a non-terminal advance
+      // re-writes their existing values from the loaded row, so they are never disturbed.
       let next = { ...(await loadSagaOrThrow(exec, id)), ...patch, state: to };
       let affected = await execWrite(
         exec,
         `UPDATE payout_sagas SET
            reserve = ?, rate_id = ?, state = ?, provider_ref = ?,
-           attempts = ?, due_at = ?, updated_at = ?, payout_usd = ?
+           attempts = ?, due_at = ?, updated_at = ?, payout_usd = ?, reason = ?
          WHERE id = ? AND state = ?`,
         [
           next.reserve.minor.toString(),
@@ -867,6 +896,7 @@ function createSagaStore(exec: MysqlExecutor): SagaStore {
           next.dueAt,
           next.updatedAt,
           next.payoutUsd === null ? null : next.payoutUsd.minor.toString(),
+          next.reason,
           id,
           from,
         ],
@@ -1188,9 +1218,7 @@ function createTrustStore(
       let cutoff = clock.now() - windowMs;
       let connection = await pool.getConnection();
       try {
-        await rows(connection, 'SELECT GET_LOCK(?, 10)', [
-          subjectLockName(subject),
-        ]);
+        await takeGetLock(connection, subjectLockName(subject));
         await rows(
           connection,
           `INSERT IGNORE INTO trust_attempts (idempotency_key, subject, amount, outcome, at)

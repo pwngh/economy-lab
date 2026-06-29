@@ -22,6 +22,7 @@ import assert from 'node:assert/strict';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { decodeAmount, toAmount } from '#src/money.ts';
 import { spendable, SYSTEM } from '#src/accounts.ts';
+import { byCodeUnit } from '#src/bytes.ts';
 
 import type { InboxEntry, Saga, SagaState, Store, Unit } from '#src/ports.ts';
 import type { Operation, Transaction } from '#src/contract.ts';
@@ -709,6 +710,33 @@ async function balanceAccountsEnumeratesBalanceRow(
   assert.equal(seen.has(spendable(userId)), true);
 }
 
+// Same order across adapters for `balanceAccounts`: every engine lists accounts in one
+// locale-independent (code-unit) order — not the DB's collation or a Map's insertion order — so a
+// caller, and the integrity drift report, see identical ordering everywhere. Fund users whose ids
+// are created out of order, then assert the whole listing comes back in code-unit order.
+async function balanceAccountsListsInCodeUnitOrder(
+  store: Store,
+): Promise<void> {
+  let base = freshUser();
+  let ids = [`${base}_c`, `${base}_a`, `${base}_b`];
+  for (let id of ids) {
+    await store.transaction((unit) =>
+      fundSpendable(unit, id, '1.00', `txn_conf_ord_${id}`),
+    );
+  }
+
+  let seen: string[] = [];
+  for await (let account of store.ledger.balanceAccounts()) {
+    seen.push(account);
+  }
+
+  for (let id of ids) {
+    assert.equal(seen.includes(spendable(id)), true);
+  }
+  // Already sorted on every engine: equal to its own code-unit-sorted copy.
+  assert.deepEqual(seen, [...seen].sort(byCodeUnit));
+}
+
 // Same markBilled behaviour across adapters: stops two concurrent renewal sweeps from charging a
 // subscription twice in one period. markBilled updates the row only if the caller's expected due
 // date still matches next_due_at. The first sweeper passes the current due date, so its update
@@ -826,6 +854,8 @@ export function runStoreConformance(
       withStore(t, claimsWebhookEventIdOnce));
     test('enumerates an account that has a stored balance row', (t) =>
       withStore(t, balanceAccountsEnumeratesBalanceRow));
+    test('lists balance-row accounts in code-unit order on every engine', (t) =>
+      withStore(t, balanceAccountsListsInCodeUnitOrder));
     test('bills a subscription via compare-and-set so a stale renewal run is rejected', (t) =>
       withStore(t, markBilledIsCompareAndSet));
     test('lists every saga newest-first regardless of state', (t) =>

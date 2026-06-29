@@ -54,6 +54,24 @@ export function balanceDelta(leg: Leg): Amount {
 }
 
 /**
+ * Take the per-transaction lock on each of `accounts`, always in one global order: `.sort()` by id
+ * (raw character-code order, the same on every machine, unlike a locale-aware comparison), then
+ * de-duplicated. Two operations that share an account then acquire its lock in the same order, so
+ * neither can deadlock waiting on a lock the other holds. Every lock-set goes through here, so the
+ * fixed-order discipline lives in one place instead of being re-implemented — and mis-ordered — per
+ * call site.
+ */
+export async function lockAll(
+  ledger: Ledger,
+  accounts: ReadonlyArray<AccountRef>,
+  options?: Options,
+): Promise<void> {
+  for (let account of [...new Set(accounts)].sort()) {
+    await ledger.lock(account, options);
+  }
+}
+
+/**
  * Validate a posting, then write it. Four checks before the write: each leg's currency
  * matches its account, leg amounts sum to zero per currency, every account exists, and no
  * user account goes negative. The database enforces these too; these are a second line of

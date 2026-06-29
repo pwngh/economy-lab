@@ -68,15 +68,23 @@ import {
   fixedClock,
   seededDigest,
   testConfig,
+  sequentialIds,
+  seededSigner,
+  fakeProcessor,
+  fixedRates,
+  testLogger,
+  noopMeter,
 } from '#test/support/capabilities.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import {
   adversarialPostgres,
   adversarialMysql,
 } from '#test/conformance/adversarial-engines.ts';
+import { settleDuePayouts } from '#src/worker/payouts.ts';
 
 import type { AdversarialEngine } from '#test/conformance/adversarial-engines.ts';
-import type { Economy, Operation, Outcome } from '#src/contract.ts';
+import type { SettleSummary } from '#src/worker/payouts.ts';
+import type { Economy, Operation, Outcome, WorkerCtx } from '#src/contract.ts';
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Saga, Store } from '#src/ports.ts';
@@ -107,6 +115,9 @@ let RESERVE = credit('4.00');
 let SETTLE_USD = usd('0.02');
 let INVALID = 'SAGA.INVALID_TRANSITION';
 let ITERATIONS = 50;
+// Fewer for the worker-vs-settle race: each iteration adds to the same growing ledger that prove()
+// re-walks, and 30 genuinely-concurrent attempts catch the narrow timeout-vs-late-settle window.
+let WORKER_ITERATIONS = 15;
 
 // How a refused loser must surface, on every backend: the clean domain fault. Whoever takes the
 // PAYOUT_RESERVE lock first transitions the saga; the loser reloads a no-longer-SUBMITTED saga and
@@ -433,6 +444,114 @@ async function runDeterministicRaces(
   }
 }
 
+// --- worker timeout vs a late settle: the unguarded-reversal double-pay the audit found --------
+
+// The background sweep force-fails a SUBMITTED payout aged past maxPayoutAgeMs, returning its reserve
+// to the seller (deadLetter), at the same moment the provider's late settlement webhook settles it.
+// Both move the same reserve in opposite, irreversible directions. The sweep now locks PAYOUT_RESERVE
+// and CAS-flips the saga before posting — identical to the pipeline ops — so exactly one wins: settle
+// pays the seller (SETTLED, reserve -> REVENUE) or the sweep returns the reserve (FAILED), never
+// both. Before the fix the sweep posted the reversal first and flipped state unconditionally, so a
+// settle that won the chain race let the sweep's reversal re-post on retry and double-pay the seller.
+
+// The sweep posts its reversal with its own id stream; prefix it so the sweep's txn/obx/evt ids never
+// collide with the economy's over the shared store (both otherwise count from zero).
+function prefixedIds(prefix: string): WorkerCtx['ids'] {
+  let base = sequentialIds();
+  return { next: (kind) => base.next(`${prefix}-${kind}`) };
+}
+
+// A WorkerCtx for the sweep. Clock at 0 so a saga seeded with a stale `updatedAt` reads as aged past
+// maxPayoutAgeMs; the timeout path calls neither processor nor rates, but they're supplied to satisfy
+// the type. One ctx is reused across iterations so its prefixed id counter keeps climbing.
+function raceWorkerCtx(): WorkerCtx {
+  return {
+    clock: fixedClock(0),
+    ids: prefixedIds('wkr'),
+    digest: seededDigest(1),
+    signer: seededSigner(1),
+    processor: fakeProcessor(),
+    rates: fixedRates(),
+    logger: testLogger(),
+    meter: noopMeter(),
+    config: testConfig(),
+  };
+}
+
+// One worker-timeout-vs-settle race on a fresh aged SUBMITTED saga, fired truly concurrently.
+// `settleFirst` controls which is handed to Promise.all first. The sweep returns a summary (it does
+// not throw on a lost CAS); the settle is an economy.submit that rejects with INVALID_TRANSITION if
+// it loses. Asserts exactly one outcome, money moved once in the winner's direction, prove() holds.
+async function oneWorkerVsSettleRace(
+  fixtures: { engine: Economy; store: Store; worker: WorkerCtx },
+  tag: string,
+  settleFirst: boolean,
+): Promise<void> {
+  let { engine, store, worker } = fixtures;
+  let sagaId = `pay_wkr_${tag}`;
+  let seller = `usr_wkr_seller_${tag}`;
+  await seedSubmittedSaga(store, sagaId, seller);
+  let before = await snapshot(store, earned(seller));
+
+  let settle = () => settleOf(engine.submit(settlePayoutOp(sagaId)));
+  let sweep = () => settleDuePayouts(store, worker, { now: 0, limit: 50 });
+
+  let settleResult: Settled;
+  let sweepSummary: SettleSummary;
+  if (settleFirst) {
+    let [s, w] = await Promise.all([settle(), sweep()]);
+    settleResult = s;
+    sweepSummary = w;
+  } else {
+    let [w, s] = await Promise.all([sweep(), settle()]);
+    settleResult = s;
+    sweepSummary = w;
+  }
+
+  let saga = await engine.read.saga(sagaId);
+  let after = await snapshot(store, earned(seller));
+  let failedByWorker = sweepSummary.deadLettered.some((d) => d.id === sagaId);
+
+  // Exactly one terminal outcome: SETTLED (settle won) or FAILED (the sweep won), never neither.
+  let settleWon = saga?.state === 'SETTLED';
+  let workerWon = saga?.state === 'FAILED';
+  assert.ok(
+    settleWon !== workerWon,
+    `${tag} (settleFirst=${settleFirst}): saga ended ${String(saga?.state)}; expected exactly one of SETTLED/FAILED`,
+  );
+
+  if (settleWon) {
+    assert.equal(
+      settleResult.kind,
+      'committed',
+      `${tag}: saga SETTLED but settle did not commit (got ${JSON.stringify(settleResult)})`,
+    );
+    assert.ok(
+      !failedByWorker,
+      `${tag}: settle won, yet the sweep also reported the saga dead-lettered — double outcome`,
+    );
+    assertSettleWonBooks(tag, saga?.state, before, after);
+  } else {
+    assert.ok(
+      failedByWorker,
+      `${tag}: saga FAILED but the sweep did not report it dead-lettered`,
+    );
+    assertLoserRefused(tag, settleResult, 'settle', CLEAN_REFUSAL);
+    assertReverseWonBooks(tag, saga?.state, before, after);
+  }
+  await assertInvariants(engine, tag);
+}
+
+async function runWorkerVsSettleRaces(
+  fixtures: { engine: Economy; store: Store; worker: WorkerCtx },
+  name: string,
+): Promise<void> {
+  for (let i = 0; i < WORKER_ITERATIONS; i += 1) {
+    await oneWorkerVsSettleRace(fixtures, `${name}_ws${i}`, true);
+    await oneWorkerVsSettleRace(fixtures, `${name}_ww${i}`, false);
+  }
+}
+
 // --- registration ------------------------------------------------------------------------------
 
 // memory: always available, deterministic interleaving (true concurrency needs a real engine).
@@ -466,13 +585,19 @@ function runSqlRace(
       }
     });
 
-    test('exactly one of settle/reverse wins each concurrent race; money moves once, the loser is INVALID_TRANSITION, prove() holds', async (t: TestContext) => {
+    test('settle/reverse and worker-timeout/settle: exactly one wins each concurrent race; money moves once, the loser is INVALID_TRANSITION, prove() holds', async (t: TestContext) => {
       if (!provisioned) return t.skip(`${name} unreachable`);
       // A single economy across all iterations so its seeded txn-id counter stays unique; the engine's
       // store is shared, and each iteration carries its own saga/seller namespace. The store is closed
       // by `provisioned.close()` in `after`, so the economy is not closed here (that would double-close).
+      // Both race suites run on the one economy: the worker sweep uses its own prefixed id stream
+      // (raceWorkerCtx) so its postings never collide with the economy's over the shared store.
       let economy = makeEconomy(1, provisioned.store);
       await runConcurrentRaces(economy, provisioned.store, name);
+      await runWorkerVsSettleRaces(
+        { engine: economy, store: provisioned.store, worker: raceWorkerCtx() },
+        `${name}_wkr`,
+      );
     });
   });
 }

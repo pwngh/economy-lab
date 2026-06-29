@@ -9,8 +9,8 @@
  * @license MIT
  */
 
-import { ERROR_CODES, normalizeError } from '#src/errors.ts';
-import { credit, debit, postEntry } from '#src/ledger.ts';
+import { normalizeError } from '#src/errors.ts';
+import { credit, debit, lockAll, postEntry } from '#src/ledger.ts';
 import { encodeAmount, toAmount } from '#src/money.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
 
@@ -92,8 +92,9 @@ async function advanceOne(
       tally.retrying.push({ id: saga.id, code: normalized.code });
       return;
     }
-    await deadLetter(store, ctx, saga, normalized.code);
-    tally.deadLettered.push({ id: saga.id, reason: normalized.code });
+    if (await deadLetter(store, ctx, saga, normalized.code)) {
+      tally.deadLettered.push({ id: saga.id, reason: normalized.code });
+    }
   }
 }
 
@@ -111,31 +112,41 @@ async function bumpAttempt(
   });
 }
 
-// Give up on a payout and, unless another worker already finished it, return its reserved credits.
+// Give up on a payout and, unless another actor already finished it, return its reserved credits.
+// Returns true if THIS call set the saga aside, false if it lost the race to a concurrent finisher.
 //
-// A requested payout moved the seller's earned credits into PAYOUT_RESERVE; flipping the saga to
-// FAILED alone would park them there forever. So the normal abandon case (e.g. a provider failure
-// out of retries) does two things in one transaction: post the exact reverse of the request-time
-// reservation (debit PAYOUT_RESERVE, credit the seller's earned account, full reserved amount), and
-// mark the saga FAILED. Coupling them releases the credits iff the saga is set aside.
+// Requesting a payout moved the seller's earned credits into PAYOUT_RESERVE; flipping the saga to
+// FAILED alone would park them there forever. So one transaction couples two writes: flip the saga
+// to FAILED and post the exact reverse of the request-time reservation (debit PAYOUT_RESERVE, credit
+// the seller's earned account, the full reserved amount). Coupled, the credits return iff the saga
+// is actually set aside.
 //
-// Exception: when the state change is rejected because another worker got there first
-// (`INVALID_TRANSITION`). The step change only succeeds if the saga is still in the expected state,
-// so a rejection means the saga already settled (via the settlement webhook, see
-// src/operations/settlePayout.ts) and its reserve moved into REVENUE. The books are already correct;
-// posting the reversal would return the credits twice, so we only flip the state and leave the
-// ledger untouched.
+// The flip is a compare-and-set and the reversal posts ONLY if the CAS wins — the same guard the
+// pipeline's settlePayout and reversePayout use. A lost CAS means another actor moved the saga first
+// (a late settlement webhook settled it into REVENUE, or a manual reverse already returned the
+// reserve), so its reserve is already accounted for; posting now would return the credits a SECOND
+// time. On a lost CAS we touch nothing and report false. Locking PAYOUT_RESERVE and the seller's
+// earned account in the global sorted order makes this serialize with those pipeline ops on the
+// shared reserve rather than racing them to extend its hash chain — without the lock a late settle
+// could win the chain and still let this reversal re-post on retry, double-paying the seller.
 async function deadLetter(
   store: Store,
   ctx: WorkerCtx,
   saga: Saga,
   reason: string,
-): Promise<void> {
-  if (reason === ERROR_CODES.INVALID_TRANSITION) {
-    await store.sagas.deadLetter(saga.id, reason);
-    return;
-  }
-  await store.transaction(async (unit) => {
+): Promise<boolean> {
+  return store.transaction(async (unit) => {
+    await lockAll(unit.ledger, [SYSTEM.PAYOUT_RESERVE, earned(saga.userId)]);
+    // Flip to FAILED only if the saga is still in the state we read, recording the failure reason in
+    // the same write (so it is read straight off the saga, not re-derived from posting meta). A false
+    // return means a concurrent settle/reverse got there first; leave the books to the winner.
+    let advanced = await unit.sagas.advance(saga.id, saga.state, 'FAILED', {
+      updatedAt: ctx.clock.now(),
+      reason,
+    });
+    if (!advanced) {
+      return false;
+    }
     await postEntry(unit.ledger, {
       txnId: ctx.ids.next('txn'),
       legs: [
@@ -144,10 +155,8 @@ async function deadLetter(
       ],
       meta: { kind: 'payout.deadLetter', sagaId: saga.id, reason },
     });
-    await unit.sagas.deadLetter(saga.id, reason);
-    // Queue the "payout reversed" event in the same transaction, so it emits iff the reversing
-    // posting committed. Normal-abandon branch only; the early-return branch above (another worker
-    // already settled) posts nothing and emits nothing, since that worker consumed the reserve.
+    // Queue the "payout reversed" event in the same transaction, so it emits iff the reversal
+    // committed — iff this worker, not a concurrent finisher, is the one that set the saga aside.
     await unit.outbox.enqueue({
       id: ctx.ids.next('obx'),
       event: {
@@ -168,6 +177,7 @@ async function deadLetter(
       attempts: 0,
       reason: null,
     });
+    return true;
   });
 }
 
@@ -204,8 +214,9 @@ async function driveTransition(
     // to the seller, so a timed-out payout is never paid and never strands the reserve. A SUBMITTED
     // payout still within the age window is left untouched this run, waiting on the webhook.
     if (ctx.clock.now() - saga.updatedAt > ctx.config.maxPayoutAgeMs) {
-      await deadLetter(store, ctx, saga, PAYOUT_TIMEOUT_REASON);
-      tally.deadLettered.push({ id: saga.id, reason: PAYOUT_TIMEOUT_REASON });
+      if (await deadLetter(store, ctx, saga, PAYOUT_TIMEOUT_REASON)) {
+        tally.deadLettered.push({ id: saga.id, reason: PAYOUT_TIMEOUT_REASON });
+      }
     }
   }
 }

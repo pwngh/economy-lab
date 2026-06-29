@@ -32,7 +32,7 @@ import { chainHash, balanceDelta, GENESIS } from '#src/ledger.ts';
 import { toAmount, encodeAmount, decodeAmount, isAmount } from '#src/money.ts';
 import { currency } from '#src/accounts.ts';
 import { assertSchemaCurrent } from '#src/schema.ts';
-import { fromHex } from '#src/bytes.ts';
+import { byCodeUnit, fromHex } from '#src/bytes.ts';
 import {
   callProcedure,
   callFunction,
@@ -495,6 +495,10 @@ async function* headsOf(
        join postings p on p.id = c.posting_id
       order by c.account_id, p.seq desc`,
   );
+  // Code-unit order in the app (not the DB's collation) so every engine lists accounts identically.
+  result.rows.sort((a, b) =>
+    byCodeUnit(a.account_id as string, b.account_id as string),
+  );
   for (let row of result.rows) {
     yield [row.account_id as AccountRef, row.hash as string] as const;
   }
@@ -514,8 +518,11 @@ async function* headsOf(
 async function* balanceAccountsOf(q: Queryable): AsyncIterable<AccountRef> {
   let result = await q.query(
     `select account_id from account_balances
-       where head_hash <> repeat('0', 64) or balance <> 0
-       order by account_id asc`,
+       where head_hash <> repeat('0', 64) or balance <> 0`,
+  );
+  // Code-unit order in the app (not the DB's collation) so every engine lists accounts identically.
+  result.rows.sort((a, b) =>
+    byCodeUnit(a.account_id as string, b.account_id as string),
   );
   for (let row of result.rows) {
     yield row.account_id as AccountRef;
@@ -843,8 +850,12 @@ function createOutboxStore(q: Queryable): OutboxStore {
       if (ids.length === 0) {
         return;
       }
+      // `and status = 'pending'` so a stale resend can't flip a row that has since been dead-lettered
+      // (or already relayed) back to 'relayed' — the same terminal-state guard recordFailure uses and
+      // the in-memory reference applies (it skips any non-'pending' row).
       await q.query(
-        `update outbox set status = 'relayed' where id = any($1::text[])`,
+        `update outbox set status = 'relayed'
+          where id = any($1::text[]) and status = 'pending'`,
         [[...ids]],
       );
     },
@@ -1125,8 +1136,10 @@ function createSagaStore(q: Queryable): SagaStore {
       return result.rows.map(rowToSaga);
     },
     advance: async (id, from, to, patch) => {
-      // `payout_usd` is the terminal settle outcome: written when settlePayout marks the saga
-      // SETTLED (patch carries the USD Amount), left as-is on every other advance via coalesce.
+      // `payout_usd` is the terminal settle outcome (patch carries the USD Amount when settlePayout
+      // marks the saga SETTLED); `reason` is the terminal failure outcome (carried when the worker
+      // CAS-fails a stuck/abandoned payout to FAILED). Both left as-is on every other advance via
+      // coalesce, so a non-terminal advance never disturbs them.
       let result = await q.query(
         `update payout_sagas
             set state = $3,
@@ -1134,7 +1147,8 @@ function createSagaStore(q: Queryable): SagaStore {
                 attempts = coalesce($5, attempts),
                 due_at = coalesce($6, due_at),
                 updated_at = coalesce($7, updated_at),
-                payout_usd = coalesce($8, payout_usd)
+                payout_usd = coalesce($8, payout_usd),
+                reason = coalesce($9, reason)
           where id = $1 and state = $2
           returning id`,
         [
@@ -1146,6 +1160,7 @@ function createSagaStore(q: Queryable): SagaStore {
           patch.dueAt ?? null,
           patch.updatedAt ?? null,
           patch.payoutUsd?.minor ?? null,
+          patch.reason ?? null,
         ],
       );
       return result.rows.length > 0;

@@ -21,7 +21,7 @@ import {
   spendable,
 } from '#src/accounts.ts';
 import { maturedAtLeast } from '#src/maturity.ts';
-import { feeForPrice } from '#src/pricing.ts';
+import { revenueForSplit } from '#src/pricing.ts';
 
 import type { Amount } from '#src/money.ts';
 import type {
@@ -262,10 +262,10 @@ function distributeEarned(
 // retry-dedup) so a later refund can look it up and reverse exactly these lines. The recorded fee
 // is the platform's cut of the spendable-funded part, the slice REVENUE keeps off that part.
 //
-// The fee comes from `feeForPrice`, the same helper the pricing policy uses to post the REVENUE
-// credit, so the recorded fee always equals the fee credited to REVENUE. Computing it independently
-// here (as the old code did) understated it whenever the exact cut wasn't a whole credit, since
-// posting rounds the fee up to a whole credit. The promo-funded part is charged no fee, so the
+// `revenueForSplit` is the SAME computation splitLegs uses for the REVENUE credit — the fee PLUS the
+// residual left by rounding each seller's share down — so the recorded fee always equals what REVENUE
+// actually kept, even on an uneven multi-seller split where that residual is non-zero. (Recording the
+// bare `feeForPrice` understated it on those splits.) The promo-funded part is charged no fee, so the
 // recorded fee covers only the spendable part.
 function saleOf(
   operation: Extract<Operation, { kind: 'spend' }>,
@@ -273,7 +273,11 @@ function saleOf(
   transaction: Transaction,
   feeBps: number,
 ): Sale {
-  let feeMinor = feeForPrice(plan.spendablePart.minor, feeBps);
+  let feeMinor = revenueForSplit(
+    plan.spendablePart,
+    operation.recipients ?? [],
+    feeBps,
+  );
   return {
     orderId: operation.orderId,
     buyerId: operation.buyerId,

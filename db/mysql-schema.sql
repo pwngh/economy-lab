@@ -71,7 +71,9 @@ CREATE TABLE accounts (
      currency   VARCHAR(8)   NOT NULL,
      created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
      CHECK (kind IN ('spendable', 'earned', 'promo', 'system')),
-     CHECK (currency IN ('CREDIT', 'USD'))
+     CHECK (currency IN ('CREDIT', 'USD')),
+     -- Lets legs carry a composite FK to (id, currency), so a leg's currency must match its account's.
+     UNIQUE KEY accounts_id_currency_uq (id, currency)
    );
 
 INSERT INTO accounts (id, kind, currency) VALUES
@@ -102,7 +104,8 @@ CREATE TABLE legs (
      CHECK (amount <> 0),
      CHECK (currency IN ('CREDIT', 'USD')),
      CONSTRAINT legs_posting_fk FOREIGN KEY (posting_id) REFERENCES postings (id),
-     CONSTRAINT legs_account_fk FOREIGN KEY (account_id) REFERENCES accounts (id),
+     -- Composite FK: a leg's currency must match its account's, enforced natively (not just app-side).
+     CONSTRAINT legs_account_fk FOREIGN KEY (account_id, currency) REFERENCES accounts (id, currency),
      -- Composite (account_id, id): the maturity tail reads an account's newest lots with
      -- `WHERE account_id = ? ORDER BY id DESC LIMIT n` (src/engines, timelineOf). legs.id is an
      -- AUTO_INCREMENT assigned in commit order, so ordering by it gives the FIFO order the tail
@@ -542,4 +545,4 @@ INSERT INTO account_balances (account_id, currency, balance, head_hash)
 -- Schema version stamp — the engine reads this on startup and refuses to run if it does not match
 -- SCHEMA_VERSION in src/schema.ts. Keep the value in lockstep with the Postgres schema and src/schema.ts.
 CREATE TABLE schema_meta (version VARCHAR(32) NOT NULL);
-INSERT INTO schema_meta (version) VALUES ('5');
+INSERT INTO schema_meta (version) VALUES ('7');

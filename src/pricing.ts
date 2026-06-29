@@ -51,24 +51,49 @@ function splitLegs(
   feeBps: number,
 ): Leg[] {
   assertShareSum(recipients);
-  let fee = feeForPrice(price.minor, feeBps);
-  let net = price.minor - fee;
+  let net = price.minor - feeForPrice(price.minor, feeBps);
 
   let legs: Leg[] = [];
-  let distributed = 0n;
   for (let recipient of recipients) {
-    let share = applyBps(net, recipient.shareBps);
-    distributed += share;
     legs.push(
-      credit(earned(recipient.sellerId), toAmount(price.currency, share)),
+      credit(
+        earned(recipient.sellerId),
+        toAmount(price.currency, applyBps(net, recipient.shareBps)),
+      ),
     );
   }
 
-  // Revenue gets the fee plus the leftover from rounding each share down, so
-  // shares + fee + leftover always equals the full price.
-  let residual = net - distributed;
-  legs.push(credit(SYSTEM.REVENUE, toAmount(price.currency, fee + residual)));
+  // Revenue gets the fee plus the leftover from rounding each share down, so shares + revenue always
+  // equal the full price. `revenueForSplit` computes exactly that amount — and Sale.fee records the
+  // same call — so the posted REVENUE credit and the recorded fee can never disagree.
+  legs.push(
+    credit(
+      SYSTEM.REVENUE,
+      toAmount(price.currency, revenueForSplit(price, recipients, feeBps)),
+    ),
+  );
   return legs;
+}
+
+/**
+ * The platform's actual revenue from splitting `price` among `recipients` at `feeBps`: the fee PLUS
+ * the residual left by rounding each seller's share down — exactly the amount splitLegs credits to
+ * REVENUE. spend.ts records this as `Sale.fee` (not the bare `feeForPrice`), so the recorded fee
+ * equals what REVENUE actually kept even on an uneven split, where the residual is non-zero. On an
+ * even split the residual is zero, so this is just the fee and the simple case is unchanged.
+ */
+export function revenueForSplit(
+  price: Amount,
+  recipients: ReadonlyArray<Recipient>,
+  feeBps: number,
+): bigint {
+  let fee = feeForPrice(price.minor, feeBps);
+  let net = price.minor - fee;
+  let distributed = 0n;
+  for (let recipient of recipients) {
+    distributed += applyBps(net, recipient.shareBps);
+  }
+  return fee + (net - distributed);
 }
 
 // Basis-point fraction of an amount, rounded down: amount * bps / 10000. All-bigint math so

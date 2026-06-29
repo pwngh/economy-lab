@@ -407,6 +407,46 @@ async function verifiesAcrossAKeyRotation(): Promise<void> {
   assert.equal(ok, true);
 }
 
+async function separatesLeafAndNodeHashDomains(): Promise<void> {
+  // RFC 6962 domain separation: a leaf is H(0x00 || "account:head"), an internal node is
+  // H(0x01 || left || right). Rebuild both preimages by hand and check merkleRoot agrees, so the
+  // one-byte tags can't be silently dropped — without them leaves and nodes share one hash domain
+  // and a leaf could be reinterpreted as an interior left||right pair.
+  let digest = seededDigest(1);
+  let encoder = new TextEncoder();
+  let tagged = (prefix: number, body: Uint8Array): Uint8Array => {
+    let out = new Uint8Array(1 + body.length);
+    out[0] = prefix;
+    out.set(body, 1);
+    return out;
+  };
+  let leafHash = (account: AccountRef, head: string): Promise<Uint8Array> =>
+    digest.hash(tagged(0x00, encoder.encode(`${account}:${head}`)));
+
+  let a = spendable('usr_a');
+  let b = spendable('usr_b');
+  let headA = 'a'.repeat(64);
+  let headB = 'b'.repeat(64);
+
+  // One leaf: the root is that leaf's 0x00-tagged hash, unchanged.
+  let one: ReadonlyArray<readonly [AccountRef, string]> = [[a, headA]];
+  assert.deepEqual(await merkleRoot(digest, one), await leafHash(a, headA));
+
+  // Two leaves: the root is the 0x01-tagged hash of the two leaf hashes, left then right. merkleRoot
+  // sorts by account id, so usr_a is the left child even though it is passed second.
+  let left = await leafHash(a, headA);
+  let right = await leafHash(b, headB);
+  let node = new Uint8Array(1 + left.length + right.length);
+  node[0] = 0x01;
+  node.set(left, 1);
+  node.set(right, 1 + left.length);
+  let two: ReadonlyArray<readonly [AccountRef, string]> = [
+    [b, headB],
+    [a, headA],
+  ];
+  assert.deepEqual(await merkleRoot(digest, two), await digest.hash(node));
+}
+
 describe('Chain', () => {
   test('advances one head per distinct account in a posting', () =>
     advancesOneHeadPerDistinctAccount());
@@ -430,6 +470,8 @@ describe('Chain', () => {
     producesTheSameRootForTheSameHeadsOnEveryRuntime());
   test('changes the root when any head changes', () =>
     changesTheRootWhenAnyHeadChanges());
+  test('separates the Merkle leaf and node hash domains (RFC 6962)', () =>
+    separatesLeafAndNodeHashDomains());
 
   test('records a signed checkpoint over the current heads', () =>
     recordsASignedCheckpointOverTheCurrentHeads());

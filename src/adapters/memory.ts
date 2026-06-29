@@ -13,7 +13,7 @@ import { chainHash, balanceDelta, GENESIS } from '#src/ledger.ts';
 import { toAmount } from '#src/money.ts';
 import { currency, SYSTEM } from '#src/accounts.ts';
 import { windowedVelocity } from '#src/trust.ts';
-import { fromHex, toHex } from '#src/bytes.ts';
+import { byCodeUnit, fromHex, toHex } from '#src/bytes.ts';
 import { metaString, metaNumber } from '#src/meta.ts';
 
 import type { Amount } from '#src/money.ts';
@@ -337,7 +337,10 @@ function createLedgerStore(deps: {
     timeline: (account, options) => timelineOf(state.log, account, options),
 
     heads: async function* () {
-      for (let [account, head] of state.heads) {
+      // Code-unit order (not Map insertion order) so every engine lists accounts identically.
+      for (let [account, head] of [...state.heads].sort((a, b) =>
+        byCodeUnit(a[0], b[0]),
+      )) {
         yield [account, head] as const;
       }
     },
@@ -345,9 +348,10 @@ function createLedgerStore(deps: {
     // Every account with a stored balance, read from `state.balances` keys rather than from
     // postings, so an account with a balance but no posting (which walking `heads` would never
     // reach) still reaches the integrity checker, which flags it as a balance that shouldn't
-    // exist. Copy the keys first so iteration is safe if `state.balances` changes underneath.
+    // exist. Copy the keys first so iteration is safe if `state.balances` changes underneath, then
+    // sort by code unit so every engine lists accounts in the same locale-independent order.
     balanceAccounts: async function* () {
-      for (let account of [...state.balances.keys()]) {
+      for (let account of [...state.balances.keys()].sort(byCodeUnit)) {
         yield account;
       }
     },

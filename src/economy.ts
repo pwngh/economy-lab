@@ -10,7 +10,7 @@
  */
 
 import { fault, rejected, ERROR_CODES } from '#src/errors.ts';
-import { balance as ledgerBalance } from '#src/ledger.ts';
+import { balance as ledgerBalance, lockAll } from '#src/ledger.ts';
 import {
   compare,
   decodeAmount,
@@ -241,12 +241,47 @@ async function submit(
     return rejected('ECONOMY_PAUSED', { resumesAt: ctx.config.pauseEndMs });
   }
 
-  let outcome = await pipeline.store.transaction(
-    (unit) => runOnion({ pipeline, unit, operation, options }),
-    options,
-  );
+  // A rejected outcome must roll back, not commit, so it leaves the idempotency key UNUSED and the
+  // caller can retry under it (runOnion's contract). Committing would persist MySQL's claim
+  // placeholder row — Postgres holds only a transaction advisory lock and inserts nothing — so the
+  // two engines would diverge. Throw the RejectedRollback sentinel to roll back exactly as a fault
+  // does, then recover the outcome outside the transaction. The velocity attempt screenRisk recorded
+  // is on a separate connection, so it survives this rollback — denied attempts still count.
+  let outcome = await pipeline.store
+    .transaction(
+      (unit) =>
+        runRollingBackRejections({ pipeline, unit, operation, options }),
+      options,
+    )
+    .catch((error: unknown) => {
+      if (error instanceof RejectedRollback) {
+        return error.outcome;
+      }
+      throw error;
+    });
 
   await invalidateCache(pipeline, operation, outcome);
+  return outcome;
+}
+
+// Thrown to roll back a transaction whose outcome is `rejected` while still surfacing that outcome (a
+// rejection is not an error to the caller). A distinct class so submit tells it apart from a genuine
+// fault, which must keep propagating and rolling back as it always has.
+class RejectedRollback extends Error {
+  outcome: Outcome;
+  constructor(outcome: Outcome) {
+    super('rejected outcome rolled back');
+    this.outcome = outcome;
+  }
+}
+
+// Run the onion, then force a rollback on a `rejected` outcome by throwing the sentinel; a committed
+// or duplicate outcome returns normally so the transaction commits.
+async function runRollingBackRejections(step: Step): Promise<Outcome> {
+  let outcome = await runOnion(step);
+  if (outcome.status === 'rejected') {
+    throw new RejectedRollback(outcome);
+  }
   return outcome;
 }
 
@@ -368,13 +403,18 @@ async function runOnion(step: Step): Promise<Outcome> {
     return { status: 'duplicate', transaction: claim.transaction };
   }
 
-  let funds = await screenFunds(step);
-  if (funds) {
-    return funds;
-  }
+  // Risk BEFORE funds: screenRisk records the velocity attempt at check time, so a burst of
+  // unaffordable spends still counts toward the limit (and a velocity-exceeded request is denied
+  // whether or not it could pay). Screening funds first would let an attacker hammer with no money
+  // and accrue no velocity — the opposite of the fraud signal the README's "even for denied
+  // attempts" describes. Both screens run before any money moves, so the order is free to choose.
   let risk = await screenRisk(step);
   if (risk) {
     return risk;
+  }
+  let funds = await screenFunds(step);
+  if (funds) {
+    return funds;
   }
 
   await lockAccounts(step);
@@ -509,10 +549,8 @@ async function screenRisk(step: Step): Promise<Outcome | null> {
 }
 
 // Lock every account the operation will touch before posting, so two operations on the same accounts
-// can't interleave and corrupt a balance. Locked in a fixed order (default string `.sort()`, whose
-// raw character-code order is identical on every machine, unlike a locale-aware comparison), so
-// operations sharing an account grab locks in the same order. That prevents a deadlock where each
-// operation waits on a lock the other holds.
+// can't interleave and corrupt a balance. Goes through `lockAll` (src/ledger.ts), which takes them in
+// the deadlock-free global order every lock-set shares.
 //
 // This is app-side concurrency control, deliberately, and the one invariant the database is not the
 // primary enforcer of. The write runs at the engine's default isolation, not SERIALIZABLE, so this
@@ -523,10 +561,7 @@ async function screenRisk(step: Step): Promise<Outcome | null> {
 // + retry-on-conflict in the future.
 async function lockAccounts(step: Step): Promise<void> {
   let { unit, operation, options } = step;
-  let sorted = [...new Set(accountsOf(operation))].sort();
-  for (let account of sorted) {
-    await unit.ledger.lock(account, options);
-  }
+  await lockAll(unit.ledger, accountsOf(operation), options);
 }
 
 // After a successful posting, queue the matching notification event (e.g. "credits topped up").

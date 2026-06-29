@@ -63,6 +63,7 @@ import {
   adversarialPostgres,
   adversarialMysql,
 } from '#test/conformance/adversarial-engines.ts';
+import { makeEconomy } from '#test/support/economy.ts';
 
 import type { TestContext } from 'node:test';
 import type {
@@ -177,6 +178,35 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
         live,
         'an unbalanced leg set (sum != 0 per currency)',
         `insert into legs (posting_id, account_id, currency, amount) values ('${txn}', '${account}', 'CREDIT', -500)`,
+      );
+    });
+
+    // --- leg currency: a leg's currency must match its account's (composite FK) ----------------
+    // Enforced natively: PG by the composite FK legs(account_id, currency) -> accounts(id, currency);
+    // MySQL by the same FK plus revoked direct legs DML, so a raw write is refused at the door (as in
+    // the conservation case). A BALANCED cross-currency pair passes the per-currency conservation
+    // check, so the FK is the only thing that catches it — a distinct invariant from conservation.
+    test('leg currency: a raw cross-currency leg pair is refused even though it conserves', async (t: TestContext) => {
+      if (!engine) return t.skip(`${name} unreachable`);
+      let live = engine;
+      let userId = `usr_adv_legcur_${seq()}`;
+      let account = spendable(userId);
+      await fundSpendable(
+        live.store,
+        userId,
+        '5.00',
+        `txn_adv_legcur_setup_${userId}`,
+      );
+
+      let txn = `txn_adv_legcur_${userId}`;
+      await live.raw(rawInsertPosting(txn));
+      // USD legs on CREDIT accounts (a user's spendable and REVENUE), summing to zero in USD: per-
+      // currency conservation would pass, so only the composite FK rejects the currency mismatch.
+      await assertRawRejected(
+        live,
+        'a balanced cross-currency leg pair (USD legs on CREDIT accounts)',
+        `insert into legs (posting_id, account_id, currency, amount) values ` +
+          `('${txn}', '${account}', 'USD', 500), ('${txn}', '${SYSTEM.REVENUE}', 'USD', -500)`,
       );
     });
 
@@ -350,6 +380,74 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
         live,
         'a cached balance that drifts from SUM(legs)',
         `update account_balances set balance = 999 where account_id = '${account}'`,
+      );
+    });
+
+    test('outbox: markRelayed never resurrects a dead-lettered row', async (t: TestContext) => {
+      if (!engine) return t.skip(`${name} unreachable`);
+      let live = engine;
+      let id = `obx_adv_dead_${name}`;
+      // A poison message: enqueued, then given up on (dead-lettered → status 'failed').
+      await live.store.transaction((unit: Unit) =>
+        unit.outbox.enqueue({
+          id,
+          event: {
+            id: `evt_${id}`,
+            type: 'economy.test.dead',
+            version: 1,
+            occurredAt: 0,
+            subject: 'usr_adv',
+            data: {},
+            audience: 'internal',
+          },
+          status: 'pending',
+          attempts: 0,
+          reason: null,
+        }),
+      );
+      await live.store.outbox.deadLetter(id, 'poison');
+
+      // A stale resend marks it relayed. With markRelayed's `status = 'pending'` guard this is a
+      // no-op; without it the dead row is silently flipped to 'relayed' and the poison event looks
+      // delivered. claimBatch never returns a terminal row, so read the status directly.
+      await live.store.outbox.markRelayed([id]);
+      let observed = (await live.raw(
+        `select status from outbox where id = '${id}'`,
+      )) as Array<{ status: string }>;
+      assert.equal(
+        observed[0]?.status,
+        'failed',
+        `${name}: markRelayed flipped a dead-lettered outbox row to '${String(observed[0]?.status)}' — a poison event must stay 'failed'`,
+      );
+    });
+
+    test('idempotency: a rejected request leaves the key unused (no row)', async (t: TestContext) => {
+      if (!engine) return t.skip(`${name} unreachable`);
+      let live = engine;
+      let economy = makeEconomy(1, live.store);
+      let key = `idem_adv_reject_${name}`;
+      // A refund of an order that doesn't exist: the pipeline claims the key, then the handler returns
+      // rejected(UNKNOWN_ORDER) with nothing posted. A rejected outcome rolls the transaction back, so
+      // the key is left UNUSED — MySQL's claim placeholder must not survive (it once did, diverging
+      // from Postgres, which holds a transaction advisory lock and inserts no row at all).
+      let outcome = await economy.submit({
+        kind: 'refund',
+        idempotencyKey: key,
+        actor: { kind: 'system', service: 'support' },
+        orderId: `no_such_order_${name}`,
+        reason: 'adversarial',
+      });
+      assert.equal(outcome.status, 'rejected');
+
+      // `key` is a reserved word on MySQL, so quote the column per engine.
+      let keyCol = name === 'mysql' ? '`key`' : 'key';
+      let counted = (await live.raw(
+        `select count(*) as n from idempotency where ${keyCol} = '${key}'`,
+      )) as Array<{ n: number | string }>;
+      assert.equal(
+        Number(counted[0]?.n),
+        0,
+        `${name}: a rejected request left an idempotency row for '${key}' — the key must stay unused`,
       );
     });
   });

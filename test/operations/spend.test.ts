@@ -454,6 +454,52 @@ async function recordsFeeEqualToRevenuePosted(): Promise<void> {
   assert.equal(sale!.fee.minor, -revenueLeg!.amount.minor);
 }
 
+async function recordsFeeIncludingResidualOnUnevenSplit(): Promise<void> {
+  // 1530 bps on 400.00 → fee 62.00 (6200 minor), net 338.00. Split three uneven ways
+  // (33.33 / 33.33 / 33.34 %): each seller's share floors, leaving a 2-minor residual REVENUE keeps
+  // ON TOP of the fee. Sale.fee must record the full 62.02 the platform actually took, not the bare
+  // 62.00 fee — the old bug recorded `feeForPrice` and came up short by the residual on uneven splits.
+  let { store, ctx } = spendFixture(1530);
+  await runOp(
+    store,
+    ctx,
+    buildTopUp({ userId: 'usr_buyer', amount: credit('500.00') }),
+  );
+
+  let outcome = await runOp(
+    store,
+    ctx,
+    buildSpend({
+      buyerId: 'usr_buyer',
+      sku: 'wrld_pass',
+      price: credit('400.00'),
+      orderId: 'ord_fee_uneven',
+      recipients: [
+        { sellerId: 'usr_a', shareBps: 3_333 },
+        { sellerId: 'usr_b', shareBps: 3_333 },
+        { sellerId: 'usr_c', shareBps: 3_334 },
+      ],
+    }),
+  );
+  assert.equal(outcome.status, 'committed');
+
+  let sale = await store.transaction((unit) =>
+    unit.sales.get('ord_fee_uneven'),
+  );
+  assert.notEqual(sale, null);
+  let committed = outcome as Extract<Outcome, { status: 'committed' }>;
+  // Whole price from spendable (no promo), so REVENUE is touched in one credit line: the fee plus
+  // the rounding residual. Credit lines store negative, so negate to compare against the positive fee.
+  let revenueLeg = committed.transaction.legs.find(
+    (leg) => leg.account === SYSTEM.REVENUE,
+  );
+  assert.notEqual(revenueLeg, undefined);
+  // Sale.fee equals what REVENUE actually kept...
+  assert.equal(sale!.fee.minor, -revenueLeg!.amount.minor);
+  // ...which is the 62.00 fee PLUS the 0.02 residual the uneven split left behind, not the bare fee.
+  assert.equal(sale!.fee.minor, 6202n);
+}
+
 describe('Spend Entitlement, Order, Fee, Age', () => {
   test('grants the buyer the SKU entitlement on a committed spend', () =>
     grantsEntitlementOnSpend());
@@ -461,6 +507,8 @@ describe('Spend Entitlement, Order, Fee, Age', () => {
     rejectsDuplicateOrderId());
   test('records Sale.fee equal to the fee posted to REVENUE on a non-whole-credit fee', () =>
     recordsFeeEqualToRevenuePosted());
+  test('records Sale.fee including the rounding residual on an uneven multi-seller split', () =>
+    recordsFeeIncludingResidualOnUnevenSplit());
 });
 
 // --- Op-specific field-shape guards -------------------------------------------------------

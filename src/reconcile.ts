@@ -135,9 +135,11 @@ export interface ReconcileInputs {
  * Only records inside the window count, so the caller can over-supply and let this filter.
  * Half-open window: a record exactly on `to` belongs to the next window.
  *
- * Two records match on same kind (buy/payout) and same matchKey. If two records on one
- * side share a key (shouldn't happen), only the first matches; later duplicates are
- * reported as orphans on their own side.
+ * Two records match on same kind (buy/payout) and same matchKey. If a key repeats on a side
+ * (shouldn't happen — matchKey is a unique join reference), the duplicates pair up oldest-first and
+ * any surplus on either side surfaces as orphans on that side, so every record is accounted for
+ * exactly once. A reconciler exists to catch the "shouldn't happen", so it must never silently drop
+ * one — `report` self-checks that the counts reconstruct both sides.
  */
 export function reconcile(
   window: Range,
@@ -162,27 +164,28 @@ function matchSides(
   let ledgerByKey = indexByKey(ledger);
   let discrepancies: Discrepancy[] = [];
   let matched = matchProcessorSide(processor, ledgerByKey, discrepancies);
-  collectLedgerOrphans(ledger, ledgerByKey, discrepancies);
+  collectLedgerOrphans(ledgerByKey, discrepancies);
   return { matched, discrepancies };
 }
 
-// Find each processor record's ledger counterpart in the index, removing matches as we
-// go. Whatever remains in the index afterward is the ledger records with no processor
-// counterpart, which the next pass reports as ledger orphans.
+// Pair each processor record with one ledger counterpart, consuming it from that key's bucket
+// (oldest-first) so a ledger record matches at most one processor record. No bucket, or one already
+// emptied, means a processor record the ledger never recorded — a processor orphan. Whatever stays
+// in the buckets afterward is ledger records with no processor counterpart, reported as ledger
+// orphans by the next pass.
 function matchProcessorSide(
   processor: ReadonlyArray<ProcessorRecord>,
-  ledgerByKey: Map<string, LedgerRecord>,
+  ledgerByKey: Map<string, LedgerRecord[]>,
   discrepancies: Discrepancy[],
 ): number {
   let matched = 0;
   for (let record of processor) {
     let key = keyOf(record.kind, record.matchKey);
-    let counterpart = ledgerByKey.get(key);
+    let counterpart = ledgerByKey.get(key)?.shift();
     if (counterpart === undefined) {
       discrepancies.push(processorOrphan(record));
       continue;
     }
-    ledgerByKey.delete(key);
     if (sameAmount(record.amount, counterpart.amount)) {
       matched += 1;
     } else {
@@ -192,18 +195,16 @@ function matchProcessorSide(
   return matched;
 }
 
-// Turn the ledger records left in the index into ledger orphans. Iterates the original
-// ledger list, not the Map, so order doesn't depend on Map iteration across runtimes.
-// (Sorted again later, but this keeps it predictable beforehand.)
+// Turn the ledger records left unmatched in the buckets into ledger orphans: every record no
+// processor match consumed. Buckets keep first-seen order (within a key, and across keys by
+// insertion — both ECMAScript-guaranteed for a Map), so this is deterministic; the report's final
+// sort settles cross-key order, and same-key duplicates keep their original order here.
 function collectLedgerOrphans(
-  ledger: ReadonlyArray<LedgerRecord>,
-  remaining: Map<string, LedgerRecord>,
+  remaining: Map<string, LedgerRecord[]>,
   discrepancies: Discrepancy[],
 ): void {
-  for (let record of ledger) {
-    let key = keyOf(record.kind, record.matchKey);
-    if (remaining.has(key)) {
-      remaining.delete(key);
+  for (let bucket of remaining.values()) {
+    for (let record of bucket) {
       discrepancies.push(ledgerOrphan(record));
     }
   }
@@ -218,17 +219,58 @@ function report(
   match: Match,
 ): ReconcileReport {
   let sorted = [...match.discrepancies].sort(byDiscrepancy);
+  let processorOrphans = countKind(sorted, 'processor_orphan');
+  let ledgerOrphans = countKind(sorted, 'ledger_orphan');
+  let amountDrifts = countKind(sorted, 'amount_drift');
+  assertAccountedFor({
+    matched: match.matched,
+    amountDrifts,
+    processorOrphans,
+    ledgerOrphans,
+    processorCount: processor.length,
+    ledgerCount: ledger.length,
+  });
   return {
     window,
     reconciled: sorted.length === 0,
     matched: match.matched,
     processorCount: processor.length,
     ledgerCount: ledger.length,
-    processorOrphans: countKind(sorted, 'processor_orphan'),
-    ledgerOrphans: countKind(sorted, 'ledger_orphan'),
-    amountDrifts: countKind(sorted, 'amount_drift'),
+    processorOrphans,
+    ledgerOrphans,
+    amountDrifts,
     discrepancies: sorted,
   };
+}
+
+// Every record on each side must be accounted for exactly once. A match and an amount-drift each
+// consume one record from BOTH sides (a paired processor+ledger record); a processor orphan is an
+// unpaired processor record, a ledger orphan an unpaired ledger record. So both sides must
+// reconstruct: matched + drifts + processorOrphans === processorCount, and the same for the ledger.
+// If either fails, the matcher dropped or double-counted a record and the report cannot be trusted,
+// so throw rather than emit a quietly-wrong reconciliation — the one thing a reconciler must never
+// do. Holds by construction today; this is the regression guard that keeps it so.
+function assertAccountedFor(counts: {
+  matched: number;
+  amountDrifts: number;
+  processorOrphans: number;
+  ledgerOrphans: number;
+  processorCount: number;
+  ledgerCount: number;
+}): void {
+  let processorSeen =
+    counts.matched + counts.amountDrifts + counts.processorOrphans;
+  let ledgerSeen = counts.matched + counts.amountDrifts + counts.ledgerOrphans;
+  if (
+    processorSeen !== counts.processorCount ||
+    ledgerSeen !== counts.ledgerCount
+  ) {
+    throw new Error(
+      `reconcile: internal accounting mismatch — processor ${processorSeen}/${counts.processorCount}, ` +
+        `ledger ${ledgerSeen}/${counts.ledgerCount} (matched=${counts.matched}, drifts=${counts.amountDrifts}, ` +
+        `processorOrphans=${counts.processorOrphans}, ledgerOrphans=${counts.ledgerOrphans})`,
+    );
+  }
 }
 
 // --- Matching primitives ----------------------------------------------------------
@@ -247,16 +289,22 @@ function withinWindow<T>(
   });
 }
 
-// Build a key → ledger record lookup. On a duplicate key the first wins and the later one
-// is left out, so it surfaces as a ledger orphan rather than overwriting the first.
+// Bucket the ledger records by key, keeping EVERY record per key in first-seen order. A repeated key
+// (matchKey is meant to be a unique join reference, so a repeat is the "shouldn't happen" a
+// reconciler exists to catch) keeps all its records, so matchProcessorSide pairs each with a
+// distinct processor record and any surplus still surfaces as a ledger orphan — never silently
+// dropped (the bug this replaced: keeping only the first and losing the rest).
 function indexByKey(
   ledger: ReadonlyArray<LedgerRecord>,
-): Map<string, LedgerRecord> {
-  let index = new Map<string, LedgerRecord>();
+): Map<string, LedgerRecord[]> {
+  let index = new Map<string, LedgerRecord[]>();
   for (let record of ledger) {
     let key = keyOf(record.kind, record.matchKey);
-    if (!index.has(key)) {
-      index.set(key, record);
+    let bucket = index.get(key);
+    if (bucket === undefined) {
+      index.set(key, [record]);
+    } else {
+      bucket.push(record);
     }
   }
   return index;
