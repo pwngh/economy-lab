@@ -74,13 +74,10 @@ export type { Capabilities, Options, Range, Statement } from '#src/ports.ts';
 
 // --- Composition from env ---------------------------------------------------------
 //
-// The layers this composes from, since the directory split only half-expresses them:
-//   - src/engines/  — the systems of record that enforce the ledger invariants natively (Postgres,
-//                     MySQL). The database is not an adapter; it is the source of truth.
-//   - src/adapters/ — everything pluggable that does not enforce invariants: the in-memory and HTTP
-//                     stores (records too, but the zero-infra / in-process transports), plus the
-//                     genuine capabilities you don't own — Redis cache, SQS or HTTP dispatcher, payout
-//                     processor, FX rates.
+// Two source layers, since the directory split only half-expresses them: src/engines/ are the
+// systems of record that enforce ledger invariants natively (Postgres, MySQL) — the database is
+// the source of truth, not an adapter; src/adapters/ are everything pluggable that does not enforce
+// invariants (in-memory/HTTP stores, Redis cache, SQS/HTTP dispatcher, payout processor, FX rates).
 
 /**
  * External services with no built-in stand-in; the caller supplies a real one. `pricing` splits
@@ -181,6 +178,8 @@ export function workerCtxFrom(caps: Capabilities): WorkerCtx {
  * Wire an {@link Economy} whose Store (and optional Redis cache / SQS dispatcher) are chosen from
  * `env`, falling back to the in-memory store when `DATABASE_URL` is unset. Thin over
  * {@link capabilitiesFromEnv}.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy} for composing an economy from env.
  */
 export async function compose(
   env: Record<string, string | undefined>,

@@ -211,10 +211,9 @@ export type Operation =
     };
 
 /**
- * The result of submitting an operation: it went through (`committed`), it repeated one already
- * done and the earlier result is returned unchanged (`duplicate`), or it was declined for a
- * business reason the caller can handle (`rejected`). Rejection is a normal "no" returned as data;
- * a genuine fault is thrown instead.
+ * The result of submitting an operation: `committed`, `duplicate` (a repeat, earlier result
+ * returned unchanged), or `rejected`. A rejection is a normal "no" returned as data; a genuine
+ * fault is thrown instead.
  */
 export type Outcome =
   | { status: 'committed'; transaction: Transaction }
@@ -316,6 +315,9 @@ export type EconomyStatus = {
 /**
  * Public surface of a running economy: submit operations that change money, read balances and
  * statements, run the integrity check, shut down. Built by `createEconomy` in `economy.ts`.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy} for the
+ * submit/read/close surface and its construction.
  */
 export interface Economy {
   submit(operation: Operation, options?: Options): Promise<Outcome>;

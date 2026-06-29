@@ -308,9 +308,10 @@ function distinctAccounts(posting: Posting): AccountRef[] {
   return order;
 }
 
-// RFC 6962 domain tags: a one-byte prefix that keeps a leaf's preimage out of the internal-node
-// domain, so no leaf can ever be reinterpreted as an interior left||right pair (second-preimage
-// defense). The two values just have to differ; 0x00 for leaves and 0x01 for nodes is the convention.
+// RFC 6962 domain tags (https://datatracker.ietf.org/doc/rfc6962/): a one-byte prefix that keeps a
+// leaf's preimage out of the internal-node domain, so no leaf can ever be reinterpreted as an
+// interior left||right pair (second-preimage defense). The two values just have to differ; 0x00 for
+// leaves and 0x01 for nodes is the convention.
 const MERKLE_LEAF = 0x00;
 const MERKLE_NODE = 0x01;
 

@@ -18,8 +18,10 @@ import type { Outcome } from '#src/contract.ts';
  *
  * Kept separate from the thrown faults in `ERROR_CODES`. Affordability is checked up front
  * and returned as INSUFFICIENT_FUNDS; it never reaches the deeper OVERDRAFT fault, which
- * only fires if a balance went negative anyway. Keeping ordinary "no" answers (UNKNOWN_ORDER,
- * UNKNOWN_SUBSCRIPTION) off the thrown-error path keeps them out of error dashboards and alerts.
+ * only fires if a balance went negative anyway. Keeping ordinary "no" answers off the
+ * thrown-error path keeps them out of error dashboards and alerts.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/outcomes-and-reason-codes/ Outcomes & reason codes} for the full taxonomy.
  */
 export type RejectionCode =
   // The account doesn't have enough money to cover the request.
@@ -33,10 +35,9 @@ export type RejectionCode =
   // No sale was found for the order the request refers to.
   | 'UNKNOWN_ORDER'
   // A spend reused an orderId that already has a completed sale but carried a different
-  // idempotencyKey (the value that lets a retried request run at most once: a repeat with the
-  // same key is recognized and not re-applied). The orderId identifies a unique purchase, so a
-  // second charge for the same order is returned as a normal "no", not thrown. Expected client
-  // mistake (a retry that lost its idempotency key), not a bug.
+  // idempotencyKey. The orderId identifies a unique purchase, so a second charge for the same
+  // order is returned as a normal "no", not thrown. Expected client mistake (a retry that lost
+  // its idempotency key), not a bug.
   | 'DUPLICATE_ORDER'
   // No subscription was found matching the request.
   | 'UNKNOWN_SUBSCRIPTION'
@@ -81,8 +82,7 @@ export const ERROR_CODES = {
   UNAUTHORIZED: 'AUTH.UNAUTHORIZED',
 
   // A cryptographic signature didn't verify. Thrown in src/server.ts when an inbound webhook's
-  // HMAC signature (a keyed hash proving the sender holds the shared secret) fails to match,
-  // before any state is changed; outer layers map this to HTTP 401.
+  // HMAC signature fails to match, before any state is changed; outer layers map this to HTTP 401.
   INVALID_SIGNATURE: 'AUTH.INVALID_SIGNATURE',
 
   // The underlying storage layer (database, etc.) failed.

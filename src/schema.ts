@@ -12,15 +12,14 @@
 /**
  * Schema version stamp — the one guard against a database that has silently drifted from this code.
  *
- * Both SQL schema files (db/postgresql-schema.sql, db/mysql-schema.sql) seed a single `schema_meta`
- * row with this exact value. On startup each SQL engine reads it back and refuses to run if it does
- * not match (see {@link assertSchemaCurrent}). That turns a silent drift — the engine reading
- * `platform:` accounts out of a database still on the old `vrchat:` schema, and showing $0.00
- * instead of erroring — into a loud, actionable startup error.
+ * Both SQL schema files seed a `schema_meta` row with this value; startup reads it back and fails
+ * fast on mismatch (see {@link assertSchemaCurrent}), turning a silent drift into a loud error.
  *
- * Bump this AND the matching `insert into schema_meta` in BOTH schema files in the same change,
- * whenever the schema changes: a new column, a renamed account id, an added index. Any edit that a
- * running database would need re-migrated to pick up should bump the version.
+ * Bump this AND the matching `insert into schema_meta` in BOTH schema files
+ * (db/postgresql-schema.sql, db/mysql-schema.sql) in the same change, whenever a running database
+ * would need re-migrating to pick up the edit: a new column, a renamed account id, an added index.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/configuration/ Configuration} for schema versioning and drift guard.
  */
 export const SCHEMA_VERSION = '7';
 

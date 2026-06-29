@@ -20,7 +20,11 @@ import type { Posting } from '#src/ports.ts';
 // them to the database.
 type Link = { account: AccountRef; prevHash: string; hash: string };
 
-/** Which SQL dialect's placeholder style to emit: Postgres `$1,$2,…` or MySQL `?,?,…`. */
+/**
+ * Which SQL dialect's placeholder style to emit: Postgres `$1,$2,…` or MySQL `?,?,…`.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for the stored-routine boundary.
+ */
 export type SqlDialect = 'postgres' | 'mysql';
 
 /**

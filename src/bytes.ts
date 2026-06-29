@@ -27,6 +27,9 @@ let HEX = (() => {
  * Hand-written over `Uint8Array` rather than `Buffer` or `Uint8Array.prototype.toHex`,
  * neither of which exists on every runtime we target. This guarantees identical output
  * on Node, Bun, Deno, and Workers, which matters since the result feeds cross-runtime hashes.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for the
+ * hash chain these hex helpers feed.
  */
 export function toHex(bytes: Uint8Array): string {
   let out = '';
@@ -39,8 +42,8 @@ export function toHex(bytes: Uint8Array): string {
 /**
  * Decode a lowercase hex string back into its byte array.
  *
- * Throws on odd length or any non-hex-digit character. Such input is a broken
- * string from the caller, a bug to fix at the source, not a recoverable outcome.
+ * Throws on odd length or any non-hex-digit character: such input is a caller bug to fix at the
+ * source, not a recoverable outcome.
  */
 export function fromHex(hex: string): Uint8Array {
   if (hex.length % 2 !== 0) {
@@ -63,9 +66,8 @@ export function fromHex(hex: string): Uint8Array {
 
 /**
  * Order two strings by raw UTF-16 character codes, returning -1, 0, or 1 (sort comparator shape).
- * JS `<`/`>` on strings compare by character code, which is stable across runtimes and locales,
- * unlike `localeCompare` (varies by machine and language). Used when sorting account ids or report
- * keys so the order, and any hash or report derived from it, is identical everywhere.
+ * Character-code order via `<`/`>` is identical across runtimes and locales, unlike `localeCompare`,
+ * so any hash or report derived from sorted account ids or keys matches everywhere.
  */
 export function byCodeUnit(a: string, b: string): number {
   if (a < b) {

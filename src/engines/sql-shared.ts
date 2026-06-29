@@ -31,7 +31,12 @@ import type {
 
 // --- Default services -------------------------------------------------------------
 
-// SHA-256 via Web Crypto, available on every JS runtime.
+/**
+ * SHA-256 via Web Crypto, available on every JS runtime. The same bytes hash to the same
+ * digest on every runtime, so the chain head an engine writes is reproducible everywhere.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for how engines plug into the ledger.
+ */
 export function defaultDigest(): Digest {
   return {
     hash: async (bytes) =>
@@ -88,22 +93,17 @@ export type Link = { account: AccountRef; prevHash: string; hash: string };
 // each engine passes a single closure that owns one fresh transaction per try.
 type Attempt<T> = () => Promise<T>;
 
-// Decides whether a thrown error is a *transient* lock conflict the database itself raised by
-// breaking a tie — a deadlock or serialization abort that rolled the transaction back without
-// committing anything — as opposed to a domain fault, a CHECK/constraint violation, or any other
-// error. Only the former is safe to retry: the aborted attempt persisted nothing, so re-running the
-// whole transaction either succeeds (the conflict cleared) or reloads the now-terminal state and
-// fails with the clean domain outcome. Each engine supplies its own driver-specific test (pg
-// `error.code`, mysql2 `error.errno`).
+// True only for a *transient* lock conflict the database raised by breaking a tie (deadlock or
+// serialization abort) that rolled the transaction back without committing — never for a domain
+// fault or a CHECK/constraint violation. Only the former is safe to retry: the aborted attempt
+// persisted nothing. Each engine supplies its own driver-specific test (pg `error.code`, mysql2
+// `error.errno`).
 export type IsTransientConflict = (error: unknown) => boolean;
 
-// Run `attempt` (one full transaction) under a bounded transient-conflict retry. On a conflict the
-// caller's own try/catch has already rolled the aborted transaction back, so this just waits a short
-// jittered backoff and runs a fresh attempt. After `maxAttempts` tries it rethrows the last error
-// unchanged, so a persistent conflict still surfaces rather than looping forever. A non-transient
-// error (domain fault, constraint violation, anything else) is rethrown immediately on the first
-// occurrence — it is never retried. Backoff is a few milliseconds with random jitter, fine for
-// runtime engine code (this is a cold path taken only when the database aborts a transaction).
+// Run `attempt` (one full transaction) under a bounded transient-conflict retry: on a conflict,
+// wait a short jittered backoff and run a fresh attempt. After `maxAttempts` tries it rethrows the
+// last error unchanged, so a persistent conflict surfaces rather than looping forever. A
+// non-transient error is rethrown immediately on the first occurrence — never retried.
 export async function withTransientRetry<T>(
   attempt: Attempt<T>,
   isTransientConflict: IsTransientConflict,
