@@ -17,8 +17,7 @@
 //      `make smoke`). Shows the engine cost of the double-entry + hash-chain guarantees.
 //   2. Integrity cost vs ledger size (in-memory): how prove() and a checkpoint seal grow with
 //      history (they re-walk every posting from genesis — O(postings)) against checkpoint verify
-//      (which reads only account heads — O(accounts), ~flat). A signed checkpoint verifies in
-//      O(accounts), so it — not a periodic full re-prove — is what ongoing integrity rests on.
+//      (which reads only account heads — O(accounts), ~flat).
 //
 // These are LAB numbers: one process, sequential submits (no pipelining), in-memory by default. They
 // characterize relative cost and scaling shape, not production capacity. Policy gates (maturity,

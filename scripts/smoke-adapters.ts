@@ -9,20 +9,20 @@
  * @license MIT
  */
 
-// Live integration smoke for the optional adapters. Drives the Redis cache and the HTTP/SQS
-// dispatchers through the REAL wiring (`capabilitiesFromEnv` -> `selectCache`/`selectDispatcher`)
-// against running services, with the real drivers (ioredis, @aws-sdk/client-sqs, fetch). The
-// fake-based unit tests (test/adapters/*, test/conformance/{cache,dispatcher}.ts) prove each
-// adapter's logic; this proves the SDK integration the fakes can't see — it is how the SQS
-// command-shape bug was caught (the adapter's `{ input }` command needs wrapping into a real
-// `SendMessageCommand`, which only the live SDK rejects).
-//
-// Each adapter skips when its service is unreachable, so this is safe to run anywhere; it exits
-// non-zero only when a reachable adapter actually fails.
-//
-//   node scripts/smoke-adapters.ts        # or: make smoke
-//
-// Services (docker compose up -d): Redis :6379, LocalStack/SQS :4566.
+/**
+ * Live integration smoke for the optional adapters: drives the real wiring against running
+ * services with the real drivers (ioredis, @aws-sdk/client-sqs, fetch), proving the SDK
+ * integration the fake-based unit tests can't see.
+ *
+ * Each adapter skips when its service is unreachable, so this is safe to run anywhere; it exits
+ * non-zero only when a reachable adapter actually fails.
+ *
+ *   node scripts/smoke-adapters.ts        # or: make smoke
+ *
+ * Services (docker compose up -d): Redis :6379, LocalStack/SQS :4566.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for the adapter wiring this exercises.
+ */
 
 import { createServer } from 'node:http';
 import { connect } from 'node:net';

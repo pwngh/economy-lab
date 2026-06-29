@@ -17,10 +17,9 @@
 //   scripts/main.ts dev     # same API, forced in-memory with dev secrets — no infra, `make dev`
 //   scripts/main.ts worker  # background loop running the maintenance sweep every $WORKER_INTERVAL_MS
 //
-// serve/dev run the src/server.ts handler, written against web Request/Response. Bun and Deno run it
-// as-is; on Node we translate node:http requests to web Requests (`bridge`, below). That translation
-// is why this entry lives in scripts/: the rest of src/ avoids Node-specific APIs to stay runtime-
-// agnostic.
+// serve/dev run the src/server.ts handler (web Request/Response). On Node we translate node:http to
+// web Requests (`bridge`, below); that translation is why this entry lives in scripts/, so the rest
+// of src/ can stay runtime-agnostic.
 //
 // Three externals have no safe default: the request signer, the CREDIT-to-USD rates, and the payout
 // provider. In production (NODE_ENV=production) they must be real and configured; `wiring` refuses to
@@ -231,18 +230,11 @@ function wiring(env: Env): {
 
 // --- webhook ingestion ------------------------------------------------------------
 
-// Handler for inbound "purchase" webhooks (callbacks the payment provider sends when a user buys
-// credit). The serve path passes this into createServer. Before this runs, the server has verified
-// the provider's signature, checked the timestamp is recent, and (when a seen-events store is wired)
-// recorded the event id so the same event isn't processed twice. So the body is trusted and first-seen.
-//
-// The handler decodes the body to a typed event and persists the resulting "topUp" to the inbox,
-// rather than posting it inline: it acknowledges fast and the apply worker (`drainInbox`) settles the
-// credit off the request path. The inbox dedupes on the provider event id, so a redelivery that slips
-// past the seen-events check enqueues no second row and credits the user once.
-//
-// On a malformed body or any thrown error, the response carries only the error message and mapped
-// status code, never internal details.
+// Handler for inbound "purchase" webhooks. createServer runs the verification gate first, so the body
+// here is already trusted and first-seen; this decodes it and persists the resulting "topUp" to the
+// inbox rather than posting inline, so we ack fast and the apply worker (`drainInbox`) settles off the
+// request path. The inbox dedupes on the provider event id, so a redelivery credits the user once.
+// On any thrown error the response carries only the message, never internal details.
 function purchaseWebhook(store: Store, ids: Ids, clock: Clock): WebhookHandler {
   return async (provider, request) => {
     try {
@@ -265,10 +257,9 @@ function purchaseWebhook(store: Store, ids: Ids, clock: Clock): WebhookHandler {
 
 // --- serve ------------------------------------------------------------------------
 
-// Run the Fetch handler on the current runtime. Bun and Deno serve a Fetch handler directly; on
-// Node we bridge node:http to web Request/Response, so the same server code (src/server.ts, Fetch-
-// only) runs everywhere. Returns a closer that stops accepting connections and resolves once the
-// listener is down, so a SIGTERM can drain in-flight before the store is closed.
+// Run the Fetch handler on the current runtime: Bun and Deno serve it directly, Node goes through
+// `bridge`. Returns a closer that stops accepting connections and resolves once the listener is down,
+// so a SIGTERM can drain in-flight before the store is closed.
 function serve(handler: FetchHandler, port: number): CloseServer {
   const runtime = globalThis as unknown as {
     Bun?: {
@@ -465,9 +456,14 @@ function onShutdown(env: Env, drain: () => Promise<void>): void {
 
 // --- serve (shared by `serve` and `dev`) ------------------------------------------
 
-// Build the economy from `env`, mount the HTTP handler with the active webhook gate, start the
-// listener, register graceful shutdown. `serve` and `dev` both use this, differing only in the env
-// they pass: `dev` forces in-memory adapters and dev secrets (see `devEnv`).
+/**
+ * Build the economy from `env`, mount the HTTP handler with the active webhook gate, start the
+ * listener, register graceful shutdown. `serve` and `dev` both use this, differing only in the env
+ * they pass: `dev` forces in-memory adapters and dev secrets (see `devEnv`).
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for
+ * the routes, wire format, and webhook gate this entry point mounts.
+ */
 async function runServe(env: Env): Promise<void> {
   const { ports, defaults } = wiring(env);
   // Build the capability bundle once so the economy and the webhook handler share one store, id
@@ -477,10 +473,8 @@ async function runServe(env: Env): Promise<void> {
   const caps = await capabilitiesFromEnv(env, ports, defaults);
   const economy = createEconomy(caps);
   const config = loadConfig(env);
-  // Mount the purchase-webhook handler with the checks that activate webhook security: config and
-  // clock let the server verify each callback's signature and timestamp, so a genuine callback is
-  // persisted to the inbox as a topUp and a forged or stale one is rejected before it changes
-  // anything. The inbox dedupes on the provider event id, so each event is enqueued at most once.
+  // config and clock are what activate the webhook gate: without them createServer can't verify a
+  // callback's signature and timestamp, so a forged or stale one would reach the handler unchecked.
   const handler = createServer(economy, {
     webhook: purchaseWebhook(caps.store, caps.ids, caps.clock),
     config,

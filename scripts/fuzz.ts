@@ -10,16 +10,14 @@
  */
 
 /**
- * CLI script: sets a process exit code (non-zero on first divergence, zero when every adapter
- * agrees).
+ * CLI script (`make fuzz`): cross-backend differential. Sets a process exit code — non-zero on the
+ * first divergence, zero when every adapter agrees.
  *
- * Checks the SQL storage adapters against the in-memory reference. For each seed, builds one fixed
- * operation sequence and replays it against every reachable adapter (memory, postgres, mysql, http)
- * on its own fresh isolated store. Memory is the reference; every other adapter must finish with the
- * same per-account balance, the same latest hash-chain entry ("head") per account, and the same
- * integrity report (`prove` re-derives balances from the entries and reports conserved, fully backed
- * by USD, never overdrawn, chains intact). A mismatch fails as `adapter <X> diverged from memory at
- * <detail>`. An adapter whose database is unreachable is skipped (logged, not failed).
+ * For each seed, builds one fixed operation sequence and replays it against every reachable adapter
+ * (memory, postgres, mysql, http) on its own fresh isolated store. Memory is the reference; every
+ * other adapter must finish with the same per-account balance, the same hash-chain head per account,
+ * and the same integrity report. A mismatch fails as `adapter <X> diverged from memory at <detail>`.
+ * An adapter whose database is unreachable is skipped (logged, not failed).
  *
  * Every adapter must hash the same way for the comparison to be valid, so each store comes from
  * `adapterMatrix()` wired with the same seeded hash function and fixed clock. The chain hash is
@@ -31,6 +29,9 @@
  * same comparison.
  *
  * Fully fixed (no randomness), so the run is reproducible on Node, Bun, and Deno.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/the-proof/ The proof} for what
+ * the integrity report each adapter must reproduce actually asserts.
  */
 
 import process from 'node:process';
@@ -75,10 +76,9 @@ function check(condition: boolean, message: string): void {
 type Snapshot = {
   balances: Map<AccountRef, string>;
 
-  // Each account's latest hash-chain entry (its "head", most recent hash) as raw hex. The chain
-  // makes after-the-fact tampering detectable. A bug that merged an account's debit/credit lines into
-  // the right balance but linked them in the wrong order leaves balances equal yet head hashes
-  // different; the balance map alone would miss it, this map catches it.
+  // Each account's latest hash-chain entry (its "head") as raw hex. A bug that posts the same lines
+  // in the wrong order leaves balances equal yet head hashes different; the balance map alone would
+  // miss it, this map catches it.
   heads: Map<AccountRef, string>;
 
   report: ProveReport;
@@ -149,10 +149,9 @@ function diverge(reference: Snapshot, candidate: Snapshot): string | null {
     }
   }
 
-  // Every account's head hash must match memory's byte for byte. A bug that merged an account's
-  // debit/credit lines into the right balance but in a different order leaves balances equal while
-  // shifting the head hash; only this comparison catches it. Detail worded so the caller's `adapter
-  // <X> diverged from memory at <detail>` reads as `adapter <X> head diverged at <account>`.
+  // Every account's head hash must match memory's byte for byte: catches wrong-order posting bugs
+  // that leave balances equal. Detail worded so the caller's `adapter <X> diverged from memory at
+  // <detail>` reads as `adapter <X> head diverged at <account>`.
   let headAccounts = new Set<AccountRef>([
     ...reference.heads.keys(),
     ...candidate.heads.keys(),

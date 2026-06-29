@@ -38,6 +38,9 @@ import type { Handler, Operation } from '#src/contract.ts';
  * Most keys match the imported handler name. A few handlers are exported as `handle…`
  * (`handleClawback`, `handleSubscribe`, `handleCancelSubscription`), written `kind: handler` so
  * the key stays the operation's kind.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy} for the
+ * submit entry point that dispatches through this registry.
  */
 export const REGISTRY = {
   topUp,

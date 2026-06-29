@@ -9,18 +9,23 @@
  * @license MIT
  */
 
-// Runnable demo of `compose` (src/index.ts), which wires up the economy from env vars. Reads the
-// same env a real deployment would, prints which backend each var picked (db, optional cache, event
-// dispatcher), runs a small money flow, then reads balances back from the selected backend. Switch
-// backends via env:
-//
-//   node scripts/compose-demo.ts                                              # memory
-//   DATABASE_URL=postgres://economy:economy@localhost:5432/economy_lab  ...    # postgres
-//   DATABASE_URL=mysql://root:economy@localhost:3306/economy_lab        ...    # mysql
-//   REDIS_URL=redis://localhost:6379 ...                                       # + cache in front of reads
-//
-// In-memory backend is self-contained. SQL backends use the existing schema (run `make db-migrate`
-// first); DEMO_RESET=1 drops & recreates it, which DESTROYS all data — a demo convenience (issue #20).
+/**
+ * Runnable demo of `compose` (src/index.ts), which wires up the economy from env vars. Reads the
+ * same env a real deployment would, prints which backend each var picked (db, optional cache, event
+ * dispatcher), runs a small money flow, then reads balances back from the selected backend. Switch
+ * backends via env:
+ *
+ *   node scripts/compose-demo.ts                                              # memory
+ *   DATABASE_URL=postgres://economy:economy@localhost:5432/economy_lab  ...    # postgres
+ *   DATABASE_URL=mysql://root:economy@localhost:3306/economy_lab        ...    # mysql
+ *   REDIS_URL=redis://localhost:6379 ...                                       # + cache in front of reads
+ *
+ * In-memory backend is self-contained. SQL backends use the existing schema (run `make db-migrate`
+ * first); DEMO_RESET=1 drops & recreates it, which DESTROYS all data — a demo convenience (issue #20).
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy} for the
+ * money flow this sample walks through.
+ */
 
 import { readFile } from 'node:fs/promises';
 
@@ -133,10 +138,9 @@ function fmt(a: Amount): string {
 const env = {
   WEBHOOK_SECRET: 'demo-webhook-secret',
   SIGNING_SECRET: 'demo-signing-secret',
-  // Demo-only policy so the flow runs in one shot. A deployment sets these from real policy:
-  //   - 0-ms maturity: just-topped-up balance is immediately spendable, earnings immediately payable
-  //     (real default: 7-day card chargeback window, so funds are held).
-  //   - tiny payout minimum so the demo's modest earnings clear the gate (real default: 20,000).
+  // Demo-only policy so the flow clears in one shot: 0-ms maturity makes funds immediately
+  // spendable/payable, and a tiny payout minimum lets the modest earnings clear the gate. A
+  // deployment sets these from real policy (e.g. a 7-day card-chargeback hold, a 20,000 minimum).
   MATURITY_HORIZON_CARD_MS: '0',
   MATURITY_HORIZON_DEFAULT_MS: '0',
   PAYOUT_MIN_EARNED_MINOR: '100',
@@ -189,10 +193,8 @@ const r2 = await economy.submit(
 );
 console.warn(`spend 12.00 (60/40 split):      ${r2.status}`);
 
-// 3. Creator requests a payout: sets aside earned credits and starts a multi-step workflow a
-//    background worker finishes later. Must clear a minimum amount, and earnings must be old enough
-//    (a post-sale hold in case the card charge is reversed), so brand-new earnings can come back
-//    'rejected'. Accounts still net to zero either way.
+// 3. Creator requests a payout. Brand-new earnings can come back 'rejected' (a minimum and a
+//    post-sale hold gate the request); the demo prints whichever status it gets.
 const r3 = await economy.submit(
   requestPayout({ userId: creatorA, amount: credit('5.00') }),
 );
@@ -215,10 +217,7 @@ console.warn(
   `REVENUE (platform)  = ${fmt(await economy.read.balance(SYSTEM.REVENUE))}`,
 );
 
-// 4. Regardless of the above, the ledger holds on every rule: debits equal credits, every spendable
-//    credit is backed by real USD held against it, no wallet went negative, the per-account hash
-//    chain (each entry hashes in the prior one) is unbroken, and each account's cached running
-//    balance matches the sum of its debit and credit lines.
+// 4. Regardless of the above, the ledger still holds on every invariant prove() checks.
 const report = await economy.read.prove();
 console.warn(
   `\nprove(): conserved=${report.conserved} backed=${report.backed} ` +

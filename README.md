@@ -12,23 +12,21 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-554_passing-3fb950" alt="tests">
+  <img src="https://img.shields.io/badge/tests-699_passing-3fb950" alt="tests">
   <img src="https://img.shields.io/badge/runtime_deps-0-3fb950" alt="runtime deps">
   <img src="https://img.shields.io/badge/node-%E2%89%A522.18-1f6feb" alt="node">
   <img src="https://img.shields.io/badge/license-MIT-1f6feb" alt="license">
 </p>
 
 <p align="center">
-  <a href="https://economy-lab-docs.pages.dev/economy/"><strong>Documentation ↗</strong></a> ·
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#architecture">Architecture</a> ·
-  <a href="#what-it-demonstrates">What it demonstrates</a> ·
+  <a href="#quick-start">Quick start</a> -
+  <a href="#architecture">Architecture</a> -
+  <a href="#what-it-demonstrates">What it demonstrates</a> -
   <a href="#run-it">Run it</a>
 </p>
 
-A small, runnable lab for the application layer of a credits economy.
 
-> **📖 Read the full documentation here:** **[economy-lab-docs.pages.dev](https://economy-lab-docs.pages.dev/economy/)**. 
+> **📖 Read the full documentation here:** **[economy-lab-docs.pages.dev](https://economy-lab-docs.pages.dev/economy/)**.
 
 ## Quick start
 
@@ -56,7 +54,6 @@ await economy.close();
 See
 [the `Economy` surface](https://economy-lab-docs.pages.dev/economy/reference/the-economy/) for the
 whole API.
-
 
 ## Architecture
 
@@ -94,10 +91,8 @@ flowchart TB
 ```
 
 The same logic runs in-memory and on Postgres or MySQL through swappable **engines** (databases that
-enforce the invariants natively) and **adapters** (pluggable cache and event transports) — one
+enforce the invariants natively) and **adapters** (pluggable cache and event transports). One
 conformance suite holds them to identical behavior.
-
-Full detail: [Storage & Messaging](https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/).
 
 ## What it demonstrates
 
@@ -133,13 +128,13 @@ make fuzz        # cross-backend differential — every backend must produce ide
 The bundled host process runs as an [HTTP service](https://economy-lab-docs.pages.dev/economy/reference/http-service/)
 (`POST /submit`, `POST /webhooks/:provider`, plus `/healthz` and `/readyz`) and a
 [background worker](https://economy-lab-docs.pages.dev/economy/reference/background-worker/) (ten sweeps
-on an interval). 
+on an interval).
 
 Every backend is selected by an environment variable — see
 [configuration](https://economy-lab-docs.pages.dev/economy/reference/configuration/) for the full set.
 
 With Docker: `docker compose up -d` brings up Postgres, MySQL, Redis, and LocalStack/SQS; point
-`DATABASE_URL` at one, run `make db-migrate`, then `make start` or `make worker`. 
+`DATABASE_URL` at one, run `make db-migrate`, then `make start` or `make worker`.
 
 ## License
 

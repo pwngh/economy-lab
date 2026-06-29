@@ -194,11 +194,9 @@ function program(seed: number, length: number): Operation[] {
 type Failure = { invariant: string; detail: Record<string, unknown> };
 
 // Check every ledger property after one operation, returning the first failure (or null).
-// Five come from the economy's integrity report: money is neither created nor destroyed,
-// real USD still covers what the platform owes users, no account went negative, every
-// hash chain is well-formed, and each account's cached balance equals the sum of its
-// debit/credit lines. The sixth, the chain-link check below, confirms each touched
-// account's latest hash matches the hash the committed operation reported.
+// Five flags come from the economy's integrity report; the sixth, the chain-link check
+// below, confirms each touched account's latest head matches what the committed operation
+// reported.
 async function checkInvariants(
   provable: Provable,
   outcome: Outcome,
@@ -395,6 +393,13 @@ async function proveAdapter(
   return true;
 }
 
+/**
+ * Run the randomized invariant prover across every reachable adapter, exiting non-zero on
+ * the first violation.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/the-proof/ The proof} for what
+ * the proof asserts and why it runs after every operation.
+ */
 async function main(): Promise<void> {
   // 8 seeds, each a 60-operation program. Every adapter runs this same workload.
   let seeds = Array.from({ length: 8 }, (_, i) => 0x1000 + i);

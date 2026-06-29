@@ -55,8 +55,8 @@ function canonical(value: unknown): unknown {
   return value;
 }
 
-// Final text written to (or compared against) the golden file: pretty-printed JSON, two-space
-// indent, trailing newline, so a diff points at the exact changed line.
+// Final golden text: pretty-printed JSON, two-space indent, trailing newline, so a diff points
+// at the exact changed line.
 function render(value: unknown): string {
   return `${JSON.stringify(canonical(value), null, 2)}\n`;
 }
@@ -96,10 +96,8 @@ async function step(
   return outcome;
 }
 
-// Run the scenario against a fresh test economy and return the trace contents: the ordered
-// steps, the prove() integrity report (money conserved, cash covers what users are owed), and
-// a pinned set of key balances. Any change in money lines, integrity checks, or a balance
-// shows up in the diff.
+// Run the scenario against a fresh test economy and return the trace contents: ordered steps,
+// the prove() integrity report, and a pinned set of key balances. Any change shows up in the diff.
 //
 // Scenario: top-up, promo grant, purchase split between two sellers, the same purchase again
 // (must not double-charge), and an over-priced purchase that's declined for insufficient funds.
@@ -143,8 +141,7 @@ async function buildTrace(): Promise<Record<string, unknown>> {
 }
 
 // Balances for a hand-picked set of accounts under stable labels: buyer spendable/promo, each
-// seller's earnings, platform accounts. A bug in purchase splitting, promo drawdown, or cash
-// tracking changes one of these numbers.
+// seller's earnings, platform accounts.
 async function keyBalances(economy: Economy): Promise<Record<string, unknown>> {
   let accounts: ReadonlyArray<readonly [string, AccountRef]> = [
     ['buyer.spendable', spendable('usr_buyer')],

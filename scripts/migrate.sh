@@ -7,10 +7,11 @@
 #   DATABASE_URL=mysql://root:economy@localhost:3306/economy_lab        sh scripts/migrate.sh
 #   make db-migrate        # reads DATABASE_URL from the environment, falling back to .env
 #
-# Postgres: db/postgresql-schema.sql declares its tables outright (no IF NOT EXISTS), so the
-# `public` schema is reset first and the file applied — safe to re-run. MySQL: db/mysql-schema.sql
-# drops every table and routine up front, so it is self-resetting. No DATABASE_URL: nothing to do
-# (the in-memory store builds its tables in code).
+# See: https://economy-lab-docs.pages.dev/economy/reference/configuration/  (Configuration)
+#
+# Both schemas are self-resetting (Postgres resets the `public` schema first; MySQL drops its tables
+# and routines up front), so re-running is safe. No DATABASE_URL: nothing to do (the in-memory store
+# builds its tables in code).
 #
 # This is a lab tool: it resets by dropping the schema — right for a throwaway dev/lab database,
 # catastrophic for one holding real money. As a guard it refuses a non-local host unless

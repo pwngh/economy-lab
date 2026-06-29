@@ -10,6 +10,8 @@
 #   sh scripts/docker.sh bootstrap  # up -d, wait for health, then run db:migrate
 #
 # Via npm, extra args need the `--` separator: `npm run docker -- down`.
+#
+# See: https://economy-lab-docs.pages.dev/economy/reference/configuration/  (Configuration)
 set -eu
 
 # Run from the repo root so docker-compose.yml is found regardless of caller cwd.
