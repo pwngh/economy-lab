@@ -1,5 +1,5 @@
 /**
- * @pwngh/economy-lab-docs
+ * @pwngh/economy-lab
  *
  * Copyright (c) Preston Neal
  *
