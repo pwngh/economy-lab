@@ -134,13 +134,9 @@ export async function maturedBalance(
 }
 
 /**
- * Reports whether an account has at least `amount` of cashable balance as of `now`, without
- * computing the full matured total. It reads the same newest-first FIFO tail as {@link
- * maturedBalance} and returns `true` the moment the matured running sum reaches `amount`. By
- * construction this equals `maturedBalance(...).minor >= amount.minor`, just stopped as soon as the
- * answer is settled, so a request well within cleared funds costs O(amount-worth-of-lots). The
- * maturity-gated callers, requestPayout's payable-funds check and spend's spendable-funds check, ask
- * exactly this. The `amount` shares the account's currency, so only minor units compare; a
+ * Reports whether an account has at least `amount` of cashable balance as of `now`, short-circuiting
+ * once the matured running sum reaches `amount`. Equals `maturedBalance(...).minor >= amount.minor`
+ * but stops early, so a request well within cleared funds costs O(amount-worth-of-lots). A
  * non-positive `amount` is trivially covered.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/ Credit maturity}.
@@ -301,12 +297,8 @@ function sumMatured(
 // --- Why this module computes maturity instead of trusting the lot ----------------
 //
 // Load-bearing caller rule: any handler issuing spendable credits must record the funding source on
-// the posting, as the top-up handler already does. A missing source falls back to the 'default'
-// horizon, which is still safe (never instantly cashable) but less precise than the real source.
-// See https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/ for the dated-lot model
-// and per-source horizons.
-//
-// Maturity is computed as (top-up time) + (source's required wait). We deliberately do not trust
-// the lot's own `maturesAt`, which the ledger defaults to the top-up time (immediately cashable)
-// when the posting recorded no maturity. Correctness depends only on the funding source and top-up
-// time, not on a precomputed maturity time.
+// the posting (a missing source falls back to the safe 'default' horizon, just less precise).
+// Maturity is (top-up time) + (source's required wait); we deliberately do not trust the lot's own
+// `maturesAt`, which the ledger defaults to the top-up time (immediately cashable) when the posting
+// recorded no maturity.
+// See https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/ for the dated-lot model.

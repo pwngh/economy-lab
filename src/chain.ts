@@ -262,15 +262,12 @@ export async function recordCheckpoint(
 }
 
 /**
- * Checks a saved checkpoint against the current ledger. It recomputes the Merkle root over the
- * current heads, compares it to the stored root, then verifies the signature covers it. The
- * signature check accepts the current key plus still-valid rotated-out keys, so a checkpoint signed
- * before a key rotation keeps verifying.
- *
- * Returns false on a normal mismatch: a changed root, an inauthentic signature, or a live head count
- * below the recorded one. The head-count check guards against deleting accounts to shrink the set the
- * root covers, which a root-only comparison would not catch. Throws only when the stored hex is
- * malformed, which is a corrupt row rather than a failed verification.
+ * Checks a saved checkpoint against the current ledger: recomputes the Merkle root over current
+ * heads, compares it to the stored root, then verifies the signature (accepting still-valid
+ * rotated-out keys, so a checkpoint signed before a rotation keeps verifying). Returns false on a
+ * normal mismatch; a live head count below the recorded one is one such mismatch, since deleting
+ * accounts to shrink the root's coverage is itself tampering. Throws only on malformed stored hex,
+ * which is a corrupt row, not a failed verification.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for why fewer
  * heads than recorded is itself a tamper signal.

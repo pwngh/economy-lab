@@ -20,32 +20,16 @@ import type { Ctx, Operation, Outcome, Transaction } from '#src/contract.ts';
 import type { Saga, SagaState, Unit } from '#src/ports.ts';
 
 /**
- * Settles a submitted payout. This is the SUBMITTED to SETTLED step, driven by the provider's
- * settlement report instead of the background worker's sweep.
+ * Settles a submitted payout (SUBMITTED to SETTLED), driven by the provider's settlement report.
  *
- * This is the worker's `settle` (src/worker/payouts.ts) relocated into a system-actor operation so
- * an inbound provider webhook can trigger it. The money math is identical to the worker's. It runs
- * the same rate and fee conversion. It writes the same two coupled postings: the credit side empties
- * PAYOUT_RESERVE into REVENUE, and the USD side debits USD_CLEARING and credits TRUST_CASH for the
- * gross USD. It applies the same SUBMITTED to SETTLED compare-and-set guard. It enqueues the same
- * `economy.payout.settled` event in the same transaction. The provider's settlement ref and reported
- * amount are carried on the operation for the audit trail. The posted figures are still the
- * rate-derived ones, exactly as the worker computes them, so conservation, backing, and no-overdraft
- * hold unchanged after a settle.
- *
- * This operation is restricted to the system or an operator (see RESTRICTED_TO_PRIVILEGED in
- * economy.ts), because an end user must never settle their own payout.
- *
- * Guards (mirroring the worker):
- * - An unknown sagaId throws a fault. This is a caller or webhook-mapping error, like
- *   reversePayout's loadSaga.
- * - A non-SUBMITTED saga throws INVALID_TRANSITION, because only a submitted payout has a
- *   disbursement to settle.
- * - Losing the SUBMITTED to SETTLED compare-and-set means another worker or settle got there first.
- *   `assertAdvanced` then throws INVALID_TRANSITION, which rolls back the two postings and the event
- *   so the seller is never paid twice.
+ * This is the worker's `settle` (src/worker/payouts.ts) relocated into a system-actor operation so an
+ * inbound provider webhook can trigger it, with money math, postings, CAS guard, and event identical
+ * to the worker's. Restricted to system or operator (RESTRICTED_TO_PRIVILEGED in economy.ts): an end
+ * user must never settle their own payout. Losing the SUBMITTED to SETTLED CAS rolls back the two
+ * postings and the event, so the seller is never paid twice.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/settle-payout/ Settle payout} for the webhook-driven SUBMITTED to SETTLED settlement step.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for the settlement and dispute callback contract.
  */
 export async function settlePayout(
   operation: Operation,
@@ -86,13 +70,10 @@ export async function settlePayout(
     payoutUsd: usd,
   });
   assertAdvanced(advanced, saga, 'SETTLED');
-  // Queue the "payout settled" event in the same transaction as the postings and state change, so it
-  // is saved only if the payout actually settled. If the compare-and-set was rejected because another
-  // worker or settle got there first, assertAdvanced above throws and rolls back this event with the
-  // entries, so no event emits for a settle that did not take. The event is internal-only and carries
-  // the money detail downstream consumers need. settlePayout is not in economy.ts's EVENTS map, so
-  // the event is enqueued here rather than by the submit pipeline, which keeps it identical to the
-  // worker's.
+  // Queue the "payout settled" event in the same transaction as the postings and state change, so a
+  // lost CAS (assertAdvanced throws) rolls it back with the entries and no event emits for a settle
+  // that did not take. settlePayout is not in economy.ts's EVENTS map, so it is enqueued here rather
+  // than by the submit pipeline, keeping it identical to the worker's.
   await unit.outbox.enqueue({
     id: ctx.ids.next('obx'),
     event: {
@@ -196,11 +177,12 @@ function payoutFee(gross: Amount, feeBps: number): Amount {
   return toAmount('USD', (gross.minor * BigInt(feeBps)) / 10_000n);
 }
 
-// Fails loudly when the compare-and-set did not take, which means another worker or settle already
-// settled this payout. Throwing rolls back the two ledger entries posted alongside it, along with the
-// queued event, instead of paying the seller twice. The throw is safe to retry. A redelivered settle
-// reloads the saga, finds it no longer SUBMITTED, and is turned away at `refuseNotSubmitted` before
-// posting anything. This is the same guard as the worker's `assertAdvanced`.
+// Fails loudly when the CAS did not take (another worker or settle got there first), rolling back the
+// two entries and the queued event instead of paying the seller twice. Safe to retry: a redelivered
+// settle reloads the saga, finds it no longer SUBMITTED, and is turned away at `refuseNotSubmitted`
+// before posting anything. Same guard as the worker's `assertAdvanced`.
+// See https://economy-lab-docs.pages.dev/economy/concepts/lifecycles/ for how a compare-and-set
+// posts its money in the same transaction, so a re-driven step takes effect at most once.
 function assertAdvanced(advanced: boolean, saga: Saga, to: SagaState): void {
   if (!advanced) {
     throw fault(

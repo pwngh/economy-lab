@@ -72,41 +72,29 @@ create table legs (
   account_id text        not null,
   currency   text        not null check (currency in ('CREDIT', 'USD')),
   amount     bigint      not null check (amount <> 0),
-  -- A leg's currency must match its account's. A composite FK to accounts(id, currency), which
-  -- carries a UNIQUE on those columns, enforces this natively, not just app-side. The check rejects
-  -- a raw cross-currency leg here: for example, a balanced pair of USD legs on CREDIT accounts, which
-  -- the per-currency conservation check would let pass. This FK subsumes the plain account_id reference.
+  -- Composite FK to accounts(id, currency): a leg's currency must match its account's, enforced
+  -- natively. Rejects a raw cross-currency leg (e.g. balanced USD legs on CREDIT accounts) that the
+  -- per-currency conservation check would let pass. Subsumes the plain account_id reference.
   foreign key (account_id, currency) references accounts (id, currency)
 );
--- The composite (account_id, id) serves the maturity tail. The tail reads an account's newest lots
--- with `where account_id = ? order by id desc limit n` (src/engines, timelineOf). legs.id is a
--- bigserial assigned in commit order, so ordering by it gives the FIFO order the tail walks. This
--- index serves that query bounded to the `limit` page, as a backward index scan or, for some
--- selectivities, a bitmap scan plus a bounded top-N sort. It never sorts over the account's whole
--- leg history. The leading `account_id` column also covers the plain account_id lookups (statement,
--- lineage), so this index replaces a bare `legs(account_id)` index rather than adding to it.
+-- Serves the maturity tail's `where account_id = ? order by id desc limit n` (timelineOf): legs.id is a
+-- bigserial in commit order, so ordering by it gives FIFO without a sort. Leading account_id also covers
+-- plain account_id lookups, so this replaces a bare legs(account_id) index rather than adding to it.
 create index legs_account_idx on legs (account_id, id);
 create index legs_posting_idx on legs (posting_id);
 
--- One hash-chain link per (posting, account): each posting advances an account's chain once,
--- regardless of how many legs touch that account. Records the previous and new hash. The hash
--- (64 lowercase hex) is computed in application code, never in SQL, from the previous hash, the
--- transaction id, that account's legs, and the posting metadata. Keeping the link separate from
--- the legs lets a posting hold several same-account legs while the recomputed hash still covers
--- the same leg set the in-memory reference implementation uses.
+-- One hash-chain link per (posting, account): each posting advances an account's chain once, however
+-- many legs touch it. The hash (64 lowercase hex) is computed in application code, never in SQL, from
+-- the previous hash, the transaction id, that account's legs, and the posting metadata. Keeping links
+-- separate from legs lets a posting hold several same-account legs under one recomputed hash.
 create table chain_links (
   posting_id text        not null references postings (id),
   account_id text        not null references accounts (id),
   prev_hash  text        not null,                          -- previous hash, 64 lowercase hex; the first link uses 32 zero bytes
   hash       text        not null,                          -- the new hash, 64 lowercase hex
-  -- The account's signed running balance immediately after this link (cents/credits). This is the
-  -- same figure post_entry writes into account_balances.balance for this account in the same call.
-  -- It lets the balance-integrity check below compare a cached balance to its chain head in O(1)
-  -- instead of re-summing the whole leg history on every balance write. It is a maintained projection
-  -- of the legs (the isDebitNormal-signed sum of the account's legs through this posting), never the
-  -- source of truth: prove() and the integrity checker still re-sum the legs and win on disagreement.
-  -- It defaults to 0 so a link written around post_entry, which supplies no balance_after, carries
-  -- the genesis balance that a subsequent balance write then has to match.
+  -- The account's signed running balance right after this link, the same figure post_entry writes into
+  -- account_balances.balance, so the balance-integrity check compares cached balance to chain head in
+  -- O(1) instead of re-summing legs. A projection, not the source of truth: prove() re-sums and wins.
   balance_after bigint   not null default 0,
   -- The composite PK enforces the one-link-per-(posting,account) invariant stated above.
   primary key (posting_id, account_id)
@@ -130,35 +118,26 @@ create table account_balances (
   account_id text   not null primary key references accounts (id),
   currency   text   not null check (currency in ('CREDIT', 'USD')),
   balance    bigint not null default 0,
-  -- Maintained chain-head pointer: the hash of this account's latest chain_links row, updated in the
-  -- same transaction as the balance (post_entry writes both). It is a maintained projection alongside
-  -- `balance` with the same trust model: chain_links stays the source of truth, and prove() still
-  -- re-walks it. The pointer lets headsForAccounts read each account's head by primary key instead of
-  -- scanning chain_links and sorting. It defaults to the genesis hash (64 zeros), so an account that
-  -- ever held a balance row but somehow has no link reads as genesis, matching a missing row.
+  -- Chain-head pointer: hash of this account's latest chain_links row, written with the balance by
+  -- post_entry, so headsForAccounts reads each head by primary key instead of scanning and sorting. A
+  -- projection (chain_links stays source of truth); defaults to the genesis hash (64 zeros).
   head_hash  text   not null default repeat('0', 64),
   -- A user account (`usr_…:<kind>`) may never go negative; a system account may.
   constraint user_account_non_negative
     check (account_id like 'platform:%' or balance >= 0)
 );
 
--- Give each house (system) account an empty balance row up front: balance 0, head_hash at the genesis
--- value (64 zeros). Such a row reads identically to no row at all, because headsForAccounts already
--- treats a missing row as genesis, so it shifts no balance and no hash. Its only job is to exist.
--- lockAccounts locks an account by taking `for update` on its balance row, and you cannot lock a row
--- that is not there yet. Without the pre-planted row, the first concurrent writers to a hot shared
--- account (STORED_VALUE is touched by every top-up) find no row to lock, so none of them wait. They
--- race to extend the chain head and collide. With the row pre-planted, they take turns on the lock
--- instead. A user account still creates its row on its first posting, where the chain-fork retry
--- covers that rarer race.
+-- Pre-plant an empty balance row (reads identically to no row) for each system account, so lockAccounts
+-- can take `for update` on it. Without it, concurrent writers to a hot shared account (STORED_VALUE,
+-- touched by every top-up) find no row to lock, so none wait and they race to extend the chain head and
+-- collide. User accounts create their row on first posting; the chain-fork retry covers that rarer race.
 insert into account_balances (account_id, currency, balance, head_hash)
   select id, currency, 0, repeat('0', 64) from accounts where kind = 'system';
 
 -- ============================================================================
 -- Idempotency: makes a retried request safe to run twice. The key is the primary key, so the DB
--- prevents duplicates: a request claims its key when it starts, a second request with the same key
--- waits for the first and then replays its recorded result, and a rolled-back first request leaves
--- no row so a fresh retry proceeds.
+-- prevents duplicates: claim on start, replay the recorded result on a duplicate, rolled-back claims
+-- leave no row so a fresh retry proceeds.
 -- See https://economy-lab-docs.pages.dev/economy/concepts/idempotency/ for the claim/record model.
 -- ============================================================================
 create table idempotency (
@@ -168,12 +147,11 @@ create table idempotency (
 );
 
 -- ============================================================================
--- Webhook replay dedup: exactly-once guard for inbound provider callbacks, kept separate from
--- the domain's `idempotency` table so the two layers can't collide on a shared key. A verified
--- webhook claims its provider event id here as the last gate (after HMAC and freshness checks),
--- so a forged or stale delivery that fails an earlier check never burns the id, leaving a later
--- genuine delivery free to credit. The event id is the primary key: a second delivery of the
--- same id finds the row present and does no work.
+-- Webhook replay dedup: exactly-once guard for inbound provider callbacks, separate from `idempotency`
+-- so the two layers can't collide on a shared key. The event id (primary key) is claimed as the LAST
+-- gate, after HMAC and freshness, so a forged or stale delivery never burns the id and a later genuine
+-- delivery is still free to credit. A second delivery of the same id finds the row and does no work.
+-- See https://economy-lab-docs.pages.dev/economy/reference/http-service/ for the verification gate.
 -- ============================================================================
 create table seen_webhooks (
   event_id text        primary key,                        -- the provider's stable event id
@@ -198,11 +176,10 @@ create table sales (
 );
 
 -- ============================================================================
--- Outbox: events waiting to be published, written in the same transaction as the ledger change
--- that caused them, so an event and its ledger effect always exist together. A background relay
--- grabs a batch (locking those rows so workers don't collide), publishes them, and marks them
--- relayed; a consumer may see an event more than once, so it dedupes on the event id. The
--- partial index keeps the pending-rows scan fast.
+-- Outbox: events waiting to be published, written in the same transaction as the ledger change that
+-- caused them, so an event and its ledger effect always exist together. A background relay publishes
+-- pending rows at-least-once (consumers dedupe on event id); the partial index keeps that scan fast.
+-- See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the outbox+inbox.
 -- ============================================================================
 create table outbox (
   id                 text        primary key,                -- obx_<uuid>
@@ -218,13 +195,12 @@ create table outbox (
 create index outbox_pending_idx on outbox (created_at) where status = 'pending';
 
 -- ============================================================================
--- Inbox: the inbound mirror of `outbox`. A verified provider event, already mapped to the
--- operation it should apply, is written in the same transaction as the webhook ingress that
--- claimed it, so a received event and its record always exist together. A background apply worker
--- grabs a batch of pending rows oldest-first (locking them so workers don't collide), submits each
--- operation, and marks them applied; `attempts` and dead-lettering keep a poison event from wedging
--- the queue. `key` is the provider's event id: a UNIQUE constraint makes a redelivered event a no-op
--- insert, so it applies at most once. The partial index keeps the pending-rows scan fast.
+-- Inbox: the inbound mirror of `outbox`. A verified provider event, mapped to the operation it should
+-- apply, is written in the same transaction as the webhook ingress that claimed it. A background worker
+-- submits pending rows oldest-first; `attempts`/dead-lettering keep a poison event from wedging the
+-- queue. `key` is the provider event id (UNIQUE -> redelivery is a no-op insert, applied at most once);
+-- the partial index keeps the pending-rows scan fast.
+-- See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the outbox+inbox.
 -- ============================================================================
 create table inbox (
   id                 text        primary key,                -- ibx_<uuid>
@@ -244,7 +220,7 @@ create index inbox_pending_idx on inbox (received_at) where status = 'pending';
 -- ============================================================================
 -- Payouts: a multi-step saga that moves a creator's earned credits out to real money. Only the
 -- background worker advances it, never a normal request. `reserve` is the earned credit set
--- aside for this payout; `rate_id` pins the credit-to-USD rate so the settlement can be
+-- aside for this payout; `rate_id` pins the CREDIT-to-USD rate so the settlement can be
 -- reproduced and disputed later.
 -- ============================================================================
 create table payout_sagas (
@@ -265,11 +241,9 @@ create table payout_sagas (
   due_at             bigint not null,
   updated_at         bigint not null
 );
--- The worker's due-payouts scan only looks at RESERVED and SUBMITTED rows. A payout becomes
--- RESERVED in the request that opens it, so a row still in REQUESTED at scan time means that
--- request crashed partway; the worker skips it rather than picking up a half-finished payout
--- forever. The CHECK above allows all five states; this index (and the matching query) narrow
--- it to the two scannable ones.
+-- The worker's due-payouts scan only looks at RESERVED and SUBMITTED rows; a row still in REQUESTED
+-- means its opening request crashed partway, so the worker skips it rather than picking up a
+-- half-finished payout forever. This partial index narrows the scan to those two states.
 create index payout_sagas_due_idx on payout_sagas (due_at)
   where state in ('RESERVED', 'SUBMITTED');
 -- requestPayout's min-interval gate reads max(updated_at) for one user across all their sagas;
@@ -354,11 +328,10 @@ create table trust_attempts (
 create index trust_attempts_subject_at_idx on trust_attempts (subject, at);
 
 -- ============================================================================
--- Checkpoints: a signed snapshot of the ledger's state. Each row holds a Merkle root (one hash
--- summarizing every account's latest hash) plus a signature made with a key the ledger writer
--- can't reach. An insider who rewrites an account history and recomputes its hashes is caught:
--- the new root no longer matches the old signature. `root` and `signature` are lowercase hex.
--- In production this table lives in a separate, tamper-proof store.
+-- Checkpoints: a signed snapshot of ledger state. Each row holds a Merkle root over every account's
+-- latest hash, signed with a key the ledger writer can't reach, so an insider who rewrites a history
+-- and recomputes its hashes is caught: the new root no longer matches the old signature. In production
+-- this table lives in a separate, tamper-proof store.
 -- ============================================================================
 create table checkpoints (
   id         text        primary key,                       -- chk_<uuid>
@@ -371,23 +344,20 @@ create table checkpoints (
 );
 
 -- ============================================================================
--- Stored routines (persistence) plus the engine's invariant enforcement. The application computes the
--- values a posting needs (which way each account moves, the per-account net delta, the chain hashes,
--- the account kind) and passes them in finished. These routines write the rows in one `call` rather
--- than a dozen-plus round-trips, as one set-based unit inside the caller's transaction. But the
--- ledger invariants are no longer the application's to guarantee. The database is the primary
--- enforcer, not a safety net: the CHECK constraints above plus the triggers at the end of this file
--- reject a write that violates conservation, no-overdraft, chain continuity, exactly-once, or balance
--- integrity, even when it bypasses the application entirely. The app keeps the same checks only as
--- friendly pre-checks that return a kind error.
+-- Stored routines (persistence) plus the engine's invariant enforcement. The application computes a
+-- posting's values and passes them in finished; these routines write the rows in one set-based `call`
+-- inside the caller's transaction. The database is the primary enforcer, not a safety net: the CHECKs
+-- above plus the triggers at the end of this file reject any write that violates conservation,
+-- no-overdraft, chain continuity, exactly-once, or balance integrity, even one that bypasses the app
+-- entirely. The app keeps the same checks only as friendly pre-checks that return a kind error.
+-- See https://economy-lab-docs.pages.dev/economy/concepts/integrity/ for the invariants.
 -- ============================================================================
 
--- Persist one posting and everything derived from it in a single call: ensure any first-time
--- user accounts (system accounts are seeded above), insert the posting row, all its legs, one
--- chain link per account, and apply each account's net balance delta. bigint amounts arrive as
--- JSON strings (no precision lost past 2^53) and are cast here. The balance step UPDATEs existing
--- rows first, so the non-negative CHECK is evaluated against the new total, not the delta alone,
--- then INSERTs first-time accounts, whose first movement is always a positive credit.
+-- Persist one posting and everything derived from it in a single call: first-time user accounts, the
+-- posting row, its legs, one chain link per account, and each account's net balance delta. bigint
+-- amounts arrive as JSON strings (no precision lost past 2^53) and are cast here. The balance step
+-- UPDATEs existing rows first so the non-negative CHECK tests the new total, not the delta alone, then
+-- INSERTs first-time accounts (whose first movement is always a positive credit).
 create procedure post_entry(
   p_txn          text,
   p_posted_at    bigint,
@@ -411,12 +381,10 @@ begin
     select p_txn, l.account, l.currency, l.amount::bigint
       from jsonb_to_recordset(p_legs) as l(account text, currency text, amount text);
 
-  -- One link per distinct account, carrying the account's signed running balance after this posting.
-  -- That balance is its current cached balance (0 if it has no row yet, meaning a first-time account)
-  -- plus this posting's net delta. account_balances still holds the OLD balance here, because the
-  -- balance step below runs after, so this is exactly the value that step writes into
-  -- account_balances.balance, by construction. The balance-integrity trigger later compares a cached
-  -- balance to this figure at the account's head.
+  -- One link per distinct account, carrying its signed running balance after this posting: the current
+  -- cached balance (0 for a first-time account) plus this posting's net delta. account_balances still
+  -- holds the OLD balance here (the balance step runs after), so by construction this equals what that
+  -- step writes into account_balances.balance, which the balance-integrity trigger later compares.
   insert into chain_links (posting_id, account_id, prev_hash, hash, balance_after)
     select p_txn, c.account, c.prev_hash, c.hash,
            coalesce(ab.balance, 0) + d.delta::bigint
@@ -465,11 +433,11 @@ as $$
 $$;
 
 -- ============================================================================
--- chain continuity. The unique index above already blocks a FORK (a second
--- link at the same prev_hash). This blocks a DISCONTINUOUS link: a new link's prev_hash must be the
--- account's current head. That head is GENESIS (64 zeros) for the first link, or an existing link's
--- hash for the account thereafter. The legitimate writer (advanceHeads, src/chain.ts) always supplies
--- the current head, so this only rejects a link written around post_entry.
+-- chain continuity. The unique index above blocks a FORK (a second link at the
+-- same prev_hash); this blocks a DISCONTINUOUS link: a new link's prev_hash must be the account's
+-- current head (GENESIS for the first link, else an existing link's hash). The legitimate writer
+-- (advanceHeads, src/chain.ts) always supplies the head, so this only rejects a link written around
+-- post_entry.
 -- ============================================================================
 create or replace function chain_continuity() returns trigger as $$
 begin
@@ -493,10 +461,9 @@ create or replace trigger chain_links_continuity
 
 -- ============================================================================
 -- conservation (Postgres). A posting's legs must net to zero per currency. A
--- DEFERRABLE INITIALLY DEFERRED constraint trigger checks at COMMIT, so post_entry can insert all of
--- a posting's (balanced) legs before the check runs, while a lone unbalanced leg written around the
--- app fails at its commit. This is the engine half of assertBalanced (src/ledger.ts), which the app
--- keeps as the friendly pre-check.
+-- DEFERRABLE INITIALLY DEFERRED constraint trigger checks at COMMIT, so post_entry can insert all of a
+-- posting's balanced legs first, while a lone unbalanced leg written around the app fails at commit.
+-- The engine half of assertBalanced (src/ledger.ts), which the app keeps as the friendly pre-check.
 -- ============================================================================
 create or replace function check_conservation() returns trigger as $$
 begin
@@ -517,20 +484,12 @@ create constraint trigger legs_conserve
   for each row execute function check_conservation();
 
 -- ============================================================================
--- balance integrity (Postgres). account_balances is a cache of the legs: its
--- value must equal the legs' net for the account, signed by the account's normal side. post_entry
--- writes that running total into both account_balances.balance and the new chain_links row's
--- balance_after in the same call, so this trigger checks the cheap, equivalent thing: a cached
--- balance must equal the balance_after recorded at the account's head (the chain_links row whose
--- hash is the row's head_hash). That is an O(1) keyed read (chain_links_account_hash_idx) instead of
--- re-summing the account's whole leg history on every balance write, yet it still rejects a
--- hand-edited balance that has drifted: a raw UPDATE that bumps balance leaves head_hash and that
--- link's balance_after untouched, so the two no longer agree. balance_after is itself the signed leg
--- sum through that posting (post_entry derives both from the same delta), so this is the same
--- invariant the prover re-checks by re-summing the legs (the legs stay the source of truth).
---
--- A head_hash with no matching chain_links row (e.g. the genesis default on an account that somehow
--- has no link) yields expected = 0, so only a zero balance passes, matching the genesis state.
+-- balance integrity (Postgres). post_entry writes an account's running total into
+-- both account_balances.balance and its head chain_links row's balance_after, so this trigger checks
+-- the cheap equivalent: cached balance must equal balance_after at the head (hash = head_hash) — an
+-- O(1) keyed read (chain_links_account_hash_idx) instead of re-summing legs. It still rejects a
+-- hand-edited balance: a raw UPDATE bumping balance leaves head_hash and balance_after untouched, so the
+-- two disagree. A head_hash with no matching link yields expected = 0, so only a zero (genesis) passes.
 -- ============================================================================
 create or replace function check_balance_integrity() returns trigger as $$
 declare

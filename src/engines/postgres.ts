@@ -384,21 +384,13 @@ async function buildStatement(
   return { account, entries, cursor: null };
 }
 
-// Stream an account's incoming funds as lots, one "lot" per entry that increased it. Each lot
-// records when the money arrived and when it becomes withdrawable, so maturity.ts can decide how
-// much has matured. When/where come from the entry's metadata; if missing, fall back to "unknown"
-// source and treat the money as available immediately.
-//
-// Bounded by `options` (see TimelineOptions): the maturity tail asks for `order: 'desc'` with a
-// small `limit`, so the DB returns just the newest page rather than scanning the account's whole
-// history. Ordered by `l.id` (legs.id, a bigserial) so the composite index `legs(account_id, id)`
-// serves the bounded `order by id desc limit n`. legs.id and postings.seq are both assigned in
-// commit order, so for one account's legs the two orderings are identical (same FIFO order).
-//
-// One wrinkle: a leg can lower the balance (a spend), and those non-lot rows are filtered out in
-// code, not SQL (the credit/debit sign for an account is a domain rule, not a column predicate).
-// So the lot-granularity `offset`/`limit` are applied after the `delta > 0` filter, while the DB
-// pages walk raw rows; a page that happens to be all spends just triggers the next page.
+// Stream an account's incoming funds as lots (one per entry that increased it) so maturity.ts can
+// decide how much has matured. Ordered by `l.id` (legs.id, a bigserial) so the composite index
+// `legs(account_id, id)` serves the bounded `order by id desc limit n` the maturity tail asks for;
+// legs.id and postings.seq share commit order, so for one account this is the same FIFO order.
+// Balance-lowering legs (spends) aren't lots and are filtered in code (the credit/debit sign is a
+// domain rule, not a column predicate), so the lot-granularity offset/limit apply after that filter.
+// @see https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/
 async function* timelineOf(
   q: Queryable,
   account: AccountRef,
@@ -609,16 +601,12 @@ async function legsOf(q: Queryable, txnId: string): Promise<Leg[]> {
 
 // --- Idempotency store ------------------------------------------------------------
 
-// Makes a request sent twice run only once. Each request carries a unique key.
-//
-// `claim` decides whether this caller does the work or replays an earlier result. If a row
-// exists for the key, return the stored result. Otherwise take a lock keyed to the request
-// (pg_advisory_xact_lock) and recheck. The lock makes a second same-key caller wait until the
-// first's transaction finishes: if it committed, a row now exists and the waiter replays it; if
-// it rolled back, no row exists and the waiter does the work itself.
-//
-// `record` inserts the result row inside the same transaction as the posting it records, so a
-// rollback leaves no row and the key stays usable for a real retry.
+// Makes a request sent twice run only once, keyed per request. `claim` replays the stored result
+// if a row exists; otherwise it takes a request-keyed lock (pg_advisory_xact_lock) and rechecks, so
+// a second same-key caller waits for the first's transaction and then either replays it (committed)
+// or does the work (rolled back). `record` inserts the result row in the same transaction as the
+// posting, so a rollback leaves no row and the key stays usable for a real retry.
+// @see https://economy-lab-docs.pages.dev/economy/concepts/idempotency/
 function createIdempotencyStore(q: Queryable): IdempotencyStore {
   return {
     claim: async (key) => {
@@ -1016,7 +1004,7 @@ function encodeAmounts(value: unknown): unknown {
 
 // Reverse of encodeAmounts: deep-copy a parsed jsonb value, turning every encoded-amount string
 // back into an Amount. A string is an encoded amount only when it parses as `CURRENCY:decimal`
-// (decodeAmountString); any other string passes through unchanged, so plain string fields
+// (tryDecodeAmountString); any other string passes through unchanged, so plain string fields
 // (idempotencyKey, sku, reason, …) are left alone.
 function decodeAmounts(value: unknown): unknown {
   if (typeof value === 'string') {
@@ -1660,20 +1648,13 @@ async function applyIsolatedSchema(
   }
 }
 
-// Run `work` inside a single database transaction. Check out one connection, BEGIN, build a unit
-// whose sub-stores all share that connection, run `work`, then COMMIT. If `work` throws, roll
-// back and re-throw. Since every store in the unit uses the same connection, all their writes
-// commit or roll back as one. The connection is always returned to the pool at the end.
-//
-// The whole unit of work (the idempotency claim, the postings, the saga advance, the outbox write)
-// lives inside this one transaction, so when Postgres aborts it with a transient lock conflict,
-// nothing committed and re-running the entire `work` in a fresh transaction is atomic and
-// idempotency-safe. withTransientRetry does exactly that: each attempt opens its own connection +
-// BEGIN/COMMIT, and the catch has already rolled the aborted transaction back, so a retry starts
-// clean. A true settle-vs-reverse conflict thus retries into the clean SAGA.INVALID_TRANSITION (the
-// retried op reloads a now-terminal saga) instead of escaping as a raw 40P01 lock error. Every
-// other error (a domain fault, a CHECK/constraint violation) is not a transient conflict, so it
-// propagates unchanged on its first occurrence.
+// Run `work` inside a single database transaction (one connection, BEGIN/COMMIT, rollback + rethrow
+// on a throw), so every sub-store write commits or rolls back as one. Because the whole unit of work
+// is in this one transaction, a transient lock conflict committed nothing, so withTransientRetry can
+// re-run all of `work` in a fresh connection + transaction atomically and idempotency-safe; a true
+// settle-vs-reverse conflict then retries into a clean SAGA.INVALID_TRANSITION rather than escaping
+// as a raw 40P01. Any non-transient error propagates unchanged on its first occurrence.
+// @see https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/
 async function runInTransaction<T>(
   pool: PgPool,
   digest: Digest,

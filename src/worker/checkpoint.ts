@@ -158,17 +158,12 @@ type VerifyTally = {
 };
 
 /**
- * Re-checks the most recent checkpoint against the current ledger. Runs as a scheduled background
- * audit, separate from sealing. Sealing writes a snapshot, and this audit confirms the last one
- * still matches.
- *
- * Delegates to `verifyCheckpoint` (chain.ts). That function also checks that the live head count
- * has not dropped below the sealed count, which catches truncation or deletion that a check of the
- * root over current heads alone would miss. A `false` result is a normal mismatch from tampering,
- * truncation, or a stale checkpoint, so it is recorded on the summary and logged at error level
- * rather than thrown. Only a thrown error, such as a corrupt stored row or unavailable storage,
- * goes through the same retry and dead-letter split as sealing. The audit is skipped when no
- * checkpoint exists yet.
+ * Re-checks the most recent checkpoint against the current ledger, as a scheduled audit separate
+ * from sealing. Delegates to `verifyCheckpoint` (chain.ts), which also checks the live head count
+ * has not dropped below the sealed count, catching truncation a root check alone would miss. A
+ * `false` result is a normal mismatch: recorded on the summary and logged at error level, not
+ * thrown. Only a thrown error (corrupt row, unavailable storage) goes through the retry and
+ * dead-letter split as sealing does. Skipped when no checkpoint exists yet.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for why a head-count drop is itself a tamper signal and why a mismatch is logged, not thrown.
  */

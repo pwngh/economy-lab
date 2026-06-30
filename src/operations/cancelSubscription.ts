@@ -16,26 +16,13 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Subscription, Unit } from '#src/ports.ts';
 
 /**
- * Cancels an active subscription. This is a status change only and moves no money. Canceling
- * forfeits the rest of the paid billing period and gives no refund, so there is nothing to
- * record in the ledger.
+ * Cancels an active subscription. A status change only, moving no money (cancel forfeits the rest
+ * of the paid period with no refund), so it posts a placeholder {@link lifecycleMarker}, marks the
+ * record `CANCELED`, and returns `committed`.
  *
- * A missing or already-canceled subscription returns a `rejected` outcome with reason
- * `UNKNOWN_SUBSCRIPTION` instead of throwing. This keeps routine cancel "no" answers off error
- * dashboards.
- *
- * Ownership is enforced on the loaded subscription. An end user may cancel only their own
- * subscription. A system service or operator may cancel anyone's. A user reaching for someone
- * else's subscription is a cross-tenant request (IDOR), so it throws `AUTH.UNAUTHORIZED`
- * instead of rejecting. The ownership check runs only after the subscription is confirmed to
- * exist and be cancelable. Probing a missing or already-canceled id therefore gets the same
- * `UNKNOWN_SUBSCRIPTION` answer regardless of caller, which never leaks whether the id exists.
- *
- * On success it marks the subscription `CANCELED` and reports a placeholder transaction that
- * records no money moving (see {@link lifecycleMarker}).
- *
- * Covered by `test/operations/cancelSubscription.test.ts` and
- * `test/operations/cancelSubscription.submit.test.ts`.
+ * A missing or already-canceled subscription returns a `rejected` `UNKNOWN_SUBSCRIPTION` rather
+ * than throwing. The ownership check runs only after the record is confirmed cancelable, so a
+ * missing or canceled id gets that same answer for every caller and never leaks whether it exists.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/cancel-subscription/ Cancel subscription} for the cancel flow and ownership rules.
  */
@@ -76,11 +63,10 @@ function assertSubscriptionId(subscriptionId: string): void {
   }
 }
 
-// Requires the caller to own the subscription, or to be privileged. The central authorize()
-// cannot catch this because cancel debits no user account, so the ownership check lives here
-// against the loaded record; without it the handler would cancel any named id, an IDOR. A system
-// or operator principal returns immediately. A user passes only when their id matches the owner,
-// else UNAUTHORIZED.
+// Requires the caller to own the subscription, or to be privileged. The central authorize() can't
+// catch this because cancel debits no user account, so the ownership check lives here against the
+// loaded record; without it the handler would cancel any named id, an IDOR. System/operator pass;
+// a user passes only when their id matches the owner, else UNAUTHORIZED.
 // See https://economy-lab-docs.pages.dev/economy/reference/operations/cancel-subscription/ for the ownership rules and why the central check can't enforce them.
 function assertMayCancel(
   operation: Extract<Operation, { kind: 'cancelSubscription' }>,

@@ -120,13 +120,13 @@ export function balance(
 }
 
 /**
- * Builds the bytes hashed to extend one account's chain. Each link's hash covers four parts:
- * the account's previous link hash, the transaction id, this account's legs in this posting,
- * and the posting metadata. `chain.ts` runs these bytes through the hash to get the new link.
+ * Builds the bytes hashed to extend one account's chain. Each link commits to the account's prior
+ * head, so altering a past entry stops the chain re-deriving. The hash covers four parts: the prior
+ * link hash, the transaction id, this account's legs, and the posting metadata. The layout is fixed
+ * (amounts via `encodeAmount`, metadata keys sorted, parts joined via `lengthPrefixed`) so the same
+ * posting reproduces the same bytes, and hash, on later verification.
  *
- * The layout is fixed so the same posting reproduces the same bytes, and the same hash, on later
- * verification. Amounts are encoded via `encodeAmount`, metadata keys are sorted, and the four
- * parts are joined so their boundaries can't be confused (see `lengthPrefixed`).
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for the hash-chain design.
  */
 export function chainPreimage(input: {
   accountPrevHash: Uint8Array;

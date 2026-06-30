@@ -22,8 +22,9 @@ import type { Unit } from '#src/ports.ts';
  * Issue marketing promo credits to a user.
  *
  * Promo credits need no USD backing (unlike topped-up money), so a grant can't increase the cash
- * held in trust. Spendable but never cashed out (only earned credits pay out). `expiresAt` is
- * stored in the entry metadata so the background worker can later reverse any unspent portion.
+ * held in trust. They are spendable but never cashed out, because only earned credits pay out.
+ * `expiresAt` is stored in the entry metadata so the background worker can later reverse any
+ * unspent portion.
  *
  * @example
  *   let outcome = await grantPromo(
@@ -48,7 +49,9 @@ export async function grantPromo(
     'grantPromo.expiresAt',
   );
 
-  // PROMO_FLOAT is debit-normal, so debiting it raises its balance to offset the user's credit.
+  // PROMO_FLOAT is debit-normal: a debit raises its balance and a credit lowers it, so debiting it
+  // here offsets the user's credit.
+  // @see https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/
   // expiresAt lives in the entry metadata so the expiry job can find this grant and reverse the unspent portion.
   let transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),

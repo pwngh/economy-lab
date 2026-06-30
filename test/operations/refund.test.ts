@@ -216,7 +216,7 @@ async function refundsBuyerEvenAfterSellerPaidOut(): Promise<void> {
     }),
   );
 
-  // Seller withdraws their whole earned cut before the refund, so a naive sign-flip reversal would
+  // Seller cashes out their whole earned cut before the refund, so a naive sign-flip reversal would
   // overdraw earned and roll the whole refund back.
   let sellerCut = await fx.balanceOf(earned('usr_seller'));
   await fx.drainEarned('usr_seller', sellerCut);

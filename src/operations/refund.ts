@@ -23,21 +23,15 @@ import type { Leg, Sale, Unit } from '#src/ports.ts';
 /**
  * Undo a past sale, making the buyer whole even when a seller already spent their cut.
  *
- * A naive sign-flip breaks once a seller spent their cut. Reversing their credit becomes a debit
- * that drives the earned balance negative, so the ledger rejects the posting and the refund rolls
- * back, leaving the buyer unpaid. Instead this returns the buyer the full price and claws back from
- * each seller (and REVENUE) only up to what each still holds. The uncollectable rest is booked to
- * `SYSTEM.RECEIVABLE` so debits and credits still cancel.
+ * A naive sign-flip breaks once a seller spent their cut: reversing their credit drives the earned
+ * balance negative, the ledger rejects the posting, and the buyer goes unpaid. Instead this returns
+ * the buyer the full price and claws back from each seller (and REVENUE) only up to what each still
+ * holds, booking the uncollectable rest to `SYSTEM.RECEIVABLE` so debits and credits still cancel.
  *
- * A refund and an order-tied clawback both reverse the same sale, so only one may run. A second
- * order-scoped idempotency key, `reversed:<orderId>`, makes the two paths mutually exclusive per
- * order. A lost claim means the order was already reversed, so the recorded transaction is returned
- * as `duplicate`. After the reversal commits, the buyer's entitlement to the SKU is revoked in the
- * same database transaction. Revoking is a no-op if the buyer was never granted it.
- *
- * Returns `committed` with the reversing transaction, `duplicate` when already reversed, or
- * `rejected` with `UNKNOWN_ORDER` when no sale was recorded for the order. Any kind other than
- * `refund` is a wiring bug and throws.
+ * Refund and an order-tied clawback share the order-scoped key `reversed:<orderId>` to stay mutually
+ * exclusive; a lost claim returns the recorded transaction as `duplicate`. The buyer's SKU
+ * entitlement is revoked in the same database transaction. Returns `committed`, `duplicate`, or
+ * `rejected` with `UNKNOWN_ORDER`.
  *
  * @example
  *   let outcome = await refund(

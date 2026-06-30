@@ -40,23 +40,15 @@ type SpendPlan = { promoPart: Amount; spendablePart: Amount };
 
 /**
  * Run a marketplace purchase: charge the buyer and pay the sellers as one balanced
- * ledger posting.
+ * ledger posting. Buyer pays from promo (marketing-grant) balance first, then spendable. A sale
+ * summary is saved under `orderId` so a later refund can reverse exactly what posted, and the SKU
+ * entitlement is granted in the same transaction so paying always confers ownership (to the buyer,
+ * or to `giftTo` when present). A second request reusing an `orderId` already on file is refused
+ * with `DUPLICATE_ORDER` so the buyer is never double-charged for one order.
  *
- * Buyer pays from promo (marketing-grant) balance first, then spendable; each part is its own
- * set of debit/credit lines in one transaction. A sale summary is saved under `orderId` so a
- * later refund can reverse exactly what posted, and the SKU entitlement is granted in the same
- * transaction so paying always confers ownership. Entitlement goes to the buyer, or to `giftTo`
- * when present: a gift is an ordinary purchase the buyer pays for and the recipient receives
- * (modelled as an `isGift` flag on the purchase), not a wallet-to-wallet transfer.
- *
- * `orderId` is unique per purchase. If a Sale already exists for it (a second request reusing
- * the same `orderId` under a different idempotency key), the spend is refused with
- * `DUPLICATE_ORDER` so the buyer is never double-charged for one order.
- *
- * Middleware has already authorized the buyer, deduplicated retries, checked affordability, run
- * the risk check, and locked the affected accounts, so this function only validates its own
- * inputs and posts. A non-positive or non-CREDIT price, or recipient shares that don't add up,
- * is a malformed request thrown as a fault, not a refusal.
+ * Middleware has already authorized, deduplicated, checked affordability, and locked the accounts;
+ * this only validates its own inputs and posts. Malformed input (bad price, shares that don't sum)
+ * throws a fault, not a refusal.
  *
  * @example
  *   let outcome = await spend(
@@ -254,15 +246,13 @@ function distributeEarned(
   return toAmount(amount.currency, distributed);
 }
 
-// Build the sale summary, keyed by `orderId` (distinct from the idempotency key used for
-// retry-dedup) so a later refund can look it up and reverse exactly these lines. The recorded fee
-// is the platform's cut of the spendable-funded part, the slice REVENUE keeps off that part.
+// Build the sale summary, keyed by `orderId` (distinct from the idempotency key) so a later refund
+// can look it up and reverse exactly these lines. The recorded fee is REVENUE's cut of the
+// spendable-funded part only (the promo-funded part is charged no fee).
 //
-// `revenueForSplit` is the same computation splitLegs uses for the REVENUE credit: the fee plus the
-// residual left by rounding each seller's share down. The recorded fee therefore always equals what
-// REVENUE actually kept, even on an uneven multi-seller split where that residual is non-zero.
-// (Recording the bare `feeForPrice` understated it on those splits.) The promo-funded part is
-// charged no fee, so the recorded fee covers only the spendable part.
+// Use `revenueForSplit` (the same computation splitLegs uses for the REVENUE credit: fee plus the
+// rounding residual), so the recorded fee always equals what REVENUE actually kept even on an uneven
+// multi-seller split. Recording the bare `feeForPrice` understated it on those splits.
 function saleOf(
   operation: Extract<Operation, { kind: 'spend' }>,
   plan: SpendPlan,
@@ -308,19 +298,14 @@ function entitlementRecipient(
   return operation.giftTo;
 }
 
-// Validate the structured shape of the spend request, the fields the central guard can't know
-// about. These are programming/client errors, so each is thrown as a fault, not an ordinary
-// refusal:
+// Validate the spend shape the central guard can't know about. Each is a client error thrown as a
+// fault, not a refusal:
 //   - `sku` must name an item; a blank one would grant ownership of nothing.
-//   - `orderId` must be present; it's the unique key for duplicate-order protection (the
-//     DUPLICATE_ORDER guard reads the stored Sale by it), and a blank one collapses that: two
-//     different purchases sharing a blank order id would look like one order.
-//   - No two recipients may name the same `sellerId`: a duplicate would split the seller's cut
-//     across two earned-credit lines under one id, double-counting in the share math.
-//   - No recipient may be a house/system account. Recipients are credited to their EARNED
-//     (cash-outable) balance, which only a real user wallet may receive, so `earned(sellerId)` must
-//     be a user wallet account (not a `platform:`-prefixed house account) with a non-blank owner.
-//     (Self-dealing and share-bounds are checked separately.)
+//   - `orderId` must be non-blank; it's the unique key for DUPLICATE_ORDER protection, and a blank
+//     one would make two different purchases look like one order.
+//   - No two recipients may name the same `sellerId`: a duplicate double-counts in the share math.
+//   - No recipient may be a house/system account: earnings are credited to a cash-outable EARNED
+//     balance, which only a real user wallet may receive. (Self-dealing/share-bounds checked separately.)
 function assertSpendShape(
   operation: Extract<Operation, { kind: 'spend' }>,
 ): void {
@@ -379,15 +364,13 @@ function assertSpendShape(
   }
 }
 
-// Require recipient shares to sum to exactly 10000 basis points (100%), each a sane fraction of the
-// net. An empty list is allowed and means the platform keeps the whole net (REVENUE takes
-// everything). Any other total is a malformed request, caught here so a miswired split can't leave
-// part of the price stuck with nobody.
+// Require recipient shares to sum to exactly 10000 basis points (100%), so a miswired split can't
+// leave part of the price stuck with nobody. An empty list is allowed and means the platform keeps
+// the whole net (REVENUE takes everything).
 //
 // The sum check alone isn't enough: shares like [-5000, 15000] still sum to 10000, but a negative
-// share would credit a seller a negative amount (a hidden debit) and a >100% share would pay out
-// more of the part than exists. So each share must be strictly positive and at most 10000 bps on
-// its own.
+// share is a hidden debit and a >100% share pays out more of the part than exists. So each share
+// must also be strictly positive and at most 10000 bps on its own.
 function assertShares(operation: Extract<Operation, { kind: 'spend' }>): void {
   let recipients = operation.recipients ?? [];
   if (recipients.length === 0) {
@@ -425,7 +408,7 @@ function assertShares(operation: Extract<Operation, { kind: 'spend' }>): void {
 // earned (cash-outable) balance out of platform REVENUE for the promo-funded part and out of the
 // buyer's payment for the spendable part. If the buyer is also a recipient, they convert their own
 // non-cashable spendable/promo credit into cash-outable EARNED credit, laundering grant/top-up
-// balance into withdrawable money funded by the house. Buyer and seller must be different parties,
+// balance into cash-outable money funded by the house. Buyer and seller must be different parties,
 // so this is a malformed request thrown as a fault.
 function assertNoSelfDealing(
   operation: Extract<Operation, { kind: 'spend' }>,

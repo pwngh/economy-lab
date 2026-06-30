@@ -21,15 +21,13 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Leg, Unit } from '#src/ports.ts';
 
 /**
- * Operator-only manual correction, for cases no ordinary operation covers (e.g. closing
- * a gap found during reconciliation).
+ * Operator-only manual correction, for cases no ordinary operation covers (e.g. closing a gap
+ * found during reconciliation). Moves `operation.account` by the signed `operation.amount`
+ * (negative corrects downward) and books the opposite entry to platform opening-equity so the two
+ * cancel and the books stay balanced. Returns a `committed` Outcome.
  *
- * Moves `operation.account` by the signed `operation.amount` (negative corrects downward)
- * and books the opposite entry to the platform opening-equity account so the two cancel
- * and the books stay balanced. Returns a `committed` Outcome with the posted transaction.
- *
- * Bad input throws a fault instead of returning a `rejected` Outcome. The actor must be an
- * operator, the amount must be a non-zero CREDIT amount, and the reason must be non-empty.
+ * Bad input throws a fault, not a `rejected` Outcome: actor must be operator, amount a non-zero
+ * CREDIT, reason non-empty.
  *
  * @example
  *   let outcome = await adjust(

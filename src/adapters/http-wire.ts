@@ -52,16 +52,16 @@ function decodeLeg(wire: unknown): Leg {
 }
 
 // Parses an encoded amount string back into an `Amount`. The currency sits before the colon and
-// the decimal value after it, as in `'CREDIT:12.34'`, so the string is self-contained. This splits
-// on the colon and passes both parts to `decodeAmount`.
+// the decimal value after it, as in `'CREDIT:12.34'`, so the string is self-contained. It delegates
+// to `decodeAmountWire`, which splits on the colon.
 function amountFrom(wire: string): Amount {
   return decodeAmountWire(wire);
 }
 
 // Behaves like `amountFrom` but returns null instead of throwing when the string is not an encoded
 // amount. This lets the generic walk below tell a `CREDIT:12.34` from an ordinary string that
-// merely contains a colon. The decimal tail must parse, since `decodeAmount` throws otherwise, and
-// that throw is caught here.
+// merely contains a colon. The decimal tail must parse, since `decodeAmountWire` throws otherwise,
+// and that throw is caught here.
 function tryAmountFrom(wire: string): Amount | null {
   if (wire.indexOf(':') < 0) {
     return null;

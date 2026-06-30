@@ -114,16 +114,14 @@ async function bumpAttempt(
 }
 
 // Gives up on a payout and, unless another actor already finished it, returns its reserved credits.
-// Returns true if THIS call set the saga aside, false if it lost the race to a concurrent finisher.
-// One transaction couples the FAILED flip with the exact reverse of the request-time reservation,
-// and the flip is a compare-and-set so the reverse posts only if THIS call wins, never returning the
-// reserve a second time on a lost race.
+// Returns true if THIS call set the saga aside, false if it lost the race. One transaction couples
+// the FAILED flip (a compare-and-set) with the reverse of the request-time reservation, so the
+// reserve is never returned twice on a lost race.
 // See https://economy-lab-docs.pages.dev/economy/concepts/lifecycles/ for the payout saga states and the shared CAS guard that releases the reserve exactly once.
 //
-// Locking PAYOUT_RESERVE and the seller's earned account in the global sorted order makes this
-// serialize with those pipeline ops on the shared reserve rather than racing them to extend its hash
-// chain. Without the lock, a late settle could win the chain and still let this reversal re-post on
-// retry, double-paying the seller.
+// Locking PAYOUT_RESERVE and the seller's earned account in the global sorted order serializes this
+// with the pipeline ops on the shared reserve. Without the lock, a late settle could win the chain
+// and still let this reversal re-post on retry, double-paying the seller.
 async function deadLetter(
   store: Store,
   ctx: WorkerCtx,

@@ -18,32 +18,15 @@ import type { Ctx, Operation, Outcome, Transaction } from '#src/contract.ts';
 import type { Saga, Unit } from '#src/ports.ts';
 
 /**
- * Undoes an in-flight payout by hand. This is the manual version of the undo that the background
- * payout worker does automatically when it gives up.
+ * Undoes an in-flight payout by hand: the manual version of the worker's give-up undo. The move to
+ * FAILED (so the worker never pays it) and the undo posting (reserve back to the seller's earned
+ * account) commit together: the credits return only if the saga also stops. This is why it does not
+ * use the generic `reverse`, which leaves saga state alone, so a reversed-but-still-RESERVED saga
+ * would be paid out anyway.
  *
- * Two things commit together in one transaction: the saga's transition to FAILED, so the worker
- * never pays it, and the undo posting that moves the reserve back to the seller's earned account.
- * The credits return only if the saga also stops. This is why the operation does not use the
- * generic `reverse`. That helper posts the opposite entry but leaves saga state alone. Reversing a
- * RESERVED reservation would leave it RESERVED, the worker would still pay it, and the seller would
- * get the money back while the payout went through anyway.
- *
- * Refusals and edge cases:
- * - SETTLED throws `INVALID_TRANSITION`. The payout already disbursed real money, so no reserve is
- *   left to return. Undoing would credit the seller twice. Posts nothing.
- * - SUBMITTED that has not yet aged past `config.maxPayoutAgeMs` throws `INVALID_TRANSITION`. The
- *   age is measured from `updatedAt`, set on entering SUBMITTED. The disbursement is in the
- *   provider's hands and may still settle externally, so returning the reserve now risks a
- *   double-pay. This mirrors the worker's SUBMITTED-timeout cutoff. Past the cutoff, the provider
- *   is presumed never to have paid and the reverse is allowed. Posts nothing.
- * - RESERVED, or SUBMITTED aged past the cutoff, moves the saga to FAILED and posts the undo
- *   (debit PAYOUT_RESERVE, credit the seller's earned account, full reserved amount).
- * - A guarded state change that loses to a concurrent worker returns `duplicate` and posts
- *   nothing. The reserve was already spent or returned by whoever moved it first.
- * - An unknown sagaId is an operator typo. It throws a fault rather than a quiet "nothing to do",
- *   as `reverse` does for an unknown transaction id.
- *
- * The `economy.payout.reversed` event is emitted by the submit pipeline on commit, not here.
+ * RESERVED, or SUBMITTED aged past `config.maxPayoutAgeMs`, moves to FAILED and posts the undo.
+ * SETTLED and still-live SUBMITTED both throw `INVALID_TRANSITION`: returning a reserve already
+ * disbursed, or one the provider may still settle, risks a double-pay.
  *
  * @example
  *   let outcome = await reversePayout(

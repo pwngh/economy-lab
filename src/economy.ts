@@ -151,12 +151,11 @@ function cacheKey(account: AccountRef): string {
   return `bal:${account}`;
 }
 
-// Runs a cache operation and falls back on any error. The cache is best-effort: a Redis blip must
-// degrade to a direct ledger read and never fail a request the ledger can still serve (see the Cache
-// port, where every miss is safe). On any error this logs it and returns the fallback, so a `get`
-// becomes a miss and a `set` or `invalidate` becomes a no-op rather than an outage. The Redis adapter
-// raises a retryable STORE.FAILURE on a driver error, and this is where that is absorbed. Adding a
-// cache can therefore only speed reads, never make them fail.
+// Runs a cache operation, logging and falling back on any error: a `get` becomes a miss and a `set`
+// or `invalidate` a no-op. The cache is best-effort, so adding one can only speed reads, never make
+// them fail (a driver's retryable STORE.FAILURE is absorbed here).
+// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for why the cache is
+// best-effort and every miss is safe.
 async function bestEffortCache<T>(
   ctx: Ctx,
   op: 'get' | 'set' | 'invalidate',
@@ -515,14 +514,13 @@ async function fundsNeeded(
   ];
 }
 
-// Checks whether this operation would push the user past their recent-spending limit. It records
-// this attempt and reads back the windowed total in one atomic per-subject step (`trust.record`),
-// then denies if that total, which already includes this attempt, is over the limit. Recording at
-// check time, rather than reading first and bumping after the commit, closes the velocity-limit
-// TOCTOU: two concurrent same-subject submits cannot both read a stale pre-bump total and pass. The
-// record goes straight through the trust store, not the transaction's view, so even a denied
-// attempt, or one whose transaction later rolls back, still counts against the limit. The limit
-// cannot be probed for free. Returns `rejected` when over the limit, otherwise null.
+// Checks whether this operation would push the user past their recent-spending limit, returning
+// `rejected` if so else null. It records this attempt and reads back the windowed total in one atomic
+// per-subject step (`trust.record`), then denies if that total (already including this attempt) is
+// over the limit. Recording at check time, not reading-then-bumping after commit, closes the
+// velocity-limit TOCTOU: two concurrent same-subject submits cannot both read a stale total and pass.
+// The record goes straight through the trust store, not the transaction's view, so even a denied or
+// rolled-back attempt still counts and the limit cannot be probed for free.
 async function screenRisk(step: Step): Promise<Outcome | null> {
   let { pipeline, operation, options } = step;
   let subject = riskSubject(operation);
@@ -547,17 +545,15 @@ async function screenRisk(step: Step): Promise<Outcome | null> {
   return null;
 }
 
-// Locks every account the operation will touch before posting, so two operations on the same
-// accounts cannot interleave and corrupt a balance. It goes through `lockAll` (src/ledger.ts), which
-// takes the accounts in the deadlock-free global order every lock-set shares.
+// Locks every account the operation will touch before posting, via `lockAll` (src/ledger.ts), which
+// takes them in the deadlock-free global order every lock-set shares.
 //
-// This is app-side concurrency control, deliberately, and the one invariant the database is not the
-// primary enforcer of. The write runs at the engine's default isolation, not SERIALIZABLE, so this
-// fixed-order locking, not the engine, is what serializes contending operations. The engine enforces
-// each invariant's content, such as conservation, balances, and continuity, while this enforces their
-// interleaving. The pairing is exercised by test/conformance/concurrency.adversarial.test.ts, where N
-// parallel same-account spends still conserve and never overdraw. We may replace this with
-// SERIALIZABLE plus retry-on-conflict in the future.
+// This is app-side concurrency control, deliberately: the write runs at the engine's default
+// isolation, not SERIALIZABLE, so this fixed-order locking, not the engine, is what serializes
+// contending operations. The engine still enforces each invariant's content (conservation, balances,
+// continuity); this only enforces their interleaving. Exercised by
+// test/conformance/concurrency.adversarial.test.ts.
+// See https://economy-lab-docs.pages.dev/economy/concepts/integrity/ for the locking/isolation split.
 async function lockAccounts(step: Step): Promise<void> {
   let { unit, operation, options } = step;
   await lockAll(unit.ledger, accountsOf(operation), options);
@@ -566,6 +562,8 @@ async function lockAccounts(step: Step): Promise<void> {
 // After a successful posting, queues the matching notification event, such as "credits topped up".
 // The event is written into the outbox in the same transaction as the posting, so it ships only if
 // the posting committed. A rollback leaves no stray event, and a commit always has its event queued.
+// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for how the legs and
+// the event commit in one transaction, so they all land or none do.
 async function emitEvents(
   step: Step,
   outcome: Extract<Outcome, { status: 'committed' }>,
@@ -666,16 +664,13 @@ type LedgerFold = {
 };
 
 // The lighter twin of integrity.ts foldLedger and accumulateLegs, the thorough prover. Keep the two
-// in sync. Visits every account ever posted to, which the ledger lists by the latest hash in each
-// account's hash-chain, and gathers the figures the integrity check needs in one pass.
-//
-// For each account it recomputes the balance by summing the recorded debit and credit entries, the
-// source of truth, rather than the store's cached running balance, which can be wrong. It adds each
-// recomputed total into a per-currency running sum, signed by the side it grows on: positive for
-// debit-normal, negative for credit-normal. A healthy ledger sums to zero in each currency, and a
-// non-zero total means money was created or destroyed. Separately, when the cached running balance
-// disagrees with the recomputed total, it reports that account as a mismatch instead of folding it
-// into the sum.
+// in sync. Visits every account ever posted to (the ledger's hash-chain heads) and gathers the
+// integrity figures in one pass. For each account it recomputes the balance from the recorded entries
+// (the source of truth, not the cached running balance) and adds it into a per-currency sum signed by
+// the side it grows on: positive debit-normal, negative credit-normal. A healthy ledger sums to zero
+// per currency; a non-zero total means money was created or destroyed. A cached balance that
+// disagrees with the recomputed total is reported as drift instead of folded in.
+// See https://economy-lab-docs.pages.dev/economy/concepts/the-proof/ for what each figure proves.
 async function foldLedger(store: Store): Promise<LedgerFold> {
   let signedByCurrency = new Map<Currency, bigint>();
   let custodialCredit = 0n;
@@ -814,13 +809,11 @@ let RESTRICTED_TO_PRIVILEGED = new Set<Operation['kind']>([
 // the transaction is always present.
 type Committed = Extract<Outcome, { status: 'committed' }>;
 
-// For each operation kind that announces itself, the event to emit on commit. Each entry holds the
-// event name, the audience (`client` for an end user, `internal` for back-office consumers), how to
-// derive the subject (which user the event is about), and how to build the payload. A client event
-// carries only an allow-listed, PII-free summary, where a builder must opt each field in, while an
-// internal event may carry richer detail. Both builders get the committed result, so either can be
-// derived from the entries that actually posted. refund needs this, since its operation names only an
-// orderId, not the buyer.
+// For each operation kind that announces itself, the event to emit on commit: name, audience
+// (`client` for an end user, `internal` for back-office), subject builder, and payload builder. A
+// client event carries only an allow-listed, PII-free summary (opt-in per field); internal events may
+// carry richer detail. Both builders get the committed result, so a payload can derive from the
+// entries that actually posted (refund needs this, since its operation names only an orderId).
 let EVENTS: Partial<
   Record<
     Operation['kind'],

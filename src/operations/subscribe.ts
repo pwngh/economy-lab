@@ -37,13 +37,10 @@ let MAX_PERIOD_MS = 10 * 365 * 24 * 60 * 60_000; // 315,360,000,000 ms
 type ChargePlan = { promoPart: Amount; spendablePart: Amount };
 
 /**
- * Charge the first month of a subscription and create its record. Validates the price range,
- * confirms enough spendable money, posts the charge (seller earns, platform takes its fee),
- * then saves the `Subscription` the background worker renews each later month.
- *
- * Returns a `committed` outcome on success, `rejected('ALREADY_SUBSCRIBED')` when an active
- * subscription to the same (userId, sku, sellerId) already exists, or
- * `rejected('INSUFFICIENT_FUNDS')` when the buyer's spendable balance can't cover its share.
+ * Charge the first month of a subscription and create its record: validate the price, post the
+ * charge (seller earns, platform takes its fee), then save the `Subscription` the background
+ * worker renews each later month. Returns `committed`, or a `rejected` outcome for a duplicate
+ * active subscription (`ALREADY_SUBSCRIBED`) or a short spendable balance (`INSUFFICIENT_FUNDS`).
  *
  * @example
  *   // Inside an open transaction (`unit`), bill month one and open the record:
@@ -120,7 +117,7 @@ export async function handleSubscribe(
 // Rejects a buyer who tries to subscribe to themselves. When `userId` equals `sellerId`, the
 // charge draws the buyer's non-cashable balances (promo and non-payable spendable) and credits
 // them back as EARNED, which is cash-outable and funded by platform REVENUE. That would turn
-// gift and promo grants into withdrawable cash and drain the treasury, so this is malformed
+// gift and promo grants into cash-outable cash and drain the treasury, so this is malformed
 // rather than a business "no". Throw a fault.
 function rejectSelfSubscription(
   operation: Extract<Operation, { kind: 'subscribe' }>,
@@ -205,14 +202,12 @@ function planCharge(price: Amount, promoBalance: Amount): ChargePlan {
   };
 }
 
-// Confirms the buyer has enough spendable money for the spendable share. The middleware's up-front
-// funds check only runs for `spend`, so subscribe checks here. A short balance returns an
-// INSUFFICIENT_FUNDS rejection, which is a business "no" carried as data. A sufficient balance
-// returns null, and posting proceeds.
+// Confirms the buyer has enough spendable money for the spendable share; the middleware's up-front
+// funds check only runs for `spend`, so subscribe checks here. Short balance returns an
+// INSUFFICIENT_FUNDS rejection (a business "no" as data), sufficient returns null.
 //
-// This is a courtesy pre-check, not the enforcer. The database's per-user non-negative CHECK is
-// what actually blocks an overdraft. This check exists only to return a kind INSUFFICIENT_FUNDS
-// rejection before the engine would reject the entry.
+// A courtesy pre-check, not the enforcer: the database's per-user non-negative CHECK actually
+// blocks overdrafts. This just returns a kind rejection before the engine would reject the entry.
 async function screenSpendable(
   unit: Unit,
   userId: string,
@@ -255,11 +250,10 @@ async function postCharge(
 }
 
 // Appends the ledger legs for the promo-funded part. Promo credits are not real money, so this
-// takes two steps. First, it draws down the grant: it debits the buyer's promo and credits
-// PROMO_FLOAT, the account that offsets outstanding promo grants. Second, it pays the seller real
-// earnings from platform revenue: it debits REVENUE and credits the seller's earned. The whole
-// promo amount goes to the seller, because the fee applies only to the spendable (real-money)
-// part, as in `spend`.
+// takes two steps: draw down the grant (debit promo, credit PROMO_FLOAT, which offsets outstanding
+// grants), then pay the seller real earnings from platform revenue (debit REVENUE, credit earned).
+// The whole promo amount goes to the seller, because the fee applies only to the spendable part, as
+// in `spend`.
 function appendPromoLegs(
   legs: Leg[],
   operation: Extract<Operation, { kind: 'subscribe' }>,

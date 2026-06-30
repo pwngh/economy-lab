@@ -131,17 +131,11 @@ export interface ReconcileInputs {
 }
 
 /**
- * Compares processor records against ledger records for one window and reports mismatches.
- *
- * Only records inside the window count, so the caller can over-supply and let this function
- * filter. The window is half-open: a record exactly on `to` belongs to the next window.
- *
- * Two records match when they share the same kind (buy or payout) and the same matchKey. A
- * key should never repeat on one side, because matchKey is a unique join reference, so a
- * repeat is the "shouldn't happen" a reconciler exists to catch. When it does repeat, the
- * duplicates pair up oldest-first, and any surplus on either side surfaces as orphans on
- * that side. Every record is therefore accounted for exactly once. The reconciler must never
- * silently drop one, so `report` self-checks that the counts reconstruct both sides.
+ * Compares processor records against ledger records for one window and reports mismatches. The
+ * caller may over-supply; only records inside the half-open window count (a record exactly on `to`
+ * belongs to the next window). Two records match on the same kind and matchKey. Every record must be
+ * accounted for exactly once and the reconciler must never silently drop one, so `report` self-checks
+ * that the counts reconstruct both sides.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how reconciliation runs on a schedule.
  */

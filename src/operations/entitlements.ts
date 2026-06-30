@@ -84,11 +84,10 @@ export async function revokeEntitlement(
   return { status: 'committed', transaction: lifecycleMarker(ctx) };
 }
 
-// Validates that the userId and sku are non-blank. Entitlements move no money, so they post
-// to no accounts. The central blank-owner guard only inspects wallet accounts an operation
-// posts to, so it never sees these fields. They are checked here instead. A blank or
-// whitespace userId records ownership against a phantom user. A blank sku records ownership
-// of nothing. Both are malformed requests, not a normal "no", so each throws a fault.
+// Validates that the userId and sku are non-blank. Entitlements post to no accounts, so the
+// central blank-owner guard (which only inspects wallet accounts) never sees these fields; they
+// are checked here. A blank userId records ownership against a phantom user, a blank sku records
+// ownership of nothing. Both are malformed, not a normal "no", so each throws a fault.
 function assertIdentified(userId: string, sku: string): void {
   if (userId.trim() === '') {
     throw fault(

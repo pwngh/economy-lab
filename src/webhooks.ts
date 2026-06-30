@@ -9,19 +9,9 @@
  * @license MIT
  */
 
-// Inbound provider-callback dispatch. This module maps a verified callback to the ledger Operation
-// its kind should apply (purchase -> `topUp`, settled payout -> `settlePayout`, dispute -> `clawback`),
-// then persists that Operation to the transactional inbox for the apply worker to submit later.
-// See https://economy-lab-docs.pages.dev/economy/ports/processor/ for how verified callbacks map to
-// operations and flow through the inbox.
-//
-// This module assumes the edge already checked signature and freshness and claimed the provider
-// `eventId` in its replay store. It adds a second dedup guard: the inbox keys on that same `eventId`
-// (see `webhookIdempotencyKey`), so a redelivery that slips past the replay store enqueues no second
-// row and applies at most once.
-//
-// A purchase never increases "revenue": crediting a user for cash is a topUp against the
-// stored-value pool (credits owed to users), so "revenue" stays platform fee income only.
+// Inbound webhook event types and the dispatch that turns a verified provider callback into an
+// inbox Operation. The by-kind mapping and the at-most-once dedup live on `handleWebhook` below.
+// See https://economy-lab-docs.pages.dev/economy/ports/processor/ for the verified-callback-to-operation flow.
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { decodeAmountWire } from '#src/money.ts';
@@ -246,11 +236,10 @@ function isPurchase(event: WebhookEvent): event is PurchaseEvent {
  * later, so the provider gets a fast acknowledgement and the money move settles off the request path.
  * - `accepted`: a fresh provider event; its row was enqueued and will be applied by the next sweep.
  * - `duplicate`: a redelivery of an already-seen `eventId`; the existing row stood and no second was
- *   inserted, so the operation still applies at most once. Mirrors the `duplicate` Outcome the inline
- *   submit used to return when the operation's dedup key was already recorded.
+ *   inserted, so the operation still applies at most once.
  *
- * `entry` is the stored row (the freshly enqueued one, or the pre-existing one on a duplicate), so
- * the caller can surface the row id without a second read.
+ * `entry` is the stored row (freshly enqueued, or the pre-existing one on a duplicate), so the
+ * caller can surface the row id without a second read.
  */
 export type WebhookAck = {
   status: 'accepted' | 'duplicate';
@@ -258,20 +247,13 @@ export type WebhookAck = {
 };
 
 /**
- * Inbound provider-callback dispatch: handles any verified callback. Dispatches the event by its
- * kind to the operation it applies (`topUp` / `settlePayout` / `clawback`, via {@link toOperation}),
- * then persists that operation to the inbox in one transaction and returns immediately. It does NOT
- * post to the ledger inline. The apply worker (`drainInbox`) submits the stored Operation through the
- * normal economy path on its next sweep, so invariants and idempotency apply there, not here.
+ * Inbound provider-callback dispatch: maps a verified callback by kind to the operation it applies
+ * (via {@link toOperation}), persists that to the inbox in one transaction, and returns. It does NOT
+ * post to the ledger inline; the apply worker (`drainInbox`) submits the stored Operation later, so
+ * invariants and idempotency apply there. A redelivery is still enqueued at most once: `enqueueInbound`
+ * dedupes on the provider `eventId`, and an id mismatch on the returned row is exactly that case.
  *
- * The server edge has already checked signature and freshness and claimed `eventId` in the replay
- * store, so the event is trusted and normally a first-time delivery. A duplicate that still reaches
- * here is enqueued at most once: `enqueueInbound` dedupes on the provider `eventId` (the row `key`),
- * returning the existing row without inserting a second, so the operation applies at most once whether
- * the redelivery is caught here or later by the operation's idempotency key. The status reports which
- * case happened by comparing the returned row id against the one we minted: a returned row carrying a
- * different id means the key was already present.
- *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for the verification gate the edge runs first.
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for how verified callbacks flow through the inbox.
  */
 export async function handleWebhook(

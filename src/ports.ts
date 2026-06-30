@@ -23,19 +23,13 @@ import type { Config } from '#src/config.ts';
 export type Options = { signal?: AbortSignal };
 
 /**
- * Bounds a {@link Ledger.timeline} read. The default (omitted, or `order: 'asc'` with no
- * `limit`) streams the account's whole lot history oldest-first, as the original signature did.
+ * Bounds a {@link Ledger.timeline} read so the page, not the account lifetime, sets the cost. The
+ * default (omitted, or `order: 'asc'` with no `limit`) streams the whole lot history oldest-first,
+ * as the original signature did; `order: 'desc'` with `limit`/`offset` reads the newest run, the
+ * order the maturity tail wants so it can stop once it has covered the live balance.
  *
- * - `order`: 'asc' yields oldest-first (the FIFO drain order); 'desc' yields newest-first, the
- *   order the maturity tail reads so it can stop once it has covered the live balance.
- * - `limit`: at most this many lots, so a caller that needs only the newest run fetches a small
- *   page instead of the lifetime.
- * - `offset`: skip this many lots first, so a caller can page deeper if one page didn't cover the
- *   balance.
- *
- * The SQL engines translate this into `ORDER BY legs.id {ASC|DESC} LIMIT ? OFFSET ?` (legs.id is
- * assigned in commit order and covered by the legs(account_id, id) index), so the database
- * materializes only the requested page rather than the whole result set.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging}
+ * for the SQL pushdown.
  */
 export type TimelineOptions = {
   order?: 'asc' | 'desc';
@@ -92,11 +86,14 @@ export interface Signer {
 }
 
 /**
- * Optional read-through key/value cache for hot reads such as balances. The cache is best-effort.
- * When none is injected, the read path skips it and goes straight to the ledger. When a cache call
- * errors, the read path falls back to a direct ledger read rather than failing the request. A cache
- * therefore only ever speeds reads up; it never breaks them. `memoryCache` is the in-process
- * reference adapter; `redisCacheFrom` is the Redis adapter.
+ * Optional read-through key/value cache for hot reads such as balances. The cache is best-effort, so
+ * any error degrades to a direct ledger read and never fails the request. When none is injected, the
+ * read path skips it and goes straight to the ledger. A cache therefore only ever speeds reads up; it
+ * never breaks them. `memoryCache` is the in-process reference adapter; `redisCacheFrom` is the Redis
+ * adapter.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging}
+ * for the best-effort cache contract.
  */
 export interface Cache {
   get(key: string): Promise<string | null>;
@@ -169,7 +166,7 @@ export interface Rates {
   // in USD at this rate.
   par(currency: Currency): Rate;
 
-  // Returns the acquisition rate a user pays when buying credits. It is less favourable than `par`
+  // Returns the acquisition rate a user pays when buying credits. It is less favorable than `par`
   // or `payout`. `topUp` values the buyer's cash at this rate. The gap between it and `par` is the
   // platform spread (see this type's doc-comment).
   buy(currency: Currency): Rate;
@@ -229,14 +226,9 @@ export interface Ledger {
 
   // Streams the account's settlement lots. Each lot is a chunk of funds from a single top-up,
   // tagged with the date it becomes eligible to be paid out (see {@link Lot}). Lots stream one at a
-  // time so a long history doesn't have to fit in memory.
-  //
-  // `options` bounds the read so a caller that only needs the newest run of lots (the maturity FIFO
-  // tail) never has to touch the whole account history. The default is the full history,
-  // oldest-first (`order: 'asc'`, no limit), which preserves the original behaviour. With `order:
-  // 'desc'` lots stream newest-first, and `limit` and `offset` page that order. The SQL engines
-  // push `ORDER BY legs.id DESC LIMIT ... OFFSET ...` down to the database, so the database work is
-  // bounded by the page rather than the account's lifetime. See {@link TimelineOptions}.
+  // time so a long history doesn't have to fit in memory. `options` bounds the read so a caller
+  // that only needs the newest run of lots (the maturity FIFO tail) never touches the whole account
+  // history; the default is the full history, oldest-first. See {@link TimelineOptions}.
   timeline(account: AccountRef, options?: TimelineOptions): AsyncIterable<Lot>;
 
   // Streams every account paired with its current chain-head hash, the latest hash in that
@@ -336,10 +328,12 @@ export type Posting = {
 
 /**
  * One posting as `lineage` returns it for a single account, carrying the two hashes that tie it
- * into that account's tamper-evident chain. Each head hash is computed from the previous head
- * plus this posting's contents, so changing any contents changes the hash. The prover re-hashes
- * (previous head + the account's legs + meta) and checks it equals the stored `hash`; an
- * after-the-fact edit won't match.
+ * into that account's tamper-evident chain. Each link's hash commits to the account's prior head,
+ * so altering a past entry stops the chain re-deriving. The prover re-hashes (previous head + the
+ * account's legs + meta) and checks it equals the stored `hash`; an after-the-fact edit won't match.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for the
+ * hash chain.
  */
 export type StoredLink = {
   txnId: string;
@@ -356,20 +350,14 @@ export type StoredLink = {
 };
 
 /**
- * The stores a single operation's handler may write to, all inside one database transaction so
- * its writes commit together.
+ * The stores a single operation's handler may write to, all inside one database transaction so its
+ * writes commit together. `promos` and `inbox` are included so their writes share the money
+ * posting's transaction; a rolled-back grant or apply then leaves no orphan row. `trust` is
+ * deliberately absent (the risk-velocity write happens outside the transaction) and so is
+ * `checkpoints` (only the worker writes it).
  *
- * Three stores are deliberately absent. `trust` is absent because the risk-velocity write happens
- * outside the transaction, through `Store.trust`. `checkpoints` is absent because only the
- * background worker writes it. A separate balance reader is absent because the funds pre-check reads
- * through `ledger.balance`.
- *
- * `promos` is included so `grantPromo` records the grant in the same transaction as the money
- * posting; a rolled-back grant then leaves no promo-expiry row. `inbox` is included for the mirror
- * reason. The webhook handler persists a verified inbound event in the same transaction that claims
- * it (`enqueueInbound`), and the apply worker marks a row applied (`markApplied`) in the same
- * transaction as the money posting it drives, so a rolled-back apply leaves the row pending for the
- * next sweep.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging}
+ * for atomicity and the outbox/inbox.
  */
 export interface Unit {
   ledger: Ledger;

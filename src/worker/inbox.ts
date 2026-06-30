@@ -15,18 +15,14 @@ import type { Economy, Outcome, WorkerCtx } from '#src/contract.ts';
 import type { InboxEntry, Options, Store } from '#src/ports.ts';
 
 /**
- * Result of one inbox-apply run. This is the inbound mirror of {@link RelaySummary}. The relay
- * delivers committed money moves outward; this applies received events inward.
- * - `applied`: ids whose stored Operation submitted and committed, or deduped to an already-applied
- *   result. Each row is marked 'applied' this run so it is not re-claimed.
- * - `failed`: ids whose apply threw a retryable fault while the row is still under the attempt cap.
- *   Each carries the error code and the `retryable` flag for caller metrics. The row is left
- *   'pending' with `attempts` bumped and is retried next run.
- * - `deadLettered`: ids that hit the attempt cap (`config.maxInboxAttempts`) on a retryable fault, or
- *   were declined for a terminal business reason that retrying cannot fix (a `rejected` Outcome). The
- *   row is set to 'dead' and never re-claimed, so a poison event cannot block the events behind it.
- *   Each carries the event id and the error or reason code (`reason`). This is the same id-plus-reason
- *   shape the other background sweeps use.
+ * Result of one inbox-apply run, the inbound mirror of {@link RelaySummary}.
+ * - `applied`: ids that committed (or deduped to an already-applied result); the row is marked
+ *   'applied' so it is not re-claimed.
+ * - `failed`: ids whose apply threw a retryable fault under the cap; row stays 'pending', `attempts`
+ *   bumped, retried next run. Carries error code and `retryable` for metrics.
+ * - `deadLettered`: ids that hit the attempt cap (`config.maxInboxAttempts`) or were declined for a
+ *   terminal business reason (a `rejected` Outcome). Row set to 'dead' and never re-claimed, so a
+ *   poison event cannot block the events behind it. Carries event id and `reason`.
  */
 export type InboxSummary = {
   applied: ReadonlyArray<string>;
@@ -49,24 +45,17 @@ type Applier = Pick<Economy, 'submit'>;
 
 /**
  * Applies a batch of pending inbox events. Each row holds a verified inbound provider event already
- * mapped to the {@link Operation} it should apply, such as a topUp or a clawback. The row was
- * enqueued in the same transaction as the webhook ingress that claimed it. This claims up to `limit`
- * rows, submits each through the economy, and marks the ones that committed so they are not
- * re-claimed.
+ * mapped to the {@link Operation} it applies (a topUp, a clawback). Claims up to `limit` rows,
+ * submits each through the economy, and marks the committed ones so they are not re-claimed.
  *
- * Runs continuously. Unlike an end-user write, draining the inbox is never gated on the economy pause
- * (`economyPaused`). The inbox keeps settlements flowing and decouples provider latency, so a
- * maintenance window that refuses discretionary user writes must not also stall money the provider
- * already confirmed. Settlement carries actor 'system', which the pause gate exempts anyway, so a
- * stored topUp or clawback is not declined as ECONOMY_PAUSED when it reaches the economy.
- *
- * Each event is applied in its own try/catch, so one failure cannot stop the batch. A failed event is
- * left 'pending' and retried next run. An apply can therefore run more than once, for example when
- * submit committed but `markApplied` did not. Exactly-once delivery rests on the stored Operation's
- * idempotencyKey, which is the provider event id (the same value the row deduped on). A re-apply
- * resolves to the same money move as a `duplicate` Outcome rather than a second posting.
+ * Never gated on the economy pause: settlements must keep flowing through a maintenance window, and
+ * settlement carries actor 'system', which the pause gate exempts anyway. Each event applies in its
+ * own try/catch, so one failure cannot stop the batch and an apply can run more than once (submit
+ * committed but `markApplied` did not). Exactly-once rests on the stored Operation's idempotencyKey
+ * (the provider event id the row deduped on): a re-apply resolves to a `duplicate` Outcome.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how inbox draining fits the sweep loop.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/idempotency/ Idempotency} for the idempotencyKey dedupe.
  */
 export async function drainInbox(
   store: Store,
@@ -92,16 +81,11 @@ export async function drainInbox(
   return tally;
 }
 
-// Submits one stored Operation and records the outcome in the tally. On a committed or duplicate
-// Outcome the row is marked 'applied' and its id goes to `applied`. A `rejected` Outcome is a
-// terminal business "no" like INSUFFICIENT_FUNDS that retrying cannot fix, so it dead-letters the
-// row; leaving it 'pending' would retry the same doomed apply every sweep. A thrown fault is the
-// retryable case and goes to `recordFailure`, which bumps-and-retries or dead-letters at the cap.
-// `recordFailure` persists the failure rather than re-throwing it, so the batch keeps going.
-//
-// `relayOutbox` inlines its failure handling in one catch. The inbox splits it out because this
-// function already owns the `rejected`-Outcome dead-letter path, and keeping the thrown-fault path in
-// its own helper keeps both readable.
+// Submits one stored Operation and records the outcome in the tally. A committed or duplicate
+// Outcome marks the row 'applied'. A `rejected` Outcome is a terminal business "no" (e.g.
+// INSUFFICIENT_FUNDS) that retrying cannot fix, so it dead-letters the row rather than retrying the
+// same doomed apply every sweep. A thrown fault is the retryable case and goes to `recordFailure`,
+// which bumps-and-retries or dead-letters at the cap rather than re-throwing.
 async function applyOne(
   store: Store,
   ctx: WorkerCtx,
@@ -143,15 +127,14 @@ async function applyOne(
   tally.applied.push(entry.id);
 }
 
-// Persists a thrown, retryable apply failure and bounds retries by the stored attempt count. This
-// failure makes the row's count `entry.attempts + 1`. At the cap the row is dead-lettered (status
-// 'dead' so `claimInbound` will not hand it back) and recorded in `deadLettered`, which keeps a
-// poison event from wedging the queue. Below the cap, `bumpAttempt` raises `attempts`, the row stays
-// 'pending', the event is recorded in `failed`, and the next run retries it.
+// Persists a thrown, retryable apply failure and bounds retries by the stored attempt count
+// (`entry.attempts + 1`). At the cap the row dead-letters (status 'dead' so `claimInbound` won't
+// hand it back), keeping a poison event from wedging the queue. Below the cap, `bumpAttempt` raises
+// `attempts`, the row stays 'pending', and the next run retries it.
 //
 // The cap is `>=`, so the default `maxInboxAttempts` of 10 dead-letters on the 10th failure (the one
-// that takes `attempts` to 10). This is the same off-by-one as the outbox's `dispatchOne`. It is
-// stated at both so every adapter only has to agree on the stored count.
+// that takes `attempts` to 10). Same off-by-one as the outbox's `dispatchOne`; stated at both so
+// every adapter only has to agree on the stored count.
 async function recordFailure(
   store: Store,
   ctx: WorkerCtx,

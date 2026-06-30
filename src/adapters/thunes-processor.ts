@@ -316,18 +316,16 @@ async function request(
 // --- Inbound settlement callback --------------------------------------------------
 
 /**
- * Map a Thunes Money Transfer transaction callback to the {@link PayoutSettledEvent} the webhook edge
- * already knows how to apply (`toSettlePayout` -> `settlePayout`). Thunes POSTs the full transaction
- * object on every status change; this fires the settle only on the terminal success status
- * (`70000 COMPLETED` / status_class `7`), returning `null` for any in-flight status so the edge can
- * ack `2XX` and wait for the next callback.
+ * Map a Thunes transaction callback to the {@link PayoutSettledEvent} the webhook edge applies. Fires
+ * the settle only on the terminal success status (`70000 COMPLETED` / status_class `7`); returns
+ * `null` for any in-flight status so the edge acks `2XX` and waits for the next callback.
  *
- * `external_id` carried our payout saga id (set in {@link thunesProcessor}), so it maps straight to
- * `sagaId`; the Thunes transaction `id` becomes `eventId` (one settle per transaction) and the audit
- * `providerRef`. `providerAmount` is read from the source amount the rail debited and is recorded for
- * the audit trail only; `settlePayout` posts the rate-derived figures it recomputes from the reserve.
+ * `providerAmount` (the rail-debited source) is recorded for audit only: `settlePayout` posts the
+ * rate-derived figures it recomputes from the reserve, not this. `provider` comes from the webhook
+ * route, never the body, so it can't be spoofed.
  *
- * `provider` comes from the webhook route, never the body, so it can't be spoofed.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for settlement and the settle event.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for the webhook edge.
  */
 export function decodeThunesPayoutCallback(
   provider: string,

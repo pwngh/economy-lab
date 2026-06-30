@@ -111,13 +111,10 @@ CREATE TABLE legs (
      CONSTRAINT legs_posting_fk FOREIGN KEY (posting_id) REFERENCES postings (id),
      -- Composite FK: a leg's currency must match its account's, enforced natively (not just app-side).
      CONSTRAINT legs_account_fk FOREIGN KEY (account_id, currency) REFERENCES accounts (id, currency),
-     -- Composite index on (account_id, id). The maturity tail reads an account's newest lots with
-     -- `WHERE account_id = ? ORDER BY id DESC LIMIT n` (src/engines, timelineOf). legs.id is an
-     -- AUTO_INCREMENT assigned in commit order, so ordering by it gives the FIFO order the tail
-     -- walks, and this index serves that query as a bounded keyed scan with no filesort over the
-     -- account's whole leg history. The leading account_id column also covers the plain account_id
-     -- lookups (statement, lineage), so this replaces a bare legs(account_id) index. Mirrors the
-     -- Postgres legs_account_idx. (legs.id is the PK, so naming it in the index needs no extra column.)
+     -- Serves the maturity tail's `WHERE account_id = ? ORDER BY id DESC LIMIT n` as a bounded keyed
+     -- scan, no filesort (legs.id is AUTO_INCREMENT in commit order = FIFO). Leading account_id also
+     -- covers plain account_id lookups, replacing a bare legs(account_id) index. Mirrors Postgres
+     -- legs_account_idx (see db/postgresql-schema.sql).
      KEY legs_account_idx (account_id, id),
      KEY legs_posting_idx (posting_id)
    );
@@ -127,13 +124,10 @@ CREATE TABLE chain_links (
      account_id VARCHAR(96) NOT NULL,
      prev_hash  CHAR(64)    NOT NULL,
      hash       CHAR(64)    NOT NULL,
-     -- Holds the account's signed running balance immediately after this link. It is the same figure
-     -- post_entry writes into account_balances.balance for this account in the same CALL. Storing it
-     -- lets balance integrity compare a cached balance to its chain head in O(1), instead of re-summing
-     -- the whole leg history on every balance write. This is a maintained projection of the legs, not
-     -- the source of truth, so prove() still re-sums. It defaults to 0 so a link written around
-     -- post_entry carries the genesis balance. Rationale documented in db/postgresql-schema.sql
-     -- (chain_links.balance_after).
+     -- The account's signed running balance after this link, the same figure post_entry writes into
+     -- account_balances.balance, letting balance integrity compare a cached balance to its chain head in
+     -- O(1). A maintained projection, not the source of truth (prove() re-sums). Rationale in
+     -- db/postgresql-schema.sql (chain_links.balance_after).
      balance_after BIGINT   NOT NULL DEFAULT 0,
      PRIMARY KEY (posting_id, account_id),
      CONSTRAINT chain_links_posting_fk FOREIGN KEY (posting_id) REFERENCES postings (id),
@@ -152,11 +146,9 @@ CREATE TABLE account_balances (
      account_id VARCHAR(96) PRIMARY KEY,
      currency   VARCHAR(8)  NOT NULL,
      balance    BIGINT      NOT NULL DEFAULT 0,
-     -- Points at the chain head: the hash of this account's latest chain_links row, updated in the
-     -- same transaction as the balance (post_entry writes both). It is a maintained projection
-     -- alongside `balance`, under the same trust model. chain_links stays the source of truth, so
-     -- prove() still re-walks it. Storing it lets headsForAccounts read each account's head by primary
-     -- key, instead of scanning chain_links and sorting. Defaults to the genesis hash (64 zeros).
+     -- Chain-head pointer (hash of the latest chain_links row), written with the balance by post_entry
+     -- so headsForAccounts reads each head by primary key instead of scanning and sorting. A projection
+     -- under the same trust model; defaults to the genesis hash (64 zeros). See db/postgresql-schema.sql.
      head_hash  CHAR(64)    NOT NULL DEFAULT '0000000000000000000000000000000000000000000000000000000000000000',
      CHECK (currency IN ('CREDIT', 'USD')),
      CHECK (account_id LIKE 'platform:%' OR balance >= 0),
@@ -325,14 +317,11 @@ CREATE TABLE seen_webhooks (
    );
 
 -- ============================================================================
--- Stored routines (MySQL) plus the engine's invariant enforcement. Counterpart to the Postgres
--- routines in db/postgresql-schema.sql. The application computes the values and passes them in; the
--- routines write the rows. Here the database, not the application, is the primary enforcer of the
--- ledger invariants, not just a safety net. post_entry asserts conservation and is the SOLE writer of
--- `legs` (direct DML is revoked from the app role; see adversarial-engines.ts). The triggers below
--- enforce chain continuity and balance integrity. The CHECK constraints above cover no-overdraft, and
--- the primary keys cover exactly-once. The routines are wrapped in `DELIMITER $$` so the loader (and
--- the mysql CLI) don't read the semicolons inside each body as statement ends.
+-- Stored routines (MySQL), counterpart to the Postgres routines in db/postgresql-schema.sql. The
+-- database, not the app, is the primary enforcer: post_entry asserts conservation and is the SOLE
+-- writer of `legs` (direct DML revoked from the app role; see adversarial-engines.ts), the triggers
+-- below enforce chain continuity and balance integrity, CHECKs cover no-overdraft, primary keys cover
+-- exactly-once. Wrapped in `DELIMITER $$` so the loader doesn't read the bodies' semicolons as ends.
 --
 -- NOTE: with binary logging enabled, creating a stored FUNCTION can require a one-time
 -- `SET GLOBAL log_bin_trust_function_creators = 1` (or SUPER / SYSTEM_VARIABLES_ADMIN). The
@@ -341,39 +330,31 @@ CREATE TABLE seen_webhooks (
 
 -- ============================================================================
 -- Least-privilege app role (a deploy requirement; this file does not run it).
--- post_entry's claim to be the SOLE writer of `legs` is, on MySQL, a privilege fact rather than a
--- constraint. Postgres rejects an unbalanced leg written around the procedure with the deferred
--- legs_conserve trigger (it checks at COMMIT); MySQL has no deferred constraint triggers, so the
--- conservation check lives inside post_entry and only binds if nothing else can INSERT into `legs`.
--- The application must therefore connect as a role that can CALL the procedure but cannot write
--- `legs` directly:
+-- post_entry's claim to be the SOLE writer of `legs` is, on MySQL, a privilege fact, not a constraint:
+-- MySQL has no deferred constraint trigger, so the conservation check inside post_entry only binds if
+-- nothing else can INSERT into `legs`. The app must therefore connect as a role that can CALL the
+-- procedure but not write `legs` directly:
 --
 --   CREATE ROLE economy_app;
 --   GRANT SELECT, EXECUTE        ON `economy_lab`.*       TO economy_app;  -- read all + CALL post_entry
 --   GRANT INSERT, UPDATE, DELETE ON `economy_lab`.<table> TO economy_app;  -- every ledger table EXCEPT `legs`
 --   GRANT economy_app TO '<app_login>'@'<host>';                          -- then have the app connect as <app_login>
 --
--- DML stays granted on every other table on purpose. Chain continuity, balance integrity, overdraft,
--- and exactly-once must each be reachable by a raw write, so their own triggers, CHECKs, and keys do
--- the rejecting. Only `legs` is sealed. post_entry declares no SQL SECURITY clause, so it runs as
--- DEFINER. Invoked by economy_app, it still writes `legs` with the schema owner's rights, balanced by
--- construction. That assumes the DEFINER (whoever applies this file) keeps `legs` DML and is a
--- different identity from economy_app.
---
--- Not executed here: the schema is applied by one privileged connection (scripts/migrate.sh), the
--- database name isn't known statically, and provisioning a second login is a deployment rail this lab
--- stubs. test/conformance/adversarial-engines.ts builds exactly this role and proves a raw
--- unbalanced-leg INSERT is refused while balanced legs still post through post_entry.
+-- DML stays granted elsewhere on purpose: continuity, balance integrity, overdraft, and exactly-once
+-- must each be reachable by a raw write so their triggers/CHECKs/keys do the rejecting. Only `legs` is
+-- sealed. post_entry runs as DEFINER, so invoked by economy_app it still writes `legs` with the owner's
+-- rights, balanced by construction. That assumes the DEFINER keeps `legs` DML and is a different
+-- identity from economy_app. Not executed here (the lab stubs the second-login rail);
+-- test/conformance/adversarial-engines.ts builds this role and proves a raw unbalanced-leg INSERT is
+-- refused while balanced legs still post through post_entry.
 -- ============================================================================
 DELIMITER $$
 
--- Persists one posting and everything derived from it in a single CALL. It ensures any first-time
--- user accounts exist (system accounts are seeded above), inserts the posting row, inserts its legs,
--- inserts one chain link per account, and applies each account's net balance delta. The bigint
--- amounts arrive as JSON strings, so no precision is lost past 2^53, and they are cast here. The
--- balance step UPDATEs existing rows first, so the non-negative CHECK tests the new total rather than
--- the delta alone. It then INSERTs first-time accounts, whose first movement is always a positive
--- credit.
+-- Persists one posting and everything derived from it in a single CALL: first-time user accounts, the
+-- posting row, its legs, one chain link per account, and each account's net balance delta. bigint
+-- amounts arrive as JSON strings (no precision lost past 2^53) and are cast here. The balance step
+-- UPDATEs existing rows first so the non-negative CHECK tests the new total, not the delta alone, then
+-- INSERTs first-time accounts (whose first movement is always a positive credit).
 CREATE PROCEDURE post_entry(
   IN p_txn          VARCHAR(64),
   IN p_posted_at    BIGINT,
@@ -402,10 +383,9 @@ BEGIN
         amount   VARCHAR(32) PATH '$.amount'
       )) AS l;
 
-  -- Conservation check (MySQL). With direct DML on `legs` revoked, this procedure is the only writer
-  -- of legs, so this assert makes it refuse an unbalanced posting. Legs that don't net to zero per
-  -- currency can't be committed by any route. This is the content half of what the Postgres deferred
-  -- constraint trigger enforces. Legitimate postings always balance (assertBalanced in
+  -- Conservation check (MySQL). With direct DML on `legs` revoked, post_entry is the only writer, so
+  -- this assert is the sole route by which legs not netting to zero per currency are refused -- the
+  -- content half of the Postgres deferred trigger. Legitimate postings always balance (assertBalanced,
   -- src/ledger.ts), so this fires only on malformed input.
   IF EXISTS (
     SELECT 1 FROM legs WHERE posting_id = p_txn GROUP BY currency HAVING SUM(amount) <> 0
@@ -414,11 +394,10 @@ BEGIN
       SET MESSAGE_TEXT = 'conservation: posting legs do not net to zero per currency';
   END IF;
 
-  -- Inserts one link per distinct account, carrying the account's signed running balance after this
-  -- posting. That balance is its current cached balance (0 if it has no row yet) plus this posting's
-  -- net delta. account_balances still holds the OLD balance here, because the balance step below runs
-  -- after, so by construction this equals the value that step writes into account_balances.balance.
-  -- Balance integrity later compares a cached balance to this figure at the account's head.
+  -- One link per distinct account, carrying its signed running balance after this posting (current
+  -- cached balance, 0 if none yet, plus the net delta). account_balances still holds the OLD balance
+  -- here (the balance step runs after), so by construction this equals what that step writes, which
+  -- balance integrity later compares at the account's head.
   INSERT INTO chain_links (posting_id, account_id, prev_hash, hash, balance_after)
     SELECT p_txn, c.account, c.prev_hash, c.hash,
            COALESCE(ab.balance, 0) + CAST(d.delta AS SIGNED)
@@ -495,16 +474,9 @@ BEGIN
   END IF;
 END$$
 
--- Enforces balance integrity. In the same CALL, post_entry writes the running total into both
--- account_balances.balance and the new chain_links row's balance_after, so these two must agree. This
--- trigger checks the cheap equivalent: a cached balance must equal the balance_after recorded at the
--- account's head (the chain_links row whose hash is the row's head_hash). That is an O(1) keyed read
--- (chain_links_account_hash_idx), instead of re-summing the whole leg history on every balance write.
--- It still rejects a hand-edited balance: a raw UPDATE that bumps balance leaves head_hash and that
--- link's balance_after untouched, so the two disagree. balance_after is itself the signed leg sum
--- through that posting, the same invariant the prover re-checks by re-summing the legs. A head_hash
--- with no matching link yields expected = 0, so only a zero balance passes (the genesis state).
--- Rationale documented in db/postgresql-schema.sql.
+-- Enforces balance integrity: cached balance must equal balance_after at the account's head -- an O(1)
+-- keyed read instead of re-summing legs. Still rejects a hand-edited balance, since a raw UPDATE leaves
+-- balance_after untouched so the two disagree. Rationale documented in db/postgresql-schema.sql.
 CREATE TRIGGER account_balances_integrity_ins BEFORE INSERT ON account_balances
 FOR EACH ROW
 BEGIN
@@ -535,14 +507,12 @@ END$$
 
 DELIMITER ;
 
--- Give each house (system) account an empty balance row up front: balance 0, head_hash at the genesis
--- value (64 zeros). Such a row reads identically to no row at all, because headsForAccounts already
--- treats a missing row as genesis, so it shifts no balance and no hash. Its only job is to exist.
--- lockAccounts locks an account by taking `FOR UPDATE` on its balance row, and you cannot lock a row
--- that is not there yet. Without this row, the first concurrent writers to a hot shared account
--- (STORED_VALUE is touched by every top-up) find no row to lock, so none of them wait. They race to
--- extend the chain head and collide. Pre-planted, they take turns on the lock instead. A user account
--- still creates its row on its first posting, where the chain-fork retry covers that rarer race.
+-- Pre-plant an empty balance row (balance 0, genesis head_hash) for each system account. It reads
+-- identically to no row (headsForAccounts treats a missing row as genesis); its only job is to exist
+-- so lockAccounts can take `FOR UPDATE` on it. Without it, the first concurrent writers to a hot shared
+-- account (STORED_VALUE, touched by every top-up) find no row to lock, so none wait and they race to
+-- extend the chain head and collide. A user account creates its row on first posting; the chain-fork
+-- retry covers that rarer race.
 INSERT INTO account_balances (account_id, currency, balance, head_hash)
   SELECT id, currency, 0, REPEAT('0', 64) FROM accounts WHERE kind = 'system';
 

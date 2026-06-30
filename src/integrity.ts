@@ -61,18 +61,12 @@ type LedgerFold = {
 };
 
 /**
- * Runs all consistency checks over the whole ledger and returns the report.
+ * Runs all consistency checks over the whole ledger and returns the report. Reads only.
  *
- * This is the thorough prover. It recomputes the entire hash chain to catch any altered entry.
- * The lighter prover in `economy.ts` (`economy.read.prove`) only checks that each account's
- * latest hash is well-formed, without recomputing it.
- *
- * Reads only, through `store`, `ctx.rates`, and `chain.ts` `proveChain`.
- *
- * This is an independent audit, not the enforcer. The database enforces conservation,
- * no-overdraft, and balance integrity (see db/*-schema.sql). This function re-derives those
- * invariants from the legs to catch a bug in the enforcement itself. An auditor or worker runs
- * it; it never guards the write path.
+ * This is the thorough prover: it recomputes the entire hash chain to catch any altered entry,
+ * unlike the lighter `economy.read.prove`. It is an independent audit, not the enforcer — the DB
+ * enforces these invariants (see db/*-schema.sql); this re-derives them from the legs to catch a
+ * bug in the enforcement itself, so it never guards the write path.
  *
  * @example
  *   let report = await proveEconomy(store, { rates: fixedRates(), digest });
@@ -152,7 +146,7 @@ async function foldLedger(
     // directly-edited balance). Legs are authoritative; the materialized figure is the cache.
     pushIfDrifted(account, balance, derivedMinor, drift);
     // Sum the credits the platform must back with real USD. `classify` tags an account
-    // "custodial" when its balance is a credit a user can spend or withdraw. Revenue-share still
+    // "custodial" when its balance is a credit a user can spend or cash out. Revenue-share still
     // owed, promotional grants, and amounts reserved for a pending payout are not custodial,
     // because none are user-spendable yet. Every custodial balance is a credit, so the
     // `currency === 'CREDIT'` check keeps a stray USD balance out of this credits-only total.
@@ -227,7 +221,7 @@ function pushIfDrifted(
 }
 
 // Returns the USD that must back a given amount of credits. It is the credit amount times the par
-// rate (the fixed credit-to-USD rate), rounded down.
+// rate (the fixed CREDIT-to-USD rate), rounded down.
 //
 // The rate is stored as an integer `par.rate` plus a `par.scale`, where the true rate equals
 // par.rate / 10^scale. For example, rate 50 and scale 2 mean 0.50 USD per credit. So dividing the

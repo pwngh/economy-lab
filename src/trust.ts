@@ -92,14 +92,10 @@ export function assessRisk(
 
 /**
  * Builds the attempt record to add to a subject's running total after an operation finishes.
- * Returns null when there is nothing to record, which happens for an untracked subject or for a
- * duplicate that was already counted. The record carries `idempotencyKey` so the store will not
- * count a genuine retry twice.
- *
- * This is the pure reference implementation of the attempt-record rule. The tests and the
- * in-memory trust adapter exercise it. The live pipeline does not call this. It records the
- * equivalent record through `store.trust.record` inside the transaction (see economy.ts
- * screenRisk).
+ * Returns null for an untracked subject or a duplicate already counted. The record carries
+ * `idempotencyKey` so the store will not count a genuine retry twice. This is the pure reference
+ * twin; the live pipeline records the equivalent through `store.trust.record` (see economy.ts
+ * screenRisk), not this.
  *
  * A `rejected` outcome is still recorded, because denied attempts count toward the limit and a
  * burst is itself a fraud signal. A `duplicate` is not recorded, because the original already

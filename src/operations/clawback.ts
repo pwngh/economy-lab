@@ -25,25 +25,16 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Leg, Unit } from '#src/ports.ts';
 
 /**
- * Reclaim credits after a bank chargeback. The USD movement (dollars clawed back at the payment
- * processor) happens outside this ledger; this handler books only the credit side of the loss.
+ * Reclaim credits after a bank chargeback. The USD movement happens outside this ledger; this books
+ * only the credit side of the loss.
  *
- * Pulls `operation.amount` of credits from the user's spendable balance, capped at the current
- * balance (the smaller of requested and held). The rest becomes a debt to the platform in
- * RECEIVABLE. The full amount is credited to STORED_VALUE (credits in circulation), which the
- * original top-up raised when it issued these credits. The loss therefore un-issues them rather
- * than booking REVENUE the platform never earned, and REVENUE stays untouched. Every line is in
- * CREDIT, so no currency is mixed. The two debits sum to the STORED_VALUE credit, so the posting
- * nets to zero.
+ * Pulls `amount` from spendable, capped at what the user holds, with the rest a debt in RECEIVABLE.
+ * The full amount credits STORED_VALUE so the loss un-issues the credits rather than booking REVENUE
+ * the platform never earned; the two debits sum to that credit, so the all-CREDIT posting nets zero.
  *
- * When an `orderId` is present, the chargeback is mutually exclusive with a refund of the same
- * order through the shared `reversed:${orderId}` key. The handler claims the key before posting. A
- * lost claim means a refund or an earlier clawback already reversed the order, so it returns that
- * transaction as a `duplicate`. After a successful post it records the key, which blocks a later
- * refund of the order.
- *
- * Returns a `committed` Outcome, or `duplicate` on a lost claim. A non-CREDIT or non-positive
- * amount is a programming error, thrown as a fault.
+ * A present `orderId` shares the `reversed:${orderId}` key to stay mutually exclusive with a refund
+ * of the same order; a lost claim returns that reversal's transaction as `duplicate`. Returns
+ * `committed` or `duplicate`. A bad amount throws a fault.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/clawback/ Clawback} for the chargeback reversal and split accounting.
  */

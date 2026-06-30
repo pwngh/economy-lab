@@ -183,12 +183,10 @@ export type Operation =
       userId: string;
       sagaId: string;
       reason: string;
-      // Operator-only correction to undo a payout that has not paid out yet. Marks the multi-step
-      // payout (the "saga") as FAILED, but only if it is still in its pre-paid state so two attempts
-      // can't both undo it. Returns the set-aside credits to the seller's earned account. A payout
-      // that has already disbursed real USD is refused. `userId` names the seller so the engine
-      // knows which account to lock. The operation is identified only by its payout id and names no
-      // account directly.
+      // Operator-only correction to undo a not-yet-paid payout. Marks the saga FAILED and returns the
+      // set-aside credits to the seller's earned account, but only if it is still pre-paid, so two
+      // attempts can't both undo it; a payout that already disbursed real USD is refused. `userId`
+      // names the seller (which account to lock); the operation is otherwise identified only by sagaId.
     }
   | {
       kind: 'settlePayout';
@@ -199,17 +197,15 @@ export type Operation =
       // disbursement), recorded for the audit trail. Carried from the inbound provider webhook that
       // drives the settle.
       providerRef: string;
-      // The USD amount the provider reported settling. Recorded for the audit trail and
-      // reconciliation only. The figures actually posted are the rate-derived ones the worker
-      // computes: gross USD from the reserve at the payout rate, less the rail fee. The worker
-      // computes them identically so a settle driven by a webhook moves exactly what the worker's
-      // own settle moved.
+      // The USD amount the provider reported settling. Recorded for audit/reconciliation only: the
+      // figures actually posted are the rate-derived ones the worker computes (gross USD from the
+      // reserve at the payout rate, less the rail fee), so a webhook-driven settle moves exactly what
+      // the worker's own settle moved.
       providerAmount: Amount;
       // System- or operator-only (RESTRICTED_TO_PRIVILEGED in economy.ts): the SUBMITTED -> SETTLED
-      // step that empties the seller's reserve into REVENUE and moves the gross USD out of trust.
-      // An end user must never settle their own payout. The operation is named only by its payout id
-      // (`sagaId`). The postings touch platform accounts only, so no user wallet account is named
-      // directly.
+      // step that empties the seller's reserve into REVENUE and moves gross USD out of trust. An end
+      // user must never settle their own payout. Named only by `sagaId`; postings touch platform
+      // accounts only.
     };
 
 /**
@@ -354,11 +350,9 @@ export interface Economy {
     // board: settled and failed payouts included, not only the due ones the worker claims. Lets a UI
     // render payout status without tracking minted payout ids itself. Delegates to `SagaStore.list`.
     payouts(options?: Options): AsyncIterable<Saga>;
-    // Every committed posting, newest first, streamed (a busy ledger can have many). This is the
-    // whole journal: user operations and the worker's own postings alike, covering every account
-    // touched, not only the ones a given reader minted. Each posting carries its full legs, so a UI
-    // can render and expand a row without a second lookup. Lets the journal be read from the engine
-    // itself instead of a side channel that only sees the writes one process happened to make.
+    // Every committed posting, newest first, streamed (a busy ledger can have many). The whole
+    // journal: user and worker postings alike, every account touched, not only the ones a given reader
+    // minted. Each posting carries its full legs, so a UI renders a row without a second lookup.
     // Delegates to `Ledger.list`.
     postings(options?: Options): AsyncIterable<Posting>;
     prove(options?: Options): Promise<ProveReport>;
@@ -373,7 +367,7 @@ export interface ProveReport {
 
   // True when the real USD the platform holds in trust covers every credit it owes back to
   // users: the credits sitting in their spendable balances. Credits are converted to USD at the
-  // peg, the fixed credits-to-USD rate.
+  // peg, the fixed CREDIT-to-USD rate.
   backed: boolean;
 
   // True when no user account has gone below zero.
@@ -389,12 +383,11 @@ export interface ProveReport {
   // even when the books still balance.
   consistent: boolean;
 
-  // Every account whose cached balance disagrees with the balance re-added from its debit and
-  // credit lines; empty when `consistent` is true. Each entry names the account and both figures so
-  // an operator sees the size and direction of the gap. This catches two cases. The first is an
-  // account with real postings whose cached total drifted. The second is a leftover balance row
-  // with no postings behind it: its lines say it should not exist, so it is compared against a
-  // re-added balance of zero, and any non-zero cached figure is wrong.
+  // Every account whose cached balance disagrees with the balance re-added from its debit and credit
+  // lines; empty when `consistent` is true. Each entry names the account and both figures, so an
+  // operator sees the gap's size and direction. Catches both a real account whose cached total
+  // drifted and a leftover balance row with no postings (re-added to zero, so any cached figure is
+  // wrong).
   drift: ReadonlyArray<{
     account: AccountRef;
     materialized: Amount;

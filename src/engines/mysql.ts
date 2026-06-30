@@ -400,26 +400,13 @@ async function buildStatement(
   return { account, entries, cursor: null };
 }
 
-// Streams an account's funds as dated lots for the maturity logic that decides when funds become
-// spendable. Yields one lot per posting that increased the balance, and skips legs that decreased
-// it. The maturity rule lives in maturity.ts; here we carry over what each posting recorded. A
-// posting with no source or maturity time falls back to "unknown" and to mature-now, the safe
-// default.
-//
-// The result is bounded by `options` (see TimelineOptions). The maturity tail asks for `order:
-// 'desc'` with a small `limit`, so the database does `ORDER BY l.id DESC LIMIT ...` and returns just
-// the newest page instead of scanning the whole account history. We stop issuing queries as soon as
-// the requested number of lots is produced, so the database work is bounded by the tail, not the
-// lifetime. As in Postgres, the balance-lowering legs (spends) are filtered out in code rather than
-// SQL. The lot-granularity `offset` and `limit` therefore apply after that filter, while the
-// database pages walk raw rows.
-//
-// The query orders by `l.id` (legs.id, an AUTO_INCREMENT) rather than `p.seq`, so the composite
-// index `legs(account_id, id)` serves `WHERE account_id = ? ORDER BY id DESC LIMIT n` as a bounded
-// keyed scan with no filesort. An `ORDER BY p.seq` instead had to join every one of the account's
-// legs to postings and sort them. legs.id and postings.seq are both assigned in commit order, so for
-// a single account's legs the two orderings are identical: the same FIFO order, now read off the
-// index.
+// Streams an account's incoming funds as dated lots (one per posting that increased the balance,
+// skipping spends) for the maturity logic; a posting with no source/maturity falls back to "unknown"
+// and mature-now. Ordered by `l.id` (legs.id, an AUTO_INCREMENT) not `p.seq`, so the composite index
+// `legs(account_id, id)` serves `ORDER BY id DESC LIMIT n` as a bounded keyed scan with no filesort
+// (an `ORDER BY p.seq` would join and sort every leg); the two share commit order, so for one account
+// this is the same FIFO order. Spends are filtered in code, so the lot offset/limit apply after that.
+// @see https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/
 async function* timelineOf(
   exec: MysqlExecutor,
   account: AccountRef,
@@ -573,17 +560,12 @@ function naturalDelta(account: AccountRef, row: Row): Amount {
 
 // --- Idempotency store ------------------------------------------------------------
 
-// Makes a request safe to retry: a given idempotency key is processed at most once, and a retry
-// returns the original result.
-//
-// `claim` is the gate. The key is the `idempotency` primary key, so one row per key. The first
-// caller inserts a placeholder row (no result yet) and proceeds. A later caller with the same key
-// finds that row:
-//   - If the first call finished and saved its result, the later caller gets that result back.
-//   - If the first call is still in progress, the later caller blocks on the placeholder row
-//     (locked by the unfinished transaction) until that call commits or rolls back.
-// If the first call rolls back, its placeholder row disappears with it, so a failed attempt doesn't
-// consume the key and the request can be retried.
+// Makes a request safe to retry: a key (the `idempotency` primary key) is processed at most once and
+// a retry returns the original result. `claim` is the gate: the first caller inserts a placeholder
+// row (no result) and proceeds; a later same-key caller either gets the saved result back, or blocks
+// on the placeholder row (locked by the unfinished transaction) until that call commits or rolls
+// back. A rollback drops the placeholder with it, so a failed attempt frees the key for a real retry.
+// @see https://economy-lab-docs.pages.dev/economy/concepts/idempotency/
 function createIdempotencyStore(exec: MysqlExecutor): IdempotencyStore {
   return {
     claim: async (key) => {
@@ -1078,13 +1060,11 @@ function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
       return result.map(rowToSubscription);
     },
     markBilled: async (id, nextDueAt, expectedDueAt) => {
-      // Update the due date only if it still holds the value this caller expects (the UPDATE's
-      // WHERE requires next_due_at = `expectedDueAt`). Guards against two renewal workers acting on
-      // the same subscription at once: whichever updates first changes the due date, so the second
-      // (which expected the now-stale old date) matches no row (affectedRows = 0), returns false,
-      // and treats the renewal as already done, never double-charging. The saga store's `advance`
-      // guards itself the same way. A successful renewal also resets `attempts` (consecutive failed
-      // charges) to 0, so a recovered subscription starts fresh against the retry limit.
+      // Compare-and-set against the period the caller claimed (WHERE next_due_at = `expectedDueAt`):
+      // if an overlapping renewal worker already billed this period and moved the due date on, no row
+      // matches (affectedRows = 0), so the loser returns false and never double-charges. SagaStore's
+      // `advance` guards itself the same way. A success also resets `attempts` to 0 so a recovered
+      // subscription starts fresh against the retry limit.
       let affected = await execWrite(
         exec,
         `UPDATE subscriptions SET next_due_at = ?, period = period + 1, attempts = 0
@@ -1363,15 +1343,11 @@ function rowToInbox(row: Row): InboxEntry {
   };
 }
 
-// The JSON-safe form of the Operation stored in the inbox row's `operation` JSON column.
-// JSON.stringify throws on the BigInt inside each Amount, so encodeOperation walks the operation and
-// swaps every branded Amount for its `CREDIT:12.34` string (encodeAmount). decodeOperation reverses
-// it, rebuilding an Operation whose real Amounts equal the originals so the apply worker submits the
-// same money move. This is the same approach as encodeTransaction/decodeTransaction below,
-// generalized over the Operation union. Walking by the Amount brand keeps the codec working whichever
-// variant (and whichever amount-bearing fields) the operation has, with no per-kind branch to drift.
-// It is kept local here for engine symmetry with the postgres twin (which carries its own copy),
-// rather than shared.
+// JSON-safe form of the Operation in the inbox row's `operation` column. JSON.stringify throws on the
+// BigInt inside each Amount, so encodeOperation swaps every branded Amount for its `CREDIT:12.34`
+// string (encodeAmount) and decodeOperation reverses it, rebuilding equal Amounts so the apply worker
+// submits the same money move. Walking by the Amount brand keeps one codec working for every Operation
+// variant, with no per-kind branch to drift. Same approach as encodeTransaction/decodeTransaction below.
 type EncodedOperation = Record<string, unknown>;
 
 function encodeOperation(operation: Operation): EncodedOperation {
@@ -1581,16 +1557,12 @@ export function mysqlStore(deps: {
     checkpoints: createCheckpointStore(pool),
     replay: createReplayStore(pool),
 
-    // The whole unit of work (the idempotency claim, the postings, the saga advance, the outbox
-    // write) lives inside this one transaction. So when InnoDB aborts it with a transient lock
-    // conflict (an ER_LOCK_DEADLOCK or a lock-wait timeout), nothing committed, and re-running the
-    // entire `work` in a fresh transaction is atomic and idempotency-safe. withTransientRetry does
-    // exactly that. Each attempt borrows its own connection and runs START TRANSACTION ... COMMIT, and
-    // the catch has already rolled the aborted transaction back, so a retry starts clean. A true
-    // settle-vs-reverse conflict thus retries into the clean SAGA.INVALID_TRANSITION (the retried op
-    // reloads a now-terminal saga) instead of escaping as a raw deadlock error, and a non-conflicting
-    // deadlock succeeds on a later try. Every other error (a domain fault, a CHECK/constraint
-    // violation) is not a transient conflict, so it propagates unchanged on its first occurrence.
+    // The whole unit of work lives in this one transaction, so a transient InnoDB abort (deadlock or
+    // lock-wait timeout) committed nothing and withTransientRetry can re-run all of `work` in a fresh
+    // connection + transaction, atomic and idempotency-safe. A true settle-vs-reverse conflict then
+    // retries into a clean SAGA.INVALID_TRANSITION (the retried op reloads a now-terminal saga) rather
+    // than escaping as a raw deadlock; any non-transient error propagates unchanged on its first throw.
+    // @see https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/
     transaction: async (work) =>
       withTransientRetry(async () => {
         let connection = await pool.getConnection();

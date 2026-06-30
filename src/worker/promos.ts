@@ -45,17 +45,13 @@ type PromoExpiryTally = {
 };
 
 /**
- * Claw back the unspent part of every expired promo grant, one at a time.
+ * Claw back the unspent part of every expired promo grant, one at a time. Per grant, take back
+ * min(grant amount, balance) read fresh, so two grants for the same user can't over-claw (the first
+ * reversal lowers the balance the second sees).
  *
- * For each grant, read the user's current promo balance and take back min(grant amount, balance):
- * that is the unspent remainder, since spending lowers the balance. Reading the balance fresh per
- * grant stops two grants for the same user from clawing back too much, since the first reversal
- * lowers the balance the second sees.
- *
- * Each grant runs in its own transaction so the money movement and the "mark reversed" write
- * commit or roll back together. If undone, the grant stays eligible for retry rather than being
- * flagged reversed with no money moved. A fully-spent grant moves nothing but is still flagged.
- * Errors on a single grant are caught and recorded so they can't halt the rest.
+ * Each grant runs in its own transaction so the money movement and the "mark reversed" write commit
+ * or roll back together; if undone the grant stays eligible for retry. Errors on one grant are
+ * caught so they can't halt the rest.
  *
  * `now` is epoch milliseconds. `limit` caps how many grants this run picks up.
  *
@@ -100,14 +96,11 @@ async function reverseOne(args: {
   }
 }
 
-// Claws back one grant's unspent credits in a single transaction. First it locks the user's promo
-// account so no concurrent spend can shift the balance mid-reversal. Then it reads the balance and
-// takes back min(grant amount, balance), which is the unspent remainder. When that amount is
-// positive it posts a ledger entry that undoes the original grant by moving credits out of the
-// user's promo account and back into PROMO_FLOAT (see postReversal). A fully spent grant takes
-// back zero and posts no entry. Either way it flags the grant reversed inside this same
-// transaction, so if the entry rolls back the grant stays eligible to retry. Returns the amount
-// taken back.
+// Claws back one grant's unspent credits in a single transaction. Locks the user's promo account so
+// no concurrent spend shifts the balance mid-reversal, then takes back min(grant amount, balance)
+// via a reversal entry into PROMO_FLOAT (see postReversal); a fully spent grant posts nothing.
+// Either way it flags the grant reversed inside this same transaction, so if the entry rolls back
+// the grant stays eligible to retry. Returns the amount taken back.
 async function settle(args: {
   store: Store;
   ctx: WorkerCtx;

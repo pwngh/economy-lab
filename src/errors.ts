@@ -74,7 +74,7 @@ export const ERROR_CODES = {
   // A posting referenced an account that doesn't exist.
   UNKNOWN_ACCOUNT: 'LEDGER.UNKNOWN_ACCOUNT',
 
-  // A multi-step workflow (a saga) was told to move to a state it can't reach from its
+  // A multi-step saga was told to move to a state it can't reach from its
   // current one.
   INVALID_TRANSITION: 'SAGA.INVALID_TRANSITION',
 

@@ -44,9 +44,8 @@ import type { InboxSummary } from '#src/worker/inbox.ts';
 import type { ReconcileFeed, ReconcileSummary } from '#src/worker/reconcile.ts';
 
 /**
- * Names of the background jobs run each cycle. `SweepName` below is derived from this list, so
- * these literals are the sole definition. The list is `as const` rather than an enum, which freezes
- * the array and keeps the literal types.
+ * Names of the background jobs run each cycle, and the sole definition `SweepName` is derived from.
+ * `as const` (not an enum) freezes the array and keeps the literal types.
  *
  * Array order is both run order and result order, and the order is load-bearing. `feeSweep` follows
  * `treasury` because one measures the surplus and the next moves it, so keep the pair adjacent.
@@ -76,15 +75,12 @@ export type SweepName = (typeof SWEEP_NAMES)[number];
 export type SweepInput = {
   now: number;
   limit: number;
-  // Transport the relay job delivers outgoing events through. Optional: a deployment with no
-  // dispatcher (no SQS queue or HTTP endpoint, see `selectDispatcher` in src/index.ts) still
-  // runs every other job. When absent the relay job is skipped; pending rows stay in the outbox
-  // (the table of not-yet-delivered events) for a later run once a dispatcher is wired up.
+  // Transport the relay job delivers outgoing events through. Optional (see `selectDispatcher` in
+  // src/index.ts): when absent the relay job is skipped and pending outbox rows wait for a later run.
   dispatcher?: Dispatcher;
   // Economy the inbox-apply job submits each stored inbound Operation through, so the money move runs
-  // through the same invariants and idempotency a direct caller hits. Optional, mirroring
-  // `dispatcher`: a worker process built without an economy handle skips `drainInbox`, leaving pending
-  // inbox rows for a later run once one is wired up.
+  // through the same invariants and idempotency a direct caller hits. Optional like `dispatcher`:
+  // absent, `drainInbox` is skipped and pending inbox rows wait for a later run.
   economy?: Economy;
   feed: ReconcileFeed;
   windows: ReadonlyArray<Range>;
@@ -114,11 +110,10 @@ export type SweepBatch = {
 };
 
 // Holds runOnce's result: the per-job batch plus the txn id of every ledger posting the run
-// committed. A host can fold the run's settlements, reversals, and sweeps into a feed without
-// intercepting the id generator itself. A rolled-back job can mint an id that never commits, so
-// resolve each id via read.posting and skip a null. `postings` sits beside `batch` rather than
-// merged into it, so iterating the batch's job results (for example, to collect failures) never
-// trips over the postings list.
+// committed, so a host can fold settlements, reversals, and sweeps into a feed without intercepting
+// the id generator. A rolled-back job can mint an id that never commits, so resolve each id via
+// read.posting and skip a null. `postings` sits beside `batch`, not merged in, so iterating the
+// batch's job results never trips over the postings list.
 export type SweepRun = { batch: SweepBatch; postings: ReadonlyArray<string> };
 
 /**
@@ -148,19 +143,12 @@ export async function runSweeps(
       sweepDueSubscriptions(store, ctx, { now, limit }),
     ),
     treasury: await isolate(() => sweepTreasury(store, ctx, { now })),
-    // Moves the surplus treasury just measured into platform funds. Surplus is cash held beyond what
-    // is owed to users. The job takes the full amount available this cycle, skips when that amount is
-    // zero, and records the economy.fees.swept event in the same commit as the money movement so the
-    // two can't disagree. It is wrapped like every job, so a refusal is reported as a failed result.
-    // The safety check refuses unless the funds are truly surplus and settled; money owed to users
-    // may not move.
+    // Moves the surplus the treasury sweep just measured into platform funds. Wrapped like every
+    // job, so realizeFees's refusal (money owed to users may never move) surfaces as a failed result.
     feeSweep: await isolate(() => realizeFees(store, ctx, { now })),
-    // Re-checks the previous sealed snapshot against the current ledger before sealing a fresh one
-    // below. The old snapshot predates any tampering done since it was sealed, so it catches that
-    // tampering. A just-taken snapshot always passes because it is built from the ledger it is
-    // compared against. A mismatch is recorded on the summary rather than thrown, so it skips
-    // `isolate`'s error path. Only a corrupted row or a storage failure is reported as a failed
-    // result.
+    // Re-checks the previous sealed snapshot before `checkpoint` below overwrites it: that old
+    // snapshot predates any tampering since it was sealed, so it catches it. A mismatch is recorded
+    // on the summary (not thrown), so only a corrupt row or storage failure becomes a failed result.
     checkpointVerify: await isolate(() => reverifyCheckpoint(store, ctx)),
     checkpoint: await isolate(() => sealCheckpoint(store, ctx)),
     // Relay is one of two sweeps with an optional capability. With no dispatcher there is nothing to
@@ -179,11 +167,9 @@ export async function runSweeps(
             ),
           ),
     // The inbound mirror of relay, and the other sweep with an optional capability. With no economy
-    // handle there is nothing to submit through, so it short-circuits to an empty successful summary
-    // and pending inbox rows stay put for a later run. Unlike a user write, this is never gated on
-    // the economy pause: settlements must keep flowing through a maintenance window (see drainInbox's
-    // note). The job is still wrapped in `isolate`, so a store or submit failure is reported as a
-    // failed result rather than escaping the run.
+    // handle there is nothing to submit through, so it short-circuits to an empty summary and pending
+    // inbox rows stay put. Never gated on the economy pause: settlements must keep flowing through a
+    // maintenance window (see drainInbox's note).
     drainInbox:
       input.economy === undefined
         ? { ok: true, summary: { applied: [], failed: [], deadLettered: [] } }
@@ -204,15 +190,9 @@ export async function runSweeps(
   };
 }
 
-// Runs one job and turns its outcome into a SweepResult. A return becomes `ok: true` with the
-// summary.
-//
-// A throw goes through `normalizeError` (errors.ts) to a standard EconomyError. An existing
-// EconomyError passes through unchanged. Anything else is wrapped as a retryable STORE.FAILURE that
-// keeps the original as `cause` for logs. The EconomyError's code and retry flag form the
-// `ok: false` result.
-//
-// Catching here keeps one failing job from stopping the others.
+// Runs one job and turns its outcome into a SweepResult: a return becomes `ok: true` with the
+// summary, a throw is normalized (errors.ts) into the `ok: false` code and retry flag. Catching
+// here keeps one failing job from stopping the others.
 async function isolate<TSummary>(
   run: () => Promise<TSummary>,
 ): Promise<SweepResult<TSummary>> {

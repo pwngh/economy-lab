@@ -19,19 +19,11 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Leg, Posting, Unit } from '#src/ports.ts';
 
 /**
- * Undoes an earlier transaction by posting its exact opposite. This is an operator-only manual
- * correction. It looks up the transaction named by `operation.txnId`, then posts a new transaction
- * with the same legs but every amount's sign flipped. It locks each account the original touched
- * before posting.
- *
- * Returns a `committed` Outcome carrying the reversing transaction. Four caller mistakes throw an
- * `OP.MALFORMED` fault: a non-operator actor, a blank reason, an unknown `txnId`, or a `txnId`
- * that names a reversal. Reversing a reversal just loops the money back out and in.
- *
- * A transaction is reversed at most once. The handler stakes the shared `reversed:${txnId}` key,
- * the same pattern refund and clawback use for `reversed:${orderId}`. The first reverse claims the
- * key and posts the inverse. A second reverse loses the claim and returns the first reversal's
- * transaction as a `duplicate`, moving no money again.
+ * Undoes an earlier transaction by posting its exact opposite: an operator-only manual correction
+ * that posts the original's legs with every amount's sign flipped, locking each account it touched
+ * first. A transaction is reversed at most once via the shared `reversed:${txnId}` key (the pattern
+ * refund and clawback use); a second reverse returns the first reversal as a `duplicate`. Reversing
+ * a reversal is refused with `OP.MALFORMED`, as it would just loop the money back out and in.
  *
  * @example
  *   let outcome = await reverse(

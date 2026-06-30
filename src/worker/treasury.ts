@@ -22,7 +22,7 @@ import type { Rate, Store, Unit } from '#src/ports.ts';
 /**
  * Holds the result of one backing check. The fields report the USD required against users'
  * spendable credits, the USD held, and whether the held cash covers the requirement. A credit
- * is backed when it can be redeemed from cash held in trust at the fixed credit-to-USD "par"
+ * is backed when it can be redeemed from cash held in trust at the fixed CREDIT-to-USD "par"
  * rate.
  */
 export type BackingPosition = {
@@ -263,23 +263,17 @@ function assertWithinSweepable(amount: Amount, sweepable: bigint): void {
 }
 
 /**
- * Realizes earned platform fees as platform cash. It moves `amount` of CREDIT out of REVENUE
- * and the matching USD out of the trust account that holds users' money. This is the only path
- * that converts accrued fees into cash the platform keeps. It is the read-write counterpart to
- * {@link sweepTreasury}, which only checks backing.
+ * Realizes earned platform fees as platform cash, the only path that converts accrued fees into
+ * cash the platform keeps. The read-write counterpart to {@link sweepTreasury}, which only checks.
  *
- * The surplus check, the refund-window cap, and the idempotency claim all run inside one DB
- * transaction with the touched accounts locked, so a concurrent sweep can't move the numbers
- * between the check and the post (TOCTOU). A draw past the surplus throws COMMINGLING. Revenue
- * still inside its refund window is excluded via `maturedBalance(REVENUE)`. A re-run with the
- * same key is a no-op.
- *
- * REVENUE is CREDIT, trust-cash is USD, and one entry can't mix currencies, so the move splits
- * into two coupled entries that share a rate id, the same as a payout settle. A CREDIT entry
- * retires REVENUE against STORED_VALUE, and a USD entry moves cash from trust into clearing.
+ * The surplus check, refund-window cap, and idempotency claim all run inside one DB transaction
+ * with the touched accounts locked, so a concurrent sweep can't move the numbers between check and
+ * post (TOCTOU). REVENUE is CREDIT and trust-cash is USD, and one entry can't mix currencies, so
+ * the move splits into two coupled entries that share a rate id, the same as a payout settle.
  *
  * @throws {EconomyError} INVALID_AMOUNT for a non-positive `amount`; COMMINGLING when the
  *   draw would exceed the surplus the platform is allowed to take.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/solvency/ Solvency} for why a sweep may take only the surplus.
  */
 export async function sweepFees(
   store: Store,
@@ -388,15 +382,13 @@ export type FeeRealizationSummary = {
 };
 
 /**
- * Realizes fees on a schedule, the write that {@link sweepTreasury} does not do. On each
- * scheduled run it realizes the full amount the platform is currently allowed to take, the
- * smaller of its cash surplus and its matured revenue.
+ * Realizes fees on a schedule, the write that {@link sweepTreasury} does not do. Each run takes the
+ * full amount currently allowed (the smaller of cash surplus and matured revenue) and skips cleanly
+ * when there is nothing.
  *
- * The policy is to take everything available and skip cleanly when there is nothing. The amount
- * is read once inside a transaction, and {@link sweepFees} re-checks the surplus and
- * refund-window math under its own locks. A zero read stops before any write. A positive read
- * passes the exact amount to {@link sweepFees}, whose checks gate at post time. The key is built
- * from this run's timestamp (`fees:<run time>`), so a retry does nothing.
+ * The amount is read once, then {@link sweepFees} re-checks the surplus and refund-window math under
+ * its own locks at post time. The key is this run's timestamp (`fees:<run time>`), so a retry does
+ * nothing.
  */
 export async function realizeFees(
   store: Store,

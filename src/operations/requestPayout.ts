@@ -21,21 +21,10 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Saga, Unit } from '#src/ports.ts';
 
 /**
- * Starts a payout for a seller. It reserves `amount` of their earned credits and opens a saga
- * that a background worker later finishes by paying real USD.
- *
- * This handler does the caller-driven bookkeeping only. It moves earned credits into
- * PAYOUT_RESERVE and opens the saga in RESERVED. The worker then submits to the payment
- * provider, settles, and posts the USD side. (PAYOUT_RESERVE holds credits owed out as a
- * payout. It is separate from HELD, which holds funds for in-app purchases.)
- *
- * The caller handles two outcomes. Not enough earned credit returns a `rejected` result to
- * inspect rather than an exception. A malformed request, where the amount is not CREDIT or is
- * not positive, throws a fault because it is a programming error.
- *
- * Only earned credit is payable. It is paid as USD on settle and is never made spendable
- * in-app. The two ledger lines posted here are both CREDIT and cancel out. The worker posts
- * the USD later.
+ * Starts a payout for a seller: reserves `amount` of earned credits into PAYOUT_RESERVE and opens
+ * the saga in RESERVED for a worker to finish in USD. The two lines posted here are both CREDIT and
+ * cancel out; the worker posts the USD side later. Only earned credit is payable. Insufficient
+ * earned credit returns a `rejected` result; a malformed amount (not CREDIT, or not positive) throws.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/request-payout/ Request payout} for the full payout request lifecycle.
  */
@@ -56,14 +45,11 @@ export async function requestPayout(
       requested: encodeAmount(amount),
     });
   }
-  // Enforces a minimum gap between one user's payout requests. The gap is
-  // ctx.config.payoutMinIntervalMs, which defaults to 24h with a legal limit of 14 days.
-  // lastPayoutAt is the max `updatedAt` over this user's sagas in any state, which is their
-  // most recent request time. A `null` means no prior payout, so a first request passes. The
-  // comparison is a strict `<`, so a request exactly `payoutMinIntervalMs` later is allowed.
-  // This runs before the balance read so the cheap rejection comes first, matching the
-  // minimum-before-balance ordering above. It returns a rejection rather than throwing, so the
-  // caller can surface `retryAfter`.
+  // Enforces a minimum gap (ctx.config.payoutMinIntervalMs) between a user's payout requests.
+  // lastPayoutAt is the max `updatedAt` over this user's sagas; `null` means no prior payout, so a
+  // first request passes. Strict `<`, so a request exactly the interval later is allowed. Runs
+  // before the balance read so the cheap rejection comes first, and returns a rejection (not a
+  // throw) so the caller can surface `retryAfter`.
   let last = await unit.sagas.lastPayoutAt(operation.userId);
   if (
     last !== null &&

@@ -109,17 +109,13 @@ function applyBps(minor: bigint, bps: number): bigint {
 }
 
 /**
- * Returns the platform fee for a price, in minor units, rounded up to a whole credit so the fee
- * is always a whole spendable unit. It takes the exact basis-point fee, rounds up to the next
- * whole credit, then caps the result at the price so the fee can never exceed what was paid. The
- * cap only matters below one whole credit, since real listings are 100 credits or more. The
- * leftover line in splitLegs absorbs the difference between the exact fee and the rounded fee.
+ * Returns the platform fee for a price, in minor units, rounded up to a whole credit, then capped at
+ * the price so the fee never exceeds what was paid (the cap only matters below one whole credit). The
+ * leftover line in splitLegs absorbs the difference between the exact and rounded fee.
  *
- * This is the single source for the transaction fee. Every charge that takes the fee calls it:
- * a sale (`splitLegs` here, plus `spend.saleOf` recording the same `Sale.fee`), the first month
- * of a subscription (`operations/subscribe.ts`), and each renewal (`worker/subscriptions.ts`).
- * Sharing this function makes every caller round identically, so no caller re-derives a floor
- * that would disagree when the raw fee is not a whole credit.
+ * This is the single source for the transaction fee, called by every charge that takes one (sale,
+ * subscription first month, renewal), so no caller re-derives a floor that would disagree when the
+ * raw fee is not a whole credit.
  */
 export function feeForPrice(minor: bigint, bps: number): bigint {
   let units = ceilDiv(minor * BigInt(bps), BPS_TOTAL_BIG * SCALE);

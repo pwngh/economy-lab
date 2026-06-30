@@ -349,12 +349,10 @@ function createLedgerStore(deps: {
       }
     },
 
-    // Yields every account with a stored balance. It reads from `state.balances` keys rather than
-    // from postings. That way an account with a balance but no posting still reaches the integrity
-    // checker, which flags it as a balance that shouldn't exist. Walking `heads` would never reach
-    // such an account. Copy the keys first so iteration is safe if `state.balances` changes
-    // underneath, then sort by code unit so every engine lists accounts in the same
-    // locale-independent order.
+    // Yields every account with a stored balance, reading from `state.balances` keys rather than
+    // postings: that way a balance with no posting still reaches the integrity checker (which flags it
+    // as a balance that shouldn't exist), whereas walking `heads` never would. Copy the keys first for
+    // safe iteration, then sort by code unit so every engine lists accounts in the same order.
     balanceAccounts: async function* () {
       for (let account of [...state.balances.keys()].sort(byCodeUnit)) {
         yield account;
@@ -401,16 +399,13 @@ function buildStatement(
   return { account, entries, cursor: null };
 }
 
-// Streams this account's incoming funds as lots for FIFO settlement, emitting one lot per posting
-// entry that increased the balance. When a posting's metadata omits `source` or `maturesAt`, this
-// falls back to "unknown" and a mature-now timestamp. Maturity rules live in maturity.ts; this
-// store only reports what each posting recorded.
+// Streams this account's incoming funds as lots for FIFO settlement, one lot per posting entry that
+// increased the balance, with `source`/`maturesAt` falling back to "unknown" and mature-now when the
+// metadata omits them (maturity rules live in maturity.ts).
 //
-// `options` mirrors the SQL engines. 'asc' (the default) yields oldest-first, matching the log's
-// commit order, and 'desc' yields newest-first. `offset` and `limit` page that order, so the
-// maturity tail can pull just the newest run instead of the whole history. The log array index is
-// the in-memory analogue of the SQL `seq`, so reversing it gives the same total order as
-// `order by seq desc`. `limit` is honoured by stopping early rather than materializing every lot.
+// `options` mirrors the SQL engines: 'asc' (default) is commit order, 'desc' newest-first, with
+// `offset`/`limit` paging so the maturity tail pulls just the newest run. The log array index is the
+// in-memory analogue of SQL `seq`, so reversing it matches `order by seq desc`.
 async function* timelineOf(
   log: ReadonlyArray<StoredPosting>,
   account: AccountRef,
@@ -512,12 +507,10 @@ function postingOf(
   return { txnId: row.txnId, legs: row.legs, meta: row.meta };
 }
 
-// Streams the whole ledger, newest commit first (see Ledger.list). The append-only `log` already
-// holds postings in commit order, and its array index is the in-memory analogue of the SQL engines'
-// `seq`. Reversing a snapshot therefore gives the same total order as `order by seq desc`, with no
-// tie to break, so there is no need to sort. Snapshot first so iteration is safe if `log` changes
-// underneath, and copy each posting's fields so a consumer can't mutate stored state. Defined at
-// module level (like postingOf) to keep createLedgerStore short.
+// Streams the whole ledger, newest commit first (see Ledger.list). The `log` index is the in-memory
+// analogue of the SQL engines' `seq`, so reversing a snapshot matches `order by seq desc` with no tie
+// to break. Snapshot first so iteration survives concurrent writes, and copy each posting's fields so
+// a consumer can't mutate stored state.
 async function* listPostingsOf(
   log: ReadonlyArray<StoredPosting>,
 ): AsyncIterable<Posting> {
@@ -1067,14 +1060,12 @@ function createPromoStore(): PromoStore & Participant {
 
 // Counts how much a subject has spent and tried to spend recently, for rate/abuse limiting. Its
 // writes sit outside the money transaction, so even a rejected attempt counts toward the limit
-// (a rollback must not erase the attempt). `bump` ignores a repeat of an attempt it has already
-// seen (matched by idempotency key), so a retry isn't counted twice.
+// (a rollback must not erase the attempt). `bump` dedupes a repeat attempt by idempotency key, so a
+// retry isn't counted twice.
 //
-// Attempts are kept as a per-subject list, not a single running total, so `read` can apply the
-// sliding window. It sums only the attempts inside the last `windowMs` (via `windowedVelocity`),
-// the same rolling window the SQL adapters get from `SUM(amount) WHERE at > cutoff`. This guards
-// against a regression: an earlier grow-forever running total never aged out, so the limit stuck
-// once it was first hit.
+// Attempts are kept as a per-subject list, not a running total, so `read` can sum only those inside
+// the last `windowMs` (via `windowedVelocity`), mirroring the SQL adapters' `SUM(amount) WHERE at >
+// cutoff`. Regression-lock: an earlier grow-forever total never aged out, so the limit stuck once hit.
 function createTrustStore(clock: Clock, windowMs: number): TrustStore {
   let attemptsBySubject = new Map<string, Attempt[]>();
   let seenAttempts = new Set<string>();
@@ -1141,12 +1132,10 @@ function createCheckpointStore(): CheckpointStore {
 
 // --- Replay store -----------------------------------------------------------------
 
-// Drops duplicate incoming webhooks from a payment provider, matching each by the event id the
-// provider assigned. This id space is separate from the idempotency keys our own callers send. When
-// a webhook arrives, the handler records its event id here as the final check, after verifying the
-// signature and that the event is recent, outside any money transaction. Because it sits outside the
-// transaction, this store registers no undo steps and is never rolled back. SQL adapters back it with
-// the `seen_webhooks` table; here it is a Set.
+// Drops duplicate incoming provider webhooks, matched by the provider's event id (a separate id space
+// from our callers' idempotency keys). The handler claims the id here as its final check, after
+// signature + recency, outside any money transaction, so this store registers no undo and is never
+// rolled back. SQL adapters back it with the `seen_webhooks` table; here it is a Set.
 function createReplayStore(): ReplayStore {
   let seen = new Set<string>();
   return {
