@@ -10,3 +10,6 @@ package-lock.json
 db/migrations
 Dockerfile
 .dockerignore
+
+# Standalone front-end apps own their formatting (apps/docs uses biome). Mirrors the eslint ignore.
+apps
