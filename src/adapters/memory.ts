@@ -943,7 +943,6 @@ function createEntitlementStore(deps: {
       rows.set(key, { attrs: { ...attrs }, revoked: false });
     },
     revoke: async (userId, sku, _options?: Options) => {
-
       let key = keyOf(userId, sku);
       let row = rows.get(key);
       if (!row || row.revoked) {
@@ -953,7 +952,7 @@ function createEntitlementStore(deps: {
       rows.set(key, { ...row, revoked: true });
     },
     owns: async (userId, sku, _options?: Options) => {
-// Expiry check is inclusive of `expiresAt`; null `expiresAt` never expires.
+      // Expiry check is inclusive of `expiresAt`; null `expiresAt` never expires.
       let row = rows.get(keyOf(userId, sku));
       if (!row || row.revoked) {
         return false;
@@ -1066,8 +1065,8 @@ function createPromoStore(): PromoStore & Participant {
   return {
     journal,
     open: async (grant, _options?: Options) => {
-// Grant id equals its posting's txnId, so re-opening must leave the first row untouched (unlike
-// SagaStore/SubscriptionStore.open, which replace).
+      // Grant id equals its posting's txnId, so re-opening must leave the first row untouched (unlike
+      // SagaStore/SubscriptionStore.open, which replace).
       if (rows.has(grant.id)) {
         return;
       }
@@ -1088,7 +1087,6 @@ function createPromoStore(): PromoStore & Participant {
       return due.slice(0, limit);
     },
     markReversed: async (id, _options?: Options) => {
-
       let grant = rows.get(id);
       if (!grant || grant.reversed) {
         return;

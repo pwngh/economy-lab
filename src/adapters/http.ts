@@ -53,7 +53,6 @@ export type FetchLike = (request: Request) => Promise<Response>;
 
 /** Options for {@link httpStore}. */
 export type HttpStoreOptions = {
-
   fetch?: FetchLike;
 
   baseUrl?: string;

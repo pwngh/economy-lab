@@ -94,7 +94,6 @@ export interface Discrepancy {
  * fields summarize that list. `reconciled` is true when no mismatch was found.
  */
 export interface ReconcileReport {
-
   window: Range;
 
   reconciled: boolean;
