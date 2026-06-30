@@ -52,7 +52,7 @@ const KIND_TONE: Record<string, 'blue' | 'green' | 'amber' | 'red'> = {
 };
 
 // The ledger feed: every committed posting, newest first, grouped by day and expandable to its
-// legs. Worker settlements and sweeps are folded to one row per event (the cash leg in the expansion).
+// legs.
 export default function Ledger({ loaderData }: Route.ComponentProps) {
   const { page } = loaderData;
   const { rows: txns, offset, limit, total } = page;

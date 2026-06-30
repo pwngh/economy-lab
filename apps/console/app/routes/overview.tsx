@@ -159,7 +159,7 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
 }
 
 // The record form — submits one operation to /actions/record via a fetcher, with inline
-// success/decline notices. The buyer/seller/listing fields only apply to a purchase.
+// success/decline notices. The seller/listing fields only apply to a purchase.
 function RecordCard() {
   const fx = useFetcher<{ note?: string; error?: string; ok?: boolean }>();
   const busy = fx.state !== 'idle';

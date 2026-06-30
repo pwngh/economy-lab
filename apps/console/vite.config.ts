@@ -35,9 +35,9 @@ export default defineConfig({
     // Compile the engine's `.ts` source through Vite rather than treating it as an external
     // Node module. A regex keeps every file under the repo `src/` tree in the transform path.
     noExternal: [/economy-lab[\\/]src[\\/]/],
-    // The optional DB/cache/queue drivers are dynamically imported (by this app's selectStore(), the
-    // way compose() does in the full engine) only when DATABASE_URL is set; keep them external so an
-    // unused driver is never bundled or required.
+    // The optional DB/cache/queue drivers are dynamically imported by the engine's store selection
+    // only when DATABASE_URL is set; keep them external so an unused driver is never bundled or
+    // required.
     external: ['pg', 'mysql2', 'ioredis', '@aws-sdk/client-sqs'],
   },
   server: {
