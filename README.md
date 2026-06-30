@@ -22,17 +22,26 @@
   <a href="#quick-start">Quick start</a> -
   <a href="#architecture">Architecture</a> -
   <a href="#what-it-demonstrates">What it demonstrates</a> -
-  <a href="#run-it">Run it</a>
+  <a href="#run-it">Run it</a> -
+  <a href="#documentation">Documentation</a>
 </p>
 
-> **📖 Read the full documentation here:** **[economy-lab-docs.pages.dev](https://economy-lab-docs.pages.dev/economy/)**.
+> **Read the full documentation:** **[economy-lab-docs.pages.dev](https://economy-lab-docs.pages.dev/economy/)**.
+
+## Highlights
+
+- **Zero runtime dependencies** — pure TypeScript; the whole economy runs in-memory with no infrastructure.
+- **Provably solvent** — `read.prove()` checks every solvency and integrity invariant; `make prove` and `make fuzz` surface any leak or drift.
+- **Tamper-evident by construction** — every balance folds from an append-only, hash-chained, double-entry log under signed Merkle checkpoints.
+- **One codebase, five backends** — in-memory, Postgres, MySQL, Redis, and SQS run identical logic, pinned by a single conformance suite.
+- **Safe by default** — `submit` returns an `Outcome` and never throws for a "no"; every request is idempotent.
 
 ## Quick start
 
-You build an `Economy`, then drive it through a single `submit` entry point and read its state through
-`read`. The in-memory build needs no infrastructure; `compose` picks adapters from the environment.
-Either way you supply the four external integrations: a `signer`, a payout `processor`, an FX `rates`
-source, and a fee `pricing` policy:
+Build an `Economy`, drive it through a single `submit`, and read derived state through `read`. The
+in-memory build needs no infrastructure — `compose` picks adapters from the environment — and either
+way you supply four integrations: a `signer`, a payout `processor`, an FX `rates` source, and a fee
+`pricing` policy:
 
 ```ts
 import { compose } from './src/index.ts';
@@ -49,10 +58,6 @@ const balance = await economy.read.balance(account); // read a derived balance
 const report = await economy.read.prove(); // check every solvency & integrity invariant
 await economy.close();
 ```
-
-See
-[the `Economy` surface](https://economy-lab-docs.pages.dev/economy/reference/the-economy/) for the
-whole API.
 
 ## Architecture
 
@@ -108,8 +113,7 @@ conformance suite holds them to identical behavior.
 | Spend-velocity risk gate     | [trust.ts](src/trust.ts)                                                                                       | Recent spend is summed over a sliding window and checked against a limit before any money moves.                                       |
 | Swappable storage            | [engines/](src/engines), [adapters/](src/adapters)                                                             | The same logic runs in-memory and on Postgres, MySQL, Redis, and SQS; one conformance suite runs against every backend.                |
 
-Read [the proof](https://economy-lab-docs.pages.dev/economy/concepts/the-proof/) for how `make prove`
-and `make fuzz` attack these invariants after every operation and across every backend.
+`make prove` and `make fuzz` attack these invariants after every operation and across every backend.
 
 ## Run it
 
@@ -124,16 +128,20 @@ make prove       # randomized invariant proof; exits non-zero on any leak or dri
 make fuzz        # cross-backend differential — every backend must produce identical results
 ```
 
-The bundled host process runs as an [HTTP service](https://economy-lab-docs.pages.dev/economy/reference/http-service/)
-(`POST /submit`, `POST /webhooks/:provider`, plus `/healthz` and `/readyz`) and a
-[background worker](https://economy-lab-docs.pages.dev/economy/reference/background-worker/) (ten sweeps
-on an interval).
-
-Every backend is selected by an environment variable, see
-[configuration](https://economy-lab-docs.pages.dev/economy/reference/configuration/) for the full set.
+The bundled host process runs as an HTTP service (`POST /submit`, `POST /webhooks/:provider`, plus
+`/healthz` and `/readyz`) and a background worker (ten sweeps on an interval). Every backend is
+selected by an environment variable.
 
 With Docker: `docker compose up -d` brings up Postgres, MySQL, Redis, and LocalStack/SQS; point
 `DATABASE_URL` at one, run `make db-migrate`, then `make start` or `make worker`.
+
+## Documentation
+
+- [The Economy surface](https://economy-lab-docs.pages.dev/economy/reference/the-economy/) — the whole `submit` / `read` / `close` API.
+- [The proof](https://economy-lab-docs.pages.dev/economy/concepts/the-proof/) — how `make prove` and `make fuzz` attack the invariants.
+- [HTTP service](https://economy-lab-docs.pages.dev/economy/reference/http-service/) — `POST /submit`, webhooks, and health checks.
+- [Background worker](https://economy-lab-docs.pages.dev/economy/reference/background-worker/) — the ten sweeps and how they run.
+- [Configuration](https://economy-lab-docs.pages.dev/economy/reference/configuration/) — every environment variable and backend selector.
 
 ## License
 
