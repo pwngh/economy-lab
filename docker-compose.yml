@@ -35,6 +35,11 @@ services:
   # connect via MYSQL_TEST_URL and create a throwaway database per run, so they use root.
   mysql:
     image: mysql:8.4
+    # Drop the binary log: on a single node it is a redundant second fsync per commit, so a "durable"
+    # commit would pay two fsyncs where Postgres pays one. `--skip-log-bin` keeps full redo-log
+    # durability (innodb_flush_log_at_trx_commit stays 1) and just removes the binlog fsync — MySQL at
+    # Postgres's one-fsync parity, with no durability traded away (the lossy flush=2 knob is left unset).
+    command: ['--skip-log-bin']
     environment:
       MYSQL_ROOT_PASSWORD: economy
       MYSQL_DATABASE: economy_lab
@@ -57,3 +62,25 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # Production-parity benchmark runner: runs scripts/bench.ts INSIDE a Linux container against the
+  # compose Postgres/MySQL, so the commit pays a real Linux fsync (unlike Homebrew Postgres on macOS,
+  # where fsync skips F_FULLFSYNC). Reaches the DBs by service name, so it ignores whatever owns the
+  # host's 5432/3306; the repo is mounted in (pg/mysql2 are pure JS). Under the "tools" profile, so a
+  # plain `docker compose up` skips it. Run: `make bench-prod`, or `docker compose run --rm bench [...]`.
+  bench:
+    image: node:22-slim
+    profiles: ['tools']
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      DATABASE_URL: postgres://economy:economy@postgres:5432/economy_lab
+      MYSQL_TEST_URL: mysql://root:economy@mysql:3306/economy_lab
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    entrypoint: ['node']
+    command: ['scripts/bench.ts']

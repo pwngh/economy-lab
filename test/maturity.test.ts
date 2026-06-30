@@ -30,12 +30,10 @@ import {
   testConfig,
 } from '#test/support/capabilities.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
-import { postgresStore } from '#src/engines/postgres.ts';
 import {
-  applyMysqlSchema,
-  createMysqlPool,
-  mysqlStore,
-} from '#src/engines/mysql.ts';
+  makeIsolatedMysqlStore,
+  makeIsolatedPostgresStore,
+} from '#test/support/adapters.ts';
 import { credit as creditLeg, debit, postEntry } from '#src/ledger.ts';
 import { SYSTEM, spendable } from '#src/accounts.ts';
 
@@ -332,36 +330,25 @@ function lcg(seed: number): () => number {
 // deterministic.
 type DiffBackend = 'memory' | 'postgres' | 'mysql';
 
-// Builds a Postgres store on one throwaway schema, loaded with the current schema and dropped
-// on close. This is the same isolation test/adapters/postgres.test.ts uses. The injected clock
-// and digest make the run deterministic and let the test control each top-up time.
-let diffSchemaSeq = 0;
+// Builds a Postgres store on one throwaway schema (the shared isolated provisioning, the same the
+// conformance matrix and the bench harness use), with the seeded digest and this test's advancing
+// clock so the run is deterministic and the test controls each top-up time.
 function postgresDiffStore(clock: Clock): Promise<Store> {
-  diffSchemaSeq += 1;
   const url =
     process.env.DATABASE_URL ??
     process.env.PG_URL ??
     'postgres://economy:economy@localhost:5432/economy_lab';
-  return postgresStore({
-    url,
-    schema: `el_mat_${process.pid}_${Date.now().toString(36)}_${diffSchemaSeq}`,
-    clock,
-    digest: seededDigest(1),
-  });
+  return makeIsolatedPostgresStore({ url, digest: seededDigest(1), clock });
 }
 
-// Builds a MySQL store on a fresh pool against MYSQL_TEST_URL, with the schema applied and the
-// shared clock and seeded digest. This mirrors test/adapters/mysql.test.ts. The postings here
-// carry no idempotency keys, so they don't need the throwaway-database isolation the broader
-// matrix uses.
+// Builds a MySQL store on its own throwaway database (the same shared isolated provisioning), with
+// the seeded digest and this test's advancing clock.
 async function mysqlDiffStore(clock: Clock): Promise<Store> {
   const url = process.env.MYSQL_TEST_URL;
   if (!url) {
     throw new Error('MYSQL_TEST_URL not set');
   }
-  const pool = await createMysqlPool(url);
-  await applyMysqlSchema(pool);
-  return mysqlStore({ pool, clock, digest: seededDigest(1) });
+  return makeIsolatedMysqlStore({ url, digest: seededDigest(1), clock });
 }
 
 // One step in the randomized timeline. A top-up records a lot tagged with its funding source,
@@ -519,7 +506,7 @@ describe('maturity bounded reads vs full-scan oracle', () => {
   // funding sources and horizons (0, 1-day, 7-day) and interleaved partial spends, in both an
   // accumulate-heavy and a consume-heavy shape, and the test asserts exact agreement at several
   // `now` cuts. Memory always runs; postgres and mysql run when reachable and skip otherwise.
-  // Zero divergence proves the optimization changed cost, not results.
+  // Agreement at every cut means the optimization changed cost, not results.
   const backends: DiffBackend[] = ['memory', 'postgres', 'mysql'];
 
   for (const backend of backends) {

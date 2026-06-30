@@ -44,25 +44,32 @@ export function defaultDigest(): Digest {
   return sha256Digest();
 }
 
-// Returns a clock fixed at time 0, so "posted at" timestamps are predictable in tests. Pass a
-// real clock when wall-clock times matter.
 export function defaultClock(): Clock {
   return { now: () => 0 };
 }
 
-// The hash preceding an account's first entry, as lowercase hex. GENESIS is 32 zero bytes
-// (ledger.ts), so this string is 64 zeros.
 export let GENESIS_HEX = toHex(GENESIS);
 
 // The unique index guarding each account's hash-chain head, chain_links (account_id, prev_hash).
 // A 23505 (Postgres) or 1062 (MySQL) violation that names this index is a chain-head fork: two
-// writers reached for the same head and one lost. withTransientRetry treats that fork as transient
+// writers used the same prev_hash and one of the inserts was rejected. withTransientRetry treats that fork as transient
 // and retries it. This name must match the index name in db/postgresql-schema.sql and
-// db/mysql-schema.sql. Rename the index there without renaming it here and the retry silently stops
-// firing, so the cold-start fork race returns with no error to show for it.
+// db/mysql-schema.sql. Rename the index there without renaming it here and the retry stops
+// firing, so the cold-start fork race resurfaces as an unretried error.
 export let CHAIN_FORK_INDEX = 'chain_links_account_prev_uq';
 
-// Coerces a DB value to BigInt explicitly, so the adapter decides the type rather than the driver.
+// The leading text of the chain-continuity trigger's error message in both schemas (Postgres
+// `raise exception 'chain continuity: ...'`, MySQL `SIGNAL ... MESSAGE_TEXT = 'chain continuity: ...'`).
+// That trigger is the other face of the same cold-start / stale-head race the fork index above catches:
+// depending on timing, a concurrent writer to a not-yet-extended account trips the continuity trigger
+// (a genesis link on a now-non-empty chain, or a prev_hash that is no longer the head) before the
+// unique index does. withTransientRetry treats it as transient and re-reads the head. The match is on
+// this message prefix, not the bare SQLSTATE (Postgres P0001 / MySQL 1644), because that same state is
+// also raised for genuine `conservation` and `balance integrity` faults, which must never be retried --
+// their messages start differently, so the prefix match excludes them. Keep this string in lockstep
+// with the trigger MESSAGE_TEXT in db/postgresql-schema.sql and db/mysql-schema.sql.
+export let CHAIN_CONTINUITY_MARKER = 'chain continuity';
+
 export function readMinor(value: unknown): bigint {
   return BigInt(value as bigint | number | string);
 }
@@ -95,11 +102,11 @@ let SEEDED_SYSTEM_ACCOUNTS: ReadonlySet<string> = new Set(
 );
 
 // Whether an account is one the schema pre-seeds. `hasAccount` uses this to confirm a platform
-// account without a round trip, the same way a `usr_…:<kind>` suffix is confirmed without a query
-// (the write path creates that one on first use). A platform-looking id that is NOT seeded — a typo
-// like `platform:revenuee` — is absent here, so it still falls through to the existence query and
-// yields a clean UNKNOWN_ACCOUNT rather than reaching the database as a raw foreign-key violation.
-// This matches the in-memory adapter, which already recognizes the same set in-process.
+// account without a round trip, like a `usr_…:<kind>` suffix is confirmed without a query (the
+// write path creates that one on first use). A platform-looking id that is not seeded — a typo
+// like `platform:revenuee` — is absent here, so it falls through to the existence query and yields
+// a clean UNKNOWN_ACCOUNT rather than reaching the database as a raw foreign-key violation. This
+// matches the in-memory adapter, which recognizes the same set in-process.
 export function isSeededSystemAccount(account: AccountRef): boolean {
   return SEEDED_SYSTEM_ACCOUNTS.has(account);
 }
@@ -118,24 +125,70 @@ type Attempt<T> = () => Promise<T>;
 // driver-specific test: pg checks `error.code`, mysql2 checks `error.errno`.
 export type IsTransientConflict = (error: unknown) => boolean;
 
+// --- Retry observability (off by default) -----------------------------------------
+//
+// A retry that then commits leaves no trace in the app's outcome — the caller just sees success — so
+// the contention the engine absorbs under the hood is invisible. That is fine for production but hides
+// a performance bench's most important signal. This optional observer lets the bench count that hidden
+// retry pressure. It is null by default and costs nothing on the production path (each
+// `retryObserver?.(...)` is a property read and short-circuit); production never sets it.
+export type RetryEvent =
+  // A transient conflict was caught; a fresh attempt is about to run. `attempt` is the try that failed.
+  | { type: 'retry'; attempt: number; error: unknown }
+  // Committed, but only after retrying (`attempts` > 1). One per op the retry budget rescued.
+  | { type: 'recovered'; attempts: number }
+  // The budget ran out on a still-transient conflict; the error is rethrown. One per op that gave up.
+  | { type: 'exhausted'; attempts: number; error: unknown };
+
+export type RetryObserver = (event: RetryEvent) => void;
+
+let retryObserver: RetryObserver | null = null;
+
+// Install (or clear, with null) the retry observer; returns the previous so a caller can restore it. The
+// bench sets it around a sample and restores it in a `finally`, so retries don't leak across samples.
+export function setRetryObserver(
+  observer: RetryObserver | null,
+): RetryObserver | null {
+  const previous = retryObserver;
+  retryObserver = observer;
+  return previous;
+}
+
 // Runs `attempt`, one full transaction, under a bounded transient-conflict retry. On a transient
 // conflict it waits a short jittered backoff and runs a fresh attempt. After `maxAttempts` tries it
 // rethrows the last error unchanged, so a persistent conflict surfaces rather than looping forever.
 // A non-transient error is rethrown immediately on the first occurrence and is never retried.
+//
+// The budget is 10 (not 2-3): under deep concurrency many writers contend on one shared
+// account's chain head, so a single posting can lose the fork/continuity race several
+// times before it succeeds -- with too small a budget those attempts surface as errors even though a retry
+// would have committed cleanly. The backoff also widens with each try (jitter window grows with
+// `tries`, capped) so a thundering herd that just collided spreads out instead of re-colliding in
+// lock-step. A genuinely stuck conflict still bounds out at maxAttempts and rethrows. The observer
+// hooks only report what the loop already decided; they do not change when an attempt is retried.
 export async function withTransientRetry<T>(
   attempt: Attempt<T>,
   isTransientConflict: IsTransientConflict,
-  maxAttempts = 5,
+  maxAttempts = 10,
 ): Promise<T> {
   for (let tries = 1; ; tries += 1) {
     try {
-      return await attempt();
+      const result = await attempt();
+      if (tries > 1) retryObserver?.({ type: 'recovered', attempts: tries });
+      return result;
     } catch (error) {
-      if (tries >= maxAttempts || !isTransientConflict(error)) {
+      const transient = isTransientConflict(error);
+      if (tries >= maxAttempts || !transient) {
+        // Distinguish "gave up on a still-transient conflict" (the budget ran out) from "a
+        // non-transient fault on the first throw"; only the former is retry pressure that hit its cap.
+        if (transient)
+          retryObserver?.({ type: 'exhausted', attempts: tries, error });
         throw error;
       }
-      // A few ms with jitter so two transactions that just deadlocked don't re-collide in lock-step.
-      await sleep(2 + Math.random() * 8);
+      retryObserver?.({ type: 'retry', attempt: tries, error });
+      // Jitter so two transactions that just collided don't re-collide in lock-step, with the window
+      // widening on each retry (capped) to thin out a herd contending on the same hot chain head.
+      await sleep((2 + Math.random() * 8) * Math.min(tries, 5));
     }
   }
 }

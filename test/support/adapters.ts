@@ -20,7 +20,7 @@ import {
 import { httpStore, createStoreServer } from '#src/adapters/http.ts';
 import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
 
-import type { Store } from '#src/ports.ts';
+import type { Clock, Digest, Store } from '#src/ports.ts';
 
 /** Describes one adapter in the matrix. It holds a name for the test title and a fresh-store factory. */
 export type AdapterCase = {
@@ -43,7 +43,7 @@ function postgresUrl(): string {
 // a per-call counter. It names the Postgres throwaway schema and the MySQL throwaway database, each
 // of which is dropped when the store closes.
 let run = 0;
-function freshName(prefix: string): string {
+export function freshName(prefix: string): string {
   run += 1;
   let stamp = Date.now().toString(36);
   return `${prefix}_${process.pid}_${stamp}_${run}`;
@@ -70,8 +70,35 @@ function withDatabase(url: string, database: string | null): string {
 }
 
 /**
- * Builds a MySQL store on its own throwaway database. This mirrors the Postgres case's discipline
- * of a unique schema per store that is dropped on close.
+ * Builds a Postgres store on its own throwaway schema, loaded with db/postgresql-schema.sql and
+ * dropped when the store closes (postgresStore's `schema` option does all of that). The shared
+ * isolated-Postgres provisioning: the conformance matrix passes a seeded digest/clock so backends
+ * hash identically, while the bench harness passes the production digest and a `poolMax` sized to its
+ * concurrency. Parameterizing the hash/clock/pool keeps this one function instead of a copy per caller.
+ */
+export async function makeIsolatedPostgresStore(opts: {
+  url: string;
+  digest: Digest;
+  clock: Clock;
+  poolMax?: number;
+  connectionTimeoutMillis?: number;
+}): Promise<Store> {
+  return postgresStore({
+    url: opts.url,
+    schema: freshName('el_iso'),
+    digest: opts.digest,
+    clock: opts.clock,
+    ...(opts.poolMax ? { poolMax: opts.poolMax } : {}),
+    ...(opts.connectionTimeoutMillis
+      ? { connectionTimeoutMillis: opts.connectionTimeoutMillis }
+      : {}),
+  });
+}
+
+/**
+ * Builds a MySQL store on its own throwaway database. Like the Postgres case, it gives each store a unique namespace that is dropped on close, and is the shared isolated-MySQL
+ * provisioning for both the conformance matrix and the bench harness (which differ only in the
+ * digest/clock and an optional `connectionLimit`).
  *
  * prove.ts and fuzz.ts build a fresh store for every probe, seed, and replay. Pointing them all at
  * the one shared database named in MYSQL_TEST_URL re-ran the whole drop-everything and
@@ -85,9 +112,14 @@ function withDatabase(url: string, database: string | null): string {
  * the store pool, drops the database through the admin pool, then ends the admin pool. If setup
  * throws partway, the same teardown runs, so no pool or database leaks.
  */
-async function makeMysqlStore(url: string): Promise<Store> {
-  let database = safeDatabaseName(freshName('el_matrix'));
-  let admin = await createMysqlPool(withDatabase(url, null));
+export async function makeIsolatedMysqlStore(opts: {
+  url: string;
+  digest: Digest;
+  clock: Clock;
+  connectionLimit?: number;
+}): Promise<Store> {
+  let database = safeDatabaseName(freshName('el_iso'));
+  let admin = await createMysqlPool(withDatabase(opts.url, null));
   await admin.query(`CREATE DATABASE \`${database}\``);
 
   // Drops the throwaway database and tears down the admin pool. It tolerates a missing database and
@@ -102,7 +134,10 @@ async function makeMysqlStore(url: string): Promise<Store> {
 
   let pool;
   try {
-    pool = await createMysqlPool(withDatabase(url, database));
+    pool = await createMysqlPool(
+      withDatabase(opts.url, database),
+      opts.connectionLimit ? { connectionLimit: opts.connectionLimit } : {},
+    );
     await applyMysqlSchema(pool);
   } catch (error) {
     if (pool) {
@@ -112,11 +147,7 @@ async function makeMysqlStore(url: string): Promise<Store> {
     throw error;
   }
 
-  let store = mysqlStore({
-    pool,
-    digest: seededDigest(1),
-    clock: fixedClock(0),
-  });
+  let store = mysqlStore({ pool, digest: opts.digest, clock: opts.clock });
   return {
     ...store,
     close: async () => {
@@ -151,9 +182,8 @@ export function adapterMatrix(): AdapterCase[] {
     {
       name: 'postgres',
       makeStore: async () =>
-        postgresStore({
+        makeIsolatedPostgresStore({
           url: postgresUrl(),
-          schema: freshName('el_matrix'),
           digest: seededDigest(1),
           clock: fixedClock(0),
         }),
@@ -165,7 +195,11 @@ export function adapterMatrix(): AdapterCase[] {
         if (!url) {
           throw new Error('MYSQL_TEST_URL not set');
         }
-        return makeMysqlStore(url);
+        return makeIsolatedMysqlStore({
+          url,
+          digest: seededDigest(1),
+          clock: fixedClock(0),
+        });
       },
     },
     {

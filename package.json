@@ -32,6 +32,7 @@
     "fuzz": "node scripts/fuzz.ts",
     "smoke": "node scripts/smoke-adapters.ts",
     "bench": "node --env-file-if-exists=.env scripts/bench.ts",
+    "scale": "node --env-file-if-exists=.env scripts/scale-probe.ts",
     "trace": "node scripts/trace.ts",
     "trace:check": "node scripts/trace.ts --check",
     "demo": "node --env-file-if-exists=.env scripts/compose-demo.ts"

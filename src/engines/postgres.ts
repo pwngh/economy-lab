@@ -21,7 +21,12 @@ import pgUntyped from 'pg';
 // how a Postgres column type converts to a JS value). Declaring only what we call avoids
 // depending on the full vendor types.
 interface PgModule {
-  Pool: new (config: { connectionString: string; options?: string }) => PgPool;
+  Pool: new (config: {
+    connectionString: string;
+    options?: string;
+    max?: number;
+    connectionTimeoutMillis?: number;
+  }) => PgPool;
   types: {
     setTypeParser(oid: number, parse: (value: string) => unknown): void;
   };
@@ -48,6 +53,7 @@ import {
   defaultClock,
   GENESIS_HEX,
   CHAIN_FORK_INDEX,
+  CHAIN_CONTINUITY_MARKER,
   readMinor,
   distinctAccounts,
   rowToSaga,
@@ -120,7 +126,6 @@ type Queryable = Pick<PgPool, 'query'>;
 // lose. Parsers are global per process; resetting is harmless, so calling postgresStore more
 // than once is safe.
 function configureBigIntParsers(): void {
-  // 20 is the internal id (OID) for the int8/BIGINT column type, 1700 for NUMERIC.
   pg.types.setTypeParser(20, (value: string) => BigInt(value));
   pg.types.setTypeParser(1700, (value: string) => BigInt(value));
 }
@@ -243,9 +248,7 @@ async function ensureAccount(q: Queryable, account: AccountRef): Promise<void> {
   );
 }
 
-// Batched twin of ensureAccount: insert the first-use rows for every user account in `accounts` at
-// once (system accounts are schema-seeded, so skipped). `on conflict do nothing` keeps it
-// repeat-safe. lockMany uses it to ensure a lock set in one round trip instead of one each.
+// Batched twin of ensureAccount: one round trip for every user account; see ensureAccount.
 async function ensureAccounts(
   q: Queryable,
   accounts: ReadonlyArray<AccountRef>,
@@ -268,34 +271,25 @@ async function ensureAccounts(
   );
 }
 
-// NOTE: the per-leg balance fold (UPDATE existing row first so the non-negative CHECK runs
+// note: the per-leg balance fold (UPDATE existing row first so the non-negative CHECK runs
 // against the new total, then INSERT a first-time row) now lives in the `post_entry` stored
 // procedure (db/postgresql-schema.sql), which applies every account's net delta in one
 // set-based step. The application still decides each delta via `balanceDelta` (postEntryArgs
 // in sql-routines.ts); the procedure only persists it.
 
-// Write a posting: the posting row, all entry lines, one chain-link row per distinct account
-// touched (carrying that account's old and new chain hashes), and the balance updates. Every
-// write goes through the one queryable passed in, so a transaction client commits or rolls
-// them back together.
-//
-// Legs and the chain are stored at different granularities: a posting may have several legs
-// to one account (e.g. a promo-funded spend) but advances that account's hash chain once.
-// Storing every leg keeps the leg set lineageOf reads back (and recomputes the hash from)
-// identical to the in-memory adapter's. The chain link is stored once per account because
-// chain_links is keyed by (posting, account), so one link per leg would clash on a legitimate
-// second same-account leg. advanceChain yields one Link per distinct account, so `links` is
-// exactly the rows chain_links needs.
+// Legs and the chain are stored at different granularities: a posting may have several legs to
+// one account (e.g. a promo-funded spend) but advances that account's hash chain once. chain_links
+// is keyed by (posting, account) — one link per distinct account, never one per leg — and
+// advanceChain yields exactly that. Storing every leg keeps lineageOf's recompute byte-identical
+// to the in-memory adapter.
+// @see https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry
 async function writePosting(
   q: Queryable,
   posting: Posting,
   postedAt: number,
   links: ReadonlyArray<Link>,
 ): Promise<void> {
-  // One round-trip persists the whole posting. The application has already decided everything
-  // (chain hashes, per-account net balance deltas, which user accounts are new); `post_entry`
-  // writes the posting, legs, chain links, and balance changes as one set-based unit in this
-  // transaction. JSON arrays carry the bigint amounts as strings to avoid loss past 2^53.
+  // JSON arrays carry the bigint amounts as strings to avoid loss past 2^53.
   let query = (sql: string, params: ReadonlyArray<unknown>) =>
     q.query(sql, params);
   let args = postEntryArgs(posting, links);
@@ -313,8 +307,6 @@ async function writePosting(
 function createLedgerStore(q: Queryable, digest: Digest, clock: Clock): Ledger {
   return {
     hasAccount: async (account) => {
-      // A known user-account suffix or a schema-seeded system account always exists, so confirm it
-      // without a round trip; only a genuinely unknown id falls through to the existence query.
       if (isKnownSuffix(account) || isSeededSystemAccount(account)) {
         return true;
       }
@@ -336,8 +328,6 @@ function createLedgerStore(q: Queryable, digest: Digest, clock: Clock): Ledger {
     },
 
     balance: async (account) => {
-      // Cached balance via the `account_balance` function (0 when the account has no row yet),
-      // one named access path on the database side.
       let raw = await callFunction(
         (sql, params) => q.query(sql, params),
         'postgres',
@@ -398,10 +388,8 @@ function lockingLedger(q: Queryable, digest: Digest, clock: Clock): Ledger {
   };
 }
 
-// Builds a statement of an account's entries between two times (including `from`, excluding `to`).
-// Each amount is signed by how it changed this account's balance, so a credit to a user account
-// reads positive. The cursor is always null because the conformance fixtures fit one page, so there
-// is no next-page cursor.
+// Amounts are signed by how they changed this account's balance (a credit to a user account reads
+// positive). Cursor is always null: the conformance fixtures fit one page.
 async function buildStatement(
   q: Queryable,
   account: AccountRef,
@@ -516,8 +504,6 @@ function rowToLot(
   };
 }
 
-// Stream every account paired with its chain tip hash (the hash of its most recent entry).
-// `distinct on` keeps one row per account; ordering newest first picks the latest.
 async function* headsOf(
   q: Queryable,
 ): AsyncIterable<readonly [AccountRef, string]> {
@@ -545,7 +531,7 @@ async function* headsOf(
 // head, zero balance) only so lockAccounts' `for update` has something to grab on the first write; it
 // carries no history and reads exactly like no row, so leaving it out keeps this listing matching the
 // pre-seed behavior and the in-memory adapter. The `or balance <> 0` is the exception: a genesis-head
-// row with a non-zero balance is no longer a placeholder, it is the very drift this scan hunts.
+// row with a non-zero balance is no longer a placeholder, it is the drift this scan looks for.
 async function* balanceAccountsOf(q: Queryable): AsyncIterable<AccountRef> {
   let result = await q.query(
     `select account_id from account_balances
@@ -560,10 +546,7 @@ async function* balanceAccountsOf(q: Queryable): AsyncIterable<AccountRef> {
   }
 }
 
-// Stream an account's full chain history, oldest first, so an auditor can recompute each hash
-// and confirm no tampering. Each entry yields what the hash was computed from when written
-// (all the entry's lines, its metadata, the previous hash) plus the stored hash, so the two
-// can be checked against each other.
+// @see https://economy-lab-docs.pages.dev/economy/concepts/integrity
 async function* lineageOf(
   q: Queryable,
   account: AccountRef,
@@ -579,13 +562,19 @@ async function* lineageOf(
       order by p.seq asc`,
     [account],
   );
+  // Batch every posting's legs in one query instead of a legsOf round trip per row (an N+1 on the
+  // audit path, which walks the whole chain anyway). The whole posting's legs, not just this
+  // account's: chainPreimage filters to the account's own legs, so the recompute matches the
+  // in-memory reference.
+  let legsByTxn = await legsByPosting(
+    q,
+    result.rows.map((row) => row.posting_id as string),
+  );
   for (let row of result.rows) {
-    // The whole posting's legs, not just this account's: chainPreimage filters to the
-    // account's own legs, so the recompute matches the in-memory reference.
-    let legs = await legsOf(q, row.posting_id as string);
+    let txnId = row.posting_id as string;
     yield {
-      txnId: row.posting_id as string,
-      legs,
+      txnId,
+      legs: legsByTxn.get(txnId) ?? [],
       meta: (row.meta ?? {}) as Record<string, unknown>,
       prevHash: row.prev_hash as string,
       hash: row.hash as string,
@@ -612,18 +601,22 @@ async function postingOf(q: Queryable, txnId: string): Promise<Posting | null> {
   };
 }
 
-// Streams every posting, newest commit first (see Ledger.list). Orders by `seq` desc, the
-// ever-increasing commit number (`bigserial unique`, a single indexed access path). This gives a
-// total order with no tie to break, the SQL mirror of `payout_sagas order by updated_at desc`. Each
-// posting carries its full legs, the same way postingOf returns them, so a reader can expand a row
-// without a second round-trip.
+// Newest commit first via `order by seq desc` (bigserial unique: a total order, no tie to break).
+// Each posting carries its full legs so a reader can expand a row without a second round trip.
 async function* listPostingsOf(q: Queryable): AsyncIterable<Posting> {
   let result = await q.query(`select id, meta from postings order by seq desc`);
+  // One batched legs read instead of a legsOf round trip per posting (the same N+1 fold as lineageOf).
+  // ledger.list() consumers buffer the whole stream, so reading the legs up front changes nothing they
+  // observe.
+  let legsByTxn = await legsByPosting(
+    q,
+    result.rows.map((row) => row.id as string),
+  );
   for (let row of result.rows) {
-    let legs = await legsOf(q, row.id as string);
+    let txnId = row.id as string;
     yield {
-      txnId: row.id as string,
-      legs,
+      txnId,
+      legs: legsByTxn.get(txnId) ?? [],
       meta: (row.meta ?? {}) as Record<string, unknown>,
     };
   }
@@ -642,6 +635,39 @@ async function legsOf(q: Queryable, txnId: string): Promise<Leg[]> {
     account: row.account_id as AccountRef,
     amount: toAmount(row.currency as Amount['currency'], readMinor(row.amount)),
   }));
+}
+
+// Batched twin of legsOf: every leg of many postings in one round trip, grouped by posting id and
+// rebuilt exactly as legsOf does, so batched and per-posting paths return byte-identical legs.
+async function legsByPosting(
+  q: Queryable,
+  postingIds: ReadonlyArray<string>,
+): Promise<Map<string, Leg[]>> {
+  let byPosting = new Map<string, Leg[]>();
+  if (postingIds.length === 0) {
+    return byPosting;
+  }
+  let result = await q.query(
+    `select posting_id, account_id, amount, currency from legs
+      where posting_id = any($1::text[]) order by posting_id, id asc`,
+    [[...postingIds]],
+  );
+  for (let row of result.rows) {
+    let txnId = row.posting_id as string;
+    let legs = byPosting.get(txnId);
+    if (!legs) {
+      legs = [];
+      byPosting.set(txnId, legs);
+    }
+    legs.push({
+      account: row.account_id as AccountRef,
+      amount: toAmount(
+        row.currency as Amount['currency'],
+        readMinor(row.amount),
+      ),
+    });
+  }
+  return byPosting;
 }
 
 // --- Idempotency store ------------------------------------------------------------
@@ -695,10 +721,8 @@ function createIdempotencyStore(q: Queryable): IdempotencyStore {
   };
 }
 
-// JSON-safe form of a Transaction stored in the idempotency row. JSON.stringify throws on
-// BigInt, so each amount becomes a string (encodeAmount). Other fields (id, postedAt, links)
-// are plain JSON and pass through. Decoding reverses the amount step, rebuilding a Transaction
-// equal to the original so a replay returns the same result.
+// JSON-safe Transaction for the idempotency row: JSON.stringify throws on BigInt, so each amount
+// becomes a string (encodeAmount); decode reverses it so a replay returns the same result.
 interface EncodedLeg {
   account: string;
   amount: string;
@@ -759,9 +783,8 @@ function createReplayStore(q: Queryable): ReplayStore {
 
 // --- Sale store -------------------------------------------------------------------
 
-// Stores each completed sale, looked up by order id. A refund reads the matching record to
-// reverse exactly what the original purchase posted. Entry lines stored as JSON with each
-// amount as its integer minor-units string, since JSON can't hold BigInt.
+// Entry lines stored as JSON, each amount as its minor-units string, since JSON can't hold BigInt.
+// @see https://economy-lab-docs.pages.dev/economy/reference/operations/refund
 function createSaleStore(q: Queryable): SaleStore {
   return {
     put: async (sale) => {
@@ -920,11 +943,9 @@ function rowToOutbox(row: Record<string, unknown>): OutboxMessage {
 // See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the inbox pattern (record-in-the-ingress-transaction, apply-later, dedupe-by-id).
 function createInboxStore(q: Queryable): InboxStore {
   return {
-    // Dedupe on the provider event id with `on conflict (key) do nothing`: a first sighting
-    // inserts and `returning` hands the new row back; a redelivery inserts nothing and returns no
-    // row, so a follow-up read fetches the row already stored under that key. Either way the caller
-    // gets the canonical row for the key, applied at most once. The operation's bigint amounts are
-    // carried as decimal strings (encodeOperation) since jsonb can't hold a BigInt.
+    // A redelivery (no row from `on conflict do nothing ... returning`) falls through to re-reading
+    // the canonical row by key. Operation amounts are decimal strings (encodeOperation): jsonb has
+    // no BigInt.
     enqueueInbound: async (entry) => {
       let inserted = await q.query(
         `insert into inbox (id, key, operation, status, attempts, received_at)
@@ -1027,9 +1048,7 @@ function decodeOperation(encoded: EncodedOperation): Operation {
   return decodeAmounts(encoded) as Operation;
 }
 
-// Deep-copy a value, replacing every branded Amount with its encoded string. Recurses through
-// plain objects and arrays; leaves all other scalars untouched. The Amount test comes first so an
-// Amount (itself an object) is encoded rather than walked field-by-field.
+// The isAmount test comes first so an Amount (itself an object) is encoded, not walked field-by-field.
 function encodeAmounts(value: unknown): unknown {
   if (isAmount(value)) {
     return encodeAmount(value);
@@ -1047,10 +1066,8 @@ function encodeAmounts(value: unknown): unknown {
   return value;
 }
 
-// Reverse of encodeAmounts: deep-copy a parsed jsonb value, turning every encoded-amount string
-// back into an Amount. A string is an encoded amount only when it parses as `CURRENCY:decimal`
-// (tryDecodeAmountString); any other string passes through unchanged, so plain string fields
-// (idempotencyKey, sku, reason, …) are left alone.
+// Reverse of encodeAmounts. A string is an encoded amount only if it parses as `CURRENCY:decimal`
+// (tryDecodeAmountString); any other string (idempotencyKey, sku, reason, …) passes through.
 function decodeAmounts(value: unknown): unknown {
   if (typeof value === 'string') {
     let amount = tryDecodeAmountString(value);
@@ -1086,9 +1103,7 @@ function tryDecodeAmountString(encoded: string): Amount | null {
 
 // --- Saga store -------------------------------------------------------------------
 
-// Whole payout board, newest first (see SagaStore.list). No `for update`: a read-only enumeration,
-// not a claim. `q.query` returns the rows in one round trip; they are yielded one at a time so a
-// consumer can stop early. Module-level like balanceAccountsOf to keep createSagaStore short.
+// No `for update`: a read-only enumeration, not a claim.
 async function* listSagasOf(q: Queryable): AsyncIterable<Saga> {
   let result = await q.query(
     `select * from payout_sagas order by updated_at desc`,
@@ -1181,10 +1196,7 @@ function createSagaStore(q: Queryable): SagaStore {
     deadLetter: async (id, reason) => {
       await advanceToFailed(q, id, reason);
     },
-    // The user's most recent payout activity: max(updated_at) across all their sagas in any
-    // state (updated_at starts at request time and only moves forward). Null when the user has no
-    // sagas, so their first request always passes the min-interval gate. updated_at is a bigint,
-    // so coerce the aggregate to a JS Number.
+    // Null when the user has no sagas, so their first request always passes the min-interval gate.
     lastPayoutAt: async (userId) => {
       let result = await q.query(
         `select max(updated_at) as last from payout_sagas where user_id = $1`,
@@ -1201,8 +1213,6 @@ async function advanceToFailed(
   id: string,
   reason: string,
 ): Promise<void> {
-  // Record the failure reason on the saga's terminal-outcome `reason` field, so it's read straight
-  // off the record instead of re-derived from posting meta.
   await q.query(
     `update payout_sagas
         set state = 'FAILED', reason = $2
@@ -1304,8 +1314,7 @@ function createSubscriptionStore(q: Queryable): SubscriptionStore {
       let row = result.rows[0];
       return row ? rowToSubscription(row) : null;
     },
-    // The one ACTIVE subscription for this (user, sku, seller) triple, or null. The subscribe
-    // handler reads this to refuse a duplicate active subscription that would double-bill.
+    // The subscribe handler reads this to refuse a duplicate active subscription that would double-bill.
     activeFor: async (userId, sku, sellerId) => {
       let result = await q.query(
         `select * from subscriptions
@@ -1573,9 +1582,7 @@ function createCheckpointStore(pool: PgPool): CheckpointStore {
 
 // --- The transaction unit ---------------------------------------------------------
 
-// Bundle the sub-stores a request handler may use inside one transaction, all bound to the same
-// client, so every write commits or rolls back together. The trust and checkpoint stores are
-// left out: their writes must survive a transaction rollback.
+// Trust and checkpoint stores are left out: their writes must survive a transaction rollback.
 function buildUnit(q: Queryable, digest: Digest, clock: Clock): Unit {
   return {
     ledger: lockingLedger(q, digest, clock),
@@ -1596,10 +1603,8 @@ function buildUnit(q: Queryable, digest: Digest, clock: Clock): Unit {
 export interface PostgresStoreOptions {
   url: string;
 
-  // Name of a dedicated Postgres schema to create, load db/postgresql-schema.sql into, and drop
-  // again when the store closes. A per-test-run schema keeps parallel runs from stepping on each
-  // other. Leave it out to use whatever schema the connection already points at (tables must
-  // already exist there).
+  // Optional dedicated Postgres schema, created/loaded then dropped on close, so parallel test runs
+  // don't collide. Omit to use the schema the connection already points at.
   schema?: string;
 
   digest?: Digest;
@@ -1609,6 +1614,18 @@ export interface PostgresStoreOptions {
   // Rolling window (ms) the trust store applies when summing a subject's recent spend for the
   // velocity check. Defaults to one hour; the composition passes config.velocityWindowMs.
   velocityWindowMs?: number;
+
+  // Max connections in the pool. Each in-flight transaction holds one connection for its whole
+  // BEGIN..COMMIT, so this caps how many submits can run at once: a caller that drives N concurrent
+  // submits must size this to at least N or the extra ones block waiting for a connection. Left unset,
+  // `pg`'s default of 10 applies, which is the historical behaviour.
+  poolMax?: number;
+
+  // Max time (ms) to wait for a connection before failing. `pg`'s default is no timeout, so a
+  // routable-but-stalled host (firewall drop, mid-startup) would hang indefinitely; a caller that
+  // wants to fail fast and move on (e.g. the bench skipping an unreachable backend) sets this. Left
+  // unset, the historical no-timeout behaviour applies.
+  connectionTimeoutMillis?: number;
 }
 
 /**
@@ -1637,6 +1654,10 @@ export async function postgresStore(
   let pool = new pg.Pool({
     connectionString: options.url,
     ...(schema ? { options: `-c search_path=${schema}` } : {}),
+    ...(options.poolMax ? { max: options.poolMax } : {}),
+    ...(options.connectionTimeoutMillis
+      ? { connectionTimeoutMillis: options.connectionTimeoutMillis }
+      : {}),
   });
   if (schema) {
     await applyIsolatedSchema(pool, schema);
@@ -1729,18 +1750,29 @@ async function runInTransaction<T>(
 // surfaces on `error.code`. Anything else (a domain fault, a CHECK or constraint violation, a
 // connection error) is not retried.
 function isTransientConflict(error: unknown): boolean {
-  let e = error as { code?: unknown; constraint?: unknown } | null;
+  let e = error as {
+    code?: unknown;
+    constraint?: unknown;
+    message?: unknown;
+  } | null;
   let code = e?.code;
   // 40P01 (deadlock) and 40001 (serialization failure) are the classic "try again" aborts. The third
   // case is subtler. Each account's history is a hash chain, and a new link names the current last
   // link (the head) as its parent. chain_links_account_prev_uq lets only one link claim a given
-  // parent. So when two writers read the same head and both try to attach, one wins and the other
-  // gets a 23505. That writer is not wrong, just late: the head has moved, and a retry re-reads it
+  // parent. So when two writers read the same head and both try to attach, one succeeds and the other
+  // gets a 23505. That 23505 is not a real duplicate: the head has moved, so a retry re-reads it
   // and attaches cleanly. This case is scoped to that one index, so a real duplicate (a colliding id
   // or idempotency key) still fails fast.
+  //
+  // P0001 (the default SQLSTATE of `raise exception`) carrying the chain-continuity message is the
+  // same race from the trigger side rather than the unique index -- equally fixed by re-reading the
+  // head. It is matched only on that message, since P0001 is also raised for the genuine
+  // `conservation` and `balance integrity` faults, which must fail fast and are never retried.
   return (
     code === '40P01' ||
     code === '40001' ||
-    (code === '23505' && e?.constraint === CHAIN_FORK_INDEX)
+    (code === '23505' && e?.constraint === CHAIN_FORK_INDEX) ||
+    (code === 'P0001' &&
+      String(e?.message ?? '').includes(CHAIN_CONTINUITY_MARKER))
   );
 }

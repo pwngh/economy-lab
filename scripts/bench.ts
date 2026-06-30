@@ -9,127 +9,79 @@
  * @license MIT
  */
 
-// Benchmarks for the economy. Both run through the real composition root, the same
-// `capabilitiesFromEnv` -> `createEconomy` wiring that `make demo` and `make start` use:
+// Benchmarks for the economy, built on the shared harness (scripts/support/harness.ts), so a run is
+// standardized, reseeded, provable, portable, and tunable:
 //
-//   1. Submit throughput (ops/sec, sequential) for topUp, spend, and requestPayout, per storage
-//      backend. The backends are in-memory, plus Postgres and MySQL when reachable; an unreachable
-//      backend is skipped, as in `make smoke`. This shows the engine cost of the double-entry and
-//      hash-chain guarantees.
-//   2. Integrity cost vs ledger size (in-memory). This shows how prove() and a checkpoint seal grow
-//      with history, since both re-walk every posting from genesis (O(postings)), against checkpoint
-//      verify, which reads only account heads (O(accounts), so it stays roughly flat).
+//   1. Submit throughput per backend, both ways: sequential (one op at a time — latency-bound, each
+//      op pays a full round trip + commit) and concurrent (up to BENCH_CONCURRENCY in flight — on a
+//      durable SQL backend this lets the engine overlap round trips and group-commit many fsyncs into
+//      one, so it is the throughput the engine sustains). The sequential number is not the engine's ceiling.
+//   2. Integrity cost vs ledger size (in-memory). prove() and a checkpoint seal re-walk every posting
+//      from genesis — O(postings) — so both climb with history; checkpoint verify reads only account
+//      heads — O(accounts) — so it stays ~flat. That contrast is why a signed checkpoint, not a full
+//      re-prove, anchors ongoing integrity as history grows.
 //
-// These are LAB numbers: one process, sequential submits (no pipelining), in-memory by default. They
-// characterize relative cost and scaling shape, not production capacity. The policy gates (maturity,
-// velocity, payout interval and minimum) are neutralized via env so the timings reflect ledger work,
-// not rejections.
+// Each SQL backend runs in its own throwaway schema/database, created fresh and
+// dropped on teardown, so a run never inherits another run's rows (a bloated database is measurably slower). Each backend is also proven after its workload — a reported number always comes from a
+// ledger that just passed every invariant — and annotated with its live durability settings, so the
+// reader can see whether the measured commit is as durable as production.
 //
-// See https://economy-lab-docs.pages.dev/economy/reference/performance/ for what these two tables
-// measure and how to read the scaling shape.
+//   node scripts/bench.ts                          # in-memory + any reachable DB
+//   BENCH_PROFILE=fast node scripts/bench.ts        # quick sample
+//   BENCH_PROFILE=thorough node scripts/bench.ts    # heavy sample
+//   BENCH_BACKENDS=postgres BENCH_OPS=1000 node scripts/bench.ts
+//   BENCH_OUTPUT=json BENCH_JSON_PATH=bench.json node scripts/bench.ts
+//   make bench-prod                                 # run inside a Linux container vs the compose DBs
 //
-//   node scripts/bench.ts                 # or: make bench   (in-memory; + any DB that's up)
-//   BENCH_OPS=5000 node scripts/bench.ts  # heavier throughput sample
-//
-// SQL backends need their schema applied first (`make db-migrate`); the bench skips a backend it
-// can't reach or whose schema is missing. Postgres :5432, MySQL :3306 (docker compose up -d).
+// Knobs (all optional): BENCH_PROFILE, BENCH_OPS, BENCH_REPS, BENCH_WARMUP, BENCH_CONCURRENCY,
+// BENCH_BUDGET_MS, BENCH_BACKENDS, BENCH_OUTPUT, BENCH_JSON_PATH, BENCH_SEED, and the connection URLs
+// BENCH_POSTGRES_URL / BENCH_MYSQL_URL (else DATABASE_URL / MYSQL_TEST_URL). See harness.ts.
 
-import {
-  capabilitiesFromEnv,
-  createEconomy,
-  workerCtxFrom,
-} from '#src/index.ts';
 import { sealCheckpoint, reverifyCheckpoint } from '#src/worker/checkpoint.ts';
 import { topUp, spend, requestPayout, credit } from '#test/support/builders.ts';
 import {
-  defaultPricing,
-  seededSigner,
-  fakeProcessor,
-  fixedRates,
-} from '#test/support/capabilities.ts';
+  bestMs,
+  determinismRoot,
+  emitJson,
+  maskUrl,
+  measureConcurrent,
+  measureSequential,
+  ms,
+  num,
+  printTable,
+  proveEconomyOrReport,
+  rate,
+  resolveConfig,
+  tryProvision,
+} from '#scripts/support/harness.ts';
 
-import type { Amount, Economy, ExternalPorts } from '#src/index.ts';
+import type {
+  BenchMode,
+  ConcurrentResult,
+  CounterProbe,
+  GatesMode,
+  Provisioned,
+} from '#scripts/support/harness.ts';
+import type { Amount, Economy } from '#src/index.ts';
 
-// External ports have no built-in stand-in, so the deterministic test doubles serve the bench. The
-// bench measures the ledger, not the FX feed or the payout rail, so a fake feed and rail are fine.
-const ports: ExternalPorts = {
-  pricing: defaultPricing(),
-  signer: seededSigner(1),
-  processor: fakeProcessor(),
-  rates: fixedRates(),
+const cfg = resolveConfig();
+
+// Per-process tag so ids are unique within a run; with the reseeded throwaway schema/database, that
+// is all the uniqueness a run needs.
+const tag = `b${process.pid.toString(36)}`;
+
+// --- Workload kinds ----------------------------------------------------------------
+
+// `poolSize` is how many distinct subjects this kind spreads its ops across (0 for topUp, a fresh user
+// per op). measureKind warms every one before timing so no concurrent op pays a cold-start chain-genesis
+// (which could fork-race a sibling and pollute the throughput number).
+type Kind = {
+  name: string;
+  poolSize: number;
+  setup: (economy: Economy) => Promise<void>;
+  perOp: (economy: Economy, k: number) => Promise<unknown>;
 };
 
-// Env shared by every run. It holds the required secrets, plus the policy gates turned off so a
-// high-volume burst of one subject's operations is not held back by maturity, velocity, or the
-// payout interval and minimum. None of those gates is what these timings are about. This object
-// deliberately does NOT inherit process.env, so the gate settings stay controlled. Backend DSNs are
-// merged in explicitly below.
-const BASE_ENV: Record<string, string> = {
-  WEBHOOK_SECRET: 'bench-webhook-secret',
-  SIGNING_SECRET: 'bench-signing-secret',
-  MATURITY_HORIZON_CARD_MS: '0',
-  MATURITY_HORIZON_CRYPTO_MS: '0',
-  MATURITY_HORIZON_DEFAULT_MS: '0',
-  PAYOUT_MIN_EARNED_MINOR: '1',
-  PAYOUT_MIN_INTERVAL_MS: '0',
-  VELOCITY_LIMIT_MINOR: '1000000000000000',
-};
-
-const OPS = Number(process.env.BENCH_OPS ?? 500); // measured ops per throughput sample
-const REPS = 3; // throughput is the best (fastest) of this many runs
-const WARMUP = 50; // discarded ops before timing, to let the JIT settle
-const CURVE_USERS = 20; // fixed user set for the curves: accounts stay ~flat, history grows
-const CURVE_SIZES = [500, 1000, 2000, 4000]; // top-ups seeded before each measurement
-const CURVE_REPS = 2; // integrity measurements are the best of this many
-
-// Per-process tag so ids are unique across runs (SQL backends keep their rows between runs).
-const tag = Math.random().toString(36).slice(2, 8);
-
-const nowMs = (): number => performance.now();
-
-// Runs `fn` `reps` times and returns the fastest run, in ms. The fastest run is the cleanest single
-// number to report under GC and JIT noise.
-async function bestMs(
-  reps: number,
-  fn: () => Promise<unknown>,
-): Promise<number> {
-  let best = Infinity;
-  for (let r = 0; r < reps; r++) {
-    const t0 = nowMs();
-    await fn();
-    best = Math.min(best, nowMs() - t0);
-  }
-  return best;
-}
-
-// Per-op-type time budget. A backend whose per-call cost grows with accumulated state caps out here
-// instead of hanging the whole run for minutes. That state can be reserves, risk attempts, or lots
-// piling up on one subject over a real database.
-const BUDGET_MS = 5000;
-
-// Returns ops/sec for `perOp`, the best of REPS runs. Each run stops at BUDGET_MS, and the rate is
-// taken from the ops that actually completed. A slow or degrading backend therefore bounds its own
-// time and still reports a representative number rather than stalling. `perOp` gets a unique index
-// so each op uses fresh ids.
-async function measure(
-  perOp: (k: number) => Promise<unknown>,
-): Promise<number> {
-  let bestPerOp = Infinity;
-  for (let r = 0; r < REPS; r++) {
-    const t0 = nowMs();
-    let done = 0;
-    for (let i = 0; i < OPS; i++) {
-      await perOp(r * OPS + i);
-      done = i + 1;
-      if (nowMs() - t0 > BUDGET_MS) break;
-    }
-    bestPerOp = Math.min(bestPerOp, (nowMs() - t0) / done);
-  }
-  return 1000 / bestPerOp;
-}
-
-// Submits one sale. The whole `price` goes to one creator, minus the platform fee the pricing policy
-// takes, so a few large funding sales build a payable `earned` balance quickly.
 function sale(
   economy: Economy,
   o: { buyer: string; creator: string; label: string; price?: Amount },
@@ -145,230 +97,496 @@ function sale(
   );
 }
 
-// Returns ops/sec for a top-up. Each op uses a fresh user, so nothing serializes on one account.
-async function throughputTopUp(economy: Economy): Promise<number> {
-  for (let i = 0; i < WARMUP; i++) {
-    await economy.submit(
-      topUp({ userId: `usr_tuw_${tag}_${i}`, amount: credit('10.00') }),
-    );
-  }
-  return measure((k) =>
-    economy.submit(
-      topUp({ userId: `usr_tu_${tag}_${k}`, amount: credit('10.00') }),
-    ),
+const timedOps = cfg.reps * cfg.ops * 2;
+
+// Warmup runs cfg.warmup ops, or once per pooled subject, whichever is larger (so every subject's
+// account exists before timing). Funding must cover these too, else a buyer runs dry mid-warmup and the
+// timed sample sees INSUFFICIENT_FUNDS the throughput-mode assertion would flag as a bug.
+const warmupOpsFor = (poolSize: number): number =>
+  Math.max(cfg.warmup, poolSize);
+
+const poolIdx = (k: number, size: number): number => ((k % size) + size) % size;
+
+// Why pools: real traffic is many independent users transacting at once. Hammering one buyer/one
+// creator measures single-row lock contention, not throughput — at depth every op fights over the
+// same rows, so the rate collapses and MySQL deadlocks. Spreading each kind across a pool of subjects
+// (>= the concurrency) leaves concurrent ops touching disjoint user rows, contending only on the
+// genuinely-shared platform account every posting touches (the funding float for topUp, REVENUE for a
+// sale, the payout reserve for a payout) — the honest concurrency ceiling for this ledger's
+// lock-the-whole-set discipline.
+
+function topUpKind(): Kind {
+  return {
+    name: 'topUp',
+    poolSize: 0, // a fresh user per op; the only shared rows are the seeded platform accounts
+    setup: async () => {},
+    perOp: (economy, k) =>
+      economy.submit(
+        topUp({ userId: `usr_tu_${tag}_${k}`, amount: credit('10.00') }),
+      ),
+  };
+}
+
+// spend: a pool of buyers and creators, round-robin per op. With the pool, concurrent sales contend
+// only on REVENUE (every sale credits the platform fee there), not on one buyer's spendable and one
+// creator's earned.
+function spendKind(poolSize: number): Kind {
+  const buyers = Array.from(
+    { length: poolSize },
+    (_, i) => `usr_spb_${tag}_${i}`,
   );
+  const creators = Array.from(
+    { length: poolSize },
+    (_, i) => `usr_spc_${tag}_${i}`,
+  );
+  // Each buyer covers its share of every timed sale plus the warmup (round-robin), with margin. In
+  // contention mode poolSize is small, so this figure is large and every buyer is hammered — fully
+  // funded on purpose, so the signal is contention (retries/throws), not fund rejections.
+  const perBuyer =
+    Math.ceil((timedOps + warmupOpsFor(poolSize)) / poolSize) + 50;
+  return {
+    name: 'spend',
+    poolSize,
+    setup: async (economy) => {
+      for (const buyer of buyers) {
+        await economy.submit(
+          topUp({ userId: buyer, amount: credit(`${perBuyer}.00`) }),
+        );
+      }
+    },
+    perOp: (economy, k) => {
+      const i = poolIdx(k, poolSize);
+      return sale(economy, {
+        buyer: buyers[i]!,
+        creator: creators[i]!,
+        label: `sp_${k}`,
+      });
+    },
+  };
 }
 
-// Returns ops/sec for a marketplace sale. One funded buyer, one creator, a fresh order id each time.
-async function throughputSpend(economy: Economy): Promise<number> {
-  const buyer = `usr_spb_${tag}`;
-  const creator = `usr_spc_${tag}`;
-  await economy.submit(topUp({ userId: buyer, amount: credit('1000000.00') }));
-  for (let i = 0; i < WARMUP; i++)
-    await sale(economy, { buyer, creator, label: `spw_${i}` });
-  return measure((k) => sale(economy, { buyer, creator, label: `sp_${k}` }));
+// requestPayout: the synchronous reserve step (not the worker settlement) against a pool of creators'
+// earned balances. Each creator is pre-funded with large sales from one bank buyer; the funding is
+// generous because the exact fee split belongs to the injected pricing policy and is not assumed here.
+function payoutKind(poolSize: number): Kind {
+  const bank = `usr_pob_${tag}`;
+  const creators = Array.from(
+    { length: poolSize },
+    (_, i) => `usr_poc_${tag}_${i}`,
+  );
+
+  const perCreator =
+    Math.ceil((timedOps + warmupOpsFor(poolSize)) / poolSize) + 50; // reserves of 1.00 each
+  const salesPerCreator = Math.ceil(perCreator / 300) + 1; // sales of 1000.00, creator keeps >=30%
+  return {
+    name: 'requestPayout',
+    poolSize,
+    setup: async (economy) => {
+      await economy.submit(
+        topUp({ userId: bank, amount: credit('1000000000.00') }),
+      );
+      for (let c = 0; c < poolSize; c++) {
+        for (let s = 0; s < salesPerCreator; s++) {
+          await sale(economy, {
+            buyer: bank,
+            creator: creators[c]!,
+            label: `pof_${c}_${s}`,
+            price: credit('1000.00'),
+          });
+        }
+      }
+    },
+    perOp: (economy, k) =>
+      economy.submit(
+        requestPayout({
+          userId: creators[poolIdx(k, poolSize)]!,
+          amount: credit('1.00'),
+        }),
+      ),
+  };
 }
 
-// Returns ops/sec for a payout request, meaning the synchronous reserve step, not the worker
-// settlement. It funds the creator's earned balance with a handful of large sales first. The funding
-// is generous because the exact fee split belongs to the injected pricing policy and is not assumed
-// here. Returns null if a payout will not commit.
-async function throughputPayout(economy: Economy): Promise<number | null> {
-  const buyer = `usr_pob_${tag}`;
-  const creator = `usr_poc_${tag}`;
+// A `key=count` rendering of a histogram, used for the rejection-reason and throw-class breakdowns.
+const hist = (h: Record<string, number>): string =>
+  Object.entries(h)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(', ');
+
+// Throughput mode spreads ops across >= concurrency subjects so concurrent ops touch disjoint rows
+// (the ledger's ceiling, not single-row contention). Contention mode shrinks the pool so many ops
+// dogpile a few subjects' chains, surfacing the retry/deadlock pressure throughput mode avoids.
+function poolSizeForMode(concurrency: number, mode: BenchMode): number {
+  if (mode === 'contention') return Math.max(2, Math.floor(concurrency / 4));
+  return Math.max(concurrency, 8);
+}
+
+// A small fixed op sequence run on a fresh ledger to fingerprint the engine for the cross-engine
+// determinism check (see determinismRoot). Fixed ids/amounts (no pid tag, no clock dependence) so every
+// engine posts byte-identical entries; a representative cross-section (top-ups, fee-splitting sales, a
+// payout reserve) so a divergence in any path changes the root. Every op commits under both gate modes.
+async function runDeterminismSequence(economy: Economy): Promise<void> {
   await economy.submit(
-    topUp({ userId: buyer, amount: credit('100000000.00') }),
+    topUp({ userId: 'det_buyer_a', amount: credit('1000.00') }),
   );
-  const reserved = WARMUP + REPS * OPS; // total credits the runs will reserve, at 1.00 each
-  const funding = Math.ceil((reserved * 1.5) / 300) + 5; // sales of 1000.00, assuming creator keeps >=30%
-  for (let i = 0; i < funding; i++) {
-    await sale(economy, {
-      buyer,
-      creator,
-      label: `pof_${i}`,
-      price: credit('1000.00'),
-    });
-  }
-  const probe = await economy.submit(
-    requestPayout({ userId: creator, amount: credit('1.00') }),
+  await economy.submit(
+    topUp({ userId: 'det_buyer_b', amount: credit('1000.00') }),
   );
-  if (probe.status !== 'committed') return null;
-  for (let i = 0; i < WARMUP; i++) {
+  for (let i = 0; i < 2; i++) {
     await economy.submit(
-      requestPayout({ userId: creator, amount: credit('1.00') }),
+      spend({
+        buyerId: i === 0 ? 'det_buyer_a' : 'det_buyer_b',
+        sku: 'det_sku',
+        price: credit('100.00'),
+        orderId: `det_ord_${i}`,
+        recipients: [{ sellerId: 'det_creator', shareBps: 10_000 }],
+      }),
     );
   }
-  return measure(() =>
-    economy.submit(requestPayout({ userId: creator, amount: credit('1.00') })),
+  await economy.submit(
+    requestPayout({ userId: 'det_creator', amount: credit('1.00') }),
   );
 }
 
-// Measures one op-type without letting a failure sink the whole backend. A missing schema or a
-// payout gate can make one op throw. On any throw, this cell reads n/a and the rest still run.
-async function tryRate(
-  name: string,
-  run: () => Promise<number | null>,
-): Promise<number | null> {
-  try {
-    return await run();
-  } catch (e) {
+// One kind's measurement: `seq` is the latency-bound rate (one op at a time); `con` is the full
+// concurrent ConcurrentResult (rate plus the breakdown needed to trust it). measureKind runs setup,
+// warmup, then the two samples.
+type KindRates = {
+  name: string;
+  seq: number;
+  con: ConcurrentResult;
+};
+
+async function measureKind(
+  economy: Economy,
+  concurrency: number,
+  kind: Kind,
+  counters: CounterProbe,
+): Promise<KindRates> {
+  await kind.setup(economy);
+  const warm = warmupOpsFor(kind.poolSize);
+  for (let i = 0; i < warm; i++) {
+    // Negative-offset indices so warmup ids never collide with the timed ones. (A cold-start stress
+    // mode would skip this on purpose.)
+    await kind.perOp(economy, -1 - i);
+  }
+  const seq = await measureSequential(cfg, (k) => kind.perOp(economy, k));
+  const con = await measureConcurrent(
+    cfg,
+    concurrency,
+    (k) => kind.perOp(economy, cfg.reps * cfg.ops + k),
+    counters,
+  );
+  return { name: kind.name, seq, con };
+}
+
+// Print one kind's result as a self-contained block: throughput (seq + con), latency distribution, the
+// committed/rejected/threw taxonomy, retry pressure, and the engine's own deadlock count. In throughput
+// mode a rejection or duplicate is a bug (the workload is fully funded), so it is called out loudly.
+function reportKind(p: Provisioned, r: KindRates): void {
+  const c = r.con;
+  const lat = c.latency;
+  console.warn(
+    `      ${r.name.padEnd(14)} seq ${rate(r.seq).padStart(9)}  con ${rate(c.rate).padStart(9)} ops/sec` +
+      `  · lat p50 ${ms(lat.p50)} p95 ${ms(lat.p95)} p99 ${ms(lat.p99)} max ${ms(lat.max)} ms`,
+  );
+  const bits: string[] = [`committed ${num(c.committed)}`];
+  bits.push(
+    c.rejected > 0
+      ? `rejected ${c.rejected} [${hist(c.rejectReasons)}]`
+      : 'rejected 0',
+  );
+  bits.push(
+    c.threw > 0 ? `threw ${c.threw} [${hist(c.throwClasses)}]` : 'threw 0',
+  );
+  if (c.duplicate > 0) bits.push(`duplicate ${c.duplicate}`);
+  const retry =
+    c.retries.retries > 0
+      ? `retries ${num(c.retries.retries)} (recovered ${num(c.retries.recovered)}, exhausted ${num(c.retries.exhausted)})`
+      : 'retries 0';
+  const dl = c.dbCounters
+    ? `db-deadlocks ${c.dbCounters.deadlocks}` +
+      (c.dbCounters.lockWaits > 0
+        ? `, lock-waits ${c.dbCounters.lockWaits}`
+        : '')
+    : 'db-deadlocks n/a';
+  console.warn(`                     ${bits.join('  ')}  · ${retry}  · ${dl}`);
+  if (p.mode === 'throughput' && (c.rejected > 0 || c.duplicate > 0)) {
     console.warn(
-      `      ${name} failed: ${e instanceof Error ? e.message : String(e)}`,
+      `      ⚠ ${r.name}: ${c.rejected} rejected / ${c.duplicate} duplicate under throughput mode — a funding/gate/id BUG, not contention; investigate`,
     );
-    return null;
   }
 }
 
-// Returns the throughput row for one backend, or null when the backend is unreachable, for example
-// on a refused connection or an unmigrated schema. A single probe op confirms the backend works
-// before the timed runs begin.
-async function throughputRow(
-  label: string,
-  url: string | undefined,
-): Promise<string[] | null> {
-  const env = { ...BASE_ENV, ...(url ? { DATABASE_URL: url } : {}) };
-  if (url) console.warn(`    connecting to ${mask(url)}`);
-  let caps;
-  try {
-    caps = await capabilitiesFromEnv(env, ports);
-    const economy = createEconomy(caps);
-    await economy.submit(
-      topUp({ userId: `usr_probe_${tag}`, amount: credit('1.00') }),
-    );
-    console.warn(`    connected — timing ${REPS} runs of ${OPS} ops per kind`);
-    const tu = await tryRate('topUp', () => throughputTopUp(economy));
-    console.warn(`      topUp          ${rate(tu).padStart(10)} ops/sec`);
-    const sp = await tryRate('spend', () => throughputSpend(economy));
-    console.warn(`      spend          ${rate(sp).padStart(10)} ops/sec`);
-    const po = await tryRate('requestPayout', () => throughputPayout(economy));
-    console.warn(`      requestPayout  ${rate(po).padStart(10)} ops/sec`);
-    await caps.store.close();
-    return [label, rate(tu), rate(sp), rate(po)];
-  } catch (e) {
-    if (caps) await caps.store.close().catch(() => {});
-    console.warn(
-      `    SKIP ${label}: ${e instanceof Error ? e.message : String(e)}`,
-    );
-    return null;
+type BackendResult = {
+  backend: string;
+  durability: string;
+  provable: boolean;
+  mode: BenchMode;
+  gates: GatesMode;
+  concurrency: number;
+  poolMax: number;
+  connsPerOp: number;
+  determinismRoot: string;
+  kinds: KindRates[];
+};
+
+// Exit non-zero when any backend's prove gate fails, a backend throws mid-run, or the roots disagree — a
+// number over a broken ledger (or a run that completed no backend) must never exit 0. `determinismOk`
+// (did the compared roots agree) and `determinismChecked` (were at least two compared) are separate so
+// the JSON can report agreement honestly: agreed, disagreed, or never checked.
+let anyProveFailed = false;
+let determinismOk = true;
+let determinismChecked = false;
+
+async function throughputFor(p: Provisioned): Promise<BackendResult> {
+  console.warn(`    ${p.durability}`);
+  console.warn(
+    `    pool ${p.poolMax} conns (${p.connsPerOp}×${p.concurrency} concurrency + headroom) · mode ${p.mode} · gates ${p.gates}`,
+  );
+  // Cross-engine determinism fingerprint: run a fixed sequence on the fresh ledger and snapshot its
+  // Merkle root before the workload perturbs it, so every backend's root covers the identical postings.
+  await runDeterminismSequence(p.economy);
+  const root = await determinismRoot(p);
+
+  const poolSize = poolSizeForMode(p.concurrency, p.mode);
+  const kinds: KindRates[] = [];
+  for (const kind of [topUpKind(), spendKind(poolSize), payoutKind(poolSize)]) {
+    const r = await measureKind(p.economy, p.concurrency, kind, p.counters);
+    reportKind(p, r);
+    kinds.push(r);
   }
+  // Provability gate: the numbers above came from a ledger that must still pass every invariant. A
+  // failure is loud and flips the process exit code; it never silently passes.
+  const { ok, report } = await proveEconomyOrReport(p.economy);
+  if (ok) {
+    console.warn('      prove          PASS — every invariant holds');
+  } else {
+    anyProveFailed = true;
+    console.warn(`      prove          FAIL — ${JSON.stringify(report)}`);
+  }
+  return {
+    backend: p.label,
+    durability: p.durability,
+    provable: ok,
+    mode: p.mode,
+    gates: p.gates,
+    concurrency: p.concurrency,
+    poolMax: p.poolMax,
+    connsPerOp: p.connsPerOp,
+    determinismRoot: root,
+    kinds,
+  };
 }
 
-// Returns the integrity-cost-vs-ledger-size rows, in-memory. It seeds top-ups across a fixed user
-// set, so the account count stays roughly flat while postings pile up. At each size it times
-// prove(), a checkpoint seal, and a checkpoint verify.
-async function curveRows(): Promise<string[][]> {
-  const caps = await capabilitiesFromEnv(BASE_ENV, ports);
-  const economy = createEconomy(caps);
-  const { store } = caps;
-  const ctx = workerCtxFrom(caps);
+type CurveRow = {
+  postings: number;
+  accounts: number;
+  prove: number;
+  seal: number;
+  verify: number;
+};
+
+async function integrityCurve(): Promise<CurveRow[]> {
+  const p = await tryProvision('in-memory', cfg);
+  if (!p) return [];
+  const { economy, store, workerCtx } = p;
   const users = Array.from(
-    { length: CURVE_USERS },
+    { length: cfg.curveUsers },
     (_, i) => `usr_cv_${tag}_${i}`,
   );
-  const rows: string[][] = [];
+  const rows: CurveRow[] = [];
   let done = 0;
   console.warn('\nintegrity curves (in-memory), one row per ledger size:');
-  for (const size of CURVE_SIZES) {
+  for (const size of cfg.curveSizes) {
     for (; done < size; done++) {
       await economy.submit(
-        topUp({ userId: users[done % users.length], amount: credit('10.00') }),
+        topUp({ userId: users[done % users.length]!, amount: credit('10.00') }),
       );
     }
-    await economy.read.prove(); // warm the path before timing it
-    const prove = await bestMs(CURVE_REPS, () => economy.read.prove());
-    const seal = await bestMs(CURVE_REPS, () => sealCheckpoint(store, ctx));
-    const verify = await bestMs(CURVE_REPS, () =>
-      reverifyCheckpoint(store, ctx),
+
+    const prove = await bestMs(cfg.curveReps, () => economy.read.prove());
+    const seal = await bestMs(cfg.curveReps, () =>
+      sealCheckpoint(store, workerCtx),
     );
-    const accounts = await accountCount(economy);
-    rows.push([num(done * 2), num(accounts), ms(prove), ms(seal), ms(verify)]);
+    const verify = await bestMs(cfg.curveReps, () =>
+      reverifyCheckpoint(store, workerCtx),
+    );
+    const accountIds: string[] = [];
+    for await (const account of economy.read.accounts())
+      accountIds.push(account);
+    rows.push({
+      postings: done * 2,
+      accounts: accountIds.length,
+      prove,
+      seal,
+      verify,
+    });
     console.warn(
       `  ${String(done * 2).padStart(6)} postings · prove ${ms(prove)} · seal ${ms(seal)} · verify ${ms(verify)} (ms)`,
     );
   }
-  await store.close();
+  await p.teardown();
   return rows;
 }
 
-async function accountCount(economy: Economy): Promise<number> {
-  const seen: string[] = [];
-  for await (const account of economy.read.accounts()) seen.push(account);
-  return seen.length;
-}
-
-// --- formatting -------------------------------------------------------------------
-
-// Hides a DSN password (`:secret@`) before logging the connection string.
-const mask = (url: string): string => url.replace(/:[^:@/]*@/, ':***@');
-
-const num = (n: number): string => Math.round(n).toLocaleString('en-US');
-const rate = (n: number | null): string => (n === null ? 'n/a' : num(n));
-const ms = (n: number): string => n.toFixed(n < 10 ? 2 : 1);
-
-function printTable(title: string, headers: string[], rows: string[][]): void {
-  const widths = headers.map((h, i) =>
-    Math.max(h.length, ...rows.map((r) => r[i].length)),
-  );
-  const line = (cells: string[]): string =>
-    cells.map((c, i) => c.padEnd(widths[i])).join('  ');
-  console.warn(`\n${title}`);
-  console.warn(line(headers));
-  console.warn(widths.map((w) => '-'.repeat(w)).join('  '));
-  for (const r of rows) console.warn(line(r));
-}
-
-// --- run ---------------------------------------------------------------------------
-
 console.warn('=== economy-lab benchmarks ===');
 console.warn(
-  `Lab numbers: single process, sequential submits, Node ${process.version}.`,
+  `Lab numbers: single process, Node ${process.version}, profile "${cfg.profile}" (ops=${cfg.ops}, reps=${cfg.reps}, concurrency=${cfg.concurrency}).`,
+);
+console.warn(
+  `Mode "${cfg.mode}" (${cfg.mode === 'throughput' ? 'fully funded — any rejection is a bug' : 'oversubscribed on purpose — rejections/retries are the measured signal'}), ` +
+    `gates ${cfg.gates}, pools sized ${cfg.connsPerOp}×concurrency + ${cfg.poolHeadroom} for the two-connection-per-op write path.`,
 );
 console.warn(
   'They show relative cost and scaling shape, not production capacity.',
 );
-
-// Prefer the connection the rest of the project already uses, that is DATABASE_URL or MYSQL_TEST_URL
-// from .env as loaded by `make bench`. A machine's real role and password can differ from the
-// compose template, for example when a volume was first initialized under a different POSTGRES_USER.
-// The literals are only a last-resort default for a bare checkout with the compose stack freshly up.
-const envDb = process.env.DATABASE_URL ?? '';
-// Postgres is reached by either scheme, since the `pg` driver treats `postgres://` and
-// `postgresql://` as the same alias, so accept both. MySQL is reached via `mysql://`. This matches
-// selectStore in src/index.ts.
-const envIsPostgres =
-  envDb.startsWith('postgres://') || envDb.startsWith('postgresql://');
-const pgUrl =
-  process.env.BENCH_POSTGRES_URL ??
-  (envIsPostgres ? envDb : undefined) ??
-  'postgres://economy:economy@localhost:5432/economy_lab';
-const mysqlUrl =
-  process.env.BENCH_MYSQL_URL ??
-  process.env.MYSQL_TEST_URL ??
-  (envDb.startsWith('mysql://') ? envDb : undefined) ??
-  'mysql://root:economy@localhost:3306/economy_lab';
-
-console.warn(`\nsubmit throughput (best of ${REPS} × ${OPS} sequential ops):`);
-const throughput: string[][] = [];
-for (const [label, url] of [
-  ['in-memory', undefined],
-  ['postgres', pgUrl],
-  ['mysql', mysqlUrl],
-] as const) {
-  console.warn(`  ${label}: measuring...`);
-  const row = await throughputRow(label, url);
-  if (row) throughput.push(row);
-}
-printTable(
-  `Submit throughput — ops/sec, sequential, best of ${REPS} × ${OPS} (higher is better)`,
-  ['backend', 'topUp', 'spend', 'requestPayout'],
-  throughput,
+console.warn(
+  `\nsubmit throughput (best of ${cfg.reps} × ${cfg.ops}; seq = one at a time, con = ${cfg.concurrency} in flight; rate over committed ops only):`,
 );
 
-const curve = await curveRows();
+const results: BackendResult[] = [];
+for (const backend of cfg.backends) {
+  console.warn(`  ${backend}: measuring...`);
+  if (backend !== 'in-memory') {
+    console.warn(
+      `    connecting to ${maskUrl(backend === 'postgres' ? cfg.urls.postgres : cfg.urls.mysql)}`,
+    );
+  }
+  const p = await tryProvision(backend, cfg);
+  if (!p) continue;
+  try {
+    results.push(await throughputFor(p));
+  } catch (e) {
+    // Contain a mid-run failure to this backend (e.g. a dropped connection, or a prove-walk that hit
+    // a connection error) so the others' results and the integrity curve below still print. But a
+    // backend that provisioned and then THREW is a failure, not a provisioning skip: fail the run
+    // loudly (exit non-zero) so it can never be mistaken for a clean pass — distinct from tryProvision
+    // returning null for an unreachable backend, which is the intended skip.
+    anyProveFailed = true;
+    console.warn(
+      `    FAILED ${backend}: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  } finally {
+    await p.teardown();
+  }
+}
+
+const kindNames = ['topUp', 'spend', 'requestPayout'];
+const kindOf = (r: BackendResult, name: string): KindRates | undefined =>
+  r.kinds.find((k) => k.name === name);
+const seqRate = (r: BackendResult, name: string): string =>
+  rate(kindOf(r, name)?.seq ?? null);
+const conRate = (r: BackendResult, name: string): string =>
+  rate(kindOf(r, name)?.con.rate ?? null);
+
+printTable(
+  `Sequential throughput — ops/sec, one at a time (latency-bound; higher is better)`,
+  ['backend', ...kindNames, 'provable'],
+  results.map((r) => [
+    r.backend,
+    ...kindNames.map((n) => seqRate(r, n)),
+    r.provable ? 'yes' : 'NO',
+  ]),
+);
+printTable(
+  `Concurrent throughput — ops/sec, up to ${cfg.concurrency} in flight (pipelined; in-memory is serial so con≈seq)`,
+  ['backend', ...kindNames, 'provable'],
+  results.map((r) => [
+    r.backend,
+    ...kindNames.map((n) => conRate(r, n)),
+    r.provable ? 'yes' : 'NO',
+  ]),
+);
+
+// Latency distribution under concurrency, over committed ops only (ms; p99 reads "spend's worst 1% of
+// committed ops"). A fat p99/max beside a healthy p50 is the contention a best-of-N mean would smooth
+// away — the stalls a stress bench exists to expose.
+printTable(
+  `Concurrent latency over committed ops — ms (p50 / p99 / max per kind; lower is better)`,
+  ['backend', ...kindNames.map((n) => `${n} p50·p99·max`)],
+  results.map((r) => [
+    r.backend,
+    ...kindNames.map((n) => {
+      const l = kindOf(r, n)?.con.latency;
+      return l ? `${ms(l.p50)} · ${ms(l.p99)} · ${ms(l.max)}` : 'n/a';
+    }),
+  ]),
+);
+
+// Surface what did NOT commit under concurrency, split by cause — never a blanket "deadlock". Each line
+// names the rejections (data, no money moved), the throws past the retry budget (with the REAL class +
+// driver code), the retries withTransientRetry absorbed, and — authoritatively — the deadlocks the
+// ENGINE itself detected (counter Δ). App-side throws are what surfaced; the DB counter is ground truth.
+for (const r of results) {
+  for (const k of r.kinds) {
+    const c = k.con;
+    const surfaced = c.rejected > 0 || c.threw > 0 || c.duplicate > 0;
+    const contended =
+      c.retries.retries > 0 || (c.dbCounters?.deadlocks ?? 0) > 0;
+    if (!surfaced && !contended) continue;
+    const bits: string[] = [];
+    if (c.rejected > 0)
+      bits.push(`rejected ${c.rejected} (${hist(c.rejectReasons)})`);
+    if (c.threw > 0) bits.push(`threw ${c.threw} (${hist(c.throwClasses)})`);
+    if (c.duplicate > 0) bits.push(`duplicate ${c.duplicate}`);
+    if (c.retries.retries > 0)
+      bits.push(
+        `retries ${num(c.retries.retries)} (recovered ${num(c.retries.recovered)}, exhausted ${num(c.retries.exhausted)})`,
+      );
+    bits.push(
+      c.dbCounters
+        ? `engine-detected deadlocks ${c.dbCounters.deadlocks}` +
+            (c.dbCounters.lockWaits > 0
+              ? ` + lock-waits ${c.dbCounters.lockWaits}`
+              : '')
+        : 'engine-detected deadlocks n/a',
+    );
+    console.warn(`  ${r.backend} ${k.name}: ${bits.join('  ·  ')}`);
+  }
+}
+
+// Cross-engine determinism: the same fixed sequence must reach the same Merkle root on every backend
+// that ran; a mismatch is a real correctness bug, so it is loud and flips the exit code. The reference
+// is in-memory when present, else any backend that ran (so two SQL engines are still compared when
+// in-memory is excluded). Fewer than two backends → nothing to compare, reported as "not run".
+if (results.length >= 2) {
+  determinismChecked = true;
+  const reference =
+    results.find((r) => r.backend === 'in-memory') ?? results[0]!;
+  const disagree = results.filter(
+    (r) => r.determinismRoot !== reference.determinismRoot,
+  );
+  if (disagree.length === 0) {
+    console.warn(
+      `\ncross-engine determinism: PASS — ${results.length} backends reached identical chain root ${reference.determinismRoot.slice(0, 16)}…`,
+    );
+  } else {
+    anyProveFailed = true;
+    determinismOk = false;
+    console.warn(
+      `\ncross-engine determinism: FAIL — ${reference.backend} root ${reference.determinismRoot.slice(0, 16)}… but ` +
+        disagree
+          .map((r) => `${r.backend}=${r.determinismRoot.slice(0, 16)}…`)
+          .join(', '),
+    );
+  }
+} else {
+  console.warn(
+    `\ncross-engine determinism: not run — fewer than two backends produced a root to compare.`,
+  );
+}
+
+const curve = await integrityCurve();
 printTable(
   'Integrity cost vs ledger size — in-memory, ms (lower is better)',
   ['postings', 'accounts', 'prove()', 'seal', 'verify'],
-  curve,
+  curve.map((c) => [
+    num(c.postings),
+    num(c.accounts),
+    ms(c.prove),
+    ms(c.seal),
+    ms(c.verify),
+  ]),
 );
 console.warn('');
 console.warn(
@@ -382,6 +600,35 @@ console.warn(
 );
 console.warn('full re-prove — O(postings) — cannot keep up as history grows.');
 
-// Open SQL pools keep the event loop alive. This is a run-once script, so exit explicitly.
+await emitJson(cfg, {
+  config: {
+    ops: cfg.ops,
+    reps: cfg.reps,
+    warmup: cfg.warmup,
+    concurrency: cfg.concurrency,
+    mode: cfg.mode,
+    gates: cfg.gates,
+    connsPerOp: cfg.connsPerOp,
+    poolHeadroom: cfg.poolHeadroom,
+    backends: cfg.backends,
+  },
+  // Each backend's `kinds[].con` carries the full taxonomy, latency, retry pressure, and deadlock Δ, so
+  // the JSON is as complete as the table.
+  throughput: results,
+  // Run-level verdicts a CI job can assert on. `provable` requires at least one backend to have completed;
+  // `crossEngineDeterministic` is agreed/disagreed, or null when fewer than two backends were compared.
+  provable: results.length > 0 && results.every((r) => r.provable),
+  crossEngineDeterministic: determinismChecked ? determinismOk : null,
+  integrityCurve: curve,
+});
+
+// Fail loudly: exit non-zero when a prove gate failed, a backend errored mid-run, or the roots
+// disagreed, so a broken (or empty) run can never read as a pass. Exit explicitly since open SQL pools
+// would otherwise keep the event loop alive.
+if (anyProveFailed) {
+  console.warn(
+    '\nFAIL: a prove gate, a mid-run backend error, or the cross-engine determinism check did not pass — see above. Exiting non-zero.',
+  );
+}
 // eslint-disable-next-line n/no-process-exit
-process.exit(0);
+process.exit(anyProveFailed ? 1 : 0);
