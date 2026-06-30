@@ -119,14 +119,10 @@ function defaultClock(): Clock {
   return { now: () => 0 };
 }
 
-// Starting hash for a new account's chain, as lowercase hex. GENESIS is 32 zero bytes, so
-// this is 64 zeros.
 let GENESIS_HEX = toHex(GENESIS);
 
 // --- Ledger store -----------------------------------------------------------------
 
-// One posting as stored in the append-only log, the source of truth for statement and
-// timeline reads.
 interface StoredPosting {
   txnId: string;
   legs: ReadonlyArray<Leg>;
@@ -151,12 +147,9 @@ function isKnownAccount(account: AccountRef, registered: Set<string>): boolean {
   return suffix === 'spendable' || suffix === 'earned' || suffix === 'promo';
 }
 
-// Mutable state of one ledger store, grouped so the helpers below can live at module scope
-// (taking it as a parameter) rather than nested in the factory.
 interface LedgerState {
   journal: Journal;
 
-  // Every posting, in the order it was appended.
   log: StoredPosting[];
 
   // Balance per account in minor units (cents), kept current as postings apply so a balance
@@ -179,8 +172,6 @@ interface LedgerState {
   lotIndexByAccount: Map<AccountRef, number[]>;
 }
 
-// One account's hash-chain step for a posting: the account, its head before (prevHash) and
-// after (hash).
 type Link = { account: AccountRef; prevHash: string; hash: string };
 
 /**
@@ -317,8 +308,7 @@ function undoPosting(
   undo: PostingUndo,
 ): void {
   state.log.pop();
-  // This was the most recent posting (just popped), so its index sits at the end of each lotted
-  // account's list; pop it back off, dropping an emptied list.
+
   for (let account of undo.lotted) {
     let positions = state.lotIndexByAccount.get(account);
     if (positions !== undefined) {
@@ -353,8 +343,7 @@ function createLedgerStore(deps: {
   let state: LedgerState = {
     journal: createJournal(),
     log: [],
-    // Kept current as postings apply (`balanceDelta` from ledger.ts gives each entry's effect),
-    // so a balance read is a single map lookup.
+
     balances: new Map(),
     heads: new Map(),
     // Seeded from the platform accounts so they're accepted immediately.
@@ -799,8 +788,7 @@ function createInboxStore(): InboxStore & Participant {
     },
     deadLetter: async (id, reason, _options?: Options) => {
       let entry = rows.get(id);
-      // Does nothing for a missing or already-terminal row, mirroring the outbox and saga stores.
-      // Flipping the status to 'dead' keeps `claimInbound` from handing this poison event back again.
+
       if (!entry || entry.status !== 'pending') {
         return;
       }
@@ -913,8 +901,7 @@ function createSagaStore(): SagaStore & Participant {
       }
       let prior = { ...saga };
       journal.record(() => rows.set(id, prior));
-      // Flip to FAILED and record the failure reason on the saga itself, so the terminal outcome
-      // travels with the record instead of a side map.
+
       rows.set(id, { ...saga, state: 'FAILED', reason });
     },
   };
@@ -956,8 +943,7 @@ function createEntitlementStore(deps: {
       rows.set(key, { attrs: { ...attrs }, revoked: false });
     },
     revoke: async (userId, sku, _options?: Options) => {
-      // Soft-deletes by keeping the row and flipping `revoked`. It does nothing, and records no
-      // undo, for an absent or already-revoked row, so refund and clawback can call it idempotently.
+
       let key = keyOf(userId, sku);
       let row = rows.get(key);
       if (!row || row.revoked) {
@@ -967,10 +953,7 @@ function createEntitlementStore(deps: {
       rows.set(key, { ...row, revoked: true });
     },
     owns: async (userId, sku, _options?: Options) => {
-      // Ownership requires a live (non-revoked) row that has not expired. The expiry check is
-      // inclusive of `expiresAt`. The item is still owned exactly at that time, and no longer owned
-      // once the clock is past it. A row with no `expiresAt` never expires. Read-only, and it does
-      // not auto-purge expired rows.
+// Expiry check is inclusive of `expiresAt`; null `expiresAt` never expires.
       let row = rows.get(keyOf(userId, sku));
       if (!row || row.revoked) {
         return false;
@@ -1083,10 +1066,8 @@ function createPromoStore(): PromoStore & Participant {
   return {
     journal,
     open: async (grant, _options?: Options) => {
-      // Opening the same grant twice does nothing the second time, never overwriting the first
-      // row. SagaStore.open and SubscriptionStore.open replace an existing row with the same id,
-      // but here the grant id equals its posting's transaction id, so re-opening must leave the
-      // existing grant untouched.
+// Grant id equals its posting's txnId, so re-opening must leave the first row untouched (unlike
+// SagaStore/SubscriptionStore.open, which replace).
       if (rows.has(grant.id)) {
         return;
       }
@@ -1107,8 +1088,7 @@ function createPromoStore(): PromoStore & Participant {
       return due.slice(0, limit);
     },
     markReversed: async (id, _options?: Options) => {
-      // Does nothing for a missing or already-reversed row, using the same read-modify guard the
-      // saga and outbox dead-letters use, so re-running the sweep over one grant is harmless.
+
       let grant = rows.get(id);
       if (!grant || grant.reversed) {
         return;
@@ -1133,20 +1113,16 @@ function createPromoStore(): PromoStore & Participant {
 // history. Still mirrors the SQL adapters' windowed `SUM(amount) WHERE at > cutoff` and reproduces
 // `windowedVelocity` exactly — same boundary, same windowStart.
 
-// One subject's sliding-window state. `attempts` holds the attempts in `at` (clock) order, the order
-// inserted; entries before `head` have aged out and been subtracted from `sumMinor`. `sumMinor` is
-// the sum of the live tail `attempts[head..]` — the windowed spend — maintained as attempts are added
-// and pruned rather than recomputed on each read.
+// `sumMinor` = sum of the live tail `attempts[head..]`; entries before `head` have aged out and been
+// subtracted.
 type TrustWindow = { attempts: Attempt[]; head: number; sumMinor: bigint };
 
 function createTrustStore(clock: Clock, windowMs: number): TrustStore {
   let bySubject = new Map<string, TrustWindow>();
   let seenAttempts = new Set<string>();
 
-  // Appends an attempt to its subject's window, deduplicated on idempotency key so a genuine retry
-  // isn't counted twice. `at` comes from the clock at check time, which only moves forward, so the
-  // appended attempt is the newest and the window stays ordered by `at`. Its amount joins `sumMinor`
-  // here; pruning subtracts it later, once it ages out. Both `bump` and `record` use it.
+  // `at` comes from the clock (only moves forward), so the appended attempt is the newest and the
+  // window stays ordered by `at` — which `measure`'s prefix-pruning relies on.
   let insert = (subject: string, attempt: Attempt): void => {
     if (seenAttempts.has(attempt.idempotencyKey)) {
       return;
@@ -1161,12 +1137,8 @@ function createTrustStore(clock: Clock, windowMs: number): TrustStore {
     window.sumMinor += attempt.amount.minor;
   };
 
-  // Drops the attempts that have aged out (`at <= cutoff`) off the front, subtracting each from
-  // `sumMinor`, then reads the velocity off the maintained totals. Attempts are ordered by `at`, so
-  // the expired ones are always a prefix; this advances `head` past just those and never scans the
-  // live tail. The consumed prefix is compacted away once it dominates the array, so memory stays
-  // bounded to the live window. `windowStart` is the oldest attempt still in the window, matching
-  // `windowedVelocity`.
+  // Expired attempts are always a prefix (ordered by `at`), so advance `head` past just those and
+  // never scan the live tail; compact the consumed prefix once it dominates so memory stays bounded.
   let measure = (subject: string, now: number): Velocity => {
     let window = bySubject.get(subject);
     let cutoff = now - windowMs;
@@ -1210,9 +1182,7 @@ function createTrustStore(clock: Clock, windowMs: number): TrustStore {
 
 // --- Checkpoint store -------------------------------------------------------------
 
-// Stores checkpoints, the periodic signed snapshots of the ledger's state. It is append-only and
-// never part of a money transaction, so a rollback can't delete a checkpoint that was already
-// recorded.
+// Append-only and never part of a money transaction, so a rollback can't delete a recorded checkpoint.
 function createCheckpointStore(): CheckpointStore {
   let rows: Checkpoint[] = [];
   return {
@@ -1267,8 +1237,7 @@ export function memoryStore(deps?: {
 }): Store {
   let digest = deps?.digest ?? defaultDigest();
   let clock = deps?.clock ?? defaultClock();
-  // Rolling window the trust store applies when summing a subject's recent attempts. Defaults to
-  // one hour (matching config's default); the real composition passes config.velocityWindowMs.
+
   let velocityWindowMs = deps?.velocityWindowMs ?? 60 * 60_000;
 
   let ledger = createLedgerStore({ digest, clock });

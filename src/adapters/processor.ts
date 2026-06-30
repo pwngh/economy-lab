@@ -94,8 +94,6 @@ async function submitPayout(
     });
   }
 
-  // Read the body before checking status, so a non-2xx error can carry it. A mid-download
-  // drop is the same kind of network problem as a failed request, so it is retryable.
   let body: string;
   try {
     body = await response.text();
@@ -164,8 +162,6 @@ function parseProviderRef(body: string): string {
 
 // --- Local helpers ----------------------------------------------------------------
 
-// Request headers: JSON content-type, plus an Authorization header when an API key is
-// configured. The key goes only here, never into an error's detail.
 function headersFor(config: HttpProcessorConfig): Record<string, string> {
   let headers: Record<string, string> = { 'content-type': 'application/json' };
   if (config.apiKey !== undefined) {

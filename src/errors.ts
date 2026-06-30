@@ -155,7 +155,6 @@ export class EconomyError extends Error {
   }
 }
 
-/** Builds an {@link EconomyError} to throw when something has actually gone wrong. */
 export function fault(
   code: string,
   message: string,

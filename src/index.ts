@@ -44,7 +44,6 @@ export { memoryStore } from '#src/adapters/memory.ts';
 // memoryCache: in-process read-through cache, the zero-infra counterpart to the Redis adapter.
 export { memoryCache } from '#src/adapters/memory-cache.ts';
 
-// createWorker builds the background sweep loop from a store + worker context.
 export { createWorker } from '#src/worker/index.ts';
 
 // Account-naming helpers. spendable/earned/promo/currency build account ids; SYSTEM holds the
@@ -52,7 +51,6 @@ export { createWorker } from '#src/worker/index.ts';
 // (a user account id looks like `usr_…:<kind>`).
 export { spendable, earned, promo, currency, SYSTEM } from '#src/accounts.ts';
 
-// loadConfig reads and validates settings from env vars; Config is the resulting settings object.
 export { loadConfig } from '#src/config.ts';
 
 export type { Economy } from '#src/economy.ts';

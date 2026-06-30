@@ -112,8 +112,6 @@ async function driveSeal(
   });
 }
 
-// Reports whether the ledger has no accounts. Stops after the first head, so it never loads the
-// full list.
 async function isEmpty(store: Store): Promise<boolean> {
   for await (let _head of store.ledger.heads()) {
     return false;

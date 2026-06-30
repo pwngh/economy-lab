@@ -84,7 +84,7 @@ export async function drainInbox(
 // Submits one stored Operation and records the outcome in the tally. A committed or duplicate
 // Outcome marks the row 'applied'. A `rejected` Outcome is a terminal business "no" (e.g.
 // INSUFFICIENT_FUNDS) that retrying cannot fix, so it dead-letters the row rather than retrying the
-// same doomed apply every sweep. A thrown fault is the retryable case and goes to `recordFailure`,
+// same apply that will fail every sweep. A thrown fault is the retryable case and goes to `recordFailure`,
 // which bumps-and-retries or dead-letters at the cap rather than re-throwing.
 async function applyOne(
   store: Store,

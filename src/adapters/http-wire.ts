@@ -33,8 +33,6 @@ import type {
   Velocity,
 } from '#src/ports.ts';
 
-// The wire form of one posting leg. It carries the account plus the amount as a decimal string
-// that also names the currency, such as `'CREDIT:12.34'`.
 type WireLeg = { account: string; amount: string };
 
 // Each account keeps a tamper-evident hash chain over its postings. Each entry's hash covers the
@@ -150,7 +148,7 @@ export let encodeWire = {
   saga: (saga: Saga): unknown => ({
     ...saga,
     reserve: encodeAmount(saga.reserve),
-    // The terminal settle outcome rides the wire as an encoded amount (or null before settlement),
+    // The terminal settle outcome is sent as an encoded amount (or null before settlement),
     // decoded back to an Amount in decodeWire.saga below.
     payoutUsd: saga.payoutUsd === null ? null : encodeAmount(saga.payoutUsd),
   }),

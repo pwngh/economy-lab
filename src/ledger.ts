@@ -84,7 +84,7 @@ export async function lockAll(
 
 /**
  * Validates a posting, then writes it. Four pre-write checks (currency match, balanced,
- * accounts exist, no user overdraft) are a courtesy second line of defense; the database
+ * accounts exist, no user overdraft) are a redundant second line of defense; the database
  * enforces them too. Only the write advances each account's hash chain and running balances.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/ Accounts & double-entry} for the posting model these checks enforce.
@@ -207,7 +207,7 @@ function assertSingleCurrencyPerLeg(posting: Posting): void {
 
 // A posting balances when leg amounts sum to zero per currency; any nonzero total is rejected.
 //
-// Courtesy pre-check, not the enforcer. Conservation is enforced by the database (PG: a deferred
+// Redundant pre-check; not the enforcer. Conservation is enforced by the database (PG: a deferred
 // constraint trigger on legs; MySQL: the assert inside post_entry plus revoked direct DML; see
 // db/*-schema.sql). The app never constructs an unbalanced posting, so this exists only to fail fast
 // with a clear fault rather than a raw engine error. It cannot let through anything the engine would.

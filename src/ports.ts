@@ -460,10 +460,7 @@ export interface OutboxStore {
  * A transactional inbox: the inbound mirror of {@link OutboxStore}. A verified provider event,
  * already mapped to the {@link Operation} it should apply, is saved in the same database
  * transaction as the webhook ingress that claimed it, then a separate apply worker submits each
- * pending operation and marks the row applied. An inbound event is never applied without being
- * recorded, nor recorded without eventually being applied (or dead-lettered). Where the outbox is
- * outbound — a committed money move emits an event to deliver — the inbox is inbound: a received
- * event drives a money move to post.
+ * pending operation and marks the row applied. An inbound event is recorded before it is applied, and a recorded event is eventually applied (or dead-lettered). The outbox is outbound: a committed money move emits an event to deliver. The inbox is inbound: a received event drives a money move to post.
  */
 export interface InboxStore {
   // Saves a verified inbound event to apply later. Called inside the webhook handler's transaction.

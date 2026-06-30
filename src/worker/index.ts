@@ -47,7 +47,7 @@ import type { ReconcileFeed, ReconcileSummary } from '#src/worker/reconcile.ts';
  * Names of the background jobs run each cycle, and the sole definition `SweepName` is derived from.
  * `as const` (not an enum) freezes the array and keeps the literal types.
  *
- * Array order is both run order and result order, and the order is load-bearing. `feeSweep` follows
+ * Array order is both run order and result order, and the order matters. `feeSweep` follows
  * `treasury` because one measures the surplus and the next moves it, so keep the pair adjacent.
  * `checkpointVerify` runs before `checkpoint` so it re-checks the old sealed snapshot before a fresh
  * one overwrites it; a just-taken snapshot always passes. `drainInbox` sits next to its outbound
@@ -144,7 +144,7 @@ export async function runSweeps(
     ),
     treasury: await isolate(() => sweepTreasury(store, ctx, { now })),
     // Moves the surplus the treasury sweep just measured into platform funds. Wrapped like every
-    // job, so realizeFees's refusal (money owed to users may never move) surfaces as a failed result.
+    // job, so when realizeFees rejects (money owed to users must not move) that surfaces as a failed result.
     feeSweep: await isolate(() => realizeFees(store, ctx, { now })),
     // Re-checks the previous sealed snapshot before `checkpoint` below overwrites it: that old
     // snapshot predates any tampering since it was sealed, so it catches it. A mismatch is recorded

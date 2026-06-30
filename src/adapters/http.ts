@@ -53,12 +53,9 @@ export type FetchLike = (request: Request) => Promise<Response>;
 
 /** Options for {@link httpStore}. */
 export type HttpStoreOptions = {
-  // Sends requests. It defaults to an in-process server over a fresh in-memory store, so
-  // requests stay inside this process.
+
   fetch?: FetchLike;
 
-  // Origin (scheme and host) that request URLs are built against. It only matters over a
-  // real network and is ignored for the in-process default.
   baseUrl?: string;
 };
 
@@ -148,9 +145,6 @@ function sessionLedger(
 }
 
 // --- Streamed reads ---------------------------------------------------------------
-
-// These are async iterables so a real backend could paginate. This in-process version
-// returns everything in one response and yields rows one by one.
 
 // Streams each account paired with the hash of its most recent entry. Each account has a
 // hash-chain of entries, and that latest hash is its "head".
@@ -608,8 +602,6 @@ async function runTransaction<T>(
   }
 }
 
-// Bundles the sub-stores a handler may use inside a transaction, all bound to the same
-// session. Trust and checkpoints are left out because they are never part of a transaction.
 function sessionUnit(
   transport: { fetch: FetchLike; baseUrl: string },
   session: string,

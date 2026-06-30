@@ -84,8 +84,7 @@ export async function proveEconomy(
     fold.custodialCreditMinor,
     ctx.rates.par('CREDIT'),
   );
-  // `TRUST_CASH` is the real USD the platform holds. Compare it to the USD needed to back all
-  // those credits. A shortfall is the gap between the two, and zero means fully backed.
+
   let trustCash = await store.ledger.balance(SYSTEM.TRUST_CASH, options);
   let shortfallMinor =
     trustCash.minor < required ? required - trustCash.minor : 0n;
@@ -230,8 +229,6 @@ function backingRequiredMinor(custodialCreditMinor: bigint, par: Rate): bigint {
   return (custodialCreditMinor * par.rate) / 10n ** BigInt(par.scale);
 }
 
-// True when debits and credits cancel to zero in every currency.
-// An empty ledger has nothing to add up, so it passes.
 function everyCurrencyBalances(
   signedByCurrency: Map<Currency, bigint>,
 ): boolean {
@@ -262,8 +259,6 @@ export function allInvariantsHold(report: ProveReport): boolean {
   );
 }
 
-// A time range wide enough to include every entry ever recorded, so a statement over it returns
-// an account's whole history. Times are epoch milliseconds, and the upper end is exclusive.
 let FULL_RANGE = {
   from: Number.MIN_SAFE_INTEGER,
   to: Number.MAX_SAFE_INTEGER,

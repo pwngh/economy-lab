@@ -78,12 +78,12 @@ export async function grantPromo(
 
 // Caps how far in the future a grant may expire, in milliseconds. Every grant must expire so the
 // sweep can reclaim unspent credit. This ceiling of five years stops a caller from minting an
-// effectively never-expiring grant through an absurd far-future timestamp.
+// effectively never-expiring grant with a far-future timestamp.
 let MAX_EXPIRY_AHEAD_MS = 5 * 365 * 24 * 60 * 60_000;
 
 // Requires a finite, whole-millisecond timestamp that is strictly after now and no further out than
 // the ceiling above, and returns it unchanged. Values from the wire can be NaN, Infinity, or
-// fractional. A past, zero, or negative expiry would immediately poison the reclaim sweep, which
+// fractional. A past, zero, or negative expiry would be immediately claimed by the reclaim sweep, which
 // claims any grant whose `expiresAt` has already passed. These are all caller or programming
 // mistakes, so it throws a MALFORMED fault rather than a "rejected" outcome.
 function futureExpiresAt(expiresAt: number, ctx: Ctx, label: string): number {

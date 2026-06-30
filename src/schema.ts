@@ -14,7 +14,7 @@
  * this code.
  *
  * Both SQL schema files seed a `schema_meta` row with this value. Startup reads it back and fails fast
- * on a mismatch (see {@link assertSchemaCurrent}), which turns a silent drift into a loud error.
+ * on a mismatch (see {@link assertSchemaCurrent}), so a drift is reported as an error instead of going undetected.
  *
  * Bump this AND the matching `insert into schema_meta` in BOTH schema files
  * (db/postgresql-schema.sql, db/mysql-schema.sql) in the same change, whenever a running database

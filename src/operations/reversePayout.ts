@@ -88,8 +88,6 @@ export async function reversePayout(
   return { status: 'committed', transaction };
 }
 
-// Loads the saga by id. The operator typed the id, so a missing saga is operator error. It throws
-// a fault rather than a normal "no", matching how `reverse` handles an unknown txnId.
 async function loadSaga(unit: Unit, sagaId: string): Promise<Saga> {
   let saga = await unit.sagas.load(sagaId);
   if (saga === null) {
@@ -154,8 +152,6 @@ function refuseLiveSubmitted(saga: Saga, ctx: Ctx): void {
   }
 }
 
-// Requires a non-blank reason so the reversal records why it happened, for audit. A missing or
-// whitespace-only reason is operator error, matching `reverse`.
 function assertReason(reason: string): void {
   if (reason.trim() === '') {
     throw fault(
@@ -166,8 +162,6 @@ function assertReason(reason: string): void {
   }
 }
 
-// On a lost guarded state change there's no ledger posting, but the `duplicate` result still has
-// to carry a transaction. Return an empty placeholder with no entries.
 function noopTransaction(): Transaction {
   return { id: '', postedAt: 0, legs: [], links: [] };
 }

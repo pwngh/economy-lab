@@ -51,7 +51,7 @@ export async function handleCancelSubscription(
 
 // Requires a non-blank subscription id. A blank or whitespace-only id is malformed client
 // input, so it throws a client error up front rather than reaching the store. Passing it to
-// the store would degrade it into the routine UNKNOWN_SUBSCRIPTION "no" answer. A non-blank id
+// the store would turn it into an UNKNOWN_SUBSCRIPTION result. A non-blank id
 // with no matching record still flows through to that UNKNOWN_SUBSCRIPTION outcome below.
 function assertSubscriptionId(subscriptionId: string): void {
   if (subscriptionId.trim() === '') {

@@ -158,8 +158,6 @@ function planSpend(price: Amount, promoBalance: Amount): SpendPlan {
   };
 }
 
-// Build the debit/credit lines: one set for the promo-funded part, one for the spendable-funded
-// part. Each set balances on its own (debits and credits sum to zero), so the whole posting does.
 function buildSpendLegs(
   operation: Extract<Operation, { kind: 'spend' }>,
   plan: SpendPlan,
@@ -236,7 +234,7 @@ function distributeEarned(
   for (let recipient of recipients) {
     let share = (amount.minor * BigInt(recipient.shareBps)) / 10_000n;
     distributed += share;
-    // A share that rounds down to zero adds no leg (a zero-amount leg is a no-op the ledger drops).
+
     if (share > 0n) {
       legs.push(
         credit(earned(recipient.sellerId), toAmount(amount.currency, share)),
@@ -267,8 +265,7 @@ function saleOf(
   return {
     orderId: operation.orderId,
     buyerId: operation.buyerId,
-    // Whoever received the item (buyer or gift recipient), so a refund revokes the right user's
-    // ownership. `giftTo` was already validated non-blank in the handler.
+
     recipientId: operation.giftTo ?? operation.buyerId,
     sku: operation.sku,
     price: operation.price,

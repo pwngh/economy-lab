@@ -13,7 +13,7 @@ import type { Cache, Clock } from '#src/ports.ts';
 
 interface Entry {
   value: string;
-  // Epoch ms after which the entry is gone, or null when it never expires.
+
   expiresAt: number | null;
 }
 

@@ -36,8 +36,6 @@ export interface ProcessorRecord {
   amount: Amount;
   providerRef: string;
 
-  // When the processor cleared this event, in epoch milliseconds. The window filter
-  // compares against this field.
   settledAt: number;
 }
 
@@ -48,23 +46,19 @@ export interface ProcessorRecord {
 export interface LedgerRecord {
   kind: ReconcileKind;
 
-  // The same shared reference the processor carries, so the two records join on it. The
-  // ledger copies it in from the event when it writes the entry.
   matchKey: string;
 
   amount: Amount;
   txnId: string;
 
-  // When this entry was committed to the ledger, in epoch milliseconds. The window filter
-  // compares against this field.
   postedAt: number;
 }
 
 /**
  * Names the ways the two sides can disagree.
  *
- * - processor_orphan: the processor cleared money with no matching ledger entry. This is
- *   dangerous, because real money moved but nothing is on our books.
+ * - processor_orphan: the processor cleared money with no matching ledger entry. Real money
+ *   moved but nothing is on our books.
  * - ledger_orphan: a ledger entry the processor never cleared. This is either stuck money
  *   or an entry that should not exist.
  * - amount_drift: both sides exist for the event but the amounts differ.
@@ -100,20 +94,17 @@ export interface Discrepancy {
  * fields summarize that list. `reconciled` is true when no mismatch was found.
  */
 export interface ReconcileReport {
-  // The time window that was reconciled.
+
   window: Range;
 
   reconciled: boolean;
 
-  // How many events matched on both sides with equal amounts.
   matched: number;
 
-  // How many records each side contributed within the window.
   processorCount: number;
 
   ledgerCount: number;
 
-  // The count per discrepancy kind (see DiscrepancyKind), summarizing the list below.
   processorOrphans: number;
 
   ledgerOrphans: number;
@@ -123,7 +114,6 @@ export interface ReconcileReport {
   discrepancies: ReadonlyArray<Discrepancy>;
 }
 
-/** Holds the two sides to compare: the processor's settled records and the ledger's own. */
 export interface ReconcileInputs {
   processor: ReadonlyArray<ProcessorRecord>;
 
@@ -134,7 +124,7 @@ export interface ReconcileInputs {
  * Compares processor records against ledger records for one window and reports mismatches. The
  * caller may over-supply; only records inside the half-open window count (a record exactly on `to`
  * belongs to the next window). Two records match on the same kind and matchKey. Every record must be
- * accounted for exactly once and the reconciler must never silently drop one, so `report` self-checks
+ * accounted for exactly once and the reconciler must not drop one, so `report` self-checks
  * that the counts reconstruct both sides.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how reconciliation runs on a schedule.
@@ -151,8 +141,6 @@ export function reconcile(
   return report(window, processor, ledger, match);
 }
 
-// The intermediate match result. Discrepancies are in discovery order, and `report` sorts
-// them into the final stable order.
 type Match = { matched: number; discrepancies: Discrepancy[] };
 
 function matchSides(
@@ -209,8 +197,6 @@ function collectLedgerOrphans(
   }
 }
 
-// Sorts discrepancies into stable order and assembles the report. The counts come from that
-// same sorted list, so they cannot disagree with it.
 function report(
   window: Range,
   processor: ReadonlyArray<ProcessorRecord>,
@@ -248,9 +234,8 @@ function report(
 // ledger record. Both sides must therefore reconstruct: matched + drifts + processorOrphans
 // === processorCount, and the same for the ledger. If either check fails, the matcher
 // dropped or double-counted a record and the report cannot be trusted. Throwing here is
-// safer than emitting a quietly-wrong reconciliation, which is the one thing a reconciler
-// must never do. The equality holds by construction today, and this is the regression guard
-// that keeps it so.
+// safer than returning a wrong reconciliation. The equality holds by construction today, and
+// this is the regression guard that keeps it so.
 function assertAccountedFor(counts: {
   matched: number;
   amountDrifts: number;
@@ -292,10 +277,10 @@ function withinWindow<T>(
 }
 
 // Buckets the ledger records by key, keeping EVERY record per key in first-seen order.
-// matchKey is meant to be a unique join reference, so a repeated key is the "shouldn't
-// happen" a reconciler exists to catch. A repeated key keeps all its records, so
+// matchKey is meant to be a unique join reference, so a repeated key should not occur and is
+// the kind of mismatch the reconciler catches. A repeated key keeps all its records, so
 // matchProcessorSide pairs each with a distinct processor record and any surplus still
-// surfaces as a ledger orphan. Nothing is silently dropped. The bug this replaced kept only
+// surfaces as a ledger orphan. No record is dropped. The bug this replaced kept only
 // the first record per key and lost the rest.
 function indexByKey(
   ledger: ReadonlyArray<LedgerRecord>,
@@ -313,8 +298,6 @@ function indexByKey(
   return index;
 }
 
-// Combines kind with the match reference so a buy and a payout that share a reference do not
-// collide.
 function keyOf(kind: ReconcileKind, matchKey: string): string {
   return `${kind}:${matchKey}`;
 }

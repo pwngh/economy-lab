@@ -283,8 +283,8 @@ async function runRollingBackRejections(step: Step): Promise<Outcome> {
   return outcome;
 }
 
-// The largest amount, in minor units, any single operation may move. It is generous, but it blocks
-// overflow-scale values from a typo or a hostile caller.
+// The largest amount, in minor units, any single operation may move. The limit is high enough for
+// legitimate operations but blocks overflow-scale values from a typo or a hostile caller.
 let MAX_OP_AMOUNT_MINOR = 1_000_000_000_000_000n;
 
 // Rejects a malformed operation before any work begins. The check lives here, caught once, rather
@@ -941,7 +941,6 @@ let EVENTS: Partial<
   },
 };
 
-// Builds the default payload for kinds with nothing to summarize beyond the txn id.
 function txnData(
   _operation: Operation,
   outcome: Committed,

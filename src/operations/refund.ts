@@ -189,14 +189,11 @@ function reversalLegs(coverage: Coverage): Leg[] {
   return legs;
 }
 
-// Builds a leg that raises `account`'s balance by `amount`. It picks the side from the account's
-// normal side: debit-normal accounts rise on a debit, and the rest rise on a credit.
 function raiseLeg(account: AccountRef, amount: Amount): Leg {
   let sign = isDebitNormal(account) ? 1n : -1n;
   return { account, amount: toAmount(amount.currency, amount.minor * sign) };
 }
 
-// The mirror of raiseLeg. It lowers `account`'s balance by `amount` using the opposite side.
 function lowerLeg(account: AccountRef, amount: Amount): Leg {
   let sign = isDebitNormal(account) ? -1n : 1n;
   return { account, amount: toAmount(amount.currency, amount.minor * sign) };
@@ -253,9 +250,9 @@ function refundMeta(
 }
 
 // Requires a non-blank `orderId`. A blank or whitespace-only value is malformed input the central
-// guard cannot catch, because it carries no order to look up. Left unchecked it would degrade to a
-// silent UNKNOWN_ORDER rejection that hides the malformed request, so this throws a fault instead
-// to surface the client error. A genuinely unknown but non-blank orderId still flows through to the
+// guard cannot catch, because it carries no order to look up. Left unchecked it would return a
+// UNKNOWN_ORDER rejection that does not distinguish the malformed request from a genuine lookup
+// miss, so this throws a fault instead to report the client error. A genuinely unknown but non-blank orderId still flows through to the
 // UNKNOWN_ORDER rejection.
 function requireOrderId(orderId: string): void {
   if (orderId.trim() === '') {

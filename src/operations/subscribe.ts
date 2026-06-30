@@ -206,8 +206,8 @@ function planCharge(price: Amount, promoBalance: Amount): ChargePlan {
 // funds check only runs for `spend`, so subscribe checks here. Short balance returns an
 // INSUFFICIENT_FUNDS rejection (a business "no" as data), sufficient returns null.
 //
-// A courtesy pre-check, not the enforcer: the database's per-user non-negative CHECK actually
-// blocks overdrafts. This just returns a kind rejection before the engine would reject the entry.
+// This is a pre-check, not the enforcer of overdrafts: the database's per-user non-negative CHECK
+// is what blocks them. This just returns a rejection before the engine would reject the entry.
 async function screenSpendable(
   unit: Unit,
   userId: string,

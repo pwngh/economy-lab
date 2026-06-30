@@ -177,8 +177,8 @@ function payoutFee(gross: Amount, feeBps: number): Amount {
   return toAmount('USD', (gross.minor * BigInt(feeBps)) / 10_000n);
 }
 
-// Fails loudly when the CAS did not take (another worker or settle got there first), rolling back the
-// two entries and the queued event instead of paying the seller twice. Safe to retry: a redelivered
+// Throws when the CAS did not take (another worker or settle got there first), rolling back the
+// two entries and the queued event so the seller is not paid twice. Safe to retry: a redelivered
 // settle reloads the saga, finds it no longer SUBMITTED, and is turned away at `refuseNotSubmitted`
 // before posting anything. Same guard as the worker's `assertAdvanced`.
 // See https://economy-lab-docs.pages.dev/economy/concepts/lifecycles/ for how a compare-and-set

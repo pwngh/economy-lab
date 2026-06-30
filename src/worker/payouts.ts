@@ -132,7 +132,7 @@ async function deadLetter(
     await lockAll(unit.ledger, [SYSTEM.PAYOUT_RESERVE, earned(saga.userId)]);
     // Flip to FAILED only if the saga is still in the state we read, recording the failure reason in
     // the same write so it is read straight off the saga, not re-derived from posting meta. A false
-    // return means a concurrent settle or reverse got there first, so leave the books to the winner.
+    // return means a concurrent settle or reverse advanced the saga first, so leave the books to that actor.
     let advanced = await unit.sagas.advance(saga.id, saga.state, 'FAILED', {
       updatedAt: ctx.clock.now(),
       reason,

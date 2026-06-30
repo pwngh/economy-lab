@@ -219,7 +219,7 @@ export async function merkleRoot(
 
 /**
  * Takes a tamper-evident snapshot, called a "checkpoint". It first proves the chain re-derives, then
- * signs the Merkle root over every head and saves it. Proof comes first. On a break this throws a
+ * signs the Merkle root over every head and saves it. The proof runs before the signing. On a break this throws a
  * non-retryable CHAIN_BROKEN fault and persists nothing, so a signed root never attests to a tampered
  * ledger, and the caller sets the job aside for an operator rather than retrying. The save goes
  * through the checkpoint store, outside the money transaction, so a rolled-back operation cannot undo
@@ -284,8 +284,7 @@ export async function verifyCheckpoint(
   if (toHex(root) !== checkpoint.root) {
     return false;
   }
-  // Decode stored hex back to bytes so the signature is checked over the same root bytes
-  // recordCheckpoint signed.
+
   return deps.signer.verify(
     fromHex(checkpoint.root),
     fromHex(checkpoint.signature),
@@ -357,8 +356,7 @@ function nodePreimage(left: Uint8Array, right: Uint8Array): Uint8Array {
   return out;
 }
 
-// Drains the ledger's stream of (account, head) pairs into an array. Loading all at once is fine
-// because there is one pair per account, and a checkpoint covers all of them anyway.
+// Loading all at once is fine: one pair per account, and a checkpoint covers all of them anyway.
 async function collectHeadPairs(
   ledger: Ledger,
 ): Promise<ReadonlyArray<readonly [AccountRef, string]>> {

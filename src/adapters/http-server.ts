@@ -74,8 +74,6 @@ async function rollbackSession(session: Session): Promise<void> {
 
 // --- Ledger routes ----------------------------------------------------------------
 
-// Picks the ledger for a request. Session id 'root' means a read outside any transaction, so it
-// uses the backing store's ledger. Any other id uses the held transaction's ledger.
 function ledgerFor(
   backing: Store,
   sessions: Map<string, Session>,
@@ -193,8 +191,6 @@ function unitFor(
   return session === 'root' ? backing : sessions.get(session)!.unit;
 }
 
-// Runs one non-ledger sub-store call, such as sagas, idempotency, or entitlements. Looks up the
-// handler by its "<store>/<method>" key from the path. Throws if no such route exists.
 async function subStoreRoute(
   unit: Unit,
   store: string,
@@ -420,8 +416,7 @@ async function trustRoute(
     ...wireAttempt,
     amount: decodeWire.amount(wireAttempt.amount),
   } as Parameters<typeof backing.trust.bump>[1];
-  // `record` is the atomic record-and-measure the risk gate uses. Run it on the backing store
-  // (where per-subject serialization happens) and return the velocity wire-encoded, same as `read`.
+
   if (method === 'record') {
     let velocity = await backing.trust.record(body.subject as string, attempt);
     return { ...velocity, spent: encodeWire.amount(velocity.spent) };
@@ -461,14 +456,7 @@ async function replayRoute(
 
 // --- The request router -----------------------------------------------------------
 
-// Routes one request to its handler based on the first path segment. The recognized paths are:
-//   /tx/begin                       open a new held transaction
-//   /tx/<id>/commit | rollback      finish a held transaction
-//   /tx/<id>/<store>/<method>       a call inside a held transaction
-//   /trust/<method>                 a trust-accumulator call
-//   /checkpoints/<method>           a checkpoint call
-//   /replay/<method>                a webhook replay-dedup call
-//   /close                          shut the backing store down
+// @see https://economy-lab-docs.pages.dev/economy/reference/http-service
 async function dispatch(
   backing: Store,
   sessions: Map<string, Session>,

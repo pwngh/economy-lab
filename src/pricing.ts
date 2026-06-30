@@ -45,7 +45,7 @@ export function flatFee(): FeePolicy {
 // https://economy-lab-docs.pages.dev/economy/ports/pricing/ for how the fee comes off the top, the
 // net divides by share, and the rounding leftover joins revenue so no unit of price is lost.
 //
-// Load-bearing here: these are the credit lines only. Credits are stored negative, so the lines sum
+// These are the credit lines only. Credits are stored negative, so the lines sum
 // to -price. The spend handler adds the matching debit against the buyer's balance, which zeroes the
 // posting.
 function splitLegs(

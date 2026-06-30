@@ -122,8 +122,7 @@ function sagaOf(
     rateId,
     state: 'RESERVED',
     providerRef: null,
-    // Terminal-outcome fields, set only once the payout reaches SETTLED (payoutUsd) or FAILED
-    // (reason); null on a freshly requested payout.
+
     reason: null,
     payoutUsd: null,
     attempts: 0,

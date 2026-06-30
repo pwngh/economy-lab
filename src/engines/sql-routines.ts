@@ -92,18 +92,15 @@ export async function callFunction(
  * bigints are carried as strings so the JSON keeps full precision past 2^53.
  */
 export interface PostEntryArgs {
-  // The raw legs, one row per leg. Amounts are signed: a debit is positive, a credit is negative.
+  // Amounts are signed: a debit is positive, a credit is negative.
   legs: Array<{ account: string; currency: string; amount: string }>;
 
-  // One chain link per distinct account the posting touched.
   links: Array<{ account: string; prev_hash: string; hash: string }>;
 
   // The net change to each account's cached balance. Each delta is already `balanceDelta`-signed
   // and summed across that account's legs.
   balances: Array<{ account: string; currency: string; delta: string }>;
 
-  // The user accounts (`usr_…:<kind>`) to create on first use. System accounts are seeded by the
-  // schema, so they are never listed here.
   newAccounts: Array<{ id: string; kind: string; currency: string }>;
 }
 

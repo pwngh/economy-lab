@@ -50,8 +50,8 @@ export async function reverse(
   await extendLocks(unit, original.legs);
 
   // Stake the per-transaction key before posting so a txnId is reversed at most once. The first
-  // reverse claims it and posts the inverse. A second loses the claim and gets the first reversal's
-  // transaction back as a duplicate. This mirrors how refund and clawback stake
+  // reverse claims it and posts the inverse. A second finds the key already claimed and returns the
+  // first reversal's transaction as a duplicate. This mirrors how refund and clawback stake
   // `reversed:${orderId}`. The claim lives inside this posting's db transaction, so a rollback
   // releases it and a retry succeeds.
   let claimKey = reversalKey(operation.txnId);
@@ -66,8 +66,6 @@ export async function reverse(
     meta: reverseMeta(operation),
   });
 
-  // Record the reversal under the same key so a later reverse resolves to this transaction as
-  // its duplicate. Written inside the posting's transaction, so it only takes effect on commit.
   await unit.idempotency.record(claimKey, transaction);
 
   return { status: 'committed', transaction };
@@ -95,8 +93,8 @@ async function loadPosting(unit: Unit, txnId: string): Promise<Posting> {
 }
 
 // Rejects a txnId that names a reversal. A reversal must never be reversed. It would loop the same
-// money out and in with no net effect, and it would let an operator chain reversals to flip a
-// balance at will. A reversal records `kind: 'reverse'` in its metadata (see `reverseMeta`), so
+// money out and in with no net effect, and it would let an operator chain reversals to adjust a
+// balance by an arbitrary amount. A reversal records `kind: 'reverse'` in its metadata (see `reverseMeta`), so
 // this rejects any posting carrying that marker. This is an operator mistake, so it throws a fault,
 // the same as an unknown txnId.
 function assertNotReversal(

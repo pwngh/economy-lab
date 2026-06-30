@@ -168,9 +168,7 @@ async function measureBacking(
   };
 }
 
-// Converts a credit amount to its backing USD, rounding down. The rate is stored scaled by
-// 10^scale, so this multiplies by par.rate and then divides by 10^scale to undo the scaling.
-// This is the same conversion as the integrity check and the top-up and payout paths.
+// Same conversion as the integrity check and the top-up and payout paths.
 function requiredBackingMinor(custodialCreditMinor: bigint, par: Rate): bigint {
   return (custodialCreditMinor * par.rate) / 10n ** BigInt(par.scale);
 }
@@ -242,7 +240,7 @@ export type FeeSweepResult =
 
 // Enforces that the platform takes only its own money before posting: `amount` may not exceed
 // `sweepable`, the smaller of the cash surplus and matured revenue. A draw over the limit throws
-// COMMINGLING, a hard error rather than a returned "no", so the worker loop marks the run failed.
+// COMMINGLING, a hard error rather than a returned value, so the worker loop marks the run failed.
 // See https://economy-lab-docs.pages.dev/economy/concepts/solvency/ for why a sweep may take only the surplus and never users' money.
 function assertWithinSweepable(amount: Amount, sweepable: bigint): void {
   if (amount.minor <= sweepable) {
@@ -290,8 +288,7 @@ export async function sweepFees(
   }
 
   return store.transaction(async (unit) => {
-    // Claim the idempotency key before any read or posting, so a retry stops here. A failed
-    // claim means another run already swept this request.
+    // Claim before any read or posting, so a retry stops here.
     if (key !== undefined) {
       let claim = await unit.idempotency.claim(`sweep:${key}`);
       if (!claim.claimed) {
@@ -309,10 +306,8 @@ export async function sweepFees(
 
     assertWithinSweepable(amount, await sweepableCredit(store, ctx, unit));
 
-    // Convert swept credits to USD at par. Par is the peg that trust-cash is held against and
-    // the rate the surplus check uses, so the cash and credit sides stay reconciled. The payout
-    // rate is for paying sellers, not for realizing the platform's surplus, so it is not used
-    // here. Keep the rate so the CREDIT and USD entries below can be matched as one move.
+    // Use par, not the payout rate: par is the peg trust-cash is held against, so the cash and
+    // credit sides stay reconciled. Keep the rate so the two entries below match as one move.
     let rate = ctx.rates.par('CREDIT');
     let usd = convertFloor(amount, rate, 'USD');
 
@@ -463,9 +458,8 @@ async function surplusCredit(
   return trustInCredit - custodialCreditMinor;
 }
 
-// Converts USD back to CREDIT at par, rounding down. This reverses `requiredBackingMinor`,
-// which goes from CREDIT to USD. Both round down, so a round trip from credits to USD and back
-// lands at or below where it started.
+// Reverses `requiredBackingMinor` (CREDIT->USD). Both round down, so a credits->USD->credits
+// round trip lands at or below where it started.
 function usdToCredit(usdMinor: bigint, par: Rate): bigint {
   let factor = par.rate;
   if (factor === 0n) {

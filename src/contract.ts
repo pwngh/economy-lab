@@ -343,15 +343,15 @@ export interface Economy {
     // without inferring the state from an ECONOMY_PAUSED decline.
     status(): EconomyStatus;
     // Every account that has a balance row, streamed. A real ledger can hold many, so iterate and
-    // stop when you've seen enough rather than collecting blindly. Lets a reader enumerate accounts
+    // stop when you've seen enough rather than collecting them all. Lets a reader enumerate accounts
     // (and derive users) without tracking them itself. This is the prover's own enumeration.
     accounts(options?: Options): AsyncIterable<AccountRef>;
-    // Every payout saga, newest first, streamed (a busy economy can have many). This is the whole
-    // board: settled and failed payouts included, not only the due ones the worker claims. Lets a UI
+    // Every payout saga, newest first, streamed (a busy economy can have many). Includes settled
+    // and failed payouts, not only the due ones the worker claims. Lets a UI
     // render payout status without tracking minted payout ids itself. Delegates to `SagaStore.list`.
     payouts(options?: Options): AsyncIterable<Saga>;
-    // Every committed posting, newest first, streamed (a busy ledger can have many). The whole
-    // journal: user and worker postings alike, every account touched, not only the ones a given reader
+    // Every committed posting, newest first, streamed (a busy ledger can have many). Includes user
+    // and worker postings alike, every account touched, not only the ones a given reader
     // minted. Each posting carries its full legs, so a UI renders a row without a second lookup.
     // Delegates to `Ledger.list`.
     postings(options?: Options): AsyncIterable<Posting>;

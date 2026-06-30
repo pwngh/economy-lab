@@ -161,7 +161,7 @@ export function toTopUp(event: PurchaseEvent): Operation {
  * redelivers. `sagaId` names the payout to settle. `providerRef` and `providerAmount` are carried for
  * the audit trail only. The figures actually posted are the rate-derived ones `settlePayout` computes
  * from the saga's reserve, identical to the worker's settle, so the provider's reported amount is
- * recorded but never trusted as the posted figure. The actor is `system`, which `settlePayout`'s
+ * recorded but is not used as the posted figure. The actor is `system`, which `settlePayout`'s
  * privileged-only gate (RESTRICTED_TO_PRIVILEGED) requires.
  */
 export function toSettlePayout(event: PayoutSettledEvent): Operation {

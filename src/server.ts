@@ -172,7 +172,7 @@ async function submitRoute(
 // wired. With a webhook secret configured, the body is verified before the handler runs, so a forged
 // request never reaches code that changes balances. The checks run in this order: signature, then
 // freshness, then (only with a replay store) claiming the provider `eventId` last so a rejected
-// delivery never burns an id and blocks a later genuine redelivery. The order is load-bearing; keep
+// delivery does not record an id and block a later genuine redelivery. This order is required; keep
 // it as written. See https://economy-lab-docs.pages.dev/economy/reference/http-service/ for the gate.
 //
 // The raw bytes are read once. Verification, replay decode, and handler all work over that buffer.
@@ -227,7 +227,7 @@ async function webhookRoute(
     Math.abs(now - timestamp) > config.replayWindowMs
   ) {
     // Stale or replayed: 200 duplicate (no mutation) so the provider stops redelivering, not a 5xx
-    // that invites a retry storm.
+    // that triggers repeated retries.
     return jsonResponse(200, { status: 'duplicate' });
   }
 
@@ -283,11 +283,8 @@ async function replayGate(
   return null;
 }
 
-// Verifies an HMAC-SHA256 signature over the raw request bytes using Web Crypto. The hex
-// `x-signature` is decoded to bytes and checked with `crypto.subtle.verify`. That call compares in
-// constant time and returns true only on the right length and value, so a malformed or short
-// signature is a clean false rather than a thrown comparison. A non-hex signature fails decode and
-// is treated as a non-match.
+// `crypto.subtle.verify` compares in constant time and returns a clean false (never throws) on a
+// wrong length/value; a non-hex signature fails fromHex and is also treated as a non-match.
 async function verifyHmac(
   rawBytes: Uint8Array,
   signature: string,
@@ -309,14 +306,12 @@ async function verifyHmac(
   return crypto.subtle.verify('HMAC', key, provided, rawBytes);
 }
 
-// Returns the hex signature from the request, or '' when the header is absent. An absent signature
-// is a guaranteed mismatch, so it needs no special-casing.
+// Absent header -> '', a guaranteed mismatch, so it needs no special-casing.
 function signatureOf(request: Request): string {
   return request.headers.get(SIGNATURE_HEADER) ?? '';
 }
 
-// Builds a fresh Request carrying the already-read bytes as its body, copying the method, URL, and
-// headers. This lets the verified handler re-read the body the server consumed for verification.
+// Lets the verified handler re-read the body the server already consumed for verification.
 function rebuildRequest(request: Request, rawBytes: Uint8Array): Request {
   return new Request(request.url, {
     method: request.method,
@@ -325,10 +320,8 @@ function rebuildRequest(request: Request, rawBytes: Uint8Array): Request {
   });
 }
 
-// Provides the default clock for the freshness check when the caller supplies none, reading real
-// system time. It is defined here rather than imported from runtime.ts so this file depends only on
-// cross-runtime Fetch and Web APIs (Node, Bun, Deno, Cloudflare Workers) and pulls in no signing or
-// hashing setup. Tests and hosts override it with their own clock.
+// Defined here, not imported from runtime.ts, so this file pulls in no Node/signing/hashing deps and
+// stays cross-runtime (Node, Bun, Deno, Cloudflare Workers).
 let systemClock: Clock = { now: () => Date.now() };
 
 // --- Operation codec (money travels as a decimal string) --------------------------
@@ -353,9 +346,8 @@ function decodeOperation(body: unknown): Operation {
   return decoded as unknown as Operation;
 }
 
-// Converts one money field's decimal string into an Amount. A missing or non-string field is a
-// malformed-operation fault (wrong shape). A present-but-invalid string makes the decoder throw a
-// separate money fault, which keeps "wrong shape" and "wrong amount" distinct.
+// Non-string field -> malformed fault (wrong shape); a bad string -> a money fault (wrong amount).
+// Keeping the two distinct lets the caller tell a shape error from an amount error.
 function decodeAmountField(value: unknown, field: string): Amount {
   if (typeof value !== 'string') {
     throw malformed(
@@ -365,9 +357,8 @@ function decodeAmountField(value: unknown, field: string): Amount {
   return decodeWire.amount(value);
 }
 
-// Maps each operation kind to its money field names. Those are the only fields needing decimal-string
-// decoding; everything else stays plain JSON. Every valid kind has an entry, some empty, so a body
-// whose kind is missing from this map is rejected as malformed before it reaches submit.
+// Every valid kind has an entry (some empty), so this map also gates known-vs-unknown kinds: a body
+// whose kind is absent here is rejected as malformed before it reaches submit.
 const AMOUNT_FIELDS: Record<string, ReadonlyArray<string>> = {
   topUp: ['amount'],
   spend: ['price'],
@@ -426,18 +417,16 @@ const BAD_REQUEST_CODES = new Set<string>([
 
 // --- Local helpers ----------------------------------------------------------------
 
-// Turns anything thrown into an error response with the mapped status and only the error's message.
-// normalizeError wraps a non-EconomyError as a retryable storage failure, so an unexpected throw
-// goes out as a 503 with a generic message. Its stack trace and cause never reach the client.
+// normalizeError wraps a non-EconomyError as a retryable storage failure -> 503 with a generic
+// message; its stack trace and cause never reach the client.
 function faultResponse(error: unknown): Response {
   let normalized: EconomyError =
     error instanceof EconomyError ? error : normalizeError(error);
   return errorResponse(statusFor(normalized), normalized.message);
 }
 
-// Reads the request body and parses it as JSON. An empty or invalid-JSON body becomes a
-// malformed-operation fault, so the raw parser error never escapes and the bad-request verdict
-// stays here.
+// Empty or invalid-JSON body -> malformed fault, so the raw parser error never escapes and the
+// bad-request verdict stays here.
 async function readJson(request: Request): Promise<unknown> {
   let text = await request.text();
   if (text.length === 0) {

@@ -95,7 +95,7 @@ export async function maturedBalance(
 ): Promise<Amount> {
   let live = await ledger.balance(account, { signal: options.signal });
   let unit = currency(account);
-  // A zero or negative balance has no remaining lots, so nothing is cashable.
+
   if (live.minor <= 0n) {
     return zero(unit);
   }
@@ -229,8 +229,6 @@ export async function immatureBalance(
 
 // --- Which lots are left, then which have matured --------------------
 
-// A lot trimmed to the two fields the calculation needs: the amount and the moment it becomes
-// cashable. Trimming keeps each helper simple and computes maturity in one place.
 type Settled = { minor: bigint; maturesAt: number };
 
 // Reads every lot for the account, oldest first, reduced to Settled. The ledger only turns
@@ -296,9 +294,9 @@ function sumMatured(
 
 // --- Why this module computes maturity instead of trusting the lot ----------------
 //
-// Load-bearing caller rule: any handler issuing spendable credits must record the funding source on
-// the posting (a missing source falls back to the safe 'default' horizon, just less precise).
-// Maturity is (top-up time) + (source's required wait); we deliberately do not trust the lot's own
+// Caller rule this depends on: any handler issuing spendable credits must record the funding source on
+// the posting (a missing source falls back to the 'default' horizon, just less precise).
+// Maturity is (top-up time) + (source's required wait); it is computed here rather than read from the lot's own
 // `maturesAt`, which the ledger defaults to the top-up time (immediately cashable) when the posting
 // recorded no maturity.
 // See https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/ for the dated-lot model.

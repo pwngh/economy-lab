@@ -37,7 +37,7 @@ export interface Config {
   /** Max provider attempts for a single payout before the system gives up and reverses it. */
   maxPayoutAttempts: number;
 
-  /** Delivery attempts an outbox message gets before the relay dead-letters it as status 'failed'. The cap stops a poison event from wedging the queue forever. The relay dead-letters the message once `attempts` reaches this value. */
+  /** Delivery attempts an outbox message gets before the relay dead-letters it as status 'failed'. The cap stops a poison event from wedging the queue forever. */
   maxOutboxAttempts: number;
 
   /** Apply attempts an inbox event gets before the apply worker dead-letters it as status 'dead'. The cap stops a poison inbound event from wedging the queue forever. This is the inbound mirror of `maxOutboxAttempts`. */
@@ -61,7 +61,7 @@ export interface Config {
   velocityLimitMinor: bigint;
 
   /** Length (ms) of the rolling spending window for `velocityLimitMinor`. Only a subject's attempts
-   *  from the last `velocityWindowMs` count toward the limit. Each attempt ages out once it is older than the window. */
+   *  from the last `velocityWindowMs` count toward the limit. */
   velocityWindowMs: number;
 
   /**
@@ -146,7 +146,7 @@ export function loadConfig(env: EnvMap): Config {
     maxSubscriptionAttempts: toInt(env.MAX_SUBSCRIPTION_ATTEMPTS, 10),
     // One day: a payout stuck in SUBMITTED longer than this is force-failed as timed out.
     maxPayoutAgeMs: toInt(env.MAX_PAYOUT_AGE_MS, 24 * 60 * 60_000),
-    // Default is an example marketplace transaction fee of about 15.3%.
+
     platformFeeBps: toInt(env.PLATFORM_FEE_BPS, 1530),
     payoutFeeBps: toInt(env.PAYOUT_FEE_BPS, 150),
     velocityLimitMinor: toBigInt(env.VELOCITY_LIMIT_MINOR, 100_000n),
