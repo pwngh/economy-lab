@@ -71,10 +71,10 @@ DROP TABLE IF EXISTS postings;
 DROP TABLE IF EXISTS accounts;
 
 CREATE TABLE accounts (
-     id         VARCHAR(96)  PRIMARY KEY,
-     kind       VARCHAR(16)  NOT NULL,
-     currency   VARCHAR(8)   NOT NULL,
-     created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     id         VARCHAR(96)  PRIMARY KEY COMMENT 'Account id; platform:<name> or usr_<uuid>:<kind>.',
+     kind       VARCHAR(16)  NOT NULL COMMENT 'One of spendable, earned, promo, system.',
+     currency   VARCHAR(8)   NOT NULL COMMENT 'One of CREDIT or USD.',
+     created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.',
      CHECK (kind IN ('spendable', 'earned', 'promo', 'system')),
      CHECK (currency IN ('CREDIT', 'USD')),
      -- Lets legs carry a composite FK to (id, currency), so a leg's currency must match its account's.
@@ -93,19 +93,19 @@ INSERT INTO accounts (id, kind, currency) VALUES
      ('platform:opening_equity', 'system', 'CREDIT');
 
 CREATE TABLE postings (
-     id         VARCHAR(64) PRIMARY KEY,
-     meta       JSON        NOT NULL,
-     posted_at  BIGINT      NOT NULL,
-     seq        BIGINT      AUTO_INCREMENT UNIQUE,
-     created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP
+     id         VARCHAR(64) PRIMARY KEY COMMENT 'Transaction id, like txn_<uuid>.',
+     meta       JSON        NOT NULL COMMENT 'JSON metadata bag for the posting.',
+     posted_at  BIGINT      NOT NULL COMMENT 'Commit time in epoch milliseconds.',
+     seq        BIGINT      AUTO_INCREMENT UNIQUE COMMENT 'Auto-increment sequence giving postings a total order.',
+     created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
    );
 
 CREATE TABLE legs (
-     id         BIGINT       AUTO_INCREMENT PRIMARY KEY,
-     posting_id VARCHAR(64)  NOT NULL,
-     account_id VARCHAR(96)  NOT NULL,
-     currency   VARCHAR(8)   NOT NULL,
-     amount     BIGINT       NOT NULL,
+     id         BIGINT       AUTO_INCREMENT PRIMARY KEY COMMENT 'Auto-increment leg id in commit order.',
+     posting_id VARCHAR(64)  NOT NULL COMMENT 'Parent posting id; FK to postings.',
+     account_id VARCHAR(96)  NOT NULL COMMENT 'Account this leg debits or credits.',
+     currency   VARCHAR(8)   NOT NULL COMMENT 'One of CREDIT or USD; must match account.',
+     amount     BIGINT       NOT NULL COMMENT 'Signed minor units: debit positive, credit negative; never zero.',
      CHECK (amount <> 0),
      CHECK (currency IN ('CREDIT', 'USD')),
      CONSTRAINT legs_posting_fk FOREIGN KEY (posting_id) REFERENCES postings (id),
@@ -120,15 +120,15 @@ CREATE TABLE legs (
    );
 
 CREATE TABLE chain_links (
-     posting_id VARCHAR(64) NOT NULL,
-     account_id VARCHAR(96) NOT NULL,
-     prev_hash  CHAR(64)    NOT NULL,
-     hash       CHAR(64)    NOT NULL,
+     posting_id VARCHAR(64) NOT NULL COMMENT 'Posting that advanced this account chain; FK to postings.',
+     account_id VARCHAR(96) NOT NULL COMMENT 'Account whose hash chain this link extends; FK to accounts.',
+     prev_hash  CHAR(64)    NOT NULL COMMENT 'Previous chain hash, 64 lowercase hex; genesis is zeros.',
+     hash       CHAR(64)    NOT NULL COMMENT 'This link''s new chain hash, 64 lowercase hex.',
      -- The account's signed running balance after this link, the same figure post_entry writes into
      -- account_balances.balance, letting balance integrity compare a cached balance to its chain head in
      -- O(1). A maintained projection, not the source of truth (prove() re-sums). Rationale in
      -- db/postgresql-schema.sql (chain_links.balance_after).
-     balance_after BIGINT   NOT NULL DEFAULT 0,
+     balance_after BIGINT   NOT NULL DEFAULT 0 COMMENT 'Signed running balance right after this link; cached projection.',
      PRIMARY KEY (posting_id, account_id),
      CONSTRAINT chain_links_posting_fk FOREIGN KEY (posting_id) REFERENCES postings (id),
      CONSTRAINT chain_links_account_fk FOREIGN KEY (account_id) REFERENCES accounts (id),
@@ -143,13 +143,13 @@ CREATE TABLE chain_links (
 -- account_balances: cached per-account balance read model. Rationale/invariants (non-negative
 -- overdraft guard, always re-derivable from legs) documented in db/postgresql-schema.sql.
 CREATE TABLE account_balances (
-     account_id VARCHAR(96) PRIMARY KEY,
-     currency   VARCHAR(8)  NOT NULL,
-     balance    BIGINT      NOT NULL DEFAULT 0,
+     account_id VARCHAR(96) PRIMARY KEY COMMENT 'Account this cached balance is for; PK and FK to accounts.',
+     currency   VARCHAR(8)  NOT NULL COMMENT 'Currency of the balance: CREDIT or USD.',
+     balance    BIGINT      NOT NULL DEFAULT 0 COMMENT 'Cached signed balance in minor units; user accounts stay non-negative.',
      -- Chain-head pointer (hash of the latest chain_links row), written with the balance by post_entry
      -- so headsForAccounts reads each head by primary key instead of scanning and sorting. A projection
      -- under the same trust model; defaults to the genesis hash (64 zeros). See db/postgresql-schema.sql.
-     head_hash  CHAR(64)    NOT NULL DEFAULT '0000000000000000000000000000000000000000000000000000000000000000',
+     head_hash  CHAR(64)    NOT NULL DEFAULT '0000000000000000000000000000000000000000000000000000000000000000' COMMENT 'Hash of this account''s latest chain_links row; defaults to genesis zeros.',
      CHECK (currency IN ('CREDIT', 'USD')),
      CHECK (account_id LIKE 'platform:%' OR balance >= 0),
      CONSTRAINT account_balances_account_fk FOREIGN KEY (account_id) REFERENCES accounts (id)
@@ -158,21 +158,21 @@ CREATE TABLE account_balances (
 -- idempotency: exactly-once retry guard. Rationale/invariants documented in
 -- db/postgresql-schema.sql (idempotency banner).
 CREATE TABLE idempotency (
-     `key`     VARCHAR(255) PRIMARY KEY,
-     transaction JSON        NULL,  -- The recorded result, replayed verbatim on a duplicate. It is NULL while a row is claimed but not yet recorded. Claim inserts a NULL placeholder to hold the row lock, then record fills it in.
-     created_at  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP
+     `key`     VARCHAR(255) PRIMARY KEY COMMENT 'Idempotency key; PK that blocks duplicate request execution.',
+     transaction JSON        NULL COMMENT 'Recorded result, replayed verbatim on a duplicate request.',  -- The recorded result, replayed verbatim on a duplicate. It is NULL while a row is claimed but not yet recorded. Claim inserts a NULL placeholder to hold the row lock, then record fills it in.
+     created_at  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
    );
 
 CREATE TABLE sales (
-     order_id     VARCHAR(64) PRIMARY KEY,
-     buyer_id     VARCHAR(64) NOT NULL,
-     recipient_id VARCHAR(64),
-     sku          VARCHAR(64) NOT NULL,
-     price        BIGINT      NOT NULL,
-     fee          BIGINT      NOT NULL,
-     legs         JSON        NOT NULL,
-     txn_id       VARCHAR(64) NOT NULL,
-     posted_at    BIGINT      NOT NULL,
+     order_id     VARCHAR(64) PRIMARY KEY COMMENT 'Order id; primary key, distinct from idempotency key.',
+     buyer_id     VARCHAR(64) NOT NULL COMMENT 'Account that paid for the purchase.',
+     recipient_id VARCHAR(64) COMMENT 'Account receiving the item; null if buyer.',
+     sku          VARCHAR(64) NOT NULL COMMENT 'Catalog item code that was purchased.',
+     price        BIGINT      NOT NULL COMMENT 'Purchase price in minor units; always positive.',
+     fee          BIGINT      NOT NULL COMMENT 'Platform fee in minor units; zero or more.',
+     legs         JSON        NOT NULL COMMENT 'Posted lines as decimal strings for exact replay.',
+     txn_id       VARCHAR(64) NOT NULL COMMENT 'Posting transaction id; references postings.id.',
+     posted_at    BIGINT      NOT NULL COMMENT 'When the sale posted, epoch ms.',
      CHECK (price > 0),
      CHECK (fee >= 0),
      CONSTRAINT sales_txn_fk FOREIGN KEY (txn_id) REFERENCES postings (id)
@@ -181,12 +181,12 @@ CREATE TABLE sales (
 -- outbox: events awaiting publish via the transactional outbox relay. Rationale/invariants
 -- documented in db/postgresql-schema.sql (outbox banner).
 CREATE TABLE outbox (
-     id                 VARCHAR(64) PRIMARY KEY,
-     event              JSON        NOT NULL,
-     status             VARCHAR(16) NOT NULL DEFAULT 'pending',
-     attempts           INT         NOT NULL DEFAULT 0,
-     dead_letter_reason TEXT        NULL,
-     created_at         TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+     id                 VARCHAR(64) PRIMARY KEY COMMENT 'Outbox row id; primary key, obx_<uuid>.',
+     event              JSON        NOT NULL COMMENT 'JSON event payload to publish.',
+     status             VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'One of pending, relayed, failed.',
+     attempts           INT         NOT NULL DEFAULT 0 COMMENT 'Number of publish attempts so far.',
+     dead_letter_reason TEXT        NULL COMMENT 'Last error code if failed; else null.',
+     created_at         TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC time the row was inserted.',
      CHECK (status IN ('pending', 'relayed', 'failed')),
      KEY outbox_pending_idx (status, created_at)
    );
@@ -196,14 +196,14 @@ CREATE TABLE outbox (
 -- insert, applied at most once). Rationale/invariants documented in db/postgresql-schema.sql
 -- (inbox banner).
 CREATE TABLE inbox (
-     id                 VARCHAR(64) PRIMARY KEY,
-     `key`              VARCHAR(255) NOT NULL UNIQUE,
-     operation          JSON         NOT NULL,
-     status             VARCHAR(16)  NOT NULL DEFAULT 'pending',
-     attempts           INT          NOT NULL DEFAULT 0,
-     dead_letter_reason TEXT         NULL,
-     received_at        BIGINT       NOT NULL,
-     created_at         TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+     id                 VARCHAR(64) PRIMARY KEY COMMENT 'Inbox row id; primary key, ibx_<uuid>.',
+     `key`              VARCHAR(255) NOT NULL UNIQUE COMMENT 'Provider event id; unique, dedupes redelivery.',
+     operation          JSON         NOT NULL COMMENT 'Serialized Operation to submit, as JSON.',
+     status             VARCHAR(16)  NOT NULL DEFAULT 'pending' COMMENT 'One of pending, applied, dead.',
+     attempts           INT          NOT NULL DEFAULT 0 COMMENT 'Number of apply attempts so far.',
+     dead_letter_reason TEXT         NULL COMMENT 'Last error code if dead; else null.',
+     received_at        BIGINT       NOT NULL COMMENT 'When the event was enqueued, epoch ms.',
+     created_at         TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC time the row was inserted.',
      CHECK (status IN ('pending', 'applied', 'dead')),
      KEY inbox_pending_idx (status, received_at)
    );
@@ -211,20 +211,20 @@ CREATE TABLE inbox (
 -- payout_sagas: multi-step payout saga state. Rationale/invariants documented in
 -- db/postgresql-schema.sql (payout_sagas banner).
 CREATE TABLE payout_sagas (
-     id                 VARCHAR(64) PRIMARY KEY,
-     user_id            VARCHAR(64) NOT NULL,
-     reserve            BIGINT      NOT NULL,
-     rate_id            VARCHAR(64) NOT NULL,
-     state              VARCHAR(16) NOT NULL,
-     provider_ref       VARCHAR(128),
-     attempts           INT         NOT NULL DEFAULT 0,
-     due_at             BIGINT      NOT NULL,
-     updated_at         BIGINT      NOT NULL,
+     id                 VARCHAR(64) PRIMARY KEY COMMENT 'Saga primary key, pay_ prefixed uuid.',
+     user_id            VARCHAR(64) NOT NULL COMMENT 'Creator the payout belongs to.',
+     reserve            BIGINT      NOT NULL COMMENT 'Earned credits set aside; always positive.',
+     rate_id            VARCHAR(64) NOT NULL COMMENT 'Pinned CREDIT-to-USD rate for this settlement.',
+     state              VARCHAR(16) NOT NULL COMMENT 'One of REQUESTED, RESERVED, SUBMITTED, SETTLED, FAILED.',
+     provider_ref       VARCHAR(128) COMMENT 'Payout provider reference; null until submitted.',
+     attempts           INT         NOT NULL DEFAULT 0 COMMENT 'Consecutive worker attempt count.',
+     due_at             BIGINT      NOT NULL COMMENT 'Epoch ms when the worker may next advance it.',
+     updated_at         BIGINT      NOT NULL COMMENT 'Epoch ms the row was last updated.',
      -- The payout's terminal outcome, stored on the saga (see db/postgresql-schema.sql). `reason` is
      -- the worker's failure reason (FAILED); `payout_usd` is the gross USD disbursed (SETTLED). Both
      -- null until the saga reaches its terminal state.
-     reason             VARCHAR(255),
-     payout_usd         BIGINT,
+     reason             VARCHAR(255) COMMENT 'Failure reason set when dead-lettered; null otherwise.',
+     payout_usd         BIGINT COMMENT 'Gross USD disbursed; null until SETTLED.',
      CHECK (reserve > 0),
      CHECK (state IN ('REQUESTED', 'RESERVED', 'SUBMITTED', 'SETTLED', 'FAILED')),
      KEY payout_sagas_due_idx (state, due_at),
@@ -237,26 +237,26 @@ CREATE TABLE payout_sagas (
 -- promo_grants: one row per promotional credit handed out; swept for expired, not-yet-reversed
 -- grants. Rationale/invariants documented in db/postgresql-schema.sql (promo_grants banner).
 CREATE TABLE promo_grants (
-     id         VARCHAR(64) PRIMARY KEY,
-     user_id    VARCHAR(64) NOT NULL,
-     amount     BIGINT      NOT NULL,
-     currency   VARCHAR(8)  NOT NULL,
-     expires_at BIGINT      NOT NULL,
-     reversed   BOOLEAN     NOT NULL DEFAULT FALSE,
+     id         VARCHAR(64) PRIMARY KEY COMMENT 'Primary key, txn_ uuid shared with the posting.',
+     user_id    VARCHAR(64) NOT NULL COMMENT 'User the promotional credit was granted to.',
+     amount     BIGINT      NOT NULL COMMENT 'Full original grant in minor units; non-negative.',
+     currency   VARCHAR(8)  NOT NULL COMMENT 'CREDIT or USD; always CREDIT in practice.',
+     expires_at BIGINT      NOT NULL COMMENT 'Epoch ms the grant expires.',
+     reversed   BOOLEAN     NOT NULL DEFAULT FALSE COMMENT 'True once the unspent remainder was reversed.',
      CHECK (amount >= 0),
      CHECK (currency IN ('CREDIT', 'USD')),
      KEY promo_grants_due_idx (reversed, expires_at)
    );
 
 CREATE TABLE entitlements (
-     user_id    VARCHAR(64) NOT NULL,
-     sku        VARCHAR(64) NOT NULL,
-     quantity   INT         NOT NULL DEFAULT 1,
-     version    INT         NOT NULL DEFAULT 1,
-     expires_at BIGINT,
-     revoked    BOOLEAN     NOT NULL DEFAULT FALSE,
-     source     VARCHAR(64),
-     granted_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     user_id    VARCHAR(64) NOT NULL COMMENT 'Owner of the entitlement; part of primary key.',
+     sku        VARCHAR(64) NOT NULL COMMENT 'SKU the user owns; part of primary key.',
+     quantity   INT         NOT NULL DEFAULT 1 COMMENT 'Units owned; non-negative.',
+     version    INT         NOT NULL DEFAULT 1 COMMENT 'Optimistic-lock version, bumped on each change.',
+     expires_at BIGINT COMMENT 'Epoch ms it lapses; null never lapses.',
+     revoked    BOOLEAN     NOT NULL DEFAULT FALSE COMMENT 'True when a refund or clawback removed it.',
+     source     VARCHAR(64) COMMENT 'What granted the entitlement; nullable.',
+     granted_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the entitlement was granted.',
      PRIMARY KEY (user_id, sku),
      CHECK (quantity >= 0)
    );
@@ -264,17 +264,17 @@ CREATE TABLE entitlements (
 -- subscriptions: recurring-charge state read by the renewal sweep. Rationale/invariants
 -- documented in db/postgresql-schema.sql (subscriptions banner).
 CREATE TABLE subscriptions (
-     id          VARCHAR(64) PRIMARY KEY,
-     user_id     VARCHAR(64) NOT NULL,
-     seller_id   VARCHAR(64) NOT NULL,
-     sku         VARCHAR(64) NOT NULL,
-     price       BIGINT      NOT NULL,
-     period_ms   BIGINT      NOT NULL,
-     state       VARCHAR(16) NOT NULL,
-     period      INT         NOT NULL DEFAULT 1,
-     attempts    INT         NOT NULL DEFAULT 0,
-     next_due_at BIGINT      NOT NULL,
-     updated_at  BIGINT      NOT NULL,
+     id          VARCHAR(64) PRIMARY KEY COMMENT 'Subscription id, sub_<uuid>; primary key.',
+     user_id     VARCHAR(64) NOT NULL COMMENT 'Buyer charged each billing period.',
+     seller_id   VARCHAR(64) NOT NULL COMMENT 'Seller credited each billing period.',
+     sku         VARCHAR(64) NOT NULL COMMENT 'Product identifier being subscribed to.',
+     price       BIGINT      NOT NULL COMMENT 'Per-period charge in minor units; always positive.',
+     period_ms   BIGINT      NOT NULL COMMENT 'Billing interval length in milliseconds; always positive.',
+     state       VARCHAR(16) NOT NULL COMMENT 'One of ACTIVE, LAPSED, CANCELED.',
+     period      INT         NOT NULL DEFAULT 1 COMMENT 'Billing-cycle counter; renewal bills period plus one.',
+     attempts    INT         NOT NULL DEFAULT 0 COMMENT 'Consecutive failed charges; reset to 0 on success.',
+     next_due_at BIGINT      NOT NULL COMMENT 'Epoch ms when the next charge is due.',
+     updated_at  BIGINT      NOT NULL COMMENT 'Epoch ms of the last update.',
      CHECK (price > 0),
      CHECK (period_ms > 0),
      CHECK (state IN ('ACTIVE', 'LAPSED', 'CANCELED')),
@@ -286,11 +286,11 @@ CREATE TABLE subscriptions (
    );
 
 CREATE TABLE trust_attempts (
-     idempotency_key VARCHAR(255) PRIMARY KEY,
-     subject         VARCHAR(64)  NOT NULL,
-     amount          BIGINT       NOT NULL,
-     outcome         VARCHAR(16)  NOT NULL,
-     at              BIGINT       NOT NULL,
+     idempotency_key VARCHAR(255) PRIMARY KEY COMMENT 'Attempt idempotency key; primary key, dedupes retries.',
+     subject         VARCHAR(64)  NOT NULL COMMENT 'Identity whose spend velocity is summed.',
+     amount          BIGINT       NOT NULL COMMENT 'Attempted spend in minor units.',
+     outcome         VARCHAR(16)  NOT NULL COMMENT 'One of committed, rejected.',
+     at              BIGINT       NOT NULL COMMENT 'Epoch ms the attempt was recorded.',
      CHECK (outcome IN ('committed', 'rejected')),
      KEY trust_attempts_subject_at_idx (subject, at)
    );
@@ -298,13 +298,13 @@ CREATE TABLE trust_attempts (
 -- checkpoints: signed Merkle-root snapshots of ledger state. Rationale/invariants documented in
 -- db/postgresql-schema.sql (checkpoints banner).
 CREATE TABLE checkpoints (
-     id         VARCHAR(64) PRIMARY KEY,
-     root       CHAR(64)    NOT NULL,
-     signature  TEXT        NOT NULL,
-     count      BIGINT      NOT NULL,
-     at         BIGINT      NOT NULL,
-     seq        BIGINT      AUTO_INCREMENT UNIQUE,
-     created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP
+     id         VARCHAR(64) PRIMARY KEY COMMENT 'Checkpoint id, chk_<uuid>; primary key.',
+     root       CHAR(64)    NOT NULL COMMENT 'Merkle root over account hashes; lowercase hex.',
+     signature  TEXT        NOT NULL COMMENT 'Signature over the root; lowercase hex.',
+     count      BIGINT      NOT NULL COMMENT 'How many account hashes this root covers.',
+     at         BIGINT      NOT NULL COMMENT 'Epoch ms the checkpoint was taken.',
+     seq        BIGINT      AUTO_INCREMENT UNIQUE COMMENT 'Monotonic sequence number; unique, auto-assigned.',
+     created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
    );
 
 -- seen_webhooks: exactly-once replay dedup for inbound provider callbacks, claimed as the last
@@ -312,8 +312,8 @@ CREATE TABLE checkpoints (
 -- and does no work. Rationale/invariants documented in db/postgresql-schema.sql (seen_webhooks
 -- banner). The metadata column name differs cosmetically (created_at here vs seen_at in PG).
 CREATE TABLE seen_webhooks (
-     event_id   VARCHAR(255) PRIMARY KEY,
-     created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+     event_id   VARCHAR(255) PRIMARY KEY COMMENT 'Provider stable event id; primary key for replay dedup.',
+     created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
    );
 
 -- ============================================================================
@@ -518,5 +518,5 @@ INSERT INTO account_balances (account_id, currency, balance, head_hash)
 
 -- Schema version stamp. The engine reads this on startup and refuses to run if it does not match
 -- SCHEMA_VERSION in src/schema.ts. Keep the value in lockstep with the Postgres schema and src/schema.ts.
-CREATE TABLE schema_meta (version VARCHAR(32) NOT NULL);
+CREATE TABLE schema_meta (version VARCHAR(32) NOT NULL COMMENT 'Schema version stamp; must match SCHEMA_VERSION at startup.');
 INSERT INTO schema_meta (version) VALUES ('7');
