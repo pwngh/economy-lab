@@ -240,11 +240,10 @@ export type FeeSweepResult =
   | { duplicate: true; swept: Amount }
   | { duplicate: false; swept: Amount; transaction: Transaction };
 
-// Enforces that the platform takes only its own money before posting. The `amount` may not
-// exceed `sweepable`, the smaller of the cash surplus and matured revenue. Taking more would
-// pull trust-cash below what is owed to users. A draw over the limit throws COMMINGLING, a hard
-// error rather than a returned "no", so the worker loop marks the run failed instead of leaving
-// users under-backed.
+// Enforces that the platform takes only its own money before posting: `amount` may not exceed
+// `sweepable`, the smaller of the cash surplus and matured revenue. A draw over the limit throws
+// COMMINGLING, a hard error rather than a returned "no", so the worker loop marks the run failed.
+// See https://economy-lab-docs.pages.dev/economy/concepts/solvency/ for why a sweep may take only the surplus and never users' money.
 function assertWithinSweepable(amount: Amount, sweepable: bigint): void {
   if (amount.minor <= sweepable) {
     return;
@@ -450,11 +449,10 @@ async function sweepableCredit(
   return ceiling < 0n ? 0n : ceiling;
 }
 
-// Returns the platform surplus in CREDIT. This is trust cash converted to CREDIT at par, minus
-// what is owed to users: every user's spendable balance plus HELD escrow. A positive result is
-// cash held beyond what is owed, and only that much may be realized. The owed total counts the
-// same accounts as the backing check above, so revenue, promo grants, and payout reserves are
-// not counted as owed.
+// Returns the platform surplus in CREDIT: trust cash converted to CREDIT at par, minus what is owed
+// to users. The owed total counts the same custodial accounts as the backing check above (via
+// `classify`), so revenue, promo grants, and payout reserves are not counted as owed.
+// See https://economy-lab-docs.pages.dev/economy/concepts/solvency/ for what surplus is and which credits count toward the backing total.
 async function surplusCredit(
   store: Store,
   ctx: WorkerCtx,

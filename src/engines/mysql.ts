@@ -663,11 +663,10 @@ function createSaleStore(exec: MysqlExecutor): SaleStore {
 
 // --- Outbox store -----------------------------------------------------------------
 
-// Reliable event publishing via the transactional-outbox pattern. The event is saved
-// (`enqueue`) in the same transaction as the money posting, so it exists exactly when the
-// posting does. A relay process later picks up a batch of pending events (`claimBatch`); FOR
-// UPDATE SKIP LOCKED lets several relay workers grab different rows at once. The consumer
-// de-duplicates by event id, so an event published twice is delivered once.
+// The transactional-outbox sub-store: `enqueue` saves the event in the same transaction as the
+// money posting, a relay later picks up a batch of pending events (`claimBatch`), and FOR UPDATE
+// SKIP LOCKED lets several relay workers grab different rows at once.
+// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the outbox pattern (write-with-the-transaction, relay-later, dedupe-by-id).
 function createOutboxStore(exec: MysqlExecutor): OutboxStore {
   return {
     enqueue: async (message) => {
@@ -732,12 +731,12 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
 
 // --- Inbox store ------------------------------------------------------------------
 
-// The inbound mirror of the outbox. A verified provider event, already mapped to the Operation it
-// applies, is saved (`enqueueInbound`) in the same transaction as the webhook ingress that claimed
-// it, so it exists exactly when that ingress commits. A separate apply worker later claims a batch of
-// pending rows (`claimInbound`), and FOR UPDATE SKIP LOCKED lets several workers grab different rows
-// at once. Dedupe is on `key` (the provider event id, UNIQUE in SQL): a redelivered event is a no-op
-// insert that returns the existing row, so the event is applied at most once.
+// The inbound mirror of the outbox. `enqueueInbound` saves the row in the same transaction as the
+// webhook ingress that claimed it, and dedupes on `key` (the provider event id, UNIQUE in SQL): a
+// redelivered event is a no-op insert that returns the existing row. A separate apply worker later
+// claims a batch of pending rows (`claimInbound`), and FOR UPDATE SKIP LOCKED lets several workers
+// grab different rows at once.
+// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the inbox pattern (record-in-the-ingress-transaction, apply-later, dedupe-by-id).
 function createInboxStore(exec: MysqlExecutor): InboxStore {
   return {
     // INSERT IGNORE swallows the duplicate-key conflict on the UNIQUE `key`, so a redelivered event

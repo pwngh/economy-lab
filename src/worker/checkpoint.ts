@@ -45,15 +45,13 @@ type CheckpointTally = {
 
 /**
  * Takes one tamper-evident snapshot of the ledger and saves it. Runs as a scheduled background job.
- *
- * Collects every account's chain head and combines them into a signed Merkle root, then stores that
- * root as a checkpoint. The root changes if any account changes, so anchoring it externally later
- * proves the ledger is unaltered.
+ * It folds every account's chain head into one signed Merkle root and stores it as a checkpoint.
  *
  * Catches errors so one bad run cannot stop future runs. Retryable failures are left for the next
  * run, and other failures are set aside for an operator. An empty ledger is skipped rather than
  * sealing an empty snapshot.
  *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for how the signed Merkle root anchors the ledger and proves it is unaltered.
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how scheduled sweeps are driven and retried.
  */
 export async function sealCheckpoint(
@@ -171,6 +169,8 @@ type VerifyTally = {
  * rather than thrown. Only a thrown error, such as a corrupt stored row or unavailable storage,
  * goes through the same retry and dead-letter split as sealing. The audit is skipped when no
  * checkpoint exists yet.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for why a head-count drop is itself a tamper signal and why a mismatch is logged, not thrown.
  */
 export async function reverifyCheckpoint(
   store: Store,

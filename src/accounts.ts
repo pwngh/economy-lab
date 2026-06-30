@@ -134,15 +134,11 @@ export function currency(ref: AccountRef): Currency {
 }
 
 /**
- * Sort every account into one of four classes. The DB schema and the USD-backing solvency check
- * both rely on these.
+ * Sorts every account into one of four classes: `custodial`, `excluded`, `house-asset`, or
+ * `house-liability`. The DB schema and the USD-backing solvency check both rely on these, and only
+ * `custodial` (users' spendable) counts toward the trust total.
  *
- * - `custodial`: credits the platform must back with real USD (users' spendable balances). Only
- *   these count toward the trust total.
- * - `excluded`: platform obligations that need no USD backing (earned, promo, PAYOUT_RESERVE),
- *   kept out of the backing total so they can't raise the cash required.
- * - `house-asset`: value the platform holds or is owed.
- * - `house-liability`: value the platform owes out.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/ Accounts & double-entry} for what each bucket holds and why only custodial raises the required cash.
  */
 export function classify(
   ref: AccountRef,

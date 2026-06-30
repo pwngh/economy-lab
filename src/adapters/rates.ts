@@ -14,17 +14,12 @@ import type { Rate, Rates, Options } from '#src/ports.ts';
 
 /**
  * Holds the three CREDIT-to-USD rates a deployment configures for its {@link Rates} dual-rate credit
- * economy. Credit value is platform-fixed, so all three are business constants, not a live market
- * feed. The `buy` rate is the acquisition rate: what a user pays per credit when buying (for example,
- * about 120 credits per USD, or $0.00833). The `par` rate is the redemption and backing rate: a
- * credit's cash-out floor (for example, about 200 credits per USD, or $0.005), used to check that the
- * platform holds enough real USD to back users' spendable credits. The `payout` rate is the creator
- * settlement rate: what a creator's earned credits convert to when cashing out, and it equals `par`.
+ * economy. Each rate is two integers (`rate` and `scale`), so conversion stays free of
+ * floating-point error. These are business constants a deployment sets, not a live market feed.
  *
- * Each rate is two integers, `rate` and `scale`. The multiplier is `rate / 10^scale` (for example,
- * rate 5 and scale 3 give $0.005 per credit). Integers avoid floating-point error. The gap between
- * `buy` and `par` is the platform spread (for example, about 40 percent). That spread is the margin
- * between buying and cashing out, not a separate deduction.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/money-model/ Money model} for what
+ *   the buy, par, and payout rates mean and how the buy-par spread funds the platform.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/rates/ Rates} for the port these feed.
  */
 export interface RatesConfig {
   buyRate: bigint;
@@ -42,12 +37,8 @@ function identityRate(from: Currency, to: Currency): Rate {
 
 /**
  * Builds the production CREDIT-to-USD rate source from a deployment's configured rates, replacing the
- * 1:1 dev placeholder. The rates are fixed business constants a deployment configures, not a live
- * market feed.
- *
- * Returns the three rates of the dual-rate credit economy: `buy` (the acquisition rate), `par` (the
- * redemption and backing rate), and `payout` (the creator settlement rate, which equals `par`). Each
- * rate carries a `rateId` naming the exact rate so a transaction can record which one it used.
+ * 1:1 dev placeholder. Each returned rate carries a `rateId` naming the exact rate so a transaction
+ * can record which one it priced against.
  *
  * Same-currency conversion returns 1:1. Only CREDIT and USD exist, so any other pair is a wiring bug
  * and throws.

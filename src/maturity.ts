@@ -77,22 +77,15 @@ export function isMatured(lot: Lot, now: number, config: Config): boolean {
 let TAIL_PAGE = 64;
 
 /**
- * Returns the cashable part of an account's balance as of `now`. This is how much a cash-out may
- * draw without dipping into funds still in their settlement wait.
+ * Returns the cashable part of an account's balance as of `now`: how much a cash-out may draw
+ * without dipping into funds still in their settlement wait. It reads the newest-first FIFO tail and
+ * stops the instant the lots cover the live balance, so it never scans the already-spent history.
+ * {@link maturedBalanceFullScan} keeps the naive O(account history) version for the differential
+ * test. The computation is currency-agnostic, so it covers spendable credits and earned balances
+ * alike.
  *
- * Spends draw oldest-first (FIFO), so what is left is the newest run of lots summing to the live
- * balance. Finding that run by scanning the whole history is the old O(account history) path, kept
- * as {@link maturedBalanceFullScan} for the differential test. Instead, read lots NEWEST-first and
- * stop the instant they cover the balance. That yields the identical tail computed from the new end,
- * never touching the already-spent history. Sum the matured lots as we go. The drain splits the
- * oldest lot in the tail, so only its unspent remainder (`remaining`) counts, exactly as the old
- * `fifoTail` split it.
- *
- * This is currency-agnostic, so the same call covers spendable credits and a seller's earned
- * balance.
- *
- * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/lifecycles/ Lifecycles} for the
- * settlement window and chargeback maturity model these cleared-funds checks gate on.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/ Credit maturity}
+ * for the dated-lot model, the FIFO tail, and why only the matured run is cashable.
  */
 export async function maturedBalance(
   ledger: Ledger,
@@ -142,22 +135,15 @@ export async function maturedBalance(
 
 /**
  * Reports whether an account has at least `amount` of cashable balance as of `now`, without
- * computing the full matured total. The callers that gate on maturity (requestPayout's payable-funds
- * check and spend's spendable-funds check) only ask whether matured is at least `amount`, so this
- * answers exactly that and stops the instant it can.
+ * computing the full matured total. It reads the same newest-first FIFO tail as {@link
+ * maturedBalance} and returns `true` the moment the matured running sum reaches `amount`. By
+ * construction this equals `maturedBalance(...).minor >= amount.minor`, just stopped as soon as the
+ * answer is settled, so a request well within cleared funds costs O(amount-worth-of-lots). The
+ * maturity-gated callers, requestPayout's payable-funds check and spend's spendable-funds check, ask
+ * exactly this. The `amount` shares the account's currency, so only minor units compare; a
+ * non-positive `amount` is trivially covered.
  *
- * It reads the same newest-first FIFO tail as {@link maturedBalance}, the newest run of lots summing
- * to the live balance. It accumulates each lot's matured contribution and returns `true` the moment
- * that running sum reaches `amount`. If the tail is exhausted first, the matured part never covers
- * `amount`, so it returns `false`. A request well within cleared funds therefore stops after a lot
- * or two, at cost O(amount-worth-of-lots). The worst case is the maturity horizon's window, never
- * the full history. By construction this equals `maturedBalance(...).minor >= amount.minor` for
- * every input: identical lots and identical per-lot maturity, just stopped as soon as the answer is
- * settled.
- *
- * The `amount` and the account share a currency, since the callers pass a CREDIT amount against a
- * CREDIT balance, so only the minor units are compared. A non-positive `amount` is trivially
- * covered.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/ Credit maturity}.
  */
 export async function maturedAtLeast(
   ledger: Ledger,
@@ -314,13 +300,11 @@ function sumMatured(
 
 // --- Why this module computes maturity instead of trusting the lot ----------------
 //
-// The ledger fills a lot's `source` from the original posting's funding info. When that info is
-// missing it defaults to the source value 'unknown', which resolves through the 'default' horizon
-// entry (configurable via MATURITY_HORIZON_DEFAULT_MS, and equal to the card horizon only under the
-// shipped defaults). So any handler issuing spendable credits must record the funding source on the
-// posting, as the top-up handler already does. Otherwise its credits fall back to the default
-// horizon. That fallback is still safe, never instantly cashable, just less precise than the real
-// source.
+// Load-bearing caller rule: any handler issuing spendable credits must record the funding source on
+// the posting, as the top-up handler already does. A missing source falls back to the 'default'
+// horizon, which is still safe (never instantly cashable) but less precise than the real source.
+// See https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/ for the dated-lot model
+// and per-source horizons.
 //
 // Maturity is computed as (top-up time) + (source's required wait). We deliberately do not trust
 // the lot's own `maturesAt`, which the ledger defaults to the top-up time (immediately cashable)

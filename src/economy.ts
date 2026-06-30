@@ -226,11 +226,11 @@ async function submit(
   validateOperation(operation);
   authorize(operation);
 
-  // Maintenance window. Refuse an end user's discretionary write with a clean decline, but refuse
-  // only the user's. Settlement webhooks (actor 'system') and operator fixes must keep flowing so the
-  // economy stays correct and external money can still settle. This gate sits before the transaction
-  // opens, so a paused user op records no velocity attempt and touches no ledger. Reads never reach
-  // this path.
+  // Maintenance window. Refuse only an end user's discretionary write, never a 'system' settlement
+  // webhook or operator fix. This gate sits before the transaction opens, so a paused user op records
+  // no velocity attempt and touches no ledger. Reads never reach this path.
+  // See https://economy-lab-docs.pages.dev/economy/concepts/actors-and-authorization/ for why the
+  // pause tells actors apart by kind.
   let ctx = pipeline.ctx;
   if (
     operation.actor.kind === 'user' &&
@@ -390,10 +390,10 @@ async function invalidateCache(
   }
 }
 
-// The transaction body: the checks plus the money posting. The idempotency key makes a retry run at
-// most once, because a repeat with the same key is recognized and not re-applied. Returning
-// `rejected` or throwing a fault rolls back and leaves the key unused, so the caller can retry a
-// rejected request under the same key.
+// The transaction body: claim the idempotency key, run the checks and the money posting, then record
+// the outcome under the key on commit. A repeat with the same key replays the recorded result; a
+// rejected or faulted request rolls back and leaves the key unused for a retry.
+// See https://economy-lab-docs.pages.dev/economy/concepts/idempotency/ for the claim/record model.
 async function runOnion(step: Step): Promise<Outcome> {
   let { unit, operation, options } = step;
   let claim = await unit.idempotency.claim(operation.idempotencyKey, options);
@@ -429,12 +429,10 @@ async function runOnion(step: Step): Promise<Outcome> {
   return outcome;
 }
 
-// Decides whether the caller may run this operation, and throws an UNAUTHORIZED fault if not. The
-// end-user rule is that a user may run an operation only if every account it debits belongs to them.
-// Debiting someone else's account is forbidden. Paying into another user's account, or moving the
-// balancing amount through a platform account, is fine. Privileged-only operations, such as grants
-// and manual operator corrections, are off-limits to end users. This runs before the operation is
-// claimed.
+// Decides whether the caller may run this operation, and throws an UNAUTHORIZED fault if not. This
+// runs before the operation is claimed.
+// See https://economy-lab-docs.pages.dev/economy/concepts/actors-and-authorization/ for the actor
+// kinds, the user-may-only-debit-own-accounts rule, and the privileged-only set.
 function authorize(operation: Operation): void {
   let actor = operation.actor;
   if (actor.kind === 'operator') {
@@ -624,18 +622,12 @@ function planSpend(price: Amount, promoBalance: Amount): SpendPlan {
  * Walks every account once and reports whether the ledger still holds its core guarantees. See the
  * {@link ProveReport} fields for what each flag means.
  *
- * This is now an independent audit, not the primary guard. The database enforces conservation,
- * no-overdraft, chain continuity, and balance integrity at write time (db/*-schema.sql), so a
- * violation should be unrepresentable. prove() re-derives every balance from the legs and re-checks
- * regardless, an out-of-band cross-check that also catches a bug in the engine enforcement itself.
+ * This is the lighter in-process prover: its `chainIntact` is only a shape check on each account's
+ * latest hash, while the full replay that re-verifies every posting lives in integrity.ts.
  *
- * `backed` checks that the platform holds enough real cash to cover what it owes users. It sums the
- * custodial credit balances, the credits in users' spendable accounts (classify() labels only these
- * "custodial"), converts that to USD at the fixed CREDIT-to-USD rate, and checks the cash account
- * holds at least that much.
- *
- * `chainIntact` here is only a shape check on each account's latest hash. The full replay that
- * re-verifies every posting lives in integrity.ts.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/the-proof/ The proof} for why this
+ * is an independent audit rather than the primary guard, how `backed` converts custodial credits to
+ * USD, and how the two provers differ.
  */
 async function proveEconomy(
   store: Store,
@@ -800,34 +792,21 @@ function unauthorized(operation: Operation, message: string) {
   });
 }
 
-// Operations an end user may never run: granting or revoking entitlements, granting promo credits,
-// and the manual operator-only corrections (adjust and reverse). Revoking an entitlement names an
-// arbitrary account the caller need not own and posts no debit the ownership check could catch, so it
-// is gated on a system or operator principal here.
+// Operations an end user may never run. Several reclaim or mint money in accounts the ownership check
+// below cannot catch (clawback, revokeEntitlement), so they are gated on a system or operator
+// principal here instead.
+// See https://economy-lab-docs.pages.dev/economy/concepts/actors-and-authorization/ for the per-kind
+// reason each operation is barred to a user.
 let RESTRICTED_TO_PRIVILEGED = new Set<Operation['kind']>([
   'grantPromo',
   'grantEntitlement',
   'revokeEntitlement',
-  // topUp mints spendable credits, so only the trusted payment path, a verified processor webhook,
-  // may issue it, never an end user.
   'topUp',
   'adjust',
   'reverse',
-  // refund makes the buyer whole by debiting the seller's earned balance. Self-serve is a fraud
-  // vector, so this is platform-initiated only.
   'refund',
-  // A bank chargeback or fraud recovery. It reclaims credits from a user's spendable balance, money
-  // out of an account the actor need not own, which the ownership rule below cannot catch. So, like
-  // adjust and reverse, it is system-or-operator only, never an end user.
   'clawback',
-  // A manual payout reversal hands the reserved credits back to the seller and force-fails a payout
-  // already in flight. It is an emergency action run by hand, never by an end user, so like adjust
-  // and reverse it is restricted to a system service or human operator.
   'reversePayout',
-  // Settling a payout disburses real USD out of trust and converts the seller's reserve into
-  // platform revenue, the SUBMITTED -> SETTLED step. It is driven by a verified inbound provider
-  // webhook (actor 'system') or an operator, never by an end user, who must never settle their own
-  // payout.
   'settlePayout',
 ]);
 

@@ -155,14 +155,8 @@ function refuseNotSubmitted(saga: Saga): void {
 // worker's `postSettlementEntries`. Each entry balances within its single currency. It returns the
 // credit-side posting's transaction, the primary settle entry, for the committed Outcome. The
 // USD-side posting commits in the same transaction.
-//
-// The CREDIT entry empties the reserve into REVENUE. The seller's set-aside credits become platform
-// earnings, because the platform now owes the seller real money instead.
-//
-// The USD entry records cash leaving the platform. It debits USD_CLEARING, which mirrors money
-// moving in and out of the trust account, and credits TRUST_CASH, the real cash held for users.
-// TRUST_CASH grows on a debit, so crediting it lowers it. That drop is the cash the buyer gave up
-// when they spent those credits, so the cash backing spendable money is never touched.
+// See https://economy-lab-docs.pages.dev/economy/reference/operations/settle-payout/ for what each
+// entry does: the reserve clears into REVENUE, and the gross USD leaves TRUST_CASH via USD_CLEARING.
 async function postSettlementEntries(
   unit: Unit,
   ctx: Ctx,

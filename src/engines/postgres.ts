@@ -801,11 +801,11 @@ function rowToSale(row: Record<string, unknown>): Sale {
 
 // --- Outbox store -----------------------------------------------------------------
 
-// Holds events to send out, so sending happens after the data commits. `enqueue` writes the
-// event in the same transaction as the work that produced it, so an event exists iff its work
-// committed. A separate relay process reads a batch (`claimBatch`), sends each event, and calls
-// `markRelayed`. `claimBatch` uses `for update skip locked` so several relay workers run at once
-// without two grabbing the same row.
+// The transactional-outbox sub-store: `enqueue` writes the event in the same transaction as the
+// money move, a relay later reads a batch (`claimBatch`), sends each, and calls `markRelayed`.
+// `claimBatch` uses `for update skip locked` so several relay workers run at once without two
+// grabbing the same row.
+// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the outbox pattern (write-with-the-transaction, relay-later, dedupe-by-id).
 function createOutboxStore(q: Queryable): OutboxStore {
   return {
     enqueue: async (message) => {
@@ -879,14 +879,12 @@ function rowToOutbox(row: Record<string, unknown>): OutboxMessage {
 
 // --- Inbox store ------------------------------------------------------------------
 
-// The inbound mirror of the outbox. Holds verified provider events already mapped to the
-// Operation they apply, so applying happens after the webhook ingress commits. `enqueueInbound`
-// writes the row in the same transaction as the ingress that claimed it, so a row exists iff its
-// ingress committed; it dedupes on `key` (the provider event id, UNIQUE in SQL) so a redelivered
-// event is a no-op that returns the existing row rather than a second insert, mirroring the
-// idempotency story. A separate apply worker reads a batch (`claimInbound`), submits each
-// operation, and calls `markApplied`. `claimInbound` uses `for update skip locked` so several
-// apply workers run at once without two grabbing the same row.
+// The inbound mirror of the outbox. `enqueueInbound` writes the row in the same transaction as
+// the webhook ingress that claimed it, and dedupes on `key` (the provider event id, UNIQUE in
+// SQL) so a redelivered event is a no-op that returns the existing row. A separate apply worker
+// reads a batch (`claimInbound`) and calls `markApplied`. `claimInbound` uses `for update skip
+// locked` so several apply workers run at once without two grabbing the same row.
+// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the inbox pattern (record-in-the-ingress-transaction, apply-later, dedupe-by-id).
 function createInboxStore(q: Queryable): InboxStore {
   return {
     // Dedupe on the provider event id with `on conflict (key) do nothing`: a first sighting

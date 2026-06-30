@@ -85,13 +85,11 @@ export async function requestPayout(
     });
   }
 
-  // Only earned credit past its settlement wait is payable: a chargeback window must elapse
-  // before paying real USD against it. The raw balance above can pass while part is still
-  // maturing, so this is a second, stricter gate. The check only asks whether the cleared part
-  // is at least `amount`, so it calls maturedAtLeast, which stops as soon as the matured tail
-  // covers `amount` rather than summing the whole open tail. Like INSUFFICIENT_FUNDS it returns
-  // a rejection rather than throwing. No `signal` is threaded here, matching the raw balance
-  // read.
+  // A second, stricter gate after the raw balance: only earned credit past its settlement wait
+  // is payable. maturedAtLeast asks the cheaper "is the cleared part at least `amount`?" and
+  // stops early. Like INSUFFICIENT_FUNDS it returns a rejection rather than throwing.
+  // See https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/ for why fresh
+  // earnings clear on a delay and how the matured tail is measured.
   let cleared = await maturedAtLeast(
     unit.ledger,
     earned(operation.userId),
@@ -119,15 +117,11 @@ export async function requestPayout(
   return { status: 'committed', transaction };
 }
 
-// Builds the saga record. The saga opens in RESERVED because the credits were set aside in
-// the same DB transaction as this record.
-//
-// The fields work as follows. `reserve` is the earned credits held in PAYOUT_RESERVE for this
-// payout. `rateId` is the audited CREDIT-to-USD rate, so the worker pays at the rate that
-// applied when the request was made. `dueAt` is when the worker should first try submitting to
-// the provider.
-//
-// The worker's periodic sweep picks up due sagas and advances them to SUBMITTED, then SETTLED.
+// Builds the saga record. It opens in RESERVED because the credits were set aside in the same
+// DB transaction as this record. `rateId` locks the CREDIT-to-USD rate so the worker later pays
+// at the rate that applied at request time, and `dueAt` is when the worker first tries to submit.
+// See https://economy-lab-docs.pages.dev/economy/concepts/lifecycles/ for the payout saga's
+// states and how the worker advances RESERVED to SUBMITTED to SETTLED.
 function sagaOf(
   operation: Extract<Operation, { kind: 'requestPayout' }>,
   reserve: Amount,

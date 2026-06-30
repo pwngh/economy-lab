@@ -288,9 +288,10 @@ export type Middleware = (next: Handler) => Handler;
 
 /**
  * Splits a sale's `price` across recipients and the platform into the debit/credit lines (legs) to
- * post. Accounts for every minor unit with no rounding loss. The platform fee comes off the top,
- * rounded down. Each recipient then takes a rounded-down share of the rest. The leftover rounding
- * penny goes to platform revenue. Implemented in `pricing.ts`.
+ * post, accounting for every minor unit with no rounding loss. Implemented in `pricing.ts`.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/pricing/ Pricing} for the fee-off-the-top,
+ * rounded-down shares, and leftover-penny-to-revenue split.
  */
 export type FeePolicy = (input: {
   price: Amount;

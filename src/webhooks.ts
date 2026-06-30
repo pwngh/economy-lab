@@ -10,18 +10,15 @@
  */
 
 // Inbound provider-callback dispatch. This module maps a verified callback to the ledger Operation
-// its kind should apply, then persists that Operation to the transactional inbox (the inbound mirror
-// of the outbox) for the apply worker to submit later. The kinds map as follows:
-//   - a cleared purchase  -> `topUp`        (credit the buyer's spendable balance)
-//   - a settled payout    -> `settlePayout` (the SUBMITTED -> SETTLED step for the named saga)
-//   - a dispute/chargeback -> `clawback`    (reclaim the disputed credits)
+// its kind should apply (purchase -> `topUp`, settled payout -> `settlePayout`, dispute -> `clawback`),
+// then persists that Operation to the transactional inbox for the apply worker to submit later.
+// See https://economy-lab-docs.pages.dev/economy/ports/processor/ for how verified callbacks map to
+// operations and flow through the inbox.
 //
-// Duplicate suppression spans two layers, identically for every kind. The edge claims the
-// provider's `eventId` in a replay store to drop redeliveries before they reach here. It runs that
-// claim only after checking signature and freshness, so a forged or stale delivery cannot waste a
-// real eventId. This module assumes those checks already passed and adds a second guard: the inbox
-// dedupes on the provider `eventId` as the row `key` (see `webhookIdempotencyKey`), so a redelivery
-// that slips past the replay store enqueues no second row and applies at most once.
+// This module assumes the edge already checked signature and freshness and claimed the provider
+// `eventId` in its replay store. It adds a second dedup guard: the inbox keys on that same `eventId`
+// (see `webhookIdempotencyKey`), so a redelivery that slips past the replay store enqueues no second
+// row and applies at most once.
 //
 // A purchase never increases "revenue": crediting a user for cash is a topUp against the
 // stored-value pool (credits owed to users), so "revenue" stays platform fee income only.

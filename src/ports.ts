@@ -145,18 +145,12 @@ export interface Processor {
 /**
  * Dual-Rate Credit Economy.
  *
- * Credits are platform-priced, not market-priced. This port supplies fixed CREDIT-to-USD rates from
- * an audited source, never from config or caller input. Three rates govern the economy:
- * - `buy`: the acquisition rate, what a user pays per credit (e.g. ~120 credits/USD).
- * - `par`: the redemption, backing, and settlement rate. It is a credit's cash-out floor and the
- *   value used to check that the platform holds enough real USD to back users' spendable credits
- *   (e.g. ~200 credits/USD).
- * - `payout`: the creator settlement rate, what an earned credit converts to in USD (equal to `par`).
+ * This port supplies fixed CREDIT-to-USD rates from an audited source, never from config or caller
+ * input. It hands the core three rates that always hold the order `buy >= par >= payout`, where the
+ * `buy`-to-`par` gap is the platform spread.
  *
- * The rates always hold the order `buy >= par >= payout`. The gap between `buy` and `par` is the
- * platform spread (the platform's margin, e.g. ~40%). The spread funds platform fees, payment
- * processing, reserves, and operating margin.
- *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/money-model/ The money model} for
+ * what `buy`/`par`/`payout` mean, why the ordering holds, and what the spread funds.
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/rates/ Rates} for the port and its
  * configured adapter.
  */

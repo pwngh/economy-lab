@@ -145,14 +145,12 @@ function refuseSettled(saga: Saga): void {
   }
 }
 
-// A SUBMITTED payout's disbursement is in the provider's hands and may still settle externally. If
-// we reverse now and the provider then pays, the seller is double-paid. The worker treats
-// SUBMITTED as live until it ages past `maxPayoutAgeMs`, measured from `updatedAt` (set on entering
-// SUBMITTED in submitToProvider), then force-fails it. We mirror that cutoff with the same
-// `now - updatedAt` comparison and reject a manual reverse before the payout ages past it. Past the
-// cutoff the provider is presumed never to have paid, so reversing is allowed and matches the
-// worker. RESERVED was never handed to the provider, so it has no live settlement to race and is
-// not gated here.
+// A SUBMITTED payout is still live until it ages past `maxPayoutAgeMs`, measured from `updatedAt`
+// (set on entering SUBMITTED in submitToProvider). This mirrors the worker's force-fail cutoff with
+// the same `now - updatedAt` comparison, so a manual reverse is rejected until then. RESERVED is not
+// gated here because it was never handed to the provider.
+// See https://economy-lab-docs.pages.dev/economy/reference/operations/reverse-payout/ for why
+// reversing a still-settling payout risks a double-pay and how the timeout cutoff opens the window.
 function refuseLiveSubmitted(saga: Saga, ctx: Ctx): void {
   if (
     saga.state === 'SUBMITTED' &&

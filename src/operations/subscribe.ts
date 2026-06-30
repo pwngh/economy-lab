@@ -102,13 +102,11 @@ export async function handleSubscribe(
     ctx,
   );
 
-  // Grant SKU ownership in the same transaction (`unit`) that posted the first-month charge, so
-  // the two stay in lockstep: a paying buyer always owns the SKU, and a rolled-back charge rolls
-  // back the grant too. The grant expires at the end of the month just billed; later renewals
-  // extend it and a lapse revokes it (worker logic in a different file). `source` records which
-  // subscription this ownership came from, for auditing. If this buyer had a lapsed subscription
-  // to the same SKU, the old grant row was marked revoked rather than deleted; this clears that
-  // mark and reactivates ownership instead of leaving the stale row.
+  // Grant SKU ownership in the same transaction (`unit`) that posted the charge, so the two stay
+  // in lockstep. `source` records which subscription this ownership came from. If this buyer had a
+  // lapsed subscription to the same SKU, the old grant row was marked revoked rather than deleted;
+  // this grant clears that mark and reactivates ownership instead of leaving the stale row.
+  // See https://economy-lab-docs.pages.dev/economy/reference/operations/subscribe/ for the same-transaction grant and renewal handoff.
   await unit.entitlements.grant(operation.userId, operation.sku, {
     expiresAt: transaction.postedAt + operation.periodMs,
     source: 'subscription:' + subscriptionId,

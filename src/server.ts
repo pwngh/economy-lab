@@ -169,19 +169,11 @@ async function submitRoute(
 // --- /webhooks/:provider ----------------------------------------------------------
 
 // Gates an inbound webhook, then passes it to the injected handler. Returns 404 when no handler is
-// wired.
-//
-// When a config with a webhook secret is present, the body is verified before the handler runs, so a
-// forged request never reaches code that changes balances. The checks run in order:
-//   1. HMAC-SHA256 of the raw body must match `x-signature`. A match proves the sender knew the
-//      shared secret. A mismatch returns 401 INVALID_SIGNATURE and nothing downstream runs.
-//   2. `x-timestamp` must be finite and within `config.replayWindowMs` of the clock. Otherwise the
-//      delivery is treated as old or replayed and answered 200 "duplicate" so the provider stops
-//      redelivering.
-//   3. (Only with a replay store.) The provider `eventId` is claimed last. A forged or stale
-//      delivery is already rejected above, so it never burns the id and blocks a later genuine
-//      redelivery. A repeat eventId is answered 200 and the handler never runs, so its work (such as
-//      crediting a user) happens once.
+// wired. With a webhook secret configured, the body is verified before the handler runs, so a forged
+// request never reaches code that changes balances. The checks run in this order: signature, then
+// freshness, then (only with a replay store) claiming the provider `eventId` last so a rejected
+// delivery never burns an id and blocks a later genuine redelivery. The order is load-bearing; keep
+// it as written. See https://economy-lab-docs.pages.dev/economy/reference/http-service/ for the gate.
 //
 // The raw bytes are read once. Verification, replay decode, and handler all work over that buffer.
 // The handler gets a fresh Request rebuilt from the bytes, so the body is never consumed twice.

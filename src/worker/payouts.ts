@@ -115,18 +115,10 @@ async function bumpAttempt(
 
 // Gives up on a payout and, unless another actor already finished it, returns its reserved credits.
 // Returns true if THIS call set the saga aside, false if it lost the race to a concurrent finisher.
-//
-// Requesting a payout moved the seller's earned credits into PAYOUT_RESERVE. Flipping the saga to
-// FAILED alone would park them there forever. So one transaction couples two writes: it flips the
-// saga to FAILED and posts the exact reverse of the request-time reservation (debit PAYOUT_RESERVE,
-// credit the seller's earned account, the full reserved amount). Because they are coupled, the
-// credits return if and only if the saga is actually set aside.
-//
-// The flip is a compare-and-set, and the reversal posts ONLY if the CAS wins. This is the same guard
-// the pipeline's settlePayout and reversePayout use. A lost CAS means another actor moved the saga
-// first: a late settlement webhook settled it into REVENUE, or a manual reverse already returned the
-// reserve. Either way its reserve is already accounted for, so posting now would return the credits
-// a SECOND time. On a lost CAS we touch nothing and report false.
+// One transaction couples the FAILED flip with the exact reverse of the request-time reservation,
+// and the flip is a compare-and-set so the reverse posts only if THIS call wins, never returning the
+// reserve a second time on a lost race.
+// See https://economy-lab-docs.pages.dev/economy/concepts/lifecycles/ for the payout saga states and the shared CAS guard that releases the reserve exactly once.
 //
 // Locking PAYOUT_RESERVE and the seller's earned account in the global sorted order makes this
 // serialize with those pipeline ops on the shared reserve rather than racing them to extend its hash

@@ -155,10 +155,11 @@ insert into account_balances (account_id, currency, balance, head_hash)
   select id, currency, 0, repeat('0', 64) from accounts where kind = 'system';
 
 -- ============================================================================
--- Idempotency: makes a retried request safe to run twice. The key is the primary key, so the
--- DB prevents duplicates. A request claims its key when it starts; a second request with the
--- same key waits for the first, then replays its recorded result. A rolled-back first request
--- leaves no row, so a fresh retry proceeds.
+-- Idempotency: makes a retried request safe to run twice. The key is the primary key, so the DB
+-- prevents duplicates: a request claims its key when it starts, a second request with the same key
+-- waits for the first and then replays its recorded result, and a rolled-back first request leaves
+-- no row so a fresh retry proceeds.
+-- See https://economy-lab-docs.pages.dev/economy/concepts/idempotency/ for the claim/record model.
 -- ============================================================================
 create table idempotency (
   key         text        primary key,

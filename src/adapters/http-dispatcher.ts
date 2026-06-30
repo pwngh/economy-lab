@@ -32,20 +32,15 @@ export interface HttpDispatcherConfig {
 }
 
 /**
- * Builds the function that POSTs one economy event to a remote endpoint over HTTP.
- *
- * Events land in an outbox table in the same transaction as the money move that produced them. The
- * relay worker reads that table and calls this function to deliver each event. HTTP is one delivery
- * path, and SQS is the alternative. `SQS_QUEUE_URL` selects SQS and wins if both are set; otherwise
- * `DISPATCHER_URL` selects this HTTP path. Each call POSTs one event as JSON through the shared
- * `encodeEvent` (event-wire.ts), so HTTP and SQS deliver the identical body either way.
+ * Builds the {@link Dispatcher} that POSTs one economy event to a remote endpoint over HTTP. HTTP is
+ * one of two delivery paths (the alternative is SQS); both POST the identical body through the shared
+ * `encodeEvent` (event-wire.ts).
  *
  * A network error or a non-2xx response throws a retryable `PROVIDER.FAILURE`, so the relay
- * redelivers later with backoff. Retries can duplicate an event, so the event id goes in an
- * `Idempotency-Key` header for the receiver to dedupe. SQS does the same through
- * `MessageDeduplicationId`.
+ * redelivers later with backoff. Because a retry can duplicate an event, the event id goes in an
+ * `Idempotency-Key` header for the receiver to dedupe.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for how events leave the lab.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for the outbox-to-relay flow, the dispatcher port, and at-least-once delivery.
  */
 export function httpDispatcher(config: HttpDispatcherConfig): Dispatcher {
   let send = config.fetch ?? fetch;

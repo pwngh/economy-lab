@@ -10,17 +10,17 @@
  */
 
 /**
- * A {@link Processor} backed by the Thunes Money Transfer v2 API (the cross-border payout rail).
+ * A {@link Processor} backed by the Thunes Money Transfer v2 API (the cross-border payout rail). It
+ * hides Thunes' three-step quotation -> transaction -> confirm flow behind the single port method,
+ * returning the transaction id as `providerRef`; settlement comes back via
+ * {@link decodeThunesPayoutCallback}.
  *
- * Hides Thunes' three-step flow (quotation -> transaction -> confirm, where confirm is the
- * money-movement boundary) behind the single port method, returning the transaction id as
- * `providerRef`. Settlement comes back via {@link decodeThunesPayoutCallback}.
+ * Idempotency rides on `external_id = key` (the payout saga id), and the worker
+ * (`src/worker/payouts.ts`) owns retry/backoff/attempt-capping, so each call here is a single attempt
+ * that throws a retryable {@link ERROR_CODES.PROVIDER_FAILURE} on transient failure.
  *
- * Idempotency rides on `external_id = key` (the payout saga id): the worker (`src/worker/payouts.ts`)
- * owns retry/backoff/attempt-capping, so this is a single attempt that throws a retryable
- * {@link ERROR_CODES.PROVIDER_FAILURE} on transient failure. On re-run it recovers the already-created
- * transaction (`1007001`) and treats an already-confirmed transaction (`1007002`) as success, so a
- * retried payout never pays twice and never strands the seller's reserve.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for the
+ *   three-step flow, the confirm money-movement boundary, and the idempotent-replay handling.
  */
 
 import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';

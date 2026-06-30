@@ -268,10 +268,12 @@ export async function recordCheckpoint(
  * before a key rotation keeps verifying.
  *
  * Returns false on a normal mismatch: a changed root, an inauthentic signature, or a live head count
- * below the recorded one. That last check matters because deleting accounts shrinks the set the root
- * covers, so a root-only comparison would still match its smaller input. A healthy ledger only grows,
- * so fewer heads than recorded is itself a tamper signal. Throws only when the stored hex is
+ * below the recorded one. The head-count check guards against deleting accounts to shrink the set the
+ * root covers, which a root-only comparison would not catch. Throws only when the stored hex is
  * malformed, which is a corrupt row rather than a failed verification.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for why fewer
+ * heads than recorded is itself a tamper signal.
  */
 export async function verifyCheckpoint(
   deps: { ledger: Ledger; digest: Digest; signer: Signer },

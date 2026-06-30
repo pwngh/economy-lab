@@ -82,14 +82,12 @@ export async function spend(
   assertNoSelfDealing(operation);
   let recipientId = entitlementRecipient(operation);
 
-  // Refuse a second purchase that reuses an orderId already on file.
-  //
-  // The idempotency key drops exact retries, but two different requests can carry the same orderId
-  // under different keys; both pass the retry check and post, charging the buyer twice. Since a
-  // refund finds a sale by orderId, only the last-written sale's lines would be reversible,
-  // stranding the first charge. spend runs with the affected accounts locked, so reading the stored
-  // sale here can't race another writer. If one exists, return a business rejection (not a fault,
-  // same shape as FUNDS_IMMATURE below) so no second debit posts.
+  // Refuse a second purchase that reuses an orderId already on file, so the buyer is never
+  // double-charged for one order. spend runs with the affected accounts locked, so reading the
+  // stored sale here can't race another writer. Return a business rejection (not a fault, same
+  // shape as FUNDS_IMMATURE below) so no second debit posts.
+  // See https://economy-lab-docs.pages.dev/economy/reference/operations/spend/ for why orderId is
+  // distinct from the idempotency key and how DUPLICATE_ORDER protects against the double charge.
   let existing = await unit.sales.get(operation.orderId);
   if (existing !== null) {
     return rejected('DUPLICATE_ORDER', { orderId: operation.orderId });
@@ -186,10 +184,10 @@ function buildSpendLegs(
 //      PROMO_FLOAT account that offsets it.
 //   2. Pay the sellers out of platform revenue: debit house REVENUE, credit each seller's earned
 //      balance.
-// A promo grant isn't real money the buyer paid, so the sellers are funded from REVENUE rather
-// than the buyer. This funding pair is separate from the price the buyer owes, so it never enters
-// the check that buyer outflow equals the price. When seller shares don't divide evenly, the
-// leftover (promoPart minus what was paid out) is not debited from REVENUE, so the house keeps it.
+// Sellers are funded from REVENUE, not the buyer, because a promo grant isn't money the buyer paid;
+// see https://economy-lab-docs.pages.dev/economy/reference/operations/spend/ for the promo-funded
+// split. When seller shares don't divide evenly, the leftover (promoPart minus what was paid out)
+// is not debited from REVENUE, so the house keeps it.
 function appendPromoLegs(
   legs: Leg[],
   operation: Extract<Operation, { kind: 'spend' }>,

@@ -76,13 +76,12 @@ function assertSubscriptionId(subscriptionId: string): void {
   }
 }
 
-// Requires the caller to own the subscription, or to be privileged. A user actor may cancel
-// only their own subscription. A system or operator principal may cancel any. The central
-// authorize() cannot catch this. Cancel debits no user account, so its ownership rule has
-// nothing to check, and cancel is not privileged-only, since users must cancel their own. The
-// check therefore lives here, against the loaded record. Without it the handler would cancel
-// whatever id was named regardless of caller, which is an IDOR. A system or operator principal
-// returns immediately. A user passes only when their id matches the owner, else UNAUTHORIZED.
+// Requires the caller to own the subscription, or to be privileged. The central authorize()
+// cannot catch this because cancel debits no user account, so the ownership check lives here
+// against the loaded record; without it the handler would cancel any named id, an IDOR. A system
+// or operator principal returns immediately. A user passes only when their id matches the owner,
+// else UNAUTHORIZED.
+// See https://economy-lab-docs.pages.dev/economy/reference/operations/cancel-subscription/ for the ownership rules and why the central check can't enforce them.
 function assertMayCancel(
   operation: Extract<Operation, { kind: 'cancelSubscription' }>,
   subscription: Subscription,

@@ -74,10 +74,11 @@ export type { Capabilities, Options, Range, Statement } from '#src/ports.ts';
 
 // --- Composition from env ---------------------------------------------------------
 //
-// There are two source layers, since the directory split only half-expresses them. src/engines/ are
-// the systems of record that enforce ledger invariants natively (Postgres, MySQL): the database is
-// the source of truth, not an adapter. src/adapters/ are everything pluggable that does not enforce
-// invariants (in-memory and HTTP stores, Redis cache, SQS and HTTP dispatcher, payout processor, FX rates).
+// Two source layers the directory names only half-express: src/engines/ are the systems of record
+// that enforce ledger invariants natively (Postgres, MySQL), and src/adapters/ are everything
+// pluggable that does not (in-memory and HTTP stores, Redis cache, SQS and HTTP dispatcher, payout
+// processor, FX rates). See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/
+// for how every adapter meets one contract and the SQL engines also enforce it in the database.
 
 /**
  * External services with no built-in stand-in; the caller supplies a real one. `pricing` splits

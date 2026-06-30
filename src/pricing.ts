@@ -41,14 +41,12 @@ export function flatFee(): FeePolicy {
   return (input) => splitLegs(input.price, input.recipients, input.feeBps);
 }
 
-// Splits a sale's price into ledger lines for the fee policy above. The fee comes off the
-// top, the rest is divided among recipients by share, and revenue gets the fee plus any
-// rounding leftover so no unit of price is lost. Each recipient gets one credit to their
-// earned account, which holds money owed to them as a seller. Revenue gets one credit for
-// the fee plus the leftover.
+// Splits a sale's price into ledger lines for the fee policy above. See
+// https://economy-lab-docs.pages.dev/economy/ports/pricing/ for how the fee comes off the top, the
+// net divides by share, and the rounding leftover joins revenue so no unit of price is lost.
 //
-// These are the credit lines only. Credits are stored negative, so the lines sum to -price.
-// The spend handler adds the matching debit against the buyer's balance, which zeroes the
+// Load-bearing here: these are the credit lines only. Credits are stored negative, so the lines sum
+// to -price. The spend handler adds the matching debit against the buyer's balance, which zeroes the
 // posting.
 function splitLegs(
   price: Amount,
