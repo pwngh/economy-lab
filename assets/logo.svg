@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="economy-lab">
-  <rect x="4" y="4" width="56" height="56" rx="16" fill="none" stroke="#424a53" stroke-width="1.5"/>
-  <line x1="18" y1="26" x2="42" y2="26" stroke="#3fb950" stroke-width="3.5" stroke-linecap="round"/>
-  <polyline points="37,21 45,26 37,31" fill="none" stroke="#3fb950" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
-  <line x1="46" y1="38" x2="22" y2="38" stroke="#1f6feb" stroke-width="3.5" stroke-linecap="round"/>
-  <polyline points="27,33 19,38 27,43" fill="none" stroke="#1f6feb" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>
