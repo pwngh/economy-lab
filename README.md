@@ -1,30 +1,28 @@
-<p align="center">
+<h2 align="left">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
-    <img src="assets/logo.svg" width="84" alt="economy-lab">
+    <img src="assets/logo.svg" alt="" height="28" align="top">
   </picture>
-</p>
+  &#160;economy-lab
+</h2>
 
-<h1 align="center" style="margin-top: -36px;">economy-lab</h4>
+A provably-solvent credits economy: wallets, payouts, subscriptions, and a marketplace, on one double-entry ledger.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/tests-699_passing-3fb950" alt="tests">
-  <img src="https://img.shields.io/badge/runtime_deps-0-3fb950" alt="runtime deps">
-  <img src="https://img.shields.io/badge/node-%E2%89%A522.18-1f6feb" alt="node">
-  <img src="https://img.shields.io/badge/license-MIT-1f6feb" alt="license">
-</p>
+![tests](https://img.shields.io/badge/tests-699_passing-3fb950)
+![runtime deps](https://img.shields.io/badge/runtime_deps-0-3fb950)
+![node](https://img.shields.io/badge/node-%E2%89%A522.18-1f6feb)
+![license](https://img.shields.io/badge/license-MIT-1f6feb)
 
-<p align="center">
-  <a href="#quick-start">Quick start</a> -
-  <a href="#architecture">Architecture</a> -
-  <a href="#what-it-demonstrates">What it demonstrates</a> -
-  <a href="#run-it">Run it</a> -
-  <a href="#documentation">Documentation</a>
-</p>
+**On this page**
 
-<p align="center">
-  <em>A provably-solvent credits economy: wallets, payouts, subscriptions, and a marketplace, on one double-entry ledger.</em>
-</p>
+- [Highlights](#highlights)
+- [Quick start](#quick-start)
+- [Architecture](#architecture)
+- [What it demonstrates](#what-it-demonstrates)
+- [Run it](#run-it)
+- [Documentation](#documentation)
+
+---
 
 > Read the full documentation: [economy-lab-docs.pages.dev](https://economy-lab-docs.pages.dev/economy/).
 
