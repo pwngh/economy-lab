@@ -24,8 +24,8 @@ import { fixedClock, testConfig } from '#test/support/capabilities.ts';
 import type { Economy } from '#src/contract.ts';
 import type { WebhookHandler } from '#src/server.ts';
 
-// HMAC-SHA256 over body under `secret`, lowercase hex digest (the `x-signature` form). Web Crypto so
-// it runs on every target runtime.
+// Signs the body with HMAC-SHA256 under `secret` and returns a lowercase hex digest, the form the
+// `x-signature` header carries. Uses Web Crypto so the test runs on every target runtime.
 async function signHex(body: string, secret: string): Promise<string> {
   let key = await crypto.subtle.importKey(
     'raw',
@@ -42,7 +42,8 @@ async function signHex(body: string, secret: string): Promise<string> {
   return toHex(new Uint8Array(signature));
 }
 
-// POST to a webhook endpoint with optional signature/timestamp headers (signed, forged, or stale).
+// Builds a POST to a webhook endpoint with optional signature and timestamp headers. Callers pass
+// signed, forged, or stale headers to drive each verification path.
 function webhookRequest(
   provider: string,
   body: string,
@@ -55,8 +56,8 @@ function webhookRequest(
   });
 }
 
-// POST to /submit from an operation body. Money fields must already be decimal strings (the form the
-// server decodes), as a real client would send.
+// Builds a POST to /submit from an operation body. The money fields must already be decimal strings,
+// the form the server decodes, just as a real client would send.
 function submitRequest(body: Record<string, unknown>): Request {
   return new Request('https://economy.test/submit', {
     method: 'POST',
@@ -65,8 +66,8 @@ function submitRequest(body: Record<string, unknown>): Request {
   });
 }
 
-// topUp request body. Only `amount` is a decimal string (the one money field the server decodes);
-// the rest is plain JSON.
+// Builds a topUp request body. Only `amount` is a decimal string, the one money field the server
+// decodes. The rest is plain JSON.
 function topUpBody(userId: string, dollars: string): Record<string, unknown> {
   return {
     kind: 'topUp',
@@ -78,8 +79,8 @@ function topUpBody(userId: string, dollars: string): Record<string, unknown> {
   };
 }
 
-// spend request body for a buyer with no balance. The server checks up front and returns a rejected
-// outcome (reason INSUFFICIENT_FUNDS), not a server error.
+// Builds a spend request body for a buyer with no balance. The server checks the balance up front and
+// returns a rejected outcome with reason INSUFFICIENT_FUNDS, not a server error.
 function spendBody(buyerId: string, dollars: string): Record<string, unknown> {
   return {
     kind: 'spend',
@@ -133,7 +134,7 @@ describe('createServer /submit', () => {
 
     assert.equal(response.status, 400);
     assert.equal(typeof payload.error, 'string');
-    // Error response carries only the message; `detail`/`cause` stay server-side.
+    // The error response carries only the message. The `detail` and `cause` fields stay server-side.
     assert.equal('detail' in payload, false);
     assert.equal('cause' in payload, false);
   });
@@ -168,7 +169,7 @@ describe('createServer /submit', () => {
     let response = await server(submitRequest(topUpBody('usr_x', '1.00')));
     let payload = (await response.json()) as Record<string, unknown>;
 
-    // Retryable fault → 503, but the body is just the human-readable message.
+    // A retryable fault maps to 503, but the body is just the human-readable message.
     assert.equal(response.status, 503);
     assert.equal(payload.error, 'A storage layer failed.');
     // Exactly one key; no detail, cause, or stack.
@@ -228,7 +229,7 @@ describe('createServer /webhooks HMAC Verification', () => {
   test('a forged signature returns 401 and the handler never runs (no mutation)', async () => {
     let secret = 'sek_test';
     let body = JSON.stringify({ eventId: 'evt_2', amount: '10.00' });
-    // A valid-hex but wrong signature: signed with a different secret.
+    // Produces a valid-hex but wrong signature by signing with a different secret.
     let forged = await signHex(body, 'wrong-secret');
 
     let invoked = false;
@@ -404,8 +405,8 @@ describe('createServer Health And Readiness', () => {
   });
 
   test('GET /readyz returns 503 when the store read throws', async () => {
-    // Minimal economy whose readiness probe (read.balance) fails, for an unreachable store. Only what
-    // /readyz touches needs to be real.
+    // Builds a minimal economy whose readiness probe, read.balance, throws to stand in for an
+    // unreachable store. Only the parts that /readyz touches need to be real.
     let economy = {
       submit: async () => {
         throw new Error('not used');

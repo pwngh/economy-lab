@@ -44,9 +44,10 @@ import type {
   Store,
 } from '#src/ports.ts';
 
-// Deterministic capability bundle for the worker job. Takes the caller's `digest` so the seal
-// hashes with the same function the ledger used at write time, so recomputed hashes match. The
-// sealing job only reads digest/signer/clock/ids; the rest are stand-ins to satisfy the type.
+// Builds a deterministic capability bundle for the worker job. Takes the caller's `digest` so the
+// seal hashes with the same function the ledger used at write time, which keeps recomputed hashes
+// matching. The sealing job only reads digest, signer, clock, and ids. The other capabilities are
+// stand-ins that satisfy the type.
 function workerCtx(digest: Digest): WorkerCtx {
   return {
     clock: fixedClock(0),
@@ -61,19 +62,19 @@ function workerCtx(digest: Digest): WorkerCtx {
   };
 }
 
-// Reconciliation source that returns nothing on either side, so the reconcile sweep finds no
-// records to mismatch.
+// Builds a reconciliation source that returns nothing on either side. The reconcile sweep then
+// finds no records to mismatch.
 function emptyFeed(): ReconcileFeed {
   return { pull: async () => ({ processor: [], ledger: [] }) };
 }
 
-// Event dispatcher that discards everything. No event is enqueued, so it is never invoked;
-// present only to complete the sweep input.
+// Builds an event dispatcher that discards everything. No event is enqueued, so the dispatcher is
+// never invoked. It exists only to complete the sweep input.
 function nullDispatcher(): Dispatcher {
   return async () => {};
 }
 
-// The full argument bundle the runner passes to every sweep. Callers can override any field.
+// Builds the full argument bundle the runner passes to every sweep. Callers can override any field.
 function sweepInput(overrides?: Partial<SweepInput>): SweepInput {
   return {
     now: 1_000,
@@ -85,8 +86,9 @@ function sweepInput(overrides?: Partial<SweepInput>): SweepInput {
   };
 }
 
-// One balanced transaction: credit 500 to the user's spendable balance, debit the matching 500
-// to platform revenue. Touches two accounts, so the ledger has two accounts to snapshot.
+// Builds one balanced transaction. It credits 500 to the user's spendable balance and debits the
+// matching 500 to platform revenue. The transaction touches two accounts, so the ledger has two
+// accounts to snapshot.
 function balancedPosting(txnId: string, user: string): Posting {
   let amount = toAmount('CREDIT', 500n);
   return {
@@ -96,9 +98,9 @@ function balancedPosting(txnId: string, user: string): Posting {
   };
 }
 
-// In-memory store seeded with one transaction, so the ledger has real accounts to snapshot.
-// Returns the store and its hash function, so the test can pass the same one to both seal and
-// verify.
+// Builds an in-memory store seeded with one transaction, so the ledger has real accounts to
+// snapshot. Returns the store and its hash function so the test can pass the same hash function to
+// both seal and verify.
 async function populatedStore(): Promise<{ store: Store; digest: Digest }> {
   let digest = seededDigest(1);
   let store = memoryStore({ digest });
@@ -108,8 +110,9 @@ async function populatedStore(): Promise<{ store: Store; digest: Digest }> {
   return { store, digest };
 }
 
-// Wrap a store so checkpoint put always throws the given error, leaving everything else working.
-// Lets a test drive the sealing job's error handling (retry vs. set aside for an operator).
+// Wraps a store so checkpoint put always throws the given error, while everything else keeps
+// working. This lets a test drive the sealing job's error handling, which either retries or sets
+// the fault aside for an operator.
 function withFailingCheckpointPut(store: Store, error: Error): Store {
   return {
     ...store,
@@ -221,11 +224,11 @@ async function deadLettersATerminalFault(): Promise<void> {
   assert.deepEqual(summary.retrying, []);
 }
 
-// An account's postings form a hash chain; its "head" is the latest hash. A checkpoint seals a
-// "root" over the current heads. This appends a second balanced posting, advancing a head, so
-// the live heads no longer match the earlier checkpoint and re-verification reports a mismatch.
-// The debit goes to STORED_VALUE (holding account for issued credits), leaving the seed's
-// REVENUE account untouched.
+// Appends a second balanced posting that advances an account head. An account's postings form a
+// hash chain, and its head is the latest hash in that chain. A checkpoint seals a root over the
+// current heads. Advancing a head makes the live heads no longer match the earlier checkpoint, so
+// re-verification reports a mismatch. The debit goes to STORED_VALUE, the holding account for
+// issued credits, which leaves the seed's REVENUE account untouched.
 async function mutateLedger(store: Store, user: string): Promise<void> {
   let amount = toAmount('CREDIT', 100n);
   await store.transaction((unit) =>
@@ -237,10 +240,11 @@ async function mutateLedger(store: Store, user: string): Promise<void> {
   );
 }
 
-// Wrap a store so its ledger reports only the first `keep` account heads, as if the rest were
+// Wraps a store so its ledger reports only the first `keep` account heads, as if the rest were
 // deleted. Re-verification recomputes the root over whatever heads it sees, so a root over this
-// shorter list still matches a checkpoint sealed over the same shorter list. Missing accounts
-// are caught only by the separate check that live head count >= the count the checkpoint recorded.
+// shorter list still matches a checkpoint sealed over the same shorter list. The separate count
+// check is what catches missing accounts: it requires the live head count to be at least the count
+// the checkpoint recorded.
 function withTruncatedHeads(store: Store, keep: number): Store {
   return {
     ...store,
@@ -292,7 +296,7 @@ async function flagsAMismatchAfterTheLedgerChanges(): Promise<void> {
   let { store, digest } = await populatedStore();
   let ctx = workerCtx(digest);
   let sealed = await sealCheckpoint(store, ctx);
-  // Change the ledger after sealing: the live heads no longer match the signed root.
+  // Change the ledger after sealing, so the live heads no longer match the signed root.
   await mutateLedger(store, 'usr_a');
 
   let summary = await reverifyCheckpoint(store, ctx);
@@ -305,10 +309,11 @@ async function flagsAMismatchAfterTheLedgerChanges(): Promise<void> {
 }
 
 async function verifiesThePriorCheckpointBeforeSealingAFreshOne(): Promise<void> {
-  // R2: one sweep cycle must verify the prior sealed checkpoint against the live ledger before
-  // sealing a fresh one. Seal, then change the ledger so a head no longer matches the signed
-  // root. runSweeps once should report checkpointVerify mismatch=true, showing the verify ran
-  // against the prior checkpoint, not one sealed this cycle (which would match by construction).
+  // R2: one sweep cycle must verify the prior sealed checkpoint against the live ledger before it
+  // seals a fresh one. The test seals a checkpoint, then changes the ledger so a head no longer
+  // matches the signed root. A single runSweeps call should report checkpointVerify mismatch=true.
+  // That proves the verify ran against the prior checkpoint. A checkpoint sealed this cycle would
+  // match by construction, so it could never surface this mismatch.
   let { store, digest } = await populatedStore();
   let ctx = workerCtx(digest);
   await sealCheckpoint(store, ctx);
@@ -328,10 +333,10 @@ async function verifiesThePriorCheckpointBeforeSealingAFreshOne(): Promise<void>
 async function flagsAMismatchWhenHeadsAreTruncated(): Promise<void> {
   let { store, digest } = await populatedStore();
   let ctx = workerCtx(digest);
-  // Seal while the store reports one account head, then drop to zero, simulating a deleted
-  // account. A root-only check never notices deletion (it matches its own shrunken input). The
-  // count check catches it: it runs first and fails because live head count (0) is below the
-  // count the checkpoint recorded (1).
+  // Seal while the store reports one account head, then drop to zero to simulate a deleted account.
+  // A root-only check never notices the deletion, because the root matches its own shrunken input.
+  // The count check is what catches it. The count check runs first and fails because the live head
+  // count (0) is below the count the checkpoint recorded (1).
   let oneHead = withTruncatedHeads(store, 1);
   let sealed = await sealCheckpoint(oneHead, ctx);
   assert.equal(sealed.sealed!.count, 1);
@@ -357,9 +362,9 @@ async function flagsAMismatchWhenHeadsAreTruncated(): Promise<void> {
 async function verifiesWhenTheHeadSetGrewSinceSealing(): Promise<void> {
   let { store, digest } = await populatedStore();
   let ctx = workerCtx(digest);
-  // Seal over the full two-head ledger, then re-verify with the sealed count pinned to 1, so live
-  // head count (2) exceeds the sealed count. Root is unchanged so it matches, and the count guard
-  // (live 2 >= sealed 1) does not fire: a grown head set is healthy, not a mismatch.
+  // Seal over the full two-head ledger, then re-verify with the sealed count pinned to 1, so the
+  // live head count (2) exceeds the sealed count. The root is unchanged, so it still matches. The
+  // count guard (live 2 >= sealed 1) does not fire. A grown head set is healthy, not a mismatch.
   let sealed = await sealCheckpoint(store, ctx);
   assert.equal(sealed.sealed!.count, 2);
   let grown: Store = {
@@ -384,9 +389,9 @@ async function deadLettersACorruptCheckpointRow(): Promise<void> {
   await sealCheckpoint(store, ctx);
   let real = await store.checkpoints.latest();
   // Wrap the store so the latest checkpoint keeps its valid, matching root but carries a malformed
-  // signature. Ledger is unchanged, so roots match and verifyCheckpoint reaches the signature
-  // check, where decoding the bad hex throws: a terminal failure (corrupt stored row), not a
-  // normal mismatch.
+  // signature. The ledger is unchanged, so the roots match and verifyCheckpoint reaches the
+  // signature check. Decoding the bad hex throws there. That is a terminal failure from a corrupt
+  // stored row, not a normal mismatch.
   let corrupt: Store = {
     ...store,
     checkpoints: {

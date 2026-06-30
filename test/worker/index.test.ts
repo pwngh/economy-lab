@@ -42,8 +42,9 @@ import type {
   Store,
 } from '#src/ports.ts';
 
-// Deterministic fake capabilities handed to every background job. Takes the same `digest`
-// (hasher) the seed posting used, so the checkpoint job hashes the bytes recorded at seed time.
+// Builds the deterministic fake capabilities handed to every background job. It takes the same
+// `digest` hasher the seed posting used, so the checkpoint job hashes the bytes recorded at seed
+// time.
 function workerCtx(digest: Digest): WorkerCtx {
   return {
     clock: fixedClock(0),
@@ -58,21 +59,21 @@ function workerCtx(digest: Digest): WorkerCtx {
   };
 }
 
-// Reconciliation source empty on both sides (processor and ledger): nothing to mismatch, so
-// the reconcile job runs clean without a real processor record.
+// Builds a reconciliation source that is empty on both the processor side and the ledger side.
+// Nothing can mismatch, so the reconcile job runs clean without a real processor record.
 function emptyFeed(): ReconcileFeed {
   return { pull: async () => ({ processor: [], ledger: [] }) };
 }
 
-// Event dispatcher that discards everything. Never invoked (no event is queued); present only
-// to complete the input object.
+// Builds an event dispatcher that discards everything. No event is queued, so it is never invoked.
+// It exists only to complete the input object.
 function nullDispatcher(): Dispatcher {
   return async () => {};
 }
 
-// Arguments the runner passes to every job: `now`, a per-pass `limit` for due-item scans,
-// a `dispatcher` for event delivery, and `feed` plus `windows` for reconciliation. Override any
-// field per test.
+// Builds the arguments the runner passes to every job. `now` is the current time. `limit` caps the
+// due-item scan on each pass. `dispatcher` delivers events. `feed` and `windows` drive
+// reconciliation. Each test can override any field.
 function sweepInput(overrides?: Partial<SweepInput>): SweepInput {
   return {
     now: 1_000,
@@ -84,8 +85,8 @@ function sweepInput(overrides?: Partial<SweepInput>): SweepInput {
   };
 }
 
-// Balanced posting: 500 credits from platform revenue to a user's spendable balance. Gives the
-// ledger two real accounts so the checkpoint job has something to snapshot.
+// Builds a balanced posting that moves 500 credits from platform revenue to a user's spendable
+// balance. This gives the ledger two real accounts, so the checkpoint job has something to snapshot.
 function seedPosting(): Posting {
   let amount = toAmount('CREDIT', 500n);
   return {
@@ -95,8 +96,8 @@ function seedPosting(): Posting {
   };
 }
 
-// In-memory store with the seed posting committed, so checkpoint and treasury jobs read real
-// accounts. Returns the store plus its hasher, for passing into the worker context.
+// Builds an in-memory store with the seed posting already committed, so the checkpoint and treasury
+// jobs read real accounts. Returns the store plus its hasher for passing into the worker context.
 async function seededStore(): Promise<{ store: Store; digest: Digest }> {
   let digest = seededDigest(1);
   let store = memoryStore({ digest });
@@ -104,16 +105,16 @@ async function seededStore(): Promise<{ store: Store; digest: Digest }> {
   return { store, digest };
 }
 
-// One boolean per job, flipped on the job's first store read; a test asserts all true to prove
-// every job ran.
+// Holds one boolean per job. Each flag flips on that job's first store read, and a test asserts all
+// flags are true to prove every job ran.
 //
-// Three jobs lack a distinct read to watch:
-//   - checkpoint reads the same `ledger.heads` (per-account latest entries) as treasury, so it
-//     can't be told apart there; tracked by its later `checkpoints.put` write instead.
+// Some jobs lack a distinct read to watch, so they are tracked differently:
+//   - checkpoint reads the same `ledger.heads` (per-account latest entries) as treasury, so the
+//     read cannot tell them apart. Its later `checkpoints.put` write tracks it instead.
 //   - checkpointVerify is tracked by its `checkpoints.latest` read.
 //   - reconcile is tracked on its feed (see `recordingFeed`), not in this store.
-//   - feeSweep shares treasury's `ledger.heads` read, so it has no distinct flag in this
-//     roll-up; it is asserted instead in treasury.test.ts.
+//   - feeSweep shares treasury's `ledger.heads` read, so it has no distinct flag in this roll-up.
+//     It is asserted instead in treasury.test.ts.
 type Touched = {
   payouts: boolean;
   subscriptions: boolean;
@@ -124,8 +125,8 @@ type Touched = {
   promos: boolean;
 };
 
-// Wrap a store so each job's first call flips its flag in `touched`, optionally throwing a
-// supplied error from one chosen job. Shared by the "every job ran" and "throw is isolated" tests.
+// Wraps a store so each job's first call flips its flag in `touched`. A chosen job can be made to
+// throw a supplied error. Shared by the "every job ran" and "throw is isolated" tests.
 function recordingStore(
   store: Store,
   touched: Touched,
@@ -173,8 +174,8 @@ function recordingStore(
   };
 }
 
-// Wrap an async store method to run `before` (flips the flag, may throw) and only then call the
-// real method. Running `before` first records the flag even when the real call returns empty.
+// Wraps an async store method to run `before`, then call the real method. `before` flips the flag
+// and may throw. Running it first records the flag even when the real call returns empty.
 function probe<TArgs extends unknown[], TResult>(
   method: (...args: TArgs) => Promise<TResult>,
   before: () => void,
@@ -185,8 +186,8 @@ function probe<TArgs extends unknown[], TResult>(
   };
 }
 
-// Reconciliation source that flips its flag when pulled, so the reconcile job's run is observable
-// like the store-backed jobs.
+// Builds a reconciliation source that flips its flag when pulled. This makes the reconcile job's run
+// observable, like the store-backed jobs.
 function recordingFeed(touched: { reconcile: boolean }): ReconcileFeed {
   return {
     pull: async () => {
@@ -343,7 +344,7 @@ async function startSchedulesTheBatchOnTheInjectedScheduler(): Promise<void> {
 
   assert.notEqual(worker.start, undefined);
   let stop = worker.start!(5_000, sweepInput());
-  // start registered the interval with the scheduler and got back a cancel function.
+  // start registered the interval with the scheduler and received a cancel function in return.
   assert.equal(scheduled!.ms, 5_000);
   // Running the registered task once executes a full batch of every job without throwing.
   await scheduled!.task();
@@ -352,12 +353,12 @@ async function startSchedulesTheBatchOnTheInjectedScheduler(): Promise<void> {
   await store.close();
 }
 
-// No dispatcher: relay sweep skips cleanly. Reports success with an empty summary, never touches
-// the outbox, leaves pending events queued for a later run.
+// When no dispatcher is configured, the relay sweep skips cleanly. It reports success with an empty
+// summary, never touches the outbox, and leaves pending events queued for a later run.
 async function skipsTheRelaySweepWhenNoDispatcherIsConfigured(): Promise<void> {
   let { store, digest } = await seededStore();
-  // Queue one event: a relay run that happened would deliver and mark it (changing the outbox);
-  // a skipped run leaves it pending and untouched.
+  // Queue one event. A relay run that actually happened would deliver it and mark it, changing the
+  // outbox. A skipped run leaves it pending and untouched.
   await store.transaction((unit) =>
     unit.outbox.enqueue({
       id: 'obx_skip',
@@ -376,7 +377,7 @@ async function skipsTheRelaySweepWhenNoDispatcherIsConfigured(): Promise<void> {
     }),
   );
 
-  // dispatcher: undefined is the no-dispatcher deployment (see selectDispatcher in src/index.ts).
+  // An undefined `dispatcher` is the no-dispatcher deployment (see selectDispatcher in src/index.ts).
   let batch = await runSweeps(
     store,
     workerCtx(digest),

@@ -33,13 +33,13 @@ import type {
   Velocity,
 } from '#src/ports.ts';
 
-// Wire form of one posting leg: the account, plus its amount as a decimal string that also
-// names the currency (e.g. `'CREDIT:12.34'`).
+// The wire form of one posting leg. It carries the account plus the amount as a decimal string
+// that also names the currency, such as `'CREDIT:12.34'`.
 type WireLeg = { account: string; amount: string };
 
-// Each account keeps a tamper-evident hash chain over its postings (each entry's hash covers
-// the previous hash plus the new contents, so a later edit breaks the chain). Wire form of one
-// account's link for a single transaction: the account, its chain hash before, and after.
+// Each account keeps a tamper-evident hash chain over its postings. Each entry's hash covers the
+// previous hash plus the new contents, so a later edit breaks the chain. This is the wire form of
+// one account's link for a single transaction: the account, its chain hash before, and after.
 type WireLink = { account: string; prevHash: string; hash: string };
 
 function encodeLeg(leg: Leg): WireLeg {
@@ -51,17 +51,19 @@ function decodeLeg(wire: unknown): Leg {
   return { account: row.account as AccountRef, amount: amountFrom(row.amount) };
 }
 
-// Parse an encoded amount string back into an `Amount`. Currency before the colon, decimal
-// value after (`'CREDIT:12.34'`), so the string is self-contained. Split and pass to `decodeAmount`.
+// Parses an encoded amount string back into an `Amount`. The currency sits before the colon and
+// the decimal value after it, as in `'CREDIT:12.34'`, so the string is self-contained. This splits
+// on the colon and passes both parts to `decodeAmount`.
 function amountFrom(wire: string): Amount {
   let colon = wire.indexOf(':');
   let currency = wire.slice(0, colon) as Amount['currency'];
   return decodeAmount(wire.slice(colon + 1), currency);
 }
 
-// Like `amountFrom` but returns null instead of throwing when the string isn't an encoded amount,
-// so the generic walk below can tell a `CREDIT:12.34` from an ordinary string that merely contains
-// a colon. The decimal tail must parse (decodeAmount throws otherwise), caught here.
+// Behaves like `amountFrom` but returns null instead of throwing when the string is not an encoded
+// amount. This lets the generic walk below tell a `CREDIT:12.34` from an ordinary string that
+// merely contains a colon. The decimal tail must parse, since `decodeAmount` throws otherwise, and
+// that throw is caught here.
 function tryAmountFrom(wire: string): Amount | null {
   let colon = wire.indexOf(':');
   if (colon < 0) {
@@ -76,10 +78,11 @@ function tryAmountFrom(wire: string): Amount | null {
 }
 
 // The inbox row carries a whole {@link Operation}, whose money fields differ by `kind` (topUp.amount,
-// spend.price, clawback.amount, …) and hold a `bigint` JSON.stringify can't serialize. Rather than a
-// per-kind branch that would drift as the union grows, these walk the operation generically and swap
-// every branded Amount for its `CREDIT:12.34` string on the way out, reversing it on the way in —
-// the same Amount-brand walk the SQL engines use to store an Operation in a jsonb column.
+// spend.price, clawback.amount, and so on) and hold a `bigint` that JSON.stringify cannot serialize.
+// A per-kind branch would drift as the union grows. Instead, these two functions walk the operation
+// generically. The encoder swaps every branded Amount for its `CREDIT:12.34` string, and the decoder
+// reverses that swap. This is the same Amount-brand walk the SQL engines use to store an Operation in
+// a jsonb column.
 function encodeAmounts(value: unknown): unknown {
   if (isAmount(value)) {
     return encodeAmount(value);

@@ -16,14 +16,14 @@ import assert from 'node:assert/strict';
 import type { Cache } from '#src/ports.ts';
 
 /**
- * The shared {@link Cache} contract every adapter must satisfy, run against the in-process
- * reference (`memoryCache`) and the Redis adapter (over a fake client) — the same pattern as
- * `test/conformance/store.ts`: one suite, many backends, so a new Cache implementation can't
- * silently diverge.
+ * Runs the shared {@link Cache} contract that every adapter must satisfy. The suite runs against
+ * the in-process reference (`memoryCache`) and the Redis adapter over a fake client. This follows
+ * the same pattern as `test/conformance/store.ts`: one suite, many backends, so a new Cache
+ * implementation cannot silently diverge.
  *
- * Covers the cross-adapter contract (miss, round-trip, overwrite, invalidate, read-back before
- * expiry). Backend-specific behavior — Redis key prefixing and a real `PX` expiry, the memory
- * cache's clock-driven expiry — stays in each adapter's own test.
+ * The suite covers the cross-adapter contract: miss, round-trip, overwrite, invalidate, and
+ * read-back before expiry. Backend-specific behavior stays in each adapter's own test. That
+ * includes Redis key prefixing and a real `PX` expiry, plus the memory cache's clock-driven expiry.
  */
 export function runCacheConformance(
   name: string,

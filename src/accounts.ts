@@ -15,8 +15,8 @@ import type { Currency } from '#src/money.ts';
 import type { Operation } from '#src/contract.ts';
 
 /**
- * The three kinds of account a single user can have. A category, not a currency; the currency
- * of any money movement comes from the amount's own `Currency`.
+ * The three kinds of account a single user can have. This is a category, not a currency. The
+ * currency of any money movement comes from the amount's own `Currency`.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/ Accounts & double-entry} for how these accounts and their normal sides balance.
  */
@@ -53,8 +53,8 @@ export function promo(userId: string): AccountRef {
 
 /**
  * The platform's own ("house") accounts. Each id starts with `platform:` to distinguish it from a
- * user account. Per-account comments note currency and normal side ("debit-normal" = goes up when
- * debited; "credit-normal" = goes up when credited).
+ * user account. Each account's comment notes its currency and its normal side. A debit-normal
+ * account goes up when debited. A credit-normal account goes up when credited.
  */
 export const SYSTEM = {
   // The real USD the platform holds in trust on behalf of users. Debit-normal, in USD.
@@ -242,7 +242,7 @@ let LOCK_SETS: {
   refund: () => [...REVERSAL_CONTRAS],
   clawback: (o) => [
     spendable(o.userId),
-    SYSTEM.STORED_VALUE, // a chargeback cancels credits the same way a top-up issued them — against STORED_VALUE, not REVENUE
+    SYSTEM.STORED_VALUE, // a chargeback cancels credits against STORED_VALUE, not REVENUE, the same way a top-up issued them
     SYSTEM.RECEIVABLE,
   ],
   requestPayout: (o) => [earned(o.userId), SYSTEM.PAYOUT_RESERVE],
@@ -253,12 +253,14 @@ let LOCK_SETS: {
     SYSTEM.REVENUE,
     earned(o.sellerId),
   ],
-  // Only change subscription/entitlement state; post no money, so no accounts to lock.
+  // These operations only change subscription or entitlement state. They post no money, so they
+  // lock no accounts.
   cancelSubscription: () => [],
   grantEntitlement: () => [],
   revokeEntitlement: () => [],
   grantPromo: (o) => [promo(o.userId), SYSTEM.PROMO_FLOAT],
-  // The adjusted account plus OPENING_EQUITY, which holds the offsetting entry so the books balance.
+  // Lock the adjusted account plus OPENING_EQUITY, which holds the offsetting entry so the books
+  // balance.
   adjust: (o) => [o.account, SYSTEM.OPENING_EQUITY],
   reverse: () => [...REVERSAL_CONTRAS],
   // Undoing a payout by hand reverses the original: debit PAYOUT_RESERVE, credit the seller's

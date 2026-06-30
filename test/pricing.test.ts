@@ -22,9 +22,9 @@ import type { Amount } from '#src/money.ts';
 import type { Recipient } from '#src/contract.ts';
 import type { Leg } from '#src/ports.ts';
 
-// Sums the signed amounts of every ledger line. Split returns only credit lines, stored as
-// negative amounts, so a balanced split sums to −price. Single currency throughout, so a
-// plain sum suffices.
+// Sums the signed amounts of every ledger line. The split returns only credit lines, which
+// are stored as negative amounts, so a balanced split sums to -price. Every amount uses one
+// currency, so a plain integer sum is correct.
 function signedSum(legs: ReadonlyArray<Leg>): bigint {
   let total = 0n;
   for (let leg of legs) {
@@ -51,9 +51,9 @@ let soloSeller: Recipient[] = [{ sellerId: 'usr_seller', shareBps: 10_000 }];
 
 // --- The conservation property ----------------------------------------------------
 
-// Cases checking the price is fully accounted for. Some divide evenly, others leave a
-// rounding remainder the split must park somewhere. Each checks the credit lines sum to
-// −price.
+// Cases that check the price is fully accounted for. Some prices divide evenly. Others leave
+// a rounding remainder that the split must park somewhere. Each case asserts the credit lines
+// sum to -price.
 let CONSERVATION_CASES: ReadonlyArray<{
   name: string;
   price: Amount;
@@ -141,8 +141,8 @@ function conservesPriceAcrossPricesAndSplits(): void {
 }
 
 function splitsFeeOffGrossAndShareOffNet(): void {
-  // 10.00 sale at 30% fee: 3.00 fee off the gross goes to revenue, 7.00 net to the seller.
-  // Divides evenly, no leftover.
+  // A 10.00 sale at a 30% fee. The 3.00 fee comes off the gross and goes to revenue. The 7.00
+  // net goes to the seller. The amounts divide evenly, so there is no leftover.
   let legs = flatFee()({
     price: credit('10.00'),
     recipients: soloSeller,
@@ -154,8 +154,8 @@ function splitsFeeOffGrossAndShareOffNet(): void {
 }
 
 function postsRoundingResidualToRevenue(): void {
-  // 10.01 split three ways doesn't divide evenly, so each share rounds down. The dropped
-  // cents go to REVENUE rather than vanishing, keeping the whole price accounted for.
+  // 10.01 split three ways does not divide evenly, so each share rounds down. The dropped
+  // cents go to REVENUE rather than vanishing, which keeps the whole price accounted for.
   let price = credit('10.01');
   let recipients: Recipient[] = [
     { sellerId: 'usr_a', shareBps: 3_334 },
@@ -174,8 +174,8 @@ function postsRoundingResidualToRevenue(): void {
 }
 
 function sendsWholePriceToRevenueWhenNoRecipients(): void {
-  // No sellers, so fee plus the leftover net (together the whole price) goes to REVENUE as a
-  // single credit line that still sums to −price.
+  // There are no sellers, so the fee plus the leftover net make up the whole price. That whole
+  // price goes to REVENUE as a single credit line, which still sums to -price.
   let legs = flatFee()({
     price: credit('4.00'),
     recipients: [],

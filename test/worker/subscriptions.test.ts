@@ -37,8 +37,9 @@ import type { WorkerCtx } from '#src/contract.ts';
 import type { Config } from '#src/config.ts';
 import type { Options, Store, Subscription, Unit } from '#src/ports.ts';
 
-// Context the sweep needs: clock, ids, logger, fee config, etc. All no-op test stand-ins.
-// `overrides` swaps in a different config (e.g. fee rate) without rebuilding the rest.
+// Builds the context the sweep needs: clock, ids, logger, fee config, and so on. Every field is a
+// no-op test stand-in. `overrides` swaps in a different config (for example a different fee rate)
+// without rebuilding the rest.
 function workerCtx(overrides?: { config?: Config }): WorkerCtx {
   return {
     clock: fixedClock(0),
@@ -53,10 +54,10 @@ function workerCtx(overrides?: { config?: Config }): WorkerCtx {
   };
 }
 
-// Put `amount` into a user's account so a later charge has something to draw on. The
-// matching debit goes to STORED_VALUE (a platform account allowed to go negative,
-// tracking credits in circulation): keeps the seed entry balanced and leaves REVENUE at
-// zero for later checks.
+// Puts `amount` into a user's account so a later charge has something to draw on. The matching
+// debit goes to STORED_VALUE, a platform account that is allowed to go negative and tracks credits
+// in circulation. Routing the debit there keeps the seed entry balanced and leaves REVENUE at zero
+// for the later assertions.
 async function fund(
   unit: Unit,
   account: AccountRef,
@@ -74,9 +75,9 @@ async function fund(
   );
 }
 
-// A subscription record as it looks right after the first month: ACTIVE, next charge due.
-// Defaults fill the fields a case doesn't care about; each case sets only what it tests
-// (price, due time, funding).
+// Builds a subscription record as it looks right after the first month: ACTIVE, with the next
+// charge due. The defaults fill the fields a case does not care about. Each case overrides only
+// what it tests, such as price, due time, or funding.
 function subscription(
   overrides: Partial<Subscription> & Pick<Subscription, 'id'>,
 ): Subscription {
@@ -95,8 +96,8 @@ function subscription(
   };
 }
 
-// Save an ACTIVE subscription and give the buyer `funded` to spend. The buyer's account
-// can't go negative, so without seeding a charge would be rejected as an overdraft.
+// Saves an ACTIVE subscription and gives the buyer `funded` to spend. The buyer's account cannot
+// go negative, so without this seeding a charge would be rejected as an overdraft.
 async function openSub(
   store: Store,
   row: Subscription,
@@ -141,7 +142,6 @@ async function chargesAFundedRenewalAndAdvancesTheDueTime(
     credit('70.00'),
   );
   assert.deepEqual(await store.ledger.balance(SYSTEM.REVENUE), credit('30.00'));
-  // Still ACTIVE, next charge moved one period forward.
   let billed = await store.subscriptions.load('sub_1');
   assert.equal(billed!.state, 'ACTIVE');
   assert.equal(billed!.nextDueAt, sub.nextDueAt + sub.periodMs);
@@ -151,10 +151,11 @@ async function chargesAFundedRenewalAndAdvancesTheDueTime(
 async function roundsTheFeeUpToAWholeCreditTowardThePlatform(
   store: Store,
 ): Promise<void> {
-  // 30% of 100.01 is 30.003 credits, between whole credits. Fee rounds up to a whole credit, so
-  // the platform takes 31.00 and the seller keeps 69.01. 100.01 makes the fee fractional in minor
-  // units (3000.3): a path that floored to minor units before rounding up would drop the 0.3 and
-  // take only 30.00, so this pins that renewal shares pricing.ts `feeForPrice`.
+  // 30% of 100.01 is 30.003 credits, which falls between whole credits. The fee rounds up to a
+  // whole credit, so the platform takes 31.00 and the seller keeps 69.01. The 100.01 price makes
+  // the fee fractional in minor units (3000.3). A path that floored to minor units before rounding
+  // up would drop the 0.3 and take only 30.00. This pins that the renewal shares the same
+  // `feeForPrice` rounding as the rest of pricing.ts.
   let sub = subscription({ id: 'sub_1', price: credit('100.01') });
   await openSub(store, sub, credit('100.01'));
 
@@ -274,9 +275,9 @@ async function isolatesAPerItemFaultAndDeadLettersWhileTheBatchContinues(): Prom
   await store.close();
 }
 
-// Wrap a store so any read of `badUser`'s spendable balance throws STORE.FAILURE; every other
-// method passes through. That error is treated as permanent, so the sweep gives up on the record
-// and dead-letters it rather than leaving it for the next run to re-hit.
+// Wraps a store so any read of `badUser`'s spendable balance throws STORE.FAILURE, while every
+// other method passes through. That error is treated as permanent, so the sweep gives up on the
+// record and dead-letters it rather than leaving it for the next run to re-hit.
 function faultOnBuyerBalance(store: Store, badUser: string): Store {
   return {
     ...store,
@@ -302,11 +303,11 @@ function faultOnBuyerBalance(store: Store, badUser: string): Store {
   };
 }
 
-// Wrap a store so reading `badUser`'s spendable balance throws a plain Error rather than one of
+// Wraps a store so reading `badUser`'s spendable balance throws a plain Error rather than one of
 // the project's typed errors. The sweep treats unrecognized errors as transient infra failures
 // worth retrying, so this drives the retry-and-count path instead of the give-up path the
 // permanent-error wrapper above triggers. Every other method passes through, so the row can still
-// be picked up and re-billed, staying ACTIVE until the retry count hits its cap.
+// be picked up and re-billed. The row stays ACTIVE until the retry count hits its cap.
 function retryableFaultOnBuyerBalance(store: Store, badUser: string): Store {
   return {
     ...store,
@@ -440,16 +441,17 @@ async function resetsAttemptsToZeroOnASuccessfulRenewal(): Promise<void> {
 }
 
 // Wrap a store so `subscriptions.claimDue` always hands back the same stale snapshot of one
-// subscription, regardless of the underlying row. Models two overlapping renewal sweepers that
-// both claimed the row (period 1, due at 0) before either billed: the second still believes the
-// row is due for period 2 even though the first advanced it. Every other method passes through,
-// so the real row's state (nextDueAt, period, balance) updates normally; only the claim is frozen.
+// subscription, regardless of the underlying row. This models two overlapping renewal sweepers
+// that both claimed the row (period 1, due at 0) before either billed. The second sweep still
+// believes the row is due for period 2 even though the first advanced it. Every other method
+// passes through, so the real row's state (nextDueAt, period, balance) updates normally. Only the
+// claim is frozen.
 //
-// Harness for the two guards against a double charge. First, the renewal reserves a one-time key
-// naming this exact period before posting, so the second sweep finds it taken and posts nothing.
-// Second, the due-date advance is a compare-and-set (move forward only if the stored due date
-// still matches the one this sweep started from), so the second sweep's advance fails. Either way
-// the second sweep does nothing: no charge, no second event.
+// This is the harness for the two guards against a double charge. First, the renewal reserves a
+// one-time key naming this exact period before posting, so the second sweep finds the key taken
+// and posts nothing. Second, the due-date advance is a compare-and-set: it moves the date forward
+// only if the stored due date still matches the one this sweep started from, so the second sweep's
+// advance fails. Either way the second sweep does nothing: no charge and no second event.
 function staleClaimDue(store: Store, snapshot: Subscription): Store {
   return {
     ...store,

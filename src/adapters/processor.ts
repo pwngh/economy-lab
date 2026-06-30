@@ -95,7 +95,7 @@ async function submitPayout(
   }
 
   // Read the body before checking status, so a non-2xx error can carry it. A mid-download
-  // drop is the same kind of network problem as a failed request: retryable.
+  // drop is the same kind of network problem as a failed request, so it is retryable.
   let body: string;
   try {
     body = await response.text();
@@ -132,9 +132,10 @@ function encodeRequest(input: {
   });
 }
 
-// Pull the provider's reference id out of a 2xx body. Must be JSON with a non-empty
-// `providerRef` string. Invalid JSON or a missing/blank field is non-retryable: the payout
-// may already have gone through, so retrying could pay twice; reconciliation resolves it.
+// Pulls the provider's reference id out of a 2xx body. The body must be JSON with a
+// non-empty `providerRef` string. Invalid JSON or a missing or blank field is non-retryable,
+// because the payout may already have gone through. Retrying could pay twice, so
+// reconciliation resolves the ambiguity instead.
 function parseProviderRef(body: string): string {
   let parsed: unknown;
   try {

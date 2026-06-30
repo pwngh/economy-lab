@@ -95,9 +95,9 @@ function setup(): Fixture {
     refund: (operation) =>
       store.transaction((unit: Unit) => refund(operation, unit, ctx)),
     balanceOf: (account) => store.ledger.balance(account),
-    // Move the seller's earned balance into PAYOUT_RESERVE. Both accounts go up when credited, down
-    // when debited, so debit one and credit the other by the same amount to keep the posting balanced.
-    // Leaves earned at zero: the state of a seller already paid out when a refund of their sale arrives.
+    // Move the seller's earned balance into PAYOUT_RESERVE. Debiting earned and crediting the reserve
+    // by the same amount keeps the posting balanced and leaves earned at zero. This is the state of a
+    // seller who has already been paid out when a refund of their sale arrives.
     drainEarned: async (userId, amount) => {
       await post(
         [debit(earned(userId), amount), credit(SYSTEM.PAYOUT_RESERVE, amount)],

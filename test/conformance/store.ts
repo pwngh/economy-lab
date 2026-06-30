@@ -11,8 +11,9 @@
  */
 
 /**
- * Amount is an object, not a number, so equal amounts aren't the same reference. Money checks
- * use `assert.deepEqual` (value), never `assert.equal` (identity).
+ * Amount is an object, not a number, so two equal amounts are not the same reference. Money
+ * checks therefore use `assert.deepEqual`, which compares by value, never `assert.equal`, which
+ * compares by identity.
  */
 
 import { describe, test, before, after } from 'node:test';
@@ -34,7 +35,7 @@ function freshUser(): string {
   return `usr_conf_${userSeq}`;
 }
 
-// Funds a user's spendable balance with one balanced posting: credit the user, debit a
+// Funds a user's spendable balance with one balanced posting. It credits the user and debits a
 // platform account so the lines cancel to zero. Both accounts exist, so postEntry's
 // known-account check passes.
 async function fundSpendable(
@@ -51,8 +52,8 @@ async function fundSpendable(
   });
 }
 
-// Builds one outbox message. Caller passes a distinct message id so a test can assert
-// which message it enqueued.
+// Builds one outbox message. The caller passes a distinct message id so a test can assert which
+// message it enqueued.
 function outboxRow(
   userId: string,
   messageId: string,
@@ -88,10 +89,10 @@ function outboxRow(
   };
 }
 
-// Builds one inbox row: a verified inbound event already mapped to the topUp it applies. The inbound
-// mirror of `outboxRow`. `key` is the provider event id (the dedupe key on enqueue, doubling as the
-// operation's idempotencyKey); the caller passes a distinct row id so a test can assert which row it
-// enqueued.
+// Builds one inbox row, a verified inbound event already mapped to the topUp it applies. This is
+// the inbound mirror of `outboxRow`. `key` is the provider event id. That id is the dedupe key on
+// enqueue and also doubles as the operation's idempotencyKey. The caller passes a distinct row id
+// so a test can assert which row it enqueued.
 function inboxRow(userId: string, rowId: string, key: string): InboxEntry {
   return {
     id: rowId,
@@ -242,12 +243,12 @@ async function dropsOutboxOnRollback(store: Store): Promise<void> {
   );
 }
 
-// Same retry-and-dead-letter behaviour across adapters, the outbound twin of
-// bumpsInboxAttemptThenDeadLetters. `recordFailure` counts one failed delivery (bumps `attempts`,
-// leaves the row 'pending', no reason yet); `deadLetter` then gives up on the poison message,
-// flipping it to 'failed' and persisting the reason ON the record so `claimBatch` never hands it
-// back. Like the relay worker, recordFailure/deadLetter run on the top-level store, not inside
-// store.transaction(...).
+// Pins the same retry-and-dead-letter behaviour across adapters. This is the outbound twin of
+// bumpsInboxAttemptThenDeadLetters. `recordFailure` counts one failed delivery: it bumps
+// `attempts`, leaves the row 'pending', and records no reason yet. `deadLetter` then gives up on
+// the poison message, flips it to 'failed', and persists the reason on the record so `claimBatch`
+// never hands it back. Like the relay worker, recordFailure and deadLetter run on the top-level
+// store, not inside store.transaction(...).
 async function recordsFailureThenDeadLettersOutbox(
   store: Store,
 ): Promise<void> {
@@ -257,8 +258,8 @@ async function recordsFailureThenDeadLettersOutbox(
     unit.outbox.enqueue(outboxRow(userId, messageId)),
   );
 
-  // One failed delivery: attempts goes 0 -> 1, the row stays pending and is re-claimable. A still-
-  // pending row carries no dead-letter reason yet ('null otherwise').
+  // One failed delivery bumps attempts from 0 to 1. The row stays pending and is re-claimable. A
+  // still-pending row carries no dead-letter reason yet.
   await store.outbox.recordFailure(messageId);
   let afterFail = await store.outbox.claimBatch(10);
   let failed = afterFail.find((message) => message.id === messageId);
@@ -267,10 +268,10 @@ async function recordsFailureThenDeadLettersOutbox(
   assert.equal(failed!.status, 'pending');
   assert.equal(failed!.reason, null);
 
-  // Give up on the poison message: dead-letter it, and it's never claimed again. The reason is
-  // persisted ON the 'failed' record (not a side-channel), mirroring the saga terminal-outcome test.
-  // claimBatch never returns a terminal row, so this test can't reload it that way, but the SQL
-  // decoders carry dead_letter_reason -> reason off the row.
+  // Give up on the poison message by dead-lettering it, after which it is never claimed again. The
+  // reason is persisted on the 'failed' record itself, not in a side-channel, mirroring the saga
+  // terminal-outcome test. claimBatch never returns a terminal row, so this test cannot reload it
+  // that way, but the SQL decoders carry dead_letter_reason through to reason off the row.
   await store.outbox.deadLetter(messageId, 'poison');
   let afterDead = await store.outbox.claimBatch(10);
   assert.equal(
@@ -278,7 +279,8 @@ async function recordsFailureThenDeadLettersOutbox(
     false,
   );
 
-  // recordFailure / markRelayed / deadLetter on the now-terminal row are all no-ops (no throw).
+  // recordFailure, markRelayed, and deadLetter on the now-terminal row are all no-ops that do not
+  // throw.
   await store.outbox.recordFailure(messageId);
   await store.outbox.markRelayed([messageId]);
   await store.outbox.deadLetter(messageId, 'again');
@@ -289,10 +291,10 @@ async function recordsFailureThenDeadLettersOutbox(
   );
 }
 
-// Inbound mirror of relaysOutboxOnce: a verified event enqueued in the webhook's transaction is
+// Inbound mirror of relaysOutboxOnce. A verified event enqueued in the webhook's transaction is
 // claimed once, marked applied, then never re-claimed. `claimInbound` hands back only 'pending'
-// rows; `markApplied` flips the row to 'applied' (terminal), so the second claim is empty — the
-// inbox applies each event at most once, just as the outbox relays each at most once.
+// rows. `markApplied` flips the row to the terminal 'applied' state, so the second claim is empty.
+// The inbox applies each event at most once, just as the outbox relays each at most once.
 async function appliesInboxOnce(store: Store): Promise<void> {
   let userId = freshUser();
   let rowId = `ibx_conf_${userId}`;
@@ -312,9 +314,9 @@ async function appliesInboxOnce(store: Store): Promise<void> {
   assert.deepEqual(afterApply, []);
 }
 
-// Inbound mirror of dropsOutboxOnRollback: an enqueue inside a transaction that throws leaves no
-// inbox row, so a rolled-back webhook ingress never queues an apply. Same all-or-nothing contract
-// the outbox holds for a rolled-back money move.
+// Inbound mirror of dropsOutboxOnRollback. An enqueue inside a transaction that throws leaves no
+// inbox row, so a rolled-back webhook ingress never queues an apply. This is the same
+// all-or-nothing contract the outbox holds for a rolled-back money move.
 async function dropsInboxOnRollback(store: Store): Promise<void> {
   let userId = freshUser();
   let rowId = `ibx_conf_rollback_${userId}`;
@@ -334,10 +336,10 @@ async function dropsInboxOnRollback(store: Store): Promise<void> {
   );
 }
 
-// Same dedupe-by-key behaviour across adapters: enqueuing the same provider event id twice inserts
-// one row and the duplicate returns the existing row (at most once), so a
-// redelivered provider event is applied at most once. The two enqueues use different row ids but
-// share one `key`; only the first row id is ever stored or claimed.
+// Pins the same dedupe-by-key behaviour across adapters. Enqueuing the same provider event id
+// twice inserts one row, and the duplicate enqueue returns that existing row, so a redelivered
+// provider event is applied at most once. The two enqueues use different row ids but share one
+// `key`. Only the first row id is ever stored or claimed.
 async function dedupesInboxByKey(store: Store): Promise<void> {
   let userId = freshUser();
   let key = `evt_conf_dedupe_${userId}`;
@@ -347,7 +349,8 @@ async function dedupesInboxByKey(store: Store): Promise<void> {
   let first = await store.transaction((unit) =>
     unit.inbox.enqueueInbound(inboxRow(userId, firstId, key)),
   );
-  // Redelivery: same provider event id, fresh row id. A no-op that returns the already-stored row.
+  // Redelivery uses the same provider event id with a fresh row id. It is a no-op that returns the
+  // already-stored row.
   let duplicate = await store.transaction((unit) =>
     unit.inbox.enqueueInbound(inboxRow(userId, secondId, key)),
   );
@@ -365,14 +368,14 @@ async function dedupesInboxByKey(store: Store): Promise<void> {
   );
 }
 
-// Same retry-and-dead-letter behaviour across adapters. `bumpAttempt` counts one failed apply: it
-// increments `attempts` but leaves the row 'pending', so the next sweep re-claims it (it never flips
-// the status — only `deadLetter` does). `deadLetter` then gives up on the poison event, flipping it
-// to 'dead' so `claimInbound` never hands it back again. The inbound mirror of the outbox's
-// recordFailure/deadLetter pair.
+// Pins the same retry-and-dead-letter behaviour across adapters. `bumpAttempt` counts one failed
+// apply: it increments `attempts` but leaves the row 'pending', so the next sweep re-claims it. It
+// never flips the status, since only `deadLetter` does that. `deadLetter` then gives up on the
+// poison event and flips it to 'dead' so `claimInbound` never hands it back again. This is the
+// inbound mirror of the outbox's recordFailure and deadLetter pair.
 //
-// bumpAttempt and deadLetter run on the top-level store, not inside store.transaction(...), matching
-// how the apply worker calls them.
+// bumpAttempt and deadLetter run on the top-level store, not inside store.transaction(...),
+// matching how the apply worker calls them.
 async function bumpsInboxAttemptThenDeadLetters(store: Store): Promise<void> {
   let userId = freshUser();
   let rowId = `ibx_conf_dead_${userId}`;
@@ -380,8 +383,8 @@ async function bumpsInboxAttemptThenDeadLetters(store: Store): Promise<void> {
     unit.inbox.enqueueInbound(inboxRow(userId, rowId, `evt_${rowId}`)),
   );
 
-  // One failed apply: attempts goes 0 -> 1, the row stays pending and is re-claimable. A still-
-  // pending row carries no dead-letter reason yet ('null otherwise').
+  // One failed apply bumps attempts from 0 to 1. The row stays pending and is re-claimable. A
+  // still-pending row carries no dead-letter reason yet.
   await store.inbox.bumpAttempt(rowId);
   let afterBump = await store.inbox.claimInbound({ now: 0, limit: 10 });
   let bumped = afterBump.find((entry) => entry.id === rowId);
@@ -398,17 +401,18 @@ async function bumpsInboxAttemptThenDeadLetters(store: Store): Promise<void> {
     false,
   );
 
-  // The failure reason is persisted ON the dead row (not a side-channel), so re-resolving the row
-  // by its key reads it back on every backend, mirroring the saga terminal-outcome test. A duplicate
-  // enqueue on the same key returns the stored row, terminal status and all.
+  // The failure reason is persisted on the dead row itself, not in a side-channel, so re-resolving
+  // the row by its key reads it back on every backend, mirroring the saga terminal-outcome test. A
+  // duplicate enqueue on the same key returns the stored row, terminal status and all.
   let resolved = await store.transaction((unit) =>
     unit.inbox.enqueueInbound(inboxRow(userId, rowId, `evt_${rowId}`)),
   );
   assert.equal(resolved.status, 'dead');
   assert.equal(resolved.reason, 'poison');
 
-  // markApplied / bumpAttempt / deadLetter on the now-terminal row are all no-ops (no throw), so the
-  // first dead-letter reason stands; a second deadLetter('again') doesn't overwrite it.
+  // markApplied, bumpAttempt, and deadLetter on the now-terminal row are all no-ops that do not
+  // throw, so the first dead-letter reason stands. A second deadLetter('again') does not overwrite
+  // it.
   await store.inbox.markApplied(rowId);
   await store.inbox.bumpAttempt(rowId);
   await store.inbox.deadLetter(rowId, 'again');
@@ -442,12 +446,12 @@ async function recomputesChainHead(store: Store): Promise<void> {
   assert.equal(link!.prevHash, '0'.repeat(64));
 }
 
-// Regression: a posting that touches the same account with two lines at once. SQL adapters
-// insert one row per line keyed on (account, previous-hash); the second line for that account
-// repeats the pair and the insert rejected it. Posts two credits into one user's spendable
-// account, each matched by a debit so the posting still cancels to zero. Every store must accept
-// it, sum both lines into one balance, and extend the account's hash chain by exactly one step.
-// Pinned for all stores, not just whatever the `prove` fuzzer generates.
+// Regression for a posting that touches the same account with two lines at once. SQL adapters
+// insert one row per line keyed on (account, previous-hash). The second line for that account
+// repeated the pair, and the insert rejected it. This test posts two credits into one user's
+// spendable account, each matched by a debit so the posting still cancels to zero. Every store
+// must accept it, sum both lines into one balance, and extend the account's hash chain by exactly
+// one step. Pinned for all stores, not just whatever the `prove` fuzzer happens to generate.
 async function storesMultipleLegsToOneAccount(store: Store): Promise<void> {
   let userId = freshUser();
   let first = decodeAmount('3.00', 'CREDIT');
@@ -487,10 +491,11 @@ async function storesMultipleLegsToOneAccount(store: Store): Promise<void> {
   assert.equal(link!.prevHash, '0'.repeat(64));
 }
 
-// Same promo-grant behaviour across adapters. Three rules: opening the same grant twice leaves
-// one row (repeat open by id is a no-op, doesn't overwrite); claimDue returns a grant once its
-// expiry is at or before `now`, oldest expiry first; markReversed removes a grant from the due
-// set and is a no-op if rerun on an already-reversed grant.
+// Pins the same promo-grant behaviour across adapters, covering three rules. First, opening the
+// same grant twice leaves one row, because a repeat open by id is a no-op that does not overwrite.
+// Second, claimDue returns a grant once its expiry is at or before `now`, oldest expiry first.
+// Third, markReversed removes a grant from the due set and is a no-op if rerun on an
+// already-reversed grant.
 //
 // claimDue and markReversed run on the top-level store, not inside store.transaction(...),
 // matching how the background worker calls them.
@@ -511,13 +516,14 @@ async function reversesPromoGrantExactlyOnce(store: Store): Promise<void> {
   assert.equal(due[0]!.id, id);
   assert.deepEqual(due[0]!.amount, toAmount('CREDIT', 500n));
   await store.promos.markReversed(id);
-  assert.deepEqual(await store.promos.claimDue(1_000, 10), []); // reversed → never re-claimed
+  assert.deepEqual(await store.promos.claimDue(1_000, 10), []); // reversed, so never re-claimed
   await store.promos.markReversed(id); // no-op on already-reversed
 }
 
-// Pins claimDue's ordering and cap: "oldest expiresAt first" holds across the whole table
-// (sorted before the limit, not insertion order), and the cap is the literal `limit`. Opens
-// three grants newest first; claimDue limit 2 returns the two oldest in ascending expiresAt.
+// Pins claimDue's ordering and cap. "Oldest expiresAt first" holds across the whole table, since
+// the rows are sorted before the limit is applied rather than returned in insertion order, and the
+// cap is the literal `limit`. This test opens three grants newest first, then claimDue with limit 2
+// returns the two oldest in ascending expiresAt.
 async function claimsDuePromosOldestFirstUpToLimit(
   store: Store,
 ): Promise<void> {
@@ -544,11 +550,11 @@ async function claimsDuePromosOldestFirstUpToLimit(
   );
 }
 
-// SagaStore.list returns the whole payout board — every saga regardless of state, newest
-// `updatedAt` first — not just the due, in-progress sagas claimDue hands the worker. Opens three
-// out of updatedAt order (one settled, one failed, one in flight) and asserts list re-sorts them
-// newest first. Filtered to this test's user so a future saga test sharing the store can't perturb
-// it.
+// SagaStore.list returns the whole payout board, meaning every saga regardless of state, newest
+// `updatedAt` first. It is not limited to the due, in-progress sagas that claimDue hands the
+// worker. This test opens three sagas out of updatedAt order (one settled, one failed, one in
+// flight) and asserts list re-sorts them newest first. The result is filtered to this test's user
+// so a future saga test sharing the store cannot perturb it.
 async function listsSagasNewestFirst(store: Store): Promise<void> {
   let userId = freshUser();
   let mk = (suffix: string, updatedAt: number, state: SagaState): Saga => ({
@@ -581,11 +587,12 @@ async function listsSagasNewestFirst(store: Store): Promise<void> {
   assert.deepEqual(mine, [newest.id, middle.id, oldest.id]);
 }
 
-// Same terminal-outcome persistence across adapters: a payout's SETTLED/FAILED outcome is stored on
-// the saga record (not a side-channel), so a later load reads it back. `advance` to SETTLED carries
-// the gross USD disbursed in its patch (payoutUsd, a USD Amount); `deadLetter` records the failure
-// reason. Opens two sagas, drives one to each terminal state, and asserts load round-trips the
-// stored outcome — and that a still-in-flight saga carries neither.
+// Pins the same terminal-outcome persistence across adapters. A payout's SETTLED or FAILED outcome
+// is stored on the saga record itself, not in a side-channel, so a later load reads it back.
+// `advance` to SETTLED carries the gross USD disbursed in its patch (payoutUsd, a USD Amount), and
+// `deadLetter` records the failure reason. This test opens two sagas, drives one to each terminal
+// state, and asserts load round-trips the stored outcome. It also asserts that a still-in-flight
+// saga carries neither outcome field.
 async function persistsTerminalOutcomeOnTheSaga(store: Store): Promise<void> {
   let userId = freshUser();
   let mk = (suffix: string, state: SagaState): Saga => ({
@@ -635,11 +642,12 @@ async function persistsTerminalOutcomeOnTheSaga(store: Store): Promise<void> {
   assert.equal(failed!.payoutUsd, null);
 }
 
-// Ledger.list returns the whole journal — every committed posting, newest commit first — not just
-// the ones a given reader minted, the way SagaStore.list returns the whole payout board. Funds
-// three users with separate postings, then asserts list streams them back newest-first (the commit
-// sequence, the reverse of the order they were appended) with each posting's full legs intact.
-// Filtered to this test's txn ids so other postings already in the store can't perturb it.
+// Ledger.list returns the whole journal, meaning every committed posting, newest commit first. It
+// is not limited to the postings a given reader minted, the same way SagaStore.list returns the
+// whole payout board. This test funds three users with separate postings, then asserts list streams
+// them back newest first. That order is the commit sequence, the reverse of the order they were
+// appended, and each posting arrives with its full legs intact. The result is filtered to this
+// test's txn ids so other postings already in the store cannot perturb it.
 async function listsPostingsNewestFirst(store: Store): Promise<void> {
   let userId = freshUser();
   let ids = [
@@ -668,13 +676,13 @@ async function listsPostingsNewestFirst(store: Store): Promise<void> {
   }
 }
 
-// Same webhook-dedup behaviour across adapters: an inbound provider webhook is processed at most
-// once even on redelivery. The replay store uses an atomic insert-if-absent on the event id: the
-// first claim returns `{ claimed: true }` (process), later claims of the same id return
-// `{ claimed: false }` (skip). A different id is unaffected.
+// Pins the same webhook-dedup behaviour across adapters. An inbound provider webhook is processed
+// at most once, even on redelivery. The replay store uses an atomic insert-if-absent on the event
+// id. The first claim returns `{ claimed: true }`, which means process it, and later claims of the
+// same id return `{ claimed: false }`, which means skip it. A different id is unaffected.
 //
 // claim runs on the top-level store, not inside store.transaction(...), since the webhook entry
-// point checks it as a standalone final gate, not part of a domain transaction.
+// point checks it as a standalone final gate, not as part of a domain transaction.
 async function claimsWebhookEventIdOnce(store: Store): Promise<void> {
   let eventId = `evt_replay_${freshUser()}`;
   let other = `evt_replay_${freshUser()}`;
@@ -688,12 +696,12 @@ async function claimsWebhookEventIdOnce(store: Store): Promise<void> {
   assert.equal(different.claimed, true); // an unrelated id is unaffected
 }
 
-// Same behaviour across adapters for `balanceAccounts`, which lists every account with a cached
-// running-balance row. (The cache lets reads skip re-summing entries; entries remain the source of
-// truth, so a cached row can be wrong or even orphaned with no entries.) Every account with a
-// cached row must appear, letting the integrity checker inspect rows that walking `heads()`
-// (accounts-with-entries) would miss, e.g. a stale row with no posting behind it. Funding a fresh
-// user creates its cached row, so that user must appear.
+// Pins the same behaviour across adapters for `balanceAccounts`, which lists every account that has
+// a cached running-balance row. The cache lets reads skip re-summing entries. Entries remain the
+// source of truth, so a cached row can be wrong or even orphaned with no entries behind it. Every
+// account with a cached row must appear, which lets the integrity checker inspect rows that walking
+// `heads()` (accounts with entries) would miss, such as a stale row with no posting behind it.
+// Funding a fresh user creates its cached row, so that user must appear.
 async function balanceAccountsEnumeratesBalanceRow(
   store: Store,
 ): Promise<void> {
@@ -710,10 +718,10 @@ async function balanceAccountsEnumeratesBalanceRow(
   assert.equal(seen.has(spendable(userId)), true);
 }
 
-// Same order across adapters for `balanceAccounts`: every engine lists accounts in one
-// locale-independent (code-unit) order — not the DB's collation or a Map's insertion order — so a
-// caller, and the integrity drift report, see identical ordering everywhere. Fund users whose ids
-// are created out of order, then assert the whole listing comes back in code-unit order.
+// Pins the same order across adapters for `balanceAccounts`. Every engine lists accounts in one
+// locale-independent code-unit order, not the database's collation or a Map's insertion order, so a
+// caller and the integrity drift report see identical ordering everywhere. This test funds users
+// whose ids are created out of order, then asserts the whole listing comes back in code-unit order.
 async function balanceAccountsListsInCodeUnitOrder(
   store: Store,
 ): Promise<void> {
@@ -737,11 +745,12 @@ async function balanceAccountsListsInCodeUnitOrder(
   assert.deepEqual(seen, [...seen].sort(byCodeUnit));
 }
 
-// Same markBilled behaviour across adapters: stops two concurrent renewal sweeps from charging a
-// subscription twice in one period. markBilled updates the row only if the caller's expected due
-// date still matches next_due_at. The first sweeper passes the current due date, so its update
-// applies (returns true, advances the due date). A second sweeper starting from the now-stale due
-// date matches no row and does nothing (returns false). Net: billed at most once per period.
+// Pins the same markBilled behaviour across adapters, which stops two concurrent renewal sweeps
+// from charging a subscription twice in one period. markBilled updates the row only if the caller's
+// expected due date still matches next_due_at. The first sweeper passes the current due date, so
+// its update applies: it returns true and advances the due date. A second sweeper starting from the
+// now-stale due date matches no row and does nothing, returning false. The net result is that the
+// subscription is billed at most once per period.
 async function markBilledIsCompareAndSet(store: Store): Promise<void> {
   let userId = freshUser();
   let id = `sub_conf_cas_${userId}`;
@@ -792,10 +801,11 @@ export function runStoreConformance(
   makeStore: () => Promise<Store> | Store,
 ): void {
   describe(`Store Conformance: ${name}`, () => {
-    // The backend may be unreachable (CI's no-services `check` job, or a missing local database).
-    // Probe it once here; if makeStore throws, every test below skips rather than this before hook
-    // throwing and cancelling the whole suite — the graceful contract the standalone describes use
-    // and the one ci.yml's `check` job relies on ("conformance tests skip when no backend reachable").
+    // The backend may be unreachable, for example in CI's no-services `check` job or with a missing
+    // local database. Probe it once here. If makeStore throws, every test below skips, rather than
+    // this before hook throwing and cancelling the whole suite. That is the graceful contract the
+    // standalone describes use, and the one ci.yml's `check` job relies on ("conformance tests skip
+    // when no backend reachable").
     let store: Store | null = null;
 
     before(async () => {

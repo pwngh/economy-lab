@@ -30,12 +30,13 @@ export type ReconcileFeed = {
 };
 
 /**
- * Outcome of one sweep, each window sorted into one bucket:
- *   - `reconciled`: the two sides matched, no discrepancies.
- *   - `drifted`: comparison ran and found discrepancies (mismatched or missing records). A
- *     normal result that carries data, not a failure.
- *   - `failed`: the feed pull threw, so the comparison never ran. Keeps the error code and
- *     whether it's retryable.
+ * Reports the outcome of one sweep. Each window is sorted into exactly one bucket.
+ *
+ *   - `reconciled`: the two sides matched and there were no discrepancies.
+ *   - `drifted`: the comparison ran and found discrepancies, such as mismatched or missing
+ *     records. This is a normal result that carries data, not a failure.
+ *   - `failed`: the feed pull threw, so the comparison never ran. This bucket keeps the
+ *     error code and whether the error is retryable.
  */
 export type ReconcileSummary = {
   reconciled: ReadonlyArray<ReconcileReport>;
@@ -43,8 +44,8 @@ export type ReconcileSummary = {
   failed: ReadonlyArray<{ window: Range; code: string; retryable: boolean }>;
 };
 
-// ReconcileSummary with mutable arrays so the sweep can push as it goes; the public type
-// exposes it read-only.
+// Mirrors ReconcileSummary but with mutable arrays so the sweep can push results as it goes.
+// The public type exposes the same shape read-only.
 type ReconcileTally = {
   reconciled: ReconcileReport[];
   drifted: ReconcileReport[];
@@ -52,10 +53,11 @@ type ReconcileTally = {
 };
 
 /**
- * Reconcile a batch of windows: for each, pull both sides, compare, sort into the summary.
- * Clean match → `reconciled`; mismatches → `drifted` (normal result); feed pull throws →
- * `failed`. Windows are handled independently, so one unreachable feed fails only its own
- * window and the rest of the batch still runs.
+ * Reconciles a batch of windows. For each window, it pulls both sides, compares them, and
+ * sorts the result into the summary. A clean match goes to `reconciled`. Mismatches go to
+ * `drifted`, which is a normal result. A feed pull that throws goes to `failed`. Windows are
+ * handled independently, so one unreachable feed fails only its own window and the rest of
+ * the batch still runs.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how the worker schedules and sweeps reconciliation windows.
  */
@@ -75,14 +77,15 @@ export async function reconcileDueWindows(
   return tally;
 }
 
-// Inputs constant across a sweep (feed, worker capabilities, optional cancellation signal),
-// grouped so the per-window function takes fewer arguments.
+// Groups the inputs that stay constant across a sweep: the feed, the worker capabilities,
+// and an optional cancellation signal. Grouping them lets the per-window function take fewer
+// arguments.
 type Sweep = { feed: ReconcileFeed; ctx: WorkerCtx; options?: Options };
 
-// Reconcile a single window, catching feed-pull errors so they can't stop other windows.
-// Caught errors go to `failed` with their retryable flag (transient storage/provider
-// failures retry next sweep; anything else is terminal). A successful pull is compared and
-// handed to `record`. Drift is not an error and is never caught here.
+// Reconciles a single window. It catches feed-pull errors so one failed pull cannot stop the
+// other windows. A caught error goes to `failed` with its retryable flag: transient storage
+// or provider failures retry on the next sweep, and anything else is terminal. A successful
+// pull is compared and handed to `record`. Drift is not an error, so it is never caught here.
 async function reconcileOne(
   sweep: Sweep,
   window: Range,
@@ -107,10 +110,10 @@ async function reconcileOne(
   }
 }
 
-// File the comparison result into the tally and report it. Every window records its
-// discrepancy count as a metric. Clean → `reconciled`, logs `info`; discrepancies →
-// `drifted`, logs `warn` with per-kind counts so monitoring can alert on drift. The report
-// is passed through unchanged for the caller.
+// Files the comparison result into the tally and reports it. Every window records its
+// discrepancy count as a metric. A clean window goes to `reconciled` and logs at `info`. A
+// window with discrepancies goes to `drifted` and logs at `warn` with per-kind counts so
+// monitoring can alert on drift. The report itself is passed through unchanged for the caller.
 function record(
   ctx: WorkerCtx,
   window: Range,

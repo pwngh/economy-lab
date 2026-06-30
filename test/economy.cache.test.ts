@@ -64,8 +64,8 @@ function recordingCache(): Cache & {
 }
 
 // A cache whose every operation throws, standing in for an unreachable Redis. The read path must
-// degrade to the ledger and a committed posting must still succeed — the Cache port's best-effort
-// contract (a cache only speeds reads, never breaks them).
+// degrade to the ledger and a committed posting must still succeed. This is the Cache port's
+// best-effort contract: a cache only speeds reads, it never breaks them.
 function throwingCache(): Cache {
   let boom = (): never => {
     throw new Error('redis unavailable');
@@ -116,8 +116,9 @@ describe('Read-Through Balance Cache', () => {
     assert.deepEqual(cache.gets, [`bal:${account}`]);
     assert.deepEqual(cache.sets, [`bal:${account}`]);
 
-    // Second read hits: returns the stored value, no new populate. The cache holds strings, so the
-    // balance is serialized in and parsed back out; assert the round-trip returns the same amount.
+    // The second read hits the cache and returns the stored value without populating again. The
+    // cache holds strings, so the balance is serialized in and parsed back out. Assert the round
+    // trip returns the same amount.
     let second = await economy.read.balance(account);
     assert.deepEqual(second, credit('10.00'));
     assert.deepEqual(cache.gets, [`bal:${account}`, `bal:${account}`]);
@@ -143,8 +144,8 @@ describe('Read-Through Balance Cache', () => {
     );
     assert.equal(cache.invalidations.includes(`bal:${account}`), true);
 
-    // Next read is a fresh miss, re-deriving by summing recorded entries: the new balance, not
-    // the stale cached 10.00.
+    // The next read is a fresh miss. It re-derives the balance by summing the recorded entries, so
+    // it returns the new balance rather than the stale cached 10.00.
     let after = await economy.read.balance(account);
     assert.deepEqual(after, credit('15.00'));
   });
@@ -186,8 +187,9 @@ describe('Read-Through Balance Cache', () => {
       topUp({ userId: 'usr_buyer', amount: credit('10.00') }),
     );
 
-    // get throws (absorbed as a miss -> ledger read), then set throws (absorbed) — the read still
-    // returns the right balance instead of propagating the cache failure.
+    // The get throws and is absorbed as a miss, so the read falls back to the ledger. The set then
+    // throws and is also absorbed. The read returns the right balance instead of propagating the
+    // cache failure.
     let balance = await economy.read.balance(account);
     assert.deepEqual(balance, credit('10.00'));
   });

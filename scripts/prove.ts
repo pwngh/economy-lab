@@ -32,16 +32,16 @@ import type { Economy, Operation, Outcome } from '#src/contract.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Store } from '#src/ports.ts';
 
-// Running economy plus its storage. The link check below reads each account's latest hash
-// from the store and compares it against what the committed operations reported.
+// Pairs a running economy with its storage. The link check below reads each account's latest
+// hash from the store and compares it against what the committed operations reported.
 type Provable = { economy: Economy; store: Store };
 
-// Build a runnable { economy, store } over one adapter's storage. The adapter's makeStore()
-// hashes with seededDigest(1) and timestamps with fixedClock(0); the economy must use the same
-// digest and clock. read.prove() recomputes each account's chain hash with the economy's digest
-// and compares against the store's recorded hash, so a mismatched digest or clock would report a
-// broken chain on correct data. Digest and clock stay fixed; only the signer varies per seed,
-// and it never feeds the chain hash.
+// Builds a runnable { economy, store } over one adapter's storage. The adapter's makeStore()
+// hashes with seededDigest(1) and timestamps with fixedClock(0), so the economy must use the
+// same digest and clock. read.prove() recomputes each account's chain hash with the economy's
+// digest and compares it against the store's recorded hash. A mismatched digest or clock would
+// therefore report a broken chain on correct data. The digest and clock stay fixed across seeds.
+// Only the signer varies per seed, and the signer never feeds the chain hash.
 async function makeProvable(
   adapter: AdapterCase,
   seed: number,
@@ -65,8 +65,8 @@ async function makeProvable(
   return { economy, store };
 }
 
-// mulberry32 PRNG. Returns a function yielding the next number in [0, 1). The same seed
-// produces the identical sequence on every JS runtime, which makes a proof run repeatable.
+// Builds a mulberry32 PRNG and returns a function yielding the next number in [0, 1). The same
+// seed produces an identical sequence on every JS runtime, which makes a proof run repeatable.
 function rng(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -78,23 +78,25 @@ function rng(seed: number): () => number {
   };
 }
 
-// Generator's running tally of one user's two balances, in minor units (cents): `spendable`
-// is topped-up money, `promo` is a marketing grant. Tracked so the generator only produces
-// affordable spends, keeping the proof on the path where money moves rather than declines.
+// Holds the generator's running tally of one user's two balances, in minor units (cents).
+// `spendable` is topped-up money. `promo` is a marketing grant. The generator tracks both so
+// it only produces affordable spends, keeping the proof on the path where money moves rather
+// than declines.
 type Wallet = { spendable: bigint; promo: bigint };
 
-// Format minor units (cents) as a two-decimal string like "12.34", the form decodeAmount
-// expects when building an Amount.
+// Formats minor units (cents) as a two-decimal string like "12.34". That is the form
+// decodeAmount expects when building an Amount.
 function dollars(minor: bigint): string {
   let whole = minor / 100n;
   let frac = (minor % 100n).toString().padStart(2, '0');
   return `${whole}.${frac}`;
 }
 
-// Pick one random-but-valid operation and update the local tally so the next one stays valid.
-// The idempotency key (makes a retried request run at most once: a repeat with the same key
-// is recognized and not reapplied) and the ids derive only from the step number, so a re-run
-// produces the byte-identical operation, letting the replay check resubmit the exact request.
+// Picks one random-but-valid operation and updates the local tally so the next one stays valid.
+// The idempotency key and the ids derive only from the step number, so a re-run produces the
+// byte-identical operation. That lets the replay check resubmit the exact request. The
+// idempotency key makes a retried request run at most once: a repeat with the same key is
+// recognized and not reapplied.
 function nextOperation(
   next: () => number,
   step: number,
@@ -121,9 +123,9 @@ function nextOperation(
   return spendOperation(next, step, userId, wallet);
 }
 
-// Build a spend operation and subtract the price from the local tally. The real spend handler
-// charges promo before spendable, so the tally drains in that order; otherwise the local copy
-// drifts from the economy's and we'd generate unaffordable spends.
+// Builds a spend operation and subtracts the price from the local tally. The real spend handler
+// charges promo before spendable, so the tally must drain in that same order. Draining in any
+// other order would let the local copy drift from the economy's and generate unaffordable spends.
 function spendOperation(
   next: () => number,
   step: number,
@@ -140,9 +142,9 @@ function spendOperation(
   wallet.promo -= fromPromo;
   wallet.spendable -= priceMinor - fromPromo;
   // `orderId` is required by the contract and is the sale row's primary key. Deriving it from
-  // the step keeps it byte-identical on replay (like the idempotency key) and unique per spend,
-  // so adapters enforcing a not-null/unique order key (e.g. postgres) take the same path as
-  // memory rather than diverging on a null key.
+  // the step keeps it byte-identical on replay, like the idempotency key, and unique per spend.
+  // An adapter that enforces a not-null and unique order key (for example postgres) then takes
+  // the same path as memory rather than diverging on a null key.
   return op('spend', step, {
     orderId: `ord_p_${step}`,
     buyerId: userId,
@@ -161,8 +163,8 @@ function walletOf(wallets: Map<string, Wallet>, userId: string): Wallet {
   return wallet;
 }
 
-// Assemble an Operation, stamping in the per-step idempotency key and a fixed actor. Every
-// request comes from an internal "system" service: this proof checks accounting rules, not
+// Assembles an Operation, stamping in the per-step idempotency key and a fixed actor. Every
+// request comes from an internal "system" service. This proof checks accounting rules, not
 // authorization, so it bypasses permission checks rather than modeling real users.
 function op(
   kind: Operation['kind'],
@@ -193,10 +195,10 @@ function program(seed: number, length: number): Operation[] {
 
 type Failure = { invariant: string; detail: Record<string, unknown> };
 
-// Check every ledger property after one operation, returning the first failure (or null).
-// Five flags come from the economy's integrity report; the sixth, the chain-link check
-// below, confirms each touched account's latest head matches what the committed operation
-// reported.
+// Checks every ledger property after one operation and returns the first failure, or null when
+// all hold. Five flags come from the economy's integrity report. The sixth is the chain-link
+// check below, which confirms each touched account's latest head matches what the committed
+// operation reported.
 async function checkInvariants(
   provable: Provable,
   outcome: Outcome,
@@ -227,10 +229,10 @@ async function checkInvariants(
   return verifyChainLinks(provable, outcome, heads);
 }
 
-// Each account keeps a tamper-evident chain of postings; the "head" is its latest hash. This
-// accumulates the expected head per touched account (the hash the committed operation reported)
-// across steps in `heads`, then reads each account's actual head from storage and fails on any
-// mismatch.
+// Each account keeps a tamper-evident chain of postings, and its "head" is the latest hash. This
+// accumulates the expected head per touched account in `heads` across steps, where each expected
+// head is the hash the committed operation reported. It then reads each account's actual head
+// from storage and fails on any mismatch.
 async function verifyChainLinks(
   provable: Provable,
   outcome: Outcome,
@@ -256,10 +258,10 @@ async function verifyChainLinks(
   return null;
 }
 
-// Check that submitting the same operation twice runs it once: the second submit must return
-// `duplicate`, guaranteeing a safely retried request never double-charges. To avoid disturbing
-// the main run, this rebuilds the program in a fresh economy, replays up to the target step,
-// then resubmits that operation and expects `duplicate`.
+// Checks that submitting the same operation twice runs it only once. The second submit must
+// return `duplicate`, which guarantees a safely retried request never double-charges. To avoid
+// disturbing the main run, this rebuilds the program in a fresh economy, replays up to the
+// target step, then resubmits that operation and expects `duplicate`.
 async function replayIsDuplicate(
   adapter: AdapterCase,
   seed: number,
@@ -288,8 +290,8 @@ async function replayIsDuplicate(
   }
 }
 
-// Submit operations one at a time, running the full checks after each. On the first failure,
-// stop and return the step index plus what failed. If every check passes, return null.
+// Submits operations one at a time, running the full checks after each. On the first failure,
+// it stops and returns the step index plus what failed. It returns null when every check passes.
 async function runSeed(
   adapter: AdapterCase,
   seed: number,
@@ -315,9 +317,9 @@ async function runSeed(
   }
 }
 
-// After a failure, find the shortest leading slice that still fails, so the report points at
-// the smallest reproducer. Tries the first 1 op, then 2, etc., stopping at the first failing
-// slice; `at` is where the full run broke, so the search never looks past it.
+// After a failure, finds the shortest leading slice that still fails, so the report points at
+// the smallest reproducer. It tries the first 1 op, then the first 2, and so on, stopping at the
+// first failing slice. `at` is where the full run broke, so the search never looks past it.
 async function shrink(
   adapter: AdapterCase,
   seed: number,
@@ -335,9 +337,9 @@ async function shrink(
   return minimal;
 }
 
-// Probe an adapter's backend by opening and closing a store. memory and the in-process http
-// server always answer; postgres/mysql throw when their backend is unreachable (or URL unset).
-// An unreachable adapter is skipped, not failed, which is correct for local work.
+// Probes an adapter's backend by opening and closing a store. memory and the in-process http
+// server always answer. postgres and mysql throw when their backend is unreachable or its URL
+// is unset. An unreachable adapter is skipped, not failed, which is correct for local work.
 async function reachable(adapter: AdapterCase): Promise<boolean> {
   try {
     let probe = await adapter.makeStore();
@@ -348,9 +350,9 @@ async function reachable(adapter: AdapterCase): Promise<boolean> {
   }
 }
 
-// Run the full proof against one storage adapter: for every seed, generate a fixed-length
-// program and check all ledger properties after each operation. Prints one summary line.
-// Returns false on the first failing property, first narrowing it to the shortest reproducing
+// Runs the full proof against one storage adapter. For every seed, it generates a fixed-length
+// program and checks all ledger properties after each operation, then prints one summary line.
+// It returns false on the first failing property, first narrowing it to the shortest reproducing
 // run and setting a non-zero process exit code so the script reports failure to the shell.
 async function proveAdapter(
   adapter: AdapterCase,
@@ -359,9 +361,9 @@ async function proveAdapter(
 ): Promise<boolean> {
   for (let seed of seeds) {
     let operations = program(seed, length);
-    // A backend can also reject a posting outright (a thrown DB error), not just return a
-    // failing invariant. Treat that as a per-adapter failure, reporting it and exiting non-zero
-    // instead of crashing the process and masking the rest.
+    // A backend can also reject a posting outright with a thrown DB error, not just return a
+    // failing invariant. Treat that as a per-adapter failure. Report it and exit non-zero
+    // instead of crashing the process and masking the remaining adapters.
     let result: { at: number; failure: Failure } | null;
     try {
       result = await runSeed(adapter, seed, operations);
@@ -401,13 +403,13 @@ async function proveAdapter(
  * the proof asserts and why it runs after every operation.
  */
 async function main(): Promise<void> {
-  // 8 seeds, each a 60-operation program. Every adapter runs this same workload.
+  // Use 8 seeds, each a 60-operation program. Every adapter runs this same workload.
   let seeds = Array.from({ length: 8 }, (_, i) => 0x1000 + i);
   let length = 60;
 
   for (let adapter of adapterMatrix()) {
-    // memory always runs; every other adapter is gated on its backend being reachable and
-    // skipped (not failed) when it isn't.
+    // memory always runs. Every other adapter is gated on its backend being reachable, and it
+    // is skipped, not failed, when the backend is unreachable.
     if (adapter.name !== 'memory' && !(await reachable(adapter))) {
       console.warn(`prove [${adapter.name}]: backend unreachable — skipped.`);
       continue;

@@ -18,31 +18,32 @@ import type { Dispatcher, EconomyEvent, Options } from '#src/ports.ts';
 
 export interface HttpDispatcherConfig {
   /**
-   * The consumer endpoint each event is POSTed to — your event bus or webhook receiver (the lab is
-   * the producer; the receiver is out of scope). `https://bus.internal/economy` is a placeholder.
+   * The consumer endpoint each event is POSTed to. This is your event bus or webhook receiver. The
+   * lab is the producer, and the receiver is out of scope. `https://bus.internal/economy` is a
+   * placeholder.
    */
   url: string;
 
   /**
-   * fetch implementation. Defaults to the global `fetch` (no node-specific dependency);
-   * tests pass a stand-in.
+   * Supplies the `fetch` implementation. Defaults to the global `fetch`, which avoids any
+   * node-specific dependency. Tests pass a stand-in.
    */
   fetch?: typeof fetch;
 }
 
 /**
- * Build the function that POSTs one economy event to a remote endpoint over HTTP.
+ * Builds the function that POSTs one economy event to a remote endpoint over HTTP.
  *
- * Events land in an outbox table in the same transaction as the money move that produced them;
- * the relay worker reads that table and calls this to deliver each. HTTP is one delivery path;
- * SQS is the alternative; `SQS_QUEUE_URL` selects SQS and wins if both are set, otherwise
- * `DISPATCHER_URL` selects this HTTP path. Each call POSTs one event as JSON via the shared
+ * Events land in an outbox table in the same transaction as the money move that produced them. The
+ * relay worker reads that table and calls this function to deliver each event. HTTP is one delivery
+ * path, and SQS is the alternative. `SQS_QUEUE_URL` selects SQS and wins if both are set; otherwise
+ * `DISPATCHER_URL` selects this HTTP path. Each call POSTs one event as JSON through the shared
  * `encodeEvent` (event-wire.ts), so HTTP and SQS deliver the identical body either way.
  *
- * A network error or non-2xx response throws a retryable `PROVIDER.FAILURE`, so the relay
- * redelivers later with backoff. Since retries can duplicate, the event id goes in an
- * `Idempotency-Key` header for the receiver to dedupe (SQS does the same via
- * `MessageDeduplicationId`).
+ * A network error or a non-2xx response throws a retryable `PROVIDER.FAILURE`, so the relay
+ * redelivers later with backoff. Retries can duplicate an event, so the event id goes in an
+ * `Idempotency-Key` header for the receiver to dedupe. SQS does the same through
+ * `MessageDeduplicationId`.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for how events leave the lab.
  */
@@ -73,7 +74,7 @@ export function httpDispatcher(config: HttpDispatcherConfig): Dispatcher {
   };
 }
 
-// Wrap a failed dispatch as a retryable `PROVIDER.FAILURE`, keeping the original error as
+// Wraps a failed dispatch as a retryable `PROVIDER.FAILURE` and keeps the original error as
 // `cause`. Mirrors the SQS dispatcher's transportFault.
 function transportFault(message: string, error: unknown): Error {
   return fault(ERROR_CODES.PROVIDER_FAILURE, message, {

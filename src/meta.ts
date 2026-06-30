@@ -10,13 +10,13 @@
  */
 
 /**
- * Typed reads from a posting's free-form `meta` (a plain JSON object). Generic — no SQL, no driver,
- * no store specifics — so any layer uses them: the in-memory store and the SQL engines both read
- * posting metadata this way. Kept out of the engine helpers so a non-SQL store doesn't have to
- * import engine code for a plain JSON lookup.
+ * Reads typed fields from a posting's free-form `meta`, a plain JSON object. These helpers carry no
+ * SQL, no driver, and no store specifics, so any layer can use them. The in-memory store and the SQL
+ * engines both read posting metadata this way. They live outside the engine helpers so that a non-SQL
+ * store does not have to import engine code just to do a plain JSON lookup.
  */
 
-// Read a string field from `meta`, or `fallback` when it is missing or not a string.
+// Reads a string field from `meta`. Returns `fallback` when the key is missing or its value is not a string.
 export function metaString(
   meta: Record<string, unknown>,
   key: string,
@@ -26,7 +26,7 @@ export function metaString(
   return typeof value === 'string' ? value : fallback;
 }
 
-// Read a number field from `meta`, or `fallback` when it is missing or not a number.
+// Reads a number field from `meta`. Returns `fallback` when the key is missing or its value is not a number.
 export function metaNumber(
   meta: Record<string, unknown>,
   key: string,

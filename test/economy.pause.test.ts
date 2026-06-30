@@ -17,22 +17,23 @@ import { topUp, spend, adjust, credit } from '#test/support/builders.ts';
 import { spendable } from '#src/accounts.ts';
 
 // The scheduled maintenance pause refuses end-user discretionary writes with a clean ECONOMY_PAUSED
-// decline, while NEVER blocking external settlement (provider/Tilia webhooks arrive as actor
-// 'system') or operator fixes. The decline records no velocity attempt and touches no ledger; reads
-// (balance, prove, status) stay open. The fixed test clock reads 0, so a window of [0, 1h) is active
-// "now" and a window of [-2h, -1h) is in the past.
+// decline. It never blocks external settlement or operator fixes. Settlement is exempt because
+// provider and Tilia webhooks arrive as actor 'system'. The decline records no velocity attempt and
+// touches no ledger. Reads stay open, so balance, prove, and status all still work while paused.
+// The fixed test clock reads 0, so a window of [0, 1h) is active "now" and a window of [-2h, -1h) is
+// in the past.
 describe('economy pause window', () => {
-  // A window that brackets the fixed clock's `now` (0): paused.
+  // This window brackets the fixed clock's `now` (0), so the economy is paused.
   const ACTIVE = { pauseStartMs: 0, pauseEndMs: 60 * 60_000 };
-  // A window entirely in the past: not paused at `now`.
+  // This window lies entirely in the past, so the economy is not paused at `now`.
   const PAST = { pauseStartMs: -2 * 60 * 60_000, pauseEndMs: -60 * 60_000 };
 
   test('a user spend during the window is rejected with ECONOMY_PAUSED', async () => {
     const economy = makeEconomy(1, undefined, ACTIVE);
     try {
-      // Fund the buyer through an operator adjust (an operator write, which the pause must not block)
-      // so the spend would otherwise have the credits to succeed — proving the pause, not a shortfall,
-      // is what declines it.
+      // Fund the buyer through an operator adjust, which the pause must not block. The buyer then has
+      // enough credits for the spend to succeed, so the pause itself, not a shortfall, is the only
+      // thing that can decline it.
       const funded = await economy.submit(
         adjust({
           account: spendable('usr_pause_buyer'),

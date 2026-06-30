@@ -19,18 +19,20 @@ import type { Amount } from '#src/money.ts';
 import type { Ctx, Operation, Outcome, Transaction } from '#src/contract.ts';
 import type { Leg, Subscription, Unit } from '#src/ports.ts';
 
-// Allowed subscription price: 100 to 10,000 credits/month inclusive, in minor units
-// (1 credit = 100 minor). Outside this range is a malformed request.
+// A subscription price must be 100 to 10,000 credits per month, inclusive, expressed in minor
+// units (1 credit = 100 minor). A price outside this range is a malformed request.
 let MIN_PRICE_MINOR = 10_000n; // 100.00 credits
 let MAX_PRICE_MINOR = 1_000_000n; // 10,000.00 credits
 
-// Longest accepted billing period, in ms: ten 365-day years. Anything longer is treated as
-// garbage off the wire (bad unit conversion, overflow, seconds-for-ms) and rejected as malformed.
-// Also stays well below Number.MAX_SAFE_INTEGER so `postedAt + periodMs` can't lose precision.
+// The longest accepted billing period is ten 365-day years, in milliseconds. A longer period is
+// treated as garbage off the wire (a bad unit conversion, an overflow, or seconds used for ms)
+// and rejected as malformed. This ceiling also stays well below Number.MAX_SAFE_INTEGER, so
+// `postedAt + periodMs` cannot lose precision.
 let MAX_PERIOD_MS = 10 * 365 * 24 * 60 * 60_000; // 315,360,000,000 ms
 
-// Split of the first-month price across the buyer's balances: `promoPart` from their promo
-// grant, `spendablePart` from topped-up real money. Promo first, spendable covers the rest.
+// Splits the first-month price across the buyer's two balances. `promoPart` is funded from their
+// promo grant, and `spendablePart` is funded from topped-up real money. Promo is drawn first, and
+// spendable covers the rest.
 type ChargePlan = { promoPart: Amount; spendablePart: Amount };
 
 /**
@@ -66,8 +68,9 @@ export async function handleSubscribe(
   validateFields(operation);
   let price = validatedPrice(operation.price);
 
-  // Refuse a second ACTIVE subscription to the same (userId, sku, sellerId); a second one would
-  // double-bill. Ordinary business "no": return a rejected outcome and post nothing, not a fault.
+  // Refuse a second ACTIVE subscription to the same (userId, sku, sellerId), because a second one
+  // would double-bill. This is an ordinary business "no", so return a rejected outcome and post
+  // nothing rather than throw a fault.
   let existing = await unit.subscriptions.activeFor(
     operation.userId,
     operation.sku,
@@ -117,10 +120,11 @@ export async function handleSubscribe(
 
 // --- Validation -------------------------------------------------------------------
 
-// A buyer may not subscribe to themselves. If `userId` === `sellerId`, the charge draws the
-// buyer's non-cashable balances (promo, non-payable spendable) and credits them back as EARNED,
-// which is cash-outable and funded by platform REVENUE. That turns gift/promo grants into
-// withdrawable cash and drains the treasury, so it's malformed, not a business "no": throw a fault.
+// Rejects a buyer who tries to subscribe to themselves. When `userId` equals `sellerId`, the
+// charge draws the buyer's non-cashable balances (promo and non-payable spendable) and credits
+// them back as EARNED, which is cash-outable and funded by platform REVENUE. That would turn
+// gift and promo grants into withdrawable cash and drain the treasury, so this is malformed
+// rather than a business "no". Throw a fault.
 function rejectSelfSubscription(
   operation: Extract<Operation, { kind: 'subscribe' }>,
 ): void {
@@ -133,11 +137,12 @@ function rejectSelfSubscription(
   }
 }
 
-// Guard the op-specific fields central validateOperation can't reason about: period and SKU.
-// `periodMs` arrives as a plain number, so it may be NaN, Infinity, fractional, zero, negative,
-// or absurdly large (any of which corrupts billing math, e.g. a NaN period end); require a
-// finite positive integer within the ceiling. `sku` must be non-blank, since a blank one would
-// key an entitlement grant and ledger metadata to nothing. Both are wiring errors: throw a fault.
+// Guards the two op-specific fields the central validateOperation cannot reason about: the period
+// and the SKU. `periodMs` arrives as a plain number, so it may be NaN, Infinity, fractional, zero,
+// negative, or absurdly large. Any of those corrupts the billing math (for example, a NaN period
+// end), so require a finite positive integer within the ceiling. `sku` must be non-blank, because
+// a blank one would key an entitlement grant and ledger metadata to nothing. Both are wiring
+// errors, so throw a fault.
 function validateFields(
   operation: Extract<Operation, { kind: 'subscribe' }>,
 ): void {
@@ -162,8 +167,9 @@ function validateFields(
   }
 }
 
-// Validate the price and return it unchanged for inline use. Wrong currency or out-of-range
-// is a wiring error, not a business "no", so throw a fault rather than return a decline.
+// Validates the price and returns it unchanged for inline use. A wrong currency or an
+// out-of-range amount is a wiring error, not a business "no", so it throws a fault rather than
+// returning a decline.
 function validatedPrice(price: Amount): Amount {
   if (price.currency !== 'CREDIT') {
     throw fault(
@@ -190,8 +196,9 @@ function validatedPrice(price: Amount): Amount {
 
 // --- The funds plan ---------------------------------------------------------------
 
-// Split the price between promo and spendable: use as much promo as available (capped at the
-// price), charge the rest to spendable. Same promo-first rule as the marketplace `spend` op.
+// Splits the price between promo and spendable. It uses as much promo as is available, capped at
+// the price, and charges the rest to spendable. This is the same promo-first rule the marketplace
+// `spend` op uses.
 function planCharge(price: Amount, promoBalance: Amount): ChargePlan {
   let available = promoBalance.minor > 0n ? promoBalance.minor : 0n;
   let promoMinor = available < price.minor ? available : price.minor;
@@ -201,13 +208,14 @@ function planCharge(price: Amount, promoBalance: Amount): ChargePlan {
   };
 }
 
-// Confirm enough spendable money for the spendable share. The middleware's up-front funds check
-// only runs for `spend`, so subscribe checks here. Short balance returns an INSUFFICIENT_FUNDS
-// rejection (business "no", as data); otherwise null and posting proceeds.
+// Confirms the buyer has enough spendable money for the spendable share. The middleware's up-front
+// funds check only runs for `spend`, so subscribe checks here. A short balance returns an
+// INSUFFICIENT_FUNDS rejection, which is a business "no" carried as data. A sufficient balance
+// returns null, and posting proceeds.
 //
-// Courtesy funds pre-check, not the enforcer. The database's per-user non-negative CHECK is what
-// actually blocks an overdraft; this exists to return a kind INSUFFICIENT_FUNDS rejection before
-// the engine would.
+// This is a courtesy pre-check, not the enforcer. The database's per-user non-negative CHECK is
+// what actually blocks an overdraft. This check exists only to return a kind INSUFFICIENT_FUNDS
+// rejection before the engine would reject the entry.
 async function screenSpendable(
   unit: Unit,
   userId: string,
@@ -226,8 +234,8 @@ async function screenSpendable(
 
 // --- Posting ----------------------------------------------------------------------
 
-// Post the first-month charge as one balanced ledger entry: debit/credit legs summing to zero.
-// The promo-funded and spendable-funded parts each contribute their own legs.
+// Posts the first-month charge as one balanced ledger entry whose debit and credit legs sum to
+// zero. The promo-funded part and the spendable-funded part each contribute their own legs.
 async function postCharge(
   operation: Extract<Operation, { kind: 'subscribe' }>,
   plan: ChargePlan,
@@ -249,11 +257,12 @@ async function postCharge(
   });
 }
 
-// Ledger lines for the promo-funded part. Promo credits aren't real money, so: (1) draw down
-// the grant, debit the buyer's promo and credit PROMO_FLOAT (offsets outstanding promo grants);
-// (2) pay the seller real earnings from platform revenue, debit REVENUE and credit the seller's
-// earned. The whole promo amount goes to the seller; the fee applies only to the spendable
-// (real-money) part, as in `spend`.
+// Appends the ledger legs for the promo-funded part. Promo credits are not real money, so this
+// takes two steps. First, it draws down the grant: it debits the buyer's promo and credits
+// PROMO_FLOAT, the account that offsets outstanding promo grants. Second, it pays the seller real
+// earnings from platform revenue: it debits REVENUE and credits the seller's earned. The whole
+// promo amount goes to the seller, because the fee applies only to the spendable (real-money)
+// part, as in `spend`.
 function appendPromoLegs(
   legs: Leg[],
   operation: Extract<Operation, { kind: 'subscribe' }>,
@@ -268,9 +277,9 @@ function appendPromoLegs(
   legs.push(credit(earned(operation.sellerId), promoPart));
 }
 
-// Ledger lines for the spendable (real-money) part. Debit the buyer's spendable for the full
-// part, credit the seller the amount after fee, credit REVENUE the fee. Net plus fee equal the
-// spendable part exactly.
+// Appends the ledger legs for the spendable (real-money) part. It debits the buyer's spendable for
+// the full part, credits the seller the amount after the fee, and credits REVENUE the fee. The net
+// and the fee add up to the spendable part exactly.
 function appendSpendableLegs(
   legs: Leg[],
   operation: Extract<Operation, { kind: 'subscribe' }>,
@@ -280,9 +289,10 @@ function appendSpendableLegs(
   if (spendablePart.minor === 0n) {
     return;
   }
-  // `feeForPrice` (pricing.ts) is the one place the transaction fee is computed: exact basis-point
-  // fee rounded up to a whole credit (credits are the indivisible billing unit), capped at the
-  // charge. Spend, first-month subscribe, and renewal all call it, so they round identically.
+  // `feeForPrice` (pricing.ts) is the one place the transaction fee is computed. It takes the exact
+  // basis-point fee, rounds it up to a whole credit (credits are the indivisible billing unit), and
+  // caps it at the charge. Spend, first-month subscribe, and renewal all call it, so they all round
+  // identically.
   let feeMinor = feeForPrice(spendablePart.minor, ctx.config.platformFeeBps);
   let netMinor = spendablePart.minor - feeMinor;
   legs.push(debit(spendable(operation.userId), spendablePart));
@@ -292,8 +302,8 @@ function appendSpendableLegs(
 
 // --- The subscription record ------------------------------------------------------
 
-// Save the subscription record for the background worker to renew. This handler only charges the
-// first month (month one was just billed); the worker bills every period after.
+// Saves the subscription record for the background worker to renew. This handler only charges the
+// first month, which was just billed. The worker bills every period after that.
 async function openSubscription(
   operation: Extract<Operation, { kind: 'subscribe' }>,
   transaction: Transaction,

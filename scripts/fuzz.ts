@@ -10,8 +10,8 @@
  */
 
 /**
- * CLI script (`make fuzz`): cross-backend differential. Sets a process exit code — non-zero on the
- * first divergence, zero when every adapter agrees.
+ * CLI script (`make fuzz`) that runs a cross-backend differential. It sets a process exit code:
+ * non-zero on the first divergence, zero when every adapter agrees.
  *
  * For each seed, builds one fixed operation sequence and replays it against every reachable adapter
  * (memory, postgres, mysql, http) on its own fresh isolated store. Memory is the reference; every
@@ -24,9 +24,9 @@
  * computed inside the store, so identical sequences produce identical hashes, heads, and balances on
  * every backend.
  *
- * SQL adapters run few seeds and a short sequence (each op is a round trip to a real database); the
- * cheap memory adapter carries the long deep loop. The four adversarial cases below run through the
- * same comparison.
+ * The SQL adapters run few seeds and a short sequence, because each operation is a round trip to a
+ * real database. The cheap memory adapter carries the long deep loop. The four adversarial cases
+ * below run through the same comparison.
  *
  * Fully fixed (no randomness), so the run is reproducible on Node, Bun, and Deno.
  *
@@ -52,9 +52,9 @@ import type { AccountRef } from '#src/accounts.ts';
 import type { Store } from '#src/ports.ts';
 
 // Seeds the economy's hash function, fixed at 1 for every adapter and case. Each store in the matrix
-// is also built with seededDigest(1), and the chain hash is computed inside the store, so they must
-// share a seed for the economy's reported hashes to match the store's recorded ones. With that
-// fixed, a seed produces the same operation sequence on every adapter.
+// is also built with seededDigest(1), and the chain hash is computed inside the store. The economy
+// and the store must share a seed for the economy's reported hashes to match the store's recorded
+// ones. With the seed fixed, a seed value produces the same operation sequence on every adapter.
 const ECONOMY_SEED = 1;
 
 // Throws with the given message when the condition is false. The runner catches it and reports the
@@ -67,18 +67,19 @@ function check(condition: boolean, message: string): void {
 
 // --- The differential core --------------------------------------------------------------
 
-// One adapter's end state after replaying a sequence: each touched account's balance (stable encoded
-// string), each account's latest hash-chain entry, the integrity report, and the step index plus
-// error code of any throw. Two adapters fed the same sequence must produce equal snapshots, errors
-// included; memory is the reference. Recording the error instead of aborting means a case whose
-// operation is meant to throw (e.g. recipient shares that add up wrong) is itself compared: every
-// adapter must throw the same code at the same step and leave the same balances.
+// One adapter's end state after replaying a sequence. It holds each touched account's balance as a
+// stable encoded string, each account's latest hash-chain entry, the integrity report, and the step
+// index plus error code of any throw. Two adapters fed the same sequence must produce equal
+// snapshots, errors included, with memory as the reference. Recording the error instead of aborting
+// lets a case whose operation is meant to throw, such as recipient shares that add up wrong, be
+// compared itself: every adapter must throw the same code at the same step and leave the same
+// balances.
 type Snapshot = {
   balances: Map<AccountRef, string>;
 
-  // Each account's latest hash-chain entry (its "head") as raw hex. A bug that posts the same lines
-  // in the wrong order leaves balances equal yet head hashes different; the balance map alone would
-  // miss it, this map catches it.
+  // Each account's latest hash-chain entry, its "head", as raw hex. A bug that posts the same lines
+  // in the wrong order leaves balances equal yet head hashes different. The balance map alone would
+  // miss that bug; this map catches it.
   heads: Map<AccountRef, string>;
 
   report: ProveReport;
@@ -86,10 +87,10 @@ type Snapshot = {
   fault: { at: number; code: string } | null;
 };
 
-// Replay one sequence against a single store and capture its end state. The store is built fresh and
-// isolated by `adapterMatrix()`, wired with the shared seeded hash function and fixed clock; the
-// economy is built over it with the matching seed. Always closed, even on throw, so a thrown error
-// can't leak a database connection or throwaway schema.
+// Replays one sequence against a single store and captures its end state. The store is built fresh
+// and isolated by `adapterMatrix()`, wired with the shared seeded hash function and fixed clock. The
+// economy is built over it with the matching seed. The store always closes, even on throw, so a
+// thrown error cannot leak a database connection or throwaway schema.
 async function replay(
   store: Store,
   operations: ReadonlyArray<Operation>,
@@ -98,10 +99,10 @@ async function replay(
   try {
     let fault: { at: number; code: string } | null = null;
     for (let i = 0; i < operations.length; i += 1) {
-      // A 'rejected' outcome moved no money; the final-state comparison captures it. An operation
-      // that fails outright throws instead; catch the first throw, record its step and code, and
-      // stop submitting, so the throw is itself compared across adapters (same code, step, leftover
-      // balances) rather than aborting the run.
+      // A 'rejected' outcome moved no money, and the final-state comparison captures it. An
+      // operation that fails outright throws instead. Catch the first throw, record its step and
+      // code, and stop submitting. The throw is then compared across adapters by code, step, and
+      // leftover balances, rather than aborting the run.
       try {
         await economy.submit(operations[i]!);
       } catch (error) {
@@ -115,9 +116,9 @@ async function replay(
   }
 }
 
-// Read the end state out of a running economy: the balance of every account the ledger has a head
-// for (every account any posting touched), each account's head, the integrity report, and any
-// error the replay caught.
+// Reads the end state out of a running economy. It returns the balance of every account the ledger
+// has a head for, which is every account any posting touched, plus each account's head, the
+// integrity report, and any error the replay caught.
 async function snapshot(
   economy: Economy,
   store: Store,
@@ -132,10 +133,10 @@ async function snapshot(
   return { balances, heads, report: await economy.read.prove(), fault };
 }
 
-// Compare a candidate snapshot against the memory reference, returning the first difference as a
-// readable detail or null when byte-for-byte equal. The account set, per-account balances,
-// per-account head hashes, and every integrity-report flag (plus the shortfall amount, how much USD
-// backing is missing) must all match.
+// Compares a candidate snapshot against the memory reference. Returns the first difference as a
+// readable detail, or null when the two are byte-for-byte equal. The account set, the per-account
+// balances, the per-account head hashes, and every integrity-report flag must all match. The
+// shortfall amount, which is how much USD backing is missing, must match too.
 function diverge(reference: Snapshot, candidate: Snapshot): string | null {
   let accounts = new Set<AccountRef>([
     ...reference.balances.keys(),
@@ -149,9 +150,9 @@ function diverge(reference: Snapshot, candidate: Snapshot): string | null {
     }
   }
 
-  // Every account's head hash must match memory's byte for byte: catches wrong-order posting bugs
-  // that leave balances equal. Detail worded so the caller's `adapter <X> diverged from memory at
-  // <detail>` reads as `adapter <X> head diverged at <account>`.
+  // Every account's head hash must match memory's byte for byte. This catches wrong-order posting
+  // bugs that leave balances equal. The detail is worded so the caller's `adapter <X> diverged from
+  // memory at <detail>` reads as `adapter <X> head diverged at <account>`.
   let headAccounts = new Set<AccountRef>([
     ...reference.heads.keys(),
     ...candidate.heads.keys(),
@@ -193,21 +194,21 @@ function diverge(reference: Snapshot, candidate: Snapshot): string | null {
   return null;
 }
 
-// Outcome of running one case across the matrix: which adapters took part (memory plus every
-// reachable backend) and which were skipped because their backend was down.
+// Outcome of running one case across the matrix. It records which adapters took part, meaning memory
+// plus every reachable backend, and which were skipped because their backend was down.
 type CaseResult = { compared: string[]; skipped: string[] };
 
 /**
- * Run one sequence against a set of matrix adapters and assert they all agree.
+ * Runs one sequence against a set of matrix adapters and asserts they all agree.
  *
- * Memory is the reference and always available. For each other adapter, try to build a fresh store;
- * if that throws, the backend is unreachable and the adapter is skipped (recorded, not failed). A
- * reachable adapter whose end state differs from memory's throws `adapter <X> diverged from memory
- * at <detail>`, which the caller reports before exiting non-zero.
+ * Memory is the reference and is always available. For each other adapter, this tries to build a
+ * fresh store. If that throws, the backend is unreachable, so the adapter is skipped: recorded, not
+ * failed. A reachable adapter whose end state differs from memory's throws `adapter <X> diverged
+ * from memory at <detail>`, which the caller reports before exiting non-zero.
  *
- * `include` selects which adapter names take part; memory is always forced in. Keeps the
- * real-database operation count small: deep seeds pass an `include` naming only the no-database
- * adapters (memory, http), so the SQL databases run only on the short bounded seeds.
+ * `include` selects which adapter names take part, and memory is always forced in. This keeps the
+ * real-database operation count small. Deep seeds pass an `include` naming only the no-database
+ * adapters (memory and http), so the SQL databases run only on the short bounded seeds.
  */
 async function runDifferential(
   label: string,
@@ -258,9 +259,9 @@ async function runDifferential(
 
 // --- Seeded operation generator (bounded for SQL, deep for memory) ----------------------
 
-// mulberry32 PRNG, identical to the one in scripts/prove.ts. Returns a function yielding the next
-// number in [0, 1) each call. Fixed math, so a seed produces the same sequence on every JS runtime,
-// which is what makes a seed the same op sequence on every adapter.
+// mulberry32 PRNG, identical to the one in scripts/prove.ts. Returns a function that yields the next
+// number in [0, 1) on each call. The math is fixed, so a seed produces the same sequence on every JS
+// runtime. That is what makes a seed produce the same operation sequence on every adapter.
 function rng(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -272,8 +273,9 @@ function rng(seed: number): () => number {
   };
 }
 
-// Running tally of one user's two spendable sources, in minor units (cents), so the generator only
-// produces affordable spends, exercising the path where money moves rather than a declined spend.
+// Running tally of one user's two spendable sources, in minor units (cents). The generator reads it
+// to produce only affordable spends, exercising the path where money moves rather than a declined
+// spend.
 type Wallet = { spendable: bigint; promo: bigint };
 
 // Format a count of minor units (cents) as a two-decimal string like "12.34", the text form
@@ -297,9 +299,10 @@ function walletOf(wallets: Map<string, Wallet>, userId: string): Wallet {
   return wallet;
 }
 
-// Build an affordable spend and subtract it from the local tally, promo first, matching the real
-// spend handler (charges promo credit before spendable). Order matters: if the tally fell out of
-// step with the handler, we'd start generating spends the user can't afford.
+// Builds an affordable spend and subtracts it from the local tally, promo first. This matches the
+// real spend handler, which charges promo credit before spendable. The order matters: if the tally
+// fell out of step with the handler, the generator would start producing spends the user cannot
+// afford.
 function spendOperation(
   next: () => number,
   step: number,
@@ -317,8 +320,9 @@ function spendOperation(
   wallet.spendable -= priceMinor - fromPromo;
   return op('spend', step, {
     // Deterministic per-step order id. The SQL adapters record every sale in a `sales` table whose
-    // `order_id` is non-null, so a generated spend must carry one (memory has no such table and would
-    // mask the omission). Derived from the step to stay byte-identical per adapter.
+    // `order_id` is non-null, so a generated spend must carry one. Memory has no such table and
+    // would mask the omission. The id is derived from the step so it stays byte-identical per
+    // adapter.
     orderId: `ord_f_${step}`,
     buyerId: userId,
     sku: 'wrld_pass',
@@ -328,15 +332,15 @@ function spendOperation(
 }
 
 // What a generated sequence may contain. `promo` stays a toggle because a promo-credit spend posts
-// more than one debit/credit line to a single account, the shape that once broke the SQL adapters
-// (which inserted those lines one at a time). That bug is fixed (every adapter handles the repeated
-// (account, previous-hash) pair), so both the deep memory/http loop and the bounded SQL seeds run
-// with `promo: true`, exercising every operation kind on every backend.
+// more than one debit/credit line to a single account. That shape once broke the SQL adapters, which
+// inserted those lines one at a time. The bug is fixed, since every adapter now handles the repeated
+// (account, previous-hash) pair. Both the deep memory/http loop and the bounded SQL seeds therefore
+// run with `promo: true`, exercising every operation kind on every backend.
 type ProgramOptions = { promo: boolean };
 
-// Pick one valid operation for the next step and update the local tally so the next step stays valid
-// too. The idempotency key and all ids come only from the step number, so the sequence is
-// byte-identical on every replay, hence on every adapter.
+// Picks one valid operation for the next step and updates the local tally so the next step stays
+// valid too. The idempotency key and all ids come only from the step number, so the sequence is
+// byte-identical on every replay, and therefore on every adapter.
 function nextOperation(
   next: () => number,
   step: number,
@@ -368,9 +372,9 @@ function nextOperation(
   return spendOperation(next, step, userId, wallet);
 }
 
-// Assemble an Operation, stamping in the per-step idempotency key and a fixed system actor. This
-// check is about whether accounting comes out the same on every backend, not authorization, so it
-// runs as the system and skips permission checks.
+// Assembles an Operation, stamping in the per-step idempotency key and a fixed system actor. This
+// check is about whether accounting comes out the same on every backend, not about authorization,
+// so it runs as the system and skips permission checks.
 function op(
   kind: Operation['kind'],
   step: number,
@@ -401,17 +405,18 @@ function program(
 
 // --- Adversarial fixtures (preserved, run through the differential) ---------------------
 
-// The four adversarial cases, each a fixed operation sequence rather than an assertion against a
-// single in-memory economy. Each sequence is replayed across the whole matrix; comparing every
+// The four adversarial cases. Each is a fixed operation sequence rather than an assertion against a
+// single in-memory economy. Each sequence is replayed across the whole matrix, and comparing every
 // reachable adapter against memory covers what the old single-backend assertions did. The builders
 // generate fresh idempotency keys at module load, identically on every adapter, so a sequence is the
 // same on every backend.
 function adversarialFixtures(): Array<{
   name: string;
   operations: Operation[];
-  // Optional: restrict a fixture to the no-database adapters (memory, http) instead of the full
-  // matrix. No fixture needs it today (the bug that once forced the promo-draw fixture to skip the
-  // SQL backends is fixed), but kept for a future fixture that can't reach a real database.
+  // Optionally restricts a fixture to the no-database adapters (memory and http) instead of the full
+  // matrix. No fixture needs this today, since the bug that once forced the promo-draw fixture to
+  // skip the SQL backends is fixed. It is kept for a future fixture that cannot reach a real
+  // database.
   inProcessOnly?: boolean;
 }> {
   let duplicatePurchase = spend({
@@ -466,9 +471,9 @@ function adversarialFixtures(): Array<{
     },
     {
       // A spend covered by promo credit draws the promo balance down before the user's spendable
-      // credit, and the platform's promo accounting still balances afterward. Posts two debit/credit
-      // lines to one account; with the multi-line write bug fixed, every adapter stores it, so it
-      // runs across the full matrix.
+      // credit, and the platform's promo accounting still balances afterward. It posts two
+      // debit/credit lines to one account. With the multi-line write bug fixed, every adapter stores
+      // it, so it runs across the full matrix.
       name: 'promo spend conserves the float',
       operations: [
         topUp({ userId: 'usr_pr', amount: creditAmount('2.00') }),
@@ -488,9 +493,9 @@ function adversarialFixtures(): Array<{
   ];
 }
 
-// Check the promo fixture's exact balances on the memory reference. Cross-adapter comparison can't
-// catch a change that broke spend ordering the same way on every adapter at once; pinning the
-// expected numbers here does. Run after the adapter comparison.
+// Checks the promo fixture's exact balances on the memory reference. The cross-adapter comparison
+// cannot catch a change that broke spend ordering the same way on every adapter at once. Pinning the
+// expected numbers here does catch it. Runs after the adapter comparison.
 async function assertReferenceBalances(): Promise<void> {
   let promoEconomy = makeEconomy(ECONOMY_SEED);
   await promoEconomy.submit(
@@ -527,8 +532,8 @@ async function assertReferenceBalances(): Promise<void> {
 // --- Runner ------------------------------------------------------------------------------
 
 async function main(): Promise<void> {
-  // Track which non-memory adapters were actually compared, so the success line says memory matched
-  // postgres rather than claiming a comparison a down database skipped.
+  // Tracks which non-memory adapters were actually compared, so the success line says memory matched
+  // postgres rather than claiming a comparison that a down database skipped.
   let comparedAdapters = new Set<string>();
   let skippedAdapters = new Set<string>();
 
@@ -543,16 +548,16 @@ async function main(): Promise<void> {
     }
   };
 
-  // Full matrix (SQL included) runs the small bounded cases; the no-database set (memory plus http,
-  // both always available) carries the long deep loop, keeping the real-database operation count
-  // small. (runDifferential always forces memory in, so naming only http here still compares memory
-  // against http.)
+  // The full matrix, SQL included, runs the small bounded cases. The no-database set of memory plus
+  // http, both always available, carries the long deep loop, which keeps the real-database operation
+  // count small. (runDifferential always forces memory in, so naming only http here still compares
+  // memory against http.)
   let fullMatrix = new Set(adapterMatrix().map((adapter) => adapter.name));
   let inProcess = new Set(['http']);
 
   try {
-    // Adversarial cases: small, hand-built. Each runs across the whole matrix unless it sets
-    // inProcessOnly (no-database adapters only); no case sets that flag today.
+    // Adversarial cases are small and hand-built. Each runs across the whole matrix unless it sets
+    // inProcessOnly, which restricts it to the no-database adapters. No case sets that flag today.
     let fixtures = adversarialFixtures();
     for (let fixture of fixtures) {
       note(
@@ -565,9 +570,9 @@ async function main(): Promise<void> {
     }
     await assertReferenceBalances();
 
-    // Generated seeds. memory carries the deep loop (many seeds, each a long sequence) alongside
-    // http (no database, cheap); the SQL databases run few seeds and a short sequence, since each op
-    // is a round trip to a live database.
+    // Generated seeds. Memory carries the deep loop, which is many seeds, each a long sequence,
+    // alongside http, which has no database and is cheap. The SQL databases run few seeds and a
+    // short sequence, since each operation is a round trip to a live database.
     let deepSeeds = Array.from({ length: 12 }, (_, i) => 0xf00 + i);
     let deepLength = 80;
     let sqlSeeds = 3; // run the SQL backends on only the first few seeds
@@ -576,9 +581,10 @@ async function main(): Promise<void> {
     for (let i = 0; i < deepSeeds.length; i += 1) {
       let seed = deepSeeds[i]!;
       if (i < sqlSeeds) {
-        // Full matrix (SQL backends too) on a short sequence, promos included. With the multi-line
-        // write bug fixed, the SQL adapters store promo-draw spends (two lines to one account) too,
-        // so memory and postgres compare cleanly on the full set of operation kinds.
+        // Full matrix, SQL backends too, on a short sequence with promos included. With the
+        // multi-line write bug fixed, the SQL adapters store promo-draw spends, which post two lines
+        // to one account. Memory and postgres therefore compare cleanly on the full set of operation
+        // kinds.
         note(
           await runDifferential(
             `seed 0x${seed.toString(16)} (sql-bounded)`,
@@ -587,8 +593,8 @@ async function main(): Promise<void> {
           ),
         );
       } else {
-        // memory and http only, on a long sequence, promos included. No SQL round trips, but the
-        // richer promo-draw path is still exercised against the no-database adapters.
+        // Memory and http only, on a long sequence with promos included. There are no SQL round
+        // trips, but the richer promo-draw path is still exercised against the no-database adapters.
         note(
           await runDifferential(
             `seed 0x${seed.toString(16)} (deep)`,

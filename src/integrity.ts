@@ -31,27 +31,29 @@ import type {
   Store,
 } from '#src/ports.ts';
 
-// One account whose cached running balance disagrees with the balance re-derived by summing
-// its individual debit and credit lines.
+// Records one account whose cached running balance disagrees with the balance re-derived by
+// summing its own debit and credit lines.
 type Drift = { account: AccountRef; materialized: Amount; derived: Amount };
 
 /**
- * What `proveEconomy` needs: exchange rates and a `digest` (hashing function). Subset of the
- * app-wide `Ctx`, so a full `Ctx` can be passed straight in. `digest` is required because the
- * tamper check always recomputes entry hashes from scratch; there's no latest-hash-only path.
+ * Holds what `proveEconomy` needs: exchange rates and a `digest` hashing function. This is a
+ * subset of the app-wide `Ctx`, so a full `Ctx` can be passed straight in. The `digest` is
+ * required because the tamper check always recomputes entry hashes from scratch. There is no
+ * cheaper path that trusts the latest stored hash.
  */
 export type ProveCtx = { rates: Rates; digest: Digest };
 
-// What one pass over the ledger collects. The hash chain is not checked here; `chain.ts`
+// Collects what one pass over the ledger gathers. The hash chain is not checked here. `chain.ts`
 // `proveChain` does that, so the chain is verified in one place.
 type LedgerFold = {
-  // Running total per currency, debits added and credits subtracted; should reach zero.
+  // Running total per currency. Debits are added and credits are subtracted, so it should
+  // reach zero.
   signedByCurrency: Map<Currency, bigint>;
 
   // Total credits the platform owes users and must hold real USD against.
   custodialCreditMinor: bigint;
 
-  // Set if any user account dropped below zero.
+  // True if any user account dropped below zero.
   anyUserNegative: boolean;
 
   // Every account whose materialized balance disagrees with the balance folded from its legs.
@@ -59,17 +61,18 @@ type LedgerFold = {
 };
 
 /**
- * Run all consistency checks over the whole ledger and return the report.
+ * Runs all consistency checks over the whole ledger and returns the report.
  *
- * Thorough prover: recomputes the entire hash chain to catch any altered entry. The lighter
- * prover in `economy.ts` (`economy.read.prove`) only checks each account's latest hash is
- * well-formed, without recomputing it.
+ * This is the thorough prover. It recomputes the entire hash chain to catch any altered entry.
+ * The lighter prover in `economy.ts` (`economy.read.prove`) only checks that each account's
+ * latest hash is well-formed, without recomputing it.
  *
- * Read-only, through `store`, `ctx.rates`, and `chain.ts` `proveChain`.
+ * Reads only, through `store`, `ctx.rates`, and `chain.ts` `proveChain`.
  *
- * Independent audit, not the enforcer. The database enforces conservation, no-overdraft, and
- * balance integrity (see db/*-schema.sql); this re-derives them from the legs to catch a bug in
- * the enforcement itself. Run by an auditor/worker, never as the write-path guard.
+ * This is an independent audit, not the enforcer. The database enforces conservation,
+ * no-overdraft, and balance integrity (see db/*-schema.sql). This function re-derives those
+ * invariants from the legs to catch a bug in the enforcement itself. An auditor or worker runs
+ * it; it never guards the write path.
  *
  * @example
  *   let report = await proveEconomy(store, { rates: fixedRates(), digest });
@@ -87,15 +90,16 @@ export async function proveEconomy(
     fold.custodialCreditMinor,
     ctx.rates.par('CREDIT'),
   );
-  // `TRUST_CASH` is the real USD the platform holds. Compare to the USD needed to back all
-  // those credits; a shortfall is the gap (zero means backed).
+  // `TRUST_CASH` is the real USD the platform holds. Compare it to the USD needed to back all
+  // those credits. A shortfall is the gap between the two, and zero means fully backed.
   let trustCash = await store.ledger.balance(SYSTEM.TRUST_CASH, options);
   let shortfallMinor =
     trustCash.minor < required ? required - trustCash.minor : 0n;
 
-  // Check no stored entry was altered. `proveChain` walks each account's entries in order,
-  // recomputes each hash and checks it against the stored hash (and that each entry links to
-  // the previous one). Only place the chain is checked; result reused as-is below.
+  // Check that no stored entry was altered. `proveChain` walks each account's entries in order.
+  // It recomputes each hash, checks it against the stored hash, and confirms that each entry
+  // links to the previous one. This is the only place the chain is checked, and the result is
+  // reused as-is below.
   let chain = await proveChain(
     { ledger: store.ledger, digest: ctx.digest },
     options,
@@ -116,10 +120,10 @@ export async function proveEconomy(
 
 // Walks every account ever posted to and collects what the integrity checks need.
 //
-// The conservation total and per-account derived balance are built from the entries, not the
+// The conservation total and the per-account derived balance are built from the entries, not the
 // stored balances, so a mis-saved balance surfaces as drift instead of hiding a real imbalance.
-// Backing and overdraft read the stored balance directly, which is cheaper and is what they
-// vouch for.
+// Backing and overdraft read the stored balance directly, which is cheaper and is the figure
+// they vouch for.
 async function foldLedger(
   ledger: Ledger,
   options?: Options,
@@ -128,14 +132,14 @@ async function foldLedger(
   let custodialCreditMinor = 0n;
   let anyUserNegative = false;
   let drift: Drift[] = [];
-  // Accounts the `heads()` fold visited, so the phantom-row pass below knows which
-  // `balanceAccounts()` rows have no backing posting and still need a derived-0 comparison.
+  // Tracks the accounts the `heads()` fold visited. The phantom-row pass below uses this to find
+  // which `balanceAccounts()` rows have no backing posting and still need a derived-zero check.
   let seen = new Set<AccountRef>();
 
   for await (let [account] of ledger.heads()) {
     seen.add(account);
-    // Folding the legs serves two checks: the per-currency conservation total and the
-    // per-account derived balance, compared below against the cached running balance.
+    // Folding the legs serves two checks. It feeds the per-currency conservation total, and it
+    // produces the per-account derived balance compared below against the cached running balance.
     let derivedMinor = await accumulateLegs(
       ledger,
       account,
@@ -148,10 +152,10 @@ async function foldLedger(
     // directly-edited balance). Legs are authoritative; the materialized figure is the cache.
     pushIfDrifted(account, balance, derivedMinor, drift);
     // Sum the credits the platform must back with real USD. `classify` tags an account
-    // "custodial" when its balance is a credit a user can spend or withdraw. Revenue-share
-    // still owed, promotional grants, and amounts reserved for a pending payout are not
-    // custodial (not user-spendable yet). Custodial balances are all credits, so the
-    // `currency === 'CREDIT'` check blocks a stray USD balance from this credits-only total.
+    // "custodial" when its balance is a credit a user can spend or withdraw. Revenue-share still
+    // owed, promotional grants, and amounts reserved for a pending payout are not custodial,
+    // because none are user-spendable yet. Every custodial balance is a credit, so the
+    // `currency === 'CREDIT'` check keeps a stray USD balance out of this credits-only total.
     if (classify(account) === 'custodial' && currency(account) === 'CREDIT') {
       custodialCreditMinor += balance.minor;
     }
@@ -159,12 +163,12 @@ async function foldLedger(
       anyUserNegative = true;
     }
   }
-  // R33: the `heads()` fold only visits accounts with >=1 posting, so a balance row with no
-  // backing posting (a phantom or stale row from a direct DB edit or half-applied write) would
-  // be invisible. Enumerate every materialized balance row and, for any account the legs fold
-  // never touched, compare its stored balance against a derived 0; the legs say it should not
-  // exist, so any non-zero figure is drift. Reuses the R32 comparison, so a legs-less row
-  // surfaces in the same `drift` array.
+  // R33: the `heads()` fold only visits accounts with at least one posting. A balance row with
+  // no backing posting would be invisible to it. Such a row is a phantom or stale row left by a
+  // direct DB edit or a half-applied write. So enumerate every materialized balance row, and for
+  // any account the legs fold never touched, compare its stored balance against a derived 0. The
+  // legs say the account should not exist, so any non-zero figure is drift. This reuses the R32
+  // comparison, so a legs-less row surfaces in the same `drift` array.
   for await (let account of ledger.balanceAccounts(options)) {
     if (seen.has(account)) {
       continue;
@@ -176,12 +180,14 @@ async function foldLedger(
 }
 
 // Folds one account's entries into the per-currency conservation totals and returns that
-// account's balance re-derived from its legs (the value `ledger.balance` should match).
+// account's balance re-derived from its legs. That returned value is the figure `ledger.balance`
+// should match.
 //
 // Each entry's amount is already signed the way it changed this account's balance, so summing
-// them reproduces the materialized balance (the returned derived total). For conservation,
-// recover the original debit by sign: debit-normal accounts (`isDebitNormal`) keep their sign,
-// credit-normal ones flip it; summed across all accounts these must reach zero per currency.
+// the amounts reproduces the materialized balance, which is the returned derived total. The
+// conservation total needs the original debit instead, recovered by sign. A debit-normal account
+// (`isDebitNormal`) keeps its sign, and a credit-normal account flips it. Summed across all
+// accounts, these must reach zero per currency.
 async function accumulateLegs(
   ledger: Ledger,
   account: AccountRef,
@@ -200,10 +206,11 @@ async function accumulateLegs(
   return derivedMinor;
 }
 
-// Record one account as drifted when its cached running balance disagrees with the balance its
-// legs derive to. Shared by both cases: an account with postings whose materialized total
-// diverged (R32), and a phantom/stale balance row with no backing posting, which derives to 0
-// (R33). Legs are the source of truth; the materialized figure is the cache that may be wrong.
+// Records one account as drifted when its cached running balance disagrees with the balance its
+// legs derive to. Both cases share this helper. The first is an account with postings whose
+// materialized total diverged (R32). The second is a phantom or stale balance row with no
+// backing posting, which derives to 0 (R33). The legs are the source of truth, and the
+// materialized figure is the cache that may be wrong.
 function pushIfDrifted(
   account: AccountRef,
   materialized: Amount,
@@ -219,12 +226,12 @@ function pushIfDrifted(
   }
 }
 
-// USD that must back a given amount of credits: credit amount times the par rate (fixed
-// credit-to-USD rate), rounded down.
+// Returns the USD that must back a given amount of credits. It is the credit amount times the par
+// rate (the fixed credit-to-USD rate), rounded down.
 //
-// The rate is stored as integer `par.rate` plus `par.scale`, true rate = par.rate / 10^scale
-// (e.g. rate 50, scale 2 means 0.50 USD per credit), so dividing the product by 10^scale gives
-// the real result.
+// The rate is stored as an integer `par.rate` plus a `par.scale`, where the true rate equals
+// par.rate / 10^scale. For example, rate 50 and scale 2 mean 0.50 USD per credit. So dividing the
+// product by 10^scale gives the real result.
 function backingRequiredMinor(custodialCreditMinor: bigint, par: Rate): bigint {
   return (custodialCreditMinor * par.rate) / 10n ** BigInt(par.scale);
 }
@@ -245,10 +252,11 @@ function everyCurrencyBalances(
 // --- The all-checks roll-up (imported by test/integrity.test.ts) -------------------
 
 /**
- * True only when every integrity check passed: debits and credits conserved per currency, real
- * USD backing every owed credit, no account overdrawn, no stored entry altered (hash chain
- * verifies), and every cached balance agreeing with the lines it sums. Each is a field on the
- * report; for one check, read the field directly (e.g. `report.conserved`).
+ * Returns true only when every integrity check passed. That means debits and credits are
+ * conserved per currency, real USD backs every owed credit, no account is overdrawn, no stored
+ * entry was altered (the hash chain verifies), and every cached balance agrees with the lines it
+ * sums. Each check is a field on the report. To read one check, read its field directly, such as
+ * `report.conserved`.
  */
 export function allInvariantsHold(report: ProveReport): boolean {
   return (
@@ -260,8 +268,8 @@ export function allInvariantsHold(report: ProveReport): boolean {
   );
 }
 
-// Time range wide enough to include every entry ever recorded, so a statement over this range
-// returns an account's whole history. (Times are epoch ms; upper end exclusive.)
+// A time range wide enough to include every entry ever recorded, so a statement over it returns
+// an account's whole history. Times are epoch milliseconds, and the upper end is exclusive.
 let FULL_RANGE = {
   from: Number.MIN_SAFE_INTEGER,
   to: Number.MAX_SAFE_INTEGER,

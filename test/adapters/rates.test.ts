@@ -14,9 +14,10 @@ import assert from 'node:assert/strict';
 
 import { configuredRates } from '#src/adapters/rates.ts';
 
-// CREDIT-to-USD rates, each `rate`/10^`scale`. buy = 1/10^2 = $0.01 (user pays per credit),
-// par = 5/10^3 = $0.005 (backing / cash-out value), payout = par. buy > par, the gap is the
-// platform's purchase spread.
+// CREDIT-to-USD rates for the fixture. Each rate is `rate`/10^`scale` USD per credit. The buy rate
+// is 1/10^2 = $0.01, what a user pays per credit. The par rate is 5/10^3 = $0.005, the backing and
+// cash-out value. The payout rate equals par. Buy exceeds par, and that gap is the platform's
+// purchase spread.
 const RATES = {
   buyRate: 1n,
   buyScale: 2,

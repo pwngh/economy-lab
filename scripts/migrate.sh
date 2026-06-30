@@ -1,7 +1,7 @@
 #!/bin/sh
-# Apply the database schema for the engine named by DATABASE_URL, using its native client
-# (psql / mysql). Replaced the former TypeScript migrate script. Run by hand or in CI before the SQL
-# conformance suites; the running server never creates tables on startup.
+# Applies the database schema for the engine named by DATABASE_URL, using that engine's native client
+# (psql or mysql). Run it by hand or in CI before the SQL conformance suites. The running server never
+# creates tables on startup.
 #
 #   DATABASE_URL=postgres://economy:economy@localhost:5432/economy_lab  sh scripts/migrate.sh
 #   DATABASE_URL=mysql://root:economy@localhost:3306/economy_lab        sh scripts/migrate.sh
@@ -9,12 +9,12 @@
 #
 # See: https://economy-lab-docs.pages.dev/economy/reference/configuration/  (Configuration)
 #
-# Both schemas are self-resetting (Postgres resets the `public` schema first; MySQL drops its tables
-# and routines up front), so re-running is safe. No DATABASE_URL: nothing to do (the in-memory store
-# builds its tables in code).
+# Both schemas are self-resetting (Postgres resets the `public` schema first, and MySQL drops its
+# tables and routines up front), so re-running is safe. When DATABASE_URL is unset there is nothing to
+# do, because the in-memory store builds its tables in code.
 #
-# This is a lab tool: it resets by dropping the schema — right for a throwaway dev/lab database,
-# catastrophic for one holding real money. As a guard it refuses a non-local host unless
+# This is a lab tool. It resets by dropping the schema, which is right for a throwaway dev or lab
+# database but catastrophic for one holding real money. As a guard it refuses a non-local host unless
 # MIGRATE_FORCE=1. A real deployment wants additive, versioned migrations instead, not this.
 set -eu
 
@@ -31,15 +31,15 @@ fi
 
 url="${DATABASE_URL:-}"
 
-# Destructive-reset guard. This DROPS the schema, so refuse a non-local host unless explicitly
-# forced. A throwaway dev/lab database on localhost is always allowed; anything else (a staging or
-# production host reached by a stray DATABASE_URL) needs MIGRATE_FORCE=1.
+# Destructive-reset guard. This DROPS the schema, so it refuses a non-local host unless explicitly
+# forced. A throwaway dev or lab database on localhost is always allowed. Anything else, such as a
+# staging or production host reached by a stray DATABASE_URL, needs MIGRATE_FORCE=1.
 host="${url#*://}"
 host="${host#*@}"
 host="${host%%/*}"
 host="${host%%:*}"
 case "$host" in
-localhost | 127.0.0.1 | ::1 | "") ;; # local, or no host at all — allowed
+localhost | 127.0.0.1 | ::1 | "") ;; # local, or no host at all: allowed
 *)
   [ "${MIGRATE_FORCE:-}" = "1" ] || {
     echo "scripts/migrate.sh: refusing to reset a non-local database ($host) — this DROPS the schema." >&2
@@ -64,8 +64,9 @@ postgres* | postgresql*)
 mysql*)
   command -v mysql >/dev/null 2>&1 ||
     { echo "scripts/migrate.sh: mysql client not found on PATH" >&2; exit 1; }
-  # mysql(1) takes no URL, so split DATABASE_URL into host/port/user/password/database. (Plain
-  # credentials only — URL-encoded user/password are not decoded; the dev URLs need none.)
+  # mysql(1) takes no URL, so split DATABASE_URL into host, port, user, password, and database. Only
+  # plain credentials work here: a URL-encoded user or password is not decoded, and the dev URLs need
+  # no decoding.
   rest="${url#mysql://}"
   case "$rest" in
   *@*) creds="${rest%%@*}"; hostpart="${rest#*@}" ;;

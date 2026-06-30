@@ -14,13 +14,14 @@ import { decodeWire, encodeWire } from '#src/adapters/http-wire.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Store, Unit } from '#src/ports.ts';
 
-// A transaction held open between requests. The db transaction is paused mid-flight, waiting
-// on a promise (the "gate"), so later requests reuse it before it commits or rolls back.
+// Holds a db transaction open across several requests. The transaction body pauses on a promise
+// called the gate, so later requests run inside it before it commits or rolls back.
 type Session = {
-  // Transaction-scoped stores (ledger, sagas, etc.); all writes commit or roll back together.
+  // The transaction-scoped stores, such as the ledger and sagas. All their writes commit or roll
+  // back together.
   unit: Unit;
 
-  // End the transaction: true commits, false rolls back, by resolving/rejecting the gate.
+  // Ends the transaction by resolving or rejecting the gate. True commits and false rolls back.
   settle: (commit: boolean) => void;
 
   // Resolves once the db transaction has committed or rolled back. Awaiting surfaces any
@@ -30,9 +31,9 @@ type Session = {
 
 // --- Session lifecycle ------------------------------------------------------------
 
-// Open a db transaction and pause its body on the gate promise so later requests can use it.
-// The commit/rollback routes resolve or reject the gate to finish it. Returns the session id
-// callers pass on every follow-up request.
+// Opens a db transaction and pauses its body on the gate promise so later requests can use it.
+// The commit and rollback routes resolve or reject the gate to finish it. Returns the session id
+// that callers pass on every follow-up request.
 function beginSession(backing: Store, sessions: Map<string, Session>): string {
   let id = `sess_${sessions.size}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   let settle!: (commit: boolean) => void;
@@ -40,9 +41,9 @@ function beginSession(backing: Store, sessions: Map<string, Session>): string {
     settle = (commit) =>
       commit ? resolve() : reject(new Error('transaction rolled back'));
   });
-  // Record the session from inside the transaction body, saving its unit. `done` is a
-  // placeholder here, overwritten just below, since the transaction promise doesn't exist yet.
-  // Nothing reads `done` before the real value is set.
+  // Record the session from inside the transaction body so it captures the unit. `done` starts as
+  // a placeholder because the transaction promise does not exist yet. The line below overwrites it,
+  // and nothing reads `done` before then.
   let done = backing
     .transaction(async (unit) => {
       sessions.set(id, {
@@ -73,8 +74,8 @@ async function rollbackSession(session: Session): Promise<void> {
 
 // --- Ledger routes ----------------------------------------------------------------
 
-// Pick the ledger for a request. Session id 'root' means a read outside any transaction, so
-// use the backing store's ledger; otherwise use the held transaction's ledger.
+// Picks the ledger for a request. Session id 'root' means a read outside any transaction, so it
+// uses the backing store's ledger. Any other id uses the held transaction's ledger.
 function ledgerFor(
   backing: Store,
   sessions: Map<string, Session>,
@@ -112,9 +113,9 @@ async function ledgerRoute(
   return ledgerReadRoute(ledger, method, body);
 }
 
-// Remaining ledger reads, split out to keep each function short. `statement` returns one page;
-// `heads`, `timeline`, `lineage`, and `list` stream rows one at a time, so each collects into an
-// array here.
+// Handles the remaining ledger reads, split out to keep each function short. `statement` returns
+// one page. `heads`, `timeline`, `lineage`, and `list` stream rows one at a time, so each one
+// collects into an array here.
 async function ledgerReadRoute(
   ledger: Store['ledger'],
   method: string,
@@ -132,8 +133,8 @@ async function ledgerReadRoute(
     return collect(ledger.balanceAccounts(), (account) => account as unknown);
   }
   if (method === 'timeline') {
-    // Pass the bounded read straight through to the backing ledger, so a `desc`/`limit` request
-    // bounds the real engine's DB work rather than being applied after a full fetch.
+    // Pass the order and limit straight through to the backing ledger. The engine then bounds its
+    // own DB work, instead of fetching every row and trimming the result here.
     let timelineOptions = {
       order: body.order as 'asc' | 'desc' | undefined,
       limit: body.limit as number | undefined,
@@ -181,9 +182,9 @@ async function collect<T>(
 
 // --- Sub-store routes -------------------------------------------------------------
 
-// Pick the unit for a request. Session id 'root' means a call outside any transaction; the
-// backing store exposes the same sub-stores a unit does, so it stands in directly. Otherwise
-// use the unit captured for that session.
+// Picks the unit for a request. Session id 'root' means a call outside any transaction. The
+// backing store exposes the same sub-stores a unit does, so it stands in directly. Any other id
+// uses the unit captured for that session.
 function unitFor(
   backing: Store,
   sessions: Map<string, Session>,
@@ -192,8 +193,8 @@ function unitFor(
   return session === 'root' ? backing : sessions.get(session)!.unit;
 }
 
-// Run one non-ledger sub-store call (sagas, idempotency, entitlements, etc.). Looks up the
-// handler by "<store>/<method>" key from the path; throws if no such route.
+// Runs one non-ledger sub-store call, such as sagas, idempotency, or entitlements. Looks up the
+// handler by its "<store>/<method>" key from the path. Throws if no such route exists.
 async function subStoreRoute(
   unit: Unit,
   store: string,
@@ -212,9 +213,9 @@ type SubHandler = (
   body: Record<string, unknown>,
 ) => Promise<unknown>;
 
-// Every non-ledger sub-store call, one entry per method. Each handler decodes the body's wire
-// form to domain values, calls the store method, and encodes the result back. The client has
-// a matching call for every entry.
+// Holds every non-ledger sub-store call, with one entry per method. Each handler decodes the
+// body's wire form to domain values, calls the store method, and encodes the result back. The
+// client has a matching call for every entry.
 let SUBSTORE_ROUTES: Record<string, SubHandler> = {
   'idempotency/claim': async (unit, body) => {
     let result = await unit.idempotency.claim(body.key as string);
@@ -381,16 +382,16 @@ let SUBSTORE_ROUTES: Record<string, SubHandler> = {
   },
 };
 
-// Decode a saga patch (a saga is a long-running multi-step payout tracked across states). The
-// patch updates only some fields, so its one money field `reserve` may be absent; decode it
-// from the wire string only when present, otherwise pass the patch through unchanged.
+// Decodes a saga patch. A saga is a long-running multi-step payout tracked across states. The
+// patch updates only some fields, so its money field `reserve` may be absent. Decode `reserve`
+// from its wire string only when present, and pass the rest of the patch through unchanged.
 function decodeSagaPatch(
   patch: unknown,
 ): Parameters<Unit['sagas']['advance']>[3] {
   let row = { ...(patch as Record<string, unknown>) };
-  // Decode the amount-typed fields that ride the wire as encoded strings (reserve, payoutUsd) back
-  // to Amounts; everything else passes through. payoutUsd is null before settlement, so only decode
-  // an actual encoded-amount string.
+  // The amount-typed fields `reserve` and `payoutUsd` ride the wire as encoded strings. Decode
+  // them back to Amounts, and let every other field pass through. `payoutUsd` is null before
+  // settlement, so decode it only when it is an actual encoded-amount string.
   if (typeof row.reserve === 'string') {
     row.reserve = decodeWire.amount(row.reserve);
   }
@@ -401,9 +402,9 @@ function decodeSagaPatch(
 }
 
 // --- Routes that bypass transactions (trust, checkpoints) -------------------------
-// The trust store (a running per-subject tally of recent spend, used for risk checks) and the
-// checkpoints write directly on the backing store, not inside a held transaction, so these
-// routes take the store rather than a session's unit.
+// The trust store keeps a running per-subject tally of recent spend for risk checks. It and the
+// checkpoints write directly on the backing store, not inside a held transaction. So these routes
+// take the store rather than a session's unit.
 
 async function trustRoute(
   backing: Store,
@@ -443,10 +444,10 @@ async function checkpointRoute(
   return backing.checkpoints.latest();
 }
 
-// The webhook replay store dedups incoming events: claiming an event id succeeds the first
-// time and fails on repeats. Claimed directly on the backing store, never inside a held
-// transaction (webhook ingress checks it before doing work), so this route takes the store.
-// Only `claim` exists; its `{ claimed }` result is plain JSON, no codec needed.
+// The webhook replay store deduplicates incoming events. Claiming an event id succeeds the first
+// time and fails on repeats. The claim runs directly on the backing store, never inside a held
+// transaction, because webhook ingress checks it before doing any work, so this route takes the
+// store. Only `claim` exists, and its `{ claimed }` result is plain JSON that needs no codec.
 async function replayRoute(
   backing: Store,
   method: string,
@@ -460,7 +461,7 @@ async function replayRoute(
 
 // --- The request router -----------------------------------------------------------
 
-// Route one request to its handler based on the first path segment. The recognized paths are:
+// Routes one request to its handler based on the first path segment. The recognized paths are:
 //   /tx/begin                       open a new held transaction
 //   /tx/<id>/commit | rollback      finish a held transaction
 //   /tx/<id>/<store>/<method>       a call inside a held transaction

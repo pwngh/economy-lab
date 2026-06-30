@@ -27,8 +27,8 @@ import type {
 // has its own test below.
 let ALL_TIME = { from: 0, to: 1_000_000 };
 
-// Processor record (one settled payment the processor reports), with defaults for fields a
-// test doesn't care about.
+// Builds a processor record, which is one settled payment the processor reports. Fields a
+// test does not care about get defaults.
 function processorRecord(o: {
   kind?: ReconcileKind;
   matchKey: string;
@@ -44,8 +44,8 @@ function processorRecord(o: {
   };
 }
 
-// Ledger record (our own record of the same payment). Defaults line up with
-// processorRecord so a matching pair is easy to build.
+// Builds a ledger record, which is our own record of the same payment. The defaults line up
+// with processorRecord so that a matching pair is easy to build.
 function ledgerRecord(o: {
   kind?: ReconcileKind;
   matchKey: string;
@@ -151,8 +151,8 @@ function neverMatchesABuyToAPayout(): void {
 function scopesTheHalfOpenWindow(): void {
   let amount = usd('1.00');
 
-  // Window is [10, 20): 10 is inside, 20 belongs to the next window. So "in" records count
-  // and "out" records are dropped.
+  // The window [10, 20) is half-open. 10 is inside, and 20 belongs to the next window. So the
+  // "in" records count and the "out" records are dropped.
   let report = reconcile(
     { from: 10, to: 20 },
     {
@@ -239,14 +239,15 @@ function reportsCountsAndKeepsThemConsistentWithTheList(): void {
 }
 
 // --- duplicate match keys: the "shouldn't happen" a reconciler exists to catch ------------------
-// matchKey is meant to be a unique join reference, so a repeat is corruption (e.g. a row double-
-// posted by an idempotency/race bug) — exactly what a reconciler must catch. These pin that each
-// duplicate is matched or orphaned EXACTLY ONCE on both sides, never silently dropped (the bug:
-// keeping only the first ledger record per key, which let a duplicate vanish and the report read
-// `reconciled: true`).
+// A matchKey is meant to be a unique join reference. A repeat therefore signals corruption, such
+// as a row double-posted by an idempotency or race bug. Catching that case is exactly why a
+// reconciler exists. These tests pin that each duplicate is matched or orphaned exactly once on
+// both sides and is never silently dropped. The guarded bug kept only the first ledger record per
+// key, which let a duplicate vanish and made the report read `reconciled: true`.
 
-// Two ledger records share a key, one processor record matches: one pairs up, the surplus ledger
-// record surfaces as a ledger orphan — not dropped, and the report is not a false all-clear.
+// Two ledger records share a key and one processor record matches. One pair forms, and the surplus
+// ledger record surfaces as a ledger orphan rather than being dropped, so the report is not a
+// false all-clear.
 function surfacesADuplicateLedgerRecordAsAnOrphan(): void {
   let amount = usd('5.00');
   let report = reconcile(ALL_TIME, {
@@ -264,8 +265,8 @@ function surfacesADuplicateLedgerRecordAsAnOrphan(): void {
   assert.equal(report.matched + report.ledgerOrphans, report.ledgerCount);
 }
 
-// N duplicate ledger records, no processor side: all N surface as ledger orphans, not collapsed to
-// one (the old index kept only the first).
+// N duplicate ledger records with no processor side. All N surface as ledger orphans rather than
+// collapsing to one. The old index kept only the first record per key.
 function surfacesEveryDuplicateLedgerOrphan(): void {
   let amount = usd('3.00');
   let report = reconcile(ALL_TIME, {
@@ -283,8 +284,8 @@ function surfacesEveryDuplicateLedgerOrphan(): void {
   assert.equal(report.matched + report.ledgerOrphans, report.ledgerCount);
 }
 
-// The processor side is symmetric: two processor records sharing a key with one ledger record pair
-// one and surface the surplus as a processor orphan.
+// The processor side is symmetric. Two processor records share a key with one ledger record. One
+// pair forms, and the surplus surfaces as a processor orphan.
 function surfacesADuplicateProcessorRecordAsAnOrphan(): void {
   let amount = usd('4.00');
   let report = reconcile(ALL_TIME, {

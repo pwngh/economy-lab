@@ -20,8 +20,9 @@
  *   DATABASE_URL=mysql://root:economy@localhost:3306/economy_lab        ...    # mysql
  *   REDIS_URL=redis://localhost:6379 ...                                       # + cache in front of reads
  *
- * In-memory backend is self-contained. SQL backends use the existing schema (run `make db-migrate`
- * first); DEMO_RESET=1 drops & recreates it, which DESTROYS all data — a demo convenience (issue #20).
+ * The in-memory backend is self-contained. SQL backends use the existing schema, so run
+ * `make db-migrate` first. Setting DEMO_RESET=1 drops and recreates that schema, which DESTROYS all
+ * data. It is a demo convenience (issue #20).
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy} for the
  * money flow this sample walks through.
@@ -41,8 +42,8 @@ import {
 
 import type { Amount } from '#src/money.ts';
 
-// The `pg` (PostgreSQL driver) methods the schema reset calls. Driver ships no types, so declare
-// just the parts used here.
+// The `pg` (PostgreSQL driver) methods the schema reset calls. The driver ships no types, so this
+// declares just the parts used here.
 interface PgDemoClient {
   connect(): Promise<void>;
   query(sql: string): Promise<unknown>;
@@ -52,15 +53,15 @@ interface PgDemoModule {
   Client: new (config: { connectionString: string }) => PgDemoClient;
 }
 
-// Postgres is reached by either scheme (the `pg` driver aliases `postgres://` and `postgresql://`);
-// MySQL via `mysql://`. Mirrors the scheme test in src/index.ts so the demo's labels and schema reset
-// agree with what compose() actually selects.
+// Postgres is reached by either scheme, because the `pg` driver aliases `postgres://` and
+// `postgresql://`. MySQL uses `mysql://`. These tests mirror the scheme test in src/index.ts so the
+// demo's labels and schema reset agree with what compose() actually selects.
 const isPostgres = (u: string): boolean =>
   u.startsWith('postgres://') || u.startsWith('postgresql://');
 const isMysql = (u: string): boolean => u.startsWith('mysql://');
 
-// Human-readable label for which backend each env var picks. Mirrors compose()'s internal choices so
-// the demo can print them; compose() returns the wired-up economy, not these labels.
+// Builds a human-readable label for the backend each env var picks. It mirrors compose()'s internal
+// choices so the demo can print them. compose() itself returns the wired-up economy, not these labels.
 function selection(env: Record<string, string | undefined>): {
   store: string;
   cache: string;
@@ -86,9 +87,9 @@ function selection(env: Record<string, string | undefined>): {
   return { store, cache, dispatcher };
 }
 
-// SQL backend only: optionally reset the database to a clean schema. Destructive drop-and-recreate,
-// runs only when DEMO_RESET=1; otherwise uses the existing schema (run `make db-migrate` first).
-// No-op for the in-memory backend.
+// Optionally resets a SQL database to a clean schema. The reset is a destructive drop-and-recreate
+// that runs only when DEMO_RESET=1. Without that flag it uses the existing schema, so run
+// `make db-migrate` first. This is a no-op for the in-memory backend.
 async function ensureSchema(
   env: Record<string, string | undefined>,
 ): Promise<void> {
@@ -138,9 +139,9 @@ function fmt(a: Amount): string {
 const env = {
   WEBHOOK_SECRET: 'demo-webhook-secret',
   SIGNING_SECRET: 'demo-signing-secret',
-  // Demo-only policy so the flow clears in one shot: 0-ms maturity makes funds immediately
-  // spendable/payable, and a tiny payout minimum lets the modest earnings clear the gate. A
-  // deployment sets these from real policy (e.g. a 7-day card-chargeback hold, a 20,000 minimum).
+  // Demo-only policy so the flow clears in one shot. A 0-ms maturity makes funds immediately
+  // spendable and payable, and a tiny payout minimum lets the modest earnings clear the gate. A
+  // deployment sets these from real policy, such as a 7-day card-chargeback hold and a 20,000 minimum.
   MATURITY_HORIZON_CARD_MS: '0',
   MATURITY_HORIZON_DEFAULT_MS: '0',
   PAYOUT_MIN_EARNED_MINOR: '100',
@@ -193,8 +194,8 @@ const r2 = await economy.submit(
 );
 console.warn(`spend 12.00 (60/40 split):      ${r2.status}`);
 
-// 3. Creator requests a payout. Brand-new earnings can come back 'rejected' (a minimum and a
-//    post-sale hold gate the request); the demo prints whichever status it gets.
+// 3. Creator requests a payout. Brand-new earnings can come back 'rejected', because a minimum and a
+//    post-sale hold gate the request. The demo prints whichever status it gets.
 const r3 = await economy.submit(
   requestPayout({ userId: creatorA, amount: credit('5.00') }),
 );

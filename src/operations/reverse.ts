@@ -18,17 +18,19 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Leg, Posting, Unit } from '#src/ports.ts';
 
 /**
- * Undo an earlier transaction by posting its exact opposite. Operator-only manual correction:
- * look up the transaction named by `operation.txnId`, then post a new transaction with the same
- * legs but every amount's sign flipped. Locks each account the original touched before posting.
+ * Undoes an earlier transaction by posting its exact opposite. This is an operator-only manual
+ * correction. It looks up the transaction named by `operation.txnId`, then posts a new transaction
+ * with the same legs but every amount's sign flipped. It locks each account the original touched
+ * before posting.
  *
  * Returns a `committed` Outcome carrying the reversing transaction. Four caller mistakes throw an
  * `OP.MALFORMED` fault: a non-operator actor, a blank reason, an unknown `txnId`, or a `txnId`
- * that names a reversal (reversing a reversal just loops money back out and in).
+ * that names a reversal. Reversing a reversal just loops the money back out and in.
  *
- * A transaction is reversed at most once: stakes the shared `reversed:${txnId}` key (same pattern
- * refund and clawback use for `reversed:${orderId}`). A second reverse loses the claim and returns
- * the first reversal's transaction as `duplicate`, moving no money again.
+ * A transaction is reversed at most once. The handler stakes the shared `reversed:${txnId}` key,
+ * the same pattern refund and clawback use for `reversed:${orderId}`. The first reverse claims the
+ * key and posts the inverse. A second reverse loses the claim and returns the first reversal's
+ * transaction as a `duplicate`, moving no money again.
  *
  * @example
  *   let outcome = await reverse(
@@ -56,9 +58,9 @@ export async function reverse(
   assertNotReversal(operation, original);
   await extendLocks(unit, original.legs);
 
-  // Stake the per-transaction key before posting so a txnId is reversed at most once. First
-  // reverse claims it and posts the inverse; a second loses the claim and gets the first
-  // reversal's transaction back as a duplicate. Mirrors refund/clawback staking
+  // Stake the per-transaction key before posting so a txnId is reversed at most once. The first
+  // reverse claims it and posts the inverse. A second loses the claim and gets the first reversal's
+  // transaction back as a duplicate. This mirrors how refund and clawback stake
   // `reversed:${orderId}`. The claim lives inside this posting's db transaction, so a rollback
   // releases it and a retry succeeds.
   let claimKey = reversalKey(operation.txnId);
@@ -80,14 +82,15 @@ export async function reverse(
   return { status: 'committed', transaction };
 }
 
-// Per-transaction idempotency key a reverse stakes so a transaction is reversed at most once.
-// Same `reversed:${id}` family refund and clawback use, here scoped to the transaction undone.
+// Builds the per-transaction idempotency key a reverse stakes so a transaction is reversed at most
+// once. This is the same `reversed:${id}` family refund and clawback use, here scoped to the
+// transaction being undone.
 function reversalKey(txnId: string): string {
   return `reversed:${txnId}`;
 }
 
-// Look up the transaction to undo. The operator typed this id, so an unknown one is operator
-// error: throw a fault. (Compare `refund`, where an unknown order id is an everyday caller "no".)
+// Loads the transaction to undo. The operator typed this id, so an unknown one is operator error
+// and throws a fault. Compare `refund`, where an unknown order id is an everyday caller decline.
 async function loadPosting(unit: Unit, txnId: string): Promise<Posting> {
   let posting = await unit.ledger.posting(txnId);
   if (posting === null) {
@@ -100,10 +103,11 @@ async function loadPosting(unit: Unit, txnId: string): Promise<Posting> {
   return posting;
 }
 
-// A reversal must never be reversed: it would loop the same money out and in with no net effect,
-// and let an operator chain reversals to flip a balance at will. A reversal records
-// `kind: 'reverse'` in its metadata (see `reverseMeta`), so reject any txnId whose posting carries
-// that marker. Operator mistake, so it throws a fault, same as an unknown txnId.
+// Rejects a txnId that names a reversal. A reversal must never be reversed. It would loop the same
+// money out and in with no net effect, and it would let an operator chain reversals to flip a
+// balance at will. A reversal records `kind: 'reverse'` in its metadata (see `reverseMeta`), so
+// this rejects any posting carrying that marker. This is an operator mistake, so it throws a fault,
+// the same as an unknown txnId.
 function assertNotReversal(
   operation: Extract<Operation, { kind: 'reverse' }>,
   original: Posting,
@@ -117,10 +121,10 @@ function assertNotReversal(
   }
 }
 
-// Lock every account the original touched so no other operation changes those balances while
-// this reversal posts. The framework only locks accounts named in the request, but a reverse
-// request carries just a txnId, so the handler discovers and locks them from the loaded
-// transaction. The Set skips an account that appears on more than one leg.
+// Locks every account the original touched so no other operation changes those balances while this
+// reversal posts. The framework only locks accounts named in the request, but a reverse request
+// carries just a txnId, so the handler discovers and locks them from the loaded transaction. The
+// Set skips an account that appears on more than one leg.
 async function extendLocks(
   unit: Unit,
   legs: ReadonlyArray<Leg>,
@@ -134,15 +138,16 @@ async function extendLocks(
   }
 }
 
-// Opposite of each leg: same account, sign flipped (`neg` from money.ts). The original's legs
-// already sum to zero per currency, so flipping every sign keeps that sum at zero and the
+// Builds the opposite of each leg: same account, sign flipped (`neg` from money.ts). The original's
+// legs already sum to zero per currency, so flipping every sign keeps that sum at zero. The
 // reversal balances without recomputing anything.
 function reverseLegs(legs: ReadonlyArray<Leg>): Leg[] {
   return legs.map((leg) => ({ account: leg.account, amount: neg(leg.amount) }));
 }
 
-// Metadata stored with the reversing transaction: which transaction it undoes and the operator's
-// reason, kept so an audit can see who undid what and why. No amounts here; those live on the legs.
+// Builds the metadata stored with the reversing transaction: which transaction it undoes and the
+// operator's reason. An audit uses this to see who undid what and why. No amounts live here;
+// those are on the legs.
 function reverseMeta(
   operation: Extract<Operation, { kind: 'reverse' }>,
 ): Record<string, unknown> {
@@ -153,9 +158,9 @@ function reverseMeta(
   };
 }
 
-// Only an operator may run a reverse. The framework checks this before the handler runs, but the
-// handler rechecks so it's safe when called directly (e.g. from a test): a non-operator caller
-// throws a fault instead of performing this privileged write.
+// Requires an operator actor. Only an operator may run a reverse. The framework checks this before
+// the handler runs, but the handler rechecks so it stays safe when called directly, such as from a
+// test. A non-operator caller throws a fault instead of performing this privileged write.
 function assertOperator(
   operation: Extract<Operation, { kind: 'reverse' }>,
 ): void {
@@ -168,8 +173,8 @@ function assertOperator(
   }
 }
 
-// A reversal must record why it happened. Reject a missing or whitespace-only reason so none is
-// posted without a justification for the audit trail.
+// Requires a non-blank reason. A reversal must record why it happened. This rejects a missing or
+// whitespace-only reason so none is posted without a justification for the audit trail.
 function assertReason(reason: string): void {
   if (reason.trim() === '') {
     throw fault(
@@ -180,8 +185,9 @@ function assertReason(reason: string): void {
   }
 }
 
-// Operations are routed by `kind`, so this handler should only receive a `reverse`. Any other
-// kind means a wiring bug; throw a fault rather than handle an operation it wasn't built for.
+// Builds the fault for an operation of the wrong kind. Operations are routed by `kind`, so this
+// handler should only receive a `reverse`. Any other kind means a wiring bug, so it throws a fault
+// rather than handle an operation it was not built for.
 function kindMismatch(operation: Operation): ReturnType<typeof fault> {
   return fault(
     ERROR_CODES.MALFORMED_OPERATION,

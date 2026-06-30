@@ -261,11 +261,11 @@ function distributeEarned(
 // retry-dedup) so a later refund can look it up and reverse exactly these lines. The recorded fee
 // is the platform's cut of the spendable-funded part, the slice REVENUE keeps off that part.
 //
-// `revenueForSplit` is the SAME computation splitLegs uses for the REVENUE credit — the fee PLUS the
-// residual left by rounding each seller's share down — so the recorded fee always equals what REVENUE
-// actually kept, even on an uneven multi-seller split where that residual is non-zero. (Recording the
-// bare `feeForPrice` understated it on those splits.) The promo-funded part is charged no fee, so the
-// recorded fee covers only the spendable part.
+// `revenueForSplit` is the same computation splitLegs uses for the REVENUE credit: the fee plus the
+// residual left by rounding each seller's share down. The recorded fee therefore always equals what
+// REVENUE actually kept, even on an uneven multi-seller split where that residual is non-zero.
+// (Recording the bare `feeForPrice` understated it on those splits.) The promo-funded part is
+// charged no fee, so the recorded fee covers only the spendable part.
 function saleOf(
   operation: Extract<Operation, { kind: 'spend' }>,
   plan: SpendPlan,

@@ -48,9 +48,9 @@ function workerCtx(): WorkerCtx {
   };
 }
 
-// Fake feed: looks up canned inputs by window start (`window.from`), or returns empty
-// processor/ledger lists. Real hosts fetch both sides from a vendor; here the data is
-// fixed up front so each test controls what one sweep sees.
+// Builds a fake feed that looks up canned inputs by window start (`window.from`) and
+// returns empty processor and ledger lists when a window has none. Real hosts fetch both
+// sides from a vendor. Fixing the data up front lets each test control what one sweep sees.
 function feedOf(byWindow: Map<number, ReconcileInputs>): ReconcileFeed {
   return {
     pull: async (window) => {
@@ -63,8 +63,8 @@ function feedOf(byWindow: Map<number, ReconcileInputs>): ReconcileFeed {
   };
 }
 
-// Fake feed that throws for every window (unreachable feed). The sweep should catch this
-// per window, record it under `failed`, and keep going.
+// Builds a fake feed that throws for every window, standing in for an unreachable feed.
+// The sweep should catch the error per window, record it under `failed`, and keep going.
 function throwingFeed(error: unknown): ReconcileFeed {
   return {
     pull: async () => {
@@ -121,8 +121,9 @@ let DRIFTED: ReconcileInputs = {
   ],
 };
 
-// Processor-cleared money with no ledger entry (ledger side empty): real money moved but
-// nothing on our books accounts for it. Reconciliation reports a "processor orphan".
+// Processor-cleared money with no matching ledger entry, so the ledger side is empty. Real
+// money moved, but nothing on our books accounts for it. Reconciliation reports a
+// "processor orphan".
 let PROCESSOR_ORPHAN: ReconcileInputs = {
   processor: [
     {

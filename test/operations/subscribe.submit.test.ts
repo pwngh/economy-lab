@@ -31,8 +31,8 @@ import type { Store } from '#src/ports.ts';
 // permission check and the handler's balance check. Sibling subscribe.test.ts calls the handler
 // directly; this file covers the end-to-end path.
 
-// Seed a user's spendable balance via a public top-up, asserting it committed. Used to give a
-// buyer money before they subscribe.
+// Seeds a user's spendable balance through a public top-up and asserts the top-up committed.
+// Gives a buyer money before they subscribe.
 async function fund(
   economy: Economy,
   userId: string,
@@ -44,8 +44,9 @@ async function fund(
   assert.equal(outcome.status, 'committed');
 }
 
-// Can't start a subscription that charges someone else's account. Actor usr_attacker, charged
-// account usr_victim: the permission check rejects with AUTH.UNAUTHORIZED before any money moves.
+// A user cannot start a subscription that charges someone else's account. The actor is
+// usr_attacker and the charged account is usr_victim. The permission check rejects with
+// AUTH.UNAUTHORIZED before any money moves.
 async function rejectsAForeignAccount(): Promise<void> {
   let economy = makeEconomy();
   await assert.rejects(
@@ -82,10 +83,11 @@ async function rejectsInsufficientFundsCleanly(): Promise<void> {
   );
 }
 
-// A buyer may not subscribe to themselves. With userId === sellerId the charge would draw the
-// buyer's non-cashable promo/spendable and credit it back as cash-outable EARNED, funded by the
-// platform's REVENUE: a treasury drain. The handler throws OP.MALFORMED (a thrown error, not a
-// rejected outcome) through economy.submit, and no money moves.
+// A buyer may not subscribe to themselves. When userId equals sellerId, the charge would draw
+// the buyer's non-cashable spendable and credit it back as cash-outable EARNED, with the
+// platform's REVENUE funding the difference. That drains the treasury. The handler throws
+// OP.MALFORMED through economy.submit, a thrown error rather than a rejected outcome, and no
+// money moves.
 async function rejectsSelfSubscription(): Promise<void> {
   let economy = makeEconomy();
   await fund(economy, 'usr_self', '100.00');
@@ -102,7 +104,8 @@ async function rejectsSelfSubscription(): Promise<void> {
     (error: unknown) => (error as { code?: string }).code === 'OP.MALFORMED',
   );
 
-  // Stopped before posting: buyer's funded balance untouched, nothing accrued.
+  // The throw stops the operation before posting, so the buyer's funded balance is untouched
+  // and nothing accrued.
   assert.deepEqual(
     await economy.read.balance(spendable('usr_self')),
     credit('100.00'),
@@ -140,10 +143,11 @@ async function chargesBuyerAndAccruesSellerMonthOne(): Promise<void> {
   );
 }
 
-// A buyer holding an ACTIVE subscription to a (userId, sku, sellerId) can't open a second one
-// to the same triple, which would bill twice per period. First subscribe commits and charges
-// once (200.00 funded, 100.00 charged, 100.00 left); second is an ALREADY_SUBSCRIBED rejection
-// that moves no money, so buyer shows one charge and seller accrued one month.
+// A buyer holding an ACTIVE subscription to a (userId, sku, sellerId) triple cannot open a
+// second one to the same triple, which would bill them twice per period. The first subscribe
+// commits and charges once: 200.00 funded, 100.00 charged, 100.00 left. The second is an
+// ALREADY_SUBSCRIBED rejection that moves no money. So the buyer shows one charge and the
+// seller accrued one month.
 async function rejectsSecondActiveSubscription(): Promise<void> {
   let economy = makeEconomy();
   await fund(economy, 'usr_buyer', '200.00');
@@ -172,8 +176,8 @@ async function rejectsSecondActiveSubscription(): Promise<void> {
     'ALREADY_SUBSCRIBED',
   );
 
-  // Charged once: 200.00 funded minus one 100.00 charge leaves 100.00; seller accrued one
-  // month's net (100.00 less 30% fee = 70.00).
+  // The buyer was charged once. The 200.00 funded minus one 100.00 charge leaves 100.00. The
+  // seller accrued one month's net, which is 100.00 less the 30% fee, or 70.00.
   assert.deepEqual(
     await economy.read.balance(spendable('usr_buyer')),
     credit('100.00'),
@@ -185,8 +189,8 @@ async function rejectsSecondActiveSubscription(): Promise<void> {
 }
 
 // The guard is scoped to the exact (userId, sku, sellerId) triple, so one active subscription
-// doesn't block a different sku or seller. Both follow-up subscribes commit and bill, draining
-// the funded 300.00 by three 100.00 charges to 0.00.
+// does not block a different sku or seller. Both follow-up subscribes commit and bill. Three
+// 100.00 charges drain the funded 300.00 to 0.00.
 async function allowsDifferentSkuOrSeller(): Promise<void> {
   let economy = makeEconomy();
   await fund(economy, 'usr_buyer', '300.00');
@@ -201,7 +205,7 @@ async function allowsDifferentSkuOrSeller(): Promise<void> {
   );
   assert.equal(first.status, 'committed');
 
-  // Same buyer + seller, different sku: separate product, so it commits.
+  // Same buyer and seller but a different sku is a separate product, so it commits.
   let otherSku = await economy.submit(
     buildSubscribe({
       userId: 'usr_buyer',
@@ -212,7 +216,7 @@ async function allowsDifferentSkuOrSeller(): Promise<void> {
   );
   assert.equal(otherSku.status, 'committed');
 
-  // Same buyer + sku, different seller: separate seller's offering, so it commits too.
+  // Same buyer and sku but a different seller is a separate seller's offering, so it commits too.
   let otherSeller = await economy.submit(
     buildSubscribe({
       userId: 'usr_buyer',
@@ -229,10 +233,10 @@ async function allowsDifferentSkuOrSeller(): Promise<void> {
   );
 }
 
-// After cancel the subscription is no longer ACTIVE, so the guard lets the buyer re-subscribe
-// to the same triple. Drives a real cancelSubscription through economy.submit (as the owner),
-// looking up the live subscription id from the backing store. Buyer funds 200.00, charged
-// twice across the two committed subscribes, ending at 0.00.
+// After a cancel the subscription is no longer ACTIVE, so the guard lets the buyer re-subscribe
+// to the same triple. This drives a real cancelSubscription through economy.submit as the
+// owner, looking up the live subscription id from the backing store. The buyer funds 200.00 and
+// is charged twice across the two committed subscribes, ending at 0.00.
 async function allowsResubscribeAfterCancel(): Promise<void> {
   let digest = seededDigest(1);
   let clock = fixedClock(0);

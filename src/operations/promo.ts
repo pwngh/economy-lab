@@ -75,9 +75,9 @@ export async function grantPromo(
   return { status: 'committed', transaction };
 }
 
-// Amount must be CREDIT and positive. A failure here is a caller/programming mistake, so throw
-// a fault rather than a "rejected" outcome (rejected is for business "no" answers like
-// insufficient funds).
+// Requires a positive CREDIT amount and returns it unchanged. A wrong currency or a non-positive
+// amount is a caller or programming mistake, so it throws a fault. A "rejected" outcome is reserved
+// for business "no" answers like insufficient funds.
 function positiveCredit(amount: Amount, label: string): Amount {
   if (amount.currency !== 'CREDIT') {
     throw fault(ERROR_CODES.MALFORMED_OPERATION, `${label} must be CREDIT.`, {
@@ -92,16 +92,16 @@ function positiveCredit(amount: Amount, label: string): Amount {
   return amount;
 }
 
-// Max expiry distance for a grant, in ms. Every grant must expire so the sweep can reclaim
-// unspent credit; this ceiling (five years) stops a caller from minting an effectively
-// never-expiring grant via an absurd far-future timestamp.
+// Caps how far in the future a grant may expire, in milliseconds. Every grant must expire so the
+// sweep can reclaim unspent credit. This ceiling of five years stops a caller from minting an
+// effectively never-expiring grant through an absurd far-future timestamp.
 let MAX_EXPIRY_AHEAD_MS = 5 * 365 * 24 * 60 * 60_000;
 
-// Expiry must be a finite, whole-ms timestamp strictly after now and no further out than the
-// ceiling above. Off-the-wire values can be NaN, Infinity, or fractional; a zero/negative/past
-// expiry would immediately poison the reclaim sweep, which claims any grant whose `expiresAt`
-// has already passed. All caller/programming mistakes, so throw a MALFORMED fault, not a
-// "rejected" outcome.
+// Requires a finite, whole-millisecond timestamp that is strictly after now and no further out than
+// the ceiling above, and returns it unchanged. Values from the wire can be NaN, Infinity, or
+// fractional. A past, zero, or negative expiry would immediately poison the reclaim sweep, which
+// claims any grant whose `expiresAt` has already passed. These are all caller or programming
+// mistakes, so it throws a MALFORMED fault rather than a "rejected" outcome.
 function futureExpiresAt(expiresAt: number, ctx: Ctx, label: string): number {
   let now = ctx.clock.now();
   if (!Number.isInteger(expiresAt) || expiresAt <= now) {

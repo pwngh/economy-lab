@@ -18,9 +18,10 @@ import { encodeEvent } from '#src/adapters/event-wire.ts';
 import type { Dispatcher, EconomyEvent } from '#src/ports.ts';
 
 /**
- * Wraps one Dispatcher adapter over a controllable fake transport: it records the message bodies
- * sent and the abort signals seen, and `failNext` makes the next dispatch fail (a thrown transport
- * error), so the shared suite can exercise the success, failure, and cancellation paths uniformly.
+ * Wraps one Dispatcher adapter over a controllable fake transport. It records the message bodies
+ * sent and the abort signals seen. Calling `failNext` makes the next dispatch throw a transport
+ * error. The shared suite uses this to exercise the success, failure, and cancellation paths
+ * uniformly across adapters.
  */
 export interface DispatcherHarness {
   dispatcher: Dispatcher;
@@ -43,13 +44,14 @@ function sampleEvent(): EconomyEvent {
 }
 
 /**
- * The shared {@link Dispatcher} contract every adapter must satisfy, run against the HTTP and SQS
- * adapters over fake transports — the same pattern as `test/conformance/store.ts`.
+ * Runs the shared {@link Dispatcher} contract that every adapter must satisfy. It runs against the
+ * HTTP and SQS adapters over fake transports, following the same pattern as
+ * `test/conformance/store.ts`.
  *
- * The encoding test pins both transports to one byte-for-byte body (`encodeEvent`), so HTTP and SQS
- * can't silently diverge in what a receiver sees; the failure test pins the error contract the relay
- * worker depends on (retryable `PROVIDER.FAILURE` so a delivery redelivers); the signal test pins
- * cancellation forwarding.
+ * The encoding test pins both transports to one byte-for-byte body from `encodeEvent`, so HTTP and
+ * SQS cannot silently diverge in what a receiver sees. The failure test pins the error contract the
+ * relay worker depends on: a retryable `PROVIDER.FAILURE` so a failed delivery redelivers. The
+ * signal test pins cancellation forwarding.
  */
 export function runDispatcherConformance(
   name: string,

@@ -10,11 +10,12 @@
  */
 
 /**
- * Globals the core library may use: the subset present on every modern runtime
- * (Node 22+, Bun, Deno, Cloudflare Workers). The build has no DOM and no Node types,
- * so without this file these globals are unknown to the type checker. Declaring only
- * this subset keeps Node-only globals out of the core. Adapter code that needs Node
- * APIs imports from `node:*` directly, which lint permits only there.
+ * Declares the globals the core library may use. The set is limited to the subset
+ * present on every modern runtime (Node 22+, Bun, Deno, Cloudflare Workers). The build
+ * pulls in no DOM and no Node types, so without this file the type checker does not know
+ * these globals. Declaring only the cross-runtime subset keeps Node-only globals out of
+ * the core. Adapter code that needs a Node API imports from `node:*` directly, which lint
+ * permits only there.
  */
 
 // --- Bytes / text -----------------------------------------------------------------
@@ -32,8 +33,9 @@ declare let TextDecoder: { new (label?: string): TextDecoder };
 declare function structuredClone<T>(value: T): T;
 declare function queueMicrotask(callback: () => void): void;
 
-// base64 of a binary string. WinterCG Minimum Common API (Node 16+, Bun, Deno, CF Workers), so it
-// belongs to this cross-runtime subset; the Thunes adapter uses it to build the Basic-auth header.
+// Encodes a binary string as base64. It is part of the WinterCG Minimum Common API
+// (Node 16+, Bun, Deno, CF Workers), so it belongs to this cross-runtime subset. The
+// Thunes adapter uses it to build the Basic-auth header.
 declare function btoa(data: string): string;
 
 // --- Cancellation -----------------------------------------------------------------
@@ -79,8 +81,9 @@ interface CryptoKey {
 
 type BufferSource = ArrayBufferView | ArrayBuffer;
 
-// JWK fields this codebase reads/writes (Ed25519 keys: `x` public coordinate, `d` private).
-// A full JWK has more, but these are all the signer touches.
+// Declares only the JWK fields this codebase reads and writes. The keys are Ed25519, where
+// `x` is the public coordinate and `d` is the private one. A full JWK has more fields, but
+// these are all the signer touches.
 interface JsonWebKey {
   kty?: string;
   crv?: string;

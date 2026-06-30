@@ -26,8 +26,8 @@ import type {
 } from '#src/adapters/thunes-processor.ts';
 import type { FetchLike } from '#src/adapters/processor.ts';
 
-// One captured `fetch` call (URL + options), so a test can assert what the adapter sent:
-// method, path, headers, body, signal.
+// Captures one `fetch` call, the URL plus its options, so a test can assert what the adapter sent.
+// The recorded options cover the method, path, headers, body, and signal.
 interface Recorded {
   input: string;
   init?: {
@@ -38,16 +38,16 @@ interface Recorded {
   };
 }
 
-// A single queued HTTP response: the Thunes status + the raw body string the adapter will parse.
+// A single queued HTTP response. It holds the Thunes status and the raw body string the adapter parses.
 interface Reply {
   ok: boolean;
   status: number;
   body: string;
 }
 
-// Fake `fetch` that replays `replies` in order (the adapter makes up to four calls per payout) and
-// records each call into `calls`. The adapter takes `fetch` as config, so this never touches the
-// global fetch or a live provider.
+// Builds a fake `fetch` that replays `replies` in order and records each call into `calls`. The
+// adapter makes up to four calls per payout. The adapter takes `fetch` as config, so this never
+// touches the global fetch or a live provider.
 function stubFetch(replies: Reply[], calls: Recorded[]): FetchLike {
   let next = 0;
   return async (input, init) => {
@@ -64,24 +64,26 @@ function stubFetch(replies: Reply[], calls: Recorded[]): FetchLike {
   };
 }
 
-// Fake `fetch` that always throws: failed DNS, dropped connection, or cancelled request.
+// Builds a fake `fetch` that always throws. This models a failed DNS lookup, a dropped connection,
+// or a cancelled request.
 function throwingFetch(error: unknown): FetchLike {
   return async () => {
     throw error;
   };
 }
 
-// A 2xx JSON reply carrying `{ id }`, the shape quotation/transaction responses take.
+// Builds a 2xx JSON reply carrying `{ id }`, the shape that quotation and transaction responses take.
 function withId(id: string): Reply {
   return { ok: true, status: 200, body: JSON.stringify({ id }) };
 }
 
-// A non-2xx reply carrying the Thunes error envelope `{ errors: [{ code }] }`.
+// Builds a non-2xx reply carrying the Thunes error envelope `{ errors: [{ code }] }`.
 function withErrorCode(status: number, code: string): Reply {
   return { ok: false, status, body: JSON.stringify({ errors: [{ code }] }) };
 }
 
-// Fixed Thunes routing for a recipient, so the resolver is deterministic and never hits a real store.
+// Returns fixed Thunes routing for a recipient. The resolver stays deterministic and never hits a
+// real store.
 function recipient(): ThunesRecipient {
   return {
     payerId: 'payer_gh_wallet',
@@ -91,8 +93,8 @@ function recipient(): ThunesRecipient {
   };
 }
 
-// Build the adapter over the queued replies. Credentials and sender are fixed; `resolveRecipient`
-// returns the fixed routing above. Tests override only the field under test.
+// Builds the adapter config over the queued replies. Credentials and sender are fixed, and
+// `resolveRecipient` returns the fixed routing above. Tests override only the field under test.
 function config(over: { fetch: FetchLike }): ThunesProcessorConfig {
   return {
     baseUrl: 'https://api.thunes.test',
@@ -104,8 +106,9 @@ function config(over: { fetch: FetchLike }): ThunesProcessorConfig {
   };
 }
 
-// Default USD payout request. `key` is the saga id and the idempotency key (Thunes' external_id), so
-// a retry runs the flow at most once. Tests reuse this and override key/amount only when under test.
+// Builds the default USD payout request. `key` is the saga id and the idempotency key, which Thunes
+// calls external_id, so a retry runs the flow at most once. Tests reuse this and override the key or
+// amount only when those are under test.
 function payout(over?: { key?: string; amount?: string }): {
   key: string;
   userId: string;
@@ -118,8 +121,8 @@ function payout(over?: { key?: string; amount?: string }): {
   };
 }
 
-// The happy three-call flow: quotation -> transaction -> confirm, returning the transaction id as the
-// provider reference.
+// Drives the happy three-call flow of quotation, then transaction, then confirm. It returns the
+// transaction id as the provider reference.
 async function submitDrivesQuotationTransactionConfirm(): Promise<void> {
   let calls: Recorded[] = [];
   let fetch = stubFetch(
@@ -216,11 +219,11 @@ async function submitFaultsRetryablyOnTransientStatus(): Promise<void> {
   assert.ok(error instanceof EconomyError);
   assert.equal(error.code, 'PROVIDER.FAILURE');
   assert.equal(error.retryable, true);
-  assert.equal(calls.length, 1); // failed at the quotation step; no transaction was created
+  assert.equal(calls.length, 1); // It failed at the quotation step, so no transaction was created.
 }
 
-// A client-error (4xx) status that isn't an idempotent-replay code is terminal: not retryable, so the
-// worker stops re-submitting and reverses the seller's reserve rather than burning attempts.
+// A client-error (4xx) status that is not an idempotent-replay code is terminal and not retryable.
+// The worker then stops re-submitting and reverses the seller's reserve rather than burning attempts.
 async function submitFaultsTerminallyOnClientStatus(): Promise<void> {
   let calls: Recorded[] = [];
   let fetch = stubFetch([withErrorCode(400, '1003011')], calls);
@@ -250,8 +253,9 @@ async function submitFaultsRetryablyPreservingCause(): Promise<void> {
   assert.equal((error.cause as EconomyError).cause, underlying);
 }
 
-// Idempotent replay of confirm: a re-run whose confirm reports the transaction already confirmed is
-// success — the disbursement is in flight — and returns the transaction id as the provider reference.
+// Tests idempotent replay of confirm. A re-run whose confirm reports the transaction as already
+// confirmed counts as success, because the disbursement is in flight. It returns the transaction id
+// as the provider reference.
 async function confirmAlreadyConfirmedIsSuccess(): Promise<void> {
   let calls: Recorded[] = [];
   let fetch = stubFetch(
@@ -265,7 +269,7 @@ async function confirmAlreadyConfirmedIsSuccess(): Promise<void> {
   assert.deepEqual(result, { providerRef: 'txn_8' });
 }
 
-// Idempotent replay of transaction creation: a reused external_id means the transaction already
+// Tests idempotent replay of transaction creation. A reused external_id means the transaction already
 // exists, so the adapter recovers it by partner reference and continues to confirm.
 async function reusedExternalIdRecoversTransaction(): Promise<void> {
   let calls: Recorded[] = [];
@@ -290,8 +294,9 @@ async function reusedExternalIdRecoversTransaction(): Promise<void> {
   assert.equal(calls[2]!.init?.method, 'GET');
 }
 
-// A completed transaction callback maps to the PayoutSettledEvent the webhook edge already applies:
-// external_id -> sagaId, transaction id -> providerRef/eventId, source amount -> providerAmount.
+// A completed transaction callback maps to the PayoutSettledEvent that the webhook edge already
+// applies. The mapping sends external_id to sagaId, the transaction id to providerRef and eventId,
+// and the source amount to providerAmount.
 function callbackCompletedMapsToSettleEvent(): void {
   let event = decodeThunesPayoutCallback('thunes', {
     id: 'txn_10',

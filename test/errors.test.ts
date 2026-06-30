@@ -50,8 +50,9 @@ describe('Error Codes', () => {
 
 describe('normalizeError', () => {
   test('returns an existing EconomyError untouched', () => {
-    // An EconomyError already carries a specific code; pass it through. Re-wrapping would overwrite
-    // the code with a generic one and could flip a "do not retry" failure to "safe to retry".
+    // An EconomyError already carries a specific code, so it passes through unchanged. Re-wrapping
+    // would overwrite that code with a generic one. It could also flip a "do not retry" failure into
+    // a "safe to retry" one.
     let original = fault(ERROR_CODES.OVERDRAFT, 'balance went negative', {
       cause: new Error('inner'),
       retryable: false,

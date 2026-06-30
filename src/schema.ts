@@ -10,10 +10,11 @@
  */
 
 /**
- * Schema version stamp — the one guard against a database that has silently drifted from this code.
+ * Stamps the schema version. This is the one guard against a database that has silently drifted from
+ * this code.
  *
- * Both SQL schema files seed a `schema_meta` row with this value; startup reads it back and fails
- * fast on mismatch (see {@link assertSchemaCurrent}), turning a silent drift into a loud error.
+ * Both SQL schema files seed a `schema_meta` row with this value. Startup reads it back and fails fast
+ * on a mismatch (see {@link assertSchemaCurrent}), which turns a silent drift into a loud error.
  *
  * Bump this AND the matching `insert into schema_meta` in BOTH schema files
  * (db/postgresql-schema.sql, db/mysql-schema.sql) in the same change, whenever a running database
@@ -24,11 +25,11 @@
 export const SCHEMA_VERSION = '7';
 
 /**
- * Throw unless the database's stamped schema version matches this build's {@link SCHEMA_VERSION}.
+ * Throws unless the database's stamped schema version matches this build's {@link SCHEMA_VERSION}.
  *
- * `found` is the value read from the database's `schema_meta` row, or `null` when that table is
- * absent — an un-migrated database, or one created before versioning existed. `backend` names the
- * engine ('Postgres' / 'MySQL') for the error message.
+ * `found` is the value read from the database's `schema_meta` row. It is `null` when that table is
+ * absent, which means an un-migrated database or one created before versioning existed. `backend`
+ * names the engine ('Postgres' or 'MySQL') for the error message.
  */
 export function assertSchemaCurrent(
   found: string | null,

@@ -19,7 +19,8 @@ import type { FeePolicy, Recipient } from '#src/contract.ts';
 import type { Leg } from '#src/ports.ts';
 
 // Fees and shares are in basis points (10000 bps = 100%). The share math and the
-// 100%-sum check share this constant (number and bigint forms) so they can't disagree.
+// 100%-sum check share this constant in both number and bigint forms, so the two
+// can never disagree.
 let BPS_TOTAL = 10_000;
 let BPS_TOTAL_BIG = 10_000n;
 
@@ -31,8 +32,8 @@ let BPS_TOTAL_BIG = 10_000n;
  *   let policy = flatFee();
  *   let legs = policy({ price: toAmount('CREDIT', 1000n), feeBps: 3000,
  *     recipients: [{ sellerId: 'usr_seller', shareBps: 10000 }] });
- *   // Price 1000, 30% fee: seller credited 700, revenue credited 300. Both are credits
- *   // (stored negative), so the lines sum to -1000 (the full price).
+ *   // Price 1000 with a 30% fee credits the seller 700 and revenue 300. Both are
+ *   // credits, stored negative, so the lines sum to -1000, the full price.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/pricing/ Pricing} for how fee policies split a sale into ledger lines.
  */
@@ -40,13 +41,15 @@ export function flatFee(): FeePolicy {
   return (input) => splitLegs(input.price, input.recipients, input.feeBps);
 }
 
-// Splits a sale's price into ledger lines for the fee policy above. Fee comes off the top,
-// the rest is divided among recipients by share, and revenue gets fee plus any rounding
-// leftover so no unit of price is lost. Each recipient gets a credit to their earned account
-// (money owed to them as a seller); revenue gets one credit for fee + leftover.
+// Splits a sale's price into ledger lines for the fee policy above. The fee comes off the
+// top, the rest is divided among recipients by share, and revenue gets the fee plus any
+// rounding leftover so no unit of price is lost. Each recipient gets one credit to their
+// earned account, which holds money owed to them as a seller. Revenue gets one credit for
+// the fee plus the leftover.
 //
-// Credit side only. Credits are stored negative, so these lines sum to -price. The spend
-// handler adds the matching debit against the buyer's balance, zeroing the posting.
+// These are the credit lines only. Credits are stored negative, so the lines sum to -price.
+// The spend handler adds the matching debit against the buyer's balance, which zeroes the
+// posting.
 function splitLegs(
   price: Amount,
   recipients: ReadonlyArray<Recipient>,
@@ -65,9 +68,10 @@ function splitLegs(
     );
   }
 
-  // Revenue gets the fee plus the leftover from rounding each share down, so shares + revenue always
-  // equal the full price. `revenueForSplit` computes exactly that amount — and Sale.fee records the
-  // same call — so the posted REVENUE credit and the recorded fee can never disagree.
+  // Revenue gets the fee plus the leftover from rounding each share down, so the shares and
+  // revenue always sum to the full price. `revenueForSplit` computes exactly that amount, and
+  // Sale.fee records the same call, so the posted REVENUE credit and the recorded fee can
+  // never disagree.
   legs.push(
     credit(
       SYSTEM.REVENUE,
@@ -78,11 +82,12 @@ function splitLegs(
 }
 
 /**
- * The platform's actual revenue from splitting `price` among `recipients` at `feeBps`: the fee PLUS
- * the residual left by rounding each seller's share down — exactly the amount splitLegs credits to
- * REVENUE. spend.ts records this as `Sale.fee` (not the bare `feeForPrice`), so the recorded fee
- * equals what REVENUE actually kept even on an uneven split, where the residual is non-zero. On an
- * even split the residual is zero, so this is just the fee and the simple case is unchanged.
+ * Returns the platform's actual revenue from splitting `price` among `recipients` at `feeBps`.
+ * That revenue is the fee plus the residual left by rounding each seller's share down, which is
+ * exactly the amount splitLegs credits to REVENUE. spend.ts records this as `Sale.fee` rather
+ * than the bare `feeForPrice`, so the recorded fee equals what REVENUE actually kept even on an
+ * uneven split, where the residual is non-zero. On an even split the residual is zero, so the
+ * result is just the fee and the simple case is unchanged.
  */
 export function revenueForSplit(
   price: Amount,
@@ -98,23 +103,25 @@ export function revenueForSplit(
   return fee + (net - distributed);
 }
 
-// Basis-point fraction of an amount, rounded down: amount * bps / 10000. All-bigint math so
-// large running totals stay exact rather than losing precision past 2^53 like a JS number.
+// Returns the basis-point fraction of an amount, rounded down: amount * bps / 10000. The math
+// stays all-bigint so large running totals remain exact rather than losing precision past 2^53
+// the way a JS number would.
 function applyBps(minor: bigint, bps: number): bigint {
   return (minor * BigInt(bps)) / BPS_TOTAL_BIG;
 }
 
 /**
- * Platform fee for a price, in minor units, rounded up to a whole credit so the fee is always a
- * whole spendable unit. Takes the exact basis-point fee, rounds up to the next whole credit, then
- * caps at the price so the fee can't exceed what was paid. (The cap only matters below one whole
- * credit; real listings are 100+ credits.) The leftover line in splitLegs absorbs the difference.
+ * Returns the platform fee for a price, in minor units, rounded up to a whole credit so the fee
+ * is always a whole spendable unit. It takes the exact basis-point fee, rounds up to the next
+ * whole credit, then caps the result at the price so the fee can never exceed what was paid. The
+ * cap only matters below one whole credit, since real listings are 100 credits or more. The
+ * leftover line in splitLegs absorbs the difference between the exact fee and the rounded fee.
  *
- * Single source for the transaction fee. Every charge that takes the fee calls it: a sale
- * (`splitLegs` here, plus `spend.saleOf` recording the same `Sale.fee`), the first month of a
- * subscription (`operations/subscribe.ts`), and each renewal (`worker/subscriptions.ts`).
- * Sharing this function makes them round identically, so no caller re-derives a floor that
- * would disagree when the raw fee isn't a whole credit.
+ * This is the single source for the transaction fee. Every charge that takes the fee calls it:
+ * a sale (`splitLegs` here, plus `spend.saleOf` recording the same `Sale.fee`), the first month
+ * of a subscription (`operations/subscribe.ts`), and each renewal (`worker/subscriptions.ts`).
+ * Sharing this function makes every caller round identically, so no caller re-derives a floor
+ * that would disagree when the raw fee is not a whole credit.
  */
 export function feeForPrice(minor: bigint, bps: number): bigint {
   let units = ceilDiv(minor * BigInt(bps), BPS_TOTAL_BIG * SCALE);
@@ -123,14 +130,16 @@ export function feeForPrice(minor: bigint, bps: number): bigint {
 }
 
 // Divides two non-negative bigints and rounds the result up to the next whole number.
+// Both operands must be non-negative; the rounding trick assumes it.
 function ceilDiv(numerator: bigint, denominator: bigint): bigint {
   return (numerator + denominator - 1n) / denominator;
 }
 
-// Throws unless recipient shares sum to 100% (10000 bps). The spend handler already checks this,
-// so when wired correctly it never fires; it's a backstop so a wiring mistake fails loudly here
-// rather than under-crediting recipients and dumping the difference into revenue. Empty recipient
-// list is allowed: with nothing to pay out, the whole net becomes leftover and goes to revenue.
+// Throws unless the recipient shares sum to 100% (10000 bps). The spend handler already checks
+// this, so when the wiring is correct this never fires. It is a backstop: a wiring mistake fails
+// loudly here rather than under-crediting recipients and silently dumping the difference into
+// revenue. An empty recipient list is allowed. With nothing to pay out, the whole net becomes
+// leftover and goes to revenue.
 function assertShareSum(recipients: ReadonlyArray<Recipient>): void {
   if (recipients.length === 0) {
     return;

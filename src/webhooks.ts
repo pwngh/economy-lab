@@ -9,17 +9,17 @@
  * @license MIT
  */
 
-// Inbound provider-callback dispatch: maps a verified callback to the ledger Operation it should
-// apply, by its kind, and persists that Operation to the transactional inbox (the inbound mirror of
-// the outbox) for the apply worker to submit later:
+// Inbound provider-callback dispatch. This module maps a verified callback to the ledger Operation
+// its kind should apply, then persists that Operation to the transactional inbox (the inbound mirror
+// of the outbox) for the apply worker to submit later. The kinds map as follows:
 //   - a cleared purchase  -> `topUp`        (credit the buyer's spendable balance)
 //   - a settled payout    -> `settlePayout` (the SUBMITTED -> SETTLED step for the named saga)
 //   - a dispute/chargeback -> `clawback`    (reclaim the disputed credits)
 //
 // Duplicate suppression spans two layers, identically for every kind. The edge claims the
-// provider's `eventId` in a replay store to drop redeliveries before they reach here, running that
-// claim only after checking signature and freshness so a forged/stale delivery can't waste a real
-// eventId. This module assumes those checks already passed and adds a second guard: the inbox
+// provider's `eventId` in a replay store to drop redeliveries before they reach here. It runs that
+// claim only after checking signature and freshness, so a forged or stale delivery cannot waste a
+// real eventId. This module assumes those checks already passed and adds a second guard: the inbox
 // dedupes on the provider `eventId` as the row `key` (see `webhookIdempotencyKey`), so a redelivery
 // that slips past the replay store enqueues no second row and applies at most once.
 //
@@ -35,16 +35,16 @@ import type { Clock, Ids, InboxEntry, Options, Store } from '#src/ports.ts';
 
 /**
  * Fields every verified provider callback carries, whatever its kind. `provider` comes from the
- * URL route (not the body, so it can't be spoofed); `eventId` is the provider's globally-unique id
- * for this delivery and the basis for applying at most once — the server claims it in its replay
+ * URL route, not the body, so it cannot be spoofed. `eventId` is the provider's globally-unique id
+ * for this delivery and the basis for applying at most once: the server claims it in its replay
  * store, and the mapped operation's dedup key is derived from it.
  */
 type WebhookBase = {
   // Which provider sent the callback (the `:provider` path segment, e.g. 'steam', 'billing').
   provider: string;
 
-  // Provider's globally-unique id for this delivery, and the basis for applying at most once:
-  // the server claims it in its replay store, and the operation's dedup key is derived from it.
+  // Provider's globally-unique id for this delivery. It is the basis for applying at most once, as
+  // the type doc above explains.
   eventId: string;
 };
 
@@ -90,8 +90,8 @@ export type PayoutSettledEvent = WebhookBase & {
   // The rail's own reference for this disbursement, recorded for the audit trail.
   providerRef: string;
 
-  // The USD the provider reported settling. Recorded for reconciliation; the posted figures are the
-  // rate-derived ones `settlePayout` computes from the reserve, identical to the worker's.
+  // The USD the provider reported settling. Recorded for reconciliation only. The posted figures are
+  // the rate-derived ones `settlePayout` computes from the reserve, identical to the worker's.
   providerAmount: Amount;
 };
 
@@ -171,10 +171,10 @@ export function toTopUp(event: PurchaseEvent): Operation {
 /**
  * Builds the `settlePayout` that clears a submitted payout from a verified {@link PayoutSettledEvent}.
  * The dedup key comes from `eventId`, so the settle applies at most once however many times the rail
- * redelivers. `sagaId` names the payout to settle; `providerRef` / `providerAmount` are carried for the
- * audit trail. The figures actually posted are the rate-derived ones `settlePayout` computes from the
- * saga's reserve — identical to the worker's settle — so the provider's reported amount is recorded
- * but never trusted as the posted figure. The actor is `system`, which `settlePayout`'s
+ * redelivers. `sagaId` names the payout to settle. `providerRef` and `providerAmount` are carried for
+ * the audit trail only. The figures actually posted are the rate-derived ones `settlePayout` computes
+ * from the saga's reserve, identical to the worker's settle, so the provider's reported amount is
+ * recorded but never trusted as the posted figure. The actor is `system`, which `settlePayout`'s
  * privileged-only gate (RESTRICTED_TO_PRIVILEGED) requires.
  */
 export function toSettlePayout(event: PayoutSettledEvent): Operation {
@@ -263,7 +263,7 @@ export type WebhookAck = {
 /**
  * Inbound provider-callback dispatch: handles any verified callback. Dispatches the event by its
  * kind to the operation it applies (`topUp` / `settlePayout` / `clawback`, via {@link toOperation}),
- * then persists that operation to the inbox in one transaction and returns immediately — it does NOT
+ * then persists that operation to the inbox in one transaction and returns immediately. It does NOT
  * post to the ledger inline. The apply worker (`drainInbox`) submits the stored Operation through the
  * normal economy path on its next sweep, so invariants and idempotency apply there, not here.
  *
@@ -358,8 +358,8 @@ export function decodeWebhookEvent(
   };
 }
 
-// Required string field, or throw a malformed-event error naming the field. Rejects wrong shapes
-// at the edge rather than coercing them into a bad event.
+// Returns a required string field, or throws a malformed-event error naming the field. This rejects
+// wrong shapes at the edge rather than coercing them into a bad event.
 function requireString(value: unknown, field: string): string {
   if (typeof value !== 'string') {
     throw malformedEvent(`Webhook field '${field}' must be a string.`);
@@ -367,10 +367,10 @@ function requireString(value: unknown, field: string): string {
   return value;
 }
 
-// Decode the `amount` field from its wire string (e.g. 'CREDIT:10.00') into an Amount: currency
-// before the colon, decimal after, the same format the rest of the API uses. A non-string or
-// unparseable value throws, keeping "wrong shape" and "wrong amount" distinct (the latter raised
-// by the money decoder).
+// Decodes the `amount` field from its wire string (e.g. 'CREDIT:10.00') into an Amount. The currency
+// comes before the colon and the decimal after, the same format the rest of the API uses. A
+// non-string value throws here, keeping "wrong shape" and "wrong amount" distinct (the money decoder
+// raises the latter on an unparseable value).
 function decodeAmountField(value: unknown): Amount {
   if (typeof value !== 'string') {
     throw malformedEvent(
@@ -387,16 +387,17 @@ function decodeAmountField(value: unknown): Amount {
   );
 }
 
-// Error for a wrong-shape webhook body, treated as a bad client request like a malformed /submit
-// body. Carries the MALFORMED_OPERATION code so the server maps it to 400, not 500.
+// Builds the fault for a wrong-shape webhook body, treated as a bad client request like a malformed
+// /submit body. It carries the MALFORMED_OPERATION code so the server maps it to 400, not 500.
 function malformedEvent(message: string): ReturnType<typeof fault> {
   return fault(ERROR_CODES.MALFORMED_OPERATION, message);
 }
 
-// Thrown for a WebhookEvent variant `toOperation` has no mapper for. Reachable only if a new event
-// kind is added to the union without a branch (the unmapped kind is `never` here, so the call fails
-// to compile until a mapper is added), so it stands in for "decoded a callback kind we can't
-// dispatch": a bad request at the edge, carrying MALFORMED_OPERATION so the server answers 400.
+// Throws for a WebhookEvent variant `toOperation` has no mapper for. The unmapped kind is `never`
+// here, so the call fails to compile until a mapper is added. It is reachable only if a new event
+// kind is added to the union without a branch, where it stands in for "decoded a callback kind we
+// cannot dispatch". That is a bad request at the edge, so it carries MALFORMED_OPERATION and the
+// server answers 400.
 function unreachableEvent(event: never): never {
   let kind = (event as { kind?: unknown }).kind;
   throw fault(

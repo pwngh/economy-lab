@@ -21,11 +21,12 @@ import { spendable, SYSTEM } from '#src/accounts.ts';
 
 import type { OutboxMessage, Saga, Store, Subscription } from '#src/ports.ts';
 
-// Test database DSN: env var if set, else local Postgres on the default port/database.
+// Resolves the test database DSN. Uses an env var when one is set, otherwise falls back to local
+// Postgres on the default port and database.
 let url = process.env.DATABASE_URL ?? process.env.PG_URL ?? testDsn();
 
-// Unique schema name per run so concurrent suites (or a rerun) get isolated tables and don't
-// collide. Combines pid, base-36 timestamp, and a per-call counter.
+// Builds a unique schema name per run so concurrent suites (or a rerun) get isolated tables and
+// don't collide. The name combines the pid, a base-36 timestamp, and a per-call counter.
 let run = 0;
 function freshSchema(): string {
   run += 1;
@@ -33,19 +34,20 @@ function freshSchema(): string {
   return `el_conf_${process.pid}_${stamp}_${run}`;
 }
 
-// Default DSN when no env var is set: local Postgres.
+// Returns the default DSN used when no env var is set, which points at local Postgres.
 function testDsn(): string {
   return 'postgres://economy:economy@localhost:5432/economy_lab';
 }
 
-// Run the shared Store suite (conformance/store.ts) against the Postgres engine. Each store gets
-// a fresh schema, into which postgresStore loads db/postgresql-schema.sql, dropped again on close.
+// Runs the shared Store suite (conformance/store.ts) against the Postgres engine. Each store gets
+// a fresh schema, into which postgresStore loads db/postgresql-schema.sql. The schema is dropped
+// again when the store closes.
 runStoreConformance('postgres', () =>
   postgresStore({ url, schema: freshSchema() }),
 );
 
-// Regression: folding a second amount onto an account that already has a balance ("folding" =
-// accumulating into the stored running total).
+// Regression test for folding a second amount onto an account that already has a balance. Here
+// "folding" means accumulating the change into the stored running total.
 //
 // The conformance suite only posts once per account, so it never hit a debit landing on an
 // already-positive account. Postgres broke here: the store folded with `insert ... on conflict do
@@ -81,9 +83,10 @@ describe('Store Conformance: postgres (Posting Onto A Funded Account)', () => {
     let userId = 'usr_fold_regression';
     let account = spendable(userId);
 
-    // First posting: credit 500.00 into the user's spendable (top-up) account. Each entry is debit
-    // and credit lines that cancel; the other line here debits SYSTEM.REVENUE. Amounts are minor
-    // units (cents), so 500.00 is 50000, which creates the account row at that balance.
+    // The first posting credits 500.00 into the user's spendable (top-up) account. Each entry is a
+    // pair of debit and credit lines that cancel, so the other line here debits SYSTEM.REVENUE.
+    // Amounts are minor units (cents), so 500.00 is 50000. This posting creates the account row at
+    // that balance.
     let funded = decodeAmount('500.00', 'CREDIT');
     await live.transaction((unit) =>
       postEntry(unit.ledger, {
@@ -97,8 +100,9 @@ describe('Store Conformance: postgres (Posting Onto A Funded Account)', () => {
       toAmount('CREDIT', 50_000n),
     );
 
-    // Second posting to the same account: debit 120.00 out. The path the bug broke; before the fix
-    // the fold rejected this on the non-negative check even though the result (38000) is positive.
+    // The second posting debits 120.00 out of the same account. This is the path the bug broke.
+    // Before the fix, the fold rejected this debit on the non-negative check even though the
+    // resulting balance (38000) is positive.
     let spent = decodeAmount('120.00', 'CREDIT');
     await live.transaction((unit) =>
       postEntry(unit.ledger, {
@@ -116,8 +120,8 @@ describe('Store Conformance: postgres (Posting Onto A Funded Account)', () => {
   });
 });
 
-// Build one pending outbox row (event queued for later delivery) with a distinct id. Mirrors the
-// conformance helper, reusable from the outbox tests below.
+// Builds one pending outbox row (an event queued for later delivery) with a distinct id. This
+// mirrors the conformance helper and is reusable from the outbox tests below.
 function outboxMessage(id: string): OutboxMessage {
   return {
     id,
@@ -136,7 +140,7 @@ function outboxMessage(id: string): OutboxMessage {
   };
 }
 
-// Build one payout saga (a payout-in-progress record). `updatedAt` defaults to `dueAt` when not
+// Builds one payout saga (a payout-in-progress record). `updatedAt` defaults to `dueAt` when not
 // given, because lastPayoutAt is computed from the largest updatedAt and the tests below need to
 // set that field to exact values.
 function sagaRow(
@@ -156,7 +160,7 @@ function sagaRow(
   };
 }
 
-// Build one subscription. attempts defaults to 0 (a freshly opened subscription).
+// Builds one subscription. `attempts` defaults to 0, which represents a freshly opened subscription.
 function subscriptionRow(
   overrides: Partial<Subscription> & { id: string },
 ): Subscription {
@@ -175,9 +179,9 @@ function subscriptionRow(
   };
 }
 
-// Wave B: the newer outbox / saga / subscription Store methods. Each test connects like the
-// conformance suite and skips (not fails) when Postgres is unreachable, so CI runs without a
-// database. Asserts the same behaviors the in-memory Store already passes.
+// Covers the newer outbox, saga, and subscription Store methods. Each test connects like the
+// conformance suite and skips (rather than fails) when Postgres is unreachable, so CI runs without
+// a database. These tests assert the same behaviors the in-memory Store already passes.
 describe('Store Conformance: postgres (Outbox)', () => {
   let store: Store | null = null;
 
@@ -209,7 +213,6 @@ describe('Store Conformance: postgres (Outbox)', () => {
     let batch = await live.outbox.claimBatch(10);
     let row = batch.find((message) => message.id === id);
     assert.notEqual(row, undefined);
-    // attempts incremented exactly twice; status unchanged so the row is still pending.
     assert.equal(row!.attempts, 2);
     assert.equal(row!.status, 'pending');
   });
@@ -220,7 +223,7 @@ describe('Store Conformance: postgres (Outbox)', () => {
       return;
     }
     let live = store;
-    // Missing row: nothing to update, must not throw.
+    // A missing row has nothing to update, so the call must not throw.
     await live.outbox.recordFailure('obx_does_not_exist');
 
     // A dead-lettered row is in the final 'failed' state, no longer retried; recordFailure must

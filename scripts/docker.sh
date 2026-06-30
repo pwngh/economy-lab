@@ -57,7 +57,7 @@ wait_healthy() {
   done
 }
 
-# Bring the stack up, wait for it, and apply the schema — the README's setup sequence in one step.
+# Bring the stack up, wait for it, and apply the schema. This runs the README's setup sequence in one step.
 # Migrates against DATABASE_URL if set, else defaults to the compose Postgres instance.
 bootstrap() {
   : "${DATABASE_URL:=postgres://economy:economy@localhost:5432/economy_lab}"
@@ -80,7 +80,7 @@ case "$1" in
     bootstrap
     ;;
   *)
-    # Word-splitting $DC is intentional — it holds either "docker compose" or "docker-compose".
+    # Word-splitting $DC is intentional, because it holds either "docker compose" or "docker-compose".
     # shellcheck disable=SC2086
     exec $DC "$@"
     ;;

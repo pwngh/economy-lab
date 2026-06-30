@@ -35,8 +35,9 @@ import { testConfig } from '#test/support/capabilities.ts';
 import type { Operation, Outcome, Transaction } from '#src/contract.ts';
 import type { Attempt, Velocity } from '#src/ports.ts';
 
-// Small spending limit so each test states its own limit instead of the larger default.
-// `limitMinor` is the limit in CREDIT minor units (cents); `windowMs` is the window length in ms.
+// Builds a config with a small spending limit so each test states its own limit instead of the
+// larger default. `limitMinor` is the limit in CREDIT minor units (cents). `windowMs` is the
+// window length in milliseconds.
 function gateConfig(limitMinor: bigint, windowMs = 3_600_000) {
   return {
     ...testConfig(),
@@ -45,9 +46,9 @@ function gateConfig(limitMinor: bigint, windowMs = 3_600_000) {
   };
 }
 
-// Spending record for one subject with an open window: started at `windowStart`, `spentMinor`
-// spent so far (CREDIT minor units). The shape the risk check receives after the store brings the
-// record up to date for the current time.
+// Builds a spending record for one subject with an open window. The window started at
+// `windowStart`, with `spentMinor` spent so far in CREDIT minor units. This is the shape the risk
+// check receives after the store brings the record up to date for the current time.
 function velocityAt(windowStart: number, spentMinor: bigint): Velocity {
   return {
     subject: 'usr_buyer',
@@ -61,9 +62,9 @@ function velocityAt(windowStart: number, spentMinor: bigint): Velocity {
 // toward the spending limit, so denial-path tests use this outcome.
 let REJECTED: Outcome = { status: 'rejected', reason: 'RISK_DENIED' };
 
-// Outcome carrying a transaction. Contents don't matter: the attempt builder only reads the
-// outcome's status and the operation's key, so detail fields are left empty (legs are the
-// debit/credit lines; links are the per-account hash-chain entries).
+// Builds an outcome carrying a transaction. The contents do not matter here because the attempt
+// builder reads only the outcome's status and the operation's key, so the detail fields are left
+// empty. Legs are the debit and credit lines. Links are the per-account hash-chain entries.
 function withTransaction(status: 'committed' | 'duplicate'): Outcome {
   let transaction: Transaction = {
     id: 'txn_test',
@@ -137,7 +138,6 @@ function allowsAnOperationOutsideTheRiskSurface(): void {
 // the whole total resetting to zero at a fixed boundary.
 
 function readsAnEmptyWindowForAFreshSubject(): void {
-  // No attempts: an untracked subject reads as nothing spent.
   let velocity = windowedVelocity('usr_new', [], 5_000, 3_600_000);
 
   assert.deepEqual(velocity, emptyVelocity('usr_new'));

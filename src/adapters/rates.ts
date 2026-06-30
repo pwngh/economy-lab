@@ -13,16 +13,18 @@ import type { Currency } from '#src/money.ts';
 import type { Rate, Rates, Options } from '#src/ports.ts';
 
 /**
- * The three CREDIT-to-USD rates a deployment configures for its {@link Rates} dual-rate credit
- * economy. Credit value is platform-fixed, so all are business constants, not a live market feed:
- * - `buy`: the acquisition rate, what a user pays per credit when buying (example: ~120 credits/USD = $0.00833);
- * - `par`: the redemption/backing & settlement rate, a credit's cash-out floor (example: ~200 credits/USD = $0.005),
- *   used to check the platform holds enough real USD to back users' spendable credits;
- * - `payout`: the creator settlement rate, what a creator's earned credits convert to USD at when cashing out (= `par`).
+ * Holds the three CREDIT-to-USD rates a deployment configures for its {@link Rates} dual-rate credit
+ * economy. Credit value is platform-fixed, so all three are business constants, not a live market
+ * feed. The `buy` rate is the acquisition rate: what a user pays per credit when buying (for example,
+ * about 120 credits per USD, or $0.00833). The `par` rate is the redemption and backing rate: a
+ * credit's cash-out floor (for example, about 200 credits per USD, or $0.005), used to check that the
+ * platform holds enough real USD to back users' spendable credits. The `payout` rate is the creator
+ * settlement rate: what a creator's earned credits convert to when cashing out, and it equals `par`.
  *
- * Each rate is two integers, `rate` and `scale`; the multiplier is `rate / 10^scale` (e.g. rate 5,
- * scale 3 → $0.005 per credit). Integers avoid floating-point error. The buy-par gap is the platform
- * spread (example: ~40%), the buy-vs-cash-out margin and not a separate deduction.
+ * Each rate is two integers, `rate` and `scale`. The multiplier is `rate / 10^scale` (for example,
+ * rate 5 and scale 3 give $0.005 per credit). Integers avoid floating-point error. The gap between
+ * `buy` and `par` is the platform spread (for example, about 40 percent). That spread is the margin
+ * between buying and cashing out, not a separate deduction.
  */
 export interface RatesConfig {
   buyRate: bigint;
@@ -33,24 +35,25 @@ export interface RatesConfig {
   payoutScale: number;
 }
 
-// A `Rate` for converting a currency to itself: multiply by one, leave the amount unchanged.
+// Builds a `Rate` for converting a currency to itself. It multiplies by one and leaves the amount unchanged.
 function identityRate(from: Currency, to: Currency): Rate {
   return { rate: 1n, scale: 0, rateId: `${from}->${to}:1` };
 }
 
 /**
- * Build the production CREDIT-to-USD rate source from a deployment's configured rates, replacing the
- * 1:1 dev placeholder. Fixed business constants a deployment configures, not a live market feed.
+ * Builds the production CREDIT-to-USD rate source from a deployment's configured rates, replacing the
+ * 1:1 dev placeholder. The rates are fixed business constants a deployment configures, not a live
+ * market feed.
  *
- * Returns the three rates of the dual-rate credit economy: `buy` (acquisition rate), `par`
- * (redemption/backing & settlement rate), and `payout` (creator settlement rate, = `par`). Each
- * carries a `rateId` naming the exact rate so a transaction can record which it used.
+ * Returns the three rates of the dual-rate credit economy: `buy` (the acquisition rate), `par` (the
+ * redemption and backing rate), and `payout` (the creator settlement rate, which equals `par`). Each
+ * rate carries a `rateId` naming the exact rate so a transaction can record which one it used.
  *
  * Same-currency conversion returns 1:1. Only CREDIT and USD exist, so any other pair is a wiring bug
  * and throws.
  *
  * @example
- *   // Example rates: buy ~120 credits/USD ($0.00833), backed/cashed at ~200/USD ($0.005) — a ~40% spread:
+ *   // Example rates: buy at ~120 credits/USD ($0.00833), backed and cashed out at ~200/USD ($0.005), a ~40% spread:
  *   let rates = configuredRates({
  *     buyRate: 8333n, buyScale: 6,
  *     parRate: 5n, parScale: 3,

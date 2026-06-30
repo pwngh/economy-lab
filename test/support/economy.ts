@@ -27,18 +27,20 @@ import {
 } from '#test/support/capabilities.ts';
 
 /**
- * Build a fresh in-memory economy for one test with fake adapters (storage, clock, ids, digest, etc.).
+ * Builds a fresh in-memory economy for one test with fake adapters for storage, clock, ids, and digest.
  *
- * Fakes are driven only by `seed`: no real clock, randomness, or network. Same seed → same result on
- * any runtime (Node, Bun, Deno). Each call gets its own storage, so tests share no state.
+ * The fakes are driven only by `seed`. They use no real clock, randomness, or network. The same seed
+ * produces the same result on any runtime (Node, Bun, Deno). Each call gets its own storage, so tests
+ * share no state.
  *
- * Pass `store` to run against a specific backend (e.g. one adapter from the matrix). It must use the
- * same seeded digest + fixed clock as this economy or hashes diverge. Omitted, a fresh in-memory one
- * is created, so existing `makeEconomy()` / `makeEconomy(seed)` calls are unchanged.
+ * Pass `store` to run against a specific backend, such as one adapter from the matrix. That store must
+ * use the same seeded digest and fixed clock as this economy, or the hashes diverge. When `store` is
+ * omitted, a fresh in-memory store is created, so existing `makeEconomy()` and `makeEconomy(seed)`
+ * calls are unchanged.
  *
- * Pass `config` to override individual default-test-config fields, e.g. a small `velocityLimitMinor`
- * so a fraud-throttling test reaches the ceiling without funding a user to seven figures. Unspecified
- * fields keep their `testConfig()` defaults.
+ * Pass `config` to override individual fields of the default test config. For example, a small
+ * `velocityLimitMinor` lets a fraud-throttling test reach the ceiling without funding a user to seven
+ * figures. Unspecified fields keep their `testConfig()` defaults.
  */
 export function makeEconomy(
   seed = 1,

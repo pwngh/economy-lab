@@ -15,13 +15,18 @@ import type { WorkerCtx } from '#src/contract.ts';
 import type { Dispatcher, OutboxMessage, Options, Store } from '#src/ports.ts';
 
 /**
- * Result of one relay run.
- * - `relayed`: ids delivered and marked done this run.
- * - `failed`: delivery threw but still under the attempt cap; each carries error code and
- *   `retryable` (for caller metrics). Left 'pending' with `attempts` bumped, retried next run.
- * - `deadLettered`: hit the attempt cap (`config.maxOutboxAttempts`), set to 'failed', never
- *   re-claimed, so a poison event can't block events behind it. Each carries event id and the
- *   error code (`reason`) — same id+reason shape the other background sweeps use.
+ * Holds the outcome of one relay run.
+ *
+ * `relayed` lists the ids delivered and marked done this run.
+ *
+ * `failed` lists deliveries that threw but stayed under the attempt cap. Each entry carries the
+ * error code and a `retryable` flag for caller metrics. The row stays 'pending' with `attempts`
+ * bumped, so the next run retries it.
+ *
+ * `deadLettered` lists events that hit the attempt cap (`config.maxOutboxAttempts`). Each is set
+ * to 'failed' and never re-claimed, so a poison event cannot block the events behind it. Each
+ * entry carries the event id and the error code (`reason`). This matches the id and reason shape
+ * the other background sweeps use.
  */
 export type RelaySummary = {
   relayed: ReadonlyArray<string>;
@@ -71,18 +76,19 @@ export async function relayOutbox(
 }
 
 // Sends one event and records the outcome in the tally. On success the id goes to `relayed`. If
-// the dispatcher throws, the failure is logged and persisted (not re-thrown) so the batch keeps
-// going.
+// the dispatcher throws, the failure is logged and persisted rather than re-thrown, so the batch
+// keeps going.
 //
-// The persisted bump bounds retries. This failure makes the row's attempt count
-// `message.attempts + 1`; at the cap the row is dead-lettered (set to 'failed' so `claimBatch`
-// won't hand it back) and recorded in `deadLettered`, keeping a poison event from wedging the
-// queue. Otherwise `recordFailure` bumps `attempts` (row stays 'pending'), the event lands in
-// `failed`, and the next run retries it.
+// Persisting the failure bounds retries. This failure makes the row's attempt count
+// `message.attempts + 1`. At the cap the row is dead-lettered: it is set to 'failed' so
+// `claimBatch` won't hand it back, and it is recorded in `deadLettered`. That keeps a poison
+// event from wedging the queue. Below the cap, `recordFailure` bumps `attempts`, the row stays
+// 'pending', the event lands in `failed`, and the next run retries it.
 //
-// Cap is `>=` so the default `maxOutboxAttempts` of 10 dead-letters on the 10th failure (the one
-// that takes `attempts` to 10). Single off-by-one for the outbox, stated here so every adapter
-// only agrees on the stored count; mirrors the payout sweep's `attempts + 1 < cap` in payouts.ts.
+// The cap test is `>=`, so the default `maxOutboxAttempts` of 10 dead-letters on the 10th
+// failure, the one that takes `attempts` to 10. This is the single off-by-one for the outbox,
+// stated here so every adapter agrees on the stored count. It mirrors the payout sweep's
+// `attempts + 1 < cap` in payouts.ts.
 async function dispatchOne(
   store: Store,
   ctx: WorkerCtx,
@@ -122,8 +128,8 @@ async function dispatchOne(
 }
 
 // Marks this run's delivered events as done in a single write so the next run skips them. If the
-// write fails, the events stay undelivered and get re-delivered next run; acceptable (receiver
-// drops duplicates), so the failure is metered and logged rather than thrown.
+// write fails, the events stay undelivered and are re-delivered next run. That is acceptable
+// because the receiver drops duplicates, so the failure is metered and logged rather than thrown.
 async function markRelayed(
   store: Store,
   ctx: WorkerCtx,

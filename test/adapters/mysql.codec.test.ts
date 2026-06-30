@@ -11,17 +11,17 @@
  */
 
 /**
- * Deterministic, DB-less coverage for the MySQL inbox Operation codec. The Store conformance suite
- * (test/conformance/store.ts) enqueues an amount-bearing inbox row, but skips when no live MySQL is
- * reachable, so the encode→JSON.stringify→parse→decode round-trip could regress silently in a
- * no-services run. This drives the real `mysqlStore` inbox store through a tiny in-memory fake
- * `MysqlPool` — no driver, no database — so the codec is exercised exactly as the engine wires it:
- * `enqueueInbound` JSON.stringifies the encoded operation into the `operation` JSON column, and the
- * follow-up read runs it back through `rowToInbox`/`decodeOperation`.
+ * Deterministic, database-less coverage for the MySQL inbox Operation codec. The Store conformance
+ * suite (test/conformance/store.ts) enqueues an amount-bearing inbox row, but it skips when no live
+ * MySQL is reachable. The encode, JSON.stringify, parse, then decode round-trip could therefore
+ * regress silently in a no-services run. This test drives the real `mysqlStore` inbox store through a
+ * tiny in-memory fake `MysqlPool` with no driver and no database, so the codec runs exactly as the
+ * engine wires it. `enqueueInbound` JSON.stringifies the encoded operation into the `operation` JSON
+ * column, and the follow-up read runs it back through `rowToInbox` and `decodeOperation`.
  *
- * Regression guard: `JSON.stringify(entry.operation)` directly throws "Do not know how to serialize a
- * BigInt" on any amount-bearing operation, so before the codec fix `enqueueInbound` could not store
- * a single real inbound settlement on MySQL.
+ * Regression guard: calling `JSON.stringify(entry.operation)` directly throws "Do not know how to
+ * serialize a BigInt" on any amount-bearing operation. Before the codec fix, `enqueueInbound` could
+ * not store a single real inbound settlement on MySQL.
  */
 
 import { describe, test } from 'node:test';
@@ -34,8 +34,9 @@ import type { MysqlPool } from '#src/engines/mysql.ts';
 import type { Operation } from '#src/contract.ts';
 import type { InboxEntry } from '#src/ports.ts';
 
-// A topUp carrying a branded Amount (minor is a bigint), the inbound event the apply worker submits.
-// Mirrors the conformance suite's inboxRow so this covers the same amount-bearing shape.
+// Builds a topUp inbox entry carrying a branded Amount whose minor field is a bigint. This is the
+// inbound event the apply worker submits. It mirrors the conformance suite's inboxRow so this test
+// covers the same amount-bearing shape.
 function topUpEntry(): InboxEntry {
   return {
     id: 'ibx_codec_1',
@@ -55,11 +56,11 @@ function topUpEntry(): InboxEntry {
   };
 }
 
-// Smallest fake of the mysql2 pool the inbox store touches: one in-memory table keyed by the row's
-// `key`, plus the bookkeeping statements `mysqlStore`'s `transaction` runs (START TRANSACTION /
-// COMMIT / lock release). It deliberately stores the `operation` column as the JSON *string* the
-// engine hands it, so `parseJson` on read goes through the real JSON.parse path a JSON column would
-// take — the round-trip a live MySQL exercises, without a driver.
+// Builds the smallest fake of the mysql2 pool the inbox store touches. It holds one in-memory table
+// keyed by the row's `key`, plus the bookkeeping statements that `mysqlStore`'s `transaction` runs
+// (START TRANSACTION, COMMIT, and lock release). It deliberately stores the `operation` column as the
+// JSON string the engine hands it. That way `parseJson` on read goes through the real JSON.parse path
+// a JSON column would take, which is the same round-trip a live MySQL exercises but without a driver.
 function fakePool(): MysqlPool {
   let inbox = new Map<string, Record<string, unknown>>();
 
@@ -70,12 +71,12 @@ function fakePool(): MysqlPool {
     let text = sql.trim();
     if (/^INSERT IGNORE INTO inbox/i.test(text)) {
       let [id, key, operation, status, attempts, receivedAt] = params;
-      // INSERT IGNORE: a duplicate `key` is a no-op, so the existing row wins.
+      // INSERT IGNORE treats a duplicate `key` as a no-op, so the existing row wins.
       if (!inbox.has(key as string)) {
         inbox.set(key as string, {
           id,
           key,
-          operation, // the JSON *string* the engine passed in, as a JSON column would hold it
+          operation, // Stores the JSON string the engine passed in, as a JSON column would hold it.
           status,
           attempts,
           received_at: receivedAt,
@@ -108,9 +109,9 @@ describe('mysql inbox Operation codec', () => {
     let store = mysqlStore({ pool: fakePool() });
     let entry = topUpEntry();
 
-    // enqueueInbound encodes the operation's Amounts before JSON.stringify (the bug was stringifying
-    // the branded Amount directly, which throws on its bigint minor), then reads the row back and
-    // decodes via rowToInbox.
+    // enqueueInbound encodes the operation's Amounts before JSON.stringify, then reads the row back
+    // and decodes it through rowToInbox. The bug was stringifying the branded Amount directly, which
+    // throws on its bigint minor.
     let stored = await store.transaction((unit) =>
       unit.inbox.enqueueInbound(entry),
     );
@@ -123,7 +124,7 @@ describe('mysql inbox Operation codec', () => {
     assert.equal(stored.operation.source, 'card');
 
     // The Amount is a real branded Amount again, with its bigint minor intact across the JSON
-    // round-trip — proof the codec, not a raw JSON.stringify, carried it.
+    // round-trip. That proves the codec carried it, not a raw JSON.stringify.
     let amount = (stored.operation as Extract<Operation, { kind: 'topUp' }>)
       .amount;
     assert.equal(isAmount(amount), true);

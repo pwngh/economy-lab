@@ -1,5 +1,5 @@
-# Developer entry points. The JS tasks live in package.json; this Makefile drives the database +
-# Docker tooling and wraps the common npm scripts, so `make <target>` works from a clean checkout.
+# Developer entry points. The JS tasks live in package.json. This Makefile drives the database and
+# Docker tooling and wraps the common npm scripts. It lets `make <target>` work from a clean checkout.
 # Schema migration uses the native clients (psql / mysql) via scripts/migrate.sh.
 
 .DEFAULT_GOAL := help

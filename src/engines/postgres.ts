@@ -90,8 +90,8 @@ import type {
   Velocity,
 } from '#src/ports.ts';
 
-// The two runtime shapes sub-stores query against: a checked-out client (one connection you
-// must release) and a pool (hands clients out).
+// Sub-stores query against one of two runtime shapes. A checked-out client is one connection you
+// must release. A pool hands clients out.
 interface PgClient {
   query(text: string, values?: ReadonlyArray<unknown>): Promise<PgResult>;
   release(): void;
@@ -105,8 +105,8 @@ interface PgPool {
   end(): Promise<void>;
 }
 
-// Anything queryable: the pool (queries outside a transaction) or a checked-out client
-// (inside one). Sub-stores target this so the same code works either way.
+// Anything queryable, either the pool (for queries outside a transaction) or a checked-out client
+// (for queries inside one). Sub-stores target this so the same code works either way.
 type Queryable = Pick<PgPool, 'query'>;
 
 // Return Postgres BIGINT and NUMERIC columns as JS BigInt instead of pg's default strings.
@@ -130,9 +130,9 @@ async function loadSchemaSql(): Promise<string> {
   return readFile(path, 'utf8');
 }
 
-// Read the database's stamped schema version from schema_meta, or null when that table is absent —
-// an un-migrated or pre-versioning database. Lets the store fail fast (see assertSchemaCurrent)
-// rather than silently query a schema that doesn't match this code.
+// Reads the database's stamped schema version from schema_meta. Returns null when that table is
+// absent, which means an un-migrated or pre-versioning database. This lets the store fail fast (see
+// assertSchemaCurrent) rather than silently query a schema that doesn't match this code.
 async function readSchemaVersion(pool: PgPool): Promise<string | null> {
   try {
     let result = await pool.query('select version from schema_meta limit 1');
@@ -167,11 +167,11 @@ function isKnownSuffix(account: AccountRef): boolean {
   return suffix === 'spendable' || suffix === 'earned' || suffix === 'promo';
 }
 
-// Tip hash of each given account's chain, in one query. `account_balances.head_hash` is the
-// maintained head pointer: post_entry advances it to the account's new link hash in the same
+// Reads the tip hash of each given account's chain in one query. `account_balances.head_hash` is
+// the maintained head pointer: post_entry advances it to the account's new link hash in the same
 // transaction it writes chain_links, so this is an O(1) primary-key read per account. Accounts with
-// no balance row are absent; the caller treats a missing account as the genesis hash (a new
-// account's head). The chain_links table stays the source of truth — prove() still re-walks it — so
+// no balance row are absent, and the caller treats a missing account as the genesis hash (a new
+// account's head). The chain_links table stays the source of truth (prove() still re-walks it), so
 // a head pointer drifting from the chain surfaces there.
 async function headsForAccounts(
   q: Queryable,
@@ -348,10 +348,10 @@ function lockingLedger(q: Queryable, digest: Digest, clock: Clock): Ledger {
   };
 }
 
-// An account's entries between two times (including `from`, excluding `to`). Each amount is
-// signed by how it changed this account's balance, so a credit to a user account reads
-// positive. Cursor is always null: the conformance fixtures fit one page, so there's no
-// next-page cursor.
+// Builds a statement of an account's entries between two times (including `from`, excluding `to`).
+// Each amount is signed by how it changed this account's balance, so a credit to a user account
+// reads positive. The cursor is always null because the conformance fixtures fit one page, so there
+// is no next-page cursor.
 async function buildStatement(
   q: Queryable,
   account: AccountRef,
@@ -570,9 +570,9 @@ async function postingOf(q: Queryable, txnId: string): Promise<Posting | null> {
   };
 }
 
-// Stream every posting, newest commit first (see Ledger.list). Orders by `seq` desc — the
-// ever-increasing commit number (`bigserial unique`, a single indexed access path), giving a total
-// order with no tie to break, the SQL mirror of `payout_sagas order by updated_at desc`. Each
+// Streams every posting, newest commit first (see Ledger.list). Orders by `seq` desc, the
+// ever-increasing commit number (`bigserial unique`, a single indexed access path). This gives a
+// total order with no tie to break, the SQL mirror of `payout_sagas order by updated_at desc`. Each
 // posting carries its full legs, the same way postingOf returns them, so a reader can expand a row
 // without a second round-trip.
 async function* listPostingsOf(q: Queryable): AsyncIterable<Posting> {
@@ -839,9 +839,9 @@ function createOutboxStore(q: Queryable): OutboxStore {
       if (ids.length === 0) {
         return;
       }
-      // `and status = 'pending'` so a stale resend can't flip a row that has since been dead-lettered
-      // (or already relayed) back to 'relayed' — the same terminal-state guard recordFailure uses and
-      // the in-memory reference applies (it skips any non-'pending' row).
+      // The `and status = 'pending'` clause stops a stale resend from flipping a row back to
+      // 'relayed' once it has been dead-lettered or already relayed. This is the same terminal-state
+      // guard recordFailure uses and the in-memory reference applies (it skips any non-'pending' row).
       await q.query(
         `update outbox set status = 'relayed'
           where id = any($1::text[]) and status = 'pending'`,
@@ -1042,10 +1042,10 @@ function decodeAmounts(value: unknown): unknown {
   return value;
 }
 
-// Decode an encoded-amount string (`CREDIT:12.34`) back into an Amount, or null if it isn't one.
-// An encoded amount is exactly `CURRENCY:decimal`; a colon alone isn't enough, so the decimal part
-// must parse (decodeAmount throws on a non-numeric tail) — caught here so an ordinary string that
-// merely contains a colon falls through to "not an amount" instead of throwing.
+// Decodes an encoded-amount string (`CREDIT:12.34`) back into an Amount, or returns null if it
+// isn't one. An encoded amount is exactly `CURRENCY:decimal`, so a colon alone isn't enough and the
+// decimal part must parse (decodeAmount throws on a non-numeric tail). This function catches that
+// throw so an ordinary string that merely contains a colon falls through to "not an amount".
 function tryDecodeAmountString(encoded: string): Amount | null {
   let colon = encoded.indexOf(':');
   if (colon < 0) {
@@ -1462,12 +1462,12 @@ async function bumpVelocity(
   );
 }
 
-// The atomic record-then-measure behind `record`. Check out one client, BEGIN, take a
-// transaction-scoped advisory lock keyed on the subject so same-subject calls run one at a time
-// (lock auto-releases at COMMIT/ROLLBACK), insert the attempt deduped on its idempotency key
-// (same column list and `on conflict do nothing` as `bumpVelocity`), then run the same windowed
-// SUM `readVelocity` uses (now seeing this attempt) and COMMIT. The returned Velocity matches
-// what `read` would return for the same rows, so every adapter agrees.
+// The atomic record-then-measure behind `record`. It checks out one client, runs BEGIN, and takes a
+// transaction-scoped advisory lock keyed on the subject so same-subject calls run one at a time (the
+// lock auto-releases at COMMIT or ROLLBACK). It then inserts the attempt deduped on its idempotency
+// key (same column list and `on conflict do nothing` as `bumpVelocity`), runs the same windowed SUM
+// `readVelocity` uses (now seeing this attempt), and COMMITs. The returned Velocity matches what
+// `read` would return for the same rows, so every adapter agrees.
 async function recordVelocity(
   pool: PgPool,
   subject: string,
@@ -1618,8 +1618,7 @@ export async function postgresStore(
     await applyIsolatedSchema(pool, schema);
   }
 
-  // Refuse to run against a database whose schema has drifted from this code (e.g. an old `vrchat:`
-  // database the engine would otherwise read `platform:` accounts out of, returning $0.00). For an
+  // Refuse to run against a database whose schema has drifted from this code. For an
   // isolated test schema we just applied the current SQL, so this passes by construction.
   assertSchemaCurrent(await readSchemaVersion(pool), 'Postgres');
 
@@ -1707,19 +1706,21 @@ async function runInTransaction<T>(
   }, isTransientConflict);
 }
 
-// A transient lock conflict Postgres raised to break a tie, safe to retry because the aborted
-// transaction committed nothing: `40P01` deadlock_detected or `40001` serialization_failure (the two
-// SQLSTATEs the `pg` driver surfaces on `error.code`). Anything else — a domain fault, a
-// CHECK/constraint violation, a connection error — is not retried.
+// Reports whether the error is a transient lock conflict Postgres raised to break a tie. Such a
+// conflict is safe to retry because the aborted transaction committed nothing. The two cases are
+// `40P01` deadlock_detected and `40001` serialization_failure, the SQLSTATEs the `pg` driver
+// surfaces on `error.code`. Anything else (a domain fault, a CHECK or constraint violation, a
+// connection error) is not retried.
 function isTransientConflict(error: unknown): boolean {
   let e = error as { code?: unknown; constraint?: unknown } | null;
   let code = e?.code;
   // 40P01 (deadlock) and 40001 (serialization failure) are the classic "try again" aborts. The third
   // case is subtler. Each account's history is a hash chain, and a new link names the current last
-  // link (the head) as its parent; chain_links_account_prev_uq lets only one link claim a given
-  // parent. So when two writers read the same head and both try to attach, one wins and the other gets
-  // a 23505 — not wrong, just late: the head has moved. A retry re-reads it and attaches cleanly.
-  // Scoped to that one index, so a real duplicate (a colliding id or idempotency key) still fails fast.
+  // link (the head) as its parent. chain_links_account_prev_uq lets only one link claim a given
+  // parent. So when two writers read the same head and both try to attach, one wins and the other
+  // gets a 23505. That writer is not wrong, just late: the head has moved, and a retry re-reads it
+  // and attaches cleanly. This case is scoped to that one index, so a real duplicate (a colliding id
+  // or idempotency key) still fails fast.
   return (
     code === '40P01' ||
     code === '40001' ||

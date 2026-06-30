@@ -17,9 +17,10 @@ import type { Dispatcher, EconomyEvent, Options } from '#src/ports.ts';
 // --- The @aws-sdk/client-sqs surface, typed structurally --------------------------
 
 /**
- * Structural shape of the one SQS client method this adapter calls, so the file compiles
- * without `@aws-sdk/client-sqs` installed (optional dependency). Captures only what we use:
- * a command holding `input` plus an optional `abortSignal`. A real `SQSClient` satisfies it.
+ * Describes the one SQS client method this adapter calls. The structural shape lets the file
+ * compile without the optional `@aws-sdk/client-sqs` dependency installed. It captures only
+ * what we use: a command holding `input` plus an optional `abortSignal`. A real `SQSClient`
+ * satisfies it.
  */
 export interface SqsCommand {
   readonly input: Record<string, unknown>;
@@ -31,8 +32,9 @@ export interface SqsClient {
   ): Promise<Record<string, unknown>>;
 }
 
-// Wraps the SendMessage body in the `{ input }` shape `send` expects, replacing the SDK's
-// `new SendMessageCommand(input)`. Field names (QueueUrl, MessageBody, ...) are SQS's own.
+// Wraps the SendMessage body in the `{ input }` shape that `send` expects. This replaces the
+// SDK's `new SendMessageCommand(input)`. The field names (QueueUrl, MessageBody, ...) are SQS's
+// own.
 function sendMessageCommand(input: {
   QueueUrl: string;
   MessageBody: string;
@@ -53,18 +55,18 @@ export interface SqsDispatcherConfig {
 }
 
 /**
- * Build the dispatcher that publishes events to SQS as JSON messages.
+ * Builds the dispatcher that publishes events to SQS as JSON messages.
  *
- * On failure throws a retryable `PROVIDER.FAILURE` so the caller's backoff wrapper retries.
- * The event id is attached so the receiver can drop duplicates (SQS may deliver twice).
+ * On failure it throws a retryable `PROVIDER.FAILURE` so the caller's backoff wrapper retries.
+ * The event id is attached so the receiver can drop duplicates, because SQS may deliver twice.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for how dispatchers deliver events.
  */
 export function sqsDispatcher(config: SqsDispatcherConfig): Dispatcher {
   let client = config.client;
-  // FIFO-only params (MessageGroupId/MessageDeduplicationId) draw InvalidParameterValue on a
-  // standard queue, so decide once from the URL suffix and attach them only for FIFO queues.
-  // The documented deployment (.env.example) uses a standard queue.
+  // The FIFO-only params (MessageGroupId, MessageDeduplicationId) draw InvalidParameterValue on a
+  // standard queue. So decide once from the URL suffix and attach them only for FIFO queues. The
+  // documented deployment (.env.example) uses a standard queue.
   let fifo = config.queueUrl.endsWith('.fifo');
 
   return async (event: EconomyEvent, options?: Options): Promise<void> => {
@@ -73,8 +75,8 @@ export function sqsDispatcher(config: SqsDispatcherConfig): Dispatcher {
         sendMessageCommand({
           QueueUrl: config.queueUrl,
           MessageBody: encodeEvent(event),
-          // FIFO only: SQS drops a second message with the same dedup id, so tagging by event
-          // id makes a resend a no-op. Messages sharing a group id deliver in order; group by
+          // FIFO only. SQS drops a second message with the same dedup id, so tagging by event id
+          // makes a resend a no-op. Messages that share a group id deliver in order, so group by
           // subject.
           ...(fifo && {
             MessageDeduplicationId: event.id,
@@ -91,7 +93,7 @@ export function sqsDispatcher(config: SqsDispatcherConfig): Dispatcher {
 
 // --- Local helpers ----------------------------------------------------------------
 
-// Wrap a failed SQS call as a retryable `PROVIDER.FAILURE`. `normalizeError` keeps the
+// Wraps a failed SQS call as a retryable `PROVIDER.FAILURE`. `normalizeError` keeps the
 // original error as `cause`.
 function transportFault(message: string, error: unknown): Error {
   let normalized = normalizeError(error);

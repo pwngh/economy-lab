@@ -32,8 +32,9 @@ import type { Config } from '#src/config.ts';
 // --- Clock & ids ------------------------------------------------------------------
 
 /**
- * Test clock that only moves when you call `advance(ms)` (jumps forward by `ms`, returns the
- * new time). Reports `start` until then. Keeps runs reproducible.
+ * Builds a test clock whose time only moves when a test calls `advance(ms)`. The clock reports
+ * `start` until then. Calling `advance(ms)` jumps the time forward by `ms` and returns the new
+ * time. A manual clock keeps test runs reproducible.
  */
 export function fixedClock(
   start = 0,
@@ -49,8 +50,8 @@ export function fixedClock(
 }
 
 /**
- * Deterministic id generator: counts up from `seed` and returns `<prefix>_<n>` (e.g. `txn_1`,
- * `txn_2`). Same ids every run.
+ * Builds a deterministic id generator. It counts up from `seed` and returns `<prefix>_<n>`, for
+ * example `txn_1` then `txn_2`. The ids are the same on every run.
  */
 export function sequentialIds(seed = 0): { next: (prefix: string) => string } {
   let n = seed;
@@ -64,9 +65,9 @@ export function sequentialIds(seed = 0): { next: (prefix: string) => string } {
 
 // --- Digest & signer (seeded, deterministic) --------------------------------------
 
-// Prefix the bytes with `seed:<seed>:` before hashing. Different seeds give different hashes for
-// the same input; a given seed is stable. Hashed with the platform's SHA-256, so results match
-// across runtimes.
+// Prefixes the bytes with `seed:<seed>:` before hashing. Different seeds produce different hashes
+// for the same input, and a given seed is stable across runs. The caller hashes the framed bytes
+// with the platform's SHA-256, so results match across runtimes.
 let ENCODER = new TextEncoder();
 function withSeed(seed: number, bytes: Uint8Array): Uint8Array {
   let prefix = ENCODER.encode(`seed:${seed}:`);
@@ -77,8 +78,9 @@ function withSeed(seed: number, bytes: Uint8Array): Uint8Array {
 }
 
 /**
- * Test hasher: SHA-256 of the input (seed mixed in first, see `withSeed`), via `crypto.subtle`
- * rather than Node's `crypto` so the hash matches on Node, Bun, and Deno.
+ * Builds a test hasher that returns the SHA-256 of the input. The seed is mixed in first, see
+ * `withSeed`. It uses `crypto.subtle` rather than Node's `crypto` so the hash matches on Node, Bun,
+ * and Deno.
  */
 export function seededDigest(seed = 1): Digest {
   return {
@@ -90,9 +92,9 @@ export function seededDigest(seed = 1): Digest {
 }
 
 /**
- * Test signer with `seed` as the stand-in secret key. `sign` returns a SHA-256 hash (seed mixed
- * in); `verify` re-signs and compares. Not real crypto, just enough to exercise the sign/verify
- * path.
+ * Builds a test signer that uses `seed` as a stand-in secret key. `sign` returns a SHA-256 hash
+ * with the seed mixed in. `verify` re-signs the bytes and compares the result. This is not real
+ * crypto. It only does enough to exercise the sign and verify path.
  */
 export function seededSigner(seed = 1): Signer {
   let sign = async (bytes: Uint8Array): Promise<Uint8Array> =>
@@ -108,7 +110,6 @@ export function seededSigner(seed = 1): Signer {
   };
 }
 
-// True when the two byte arrays are the same length and hold the same bytes.
 function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) {
     return false;
@@ -123,14 +124,15 @@ function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
 
 // --- Rates (fixed-point) -------------------------------------------------------------
 
-// Three fixed CREDIT-to-USD rates, one per read site. Round values (not the exact $0.00833
-// acquisition rate, which isn't a clean cent) so the topUp split lands on whole cents: `buy` = the
-// acquisition rate a user pays per credit ($0.01, 100 credits = $1); `par` = the
-// redemption/settlement rate the backing check uses ($0.005, 200 credits = $1); `payout` = `par`,
-// the settlement rate. The buy-par gap (50%) is the platform spread. (A separate test pins a
-// real ~40% spread + creator-nets-50% with the exact 120/200 rates.) Each rate is exact integers
-// (multiplier `rate / 10^scale`) plus a `rateId`.
-// The rateId's trailing "r/s" is rate/scale, not a fraction: 1/2 = 1·10^-2 = $0.01, 5/3 = 5·10^-3 = $0.005.
+// Three fixed CREDIT-to-USD rates, one per read site. These use round values rather than the exact
+// $0.00833 acquisition rate, which is not a clean cent, so the topUp split lands on whole cents.
+// `buy` is the acquisition rate a user pays per credit, $0.01, so 100 credits cost $1. `par` is the
+// redemption and settlement rate the backing check uses, $0.005, so 200 credits are worth $1.
+// `payout` equals `par`, the settlement rate. The gap between `buy` and `par` is 50%, which is the
+// platform spread. A separate test pins a realistic ~40% spread and a creator-nets-50% outcome with
+// the exact 120/200 rates. Each rate is exact integers, where the value is `rate / 10^scale`, plus
+// a `rateId`. The trailing "r/s" in a `rateId` is rate over scale, not a fraction: 1/2 means
+// 1·10^-2 = $0.01, and 5/3 means 5·10^-3 = $0.005.
 let BUY_CREDIT: Rate = { rate: 1n, scale: 2, rateId: 'buy:CREDIT->USD:1/2' };
 let PAR_CREDIT: Rate = { rate: 5n, scale: 3, rateId: 'par:CREDIT->USD:5/3' };
 let PAYOUT_CREDIT: Rate = {
@@ -140,9 +142,10 @@ let PAYOUT_CREDIT: Rate = {
 };
 
 /**
- * A test rate source: buy $0.01, par $0.005, payout $0.005. `payout` gives the conversion rate for
- * a payout (the pinned CREDIT-to-USD payout rate when converting CREDIT to USD, or 1-to-1 for any
- * other pair); `par` gives the backing peg; `buy` gives the rate a user pays at top-up.
+ * Builds a test rate source with buy $0.01, par $0.005, and payout $0.005. `payout` gives the
+ * conversion rate for a payout. It returns the pinned CREDIT-to-USD payout rate when converting
+ * CREDIT to USD, and 1-to-1 for any other pair. `par` gives the backing peg. `buy` gives the rate a
+ * user pays at top-up.
  */
 export function fixedRates(): Rates {
   return {
@@ -165,19 +168,20 @@ export function fixedRates(): Rates {
 
 // --- logger, meter, processor -----------------------------------------------------
 
-// Logger that discards every line, so tests produce no log noise.
+// Builds a logger that discards every line, so tests produce no log noise.
 export function testLogger(): Logger {
   return { log: () => {} };
 }
 
-// Metrics sink that records nothing; exists so code emitting metrics has something to call.
+// Builds a metrics sink that records nothing. It exists so code that emits metrics has something to
+// call.
 export function noopMeter(): Meter {
   return { count: () => {}, observe: () => {} };
 }
 
 /**
- * A fake payment provider that approves every payout and returns a predictable reference
- * (`prov_<key>`) instead of calling a real provider.
+ * Builds a fake payment provider. It approves every payout and returns a predictable reference,
+ * `prov_<key>`, instead of calling a real provider.
  */
 export function fakeProcessor(): Processor {
   return {
@@ -187,18 +191,19 @@ export function fakeProcessor(): Processor {
 
 // --- Pricing (a flat-percentage split, expressed in basis points) -----------------
 
-// `bps` basis points (hundredths of a percent) of `minor`, rounded down: minor * bps / 10000.
-// All bigint so large totals stay exact (a JS number would lose precision at that size).
+// Returns `bps` basis points (hundredths of a percent) of `minor`, rounded down, as `minor * bps /
+// 10000`. The math stays in bigint so large totals stay exact. A JS number would lose precision at
+// that size.
 function applyBps(minor: bigint, bps: number): bigint {
   return (minor * BigInt(bps)) / 10_000n;
 }
 
-// Split a sale's `price` into the credit legs that pay each party. Take the platform fee off the
-// top via the same `feeForPrice` production uses (rounds the fee up to a whole credit, posts to
-// REVENUE), so this fixture agrees with the fee `saleOf` records. Each recipient gets a
-// rounded-down share of the rest, into that seller's `earned` account. Rounding leftover goes to
-// REVENUE with the fee, so the legs sum to exactly `price`. Covers payouts only; the operation
-// handler adds the matching line that debits the buyer.
+// Splits a sale's `price` into the credit legs that pay each party. It takes the platform fee off
+// the top via the same `feeForPrice` that production uses, which rounds the fee up to a whole credit
+// and posts it to REVENUE, so this fixture agrees with the fee that `saleOf` records. Each recipient
+// gets a rounded-down share of the rest, posted to that seller's `earned` account. The rounding
+// leftover goes to REVENUE along with the fee, so the legs sum to exactly `price`. This covers the
+// payout legs only. The operation handler adds the matching line that debits the buyer.
 function splitLegs(
   price: Amount,
   recipients: ReadonlyArray<Recipient>,
@@ -223,8 +228,8 @@ function splitLegs(
 }
 
 /**
- * Test fee policy: a flat-percentage split (see `splitLegs`). Stateless, so the legs depend only
- * on the inputs.
+ * Builds a test fee policy that applies a flat-percentage split, see `splitLegs`. The policy is
+ * stateless, so the legs depend only on the inputs.
  */
 export function defaultPricing(): FeePolicy {
   return (input) => splitLegs(input.price, input.recipients, input.feeBps);
@@ -233,8 +238,8 @@ export function defaultPricing(): FeePolicy {
 // --- Config -----------------------------------------------------------------------
 
 /**
- * Test config with throwaway secrets. `loadConfig`'s startup check for missing secrets is covered
- * in the config tests, so placeholder values are fine here.
+ * Builds a test config with throwaway secrets. The config tests already cover `loadConfig`'s
+ * startup check for missing secrets, so placeholder values are fine here.
  */
 export function testConfig(): Config {
   return {

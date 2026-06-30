@@ -37,7 +37,7 @@ import type {
 
 // --- Public surface (re-exports only) ---------------------------------------------
 
-// createEconomy: builds an economy from its services. memoryStore: in-memory backend, runs with no database.
+// createEconomy builds an economy from its services. memoryStore is the in-memory backend, which runs with no database.
 export { createEconomy } from '#src/economy.ts';
 export { memoryStore } from '#src/adapters/memory.ts';
 // memoryCache: in-process read-through cache, the zero-infra counterpart to the Redis adapter.
@@ -74,10 +74,10 @@ export type { Capabilities, Options, Range, Statement } from '#src/ports.ts';
 
 // --- Composition from env ---------------------------------------------------------
 //
-// Two source layers, since the directory split only half-expresses them: src/engines/ are the
-// systems of record that enforce ledger invariants natively (Postgres, MySQL) — the database is
-// the source of truth, not an adapter; src/adapters/ are everything pluggable that does not enforce
-// invariants (in-memory/HTTP stores, Redis cache, SQS/HTTP dispatcher, payout processor, FX rates).
+// There are two source layers, since the directory split only half-expresses them. src/engines/ are
+// the systems of record that enforce ledger invariants natively (Postgres, MySQL): the database is
+// the source of truth, not an adapter. src/adapters/ are everything pluggable that does not enforce
+// invariants (in-memory and HTTP stores, Redis cache, SQS and HTTP dispatcher, payout processor, FX rates).
 
 /**
  * External services with no built-in stand-in; the caller supplies a real one. `pricing` splits
@@ -156,9 +156,9 @@ export async function capabilitiesFromEnv(
 
 /**
  * Derive a worker context from a capability bundle: the runtime services a background pass needs,
- * minus the request-path-only pieces (no pricing rule — each sweep writes its own balanced legs —
- * and no cache/dispatcher, which the worker takes separately). Lets one process build an economy
- * and a worker over the exact same store and clock.
+ * minus the request-path-only pieces. There is no pricing rule, because each sweep writes its own
+ * balanced legs. There is no cache or dispatcher, because the worker takes those separately. This
+ * lets one process build an economy and a worker over the exact same store and clock.
  */
 export function workerCtxFrom(caps: Capabilities): WorkerCtx {
   return {
@@ -197,8 +197,9 @@ export async function compose(
  * `worker.runOnce(input)` on a timer and pass the dispatcher into each run's input.
  *
  * Two processes on the same database each call this (and {@link compose}) with their own store
- * handle. For a single process sharing one store — required for the in-memory backend, where two
- * stores are two separate maps — call {@link capabilitiesFromEnv} once instead (see its note).
+ * handle. For a single process that shares one store, call {@link capabilitiesFromEnv} once instead
+ * (see its note). Sharing one store is required for the in-memory backend, where two stores are two
+ * separate maps.
  */
 export async function composeWorker(
   env: Record<string, string | undefined>,
@@ -264,10 +265,11 @@ async function selectStore(
   if (url.startsWith('mysql://')) {
     let { createMysqlPool, mysqlStore, readSchemaVersion } =
       await import('#src/engines/mysql.ts');
-    // Build the pool via the engine's helper, which sets supportBigNumbers + bigNumberStrings so a
+    // Build the pool via the engine's helper, which sets supportBigNumbers and bigNumberStrings so a
     // BIGINT money column comes back as a string (then a bigint), not a lossy JS number. Raw `mysql2`
     // `createPool` leaves those off, so wiring it directly would silently round any amount above
-    // 2^53 (~9 quadrillion) — the same createMysqlPool the engine's conformance and adversarial tests use.
+    // 2^53 (~9 quadrillion). This is the same createMysqlPool the engine's conformance and adversarial
+    // tests use.
     let pool = await createMysqlPool(url);
     // Fail fast if the database schema has drifted from this code (postgresStore does the same for
     // its branch). Postgres makes its own pool inside the store; MySQL's pool is created here.
@@ -305,10 +307,10 @@ async function selectCache(
 }
 
 // Picks how outgoing events get delivered, from env. Events are first written to the database
-// alongside the money move; the returned dispatcher ships them out. `SQS_QUEUE_URL` sends via an
-// Amazon SQS queue; else `DISPATCHER_URL` posts over HTTP; with neither, returns nothing and events
-// are delivered in-process. SQS wins if both are set. Each driver loads on demand. The worker's
-// delivery loop reads from whichever dispatcher this returns.
+// alongside the money move, and the returned dispatcher ships them out. `SQS_QUEUE_URL` sends via an
+// Amazon SQS queue. Otherwise `DISPATCHER_URL` posts over HTTP. With neither set, this returns
+// nothing and events are delivered in-process. SQS wins if both are set. Each driver loads on
+// demand. The worker's delivery loop reads from whichever dispatcher this returns.
 async function selectDispatcher(
   env: Record<string, string | undefined>,
 ): Promise<Dispatcher | undefined> {
@@ -318,9 +320,9 @@ async function selectDispatcher(
     let { sqsDispatcher } = await import('#src/adapters/sqs.ts');
     let raw = new SQSClient({});
     // The adapter speaks an SDK-free `{ input }` command so it stays importable and unit-testable
-    // without @aws-sdk/client-sqs. Translate it into a real `SendMessageCommand` here — the one
-    // place that imports the SDK. A raw `SQSClient.send` rejects a plain `{ input }`: it needs a
-    // Command instance, so the adapter's structural client is wrapped, not passed through raw.
+    // without @aws-sdk/client-sqs. Translate it into a real `SendMessageCommand` here, the one place
+    // that imports the SDK. A raw `SQSClient.send` rejects a plain `{ input }`: it needs a Command
+    // instance, so the adapter's structural client is wrapped, not passed through raw.
     return sqsDispatcher({
       queueUrl,
       client: {

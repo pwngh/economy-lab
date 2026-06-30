@@ -40,29 +40,29 @@ export type WebhookHandler = (
 export interface ServerOptions {
   webhook?: WebhookHandler;
 
-  // When present, inbound webhooks are verified before the handler runs: HMAC-SHA256 of the raw body
-  // (keyed with `config.webhookSecret`) must match `x-signature`, and `x-timestamp` must fall within
-  // `config.replayWindowMs` of the clock. When absent, the webhook path is a bare pass-through and
-  // the host verifies.
+  // When present, the server verifies inbound webhooks before the handler runs. HMAC-SHA256 of the
+  // raw body, keyed with `config.webhookSecret`, must match `x-signature`. The `x-timestamp` must
+  // fall within `config.replayWindowMs` of the clock. When absent, the webhook path is a bare
+  // pass-through and the host verifies.
   config?: Config;
 
   // Clock for webhook freshness. Time is read only through this, never `Date.now()`, so tests can
   // freeze it. Defaults to wall-clock when verification is enabled and no clock is given.
   clock?: Clock;
 
-  // Records which provider events have been processed. Claimed last (after signature and freshness),
-  // so a rejected or forged delivery never burns a provider `eventId` and blocks a later genuine
-  // one. When present, the server decodes the body into a typed WebhookEvent, claims its `eventId`,
-  // and on a repeat returns 200 without invoking the handler. When absent, the path is the bare
-  // signature-plus-freshness pass-through and the host dedups.
+  // Records which provider events have been processed. The server claims an `eventId` last, after
+  // the signature and freshness checks pass, so a rejected or forged delivery never burns a provider
+  // `eventId` and blocks a later genuine one. When present, the server decodes the body into a typed
+  // WebhookEvent, claims its `eventId`, and on a repeat returns 200 without invoking the handler.
+  // When absent, the path is the bare signature-plus-freshness pass-through and the host dedups.
   replay?: ReplayStore;
 }
 
-// The signature header: hex-encoded HMAC-SHA256 of the raw body (see verifyHmac).
+// Names the signature header. It holds the hex-encoded HMAC-SHA256 of the raw body (see verifyHmac).
 let SIGNATURE_HEADER = 'x-signature';
 
-// Provider's send time (ms since 1 Jan 1970 UTC). Used to reject stale deliveries (replay of a
-// captured request).
+// Names the timestamp header. It holds the provider's send time in milliseconds since 1 Jan 1970
+// UTC, used to reject stale deliveries (replay of a captured request).
 let TIMESTAMP_HEADER = 'x-timestamp';
 
 /**
@@ -121,16 +121,18 @@ export function createServer(
 
 // --- /healthz and /readyz ---------------------------------------------------------
 
-// Liveness: process is up and can serve a response. Does no I/O, so it answers even when a
-// downstream dependency is down (/readyz covers that). Dockerfile HEALTHCHECK targets this path.
+// Reports liveness: the process is up and can serve a response. It does no I/O, so it answers even
+// when a downstream dependency is down (/readyz covers that case). The Dockerfile HEALTHCHECK
+// targets this path.
 function livenessRoute(): Response {
   return jsonResponse(200, { status: 'ok' });
 }
 
-// Readiness: confirm a dependency is reachable before the orchestrator routes traffic here. One
-// cheap store-touching read through the economy (balance of a known system account); any throw means
-// the store is unreachable, reported as 503 with no detail (error stays server-side). createServer
-// only receives an Economy, so the probe goes through the public read surface, not the ledger.
+// Reports readiness by confirming a dependency is reachable before the orchestrator routes traffic
+// here. It makes one cheap store-touching read through the economy, the balance of a known system
+// account. Any throw means the store is unreachable, reported as 503 with no detail so the error
+// stays server-side. createServer only receives an Economy, so the probe goes through the public
+// read surface, not the ledger.
 async function readinessRoute(economy: Economy): Promise<Response> {
   try {
     await economy.read.balance(SYSTEM.REVENUE);
@@ -142,10 +144,10 @@ async function readinessRoute(economy: Economy): Promise<Response> {
 
 // --- /submit ----------------------------------------------------------------------
 
-// Read the operation from the body, run it, send the result back. A bad body or thrown EconomyError
-// becomes an error response with the mapped status, carrying only the message. A `rejected` outcome
-// (economy declining a valid request for a business reason, like insufficient funds) is not an
-// error: it returns 200 holding the decline.
+// Reads the operation from the body, runs it, and sends the result back. A bad body or a thrown
+// EconomyError becomes an error response with the mapped status, carrying only the message. A
+// `rejected` outcome is not an error. It happens when the economy declines a valid request for a
+// business reason, such as insufficient funds, and returns 200 holding the decline.
 async function submitRoute(
   economy: Economy,
   request: Request,
@@ -166,21 +168,23 @@ async function submitRoute(
 
 // --- /webhooks/:provider ----------------------------------------------------------
 
-// Gate an inbound webhook, then pass it to the injected handler. With no handler wired, return 404.
+// Gates an inbound webhook, then passes it to the injected handler. Returns 404 when no handler is
+// wired.
 //
 // When a config with a webhook secret is present, the body is verified before the handler runs, so a
-// forged request never reaches code that changes balances. Checks, in order:
-//   1. HMAC-SHA256 of the raw body must match `x-signature`, else 401 INVALID_SIGNATURE and nothing
-//      downstream runs. A match proves the sender knew the shared secret.
-//   2. `x-timestamp` must be finite and within `config.replayWindowMs` of the clock, else treated as
-//      old/replayed and answered 200 "duplicate" so the provider stops redelivering.
-//   3. (Only with a replay store) the provider `eventId` is claimed last, so a forged or stale
-//      delivery (already rejected above) never burns the id and blocks a later genuine redelivery. A
-//      repeat eventId is answered 200 and the handler never runs, so its work (e.g. crediting a
-//      user) happens once.
+// forged request never reaches code that changes balances. The checks run in order:
+//   1. HMAC-SHA256 of the raw body must match `x-signature`. A match proves the sender knew the
+//      shared secret. A mismatch returns 401 INVALID_SIGNATURE and nothing downstream runs.
+//   2. `x-timestamp` must be finite and within `config.replayWindowMs` of the clock. Otherwise the
+//      delivery is treated as old or replayed and answered 200 "duplicate" so the provider stops
+//      redelivering.
+//   3. (Only with a replay store.) The provider `eventId` is claimed last. A forged or stale
+//      delivery is already rejected above, so it never burns the id and blocks a later genuine
+//      redelivery. A repeat eventId is answered 200 and the handler never runs, so its work (such as
+//      crediting a user) happens once.
 //
-// The raw bytes are read once. Verification, replay decode, and handler all work over that buffer;
-// the handler gets a fresh Request rebuilt from the bytes, so the body is never consumed twice.
+// The raw bytes are read once. Verification, replay decode, and handler all work over that buffer.
+// The handler gets a fresh Request rebuilt from the bytes, so the body is never consumed twice.
 async function webhookRoute(
   options: ServerOptions,
   provider: string,
@@ -243,8 +247,8 @@ async function webhookRoute(
   }
 
   // Verified and not a repeat. Hand it to the handler over a fresh Request so it can read the body
-  // again. The host's handler decodes the event and applies it once through its economy (e.g.
-  // crediting the user on a payment callback).
+  // again. The host's handler decodes the event and applies it once through its economy, such as
+  // crediting the user on a payment callback.
   let verified = rebuildRequest(request, rawBytes);
   try {
     return await handler(provider, verified);
@@ -253,8 +257,8 @@ async function webhookRoute(
   }
 }
 
-// Claim the provider `eventId` so an already-processed event can't run twice (see webhookRoute
-// step 3); a no-op when no replay store is wired. Decodes the body into a typed WebhookEvent only to
+// Claims the provider `eventId` so an already-processed event can't run twice (see webhookRoute
+// step 3). A no-op when no replay store is wired. Decodes the body into a typed WebhookEvent only to
 // read its `eventId`; the handler still gets the raw verified bytes. Returns a Response to send
 // immediately (200 "duplicate" or an error), or null when the event is new and the caller runs.
 async function replayGate(
@@ -287,11 +291,11 @@ async function replayGate(
   return null;
 }
 
-// Verify an HMAC-SHA256 signature over the raw request bytes using Web Crypto. The hex
-// `x-signature` is decoded to bytes and checked with `crypto.subtle.verify`, which compares in
+// Verifies an HMAC-SHA256 signature over the raw request bytes using Web Crypto. The hex
+// `x-signature` is decoded to bytes and checked with `crypto.subtle.verify`. That call compares in
 // constant time and returns true only on the right length and value, so a malformed or short
-// signature is a clean false, never a thrown comparison. A non-hex signature fails decode and is
-// treated as a non-match.
+// signature is a clean false rather than a thrown comparison. A non-hex signature fails decode and
+// is treated as a non-match.
 async function verifyHmac(
   rawBytes: Uint8Array,
   signature: string,
@@ -313,14 +317,14 @@ async function verifyHmac(
   return crypto.subtle.verify('HMAC', key, provided, rawBytes);
 }
 
-// Hex signature off the request, or '' when the header is absent (absent signature is a guaranteed
-// mismatch, no special-casing needed).
+// Returns the hex signature from the request, or '' when the header is absent. An absent signature
+// is a guaranteed mismatch, so it needs no special-casing.
 function signatureOf(request: Request): string {
   return request.headers.get(SIGNATURE_HEADER) ?? '';
 }
 
-// Fresh Request carrying the already-read bytes as its body (copies method, URL, headers), so the
-// verified handler can re-read the body the server consumed for verification.
+// Builds a fresh Request carrying the already-read bytes as its body, copying the method, URL, and
+// headers. This lets the verified handler re-read the body the server consumed for verification.
 function rebuildRequest(request: Request, rawBytes: Uint8Array): Request {
   return new Request(request.url, {
     method: request.method,
@@ -329,18 +333,18 @@ function rebuildRequest(request: Request, rawBytes: Uint8Array): Request {
   });
 }
 
-// Default clock for the freshness check when the caller supplies none; reads real system time.
-// Defined here rather than imported from runtime.ts so this file depends only on cross-runtime
-// Fetch/Web APIs (Node, Bun, Deno, Cloudflare Workers) and pulls in no signing/hashing setup. Tests
-// and hosts override it with their own clock.
+// Provides the default clock for the freshness check when the caller supplies none, reading real
+// system time. It is defined here rather than imported from runtime.ts so this file depends only on
+// cross-runtime Fetch and Web APIs (Node, Bun, Deno, Cloudflare Workers) and pulls in no signing or
+// hashing setup. Tests and hosts override it with their own clock.
 let systemClock: Clock = { now: () => Date.now() };
 
 // --- Operation codec (money travels as a decimal string) --------------------------
 
-// Parsed JSON body → typed Operation. Money amounts arrive as decimal strings (a JSON number can't
-// safely hold them), so for the body's `kind`, convert its money fields back into Amount values via
-// the shared decoder. A non-object body, or one whose `kind` isn't a known operation, throws a
-// malformed-operation fault.
+// Converts a parsed JSON body into a typed Operation. Money amounts arrive as decimal strings
+// because a JSON number can't safely hold them. For the body's `kind`, the shared decoder converts
+// its money fields back into Amount values. A non-object body, or one whose `kind` isn't a known
+// operation, throws a malformed-operation fault.
 function decodeOperation(body: unknown): Operation {
   if (body === null || typeof body !== 'object') {
     throw malformed('Operation body must be a JSON object.');
@@ -357,9 +361,9 @@ function decodeOperation(body: unknown): Operation {
   return decoded as unknown as Operation;
 }
 
-// One money field's decimal string → Amount. A missing or non-string field is a malformed-operation
-// fault (wrong shape). A present-but-invalid string makes the decoder throw a separate money fault,
-// keeping "wrong shape" and "wrong amount" distinct.
+// Converts one money field's decimal string into an Amount. A missing or non-string field is a
+// malformed-operation fault (wrong shape). A present-but-invalid string makes the decoder throw a
+// separate money fault, which keeps "wrong shape" and "wrong amount" distinct.
 function decodeAmountField(value: unknown, field: string): Amount {
   if (typeof value !== 'string') {
     throw malformed(
@@ -369,9 +373,9 @@ function decodeAmountField(value: unknown, field: string): Amount {
   return decodeWire.amount(value);
 }
 
-// Per operation kind, its money field names: the only fields needing decimal-string decoding,
-// everything else stays plain JSON. Every valid kind has an entry (some empty), so a body whose kind
-// is missing from this map is rejected as malformed before it reaches submit.
+// Maps each operation kind to its money field names. Those are the only fields needing decimal-string
+// decoding; everything else stays plain JSON. Every valid kind has an entry, some empty, so a body
+// whose kind is missing from this map is rejected as malformed before it reaches submit.
 const AMOUNT_FIELDS: Record<string, ReadonlyArray<string>> = {
   topUp: ['amount'],
   spend: ['price'],
@@ -388,9 +392,9 @@ const AMOUNT_FIELDS: Record<string, ReadonlyArray<string>> = {
   reversePayout: [],
 };
 
-// Outcome → JSON shape for the response. A committed or duplicate outcome carries a transaction
-// whose debit/credit line amounts are written back as decimal strings. A rejected outcome carries
-// only its reason code and optional detail (no money), so it goes out unchanged.
+// Converts an Outcome into the JSON shape for the response. A committed or duplicate outcome carries
+// a transaction whose debit and credit line amounts are written back as decimal strings. A rejected
+// outcome carries only its reason code and optional detail, no money, so it goes out unchanged.
 function encodeOutcome(outcome: Outcome): unknown {
   if (outcome.status === 'rejected') {
     return outcome;
@@ -403,8 +407,9 @@ function encodeOutcome(outcome: Outcome): unknown {
 
 // --- HTTP status mapping ----------------------------------------------------------
 
-// HTTP status for a thrown EconomyError, by its stable code: missing permission or bad signature →
-// 401, malformed request or bad amount → 400, retryable fault → 503, anything else → 500.
+// Maps a thrown EconomyError to an HTTP status by its stable code. A missing permission or a bad
+// signature becomes 401. A malformed request or a bad amount becomes 400. A retryable fault becomes
+// 503. Anything else becomes 500.
 function statusFor(error: EconomyError): number {
   if (error.code === ERROR_CODES.UNAUTHORIZED) {
     return 401;
@@ -429,17 +434,18 @@ const BAD_REQUEST_CODES = new Set<string>([
 
 // --- Local helpers ----------------------------------------------------------------
 
-// Anything thrown → error response with the mapped status and only the error's message. A non-
-// EconomyError is wrapped by normalizeError as a retryable storage failure, so an unexpected throw
-// goes out as a 503 with a generic message; its stack trace and cause never reach the client.
+// Turns anything thrown into an error response with the mapped status and only the error's message.
+// normalizeError wraps a non-EconomyError as a retryable storage failure, so an unexpected throw
+// goes out as a 503 with a generic message. Its stack trace and cause never reach the client.
 function faultResponse(error: unknown): Response {
   let normalized: EconomyError =
     error instanceof EconomyError ? error : normalizeError(error);
   return errorResponse(statusFor(normalized), normalized.message);
 }
 
-// Read the request body and parse it as JSON. An empty or invalid-JSON body becomes a malformed-
-// operation fault, so the raw parser error never escapes and the bad-request verdict stays here.
+// Reads the request body and parses it as JSON. An empty or invalid-JSON body becomes a
+// malformed-operation fault, so the raw parser error never escapes and the bad-request verdict
+// stays here.
 async function readJson(request: Request): Promise<unknown> {
   let text = await request.text();
   if (text.length === 0) {

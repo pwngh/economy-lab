@@ -11,71 +11,70 @@
  */
 
 /**
- * Multi-sweep claim contention — proving the EFFECT-level exactly-once the worker actually relies on,
- * under the SAME claim pattern the production workers use. The three background sweeps each hand a
- * batch of due/pending rows to themselves and then act on each one:
- *   - settleDuePayouts (src/worker/payouts.ts): claimDue, then advance(...) — a compare-and-set.
+ * Proves the effect-level exactly-once guarantee the workers actually rely on, under the same claim
+ * pattern the production workers use. The three background sweeps each claim a batch of due or pending
+ * rows and then act on each one:
+ *   - settleDuePayouts (src/worker/payouts.ts): claimDue, then advance(...), a compare-and-set.
  *   - relayOutbox      (src/worker/relay.ts):   claimBatch, deliver, then markRelayed.
  *   - drainInbox       (src/worker/inbox.ts):   claimInbound, submit the stored Operation, then markApplied.
  * On the SQL engines every claim is `SELECT ... FOR UPDATE SKIP LOCKED`.
  *
- * WHY THE CLAIM IS NOT THE GUARANTEE. The crucial fact the previous version of this suite got wrong:
- * the production workers do NOT claim and mark inside one transaction. They claim on the POOL —
- * autocommit — so the FOR UPDATE SKIP LOCKED lock is released the instant the SELECT returns, BEFORE
- * the row is marked. Read the workers: relay.ts claims at line ~54 on the pool and `markRelayed` is a
- * SEPARATE call at ~66 ("delivery can happen more than once … the receiver must drop duplicates");
- * inbox.ts claims at ~73 on the pool and "exactly-once rests on the stored Operation's
- * idempotencyKey" (~63); payouts.ts claims at ~54 on the pool and the real state change is the
- * `advance` CAS inside `store.transaction`. So SKIP LOCKED only de-duplicates two claims WHILE they
- * overlap in time — it is the contention-REDUCER, not the exactly-once mechanism. Under the real
- * autocommit-claim pattern two sweeps CAN transiently claim the same row (one claims, its lock drops
- * on autocommit before it has marked the row, a second sweep claims the still-pending row). A test
- * that claimed-and-marked in one transaction (as the old one did) would hold the lock across
- * claim→mark and so prove a guarantee the workers never make. This suite instead exercises the real
+ * Why the claim is not the guarantee. The production workers do not claim and mark inside one
+ * transaction. They claim on the pool, in autocommit, so the FOR UPDATE SKIP LOCKED lock is released
+ * the instant the SELECT returns, before the row is marked. The workers confirm this: relay.ts claims
+ * on the pool and calls `markRelayed` separately ("delivery can happen more than once ... the receiver
+ * must drop duplicates"); inbox.ts claims on the pool, where "exactly-once rests on the stored
+ * Operation's idempotencyKey"; payouts.ts claims on the pool, and the real state change is the
+ * `advance` CAS inside `store.transaction`. So SKIP LOCKED only de-duplicates two claims while they
+ * overlap in time. It reduces contention, but it is not the exactly-once mechanism. Under the real
+ * autocommit-claim pattern two sweeps can transiently claim the same row: one claims, its lock drops on
+ * autocommit before it has marked the row, and a second sweep claims the still-pending row. A test that
+ * claimed and marked in one transaction (as an earlier version did) would hold the lock across the
+ * claim and the mark, proving a guarantee the workers never make. This suite instead exercises the real
  * pattern and asserts on the real guarantee.
  *
- * WHAT THE REAL GUARANTEE IS — exactly-once-EFFECT, the transactional-outbox / at-least-once-delivery
- * model. A transient double-claim is absorbed by three idempotent mechanisms, one per method, and
- * each test asserts on the EFFECT (the terminal transition / the ledger effect), never on
- * claim-disjointness:
- *   - SAGAS — the advance CAS. `advance(id, from, to, ...)` moves the saga only if it is still in
- *     `from`, returning false otherwise (ports.ts: "two sweeps can't both advance it"). So EACH due
- *     saga advances EXACTLY ONCE across all sweeps: exactly one sweep's advance() returns true, every
- *     other returns false. A loser getting false is correct; a saga whose advance returns true TWICE
- *     is a double-submit — a real bug.
- *   - OUTBOX — at-least-once delivery with an idempotent mark. The receiver MAY see a row twice (a
- *     transient double-claim) and that is the contract, so there is no exactly-once-claim property to
- *     assert: `markRelayed` (UPDATE ... SET status = 'relayed' WHERE id = ANY) is idempotent, so a
- *     re-claim just re-delivers and re-marks harmlessly. What contention must still hold is no LOSS and
- *     no STRANDING: every row is delivered AT LEAST once, and every row ends terminal 'relayed'. The
- *     exactly-once EFFECT is downstream, at the receiver — that is the inbox case, not this one.
- *   - INBOX — the stored Operation's idempotencyKey. Each row submits a topUp through the REAL economy
- *     under the row's idempotencyKey; `submit` claims that key atomically, so a transient re-submit
- *     resolves to a `duplicate` Outcome (no second posting). So each operation's LEDGER EFFECT happens
- *     exactly once: the user's spendable balance ends at exactly one top-up's worth, never two. A row
- *     whose topUp posts TWICE (balance doubled) is a double-apply — a real bug.
+ * What the real guarantee is: the exactly-once effect, the transactional-outbox and
+ * at-least-once-delivery model. A transient double-claim is absorbed by three idempotent mechanisms,
+ * one per method. Each test asserts on the effect (the terminal transition or the ledger effect),
+ * never on claim-disjointness:
+ *   - sagas: the advance CAS. `advance(id, from, to, ...)` moves the saga only if it is still in
+ *     `from`, returning false otherwise (ports.ts: "two sweeps can't both advance it"). So each due
+ *     saga advances exactly once across all sweeps: exactly one sweep's advance() returns true, and
+ *     every other returns false. A loser getting false is correct. A saga whose advance returns true
+ *     twice is a double-submit, a real bug.
+ *   - outbox: at-least-once delivery with an idempotent mark. The receiver may see a row twice from a
+ *     transient double-claim, and that is the contract, so there is no exactly-once-claim property to
+ *     assert. `markRelayed` (UPDATE ... SET status = 'relayed' WHERE id = ANY) is idempotent, so a
+ *     re-claim just re-delivers and re-marks harmlessly. What contention must still hold is no loss and
+ *     no stranding: every row is delivered at least once, and every row ends terminal 'relayed'. The
+ *     exactly-once effect is downstream, at the receiver. That is the inbox case, not this one.
+ *   - inbox: the stored Operation's idempotencyKey. Each row submits a topUp through the real economy
+ *     under the row's idempotencyKey. `submit` claims that key atomically, so a transient re-submit
+ *     resolves to a `duplicate` Outcome with no second posting. So each operation's ledger effect
+ *     happens exactly once: the user's spendable balance ends at exactly one top-up's worth, never two.
+ *     A row whose topUp posts twice (balance doubled) is a double-apply, a real bug.
  *
- * THE HARNESS. Seed M (~80) due/pending rows on a fresh isolated store. Run N (~6) sweeps concurrently
- * behind a shared barrier (so they hit the locks at once and the SKIP LOCKED path is genuinely
- * exercised), each looping its production claim-then-mark unit until the set drains. Then assert the
- * per-method effect above. M is well above N×LIMIT so the drain takes many overlapping rounds (real
- * contention, not one batch each); ITERATIONS≥20 so a rare double-effect interleaving has many
- * chances to surface.
+ * The harness. Seed M (~80) due or pending rows on a fresh isolated store. Run N (~6) sweeps
+ * concurrently behind a shared barrier, so they hit the locks at once and the SKIP LOCKED path is
+ * genuinely exercised. Each sweep loops its production claim-then-mark unit until the set drains. Then
+ * assert the per-method effect above. M is well above N×LIMIT so the drain takes many overlapping
+ * rounds (real contention, not one batch each). ITERATIONS is at least 20 so a rare double-effect
+ * interleaving has many chances to surface.
  *
- * TRANSIENT LOSERS vs DOUBLE-EFFECTS. Under genuine parallelism the engine may abort a sweep's mark
- * transaction with a deadlock / serialization conflict (Postgres 40P01/40001, InnoDB ER_LOCK_DEADLOCK
- * / lock-wait timeout). That is a principled loser, exactly as settle-vs-reverse documents: the
- * engine's own `transaction` wrapper retries it (withTransientRetry), and the drain loop re-runs any
- * round that still came up short, so nothing is dropped. A transient abort committed nothing, so it is
- * NOT a double-effect. A genuine fault — a saga advanced twice, an operation applied twice, or an
- * outbox row lost or left stranded — is the real bug: the failing assertion names the method, the
- * offending id, and the engine, and the test fails. It is never weakened to pass.
+ * Transient losers versus double-effects. Under genuine parallelism the engine may abort a sweep's
+ * mark transaction with a deadlock or serialization conflict (Postgres 40P01/40001, InnoDB
+ * ER_LOCK_DEADLOCK or lock-wait timeout). That is a principled loser, exactly as settle-vs-reverse
+ * documents: the engine's own `transaction` wrapper retries it (withTransientRetry), and the drain
+ * loop re-runs any round that still came up short, so nothing is dropped. A transient abort committed
+ * nothing, so it is not a double-effect. A genuine fault is the real bug: a saga advanced twice, an
+ * operation applied twice, or an outbox row lost or left stranded. The failing assertion names the
+ * method, the offending id, and the engine, and the test fails. It is never weakened to pass.
  *
- * BACKENDS. Postgres + MySQL when reachable, skipped (never failed) when not — the same connect-or-
- * skip contract the other conformance suites use; the SKIP LOCKED row locking and the
+ * Backends. Postgres and MySQL run when reachable and are skipped (never failed) when not, the same
+ * connect-or-skip contract the other conformance suites use. The SKIP LOCKED row locking and the
  * concurrent-submit dedup are the whole point, so the real proof is SQL. memory is single-threaded
  * (its journal forbids overlapping transactions: "in-memory transactions do not nest"), so it has no
- * genuine contention; a trivial single-sweep reference pass over the same harness pins that the
+ * genuine contention. A trivial single-sweep reference pass over the same harness pins that the
  * claim-then-mark effect logic drains the seeded set exactly once on the reference adapter.
  */
 
@@ -109,31 +108,32 @@ import type { Economy, Operation } from '#src/contract.ts';
 import type { InboxEntry, OutboxMessage, Saga, Store } from '#src/ports.ts';
 
 // M seeded rows, N concurrent sweeps, per-claim batch limit, and how many independent drains to run
-// per claim method. M well above N*LIMIT so the drain takes many overlapping rounds (real contention,
-// not one batch each); LIMIT small so sweeps keep colliding round after round; ITERATIONS >= 20 so a
-// rare interleaving that produces a double-effect has many chances to show. N kept modest so the
-// in-flight sweeps stay well under the connection pool (each mark holds one transaction connection),
-// the same pool-sizing discipline concurrency.adversarial documents.
+// per claim method. M is well above N*LIMIT so the drain takes many overlapping rounds (real
+// contention, not one batch each). LIMIT is small so sweeps keep colliding round after round.
+// ITERATIONS is at least 20 so a rare interleaving that produces a double-effect has many chances to
+// show. N is kept modest so the in-flight sweeps stay well under the connection pool, since each mark
+// holds one transaction connection. This is the same pool-sizing discipline concurrency.adversarial
+// documents.
 let M = 80;
 let N = 6;
 let LIMIT = 4;
 let ITERATIONS = 20;
 
 // `now` for the due-time gate. Sagas are seeded due in the past, so any non-negative sweep time
-// claims them; the inbox/outbox have no due gate. A constant keeps the seeded set deterministic.
+// claims them. The inbox and outbox have no due gate. A constant keeps the seeded set deterministic.
 let NOW = 1;
 
-// The CREDIT amount each seeded inbox topUp mints. The exactly-once-EFFECT assertion is that the
-// user's spendable balance ends at exactly this — one top-up — never two.
+// The CREDIT amount each seeded inbox topUp mints. The exactly-once-effect assertion is that the
+// user's spendable balance ends at exactly this one top-up's worth, never two.
 let TOPUP_MINOR = 1_000n;
 
-// One unique tag per drain so seeded ids never collide across iterations on a shared store. base-36
-// counter is plenty; the store is fresh per engine anyway, but distinct ids keep a failure message
-// unambiguous about which row produced the double-effect. The tag is kept SHORT and free of the
-// verbose method name: a seeded row id is `<tag>_row<k>` and every id/user_id column is VARCHAR(64)
-// on MySQL, so embedding the long human-readable method name would overflow the column (a too-long
-// id is silently dropped by INSERT IGNORE and the row vanishes). `code` is a short per-method stamp
-// so a failure message still says which method.
+// One unique tag per drain so seeded ids never collide across iterations on a shared store. A base-36
+// counter is plenty. The store is fresh per engine anyway, but distinct ids keep a failure message
+// unambiguous about which row produced the double-effect. The tag is kept short and free of the
+// verbose method name. A seeded row id is `<tag>_row<k>`, and every id and user_id column is
+// VARCHAR(64) on MySQL, so embedding the long human-readable method name would overflow the column
+// (a too-long id is silently dropped by INSERT IGNORE and the row vanishes). `code` is a short
+// per-method stamp so a failure message still says which method.
 let tagSeq = 0;
 function freshTag(code: string): string {
   tagSeq += 1;
@@ -142,9 +142,9 @@ function freshTag(code: string): string {
 
 // --- Seeding -----------------------------------------------------------------------------------
 
-// Seed one due payout saga in SUBMITTED (a state claimDue returns; see the engine's `state in
-// ('RESERVED','SUBMITTED')` gate). dueAt in the past so it's due at NOW. The exactly-once effect is
-// the advance CAS SUBMITTED -> SETTLED, which exactly one sweep wins.
+// Builds one due payout saga in SUBMITTED, a state claimDue returns (see the engine's `state in
+// ('RESERVED','SUBMITTED')` gate). dueAt is in the past so the saga is due at NOW. The exactly-once
+// effect is the advance CAS from SUBMITTED to SETTLED, which exactly one sweep wins.
 function sagaRow(id: string): Saga {
   return {
     id,
@@ -161,7 +161,7 @@ function sagaRow(id: string): Saga {
   };
 }
 
-// Build one pending outbox row to seed the contention set.
+// Builds one pending outbox row to seed the contention set.
 function outboxRow(id: string): OutboxMessage {
   return {
     id,
@@ -180,11 +180,11 @@ function outboxRow(id: string): OutboxMessage {
   };
 }
 
-// Seed one pending inbox row carrying a topUp for this row's own user. `key` (== the operation's
-// idempotencyKey) is the dedupe key the exactly-once-EFFECT rests on; a distinct key per row so each
-// row's ledger effect is independently checkable and enqueue never dedupes two seeds. The `system`
-// actor and `card` source mirror a real settlement webhook's stored Operation, which the pause gate
-// exempts (drainInbox runs continuously).
+// Builds one pending inbox row carrying a topUp for this row's own user. `key` (the operation's
+// idempotencyKey) is the dedupe key the exactly-once effect rests on. Each row gets a distinct key so
+// each row's ledger effect is independently checkable and enqueue never dedupes two seeds. The
+// `system` actor and `card` source mirror a real settlement webhook's stored Operation, which the
+// pause gate exempts so drainInbox runs continuously.
 function inboxRow(id: string): InboxEntry {
   let userId = `usr_claim_${id}`;
   return {
@@ -207,41 +207,42 @@ function inboxRow(id: string): InboxEntry {
 
 // --- Per-method effect harness -----------------------------------------------------------------
 
-// One claim method, abstracted so the same drain loop drives saga/outbox/inbox. `seed` writes the M
-// rows. `sweepOnce` is one production claim-then-mark unit: claim a batch ON THE POOL (autocommit, so
-// the SKIP LOCKED lock is released immediately — the real pattern), then act on each claimed id with
-// the same idempotent step the production worker uses (advance CAS / markRelayed / submit+markApplied)
-// in its OWN write, NOT inside the claim's transaction. It returns the ids it claimed so the drain
-// loop can tell when its view of the set is empty. `verify` runs after the drain and asserts the
-// per-method invariant (saga advanced exactly once / every outbox row delivered and none stranded /
-// ledger effect applied exactly once); it throws (with method + id + engine) when one is violated.
+// One claim method, abstracted so the same drain loop drives saga, outbox, and inbox. `seed` writes
+// the M rows. `sweepOnce` is one production claim-then-mark unit: it claims a batch on the pool (in
+// autocommit, so the SKIP LOCKED lock is released immediately, the real pattern), then acts on each
+// claimed id with the same idempotent step the production worker uses (advance CAS, markRelayed, or
+// submit plus markApplied) in its own write, not inside the claim's transaction. It returns the ids it
+// claimed so the drain loop can tell when its view of the set is empty. `verify` runs after the drain
+// and asserts the per-method invariant (saga advanced exactly once, every outbox row delivered and
+// none stranded, or ledger effect applied exactly once). It throws, naming method, id, and engine,
+// when one is violated.
 interface ClaimMethod {
   name: string;
-  // A short stamp used to build compact seeded row ids (every id/user_id column is VARCHAR(64) on
-  // MySQL, so the verbose `name` can't go in an id). Distinct per method.
+  // A short stamp used to build compact seeded row ids. Every id and user_id column is VARCHAR(64) on
+  // MySQL, so the verbose `name` cannot go in an id. Distinct per method.
   code: string;
-  // Build any per-method shared context (e.g. the real economy the inbox submits through) bound to
-  // this store. Returns the method instance whose closures capture it.
+  // Builds any per-method shared context (for example, the real economy the inbox submits through)
+  // bound to this store. Returns the method instance whose closures capture it.
   bind(store: Store, engineName: string): BoundMethod;
 }
 
 interface BoundMethod {
   seed(ids: ReadonlyArray<string>): Promise<void>;
-  // Returns how many rows this sweep's CLAIM handed back (NOT how many it managed to mark terminal).
-  // The drain loop stops a sweep when a claim returns 0 rows — its view of the pending set is empty —
-  // so a round that claims rows but marks none (all threw a transient conflict) still counts as work
-  // remaining and the loop keeps going. Returning the marked count instead would let a sweep stop
+  // Returns how many rows this sweep's claim handed back, not how many it managed to mark terminal.
+  // The drain loop stops a sweep when a claim returns 0 rows, meaning its view of the pending set is
+  // empty. A round that claims rows but marks none (all threw a transient conflict) still counts as
+  // work remaining, so the loop keeps going. Returning the marked count instead would let a sweep stop
   // while rows it claimed are still pending.
   sweepOnce(): Promise<number>;
-  // Assert the per-method exactly-once-EFFECT over every seeded id; throws (naming method + id +
-  // engine) on a double-effect.
+  // Asserts the per-method exactly-once effect over every seeded id. Throws, naming method, id, and
+  // engine, on a double-effect.
   verify(ids: ReadonlyArray<string>): Promise<void>;
 }
 
-// SAGAS: claimDue on the pool, then advance(SUBMITTED -> SETTLED) as a CAS in its own transaction —
-// the shape of settleDuePayouts (claimDue on the pool, the state change is the advance CAS). The
-// exactly-once-EFFECT is per-saga: exactly one sweep's advance returns true. We tally advance(true)
-// per id across ALL sweeps and assert each due saga was advanced exactly once.
+// Sagas: claimDue on the pool, then advance(SUBMITTED -> SETTLED) as a CAS in its own transaction.
+// This is the shape of settleDuePayouts: claimDue on the pool, and the state change is the advance
+// CAS. The exactly-once effect is per-saga: exactly one sweep's advance returns true. We tally
+// advance(true) per id across all sweeps and assert each due saga was advanced exactly once.
 function sagaMethod(): ClaimMethod {
   return {
     name: 'SagaStore.claimDue + advance CAS',
@@ -258,12 +259,12 @@ function sagaMethod(): ClaimMethod {
           });
         },
         sweepOnce: async () => {
-          // Claim on the POOL (autocommit): the FOR UPDATE SKIP LOCKED lock drops the moment the
-          // SELECT returns, before any advance runs — exactly as settleDuePayouts claims.
+          // Claim on the pool, in autocommit: the FOR UPDATE SKIP LOCKED lock drops the moment the
+          // SELECT returns, before any advance runs, exactly as settleDuePayouts claims.
           let due = await store.sagas.claimDue(NOW, LIMIT);
           for (let saga of due) {
-            // The real state change: a CAS SUBMITTED -> SETTLED in its own transaction. Only the
-            // sweep that finds the saga still in SUBMITTED wins (returns true); a sweep that
+            // The real state change: a CAS from SUBMITTED to SETTLED in its own transaction. Only the
+            // sweep that finds the saga still in SUBMITTED wins and returns true. A sweep that
             // transiently re-claimed an already-advanced saga gets false. Tally only the winners.
             let advanced = await store.transaction((unit) =>
               unit.sagas.advance(saga.id, 'SUBMITTED', 'SETTLED', {
@@ -277,9 +278,9 @@ function sagaMethod(): ClaimMethod {
           return due.length;
         },
         verify: async (ids) => {
-          // Every due saga advanced EXACTLY ONCE. A 2 is a double-submit (two sweeps' advance both
-          // returned true for the same saga — the CAS failed to serialize); a 0 means it never
-          // advanced (a row was dropped).
+          // Every due saga advanced exactly once. A 2 is a double-submit: two sweeps' advance both
+          // returned true for the same saga, so the CAS failed to serialize. A 0 means it never
+          // advanced, so a row was dropped.
           for (let id of ids) {
             let wins = advancedTrue.get(id) ?? 0;
             assert.equal(
@@ -311,17 +312,17 @@ function sagaMethod(): ClaimMethod {
   };
 }
 
-// OUTBOX: claimBatch on the pool, "deliver" to a test receiver, then markRelayed in its own
-// transaction — the shape of relayOutbox (claim on the pool, deliver, mark separately). The outbox is
-// AT-LEAST-ONCE, so there is no exactly-once-claim property to pin here. Two sweeps can both claim the
-// same still-pending row in the gap between the autocommit claim (whose FOR UPDATE SKIP LOCKED lock
-// drops the moment the SELECT returns) and either sweep's markRelayed; that transient double-claim
-// delivers the row twice, which is the contract — the receiver drops duplicates by id. markRelayed is
-// idempotent too (UPDATE ... SET status = 'relayed' WHERE id = ANY: re-flipping an already-relayed row
-// writes the same value), so a re-claim does no harm. What contention must still guarantee, and what
-// we assert, is the pair that matters: no row is lost (every row delivered at least once) and no row
-// is stranded (every row ends 'relayed'). The exactly-once EFFECT belongs to the receiver, downstream
-// of the outbox — that is the inbox method below, not this one.
+// Outbox: claimBatch on the pool, "deliver" to a test receiver, then markRelayed in its own
+// transaction. This is the shape of relayOutbox: claim on the pool, deliver, and mark separately. The
+// outbox is at-least-once, so there is no exactly-once-claim property to pin here. Two sweeps can both
+// claim the same still-pending row in the gap between the autocommit claim (whose FOR UPDATE SKIP
+// LOCKED lock drops the moment the SELECT returns) and either sweep's markRelayed. That transient
+// double-claim delivers the row twice, which is the contract: the receiver drops duplicates by id.
+// markRelayed is idempotent too (UPDATE ... SET status = 'relayed' WHERE id = ANY re-flips an
+// already-relayed row to the same value), so a re-claim does no harm. What contention must still
+// guarantee, and what we assert, is the pair that matters: no row is lost (every row delivered at
+// least once) and no row is stranded (every row ends 'relayed'). The exactly-once effect belongs to
+// the receiver, downstream of the outbox. That is the inbox method below, not this one.
 function outboxMethod(): ClaimMethod {
   return {
     name: 'OutboxStore.claimBatch + markRelayed',
@@ -338,12 +339,12 @@ function outboxMethod(): ClaimMethod {
           });
         },
         sweepOnce: async () => {
-          // Claim on the POOL (autocommit), as relayOutbox does: the FOR UPDATE SKIP LOCKED lock drops
-          // when the SELECT returns, so two sweeps can claim the same still-pending row at once.
+          // Claim on the pool, in autocommit, as relayOutbox does: the FOR UPDATE SKIP LOCKED lock
+          // drops when the SELECT returns, so two sweeps can claim the same still-pending row at once.
           let pending = await store.outbox.claimBatch(LIMIT);
           let claimed = pending.map((m) => m.id);
           for (let m of pending) {
-            // Deliver — at-least-once; a duplicate from a transient double-claim is the contract.
+            // Deliver, at-least-once. A duplicate from a transient double-claim is the contract.
             deliveries.push(m.id);
           }
           // markRelayed in its own transaction, a separate call, exactly as relay.ts does.
@@ -351,8 +352,8 @@ function outboxMethod(): ClaimMethod {
           return pending.length;
         },
         verify: async (ids) => {
-          // At-least-once delivery: every row delivered one OR MORE times (duplicates are the
-          // contract, NOT asserted away).
+          // At-least-once delivery: every row delivered one or more times. Duplicates are the
+          // contract, not asserted away.
           let deliveredSet = new Set(deliveries);
           for (let id of ids) {
             assert.ok(
@@ -375,19 +376,20 @@ function outboxMethod(): ClaimMethod {
   };
 }
 
-// INBOX: claimInbound on the pool, submit the stored Operation through the REAL economy, then
-// markApplied — the shape of drainInbox (claim on the pool, submit, mark separately). Exactly-once
-// rests on the stored Operation's idempotencyKey: a transient re-submit resolves to a `duplicate`
-// Outcome with no second posting. The EFFECT we assert is the LEDGER: each row's user ends with
-// exactly one top-up's spendable balance, never two.
+// Inbox: claimInbound on the pool, submit the stored Operation through the real economy, then
+// markApplied. This is the shape of drainInbox: claim on the pool, submit, and mark separately.
+// Exactly-once rests on the stored Operation's idempotencyKey: a transient re-submit resolves to a
+// `duplicate` Outcome with no second posting. The effect we assert is the ledger: each row's user ends
+// with exactly one top-up's spendable balance, never two.
 function inboxMethod(): ClaimMethod {
   return {
     name: 'InboxStore.claimInbound + submit + markApplied',
     code: 'ibx',
     bind: (store, engineName) => {
-      // A real economy over THIS store (one shared instance, one id generator), so a concurrent
-      // re-submit of the same idempotencyKey is deduped by `submit`'s atomic key claim — the
-      // production mechanism. It must share the store's seeded digest + fixed clock or hashes diverge.
+      // A real economy over this store (one shared instance, one id generator), so a concurrent
+      // re-submit of the same idempotencyKey is deduped by `submit`'s atomic key claim, the
+      // production mechanism. It must share the store's seeded digest and fixed clock, or hashes
+      // diverge.
       let economy: Economy = createEconomy({
         store,
         clock: fixedClock(0),
@@ -410,28 +412,28 @@ function inboxMethod(): ClaimMethod {
           });
         },
         sweepOnce: async () => {
-          // Claim on the POOL (autocommit): the lock drops the moment the SELECT returns, before any
-          // submit/markApplied — exactly as drainInbox claims.
+          // Claim on the pool, in autocommit: the lock drops the moment the SELECT returns, before any
+          // submit or markApplied, exactly as drainInbox claims.
           let pending = await store.inbox.claimInbound({
             now: NOW,
             limit: LIMIT,
           });
           for (let entry of pending) {
             // Submit through the real economy, mirroring drainInbox's applyOne. A first submit posts
-            // the topUp and records the idempotencyKey; a transient re-submit (this row was claimed by
-            // a prior sweep that hadn't yet marked it) claims the already-recorded key and returns
-            // `duplicate` — no second posting. On success the row is marked applied (markApplied
+            // the topUp and records the idempotencyKey. A transient re-submit (this row was claimed by
+            // a prior sweep that had not yet marked it) claims the already-recorded key and returns
+            // `duplicate`, with no second posting. On success the row is marked applied (markApplied
             // no-ops on an already-terminal row).
             //
-            // A submit can THROW under genuine parallelism — e.g. two topUps racing on the shared
-            // STORED_VALUE account's chain head collide on its unique chain link (SQLSTATE 23505),
-            // which the engine's retry treats as non-transient and re-raises. That is a principled
-            // loser, NOT a double-apply: the transaction rolled back, nothing posted, the key was
-            // never recorded. drainInbox's applyOne handles exactly this — it catches the throw and
-            // leaves the row 'pending' for the next sweep (at-least-once apply). We mirror that: on a
-            // throw we do NOT markApplied, so the row stays claimable and a later sweep retries it.
-            // The idempotencyKey makes the eventual effect exactly-once regardless of how many sweeps
-            // attempted it.
+            // A submit can throw under genuine parallelism. For example, two topUps racing on the
+            // shared STORED_VALUE account's chain head collide on its unique chain link (SQLSTATE
+            // 23505), which the engine's retry treats as non-transient and re-raises. That is a
+            // principled loser, not a double-apply: the transaction rolled back, nothing posted, and
+            // the key was never recorded. drainInbox's applyOne handles exactly this. It catches the
+            // throw and leaves the row 'pending' for the next sweep (at-least-once apply). We mirror
+            // that: on a throw we do not markApplied, so the row stays claimable and a later sweep
+            // retries it. The idempotencyKey makes the eventual effect exactly-once regardless of how
+            // many sweeps attempted it.
             let applied = false;
             try {
               await economy.submit(entry.operation);
@@ -443,15 +445,15 @@ function inboxMethod(): ClaimMethod {
               await store.inbox.markApplied(entry.id);
             }
           }
-          // Report how many rows the CLAIM returned, not how many we marked. A round that claimed
+          // Report how many rows the claim returned, not how many we marked. A round that claimed
           // rows but applied none (all threw a transient conflict) still means work remains, so the
-          // drain loop keeps going until a claim genuinely comes back empty.
+          // drain loop keeps going until a claim comes back genuinely empty.
           return pending.length;
         },
         verify: async (ids) => {
           // The ledger effect happened exactly once per row: each user's spendable balance equals
-          // exactly one top-up. A doubled balance is a double-apply (the idempotencyKey dedup failed
-          // to absorb a transient double-claim).
+          // exactly one top-up. A doubled balance is a double-apply, where the idempotencyKey dedup
+          // failed to absorb a transient double-claim.
           for (let id of ids) {
             let userId = `usr_claim_${id}`;
             let balance = await store.ledger.balance(spendable(userId));
@@ -486,14 +488,14 @@ function inboxMethod(): ClaimMethod {
 
 // --- The drain --------------------------------------------------------------------------------
 
-// Run `sweeps` production claim-then-mark sweeps concurrently against a seeded set until it drains,
-// then run the method's effect verification. Each sweep loops `sweepOnce`, stopping when a round
-// returns nothing (its view of the set is empty). A shared barrier (all sweeps start their first
-// claim together) maximizes the overlap so the SKIP LOCKED path — and the concurrent-mark race the
-// idempotent effect must absorb — is genuinely exercised. The SQL engines pass N; memory passes 1,
+// Runs `sweeps` production claim-then-mark sweeps concurrently against a seeded set until it drains,
+// then runs the method's effect verification. Each sweep loops `sweepOnce`, stopping when a round
+// returns nothing, meaning its view of the set is empty. A shared barrier makes all sweeps start their
+// first claim together, maximizing the overlap so the SKIP LOCKED path, and the concurrent-mark race
+// the idempotent effect must absorb, is genuinely exercised. The SQL engines pass N. memory passes 1,
 // because its single journal forbids overlapping transactions ("in-memory transactions do not nest"),
-// so N>1 there is not a real race, just nested-transaction errors — the reference adapter drains with
-// one sweep and the effect checks still hold over that single logical pass. Returns nothing; the
+// so N>1 there is not a real race, just nested-transaction errors. The reference adapter drains with
+// one sweep, and the effect checks still hold over that single logical pass. Returns nothing. The
 // method's `verify` asserts on failure.
 async function drainOnce(input: {
   store: Store;
@@ -515,11 +517,11 @@ async function drainOnce(input: {
 
   let sweep = async (): Promise<void> => {
     await barrier;
-    // Loop until a CLAIM round comes back empty: this sweep sees nothing left to do. Stopping on the
-    // claim count (not the marked count) means a sweep that claimed rows but couldn't mark them this
-    // round (all threw a transient conflict) keeps going — those rows are still pending. Other sweeps
-    // may still be draining their own rows, but the method's `verify` checks the EFFECT over every
-    // seeded id, so an early-stopping sweep can't hide an unprocessed row.
+    // Loop until a claim round comes back empty: this sweep sees nothing left to do. Stopping on the
+    // claim count, not the marked count, means a sweep that claimed rows but could not mark them this
+    // round (all threw a transient conflict) keeps going, because those rows are still pending. Other
+    // sweeps may still be draining their own rows, but the method's `verify` checks the effect over
+    // every seeded id, so an early-stopping sweep cannot hide an unprocessed row.
     for (;;) {
       let claimedCount = await bound.sweepOnce();
       if (claimedCount === 0) {
@@ -532,17 +534,17 @@ async function drainOnce(input: {
   release();
   await Promise.all(runs);
 
-  // The per-method exactly-once-EFFECT assertions (advance-won-once / terminal-flip-once /
-  // ledger-effect-once). A genuine double-effect throws here, naming method + id + engine.
+  // The per-method exactly-once-effect assertions (advance-won-once, terminal-flip-once, or
+  // ledger-effect-once). A genuine double-effect throws here, naming method, id, and engine.
   await bound.verify(expected);
 }
 
 // --- SQL registration -------------------------------------------------------------------------
 
-// Each SQL engine: provision a fresh isolated store per drain (so every iteration starts from an empty
-// seeded set with no carry-over), run the N-sweep drain, tear it down. Skip — never fail — when the
-// engine is unreachable. All three claim methods are covered, each asserting its own
-// exactly-once-EFFECT under the production autocommit-claim-then-mark pattern.
+// For each SQL engine: provision a fresh isolated store per drain (so every iteration starts from an
+// empty seeded set with no carry-over), run the N-sweep drain, and tear it down. Skip, never fail,
+// when the engine is unreachable. All three claim methods are covered, each asserting its own
+// exactly-once effect under the production autocommit-claim-then-mark pattern.
 function runClaimContention(
   name: string,
   provision: () => Promise<AdversarialEngine | null>,
@@ -575,8 +577,8 @@ function runClaimContention(
             return t.skip(`${name} became unreachable mid-run`);
           }
           try {
-            // Compact tag (engine + short method code + iteration); the verbose method name can't go
-            // in an id (VARCHAR(64) on MySQL). The base-36 counter keeps it globally unique.
+            // Compact tag (engine, short method code, and iteration). The verbose method name cannot
+            // go in an id, which is VARCHAR(64) on MySQL. The base-36 counter keeps it globally unique.
             let tag = freshTag(`${name}_${method.code}_i${i}`);
             let ids = Array.from(
               { length: M },
@@ -602,13 +604,13 @@ runClaimContention('mysql', adversarialMysql);
 
 // --- memory: single-threaded reference (no genuine contention) ---------------------------------
 
-// memory's journal forbids overlapping transactions, so there is no real race to run here — but the
-// same claim-then-mark effect harness must still drain the seeded set exactly once. This pins that the
+// memory's journal forbids overlapping transactions, so there is no real race to run here. The same
+// claim-then-mark effect harness must still drain the seeded set exactly once. This pins that the
 // effect logic itself (claim a batch, run the idempotent step, repeat until empty) is correct on the
-// reference adapter. A single sweep (sweeps=1): N concurrent transactions can't overlap on memory's
-// one journal — the second would throw "in-memory transactions do not nest" — and with no genuine
-// parallelism a second sweep adds nothing. A trivial pass; the real exactly-once-EFFECT-under-
-// parallelism proof is the SQL suites above.
+// reference adapter. It uses a single sweep (sweeps=1) because N concurrent transactions cannot
+// overlap on memory's one journal: the second would throw "in-memory transactions do not nest", and
+// with no genuine parallelism a second sweep adds nothing. This is a trivial pass. The real
+// exactly-once-effect-under-parallelism proof is the SQL suites above.
 describe('Claim contention: memory (single-threaded reference)', () => {
   for (let method of [sagaMethod(), outboxMethod(), inboxMethod()]) {
     test(`${method.name}: drains the seeded set with the effect happening exactly once`, async () => {

@@ -39,24 +39,25 @@ import type { Economy } from '#src/contract.ts';
 import type { Store, EconomyEvent } from '#src/ports.ts';
 import type { Amount } from '#src/money.ts';
 
-// Fresh store plus an economy writing to it, sharing a seeded digest and a clock fixed at 0 so
-// ledger hashes are deterministic. The store is returned so tests can read back queued events.
+// Builds a fresh store and an economy that writes to it. Both share a seeded digest and a clock
+// fixed at 0, so ledger hashes are deterministic. The store is returned so tests can read back
+// the events a submit queued.
 function makePair(): { economy: Economy; store: Store } {
   let store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
   let economy = makeEconomy(1, store);
   return { economy, store };
 }
 
-// Drain the outbox and return the events. Limit 100 is plenty (one submit queues at most one
-// event). claimBatch reads unsent rows without removing them, so mark them relayed afterward;
-// otherwise a later call hands back the same events.
+// Drains the outbox and returns the events. A limit of 100 is plenty, since one submit queues at
+// most one event. claimBatch reads unsent rows without removing them, so this marks them relayed
+// afterward. Otherwise a later call would hand back the same events.
 async function eventsOf(store: Store): Promise<EconomyEvent[]> {
   let batch = await store.outbox.claimBatch(100);
   await store.outbox.markRelayed(batch.map((message) => message.id));
   return batch.map((message) => message.event);
 }
 
-// Fund a user's spendable balance through the public top-up path, then assert it committed.
+// Funds a user's spendable balance through the public top-up path, then asserts it committed.
 async function fund(
   economy: Economy,
   userId: string,
@@ -68,9 +69,9 @@ async function fund(
   assert.equal(outcome.status, 'committed');
 }
 
-// Seed a seller's earned-credit balance by posting the entries directly, as a real sale would.
-// Earned credits normally age before payout; the test config sets that period to zero, so this
-// balance is immediately payable.
+// Seeds a seller's earned-credit balance by posting the entries directly, as a real sale would.
+// Earned credits normally age before payout. The test config sets that aging period to zero, so
+// this balance is immediately payable.
 async function fundEarned(
   store: Store,
   userId: string,
@@ -88,7 +89,7 @@ async function fundEarned(
   });
 }
 
-// The single event a submit enqueued, asserting exactly one was emitted.
+// Returns the single event a submit enqueued, asserting that exactly one was emitted.
 async function onlyEvent(store: Store): Promise<EconomyEvent> {
   let events = await eventsOf(store);
   assert.equal(events.length, 1);
@@ -215,7 +216,7 @@ describe('Submit-Path Domain Events (Payouts & Subscriptions)', () => {
     );
     assert.equal(outcome.status, 'committed');
     // A cancel commits without moving money, so it records no debit/credit lines. Emission is
-    // triggered by the committed outcome, not by money moving, so the event still fires. That's
+    // triggered by the committed outcome, not by money moving, so the event still fires. That is
     // the behavior under test: a commit with no entries must still produce its event.
     assert.deepEqual(
       (outcome as Extract<typeof outcome, { status: 'committed' }>).transaction
@@ -231,7 +232,7 @@ describe('Submit-Path Domain Events (Payouts & Subscriptions)', () => {
   });
 });
 
-// Return the user's one active subscription id, so the cancel test uses the id the subscribe
+// Returns the user's one active subscription id, so the cancel test targets the id the subscribe
 // handler actually generated.
 async function onlySubscriptionId(
   store: Store,

@@ -59,8 +59,8 @@ function sampleEvent(): EconomyEvent {
   };
 }
 
-// True if something accepts a TCP connection on host:port within the timeout — used to skip an
-// adapter whose service isn't running rather than fail.
+// Reports whether something accepts a TCP connection on host:port within the timeout. The smoke
+// uses this to skip an adapter whose service isn't running rather than fail.
 function reachable(
   host: string,
   port: number,
@@ -166,7 +166,8 @@ async function smokeSqs(): Promise<void> {
     skip('sqs dispatcher (@aws-sdk/client-sqs not installed)');
     return;
   }
-  // The SDK reads these for the SQSClient selectDispatcher builds; don't clobber a real AWS setup.
+  // The SDK reads these when selectDispatcher builds its SQSClient. Only fill the blanks so a real
+  // AWS setup in the environment is never clobbered.
   process.env.AWS_ENDPOINT_URL ??= 'http://localhost:4566';
   process.env.AWS_REGION ??= 'us-east-1';
   process.env.AWS_ACCESS_KEY_ID ??= 'test';

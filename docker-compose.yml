@@ -31,8 +31,8 @@ services:
       timeout: 5s
       retries: 5
 
-  # MySQL for the mysql Store adapter (src/adapters/mysql.ts). The fixture/test connect
-  # via MYSQL_TEST_URL and create a throwaway database per run, so root is used.
+  # MySQL for the mysql Store adapter (src/adapters/mysql.ts). The fixtures and tests
+  # connect via MYSQL_TEST_URL and create a throwaway database per run, so they use root.
   mysql:
     image: mysql:8.4
     environment:

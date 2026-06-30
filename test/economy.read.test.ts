@@ -16,10 +16,10 @@ import { makeEconomy } from '#test/support/economy.ts';
 import { topUp, credit, grantEntitlement } from '#test/support/builders.ts';
 import { spendable } from '#src/accounts.ts';
 
-// economy.read.posting / read.saga / read.accounts expose a committed posting, a payout saga by id,
-// and the set of accounts — so a reader (e.g. the console) resolves and enumerates them through the
-// read surface instead of reaching into the raw Store. Each delegates to a store method covered by
-// the conformance suite; this pins the read-surface wiring.
+// read.posting, read.saga, and read.accounts expose a committed posting, a payout saga by id, and the
+// set of accounts. A reader such as the console resolves and enumerates these through the read surface
+// rather than reaching into the raw Store. Each call delegates to a store method that the conformance
+// suite already covers, so these tests only pin the read-surface wiring.
 describe('economy.read.posting / read.saga / read.accounts', () => {
   test('read.posting resolves a committed posting by id, null for an unknown id', async () => {
     const economy = makeEconomy(1);

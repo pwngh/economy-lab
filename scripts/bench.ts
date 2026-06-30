@@ -9,20 +9,21 @@
  * @license MIT
  */
 
-// Benchmarks for the economy. Two things, both through the real composition root (`compose`'s
-// `capabilitiesFromEnv` -> `createEconomy`, the same wiring `make demo`/`make start` use):
+// Benchmarks for the economy. Both run through the real composition root, the same
+// `capabilitiesFromEnv` -> `createEconomy` wiring that `make demo` and `make start` use:
 //
-//   1. Submit throughput (ops/sec, sequential) for topUp / spend / requestPayout, per storage
-//      backend — in-memory, plus Postgres and MySQL when reachable (skipped otherwise, like
-//      `make smoke`). Shows the engine cost of the double-entry + hash-chain guarantees.
-//   2. Integrity cost vs ledger size (in-memory): how prove() and a checkpoint seal grow with
-//      history (they re-walk every posting from genesis — O(postings)) against checkpoint verify
-//      (which reads only account heads — O(accounts), ~flat).
+//   1. Submit throughput (ops/sec, sequential) for topUp, spend, and requestPayout, per storage
+//      backend. The backends are in-memory, plus Postgres and MySQL when reachable; an unreachable
+//      backend is skipped, as in `make smoke`. This shows the engine cost of the double-entry and
+//      hash-chain guarantees.
+//   2. Integrity cost vs ledger size (in-memory). This shows how prove() and a checkpoint seal grow
+//      with history, since both re-walk every posting from genesis (O(postings)), against checkpoint
+//      verify, which reads only account heads (O(accounts), so it stays roughly flat).
 //
 // These are LAB numbers: one process, sequential submits (no pipelining), in-memory by default. They
-// characterize relative cost and scaling shape, not production capacity. Policy gates (maturity,
-// velocity, payout interval/minimum) are neutralized via env so the timings reflect ledger work, not
-// rejections.
+// characterize relative cost and scaling shape, not production capacity. The policy gates (maturity,
+// velocity, payout interval and minimum) are neutralized via env so the timings reflect ledger work,
+// not rejections.
 //
 //   node scripts/bench.ts                 # or: make bench   (in-memory; + any DB that's up)
 //   BENCH_OPS=5000 node scripts/bench.ts  # heavier throughput sample
@@ -46,8 +47,8 @@ import {
 
 import type { Amount, Economy, ExternalPorts } from '#src/index.ts';
 
-// External ports with no built-in stand-in; the deterministic test doubles are fine for a bench
-// (the bench measures the ledger, not the FX feed or the payout rail).
+// External ports have no built-in stand-in, so the deterministic test doubles serve the bench. The
+// bench measures the ledger, not the FX feed or the payout rail, so a fake feed and rail are fine.
 const ports: ExternalPorts = {
   pricing: defaultPricing(),
   signer: seededSigner(1),
@@ -55,10 +56,11 @@ const ports: ExternalPorts = {
   rates: fixedRates(),
 };
 
-// Env shared by every run: required secrets, plus the policy gates turned off so a high-volume burst
-// of one subject's operations isn't held back by maturity, velocity, or the payout interval/minimum
-// — none of which is what these timings are about. Deliberately does NOT inherit process.env, so the
-// gate settings are controlled; backend DSNs are merged in explicitly below.
+// Env shared by every run. It holds the required secrets, plus the policy gates turned off so a
+// high-volume burst of one subject's operations is not held back by maturity, velocity, or the
+// payout interval and minimum. None of those gates is what these timings are about. This object
+// deliberately does NOT inherit process.env, so the gate settings stay controlled. Backend DSNs are
+// merged in explicitly below.
 const BASE_ENV: Record<string, string> = {
   WEBHOOK_SECRET: 'bench-webhook-secret',
   SIGNING_SECRET: 'bench-signing-secret',
@@ -82,7 +84,8 @@ const tag = Math.random().toString(36).slice(2, 8);
 
 const nowMs = (): number => performance.now();
 
-// Run `fn` `reps` times and return the fastest, in ms — the cleanest single number under GC/JIT noise.
+// Runs `fn` `reps` times and returns the fastest run, in ms. The fastest run is the cleanest single
+// number to report under GC and JIT noise.
 async function bestMs(
   reps: number,
   fn: () => Promise<unknown>,
@@ -96,14 +99,15 @@ async function bestMs(
   return best;
 }
 
-// Per-op-type time budget. A backend whose per-call cost grows with accumulated state (reserves,
-// risk attempts, lots piling up on one subject over a real database) caps out here instead of
-// hanging the whole run for minutes.
+// Per-op-type time budget. A backend whose per-call cost grows with accumulated state caps out here
+// instead of hanging the whole run for minutes. That state can be reserves, risk attempts, or lots
+// piling up on one subject over a real database.
 const BUDGET_MS = 5000;
 
-// ops/sec for `perOp`, the best of REPS runs. Each run stops at BUDGET_MS and the rate is taken from
-// the ops that actually completed, so a slow or degrading backend bounds its own time and still
-// reports a representative number rather than stalling. `perOp` gets a unique index for fresh ids.
+// Returns ops/sec for `perOp`, the best of REPS runs. Each run stops at BUDGET_MS, and the rate is
+// taken from the ops that actually completed. A slow or degrading backend therefore bounds its own
+// time and still reports a representative number rather than stalling. `perOp` gets a unique index
+// so each op uses fresh ids.
 async function measure(
   perOp: (k: number) => Promise<unknown>,
 ): Promise<number> {
@@ -121,8 +125,8 @@ async function measure(
   return 1000 / bestPerOp;
 }
 
-// Submit one sale: the whole `price` goes to one creator (minus the platform fee the pricing policy
-// takes), so a few large funding sales build a payable `earned` balance quickly.
+// Submits one sale. The whole `price` goes to one creator, minus the platform fee the pricing policy
+// takes, so a few large funding sales build a payable `earned` balance quickly.
 function sale(
   economy: Economy,
   o: { buyer: string; creator: string; label: string; price?: Amount },
@@ -138,7 +142,7 @@ function sale(
   );
 }
 
-// ops/sec for a top-up: a fresh user each time, so nothing serializes on one account.
+// Returns ops/sec for a top-up. Each op uses a fresh user, so nothing serializes on one account.
 async function throughputTopUp(economy: Economy): Promise<number> {
   for (let i = 0; i < WARMUP; i++) {
     await economy.submit(
@@ -152,7 +156,7 @@ async function throughputTopUp(economy: Economy): Promise<number> {
   );
 }
 
-// ops/sec for a marketplace sale: one funded buyer, one creator, a fresh order id each time.
+// Returns ops/sec for a marketplace sale. One funded buyer, one creator, a fresh order id each time.
 async function throughputSpend(economy: Economy): Promise<number> {
   const buyer = `usr_spb_${tag}`;
   const creator = `usr_spc_${tag}`;
@@ -162,9 +166,10 @@ async function throughputSpend(economy: Economy): Promise<number> {
   return measure((k) => sale(economy, { buyer, creator, label: `sp_${k}` }));
 }
 
-// ops/sec for a payout request (the synchronous reserve step, not the worker settlement). Funds the
-// creator's earned balance with a handful of large sales first — generously, since the exact fee
-// split is the injected pricing policy's, not assumed here. Returns null if a payout won't commit.
+// Returns ops/sec for a payout request, meaning the synchronous reserve step, not the worker
+// settlement. It funds the creator's earned balance with a handful of large sales first. The funding
+// is generous because the exact fee split belongs to the injected pricing policy and is not assumed
+// here. Returns null if a payout will not commit.
 async function throughputPayout(economy: Economy): Promise<number | null> {
   const buyer = `usr_pob_${tag}`;
   const creator = `usr_poc_${tag}`;
@@ -195,8 +200,8 @@ async function throughputPayout(economy: Economy): Promise<number | null> {
   );
 }
 
-// Measure one op-type without letting a failure sink the whole backend (a missing schema, a payout
-// gate): on any throw, the cell reads n/a and the rest still run.
+// Measures one op-type without letting a failure sink the whole backend. A missing schema or a
+// payout gate can make one op throw. On any throw, this cell reads n/a and the rest still run.
 async function tryRate(
   name: string,
   run: () => Promise<number | null>,
@@ -211,8 +216,9 @@ async function tryRate(
   }
 }
 
-// Throughput row for one backend, or null when the backend is unreachable (connection refused,
-// schema not migrated). A single probe op confirms it works before the timed runs begin.
+// Returns the throughput row for one backend, or null when the backend is unreachable, for example
+// on a refused connection or an unmigrated schema. A single probe op confirms the backend works
+// before the timed runs begin.
 async function throughputRow(
   label: string,
   url: string | undefined,
@@ -244,9 +250,9 @@ async function throughputRow(
   }
 }
 
-// Integrity cost vs ledger size, in-memory. Seeds top-ups across a fixed user set (so the account
-// count stays ~flat while postings pile up), then times prove(), a checkpoint seal, and a checkpoint
-// verify at each size.
+// Returns the integrity-cost-vs-ledger-size rows, in-memory. It seeds top-ups across a fixed user
+// set, so the account count stays roughly flat while postings pile up. At each size it times
+// prove(), a checkpoint seal, and a checkpoint verify.
 async function curveRows(): Promise<string[][]> {
   const caps = await capabilitiesFromEnv(BASE_ENV, ports);
   const economy = createEconomy(caps);
@@ -289,7 +295,7 @@ async function accountCount(economy: Economy): Promise<number> {
 
 // --- formatting -------------------------------------------------------------------
 
-// Hide a DSN password (`:secret@`) before logging the connection string.
+// Hides a DSN password (`:secret@`) before logging the connection string.
 const mask = (url: string): string => url.replace(/:[^:@/]*@/, ':***@');
 
 const num = (n: number): string => Math.round(n).toLocaleString('en-US');
@@ -318,13 +324,14 @@ console.warn(
   'They show relative cost and scaling shape, not production capacity.',
 );
 
-// Prefer the connection the rest of the project already uses — DATABASE_URL / MYSQL_TEST_URL from
-// .env, loaded by `make bench` — since a machine's real role/password can differ from the compose
-// template (e.g. a volume first initialized under a different POSTGRES_USER). The literals are only a
-// last-resort default for a bare checkout with the compose stack freshly up.
+// Prefer the connection the rest of the project already uses, that is DATABASE_URL or MYSQL_TEST_URL
+// from .env as loaded by `make bench`. A machine's real role and password can differ from the
+// compose template, for example when a volume was first initialized under a different POSTGRES_USER.
+// The literals are only a last-resort default for a bare checkout with the compose stack freshly up.
 const envDb = process.env.DATABASE_URL ?? '';
-// Postgres is reached by either scheme — the `pg` driver treats `postgres://` and `postgresql://`
-// as the same alias — so accept both; MySQL via `mysql://`. (Matches src/index.ts selectStore.)
+// Postgres is reached by either scheme, since the `pg` driver treats `postgres://` and
+// `postgresql://` as the same alias, so accept both. MySQL is reached via `mysql://`. This matches
+// selectStore in src/index.ts.
 const envIsPostgres =
   envDb.startsWith('postgres://') || envDb.startsWith('postgresql://');
 const pgUrl =
@@ -372,6 +379,6 @@ console.warn(
 );
 console.warn('full re-prove — O(postings) — cannot keep up as history grows.');
 
-// Open SQL pools keep the event loop alive; this is a run-once script, so exit explicitly.
+// Open SQL pools keep the event loop alive. This is a run-once script, so exit explicitly.
 // eslint-disable-next-line n/no-process-exit
 process.exit(0);

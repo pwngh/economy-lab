@@ -25,14 +25,14 @@ import type {
 } from '#src/ports.ts';
 
 /**
- * Result of one renewal sweep. Each due subscription appears in exactly one list, by id:
+ * Result of one renewal sweep. Each due subscription appears in exactly one list, by id.
  *
- * - `charged` — renewal funded and posted, due date advanced.
- * - `lapsed` — buyer couldn't cover the price; marked LAPSED, nothing charged.
- * - `deadLettered` — billing threw a non-retryable error; given up on, reason recorded.
- * - `retrying` — billing threw a temporary error; left for the next sweep, code recorded.
+ * - `charged`: the renewal was funded and posted, and the due date advanced.
+ * - `lapsed`: the buyer could not cover the price, so the row was marked LAPSED and nothing was charged.
+ * - `deadLettered`: billing threw a non-retryable error, so the row was given up on and the reason recorded.
+ * - `retrying`: billing threw a temporary error, so the row was left for the next sweep and the code recorded.
  *
- * Same shape worker/payouts.ts returns from its sweep.
+ * worker/payouts.ts returns the same shape from its own sweep.
  */
 export type SweepSummary = {
   charged: ReadonlyArray<string>;
@@ -41,8 +41,8 @@ export type SweepSummary = {
   retrying: ReadonlyArray<{ id: string; code: string }>;
 };
 
-// Mutable SweepSummary the sweep fills in. Each helper pushes its handled id onto the matching
-// list; the finished tally is returned as the summary.
+// Mutable version of SweepSummary that the sweep fills in. Each helper pushes the id it handled
+// onto the matching list, and the finished tally is returned as the summary.
 type SweepTally = {
   charged: string[];
   lapsed: string[];
@@ -79,16 +79,18 @@ export async function sweepDueSubscriptions(
   return tally;
 }
 
-// Bill one subscription, catching any error so it can't break the batch. The error decides next:
+// Bills one subscription and catches any error so a single failure cannot break the batch. The
+// error type decides what happens next.
 //
-// - A retryable error is left for the next sweep, up to a cap: each retryable failure bumps the
-//   row's `attempts` counter, and once it would reach the configured cap the sweep LAPSES the row
-//   instead of re-billing forever. Below the cap, the bumped count is persisted (via an `open`
-//   upsert) and the row recorded under `retrying`.
-// - Any other error is permanent: dead-letter the subscription right away.
+// A retryable error is left for the next sweep, up to a cap. Each retryable failure bumps the row's
+// `attempts` counter. Once that counter would reach the configured cap, the sweep LAPSES the row
+// instead of re-billing it forever. Below the cap, the bumped count is persisted through an `open`
+// upsert and the row is recorded under `retrying`.
 //
-// Cap test is `next >= cap`, next = `attempts + 1`. With the default cap of 10, the 10th
-// consecutive failure lapses the row.
+// Any other error is treated as permanent, so the subscription is dead-lettered right away.
+//
+// The cap test is `next >= cap`, where `next` is `attempts + 1`. With the default cap of 10, the
+// 10th consecutive failure lapses the row.
 async function billOne(
   store: Store,
   ctx: WorkerCtx,
@@ -107,10 +109,11 @@ async function billOne(
   }
 }
 
-// Handle a retryable failure. Raise `attempts` to `next`. If that reaches the cap, give up: flip
-// ACTIVE -> LAPSED and record under `lapsed`. Otherwise persist the raised count (`open` upserts
-// the row by id, storing the new `attempts`) and record under `retrying`. A successful renewal
-// resets `attempts` to 0 via `markBilled`, so the cap only counts consecutive failures.
+// Handles a retryable failure by raising `attempts` to `next`. If that reaches the cap, the sweep
+// gives up: it flips the row from ACTIVE to LAPSED and records it under `lapsed`. Otherwise it
+// persists the raised count, where `open` upserts the row by id and stores the new `attempts`, and
+// records the row under `retrying`. A successful renewal resets `attempts` to 0 via `markBilled`,
+// so the cap only counts consecutive failures.
 async function recordRetry(args: {
   store: Store;
   ctx: WorkerCtx;
@@ -128,9 +131,9 @@ async function recordRetry(args: {
   tally.retrying.push({ id: sub.id, code });
 }
 
-// Give up on a renewal that failed with a permanent error. No dedicated "failed" state exists, so
-// mark it LAPSED (ACTIVE -> LAPSED) to stop re-billing the broken row. The reason is recorded on
-// the summary.
+// Gives up on a renewal that failed with a permanent error. No dedicated "failed" state exists, so
+// the row is flipped from ACTIVE to LAPSED to stop re-billing the broken row. The reason is
+// recorded on the summary.
 async function deadLetter(args: {
   store: Store;
   ctx: WorkerCtx;
@@ -146,8 +149,9 @@ async function deadLetter(args: {
   tally.deadLettered.push({ id: sub.id, reason });
 }
 
-// Lapse a subscription and record it under `lapsed`. Shared exit for both the unaffordable charge
-// and the retry-cap cases. Revoke and lapsed event share the transaction with the flip to LAPSED.
+// Lapses a subscription and records it under `lapsed`. This is the shared exit for both the
+// unaffordable charge and the retry-cap cases. The revoke and the lapsed event share the
+// transaction with the flip to LAPSED.
 async function lapse(
   store: Store,
   ctx: WorkerCtx,
@@ -158,9 +162,10 @@ async function lapse(
   tally.lapsed.push(sub.id);
 }
 
-// Flip to LAPSED, revoke the perk, and queue the economy.subscription.lapsed event in one
-// transaction (the `unit` handle) so all three take effect or none do. Reached three ways: buyer
-// can't afford a renewal, retry cap hit, or a renewal failed permanently (dead-letter).
+// Flips the row to LAPSED, revokes the perk, and queues the economy.subscription.lapsed event in
+// one transaction (the `unit` handle) so all three take effect or none do. This runs in three
+// cases: the buyer cannot afford a renewal, the retry cap is hit, or a renewal failed permanently
+// and is dead-lettered.
 async function lapseAtomically(
   store: Store,
   ctx: WorkerCtx,
@@ -205,9 +210,10 @@ async function renew(
     }
 
     // Charge this period at most once. The key combines the subscription id and the period being
-    // billed; claiming it inside the transaction (after the balance check) reserves the period for
-    // this sweep. A lost claim means another sweep already billed it, so stop and post nothing.
-    // period+1 is the period this renewal bills into (the period counter bumps as part of billing).
+    // billed. Claiming it inside the transaction, after the balance check, reserves the period for
+    // this sweep. A lost claim means another sweep already billed it, so stop and post nothing. The
+    // key uses period + 1 because that is the period this renewal bills into, since the period
+    // counter bumps as part of billing.
     let key = 'sub:' + sub.id + ':p' + (sub.period + 1);
     let claim = await unit.idempotency.claim(key);
     if (!claim.claimed) {
@@ -257,9 +263,9 @@ async function renew(
   }
 }
 
-// Build the economy.subscription.renewed event: subscription billed for a new period. Subject is
-// the buyer, audience 'client'. Data carries the ids the receiver needs; the new period entered is
-// sub.period + 1.
+// Builds the economy.subscription.renewed event, which signals that a subscription was billed for a
+// new period. The subject is the buyer and the audience is 'client'. The data carries the ids the
+// receiver needs, and the new period entered is sub.period + 1.
 function renewedEvent(ctx: WorkerCtx, sub: Subscription): EconomyEvent {
   return {
     id: ctx.ids.next('evt'),
@@ -277,8 +283,9 @@ function renewedEvent(ctx: WorkerCtx, sub: Subscription): EconomyEvent {
   };
 }
 
-// Build the economy.subscription.lapsed event: subscription stopped (couldn't afford it, retry cap
-// hit, or permanent failure). Subject is the buyer, audience 'client'.
+// Builds the economy.subscription.lapsed event, which signals that a subscription stopped because
+// the buyer could not afford it, the retry cap was hit, or a renewal failed permanently. The
+// subject is the buyer and the audience is 'client'.
 function lapsedEvent(ctx: WorkerCtx, sub: Subscription): EconomyEvent {
   return {
     id: ctx.ids.next('evt'),
@@ -296,10 +303,11 @@ function lapsedEvent(ctx: WorkerCtx, sub: Subscription): EconomyEvent {
   };
 }
 
-// Post the renewal charge as one balanced ledger entry of three legs summing to zero: debit the
-// full price from the buyer's spendable account, credit the seller the post-fee net, credit the
-// platform revenue account the fee. Net + fee = price exactly. Renewals draw only from spendable
-// (real) money; unlike the first month, none comes from the buyer's promo grant.
+// Posts the renewal charge as one balanced ledger entry of three legs that sum to zero. It debits
+// the full price from the buyer's spendable account, credits the seller the post-fee net, and
+// credits the platform revenue account the fee. Net plus fee equals the price exactly. Renewals
+// draw only from spendable (real) money. Unlike the first month, none comes from the buyer's promo
+// grant.
 async function postRenewal(
   unit: Unit,
   ctx: WorkerCtx,

@@ -22,17 +22,18 @@ import type { Economy } from '#src/economy.ts';
 import type { Outcome } from '#src/contract.ts';
 import type { Attempt } from '#src/ports.ts';
 
-// Per-spend price, equal to the velocity ceiling below. One spend at this price fits inside the
-// rolling window before the limit is reached.
+// The per-spend price. It equals the velocity ceiling below, so exactly one spend at this price
+// fits inside the rolling window before the limit is reached.
 const PRICE_MINOR = 400n;
 
 const N = 5;
 
-// Velocity ceiling is one spend's price; fund the buyer far above it without touching the velocity
-// window. Funding goes through an operator `adjust` (credits the buyer's spendable directly, not a
-// velocity-tracked subject, see `riskSubject`), so only the test's spends land in the window. The
-// first spend brings the window to exactly the limit (allowed); any further spend pushes it over
-// (denied).
+// Builds an economy whose buyer is funded far above the velocity ceiling, which is set to one
+// spend's price. The funding goes through an operator `adjust` rather than a spend. The `adjust`
+// credits the buyer's spendable directly, not a velocity-tracked subject (see `riskSubject`), so it
+// never touches the velocity window and only the test's spends land there. Once funded, the first
+// spend brings the window to exactly the limit and is allowed, and any further spend pushes it over
+// and is denied.
 async function fundedEconomyAtLimit(): Promise<Economy> {
   let economy = makeEconomy(1, undefined, { velocityLimitMinor: PRICE_MINOR });
   let funded = await economy.submit(
@@ -46,8 +47,9 @@ async function fundedEconomyAtLimit(): Promise<Economy> {
   return economy;
 }
 
-// One spend at the ceiling price, with its own order id (no duplicate-order collision) and, via
-// the builder, a fresh idempotency key (each is a distinct attempt).
+// Builds one spend at the ceiling price. Each gets its own order id so spends never collide as
+// duplicate orders, and the builder gives each a fresh idempotency key so each counts as a distinct
+// attempt.
 function spendAtLimit(orderId: string): ReturnType<typeof spend> {
   return spend({
     buyerId: 'usr_buyer',
@@ -58,7 +60,7 @@ function spendAtLimit(orderId: string): ReturnType<typeof spend> {
   });
 }
 
-// How many of a batch of outcomes committed, and how many were rejected specifically for risk.
+// Counts how many of a batch of outcomes committed and how many were rejected specifically for risk.
 function tally(outcomes: ReadonlyArray<Outcome>): {
   committed: number;
   riskDenied: number;
@@ -78,12 +80,13 @@ function tally(outcomes: ReadonlyArray<Outcome>): {
   return { committed, riskDenied };
 }
 
-// The rejection reason of an outcome, or undefined if it committed or duplicated.
+// Returns an outcome's rejection reason, or undefined if it committed or duplicated.
 function reasonOf(outcome: Outcome): string | undefined {
   return outcome.status === 'rejected' ? outcome.reason : undefined;
 }
 
-// One attempt at the ceiling price, with its own idempotency key so each counts as distinct.
+// Builds one attempt at the ceiling price. Each gets its own idempotency key so each counts as
+// distinct.
 function attemptAtLimit(i: number): Attempt {
   return {
     idempotencyKey: `velocity_attempt_${i}`,
@@ -94,18 +97,19 @@ function attemptAtLimit(i: number): Attempt {
 }
 
 describe('Velocity limit under concurrency', () => {
-  // Regression lock for the velocity-limit TOCTOU, at the primitive the fix introduced: the trust
-  // store's atomic record-and-measure (`trust.record`). N attempts for the same subject, each at the
-  // ceiling price, fire at once via Promise.all. Each call records its attempt and reads back the
-  // windowed total in one indivisible per-subject step, so no two read the same pre-record total:
-  // returned totals come back strictly stepped (one ceiling apart), one at-or-below the limit and
-  // the rest over it.
+  // Regression lock for the velocity-limit TOCTOU, tested at the primitive the fix introduced: the
+  // trust store's atomic record-and-measure (`trust.record`). N attempts for the same subject, each
+  // at the ceiling price, fire at once via Promise.all. Each call records its attempt and reads back
+  // the windowed total in one indivisible per-subject step. No two calls read the same pre-record
+  // total, so the returned totals come back strictly stepped one ceiling apart, with one at or below
+  // the limit and the rest over it.
   //
   // This is what the screenRisk gate now does on every submit, so a same-subject burst can no longer
-  // slip past `velocityLimitMinor`. The old split of a separate `read` (inside the money
-  // transaction) and a deferred `bump` (after commit) let each concurrent attempt read the same
-  // stale zero, so all N passed (limit bypassed by a factor of N); contrast asserted below. JS
-  // microtask interleaving makes both outcomes deterministic and repeatable on the memory adapter.
+  // slip past `velocityLimitMinor`. The old design split the check into a separate `read` inside the
+  // money transaction and a deferred `bump` after commit. That let every concurrent attempt read the
+  // same stale zero, so all N passed and the limit was bypassed by a factor of N (the contrast test
+  // below asserts this). JS microtask interleaving makes both outcomes deterministic and repeatable
+  // on the memory adapter.
   test('exactly one of N concurrent same-subject attempts stays within the limit', async () => {
     let store = memoryStore();
 
@@ -116,8 +120,8 @@ describe('Velocity limit under concurrency', () => {
     );
     let totals = velocities.map((v) => v.spent.minor);
 
-    // Atomic record-and-measure returns N distinct totals one ceiling apart, so one is within the
-    // limit; the rolling ceiling is not exceeded by the burst.
+    // Atomic record-and-measure returns N distinct totals one ceiling apart, so exactly one is
+    // within the limit. The burst does not exceed the rolling ceiling.
     let withinLimit = totals.filter((t) => t <= PRICE_MINOR).length;
     assert.equal(
       withinLimit,
@@ -133,9 +137,10 @@ describe('Velocity limit under concurrency', () => {
     await store.close();
   });
 
-  // Contrast: the old design's separate read-then-bump. N concurrent reads before any bump lands all
-  // see the same stale zero, so every attempt is judged within the limit, the TOCTOU the fix closes.
-  // Pins down that the bug was real and that `record` (not `read`) makes the difference.
+  // Contrast test for the old design's separate read-then-bump. N concurrent reads land before any
+  // bump, so they all see the same stale zero and every attempt is judged within the limit. That is
+  // the TOCTOU the fix closes. This test pins down that the bug was real and that `record`, not
+  // `read`, makes the difference.
   test('the old read-then-bump pattern would let every concurrent attempt pass', async () => {
     let store = memoryStore();
 
@@ -154,11 +159,11 @@ describe('Velocity limit under concurrency', () => {
     await store.close();
   });
 
-  // End-to-end sanity that the ceiling holds through the full submit pipeline non-concurrently: N
-  // spends one at a time (awaiting each) yields one commit and the rest risk-denied. The memory
-  // adapter serializes money transactions (one in-memory transaction at a time), so the
-  // submit-level concurrency burst lives at the trust layer above; this sequential pass guards the
-  // steady-state rule the gate enforces on every request.
+  // End-to-end sanity check that the ceiling holds through the full submit pipeline without
+  // concurrency. Submitting N spends one at a time, awaiting each, yields one commit and the rest
+  // risk-denied. The memory adapter serializes money transactions, running one in-memory transaction
+  // at a time, so the submit-level concurrency burst lives at the trust layer above. This sequential
+  // pass guards the steady-state rule the gate enforces on every request.
   test('exactly one of N sequential same-subject spends commits', async () => {
     let economy = await fundedEconomyAtLimit();
 
@@ -174,17 +179,17 @@ describe('Velocity limit under concurrency', () => {
     assert.equal(riskDenied, N - 1, 'the rest must be turned away for risk');
   });
 
-  // Velocity is a fraud signal that must count "even for denied attempts" (README). screenRisk
-  // records the attempt at check time BEFORE screenFunds, so a burst of UNAFFORDABLE spends still
-  // accrues velocity: the first is turned away for funds (its attempt recorded, window now at the
-  // ceiling), the second trips RISK_DENIED. With the old funds-first order the unaffordable attempts
-  // recorded nothing, and the second was just another INSUFFICIENT_FUNDS — a broke attacker could
-  // hammer forever and never raise a flag.
+  // Velocity is a fraud signal that must count even for denied attempts (README). screenRisk records
+  // the attempt at check time, before screenFunds, so a burst of unaffordable spends still accrues
+  // velocity. The first spend is turned away for funds, but its attempt is recorded and the window
+  // now sits at the ceiling, so the second spend trips RISK_DENIED. Under the old funds-first order
+  // the unaffordable attempts recorded nothing and the second was just another INSUFFICIENT_FUNDS,
+  // so a broke attacker could hammer forever and never raise a flag.
   test('unaffordable spends still accrue velocity, so a burst is risk-denied not just under-funded', async () => {
     let economy = makeEconomy(1, undefined, {
       velocityLimitMinor: PRICE_MINOR,
     });
-    // usr_buyer is never funded, so every spend fails the funds check on its own.
+    // The buyer is never funded, so every spend fails the funds check on its own.
     let first = await economy.submit(spendAtLimit('ord_velocity_broke_1'));
     let second = await economy.submit(spendAtLimit('ord_velocity_broke_2'));
 

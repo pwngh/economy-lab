@@ -44,11 +44,13 @@ import type {
   Store,
 } from '#src/ports.ts';
 
-// prevHash for an account's first posting: 64 zero chars (32 zero bytes, lowercase hex).
+// The prevHash an account's first posting points back to. It is 64 zero characters,
+// which is 32 zero bytes written as lowercase hex.
 let GENESIS_HEX = '0'.repeat(64);
 
-// Balanced double-entry posting: +500 to the user's spendable, -500 from REVENUE. Two
-// distinct accounts, so advanceHeads produces two separate chain links to assert on.
+// Builds a balanced double-entry posting that credits 500 to the user's spendable account
+// and debits 500 from REVENUE. The two legs touch distinct accounts, so advanceHeads
+// produces two separate chain links to assert on.
 function balancedPosting(txnId: string, user: string): Posting {
   let amount = toAmount('CREDIT', 500n);
   return {
@@ -58,9 +60,9 @@ function balancedPosting(txnId: string, user: string): Posting {
   };
 }
 
-// Fake CheckpointStore that just counts put() calls via rows(), so a test can assert
-// recordCheckpoint saved one. The production store lives in the db adapter and writes
-// outside the money-posting transaction by design.
+// Builds a fake CheckpointStore that counts put() calls and exposes the count through rows(),
+// so a test can assert recordCheckpoint saved exactly one checkpoint. The production store
+// lives in the db adapter and writes outside the money-posting transaction by design.
 function captureCheckpoints(): CheckpointStore & { rows: () => number } {
   let rows: number[] = [];
   return {
@@ -72,9 +74,10 @@ function captureCheckpoints(): CheckpointStore & { rows: () => number } {
   };
 }
 
-// In-memory store with one balanced posting written through the normal path (postEntry),
-// so each account's hash chain is extended for real and proveChain has history to re-check.
-// Returns the same digest the write used, so later verifies re-hash identically.
+// Builds an in-memory store and writes one balanced posting through the normal path
+// (postEntry). Going through postEntry extends each account's hash chain for real, so
+// proveChain has genuine history to re-check. The returned digest is the one the write used,
+// so a later verify re-hashes identically.
 async function populatedStore(): Promise<{ store: Store; digest: Digest }> {
   let digest = seededDigest(1);
   let store = memoryStore({ digest });
@@ -181,8 +184,8 @@ async function detectsATamperedLegOnACommittedPosting(): Promise<void> {
 }
 
 async function pinpointsTheTamperedAccountAcrossAMultiPostingChain(): Promise<void> {
-  // Two postings to one account, tamper only the second. proveChain should pin the break to
-  // txn_2, not the still-valid txn_1, reporting where the chain first fails.
+  // Writes two postings to one account and tampers only the second. proveChain should pin the
+  // break to txn_2, not the still-valid txn_1, because it reports where the chain first fails.
   let digest = seededDigest(1);
   let store = memoryStore({ digest });
   await store.transaction((unit) =>
@@ -224,7 +227,7 @@ async function producesTheSameRootForTheSameHeadsOnEveryRuntime(): Promise<void>
   let rootA = await merkleRoot(seededDigest(7), heads);
   let rootB = await merkleRoot(seededDigest(7), [...heads].reverse());
 
-  assert.deepEqual(rootA, rootB); // reversed order, same root: merkleRoot sorts it
+  assert.deepEqual(rootA, rootB); // reversed order, identical root, because merkleRoot sorts first
 }
 
 async function changesTheRootWhenAnyHeadChanges(): Promise<void> {
@@ -234,7 +237,7 @@ async function changesTheRootWhenAnyHeadChanges(): Promise<void> {
     [SYSTEM.REVENUE, 'c'.repeat(64)],
   ];
   let tampered: ReadonlyArray<readonly [AccountRef, string]> = [
-    [spendable('usr_a'), 'a'.repeat(63) + 'b'], // a single hex character changed (last 'a' -> 'b')
+    [spendable('usr_a'), 'a'.repeat(63) + 'b'], // one hex character differs from base
     [SYSTEM.REVENUE, 'c'.repeat(64)],
   ];
 
@@ -408,10 +411,10 @@ async function verifiesAcrossAKeyRotation(): Promise<void> {
 }
 
 async function separatesLeafAndNodeHashDomains(): Promise<void> {
-  // RFC 6962 domain separation: a leaf is H(0x00 || "account:head"), an internal node is
-  // H(0x01 || left || right). Rebuild both preimages by hand and check merkleRoot agrees, so the
-  // one-byte tags can't be silently dropped — without them leaves and nodes share one hash domain
-  // and a leaf could be reinterpreted as an interior left||right pair.
+  // RFC 6962 domain separation: a leaf is H(0x00 || "account:head") and an internal node is
+  // H(0x01 || left || right). This rebuilds both preimages by hand and checks that merkleRoot
+  // agrees, which locks in the one-byte tags. Without those tags, leaves and nodes would share
+  // one hash domain, and a leaf could be reinterpreted as an interior left||right pair.
   let digest = seededDigest(1);
   let encoder = new TextEncoder();
   let tagged = (prefix: number, body: Uint8Array): Uint8Array => {
@@ -428,12 +431,12 @@ async function separatesLeafAndNodeHashDomains(): Promise<void> {
   let headA = 'a'.repeat(64);
   let headB = 'b'.repeat(64);
 
-  // One leaf: the root is that leaf's 0x00-tagged hash, unchanged.
+  // With a single leaf, the root is that leaf's 0x00-tagged hash, left unchanged.
   let one: ReadonlyArray<readonly [AccountRef, string]> = [[a, headA]];
   assert.deepEqual(await merkleRoot(digest, one), await leafHash(a, headA));
 
-  // Two leaves: the root is the 0x01-tagged hash of the two leaf hashes, left then right. merkleRoot
-  // sorts by account id, so usr_a is the left child even though it is passed second.
+  // With two leaves, the root is the 0x01-tagged hash of the two leaf hashes, left then right.
+  // merkleRoot sorts by account id, so usr_a is the left child even though it is passed second.
   let left = await leafHash(a, headA);
   let right = await leafHash(b, headB);
   let node = new Uint8Array(1 + left.length + right.length);

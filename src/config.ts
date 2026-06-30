@@ -37,16 +37,16 @@ export interface Config {
   /** Max provider attempts for a single payout before the system gives up and reverses it. */
   maxPayoutAttempts: number;
 
-  /** Delivery attempts an outbox message gets before the relay dead-letters it (status 'failed'), so a poison event can't wedge the queue. Dead-letters once `attempts` reaches this cap. */
+  /** Delivery attempts an outbox message gets before the relay dead-letters it as status 'failed'. The cap stops a poison event from wedging the queue forever. The relay dead-letters the message once `attempts` reaches this value. */
   maxOutboxAttempts: number;
 
-  /** Apply attempts an inbox event gets before the apply worker dead-letters it (status 'dead'), so a poison inbound event can't wedge the queue. Dead-letters once `attempts` reaches this cap. The inbound mirror of `maxOutboxAttempts`. */
+  /** Apply attempts an inbox event gets before the apply worker dead-letters it as status 'dead'. The cap stops a poison inbound event from wedging the queue forever. This is the inbound mirror of `maxOutboxAttempts`. */
   maxInboxAttempts: number;
 
   /** Consecutive retryable renewal failures before the renewal sweep lapses a subscription instead of re-billing forever. Lapses once `attempts` reaches this cap. */
   maxSubscriptionAttempts: number;
 
-  /** Longest (ms) a payout may sit in SUBMITTED before the worker force-fails it as timed out (provider never reported back). Distinct from `payoutSla.SUBMITTED`, which only schedules the next settle check. */
+  /** Longest (ms) a payout may sit in SUBMITTED before the worker force-fails it as timed out, meaning the provider never reported back. This differs from `payoutSla.SUBMITTED`, which only schedules the next settle check. */
   maxPayoutAgeMs: number;
 
   /** Platform's cut in basis points (hundredths of a percent); 10000 = 100%, 1530 = 15.3%. */
@@ -61,7 +61,7 @@ export interface Config {
   velocityLimitMinor: bigint;
 
   /** Length (ms) of the rolling spending window for `velocityLimitMinor`. Only a subject's attempts
-   *  within the last `velocityWindowMs` count toward the limit; each ages out once older than the window. */
+   *  from the last `velocityWindowMs` count toward the limit. Each attempt ages out once it is older than the window. */
   velocityWindowMs: number;
 
   /**
@@ -80,7 +80,7 @@ export interface Config {
    */
   payoutMinimumEarnedMinor: bigint;
 
-  /** Min time (ms) between payout requests. Defaults to 24h to match the live docs; the legal requirement is 14 days (1_209_600_000). */
+  /** Min time (ms) between payout requests. The default is 24h to match the live docs. The legal requirement is 14 days (1_209_600_000). */
   payoutMinIntervalMs: number;
 
   /**
@@ -154,8 +154,8 @@ export function loadConfig(env: EnvMap): Config {
     maturityHorizonMs: {
       card: cardHorizonMs,
       crypto: toInt(env.MATURITY_HORIZON_CRYPTO_MS, 24 * 60 * 60_000),
-      // Fallback for unlisted funding sources; defaults to the card horizon (the longest under the
-      // shipped defaults; overridable via MATURITY_HORIZON_DEFAULT_MS).
+      // Fallback for unlisted funding sources. It defaults to the card horizon, the longest of the
+      // shipped defaults, and can be overridden via MATURITY_HORIZON_DEFAULT_MS.
       default: toInt(env.MATURITY_HORIZON_DEFAULT_MS, cardHorizonMs),
     },
     payoutSla: {
@@ -165,9 +165,9 @@ export function loadConfig(env: EnvMap): Config {
     },
     payoutMinimumEarnedMinor: toBigInt(env.PAYOUT_MIN_EARNED_MINOR, 2_000_000n),
     payoutMinIntervalMs: toInt(env.PAYOUT_MIN_INTERVAL_MS, 24 * 60 * 60_000),
-    // Optional maintenance window. Unset or non-integer leaves the bound null (no pause); both must
-    // parse for the window to be active. Validated like the other numeric tunables (toInt's range
-    // check), only falling to null instead of a numeric default.
+    // Optional maintenance window. An unset or non-integer bound stays null, which means no pause, and
+    // both bounds must parse for the window to be active. Each bound passes the same range check as the
+    // other numeric tunables, except it falls to null instead of to a numeric default.
     pauseStartMs: toIntOrNull(env.ECONOMY_PAUSE_START_MS),
     pauseEndMs: toIntOrNull(env.ECONOMY_PAUSE_END_MS),
   };

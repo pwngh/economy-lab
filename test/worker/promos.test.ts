@@ -35,8 +35,9 @@ import type { Meter } from '#src/ports.ts';
 import type { WorkerCtx } from '#src/contract.ts';
 import type { PromoGrant, Store, Unit } from '#src/ports.ts';
 
-// Injected deps for the sweep, all deterministic fakes. The sweep only uses `ids` (txn id for the
-// reversal it posts), `logger`, and `meter`; pass a custom `meter` to observe what it counts.
+// Builds the worker context for the sweep from deterministic fakes. The sweep reads only `ids` (the
+// txn id for the reversal it posts), `logger`, and `meter`. Pass a custom `meter` to observe what
+// the sweep counts.
 function workerCtx(overrides?: { meter?: Meter }): WorkerCtx {
   return {
     clock: fixedClock(0),
@@ -51,8 +52,8 @@ function workerCtx(overrides?: { meter?: Meter }): WorkerCtx {
   };
 }
 
-// Meter that records every `count` call instead of emitting, so a test can read back how many
-// grants the sweep reported as reversed versus failed.
+// Builds a meter that records every `count` call instead of emitting it. A test can then read back
+// how many grants the sweep reported as reversed versus failed.
 function capturingMeter(): {
   meter: Meter;
   counts: Array<{ name: string; n: number; outcome: string | undefined }>;
@@ -69,10 +70,10 @@ function capturingMeter(): {
   };
 }
 
-// Issue a promo credit the way operations/promo.ts does. Promos live in the user's "promo"
-// account and expire. Records a balanced pair in one transaction: credit `amount` to the user's
-// promo account, debit the same from PROMO_FLOAT (the house pool funding promos), plus a grant
-// row. After this the user has `amount` of promo balance and the sweep has a claimable grant.
+// Issues a promo credit the way operations/promo.ts does. Promo balances live in the user's "promo"
+// account and expire. One transaction records a balanced pair plus a grant row: it credits `amount`
+// to the user's promo account and debits the same from PROMO_FLOAT, the house pool that funds
+// promos. Afterward the user holds `amount` of promo balance and the sweep has a claimable grant.
 async function issueGrant(store: Store, grant: PromoGrant): Promise<void> {
   await store.transaction(async (unit) => {
     await postEntry(unit.ledger, {
@@ -87,10 +88,10 @@ async function issueGrant(store: Store, grant: PromoGrant): Promise<void> {
   });
 }
 
-// Spend `minor` units of promo balance, as a purchase spends promo credit before real money.
-// Balanced pair: debit `minor` from the user's promo account, credit it to REVENUE (arbitrary
-// balanced destination). Drops the live balance below the original grant, so on expiry the sweep
-// reverses only the leftover.
+// Spends `minor` units of promo balance, the way a purchase spends promo credit before real money.
+// The balanced pair debits `minor` from the user's promo account and credits it to REVENUE, an
+// arbitrary balanced destination. This drops the live balance below the original grant, so on
+// expiry the sweep reverses only the leftover.
 async function spendPromo(
   unit: Unit,
   userId: string,
@@ -123,8 +124,8 @@ function grantOf(
 
 async function reversesAnUnspentExpiredGrantToPromoFloat(): Promise<void> {
   let store = memoryStore({ digest: seededDigest(1) });
-  // PROMO_FLOAT balance before any grant (starts at zero); a later assert confirms the reversal
-  // returns it here.
+  // PROMO_FLOAT balance before any grant, which starts at zero. A later assert confirms the
+  // reversal returns the float to this balance.
   let floatBeforeGrant = await store.ledger.balance(SYSTEM.PROMO_FLOAT);
   let grant = grantOf('usr_a', 'txn_grant_a', 500n, 1_000);
   await issueGrant(store, grant);
@@ -311,7 +312,8 @@ async function recordsAFailedGrantWithoutMarkingItReversed(): Promise<void> {
     { id: 'txn_grant_i', code: 'STORE.FAILURE' },
   ]);
 
-  // Never marked reversed, so the unwrapped store still reports it as due for a later retry.
+  // The grant was never marked reversed, so the unwrapped store still reports it as due for a later
+  // retry.
   let stillDue = await store.promos.claimDue(1_000, 10);
   assert.equal(stillDue.length, 1);
   assert.equal(stillDue[0]!.id, 'txn_grant_i');

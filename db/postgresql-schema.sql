@@ -72,19 +72,19 @@ create table legs (
   account_id text        not null,
   currency   text        not null check (currency in ('CREDIT', 'USD')),
   amount     bigint      not null check (amount <> 0),
-  -- A leg's currency must match its account's, enforced natively via a composite FK to
-  -- accounts(id, currency) (which carries a UNIQUE on those columns) — not just app-side. A raw
-  -- cross-currency leg (e.g. a balanced pair of USD legs on CREDIT accounts, which the per-currency
-  -- conservation check would let pass) is rejected here. Subsumes the plain account_id reference.
+  -- A leg's currency must match its account's. A composite FK to accounts(id, currency), which
+  -- carries a UNIQUE on those columns, enforces this natively, not just app-side. The check rejects
+  -- a raw cross-currency leg here: for example, a balanced pair of USD legs on CREDIT accounts, which
+  -- the per-currency conservation check would let pass. This FK subsumes the plain account_id reference.
   foreign key (account_id, currency) references accounts (id, currency)
 );
--- Composite (account_id, id): the maturity tail reads an account's newest lots with
--- `where account_id = ? order by id desc limit n` (src/engines, timelineOf). legs.id is a bigserial
--- assigned in commit order, so ordering by it gives the FIFO order the tail walks, and this index
--- serves that query bounded to the `limit` page — a backward index scan, or for some selectivities a
--- bitmap scan plus a bounded top-N sort, never a sort over the account's whole leg history.
--- The leading `account_id` column also covers the plain account_id lookups (statement, lineage), so
--- this replaces a bare `legs(account_id)` index rather than adding to it.
+-- The composite (account_id, id) serves the maturity tail. The tail reads an account's newest lots
+-- with `where account_id = ? order by id desc limit n` (src/engines, timelineOf). legs.id is a
+-- bigserial assigned in commit order, so ordering by it gives the FIFO order the tail walks. This
+-- index serves that query bounded to the `limit` page, as a backward index scan or, for some
+-- selectivities, a bitmap scan plus a bounded top-N sort. It never sorts over the account's whole
+-- leg history. The leading `account_id` column also covers the plain account_id lookups (statement,
+-- lineage), so this index replaces a bare `legs(account_id)` index rather than adding to it.
 create index legs_account_idx on legs (account_id, id);
 create index legs_posting_idx on legs (posting_id);
 
@@ -99,14 +99,14 @@ create table chain_links (
   account_id text        not null references accounts (id),
   prev_hash  text        not null,                          -- previous hash, 64 lowercase hex; the first link uses 32 zero bytes
   hash       text        not null,                          -- the new hash, 64 lowercase hex
-  -- The account's signed running balance immediately after this link (cents/credits), the same
-  -- figure post_entry writes into account_balances.balance for this account in the same call. Lets
-  -- the balance-integrity check below compare a cached balance to its chain head in O(1) instead of
-  -- re-summing the whole leg history on every balance write. A maintained projection of the legs
-  -- (= isDebitNormal-signed sum of the account's legs through this posting), never the source of
-  -- truth: prove()/the integrity checker still re-sum the legs and win on disagreement. Defaults to
-  -- 0 so a link written around post_entry (which supplies no balance_after) carries the genesis
-  -- balance, which a subsequent balance write then has to match.
+  -- The account's signed running balance immediately after this link (cents/credits). This is the
+  -- same figure post_entry writes into account_balances.balance for this account in the same call.
+  -- It lets the balance-integrity check below compare a cached balance to its chain head in O(1)
+  -- instead of re-summing the whole leg history on every balance write. It is a maintained projection
+  -- of the legs (the isDebitNormal-signed sum of the account's legs through this posting), never the
+  -- source of truth: prove() and the integrity checker still re-sum the legs and win on disagreement.
+  -- It defaults to 0 so a link written around post_entry, which supplies no balance_after, carries
+  -- the genesis balance that a subsequent balance write then has to match.
   balance_after bigint   not null default 0,
   -- The composite PK enforces the one-link-per-(posting,account) invariant stated above.
   primary key (posting_id, account_id)
@@ -131,25 +131,26 @@ create table account_balances (
   currency   text   not null check (currency in ('CREDIT', 'USD')),
   balance    bigint not null default 0,
   -- Maintained chain-head pointer: the hash of this account's latest chain_links row, updated in the
-  -- same transaction as the balance (post_entry writes both). A maintained projection alongside
-  -- `balance`, same trust model — chain_links stays the source of truth (prove() still re-walks it).
-  -- Lets headsForAccounts read each account's head by primary key instead of scanning chain_links and
-  -- sorting. Defaults to the genesis hash (64 zeros), so an account that ever held a balance row but
-  -- somehow has no link reads as genesis, matching a missing row.
+  -- same transaction as the balance (post_entry writes both). It is a maintained projection alongside
+  -- `balance` with the same trust model: chain_links stays the source of truth, and prove() still
+  -- re-walks it. The pointer lets headsForAccounts read each account's head by primary key instead of
+  -- scanning chain_links and sorting. It defaults to the genesis hash (64 zeros), so an account that
+  -- ever held a balance row but somehow has no link reads as genesis, matching a missing row.
   head_hash  text   not null default repeat('0', 64),
   -- A user account (`usr_…:<kind>`) may never go negative; a system account may.
   constraint user_account_non_negative
     check (account_id like 'platform:%' or balance >= 0)
 );
 
--- Give each house (system) account a balance row up front, empty: balance 0, head_hash at the genesis
--- value (64 zeros). Such a row reads identically to no row at all — headsForAccounts already treats a
--- missing row as genesis — so it shifts no balance and no hash. Its only job is to exist: lockAccounts
--- locks an account by taking `for update` on its balance row, and you cannot lock a row that is not
--- there yet. Without it, the first concurrent writers to a hot shared account (STORED_VALUE is touched
--- by every top-up) find no row to lock, so none of them wait — they race to extend the chain head and
--- collide. Pre-planted, they take turns on the lock instead. A user account still creates its row on
--- its first posting, where the chain-fork retry covers that rarer race.
+-- Give each house (system) account an empty balance row up front: balance 0, head_hash at the genesis
+-- value (64 zeros). Such a row reads identically to no row at all, because headsForAccounts already
+-- treats a missing row as genesis, so it shifts no balance and no hash. Its only job is to exist.
+-- lockAccounts locks an account by taking `for update` on its balance row, and you cannot lock a row
+-- that is not there yet. Without the pre-planted row, the first concurrent writers to a hot shared
+-- account (STORED_VALUE is touched by every top-up) find no row to lock, so none of them wait. They
+-- race to extend the chain head and collide. With the row pre-planted, they take turns on the lock
+-- instead. A user account still creates its row on its first posting, where the chain-fork retry
+-- covers that rarer race.
 insert into account_balances (account_id, currency, balance, head_hash)
   select id, currency, 0, repeat('0', 64) from accounts where kind = 'system';
 
@@ -369,11 +370,11 @@ create table checkpoints (
 );
 
 -- ============================================================================
--- Stored routines (persistence) + the engine's invariant enforcement. The application computes the
+-- Stored routines (persistence) plus the engine's invariant enforcement. The application computes the
 -- values a posting needs (which way each account moves, the per-account net delta, the chain hashes,
--- the account kind) and passes them in finished; these routines write the rows in one `call` rather
+-- the account kind) and passes them in finished. These routines write the rows in one `call` rather
 -- than a dozen-plus round-trips, as one set-based unit inside the caller's transaction. But the
--- ledger invariants are no longer the application's to guarantee — the database is the primary
+-- ledger invariants are no longer the application's to guarantee. The database is the primary
 -- enforcer, not a safety net: the CHECK constraints above plus the triggers at the end of this file
 -- reject a write that violates conservation, no-overdraft, chain continuity, exactly-once, or balance
 -- integrity, even when it bypasses the application entirely. The app keeps the same checks only as
@@ -409,11 +410,12 @@ begin
     select p_txn, l.account, l.currency, l.amount::bigint
       from jsonb_to_recordset(p_legs) as l(account text, currency text, amount text);
 
-  -- One link per distinct account, carrying the account's signed running balance after this posting:
-  -- its current cached balance (0 if it has no row yet — a first-time account) plus this posting's
-  -- net delta. account_balances still holds the OLD balance here (the balance step below runs after),
-  -- so this is exactly the value that step writes into account_balances.balance, by construction. The
-  -- balance-integrity trigger later compares a cached balance to this figure at the account's head.
+  -- One link per distinct account, carrying the account's signed running balance after this posting.
+  -- That balance is its current cached balance (0 if it has no row yet, meaning a first-time account)
+  -- plus this posting's net delta. account_balances still holds the OLD balance here, because the
+  -- balance step below runs after, so this is exactly the value that step writes into
+  -- account_balances.balance, by construction. The balance-integrity trigger later compares a cached
+  -- balance to this figure at the account's head.
   insert into chain_links (posting_id, account_id, prev_hash, hash, balance_after)
     select p_txn, c.account, c.prev_hash, c.hash,
            coalesce(ab.balance, 0) + d.delta::bigint
@@ -464,9 +466,9 @@ $$;
 -- ============================================================================
 -- chain continuity. The unique index above already blocks a FORK (a second
 -- link at the same prev_hash). This blocks a DISCONTINUOUS link: a new link's prev_hash must be the
--- account's current head — GENESIS (64 zeros) for the first link, or an existing link's hash for the
--- account thereafter. The legitimate writer (advanceHeads, src/chain.ts) always supplies the current
--- head, so this only rejects a link written around post_entry.
+-- account's current head. That head is GENESIS (64 zeros) for the first link, or an existing link's
+-- hash for the account thereafter. The legitimate writer (advanceHeads, src/chain.ts) always supplies
+-- the current head, so this only rejects a link written around post_entry.
 -- ============================================================================
 create or replace function chain_continuity() returns trigger as $$
 begin
@@ -527,7 +529,7 @@ create constraint trigger legs_conserve
 -- invariant the prover re-checks by re-summing the legs (the legs stay the source of truth).
 --
 -- A head_hash with no matching chain_links row (e.g. the genesis default on an account that somehow
--- has no link) yields expected = 0, so only a zero balance passes — matching the genesis state.
+-- has no link) yields expected = 0, so only a zero balance passes, matching the genesis state.
 -- ============================================================================
 create or replace function check_balance_integrity() returns trigger as $$
 declare
@@ -552,9 +554,9 @@ create or replace trigger account_balances_integrity
 
 -- ============================================================================
 -- Schema version stamp. The engine reads this row on startup and refuses to run if it does not match
--- SCHEMA_VERSION in src/schema.ts — so a database left on an older schema (e.g. the pre-rename
--- `vrchat:` accounts) fails loudly instead of being silently misread. Bump the value here, in the
--- MySQL schema's matching insert, and in src/schema.ts together, whenever this file changes.
+-- SCHEMA_VERSION in src/schema.ts, so a database left on an older schema fails loudly instead of
+-- being silently misread. Bump the value here, in the MySQL schema's matching insert, and in
+-- src/schema.ts together, whenever this file changes.
 -- ============================================================================
 create table schema_meta (version text not null);
 insert into schema_meta (version) values ('7');

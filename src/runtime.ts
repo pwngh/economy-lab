@@ -78,17 +78,18 @@ export function systemDigest(): Digest {
   };
 }
 
-// Fixed PKCS#8 DER header for an Ed25519 private key, followed by the 32-byte seed. WebCrypto
-// imports Ed25519 private keys in PKCS#8 form, so a bare seed gets wrapped in this header.
+// Fixed PKCS#8 DER header for an Ed25519 private key. The 32-byte seed is appended after it.
+// WebCrypto imports Ed25519 private keys in PKCS#8 form, so a bare seed must be wrapped in this
+// header first.
 let ED25519_PKCS8_HEADER = new Uint8Array([
   0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04,
   0x22, 0x04, 0x20,
 ]);
 
-// Derive a deterministic Ed25519 key pair from secret key material: the secret (any length) is
-// SHA-256'd to a 32-byte seed for the private key, and the public key is recovered from the
-// private key's JWK. The same secret always yields the same pair, so checkpoints verify
-// reproducibly and the public key can be published for an external auditor.
+// Derives a deterministic Ed25519 key pair from secret key material. The secret may be any
+// length; it is hashed with SHA-256 to a 32-byte seed for the private key, and the public key is
+// recovered from the private key's JWK. The same secret always yields the same pair. This lets
+// checkpoints verify reproducibly and lets the public key be published for an external auditor.
 async function ed25519KeyPair(
   secret: string,
 ): Promise<{ privateKey: CryptoKey; publicKey: CryptoKey }> {
@@ -199,14 +200,15 @@ export function systemCapabilities(options: {
 
 /**
  * Structured logger for production hosts. Each call writes one JSON object per
- * line (JSONL, parsed line by line by log collectors), shaped
- * `{ts, level, service, event, ...fields}`. info/debug/warn go to stdout (via
- * `console.warn`), error to stderr (via `console.error`). Implements the same
- * `Logger` interface as the no-op default, so a host can swap it in directly.
+ * line, shaped `{ts, level, service, event, ...fields}`. This is JSONL, which
+ * log collectors parse line by line. The info, debug, and warn levels go to
+ * stdout via `console.warn`. The error level goes to stderr via `console.error`.
+ * This implements the same `Logger` interface as the no-op default, so a host
+ * can swap it in directly.
  *
- * `now` (epoch ms) can be supplied so a test can freeze the timestamp and check
- * the exact line; defaults to wall-clock time. `service` names the emitting
- * process and appears on every line.
+ * Supply `now` (epoch ms) so a test can freeze the timestamp and check the exact
+ * line; it defaults to wall-clock time. `service` names the emitting process and
+ * appears on every line.
  */
 export function jsonlLogger(
   options: {

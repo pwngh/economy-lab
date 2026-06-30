@@ -28,7 +28,7 @@ import type { Velocity } from '#src/ports.ts';
 // The key carries a per-process random prefix, not just a bare counter: the SQL backends persist
 // idempotency rows across runs, so a fixed `idem_<n>` from one run collides with a row a previous
 // run left behind, and the second run's request replays as a duplicate instead of executing. The
-// bench hit exactly this — its requestPayout probe came back `status: 'duplicate'` and the cell
+// bench hit exactly this: its requestPayout probe came back `status: 'duplicate'` and the cell
 // read n/a. A run-unique prefix makes every key hermetic to the run that minted it, so a probe
 // never matches a persisted row. The counter still increments so keys are unique within a run too.
 let n = 0;
@@ -41,15 +41,15 @@ const system: Principal = { kind: 'system', service: 'test' };
 const operator: Principal = { kind: 'operator', operatorId: 'op_test' };
 
 /**
- * Build a CREDIT amount from a dollars-and-cents string like `'12.34'`. An `Amount` is
+ * Builds a CREDIT amount from a dollars-and-cents string like `'12.34'`. An `Amount` is
  * only created by parsing such a string (see `decodeAmount` in money.ts).
  */
 export const credit = (dollars: string): Amount =>
   decodeAmount(dollars, 'CREDIT');
 
-// Blank velocity accumulator for a subject with no spending in the current window; the same
-// shape `windowedVelocity` returns for an empty attempt list. Used to assert a fresh or
-// fully-aged-out subject reads as zero spent.
+// Builds a blank velocity accumulator for a subject with no spending in the current window.
+// This is the same shape `windowedVelocity` returns for an empty attempt list. Use it to assert
+// that a fresh or fully-aged-out subject reads as zero spent.
 export const emptyVelocity = (subject: string): Velocity => ({
   subject,
   windowStart: 0,
@@ -57,12 +57,12 @@ export const emptyVelocity = (subject: string): Velocity => ({
   attempts: 0,
 });
 
-/** Build a USD amount from a dollars-and-cents string like `'12.34'`. */
+/** Builds a USD amount from a dollars-and-cents string like `'12.34'`. */
 export const usd = (dollars: string): Amount => decodeAmount(dollars, 'USD');
 
 /**
- * Actor value for an end user. A user may only act on their own accounts, so use this
- * when a test exercises a user's own request.
+ * Builds the actor value for an end user. A user may only act on their own accounts, so use
+ * this when a test exercises a user's own request.
  */
 export const principal = (userId: string): Principal => ({
   kind: 'user',

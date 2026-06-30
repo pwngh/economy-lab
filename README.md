@@ -8,7 +8,7 @@
 <h1 align="center" style="margin-top: -25px;">economy-lab</h4>
 
 <p align="center">
-  <em>A provably-solvent credits economy — wallets, payouts, subscriptions, and a marketplace, on one double-entry ledger.</em>
+  <em>A provably-solvent credits economy: wallets, payouts, subscriptions, and a marketplace, on one double-entry ledger.</em>
 </p>
 
 <p align="center">
@@ -25,14 +25,13 @@
   <a href="#run-it">Run it</a>
 </p>
 
-
 > **📖 Read the full documentation here:** **[economy-lab-docs.pages.dev](https://economy-lab-docs.pages.dev/economy/)**.
 
 ## Quick start
 
 You build an `Economy`, then drive it through a single `submit` entry point and read its state through
 `read`. The in-memory build needs no infrastructure; `compose` picks adapters from the environment.
-Either way you supply the four external integrations — a `signer`, a payout `processor`, an FX `rates`
+Either way you supply the four external integrations: a `signer`, a payout `processor`, an FX `rates`
 source, and a fee `pricing` policy:
 
 ```ts
@@ -59,27 +58,27 @@ whole API.
 
 ```mermaid
 flowchart TB
-    subgraph sync["request path · synchronous"]
+    subgraph sync["request path, synchronous"]
         Client(["`**submit(operation)**`"]):::entry
         Ops["`**Operations**
-        validate · authorize · post`"]:::proc
+        validate, authorize, post`"]:::proc
         Client --> Ops
     end
 
     Ledger[("`**Ledger**
     the book of record
-    append-only · hash-chained · double-entry`")]:::truth
+    append-only, hash-chained, double-entry`")]:::truth
     Reads["`**Projections**
-    balances · statements · derived`"]:::derived
+    balances, statements, derived`"]:::derived
     Outbox[["`**Outbox**
     domain events`"]]:::evt
-    Worker{{"`**Worker** · asynchronous
-    payouts · subscriptions · fees · checkpoints · relay · inbox`"}}:::worker
+    Worker{{"`**Worker**, asynchronous
+    payouts, subscriptions, fees, checkpoints, relay, inbox`"}}:::worker
 
     Ops -- "debit = credit" --> Ledger
     Ledger -- "re-folded on read" --> Reads
     Ledger -- "same transaction" --> Outbox
-    Worker -. "submit · sweep · checkpoint · apply" .-> Ledger
+    Worker -. "submit, sweep, checkpoint, apply" .-> Ledger
 
     classDef entry fill:#ffffff,stroke:#1f6feb,stroke-width:1.5px,color:#1f2328;
     classDef proc fill:#f6f8fa,stroke:#57606a,stroke-width:1px,color:#1f2328;
@@ -100,7 +99,7 @@ conformance suite holds them to identical behavior.
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | Double-entry ledger          | [ledger.ts](src/ledger.ts)                                                                                     | A posting is rejected unless its debit and credit lines net to zero per currency; a balance is the sum of its lines.                   |
 | Tamper-evident history       | [chain.ts](src/chain.ts), [integrity.ts](src/integrity.ts)                                                     | Each posting is hash-chained per account; a signed Merkle checkpoint anchors the whole ledger; `proveChain` locates any altered entry. |
-| Idempotent requests + outbox | [economy.ts](src/economy.ts), [worker/relay.ts](src/worker/relay.ts)                                           | A retried request runs once — key, postings, and outbound event all commit in one transaction; duplicates replay.                      |
+| Idempotent requests + outbox | [economy.ts](src/economy.ts), [worker/relay.ts](src/worker/relay.ts)                                           | A retried request runs once: key, postings, and outbound event all commit in one transaction; duplicates replay.                       |
 | Marketplace + fee policy     | [operations/spend.ts](src/operations/spend.ts), [pricing.ts](src/pricing.ts)                                   | A sale charges the buyer and pays the sellers in one balanced transaction; shares sum to 100%; the fee is injected policy.             |
 | Payout saga + retries        | [operations/requestPayout.ts](src/operations/requestPayout.ts), [worker/payouts.ts](src/worker/payouts.ts)     | The worker submits a payout; the settlement webhook settles it once (deduped); a stuck payout re-drives then reverses.                 |
 | Recurring subscriptions      | [operations/subscribe.ts](src/operations/subscribe.ts), [worker/subscriptions.ts](src/worker/subscriptions.ts) | Each period bills once; an underfunded renewal lapses instead of overdrawing.                                                          |
@@ -130,7 +129,7 @@ The bundled host process runs as an [HTTP service](https://economy-lab-docs.page
 [background worker](https://economy-lab-docs.pages.dev/economy/reference/background-worker/) (ten sweeps
 on an interval).
 
-Every backend is selected by an environment variable — see
+Every backend is selected by an environment variable, see
 [configuration](https://economy-lab-docs.pages.dev/economy/reference/configuration/) for the full set.
 
 With Docker: `docker compose up -d` brings up Postgres, MySQL, Redis, and LocalStack/SQS; point

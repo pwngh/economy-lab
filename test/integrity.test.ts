@@ -38,11 +38,12 @@ import type { Digest, Leg, Posting, Store } from '#src/ports.ts';
 // ledger, planting a broken transaction the real handlers would reject. `tamper` edits a stored
 // transaction's lines in place without updating its hash (attacker editing the DB directly).
 //
-// `seedBalance` plants a cached per-account balance row with no posting behind it (so no hash-chain
-// entry) — a phantom/stale row a direct DB edit or half-applied write could leave. Balances are a
-// cache; the debit/credit lines are the source of truth, and this row has none. `heads()` only
-// walks accounts with a posting, so it never visits it; only `balanceAccounts()` (every cached
-// balance row) does. The prover catches it by comparing against a derived balance of zero.
+// `seedBalance` plants a cached per-account balance row with no posting behind it, so it has no
+// hash-chain entry. A direct DB edit or a half-applied write could leave such a phantom or stale row.
+// Balances are a cache, and the debit and credit lines are the source of truth, but this row has no
+// lines. `heads()` only walks accounts with a posting, so it never visits this row. Only
+// `balanceAccounts()` lists every cached balance row, so only it reaches the row. The prover catches
+// the row by comparing it against a derived balance of zero.
 type Recorder = {
   store: Store;
   digest: Digest;
@@ -245,9 +246,9 @@ describe('proveEconomy On A Broken Book', () => {
 // Each account caches a running balance the store reads in constant time. That cache should equal
 // the sum of the account's debit and credit lines. `consistent` is true only when no account's
 // cache has drifted from its line sum. `__tamper` edits a stored posting's lines but never updates
-// the cache, so after a tamper the two disagree. Second drift case: a cached balance row with no
-// posting behind it (phantom/stale row). The prover finds those by listing every cached balance row
-// via `balanceAccounts()` and comparing each against a derived balance of zero.
+// the cache, so after a tamper the two disagree. The second kind of drift is a cached balance row
+// with no posting behind it, a phantom or stale row. The prover finds those rows by listing every
+// cached balance row via `balanceAccounts()` and comparing each against a derived balance of zero.
 
 describe('proveEconomy Drift Detection', () => {
   test('reports consistent with empty drift on a clean book', async () => {

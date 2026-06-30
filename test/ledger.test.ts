@@ -20,12 +20,14 @@ import { spendable, earned, SYSTEM } from '#src/accounts.ts';
 import type { Store } from '#src/ports.ts';
 import type { AccountRef } from '#src/accounts.ts';
 
-// Fresh in-memory store per test so balances and history don't carry over.
+// Builds a fresh in-memory store for one test. Each test gets its own store so balances and
+// history do not carry over between tests.
 function freshStore(): Store {
   return memoryStore();
 }
 
-// Predicate for assert.rejects: true when the thrown error's `code` matches.
+// Builds a predicate for assert.rejects. The predicate returns true when the thrown error's
+// `code` field equals the given code.
 function codeIs(code: string) {
   return (error: unknown): boolean =>
     (error as { code?: string }).code === code;

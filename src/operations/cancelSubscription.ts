@@ -15,22 +15,23 @@ import type { Ctx, Operation, Outcome, Transaction } from '#src/contract.ts';
 import type { Subscription, Unit } from '#src/ports.ts';
 
 /**
- * Cancel an active subscription. Status change only, no money moves: canceling forfeits the
- * rest of the paid billing period (no refund), so there is nothing to record in the ledger.
+ * Cancels an active subscription. This is a status change only and moves no money. Canceling
+ * forfeits the rest of the paid billing period and gives no refund, so there is nothing to
+ * record in the ledger.
  *
- * Missing or already-canceled subscriptions return a `rejected` outcome with reason
- * `UNKNOWN_SUBSCRIPTION` rather than throwing, keeping routine cancel "no"s off error
+ * A missing or already-canceled subscription returns a `rejected` outcome with reason
+ * `UNKNOWN_SUBSCRIPTION` instead of throwing. This keeps routine cancel "no" answers off error
  * dashboards.
  *
- * Ownership is enforced on the loaded subscription: an end user may cancel only their own; a
- * system service or operator may cancel anyone's. A user reaching for someone else's
- * subscription is a cross-tenant request (IDOR), so it throws `AUTH.UNAUTHORIZED` instead of
- * rejecting. The ownership check runs only after the subscription is confirmed to exist and
- * be cancelable, so probing a missing/already-canceled id gets the same `UNKNOWN_SUBSCRIPTION`
- * answer regardless of caller and never leaks existence.
+ * Ownership is enforced on the loaded subscription. An end user may cancel only their own
+ * subscription. A system service or operator may cancel anyone's. A user reaching for someone
+ * else's subscription is a cross-tenant request (IDOR), so it throws `AUTH.UNAUTHORIZED`
+ * instead of rejecting. The ownership check runs only after the subscription is confirmed to
+ * exist and be cancelable. Probing a missing or already-canceled id therefore gets the same
+ * `UNKNOWN_SUBSCRIPTION` answer regardless of caller, which never leaks whether the id exists.
  *
- * Otherwise it marks the subscription `CANCELED` and reports success with a placeholder
- * transaction recording no money moving (see {@link lifecycleMarker}).
+ * On success it marks the subscription `CANCELED` and reports a placeholder transaction that
+ * records no money moving (see {@link lifecycleMarker}).
  *
  * Covered by `test/operations/cancelSubscription.test.ts` and
  * `test/operations/cancelSubscription.submit.test.ts`.
@@ -62,10 +63,10 @@ export async function handleCancelSubscription(
   return { status: 'committed', transaction: lifecycleMarker(ctx) };
 }
 
-// A blank or whitespace-only id is malformed client input, rejected up front as a client
-// error rather than passed to the store (where it would degrade into the routine
-// UNKNOWN_SUBSCRIPTION "no"). A non-blank id with no record still flows through to that
-// UNKNOWN_SUBSCRIPTION outcome below.
+// Requires a non-blank subscription id. A blank or whitespace-only id is malformed client
+// input, so it throws a client error up front rather than reaching the store. Passing it to
+// the store would degrade it into the routine UNKNOWN_SUBSCRIPTION "no" answer. A non-blank id
+// with no matching record still flows through to that UNKNOWN_SUBSCRIPTION outcome below.
 function assertSubscriptionId(subscriptionId: string): void {
   if (subscriptionId.trim() === '') {
     throw fault(
@@ -76,12 +77,13 @@ function assertSubscriptionId(subscriptionId: string): void {
   }
 }
 
-// Ownership guard. A user actor may cancel only their own subscription; system/operator
-// principals may cancel any. The central authorize() can't catch this: cancel debits no user
-// account, so its ownership rule has nothing to check, and cancel isn't privileged-only (users
-// must cancel their own). So the check lives here, against the loaded record. Without it, the
-// handler would cancel whatever id was named regardless of caller (an IDOR). System/operator
-// returns immediately; a user passes only when their id matches the owner, else UNAUTHORIZED.
+// Requires the caller to own the subscription, or to be privileged. A user actor may cancel
+// only their own subscription. A system or operator principal may cancel any. The central
+// authorize() cannot catch this. Cancel debits no user account, so its ownership rule has
+// nothing to check, and cancel is not privileged-only, since users must cancel their own. The
+// check therefore lives here, against the loaded record. Without it the handler would cancel
+// whatever id was named regardless of caller, which is an IDOR. A system or operator principal
+// returns immediately. A user passes only when their id matches the owner, else UNAUTHORIZED.
 function assertMayCancel(
   operation: Extract<Operation, { kind: 'cancelSubscription' }>,
   subscription: Subscription,
@@ -105,9 +107,10 @@ function assertMayCancel(
   }
 }
 
-// Placeholder transaction for a successful cancel. Cancel moves no money but a committed
-// outcome must still carry a transaction, so this gets a fresh `txn_` id and current time
-// with empty legs (debit/credit lines) and empty links (per-account history-chain updates).
+// Builds the placeholder transaction for a successful cancel. Cancel moves no money, but a
+// committed outcome must still carry a transaction. This one gets a fresh `txn_` id and the
+// current time, with empty legs (the debit and credit lines) and empty links (the per-account
+// history-chain updates).
 function lifecycleMarker(ctx: Ctx): Transaction {
   return {
     id: ctx.ids.next('txn'),
@@ -117,8 +120,9 @@ function lifecycleMarker(ctx: Ctx): Transaction {
   };
 }
 
-// Requests are routed here by kind, so a non-cancelSubscription operation arriving means
-// something upstream is wired wrong. Throw a malformed-operation fault.
+// Builds the fault for an operation of the wrong kind. Requests are routed here by kind, so a
+// non-cancelSubscription operation arriving means something upstream is wired wrong. This
+// throws a malformed-operation fault.
 function kindMismatch(operation: Operation) {
   return fault(
     ERROR_CODES.MALFORMED_OPERATION,

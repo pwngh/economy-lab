@@ -19,12 +19,10 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Rate, Unit } from '#src/ports.ts';
 
 /**
- * Buy-credits flow: user pays real money, gets spendable credits.
- *
- * Two ledger postings, since one posting can't mix currencies: one raises the buyer's spendable
- * CREDIT balance, one accounts for the USD paid (backing to TRUST_CASH, buy-vs-par spread to
- * REVENUE_USD). The CREDIT `REVENUE` account stays untouched, so it keeps meaning transaction fees
- * only.
+ * Buys credits: the user pays real money and gets spendable credits in return. It posts twice,
+ * because one posting can't mix currencies. The first posting raises the buyer's spendable CREDIT.
+ * The second records the USD paid, split into backing (held in TRUST_CASH) and the buy-vs-par spread
+ * (recognized as REVENUE_USD).
  *
  * @example
  *   let outcome = await topUp(
@@ -32,9 +30,9 @@ import type { Rate, Unit } from '#src/ports.ts';
  *       userId: 'usr_buyer', amount: toAmount('CREDIT', 1000n), source: 'card' },
  *     unit, ctx,
  *   );
- *   // outcome.status === 'committed'; spendable(usr_buyer) rose by 1000, REVENUE untouched.
+ *   // outcome.status === 'committed'; spendable(usr_buyer) rose by 1000.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/top-up/ Top-up} for how purchases split into backing and revenue.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/top-up/ Top-up}
  */
 export async function topUp(
   operation: Operation,
@@ -47,22 +45,19 @@ export async function topUp(
   requireSource(operation.source);
   let amount = positiveCredit(operation.amount, 'topUp.amount');
 
-  // `buy` is what the user pays per credit; `par` is each credit's backing/cash-out value. The cash
-  // splits into backing (held in trust) and the buy-vs-par spread (recognized as USD revenue).
-  //
-  // Both conversions round up (ceil). Backing must: the backing check values the whole spendable
-  // balance at par as one floor, `floor(total × par)`, so a per-top-up floor would under-cover by
-  // the dropped fractions and read unbacked (Σ floor(Nᵢ·par) can be < floor(ΣNᵢ·par)). Gross rounds
-  // up to match so `buy ≥ par` keeps margin ≥ 0; cost is the buyer pays at most one minor unit over.
+  // Both conversions round up. The backing rounds up because the solvency check values the whole
+  // spendable balance at par and floors it once. Flooring each top-up's backing separately would
+  // hold back less than that single floor, so the balance would read as unbacked. The gross paid
+  // rounds up to match, which keeps buy at or above par and the margin non-negative.
   let buy = ctx.rates.buy('CREDIT');
   let par = ctx.rates.par('CREDIT');
-  let grossUsd = convertCeil(amount, buy, 'USD'); // what the buyer paid
-  let backingUsd = convertCeil(amount, par, 'USD'); // held in trust to back the credits
-  let marginUsd = toAmount('USD', grossUsd.minor - backingUsd.minor); // purchase-fee revenue
+  let grossUsd = convertCeil(amount, buy, 'USD');
+  let backingUsd = convertCeil(amount, par, 'USD');
+  let marginUsd = toAmount('USD', grossUsd.minor - backingUsd.minor);
 
-  // Post the CREDIT issuance first so the returned transaction is the one the buyer cares about:
-  // their credits going up. Raises the buyer's spendable balance and records the same amount
-  // against STORED_VALUE (running count of all credits in circulation).
+  // The issuance posts first, so the returned transaction is the one the buyer cares about: their
+  // credits going up. Its matching debit records against STORED_VALUE, the running count of credits
+  // in circulation.
   let issuance = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs: [
@@ -71,10 +66,9 @@ export async function topUp(
     ],
     meta: { kind: 'topUp', source: operation.source },
   });
-  // Second posting accounts for the buyer's cash: credits USD_CLEARING the gross paid, splits the
-  // debit side into backing held in trust (TRUST_CASH) and purchase-fee revenue (REVENUE_USD, the
-  // buy-vs-par spread). The margin leg is added only when positive, so an exact-par purchase stays
-  // a two-leg cash move.
+  // The cash posting credits the gross paid to USD_CLEARING and splits the debit into backing
+  // (TRUST_CASH) and the buy-vs-par spread (REVENUE_USD). The spread leg is added only when it is
+  // positive, so a purchase at exactly par has just two legs.
   let cashLegs = [debit(SYSTEM.TRUST_CASH, backingUsd)];
   if (marginUsd.minor > 0n) {
     cashLegs.push(debit(SYSTEM.REVENUE_USD, marginUsd));
@@ -89,9 +83,8 @@ export async function topUp(
   return { status: 'committed', transaction: issuance };
 }
 
-// Require the amount to be CREDIT and positive, returning it unchanged for inline use. A wrong
-// currency or a zero/negative amount is a broken request, not a recoverable decline, so it throws
-// a fault rather than returning a declined result.
+// Requires a positive CREDIT amount and returns it unchanged. A wrong currency or a non-positive
+// amount is a malformed request, not a recoverable decline, so it throws a fault.
 function positiveCredit(amount: Amount, label: string): Amount {
   if (amount.currency !== 'CREDIT') {
     throw fault(ERROR_CODES.MALFORMED_OPERATION, `${label} must be CREDIT.`, {
@@ -106,9 +99,8 @@ function positiveCredit(amount: Amount, label: string): Amount {
   return amount;
 }
 
-// Require a non-blank funding source. The source selects the credits' maturity horizon (see
-// `maturityHorizonMs`), so an empty or whitespace-only source is malformed input (it would key the
-// horizon off a meaningless string), thrown as a fault rather than declined.
+// Requires a non-blank funding source. The source selects the credits' maturity horizon
+// (`maturityHorizonMs`), so a blank or whitespace-only value is malformed input.
 function requireSource(source: string): void {
   if (source.trim() === '') {
     throw fault(
@@ -119,10 +111,8 @@ function requireSource(source: string): void {
   }
 }
 
-// Convert a CREDIT amount to USD at the given rate, rounding up. The rate is an integer scaled by
-// 10^scale, so multiply by rate and divide by 10^scale to recover the real multiplier. The divide
-// rounds up (add denominator − 1 before the integer divide) so trust backing always covers the
-// per-balance floor the backing check uses; see call sites for why under-rounding breaks it.
+// Converts a CREDIT amount to USD at `rate`, rounding up. A rate is an integer scaled by 10^scale.
+// Rounding up keeps trust backing at or above the per-balance floor the solvency check uses.
 function convertCeil(amount: Amount, rate: Rate, to: Currency): Amount {
   let denominator = 10n ** BigInt(rate.scale);
   return toAmount(
@@ -131,8 +121,8 @@ function convertCeil(amount: Amount, rate: Rate, to: Currency): Amount {
   );
 }
 
-// Operations are routed here by `kind`; a non-'topUp' kind means the routing is wrong. That's a
-// programming bug, so throw a fault rather than mishandle the operation.
+// Builds the fault for an operation that reached the wrong handler. A mismatched kind means the
+// routing is broken, which is a programming bug rather than a bad request.
 function kindMismatch(operation: Operation): ReturnType<typeof fault> {
   return fault(
     ERROR_CODES.MALFORMED_OPERATION,

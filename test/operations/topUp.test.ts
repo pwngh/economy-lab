@@ -33,9 +33,9 @@ import { toAmount } from '#src/money.ts';
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
 
-// Ctx for the topUp handler: outside services (clock, ids, rates, processor, ...), all
-// deterministic test doubles so runs are reproducible. Production routes operations to the
-// handler by kind, but that wiring isn't built yet, so tests call topUp directly.
+// Builds the Ctx the topUp handler reads. Every outside service (clock, ids, rates, processor,
+// and the rest) is a deterministic test double, so runs are reproducible. Production routes
+// operations to the handler by kind, but that wiring isn't built yet, so tests call topUp directly.
 function makeCtx(): Ctx {
   let digest = seededDigest(1);
   let clock = fixedClock(0);
@@ -110,10 +110,11 @@ describe('topUp Issuance', () => {
       topUpOp({ userId: 'usr_buyer', amount: credit('10.00') }),
     );
 
-    // Gross at the buy rate ($0.01/credit → $0.10) credits USD_CLEARING (grows on debits, so a
-    // credit reads -0.10). The debit side splits it: par-rate backing held in trust ($0.005/credit
-    // → $0.05 TRUST_CASH) and the buy-vs-par spread (50% at these test rates) as USD revenue ($0.05
-    // REVENUE_USD). The three sum to zero.
+    // The gross cash at the buy rate is $0.01/credit, so $0.10 here. That gross credits USD_CLEARING,
+    // and USD_CLEARING grows on debits, so a credit posting reads -0.10. The debit side splits the
+    // gross two ways. Par-rate backing of $0.005/credit ($0.05) is held in trust as TRUST_CASH. The
+    // buy-vs-par spread, 50% at these test rates, becomes USD revenue ($0.05 in REVENUE_USD). The
+    // three postings sum to zero.
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.TRUST_CASH),
       usd('0.05'),
@@ -216,8 +217,8 @@ describe('topUp Validation', () => {
   test('commits a normal top-up whose backing is at least one cent', async () => {
     let { store, ctx } = fixture();
 
-    // 2.00 credits -> floor(200/200) = $0.01 backing, just above the zero-backing floor: still
-    // issues credits and holds the matching cash in trust.
+    // A 2.00-credit top-up backs at floor(200/200) = $0.01, which sits just above the zero-backing
+    // floor. The top-up still issues credits and holds the matching cash in trust.
     let outcome = await applyTopUp(
       store,
       ctx,

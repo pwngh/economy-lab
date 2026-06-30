@@ -47,9 +47,9 @@ import type { Clock, Ledger, Lot, Store } from '#src/ports.ts';
 
 const DAY = 24 * 60 * 60_000;
 
-// Distinct per-source wait times so a test can tell which wait was applied. `default` is
-// the fallback for unrecognized sources; matches the longer card wait here. (testConfig()
-// sets every wait to 0, reused by the zero-wait test.)
+// Gives each funding source a distinct wait time so a test can tell which wait was applied.
+// `default` is the fallback for unrecognized sources, and it matches the longer card wait
+// here. The separate testConfig() sets every wait to 0 and is reused by the zero-wait test.
 function horizonConfig(): Config {
   return {
     ...testConfig(),
@@ -57,9 +57,9 @@ function horizonConfig(): Config {
   };
 }
 
-// Credit a user; the ledger records it as one lot. Source ('card', 'crypto', ...) goes in
-// the posting meta like the real top-up handler does, since the maturity wait is chosen
-// from it. The clock time at posting becomes the lot's top-up time.
+// Credits a user, which the ledger records as one lot. The source ('card', 'crypto', ...)
+// goes in the posting meta the way the real top-up handler does, because the maturity wait
+// is chosen from it. The clock time at posting becomes the lot's top-up time.
 async function topUpLot(
   ledger: Ledger,
   userId: string,
@@ -73,9 +73,9 @@ async function topUpLot(
   });
 }
 
-// Spend from a user's spendable balance. Spending creates no lot (only balance-increasing
-// postings do), it just lowers the balance. The maturity code treats that drop as FIFO
-// consumption: oldest lots first.
+// Spends from a user's spendable balance. A spend creates no lot, because only
+// balance-increasing postings do; it just lowers the balance. The maturity code treats that
+// drop as FIFO consumption of the oldest lots first.
 async function spendSpendable(
   ledger: Ledger,
   userId: string,
@@ -114,7 +114,7 @@ describe('maturityHorizonMs', () => {
     const config = horizonConfig();
 
     // A top-up with no source gets the literal 'unknown' from the in-memory ledger. The
-    // config has no 'unknown' entry, so the lookup must fall back to the default.
+    // config has no 'unknown' entry, so the lookup falls back to the default.
     const horizonMs = maturityHorizonMs('unknown', config);
 
     assert.equal(horizonMs, config.maturityHorizonMs.default);
@@ -129,7 +129,7 @@ describe('lotMaturesAt', () => {
       amount: credit('10.00'),
       source: 'card',
       toppedUpAt: 1_000,
-      maturesAt: 1_000, // the lot's own stored value; the function ignores it and recomputes
+      maturesAt: 1_000, // the lot's own stored value, which the function ignores and recomputes
     };
 
     const maturesAt = lotMaturesAt(lot, config);
@@ -325,15 +325,16 @@ function lcg(seed: number): () => number {
   };
 }
 
-// The differential matrix runs on memory always, and on postgres/mysql when reachable (the subtest
-// skips otherwise, mirroring the conformance suites' connect-or-skip pattern). Each store is wired
-// to a shared advancing clock (so a posting's lot maturity is stamped at the time we choose) and
-// the seeded digest (so the SQL engines' hash chain is deterministic).
+// The differential matrix always runs on memory, and runs on postgres/mysql when they are
+// reachable. The subtest skips otherwise, mirroring the conformance suites' connect-or-skip
+// pattern. Each store is wired to a shared advancing clock, so a posting's lot maturity is
+// stamped at the time we choose, and to the seeded digest, so the SQL engines' hash chain is
+// deterministic.
 type DiffBackend = 'memory' | 'postgres' | 'mysql';
 
-// One throwaway Postgres schema per store, loaded with the current schema and dropped on close, the
-// same isolation test/adapters/postgres.test.ts uses. The injected clock and digest make the run
-// deterministic and let the test control each top-up time.
+// Builds a Postgres store on one throwaway schema, loaded with the current schema and dropped
+// on close. This is the same isolation test/adapters/postgres.test.ts uses. The injected clock
+// and digest make the run deterministic and let the test control each top-up time.
 let diffSchemaSeq = 0;
 function postgresDiffStore(clock: Clock): Promise<Store> {
   diffSchemaSeq += 1;
@@ -349,9 +350,10 @@ function postgresDiffStore(clock: Clock): Promise<Store> {
   });
 }
 
-// A MySQL store on a fresh pool against MYSQL_TEST_URL, schema applied, with the shared clock and
-// seeded digest. Mirrors test/adapters/mysql.test.ts; the per-run idempotency-free postings here
-// don't need the throwaway-database isolation the broader matrix uses.
+// Builds a MySQL store on a fresh pool against MYSQL_TEST_URL, with the schema applied and the
+// shared clock and seeded digest. This mirrors test/adapters/mysql.test.ts. The postings here
+// carry no idempotency keys, so they don't need the throwaway-database isolation the broader
+// matrix uses.
 async function mysqlDiffStore(clock: Clock): Promise<Store> {
   const url = process.env.MYSQL_TEST_URL;
   if (!url) {
@@ -362,9 +364,10 @@ async function mysqlDiffStore(clock: Clock): Promise<Store> {
   return mysqlStore({ pool, clock, digest: seededDigest(1) });
 }
 
-// One step in the randomized timeline: a top-up (records a lot, tagged with its funding source so
-// the maturity wait can be chosen) or a spend (records no lot; the maturity code reads the balance
-// drop as FIFO consumption of the oldest lots). `txnId` is supplied per step for a unique id.
+// One step in the randomized timeline. A top-up records a lot tagged with its funding source,
+// from which the maturity wait is chosen. A spend records no lot; the maturity code reads the
+// balance drop as FIFO consumption of the oldest lots. Each step supplies its own `txnId` for a
+// unique id.
 type Step =
   | {
       kind: 'topUp';
@@ -375,8 +378,8 @@ type Step =
     }
   | { kind: 'spend'; userId: string; amount: Amount; txnId: string };
 
-// Post one timeline step's balanced legs inside a store transaction, so the same call works on
-// memory and on the SQL engines (which require post_entry to run in a transaction). The clock time
+// Posts one timeline step's balanced legs inside a store transaction, so the same call works on
+// memory and on the SQL engines, which require post_entry to run in a transaction. The clock time
 // at posting becomes a top-up lot's top-up time.
 function postStep(store: Store, step: Step): Promise<unknown> {
   let userPart =
@@ -400,9 +403,10 @@ function postStep(store: Store, step: Step): Promise<unknown> {
   );
 }
 
-// One differential scenario: which store + clock to drive, the user to act as, the maturity options
-// (config), the seeded RNG, how many postings to emit, and the spend bias that shapes the timeline.
-// Bundled into one object to keep runDifferential under the param-count limit.
+// One differential scenario. It names the store and clock to drive, the user to act as, the
+// maturity options, the seeded RNG, how many postings to emit, and the spend bias that shapes
+// the timeline. These are bundled into one object to keep runDifferential under the
+// param-count limit.
 type Scenario = {
   store: Store;
   clock: Clock & { advance: (ms: number) => number };
@@ -410,20 +414,21 @@ type Scenario = {
   options: MaturityOptions;
   rand: () => number;
   postings: number;
-  // A low bias keeps top-ups dominant (accumulate-heavy, a long open tail); a high one drives the
-  // balance down toward zero between top-ups (consume-heavy, a short tail the FIFO drain repeatedly
-  // splits mid-lot).
+  // A low bias keeps top-ups dominant, which is accumulate-heavy with a long open tail. A high
+  // bias drives the balance down toward zero between top-ups, which is consume-heavy with a short
+  // tail that the FIFO drain repeatedly splits mid-lot.
   spendBias: number;
 };
 
-// Drive one user through a long randomized timeline of mixed-source top-ups and interleaved partial
-// spends, then assert the bounded reads equal the full-scan oracle at several `now` cuts:
-//   - maturedBalance == maturedBalanceFullScan (the total), and
-//   - maturedAtLeast(x) == (oracle >= x) for several thresholds x (the early-terminating gate).
+// Drives one user through a long randomized timeline of mixed-source top-ups and interleaved
+// partial spends, then asserts that the bounded reads equal the full-scan oracle at several
+// `now` cuts:
+//   - maturedBalance equals maturedBalanceFullScan (the total), and
+//   - maturedAtLeast(x) equals (oracle >= x) for several thresholds x (the early-terminating gate).
 async function runDifferential(scenario: Scenario): Promise<void> {
   const { store, clock, userId, options, rand, postings, spendBias } = scenario;
-  // Mixed funding sources spanning a 0-wait ('instant'), a 1-day ('crypto'), and a 7-day ('card')
-  // horizon, plus an unrecognized one ('wire') that falls back to the default (7-day) wait.
+  // Mixed funding sources span a 0-wait ('instant'), a 1-day ('crypto'), and a 7-day ('card')
+  // horizon, plus an unrecognized one ('wire') that falls back to the default 7-day wait.
   const sources = ['instant', 'crypto', 'card', 'wire'];
   const account = spendable(userId);
   let posted = 0n;
@@ -446,8 +451,8 @@ async function runDifferential(scenario: Scenario): Promise<void> {
       });
       posted += cents;
     } else {
-      // Spend a slice of the live balance, often most of it (so the FIFO drain splits a lot mid-way),
-      // never more — a user account can't go negative.
+      // Spend a slice of the live balance, often most of it so the FIFO drain splits a lot
+      // mid-way, but never more, because a user account can't go negative.
       const spend = BigInt(1 + Math.floor(rand() * Number(posted)));
       await postStep(store, {
         kind: 'spend',
@@ -507,21 +512,23 @@ async function runDifferential(scenario: Scenario): Promise<void> {
 }
 
 describe('maturity bounded reads vs full-scan oracle', () => {
-  // The bounded newest-first reads — maturedBalance (the total) and maturedAtLeast (the
-  // early-terminating threshold gate requestPayout/spend use) — must be byte-identical to the
-  // original full-history scan (kept as maturedBalanceFullScan) for every input. Drive each backend
-  // (memory always; postgres/mysql when reachable, skipped otherwise) through thousands of postings
-  // with mixed funding sources and horizons (0, 1-day, 7-day) and interleaved partial spends, in
-  // both an accumulate-heavy and a consume-heavy shape, then assert exact agreement at several `now`
-  // cuts. Zero divergence: the optimization changed cost, not results.
+  // The bounded newest-first reads must be byte-identical to the original full-history scan for
+  // every input. Those reads are maturedBalance (the total) and maturedAtLeast (the
+  // early-terminating threshold gate that requestPayout and spend use), and the original scan is
+  // kept as maturedBalanceFullScan. Each backend runs through thousands of postings with mixed
+  // funding sources and horizons (0, 1-day, 7-day) and interleaved partial spends, in both an
+  // accumulate-heavy and a consume-heavy shape, and the test asserts exact agreement at several
+  // `now` cuts. Memory always runs; postgres and mysql run when reachable and skip otherwise.
+  // Zero divergence proves the optimization changed cost, not results.
   const backends: DiffBackend[] = ['memory', 'postgres', 'mysql'];
 
   for (const backend of backends) {
     describe(backend, () => {
       let store: Store | null = null;
-      // Each store is built around its own advancing clock; hold a reference so the timeline driver
-      // can advance it. memoryStore/postgresStore/mysqlStore copy the clock reference, so advancing
-      // this same object moves the time the ledger stamps onto each posting.
+      // Each store is built around its own advancing clock. Hold a reference so the timeline
+      // driver can advance it. memoryStore, postgresStore, and mysqlStore copy the clock
+      // reference, so advancing this same object moves the time the ledger stamps onto each
+      // posting.
       let clock: Clock & { advance: (ms: number) => number };
 
       before(async () => {

@@ -36,8 +36,8 @@ export type RejectionCode =
   | 'UNKNOWN_ORDER'
   // A spend reused an orderId that already has a completed sale but carried a different
   // idempotencyKey. The orderId identifies a unique purchase, so a second charge for the same
-  // order is returned as a normal "no", not thrown. Expected client mistake (a retry that lost
-  // its idempotency key), not a bug.
+  // order is declined rather than thrown. This is an expected client mistake, such as a retry
+  // that lost its idempotency key, not a bug.
   | 'DUPLICATE_ORDER'
   // No subscription was found matching the request.
   | 'UNKNOWN_SUBSCRIPTION'
@@ -155,7 +155,7 @@ export class EconomyError extends Error {
   }
 }
 
-/** Build an {@link EconomyError} to throw when something has actually gone wrong. */
+/** Builds an {@link EconomyError} to throw when something has actually gone wrong. */
 export function fault(
   code: string,
   message: string,
@@ -169,7 +169,7 @@ export function fault(
 }
 
 /**
- * Build a `rejected` Outcome: the value an operation returns (not throws) when it
+ * Builds a `rejected` Outcome: the value an operation returns (not throws) when it
  * declines a valid request for one of the expected business reasons in
  * {@link RejectionCode}.
  */
@@ -183,7 +183,7 @@ export function rejected(
 }
 
 /**
- * Turn anything caught in a `catch` into an {@link EconomyError}. If it's already one, return
+ * Turns anything caught in a `catch` into an {@link EconomyError}. If it's already one, returns
  * it unchanged: re-wrapping could overwrite its retryable flag and wrongly mark a non-retryable
  * failure as safe to retry. Anything else (a raw exception from a library, the storage layer,
  * etc.) is wrapped as a retryable STORE.FAILURE, with the original kept in `cause` for logs so

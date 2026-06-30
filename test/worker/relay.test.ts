@@ -30,13 +30,13 @@ import {
 import type { WorkerCtx } from '#src/contract.ts';
 import type { Dispatcher, EconomyEvent, Store } from '#src/ports.ts';
 
-// Worker context from deterministic fakes (fixed clock, counted-up ids, etc.). The relay only
-// reads logger/meter/config, but we pass the full object to match the other worker tests.
+// Builds a worker context for the relay. The relay only reads logger, meter, and config, but
+// we pass the full object to match the other worker tests.
 //
 // A "poison" row always throws on delivery, so retries never succeed. The relay caps failed
-// attempts and marks the row permanently failed ("dead-lettering") rather than retrying forever
-// and blocking rows behind it. `maxOutboxAttempts` is that cap; a small value drives a poison
-// row to the cap in a few sweeps.
+// attempts and marks such a row permanently failed. This cap is called dead-lettering. It stops
+// the relay from retrying forever and blocking healthy rows behind the poison row.
+// `maxOutboxAttempts` is that cap. A small value drives a poison row to the cap in a few sweeps.
 function workerCtx(maxOutboxAttempts?: number): WorkerCtx {
   let config = testConfig();
   return {
@@ -55,7 +55,7 @@ function workerCtx(maxOutboxAttempts?: number): WorkerCtx {
   };
 }
 
-// Sample event in the standard emitted shape; the dispatcher receives this for delivery.
+// Builds a sample event in the standard emitted shape, ready to deliver through the dispatcher.
 function event(id: string): EconomyEvent {
   return {
     id: `evt_${id}`,
@@ -69,7 +69,8 @@ function event(id: string): EconomyEvent {
 }
 
 // Saves a pending event to the outbox. Real operations enqueue inside the same transaction as
-// the money move, so we do too, leaving the store in the state a real relay run would pick up.
+// the money move, so this helper does too. That leaves the store in the state a real relay run
+// would pick up.
 async function enqueue(store: Store, id: string): Promise<void> {
   await store.transaction((unit) =>
     unit.outbox.enqueue({
@@ -82,7 +83,8 @@ async function enqueue(store: Store, id: string): Promise<void> {
   );
 }
 
-// A dispatcher that records every event it receives, so a test asserts what was delivered.
+// Builds a dispatcher that records every event it receives. A test then asserts what was
+// delivered.
 function recordingDispatcher(): Dispatcher & { delivered: string[] } {
   let delivered: string[] = [];
   let dispatcher = (async (e: EconomyEvent) => {
@@ -92,9 +94,9 @@ function recordingDispatcher(): Dispatcher & { delivered: string[] } {
   return dispatcher;
 }
 
-// Runs one relay pass: claims up to `limit` pending events and sends each through the
-// dispatcher. `maxOutboxAttempts` pins the dead-letter cap for tests that need it; otherwise
-// the fixture default applies.
+// Runs one relay pass. It claims up to `limit` pending events and sends each through the
+// dispatcher. `maxOutboxAttempts` pins the dead-letter cap for tests that need it. Otherwise the
+// fixture default applies.
 function sweep(
   store: Store,
   dispatcher: Dispatcher,
@@ -215,8 +217,8 @@ describe('relayOutbox — Retry Cap', () => {
       throw new Error('subscriber down');
     };
 
-    // Cap of 3: the first two failures are under the cap, so each bumps `attempts` and the row
-    // stays 'pending' to be re-claimed. No dead-lettering across these two sweeps.
+    // The cap is 3. The first two failures are under the cap, so each one bumps `attempts` and
+    // leaves the row 'pending' to be re-claimed. Neither sweep dead-letters the row.
     let first = await sweep(store, dispatcher, 10, 3);
     let second = await sweep(store, dispatcher, 10, 3);
 
@@ -230,7 +232,7 @@ describe('relayOutbox — Retry Cap', () => {
       ['obx_1'],
     );
     assert.deepEqual(second.deadLettered, []);
-    // attempts has been bumped to 2; the row is still pending and still claimed.
+    // `attempts` has been bumped to 2. The row is still pending and still claimable.
     let claimable = await store.outbox.claimBatch(10);
     assert.deepEqual(
       claimable.map((m) => m.id),
@@ -247,9 +249,10 @@ describe('relayOutbox — Retry Cap', () => {
       throw new Error('always poison');
     };
 
-    // Cap of 3: failures 1 and 2 stay 'pending' (under the cap); failure 3 takes `attempts` to
-    // 3 and dead-letters the row (status 'failed'), since the worker uses a `>=` cap. The row is
-    // then terminal and never claimed again.
+    // The cap is 3. Failures 1 and 2 stay 'pending' because they are under the cap. Failure 3
+    // takes `attempts` to 3 and dead-letters the row, setting its status to 'failed'. The worker
+    // uses a `>=` cap, so the row dead-letters at 3 rather than 4. The row is then terminal and
+    // is never claimed again.
     let s1 = await sweep(store, dispatcher, 10, 3);
     let s2 = await sweep(store, dispatcher, 10, 3);
     let s3 = await sweep(store, dispatcher, 10, 3);
@@ -262,8 +265,8 @@ describe('relayOutbox — Retry Cap', () => {
       { id: 'obx_1', reason: 'STORE.FAILURE' },
     ]);
 
-    // Poison row is terminal: claimBatch never returns it, so a further sweep is a no-op and the
-    // queue is not wedged behind it.
+    // The poison row is terminal, so `claimBatch` never returns it again. A further sweep is a
+    // no-op, and the queue is not wedged behind it.
     let s4 = await sweep(store, dispatcher, 10, 3);
     assert.deepEqual(s4.relayed, []);
     assert.deepEqual(s4.failed, []);
@@ -282,8 +285,8 @@ describe('relayOutbox — Retry Cap', () => {
       }
     };
 
-    // Cap of 1: the first failure of 'bad' reaches the cap and dead-letters it in the same sweep
-    // that relays 'good'. One pass clears both: 'good' delivered, 'bad' terminal.
+    // The cap is 1. The first failure of 'bad' reaches the cap and dead-letters it in the same
+    // sweep that relays 'good'. One pass clears both: 'good' is delivered and 'bad' is terminal.
     let summary = await sweep(store, dispatcher, 10, 1);
 
     assert.deepEqual(summary.relayed, ['obx_good']);

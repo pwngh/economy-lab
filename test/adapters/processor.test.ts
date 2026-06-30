@@ -19,8 +19,8 @@ import { EconomyError } from '#src/errors.ts';
 
 import type { FetchLike } from '#src/adapters/processor.ts';
 
-// One captured `fetch` call (URL + options), so a test can assert what the adapter sent:
-// method, headers, body, signal.
+// Records one captured `fetch` call, both its URL and its options. A test reads this to assert
+// what the adapter sent: the method, the headers, the body, and the abort signal.
 interface Recorded {
   input: string;
   init?: {
@@ -31,7 +31,7 @@ interface Recorded {
   };
 }
 
-// Fake `fetch` that returns the given response and records each call into `calls`.
+// Returns a fake `fetch` that yields the given response and appends each call to `calls`.
 // The adapter takes `fetch` as an argument, so this never hits the global fetch or a live provider.
 function stubFetch(
   response: { ok: boolean; status: number; body: string },
@@ -47,16 +47,17 @@ function stubFetch(
   };
 }
 
-// Fake `fetch` that always throws: failed DNS, dropped connection, or cancelled request.
+// Returns a fake `fetch` that always throws, standing in for a transport failure such as a
+// failed DNS lookup, a dropped connection, or a cancelled request.
 function throwingFetch(error: unknown): FetchLike {
   return async () => {
     throw error;
   };
 }
 
-// Default USD payout request. `key` is an idempotency key: the provider recognizes a repeat
-// and won't pay out twice, so a retry runs at most once. Tests reuse this shape and override
-// key or amount only when that field is what's under test.
+// Builds a default USD payout request. `key` is an idempotency key. The provider recognizes a
+// repeated key and will not pay out twice, so a retry pays at most once. Tests reuse this shape
+// and override the key or the amount only when that field is what's under test.
 function payout(over?: { key?: string; amount?: string }): {
   key: string;
   userId: string;

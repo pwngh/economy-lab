@@ -18,13 +18,13 @@ interface Entry {
 }
 
 /**
- * In-process {@link Cache}: a `Map`, with the same observable contract as the Redis adapter. The
- * zero-infra reference the Cache conformance suite runs as its oracle (the way `memoryStore` is the
- * reference for the Store), and a usable single-process cache when no Redis is wired.
+ * Builds an in-process {@link Cache} backed by a `Map`. It exposes the same observable contract as
+ * the Redis adapter. The Cache conformance suite runs it as its oracle, the way `memoryStore` is the
+ * reference for the Store. It also serves as a usable single-process cache when no Redis is wired.
  *
- * Honors `ttlMs` against the injected `clock` — an entry past its expiry reads as a miss, the same
- * way Redis's `PX` flag expires a key — so the conformance can drive expiry with a fake clock.
- * Values are opaque strings; this never parses them.
+ * It honors `ttlMs` against the injected `clock`. An entry past its expiry reads as a miss, the same
+ * way Redis's `PX` flag expires a key, so the conformance suite can drive expiry with a fake clock.
+ * Values are opaque strings, and this never parses them.
  *
  * @example
  *   let cache = memoryCache(wallClock());

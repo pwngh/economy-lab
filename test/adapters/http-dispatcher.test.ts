@@ -29,7 +29,7 @@ const event: EconomyEvent = {
   audience: 'internal',
 };
 
-// fetch stub: records calls, returns a canned response or throws (network failure). No real socket.
+// Returns a fetch stub that records every call and then returns a canned response or throws to simulate a network failure. It opens no real socket.
 function stubFetch(outcome: { ok: boolean; status: number } | Error): {
   fetch: typeof fetch;
   calls: Array<{ url: string; init: RequestInit }>;
@@ -93,7 +93,7 @@ describe('httpDispatcher', () => {
   });
 });
 
-// The shared Dispatcher contract, against the HTTP adapter over a fake fetch.
+// Builds a harness that runs the shared Dispatcher contract against the HTTP adapter over a fake fetch.
 function httpHarness(): DispatcherHarness {
   const bodies: string[] = [];
   const signals: Array<AbortSignal | undefined> = [];

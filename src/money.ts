@@ -12,18 +12,19 @@
 import { ERROR_CODES, fault } from '#src/errors.ts';
 
 /**
- * Currencies the system handles: in-app CREDIT and real-world USD. String union, not
- * an enum, so a new currency can be added here without touching call sites.
+ * The currencies the system handles: in-app CREDIT and real-world USD. This is a string
+ * union rather than an enum so a new currency can be added here without touching call
+ * sites.
  */
 export type Currency = 'CREDIT' | 'USD';
 
 /**
- * A money value: currency plus amount in minor units (cents for dollars). `minor` is a
- * `bigint` to stay exact for the large totals platform accounts reach, past where
- * `number` loses precision.
+ * A money value: a currency plus an amount in minor units (cents for dollars). `minor` is
+ * a `bigint` so it stays exact for the large totals that platform accounts reach, beyond
+ * the point where `number` loses precision.
  *
- * `__brand` makes a plain `{ currency, minor }` unassignable to `Amount`, forcing every
- * amount through `toAmount` / `decodeAmount` so the rules here can't be bypassed.
+ * `__brand` makes a plain `{ currency, minor }` unassignable to `Amount`. That forces
+ * every amount through `toAmount` or `decodeAmount`, so the rules here cannot be bypassed.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/money-model/ The money model} for the exact-integer minor-unit design.
  */
@@ -37,18 +38,18 @@ export type Amount = {
 const FRACTION_DIGITS = 2;
 
 /**
- * Minor units per whole unit (100 cents = $1). Exported so other code (e.g. fee
- * rounding up to a whole credit) shares the factor; encode/decode both read it so they
- * can't disagree on scale.
+ * The number of minor units per whole unit (100 cents = $1). It is exported so other code
+ * shares this one factor, such as fee rounding that rounds up to a whole credit. Both
+ * `encodeAmount` and `decodeAmount` read it, so they cannot disagree on the scale.
  */
 export const SCALE = 100n; // 10 ** FRACTION_DIGITS
 
-/** Build an `Amount` from a currency and a minor-unit count. */
+/** Builds an `Amount` from a currency and a minor-unit count. */
 export function toAmount(currency: Currency, minor: bigint): Amount {
   return { currency, minor, __brand: 'Amount' };
 }
 
-/** Type guard: true when `value` is a real `Amount` (has the brand and a bigint minor). */
+/** Reports whether `value` is a real `Amount`, meaning it has the brand and a bigint minor. */
 export function isAmount(value: unknown): value is Amount {
   return (
     typeof value === 'object' &&
@@ -66,20 +67,20 @@ export function isNegative(amount: Amount): boolean {
   return amount.minor < 0n;
 }
 
-/** Add two amounts of the same currency; throws CURRENCY_MISMATCH across currencies. */
+/** Adds two amounts of the same currency. Throws CURRENCY_MISMATCH across currencies. */
 export function add(a: Amount, b: Amount): Amount {
   assertSameCurrency(a, b);
   return toAmount(a.currency, a.minor + b.minor);
 }
 
-/** Flip the sign of an amount. */
+/** Flips the sign of an amount. */
 export function neg(amount: Amount): Amount {
   return toAmount(amount.currency, -amount.minor);
 }
 
 /**
- * Compare two amounts of the same currency: -1, 0, or 1. Throws CURRENCY_MISMATCH
- * across currencies.
+ * Compares two amounts of the same currency and returns -1, 0, or 1. Throws
+ * CURRENCY_MISMATCH across currencies.
  */
 export function compare(a: Amount, b: Amount): -1 | 0 | 1 {
   assertSameCurrency(a, b);
@@ -92,15 +93,16 @@ export function compare(a: Amount, b: Amount): -1 | 0 | 1 {
   return 0;
 }
 
-/** A zero amount in the given currency. */
+/** Returns a zero amount in the given currency. */
 export function zero(currency: Currency): Amount {
   return toAmount(currency, 0n);
 }
 
 /**
- * Encode an amount as text, e.g. `'CREDIT:12.34'`, for anywhere it leaves the program
- * (JSON, events, traces, HTTP). String because `JSON.stringify` can't serialize the
- * `bigint`; fixed two decimals so the same amount always renders identically.
+ * Encodes an amount as text, such as `'CREDIT:12.34'`, for anywhere it leaves the program
+ * (JSON, events, traces, HTTP). The result is a string because `JSON.stringify` cannot
+ * serialize the `bigint`. It uses a fixed two decimals so the same amount always renders
+ * identically.
  */
 export function encodeAmount(amount: Amount): string {
   let negative = amount.minor < 0n;
@@ -112,8 +114,9 @@ export function encodeAmount(amount: Amount): string {
 }
 
 /**
- * Parse a decimal string (`'12.34'`, `'-0.05'`) into an `Amount`. Bad format or more
- * than two decimal places throws INVALID_AMOUNT rather than dropping the extra digits.
+ * Parses a decimal string such as `'12.34'` or `'-0.05'` into an `Amount`. A bad format,
+ * or more than two decimal places, throws INVALID_AMOUNT rather than silently dropping the
+ * extra digits.
  */
 export function decodeAmount(decimal: string, currency: Currency): Amount {
   let match = /^(-?)(\d+)(?:\.(\d{1,2}))?$/.exec(decimal);
@@ -130,8 +133,8 @@ export function decodeAmount(decimal: string, currency: Currency): Amount {
   return toAmount(currency, sign * (whole * SCALE + frac));
 }
 
-// Throw CURRENCY_MISMATCH if the amounts are in different currencies; combining them is
-// always a bug.
+// Throws CURRENCY_MISMATCH if the amounts are in different currencies. Combining two
+// currencies is always a bug.
 function assertSameCurrency(a: Amount, b: Amount): void {
   if (a.currency !== b.currency) {
     throw fault(

@@ -14,7 +14,7 @@
 # ---- builder: full Node image (has npm + a shell) -------------------------
 # Installs the optional adapters when ADAPTERS is non-empty; otherwise materializes
 # an empty node_modules so the runtime COPY below is uniform.
-# Node 22 (engines require >=22.18.0, where TypeScript type-stripping is on by default).
+# Node 22 is required. The engines field requires >=22.18.0, the version where TypeScript type-stripping is on by default.
 # Re-pin a digest for a real deploy: `docker manifest inspect node:22-slim`.
 FROM node:22-slim AS builder
 
@@ -32,7 +32,7 @@ RUN if [ -n "$ADAPTERS" ]; then \
 # gcr.io/distroless/nodejs22-debian12:nonroot
 #   - ENTRYPOINT is already ["/nodejs/bin/node"], so CMD carries only the script
 #     path ("node" dropped from the original CMD).
-#   - :nonroot runs as UID 65532; the --chown on each COPY keeps files owned by it.
+#   - :nonroot runs as UID 65532. The --chown on each COPY below keeps the copied files owned by that UID.
 #   - Pinned by tag, not digest: the authoring env could only resolve per-arch
 #     child digests, and pinning one locks the image to a single architecture. To
 #     pin the multi-arch index digest at build time, run:
@@ -53,14 +53,14 @@ COPY --chown=nonroot:nonroot db ./db
 
 EXPOSE 3000
 
-# Liveness probe with no shell or curl available: Node's http client hits /healthz
-# on the configured PORT and exits 0 only on HTTP 200. Inline (`node -e`, CommonJS)
-# to avoid an extra file or app dependency.
+# Liveness probe. The distroless image has no shell and no curl, so Node's http
+# client hits /healthz on the configured PORT and exits 0 only on HTTP 200. The
+# check runs inline (`node -e`, CommonJS) to avoid an extra file or app dependency.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD ["/nodejs/bin/node", "-e", "const http=require('http');http.get({host:'127.0.0.1',port:process.env.PORT||3000,path:'/healthz',timeout:2500},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
 
-# Entry is scripts/main.ts (distroless ENTRYPOINT supplies `node`, so args are script + mode; Node 22
-# strips types by default). The image does not migrate: apply db/schema.sql out-of-band (e.g.
-# `npm run db:migrate`) before pointing this at a real DATABASE_URL. For the worker, override the
-# args: ["scripts/main.ts","worker"].
+# The entry point is scripts/main.ts. The distroless ENTRYPOINT supplies `node`, so the args are just
+# the script path and the mode, and Node 22 strips the types at startup. The image does not run
+# migrations, so apply db/schema.sql out of band (for example, `npm run db:migrate`) before pointing
+# this at a real DATABASE_URL. To run the worker instead, override the args: ["scripts/main.ts","worker"].
 CMD ["scripts/main.ts", "serve"]

@@ -14,12 +14,12 @@
 // argv[2]:
 //
 //   scripts/main.ts serve   # HTTP API on $PORT (default 3000); store/cache/dispatcher come from env
-//   scripts/main.ts dev     # same API, forced in-memory with dev secrets — no infra, `make dev`
+//   scripts/main.ts dev     # same API, forced in-memory with dev secrets, no infra; `make dev`
 //   scripts/main.ts worker  # background loop running the maintenance sweep every $WORKER_INTERVAL_MS
 //
-// serve/dev run the src/server.ts handler (web Request/Response). On Node we translate node:http to
-// web Requests (`bridge`, below); that translation is why this entry lives in scripts/, so the rest
-// of src/ can stay runtime-agnostic.
+// serve and dev run the src/server.ts handler, which speaks web Request/Response. On Node we
+// translate node:http to web Requests (see `bridge`, below). That translation is why this entry
+// lives in scripts/, so the rest of src/ can stay runtime-agnostic.
 //
 // Three externals have no safe default: the request signer, the CREDIT-to-USD rates, and the payout
 // provider. In production (NODE_ENV=production) they must be real and configured; `wiring` refuses to
@@ -54,8 +54,8 @@ import type { ReconcileFeed } from '#src/worker/reconcile.ts';
 type Env = Record<string, string | undefined>;
 type FetchHandler = (request: Request) => Promise<Response>;
 
-// Returned by serve(): stops accepting new connections, resolves once the listener is closed, so
-// the shutdown handler can drain before tearing the store down.
+// The closer returned by serve(). It stops accepting new connections and resolves once the listener
+// is closed, so the shutdown handler can drain before tearing the store down.
 type CloseServer = () => Promise<void>;
 
 const ENCODER = new TextEncoder();
@@ -63,16 +63,16 @@ const ENCODER = new TextEncoder();
 // Host-wide structured logger. Background diagnostics (sweeps, shutdown) go here as one JSON line each.
 const log: Logger = jsonlLogger();
 
-// How long shutdown waits for in-flight work to drain before forcing exit. A rolling deploy sends
-// SIGTERM then SIGKILLs after its own grace period; this bound keeps us under that.
+// Returns how long shutdown waits for in-flight work to drain before forcing exit. A rolling deploy
+// sends SIGTERM, then SIGKILLs after its own grace period. This bound keeps us under that.
 function shutdownTimeoutMs(env: Env): number {
   return Number(env.SHUTDOWN_TIMEOUT_MS ?? 5000);
 }
 
-// Secrets a deployed process must supply, checked once at startup. Fails fast naming every missing
-// or blank one, so an unset SIGNING_SECRET surfaces here rather than as a zero-length-key error deep
-// in signer setup, and an unset WEBHOOK_SECRET can't leave inbound callbacks unverified.
-// `.env.example` ships both blank; set any non-empty value for local dev, production passes real
+// Checks at startup that a deployed process supplied every required secret. Fails fast naming every
+// missing or blank one, so an unset SIGNING_SECRET surfaces here rather than as a zero-length-key
+// error deep in signer setup, and an unset WEBHOOK_SECRET can't leave inbound callbacks unverified.
+// `.env.example` ships both blank. Set any non-empty value for local dev. Production passes real
 // high-entropy values.
 function requireSecrets(env: Env): void {
   const missing = (['SIGNING_SECRET', 'WEBHOOK_SECRET'] as const).filter(
@@ -87,17 +87,19 @@ function requireSecrets(env: Env): void {
   }
 }
 
-// Web crypto wants the signing key as hex bytes. `requireSecrets` already rejected unset/empty, so
-// this hex-encodes a non-empty secret. Production passes a real high-entropy hex key.
+// Encodes the signing key as the hex bytes web crypto wants. `requireSecrets` already rejected an
+// unset or empty value, so this hex-encodes a non-empty secret. Production passes a real
+// high-entropy hex key.
 function signingKeyHex(env: Env): string {
   return toHex(ENCODER.encode(env.SIGNING_SECRET ?? ''));
 }
 
-// Fixed CREDIT-to-USD rate source for local runs, modeling a dual-rate credit economy. Real
-// deployments wire rates from config (see productionExternals). Buy rate (the acquisition rate a
-// user pays per credit) is ≈$0.00833 (120 credits = $1); par rate (the credit's
-// redemption/settlement value) and payout rate (the settlement rate) are both $0.005 (200 credits
-// = $1). The ~40% buy-par gap is the platform spread. Any other pair 1:1.
+// Provides a fixed CREDIT-to-USD rate source for local runs, modeling a dual-rate credit economy.
+// Real deployments wire rates from config (see productionExternals). The buy rate is the
+// acquisition rate a user pays per credit, about $0.00833 (120 credits = $1). The par rate (the
+// credit's redemption value) and the payout rate (the settlement rate) are both $0.005 (200 credits
+// = $1). The roughly 40% gap between buy and par is the platform spread. Any other currency pair
+// stays 1:1.
 function fixedRates(): Rates {
   return {
     payout: async (from, to) =>
@@ -115,26 +117,27 @@ function fixedRates(): Rates {
   };
 }
 
-// Dev payout provider: approves every payout, returns a made-up reference id, so a local worker can
-// run the full payout flow (reserve, submit, settle) with no external service. Production never uses
-// this (see `isProduction` below).
+// Builds the dev payout provider. It approves every payout and returns a made-up reference id, so a
+// local worker can run the full payout flow (reserve, submit, settle) with no external service.
+// Production never uses this (see `isProduction` below).
 function devProcessor(): Processor {
   return {
     submitPayout: async (input) => ({ providerRef: `dev_${input.key}` }),
   };
 }
 
-// True when this process is a production deploy. In production the externals with no honest default
-// (CREDIT↔USD rates, payout provider) must be real and configured; the process refuses to start on
-// dev stubs, the same fail-fast stance `requireSecrets` takes for the keys.
+// Reports whether this process is a production deploy. In production the externals with no honest
+// default (the CREDIT-to-USD rates and the payout provider) must be real and configured. The
+// process refuses to start on dev stubs, the same fail-fast stance `requireSecrets` takes for the
+// keys.
 function isProduction(env: Env): boolean {
   return env.NODE_ENV === 'production';
 }
 
-// Build the real externals a production deploy requires from env, failing fast with one message
+// Builds the real externals a production deploy requires from env. Fails fast with one message
 // listing everything missing or malformed, so a prod process never runs on the 1:1 dev rate or an
-// auto-approve payout stub. Rates are the configured fixed-point CREDIT↔USD par and payout; the
-// payout provider is the real HTTP provider at PROCESSOR_URL.
+// auto-approve payout stub. The rates are the configured fixed-point CREDIT-to-USD par and payout.
+// The payout provider is the real HTTP provider at PROCESSOR_URL.
 function productionExternals(env: Env): { rates: Rates; processor: Processor } {
   const bad: string[] = [];
   const bigintOf = (key: string): bigint => {
@@ -190,8 +193,9 @@ function productionExternals(env: Env): { rates: Rates; processor: Processor } {
   };
 }
 
-// Dev externals: deterministic 1:1 rate and approve-everything payout stub (or the real HTTP
-// provider if PROCESSOR_URL is set), so a local run and the tests need no setup.
+// Builds the dev externals. The rate is a deterministic 1:1 stub and the payout provider approves
+// everything, or it is the real HTTP provider if PROCESSOR_URL is set. This way a local run and the
+// tests need no setup.
 function devExternals(env: Env): { rates: Rates; processor: Processor } {
   const endpoint = env.PROCESSOR_URL;
   return {
@@ -203,11 +207,11 @@ function devExternals(env: Env): { rates: Rates; processor: Processor } {
   };
 }
 
-// Build the external-service implementations (the "ports") and the runtime defaults the builders
-// need. Server and worker share one set of runtime capabilities (clock, id generator, hash/digest,
-// request signer) so they behave identically. The signer is required in every mode (via
-// `requireSecrets`); rates and payout provider are real-and-required in production, dev stand-ins
-// otherwise.
+// Builds the external-service implementations (the "ports") and the runtime defaults the builders
+// need. The server and the worker share one set of runtime capabilities (clock, id generator,
+// hash/digest, request signer) so they behave identically. The signer is required in every mode
+// (via `requireSecrets`). The rates and the payout provider are real and required in production, and
+// dev stand-ins otherwise.
 function wiring(env: Env): {
   ports: ExternalPorts;
   defaults: RuntimeDefaults;
@@ -230,11 +234,11 @@ function wiring(env: Env): {
 
 // --- webhook ingestion ------------------------------------------------------------
 
-// Handler for inbound "purchase" webhooks. createServer runs the verification gate first, so the body
-// here is already trusted and first-seen; this decodes it and persists the resulting "topUp" to the
-// inbox rather than posting inline, so we ack fast and the apply worker (`drainInbox`) settles off the
-// request path. The inbox dedupes on the provider event id, so a redelivery credits the user once.
-// On any thrown error the response carries only the message, never internal details.
+// Handles inbound "purchase" webhooks. createServer runs the verification gate first, so the body
+// here is already trusted and first-seen. This decodes it and persists the resulting "topUp" to the
+// inbox rather than posting inline, so we ack fast and the apply worker (`drainInbox`) settles off
+// the request path. The inbox dedupes on the provider event id, so a redelivery credits the user
+// once. On any thrown error the response carries only the message, never internal details.
 function purchaseWebhook(store: Store, ids: Ids, clock: Clock): WebhookHandler {
   return async (provider, request) => {
     try {
@@ -257,9 +261,9 @@ function purchaseWebhook(store: Store, ids: Ids, clock: Clock): WebhookHandler {
 
 // --- serve ------------------------------------------------------------------------
 
-// Run the Fetch handler on the current runtime: Bun and Deno serve it directly, Node goes through
-// `bridge`. Returns a closer that stops accepting connections and resolves once the listener is down,
-// so a SIGTERM can drain in-flight before the store is closed.
+// Runs the Fetch handler on the current runtime. Bun and Deno serve it directly, and Node goes
+// through `bridge`. Returns a closer that stops accepting connections and resolves once the listener
+// is down, so a SIGTERM can drain in-flight work before the store is closed.
 function serve(handler: FetchHandler, port: number): CloseServer {
   const runtime = globalThis as unknown as {
     Bun?: {
@@ -298,7 +302,7 @@ function serve(handler: FetchHandler, port: number): CloseServer {
     });
 }
 
-// Pass one node:http request/response pair through the Fetch handler.
+// Passes one node:http request/response pair through the Fetch handler.
 async function bridge(
   handler: FetchHandler,
   req: IncomingMessage,
@@ -340,8 +344,8 @@ const noReconcileFeed: ReconcileFeed = {
   },
 };
 
-// A running worker: its interval handle, the store to close on shutdown, and a promise to await
-// before tearing the store down (resolved when the current tick, if any, finishes).
+// A running worker. It holds the interval handle, the store to close on shutdown, and a promise to
+// await before tearing the store down (resolved when the current tick, if any, finishes).
 type RunningWorker = {
   timer: NodeJS.Timeout;
   store: Store;
@@ -358,9 +362,9 @@ async function runWorker(env: Env): Promise<RunningWorker> {
   const intervalMs = Number(env.WORKER_INTERVAL_MS ?? 60_000);
   const limit = Number(env.WORKER_BATCH ?? 100);
 
-  // Non-overlap guard: a single in-flight promise so a slow sweep never overlaps the next scheduled
-  // tick (two sweeps at once in one process). While a tick runs, later interval fires are skipped;
-  // the shutdown handler awaits this same promise.
+  // Non-overlap guard. A single in-flight promise keeps a slow sweep from overlapping the next
+  // scheduled tick, which would run two sweeps at once in one process. While a tick runs, later
+  // interval fires are skipped. The shutdown handler awaits this same promise.
   let inFlight: Promise<void> | null = null;
 
   const tick = (): Promise<void> => {
@@ -376,9 +380,10 @@ async function runWorker(env: Env): Promise<RunningWorker> {
           feed: noReconcileFeed,
           windows: [],
         });
-        // Surface each failed sweep's error code and retry flag, not just its name: the SweepResult
-        // carries why it failed (STORE.FAILURE, COMMINGLING, …) and whether the next tick retries it
-        // — what an operator needs to act. flatMap narrows `result` to the failure variant, so no cast.
+        // Surface each failed sweep's error code and retry flag, not just its name. The SweepResult
+        // carries why it failed (STORE.FAILURE, COMMINGLING, and so on) and whether the next tick
+        // retries it, which is what an operator needs to act. flatMap narrows `result` to the failure
+        // variant, so no cast.
         const failed = Object.entries(batch).flatMap(([sweep, result]) =>
           result.ok
             ? []
@@ -417,9 +422,9 @@ async function runWorker(env: Env): Promise<RunningWorker> {
 
 // --- shutdown ---------------------------------------------------------------------
 
-// Register SIGTERM/SIGINT handlers that run `drain` (stop accepting work, await in flight) once,
-// then exit 0. A bounded, unref'd timer forces exit 1 if a drain hangs, so a rolling deploy isn't
-// blocked on a stuck connection or sweep.
+// Registers SIGTERM and SIGINT handlers. They run `drain` once (stop accepting work, then await
+// in-flight work) and exit 0. A bounded, unref'd timer forces exit 1 if a drain hangs, so a rolling
+// deploy isn't blocked on a stuck connection or sweep.
 function onShutdown(env: Env, drain: () => Promise<void>): void {
   let started = false;
   const shutdown = (signal: string): void => {
@@ -467,13 +472,13 @@ function onShutdown(env: Env, drain: () => Promise<void>): void {
 async function runServe(env: Env): Promise<void> {
   const { ports, defaults } = wiring(env);
   // Build the capability bundle once so the economy and the webhook handler share one store, id
-  // generator, and clock: the handler persists each verified callback into the very store the apply
-  // worker (`drainInbox`) later drains. `compose` would return only the economy (not its store), but
+  // generator, and clock. The handler persists each verified callback into the very store the apply
+  // worker (`drainInbox`) later drains. `compose` would return only the economy, not its store, but
   // the webhook now writes to the inbox, so we need the store handle.
   const caps = await capabilitiesFromEnv(env, ports, defaults);
   const economy = createEconomy(caps);
   const config = loadConfig(env);
-  // config and clock are what activate the webhook gate: without them createServer can't verify a
+  // config and clock are what activate the webhook gate. Without them createServer can't verify a
   // callback's signature and timestamp, so a forged or stale one would reach the handler unchecked.
   const handler = createServer(economy, {
     webhook: purchaseWebhook(caps.store, caps.ids, caps.clock),
@@ -487,9 +492,10 @@ async function runServe(env: Env): Promise<void> {
   });
 }
 
-// Env for `dev` mode: force in-memory adapters (ignore any DATABASE_URL / REDIS_URL / queue from
-// .env or the shell) and supply dev secrets when none are set, so `make dev` boots with no
-// database and no configured secrets, and under `node --watch` reloads on edit. Not for prod.
+// Builds the env for `dev` mode. It forces in-memory adapters by clearing any DATABASE_URL,
+// REDIS_URL, or queue URL from .env or the shell, and it supplies dev secrets when none are set. So
+// `make dev` boots with no database and no configured secrets, and under `node --watch` it reloads
+// on edit. Not for production.
 function devEnv(env: Env): Env {
   return {
     ...env,

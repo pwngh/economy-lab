@@ -76,8 +76,8 @@ function captureClient(): SqsClient & { inputs: Record<string, unknown>[] } {
   };
 }
 
-// The shared Dispatcher contract, against the SQS adapter over a fake client that records bodies
-// and abort signals and can fail on demand.
+// Builds a harness that runs the shared Dispatcher contract against the SQS adapter. The fake
+// client records message bodies and abort signals, and it can be told to fail the next send.
 function sqsHarness(): DispatcherHarness {
   let bodies: string[] = [];
   let signals: Array<AbortSignal | undefined> = [];

@@ -15,13 +15,14 @@
  * Requesting a payout moved the seller's earned credits into PAYOUT_RESERVE (escrow); reversing
  * returns them and drives the saga to FAILED so the worker never pays it.
  *
- * Coverage: RESERVED/SUBMITTED returns the reserve to earned and fails the saga; SETTLED (money
- * already sent) is refused with INVALID_TRANSITION and posts nothing; only operators may run it
- * (users get UNAUTHORIZED).
+ * The tests cover three cases. A RESERVED or SUBMITTED payout returns the reserve to earned and
+ * fails the saga. A SETTLED payout (money already sent) is refused with INVALID_TRANSITION and posts
+ * nothing. Only operators may run the reversal, so a user actor gets UNAUTHORIZED.
  *
- * Two drive paths. State, ledger postings, and replay safety call the handler directly inside one
- * `store.transaction`, as the request pipeline runs it as its final step. The permission check and
- * the `economy.payout.reversed` event go through the full `economy.submit` entry point.
+ * The tests drive the handler two ways. The state, ledger posting, and replay-safety tests call the
+ * handler directly inside one `store.transaction`, which is how the request pipeline runs it as its
+ * final step. The permission check and the `economy.payout.reversed` event go through the full
+ * `economy.submit` entry point.
  */
 
 import { describe, test } from 'node:test';
@@ -71,9 +72,9 @@ function newCtx(): Ctx {
   };
 }
 
-// Open a payout in the given state with credits already in escrow, as a payout request leaves it:
-// the seller's earned credits sitting in PAYOUT_RESERVE. Seeding the reserve gives the reversal's
-// later debit a balance to draw from, instead of pushing it negative.
+// Opens a payout in the given state with credits already in escrow. This matches what a payout
+// request leaves behind: the seller's earned credits sitting in PAYOUT_RESERVE. Seeding the reserve
+// gives the reversal's later debit a balance to draw from, instead of pushing it negative.
 async function openReservedSaga(
   store: Store,
   overrides: Partial<Saga> & Pick<Saga, 'id' | 'state'>,
@@ -235,7 +236,8 @@ describe('reversePayout', () => {
     let afterFirst = await balanceOf(store, earned('usr_seller'));
 
     // A second reversal finds the saga already FAILED, so the guarded state change refuses to move
-    // it again: result is `duplicate`, earned balance unchanged, reserve returned once.
+    // it again. The result is `duplicate`, the earned balance is unchanged, and the reserve was
+    // returned only once.
     let second = await run(store, ctx, buildReversePayout({ sagaId: 'pay_3' }));
     assert.equal(second.status, 'duplicate');
     let afterSecond = await balanceOf(store, earned('usr_seller'));
@@ -349,8 +351,8 @@ describe('reversePayout Through Submit', () => {
   });
 });
 
-// Pull the events a committed operation queued for delivery. Events go into an outbox table in the
-// same transaction, then to subscribers later; this claims a batch and marks it delivered, so a
+// Pulls the events a committed operation queued for delivery. Events go into an outbox table in the
+// same transaction, then to subscribers later. This claims a batch and marks it delivered, so a
 // second call won't see the same events.
 async function drainEvents(store: Store): Promise<EconomyEvent[]> {
   let batch = await store.outbox.claimBatch(100);

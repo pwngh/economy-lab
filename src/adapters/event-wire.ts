@@ -12,13 +12,13 @@
 import type { EconomyEvent } from '#src/ports.ts';
 
 /**
- * The canonical JSON body for one outbound event, shared by every Dispatcher adapter (HTTP, SQS)
- * so a receiver sees the same shape — the same bytes — regardless of transport.
+ * Encodes one outbound event into its canonical JSON body. Every Dispatcher adapter (HTTP, SQS)
+ * calls this, so a receiver sees the same bytes regardless of transport.
  *
- * One source of truth: the two transports must encode identically, and the Dispatcher conformance
- * suite asserts each adapter's body equals this output. Fixed field order makes the bytes
- * deterministic, so a receiver can dedupe by content. Money in `data` is already a string by here
- * (`JSON.stringify` throws on a bigint).
+ * This function is the single source of truth for the wire format. The two transports must encode
+ * identically, and the Dispatcher conformance suite asserts each adapter's body equals this output.
+ * The fixed field order makes the bytes deterministic, so a receiver can dedupe by content. Money in
+ * `data` is already a string by this point, because `JSON.stringify` throws on a bigint.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for how dispatchers carry events across transports.
  */

@@ -33,9 +33,9 @@ import type { WorkerCtx } from '#src/contract.ts';
 import type { Economy, Operation, Outcome } from '#src/contract.ts';
 import type { InboxEntry, Store } from '#src/ports.ts';
 
-// Worker context from deterministic fakes (fixed clock, counted-up ids, etc.). drainInbox only reads
-// logger/meter/config, but we pass the full object to match the other worker tests. A small
-// `maxInboxAttempts` drives a poison row to its dead-letter cap in a few sweeps.
+// Builds a worker context from deterministic fakes (a fixed clock, counted-up ids, and so on).
+// drainInbox only reads the logger, meter, and config, but we pass the full object to match the other
+// worker tests. A small `maxInboxAttempts` drives a poison row to its dead-letter cap in a few sweeps.
 function workerCtx(maxInboxAttempts?: number): WorkerCtx {
   let config = testConfig();
   return {
@@ -52,8 +52,9 @@ function workerCtx(maxInboxAttempts?: number): WorkerCtx {
   };
 }
 
-// The topUp a stored inbox row carries: the verified provider event already mapped to its Operation,
-// keyed by the provider event id (which doubles as the row `key` and the operation's idempotencyKey).
+// Builds the topUp Operation a stored inbox row carries. It represents a verified provider event that
+// has already been mapped to an Operation. The provider event id keys it, and that same id doubles as
+// the row `key` and the operation's idempotencyKey.
 function topUp(eventId: string): Operation {
   return {
     kind: 'topUp',
@@ -65,7 +66,7 @@ function topUp(eventId: string): Operation {
   } as unknown as Operation;
 }
 
-// Enqueue a pending inbox row, the way the webhook handler does inside its transaction, leaving the
+// Enqueues a pending inbox row the way the webhook handler does, inside a transaction. This leaves the
 // store in the state a real apply sweep would pick up.
 async function enqueue(store: Store, eventId: string): Promise<InboxEntry> {
   return store.transaction((unit) =>
@@ -81,7 +82,7 @@ async function enqueue(store: Store, eventId: string): Promise<InboxEntry> {
   );
 }
 
-// A committed Outcome, the success the economy returns when a topUp posts.
+// Builds a committed Outcome, the success the economy returns when a topUp posts.
 function committed(): Outcome {
   return {
     status: 'committed',
@@ -89,9 +90,9 @@ function committed(): Outcome {
   };
 }
 
-// An Economy stub whose `submit` returns/throws what a test scripts, recording every operation it
-// was handed so a test can assert which rows were applied and in what order. Only `submit` is read by
-// drainInbox, so the rest of the surface is omitted.
+// Builds an Economy stub whose `submit` returns or throws whatever a test scripts. It records every
+// operation it was handed so a test can assert which rows were applied and in what order. drainInbox
+// reads only `submit`, so the rest of the surface is omitted.
 function scriptedEconomy(
   respond: (operation: Operation, call: number) => Outcome,
 ): Pick<Economy, 'submit'> & { submitted: Operation[] } {
@@ -105,8 +106,8 @@ function scriptedEconomy(
   };
 }
 
-// One drain pass: claims pending rows and submits each through `economy`. `maxInboxAttempts` pins the
-// dead-letter cap for tests that need it; otherwise the fixture default applies.
+// Runs one drain pass. It claims pending rows and submits each through `economy`. `maxInboxAttempts`
+// pins the dead-letter cap for tests that need it; otherwise the fixture default applies.
 function sweep(
   store: Store,
   economy: Pick<Economy, 'submit'>,
@@ -157,8 +158,8 @@ describe('drainInbox', () => {
   test('a duplicate Outcome still marks the row applied (re-apply deduped by the operation key)', async () => {
     let store = memoryStore();
     let entry = await enqueue(store, 'e1');
-    // The economy reports the money move already happened (a prior run committed it but markApplied
-    // didn't land); the row should still flip to applied so it isn't claimed forever.
+    // The economy reports that the money move already happened. A prior run committed it, but
+    // markApplied never landed. The row should still flip to applied so it isn't claimed forever.
     let economy = scriptedEconomy(() => ({
       status: 'duplicate',
       transaction: { id: 'txn_x', postedAt: 0, legs: [], links: [] },
@@ -224,8 +225,8 @@ describe('drainInbox — Dead-Letter', () => {
   test('dead-letters a poison row once attempts reach the cap and stops re-claiming it', async () => {
     let store = memoryStore();
     await enqueue(store, 'poison');
-    // Always throws a retryable fault, so retries never succeed. Cap at 2: dead-letters on the 2nd
-    // failure (the one that takes attempts to 2).
+    // Always throws a retryable fault, so retries never succeed. The cap is 2, so the row
+    // dead-letters on the second failure, the one that takes attempts to 2.
     let economy = scriptedEconomy(() => {
       throw fault('STORE.FAILURE', 'always down', { retryable: true });
     });
@@ -255,7 +256,7 @@ describe('drainInbox — Dead-Letter', () => {
   test('dead-letters a row the economy rejects (a terminal business no, not retried)', async () => {
     let store = memoryStore();
     await enqueue(store, 'e1');
-    // A well-formed request the economy declines as data (not a thrown fault): retrying would be
+    // A well-formed request the economy declines as data, not as a thrown fault. Retrying would be
     // declined the same way forever, so the row is parked rather than burning attempts.
     let economy = scriptedEconomy(() => ({
       status: 'rejected',

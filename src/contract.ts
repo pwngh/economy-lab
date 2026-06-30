@@ -83,10 +83,10 @@ export type Operation =
       price: Amount;
       recipients?: Recipient[];
       ageRestricted?: boolean;
-      // A gift: the buyer still pays and is screened for funds and velocity, but the SKU is
-      // granted to this recipient user id instead of the buyer. A gift is modelled as an ordinary
-      // purchase carrying a recipient (not a separate transaction type), with no wallet-to-wallet
-      // credit or ownership transfer. Omitted (or equal to `buyerId`) for a self-purchase.
+      // A gift. The buyer still pays and is screened for funds and velocity, but the SKU is granted
+      // to this recipient user id instead of the buyer. A gift is modelled as an ordinary purchase
+      // that carries a recipient, not a separate transaction type, with no wallet-to-wallet credit
+      // or ownership transfer. Omitted (or equal to `buyerId`) for a self-purchase.
       giftTo?: string;
     }
   | {
@@ -183,12 +183,12 @@ export type Operation =
       userId: string;
       sagaId: string;
       reason: string;
-      // Operator-only correction to undo a payout that hasn't paid out yet. Marks the multi-step
-      // payout (the "saga") as FAILED, but only if still in its pre-paid state so two attempts
-      // can't both undo it, and returns the set-aside credits to the seller's earned account. A
-      // payout that has already disbursed real USD is refused. `userId` names the seller so the
-      // engine knows which account to lock; the operation is identified only by its payout id and
-      // names no account directly.
+      // Operator-only correction to undo a payout that has not paid out yet. Marks the multi-step
+      // payout (the "saga") as FAILED, but only if it is still in its pre-paid state so two attempts
+      // can't both undo it. Returns the set-aside credits to the seller's earned account. A payout
+      // that has already disbursed real USD is refused. `userId` names the seller so the engine
+      // knows which account to lock. The operation is identified only by its payout id and names no
+      // account directly.
     }
   | {
       kind: 'settlePayout';
@@ -199,15 +199,17 @@ export type Operation =
       // disbursement), recorded for the audit trail. Carried from the inbound provider webhook that
       // drives the settle.
       providerRef: string;
-      // The USD amount the provider reported settling. Recorded for the audit trail / reconciliation;
-      // the figures actually posted are the rate-derived ones the worker computes (gross USD from the
-      // reserve at the payout rate, less the rail fee), computed identically so a settle
-      // driven by a webhook moves exactly what the worker's settle moved.
+      // The USD amount the provider reported settling. Recorded for the audit trail and
+      // reconciliation only. The figures actually posted are the rate-derived ones the worker
+      // computes: gross USD from the reserve at the payout rate, less the rail fee. The worker
+      // computes them identically so a settle driven by a webhook moves exactly what the worker's
+      // own settle moved.
       providerAmount: Amount;
       // System- or operator-only (RESTRICTED_TO_PRIVILEGED in economy.ts): the SUBMITTED -> SETTLED
       // step that empties the seller's reserve into REVENUE and moves the gross USD out of trust.
-      // An end user must never settle their own payout. Named only by its payout id (`sagaId`); the
-      // postings touch platform accounts only, no user wallet account is named directly.
+      // An end user must never settle their own payout. The operation is named only by its payout id
+      // (`sagaId`). The postings touch platform accounts only, so no user wallet account is named
+      // directly.
     };
 
 /**
@@ -286,9 +288,9 @@ export type Middleware = (next: Handler) => Handler;
 
 /**
  * Splits a sale's `price` across recipients and the platform into the debit/credit lines (legs) to
- * post. Accounts for every minor unit with no rounding loss: platform fee off the top (rounded
- * down), each recipient their rounded-down share of the rest, leftover rounding penny to platform
- * revenue. Implemented in `pricing.ts`.
+ * post. Accounts for every minor unit with no rounding loss. The platform fee comes off the top,
+ * rounded down. Each recipient then takes a rounded-down share of the rest. The leftover rounding
+ * penny goes to platform revenue. Implemented in `pricing.ts`.
  */
 export type FeePolicy = (input: {
   price: Amount;
@@ -300,10 +302,10 @@ export type FeePolicy = (input: {
 
 /**
  * The economy's pause state at a moment in time, derived from the configured maintenance window and
- * the clock. `paused` is true only inside the window; `pauseStart`/`pauseEnd` are the configured
- * bounds (epoch ms) or null when no window is set; `resumesAt` is `pauseEnd` while paused, else null.
- * The readable side of the ECONOMY_PAUSED gate: a UI reads this to show a banner without inferring
- * the state from a declined write.
+ * the clock. `paused` is true only inside the window. `pauseStart` and `pauseEnd` are the configured
+ * bounds in epoch ms, or null when no window is set. `resumesAt` is `pauseEnd` while paused, else
+ * null. This is the readable side of the ECONOMY_PAUSED gate: a UI reads it to show a banner without
+ * inferring the state from a declined write.
  */
 export type EconomyStatus = {
   paused: boolean;
@@ -334,8 +336,8 @@ export interface Economy {
     // One payout saga by id (state, provider ref, attempts), or null if unknown. The background
     // worker advances these; a UI reads them to render payout status.
     saga(id: string, options?: Options): Promise<Saga | null>;
-    // Whether a user currently owns an entitlement (a SKU — an item or feature), true or false.
-    // Ownership is a record, not a balance, so it has its own reader; this is the readable side of
+    // Whether a user currently owns an entitlement (a SKU: an item or feature), true or false.
+    // Ownership is a record, not a balance, so it has its own reader. This is the readable side of
     // `grantEntitlement`/`revokeEntitlement` that a UI gates access on.
     entitled(userId: string, sku: string, options?: Options): Promise<boolean>;
     // The economy's current pause state (see EconomyStatus): whether a maintenance window is in
@@ -343,20 +345,20 @@ export interface Economy {
     // clock, not stored, so it always reflects the live window. Lets a UI render a maintenance banner
     // without inferring the state from an ECONOMY_PAUSED decline.
     status(): EconomyStatus;
-    // Every account that has a balance row, streamed — a real ledger can hold many, so iterate and
+    // Every account that has a balance row, streamed. A real ledger can hold many, so iterate and
     // stop when you've seen enough rather than collecting blindly. Lets a reader enumerate accounts
-    // (and derive users) without tracking them itself; this is the prover's own enumeration.
+    // (and derive users) without tracking them itself. This is the prover's own enumeration.
     accounts(options?: Options): AsyncIterable<AccountRef>;
-    // Every payout saga, newest first, streamed (a busy economy can have many): the whole board —
-    // settled and failed payouts included, not only the due ones the worker claims. Lets a UI render
-    // payout status without tracking minted payout ids itself. Delegates to `SagaStore.list`.
+    // Every payout saga, newest first, streamed (a busy economy can have many). This is the whole
+    // board: settled and failed payouts included, not only the due ones the worker claims. Lets a UI
+    // render payout status without tracking minted payout ids itself. Delegates to `SagaStore.list`.
     payouts(options?: Options): AsyncIterable<Saga>;
-    // Every committed posting, newest first, streamed (a busy ledger can have many): the whole
-    // journal — user operations and the worker's own postings alike, every account touched, not
-    // only the ones a given reader minted. Each posting carries its full legs, so a UI can render
-    // and expand a row without a second lookup. Lets the journal be read from the engine itself
-    // instead of a side-channel that only sees the writes one process happened to make. Delegates
-    // to `Ledger.list`.
+    // Every committed posting, newest first, streamed (a busy ledger can have many). This is the
+    // whole journal: user operations and the worker's own postings alike, covering every account
+    // touched, not only the ones a given reader minted. Each posting carries its full legs, so a UI
+    // can render and expand a row without a second lookup. Lets the journal be read from the engine
+    // itself instead of a side channel that only sees the writes one process happened to make.
+    // Delegates to `Ledger.list`.
     postings(options?: Options): AsyncIterable<Posting>;
     prove(options?: Options): Promise<ProveReport>;
   };
@@ -388,10 +390,10 @@ export interface ProveReport {
 
   // Every account whose cached balance disagrees with the balance re-added from its debit and
   // credit lines; empty when `consistent` is true. Each entry names the account and both figures so
-  // an operator sees the size and direction of the gap. Catches two cases: an account with real
-  // postings whose cached total drifted, and a leftover balance row with no postings behind it (its
-  // lines say it shouldn't exist, so any non-zero cached figure is wrong; compared against a
-  // re-added balance of zero).
+  // an operator sees the size and direction of the gap. This catches two cases. The first is an
+  // account with real postings whose cached total drifted. The second is a leftover balance row
+  // with no postings behind it: its lines say it should not exist, so it is compared against a
+  // re-added balance of zero, and any non-zero cached figure is wrong.
   drift: ReadonlyArray<{
     account: AccountRef;
     materialized: Amount;

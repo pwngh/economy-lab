@@ -18,8 +18,9 @@ import type { Amount } from '#src/money.ts';
 import type { WorkerCtx } from '#src/contract.ts';
 import type { Options, PromoGrant, Store, Unit } from '#src/ports.ts';
 
-// Metrics counter for the sweep (periodic pass that reverses expired promo grants). Bumped
-// twice per run, once per outcome ("reversed", "failed"), so each can be graphed separately.
+// Metric name for the sweep, the periodic pass that reverses expired promo grants. The sweep
+// bumps this counter twice per run, once per outcome ("reversed" and "failed"), so each outcome
+// can be graphed separately.
 let SWEEP_METRIC = 'economy.worker.promo.expiry';
 
 /**
@@ -77,11 +78,11 @@ export async function sweepExpiredPromos(
   return tally;
 }
 
-// Process one expired grant, catching errors so one bad grant can't break the run. On success
-// the amount taken back goes under `reversed`. On error, normalizeError maps it to a standard
-// code and the grant id plus code go under `failed`. Either way the grant stays eligible for a
-// later sweep, since the transaction was rolled back along with the money movement; no cleanup
-// needed here.
+// Processes one expired grant and catches its errors so a single bad grant cannot break the run.
+// On success the amount taken back goes under `reversed`. On error normalizeError maps it to a
+// standard code, and the grant id plus that code go under `failed`. A failed grant stays eligible
+// for a later sweep because its transaction rolled back along with the money movement, so no
+// cleanup is needed here.
 async function reverseOne(args: {
   store: Store;
   ctx: WorkerCtx;
@@ -99,13 +100,14 @@ async function reverseOne(args: {
   }
 }
 
-// Claw back one grant's unspent credits in a single transaction. Lock the user's promo account
-// (so no concurrent spend shifts the balance mid-reversal), read its balance, take back
-// min(grant amount, balance) (the unspent remainder). If positive, post a ledger entry undoing
-// the original grant: credits out of the user's promo account, back into PROMO_FLOAT (see
-// postReversal). A fully-spent grant takes back zero and posts no entry. Either way flag the
-// grant reversed in this same transaction, so if the entry is undone the grant stays eligible to
-// retry. Returns the amount taken back.
+// Claws back one grant's unspent credits in a single transaction. First it locks the user's promo
+// account so no concurrent spend can shift the balance mid-reversal. Then it reads the balance and
+// takes back min(grant amount, balance), which is the unspent remainder. When that amount is
+// positive it posts a ledger entry that undoes the original grant by moving credits out of the
+// user's promo account and back into PROMO_FLOAT (see postReversal). A fully spent grant takes
+// back zero and posts no entry. Either way it flags the grant reversed inside this same
+// transaction, so if the entry rolls back the grant stays eligible to retry. Returns the amount
+// taken back.
 async function settle(args: {
   store: Store;
   ctx: WorkerCtx;
@@ -127,10 +129,10 @@ async function settle(args: {
   }, options);
 }
 
-// Post the reversal as one balanced ledger entry (debit and credit net to zero): debit the
-// user's promo account, credit PROMO_FLOAT. This mirrors the original grant (which debited
-// PROMO_FLOAT and credited the user), so grant and reversal cancel out. The grant id goes on the
-// entry metadata so the reversal can be traced back to the grant it undid.
+// Posts the reversal as one balanced ledger entry whose debit and credit net to zero: it debits
+// the user's promo account and credits PROMO_FLOAT. This mirrors the original grant, which debited
+// PROMO_FLOAT and credited the user, so the grant and the reversal cancel out. The grant id goes on
+// the entry metadata so the reversal can be traced back to the grant it undid.
 async function postReversal(args: {
   unit: Unit;
   ctx: WorkerCtx;
@@ -153,10 +155,10 @@ async function postReversal(args: {
   );
 }
 
-// Report one sweep via the context logger and meter. Writes one info log line with the two
-// counts and the failed ids, then bumps the counter twice (reversed count, failed count) so each
-// is tracked separately. Expiry reversal is internal worker housekeeping, so nothing is published
-// to the event stream.
+// Reports one sweep through the context logger and meter. It writes one info log line with the two
+// counts and the failed ids, then bumps the counter twice, once with the reversed count and once
+// with the failed count, so each outcome is tracked separately. Expiry reversal is internal worker
+// housekeeping, so nothing is published to the event stream.
 function tally2(ctx: WorkerCtx, summary: PromoExpirySummary): void {
   ctx.logger.log('info', 'worker.promo.expiry', {
     reversed: summary.reversed.length,

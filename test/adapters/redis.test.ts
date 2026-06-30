@@ -16,12 +16,13 @@ import assert from 'node:assert/strict';
 import { redisCacheFrom } from '#src/adapters/redis.ts';
 import { runCacheConformance } from '#test/conformance/cache.ts';
 
-// In-memory stand-in for the ioredis client, with only the methods the adapter calls.
-// Lets tests check adapter behavior (key prefix, expiry forwarding, error conversion)
-// without a running Redis.
+// An in-memory stand-in for the ioredis client. It implements only the methods the adapter
+// calls, so tests can check the adapter's behavior (key prefix, expiry forwarding, error
+// conversion) without a running Redis.
 //
-// `store` holds the fake's key/value pairs for inspection. `setCalls` records the exact
-// argument list of every `set` call, to confirm the expiry option passed through unchanged.
+// `store` holds the fake's key/value pairs so a test can inspect them. `setCalls` records the
+// exact argument list of every `set` call, which lets a test confirm that the expiry option
+// passed through unchanged.
 interface FakeRedis {
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<unknown>;
@@ -50,8 +51,8 @@ function fakeRedis(): FakeRedis {
   return fake;
 }
 
-// Fake whose every command throws, to check the adapter converts a driver error into
-// the project's own error type.
+// Builds a fake whose every command rejects. This lets a test check that the adapter converts
+// a driver error into the project's own error type.
 function failingRedis(cause: Error): FakeRedis {
   let base = fakeRedis();
   return {
@@ -188,5 +189,5 @@ describe('redisCacheFrom', () => {
   });
 });
 
-// The shared Cache contract, against the Redis adapter over the fake client.
+// Runs the shared Cache contract against the Redis adapter over the fake client.
 runCacheConformance('redis', () => redisCacheFrom(fakeRedis()));

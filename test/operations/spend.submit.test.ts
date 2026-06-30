@@ -22,23 +22,23 @@ import { spendable, earned } from '#src/accounts.ts';
 
 import type { Economy } from '#src/contract.ts';
 
-// Drive the spend handler's two input guards through the full public economy.submit path, the way
-// entitlements.submit.test.ts exercises the authorization layer (spend.test.ts calls the handler
-// directly). Both guards protect one invariant: a spend can never mint cash-outable earned credit
-// out of nothing.
-//   1. Self-dealing: a buyer naming themselves as recipient would turn their non-cashable
-//      spendable/promo balance into withdrawable earned credit funded by platform revenue.
-//   2. Per-recipient bounds: shares like [-5000, 15000] sum to 10000 but assign one recipient
-//      a negative cut and another more than the whole net; each share must be strictly positive
-//      and at most 10000 bps.
-// A malformed split throws a fault (OP.MALFORMED), surfacing through submit as a rejected
+// Drives the spend handler's two input guards through the full public economy.submit path. This
+// mirrors how entitlements.submit.test.ts exercises the authorization layer, whereas spend.test.ts
+// calls the handler directly. Both guards protect one invariant: a spend can never mint cash-outable
+// earned credit out of nothing.
+//   1. Self-dealing. A buyer who names themselves as a recipient would turn their non-cashable
+//      spendable or promo balance into withdrawable earned credit funded by platform revenue.
+//   2. Per-recipient bounds. Shares like [-5000, 15000] sum to 10000 but assign one recipient a
+//      negative cut and another more than the whole net. Each share must be strictly positive and
+//      at most 10000 bps.
+// A malformed split throws a fault (OP.MALFORMED). The fault surfaces through submit as a rejected
 // promise rather than a returned business rejection.
 
 function isMalformed(error: unknown): boolean {
   return (error as { code?: string }).code === 'OP.MALFORMED';
 }
 
-// Seed a buyer's spendable balance through the public economy, asserting the top-up committed, so
+// Seeds a buyer's spendable balance through the public economy and asserts the top-up committed, so
 // a following spend has real money to draw on.
 async function fund(economy: Economy, userId: string): Promise<void> {
   const outcome = await economy.submit(
@@ -58,15 +58,16 @@ describe('Spend Input Guards Through economy.submit', () => {
           buyerId: 'usr_buyer',
           sku: 'wrld_pass',
           price: credit('4.00'),
-          // Buyer as sole recipient: would mint cash-outable earned credit from their own
-          // non-cashable balance.
+          // Naming the buyer as sole recipient would mint cash-outable earned credit from their
+          // own non-cashable balance.
           recipients: [{ sellerId: 'usr_buyer', shareBps: 10_000 }],
         }),
       ),
       isMalformed,
     );
 
-    // Thrown before posting: spendable untouched, earned nothing.
+    // The guard throws before any posting. The spendable balance is untouched and no earned
+    // credit was created.
     assert.deepEqual(
       await economy.read.balance(spendable('usr_buyer')),
       credit('10.00'),
@@ -87,8 +88,8 @@ describe('Spend Input Guards Through economy.submit', () => {
           buyerId: 'usr_buyer',
           sku: 'wrld_pass',
           price: credit('4.00'),
-          // -5000 + 15000 == 10000, so the sum check passes; the negative and >100% shares must
-          // still be rejected by the per-recipient bounds check.
+          // -5000 + 15000 == 10000, so the sum check passes. The per-recipient bounds check must
+          // still reject the negative share and the share above 100%.
           recipients: [
             { sellerId: 'usr_a', shareBps: -5_000 },
             { sellerId: 'usr_b', shareBps: 15_000 },
@@ -98,7 +99,7 @@ describe('Spend Input Guards Through economy.submit', () => {
       isMalformed,
     );
 
-    // Nothing posted: the buyer was not charged.
+    // Nothing was posted, so the buyer was not charged.
     assert.deepEqual(
       await economy.read.balance(spendable('usr_buyer')),
       credit('10.00'),
@@ -122,7 +123,7 @@ describe('Spend Input Guards Through economy.submit', () => {
     );
 
     assert.equal(outcome.status, 'committed');
-    // Buyer paid full price: spendable drops 10.00 → 6.00.
+    // The buyer paid full price.
     assert.deepEqual(
       await economy.read.balance(spendable('usr_buyer')),
       credit('6.00'),

@@ -45,14 +45,15 @@ import type { ReconcileFeed, ReconcileSummary } from '#src/worker/reconcile.ts';
 
 /**
  * Names of the background jobs run each cycle. `SweepName` below is derived from this list, so
- * these literals are the sole definition. `as const` (freezing the array, keeping literal types)
- * rather than an enum.
+ * these literals are the sole definition. The list is `as const` rather than an enum, which freezes
+ * the array and keeps the literal types.
  *
- * Array order is run order and result order, and the order is load-bearing: `feeSweep` follows
- * `treasury` (measure surplus, then move it — keep the pair adjacent); `checkpointVerify` runs
- * before `checkpoint` (re-check the old sealed snapshot before a fresh one overwrites it — a
- * just-taken snapshot always passes); `drainInbox` sits next to its outbound mirror `relay` and is
- * never gated on the pause, so settlements keep flowing during a maintenance window.
+ * Array order is both run order and result order, and the order is load-bearing. `feeSweep` follows
+ * `treasury` because one measures the surplus and the next moves it, so keep the pair adjacent.
+ * `checkpointVerify` runs before `checkpoint` so it re-checks the old sealed snapshot before a fresh
+ * one overwrites it; a just-taken snapshot always passes. `drainInbox` sits next to its outbound
+ * mirror `relay` and is never gated on the pause, so settlements keep flowing during a maintenance
+ * window.
  */
 export const SWEEP_NAMES = [
   'payouts',
@@ -68,10 +69,10 @@ export const SWEEP_NAMES = [
 ] as const;
 export type SweepName = (typeof SWEEP_NAMES)[number];
 
-// Arguments for the background jobs in one object, so the runner takes a single value. Not every
-// job uses every field: `now`/`limit` for due-item scans (current time, per-pass cap);
-// `dispatcher` for event delivery; `feed`/`windows` for reconciliation. `options` may carry an
-// AbortSignal to cancel a running job.
+// Bundles the arguments for every background job into one object, so the runner takes a single
+// value. Not every job uses every field. `now` and `limit` drive the due-item scans: `now` is the
+// current time and `limit` is the per-pass cap. `dispatcher` handles event delivery. `feed` and
+// `windows` drive reconciliation. `options` may carry an AbortSignal that cancels a running job.
 export type SweepInput = {
   now: number;
   limit: number;
@@ -90,15 +91,15 @@ export type SweepInput = {
   options?: Options;
 };
 
-// Outcome of one job: it ran and produced a summary (`ok: true`), or it threw and the caught
-// error became a result (`ok: false`) carrying the error code and retry flag. Errors are always
-// reported this way, so one job's exception never escapes to the caller.
+// Holds the outcome of one job. Either the job ran and produced a summary (`ok: true`), or it threw
+// and the caught error became a result (`ok: false`) that carries the error code and retry flag.
+// Errors are always reported this way, so one job's exception never escapes to the caller.
 export type SweepResult<TSummary> =
   | { ok: true; summary: TSummary }
   | { ok: false; code: string; retryable: boolean };
 
-// Combined result from `runSweeps`: one entry per job, keyed by name; each is the job's summary
-// if it ran or its caught error if it failed. One job failing never hides the others.
+// Combines the results from `runSweeps` into one entry per job, keyed by name. Each entry is the
+// job's summary if it ran or its caught error if it failed. One job failing never hides the others.
 export type SweepBatch = {
   payouts: SweepResult<SettleSummary>;
   subscriptions: SweepResult<SweepSummary>;
@@ -112,11 +113,12 @@ export type SweepBatch = {
   promos: SweepResult<PromoExpirySummary>;
 };
 
-// runOnce's result: the per-job batch plus the txn id of every ledger posting the run committed, so
-// a host can fold the run's settlements/reversals/sweeps into a feed without intercepting the id
-// generator itself. A rolled-back job can mint an id that never commits; resolve each via
-// read.posting and skip a null. `postings` sits beside `batch`, not merged into it, so iterating the
-// batch's job results (e.g. to collect failures) never trips over the postings list.
+// Holds runOnce's result: the per-job batch plus the txn id of every ledger posting the run
+// committed. A host can fold the run's settlements, reversals, and sweeps into a feed without
+// intercepting the id generator itself. A rolled-back job can mint an id that never commits, so
+// resolve each id via read.posting and skip a null. `postings` sits beside `batch` rather than
+// merged into it, so iterating the batch's job results (for example, to collect failures) never
+// trips over the postings list.
 export type SweepRun = { batch: SweepBatch; postings: ReadonlyArray<string> };
 
 /**
@@ -146,21 +148,23 @@ export async function runSweeps(
       sweepDueSubscriptions(store, ctx, { now, limit }),
     ),
     treasury: await isolate(() => sweepTreasury(store, ctx, { now })),
-    // Move the surplus treasury just measured (cash held beyond what's owed users) into platform
-    // funds: take the full amount available this cycle, skip when zero, and record the
-    // economy.fees.swept event in the same commit as the money movement so the two can't
-    // disagree. Wrapped like every job, so if a safety check (only truly surplus, settled funds
-    // may move, not money owed to users) refuses, the refusal is reported as a failed result.
+    // Moves the surplus treasury just measured into platform funds. Surplus is cash held beyond what
+    // is owed to users. The job takes the full amount available this cycle, skips when that amount is
+    // zero, and records the economy.fees.swept event in the same commit as the money movement so the
+    // two can't disagree. It is wrapped like every job, so a refusal is reported as a failed result.
+    // The safety check refuses unless the funds are truly surplus and settled; money owed to users
+    // may not move.
     feeSweep: await isolate(() => realizeFees(store, ctx, { now })),
-    // Re-check the previous sealed snapshot against the current ledger before sealing a fresh one
-    // below. The old snapshot predates any tampering since it was sealed, so it catches it; a
-    // just-taken snapshot always passes (built from the ledger it's compared against). A mismatch
-    // is recorded on the summary rather than thrown, so it skips `isolate`'s error path; only a
-    // corrupted row or storage failure is reported as a failed result.
+    // Re-checks the previous sealed snapshot against the current ledger before sealing a fresh one
+    // below. The old snapshot predates any tampering done since it was sealed, so it catches that
+    // tampering. A just-taken snapshot always passes because it is built from the ledger it is
+    // compared against. A mismatch is recorded on the summary rather than thrown, so it skips
+    // `isolate`'s error path. Only a corrupted row or a storage failure is reported as a failed
+    // result.
     checkpointVerify: await isolate(() => reverifyCheckpoint(store, ctx)),
     checkpoint: await isolate(() => sealCheckpoint(store, ctx)),
-    // Relay is the one sweep with an optional capability. With no dispatcher there's nothing to
-    // deliver through, so it short-circuits to an empty successful summary; pending rows stay in
+    // Relay is one of two sweeps with an optional capability. With no dispatcher there is nothing to
+    // deliver through, so it short-circuits to an empty successful summary and pending rows stay in
     // the outbox for a later run. This is the only place that handles the optional dispatcher;
     // relayOutbox itself always requires one.
     relay:
@@ -174,12 +178,12 @@ export async function runSweeps(
               options,
             ),
           ),
-    // The inbound mirror of relay, and likewise the only other sweep with an optional capability.
-    // With no economy handle there's nothing to submit through, so it short-circuits to an empty
-    // successful summary; pending inbox rows stay put for a later run. Unlike a user write this is
-    // never gated on the economy pause — see drainInbox's note: settlements must keep flowing through
-    // a maintenance window. (The job is still wrapped in `isolate`, so a store/submit failure is
-    // reported as a failed result rather than escaping the run.)
+    // The inbound mirror of relay, and the other sweep with an optional capability. With no economy
+    // handle there is nothing to submit through, so it short-circuits to an empty successful summary
+    // and pending inbox rows stay put for a later run. Unlike a user write, this is never gated on
+    // the economy pause: settlements must keep flowing through a maintenance window (see drainInbox's
+    // note). The job is still wrapped in `isolate`, so a store or submit failure is reported as a
+    // failed result rather than escaping the run.
     drainInbox:
       input.economy === undefined
         ? { ok: true, summary: { applied: [], failed: [], deadLettered: [] } }
@@ -203,9 +207,10 @@ export async function runSweeps(
 // Runs one job and turns its outcome into a SweepResult. A return becomes `ok: true` with the
 // summary.
 //
-// A throw goes through `normalizeError` (errors.ts) to a standard EconomyError: an existing
-// EconomyError passes through unchanged; anything else is wrapped as a retryable STORE.FAILURE
-// keeping the original as `cause` (for logs). Its code and retry flag form the `ok: false` result.
+// A throw goes through `normalizeError` (errors.ts) to a standard EconomyError. An existing
+// EconomyError passes through unchanged. Anything else is wrapped as a retryable STORE.FAILURE that
+// keeps the original as `cause` for logs. The EconomyError's code and retry flag form the
+// `ok: false` result.
 //
 // Catching here keeps one failing job from stopping the others.
 async function isolate<TSummary>(
@@ -237,9 +242,9 @@ export function createWorker(
   scheduler?: Scheduler,
 ): Worker {
   let runOnce = async (input: SweepInput): Promise<SweepRun> => {
-    // Record every txn id minted this run via a wrapped id generator, so the host gets the run's
-    // ledger postings without intercepting `ctx.ids` itself. `start` below doesn't need this, so
-    // it stays on the bare runSweeps.
+    // Records every txn id minted this run through a wrapped id generator, so the host gets the run's
+    // ledger postings without intercepting `ctx.ids` itself. `start` below does not need this, so it
+    // stays on the bare runSweeps.
     let postings: string[] = [];
     let recordingCtx: WorkerCtx = {
       ...ctx,

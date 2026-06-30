@@ -34,22 +34,23 @@ import type { Amount } from '#src/money.ts';
 // only recognized spend/topUp/grantPromo, so a payout was neither counted nor stopped. economy.ts
 // now calls the shared rule in trust.ts, which covers payout too.
 //
-// Setup: window is one hour, clock frozen at 0, so every attempt lands in the same window and the
-// per-user total accumulates. Ceiling overridden via config to 1_000 minor units (10.00 CREDIT;
-// CREDIT has 100 minor units to the whole). Two 6.00 attempts bracket it: 6.00 fits under 10.00,
-// 6.00 + 6.00 = 12.00 crosses it, so the second is denied.
+// Setup: the window is one hour and the clock is frozen at 0, so every attempt lands in the same
+// window and the per-user total accumulates. Config overrides the ceiling to 1_000 minor units, which
+// is 10.00 CREDIT (CREDIT has 100 minor units to the whole). Two 6.00 attempts bracket that ceiling:
+// 6.00 fits under 10.00, but 6.00 + 6.00 = 12.00 crosses it, so the second is denied.
 
-// Store wired with the same fixed-seed digest and frozen clock the economy uses. Sharing one store
-// lets us seed balances by hand, then pass it to makeEconomy so both sides agree on hashes and time.
+// Builds a store wired with the same fixed-seed digest and frozen clock the economy uses. Sharing one
+// store lets the test seed balances by hand, then pass it to makeEconomy. Both sides then agree on
+// hashes and time.
 function sharedStore(): Store {
   return memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
 }
 
-// Give a seller money to pay out from. Each user's "earned" account holds revenue the platform owes
-// them; raise it and offset by debiting the platform's REVENUE account (allowed to run negative).
-// Double-entry only accepts writes whose two sides cancel, so we move money from somewhere to
-// somewhere, mimicking a real sale. Funding one payout lets the first attempt commit, leaving the
-// ceiling to stop the second.
+// Gives a seller money to pay out from. Each user's "earned" account holds revenue the platform owes
+// them. To raise it, the credit is offset by a debit to the platform's REVENUE account, which is
+// allowed to run negative. Double-entry only accepts writes whose two sides cancel, so the seed moves
+// money between two accounts to mimic a real sale. Funding one payout lets the first attempt commit
+// and leaves the ceiling to stop the second.
 function seedEarned(
   store: Store,
   userId: string,

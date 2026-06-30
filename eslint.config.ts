@@ -14,8 +14,9 @@ import n from 'eslint-plugin-n';
 import tseslint from 'typescript-eslint';
 
 // Node-only globals banned from the core. The core targets the cross-runtime surface (Node, Bun,
-// Deno, CF Workers), so each has an injected replacement: time via Clock, randomness/hashing via
-// crypto.subtle, raw bytes via Uint8Array. Each entry: forbidden global + ESLint message.
+// Deno, CF Workers), so each banned global has an injected replacement: time comes from Clock,
+// randomness and hashing from crypto.subtle, raw bytes from Uint8Array. Each entry pairs the
+// forbidden global with the ESLint message shown when it is used.
 let BANNED_GLOBALS = [
   {
     name: 'Buffer',
@@ -66,10 +67,11 @@ let BANNED_IMPORTS = {
   ],
 };
 
-// Layering invariant 1: src/ must not import test or dev-script code, which would drag test helpers
-// and CLI wiring into the production bundle. Matches static import/export from only. Uses `regex`,
-// not `group`: group patterns are gitignore-style where a leading `#` is a comment matching nothing,
-// so `#test/**` would never fire; `regex` matches the alias literally.
+// Layering invariant 1: src/ must not import test or dev-script code. Such an import would drag test
+// helpers and CLI wiring into the production bundle. The rule matches only static import and export
+// statements. It uses `regex` rather than `group` because group patterns are gitignore-style, where
+// a leading `#` is a comment that matches nothing, so `#test/**` would never fire. The `regex` form
+// matches the `#test/` alias literally.
 let NON_SHIPPED_IMPORTS = [
   {
     regex: '^#test/',
@@ -83,11 +85,11 @@ let NON_SHIPPED_IMPORTS = [
   },
 ];
 
-// Layering invariant 2: the optional db/cache/queue drivers (pg, mysql2, ioredis,
-// @aws-sdk/client-sqs) are optional in peerDependenciesMeta and loaded via dynamic import() in the
-// composition root (src/index.ts), so an unused driver is never required or bundled. Forbid static
-// imports across the library to keep that guarantee; no-restricted-imports does not flag dynamic
-// import(), so legitimate `await import(...)` sites stay valid.
+// Layering invariant 2: the optional db, cache, and queue drivers (pg, mysql2, ioredis,
+// @aws-sdk/client-sqs) are declared optional in peerDependenciesMeta. The composition root
+// (src/index.ts) loads them via dynamic import(), so an unused driver is never required or bundled.
+// Forbidding static imports across the library keeps that guarantee. no-restricted-imports does not
+// flag dynamic import(), so legitimate `await import(...)` sites stay valid.
 let OPTIONAL_DRIVER_IMPORTS = [
   '#src/engines/postgres.ts',
   '#src/engines/mysql.ts',
@@ -130,12 +132,12 @@ export default tseslint.config(
       'n/no-missing-import': 'off',
       'n/no-unpublished-import': 'off',
       'n/no-extraneous-import': 'off',
-      // This rule treats the cross-runtime `crypto` global (used by the core on purpose) as Node's
-      // experimental node:crypto and warns it may be unsupported. It's available (TS types and a
-      // runtime smoke test confirm it; the ban below already blocks Node-only globals). Off to stop
-      // the false positive.
+      // This rule treats the cross-runtime `crypto` global, which the core uses on purpose, as Node's
+      // experimental node:crypto and warns that it may be unsupported. The global is available: the TS
+      // types and a runtime smoke test confirm it, and the ban below already blocks Node-only globals.
+      // The rule is off to silence the false positive.
       'n/no-unsupported-features/node-builtins': 'off',
-      // Keep functions small enough to read top to bottom on one screen; complexity caps branches.
+      // Keep functions small enough to read top to bottom on one screen. The complexity cap limits branches.
       complexity: ['error', 15],
       'max-depth': ['error', 4],
       'max-lines-per-function': [
@@ -147,11 +149,12 @@ export default tseslint.config(
     },
   },
 
-  // Core library under src/, excluding the Node-using layers src/adapters/ and src/engines/. Targets
-  // the WinterCG surface, so Node-only globals and node:* imports are banned here; tests, adapters,
-  // and the database engines aren't matched and may use Node APIs. Both layering invariants apply: no
-  // test/dev-script code, no static imports of the optional drivers. (The drivers and the wire codec
-  // that index.ts/server.ts reach for aren't on these lists, so those seams stay valid.)
+  // Core library under src/, excluding the Node-using layers src/adapters/ and src/engines/. The core
+  // targets the WinterCG surface, so Node-only globals and node:* imports are banned here. Tests,
+  // adapters, and the database engines are not matched and may use Node APIs. Both layering invariants
+  // apply: no test or dev-script code, and no static imports of the optional drivers. The drivers and
+  // the wire codec that index.ts and server.ts reach for are not on these lists, so those seams stay
+  // valid.
   {
     files: ['src/**/*.ts'],
     ignores: ['src/adapters/**', 'src/engines/**'],
@@ -167,10 +170,10 @@ export default tseslint.config(
     },
   },
 
-  // The Node-using layers — adapters (cache/queue/transport) and engines (Postgres/MySQL) — wrap
-  // Node-only APIs, so the node:* and Node-global bans don't apply. They're still shipped code, so
-  // the layering invariants do: no test/dev-script imports, and the optional drivers stay behind
-  // dynamic import().
+  // The Node-using layers wrap Node-only APIs: the adapters cover cache, queue, and transport, and
+  // the engines cover Postgres and MySQL. Because they wrap those APIs, the node:* and Node-global
+  // bans do not apply here. They are still shipped code, so both layering invariants do apply: no
+  // test or dev-script imports, and the optional drivers stay behind dynamic import().
   {
     files: ['src/adapters/**/*.ts', 'src/engines/**/*.ts'],
     rules: {
@@ -181,9 +184,9 @@ export default tseslint.config(
     },
   },
 
-  // Tests run long and nest a few callbacks deep (AAA narratives; the conformance suites iterate the
-  // adapter matrix), so relax only the function-size and nesting limits here. Every other rule still
-  // applies to tests.
+  // Tests run long and nest a few callbacks deep. The AAA narratives make them long, and the
+  // conformance suites add nesting by iterating the adapter matrix. So relax only the function-size
+  // and nesting limits here. Every other rule still applies to tests.
   {
     files: ['test/**/*.ts'],
     rules: {

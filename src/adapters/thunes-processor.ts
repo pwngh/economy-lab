@@ -40,19 +40,21 @@ import type { FetchLike } from '#src/adapters/processor.ts';
  * {@link ResolveRecipient} that maps a user id to this shape.
  */
 export interface ThunesRecipient {
-  // The Thunes payer id: the destination service (a specific mobile-wallet or bank in the receiving
-  // country), discovered via `GET /v2/money-transfer/payers` and typically cached by the host.
+  // The Thunes payer id, which names the destination service: a specific mobile wallet or bank in the
+  // receiving country. The host discovers it via `GET /v2/money-transfer/payers` and usually caches it.
   payerId: string;
 
-  // How the funds are routed to the beneficiary, per the payer's accepted identifiers, e.g.
-  // `{ msisdn }` for a mobile wallet or `{ bank_account_number, swift_bic_code }` for a bank.
+  // How the funds reach the beneficiary, using the identifiers the chosen payer accepts. A mobile
+  // wallet takes `{ msisdn }`; a bank takes `{ bank_account_number, swift_bic_code }`.
   creditPartyIdentifier: Record<string, string>;
 
-  // The beneficiary entity fields the chosen payer requires (name, country, etc.). Passed through to
-  // Thunes verbatim; the required set is payer-specific, so the host shapes it, not this adapter.
+  // The beneficiary entity fields the chosen payer requires, such as name and country. These pass
+  // through to Thunes verbatim. The required set is payer-specific, so the host shapes it, not this
+  // adapter.
   beneficiary: Record<string, unknown>;
 
-  // ISO 4217 code of the currency the beneficiary is paid in (the quotation's destination currency).
+  // ISO 4217 code of the currency the beneficiary is paid in. This is the quotation's destination
+  // currency.
   destinationCurrency: string;
 }
 
@@ -68,10 +70,10 @@ export interface ThunesProcessorConfig {
   /** Thunes API gateway base URL (scheme + host), e.g. `https://api.thunes.com`. */
   baseUrl: string;
 
-  /** API key — the user-id half of Thunes' HTTP Basic credentials. Never written to logs or errors. */
+  /** API key, the user-id half of Thunes' HTTP Basic credentials. Never written to logs or errors. */
   apiKey: string;
 
-  /** API secret — the password half of the Basic credentials. Never written to logs or errors. */
+  /** API secret, the password half of the Basic credentials. Never written to logs or errors. */
   apiSecret: string;
 
   /**
@@ -101,9 +103,9 @@ export interface ThunesProcessorConfig {
 type Transport = { config: ThunesProcessorConfig; doFetch: FetchLike };
 
 // Doc-derived Thunes error codes for idempotent replay (verify against the live sandbox before
-// production). `1007001` rejects a reused external_id — on a retry it means our transaction already
-// exists, so recover it. `1007002` rejects confirming an already-confirmed transaction — on a retry
-// that is success, the disbursement is already in flight.
+// production). `1007001` rejects a reused external_id. On a retry it means our transaction already
+// exists, so recover it. `1007002` rejects confirming an already-confirmed transaction. On a retry
+// that is success, because the disbursement is already in flight.
 const EXTERNAL_ID_IN_USE = '1007001';
 const ALREADY_CONFIRMED = '1007002';
 
@@ -123,9 +125,10 @@ export function thunesProcessor(config: ThunesProcessorConfig): Processor {
   };
 }
 
-// Orchestrate the three Thunes calls behind the single port method. The transaction id minted at
-// step 2 is the `providerRef` we return, so confirm only has to succeed — there is no "2xx but no
-// reference" ambiguity to resolve. The money moves at confirm; everything before it is safe to redo.
+// Orchestrates the three Thunes calls behind the single port method. The transaction id minted at
+// step 2 is the `providerRef` we return, so confirm only has to succeed: there is no "2xx but no
+// reference" ambiguity to resolve. The money moves at confirm, and everything before it is safe to
+// redo.
 async function submitPayout(
   transport: Transport,
   input: { key: string; userId: string; amount: Amount },
@@ -149,8 +152,9 @@ async function submitPayout(
   return { providerRef: transactionId };
 }
 
-// Step 1 — lock the FX rate. No money moves here, so any non-2xx is surfaced for the worker to retry
-// (a reused external_id returns the existing quotation, so a redo is safe). Returns the quotation id.
+// Step 1, locking the FX rate. No money moves here, so any non-2xx is surfaced for the worker to
+// retry. A reused external_id returns the existing quotation, so a redo is safe. Returns the
+// quotation id.
 async function createQuotation(
   transport: Transport,
   draft: {
@@ -182,9 +186,10 @@ async function createQuotation(
   return requireId(res.body, 'quotation');
 }
 
-// Step 2 — create the transaction against the quotation, naming the credit party and beneficiary.
-// Still pre-confirm (no debit yet). On a reused external_id the transaction already exists from a
-// prior attempt, so recover its id instead of failing. Returns the transaction id (the providerRef).
+// Step 2, creating the transaction against the quotation, naming the credit party and beneficiary.
+// This is still pre-confirm, so no debit happens yet. On a reused external_id the transaction already
+// exists from a prior attempt, so recover its id instead of failing. Returns the transaction id (the
+// providerRef).
 async function createTransaction(
   transport: Transport,
   draft: {
@@ -221,9 +226,10 @@ async function createTransaction(
   throw httpFault('transaction', res);
 }
 
-// Step 3 — confirm: the money-movement boundary (debits our Thunes balance, submits to the payer).
-// A 2xx settles the submit. An already-confirmed transaction (a retry of a confirm that did go
-// through) is success, not failure: the disbursement is already in flight, so let the saga advance.
+// Step 3, the confirm. This is the money-movement boundary: it debits our Thunes balance and submits
+// to the payer. A 2xx settles the submit. An already-confirmed transaction is a retry of a confirm
+// that did go through, which is success, not failure: the disbursement is already in flight, so let
+// the saga advance.
 async function confirmTransaction(
   transport: Transport,
   transactionId: string,
@@ -243,8 +249,9 @@ async function confirmTransaction(
   throw httpFault('confirm', res);
 }
 
-// Recover the transaction id for a key whose external_id Thunes already has (the idempotent-replay
-// path). Thunes addresses a transaction by partner reference at `…/transactions/ext-{external_id}`.
+// Recovers the transaction id for a key whose external_id Thunes already has. This is the
+// idempotent-replay path. Thunes addresses a transaction by partner reference at
+// `.../transactions/ext-{external_id}`.
 async function recoverTransactionId(
   transport: Transport,
   key: string,
@@ -268,8 +275,8 @@ async function recoverTransactionId(
 // code (an idempotent-replay code is success, not a failure).
 type ThunesResponse = { ok: boolean; status: number; body: unknown };
 
-// Send one request and parse its body. A failed send or unreadable body is a retryable provider fault
-// with the original error attached; the status check itself is left to the caller.
+// Sends one request and parses its body. A failed send or an unreadable body becomes a retryable
+// provider fault with the original error attached. The status check itself is left to the caller.
 async function request(
   transport: Transport,
   spec: { method: string; path: string; payload?: unknown },
@@ -317,8 +324,8 @@ async function request(
  *
  * `external_id` carried our payout saga id (set in {@link thunesProcessor}), so it maps straight to
  * `sagaId`; the Thunes transaction `id` becomes `eventId` (one settle per transaction) and the audit
- * `providerRef`. `providerAmount` is read from the source amount the rail debited — recorded for the
- * audit trail only; `settlePayout` posts the rate-derived figures it recomputes from the reserve.
+ * `providerRef`. `providerAmount` is read from the source amount the rail debited and is recorded for
+ * the audit trail only; `settlePayout` posts the rate-derived figures it recomputes from the reserve.
  *
  * `provider` comes from the webhook route, never the body, so it can't be spoofed.
  */
@@ -344,16 +351,16 @@ export function decodeThunesPayoutCallback(
   };
 }
 
-// True once the transaction has reached the terminal success state. Thunes' `status` is a five-digit
-// code whose first digit is the status_class; `70000 COMPLETED` (class 7) is the only success
-// terminal, so key on the leading 7 rather than the exact string, which varies by payer.
+// Reports whether the transaction has reached the terminal success state. Thunes' `status` is a
+// five-digit code whose first digit is the status_class. `70000 COMPLETED` (class 7) is the only
+// success terminal, so key on the leading 7 rather than the exact string, which varies by payer.
 function isCompleted(row: Record<string, unknown>): boolean {
   let status = row.status;
   return typeof status === 'string' && status.startsWith('7');
 }
 
-// Read the source-amount object Thunes echoes (the funds debited from our balance) into a USD Amount.
-// economy-lab funds payouts in USD, so the source currency is USD; decode the decimal into the exact
+// Reads the source-amount object Thunes echoes, the funds debited from our balance, into a USD Amount.
+// economy-lab funds payouts in USD, so the source currency is USD. Decode the decimal into the exact
 // minor-unit Amount the rest of the system uses.
 function sourceAmount(source: unknown): Amount {
   if (source === null || typeof source !== 'object') {
@@ -375,21 +382,21 @@ function sourceAmount(source: unknown): Amount {
 
 // --- Turning requests and responses into and out of JSON --------------------------
 
-// A Thunes amount object: a decimal number plus its ISO currency. economy-lab money is an exact
-// minor-unit bigint, so render it through `encodeAmount` (`"USD:12.34"`) and take the decimal part.
-// JSON has no bigint, and Thunes' own model carries the amount as a decimal number, so this is the
-// one place a money value crosses into a float — bounded to two decimals and well within range for
-// any real payout.
+// Builds a Thunes amount object: a decimal number plus its ISO currency. economy-lab money is an
+// exact minor-unit bigint, so render it through `encodeAmount` (`"USD:12.34"`) and take the decimal
+// part. JSON has no bigint, and Thunes' own model carries the amount as a decimal number, so this is
+// the one place a money value crosses into a float. The value is bounded to two decimals and stays
+// well within range for any real payout.
 function wireAmount(amount: Amount): { amount: number; currency: Currency } {
   let text = encodeAmount(amount);
   let decimal = text.slice(text.indexOf(':') + 1);
   return { amount: Number(decimal), currency: amount.currency };
 }
 
-// Pull a resource id out of a Thunes body. Accepts a string or number and stringifies it: Thunes ids
-// exceed 32 bits, so a numeric id at the far end risks precision loss in JSON — a body that carries
-// the id as a string is preferred. A missing id on a 2xx is an ambiguous provider response; pre-money
-// (quotation/transaction) it is treated as retryable so the worker redoes the safe step.
+// Pulls a resource id out of a Thunes body. Accepts a string or number and stringifies it. Thunes ids
+// exceed 32 bits, so a numeric id risks precision loss in JSON; a body that carries the id as a string
+// is preferred. A missing id on a 2xx is an ambiguous provider response. On a pre-money step
+// (quotation or transaction) it is treated as retryable so the worker redoes the safe step.
 function requireId(body: unknown, step: string): string {
   if (body !== null && typeof body === 'object') {
     let id = (body as { id?: unknown }).id;
@@ -407,8 +414,9 @@ function requireId(body: unknown, step: string): string {
   );
 }
 
-// Thunes' error envelope is `{ errors: [{ code, message }] }`; return the first code (as a string) or
-// undefined. Used to spot the idempotent-replay codes among non-2xx responses.
+// Returns the first error code as a string, or undefined. Thunes' error envelope is
+// `{ errors: [{ code, message }] }`. This is used to spot the idempotent-replay codes among non-2xx
+// responses.
 function errorCodeOf(body: unknown): string | undefined {
   if (body === null || typeof body !== 'object') {
     return undefined;
@@ -421,7 +429,7 @@ function errorCodeOf(body: unknown): string | undefined {
   return code === undefined ? undefined : String(code);
 }
 
-// Parse a response body as JSON, tolerating an empty or non-JSON body (returned as null) — a confirm
+// Parses a response body as JSON, tolerating an empty or non-JSON body by returning null. A confirm
 // can answer 2xx with no body, and an error page may not be JSON.
 function parseJson(text: string): unknown {
   if (text.length === 0) {
@@ -436,8 +444,8 @@ function parseJson(text: string): unknown {
 
 // --- Local helpers ----------------------------------------------------------------
 
-// Request headers: JSON content-type/accept plus HTTP Basic authorization. The credentials are
-// base64'd here and never placed in an error's detail.
+// Builds the request headers: JSON content-type and accept, plus HTTP Basic authorization. The
+// credentials are base64'd here and never placed in an error's detail.
 function headersFor(config: ThunesProcessorConfig): Record<string, string> {
   return {
     'content-type': 'application/json',
@@ -470,8 +478,9 @@ function transportFault(message: string, options: { cause: unknown }) {
   });
 }
 
-// Required string field on an inbound callback, or a malformed-event fault naming the field — the
-// same edge-rejection stance `decodeWebhookEvent` takes, so the server answers 400 rather than 500.
+// Reads a required string field from an inbound callback, or throws a malformed-event fault naming the
+// field. This matches the edge-rejection stance `decodeWebhookEvent` takes, so the server answers 400
+// rather than 500.
 function requireStringField(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.length === 0) {
     throw malformed(

@@ -25,11 +25,11 @@ import type { MysqlPool } from '#src/engines/mysql.ts';
 
 let url = process.env.MYSQL_TEST_URL;
 
-// Shared Store conformance suite, run against this SQL engine. Requires a real database, so it
-// only runs when MYSQL_TEST_URL points at a live MySQL; with no URL it registers nothing
-// (an empty run, not a false pass).
+// Runs the shared Store conformance suite against this SQL engine. The suite needs a real database,
+// so it only runs when MYSQL_TEST_URL points at a live MySQL. With no URL, it registers no tests.
+// An empty run is not a false pass.
 //
-// Factory builds a fresh store per run: open a pool, create the tables, wrap the pool.
+// The factory builds a fresh store per run. It opens a pool, creates the tables, then wraps the pool.
 if (url) {
   runStoreConformance('mysql', async () => {
     let pool = await createMysqlPool(url);
@@ -38,11 +38,14 @@ if (url) {
   });
 }
 
-// GET_LOCK return handling is a correctness property, not a conformance one, and needs no live MySQL:
-// a stub pool returns the GET_LOCK row we choose, and ledger.lock runs straight on the pool. 0 (the
-// wait elapsed) and NULL (error/killed) mean the lock is NOT held, so lock must surface a transient
-// lock-wait conflict (errno 1205) for withTransientRetry to re-run — never proceed as if it held the
-// lock, which would let two writers touch one account at once.
+// Checks how ledger.lock handles each GET_LOCK return value. This is a correctness property, not a
+// conformance one, so it needs no live MySQL. A stub pool returns the GET_LOCK row we choose, and
+// ledger.lock runs straight on that pool.
+//
+// GET_LOCK returns 0 when the wait elapsed and NULL on error or kill. Both mean the lock is NOT held.
+// In that case lock must surface a transient lock-wait conflict (errno 1205) so that withTransientRetry
+// re-runs the attempt. It must never proceed as if it held the lock. Proceeding would let two writers
+// touch one account at the same time.
 function poolReturningGetLock(acquired: number | null): MysqlPool {
   return {
     query: async (sql: string) =>

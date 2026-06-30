@@ -38,9 +38,9 @@ import { spendable, SYSTEM } from '#src/accounts.ts';
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
 
-// Per-call deps for the adjust handler (clock, ids, digest, signer, config, pricing, rates...).
-// All fakes/fixed-seed doubles, so runs are deterministic (same ids, timestamps, hashes).
-// Passed to adjust directly; production routing isn't built yet, out of scope here.
+// Builds a Ctx from fixed-seed fakes so every run is deterministic, with the same ids,
+// timestamps, and hashes. The tests pass this Ctx straight to adjust, because production
+// routing does not exist yet and is out of scope here.
 function makeCtx(): Ctx {
   let digest = seededDigest(1);
   let clock = fixedClock(0);
@@ -64,12 +64,14 @@ function makeStore(): Store {
   return memoryStore({ digest, clock });
 }
 
-// Fresh store and context per test; nothing shared, so writes can't leak between tests.
+// Builds a fresh store and context for each test. Nothing is shared, so writes cannot leak
+// between tests.
 function fixture(): { store: Store; ctx: Ctx } {
   return { store: makeStore(), ctx: makeCtx() };
 }
 
-// Run adjust in a committing transaction; return its Outcome (commit status + posted entry).
+// Runs adjust inside a committing transaction. Returns the Outcome, which carries the
+// commit status and the posted entry.
 async function applyAdjust(
   store: Store,
   ctx: Ctx,
@@ -78,8 +80,8 @@ async function applyAdjust(
   return store.transaction((unit) => adjust(operation, unit, ctx));
 }
 
-// Seed a starting balance via top-up. Tests that lower a balance need one first, else the
-// downward correction goes below zero and is rejected as an overdraft.
+// Seeds a starting balance with a top-up. A test that lowers a balance must seed one first.
+// Otherwise the downward correction drops below zero and is rejected as an overdraft.
 async function issue(
   store: Store,
   ctx: Ctx,
@@ -91,8 +93,8 @@ async function issue(
   );
 }
 
-// Predicate for assert.rejects: true when the error is an Error with the given `code`.
-// Match on the stable code, not message/stack, which can change.
+// Builds a predicate for assert.rejects that matches an error by its code. The match uses the
+// stable code rather than the message or stack, because those can change without notice.
 function hasCode(code: string): (error: unknown) => boolean {
   return (error) =>
     error instanceof Error && (error as { code?: string }).code === code;
@@ -152,8 +154,8 @@ describe('Adjust Direction', () => {
       }),
     );
 
-    // RECEIVABLE goes up when debited, so a positive adjustment raises it; OPENING_EQUITY
-    // (the offset account adjust balances against) takes the opposite amount and they cancel.
+    // RECEIVABLE rises when debited, so a positive adjustment raises it. OPENING_EQUITY is the
+    // offset account that adjust balances against. It takes the opposite amount, so the two cancel.
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.RECEIVABLE),
       credit('3.00'),

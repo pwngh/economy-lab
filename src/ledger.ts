@@ -29,24 +29,25 @@ import type { Transaction } from '#src/contract.ts';
 export let GENESIS: Uint8Array = new Uint8Array(32);
 
 /**
- * Build a debit leg for one account. Stored positive: lowers credit-normal accounts
- * (e.g. a user's spendable balance), raises debit-normal ones.
+ * Builds a debit leg for one account. The amount is stored positive. A debit lowers
+ * credit-normal accounts, such as a user's spendable balance, and raises debit-normal ones.
  */
 export function debit(account: AccountRef, amount: Amount): Leg {
   return { account, amount };
 }
 
 /**
- * Build a credit leg for one account. Stored negated: raises credit-normal accounts
- * (e.g. a user's spendable balance), lowers debit-normal ones.
+ * Builds a credit leg for one account. The amount is stored negated. A credit raises
+ * credit-normal accounts, such as a user's spendable balance, and lowers debit-normal ones.
  */
 export function credit(account: AccountRef, amount: Amount): Leg {
   return { account, amount: toAmount(amount.currency, -amount.minor) };
 }
 
 /**
- * Signed amount a leg moves its account's balance. Leg amounts are debit-positive, so
- * flip the sign for credit-normal accounts and leave debit-normal ones as-is.
+ * Returns the signed amount by which a leg moves its account's balance. Leg amounts are
+ * debit-positive, so this flips the sign for credit-normal accounts and leaves debit-normal
+ * ones unchanged.
  */
 export function balanceDelta(leg: Leg): Amount {
   let sign = isDebitNormal(leg.account) ? 1n : -1n;
@@ -54,12 +55,12 @@ export function balanceDelta(leg: Leg): Amount {
 }
 
 /**
- * Take the per-transaction lock on each of `accounts`, always in one global order: `.sort()` by id
- * (raw character-code order, the same on every machine, unlike a locale-aware comparison), then
- * de-duplicated. Two operations that share an account then acquire its lock in the same order, so
- * neither can deadlock waiting on a lock the other holds. Every lock-set goes through here, so the
- * fixed-order discipline lives in one place instead of being re-implemented — and mis-ordered — per
- * call site.
+ * Takes the per-transaction lock on each of `accounts` in one global order. The order is
+ * `.sort()` by id, which sorts by raw character code. That order is the same on every machine,
+ * unlike a locale-aware comparison. The list is then de-duplicated. Two operations that share an
+ * account acquire its lock in the same order, so neither can deadlock waiting on a lock the other
+ * holds. Every lock-set goes through here, so the fixed-order discipline lives in one place rather
+ * than being re-implemented, and possibly mis-ordered, at each call site.
  */
 export async function lockAll(
   ledger: Ledger,
@@ -72,7 +73,7 @@ export async function lockAll(
 }
 
 /**
- * Validate a posting, then write it. Four pre-write checks (currency match, balanced,
+ * Validates a posting, then writes it. Four pre-write checks (currency match, balanced,
  * accounts exist, no user overdraft) are a courtesy second line of defense; the database
  * enforces them too. Only the write advances each account's hash chain and running balances.
  *
@@ -96,8 +97,8 @@ export async function postEntry(
   return ledger.append(cleaned, options);
 }
 
-// Return the posting with zero-amount legs removed (unchanged if it has none). Safe: a zero
-// leg adds nothing to any currency total and moves no money.
+// Returns the posting with zero-amount legs removed, or unchanged if it has none. This is safe
+// because a zero leg adds nothing to any currency total and moves no money.
 function dropZeroLegs(posting: Posting): Posting {
   let legs = posting.legs.filter((leg) => leg.amount.minor !== 0n);
   if (legs.length === posting.legs.length) {
@@ -107,8 +108,8 @@ function dropZeroLegs(posting: Posting): Posting {
 }
 
 /**
- * The account's current balance, in its own currency. Reads a stored running total, so
- * it's O(1) rather than re-summing history.
+ * Returns the account's current balance, in its own currency. Reads a stored running total,
+ * so the call is O(1) rather than re-summing history.
  */
 export function balance(
   ledger: Ledger,
@@ -119,13 +120,13 @@ export function balance(
 }
 
 /**
- * Build the bytes hashed to extend one account's chain. Each link's hash covers four parts:
+ * Builds the bytes hashed to extend one account's chain. Each link's hash covers four parts:
  * the account's previous link hash, the transaction id, this account's legs in this posting,
  * and the posting metadata. `chain.ts` runs these bytes through the hash to get the new link.
  *
- * Layout is fixed so the same posting reproduces the same bytes (and hash) on later
- * verification: amounts via `encodeAmount`, metadata keys sorted, and the four parts joined so
- * their boundaries can't be confused (see `lengthPrefixed`).
+ * The layout is fixed so the same posting reproduces the same bytes, and the same hash, on later
+ * verification. Amounts are encoded via `encodeAmount`, metadata keys are sorted, and the four
+ * parts are joined so their boundaries can't be confused (see `lengthPrefixed`).
  */
 export function chainPreimage(input: {
   accountPrevHash: Uint8Array;
@@ -149,9 +150,9 @@ export function chainPreimage(input: {
 }
 
 /**
- * Compute one account's new link hash as lowercase hex: bytes from `chainPreimage` run
- * through the supplied hash. The result is the account's chain head; `chain.ts` later
- * combines every head into one tamper-evident checkpoint.
+ * Computes one account's new link hash as lowercase hex by running the bytes from
+ * `chainPreimage` through the supplied hash. The result is the account's chain head, which
+ * `chain.ts` later combines with every other head into one tamper-evident checkpoint.
  */
 export async function chainHash(
   digest: Digest,
@@ -197,7 +198,7 @@ function assertSingleCurrencyPerLeg(posting: Posting): void {
 // A posting balances when leg amounts sum to zero per currency; any nonzero total is rejected.
 //
 // Courtesy pre-check, not the enforcer. Conservation is enforced by the database (PG: a deferred
-// constraint trigger on legs; MySQL: the assert inside post_entry plus revoked direct DML — see
+// constraint trigger on legs; MySQL: the assert inside post_entry plus revoked direct DML; see
 // db/*-schema.sql). The app never constructs an unbalanced posting, so this exists only to fail fast
 // with a clear fault rather than a raw engine error. It cannot let through anything the engine would.
 function assertBalanced(posting: Posting): void {

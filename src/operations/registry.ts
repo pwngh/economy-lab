@@ -29,15 +29,15 @@ import { settlePayout } from '#src/operations/settlePayout.ts';
 import type { Handler, Operation } from '#src/contract.ts';
 
 /**
- * Maps an operation's `kind` to its handler; `economy.ts` looks up handlers here.
+ * Maps each operation's `kind` to its handler. The `economy.ts` submit path looks up handlers here.
  *
- * `satisfies Record<Operation['kind'], Handler>` forces one entry per kind: add a kind to
- * `Operation` without registering a handler and this fails to compile rather than throwing at
- * runtime on first submit.
+ * The `satisfies Record<Operation['kind'], Handler>` clause forces exactly one entry per kind. Add a
+ * kind to `Operation` without registering a handler and the file fails to compile, rather than
+ * throwing at runtime on the first submit of that kind.
  *
  * Most keys match the imported handler name. A few handlers are exported as `handle…`
- * (`handleClawback`, `handleSubscribe`, `handleCancelSubscription`), written `kind: handler` so
- * the key stays the operation's kind.
+ * (`handleClawback`, `handleSubscribe`, and `handleCancelSubscription`). Those are written as
+ * `kind: handler` so the key stays the operation's kind.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy} for the
  * submit entry point that dispatches through this registry.

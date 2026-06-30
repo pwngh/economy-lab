@@ -28,10 +28,10 @@ let GOLDEN = join(HERE, '..', 'test', 'golden', `${SCENARIO}.trace`);
 
 // --- Stable output shape --------------------------------
 
-// Make a value serialize to identical bytes on every machine/run: keys sorted, every Amount
-// encoded to its decimal string via encodeAmount (Amount wraps a bigint, which JSON can't
-// print). A bare bigint here means an Amount was missed and would serialize wrong, so throw
-// rather than convert it.
+// Rewrites a value so it serializes to identical bytes on every machine and run. Object keys are
+// sorted, and every Amount becomes its decimal string via encodeAmount because an Amount wraps a
+// bigint that JSON cannot print. A bare bigint here means an Amount was missed and would serialize
+// wrong, so this throws rather than silently converting it.
 function canonical(value: unknown): unknown {
   if (isAmount(value)) {
     return encodeAmount(value);
@@ -55,17 +55,18 @@ function canonical(value: unknown): unknown {
   return value;
 }
 
-// Final golden text: pretty-printed JSON, two-space indent, trailing newline, so a diff points
-// at the exact changed line.
+// Renders the final golden text as pretty-printed JSON with a two-space indent and a trailing
+// newline. The one-value-per-line layout makes a diff point at the exact changed line.
 function render(value: unknown): string {
   return `${JSON.stringify(canonical(value), null, 2)}\n`;
 }
 
 // --- The fixed scenario -----------------------------------------------------------
 
-// One operation's outcome as a plain trace record. Rejected: just the reason. Successful:
-// transaction id, post time, and each leg (account + amount). Stable across runs because the
-// test economy issues ids in a fixed sequence and uses a frozen clock.
+// Turns one operation's outcome into a plain trace record. A rejected outcome records only its
+// reason. A successful one records the transaction id, the post time, and each leg's account and
+// amount. The record is stable across runs because the test economy issues ids in a fixed sequence
+// and uses a frozen clock.
 function recordStep(kind: string, outcome: Outcome): Record<string, unknown> {
   if (outcome.status === 'rejected') {
     return { kind, status: outcome.status, reason: outcome.reason };
@@ -84,8 +85,8 @@ function recordStep(kind: string, outcome: Outcome): Record<string, unknown> {
   };
 }
 
-// Submit one operation, append its record to steps, return the outcome. One flat list keeps
-// the trace in operation order.
+// Submits one operation, appends its record to steps, and returns the outcome. The single flat
+// list keeps the trace in operation order.
 async function step(
   economy: Economy,
   steps: Record<string, unknown>[],
@@ -96,11 +97,13 @@ async function step(
   return outcome;
 }
 
-// Run the scenario against a fresh test economy and return the trace contents: ordered steps,
-// the prove() integrity report, and a pinned set of key balances. Any change shows up in the diff.
+// Runs the scenario against a fresh test economy and returns the trace contents: the ordered
+// steps, the prove() integrity report, and a pinned set of key balances. Any change to the system
+// shows up in the diff against the golden.
 //
-// Scenario: top-up, promo grant, purchase split between two sellers, the same purchase again
-// (must not double-charge), and an over-priced purchase that's declined for insufficient funds.
+// The scenario runs five operations in order. It tops up the buyer, grants a promo, and makes a
+// purchase split between two sellers. It then submits that same purchase again, which must not
+// charge twice. It ends with an over-priced purchase that is declined for insufficient funds.
 async function buildTrace(): Promise<Record<string, unknown>> {
   let economy = makeEconomy();
   let steps: Record<string, unknown>[] = [];
@@ -125,7 +128,7 @@ async function buildTrace(): Promise<Record<string, unknown>> {
     ],
   });
   await step(economy, steps, purchase);
-  await step(economy, steps, purchase); // submit the same purchase again; it must not charge twice
+  await step(economy, steps, purchase); // the same purchase again, which must stay idempotent and not charge twice
   await step(
     economy,
     steps,
@@ -140,8 +143,8 @@ async function buildTrace(): Promise<Record<string, unknown>> {
   };
 }
 
-// Balances for a hand-picked set of accounts under stable labels: buyer spendable/promo, each
-// seller's earnings, platform accounts.
+// Reads the balances of a hand-picked set of accounts under stable labels. The set covers the
+// buyer's spendable and promo accounts, each seller's earnings, and the platform accounts.
 async function keyBalances(economy: Economy): Promise<Record<string, unknown>> {
   let accounts: ReadonlyArray<readonly [string, AccountRef]> = [
     ['buyer.spendable', spendable('usr_buyer')],
@@ -162,10 +165,10 @@ async function keyBalances(economy: Economy): Promise<Record<string, unknown>> {
 
 // --- Comparing against (or rewriting) the golden -------------------
 //
-// The golden file is the checked-in expected trace. A run either compares fresh output against
-// it (catch unintended changes) or overwrites it (accept an intended change).
+// The golden file is the checked-in expected trace. A run either compares fresh output against it
+// to catch unintended changes, or overwrites it to accept an intended change.
 
-// Read the golden file, or null if it doesn't exist yet.
+// Reads the golden file, returning null if it does not exist yet.
 async function readGolden(): Promise<string | null> {
   try {
     return await readFile(GOLDEN, 'utf8');
@@ -174,15 +177,15 @@ async function readGolden(): Promise<string | null> {
   }
 }
 
-// Write the golden file, creating its directory if needed.
+// Writes the golden file, creating its directory first if needed.
 async function writeGolden(content: string): Promise<void> {
   await mkdir(dirname(GOLDEN), { recursive: true });
   await writeFile(GOLDEN, content, 'utf8');
 }
 
-// Entry point. Mode from flags: `--check` compares fresh output against the golden and exits
-// non-zero on difference (this is what CI runs), `--update` overwrites the golden, no flag
-// just writes the file.
+// Entry point. The mode comes from the flags. `--check` compares fresh output against the golden
+// and exits non-zero on any difference, which is what CI runs. `--update` overwrites the golden.
+// No flag just writes the file.
 async function main(): Promise<void> {
   let mode = process.argv.includes('--check')
     ? 'check'
@@ -215,8 +218,8 @@ async function main(): Promise<void> {
   console.warn('trace: byte-clean against the golden.');
 }
 
-// First line where golden and fresh output differ, reporting just that line from each side
-// instead of the whole document.
+// Finds the first line where the golden and the fresh output differ. It reports just that one line
+// from each side instead of the whole document.
 function firstDiff(expected: string, actual: string): string {
   let a = expected.split('\n');
   let b = actual.split('\n');

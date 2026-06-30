@@ -18,29 +18,30 @@ import type { Config } from '#src/config.ts';
 import type { Ledger, Lot } from '#src/ports.ts';
 
 /**
- * Bundled into one parameter to stay under the param-count limit while still
- * passing the caller's AbortSignal through to the ledger's balance read.
+ * Bundles the maturity config and an optional signal into one parameter. Bundling keeps the
+ * functions under the param-count limit while still passing the caller's AbortSignal through to the
+ * ledger's balance read.
  */
 export type MaturityOptions = { config: Config; signal?: AbortSignal };
 
 /**
- * {@link maturedAtLeast}'s options: the maturity config (and optional signal) plus the `amount` the
- * cashable balance must reach. `amount` rides in the options object rather than as its own argument
- * so the call stays parallel to {@link maturedBalance}'s `(ledger, account, now, options)` and under
- * the param-count limit.
+ * Carries {@link maturedAtLeast}'s options. It extends {@link MaturityOptions} with the `amount` the
+ * cashable balance must reach. The `amount` rides in the options object rather than as its own
+ * argument so the call stays parallel to {@link maturedBalance}'s `(ledger, account, now, options)`
+ * and under the param-count limit.
  */
 export type MaturedAtLeastOptions = MaturityOptions & { amount: Amount };
 
-// Horizon lookup key for an unrecognized funding source. The 'default' horizon is
-// configured independently (MATURITY_HORIZON_DEFAULT_MS), only coinciding with the card
-// horizon under the shipped defaults, so an unknown source settles on its own conservative wait.
+// Horizon lookup key for an unrecognized funding source. The 'default' horizon is configured
+// independently through MATURITY_HORIZON_DEFAULT_MS. It coincides with the card horizon only under
+// the shipped defaults, so an unknown source settles on its own conservative wait.
 let DEFAULT_SOURCE: string = 'default';
 
 /**
- * Wait (ms) before credits from a funding source can be cashed out, covering the
- * window in which the payment could still be reversed (e.g. a card chargeback).
- * Sources not in the config fall back to the 'default' horizon, so an unknown or
- * misspelled source is treated cautiously rather than instantly available.
+ * Returns the wait in milliseconds before credits from a funding source can be cashed out. The wait
+ * covers the window in which the payment could still be reversed, such as a card chargeback. A
+ * source not in the config falls back to the 'default' horizon, so an unknown or misspelled source
+ * is treated cautiously rather than as instantly available.
  */
 export function maturityHorizonMs(source: string, config: Config): number {
   let horizons = config.maturityHorizonMs;
@@ -52,40 +53,43 @@ export function maturityHorizonMs(source: string, config: Config): number {
 }
 
 /**
- * Moment (epoch ms) a lot becomes cashable: top-up time plus the source's required wait.
- * A lot is one batch of credits from a single top-up, tagged with when it was added and
- * its funding source. Wait is computed here from `source` rather than read from the lot's
- * own `maturesAt`, since a top-up may record the source without a maturity time.
+ * Returns the moment in epoch milliseconds a lot becomes cashable, which is the top-up time plus the
+ * source's required wait. A lot is one batch of credits from a single top-up, tagged with when it
+ * was added and its funding source. The wait is computed here from `source` rather than read from
+ * the lot's own `maturesAt`, because a top-up may record the source without a maturity time.
  */
 export function lotMaturesAt(lot: Lot, config: Config): number {
   return lot.toppedUpAt + maturityHorizonMs(lot.source, config);
 }
 
 /**
- * Whether a lot is cashable as of `now`. Inclusive: cashable the moment the wait elapses.
+ * Reports whether a lot is cashable as of `now`. The boundary is inclusive, so the lot is cashable
+ * the moment its wait elapses.
  */
 export function isMatured(lot: Lot, now: number, config: Config): boolean {
   return lotMaturesAt(lot, config) <= now;
 }
 
 // How many lots to read from the ledger per bounded page. Most balances are covered by the newest
-// lot or two, so the first page almost always suffices; a wider tail (many small unspent top-ups)
-// just pulls the next page. Sized to keep the common case to one round-trip while bounding memory.
+// lot or two, so the first page almost always suffices. A wider tail, such as many small unspent
+// top-ups, just pulls the next page. The size keeps the common case to one round-trip while
+// bounding memory.
 let TAIL_PAGE = 64;
 
 /**
- * Cashable part of an account's balance as of `now`: how much a cash-out may draw without
- * dipping into funds still in their settlement wait.
+ * Returns the cashable part of an account's balance as of `now`. This is how much a cash-out may
+ * draw without dipping into funds still in their settlement wait.
  *
- * Spends draw oldest-first (FIFO), so what's left is the newest run of lots summing to the live
- * balance. Rather than scan the whole history to find that run (the old O(account history) path,
- * preserved as {@link maturedBalanceFullScan} for the differential test), read lots NEWEST-first
- * and stop the instant they cover the balance: that is the identical tail, computed from the new
- * end, never touching the already-spent history. Sum the matured ones as we go. The oldest lot in
- * the tail is split by the drain; only its unspent remainder (`remaining`) counts, exactly as the
- * old `fifoTail` split it.
+ * Spends draw oldest-first (FIFO), so what is left is the newest run of lots summing to the live
+ * balance. Finding that run by scanning the whole history is the old O(account history) path, kept
+ * as {@link maturedBalanceFullScan} for the differential test. Instead, read lots NEWEST-first and
+ * stop the instant they cover the balance. That yields the identical tail computed from the new end,
+ * never touching the already-spent history. Sum the matured lots as we go. The drain splits the
+ * oldest lot in the tail, so only its unspent remainder (`remaining`) counts, exactly as the old
+ * `fifoTail` split it.
  *
- * Currency-agnostic, so the same call covers spendable credits and a seller's earned balance.
+ * This is currency-agnostic, so the same call covers spendable credits and a seller's earned
+ * balance.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/lifecycles/ Lifecycles} for the
  * settlement window and chargeback maturity model these cleared-funds checks gate on.
@@ -98,7 +102,7 @@ export async function maturedBalance(
 ): Promise<Amount> {
   let live = await ledger.balance(account, { signal: options.signal });
   let unit = currency(account);
-  // Zero or negative balance: no remaining lots, nothing cashable.
+  // A zero or negative balance has no remaining lots, so nothing is cashable.
   if (live.minor <= 0n) {
     return zero(unit);
   }
@@ -106,8 +110,8 @@ export async function maturedBalance(
   let remaining = live.minor;
   let matured = 0n;
   // Walk the newest lots first, a bounded page at a time. The ledger pushes the `order desc
-  // limit/offset` down to the engine, so each page is bounded DB work and we stop paging the
-  // moment `remaining` hits zero.
+  // limit/offset` down to the engine, so each page is bounded DB work. Paging stops the moment
+  // `remaining` hits zero.
   for (let offset = 0; remaining > 0n; offset += TAIL_PAGE) {
     let drained = 0;
     for await (let lot of ledger.timeline(account, {
@@ -116,7 +120,7 @@ export async function maturedBalance(
       offset,
     })) {
       drained += 1;
-      // The boundary lot contributes only what's left to cover; a fully-included lot contributes
+      // The boundary lot contributes only what is left to cover. A fully-included lot contributes
       // its whole amount.
       let take = lot.amount.minor < remaining ? lot.amount.minor : remaining;
       if (lotMaturesAt(lot, options.config) <= now) {
@@ -127,8 +131,8 @@ export async function maturedBalance(
         break;
       }
     }
-    // The page returned no lots, so the history is exhausted before the balance was covered
-    // (only possible if a balance row outran its lots); stop rather than loop forever.
+    // The page returned no lots, so the history is exhausted before the balance was covered. This is
+    // only possible if a balance row outran its lots. Stop here rather than loop forever.
     if (drained === 0) {
       break;
     }
@@ -137,21 +141,23 @@ export async function maturedBalance(
 }
 
 /**
- * Whether an account has at least `amount` of cashable balance as of `now`, without computing the
- * full matured total. The callers that gate on maturity (requestPayout's payable-funds check,
- * spend's spendable-funds check) only ask "is matured >= amount?", so this answers exactly that and
- * stops the instant it can.
+ * Reports whether an account has at least `amount` of cashable balance as of `now`, without
+ * computing the full matured total. The callers that gate on maturity (requestPayout's payable-funds
+ * check and spend's spendable-funds check) only ask whether matured is at least `amount`, so this
+ * answers exactly that and stops the instant it can.
  *
- * Reads the same newest-first FIFO tail as {@link maturedBalance} — the newest run of lots summing
- * to the live balance — accumulating each lot's matured contribution, and returns `true` the moment
- * that running sum reaches `amount`. If the tail is exhausted first (the matured part never covers
- * `amount`), returns `false`. So a request well within cleared funds stops after a lot or two
- * (O(amount-worth-of-lots)); the worst case is the maturity horizon's window, never the full
- * history. By construction this equals `maturedBalance(...).minor >= amount.minor` for every input:
- * identical lots, identical per-lot maturity, just stopped as soon as the answer is settled.
+ * It reads the same newest-first FIFO tail as {@link maturedBalance}, the newest run of lots summing
+ * to the live balance. It accumulates each lot's matured contribution and returns `true` the moment
+ * that running sum reaches `amount`. If the tail is exhausted first, the matured part never covers
+ * `amount`, so it returns `false`. A request well within cleared funds therefore stops after a lot
+ * or two, at cost O(amount-worth-of-lots). The worst case is the maturity horizon's window, never
+ * the full history. By construction this equals `maturedBalance(...).minor >= amount.minor` for
+ * every input: identical lots and identical per-lot maturity, just stopped as soon as the answer is
+ * settled.
  *
- * `amount` and the account share a currency (the callers pass a CREDIT amount against a CREDIT
- * balance); only the minor units are compared. A non-positive `amount` is trivially covered.
+ * The `amount` and the account share a currency, since the callers pass a CREDIT amount against a
+ * CREDIT balance, so only the minor units are compared. A non-positive `amount` is trivially
+ * covered.
  */
 export async function maturedAtLeast(
   ledger: Ledger,
@@ -178,8 +184,9 @@ export async function maturedAtLeast(
       offset,
     })) {
       drained += 1;
-      // Same FIFO-tail split as maturedBalance: the boundary lot contributes only what's left to
-      // cover the live balance, a fully-included lot its whole amount. Only matured lots count.
+      // This is the same FIFO-tail split as maturedBalance. The boundary lot contributes only what
+      // is left to cover the live balance, and a fully-included lot contributes its whole amount.
+      // Only matured lots count.
       let take = lot.amount.minor < remaining ? lot.amount.minor : remaining;
       if (lotMaturesAt(lot, options.config) <= now) {
         matured += take;
@@ -200,11 +207,11 @@ export async function maturedAtLeast(
 }
 
 /**
- * The original full-history implementation, kept verbatim as the oracle the differential test
- * checks the bounded {@link maturedBalance} against. Reads every lot oldest-first, derives the
- * spent amount from the total, keeps the FIFO tail, then sums the matured ones. Correct but
- * O(account history) — the very cost the bounded path removes — so it lives here only for tests,
- * never on the production read path.
+ * Computes the cashable balance by scanning the full history. This is the original implementation,
+ * kept verbatim as the oracle the differential test checks the bounded {@link maturedBalance}
+ * against. It reads every lot oldest-first, derives the spent amount from the total, keeps the FIFO
+ * tail, then sums the matured ones. It is correct but O(account history), which is the very cost the
+ * bounded path removes, so it lives here only for tests and never on the production read path.
  */
 export async function maturedBalanceFullScan(
   ledger: Ledger,
@@ -224,8 +231,8 @@ export async function maturedBalanceFullScan(
 }
 
 /**
- * Part of an account's balance still in its settlement wait as of `now`. Cashable and
- * still-waiting amounts sum to the current balance.
+ * Returns the part of an account's balance still in its settlement wait as of `now`. The cashable
+ * and still-waiting amounts sum to the current balance.
  */
 export async function immatureBalance(
   ledger: Ledger,
@@ -240,13 +247,13 @@ export async function immatureBalance(
 
 // --- Which lots are left, then which have matured --------------------
 
-// A lot trimmed to the two fields the calculation needs: amount and the moment it
-// becomes cashable. Keeps each helper simple and maturity computed in one place.
+// A lot trimmed to the two fields the calculation needs: the amount and the moment it becomes
+// cashable. Trimming keeps each helper simple and computes maturity in one place.
 type Settled = { minor: bigint; maturesAt: number };
 
-// Read every lot for the account, oldest first, reduced to Settled. The ledger only
-// turns balance-increasing entries into lots, so each amount is positive. Maturity is
-// computed from the funding source, not taken from the lot's own maturesAt.
+// Reads every lot for the account, oldest first, reduced to Settled. The ledger only turns
+// balance-increasing entries into lots, so each amount is positive. Maturity is computed from the
+// funding source, not taken from the lot's own maturesAt.
 async function collectLots(
   ledger: Ledger,
   account: AccountRef,
@@ -262,9 +269,9 @@ async function collectLots(
   return lots;
 }
 
-// Return the most recent run of lots summing to the current balance. Spends drain
-// oldest-first, so spent = (sum of all lots) - (current balance). Walk oldest-first,
-// skip the spent amount (splitting the lot spending stopped partway through), keep the rest.
+// Returns the most recent run of lots summing to the current balance. Spends drain oldest-first, so
+// spent = (sum of all lots) - (current balance). The walk goes oldest-first and skips the spent
+// amount, splitting the lot that spending stopped partway through, then keeps the rest.
 function fifoTail(
   lots: ReadonlyArray<Settled>,
   balanceMinor: bigint,
@@ -290,7 +297,7 @@ function fifoTail(
   return tail;
 }
 
-// Add up the remaining lots whose wait has elapsed by `now` to get the cashable balance.
+// Adds up the remaining lots whose wait has elapsed by `now` to get the cashable balance.
 function sumMatured(
   tail: ReadonlyArray<Settled>,
   now: number,
@@ -307,15 +314,15 @@ function sumMatured(
 
 // --- Why this module computes maturity instead of trusting the lot ----------------
 //
-// The ledger fills a lot's `source` from the original posting's funding info, defaulting
-// to the source value 'unknown' when missing, which resolves through the 'default' horizon
-// entry (configurable via MATURITY_HORIZON_DEFAULT_MS, and equal to the card horizon only
-// under the shipped defaults). So any handler issuing spendable credits must record the
-// funding source on the posting (the top-up handler already does), or its credits fall back
-// to the default horizon: still safe (never instantly cashable), just less precise than the
-// real source.
+// The ledger fills a lot's `source` from the original posting's funding info. When that info is
+// missing it defaults to the source value 'unknown', which resolves through the 'default' horizon
+// entry (configurable via MATURITY_HORIZON_DEFAULT_MS, and equal to the card horizon only under the
+// shipped defaults). So any handler issuing spendable credits must record the funding source on the
+// posting, as the top-up handler already does. Otherwise its credits fall back to the default
+// horizon. That fallback is still safe, never instantly cashable, just less precise than the real
+// source.
 //
-// Maturity is computed as (top-up time) + (source's required wait). We deliberately
-// don't trust the lot's own `maturesAt`, which the ledger defaults to the top-up time
-// (immediately cashable) when the posting recorded no maturity. Correctness depends only
-// on the funding source and top-up time, not on a precomputed maturity time.
+// Maturity is computed as (top-up time) + (source's required wait). We deliberately do not trust
+// the lot's own `maturesAt`, which the ledger defaults to the top-up time (immediately cashable)
+// when the posting recorded no maturity. Correctness depends only on the funding source and top-up
+// time, not on a precomputed maturity time.
