@@ -15,7 +15,7 @@
     "test": "vitest run",
     "check:csp": "node scripts/check-csp.mjs",
     "verify": "npm run typecheck && npm run lint && npm run test",
-    "deploy": "npm run verify && npm run build && npm run check:csp && wrangler pages deploy"
+    "deploy": "npm run verify && npm run build && npm run check:csp && wrangler pages deploy --branch=production --commit-dirty=true"
   },
   "dependencies": {
     "@react-router/node": "^7.18.0",
