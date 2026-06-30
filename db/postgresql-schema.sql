@@ -626,3 +626,22 @@ comment on column checkpoints.created_at is 'UTC time the row was inserted.';
 comment on column seen_webhooks.event_id is 'Provider stable event id; primary key for replay dedup.';
 comment on column seen_webhooks.seen_at is 'UTC time this event id was first claimed.';
 comment on column schema_meta.version is 'Schema version stamp; must match SCHEMA_VERSION at startup.';
+
+-- Table comments: one-line purpose per table, in the deployed schema.
+comment on table accounts is 'Every account money posts to: user wallets and the platform accounts.';
+comment on table postings is 'Append-only record of every posting; one balanced set of legs each.';
+comment on table legs is 'The signed debit/credit lines that make up each posting.';
+comment on table chain_links is 'Per-account hash-chain links that make the ledger tamper-evident.';
+comment on table account_balances is 'Cached per-account balance read model; re-derivable from the legs.';
+comment on table idempotency is 'Exactly-once guard recording each operation outcome by key.';
+comment on table sales is 'Summary of each purchase, keyed by its order id.';
+comment on table outbox is 'Pending outbound events awaiting relay to the dispatcher.';
+comment on table inbox is 'Verified inbound provider events awaiting apply by the worker.';
+comment on table payout_sagas is 'Payout state machine: one row per creator cash-out.';
+comment on table promo_grants is 'Promotional credit grants with their expiry and reversal state.';
+comment on table entitlements is 'What each user owns (SKU ownership), with version and expiry.';
+comment on table subscriptions is 'Recurring charges: one row per subscription and its billing state.';
+comment on table trust_attempts is 'Per-key spend attempts feeding the velocity and risk check.';
+comment on table checkpoints is 'Signed Merkle checkpoints over the per-account hash chains.';
+comment on table seen_webhooks is 'Replay-dedup guard for inbound provider webhooks, by event id.';
+comment on table schema_meta is 'Single-row schema version stamp, checked at startup.';

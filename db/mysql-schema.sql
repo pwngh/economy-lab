@@ -79,7 +79,7 @@ CREATE TABLE accounts (
      CHECK (currency IN ('CREDIT', 'USD')),
      -- Lets legs carry a composite FK to (id, currency), so a leg's currency must match its account's.
      UNIQUE KEY accounts_id_currency_uq (id, currency)
-   );
+   ) COMMENT='Every account money posts to: user wallets and the platform accounts.';
 
 INSERT INTO accounts (id, kind, currency) VALUES
      ('platform:trust_cash',     'system', 'USD'),
@@ -98,7 +98,7 @@ CREATE TABLE postings (
      posted_at  BIGINT      NOT NULL COMMENT 'Commit time in epoch milliseconds.',
      seq        BIGINT      AUTO_INCREMENT UNIQUE COMMENT 'Auto-increment sequence giving postings a total order.',
      created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
-   );
+   ) COMMENT='Append-only record of every posting; one balanced set of legs each.';
 
 CREATE TABLE legs (
      id         BIGINT       AUTO_INCREMENT PRIMARY KEY COMMENT 'Auto-increment leg id in commit order.',
@@ -117,7 +117,7 @@ CREATE TABLE legs (
      -- legs_account_idx (see db/postgresql-schema.sql).
      KEY legs_account_idx (account_id, id),
      KEY legs_posting_idx (posting_id)
-   );
+   ) COMMENT='The signed debit/credit lines that make up each posting.';
 
 CREATE TABLE chain_links (
      posting_id VARCHAR(64) NOT NULL COMMENT 'Posting that advanced this account chain; FK to postings.',
@@ -138,7 +138,7 @@ CREATE TABLE chain_links (
      -- (account_id, hash); without this it scans every link for the account, so the trigger's
      -- cost grows with that account's chain length on each new posting.
      KEY chain_links_account_hash_idx (account_id, hash)
-   );
+   ) COMMENT='Per-account hash-chain links that make the ledger tamper-evident.';
 
 -- account_balances: cached per-account balance read model. Rationale/invariants (non-negative
 -- overdraft guard, always re-derivable from legs) documented in db/postgresql-schema.sql.
@@ -153,7 +153,7 @@ CREATE TABLE account_balances (
      CHECK (currency IN ('CREDIT', 'USD')),
      CHECK (account_id LIKE 'platform:%' OR balance >= 0),
      CONSTRAINT account_balances_account_fk FOREIGN KEY (account_id) REFERENCES accounts (id)
-   );
+   ) COMMENT='Cached per-account balance read model; re-derivable from the legs.';
 
 -- idempotency: exactly-once retry guard. Rationale/invariants documented in
 -- db/postgresql-schema.sql (idempotency banner).
@@ -161,7 +161,7 @@ CREATE TABLE idempotency (
      `key`     VARCHAR(255) PRIMARY KEY COMMENT 'Idempotency key; PK that blocks duplicate request execution.',
      transaction JSON        NULL COMMENT 'Recorded result, replayed verbatim on a duplicate request.',  -- The recorded result, replayed verbatim on a duplicate. It is NULL while a row is claimed but not yet recorded. Claim inserts a NULL placeholder to hold the row lock, then record fills it in.
      created_at  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
-   );
+   ) COMMENT='Exactly-once guard recording each operation outcome by key.';
 
 CREATE TABLE sales (
      order_id     VARCHAR(64) PRIMARY KEY COMMENT 'Order id; primary key, distinct from idempotency key.',
@@ -176,7 +176,7 @@ CREATE TABLE sales (
      CHECK (price > 0),
      CHECK (fee >= 0),
      CONSTRAINT sales_txn_fk FOREIGN KEY (txn_id) REFERENCES postings (id)
-   );
+   ) COMMENT='Summary of each purchase, keyed by its order id.';
 
 -- outbox: events awaiting publish via the transactional outbox relay. Rationale/invariants
 -- documented in db/postgresql-schema.sql (outbox banner).
@@ -189,7 +189,7 @@ CREATE TABLE outbox (
      created_at         TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC time the row was inserted.',
      CHECK (status IN ('pending', 'relayed', 'failed')),
      KEY outbox_pending_idx (status, created_at)
-   );
+   ) COMMENT='Pending outbound events awaiting relay to the dispatcher.';
 
 -- inbox: the inbound mirror of `outbox`; verified provider events awaiting apply via the
 -- transactional inbox worker. `key` is the provider event id (UNIQUE -> redelivery is a no-op
@@ -206,7 +206,7 @@ CREATE TABLE inbox (
      created_at         TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC time the row was inserted.',
      CHECK (status IN ('pending', 'applied', 'dead')),
      KEY inbox_pending_idx (status, received_at)
-   );
+   ) COMMENT='Verified inbound provider events awaiting apply by the worker.';
 
 -- payout_sagas: multi-step payout saga state. Rationale/invariants documented in
 -- db/postgresql-schema.sql (payout_sagas banner).
@@ -232,7 +232,7 @@ CREATE TABLE payout_sagas (
      -- without this it scans every saga that user has ever had, so the check's cost grows with their
      -- payout history on each new request.
      KEY payout_sagas_user_updated_idx (user_id, updated_at)
-   );
+   ) COMMENT='Payout state machine: one row per creator cash-out.';
 
 -- promo_grants: one row per promotional credit handed out; swept for expired, not-yet-reversed
 -- grants. Rationale/invariants documented in db/postgresql-schema.sql (promo_grants banner).
@@ -246,7 +246,7 @@ CREATE TABLE promo_grants (
      CHECK (amount >= 0),
      CHECK (currency IN ('CREDIT', 'USD')),
      KEY promo_grants_due_idx (reversed, expires_at)
-   );
+   ) COMMENT='Promotional credit grants with their expiry and reversal state.';
 
 CREATE TABLE entitlements (
      user_id    VARCHAR(64) NOT NULL COMMENT 'Owner of the entitlement; part of primary key.',
@@ -259,7 +259,7 @@ CREATE TABLE entitlements (
      granted_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the entitlement was granted.',
      PRIMARY KEY (user_id, sku),
      CHECK (quantity >= 0)
-   );
+   ) COMMENT='What each user owns (SKU ownership), with version and expiry.';
 
 -- subscriptions: recurring-charge state read by the renewal sweep. Rationale/invariants
 -- documented in db/postgresql-schema.sql (subscriptions banner).
@@ -283,7 +283,7 @@ CREATE TABLE subscriptions (
      -- without this it scans every subscription a user holds, so the duplicate-guard's cost grows with
      -- their subscription count on each new subscribe.
      KEY subscriptions_user_sku_seller_idx (user_id, sku, seller_id)
-   );
+   ) COMMENT='Recurring charges: one row per subscription and its billing state.';
 
 CREATE TABLE trust_attempts (
      idempotency_key VARCHAR(255) PRIMARY KEY COMMENT 'Attempt idempotency key; primary key, dedupes retries.',
@@ -293,7 +293,7 @@ CREATE TABLE trust_attempts (
      at              BIGINT       NOT NULL COMMENT 'Epoch ms the attempt was recorded.',
      CHECK (outcome IN ('committed', 'rejected')),
      KEY trust_attempts_subject_at_idx (subject, at)
-   );
+   ) COMMENT='Per-key spend attempts feeding the velocity and risk check.';
 
 -- checkpoints: signed Merkle-root snapshots of ledger state. Rationale/invariants documented in
 -- db/postgresql-schema.sql (checkpoints banner).
@@ -305,7 +305,7 @@ CREATE TABLE checkpoints (
      at         BIGINT      NOT NULL COMMENT 'Epoch ms the checkpoint was taken.',
      seq        BIGINT      AUTO_INCREMENT UNIQUE COMMENT 'Monotonic sequence number; unique, auto-assigned.',
      created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
-   );
+   ) COMMENT='Signed Merkle checkpoints over the per-account hash chains.';
 
 -- seen_webhooks: exactly-once replay dedup for inbound provider callbacks, claimed as the last
 -- gate (after HMAC and freshness). Only PK presence is used, so a duplicate delivery finds the row
@@ -314,7 +314,7 @@ CREATE TABLE checkpoints (
 CREATE TABLE seen_webhooks (
      event_id   VARCHAR(255) PRIMARY KEY COMMENT 'Provider stable event id; primary key for replay dedup.',
      created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
-   );
+   ) COMMENT='Replay-dedup guard for inbound provider webhooks, by event id.';
 
 -- ============================================================================
 -- Stored routines (MySQL), counterpart to the Postgres routines in db/postgresql-schema.sql. The
@@ -518,5 +518,5 @@ INSERT INTO account_balances (account_id, currency, balance, head_hash)
 
 -- Schema version stamp. The engine reads this on startup and refuses to run if it does not match
 -- SCHEMA_VERSION in src/schema.ts. Keep the value in lockstep with the Postgres schema and src/schema.ts.
-CREATE TABLE schema_meta (version VARCHAR(32) NOT NULL COMMENT 'Schema version stamp; must match SCHEMA_VERSION at startup.');
+CREATE TABLE schema_meta (version VARCHAR(32) NOT NULL COMMENT 'Schema version stamp; must match SCHEMA_VERSION at startup.') COMMENT='Single-row schema version stamp, checked at startup.';
 INSERT INTO schema_meta (version) VALUES ('7');
