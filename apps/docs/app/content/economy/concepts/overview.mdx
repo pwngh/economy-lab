@@ -1,6 +1,11 @@
 ---
 title: 'Overview'
 summary: "What economy-lab is (and isn't): a double-entry credit economy, provably solvent and tamper-evident, built as a library rather than a product."
+plain: "A “double-entry ledger” — the method economy-lab is built on — is the 500-year-old bookkeeping rule where every transaction is recorded twice: once as where the value came from, once as where it went, with the two entries always matching. You cannot add one side without the other, so money can never be silently created or destroyed; when the sides disagree, a record is wrong."
+plainCite: 1
+notes:
+  - text: "Conservation of value is a property of double-entry bookkeeping itself — first set down in print by Luca Pacioli in 1494 — not a guarantee economy-lab proves on its own."
+    href: "https://en.wikipedia.org/wiki/Double-entry_bookkeeping"
 order: 10
 status: stable
 sourceRefs:
@@ -14,7 +19,7 @@ You drive it through one [`submit`](/economy/reference/the-economy/) entry point
 
 Balances aren't stored and mutated. Every action becomes a balanced posting in an append-only, hash-chained ledger, and balances are folded back from those postings.
 
-The project enforces a handful of [invariants](/economy/concepts/the-proof/): value is conserved, no account overdrafts, every spendable credit is backed by real cash, and history can't be silently rewritten. A [prover](/economy/concepts/the-proof/) re-checks all of them after every operation.
+The project enforces several [invariants](/economy/concepts/the-proof/): value is conserved, no account overdrafts, every spendable credit is backed by real cash, and history can't be silently rewritten. A [prover](/economy/concepts/the-proof/) re-checks all of them after every operation.
 
 ## How it fits together
 
@@ -28,7 +33,7 @@ economy-lab is a runnable study of an application layer, not a deployable money 
 
 The operational edges are deliberately stubbed or simplified. That covers the payout [`Processor`](/economy/ports/processor/), the FX [`Rates`](/economy/ports/rates/) source, schema migrations, and concurrency at scale.
 
-A real deployment also needs the regulated plumbing a money transmitter provides: KYC, AML and sanctions screening, and the payout rails. economy-lab is the layer that sits on top: wallets, entitlements, marketplace logic, and the invariants that bind them.
+A real-world deployment would need to implement the regulated plumbing that a Money Transmitter provides: (KYC, AML & Sanctions Screening) and Payout Rails. economy-lab is the layer that sits on top: wallets, entitlements, marketplace logic, and the invariants that bind them.
 
 It runs entirely in memory with zero runtime dependencies, and the same logic runs on Postgres, MySQL, Redis, and SQS through swappable [adapters](/economy/ports/storage-and-messaging/). What's intentionally out of scope has its own page: [scope and non-goals](/economy/scope-and-non-goals/).
 

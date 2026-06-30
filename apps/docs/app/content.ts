@@ -35,6 +35,18 @@ export const docSchema = z.object({
   sourceRefs: z.array(z.string()).default([]),
   // Slugs of related pages, rendered as "See also".
   related: z.array(z.string()).default([]),
+  // An optional plain-language "what this is", written for a complete newcomer (the ten-year-old
+  // test). Rendered as a normal paragraph below the summary and above the on-page Contents. Most
+  // pages omit it; it earns its place only where a newcomer is likely to land first.
+  plain: z.string().optional(),
+  // Page citations: an ordered list of notes, rendered in a small "Notes" section at the foot of the
+  // page and numbered by position. A mark links down to one — `<Cite n={1}/>` anywhere in body prose,
+  // or `plainCite` for the plain paragraph. Used wherever a claim rests on outside authority (a
+  // general principle, a cited source) rather than on something economy-lab itself proves.
+  notes: z.array(z.object({ text: z.string(), href: z.string().optional() })).default([]),
+  // The 1-based index into `notes` of the citation that applies to the plain paragraph, rendered as a
+  // small "[n]" after it. Omitted when the plain paragraph needs no citation.
+  plainCite: z.number().int().positive().optional(),
   draft: z.boolean().default(false),
 });
 

@@ -9,7 +9,10 @@
  * @license MIT
  */
 
+import { Brand, brandize } from '~/components/Brand.tsx';
 import { Callout } from '~/components/Callout.tsx';
+import { Cite } from '~/components/Cite.tsx';
+import { Code } from '~/components/Code.tsx';
 import {
   ChartOfAccounts,
   CreditMaturity,
@@ -39,6 +42,9 @@ const MDX_COMPONENTS = {
   CreditMaturity,
   IdempotentRetry,
   SourceLink,
+  Cite,
+  Brand,
+  Code,
 };
 
 /**
@@ -134,7 +140,14 @@ export function DocPage({ slug }: { slug: string }) {
           {doc.status === 'draft' ? 'Draft' : 'Planned'}
         </p>
       )}
-      <p className="doc-summary">{doc.summary}</p>
+      <p className="doc-summary">{brandize(doc.summary)}</p>
+
+      {doc.plain && (
+        <p className="doc-plain">
+          {brandize(doc.plain)}
+          {doc.plainCite && <Cite n={doc.plainCite} />}
+        </p>
+      )}
 
       {doc.sourceRefs.length > 0 && (
         <p className="source-refs">
@@ -174,6 +187,36 @@ export function DocPage({ slug }: { slug: string }) {
               ) : null;
             })}
           </ul>
+        </section>
+      )}
+
+      {doc.notes.length > 0 && (
+        <section className="footnotes" aria-labelledby="notes-label">
+          <p id="notes-label" className="footnotes-label">
+            Notes
+          </p>
+          <ol>
+            {doc.notes.map((note, i) => {
+              const n = i + 1;
+              return (
+                <li key={note.text} id={`note-${n}`}>
+                  {brandize(note.text)}{' '}
+                  {note.href && (
+                    <a href={note.href} target="_blank" rel="noopener noreferrer">
+                      source
+                    </a>
+                  )}{' '}
+                  <a
+                    className="footnote-back"
+                    href={`#cite-${n}-ref`}
+                    aria-label="Back to citation"
+                  >
+                    ↩
+                  </a>
+                </li>
+              );
+            })}
+          </ol>
         </section>
       )}
 

@@ -26,6 +26,15 @@
   --success: #2e7d46;
   --danger: #b23a36;
 
+  /* Semantic colors for the <Code variant> kinds, aligned with the github-light code theme so inline
+     identifiers read the same as the ones in highlighted blocks. */
+  --code-type: #0550ae;
+  --code-class: #953800;
+  --code-function: #8250df;
+  --code-value: #116329;
+  --code-keyword: #cf222e;
+  --code-const: #0e7c86;
+
   --radius: 6px;
   --measure: 70ch;
   --prose-wide: 56rem;
@@ -61,6 +70,14 @@ html[data-theme="dark"] {
   --warn-text: #e3cf86;
   --success: #5fbe7c;
   --danger: #e8736e;
+
+  /* …and the github-dark counterparts. */
+  --code-type: #79c0ff;
+  --code-class: #ffa657;
+  --code-function: #d2a8ff;
+  --code-value: #7ee787;
+  --code-keyword: #ff7b72;
+  --code-const: #43c0cd;
 
   color-scheme: dark;
 }
@@ -417,6 +434,34 @@ a[target="_blank"]:not(.icon-link)::after {
   padding: 0.1em 0.35em;
   border-radius: 4px;
 }
+/* Inline code that links to its definition (the <Code href> component). The box comes from
+   `.prose code` above; this only drops the anchor's underline and tints the code on hover. */
+.code-link {
+  text-decoration: none;
+}
+.code-link:hover code {
+  color: var(--accent);
+}
+/* Semantic <Code variant> kinds: a quiet color cue for what an identifier is, matching the code-block
+   palette. Only the text is tinted; the box stays the neutral `.prose code` surface. */
+.code-type {
+  color: var(--code-type);
+}
+.code-class {
+  color: var(--code-class);
+}
+.code-function {
+  color: var(--code-function);
+}
+.code-value {
+  color: var(--code-value);
+}
+.code-keyword {
+  color: var(--code-keyword);
+}
+.code-const {
+  color: var(--code-const);
+}
 .prose pre {
   background: var(--code-bg);
   padding: var(--space-4);
@@ -600,6 +645,60 @@ html[data-theme="dark"] .shiki span {
   font-size: 1.15rem;
   color: var(--text-muted);
   margin: 0 0 var(--space-4);
+}
+/* The plain-language "what this is" paragraph: ordinary body text, set apart from the larger muted
+   summary above it only by full-strength color and normal size. */
+.doc-plain {
+  color: var(--text);
+  margin: 0 0 var(--space-4);
+}
+/* The project wordmark: the name set in the mono face and kept on one line, so a reference to
+   economy-lab reads as a name — subtly distinct from the sans body, without a loud color or a box. */
+.brand {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+/* A very small "[1]" citation mark, trailing a claim that rests on outside authority rather than on
+   what economy-lab proves. Links down to the matching footnote. */
+.doc-cite {
+  font-size: 0.6rem;
+  vertical-align: super;
+  line-height: 0;
+}
+.doc-cite a {
+  color: var(--text-faint);
+  text-decoration: none;
+}
+.doc-cite a:hover {
+  color: var(--accent);
+}
+/* The page-foot "Notes" section the "[n]" marks point at: a quiet, ruled-off list under the body. */
+.footnotes {
+  margin-top: var(--space-7);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.footnotes-label {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+.footnotes ol {
+  margin: 0;
+  padding-left: var(--space-4);
+}
+.footnotes li {
+  margin: 0 0 var(--space-2);
+}
+.footnote-back {
+  text-decoration: none;
 }
 .source-refs {
   display: flex;

@@ -9,6 +9,7 @@
  * @license MIT
  */
 
+import { Brand } from '~/components/Brand.tsx';
 import { pageMeta } from '~/seo.ts';
 
 export function meta() {
@@ -24,10 +25,17 @@ export function meta() {
 export default function Home() {
   return (
     <div className="prose">
-      <h1>economy-lab documentation</h1>
+      <h1>
+        <Brand /> documentation
+      </h1>
       <p className="doc-summary">
         A double-entry credit economy that is provably solvent and tamper-evident — built to
         demonstrate correctness in systems that move money.
+      </p>
+      <p className="doc-plain">
+        A “credit economy” is an app that runs on its own currency: you buy credits with real money,
+        spend them inside the app, and whoever you pay can cash their credits back out. Tokens from
+        arcade games or currencies such as V-Bucks operate the same way.
       </p>
       <p>
         All of the documentation lives under one section. Start at the{' '}

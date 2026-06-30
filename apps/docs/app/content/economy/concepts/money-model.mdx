@@ -1,13 +1,14 @@
 ---
 title: 'The money model'
 summary: 'A dual-rate credit economy (buy ≥ par ≥ payout) where the platform spread is the only fee and every value carries an explicit currency and scale.'
+plain: "If you have ever changed money at an airport, you have met this model: the booth sells you foreign currency at one rate and buys it back at a worse one, living on the gap between. The three rates below are that same idea, made exact."
 order: 20
 status: stable
 sourceRefs: ['src/money.ts', 'src/ports.ts#L154-L187 · Rates', 'src/pricing.ts']
 related: ['economy/reference/operations/top-up', 'economy/concepts/the-proof']
 ---
 
-Two kinds of value move through the economy: in-app `CREDIT` and real-world `USD`. Both are an `Amount`: a `Currency` plus a count of minor units held as a `bigint`. They convert to each other only at fixed, platform-set rates, never a live market.
+Two kinds of value move through the economy: in-app <Code variant="value">CREDIT</Code> and real-world <Code variant="value">USD</Code>. Both are an <Code variant="type">Amount</Code>: a <Code variant="type">Currency</Code> plus a count of minor units held as a <Code variant="type">bigint</Code>. They convert to each other only at fixed, platform-set rates, never a live market.
 
 Almost the whole model follows from three of those rates, ordered `buy ≥ par ≥ payout`. You pay the `buy` rate to acquire a credit. The platform backs and cashes out each credit at `par`. A creator settles earned credits at `payout`, which equals `par`.
 

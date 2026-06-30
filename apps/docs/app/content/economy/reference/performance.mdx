@@ -39,7 +39,10 @@ These are **lab numbers**, and the bench says so in its own header. It runs in a
 
 ## The scaling shape
 
-Submit cost is per operation. In memory it's the cost of building and hashing one balanced posting. On a SQL backend each `submit` is its own transaction, so it also pays a commit and an `fsync`, which dominates the per-operation time and puts the SQL backends well below the in-memory rate.
+Submit cost is per operation:
+
+- **In memory** — the cost of building and hashing one balanced posting.
+- **On a SQL backend** — each `submit` is its own transaction, so it also pays a commit and an `fsync`, which dominates the per-operation time and puts the SQL backends well below the in-memory rate.
 
 Integrity cost splits by what each check has to read:
 
@@ -47,6 +50,27 @@ Integrity cost splits by what each check has to read:
 - **Checkpoint verify reads only account heads.** It recomputes the signed root over current heads, so its cost is O(accounts) and stays roughly flat as postings accumulate.
 
 Verifying a checkpoint in O(accounts) anchors ongoing integrity where a full re-prove — O(postings) — can't keep up once the ledger has years of history. The [background worker](/economy/reference/background-worker/) seals checkpoints on a schedule.
+
+## The production path
+
+This project demonstrates the most obvious way to prove integrity: re-derive the entire chain on every run — O(postings). At real scale, a production ledger would make the seal incremental, exchanging the replay for a small proof.
+
+That proof rests on an append-only Merkle log over postings ([RFC 6962](https://datatracker.ietf.org/doc/rfc6962/)). Each new posting folds into the tree in O(log n), and the signed root becomes the checkpoint.
+
+Two proofs then stand in for the replay, each O(log n) instead of O(postings):
+
+- **Inclusion** — a specific posting sits under a given root.
+- **Consistency** — a new signed root extends an old one: the earlier history is an unaltered prefix, with nothing rewritten or dropped.
+
+So "was the ledger tampered with?" becomes a check anyone can run against two checkpoints, not a full re-derivation you have to trust the server to perform.
+
+Almost everything carries over; only the seal's full replay changes. The per-account [hash chains](/economy/concepts/integrity/) and the signed Merkle root over account heads are already how production ledgers commit to current state — Diem's Jellyfish Merkle tree, Ethereum's state trie.
+
+The replay isn't a cost-cutting shortcut — it's the deliberate choice. An incremental tree has to be maintained and persisted in the same transaction as every posting: a new write-path invariant, and another quiet place the guarantee could fail. The lab optimizes for something you can see at a glance, not throughput.
+
+If seal cost ever bit at real scale, the order matters: schedule a standalone full [`prove`](/economy/concepts/the-proof/) first — so the periodic deep audit doesn't vanish when the replay goes — then make the seal incremental.
+
+One thing the proofs can't cover alone: they catch tampering relative to the checkpoints a server issued, but not a server that shows different histories to different readers. Production closes that with witnessing — independent parties co-sign or cross-check checkpoints — which is what makes a transparency log trustworthy without trusting the operator.
 
 ## Running it against a backend
 
