@@ -1,15 +1,11 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
-    <img src="assets/logo.svg" width="96" alt="economy-lab">
+    <img src="assets/logo.svg" width="84" alt="economy-lab">
   </picture>
 </p>
 
-<h1 align="center" style="margin-top: -25px;">economy-lab</h4>
-
-<p align="center">
-  <em>A provably-solvent credits economy: wallets, payouts, subscriptions, and a marketplace, on one double-entry ledger.</em>
-</p>
+<h1 align="center" style="margin-top: -36px;">economy-lab</h4>
 
 <p align="center">
   <img src="https://img.shields.io/badge/tests-699_passing-3fb950" alt="tests">
@@ -26,7 +22,11 @@
   <a href="#documentation">Documentation</a>
 </p>
 
-> **Read the full documentation:** **[economy-lab-docs.pages.dev](https://economy-lab-docs.pages.dev/economy/)**.
+<p align="center">
+  <em>A provably-solvent credits economy: wallets, payouts, subscriptions, and a marketplace, on one double-entry ledger.</em>
+</p>
+
+> Read the full documentation: [economy-lab-docs.pages.dev](https://economy-lab-docs.pages.dev/economy/).
 
 ## Highlights
 
@@ -131,9 +131,6 @@ make fuzz        # cross-backend differential — every backend must produce ide
 The bundled host process runs as an HTTP service (`POST /submit`, `POST /webhooks/:provider`, plus
 `/healthz` and `/readyz`) and a background worker (ten sweeps on an interval). Every backend is
 selected by an environment variable.
-
-With Docker: `docker compose up -d` brings up Postgres, MySQL, Redis, and LocalStack/SQS; point
-`DATABASE_URL` at one, run `make db-migrate`, then `make start` or `make worker`.
 
 ## Documentation
 
