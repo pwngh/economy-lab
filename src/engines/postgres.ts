@@ -243,6 +243,31 @@ async function ensureAccount(q: Queryable, account: AccountRef): Promise<void> {
   );
 }
 
+// Batched twin of ensureAccount: insert the first-use rows for every user account in `accounts` at
+// once (system accounts are schema-seeded, so skipped). `on conflict do nothing` keeps it
+// repeat-safe. lockMany uses it to ensure a lock set in one round trip instead of one each.
+async function ensureAccounts(
+  q: Queryable,
+  accounts: ReadonlyArray<AccountRef>,
+): Promise<void> {
+  let userAccounts = accounts.filter(isKnownSuffix);
+  if (userAccounts.length === 0) {
+    return;
+  }
+  let newRows = userAccounts.map((account) => ({
+    id: account,
+    kind: account.slice(account.lastIndexOf(':') + 1),
+    currency: currency(account),
+  }));
+  await q.query(
+    `insert into accounts (id, kind, currency)
+       select a.id, a.kind, a.currency
+         from jsonb_to_recordset($1::jsonb) as a(id text, kind text, currency text)
+       on conflict (id) do nothing`,
+    [JSON.stringify(newRows)],
+  );
+}
+
 // NOTE: the per-leg balance fold (UPDATE existing row first so the non-negative CHECK runs
 // against the new total, then INSERT a first-time row) now lives in the `post_entry` stored
 // procedure (db/postgresql-schema.sql), which applies every account's net delta in one
@@ -351,6 +376,23 @@ function lockingLedger(q: Queryable, digest: Digest, clock: Clock): Ledger {
       await q.query(
         `select 1 from account_balances where account_id = $1 for update`,
         [account],
+      );
+    },
+    lockMany: async (accounts) => {
+      // Batched twin of `lock`: ensure the first-use rows exist, then lock every account's balance
+      // row in one statement. `order by account_id` makes Postgres take the locks in one global order
+      // (the LockRows node pulls already-sorted rows from the Sort beneath it), so operations sharing
+      // accounts serialize instead of deadlocking — same guarantee as locking per-account in sorted
+      // order, now in a single round trip. A first-use account has no account_balances row yet
+      // (post_entry creates it), so it locks nothing here, exactly like `lock`; the chain-fork unique
+      // index plus withTransientRetry still cover that cold-start race.
+      await ensureAccounts(q, accounts);
+      await q.query(
+        `select 1 from account_balances
+          where account_id = any($1::text[])
+          order by account_id
+            for update`,
+        [[...accounts]],
       );
     },
   };

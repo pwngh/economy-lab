@@ -69,7 +69,15 @@ export async function lockAll(
   accounts: ReadonlyArray<AccountRef>,
   options?: Options,
 ): Promise<void> {
-  for (let account of [...new Set(accounts)].sort()) {
+  let ordered = [...new Set(accounts)].sort();
+  // An engine with `lockMany` grabs the whole set in one round trip (Postgres' ordered `for update`),
+  // whose own ordering is what keeps it deadlock-free. Without it, lock one at a time in this same
+  // global `.sort()` order — same discipline that keeps the loop deadlock-free.
+  if (ledger.lockMany) {
+    await ledger.lockMany(ordered, options);
+    return;
+  }
+  for (let account of ordered) {
     await ledger.lock(account, options);
   }
 }

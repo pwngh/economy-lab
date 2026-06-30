@@ -209,6 +209,15 @@ export interface Ledger {
   // Takes a row lock on an account so concurrent operations can't race on its balance.
   lock(account: AccountRef, options?: Options): Promise<void>;
 
+  // Locks several accounts in one round trip, in a single deadlock-free global order. Optional:
+  // `lockAll` (src/ledger.ts) uses it when present (Postgres' ordered `for update`), else falls back
+  // to per-account `lock` in that same order (in-memory no-op lock, MySQL's per-name GET_LOCK). Only
+  // meaningful inside a transaction, where locks release at commit, like `lock`.
+  lockMany?(
+    accounts: ReadonlyArray<AccountRef>,
+    options?: Options,
+  ): Promise<void>;
+
   // Records one posting, a balanced set of debit and credit lines, and returns the committed
   // transaction.
   append(posting: Posting, options?: Options): Promise<Transaction>;

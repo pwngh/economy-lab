@@ -12,7 +12,7 @@
 import { chainHash, balanceDelta, GENESIS } from '#src/ledger.ts';
 import { toAmount } from '#src/money.ts';
 import { currency, SYSTEM } from '#src/accounts.ts';
-import { windowedVelocity } from '#src/trust.ts';
+import { VELOCITY_CURRENCY } from '#src/trust.ts';
 import { byCodeUnit, fromHex, toHex } from '#src/bytes.ts';
 import { metaString, metaNumber } from '#src/meta.ts';
 import { sha256Digest } from '#src/digest.ts';
@@ -52,6 +52,7 @@ import type {
   SubscriptionStore,
   TrustStore,
   Unit,
+  Velocity,
 } from '#src/ports.ts';
 import type { EntitlementAttrs } from '#src/contract.ts';
 
@@ -171,6 +172,11 @@ interface LedgerState {
   // Platform account ids the ledger accepts directly. User accounts aren't listed. They are instead
   // recognized by their kind suffix.
   registered: Set<string>;
+
+  // Per-account `log` positions that raised this account's balance (its lots), in commit order.
+  // `timeline` walks one account's index instead of the whole shared log, so the maturity FIFO tail
+  // costs O(this account's lots), not O(total postings). Maintained in commitPosting/undoPosting.
+  lotIndexByAccount: Map<AccountRef, number[]>;
 }
 
 // One account's hash-chain step for a posting: the account, its head before (prevHash) and
@@ -251,6 +257,19 @@ function commitPosting(state: LedgerState, stored: StoredPosting): void {
     : null;
 
   state.log.push(stored);
+  // Index this posting under each account it raised (its lots), so `timeline` reads them directly
+  // rather than scanning the whole log. One entry per distinct raised account, at the just-pushed
+  // log position; undoPosting removes the same set.
+  let index = state.log.length - 1;
+  let lotted = lottedAccounts(stored.legs);
+  for (let account of lotted) {
+    let positions = state.lotIndexByAccount.get(account);
+    if (positions === undefined) {
+      positions = [];
+      state.lotIndexByAccount.set(account, positions);
+    }
+    positions.push(index);
+  }
   for (let link of stored.links) {
     state.heads.set(link.account, link.hash);
   }
@@ -260,20 +279,56 @@ function commitPosting(state: LedgerState, stored: StoredPosting): void {
     state.balances.set(leg.account, next);
   }
 
-  state.journal.record(() => undoPosting(state, stored, priorHeads, created));
+  state.journal.record(() =>
+    undoPosting(state, stored, { priorHeads, created, lotted }),
+  );
 }
 
-// Reverses `commitPosting`. It drops the posting from the log, restores each previous chain head,
-// and undoes each balance change. An account this posting first created is removed once its balance
-// is back to zero, rather than left at zero.
+// The distinct accounts a posting raised: those with a balance-increasing leg, the lots `timeline`
+// yields. commitPosting indexes the posting under each; undoPosting removes it.
+function lottedAccounts(legs: ReadonlyArray<Leg>): AccountRef[] {
+  let seen = new Set<AccountRef>();
+  let order: AccountRef[] = [];
+  for (let leg of legs) {
+    if (balanceDelta(leg).minor > 0n && !seen.has(leg.account)) {
+      seen.add(leg.account);
+      order.push(leg.account);
+    }
+  }
+  return order;
+}
+
+// What undoPosting needs to reverse one commit: each touched account's previous chain head, the
+// accounts this posting first created (deleted on undo once their balance returns to zero), and the
+// accounts it lotted (whose lot-index entry is popped). Bundled into one parameter to stay under the
+// parameter-count cap.
+type PostingUndo = {
+  priorHeads: ReadonlyArray<{ account: AccountRef; prev: string | undefined }>;
+  created: Set<AccountRef> | null;
+  lotted: ReadonlyArray<AccountRef>;
+};
+
+// Reverses `commitPosting`: drops the posting from the log, removes its lot-index entries, restores
+// each previous chain head, and undoes each balance change. An account this posting first created is
+// removed once its balance is back to zero, rather than left at zero.
 function undoPosting(
   state: LedgerState,
   stored: StoredPosting,
-  priorHeads: ReadonlyArray<{ account: AccountRef; prev: string | undefined }>,
-  created: Set<AccountRef> | null,
+  undo: PostingUndo,
 ): void {
   state.log.pop();
-  for (let { account, prev } of priorHeads) {
+  // This was the most recent posting (just popped), so its index sits at the end of each lotted
+  // account's list; pop it back off, dropping an emptied list.
+  for (let account of undo.lotted) {
+    let positions = state.lotIndexByAccount.get(account);
+    if (positions !== undefined) {
+      positions.pop();
+      if (positions.length === 0) {
+        state.lotIndexByAccount.delete(account);
+      }
+    }
+  }
+  for (let { account, prev } of undo.priorHeads) {
     if (prev === undefined) {
       state.heads.delete(account);
     } else {
@@ -283,7 +338,7 @@ function undoPosting(
   for (let leg of stored.legs) {
     let next =
       (state.balances.get(leg.account) ?? 0n) - balanceDelta(leg).minor;
-    if (next === 0n && created?.has(leg.account)) {
+    if (next === 0n && undo.created?.has(leg.account)) {
       state.balances.delete(leg.account);
     } else {
       state.balances.set(leg.account, next);
@@ -304,6 +359,7 @@ function createLedgerStore(deps: {
     heads: new Map(),
     // Seeded from the platform accounts so they're accepted immediately.
     registered: new Set<string>(Object.values(SYSTEM)),
+    lotIndexByAccount: new Map(),
   };
 
   return {
@@ -336,7 +392,7 @@ function createLedgerStore(deps: {
     statement: async (account, range) =>
       buildStatement(state.log, account, range),
 
-    timeline: (account, options) => timelineOf(state.log, account, options),
+    timeline: (account, options) => timelineOf(state, account, options),
 
     heads: async function* () {
       // Yields in code-unit order rather than Map insertion order, so every engine lists accounts
@@ -406,7 +462,7 @@ function buildStatement(
 // `offset`/`limit` paging so the maturity tail pulls just the newest run. The log array index is the
 // in-memory analogue of SQL `seq`, so reversing it matches `order by seq desc`.
 async function* timelineOf(
-  log: ReadonlyArray<StoredPosting>,
+  state: LedgerState,
   account: AccountRef,
   options?: { order?: 'asc' | 'desc'; limit?: number; offset?: number },
 ): AsyncIterable<Lot> {
@@ -414,27 +470,17 @@ async function* timelineOf(
   let offset = options?.offset ?? 0;
   let limit = options?.limit ?? Infinity;
 
-  // Walk the log in the requested direction; the log is already in commit (asc) order.
-  let indices =
-    order === 'desc'
-      ? rangeDown(log.length - 1, 0)
-      : rangeUp(0, log.length - 1);
-
+  // Walk only this account's lots, via its lot index, rather than scanning the whole log. The index
+  // holds its log positions in commit (asc) order; 'desc' walks it newest-first. A log position is
+  // the in-memory analogue of SQL `seq`, so reversing matches `order by seq desc`.
+  let positions = state.lotIndexByAccount.get(account) ?? [];
+  let step = order === 'desc' ? -1 : 1;
+  let start = order === 'desc' ? positions.length - 1 : 0;
   let skipped = 0;
   let yielded = 0;
-  for (let i of indices) {
-    if (yielded >= limit) {
-      break;
-    }
-    let row = log[i]!;
-    for (let leg of row.legs) {
-      if (leg.account !== account) {
-        continue;
-      }
-      let delta = balanceDelta(leg);
-      if (delta.minor <= 0n) {
-        continue;
-      }
+  for (let n = 0; n < positions.length && yielded < limit; n += 1) {
+    let row = state.log[positions[start + step * n]!]!;
+    for (let lot of lotsOfPosting(row, account)) {
       if (skipped < offset) {
         skipped += 1;
         continue;
@@ -443,29 +489,33 @@ async function* timelineOf(
         break;
       }
       yielded += 1;
-      yield {
-        txnId: row.txnId,
-        amount: delta,
-        source: metaString(row.meta, 'source', 'unknown'),
-        toppedUpAt: row.postedAt,
-        maturesAt: metaNumber(row.meta, 'maturesAt', row.postedAt),
-      };
+      yield lot;
     }
   }
 }
 
-// Walks indices in ascending order over [lo..hi], yielding nothing when hi < lo. It stays a
-// generator so timelineOf can stop early without building an index array.
-function* rangeUp(lo: number, hi: number): Generator<number> {
-  for (let i = lo; i <= hi; i += 1) {
-    yield i;
-  }
-}
-
-// Walks indices in descending order over [hi..lo], yielding nothing when hi < lo.
-function* rangeDown(hi: number, lo: number): Generator<number> {
-  for (let i = hi; i >= lo; i -= 1) {
-    yield i;
+// Yields each balance-increasing leg of one posting as a Lot. A posting can raise an account in more
+// than one leg, so this may yield several; a balance-lowering leg is skipped (a spend is not a lot).
+// `source`/`maturesAt` fall back to "unknown" and mature-now when the metadata omits them.
+function* lotsOfPosting(
+  row: StoredPosting,
+  account: AccountRef,
+): Generator<Lot> {
+  for (let leg of row.legs) {
+    if (leg.account !== account) {
+      continue;
+    }
+    let delta = balanceDelta(leg);
+    if (delta.minor <= 0n) {
+      continue;
+    }
+    yield {
+      txnId: row.txnId,
+      amount: delta,
+      source: metaString(row.meta, 'source', 'unknown'),
+      toppedUpAt: row.postedAt,
+      maturesAt: metaNumber(row.meta, 'maturesAt', row.postedAt),
+    };
   }
 }
 
@@ -783,6 +833,25 @@ async function* listSagasOf(rows: Map<string, Saga>): AsyncIterable<Saga> {
 function createSagaStore(): SagaStore & Participant {
   let journal = createJournal();
   let rows = new Map<string, Saga>();
+  // Maintained max `updatedAt` per user, so `lastPayoutAt` is an O(1) read, not a scan over every
+  // saga. Sagas are only added or moved forward (never deleted outside rollback) and `updatedAt`
+  // only increases, so this index only rises on a write and is restored on rollback.
+  let lastByUser = new Map<string, number>();
+
+  // Raises a user's most-recent-payout time and records the undo. Only ever raises, so a rolled-back
+  // saga write restores the prior max (or clears it when this was the user's first saga).
+  let bumpLast = (userId: string, updatedAt: number): void => {
+    let prior = lastByUser.get(userId);
+    if (prior !== undefined && prior >= updatedAt) {
+      return;
+    }
+    lastByUser.set(userId, updatedAt);
+    journal.record(() =>
+      prior === undefined
+        ? lastByUser.delete(userId)
+        : lastByUser.set(userId, prior),
+    );
+  };
 
   return {
     journal,
@@ -793,6 +862,7 @@ function createSagaStore(): SagaStore & Participant {
       journal.record(() =>
         had ? rows.set(saga.id, prior!) : rows.delete(saga.id),
       );
+      bumpLast(saga.userId, saga.updatedAt);
     },
     load: async (id, _options?: Options) => {
       let saga = rows.get(id);
@@ -827,19 +897,14 @@ function createSagaStore(): SagaStore & Participant {
       let prior = { ...saga };
       journal.record(() => rows.set(id, prior));
       rows.set(id, { ...saga, ...patch, state: to });
+      bumpLast(saga.userId, patch.updatedAt ?? saga.updatedAt);
       return true;
     },
     lastPayoutAt: async (userId, _options?: Options) => {
-      // Returns the largest `updatedAt` across this user's sagas in any state. `updatedAt` is set to
-      // the request time at open() and only moves forward. Returns null when the user has no sagas,
-      // so their first request is always allowed. Read-only, so it records no journal undo.
-      let max: number | null = null;
-      for (let saga of rows.values()) {
-        if (saga.userId === userId) {
-          max = max === null ? saga.updatedAt : Math.max(max, saga.updatedAt);
-        }
-      }
-      return max;
+      // The largest `updatedAt` across this user's sagas in any state, read from the `lastByUser`
+      // index (kept by bumpLast on open/advance) instead of scanning every saga. Null when the user
+      // has no sagas, so their first request is always allowed. Read-only.
+      return lastByUser.get(userId) ?? null;
     },
     deadLetter: async (id, reason, _options?: Options) => {
       let saga = rows.get(id);
@@ -1062,51 +1127,83 @@ function createPromoStore(): PromoStore & Participant {
 // (a rollback must not erase the attempt). `bump` dedupes a repeat attempt by idempotency key, so a
 // retry isn't counted twice.
 //
-// Attempts are kept as a per-subject list, not a running total, so `read` can sum only those inside
-// the last `windowMs` (via `windowedVelocity`), mirroring the SQL adapters' `SUM(amount) WHERE at >
-// cutoff`. Regression-lock: an earlier grow-forever total never aged out, so the limit stuck once hit.
+// The windowed total is kept incrementally, not re-summed: each subject holds its in-window attempts
+// plus a running `sumMinor`, so read/record stays O(1) amortized as history grows. An earlier version
+// re-scanned every attempt (O(attempts)), so one hot subject's throughput fell off as it accrued
+// history. Still mirrors the SQL adapters' windowed `SUM(amount) WHERE at > cutoff` and reproduces
+// `windowedVelocity` exactly — same boundary, same windowStart.
+
+// One subject's sliding-window state. `attempts` holds the attempts in `at` (clock) order, the order
+// inserted; entries before `head` have aged out and been subtracted from `sumMinor`. `sumMinor` is
+// the sum of the live tail `attempts[head..]` — the windowed spend — maintained as attempts are added
+// and pruned rather than recomputed on each read.
+type TrustWindow = { attempts: Attempt[]; head: number; sumMinor: bigint };
+
 function createTrustStore(clock: Clock, windowMs: number): TrustStore {
-  let attemptsBySubject = new Map<string, Attempt[]>();
+  let bySubject = new Map<string, TrustWindow>();
   let seenAttempts = new Set<string>();
 
-  // Appends an attempt to its subject's list, deduplicated on idempotency key so a genuine retry
-  // isn't counted twice. Both `bump` and `record` use it to apply the write.
+  // Appends an attempt to its subject's window, deduplicated on idempotency key so a genuine retry
+  // isn't counted twice. `at` comes from the clock at check time, which only moves forward, so the
+  // appended attempt is the newest and the window stays ordered by `at`. Its amount joins `sumMinor`
+  // here; pruning subtracts it later, once it ages out. Both `bump` and `record` use it.
   let insert = (subject: string, attempt: Attempt): void => {
     if (seenAttempts.has(attempt.idempotencyKey)) {
       return;
     }
     seenAttempts.add(attempt.idempotencyKey);
-    let list = attemptsBySubject.get(subject);
-    if (list === undefined) {
-      list = [];
-      attemptsBySubject.set(subject, list);
+    let window = bySubject.get(subject);
+    if (window === undefined) {
+      window = { attempts: [], head: 0, sumMinor: 0n };
+      bySubject.set(subject, window);
     }
-    list.push(attempt);
+    window.attempts.push(attempt);
+    window.sumMinor += attempt.amount.minor;
+  };
+
+  // Drops the attempts that have aged out (`at <= cutoff`) off the front, subtracting each from
+  // `sumMinor`, then reads the velocity off the maintained totals. Attempts are ordered by `at`, so
+  // the expired ones are always a prefix; this advances `head` past just those and never scans the
+  // live tail. The consumed prefix is compacted away once it dominates the array, so memory stays
+  // bounded to the live window. `windowStart` is the oldest attempt still in the window, matching
+  // `windowedVelocity`.
+  let measure = (subject: string, now: number): Velocity => {
+    let window = bySubject.get(subject);
+    let cutoff = now - windowMs;
+    if (window !== undefined) {
+      let attempts = window.attempts;
+      while (
+        window.head < attempts.length &&
+        attempts[window.head]!.at <= cutoff
+      ) {
+        window.sumMinor -= attempts[window.head]!.amount.minor;
+        window.head += 1;
+      }
+      if (window.head > 0 && window.head * 2 >= attempts.length) {
+        window.attempts = attempts.slice(window.head);
+        window.head = 0;
+      }
+    }
+    let live = window === undefined ? 0 : window.attempts.length - window.head;
+    return {
+      subject,
+      windowStart: live > 0 ? window!.attempts[window!.head]!.at : 0,
+      spent: toAmount(VELOCITY_CURRENCY, window?.sumMinor ?? 0n),
+      attempts: live,
+    };
   };
 
   return {
-    read: async (subject, _options?: Options) =>
-      windowedVelocity(
-        subject,
-        attemptsBySubject.get(subject) ?? [],
-        clock.now(),
-        windowMs,
-      ),
+    read: async (subject, _options?: Options) => measure(subject, clock.now()),
     bump: async (subject, attempt, _options?: Options) =>
       insert(subject, attempt),
     // Records and measures in one step. Because JS is single-threaded, the dedup-insert and the
     // windowing below run with no `await` between them. Two concurrent same-subject `record` calls
-    // therefore can't interleave, and each sees its own attempt already in the list when it
-    // measures. That atomicity closes the velocity-limit TOCTOU the old separate read+bump left
-    // open.
+    // therefore can't interleave, and each sees its own attempt already counted when it measures —
+    // the atomicity that closes the velocity-limit TOCTOU the old separate read+bump left open.
     record: async (subject, attempt, _options?: Options) => {
       insert(subject, attempt);
-      return windowedVelocity(
-        subject,
-        attemptsBySubject.get(subject) ?? [],
-        clock.now(),
-        windowMs,
-      );
+      return measure(subject, clock.now());
     },
   };
 }
