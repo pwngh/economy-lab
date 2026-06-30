@@ -45,10 +45,7 @@ function walk(dir: string): string[] {
  */
 export function getAllDocSlugs(): string[] {
   return walk(CONTENT_DIR)
-    .filter(
-      (file) =>
-        includeDrafts || matter(readFileSync(file, 'utf8')).data.draft !== true,
-    )
+    .filter((file) => includeDrafts || matter(readFileSync(file, 'utf8')).data.draft !== true)
     .map((file) =>
       relative(CONTENT_DIR, file)
         .replace(/\.mdx$/, '')

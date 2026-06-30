@@ -16,8 +16,7 @@ import { pageMeta } from '~/seo.ts';
 export function meta() {
   return pageMeta({
     title: 'Operations - Economy Lab',
-    description:
-      'Every state-changing operation in the economy, one page each.',
+    description: 'Every state-changing operation in the economy, one page each.',
     path: '/economy/reference/operations/',
   });
 }
@@ -30,8 +29,8 @@ export default function OperationsIndex() {
     <section className="prose">
       <h1>Operations</h1>
       <p className="doc-summary">
-        Every state-changing call is a kind-tagged <code>Operation</code> that
-        posts a balanced transaction and returns an <code>Outcome</code>.
+        Every state-changing call is a kind-tagged <code>Operation</code> that posts a balanced
+        transaction and returns an <code>Outcome</code>.
       </p>
       <CardGrid slugs={slugs} />
     </section>

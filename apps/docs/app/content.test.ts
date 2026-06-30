@@ -88,9 +88,7 @@ describe('docSchema', () => {
   });
 
   it('rejects an unknown status', () => {
-    expect(() =>
-      docSchema.parse({ title: 'X', summary: 'Y', status: 'final' }),
-    ).toThrow();
+    expect(() => docSchema.parse({ title: 'X', summary: 'Y', status: 'final' })).toThrow();
   });
 });
 
@@ -103,9 +101,7 @@ describe('content', () => {
   });
 
   it('is sorted by order then title', () => {
-    const sorted = [...docs].sort(
-      (a, b) => a.order - b.order || a.title.localeCompare(b.title),
-    );
+    const sorted = [...docs].sort((a, b) => a.order - b.order || a.title.localeCompare(b.title));
     expect(docs.map((d) => d.slug)).toEqual(sorted.map((d) => d.slug));
   });
 });

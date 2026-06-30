@@ -34,8 +34,7 @@ export function SourceLink({
   const href = sourceUrl(to);
   const symbol = to.split('·')[1]?.trim();
   const path = to.split('·')[0]?.trim() ?? to;
-  const label =
-    children ?? symbol ?? path.split('/').pop()?.split('#')[0] ?? path;
+  const label = children ?? symbol ?? path.split('/').pop()?.split('#')[0] ?? path;
   if (!href) return <code>{label}</code>;
   return (
     <a href={href} target="_blank" rel="noopener noreferrer">

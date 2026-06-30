@@ -40,8 +40,7 @@
     input.removeAttribute('aria-activedescendant');
   };
 
-  const escapeHtml = (s) =>
-    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   const render = (matches) => {
     if (matches.length === 0) {
@@ -71,9 +70,7 @@
       return;
     }
     const matches = (index || [])
-      .filter((d) =>
-        `${d.title} ${d.summary} ${d.slug}`.toLowerCase().includes(q),
-      )
+      .filter((d) => `${d.title} ${d.summary} ${d.slug}`.toLowerCase().includes(q))
       .slice(0, 8);
     render(matches);
   };
@@ -114,9 +111,7 @@
 
   // "/" focuses search from anywhere (unless already typing in a field).
   document.addEventListener('keydown', (e) => {
-    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(
-      document.activeElement?.tagName || '',
-    );
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '');
     if (e.key === '/' && !typing) {
       e.preventDefault();
       input.focus();

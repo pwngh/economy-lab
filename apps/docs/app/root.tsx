@@ -75,25 +75,15 @@ export const links: LinksFunction = () => [
  */
 export function Layout({ children }: { children: ReactNode }) {
   const matches = useMatches();
-  const hydrate = matches.some(
-    (m) => (m.handle as { hydrate?: boolean } | undefined)?.hydrate,
-  );
+  const hydrate = matches.some((m) => (m.handle as { hydrate?: boolean } | undefined)?.hydrate);
 
   return (
     <html lang="en">
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta
-          name="theme-color"
-          media="(prefers-color-scheme: light)"
-          content="#fbfaf6"
-        />
-        <meta
-          name="theme-color"
-          media="(prefers-color-scheme: dark)"
-          content="#15171c"
-        />
+        <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fbfaf6" />
+        <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#15171c" />
         <Meta />
         <Links />
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: fixed author-controlled string, not user input; its SHA-256 is pinned in the CSP */}
@@ -180,9 +170,7 @@ export function Layout({ children }: { children: ReactNode }) {
             </a>{' '}
             — correctness in systems that move money.
           </p>
-          <p className="muted">
-            Built with React Router, prerendered to static HTML.
-          </p>
+          <p className="muted">Built with React Router, prerendered to static HTML.</p>
         </footer>
 
         {hydrate ? <ScrollRestoration /> : null}
@@ -190,10 +178,7 @@ export function Layout({ children }: { children: ReactNode }) {
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: fixed author-controlled string, not user input; its SHA-256 is pinned in the CSP */}
         <script dangerouslySetInnerHTML={{ __html: THEME_TOGGLE }} />
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: declarative Speculation Rules JSON (not executable JS); allowed by the CSP 'inline-speculation-rules' source */}
-        <script
-          type="speculationrules"
-          dangerouslySetInnerHTML={{ __html: SPECULATION_RULES }}
-        />
+        <script type="speculationrules" dangerouslySetInnerHTML={{ __html: SPECULATION_RULES }} />
         {/* Client search: a small deferred vanilla script (no framework) — the one interactive feature, loaded on every page but non-blocking. Allowed by script-src 'self'. */}
         <script src="/search.js" defer />
       </body>

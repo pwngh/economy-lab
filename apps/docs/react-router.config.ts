@@ -30,10 +30,7 @@ export default {
   // section routes (concepts/:slug, reference/operations/:slug, …). Deduped because the root-level
   // scope-and-non-goals page is both a static route and a content file.
   async prerender({ getStaticPaths }) {
-    const paths = [
-      ...getStaticPaths(),
-      ...getAllDocSlugs().map((s) => `/${s}`),
-    ];
+    const paths = [...getStaticPaths(), ...getAllDocSlugs().map((s) => `/${s}`)];
     return [...new Set(paths)];
   },
 } satisfies Config;

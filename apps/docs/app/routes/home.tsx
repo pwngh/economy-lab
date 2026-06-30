@@ -26,9 +26,8 @@ export default function Home() {
     <div className="prose">
       <h1>economy-lab documentation</h1>
       <p className="doc-summary">
-        A double-entry credit economy that is provably solvent and
-        tamper-evident — built to demonstrate correctness in systems that move
-        money.
+        A double-entry credit economy that is provably solvent and tamper-evident — built to
+        demonstrate correctness in systems that move money.
       </p>
       <p>
         All of the documentation lives under one section. Start at the{' '}

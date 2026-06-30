@@ -20,8 +20,7 @@ import { buildNav } from '~/nav.ts';
  */
 export function Sidebar() {
   const { pathname } = useLocation();
-  const isActive = (slug: string) =>
-    pathname === `/${slug}/` || pathname === `/${slug}`;
+  const isActive = (slug: string) => pathname === `/${slug}/` || pathname === `/${slug}`;
 
   return (
     <nav className="docs-sidebar" aria-label="Documentation">
@@ -34,10 +33,7 @@ export function Sidebar() {
             <ul>
               {g.items.map((l) => (
                 <li key={l.slug}>
-                  <a
-                    href={`/${l.slug}/`}
-                    aria-current={isActive(l.slug) ? 'page' : undefined}
-                  >
+                  <a href={`/${l.slug}/`} aria-current={isActive(l.slug) ? 'page' : undefined}>
                     {l.title}
                   </a>
                 </li>
@@ -52,10 +48,7 @@ export function Sidebar() {
               <ul>
                 {sg.items.map((l) => (
                   <li key={l.slug}>
-                    <a
-                      href={`/${l.slug}/`}
-                      aria-current={isActive(l.slug) ? 'page' : undefined}
-                    >
+                    <a href={`/${l.slug}/`} aria-current={isActive(l.slug) ? 'page' : undefined}>
                       {l.title}
                     </a>
                   </li>

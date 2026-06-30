@@ -65,15 +65,12 @@ const DEV = import.meta.env.DEV;
 // on disk and the two can never drift. The whole site is section-rooted under economy/, mirroring
 // creators.vrchat.com: e.g. './content/economy/reference/operations/spend.mdx' -> the slug
 // 'economy/reference/operations/spend', served at /economy/reference/operations/spend/.
-const slugOf = (path: string) =>
-  path.replace(/^\.\/content\//, '').replace(/\.mdx$/, '');
+const slugOf = (path: string) => path.replace(/^\.\/content\//, '').replace(/\.mdx$/, '');
 
 // The sub-section a page belongs to, below the economy/ root: 'concepts' | 'reference' | 'ports',
 // or '' for a page that sits directly under economy/ (scope-and-non-goals).
 const sectionOf = (slug: string) => {
-  const rel = slug.startsWith('economy/')
-    ? slug.slice('economy/'.length)
-    : slug;
+  const rel = slug.startsWith('economy/') ? slug.slice('economy/'.length) : slug;
   return rel.includes('/') ? (rel.split('/')[0] ?? '') : '';
 };
 
@@ -109,5 +106,4 @@ export const docs: DocPage[] = Object.entries(modules)
 /** Find the one page whose slug matches, or `undefined` when nothing does — the caller decides whether a miss means a not-found view. */
 export const docBySlug = (slug: string) => docs.find((d) => d.slug === slug);
 /** Every page in a top-level section ('concepts' | 'reference' | 'ports'), in sidebar order. */
-export const docsInSection = (section: string) =>
-  docs.filter((d) => d.section === section);
+export const docsInSection = (section: string) => docs.filter((d) => d.section === section);

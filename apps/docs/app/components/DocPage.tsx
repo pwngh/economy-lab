@@ -57,12 +57,7 @@ function SourceChip({ refStr }: { refStr: string }) {
     </code>
   );
   return href ? (
-    <a
-      className="source-chip"
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-    >
+    <a className="source-chip" href={href} target="_blank" rel="noopener noreferrer">
       {body}
     </a>
   ) : (
@@ -152,9 +147,8 @@ export function DocPage({ slug }: { slug: string }) {
 
       {doc.status === 'draft' && (
         <aside className="callout callout-draft">
-          <strong>Draft.</strong> This page is scaffolded — its canonical prose
-          is still being authored. The slug, frontmatter, and source links above
-          are already in place.
+          <strong>Draft.</strong> This page is scaffolded — its canonical prose is still being
+          authored. The slug, frontmatter, and source links above are already in place.
         </aside>
       )}
       {doc.status === 'planned' && (

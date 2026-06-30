@@ -28,8 +28,7 @@ const leaf = (d: { slug: string; title: string }): NavLeaf => ({
   title: d.title,
 });
 
-const isOperation = (slug: string) =>
-  slug.startsWith('economy/reference/operations/');
+const isOperation = (slug: string) => slug.startsWith('economy/reference/operations/');
 
 /** Human label for a sub-section, used in breadcrumbs and section landing pages. */
 export const SECTION_LABEL: Record<string, string> = {
@@ -54,9 +53,7 @@ export function buildNav(): NavGroup[] {
     .filter((d) => d.section === 'reference' && !isOperation(d.slug))
     .map(leaf);
   const ports = docsInSection('ports').map(leaf);
-  const scope = docs
-    .filter((d) => d.slug === 'economy/scope-and-non-goals')
-    .map(leaf);
+  const scope = docs.filter((d) => d.slug === 'economy/scope-and-non-goals').map(leaf);
 
   return [
     {
@@ -113,9 +110,7 @@ export function crumbsFor(slug: string): Crumb[] {
   const crumbs: Crumb[] = [{ label: 'Economy', href: '/economy/' }];
   if (slug === 'economy/scope-and-non-goals') return crumbs;
 
-  const rel = slug.startsWith('economy/')
-    ? slug.slice('economy/'.length)
-    : slug;
+  const rel = slug.startsWith('economy/') ? slug.slice('economy/'.length) : slug;
   const section = rel.split('/')[0] ?? '';
   if (SECTION_LABEL[section]) {
     crumbs.push({
