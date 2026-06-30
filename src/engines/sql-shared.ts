@@ -12,6 +12,7 @@
 import { toAmount } from '#src/money.ts';
 import { toHex } from '#src/bytes.ts';
 import { GENESIS } from '#src/ledger.ts';
+import { sha256Digest } from '#src/digest.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
 import type {
@@ -39,10 +40,7 @@ import type {
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for how engines plug into the ledger.
  */
 export function defaultDigest(): Digest {
-  return {
-    hash: async (bytes) =>
-      new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)),
-  };
+  return sha256Digest();
 }
 
 // Returns a clock fixed at time 0, so "posted at" timestamps are predictable in tests. Pass a

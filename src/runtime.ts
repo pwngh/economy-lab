@@ -10,6 +10,7 @@
  */
 
 import { fromHex, toHex } from '#src/bytes.ts';
+import { sha256Digest } from '#src/digest.ts';
 
 import type {
   Clock,
@@ -68,14 +69,12 @@ export function sequentialIds(seed = 0): Ids {
 }
 
 /**
- * Production hasher. Returns the SHA-256 of the input bytes via platform web
- * crypto; the same bytes hash to the same value on every runtime.
+ * Production hasher. Returns the shared SHA-256 {@link Digest} ({@link sha256Digest}): a synchronous
+ * node:crypto hash where the runtime offers one, else Web Crypto. The same bytes hash to the same
+ * value on every runtime, so a signed checkpoint re-derives wherever it is verified.
  */
 export function systemDigest(): Digest {
-  return {
-    hash: async (bytes) =>
-      new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)),
-  };
+  return sha256Digest();
 }
 
 // Fixed PKCS#8 DER header for an Ed25519 private key. The 32-byte seed is appended after it.

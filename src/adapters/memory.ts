@@ -15,6 +15,7 @@ import { currency, SYSTEM } from '#src/accounts.ts';
 import { windowedVelocity } from '#src/trust.ts';
 import { byCodeUnit, fromHex, toHex } from '#src/bytes.ts';
 import { metaString, metaNumber } from '#src/meta.ts';
+import { sha256Digest } from '#src/digest.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
@@ -104,13 +105,11 @@ interface Participant {
 
 // --- Default capabilities ---------------------------------------------------------
 
-// Returns the default hash, SHA-256 via the platform `crypto.subtle`. It is deterministic across
-// runtimes, so a plain `memoryStore()` is reproducible with no seed and no Node-specific import.
+// Returns the default hash, the shared SHA-256 `sha256Digest`. It is deterministic across runtimes
+// (a synchronous node:crypto hash when one is available, else Web Crypto, byte-identical either way),
+// so a plain `memoryStore()` stays reproducible with no seed.
 function defaultDigest(): Digest {
-  return {
-    hash: async (bytes) =>
-      new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)),
-  };
+  return sha256Digest();
 }
 
 // Returns the default clock, which always reports time 0, keeping each posting's `postedAt`

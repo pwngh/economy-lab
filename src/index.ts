@@ -15,6 +15,7 @@ import { assertSchemaCurrent } from '#src/schema.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { createWorker } from '#src/worker/index.ts';
 import { jsonlLogger } from '#src/runtime.ts';
+import { sha256Digest } from '#src/digest.ts';
 import { fault, ERROR_CODES } from '#src/errors.ts';
 
 import type { Economy } from '#src/economy.ts';
@@ -131,7 +132,7 @@ export async function capabilitiesFromEnv(
 ): Promise<Capabilities> {
   let config = loadConfig(env);
   let clock = defaults.clock ?? wallClock();
-  let digest = defaults.digest ?? subtleDigest();
+  let digest = defaults.digest ?? sha256Digest();
   let cache = await selectCache(env);
   let dispatcher = await selectDispatcher(env);
   return {
@@ -229,14 +230,6 @@ function wallClock(): Clock {
 // Ids of the form `${prefix}_${uuid}` via crypto.randomUUID, no Node-specific module.
 function uuidIds(): Ids {
   return { next: (prefix) => `${prefix}_${crypto.randomUUID()}` };
-}
-
-// SHA-256 via crypto.subtle. Same hash the in-memory store defaults to; identical result on every runtime.
-function subtleDigest(): Digest {
-  return {
-    hash: async (bytes) =>
-      new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)),
-  };
 }
 
 // Metrics sink that discards everything, so code can always record metrics with no host-supplied one.
