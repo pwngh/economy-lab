@@ -1,10 +1,16 @@
 ---
-title: "Solvency"
+title: 'Solvency'
 summary: "Provably solvent: real USD held in trust covers users' spendable credits at par, and the backing check reports any shortfall."
 order: 40
 status: stable
-sourceRefs: ["src/integrity.ts#L83-L91 · backed", "src/reconcile.ts", "src/accounts.ts#L143-L169 · classify"]
-related: ["economy/concepts/lifecycles", "economy/concepts/actors-and-authorization"]
+sourceRefs:
+  [
+    'src/integrity.ts#L83-L91 · backed',
+    'src/reconcile.ts',
+    'src/accounts.ts#L143-L169 · classify',
+  ]
+related:
+  ['economy/concepts/lifecycles', 'economy/concepts/actors-and-authorization']
 ---
 
 ## The idea
@@ -42,7 +48,11 @@ The trust money stays segregated. The platform's margin from the buy-vs-par [spr
 The platform gets paid only from the **surplus**: cash sitting beyond what's owed to users. The fee sweep refuses any draw that would pull `trust_cash` below the requirement.
 
 <Callout type="danger">
-The fee sweep enforces the backing floor at write time, not only in the audit. Before moving accrued fees into platform cash, `sweepFees` caps the draw at the smaller of the cash surplus and the matured revenue. A draw that would push `trust_cash` below what users are owed throws `COMMINGLING` and posts nothing.
+  The fee sweep enforces the backing floor at write time, not only in the audit.
+  Before moving accrued fees into platform cash, `sweepFees` caps the draw at
+  the smaller of the cash surplus and the matured revenue. A draw that would
+  push `trust_cash` below what users are owed throws `COMMINGLING` and posts
+  nothing.
 </Callout>
 
 ## How it's enforced
@@ -53,13 +63,13 @@ First, it walks every account and sums the balances `classify` marks `custodial`
 
 `backed` then holds whenever `shortfall === 0n`.
 
-| Term | Meaning |
-| --- | --- |
+| Term               | Meaning                                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------------------- |
 | `custodial` credit | The user `spendable` balances that must be backed; the only class counted toward the trust total. |
-| required USD | The custodial credit total converted to USD at `par`, rounded down. |
-| `trust_cash` | The real USD held in trust right now (`platform:trust_cash`). |
-| `shortfall` | `required − trust_cash` when underheld, else zero; an `Amount` in USD. |
-| `backed` | True when `shortfall` is zero. |
+| required USD       | The custodial credit total converted to USD at `par`, rounded down.                               |
+| `trust_cash`       | The real USD held in trust right now (`platform:trust_cash`).                                     |
+| `shortfall`        | `required − trust_cash` when underheld, else zero; an `Amount` in USD.                            |
+| `backed`           | True when `shortfall` is zero.                                                                    |
 
 Two layers run this check. The background worker's **treasury** sweep (`sweepTreasury`) re-computes the backing position every cycle. It's measure-only: a shortfall is logged at error and counted, but nothing is posted to fix it.
 

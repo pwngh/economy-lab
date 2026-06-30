@@ -23,9 +23,13 @@ export type NavGroup = {
   subgroups?: { title: string; href: string; items: NavLeaf[] }[];
 };
 
-const leaf = (d: { slug: string; title: string }): NavLeaf => ({ slug: d.slug, title: d.title });
+const leaf = (d: { slug: string; title: string }): NavLeaf => ({
+  slug: d.slug,
+  title: d.title,
+});
 
-const isOperation = (slug: string) => slug.startsWith('economy/reference/operations/');
+const isOperation = (slug: string) =>
+  slug.startsWith('economy/reference/operations/');
 
 /** Human label for a sub-section, used in breadcrumbs and section landing pages. */
 export const SECTION_LABEL: Record<string, string> = {
@@ -50,19 +54,33 @@ export function buildNav(): NavGroup[] {
     .filter((d) => d.section === 'reference' && !isOperation(d.slug))
     .map(leaf);
   const ports = docsInSection('ports').map(leaf);
-  const scope = docs.filter((d) => d.slug === 'economy/scope-and-non-goals').map(leaf);
+  const scope = docs
+    .filter((d) => d.slug === 'economy/scope-and-non-goals')
+    .map(leaf);
 
   return [
-    { title: 'Concepts', href: '/economy/concepts/', items: docsInSection('concepts').map(leaf) },
+    {
+      title: 'Concepts',
+      href: '/economy/concepts/',
+      items: docsInSection('concepts').map(leaf),
+    },
     {
       title: 'Reference',
       href: '/economy/reference/',
       items: referencePages,
       subgroups: [
-        { title: 'Operations', href: '/economy/reference/operations/', items: operations },
+        {
+          title: 'Operations',
+          href: '/economy/reference/operations/',
+          items: operations,
+        },
       ],
     },
-    { title: 'Ports & edges', href: '/economy/ports/', items: [...ports, ...scope] },
+    {
+      title: 'Ports & edges',
+      href: '/economy/ports/',
+      items: [...ports, ...scope],
+    },
   ];
 }
 
@@ -95,13 +113,21 @@ export function crumbsFor(slug: string): Crumb[] {
   const crumbs: Crumb[] = [{ label: 'Economy', href: '/economy/' }];
   if (slug === 'economy/scope-and-non-goals') return crumbs;
 
-  const rel = slug.startsWith('economy/') ? slug.slice('economy/'.length) : slug;
+  const rel = slug.startsWith('economy/')
+    ? slug.slice('economy/'.length)
+    : slug;
   const section = rel.split('/')[0] ?? '';
   if (SECTION_LABEL[section]) {
-    crumbs.push({ label: SECTION_LABEL[section], href: `/economy/${section}/` });
+    crumbs.push({
+      label: SECTION_LABEL[section],
+      href: `/economy/${section}/`,
+    });
   }
   if (isOperation(slug)) {
-    crumbs.push({ label: 'Operations', href: '/economy/reference/operations/' });
+    crumbs.push({
+      label: 'Operations',
+      href: '/economy/reference/operations/',
+    });
   }
   return crumbs;
 }

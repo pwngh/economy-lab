@@ -1,17 +1,23 @@
 ---
-title: "Concurrency"
-summary: "Two operations touching the same account at once stay correct through one app-side rule and one database constraint: every operation locks its accounts in one global order, and a unique index makes a forked hash chain impossible."
+title: 'Concurrency'
+summary: 'Two operations touching the same account at once stay correct through one app-side rule and one database constraint: every operation locks its accounts in one global order, and a unique index makes a forked hash chain impossible.'
 order: 90
 status: stable
-sourceRefs: ["src/ledger.ts#L65 · lockAll", "src/economy.ts#L557 · lockAccounts", "src/engines/postgres.ts#L305 · advanceChain", "db/postgresql-schema.sql#L105 · chain_links_account_prev_uq"]
-related: ["economy/concepts/idempotency", "economy/ports/storage-and-messaging"]
+sourceRefs:
+  [
+    'src/ledger.ts#L65 · lockAll',
+    'src/economy.ts#L557 · lockAccounts',
+    'src/engines/postgres.ts#L305 · advanceChain',
+    'db/postgresql-schema.sql#L105 · chain_links_account_prev_uq',
+  ]
+related: ['economy/concepts/idempotency', 'economy/ports/storage-and-messaging']
 ---
 
 When two operations touch the same account at the same time, they can interleave and corrupt a balance, or both try to extend that account's [hash chain](/economy/concepts/integrity/) from the same point and fork it. economy-lab keeps concurrent writes correct with one rule on the application side and one constraint in the database.
 
 ## The idea
 
-Every operation locks all the accounts it will touch *before* it posts, and it takes those locks in one global order. The order is a plain sort of the account ids, so any two operations that share an account acquire that account's lock in the same sequence — and a sort is identical on every machine, so the order is the same everywhere.
+Every operation locks all the accounts it will touch _before_ it posts, and it takes those locks in one global order. The order is a plain sort of the account ids, so any two operations that share an account acquire that account's lock in the same sequence — and a sort is identical on every machine, so the order is the same everywhere.
 
 `lockAll` de-duplicates the account set and sorts it, then takes each lock in turn:
 

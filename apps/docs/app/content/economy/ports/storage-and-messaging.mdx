@@ -1,10 +1,17 @@
 ---
-title: "Storage & messaging"
-summary: "The storage and messaging ports (the ledger and sub-stores, plus the dispatcher, cache, and outbox/inbox) and their adapters."
+title: 'Storage & messaging'
+summary: 'The storage and messaging ports (the ledger and sub-stores, plus the dispatcher, cache, and outbox/inbox) and their adapters.'
 order: 50
 status: stable
-related: ["economy/concepts/lifecycles", "economy/ports/processor"]
-sourceRefs: ["src/ports.ts#L272 · Store", "src/ports.ts#L206 · Ledger", "src/adapters/memory.ts#L1167 · memoryStore", "src/engines/postgres.ts#L1579 · postgresStore", "src/worker/relay.ts#L55 · relayOutbox"]
+related: ['economy/concepts/lifecycles', 'economy/ports/processor']
+sourceRefs:
+  [
+    'src/ports.ts#L272 · Store',
+    'src/ports.ts#L206 · Ledger',
+    'src/adapters/memory.ts#L1167 · memoryStore',
+    'src/engines/postgres.ts#L1579 · postgresStore',
+    'src/worker/relay.ts#L55 · relayOutbox',
+  ]
 ---
 
 ## The seam between the core and the world
@@ -23,19 +30,19 @@ The `ledger` is the append-only, double-entry book itself, see [accounts and dou
 
 Everything else hangs off the `Store` as a purpose-built sub-store, one per concern:
 
-| Sub-store | What it holds |
-|---|---|
-| `idempotency` | A claim per [`idempotencyKey`](/economy/concepts/integrity/), so a repeated request runs at most once. |
-| `sales` | A summary of each completed sale, keyed by order id, so a refund can reverse it precisely. |
-| `outbox` | Pending outgoing events, written with the money move and relayed later. |
-| `inbox` | Verified inbound provider events, awaiting apply. |
-| `sagas` | Each in-flight [payout saga](/economy/concepts/lifecycles/) and its state. |
-| `subscriptions` | Recurring subscriptions and when each is next due to bill. |
-| `entitlements` | Which users own which SKUs. |
-| `promos` | Each promo grant, so the worker can reverse the unspent remainder at expiry. |
-| `trust` | Each subject's recent spending, the input to the risk gate. |
-| `checkpoints` | Signed ledger snapshots, written only by the worker. |
-| `replay` | Raw inbound webhook ids, deduped separately from the domain idempotency keys. |
+| Sub-store       | What it holds                                                                                          |
+| --------------- | ------------------------------------------------------------------------------------------------------ |
+| `idempotency`   | A claim per [`idempotencyKey`](/economy/concepts/integrity/), so a repeated request runs at most once. |
+| `sales`         | A summary of each completed sale, keyed by order id, so a refund can reverse it precisely.             |
+| `outbox`        | Pending outgoing events, written with the money move and relayed later.                                |
+| `inbox`         | Verified inbound provider events, awaiting apply.                                                      |
+| `sagas`         | Each in-flight [payout saga](/economy/concepts/lifecycles/) and its state.                             |
+| `subscriptions` | Recurring subscriptions and when each is next due to bill.                                             |
+| `entitlements`  | Which users own which SKUs.                                                                            |
+| `promos`        | Each promo grant, so the worker can reverse the unspent remainder at expiry.                           |
+| `trust`         | Each subject's recent spending, the input to the risk gate.                                            |
+| `checkpoints`   | Signed ledger snapshots, written only by the worker.                                                   |
+| `replay`        | Raw inbound webhook ids, deduped separately from the domain idempotency keys.                          |
 
 ### Atomicity is the contract
 
@@ -54,7 +61,10 @@ await store.transaction(async (tx) => {
 The `Unit` is deliberately narrower than the full `Store`. The `trust` and `checkpoints` stores are missing on purpose. Risk velocity is recorded outside the money transaction (so even a denied attempt still counts toward the limit), and checkpoints are written only by the worker. The `replay` store is absent for the same reason: the webhook dedupe check runs before any money moves.
 
 <Callout type="note">
-The in-memory adapter gets atomicity from a per-store undo log rather than a real database transaction: each write records a reverser, and a rollback replays them last-to-first. The observable contract (all-or-nothing) is the same as the SQL engines.
+  The in-memory adapter gets atomicity from a per-store undo log rather than a
+  real database transaction: each write records a reverser, and a rollback
+  replays them last-to-first. The observable contract (all-or-nothing) is the
+  same as the SQL engines.
 </Callout>
 
 ## One contract, every adapter
@@ -84,7 +94,10 @@ The SQL engines do something the in-memory one can't: they enforce the invariant
 That belongs to [integrity](/economy/concepts/integrity/), which owns the conservation and no-overdraft invariants. The storage layer is just where the database half of them is declared. Money is stored as whole minor units in `BIGINT` columns, returned as JavaScript `BigInt`, never as a float that could drift.
 
 <Callout type="warning">
-The schema is declarative and applied by hand or in CI, never on app startup. The engines fail fast instead: each checks the database's recorded schema version against the code's and refuses to run on a mismatch, rather than silently operating on a drifted shape.
+  The schema is declarative and applied by hand or in CI, never on app startup.
+  The engines fail fast instead: each checks the database's recorded schema
+  version against the code's and refuses to run on a mismatch, rather than
+  silently operating on a drifted shape.
 </Callout>
 
 ## The `Dispatcher`: events out
@@ -103,11 +116,11 @@ Delivery is at-least-once. SQS may deliver a message twice, so every event carri
 
 There's a problem the `Dispatcher` alone doesn't solve: if the money commits but the event send fails, the event is lost; if you send first and the commit rolls back, you've announced a move that never happened. The fix is to make the event part of the transaction.
 
-That's the transactional outbox. When a money move commits, its outgoing event is written to the `outbox` sub-store *in the same database transaction*. A separate relay ([the background worker](/economy/reference/background-worker/)) picks up pending rows afterward and ships them through the `Dispatcher`. An event is never sent for a rolled-back move, nor lost for a committed one.
+That's the transactional outbox. When a money move commits, its outgoing event is written to the `outbox` sub-store _in the same database transaction_. A separate relay ([the background worker](/economy/reference/background-worker/)) picks up pending rows afterward and ships them through the `Dispatcher`. An event is never sent for a rolled-back move, nor lost for a committed one.
 
 The relay is `relayOutbox` in `src/worker/relay.ts`. It claims a batch of pending rows, sends each in its own try/catch so one failure can't stop the batch, and marks the delivered ones done. A send that throws is left pending with its attempt count bumped, retried next run; once it hits the configured cap it's dead-lettered to a terminal `failed` state, so one poison event can't wedge the queue behind it.
 
-The `inbox` is the mirror image, for events coming *in*. A verified provider webhook is mapped to the [`Operation`](/economy/reference/outcomes-and-reason-codes/) it should apply, then saved to the `inbox` in the same transaction as the webhook ingress that claimed it. A separate apply sweep submits each pending operation and marks the row applied. An inbound event is never applied without being recorded, nor recorded without eventually being applied or dead-lettered.
+The `inbox` is the mirror image, for events coming _in_. A verified provider webhook is mapped to the [`Operation`](/economy/reference/outcomes-and-reason-codes/) it should apply, then saved to the `inbox` in the same transaction as the webhook ingress that claimed it. A separate apply sweep submits each pending operation and marks the row applied. An inbound event is never applied without being recorded, nor recorded without eventually being applied or dead-lettered.
 
 Webhook ingress and the provider side of all this belong to the [processor port](/economy/ports/processor/); the outbox/inbox is the storage seam those flows write through.
 
@@ -115,7 +128,7 @@ Webhook ingress and the provider side of all this belong to the [processor port]
 
 The last port is a read-through key/value `Cache` for hot reads, mainly balances. It's strictly an accelerator: the core works without one, and it can only ever speed reads, never break them.
 
-That guarantee is built into the contract. When no cache is injected, the read path skips it and goes straight to the ledger. When a cache *is* present but errors, the read degrades to a direct ledger read rather than failing the request.
+That guarantee is built into the contract. When no cache is injected, the read path skips it and goes straight to the ledger. When a cache _is_ present but errors, the read degrades to a direct ledger read rather than failing the request.
 
 Two adapters back it. `memoryCache` is an in-process `Map`: the zero-infrastructure reference, with its own conformance suite the way `memoryStore` is the reference for the `Store`. `redisCacheFrom` in `src/adapters/redis.ts` adapts an already-connected `ioredis` client; setting `REDIS_URL` wires it in. Either way the cache stores opaque strings and never parses them.
 

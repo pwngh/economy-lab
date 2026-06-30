@@ -24,11 +24,18 @@ import { sourceUrl } from '~/repo.ts';
  * re-pinning the docs at a newer snapshot updates every inline link and every `sourceRefs` chip at
  * once. When the chip has no resolvable path, the label still renders, just unlinked.
  */
-export function SourceLink({ to, children }: { to: string; children?: ReactNode }) {
+export function SourceLink({
+  to,
+  children,
+}: {
+  to: string;
+  children?: ReactNode;
+}) {
   const href = sourceUrl(to);
   const symbol = to.split('·')[1]?.trim();
   const path = to.split('·')[0]?.trim() ?? to;
-  const label = children ?? symbol ?? path.split('/').pop()?.split('#')[0] ?? path;
+  const label =
+    children ?? symbol ?? path.split('/').pop()?.split('#')[0] ?? path;
   if (!href) return <code>{label}</code>;
   return (
     <a href={href} target="_blank" rel="noopener noreferrer">

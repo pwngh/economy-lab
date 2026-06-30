@@ -16,7 +16,9 @@ import { docBySlug } from '~/content.ts';
 import { pageMeta } from '~/seo.ts';
 
 export function meta({ params }: { params: { slug?: string } }) {
-  const doc = params.slug ? docBySlug(`economy/ports/${params.slug}`) : undefined;
+  const doc = params.slug
+    ? docBySlug(`economy/ports/${params.slug}`)
+    : undefined;
   if (!doc) return [{ title: 'Not found - Economy Lab' }];
   return pageMeta({
     title: `${doc.title} - Economy Lab`,

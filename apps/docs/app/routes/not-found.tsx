@@ -21,7 +21,8 @@ export default function NotFound() {
     <article className="prose">
       <h1>Page not found</h1>
       <p>
-        That page doesn't exist. Try the <a href="/economy/">economy overview</a>, the{' '}
+        That page doesn't exist. Try the{' '}
+        <a href="/economy/">economy overview</a>, the{' '}
         <a href="/economy/reference/">reference</a>, or the{' '}
         <a href="/economy/concepts/">concepts</a>.
       </p>

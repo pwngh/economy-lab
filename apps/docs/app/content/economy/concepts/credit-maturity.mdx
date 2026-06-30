@@ -1,10 +1,20 @@
 ---
-title: "Credit maturity"
-summary: "Funds clear on a delay: spends drain oldest-first, so the cashable balance is the matured part of the newest run of lots, never money still in its settlement wait."
+title: 'Credit maturity'
+summary: 'Funds clear on a delay: spends drain oldest-first, so the cashable balance is the matured part of the newest run of lots, never money still in its settlement wait.'
 order: 65
 status: stable
-sourceRefs: ["src/maturity.ts#L90 · maturedBalance", "src/maturity.ts#L144 · maturedAtLeast", "src/maturity.ts#L46 · maturityHorizonMs"]
-related: ["economy/concepts/lifecycles", "economy/reference/operations/spend", "economy/reference/operations/request-payout"]
+sourceRefs:
+  [
+    'src/maturity.ts#L90 · maturedBalance',
+    'src/maturity.ts#L144 · maturedAtLeast',
+    'src/maturity.ts#L46 · maturityHorizonMs',
+  ]
+related:
+  [
+    'economy/concepts/lifecycles',
+    'economy/reference/operations/spend',
+    'economy/reference/operations/request-payout',
+  ]
 ---
 
 Not every credit a user holds can be cashed out the instant it lands. The money behind a fresh credit can still be pulled back by a card chargeback or a disputed payment, so the platform makes new funds wait out a settlement window before they count as cleared. Credit maturity is how that wait is modelled and measured.
@@ -25,7 +35,7 @@ The maturity window holds new funds just long enough that, by the time they're c
 
 ## Lots and the FIFO tail
 
-Spends draw **oldest-first**: first in, first out. So once past spends have drained the oldest lots, what's left is the *newest* run of lots, the ones that together sum to the current balance. That run is the **tail**.
+Spends draw **oldest-first**: first in, first out. So once past spends have drained the oldest lots, what's left is the _newest_ run of lots, the ones that together sum to the current balance. That run is the **tail**.
 
 Maturity then splits the tail. A maturity horizon, "now minus the settlement wait", falls somewhere inside it. Lots older than the horizon have cleared and are cashable; the newest lots are still waiting. The cashable balance is the matured part of the tail.
 
@@ -35,7 +45,7 @@ The horizon depends on how the funds arrived. `maturityHorizonMs` returns the wa
 
 Computing the cashable balance never scans an account's whole history. Because the answer lives entirely in the tail, the read walks lots **newest-first** and stops the moment they cover the live balance.
 
-`maturedBalance` returns the full cashable amount as of `now`. `maturedAtLeast` answers the cheaper question its callers actually ask: *is the cashable balance at least this much?* It returns the instant its running sum clears the threshold. A request well within cleared funds settles after a lot or two, never the full history. By construction the two agree: `maturedAtLeast` is just `maturedBalance` stopped early. (`maturedBalanceFullScan` keeps the naive whole-history version, used only to differential-test the fast path.)
+`maturedBalance` returns the full cashable amount as of `now`. `maturedAtLeast` answers the cheaper question its callers actually ask: _is the cashable balance at least this much?_ It returns the instant its running sum clears the threshold. A request well within cleared funds settles after a lot or two, never the full history. By construction the two agree: `maturedAtLeast` is just `maturedBalance` stopped early. (`maturedBalanceFullScan` keeps the naive whole-history version, used only to differential-test the fast path.)
 
 The computation is currency-agnostic: the same call covers a user's spendable credits and a creator's earned balance.
 

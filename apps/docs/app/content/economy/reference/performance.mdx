@@ -1,10 +1,16 @@
 ---
-title: "Performance"
-summary: "What `make bench` measures and how to read it: submit throughput per storage backend and integrity cost as the ledger grows. These are lab numbers — relative cost and scaling shape, not production capacity."
+title: 'Performance'
+summary: 'What `make bench` measures and how to read it: submit throughput per storage backend and integrity cost as the ledger grows. These are lab numbers — relative cost and scaling shape, not production capacity.'
 order: 45
 status: stable
-sourceRefs: ["scripts/bench.ts#L64 · BASE_ENV", "scripts/bench.ts#L79 · CURVE_SIZES", "src/chain.ts#L122 · proveChain", "src/worker/checkpoint.ts#L57 · sealCheckpoint"]
-related: ["economy/reference/configuration", "economy/reference/reads"]
+sourceRefs:
+  [
+    'scripts/bench.ts#L64 · BASE_ENV',
+    'scripts/bench.ts#L79 · CURVE_SIZES',
+    'src/chain.ts#L122 · proveChain',
+    'src/worker/checkpoint.ts#L57 · sealCheckpoint',
+  ]
+related: ['economy/reference/configuration', 'economy/reference/reads']
 ---
 
 economy-lab ships a benchmark so its cost is measured, not asserted. It runs through the same composition root as the real service and reports two things: how fast operations commit on each storage backend, and how the integrity checks grow as history piles up. Run it with one command:
@@ -25,7 +31,10 @@ The bench prints two tables.
 These are **lab numbers**, and the bench says so in its own header. It runs in a single process, submits sequentially with no pipelining, and neutralizes the policy gates through `BASE_ENV` — maturity horizon, [velocity](/economy/concepts/spend-velocity/) limit, and the payout interval are all turned off so the timings reflect ledger work, not rejections.
 
 <Callout type="warning">
-Read these as *relative cost and scaling shape*, not as a capacity figure. A single sequential process on one machine doesn't tell you production throughput; it tells you how the backends compare and how the curves bend as the ledger grows.
+  Read these as *relative cost and scaling shape*, not as a capacity figure. A
+  single sequential process on one machine doesn't tell you production
+  throughput; it tells you how the backends compare and how the curves bend as
+  the ledger grows.
 </Callout>
 
 ## The scaling shape

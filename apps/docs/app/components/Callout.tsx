@@ -11,7 +11,12 @@
 
 import type { ReactNode } from 'react';
 
-const LABELS = { note: 'Note', tip: 'Tip', warning: 'Warning', danger: 'Danger' } as const;
+const LABELS = {
+  note: 'Note',
+  tip: 'Tip',
+  warning: 'Warning',
+  danger: 'Danger',
+} as const;
 
 type CalloutType = keyof typeof LABELS;
 
@@ -21,7 +26,13 @@ type CalloutType = keyof typeof LABELS;
  * note (context), tip (recommendation), warning (an easy mistake / non-obvious constraint), danger
  * (irreversible or money-moving footgun). The CSS variants live in app.css under `.callout-<type>`.
  */
-export function Callout({ type = 'note', children }: { type?: CalloutType; children: ReactNode }) {
+export function Callout({
+  type = 'note',
+  children,
+}: {
+  type?: CalloutType;
+  children: ReactNode;
+}) {
   return (
     <aside className={`callout callout-${type}`}>
       <p className="callout-label">{LABELS[type] ?? LABELS.note}</p>

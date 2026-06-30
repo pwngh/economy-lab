@@ -36,7 +36,12 @@ function Diagram({
 }) {
   return (
     <figure className="figure diagram">
-      <svg viewBox={viewBox} role="img" aria-label={label} xmlns="http://www.w3.org/2000/svg">
+      <svg
+        viewBox={viewBox}
+        role="img"
+        aria-label={label}
+        xmlns="http://www.w3.org/2000/svg"
+      >
         {children}
       </svg>
       <figcaption>{caption}</figcaption>
@@ -116,16 +121,42 @@ export function ChartOfAccounts() {
       <text className="d-head" x={135} y={22} textAnchor="middle">
         USER ACCOUNTS
       </text>
-      <Acct x={40} y={40} w={190} name="spendable" note="CREDIT, backed by trust" />
+      <Acct
+        x={40}
+        y={40}
+        w={190}
+        name="spendable"
+        note="CREDIT, backed by trust"
+      />
       <Acct x={40} y={96} w={190} name="earned" note="CREDIT, owed to seller" />
-      <Acct x={40} y={152} w={190} name="promo" note="CREDIT, expires if unspent" />
+      <Acct
+        x={40}
+        y={152}
+        w={190}
+        name="promo"
+        note="CREDIT, expires if unspent"
+      />
 
       <text className="d-head" x={527} y={22} textAnchor="middle">
         PLATFORM (HOUSE) ACCOUNTS
       </text>
       <Acct x={320} y={40} w={130} name="TRUST_CASH" note="USD" variant="usd" />
-      <Acct x={462} y={40} w={130} name="USD_CLEARING" note="USD" variant="usd" />
-      <Acct x={604} y={40} w={130} name="REVENUE_USD" note="USD" variant="usd" />
+      <Acct
+        x={462}
+        y={40}
+        w={130}
+        name="USD_CLEARING"
+        note="USD"
+        variant="usd"
+      />
+      <Acct
+        x={604}
+        y={40}
+        w={130}
+        name="REVENUE_USD"
+        note="USD"
+        variant="usd"
+      />
       <Acct x={320} y={96} w={130} name="STORED_VALUE" note="CREDIT" />
       <Acct x={462} y={96} w={130} name="PROMO_FLOAT" note="CREDIT" />
       <Acct x={604} y={96} w={130} name="RECEIVABLE" note="CREDIT" />
@@ -134,12 +165,26 @@ export function ChartOfAccounts() {
       <Acct x={604} y={152} w={130} name="OPENING_EQUITY" note="CREDIT" />
 
       {/* spendable is backed one-for-one by trust_cash. This draws the solvency invariant. */}
-      <line className="d-edge" x1={230} y1={62} x2={316} y2={62} markerEnd="url(#dgm-arrow)" />
+      <line
+        className="d-edge"
+        x1={230}
+        y1={62}
+        x2={316}
+        y2={62}
+        markerEnd="url(#dgm-arrow)"
+      />
       <text className="d-elabel" x={273} y={55} textAnchor="middle">
         backed one-for-one
       </text>
 
-      <rect className="d-box usd" x={40} y={214} width={16} height={12} rx={2} />
+      <rect
+        className="d-box usd"
+        x={40}
+        y={214}
+        width={16}
+        height={12}
+        rx={2}
+      />
       <text className="d-sub" x={62} y={224}>
         USD account
       </text>
@@ -177,7 +222,12 @@ function State({
         height={44}
         rx={6}
       />
-      <text className="d-name mono" x={cx} y={sub ? y + 19 : y + 27} textAnchor="middle">
+      <text
+        className="d-name mono"
+        x={cx}
+        y={sub ? y + 19 : y + 27}
+        textAnchor="middle"
+      >
         {name}
       </text>
       {sub ? (
@@ -208,7 +258,14 @@ export function PayoutSaga() {
       <State x={314} y={158} name="FAILED" sub="terminal" variant="bad" />
 
       {/* forward path */}
-      <line className="d-edge" x1={202} y1={70} x2={310} y2={70} markerEnd="url(#dgm-arrow)" />
+      <line
+        className="d-edge"
+        x1={202}
+        y1={70}
+        x2={310}
+        y2={70}
+        markerEnd="url(#dgm-arrow)"
+      />
       <text className="d-elabel" x={256} y={56} textAnchor="middle">
         payouts sweep
       </text>
@@ -216,7 +273,14 @@ export function PayoutSaga() {
         reserve → USD
       </text>
 
-      <line className="d-edge" x1={446} y1={70} x2={554} y2={70} markerEnd="url(#dgm-arrow)" />
+      <line
+        className="d-edge"
+        x1={446}
+        y1={70}
+        x2={554}
+        y2={70}
+        markerEnd="url(#dgm-arrow)"
+      />
       <text className="d-elabel" x={500} y={56} textAnchor="middle">
         settlement
       </text>
@@ -231,7 +295,14 @@ export function PayoutSaga() {
         fill="none"
         markerEnd="url(#dgm-arrow)"
       />
-      <line className="d-edge bad" x1={380} y1={92} x2={380} y2={154} markerEnd="url(#dgm-arrow)" />
+      <line
+        className="d-edge bad"
+        x1={380}
+        y1={92}
+        x2={380}
+        y2={154}
+        markerEnd="url(#dgm-arrow)"
+      />
       <text className="d-elabel" x={470} y={150} textAnchor="start">
         timeout, max attempts, reverse
       </text>
@@ -240,8 +311,8 @@ export function PayoutSaga() {
       </text>
 
       <text className="d-note" x={70} y={232}>
-        SagaState also declares REQUESTED; a live payout opens already RESERVED, in the same
-        transaction as the reservation.
+        SagaState also declares REQUESTED; a live payout opens already RESERVED,
+        in the same transaction as the reservation.
       </text>
     </Diagram>
   );
@@ -270,7 +341,12 @@ function Link({
         height={30}
         rx={5}
       />
-      <text className="d-hash mono" x={x + w / 2} y={y + 19} textAnchor="middle">
+      <text
+        className="d-hash mono"
+        x={x + w / 2}
+        y={y + 19}
+        textAnchor="middle"
+      >
         {text}
       </text>
     </g>
@@ -311,22 +387,75 @@ export function HashChain() {
       <Link x={xs[2]} y={116} text="7c6d…" variant="head" />
 
       {/* chain arrows */}
-      <line className="d-edge" x1={110} y1={57} x2={148} y2={57} markerEnd="url(#dgm-arrow)" />
-      <line className="d-edge" x1={220} y1={57} x2={258} y2={57} markerEnd="url(#dgm-arrow)" />
-      <line className="d-edge" x1={330} y1={57} x2={368} y2={57} markerEnd="url(#dgm-arrow)" />
-      <line className="d-edge" x1={110} y1={131} x2={148} y2={131} markerEnd="url(#dgm-arrow)" />
-      <line className="d-edge" x1={220} y1={131} x2={258} y2={131} markerEnd="url(#dgm-arrow)" />
+      <line
+        className="d-edge"
+        x1={110}
+        y1={57}
+        x2={148}
+        y2={57}
+        markerEnd="url(#dgm-arrow)"
+      />
+      <line
+        className="d-edge"
+        x1={220}
+        y1={57}
+        x2={258}
+        y2={57}
+        markerEnd="url(#dgm-arrow)"
+      />
+      <line
+        className="d-edge"
+        x1={330}
+        y1={57}
+        x2={368}
+        y2={57}
+        markerEnd="url(#dgm-arrow)"
+      />
+      <line
+        className="d-edge"
+        x1={110}
+        y1={131}
+        x2={148}
+        y2={131}
+        markerEnd="url(#dgm-arrow)"
+      />
+      <line
+        className="d-edge"
+        x1={220}
+        y1={131}
+        x2={258}
+        y2={131}
+        markerEnd="url(#dgm-arrow)"
+      />
 
       <text className="d-note" x={40} y={178}>
-        each link = hash(account's legs + prior head); the first starts from genesis (64 zeros)
+        each link = hash(account's legs + prior head); the first starts from
+        genesis (64 zeros)
       </text>
 
       {/* heads fold into the Merkle root */}
-      <path className="d-edge" d={headFold(57, 440)} fill="none" markerEnd="url(#dgm-arrow)" />
-      <path className="d-edge" d={headFold(131, 330)} fill="none" markerEnd="url(#dgm-arrow)" />
+      <path
+        className="d-edge"
+        d={headFold(57, 440)}
+        fill="none"
+        markerEnd="url(#dgm-arrow)"
+      />
+      <path
+        className="d-edge"
+        d={headFold(131, 330)}
+        fill="none"
+        markerEnd="url(#dgm-arrow)"
+      />
 
       <g>
-        <rect className="d-box head" x={556} y={128} width={150} height={44} rx={6} />
+        <rect
+          className="d-box head"
+          x={556}
+          y={128}
+          width={150}
+          height={44}
+          rx={6}
+        />
         <text className="d-name mono" x={631} y={147} textAnchor="middle">
           Merkle root
         </text>
@@ -335,10 +464,24 @@ export function HashChain() {
         </text>
       </g>
 
-      <line className="d-edge" x1={631} y1={172} x2={631} y2={206} markerEnd="url(#dgm-arrow)" />
+      <line
+        className="d-edge"
+        x1={631}
+        y1={172}
+        x2={631}
+        y2={206}
+        markerEnd="url(#dgm-arrow)"
+      />
 
       <g>
-        <rect className="d-box ok" x={541} y={208} width={180} height={44} rx={6} />
+        <rect
+          className="d-box ok"
+          x={541}
+          y={208}
+          width={180}
+          height={44}
+          rx={6}
+        />
         <text className="d-name mono" x={631} y={227} textAnchor="middle">
           signed checkpoint
         </text>
@@ -348,8 +491,8 @@ export function HashChain() {
       </g>
 
       <text className="d-note" x={40} y={276}>
-        Tamper a row → its hash stops re-deriving. Re-seal the chain → the new root ≠ the signed
-        checkpoint.
+        Tamper a row → its hash stops re-deriving. Re-seal the chain → the new
+        root ≠ the signed checkpoint.
       </text>
     </Diagram>
   );
@@ -418,8 +561,21 @@ export function RateLadder() {
       <ArrowDefs />
 
       {/* axis: higher = more USD per credit */}
-      <line className="d-edge" x1={148} y1={190} x2={148} y2={34} markerEnd="url(#dgm-arrow)" />
-      <text className="d-sub" transform="rotate(-90 130 112)" x={130} y={112} textAnchor="middle">
+      <line
+        className="d-edge"
+        x1={148}
+        y1={190}
+        x2={148}
+        y2={34}
+        markerEnd="url(#dgm-arrow)"
+      />
+      <text
+        className="d-sub"
+        transform="rotate(-90 130 112)"
+        x={130}
+        y={112}
+        textAnchor="middle"
+      >
         USD per credit
       </text>
 
@@ -431,7 +587,14 @@ export function RateLadder() {
         sub="what a user pays (≈120 credits per $1)"
         mono={false}
       />
-      <rect className="d-box band" x={186} y={82} width={446} height={56} rx={6} />
+      <rect
+        className="d-box band"
+        x={186}
+        y={82}
+        width={446}
+        height={56}
+        rx={6}
+      />
       <text className="d-name" x={409} y={106} textAnchor="middle">
         the spread ≈ 40%
       </text>
@@ -475,7 +638,15 @@ export function SubmitPipeline() {
       <ArrowDefs />
 
       {stages.map(([name, sub, variant], i) => (
-        <Pill key={name} x={xs[i]} y={24} w={w} name={name} sub={sub} variant={variant} />
+        <Pill
+          key={name}
+          x={xs[i]}
+          y={24}
+          w={w}
+          name={name}
+          sub={sub}
+          variant={variant}
+        />
       ))}
       {xs.slice(0, -1).map((x, i) => (
         <line
@@ -582,7 +753,12 @@ export function CreditMaturity() {
       <ArrowDefs />
 
       {/* tail bracket over the five newest lots */}
-      <text className="d-elabel" x={(xs[2] + xs[6] + w) / 2} y={42} textAnchor="middle">
+      <text
+        className="d-elabel"
+        x={(xs[2] + xs[6] + w) / 2}
+        y={42}
+        textAnchor="middle"
+      >
         live balance — newest lots, the FIFO tail
       </text>
       <path
@@ -595,7 +771,13 @@ export function CreditMaturity() {
       <text className="d-elabel" x={matLine} y={92} textAnchor="middle">
         maturity horizon
       </text>
-      <line className="d-edge bad" x1={matLine} y1={100} x2={matLine} y2={172} />
+      <line
+        className="d-edge bad"
+        x1={matLine}
+        y1={100}
+        x2={matLine}
+        y2={172}
+      />
 
       {/* lots */}
       <Pill x={xs[0]} y={116} w={w} h={42} variant="ghost" name="t1" />
@@ -612,7 +794,12 @@ export function CreditMaturity() {
         d={`M${xs[2]},166 L${xs[2]},176 L${xs[4] + w},176 L${xs[4] + w},166`}
         fill="none"
       />
-      <text className="d-name" x={(xs[2] + xs[4] + w) / 2} y={196} textAnchor="middle">
+      <text
+        className="d-name"
+        x={(xs[2] + xs[4] + w) / 2}
+        y={196}
+        textAnchor="middle"
+      >
         cashable now — matured
       </text>
 
@@ -632,7 +819,12 @@ export function CreditMaturity() {
         y2={224}
         markerEnd="url(#dgm-arrow)"
       />
-      <text className="d-sub" x={(xs[0] + xs[6] + w) / 2} y={242} textAnchor="middle">
+      <text
+        className="d-sub"
+        x={(xs[0] + xs[6] + w) / 2}
+        y={242}
+        textAnchor="middle"
+      >
         older lots → newer lots (spends drain the oldest first)
       </text>
     </Diagram>
@@ -663,10 +855,24 @@ export function IdempotentRetry() {
       <text className="d-head" x={col.claim} y={30} textAnchor="start">
         FIRST CALL
       </text>
-      <Pill x={col.claim} y={y1} w={w} variant="head" name="claim(key)" sub="free → lock" />
+      <Pill
+        x={col.claim}
+        y={y1}
+        w={w}
+        variant="head"
+        name="claim(key)"
+        sub="free → lock"
+      />
       <Pill x={col.run} y={y1} w={w} name="run handler" sub="by kind" />
       <Pill x={col.record} y={y1} w={w} name="record" sub="under the key" />
-      <Pill x={col.end} y={y1} w={w} variant="ok" name="committed" sub="+ events" />
+      <Pill
+        x={col.end}
+        y={y1}
+        w={w}
+        variant="ok"
+        name="committed"
+        sub="+ events"
+      />
       <line
         className="d-edge"
         x1={col.claim + w}
@@ -695,7 +901,14 @@ export function IdempotentRetry() {
       <text className="d-head" x={col.claim} y={136} textAnchor="start">
         RETRY, SAME KEY
       </text>
-      <Pill x={col.claim} y={y2} w={w} variant="head" name="claim(key)" sub="already taken" />
+      <Pill
+        x={col.claim}
+        y={y2}
+        w={w}
+        variant="head"
+        name="claim(key)"
+        sub="already taken"
+      />
       <Pill x={col.record} y={y2} w={w} name="replay" sub="recorded txn" />
       <Pill x={col.end} y={y2} w={w} name="duplicate" sub="no re-run" />
       <line
@@ -733,7 +946,12 @@ export function IdempotentRetry() {
         y2={y2}
         markerEnd="url(#dgm-arrow)"
       />
-      <text className="d-elabel" x={recCx + 8} y={(y1 + 44 + y2) / 2 + 4} textAnchor="start">
+      <text
+        className="d-elabel"
+        x={recCx + 8}
+        y={(y1 + 44 + y2) / 2 + 4}
+        textAnchor="start"
+      >
         reused
       </text>
     </Diagram>

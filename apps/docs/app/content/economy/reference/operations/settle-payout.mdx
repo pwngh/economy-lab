@@ -1,10 +1,20 @@
 ---
-title: "Settle payout"
-summary: "Mark a submitted payout settled once the provider confirms, a privileged transition a user cannot make for their own payout."
+title: 'Settle payout'
+summary: 'Mark a submitted payout settled once the provider confirms, a privileged transition a user cannot make for their own payout.'
 order: 60
 status: stable
-sourceRefs: ["src/operations/settlePayout.ts#L34-L105 · settlePayout", "src/operations/settlePayout.ts#L141-L170 · postSettlementEntries", "src/webhooks.ts#L167-L176 · toSettlePayout", "src/worker/payouts.ts"]
-related: ["economy/reference/operations/request-payout", "economy/reference/configuration"]
+sourceRefs:
+  [
+    'src/operations/settlePayout.ts#L34-L105 · settlePayout',
+    'src/operations/settlePayout.ts#L141-L170 · postSettlementEntries',
+    'src/webhooks.ts#L167-L176 · toSettlePayout',
+    'src/worker/payouts.ts',
+  ]
+related:
+  [
+    'economy/reference/operations/request-payout',
+    'economy/reference/configuration',
+  ]
 ---
 
 ## Settle a submitted payout
@@ -32,13 +42,13 @@ The mapping from webhook to operation lives in <SourceLink to="src/webhooks.ts#L
 
 The `settlePayout` variant of `Operation` carries five fields:
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `idempotencyKey` | `string` | (required) | The [dedup key](/economy/concepts/integrity/). For a webhook-driven settle it derives from the provider's event id, so a redelivered settlement applies at most once. |
-| `actor` | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`; a `user` is refused. |
-| `sagaId` | `string` | (required) | The payout to settle. The operation names no account directly. The saga record holds the seller and the reserved amount. |
-| `providerRef` | `string` | (required) | The rail's own id for the disbursement. Carried on the operation from the inbound webhook for the audit trail. |
-| `providerAmount` | [`Amount`](/economy/concepts/money-model/) | (required) | The USD the provider reported settling. Recorded for reconciliation, but never used as a posted figure (see [Preconditions](#preconditions-and-invariants)). |
+| Field            | Type                                                       | Default    | Description                                                                                                                                                           |
+| ---------------- | ---------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `idempotencyKey` | `string`                                                   | (required) | The [dedup key](/economy/concepts/integrity/). For a webhook-driven settle it derives from the provider's event id, so a redelivered settlement applies at most once. |
+| `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`; a `user` is refused.                                                                                                   |
+| `sagaId`         | `string`                                                   | (required) | The payout to settle. The operation names no account directly. The saga record holds the seller and the reserved amount.                                              |
+| `providerRef`    | `string`                                                   | (required) | The rail's own id for the disbursement. Carried on the operation from the inbound webhook for the audit trail.                                                        |
+| `providerAmount` | [`Amount`](/economy/concepts/money-model/)                 | (required) | The USD the provider reported settling. Recorded for reconciliation, but never used as a posted figure (see [Preconditions](#preconditions-and-invariants)).          |
 
 ## Returns
 
@@ -54,17 +64,17 @@ This settle logic was moved out of the [background worker](/economy/reference/ba
 
 The credit-side entry empties the reserve into revenue. The seller's set-aside credits become platform earnings, because the platform now owes the seller real money instead:
 
-| Account | Debit | Credit |
-|---|---|---|
-| [`PAYOUT_RESERVE`](/economy/concepts/accounts-and-double-entry/) | `saga.reserve` | |
-| [`REVENUE`](/economy/concepts/accounts-and-double-entry/) | | `saga.reserve` |
+| Account                                                          | Debit          | Credit         |
+| ---------------------------------------------------------------- | -------------- | -------------- |
+| [`PAYOUT_RESERVE`](/economy/concepts/accounts-and-double-entry/) | `saga.reserve` |                |
+| [`REVENUE`](/economy/concepts/accounts-and-double-entry/)        |                | `saga.reserve` |
 
 The USD-side entry records the cash leaving trust. `USD_CLEARING` mirrors money flowing out of the trust account; crediting `TRUST_CASH` lowers the real cash the platform holds for users:
 
-| Account | Debit | Credit |
-|---|---|---|
-| [`USD_CLEARING`](/economy/concepts/accounts-and-double-entry/) | `usd` | |
-| [`TRUST_CASH`](/economy/concepts/accounts-and-double-entry/) | | `usd` |
+| Account                                                        | Debit | Credit |
+| -------------------------------------------------------------- | ----- | ------ |
+| [`USD_CLEARING`](/economy/concepts/accounts-and-double-entry/) | `usd` |        |
+| [`TRUST_CASH`](/economy/concepts/accounts-and-double-entry/)   |       | `usd`  |
 
 The gross `usd` is the reserve converted at the [`payout` rate](/economy/concepts/money-model/). The rail's fee (`config.payoutFeeBps`) and the seller's net are split downstream at the external rail. Both are recorded on the USD posting's metadata for the audit trail, not posted as ledger legs.
 
@@ -75,7 +85,9 @@ The same operation also queues an internal `economy.payout.settled` event in thi
 Only a `system` or `operator` [actor](/economy/concepts/actors-and-authorization/) may call `settlePayout`. The kind is listed in <SourceLink to="src/economy.ts#L795-L798">RESTRICTED_TO_PRIVILEGED</SourceLink>, so a `user` actor is rejected at the authorization gate before any work runs.
 
 <Callout type="danger">
-Settling disburses real USD out of trust and turns the seller's reserve into platform revenue. An end user must never settle their own payout, which the privileged-only gate enforces.
+  Settling disburses real USD out of trust and turns the seller's reserve into
+  platform revenue. An end user must never settle their own payout, which the
+  privileged-only gate enforces.
 </Callout>
 
 ## Reason codes
@@ -86,9 +98,9 @@ A settle is driven by a verified webhook or an operator. So a settle that can't 
 
 The faults it can throw:
 
-| Code | When |
-|---|---|
-| `OP.MALFORMED` | `sagaId` names a payout that does not exist. The webhook mapping or operator supplied it, so a missing saga is a caller error. |
+| Code                      | When                                                                                                                                                                                                             |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OP.MALFORMED`            | `sagaId` names a payout that does not exist. The webhook mapping or operator supplied it, so a missing saga is a caller error.                                                                                   |
 | `SAGA.INVALID_TRANSITION` | The saga is not `SUBMITTED` (it was never submitted, already settled, or failed) so there is no disbursement to settle. Also thrown when the `SUBMITTED → SETTLED` compare-and-set loses to a concurrent settle. |
 
 ## Preconditions and invariants
@@ -100,7 +112,10 @@ The `SUBMITTED → SETTLED` move is a compare-and-set against the saga's current
 A redelivered settle is safe to retry. It reloads the saga and finds it no longer `SUBMITTED`. The state guard turns it away before anything posts.
 
 <Callout type="warning">
-The posted figures come from the saga's reserve, not from `providerAmount`: gross USD at the `payout` rate, less the rail fee. The provider's reported amount is recorded for reconciliation but never trusted as the figure that moves.
+  The posted figures come from the saga's reserve, not from `providerAmount`:
+  gross USD at the `payout` rate, less the rail fee. The provider's reported
+  amount is recorded for reconciliation but never trusted as the figure that
+  moves.
 </Callout>
 
 Because the posted amounts come from the reserve and the locked rate, the ledger's conservation, backing, and no-overdraft invariants hold unchanged after a settle.

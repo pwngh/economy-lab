@@ -1,10 +1,19 @@
 ---
-title: "Actors & authorization"
-summary: "Who can do what: every request names an actor (user, system, or operator) and passes a central authorization gate before any work runs."
+title: 'Actors & authorization'
+summary: 'Who can do what: every request names an actor (user, system, or operator) and passes a central authorization gate before any work runs.'
 order: 50
 status: stable
-sourceRefs: ["src/contract.ts#L49-L55 · Principal", "src/economy.ts#L435-L456 · authorize"]
-related: ["economy/reference/operations/refund", "economy/reference/operations/clawback", "economy/reference/http-service"]
+sourceRefs:
+  [
+    'src/contract.ts#L49-L55 · Principal',
+    'src/economy.ts#L435-L456 · authorize',
+  ]
+related:
+  [
+    'economy/reference/operations/refund',
+    'economy/reference/operations/clawback',
+    'economy/reference/http-service',
+  ]
 ---
 
 ## The idea
@@ -27,7 +36,10 @@ await economy.submit({
 ```
 
 <Callout type="note">
-The source type is named `Principal` in `src/contract.ts`. The `Operation` field that carries it is `actor`, and this site uses `Actor` for the concept. They all mean the same thing: the value attached to every request that says who is asking.
+  The source type is named `Principal` in `src/contract.ts`. The `Operation`
+  field that carries it is `actor`, and this site uses `Actor` for the concept.
+  They all mean the same thing: the value attached to every request that says
+  who is asking.
 </Callout>
 
 ## Why it exists
@@ -42,14 +54,17 @@ Authorization closes those paths up front, before validation's shape checks turn
 
 Each kind of principal carries its own identifier and its own reach.
 
-| Actor | Carries | What it may do |
-| --- | --- | --- |
-| `user` | `userId` | Act on its own accounts: `spend`, `subscribe`, `requestPayout`, `cancelSubscription`, and reads. It may pay *into* another account but never debit out of one it does not own. |
-| `system` | `service` | A trusted internal service. The privileged automated flows: `topUp`, `refund`, `clawback`, promo and entitlement grants and revokes, `settlePayout`. Full access today. |
-| `operator` | `operatorId` | A human running a manual, fully-audited fix: `adjust` and `reverse`, plus anything `system` can do. |
+| Actor      | Carries      | What it may do                                                                                                                                                                 |
+| ---------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `user`     | `userId`     | Act on its own accounts: `spend`, `subscribe`, `requestPayout`, `cancelSubscription`, and reads. It may pay _into_ another account but never debit out of one it does not own. |
+| `system`   | `service`    | A trusted internal service. The privileged automated flows: `topUp`, `refund`, `clawback`, promo and entitlement grants and revokes, `settlePayout`. Full access today.        |
+| `operator` | `operatorId` | A human running a manual, fully-audited fix: `adjust` and `reverse`, plus anything `system` can do.                                                                            |
 
 <Callout type="note">
-`system` has full access for now; the source notes per-service permission lists as future work, so a `payments` service and a `risk` service aren't yet distinguished. The model already carries the field needed to split them later (see <SourceLink to="src/economy.ts#L486-L488">source</SourceLink>).
+  `system` has full access for now; the source notes per-service permission
+  lists as future work, so a `payments` service and a `risk` service aren't yet
+  distinguished. The model already carries the field needed to split them later
+  (see <SourceLink to="src/economy.ts#L486-L488">source</SourceLink>).
 </Callout>
 
 ## The invariant it maintains
@@ -57,20 +72,20 @@ Each kind of principal carries its own identifier and its own reach.
 A `user` actor can only move money out of accounts it owns, and can never run a privileged operation. The gate holds two rules to make that true:
 
 1. **Privileged operations are closed to `user` actors.** The set `RESTRICTED_TO_PRIVILEGED` lists every kind a `user` may never run.
-2. **A `user` may only debit accounts it owns.** The gate pulls out the accounts the operation will *drain* and checks that each one belongs to the caller. Paying *into* a stranger's account is fine; draining one is not.
+2. **A `user` may only debit accounts it owns.** The gate pulls out the accounts the operation will _drain_ and checks that each one belongs to the caller. Paying _into_ a stranger's account is fine; draining one is not.
 
 The privileged set is, per <SourceLink to="src/economy.ts#L838-L864">source</SourceLink>:
 
-| Restricted operation | Why a `user` is barred |
-| --- | --- |
-| `topUp` | Mints `spendable` credits; only the trusted payment path may issue. |
-| `grantPromo` | Issues marketing credit a user could otherwise grant themself. |
-| `grantEntitlement` / `revokeEntitlement` | Names an arbitrary account the caller need not own; no debit for the ownership check to catch. |
-| `refund` | Debits a seller's `earned` balance. Self-serve refund is a fraud vector. |
-| `clawback` | Reclaims credits from an account the actor need not own. |
-| `reversePayout` | Force-fails a payout in flight; an emergency action run by hand. |
-| `settlePayout` | Disburses real [USD](/economy/concepts/solvency/) out of trust; a user must never settle their own payout. |
-| `adjust` / `reverse` | Manual operator corrections, each requiring a written reason in the audit trail. |
+| Restricted operation                     | Why a `user` is barred                                                                                     |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `topUp`                                  | Mints `spendable` credits; only the trusted payment path may issue.                                        |
+| `grantPromo`                             | Issues marketing credit a user could otherwise grant themself.                                             |
+| `grantEntitlement` / `revokeEntitlement` | Names an arbitrary account the caller need not own; no debit for the ownership check to catch.             |
+| `refund`                                 | Debits a seller's `earned` balance. Self-serve refund is a fraud vector.                                   |
+| `clawback`                               | Reclaims credits from an account the actor need not own.                                                   |
+| `reversePayout`                          | Force-fails a payout in flight; an emergency action run by hand.                                           |
+| `settlePayout`                           | Disburses real [USD](/economy/concepts/solvency/) out of trust; a user must never settle their own payout. |
+| `adjust` / `reverse`                     | Manual operator corrections, each requiring a written reason in the audit trail.                           |
 
 ## How it's enforced
 
@@ -82,12 +97,17 @@ The gate's logic:
 - A `system` actor returns immediately, full access.
 - A `user` is checked against `RESTRICTED_TO_PRIVILEGED`; a match throws `UNAUTHORIZED`. Otherwise, for each account in `debitedUserAccounts(operation)`, the gate verifies `ownedBy(account, userId)`. An account belongs to a user when its id is prefixed `userId:` (see <SourceLink to="src/economy.ts#L817-L817">source</SourceLink>).
 
-`debitedUserAccounts` is deliberately narrow: it returns only the *drained* user accounts an operation touches, not every account it locks. For a `spend` those are the buyer's [`promo`](/economy/concepts/accounts-and-double-entry/) and `spendable`; for a `subscribe`, the same; for a `requestPayout`, the user's `earned`.
+`debitedUserAccounts` is deliberately narrow: it returns only the _drained_ user accounts an operation touches, not every account it locks. For a `spend` those are the buyer's [`promo`](/economy/concepts/accounts-and-double-entry/) and `spendable`; for a `subscribe`, the same; for a `requestPayout`, the user's `earned`.
 
-Accounts being paid *into*, and platform accounts, are left out. Only a drained account has to belong to the caller (see <SourceLink to="src/economy.ts#L506-L517">source</SourceLink>).
+Accounts being paid _into_, and platform accounts, are left out. Only a drained account has to belong to the caller (see <SourceLink to="src/economy.ts#L506-L517">source</SourceLink>).
 
 <Callout type="warning">
-A failed authorization is a thrown `UNAUTHORIZED` fault, not a `rejected` [`Outcome`](/economy/reference/outcomes-and-reason-codes/). It isn't an ordinary "no" the caller can retry under the same [`idempotencyKey`](/economy/concepts/integrity/); it's a programming or permission error. Over HTTP it maps to `401` (see <SourceLink to="src/server.ts#L408-L411">source</SourceLink>).
+  A failed authorization is a thrown `UNAUTHORIZED` fault, not a `rejected`
+  [`Outcome`](/economy/reference/outcomes-and-reason-codes/). It isn't an
+  ordinary "no" the caller can retry under the same
+  [`idempotencyKey`](/economy/concepts/integrity/); it's a programming or
+  permission error. Over HTTP it maps to `401` (see{' '}
+  <SourceLink to="src/server.ts#L408-L411">source</SourceLink>).
 </Callout>
 
 ### Ownership the gate can't see

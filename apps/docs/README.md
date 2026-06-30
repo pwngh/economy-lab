@@ -1,6 +1,6 @@
 # economy-lab-docs
 
-Documentation site for [economy-lab](https://github.com/pwngh) — *correctness in systems that move money.*
+Documentation site for [economy-lab](https://github.com/pwngh) — _correctness in systems that move money._
 
 A static, prerendered docs site (React Router 7 + Vite + MDX) that ships **zero client JavaScript** on content pages and deploys to Cloudflare Pages as flat HTML.
 
@@ -20,12 +20,12 @@ Pages are MDX under `app/content/economy/<section>/<slug>.mdx`; the file path mi
 
 ```mdx
 ---
-title: "Spend"
-summary: "A marketplace sale: the buyer spends, the seller earns, the platform fee is split out."
+title: 'Spend'
+summary: 'A marketplace sale: the buyer spends, the seller earns, the platform fee is split out.'
 order: 20
-status: stable           # stable | draft | planned
-sourceRefs: ["src/operations/spend.ts", "src/pricing.ts · splitLegs"]
-related: ["concepts/money-model", "reference/outcomes-and-reason-codes"]
+status: stable # stable | draft | planned
+sourceRefs: ['src/operations/spend.ts', 'src/pricing.ts · splitLegs']
+related: ['concepts/money-model', 'reference/outcomes-and-reason-codes']
 ---
 
 Body in Markdown/MDX.

@@ -1,9 +1,10 @@
 ---
-title: "Overview"
+title: 'Overview'
 summary: "What economy-lab is (and isn't): a double-entry credit economy, provably solvent and tamper-evident, built as a library rather than a product."
 order: 10
 status: stable
-sourceRefs: ["src/economy.ts#L76 · createEconomy", "src/index.ts#L41", "README.md"]
+sourceRefs:
+  ['src/economy.ts#L76 · createEconomy', 'src/index.ts#L41', 'README.md']
 related: []
 ---
 
@@ -36,9 +37,9 @@ It runs entirely in memory with zero runtime dependencies, and the same logic ru
 economy-lab invents no cryptography and no accounting. It composes four well-established ideas into one ledger:
 
 - **Double-entry bookkeeping.** The rule that every posting balances (so value can be neither minted nor lost) is the method Luca Pacioli first set down in print in 1494. It's the foundation of [accounts & double-entry](/economy/concepts/accounts-and-double-entry/).
-- **Hash-linked tamper-evidence.** Hashing each record onto the one before it, so any later edit is detectable, comes from Haber and Stornetta's [*How to Time-Stamp a Digital Document*](https://link.springer.com/content/pdf/10.1007/BF00196791.pdf) (1991), the construction Bitcoin would later cite. The per-account [hash chain](/economy/concepts/integrity/) applies it one chain per account.
+- **Hash-linked tamper-evidence.** Hashing each record onto the one before it, so any later edit is detectable, comes from Haber and Stornetta's [_How to Time-Stamp a Digital Document_](https://link.springer.com/content/pdf/10.1007/BF00196791.pdf) (1991), the construction Bitcoin would later cite. The per-account [hash chain](/economy/concepts/integrity/) applies it one chain per account.
 - **Merkle trees, Certificate Transparency, and Ed25519.** The signed [checkpoint](/economy/concepts/integrity/) folds every account's head into a single Merkle root and signs it. The hash tree is Ralph Merkle's, from his [1979 thesis](https://www.ralphmerkle.com/papers/Thesis1979.pdf) and [later patent](https://patents.google.com/patent/US4881264A/); the leaf/node domain separation follows [RFC 6962](https://datatracker.ietf.org/doc/rfc6962/) (Certificate Transparency); and the signature is [Ed25519](https://ed25519.cr.yp.to/) (Bernstein and colleagues).
-- **Sagas.** A payout that reaches an outside rail is modeled as a long-lived transaction advanced one compensatable step at a time, the [saga](/economy/concepts/lifecycles/) pattern from Garcia-Molina and Salem's [*Sagas*](https://sigmodrecord.org/1987/12/09/sagas/) (SIGMOD 1987).
+- **Sagas.** A payout that reaches an outside rail is modeled as a long-lived transaction advanced one compensatable step at a time, the [saga](/economy/concepts/lifecycles/) pattern from Garcia-Molina and Salem's [_Sagas_](https://sigmodrecord.org/1987/12/09/sagas/) (SIGMOD 1987).
 
 Binding them together (accounting conservation, cryptographic tamper-evidence, and compensatable long-lived transactions) under one [prover](/economy/concepts/the-proof/) that re-checks all of them after every operation.
 

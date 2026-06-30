@@ -1,10 +1,14 @@
 ---
-title: "Reverse"
-summary: "An operator-only manual undo of a prior posting (distinct from reversing a payout)."
+title: 'Reverse'
+summary: 'An operator-only manual undo of a prior posting (distinct from reversing a payout).'
 order: 140
 status: stable
-sourceRefs: ["src/operations/reverse.ts#L39-L76 · reverse", "src/contract.ts#L170-L178 · kind 'reverse'"]
-related: ["economy/reference/the-economy", "economy/reference/configuration"]
+sourceRefs:
+  [
+    'src/operations/reverse.ts#L39-L76 · reverse',
+    "src/contract.ts#L170-L178 · kind 'reverse'",
+  ]
+related: ['economy/reference/the-economy', 'economy/reference/configuration']
 ---
 
 ## Reverse
@@ -17,11 +21,11 @@ A reverse of `txn_1`, posted by an operator, with the reason recorded for the au
 
 ```ts
 let outcome = await economy.submit({
-  kind: "reverse",
-  idempotencyKey: "idem_0",
-  actor: { kind: "operator", operatorId: "op_1" },
-  txnId: "txn_1",
-  reason: "reconciliation: duplicate posting",
+  kind: 'reverse',
+  idempotencyKey: 'idem_0',
+  actor: { kind: 'operator', operatorId: 'op_1' },
+  txnId: 'txn_1',
+  reason: 'reconciliation: duplicate posting',
 });
 // outcome.status === "committed"
 ```
@@ -32,12 +36,12 @@ This is the general undo for any past posting. To undo a payout that hasn't disb
 
 The `reverse` payload carries four fields beyond `kind`:
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `idempotencyKey` | `string` | required | Lets a retried submit run at most once. See [idempotency](/economy/concepts/integrity/). |
-| `actor` | [`Actor`](/economy/concepts/actors-and-authorization/) | required | Must be an `operator` principal. |
-| `txnId` | `string` | required | The id of the transaction to undo. |
-| `reason` | `string` | required | Why the reversal happened, recorded on the reversing transaction. Must be non-empty. |
+| Field            | Type                                                   | Default  | Description                                                                              |
+| ---------------- | ------------------------------------------------------ | -------- | ---------------------------------------------------------------------------------------- |
+| `idempotencyKey` | `string`                                               | required | Lets a retried submit run at most once. See [idempotency](/economy/concepts/integrity/). |
+| `actor`          | [`Actor`](/economy/concepts/actors-and-authorization/) | required | Must be an `operator` principal.                                                         |
+| `txnId`          | `string`                                               | required | The id of the transaction to undo.                                                       |
+| `reason`         | `string`                                               | required | Why the reversal happened, recorded on the reversing transaction. Must be non-empty.     |
 
 There is no `amount` field. The amounts come from the original transaction's legs. The handler flips each one's sign.
 
@@ -79,17 +83,20 @@ A `system` actor clears that gate. The handler then rechecks the actor itself an
 
 The caller mistakes it guards against are thrown as `OP.MALFORMED` faults, not returned as rejections:
 
-| Condition | Result |
-|---|---|
-| The `actor` is not an `operator`. | Throws `OP.MALFORMED`. |
-| The `reason` is blank or whitespace-only. | Throws `OP.MALFORMED`. |
-| The `txnId` names no existing posting. | Throws `OP.MALFORMED`. |
+| Condition                                              | Result                 |
+| ------------------------------------------------------ | ---------------------- |
+| The `actor` is not an `operator`.                      | Throws `OP.MALFORMED`. |
+| The `reason` is blank or whitespace-only.              | Throws `OP.MALFORMED`. |
+| The `txnId` names no existing posting.                 | Throws `OP.MALFORMED`. |
 | The `txnId` names a posting that is itself a reversal. | Throws `OP.MALFORMED`. |
 
 These are operator errors, not everyday "no" answers, unlike [`refund`](/economy/reference/operations/refund/), where an unknown order id is a normal rejection. The full throw-vs-decline split lives on [outcomes and reason codes](/economy/reference/outcomes-and-reason-codes/).
 
 <Callout type="warning">
-You cannot reverse a reversal. A reversal records `kind: "reverse"` in its metadata, and the handler refuses any `txnId` that carries that marker. Undoing an undo would loop the same money out and back in, and let an operator chain reversals to move a balance at will.
+  You cannot reverse a reversal. A reversal records `kind: "reverse"` in its
+  metadata, and the handler refuses any `txnId` that carries that marker.
+  Undoing an undo would loop the same money out and back in, and let an operator
+  chain reversals to move a balance at will.
 </Callout>
 
 ## Preconditions and invariants

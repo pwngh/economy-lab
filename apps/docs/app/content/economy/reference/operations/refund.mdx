@@ -1,10 +1,15 @@
 ---
-title: "Refund"
-summary: "Return a completed spend, reversing the posting that recorded it."
+title: 'Refund'
+summary: 'Return a completed spend, reversing the posting that recorded it.'
 order: 30
 status: stable
-related: ["economy/reference/operations/reverse", "economy/reference/configuration"]
-sourceRefs: ["src/operations/refund.ts#L47 · refund", "src/operations/registry.ts#L48 · refund"]
+related:
+  ['economy/reference/operations/reverse', 'economy/reference/configuration']
+sourceRefs:
+  [
+    'src/operations/refund.ts#L47 · refund',
+    'src/operations/registry.ts#L48 · refund',
+  ]
 ---
 
 ## Refund
@@ -15,11 +20,11 @@ You name the order, not the buyer or the amount. The handler reads those off the
 
 ```ts
 const outcome = await economy.submit({
-  kind: "refund",
-  idempotencyKey: "idem_refund_1",
-  actor: { kind: "system", service: "support" },
-  orderId: "ord_1",
-  reason: "changed mind",
+  kind: 'refund',
+  idempotencyKey: 'idem_refund_1',
+  actor: { kind: 'system', service: 'support' },
+  orderId: 'ord_1',
+  reason: 'changed mind',
 });
 // → outcome.status === "committed"
 ```
@@ -30,13 +35,13 @@ The buyer gets the full price back. Each seller is debited only up to the balanc
 
 The payload is one `refund` variant of [`Operation`](/economy/reference/the-economy/), tagged by `kind`. The fields:
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `kind` | `"refund"` | (required) | Selects this operation. |
-| `idempotencyKey` | `string` | (required) | Makes a retried request run at most once. A repeat with the same key returns the earlier result. |
-| `actor` | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`, see [Authorization](#authorization). |
-| `orderId` | `string` | (required) | The order to reverse, from the original `spend`. A blank or whitespace-only value throws. |
-| `reason` | `string` | (omitted) | Optional note recorded in the reversing transaction's metadata. |
+| Field            | Type                                                       | Default    | Description                                                                                      |
+| ---------------- | ---------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| `kind`           | `"refund"`                                                 | (required) | Selects this operation.                                                                          |
+| `idempotencyKey` | `string`                                                   | (required) | Makes a retried request run at most once. A repeat with the same key returns the earlier result. |
+| `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`, see [Authorization](#authorization).              |
+| `orderId`        | `string`                                                   | (required) | The order to reverse, from the original `spend`. A blank or whitespace-only value throws.        |
+| `reason`         | `string`                                                   | (omitted)  | Optional note recorded in the reversing transaction's metadata.                                  |
 
 ## Returns
 
@@ -59,9 +64,9 @@ To do that, it splits the original sale's legs into three groups:
 The shortfall is always denominated in `CREDIT`, since a sale only moves `CREDIT`.
 
 <Callout type="note">
-  A refund never drives a user account negative. The ledger forbids that, which is why each seller
-  clawback is capped at the balance on hand and the rest becomes a receivable rather than a debit the
-  seller can't cover.
+  A refund never drives a user account negative. The ledger forbids that, which
+  is why each seller clawback is capped at the balance on hand and the rest
+  becomes a receivable rather than a debit the seller can't cover.
 </Callout>
 
 ## Authorization
@@ -74,8 +79,8 @@ A `user` actor is declined with an `UNAUTHORIZED` fault before any work begins.
 
 `refund` returns one [`RejectionCode`](/economy/reference/outcomes-and-reason-codes/):
 
-| Code | When |
-|---|---|
+| Code            | When                                |
+| --------------- | ----------------------------------- |
 | `UNKNOWN_ORDER` | No sale was recorded for `orderId`. |
 
 A blank or whitespace-only `orderId` is not a rejection. It throws a `MALFORMED_OPERATION` fault. That way a malformed request surfaces as a client error instead of degrading to a silent `UNKNOWN_ORDER`.

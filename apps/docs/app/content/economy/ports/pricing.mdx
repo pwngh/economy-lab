@@ -1,10 +1,15 @@
 ---
-title: "Pricing"
-summary: "The pricing capability: a fee policy that splits a sale into recipient legs and platform revenue."
+title: 'Pricing'
+summary: 'The pricing capability: a fee policy that splits a sale into recipient legs and platform revenue.'
 order: 40
 status: stable
-sourceRefs: ["src/pricing.ts#L40 · flatFee", "src/pricing.ts#L51 · splitLegs", "src/contract.ts#L292 · FeePolicy"]
-related: ["economy/reference/configuration", "economy/ports/rates"]
+sourceRefs:
+  [
+    'src/pricing.ts#L40 · flatFee',
+    'src/pricing.ts#L51 · splitLegs',
+    'src/contract.ts#L292 · FeePolicy',
+  ]
+related: ['economy/reference/configuration', 'economy/ports/rates']
 ---
 
 ## The seam
@@ -40,7 +45,7 @@ sellers and their shares. The `feeBps` is the platform's cut in basis points, wh
 the whole price.
 
 Each `Recipient` is a seller plus a share: `{ sellerId, shareBps }`. The shares are basis points of
-the part left *after* the fee comes off the top, so `100` bps means one percent. The `buyerId` and
+the part left _after_ the fee comes off the top, so `100` bps means one percent. The `buyerId` and
 `sku` ride along for a policy that wants to price by buyer or item, but the reference policy ignores
 them.
 
@@ -49,9 +54,10 @@ The output is credit-side only. Every leg is a credit, and a credit is
 don't balance on their own.
 
 <Callout type="note">
-The policy returns only the recipient and revenue credits. The spend handler adds the matching
-debit against the buyer's balance, which is what zeroes the posting. A `FeePolicy` never sees the
-buyer's account, so it can't accidentally move money out of the wrong place.
+  The policy returns only the recipient and revenue credits. The spend handler
+  adds the matching debit against the buyer's balance, which is what zeroes the
+  posting. A `FeePolicy` never sees the buyer's account, so it can't
+  accidentally move money out of the wrong place.
 </Callout>
 
 ## The reference policy: a flat fee
@@ -63,9 +69,9 @@ configured rate (`PLATFORM_FEE_BPS`, default `1530`, i.e. 15.3%).
 ```ts
 let policy = flatFee();
 let legs = policy({
-  price: toAmount("CREDIT", 1000n),
+  price: toAmount('CREDIT', 1000n),
   feeBps: 3000,
-  recipients: [{ sellerId: "usr_seller", shareBps: 10000 }],
+  recipients: [{ sellerId: 'usr_seller', shareBps: 10000 }],
 });
 // Price 1000 at a 30% fee:
 //   seller credited 700, revenue credited 300.
@@ -76,11 +82,11 @@ The work happens in three steps, in order. The fee comes off the top first. Each
 takes its `shareBps` of what's left. Whatever the rounding leaves behind joins the fee in the
 platform's `REVENUE` account.
 
-Each seller's share rounds *down*, so the
+Each seller's share rounds _down_, so the
 distributed shares can fall a minor unit or two short of the net. `revenueForSplit` hands it to `REVENUE` along with the fee, so the credits always
 sum to the exact price.
 
-The fee itself rounds in the other direction. `feeForPrice` rounds the basis-point fee *up* to a
+The fee itself rounds in the other direction. `feeForPrice` rounds the basis-point fee _up_ to a
 whole credit, then caps it at the price so the fee can never exceed what the buyer paid. The cap only
 bites below one whole credit; real listings are hundreds of credits, where the fee is an ordinary cut.
 
@@ -98,7 +104,7 @@ would post a transaction that doesn't conserve value, and the
 [integrity checks](/economy/concepts/integrity/) would catch it, but as a failure, not a graceful
 decline.
 
-It does *not* trust the recipient shares blindly. Inside `splitLegs`, `assertShareSum` throws unless
+It does _not_ trust the recipient shares blindly. Inside `splitLegs`, `assertShareSum` throws unless
 the shares sum to `10000` bps. The spend handler already validates this upstream, so in correct
 wiring the backstop never fires; it exists so a wiring mistake fails loudly here rather than
 silently under-crediting sellers and dumping the difference into revenue.
@@ -107,14 +113,14 @@ An empty recipient list is allowed, not an error. With no seller to pay, the who
 leftover and lands in `REVENUE`. The platform keeps the entire sale.
 
 <Callout type="warning">
-The recipient `shareBps` must sum to exactly `10000`. A non-empty list that sums to anything else is
-a `MALFORMED_OPERATION` fault, not a rejection. It signals a bug in the caller, not a bad request
-from a user.
+  The recipient `shareBps` must sum to exactly `10000`. A non-empty list that
+  sums to anything else is a `MALFORMED_OPERATION` fault, not a rejection. It
+  signals a bug in the caller, not a bad request from a user.
 </Callout>
 
 ## Out of scope
 
-A `FeePolicy` divides one price. It is not where you decide *whether* to charge, whether the buyer
+A `FeePolicy` divides one price. It is not where you decide _whether_ to charge, whether the buyer
 has funds, or how a refund reverses the split later. Those live in the spend and refund operations.
 
 It also has no say off the request path. The background worker that settles payouts and realizes fees

@@ -1,10 +1,10 @@
 ---
-title: "The money model"
-summary: "A dual-rate credit economy (buy ≥ par ≥ payout) where the platform spread is the only fee and every value carries an explicit currency and scale."
+title: 'The money model'
+summary: 'A dual-rate credit economy (buy ≥ par ≥ payout) where the platform spread is the only fee and every value carries an explicit currency and scale.'
 order: 20
 status: stable
-sourceRefs: ["src/money.ts", "src/ports.ts#L154-L187 · Rates", "src/pricing.ts"]
-related: ["economy/reference/operations/top-up", "economy/concepts/the-proof"]
+sourceRefs: ['src/money.ts', 'src/ports.ts#L154-L187 · Rates', 'src/pricing.ts']
+related: ['economy/reference/operations/top-up', 'economy/concepts/the-proof']
 ---
 
 Two kinds of value move through the economy: in-app `CREDIT` and real-world `USD`. Both are an `Amount`: a `Currency` plus a count of minor units held as a `bigint`. They convert to each other only at fixed, platform-set rates, never a live market.
@@ -27,19 +27,20 @@ A whole unit is `SCALE` (`100n`) minor units, two decimal places, fixed. `toAmou
 Two guards keep currencies from mixing by accident. `add` and `compare` call `assertSameCurrency`, which throws `CURRENCY_MISMATCH` if you hand them two different currencies. Combining a `CREDIT` amount with a `USD` amount is always a bug. And `decodeAmount` rejects a string with more than two decimal places (`INVALID_AMOUNT`) rather than silently dropping the extra digits.
 
 <Callout type="note">
-  Credits are whole units in practice (a user buys, spends, and earns round numbers), but an `Amount`
-  still stores them in minor units so the same exact-integer math covers both currencies.
+  Credits are whole units in practice (a user buys, spends, and earns round
+  numbers), but an `Amount` still stores them in minor units so the same
+  exact-integer math covers both currencies.
 </Callout>
 
 ## Why two rates exist, and where the fee lives
 
 If a credit cashed out for exactly what you paid, the platform would earn nothing on it, so a credit costs more to buy than it pays back at cash-out. The [`Rates`](/economy/ports/rates/) port supplies three fixed CREDIT-to-USD rates from an audited source, never from caller input. They always hold the order `buy ≥ par ≥ payout`:
 
-| Rate | What it is | Example |
-| --- | --- | --- |
-| `buy` | The acquisition rate: what a user pays per credit when buying. | ~120 credits / USD ($0.00833) |
-| `par` | The redemption/backing rate: a credit's cash-out floor, and the value the backing check holds real USD against. | ~200 credits / USD ($0.005) |
-| `payout` | The creator settlement rate: what an earned credit converts to USD at. Equals `par`. | ~200 credits / USD ($0.005) |
+| Rate     | What it is                                                                                                      | Example                       |
+| -------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| `buy`    | The acquisition rate: what a user pays per credit when buying.                                                  | ~120 credits / USD ($0.00833) |
+| `par`    | The redemption/backing rate: a credit's cash-out floor, and the value the backing check holds real USD against. | ~200 credits / USD ($0.005)   |
+| `payout` | The creator settlement rate: what an earned credit converts to USD at. Equals `par`.                            | ~200 credits / USD ($0.005)   |
 
 The `buy`-to-`par` gap is the platform spread, about 40% on the example rates above. It's the platform's margin, and it funds fees, payment processing, reserves, and operating costs. The spread is taken **once, at purchase**, and never mixed into the cash held to back users.
 

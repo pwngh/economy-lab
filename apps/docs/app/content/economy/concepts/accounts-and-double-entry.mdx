@@ -1,10 +1,19 @@
 ---
-title: "Accounts & double-entry"
-summary: "Every operation is a balanced double-entry posting across a fixed chart of accounts: spendable, earned, promo, and the system accounts."
+title: 'Accounts & double-entry'
+summary: 'Every operation is a balanced double-entry posting across a fixed chart of accounts: spendable, earned, promo, and the system accounts.'
 order: 30
 status: stable
-sourceRefs: ["src/accounts.ts#L59", "src/ledger.ts#L100", "src/pricing.ts#L51 · splitLegs"]
-related: ["economy/concepts/actors-and-authorization", "economy/reference/outcomes-and-reason-codes"]
+sourceRefs:
+  [
+    'src/accounts.ts#L59',
+    'src/ledger.ts#L100',
+    'src/pricing.ts#L51 · splitLegs',
+  ]
+related:
+  [
+    'economy/concepts/actors-and-authorization',
+    'economy/reference/outcomes-and-reason-codes',
+  ]
 ---
 
 Every balance lives in a named account. Every operation is a balanced double-entry `Posting`: value moves _between_ accounts as paired debit and credit lines (each line is a `Leg`), and those lines always net to zero per currency.
@@ -25,25 +34,25 @@ The [solvency](/economy/concepts/solvency/) guarantee (every spendable credit ba
 
 The set of account kinds is fixed. A user has up to three accounts, keyed by `AccountKind`: `spendable`, `earned`, and `promo`. You build each one from a user id with the `spendable(userId)`, `earned(userId)`, and `promo(userId)` helpers.
 
-| Account     | Currency | Holds                                                                     |
-| ----------- | -------- | ------------------------------------------------------------------------- |
+| Account     | Currency | Holds                                                                          |
+| ----------- | -------- | ------------------------------------------------------------------------------ |
 | `spendable` | `CREDIT` | Credits bought and ready to spend: the only user balance backed by trust cash. |
-| `earned`    | `CREDIT` | Revenue owed to the user as a seller, waiting to be paid out.             |
-| `promo`     | `CREDIT` | A marketing grant that expires if unspent.                               |
+| `earned`    | `CREDIT` | Revenue owed to the user as a seller, waiting to be paid out.                  |
+| `promo`     | `CREDIT` | A marketing grant that expires if unspent.                                     |
 
 The platform's house accounts are the fixed `SYSTEM` map, each id prefixed `platform:`. They hold three things: the platform's cash, its revenue, and the offsetting (contra) entries that keep a one-sided user move balanced.
 
-| `SYSTEM` account | Currency | Holds                                                                       |
-| ---------------- | -------- | --------------------------------------------------------------------------- |
-| `TRUST_CASH`     | `USD`    | Real dollars held in trust, backing users' spendable credits.               |
+| `SYSTEM` account | Currency | Holds                                                                              |
+| ---------------- | -------- | ---------------------------------------------------------------------------------- |
+| `TRUST_CASH`     | `USD`    | Real dollars held in trust, backing users' spendable credits.                      |
 | `REVENUE_USD`    | `USD`    | The platform's dollar margin from the `buy`-vs-`par` spread, recognized at top-up. |
-| `USD_CLEARING`   | `USD`    | A mirror of cash that has cleared in or out of trust.                        |
-| `REVENUE`        | `CREDIT` | Platform fee income: the marketplace cut, plus rounding leftover.           |
-| `STORED_VALUE`   | `CREDIT` | The offsetting entry for every credit ever issued on a top-up.              |
-| `PAYOUT_RESERVE` | `CREDIT` | Earned credits set aside for a payout in flight.                            |
-| `RECEIVABLE`     | `CREDIT` | A shortfall a user owes back (e.g. a clawback that went negative).          |
-| `PROMO_FLOAT`    | `CREDIT` | The offsetting entry for credits granted as promos.                         |
-| `OPENING_EQUITY` | `CREDIT` | The offset used once, to seed balances on a cold start.                     |
+| `USD_CLEARING`   | `USD`    | A mirror of cash that has cleared in or out of trust.                              |
+| `REVENUE`        | `CREDIT` | Platform fee income: the marketplace cut, plus rounding leftover.                  |
+| `STORED_VALUE`   | `CREDIT` | The offsetting entry for every credit ever issued on a top-up.                     |
+| `PAYOUT_RESERVE` | `CREDIT` | Earned credits set aside for a payout in flight.                                   |
+| `RECEIVABLE`     | `CREDIT` | A shortfall a user owes back (e.g. a clawback that went negative).                 |
+| `PROMO_FLOAT`    | `CREDIT` | The offsetting entry for credits granted as promos.                                |
+| `OPENING_EQUITY` | `CREDIT` | The offset used once, to seed balances on a cold start.                            |
 
 Currency is a property of the account, not the posting. Everything is `CREDIT` except `TRUST_CASH`, `USD_CLEARING`, and `REVENUE_USD`, which are `USD` (see [the money model](/economy/concepts/money-model/) for `Amount` and `Currency`). If a leg's amount currency doesn't match its account, the posting is rejected with `CURRENCY_MISMATCH`.
 
@@ -68,6 +77,7 @@ A posting is also classified for solvency. `classify` sorts each account into on
 - `house-liability`: value the platform owes out.
 
 Only `custodial` balances raise the cash the platform must hold.
+
 </Callout>
 
 ## The invariant: every posting balances, no user account goes negative

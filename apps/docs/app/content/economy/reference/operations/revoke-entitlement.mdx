@@ -1,10 +1,15 @@
 ---
-title: "Revoke entitlement"
-summary: "Revoke a previously granted entitlement."
+title: 'Revoke entitlement'
+summary: 'Revoke a previously granted entitlement.'
 order: 110
 status: stable
-related: ["economy/reference/operations/spend", "economy/reference/operations/refund"]
-sourceRefs: ["src/operations/entitlements.ts#L65-L87 · revokeEntitlement", "src/operations/registry.ts#L54"]
+related:
+  ['economy/reference/operations/spend', 'economy/reference/operations/refund']
+sourceRefs:
+  [
+    'src/operations/entitlements.ts#L65-L87 · revokeEntitlement',
+    'src/operations/registry.ts#L54',
+  ]
 ---
 
 ## Revoke entitlement
@@ -15,12 +20,12 @@ You name the user and the SKU, and optionally a `reason` for the audit trail:
 
 ```ts
 const outcome = await economy.submit({
-  kind: "revokeEntitlement",
-  idempotencyKey: "idem_revoke_1",
-  actor: { kind: "system", service: "fulfillment" },
-  userId: "usr_owner",
-  sku: "wrld_pass",
-  reason: "chargeback",
+  kind: 'revokeEntitlement',
+  idempotencyKey: 'idem_revoke_1',
+  actor: { kind: 'system', service: 'fulfillment' },
+  userId: 'usr_owner',
+  sku: 'wrld_pass',
+  reason: 'chargeback',
 });
 // → outcome.status === "committed"
 ```
@@ -31,14 +36,14 @@ Once this commits, [`read.entitled("usr_owner", "wrld_pass")`](/economy/referenc
 
 The payload is one `revokeEntitlement` variant of [`Operation`](/economy/reference/the-economy/), tagged by `kind`. The fields:
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `kind` | `"revokeEntitlement"` | (required) | Selects this operation. |
-| `idempotencyKey` | `string` | (required) | Makes a retried request run at most once; a repeat with the same key returns the earlier result. See [idempotency](/economy/concepts/integrity/). |
-| `actor` | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`, see [Authorization](#authorization). |
-| `userId` | `string` | (required) | The user losing ownership. A blank or whitespace-only value throws. |
-| `sku` | `string` | (required) | The item or feature code to revoke, such as `"wrld_pass"`. A blank or whitespace-only value throws. |
-| `reason` | `string` | (omitted) | Optional note for the audit trail. |
+| Field            | Type                                                       | Default    | Description                                                                                                                                       |
+| ---------------- | ---------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kind`           | `"revokeEntitlement"`                                      | (required) | Selects this operation.                                                                                                                           |
+| `idempotencyKey` | `string`                                                   | (required) | Makes a retried request run at most once; a repeat with the same key returns the earlier result. See [idempotency](/economy/concepts/integrity/). |
+| `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`, see [Authorization](#authorization).                                                               |
+| `userId`         | `string`                                                   | (required) | The user losing ownership. A blank or whitespace-only value throws.                                                                               |
+| `sku`            | `string`                                                   | (required) | The item or feature code to revoke, such as `"wrld_pass"`. A blank or whitespace-only value throws.                                               |
+| `reason`         | `string`                                                   | (omitted)  | Optional note for the audit trail.                                                                                                                |
 
 ## Returns
 
@@ -68,8 +73,8 @@ A `user` actor is declined with an `UNAUTHORIZED` fault before any work begins.
 
 `revokeEntitlement` returns one [`RejectionCode`](/economy/reference/outcomes-and-reason-codes/):
 
-| Code | When |
-|---|---|
+| Code           | When                                                                  |
+| -------------- | --------------------------------------------------------------------- |
 | `NOT_ENTITLED` | The user does not currently own `sku`, so there is nothing to revoke. |
 
 The rejection carries the `userId` and `sku` in its `detail`, so the caller knows which ownership check came back empty.

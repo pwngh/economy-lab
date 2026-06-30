@@ -1,10 +1,21 @@
 ---
-title: "Processor"
-summary: "The payout processor port that pays sellers, plus the provider adapters that satisfy it."
+title: 'Processor'
+summary: 'The payout processor port that pays sellers, plus the provider adapters that satisfy it.'
 order: 20
 status: stable
-sourceRefs: ["src/ports.ts#L130-L140 · Processor", "src/adapters/processor.ts#L66 · httpProcessor", "src/adapters/thunes-processor.ts#L120 · thunesProcessor", "src/adapters/thunes-processor.ts#L330 · decodeThunesPayoutCallback"]
-related: ["economy/reference/operations/request-payout", "economy/reference/operations/settle-payout", "economy/concepts/solvency"]
+sourceRefs:
+  [
+    'src/ports.ts#L130-L140 · Processor',
+    'src/adapters/processor.ts#L66 · httpProcessor',
+    'src/adapters/thunes-processor.ts#L120 · thunesProcessor',
+    'src/adapters/thunes-processor.ts#L330 · decodeThunesPayoutCallback',
+  ]
+related:
+  [
+    'economy/reference/operations/request-payout',
+    'economy/reference/operations/settle-payout',
+    'economy/concepts/solvency',
+  ]
 ---
 
 ## The seam where real money leaves
@@ -35,7 +46,9 @@ The return is just `{ providerRef }`: the provider's own id for the disbursement
 There is deliberately no "did it settle?" method on this port. Settlement takes time, and polling for it would couple the request path to the provider's latency. Instead the provider reports settlement and disputes the other way, through inbound webhooks.
 
 <Callout type="note">
-`submitPayout` returns once the provider *accepts* the request, not once the money lands. The disbursement is in flight at that point; the saga stays in `SUBMITTED` until the settlement webhook arrives.
+  `submitPayout` returns once the provider *accepts* the request, not once the
+  money lands. The disbursement is in flight at that point; the saga stays in
+  `SUBMITTED` until the settlement webhook arrives.
 </Callout>
 
 ## Where the port is called
@@ -54,7 +67,7 @@ You give it an endpoint and an optional API key. It serializes the payout to JSO
 
 ```ts
 const processor = httpProcessor({
-  endpoint: "https://provider.example/payouts",
+  endpoint: 'https://provider.example/payouts',
   apiKey: process.env.PROVIDER_API_KEY,
 });
 ```
@@ -64,7 +77,10 @@ The amount crosses the wire as a decimal string like `"USD:12.34"`, since money 
 A failed send or a non-2xx status is **retryable**, nothing was paid, so trying again is safe. But a 2xx body with no `providerRef` is **non-retryable**: the money may already have gone out, so retrying could pay twice, and reconciliation resolves the ambiguity instead.
 
 <Callout type="warning">
-`httpProcessor` is a stub. It assumes a provider that already speaks economy-lab's one-shot request-and-reference shape, which a real payout rail rarely does. For production you write an adapter for your provider's actual API. The Thunes adapter below is the worked example.
+  `httpProcessor` is a stub. It assumes a provider that already speaks
+  economy-lab's one-shot request-and-reference shape, which a real payout rail
+  rarely does. For production you write an adapter for your provider's actual
+  API. The Thunes adapter below is the worked example.
 </Callout>
 
 ## The Thunes adapter
@@ -84,7 +100,10 @@ The port carries only `userId`, but Thunes needs a destination service and benef
 Idempotency rides on Thunes' `external_id`, which the adapter sets to the `key` it was passed: the saga id. That makes the whole three-step flow safe to re-run. On a retry, the adapter recovers an already-created transaction rather than failing, and treats an already-confirmed transaction as success, so a retried payout never pays twice and never strands the reserve.
 
 <Callout type="note">
-The two Thunes replay error codes (`1007001` for a reused `external_id`, `1007002` for an already-confirmed transaction) are derived from Thunes' documentation. The adapter's comments flag them to verify against the live sandbox before production: an honest limitation of a lab-grade integration.
+  The two Thunes replay error codes (`1007001` for a reused `external_id`,
+  `1007002` for an already-confirmed transaction) are derived from Thunes'
+  documentation. The adapter's comments flag them to verify against the live
+  sandbox before production: an honest limitation of a lab-grade integration.
 </Callout>
 
 ## How settlement comes back

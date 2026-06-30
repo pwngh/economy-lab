@@ -1,10 +1,21 @@
 ---
-title: "The Economy"
-summary: "Construct an Economy from its ports, then drive it through one submit entry point and read its state through read."
+title: 'The Economy'
+summary: 'Construct an Economy from its ports, then drive it through one submit entry point and read its state through read.'
 order: 5
 status: stable
-sourceRefs: ["src/index.ts#L185 · compose", "src/economy.ts#L76 · createEconomy", "src/contract.ts#L321 · Economy"]
-related: ["economy/reference/operations", "economy/reference/reads", "economy/reference/outcomes-and-reason-codes", "economy/reference/configuration"]
+sourceRefs:
+  [
+    'src/index.ts#L185 · compose',
+    'src/economy.ts#L76 · createEconomy',
+    'src/contract.ts#L321 · Economy',
+  ]
+related:
+  [
+    'economy/reference/operations',
+    'economy/reference/reads',
+    'economy/reference/outcomes-and-reason-codes',
+    'economy/reference/configuration',
+  ]
 ---
 
 An `Economy` is the object you hold and call. It has a small surface: one `submit` to change money, a `read` group to look at state, and `close` to shut down.
@@ -42,12 +53,12 @@ Here a user tops up their balance; the result tells you whether it `committed`, 
 
 ```ts
 const outcome = await economy.submit({
-  kind: "topUp",
-  idempotencyKey: "ord_8821",
-  actor: { kind: "system", service: "billing" },
-  userId: "usr_a1",
-  amount: { currency: "CREDIT", minor: 5000n },
-  source: "stripe",
+  kind: 'topUp',
+  idempotencyKey: 'ord_8821',
+  actor: { kind: 'system', service: 'billing' },
+  userId: 'usr_a1',
+  amount: { currency: 'CREDIT', minor: 5000n },
+  source: 'stripe',
 });
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
@@ -61,7 +72,7 @@ A `rejected` outcome is a normal "no" returned as data, not an error; a genuine 
 Reading one account's balance is a single call that returns an `Amount`:
 
 ```ts
-const balance = await economy.read.balance(spendable("usr_a1"));
+const balance = await economy.read.balance(spendable('usr_a1'));
 // → { currency: "CREDIT", minor: 5000n }
 ```
 

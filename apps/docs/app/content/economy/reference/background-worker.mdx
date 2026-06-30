@@ -1,10 +1,21 @@
 ---
-title: "Background worker"
-summary: "The sweeps that run off the request path: payouts, subscriptions, fee realization, checkpoints, and the outbox/inbox relay."
+title: 'Background worker'
+summary: 'The sweeps that run off the request path: payouts, subscriptions, fee realization, checkpoints, and the outbox/inbox relay.'
 order: 35
 status: stable
-sourceRefs: ["src/worker/index.ts#L57-L68 · SWEEP_NAMES", "src/worker/payouts.ts#L49 · settleDuePayouts", "src/worker/relay.ts#L55 · relayOutbox"]
-related: ["economy/reference/http-service", "economy/reference/operations/request-payout", "economy/reference/configuration", "economy/reference/performance"]
+sourceRefs:
+  [
+    'src/worker/index.ts#L57-L68 · SWEEP_NAMES',
+    'src/worker/payouts.ts#L49 · settleDuePayouts',
+    'src/worker/relay.ts#L55 · relayOutbox',
+  ]
+related:
+  [
+    'economy/reference/http-service',
+    'economy/reference/operations/request-payout',
+    'economy/reference/configuration',
+    'economy/reference/performance',
+  ]
 ---
 
 The synchronous core posts to the ledger and returns an `Outcome` on the request path. But plenty of work outlives a single request.
@@ -21,18 +32,18 @@ Each worker cycle runs a fixed set of jobs, named in `SWEEP_NAMES`. The array or
 
 Here is what each sweep does:
 
-| Sweep | What it does |
-|---|---|
-| `payouts` | Advance each due payout [saga](/economy/concepts/lifecycles/) one step. |
-| `subscriptions` | Renew a due subscription, or lapse it when the buyer can't cover the price. |
-| `treasury` | Re-check that held USD still [backs](/economy/concepts/solvency/) every spendable credit. |
-| `feeSweep` | Realize the platform's matured fee surplus into cash. |
+| Sweep              | What it does                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------------------ |
+| `payouts`          | Advance each due payout [saga](/economy/concepts/lifecycles/) one step.                          |
+| `subscriptions`    | Renew a due subscription, or lapse it when the buyer can't cover the price.                      |
+| `treasury`         | Re-check that held USD still [backs](/economy/concepts/solvency/) every spendable credit.        |
+| `feeSweep`         | Realize the platform's matured fee surplus into cash.                                            |
 | `checkpointVerify` | Re-check the previous signed [checkpoint](/economy/concepts/integrity/) against the live ledger. |
-| `checkpoint` | Seal a fresh signed checkpoint of the ledger. |
-| `relay` | Drain the [outbox](/economy/ports/storage-and-messaging/) to the dispatcher. |
-| `drainInbox` | Apply received provider events, deduping by event id. |
-| `reconcile` | Compare the provider's settled records against the ledger. |
-| `promos` | Claw back the unspent part of an expired promo grant. |
+| `checkpoint`       | Seal a fresh signed checkpoint of the ledger.                                                    |
+| `relay`            | Drain the [outbox](/economy/ports/storage-and-messaging/) to the dispatcher.                     |
+| `drainInbox`       | Apply received provider events, deduping by event id.                                            |
+| `reconcile`        | Compare the provider's settled records against the ledger.                                       |
+| `promos`           | Claw back the unspent part of an expired promo grant.                                            |
 
 Two pairs are deliberately adjacent. `feeSweep` runs right after `treasury`: treasury only measures the surplus, then `feeSweep` moves it. And `checkpointVerify` runs before `checkpoint`, so the old snapshot is checked against the ledger before a fresh one overwrites it.
 
@@ -73,7 +84,9 @@ let summary = await relayOutbox(store, ctx, { dispatcher, limit });
 `drainInbox` needs an economy handle to submit through. With none, it likewise short-circuits and leaves pending inbox rows in place.
 
 <Callout type="note">
-`drainInbox` is never gated on the economy pause. A provider settlement the rail already confirmed must keep flowing through a maintenance window, so the inbox keeps draining even when discretionary user writes are refused.
+  `drainInbox` is never gated on the economy pause. A provider settlement the
+  rail already confirmed must keep flowing through a maintenance window, so the
+  inbox keeps draining even when discretionary user writes are refused.
 </Callout>
 
 ## Delivery is at-least-once
@@ -115,4 +128,3 @@ See [solvency](/economy/concepts/solvency/) for what backing means and how the s
 `feeSweep` is the write the treasury sweep doesn't do. On each run it realizes the full amount the platform is allowed to take (the smaller of its cash surplus and its matured revenue) and skips cleanly when that amount is zero. A draw that would dip into users' money throws `COMMINGLING` and posts nothing.
 
 The checkpoint pair maintains the ledger's tamper-evidence. `checkpoint` seals a fresh signed snapshot of the per-account hash chains; `checkpointVerify` re-checks the previous one against the live ledger. A mismatch is a tamper signal, recorded on the summary and logged, not thrown. See [ledger integrity](/economy/concepts/integrity/) for the chain and checkpoint mechanics.
-

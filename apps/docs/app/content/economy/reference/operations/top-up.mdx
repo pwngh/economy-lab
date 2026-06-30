@@ -1,10 +1,21 @@
 ---
-title: "Top-up"
-summary: "Buyer cash becomes spendable credit, valued at the buy rate."
+title: 'Top-up'
+summary: 'Buyer cash becomes spendable credit, valued at the buy rate.'
 order: 10
 status: stable
-sourceRefs: ["src/operations/topUp.ts#L37 · topUp", "src/operations/registry.ts#L45 · REGISTRY", "src/contract.ts#L68 · kind 'topUp'", "src/webhooks.ts#L136 · toTopUp"]
-related: ["economy/reference/operations/spend", "economy/reference/operations/refund", "economy/reference/configuration"]
+sourceRefs:
+  [
+    'src/operations/topUp.ts#L37 · topUp',
+    'src/operations/registry.ts#L45 · REGISTRY',
+    "src/contract.ts#L68 · kind 'topUp'",
+    'src/webhooks.ts#L136 · toTopUp',
+  ]
+related:
+  [
+    'economy/reference/operations/spend',
+    'economy/reference/operations/refund',
+    'economy/reference/configuration',
+  ]
 ---
 
 ## Top-up
@@ -18,12 +29,12 @@ buyer. You name the user, the credit `amount`, and the funding `source`:
 
 ```ts
 let outcome = await economy.submit({
-  kind: "topUp",
-  idempotencyKey: "idem_0",
-  actor: { kind: "system", service: "payments" },
-  userId: "usr_buyer",
-  amount: decodeAmount("50.00", "CREDIT"),
-  source: "card",
+  kind: 'topUp',
+  idempotencyKey: 'idem_0',
+  actor: { kind: 'system', service: 'payments' },
+  userId: 'usr_buyer',
+  amount: decodeAmount('50.00', 'CREDIT'),
+  source: 'card',
 });
 // → { status: "committed", transaction: { … } }
 // usr_buyer's spendable balance rose by 50.00 credits.
@@ -36,13 +47,13 @@ The credit `amount` is what the user receives. What they paid in USD is derived 
 
 The payload fields, beyond the `kind` tag, are:
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `idempotencyKey` | `string` | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/integrity/). |
-| `actor` | [`Actor`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`. |
-| `userId` | `string` | (required) | The user whose `spendable` balance is credited. |
-| `amount` | [`Amount`](/economy/concepts/money-model/) | (required) | The credit to issue. Must be `CREDIT` and strictly positive. |
-| `source` | `string` | (required) | The funding rail (`card`, `steam`, …). Selects the credits' maturity horizon and must be non-empty after trimming whitespace. |
+| Field            | Type                                                   | Default    | Description                                                                                                                   |
+| ---------------- | ------------------------------------------------------ | ---------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `idempotencyKey` | `string`                                               | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/integrity/).                        |
+| `actor`          | [`Actor`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`.                                                                                |
+| `userId`         | `string`                                               | (required) | The user whose `spendable` balance is credited.                                                                               |
+| `amount`         | [`Amount`](/economy/concepts/money-model/)             | (required) | The credit to issue. Must be `CREDIT` and strictly positive.                                                                  |
+| `source`         | `string`                                               | (required) | The funding rail (`card`, `steam`, …). Selects the credits' maturity horizon and must be non-empty after trimming whitespace. |
 
 The `source` sets how long the new credits are held before they can be
 spent or cashed out, see [maturity](/economy/concepts/lifecycles/). An unrecognized `source` falls
@@ -67,20 +78,20 @@ The first posting issues the credit. It raises the buyer's `spendable` balance a
 amount against [`STORED_VALUE`](/economy/concepts/accounts-and-double-entry/), the running count of
 all credits in circulation:
 
-| Leg | Account | Amount |
-|---|---|---|
-| Debit | `STORED_VALUE` | `amount` (CREDIT) |
+| Leg    | Account             | Amount            |
+| ------ | ------------------- | ----------------- |
+| Debit  | `STORED_VALUE`      | `amount` (CREDIT) |
 | Credit | `spendable(userId)` | `amount` (CREDIT) |
 
 The second posting accounts for the cash the buyer paid. The USD splits two ways. The backing value
 (`amount × par`) is held in `TRUST_CASH` to cover the new credits. The buy-vs-par gap (the
 [platform spread](/economy/concepts/money-model/)) is recognized as revenue in `REVENUE_USD`:
 
-| Leg | Account | Amount |
-|---|---|---|
-| Debit | `TRUST_CASH` | backing = `ceil(amount × par)` (USD) |
-| Debit | `REVENUE_USD` | margin = gross − backing (USD) |
-| Credit | `USD_CLEARING` | gross = `ceil(amount × buy)` (USD) |
+| Leg    | Account        | Amount                               |
+| ------ | -------------- | ------------------------------------ |
+| Debit  | `TRUST_CASH`   | backing = `ceil(amount × par)` (USD) |
+| Debit  | `REVENUE_USD`  | margin = gross − backing (USD)       |
+| Credit | `USD_CLEARING` | gross = `ceil(amount × buy)` (USD)   |
 
 The `REVENUE_USD` leg posts only when the margin is positive. An exact-par purchase (no spread) stays
 a two-leg cash move.
@@ -90,9 +101,10 @@ balance valued at par, so the books never read unbacked. Rounding the gross up t
 margin at or above zero. The cost is at most one minor unit over the exact price.
 
 <Callout type="note">
-  The CREDIT `REVENUE` account is untouched by a top-up, so it keeps meaning transaction fees only.
-  The newly issued credits offset against `STORED_VALUE`, not `REVENUE`. The external app-store cut
-  and VAT happen at the cash-in rail before this ledger sees the purchase, and aren't modelled.
+  The CREDIT `REVENUE` account is untouched by a top-up, so it keeps meaning
+  transaction fees only. The newly issued credits offset against `STORED_VALUE`,
+  not `REVENUE`. The external app-store cut and VAT happen at the cash-in rail
+  before this ledger sees the purchase, and aren't modelled.
 </Callout>
 
 ## Authorization
@@ -110,9 +122,9 @@ webhook. `toTopUp` builds the operation from a cleared `PurchaseEvent`, keyed of
 A `top-up` can return these [reason codes](/economy/reference/outcomes-and-reason-codes/) as a
 `rejected` outcome:
 
-| Code | When |
-|---|---|
-| `RISK_DENIED` | The user's recent top-up volume crossed the configured velocity limit. A top-up counts against the same per-user velocity window as a spend. |
+| Code             | When                                                                                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RISK_DENIED`    | The user's recent top-up volume crossed the configured velocity limit. A top-up counts against the same per-user velocity window as a spend.            |
 | `ECONOMY_PAUSED` | A maintenance window is in effect. Only a `user` actor is paused (and a `user` can't top up at all) so a `system` or `operator` top-up is never paused. |
 
 Structurally invalid requests throw faults rather than returning a `rejected` outcome. A blank

@@ -1,10 +1,16 @@
 ---
-title: "Spend velocity"
+title: 'Spend velocity'
 summary: "A per-subject cap on how much value one account can move within a rolling window. The gate records the attempt and measures the window in one step, so a burst of concurrent operations can't slip past the limit."
 order: 85
 status: stable
-sourceRefs: ["src/trust.ts#L128 · riskSubject", "src/trust.ts#L150 · attemptMinor", "src/economy.ts#L524 · screenRisk", "src/engines/postgres.ts#L1450 · recordVelocity"]
-related: ["economy/concepts/concurrency", "economy/concepts/solvency"]
+sourceRefs:
+  [
+    'src/trust.ts#L128 · riskSubject',
+    'src/trust.ts#L150 · attemptMinor',
+    'src/economy.ts#L524 · screenRisk',
+    'src/engines/postgres.ts#L1450 · recordVelocity',
+  ]
+related: ['economy/concepts/concurrency', 'economy/concepts/solvency']
 ---
 
 A compromised or misbehaving account can try to move money faster than anyone reacts — draining a wallet or claiming payouts in a tight loop. Spend velocity is the gate that caps how much value one subject can move within a rolling window, checked before any money moves.
@@ -22,7 +28,7 @@ const outcome = await economy.submit(spendOperation);
 
 ## Why it exists
 
-A naive limit reads the recent total, compares it, then records the new attempt — three steps a second operation can interleave. Two concurrent spends read the same stale total, both pass, and together they blow the limit. To close that read-then-write race, the gate records *and* measures in one indivisible step per subject.
+A naive limit reads the recent total, compares it, then records the new attempt — three steps a second operation can interleave. Two concurrent spends read the same stale total, both pass, and together they blow the limit. To close that read-then-write race, the gate records _and_ measures in one indivisible step per subject.
 
 Two consequences fall out of that design:
 
@@ -33,18 +39,20 @@ Two consequences fall out of that design:
 
 `riskSubject` decides which operations are gated and whose account is the subject. An operation that moves no tracked subject's funds returns `null` and is always allowed.
 
-| Operation | Subject | Amount counted |
-| --- | --- | --- |
-| [`spend`](/economy/reference/operations/spend/), [`subscribe`](/economy/reference/operations/subscribe/) | the buyer | the `price` |
-| [`topUp`](/economy/reference/operations/top-up/), [`grantPromo`](/economy/reference/operations/grant-promo/), [`requestPayout`](/economy/reference/operations/request-payout/) | the user | the `amount` |
-| everything else | — | not gated |
+| Operation                                                                                                                                                                      | Subject   | Amount counted |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- | -------------- |
+| [`spend`](/economy/reference/operations/spend/), [`subscribe`](/economy/reference/operations/subscribe/)                                                                       | the buyer | the `price`    |
+| [`topUp`](/economy/reference/operations/top-up/), [`grantPromo`](/economy/reference/operations/grant-promo/), [`requestPayout`](/economy/reference/operations/request-payout/) | the user  | the `amount`   |
+| everything else                                                                                                                                                                | —         | not gated      |
 
 ## How it's enforced
 
 `screenRisk` runs inside the submit pipeline, before the money transaction opens. It hands the attempt to `recordVelocity`, which does the whole record-and-measure as one unit: it takes a per-subject lock, dedup-inserts the attempt keyed on the [`idempotencyKey`](/economy/concepts/idempotency/) so a retry never double-counts, sums the subject's amounts where the timestamp falls inside the window, and returns that total. `screenRisk` compares it to `velocityLimitMinor` and rejects when it's over.
 
 <Callout type="note">
-The velocity record commits on its own connection, separate from the posting. It's the one write that must survive a money-transaction rollback, so a rejected or reversed operation still counts against the window.
+  The velocity record commits on its own connection, separate from the posting.
+  It's the one write that must survive a money-transaction rollback, so a
+  rejected or reversed operation still counts against the window.
 </Callout>
 
 ## What relies on it

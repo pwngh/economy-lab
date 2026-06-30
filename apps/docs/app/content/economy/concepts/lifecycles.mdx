@@ -1,10 +1,19 @@
 ---
-title: "Lifecycles"
-summary: "Operations that live over time (the payout saga and subscription states) modeled as explicit state machines."
+title: 'Lifecycles'
+summary: 'Operations that live over time (the payout saga and subscription states) modeled as explicit state machines.'
 order: 60
 status: stable
-sourceRefs: ["src/ports.ts#L783-L790 · SAGA_STATES", "src/operations/requestPayout.ts", "src/worker/payouts.ts"]
-related: ["economy/reference/operations/reverse-payout", "economy/reference/operations/cancel-subscription"]
+sourceRefs:
+  [
+    'src/ports.ts#L783-L790 · SAGA_STATES',
+    'src/operations/requestPayout.ts',
+    'src/worker/payouts.ts',
+  ]
+related:
+  [
+    'economy/reference/operations/reverse-payout',
+    'economy/reference/operations/cancel-subscription',
+  ]
 ---
 
 A `topUp` or a `spend` finishes the instant you call it. A payout can't: it reaches an external rail that answers in its own time. A subscription can't either: it bills period after period.
@@ -27,12 +36,12 @@ The same shape covers anything that outlives one request: a subscription that re
 
 The full enum declares `REQUESTED`, `RESERVED`, `SUBMITTED`, `SETTLED`, and `FAILED`. A live payout starts at `RESERVED`, because the credits were set aside in the same database transaction that opened the saga.
 
-| State | Meaning | What advances it |
-|---|---|---|
-| `RESERVED` | Credits locked in `payout_reserve`; nothing sent to the rail yet. | The worker's `payouts` sweep. |
-| `SUBMITTED` | The sweep converted the reserve to USD and called the payout rail. | The provider's settlement webhook. |
-| `SETTLED` | The rail confirmed; the reserve clears to `revenue` and an equal sum of USD leaves `trust_cash` for the creator. | Terminal. |
-| `FAILED` | The payout was given up on; the reserve returns to the creator's `earned`. | Terminal. |
+| State       | Meaning                                                                                                          | What advances it                   |
+| ----------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `RESERVED`  | Credits locked in `payout_reserve`; nothing sent to the rail yet.                                                | The worker's `payouts` sweep.      |
+| `SUBMITTED` | The sweep converted the reserve to USD and called the payout rail.                                               | The provider's settlement webhook. |
+| `SETTLED`   | The rail confirmed; the reserve clears to `revenue` and an equal sum of USD leaves `trust_cash` for the creator. | Terminal.                          |
+| `FAILED`    | The payout was given up on; the reserve returns to the creator's `earned`.                                       | Terminal.                          |
 
 <PayoutSaga />
 
@@ -49,10 +58,17 @@ Three guards let the worker retry a step without paying twice.
 - **A stuck payout is given up on.** Past `maxPayoutAttempts` failed attempts, or after `maxPayoutAgeMs` in `SUBMITTED` with no settlement webhook, the sweep force-fails it. It flips the saga to `FAILED` and, in the same transaction, posts the exact reverse of the reservation (`debit payout_reserve → credit earned`), returning the credits to the creator (see <SourceLink to="src/worker/payouts.ts#L125-L181 · deadLetter" />).
 
 <Callout type="warning">
-`requestPayout` only pays out *matured* earnings. The raw `earned` balance can pass while part of it is still inside its chargeback window, so a second, stricter gate rejects with [`FUNDS_IMMATURE`](/economy/reference/outcomes-and-reason-codes/) unless the *cleared* portion covers the request (see <SourceLink to="src/operations/requestPayout.ts#L94-L105">source</SourceLink>). It also declines `BELOW_MINIMUM` under `payoutMinimumEarnedMinor` and `PAYOUT_TOO_SOON` within `payoutMinIntervalMs` of the user's last request.
+  `requestPayout` only pays out *matured* earnings. The raw `earned` balance can
+  pass while part of it is still inside its chargeback window, so a second,
+  stricter gate rejects with
+  [`FUNDS_IMMATURE`](/economy/reference/outcomes-and-reason-codes/) unless the
+  *cleared* portion covers the request (see{' '}
+  <SourceLink to="src/operations/requestPayout.ts#L94-L105">source</SourceLink>
+  ). It also declines `BELOW_MINIMUM` under `payoutMinimumEarnedMinor` and
+  `PAYOUT_TOO_SOON` within `payoutMinIntervalMs` of the user's last request.
 </Callout>
 
-That force-fail reversal and the operator's `reversePayout` share one CAS guard on the saga. A reversal posts the compensating entry *only if* its compare-and-set wins. A lost CAS means a concurrent settle or reverse already accounted for the reserve, so posting again would return the credits a second time. An operator can force the same early reversal with `reversePayout`, but only while the money hasn't already left.
+That force-fail reversal and the operator's `reversePayout` share one CAS guard on the saga. A reversal posts the compensating entry _only if_ its compare-and-set wins. A lost CAS means a concurrent settle or reverse already accounted for the reserve, so posting again would return the credits a second time. An operator can force the same early reversal with `reversePayout`, but only while the money hasn't already left.
 
 ## Subscriptions
 

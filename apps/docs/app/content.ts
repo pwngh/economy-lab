@@ -42,7 +42,12 @@ export const docSchema = z.object({
 // <Callout> are injected at render — see DocPage). Typed loosely because MDX merges whatever it's given.
 type MdxComponent = ComponentType<{ components?: Record<string, unknown> }>;
 /** One heading in a page's table of contents, as exported by rehype-extract-toc (depth 2 = `##`, 3 = `###`). */
-export type TocEntry = { value: string; depth: number; id?: string; children?: TocEntry[] };
+export type TocEntry = {
+  value: string;
+  depth: number;
+  id?: string;
+  children?: TocEntry[];
+};
 // `tableOfContents` is injected as a named export of each MDX module by rehype-extract-toc/mdx.
 type MdxModule = {
   default: MdxComponent;
@@ -50,7 +55,9 @@ type MdxModule = {
   tableOfContents?: TocEntry[];
 };
 
-const modules = import.meta.glob<MdxModule>('./content/**/*.mdx', { eager: true });
+const modules = import.meta.glob<MdxModule>('./content/**/*.mdx', {
+  eager: true,
+});
 
 const DEV = import.meta.env.DEV;
 
@@ -58,12 +65,15 @@ const DEV = import.meta.env.DEV;
 // on disk and the two can never drift. The whole site is section-rooted under economy/, mirroring
 // creators.vrchat.com: e.g. './content/economy/reference/operations/spend.mdx' -> the slug
 // 'economy/reference/operations/spend', served at /economy/reference/operations/spend/.
-const slugOf = (path: string) => path.replace(/^\.\/content\//, '').replace(/\.mdx$/, '');
+const slugOf = (path: string) =>
+  path.replace(/^\.\/content\//, '').replace(/\.mdx$/, '');
 
 // The sub-section a page belongs to, below the economy/ root: 'concepts' | 'reference' | 'ports',
 // or '' for a page that sits directly under economy/ (scope-and-non-goals).
 const sectionOf = (slug: string) => {
-  const rel = slug.startsWith('economy/') ? slug.slice('economy/'.length) : slug;
+  const rel = slug.startsWith('economy/')
+    ? slug.slice('economy/'.length)
+    : slug;
   return rel.includes('/') ? (rel.split('/')[0] ?? '') : '';
 };
 
@@ -99,4 +109,5 @@ export const docs: DocPage[] = Object.entries(modules)
 /** Find the one page whose slug matches, or `undefined` when nothing does — the caller decides whether a miss means a not-found view. */
 export const docBySlug = (slug: string) => docs.find((d) => d.slug === slug);
 /** Every page in a top-level section ('concepts' | 'reference' | 'ports'), in sidebar order. */
-export const docsInSection = (section: string) => docs.filter((d) => d.section === section);
+export const docsInSection = (section: string) =>
+  docs.filter((d) => d.section === section);

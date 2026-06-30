@@ -48,9 +48,15 @@ export default defineConfig({
           rehypeExtractTocExport,
           [rehypeAutolinkHeadings, { behavior: 'wrap' }],
           // Authored external links open in a new tab and are marked so the CSS adds the ↗ icon.
-          [rehypeExternalLinks, { target: '_blank', rel: ['noopener', 'noreferrer'] }],
+          [
+            rehypeExternalLinks,
+            { target: '_blank', rel: ['noopener', 'noreferrer'] },
+          ],
           // Two themes baked in; CSS keyed on [data-theme] reveals the right one at zero runtime cost.
-          [rehypeShiki, { themes: { light: 'github-light', dark: 'github-dark' } }],
+          [
+            rehypeShiki,
+            { themes: { light: 'github-light', dark: 'github-dark' } },
+          ],
         ],
       }),
     },

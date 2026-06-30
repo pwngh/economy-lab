@@ -28,7 +28,8 @@ export default function ConceptsIndex() {
     <section className="prose">
       <h1>Concepts</h1>
       <p className="doc-summary">
-        The ideas the economy is built on — read top to bottom for the full picture.
+        The ideas the economy is built on — read top to bottom for the full
+        picture.
       </p>
       <CardGrid slugs={slugs} />
     </section>

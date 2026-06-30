@@ -1,10 +1,15 @@
 ---
-title: "Grant promo"
-summary: "Issue promotional credit that expires."
+title: 'Grant promo'
+summary: 'Issue promotional credit that expires.'
 order: 120
 status: stable
-sourceRefs: ["src/operations/promo.ts#L39 · grantPromo", "src/worker/promos.ts#L60 · sweepExpiredPromos"]
-related: ["economy/reference/operations/top-up", "economy/reference/configuration"]
+sourceRefs:
+  [
+    'src/operations/promo.ts#L39 · grantPromo',
+    'src/worker/promos.ts#L60 · sweepExpiredPromos',
+  ]
+related:
+  ['economy/reference/operations/top-up', 'economy/reference/configuration']
 ---
 
 ## Grant promo
@@ -15,11 +20,11 @@ Here a marketing service grants a user 500 credits that expire 24 hours from now
 
 ```ts
 let outcome = await economy.submit({
-  kind: "grantPromo",
-  idempotencyKey: "promo_2026_06_27_usr_buyer",
-  actor: { kind: "system", service: "marketing" },
-  userId: "usr_buyer",
-  amount: toAmount("CREDIT", 500n),
+  kind: 'grantPromo',
+  idempotencyKey: 'promo_2026_06_27_usr_buyer',
+  actor: { kind: 'system', service: 'marketing' },
+  userId: 'usr_buyer',
+  amount: toAmount('CREDIT', 500n),
   expiresAt: Date.now() + 86_400_000,
 });
 // outcome.status === "committed"
@@ -31,13 +36,13 @@ The grant lands immediately. Promo credit carries no maturity hold, and a buyer'
 
 Every field is required. `grantPromo` takes no optional payload.
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `idempotencyKey` | `string` | (required) | A retried request with the same key runs at most once and returns the original `Outcome`. |
-| `actor` | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be a `system` or `operator` principal. |
-| `userId` | `string` | (required) | The user whose `promo` balance the grant raises. |
-| `amount` | [`Amount`](/economy/concepts/money-model/) | (required) | How much credit to grant. Must be `CREDIT` and positive. |
-| `expiresAt` | `number` | (required) | When the grant expires, in epoch milliseconds. Must be a whole-millisecond timestamp strictly in the future, and no more than five years out. |
+| Field            | Type                                                       | Default    | Description                                                                                                                                   |
+| ---------------- | ---------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `idempotencyKey` | `string`                                                   | (required) | A retried request with the same key runs at most once and returns the original `Outcome`.                                                     |
+| `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be a `system` or `operator` principal.                                                                                    |
+| `userId`         | `string`                                                   | (required) | The user whose `promo` balance the grant raises.                                                                                              |
+| `amount`         | [`Amount`](/economy/concepts/money-model/)                 | (required) | How much credit to grant. Must be `CREDIT` and positive.                                                                                      |
+| `expiresAt`      | `number`                                                   | (required) | When the grant expires, in epoch milliseconds. Must be a whole-millisecond timestamp strictly in the future, and no more than five years out. |
 
 ## Returns
 
@@ -51,15 +56,18 @@ On success the status is `committed`, carrying the posted `transaction`. A repea
 
 The grant posts one balanced entry. It raises the user's `promo` balance and offsets it on the platform's `PROMO_FLOAT` account, so the two legs balance.
 
-| Leg | Account | Direction |
-|---|---|---|
-| 1 | `PROMO_FLOAT` (platform) | debit |
-| 2 | `promo(userId)` | credit |
+| Leg | Account                  | Direction |
+| --- | ------------------------ | --------- |
+| 1   | `PROMO_FLOAT` (platform) | debit     |
+| 2   | `promo(userId)`          | credit    |
 
 `PROMO_FLOAT` is debit-normal, so debiting it raises its balance to mirror the credit added to the user's `promo` account.
 
 <Callout type="note">
-Promo credit needs no USD backing, unlike topped-up money. A grant raises no obligation the platform must hold cash against, so it never increases the trust balance. Promo credit is spendable but never paid out: only earned credit cashes out.
+  Promo credit needs no USD backing, unlike topped-up money. A grant raises no
+  obligation the platform must hold cash against, so it never increases the
+  trust balance. Promo credit is spendable but never paid out: only earned
+  credit cashes out.
 </Callout>
 
 The handler also records the grant in the same unit of work, reusing the posting's id. That id is how the [expiry sweep](/economy/reference/background-worker/) later finds the grant and reverses any unspent portion.
@@ -78,14 +86,16 @@ It declines no well-formed request. There is no affordability check to fail. The
 
 The faults it can throw, all from malformed input, are:
 
-| Code | When |
-|---|---|
-| `OP.MALFORMED` | `amount` is not `CREDIT`, or `expiresAt` is not a whole-millisecond timestamp, is not in the future, or is more than five years out. |
-| `MONEY.INVALID_AMOUNT` | `amount` is zero or negative. |
-| `AUTH.UNAUTHORIZED` | The caller is a `user` principal. |
+| Code                   | When                                                                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `OP.MALFORMED`         | `amount` is not `CREDIT`, or `expiresAt` is not a whole-millisecond timestamp, is not in the future, or is more than five years out. |
+| `MONEY.INVALID_AMOUNT` | `amount` is zero or negative.                                                                                                        |
+| `AUTH.UNAUTHORIZED`    | The caller is a `user` principal.                                                                                                    |
 
 <Callout type="warning">
-A zero, negative, or past `expiresAt` is rejected on purpose. The expiry sweep claims any grant whose `expiresAt` has already passed, so a past timestamp would let the sweep claw the credit straight back.
+  A zero, negative, or past `expiresAt` is rejected on purpose. The expiry sweep
+  claims any grant whose `expiresAt` has already passed, so a past timestamp
+  would let the sweep claw the credit straight back.
 </Callout>
 
 ## Preconditions and invariants
@@ -96,4 +106,4 @@ The grant and its bookkeeping row commit or roll back together. Because the reco
 
 When a grant expires, the worker's promo sweep reverses whatever is unspent. It reads the user's live `promo` balance and claws back `min(grant amount, balance)`. A partly-spent grant returns only the remainder, and a fully-spent one posts nothing.
 
-The reversal mirrors the original entry: it debits the user's `promo` account and credits `PROMO_FLOAT`. 
+The reversal mirrors the original entry: it debits the user's `promo` account and credits `PROMO_FLOAT`.

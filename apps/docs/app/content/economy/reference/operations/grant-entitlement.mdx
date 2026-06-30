@@ -1,10 +1,17 @@
 ---
-title: "Grant entitlement"
-summary: "Grant ownership of a SKU to an account."
+title: 'Grant entitlement'
+summary: 'Grant ownership of a SKU to an account.'
 order: 100
 status: stable
-sourceRefs: ["src/operations/entitlements.ts#L41 · grantEntitlement", "src/operations/registry.ts#L45 · REGISTRY", "src/contract.ts#L137 · kind 'grantEntitlement'", "src/contract.ts#L41 · EntitlementAttrs", "src/economy.ts#L795 · RESTRICTED_TO_PRIVILEGED"]
-related: ["economy/reference/operations/revoke-entitlement"]
+sourceRefs:
+  [
+    'src/operations/entitlements.ts#L41 · grantEntitlement',
+    'src/operations/registry.ts#L45 · REGISTRY',
+    "src/contract.ts#L137 · kind 'grantEntitlement'",
+    'src/contract.ts#L41 · EntitlementAttrs',
+    'src/economy.ts#L795 · RESTRICTED_TO_PRIVILEGED',
+  ]
+related: ['economy/reference/operations/revoke-entitlement']
 ---
 
 ## Grant entitlement
@@ -19,11 +26,11 @@ You name the user and the SKU. The actor is a trusted `system` service or a huma
 
 ```ts
 let outcome = await economy.submit({
-  kind: "grantEntitlement",
-  idempotencyKey: "idem_0",
-  actor: { kind: "system", service: "fulfillment" },
-  userId: "usr_owner",
-  sku: "wrld_pass",
+  kind: 'grantEntitlement',
+  idempotencyKey: 'idem_0',
+  actor: { kind: 'system', service: 'fulfillment' },
+  userId: 'usr_owner',
+  sku: 'wrld_pass',
 });
 // → { status: "committed", transaction: { … } }
 // read.entitled("usr_owner", "wrld_pass") now returns true.
@@ -36,22 +43,24 @@ prerequisite: the user need not already own anything, and no balance is checked.
 
 The payload fields, beyond the `kind` tag, are:
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `idempotencyKey` | `string` | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/integrity/). |
-| `actor` | [`Actor`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`. |
-| `userId` | `string` | (required) | The user who gains ownership. Must be non-empty after trimming whitespace. |
-| `sku` | `string` | (required) | The item or feature owned. Must be non-empty after trimming whitespace. |
-| `attrs` | `EntitlementAttrs` | `{}` | Optional details stored with the grant (see below). |
+| Field            | Type                                                   | Default    | Description                                                                                            |
+| ---------------- | ------------------------------------------------------ | ---------- | ------------------------------------------------------------------------------------------------------ |
+| `idempotencyKey` | `string`                                               | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/integrity/). |
+| `actor`          | [`Actor`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`.                                                         |
+| `userId`         | `string`                                               | (required) | The user who gains ownership. Must be non-empty after trimming whitespace.                             |
+| `sku`            | `string`                                               | (required) | The item or feature owned. Must be non-empty after trimming whitespace.                                |
+| `attrs`          | `EntitlementAttrs`                                     | `{}`       | Optional details stored with the grant (see below).                                                    |
 
 `EntitlementAttrs` carries four optional fields: `quantity` (a count), `version` (a number),
 `expiresAt` (an instant in epoch milliseconds, or `null` for "never expires"), and `source` (a free
 string). Omit `attrs` entirely to record the bare ownership fact without inventing defaults.
 
 <Callout type="note">
-  The core stores `attrs` with the grant; it does not act on them. `expiresAt`, for example, is kept
-  as data. No [sweep](/economy/reference/background-worker/) expires an entitlement the way the worker
-  expires a promo grant. Reading and enforcing these fields is the host's job.
+  The core stores `attrs` with the grant; it does not act on them. `expiresAt`,
+  for example, is kept as data. No
+  [sweep](/economy/reference/background-worker/) expires an entitlement the way
+  the worker expires a promo grant. Reading and enforcing these fields is the
+  host's job.
 </Callout>
 
 ## Returns
@@ -89,9 +98,9 @@ gate therefore stands in for the ownership check the posting path would otherwis
 `grant-entitlement` returns no reason codes: it has no `rejected` path. The ways it can fail are thrown
 faults, broken requests, not expected declines:
 
-| Fault | When |
-|---|---|
-| `UNAUTHORIZED` | The `actor` is a `user`. Granting is `system`- or `operator`-only. |
+| Fault                 | When                                                                                                                                                 |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `UNAUTHORIZED`        | The `actor` is a `user`. Granting is `system`- or `operator`-only.                                                                                   |
 | `MALFORMED_OPERATION` | `userId` or `sku` is blank or whitespace; or `attrs.expiresAt` is present and not finite; or `attrs.quantity` is present and not a positive integer. |
 
 The blank-field check lives in the handler because an entitlement posts to no wallet account, so the

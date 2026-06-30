@@ -22,9 +22,12 @@ const HEADERS_FILE = 'public/_headers';
 
 // Pull the sha256-... tokens out of the CSP script-src directive in _headers.
 const headers = readFileSync(HEADERS_FILE, 'utf8');
-const cspLine = headers.split('\n').find((l) => l.includes('Content-Security-Policy:')) ?? '';
+const cspLine =
+  headers.split('\n').find((l) => l.includes('Content-Security-Policy:')) ?? '';
 const scriptSrc = (cspLine.split('script-src')[1] ?? '').split(';')[0];
-const allowed = new Set([...scriptSrc.matchAll(/'sha256-[^']+'/g)].map((m) => m[0]));
+const allowed = new Set(
+  [...scriptSrc.matchAll(/'sha256-[^']+'/g)].map((m) => m[0]),
+);
 
 function walk(dir) {
   let out = [];
@@ -40,7 +43,9 @@ const missing = new Map(); // hash -> first file it appeared in
 for (const file of walk(BUILD_DIR)) {
   const html = readFileSync(file, 'utf8');
   // Inline scripts only: a <script> with no src= attribute.
-  for (const m of html.matchAll(/<script(?![^>]*\bsrc=)([^>]*)>([\s\S]*?)<\/script>/g)) {
+  for (const m of html.matchAll(
+    /<script(?![^>]*\bsrc=)([^>]*)>([\s\S]*?)<\/script>/g,
+  )) {
     const attrs = m[1] ?? '';
     const body = m[2];
     // Speculation Rules are declarative JSON, not executable JS; the CSP allows them via the
@@ -53,8 +58,11 @@ for (const file of walk(BUILD_DIR)) {
 }
 
 if (missing.size > 0) {
-  console.error('CSP check failed — inline script hashes missing from public/_headers script-src:');
-  for (const [hash, file] of missing) console.error(`  ${hash}  (first seen in ${file})`);
+  console.error(
+    'CSP check failed — inline script hashes missing from public/_headers script-src:',
+  );
+  for (const [hash, file] of missing)
+    console.error(`  ${hash}  (first seen in ${file})`);
   console.error('\nAdd them to the script-src directive in public/_headers.');
   process.exit(1);
 }

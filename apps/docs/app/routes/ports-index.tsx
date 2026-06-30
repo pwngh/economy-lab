@@ -24,13 +24,15 @@ export function meta() {
 
 export default function PortsIndex() {
   const ports = docsInSection('ports').map((d) => d.slug);
-  const scope = docs.filter((d) => d.slug === 'economy/scope-and-non-goals').map((d) => d.slug);
+  const scope = docs
+    .filter((d) => d.slug === 'economy/scope-and-non-goals')
+    .map((d) => d.slug);
   return (
     <section className="prose">
       <h1>Ports &amp; edges</h1>
       <p className="doc-summary">
-        The economy is the system of record; everything it talks to is a port you supply an adapter
-        for.
+        The economy is the system of record; everything it talks to is a port
+        you supply an adapter for.
       </p>
       <CardGrid slugs={[...ports, ...scope]} />
     </section>

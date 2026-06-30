@@ -1,10 +1,11 @@
 ---
-title: "Spend"
+title: 'Spend'
 summary: "A marketplace sale: the buyer spends, the seller earns, and the platform's fee is split out by the pricing policy."
 order: 20
 status: stable
-sourceRefs: ["src/operations/spend.ts#L65 · spend", "src/pricing.ts#L51 · splitLegs"]
-related: ["economy/reference/configuration"]
+sourceRefs:
+  ['src/operations/spend.ts#L65 · spend', 'src/pricing.ts#L51 · splitLegs']
+related: ['economy/reference/configuration']
 ---
 
 ## Spend
@@ -17,14 +18,14 @@ A purchase with a single seller taking the whole price looks like this:
 
 ```ts
 let outcome = await economy.submit({
-  kind: "spend",
-  idempotencyKey: "idem_0",
-  actor: { kind: "user", userId: "usr_buyer" },
-  orderId: "ord_1",
-  buyerId: "usr_buyer",
-  sku: "wrld_pass",
-  price: toAmount("CREDIT", 400n),
-  recipients: [{ sellerId: "usr_seller", shareBps: 10_000 }],
+  kind: 'spend',
+  idempotencyKey: 'idem_0',
+  actor: { kind: 'user', userId: 'usr_buyer' },
+  orderId: 'ord_1',
+  buyerId: 'usr_buyer',
+  sku: 'wrld_pass',
+  price: toAmount('CREDIT', 400n),
+  recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
 });
 // → outcome.status === "committed"
 ```
@@ -35,27 +36,27 @@ A purchase can split the price across several sellers. Each `Recipient` takes a 
 
 ```ts
 recipients: [
-  { sellerId: "usr_creator_a", shareBps: 6_000 },
-  { sellerId: "usr_creator_b", shareBps: 4_000 },
-]
+  { sellerId: 'usr_creator_a', shareBps: 6_000 },
+  { sellerId: 'usr_creator_b', shareBps: 4_000 },
+];
 ```
 
 ## Parameters
 
 Every field of the `spend` payload, with the types each one links to its canonical page:
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `kind` | `"spend"` |  | Selects this operation. |
-| `idempotencyKey` | `string` |  | Makes a retried request run at most once. A repeat with the same key returns `duplicate`. |
-| `actor` | [`Actor`](/economy/concepts/actors-and-authorization/) |  | Who is asking. A `user` actor must be the buyer. |
-| `orderId` | `string` |  | The unique key for this purchase. A refund looks the sale up by it. |
-| `buyerId` | `string` |  | The user who pays. |
-| `sku` | `string` |  | The item granted on success. |
-| `price` | [`Amount`](/economy/concepts/money-model/) |  | The total charge. Must be positive and in `CREDIT`. |
-| `recipients` | [`Recipient[]`](/economy/ports/pricing/) | `[]` | Sellers and their shares in bps. An empty list means the platform keeps the whole net. |
-| `ageRestricted` | `boolean` | `false` | Tags the posting for audit. The core does not block on age. |
-| `giftTo` | `string` | `buyerId` | Grants the `sku` to this user instead of the buyer. The buyer still pays. |
+| Field            | Type                                                   | Default   | Description                                                                               |
+| ---------------- | ------------------------------------------------------ | --------- | ----------------------------------------------------------------------------------------- |
+| `kind`           | `"spend"`                                              |           | Selects this operation.                                                                   |
+| `idempotencyKey` | `string`                                               |           | Makes a retried request run at most once. A repeat with the same key returns `duplicate`. |
+| `actor`          | [`Actor`](/economy/concepts/actors-and-authorization/) |           | Who is asking. A `user` actor must be the buyer.                                          |
+| `orderId`        | `string`                                               |           | The unique key for this purchase. A refund looks the sale up by it.                       |
+| `buyerId`        | `string`                                               |           | The user who pays.                                                                        |
+| `sku`            | `string`                                               |           | The item granted on success.                                                              |
+| `price`          | [`Amount`](/economy/concepts/money-model/)             |           | The total charge. Must be positive and in `CREDIT`.                                       |
+| `recipients`     | [`Recipient[]`](/economy/ports/pricing/)               | `[]`      | Sellers and their shares in bps. An empty list means the platform keeps the whole net.    |
+| `ageRestricted`  | `boolean`                                              | `false`   | Tags the posting for audit. The core does not block on age.                               |
+| `giftTo`         | `string`                                               | `buyerId` | Grants the `sku` to this user instead of the buyer. The buyer still pays.                 |
 
 Each `Recipient` is `{ sellerId: string; shareBps: number }`. A `shareBps` must be `> 0` and `≤ 10_000`, and the shares must sum to exactly `10_000`.
 
@@ -71,23 +72,25 @@ On success it returns `committed` with the posted `Transaction`. A well-formed r
 
 The `spendable`-funded part debits the buyer and lets the [pricing policy](/economy/ports/pricing/) split the credit across sellers and the house:
 
-| Account | Side | Amount |
-|---|---|---|
-| `spendable(buyerId)` | debit | the `spendable` part of the price |
-| `earned(sellerId)` | credit | each seller's share of the net |
-| `SYSTEM.REVENUE` | credit | the platform fee, plus any rounding leftover |
+| Account              | Side   | Amount                                       |
+| -------------------- | ------ | -------------------------------------------- |
+| `spendable(buyerId)` | debit  | the `spendable` part of the price            |
+| `earned(sellerId)`   | credit | each seller's share of the net               |
+| `SYSTEM.REVENUE`     | credit | the platform fee, plus any rounding leftover |
 
 The `promo`-funded part spends down the buyer's marketing grant and funds the sellers from house revenue, since a promo grant is not money the buyer paid:
 
-| Account | Side | Amount |
-|---|---|---|
-| `promo(buyerId)` | debit | the `promo` part of the price |
-| `SYSTEM.PROMO_FLOAT` | credit | the same `promo` part |
-| `SYSTEM.REVENUE` | debit | the total paid out to sellers |
-| `earned(sellerId)` | credit | each seller's share of the `promo` part |
+| Account              | Side   | Amount                                  |
+| -------------------- | ------ | --------------------------------------- |
+| `promo(buyerId)`     | debit  | the `promo` part of the price           |
+| `SYSTEM.PROMO_FLOAT` | credit | the same `promo` part                   |
+| `SYSTEM.REVENUE`     | debit  | the total paid out to sellers           |
+| `earned(sellerId)`   | credit | each seller's share of the `promo` part |
 
 <Callout type="note">
-  Only the `spendable`-funded part carries the platform fee. The `promo`-funded part is charged no fee, so a purchase paid entirely from `promo` earns the platform nothing.
+  Only the `spendable`-funded part carries the platform fee. The `promo`-funded
+  part is charged no fee, so a purchase paid entirely from `promo` earns the
+  platform nothing.
 </Callout>
 
 ## Authorization
@@ -100,13 +103,13 @@ A `user` actor must own every account the operation debits, so a buyer may only 
 
 A well-formed `spend` on a healthy system can be declined for these reasons, each returned as a `rejected` [`Outcome`](/economy/reference/outcomes-and-reason-codes/):
 
-| Code | When |
-|---|---|
-| `INSUFFICIENT_FUNDS` | The buyer can't cover the price from `promo` plus `spendable`. |
-| `FUNDS_IMMATURE` | The buyer has the credits, but the `spendable` part would dip into funds still in a [settlement hold](/economy/concepts/lifecycles/). |
-| `DUPLICATE_ORDER` | A sale already exists for this `orderId` under a different `idempotencyKey`, so a second charge is refused. |
-| `RISK_DENIED` | The purchase would push the buyer past their recent-spending [velocity limit](/economy/concepts/spend-velocity/). |
-| `ECONOMY_PAUSED` | A maintenance window is in effect, so an end user's purchase is declined. The decline carries `resumesAt`. |
+| Code                 | When                                                                                                                                  |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `INSUFFICIENT_FUNDS` | The buyer can't cover the price from `promo` plus `spendable`.                                                                        |
+| `FUNDS_IMMATURE`     | The buyer has the credits, but the `spendable` part would dip into funds still in a [settlement hold](/economy/concepts/lifecycles/). |
+| `DUPLICATE_ORDER`    | A sale already exists for this `orderId` under a different `idempotencyKey`, so a second charge is refused.                           |
+| `RISK_DENIED`        | The purchase would push the buyer past their recent-spending [velocity limit](/economy/concepts/spend-velocity/).                     |
+| `ECONOMY_PAUSED`     | A maintenance window is in effect, so an end user's purchase is declined. The decline carries `resumesAt`.                            |
 
 A structurally invalid request is different: it's a fault, thrown rather than returned as a `rejected` `Outcome`. A request is malformed when any of these hold:
 
@@ -135,5 +138,9 @@ The buyer always pays from `promo` first, then `spendable`. The up-front funds c
 The `sku` entitlement is granted in the same transaction as the charge. It goes to the buyer, or to `giftTo` when that field is present. Because the grant shares the transaction, a rolled-back charge grants nothing.
 
 <Callout type="warning">
-  `orderId` is distinct from `idempotencyKey`. The key drops exact retries; `orderId` identifies the purchase a [refund](/economy/reference/operations/refund/) reverses. Two requests sharing an `orderId` under different keys are refused with `DUPLICATE_ORDER`, so the buyer is never double-charged for one order.
+  `orderId` is distinct from `idempotencyKey`. The key drops exact retries;
+  `orderId` identifies the purchase a
+  [refund](/economy/reference/operations/refund/) reverses. Two requests sharing
+  an `orderId` under different keys are refused with `DUPLICATE_ORDER`, so the
+  buyer is never double-charged for one order.
 </Callout>

@@ -1,12 +1,12 @@
 ---
-title: "Outcomes & reason codes"
-summary: "How a submission resolves (committed, duplicate, or rejected) and the reason codes that explain a decline."
+title: 'Outcomes & reason codes'
+summary: 'How a submission resolves (committed, duplicate, or rejected) and the reason codes that explain a decline.'
 order: 20
 status: stable
 sourceRefs:
-  - "src/contract.ts#L216 · Outcome"
-  - "src/errors.ts#L26 · RejectionCode"
-  - "src/errors.ts#L64 · ERROR_CODES"
+  - 'src/contract.ts#L216 · Outcome'
+  - 'src/errors.ts#L26 · RejectionCode'
+  - 'src/errors.ts#L64 · ERROR_CODES'
 related:
   - economy/reference/the-economy
   - economy/reference/configuration
@@ -22,7 +22,11 @@ what that status implies.
 type Outcome =
   | { status: 'committed'; transaction: Transaction }
   | { status: 'duplicate'; transaction: Transaction }
-  | { status: 'rejected'; reason: RejectionCode; detail?: Record<string, unknown> };
+  | {
+      status: 'rejected';
+      reason: RejectionCode;
+      detail?: Record<string, unknown>;
+    };
 ```
 
 The three statuses describe three ways a request can land. The operation went through. The operation was a repeat of one already done. The
@@ -56,8 +60,9 @@ failure. A network retry, a double-clicked button, or an at-least-once delivery 
 and the caller can treat `duplicate` exactly like `committed`.
 
 <Callout type="tip">
-If you only care whether the money moved, branch on `committed` and `duplicate` together, since both
-hand you the same `transaction`. Reserve a separate path for `rejected`.
+  If you only care whether the money moved, branch on `committed` and
+  `duplicate` together, since both hand you the same `transaction`. Reserve a
+  separate path for `rejected`.
 </Callout>
 
 ### `rejected`: a declined-but-valid request
@@ -84,19 +89,19 @@ one is a stable string you can branch on, and each is raised by a specific set o
 The table lists every code, what it means, and which operation kinds return it. The operation names
 map to the pages under [operations](/economy/reference/operations/).
 
-| Code | What it means | Raised by |
-|---|---|---|
-| `INSUFFICIENT_FUNDS` | The account can't cover the amount the request needs. | `spend`, `subscribe`, `requestPayout` |
-| `FUNDS_IMMATURE` | The funds exist but are still in their holding period, so they aren't usable yet. | `spend`, `requestPayout` |
-| `RISK_DENIED` | The [velocity / abuse check](/economy/concepts/spend-velocity/) declined this request. | `spend`, `subscribe`, `topUp`, `grantPromo`, `requestPayout` (every risk-screened write) |
-| `DUPLICATE_ORDER` | A `spend` reused an `orderId` that already has a completed sale, but carried a different `idempotencyKey`. | `spend` |
-| `UNKNOWN_ORDER` | No sale was found for the `orderId` the request refers to. | `refund` |
-| `NOT_ENTITLED` | The user doesn't own the item or feature the request needs. | `revokeEntitlement` |
-| `UNKNOWN_SUBSCRIPTION` | No subscription matched the request. | `cancelSubscription` |
-| `ALREADY_SUBSCRIBED` | The user already has an active subscription to this `sku` / seller; a second would double-bill. | `subscribe` |
-| `BELOW_MINIMUM` | A payout was requested for less than the configured minimum. | `requestPayout` |
-| `PAYOUT_TOO_SOON` | A payout was requested before the configured minimum gap since the user's last request. | `requestPayout` |
-| `ECONOMY_PAUSED` | A maintenance window is in effect, so an end user's discretionary write is declined. | Any paused user write |
+| Code                   | What it means                                                                                              | Raised by                                                                                |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `INSUFFICIENT_FUNDS`   | The account can't cover the amount the request needs.                                                      | `spend`, `subscribe`, `requestPayout`                                                    |
+| `FUNDS_IMMATURE`       | The funds exist but are still in their holding period, so they aren't usable yet.                          | `spend`, `requestPayout`                                                                 |
+| `RISK_DENIED`          | The [velocity / abuse check](/economy/concepts/spend-velocity/) declined this request.                     | `spend`, `subscribe`, `topUp`, `grantPromo`, `requestPayout` (every risk-screened write) |
+| `DUPLICATE_ORDER`      | A `spend` reused an `orderId` that already has a completed sale, but carried a different `idempotencyKey`. | `spend`                                                                                  |
+| `UNKNOWN_ORDER`        | No sale was found for the `orderId` the request refers to.                                                 | `refund`                                                                                 |
+| `NOT_ENTITLED`         | The user doesn't own the item or feature the request needs.                                                | `revokeEntitlement`                                                                      |
+| `UNKNOWN_SUBSCRIPTION` | No subscription matched the request.                                                                       | `cancelSubscription`                                                                     |
+| `ALREADY_SUBSCRIBED`   | The user already has an active subscription to this `sku` / seller; a second would double-bill.            | `subscribe`                                                                              |
+| `BELOW_MINIMUM`        | A payout was requested for less than the configured minimum.                                               | `requestPayout`                                                                          |
+| `PAYOUT_TOO_SOON`      | A payout was requested before the configured minimum gap since the user's last request.                    | `requestPayout`                                                                          |
+| `ECONOMY_PAUSED`       | A maintenance window is in effect, so an end user's discretionary write is declined.                       | Any paused user write                                                                    |
 
 A few of these reward a closer look.
 
@@ -113,9 +118,10 @@ manual fix are never paused, per the rules on [actors and authorization](/econom
 The decline carries `resumesAt` in its `detail` so the caller can tell the user when to come back.
 
 <Callout type="note">
-`ECONOMY_PAUSED` is a decline you can see coming. The `read.status()` reader exposes the live pause
-state directly, so a UI can show a maintenance banner without first submitting a write and reading
-the rejection back. See the [read surface](/economy/reference/reads/).
+  `ECONOMY_PAUSED` is a decline you can see coming. The `read.status()` reader
+  exposes the live pause state directly, so a UI can show a maintenance banner
+  without first submitting a write and reading the rejection back. See the [read
+  surface](/economy/reference/reads/).
 </Callout>
 
 ## Rejected versus thrown
@@ -130,12 +136,12 @@ both.
 Thrown faults carry their own codes, kept deliberately separate from the rejection codes in
 `ERROR_CODES`. Four of them are the ones you'll meet when a request is malformed:
 
-| Thrown code | Constant | When it's thrown |
-|---|---|---|
-| `OP.MALFORMED` | `MALFORMED_OPERATION` | The request was structurally wrong: a missing or invalid field. |
-| `MONEY.INVALID_AMOUNT` | `INVALID_AMOUNT` | A money amount was invalid, such as negative or not a whole minor unit. |
-| `AUTH.UNAUTHORIZED` | `UNAUTHORIZED` | The actor isn't permitted to perform this action. |
-| `SAGA.INVALID_TRANSITION` | `INVALID_TRANSITION` | A [saga](/economy/concepts/lifecycles/) was told to move to a state it can't reach from its current one. |
+| Thrown code               | Constant              | When it's thrown                                                                                         |
+| ------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------- |
+| `OP.MALFORMED`            | `MALFORMED_OPERATION` | The request was structurally wrong: a missing or invalid field.                                          |
+| `MONEY.INVALID_AMOUNT`    | `INVALID_AMOUNT`      | A money amount was invalid, such as negative or not a whole minor unit.                                  |
+| `AUTH.UNAUTHORIZED`       | `UNAUTHORIZED`        | The actor isn't permitted to perform this action.                                                        |
+| `SAGA.INVALID_TRANSITION` | `INVALID_TRANSITION`  | A [saga](/economy/concepts/lifecycles/) was told to move to a state it can't reach from its current one. |
 
 The line between the two is about cause, not severity. `INSUFFICIENT_FUNDS` is a healthy system
 giving an expected answer, so it's a rejection you show the user. `INVALID_AMOUNT` means the caller
@@ -145,9 +151,10 @@ That separation has a practical payoff: ordinary "no" answers stay off the throw
 they never light up error dashboards or page an on-call engineer.
 
 <Callout type="warning">
-Don't reach for a `try`/`catch` to handle an empty balance or a duplicate order. Those come back as
-`rejected` outcomes, and a `catch` will never see them. Branch on `result.status` instead, and keep
-`catch` for the genuine faults.
+  Don't reach for a `try`/`catch` to handle an empty balance or a duplicate
+  order. Those come back as `rejected` outcomes, and a `catch` will never see
+  them. Branch on `result.status` instead, and keep `catch` for the genuine
+  faults.
 </Callout>
 
 `ERROR_CODES` also holds deeper safety faults you won't normally trigger from a well-formed request:

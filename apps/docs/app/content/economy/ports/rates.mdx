@@ -1,12 +1,12 @@
 ---
-title: "Rates"
-summary: "The rates port supplying the fixed CREDIT↔USD buy, par, and payout rates."
+title: 'Rates'
+summary: 'The rates port supplying the fixed CREDIT↔USD buy, par, and payout rates.'
 order: 30
 status: stable
 sourceRefs:
-  - "src/ports.ts#L154-L172 · Rates"
-  - "src/ports.ts#L182 · Rate"
-  - "src/adapters/rates.ts#L56-L100 · configuredRates"
+  - 'src/ports.ts#L154-L172 · Rates'
+  - 'src/ports.ts#L182 · Rate'
+  - 'src/adapters/rates.ts#L56-L100 · configuredRates'
 related:
   - economy/ports/pricing
 ---
@@ -25,11 +25,11 @@ The whole [money model](/economy/concepts/money-model/) is built on three fixed 
 
 Each method answers a different question:
 
-| Method | Returns | The question it answers |
-|---|---|---|
-| `buy(currency)` | The acquisition rate | What does a user pay per credit when buying? |
-| `par(currency)` | The redemption/backing rate | What does a credit cash out at, and how much real `USD` must back it? |
-| `payout(from, to, at)` | The creator settlement rate | What does an earned credit convert to `USD` at? (equals `par`) |
+| Method                 | Returns                     | The question it answers                                               |
+| ---------------------- | --------------------------- | --------------------------------------------------------------------- |
+| `buy(currency)`        | The acquisition rate        | What does a user pay per credit when buying?                          |
+| `par(currency)`        | The redemption/backing rate | What does a credit cash out at, and how much real `USD` must back it? |
+| `payout(from, to, at)` | The creator settlement rate | What does an earned credit convert to `USD` at? (equals `par`)        |
 
 The rates hold the order `buy ≥ par ≥ payout`, and the `buy`-to-`par` gap is the platform spread. The full story of why that ordering matters lives on the money-model page.
 
@@ -43,9 +43,12 @@ The default adapter is `configuredRates` in `src/adapters/rates.ts`. You hand it
 
 ```ts
 let rates = configuredRates({
-  buyRate: 8333n, buyScale: 6,    // buy ~120 credits/USD ($0.00833)
-  parRate: 5n,    parScale: 3,    // par/payout ~200 credits/USD ($0.005)
-  payoutRate: 5n, payoutScale: 3, // a ~40% spread
+  buyRate: 8333n,
+  buyScale: 6, // buy ~120 credits/USD ($0.00833)
+  parRate: 5n,
+  parScale: 3, // par/payout ~200 credits/USD ($0.005)
+  payoutRate: 5n,
+  payoutScale: 3, // a ~40% spread
 });
 ```
 
@@ -54,7 +57,11 @@ Each returned `Rate` carries a descriptive `rateId` the adapter builds from the 
 Only `CREDIT` and `USD` exist in the lab. A same-currency conversion returns a 1:1 identity rate, and `USD` is the base unit, so `buy('USD')` and `par('USD')` are both 1:1. Any other currency pair is a wiring bug rather than a missing feature.
 
 <Callout type="note">
-The adapter doesn't enforce `buy ≥ par ≥ payout` in code. It serves back whatever six numbers you configure. The ordering is a contract on the rate source, not a runtime guard, so a deployment that miswires the constants can break the platform's margin. The money-model page explains [what that ordering protects](/economy/concepts/money-model/#the-invariant-buy--par--payout).
+  The adapter doesn't enforce `buy ≥ par ≥ payout` in code. It serves back
+  whatever six numbers you configure. The ordering is a contract on the rate
+  source, not a runtime guard, so a deployment that miswires the constants can
+  break the platform's margin. The money-model page explains [what that ordering
+  protects](/economy/concepts/money-model/#the-invariant-buy--par--payout).
 </Callout>
 
 <Callout type="warning">

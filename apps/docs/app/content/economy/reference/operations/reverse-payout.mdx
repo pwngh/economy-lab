@@ -1,15 +1,24 @@
 ---
-title: "Reverse payout"
-summary: "Reverse an in-flight payout; refuses one that has already disbursed USD."
+title: 'Reverse payout'
+summary: 'Reverse an in-flight payout; refuses one that has already disbursed USD.'
 order: 70
 status: stable
-sourceRefs: ["src/operations/reversePayout.ts#L42 · reversePayout", "src/contract.ts#L179 · kind 'reversePayout'", "src/operations/registry.ts#L45 · REGISTRY"]
-related: ["economy/reference/operations/request-payout", "economy/reference/operations/settle-payout"]
+sourceRefs:
+  [
+    'src/operations/reversePayout.ts#L42 · reversePayout',
+    "src/contract.ts#L179 · kind 'reversePayout'",
+    'src/operations/registry.ts#L45 · REGISTRY',
+  ]
+related:
+  [
+    'economy/reference/operations/request-payout',
+    'economy/reference/operations/settle-payout',
+  ]
 ---
 
 <Callout type="danger">
-  `reverse-payout` refuses a payout that has already disbursed USD: once the processor has paid the
-  seller, the saga can no longer be unwound by reversal.
+  `reverse-payout` refuses a payout that has already disbursed USD: once the
+  processor has paid the seller, the saga can no longer be unwound by reversal.
 </Callout>
 
 ## Reverse payout
@@ -27,12 +36,12 @@ You name the payout by its `sagaId` and the seller by `userId`. You must also re
 
 ```ts
 let outcome = await economy.submit({
-  kind: "reversePayout",
-  idempotencyKey: "idem_0",
-  actor: { kind: "operator", operatorId: "op_1" },
-  userId: "usr_seller",
-  sagaId: "pay_1",
-  reason: "fraud hold",
+  kind: 'reversePayout',
+  idempotencyKey: 'idem_0',
+  actor: { kind: 'operator', operatorId: 'op_1' },
+  userId: 'usr_seller',
+  sagaId: 'pay_1',
+  reason: 'fraud hold',
 });
 // → { status: "committed", transaction: { … } }
 // The reserve returned to usr_seller's earned account; the saga is now FAILED.
@@ -42,22 +51,23 @@ let outcome = await economy.submit({
 
 The payload fields, beyond the `kind` tag, are:
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `idempotencyKey` | `string` | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/integrity/). |
-| `actor` | [`Actor`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `operator` or `system`. |
-| `userId` | `string` | (required) | The seller whose payout this is. Names the account the engine locks. |
-| `sagaId` | `string` | (required) | The payout to reverse, of the form `pay_<uuid>`. |
-| `reason` | `string` | (required) | An audit note for the reversal. Must be non-empty after trimming whitespace. |
+| Field            | Type                                                   | Default    | Description                                                                                            |
+| ---------------- | ------------------------------------------------------ | ---------- | ------------------------------------------------------------------------------------------------------ |
+| `idempotencyKey` | `string`                                               | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/integrity/). |
+| `actor`          | [`Actor`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `operator` or `system`.                                                         |
+| `userId`         | `string`                                               | (required) | The seller whose payout this is. Names the account the engine locks.                                   |
+| `sagaId`         | `string`                                               | (required) | The payout to reverse, of the form `pay_<uuid>`.                                                       |
+| `reason`         | `string`                                               | (required) | An audit note for the reversal. Must be non-empty after trimming whitespace.                           |
 
 The operation names no account directly. The seller's `earned` account and the
 [`PAYOUT_RESERVE`](/economy/concepts/accounts-and-double-entry/) account both come off the loaded
 `Saga` inside the handler.
 
 <Callout type="warning">
-  `userId` must equal the saga's own `userId`. The engine locks the account named by `userId`, but
-  the undo posting credits the seller recorded on the saga. A mismatch is refused, so the locked
-  account is the one that gets credited.
+  `userId` must equal the saga's own `userId`. The engine locks the account
+  named by `userId`, but the undo posting credits the seller recorded on the
+  saga. A mismatch is refused, so the locked account is the one that gets
+  credited.
 </Callout>
 
 ## Returns
@@ -76,9 +86,9 @@ On commit, the undo posts one balanced transaction that mirrors the original res
 the full reserved amount out of `PAYOUT_RESERVE` and back into the seller's
 [`earned`](/economy/concepts/accounts-and-double-entry/) account:
 
-| Leg | Account | Amount |
-|---|---|---|
-| Debit | `PAYOUT_RESERVE` | `saga.reserve` |
+| Leg    | Account               | Amount         |
+| ------ | --------------------- | -------------- |
+| Debit  | `PAYOUT_RESERVE`      | `saga.reserve` |
 | Credit | `earned(saga.userId)` | `saga.reserve` |
 
 Both legs are in `CREDIT` and sum to zero, so the books stay
@@ -99,11 +109,11 @@ reverse a payout, even their own. A `user` principal is rejected with `UNAUTHORI
 can't do that" answers, not the declined-but-expected outcomes that
 [reason codes](/economy/reference/outcomes-and-reason-codes/) describe. The faults it can throw:
 
-| Code | When |
-|---|---|
-| `INVALID_TRANSITION` | The saga is `SETTLED` (already paid out, undoing would credit the seller twice), or it is `SUBMITTED` and still within its provider settlement window. Nothing is posted. |
-| `MALFORMED_OPERATION` | `sagaId` names no payout, `userId` does not match the saga's seller, or `reason` is empty. Nothing is posted. |
-| `UNAUTHORIZED` | The `actor` is an end user rather than `operator` or `system`. |
+| Code                  | When                                                                                                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `INVALID_TRANSITION`  | The saga is `SETTLED` (already paid out, undoing would credit the seller twice), or it is `SUBMITTED` and still within its provider settlement window. Nothing is posted. |
+| `MALFORMED_OPERATION` | `sagaId` names no payout, `userId` does not match the saga's seller, or `reason` is empty. Nothing is posted.                                                             |
+| `UNAUTHORIZED`        | The `actor` is an end user rather than `operator` or `system`.                                                                                                            |
 
 ## Preconditions and invariants
 
