@@ -54,6 +54,7 @@ import {
   rowToSubscription,
   rowToCheckpoint,
   withTransientRetry,
+  isSeededSystemAccount,
 } from '#src/engines/sql-shared.ts';
 import { metaString, metaNumber } from '#src/meta.ts';
 
@@ -287,7 +288,9 @@ async function writePosting(
 function createLedgerStore(q: Queryable, digest: Digest, clock: Clock): Ledger {
   return {
     hasAccount: async (account) => {
-      if (isKnownSuffix(account)) {
+      // A known user-account suffix or a schema-seeded system account always exists, so confirm it
+      // without a round trip; only a genuinely unknown id falls through to the existence query.
+      if (isKnownSuffix(account) || isSeededSystemAccount(account)) {
         return true;
       }
       let result = await q.query(`select 1 from accounts where id = $1`, [

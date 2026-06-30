@@ -13,6 +13,7 @@ import { toAmount } from '#src/money.ts';
 import { toHex } from '#src/bytes.ts';
 import { GENESIS } from '#src/ledger.ts';
 import { sha256Digest } from '#src/digest.ts';
+import { SYSTEM } from '#src/accounts.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
 import type {
@@ -84,6 +85,24 @@ export function distinctAccounts(legs: ReadonlyArray<Leg>): AccountRef[] {
 
 // One step in an account's hash chain: the account, the hash before this entry, and the hash after.
 export type Link = { account: AccountRef; prevHash: string; hash: string };
+
+// --- Account recognition ----------------------------------------------------------
+
+// The platform ("system") accounts the schema seeds up front; db/*-schema.sql inserts exactly these
+// SYSTEM ids, so they always exist before any posting can name them.
+let SEEDED_SYSTEM_ACCOUNTS: ReadonlySet<string> = new Set(
+  Object.values(SYSTEM),
+);
+
+// Whether an account is one the schema pre-seeds. `hasAccount` uses this to confirm a platform
+// account without a round trip, the same way a `usr_…:<kind>` suffix is confirmed without a query
+// (the write path creates that one on first use). A platform-looking id that is NOT seeded — a typo
+// like `platform:revenuee` — is absent here, so it still falls through to the existence query and
+// yields a clean UNKNOWN_ACCOUNT rather than reaching the database as a raw foreign-key violation.
+// This matches the in-memory adapter, which already recognizes the same set in-process.
+export function isSeededSystemAccount(account: AccountRef): boolean {
+  return SEEDED_SYSTEM_ACCOUNTS.has(account);
+}
 
 // --- Transient-conflict retry -----------------------------------------------------
 

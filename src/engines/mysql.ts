@@ -38,6 +38,7 @@ import {
   rowToSubscription,
   rowToCheckpoint,
   withTransientRetry,
+  isSeededSystemAccount,
 } from '#src/engines/sql-shared.ts';
 import { metaString, metaNumber } from '#src/meta.ts';
 
@@ -167,6 +168,11 @@ async function isKnownAccount(
     if (suffix === 'spendable' || suffix === 'earned' || suffix === 'promo') {
       return true;
     }
+  }
+  // A schema-seeded system account always exists, so confirm it without a round trip; only a
+  // genuinely unknown id falls through to the existence query.
+  if (isSeededSystemAccount(account)) {
+    return true;
   }
   let found = await rows(exec, 'SELECT 1 FROM accounts WHERE id = ? LIMIT 1', [
     account,
