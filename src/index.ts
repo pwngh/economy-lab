@@ -301,10 +301,9 @@ async function selectCache(
 }
 
 // Picks how outgoing events get delivered, from env. Events are first written to the database
-// alongside the money move, and the returned dispatcher ships them out. `SQS_QUEUE_URL` sends via an
-// Amazon SQS queue. Otherwise `DISPATCHER_URL` posts over HTTP. With neither set, this returns
-// nothing and events are delivered in-process. SQS wins if both are set. Each driver loads on
-// demand. The worker's delivery loop reads from whichever dispatcher this returns.
+// alongside the money move; the returned dispatcher ships them out. `SQS_QUEUE_URL` sends via an
+// Amazon SQS queue; otherwise `DISPATCHER_URL` posts over HTTP; with neither set, returns nothing
+// and events are delivered in-process. SQS wins if both are set. Each driver loads on demand.
 async function selectDispatcher(
   env: Record<string, string | undefined>,
 ): Promise<Dispatcher | undefined> {

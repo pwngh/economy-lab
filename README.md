@@ -1,10 +1,4 @@
-<h2 align="left">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
-    <img src="assets/logo.svg" alt="" height="28" align="top">
-  </picture>
-  &#160;economy-lab
-</h2>
+<h2 align="left">economy-lab</h2>
 
 A provably-solvent credits economy: wallets, payouts, subscriptions, and a marketplace, on one double-entry ledger.
 

@@ -169,8 +169,8 @@ export function systemSigner(options: {
 }
 
 /**
- * Hex-encoded Ed25519 public key derived from `signingKey`. Publish it so an external party can
- * verify signed checkpoints without the signing secret. Returns the raw 32-byte public key as hex.
+ * Hex-encoded raw 32-byte Ed25519 public key derived from `signingKey`. Publish it so an external
+ * party can verify signed checkpoints without the signing secret.
  */
 export async function signingPublicKeyHex(signingKey: string): Promise<string> {
   let { publicKey } = await ed25519KeyPair(signingKey);
@@ -198,12 +198,11 @@ export function systemCapabilities(options: {
 }
 
 /**
- * Structured logger for production hosts. Each call writes one JSON object per
- * line, shaped `{ts, level, service, event, ...fields}`. This is JSONL, which
- * log collectors parse line by line. The info, debug, and warn levels go to
- * stdout via `console.warn`. The error level goes to stderr via `console.error`.
- * This implements the same `Logger` interface as the no-op default, so a host
- * can swap it in directly.
+ * Structured logger for production hosts. Each call writes one JSONL object,
+ * shaped `{ts, level, service, event, ...fields}`, for log collectors to parse
+ * line by line. The info, debug, and warn levels go to stdout via `console.warn`.
+ * The error level goes to stderr via `console.error`. Implements the same
+ * `Logger` interface as the no-op default, so a host can swap it in directly.
  *
  * Supply `now` (epoch ms) so a test can freeze the timestamp and check the exact
  * line; it defaults to wall-clock time. `service` names the emitting process and

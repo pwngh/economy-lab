@@ -537,9 +537,9 @@ export interface SagaStore {
   deadLetter(id: string, reason: string, options?: Options): Promise<void>;
 
   // Returns the time of `userId`'s most recent payout request, used to enforce
-  // config.payoutMinIntervalMs between requests. This is the max `updatedAt` over all of the user's
-  // sagas in any state. `updatedAt` is set to the request time at open() and only advances, so the
-  // max is always >= the latest request and never lets a second request slip through the window.
+  // config.payoutMinIntervalMs between requests: the max `updatedAt` over all of the user's sagas in
+  // any state. `updatedAt` is set to the request time at open() and only advances, so the max never
+  // undershoots the latest request and lets no second request slip through the window.
   // Returns null when the user has no sagas, so a first request is always allowed.
   lastPayoutAt(userId: string, options?: Options): Promise<number | null>;
 }

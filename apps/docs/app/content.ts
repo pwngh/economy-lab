@@ -62,8 +62,8 @@ const modules = import.meta.glob<MdxModule>('./content/**/*.mdx', {
 const DEV = import.meta.env.DEV;
 
 // The slug is the path under app/content/ minus the .mdx extension, so the URL is pinned to the file
-// on disk and the two can never drift. The whole site is section-rooted under economy/, mirroring
-// creators.vrchat.com: e.g. './content/economy/reference/operations/spend.mdx' -> the slug
+// on disk and the two can never drift. The whole site is section-rooted under economy/:
+// e.g. './content/economy/reference/operations/spend.mdx' -> the slug
 // 'economy/reference/operations/spend', served at /economy/reference/operations/spend/.
 const slugOf = (path: string) => path.replace(/^\.\/content\//, '').replace(/\.mdx$/, '');
 

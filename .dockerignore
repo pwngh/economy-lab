@@ -4,8 +4,6 @@ test
 docs
 .git
 .github
-viz
-.claude
 *.md
 *.log
 .env

@@ -11,8 +11,7 @@
 
 // The site's information architecture, derived from the content collection. The sidebar tree, the
 // breadcrumb trail, and the prev/next sequence all read from here, so there is one ordering to keep
-// in step with the pages themselves. Everything is section-rooted under economy/ (mirroring
-// creators.vrchat.com), so slugs and hrefs all begin /economy/.
+// in step with the pages themselves. Everything is section-rooted under economy/, so slugs and hrefs all begin /economy/.
 import { docs, docsInSection } from '~/content.ts';
 
 export type NavLeaf = { slug: string; title: string };

@@ -24,7 +24,7 @@ import remarkMdxFrontmatter from 'remark-mdx-frontmatter';
 import { defineConfig } from 'vite';
 
 /**
- * Vite build config. Turns .mdx into React Router routes and highlights every code block at BUILD
+ * Vite build config. Turns .mdx into React Router routes and highlights every code block at build
  * time (Shiki, dual theme) so the shipped HTML carries colorized code and no client JS runs to do it.
  */
 export default defineConfig({

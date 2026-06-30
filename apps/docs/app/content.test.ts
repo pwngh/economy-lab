@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
 import { docBySlug, docSchema, docs } from '~/content.ts';
 
 // The slug contract: economy-lab's source links to these exact pages via @see {DOCS_BASE_URL}/<slug>.
-// Section-rooted under economy/ (mirroring creators.vrchat.com). Every one must resolve, or an
+// Section-rooted under economy/. Every one must resolve, or an
 // inbound link dangles. This list is the route manifest, tested.
 const CONTRACT = [
   ...[

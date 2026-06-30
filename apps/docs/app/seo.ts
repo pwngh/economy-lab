@@ -21,7 +21,7 @@ export const SITE = 'https://economy-lab-docs.pages.dev';
 /** Human-readable brand name, emitted as og:site_name and reused in title suffixes. */
 const SITE_NAME = 'economy-lab docs';
 
-/** The arguments {@link pageMeta} needs. `path` is the route's absolute path from the site root (e.g. "/concepts/integrity/"); it is concatenated onto {@link SITE} to form the page's one true URL. */
+/** The arguments {@link pageMeta} needs. `path` is the route's absolute path from the site root (e.g. "/economy/concepts/integrity/"); it is concatenated onto {@link SITE} to form the page's one true URL. */
 export interface PageMetaOptions {
   title: string;
   description?: string;

@@ -105,7 +105,7 @@ export default tseslint.config(
   // `apps/` holds standalone front-end apps (the React Router console) with their own build/lint tooling,
   // so they stay outside this gate alongside the other non-core UI/asset dirs.
   {
-    ignores: ['legacy/**', 'node_modules/**', 'assets/**', 'viz/**', 'apps/**'],
+    ignores: ['legacy/**', 'node_modules/**', 'apps/**'],
   },
 
   eslint.configs.recommended,
