@@ -1,4 +1,15 @@
 /**
+ * @pwngh/economy-lab
+ *
+ * Copyright (c) Preston Neal
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE.md file in the root directory of this source tree.
+ *
+ * @license MIT
+ */
+
+/**
  * typecheck wrapper.
  *
  * tsc also checks the engine source it can reach under ../../src, which is validated separately at
