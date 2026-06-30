@@ -1,0 +1,152 @@
+---
+title: "Subscribe"
+summary: "Start a subscription, charging the first period's fee."
+order: 80
+status: stable
+sourceRefs: ["src/operations/subscribe.ts#L57 · handleSubscribe", "src/worker/subscriptions.ts#L62 · sweepDueSubscriptions"]
+related: ["economy/reference/operations/cancel-subscription", "economy/reference/configuration"]
+---
+
+## Subscribe
+
+`subscribe` does three things in one transaction. It charges a buyer for the first period
+of a recurring plan, grants them the SKU, and saves a
+[`Subscription`](/economy/concepts/lifecycles/) record. The
+[background worker](/economy/reference/background-worker/) renews that record every later
+period.
+
+You submit it with the buyer, the seller, the SKU, the per-period `price`, and the period
+length in milliseconds:
+
+```ts
+let outcome = await economy.submit({
+  kind: "subscribe",
+  idempotencyKey: "idem_1",
+  actor: { kind: "user", userId: "usr_a" },
+  userId: "usr_a",
+  sellerId: "usr_s",
+  sku: "club_pass",
+  price: toAmount("CREDIT", 50_000n),
+  periodMs: 2_592_000_000,
+});
+// outcome.status === "committed"
+```
+
+The handler bills period one only. Every period after that, the worker's renewal sweep
+bills the buyer again.
+
+## Parameters
+
+Every field below is required; `subscribe` carries no optional payload.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `idempotencyKey` | `string` | (required) | Makes a [retried request](/economy/concepts/integrity/) run at most once. |
+| `actor` | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. |
+| `userId` | `string` | (required) | The buyer. Must differ from `sellerId`. |
+| `sellerId` | `string` | (required) | The seller who earns the price. |
+| `sku` | `string` | (required) | The item or feature the subscription grants. Non-blank. |
+| `price` | [`Amount`](/economy/concepts/money-model/) | (required) | Per-period charge, in `CREDIT`. |
+| `periodMs` | `number` | (required) | Period length in milliseconds. |
+
+The `price` must be in `CREDIT` and fall between `100` and `10000` credits per period,
+inclusive. The `periodMs` must be a positive integer no larger than ten 365-day years
+(`315360000000` ms). Anything outside those bounds is a wiring error, not a business
+decline. See [Preconditions](#preconditions-and-invariants) below.
+
+## Returns
+
+`subscribe` returns an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
+
+On success the status is `committed`, carrying the first-period `Transaction`. A repeat
+of the same `idempotencyKey` returns `duplicate` with the original transaction. A valid
+request the system declines returns `rejected` with one of the [reason codes](#reason-codes)
+below.
+
+## Postings
+
+The first-period charge posts as one balanced
+[`Transaction`](/economy/concepts/accounts-and-double-entry/). Its legs depend on how the
+price splits between the buyer's [`promo`](/economy/concepts/accounts-and-double-entry/)
+grant and their [`spendable`](/economy/concepts/accounts-and-double-entry/) balance. Promo
+covers as much as it can, and spendable covers the rest.
+
+The spendable-funded part is the part that carries the platform fee. The buyer's `spendable`
+is debited the full part. The seller's [`earned`](/economy/concepts/accounts-and-double-entry/)
+is credited the net, and [`REVENUE`](/economy/concepts/accounts-and-double-entry/) takes the
+fee:
+
+| Leg | Account | Direction |
+|---|---|---|
+| Buyer pays | `userId:spendable` | debit |
+| Seller earns net | `sellerId:earned` | credit |
+| Platform fee | `platform:revenue` | credit |
+
+The promo-funded part pays the seller real earnings out of platform revenue. Promo credit
+never reaches the seller as promo. The fee applies only to the spendable part, matching
+[`spend`](/economy/reference/operations/spend/):
+
+| Leg | Account | Direction |
+|---|---|---|
+| Buyer's grant drawn down | `userId:promo` | debit |
+| Outstanding promo offset | `platform:promo_float` | credit |
+| Revenue funds the seller | `platform:revenue` | debit |
+| Seller earns the promo part | `sellerId:earned` | credit |
+
+The fee comes from [`feeForPrice`](/economy/ports/pricing/) at `platformFeeBps`, rounded up
+to a whole credit and capped at the charge. The first period, every renewal, and `spend` all
+call it, so they round the fee identically.
+
+The handler grants the buyer the SKU in the same transaction, through the end of the period
+just billed. A rolled-back charge rolls back the grant too.
+
+## Authorization
+
+A [`user`](/economy/concepts/actors-and-authorization/) actor may run `subscribe` only for
+their own wallet: the buyer `userId` must match the actor. The ownership check covers the
+two accounts the charge debits: `userId:promo` and `userId:spendable`.
+
+A `system` or `operator` actor may subscribe on any buyer's behalf. `subscribe` is not a
+privileged-only operation.
+
+## Reason codes
+
+`subscribe` returns these [`RejectionCode`](/economy/reference/outcomes-and-reason-codes/)
+values as a `rejected` outcome, a normal "no", not a thrown fault:
+
+| Code | When |
+|---|---|
+| `ALREADY_SUBSCRIBED` | An `ACTIVE` subscription already exists for the same `userId`, `sku`, and `sellerId`. A second one would double-bill. |
+| `INSUFFICIENT_FUNDS` | The buyer's `spendable` balance can't cover its share of the first period. |
+| `RISK_DENIED` | The charge would push the buyer past their recent-spending [velocity limit](/economy/concepts/actors-and-authorization/). `subscribe` counts against the same window as `spend`. |
+| `ECONOMY_PAUSED` | A maintenance window is in effect, so a `user` actor's subscribe is declined. The decline carries `resumesAt`; a `system` or `operator` actor is never paused. |
+
+Malformed input throws a fault instead of declining. Each of these throws `OP.MALFORMED`:
+
+- A buyer subscribing to themselves.
+- A `price` that isn't `CREDIT`, or one outside the credit band.
+- A non-positive or oversized `periodMs`.
+- A blank `sku`.
+
+## Preconditions and invariants
+
+The handler enforces these before it posts anything:
+
+- **The buyer is not the seller.** `userId` must differ from `sellerId`; a self-subscription
+  would turn the buyer's own promo credit into cashable earnings.
+- **No active duplicate.** At most one `ACTIVE` subscription exists per
+  `(userId, sku, sellerId)`.
+- **Funds cover the spendable share.** The pre-check declines a short balance with
+  `INSUFFICIENT_FUNDS` before posting; the database's per-user non-negative constraint is
+  the backstop.
+
+Like every operation, the posting is balanced: debits and credits sum to zero in `CREDIT`.
+
+The charge, the `Subscription` record, and the SKU grant all commit in one transaction. So a
+paying buyer always owns the SKU, and a rolled-back charge leaves no record behind.
+
+<Callout type="note">
+`subscribe` bills only the first period. Later periods are billed by the worker's renewal
+sweep, which draws from `spendable` only. A renewal never touches promo credit. An
+underfunded renewal lapses the subscription instead of overdrawing.
+</Callout>

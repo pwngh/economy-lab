@@ -1,0 +1,177 @@
+---
+title: "Configuration"
+summary: "Every environment variable economy-lab reads, with its meaning and default."
+order: 40
+status: stable
+sourceRefs: ["src/config.ts#L111-L174 · loadConfig", "src/index.ts#L127-L231 · capabilitiesFromEnv", "scripts/main.ts#L141-L207 · productionExternals", ".env.example"]
+related: ["economy/ports/rates", "economy/ports/processor", "economy/ports/storage-and-messaging", "economy/reference/http-service"]
+---
+
+## How configuration is read
+
+economy-lab reads the environment in exactly one place, at startup. The library modules
+never touch `process.env` themselves. Instead the edge calls `loadConfig` once, gets back a
+plain [`Config`](https://github.com/pwngh/economy-lab/blob/main/src/config.ts) object, and
+passes it in. A misconfigured deploy therefore fails at startup, not deep inside a request.
+
+That single read also means defaults live in one file. Every tunable below is parsed by
+`loadConfig` with a fallback, so an unset or malformed value lands on the documented default
+rather than leaving the config half-applied. These are the same defaults the operation and
+[background-worker](/economy/reference/background-worker/) pages cite.
+
+A handful of variables (the signing secrets, the CREDIT↔USD rates, the payout provider, and
+the infrastructure URLs) are read *outside* `loadConfig`, when the edge wires up the
+[`Economy`](/economy/reference/the-economy/) and its ports. Those are grouped separately at
+the end, because they pick adapters rather than tune policy.
+
+<Callout type="note">
+`.env.example` ships variable names only, never values. Copy it to `.env` and fill it in.
+`.gitignore` excludes every `.env*` file so a real secret never lands in the repo.
+</Callout>
+
+## Required secrets
+
+Two secrets have no honest default. In production (`NODE_ENV=production`) a blank value for
+either makes `loadConfig` throw a single `CONFIG.INVALID` fault listing every missing key at
+once. Outside production a blank secret is tolerated so a local run needs no setup.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `WEBHOOK_SECRET` | HMAC key that verifies inbound billing and settlement webhooks (e.g. from a payment processor). | none (required in production) |
+| `SIGNING_SECRET` | Key the signer uses to sign chain checkpoints and entitlement-gated URLs. See [integrity](/economy/concepts/integrity/). | none (required in production) |
+
+<Callout type="warning">
+The serve and worker entry point (`scripts/main.ts`) refuses to start if either secret is
+blank, in *any* `NODE_ENV`, a stricter check than `loadConfig`'s production-only one.
+</Callout>
+
+## Payouts
+
+These tune when a payout is too small, too frequent, or too old to proceed. The minimums are
+counted in CREDIT minor units; see the [money model](/economy/concepts/money-model/) for what
+a minor unit is.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `PAYOUT_MIN_EARNED_MINOR` | Smallest payout a user may request, counted only against *earned* CREDIT, not bought or promo-granted. The floor keeps a disbursement from costing more in rail fees than it pays out. | `2000000` (≈ $100) |
+| `PAYOUT_MIN_INTERVAL_MS` | Minimum time between a user's payout requests. The shipped value matches the live docs; the legal requirement is 14 days (`1209600000`). | `86400000` (24h) |
+| `MAX_PAYOUT_ATTEMPTS` | Provider attempts for one payout before the system gives up and reverses it. | `5` |
+| `MAX_PAYOUT_AGE_MS` | Longest a payout may sit in `SUBMITTED` before the worker force-fails it as timed out, because the provider never reported back. | `86400000` (24h) |
+| `PAYOUT_FEE_BPS` | Payout-rail fee in basis points, charged on the USD a creator cashes out. This is the rail's own cut, deducted from the disbursement, not platform revenue. | `150` (≈ 1.5%) |
+
+The `payout` rate and the per-state payout SLAs also feed the saga; the SLAs live under the
+worker group below, and the rate under [externals](#production-externals).
+
+## Worker queues
+
+The [background worker](/economy/reference/background-worker/) retries deferred work, then
+gives up after a cap so a poison message can't wedge a queue. Each cap below is a number of
+attempts; the worker dead-letters once `attempts` reaches it.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `MAX_OUTBOX_ATTEMPTS` | Delivery attempts an outbox event gets before the relay dead-letters it (status `failed`). | `10` |
+| `MAX_INBOX_ATTEMPTS` | Apply attempts an inbox event gets before the apply worker dead-letters it (status `dead`). The inbound mirror of `MAX_OUTBOX_ATTEMPTS`. | `10` |
+| `MAX_SUBSCRIPTION_ATTEMPTS` | Consecutive retryable renewal failures before the renewal sweep lapses a subscription instead of re-billing forever. | `10` |
+
+The payout SLAs are per-state staleness thresholds the reconcile sweep folds over. A step
+stuck past its threshold is overdue. `DEFAULT` covers any state not named.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `SLA_PENDING_MS` | Budget for a payout in `PENDING`. | `30000` |
+| `SLA_SUBMITTED_MS` | Budget for a payout in `SUBMITTED`. Distinct from `MAX_PAYOUT_AGE_MS`, which force-fails; this only schedules the next settle check. | `120000` |
+| `SLA_DEFAULT_MS` | Budget for any other state. | `60000` |
+
+## Maturity horizons
+
+Topped-up funds wait before they can be spent or paid out, keyed by funding source. An
+unlisted source falls back to the `default` entry. See [maturity in the
+lifecycle](/economy/concepts/lifecycles/) for why the holding period exists.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `MATURITY_HORIZON_CARD_MS` | Hold for a card top-up: its chargeback window. | `604800000` (7d) |
+| `MATURITY_HORIZON_CRYPTO_MS` | Hold for a crypto top-up. | `86400000` (1d) |
+| `MATURITY_HORIZON_DEFAULT_MS` | Hold for an unlisted funding source. Falls back to the card horizon, the most conservative shipped value. | `604800000` (7d, = card) |
+
+## Fees and the risk gate
+
+`PLATFORM_FEE_BPS` is the platform's cut on a sale, in basis points, where `10000` is 100%.
+The velocity variables bound how fast one subject may spend before the risk check steps in;
+see [risk and velocity](/economy/concepts/actors-and-authorization/) for the actor side of
+that gate.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `PLATFORM_FEE_BPS` | Platform's transaction fee in basis points. The example models a ~15.3% marketplace fee. | `1530` |
+| `VELOCITY_LIMIT_MINOR` | Most a subject may spend within one window, in CREDIT minor units, before the risk check engages. | `100000` |
+| `VELOCITY_WINDOW_MS` | Length of the rolling spending window. Only a subject's attempts inside the last window count; each ages out once older. | `3600000` (1h) |
+
+## Replay window and the maintenance pause
+
+`REPLAY_WINDOW_MS` bounds how stale a signed request may be before it's rejected as a possible
+replay; see [integrity](/economy/concepts/integrity/). The two pause bounds open an optional
+maintenance window.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `REPLAY_WINDOW_MS` | How long a signed webhook timestamp stays valid. Older ones are rejected. | `300000` (5 min) |
+| `ECONOMY_PAUSE_START_MS` | Epoch ms the window opens (inclusive). | unset (no pause) |
+| `ECONOMY_PAUSE_END_MS` | Epoch ms the window closes (exclusive). This is the `resumesAt` the decline reports. | unset (no pause) |
+
+The pause is active only when *both* bounds parse as integers and `start <= now < end`. While
+it holds, end-user discretionary writes are declined with `ECONOMY_PAUSED`; settlement (actor
+`system`) and operator fixes still flow, and reads never reach the gate.
+
+<Callout type="note">
+Either bound left unset or non-integer leaves that bound `null`, which reads as "no window
+configured", distinct from a real epoch value of zero. So a half-set pause never half-activates.
+</Callout>
+
+## Production externals
+
+These pick adapters rather than tune policy, so the edge reads them when it wires the ports,
+not `loadConfig`. In production, `productionExternals` (`scripts/main.ts`) fails fast with one
+message if any rate or the provider URL is missing or malformed, so a prod process never runs
+on the 1:1 dev rate or an auto-approve payout stub. Outside production these fall back to dev
+stubs, and a local run needs none of them.
+
+The six rate variables configure the fixed-point CREDIT↔USD conversions for the
+[rates port](/economy/ports/rates/): `usd_minor = floor(credit_minor × rate / 10^scale)`. The
+gap between `buy` and `par` is the platform [spread](/economy/concepts/money-model/).
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `CREDIT_BUY_RATE` / `CREDIT_BUY_SCALE` | `buy` rate: USD a user pays per credit at top-up. | none (required in production) |
+| `CREDIT_PAR_RATE` / `CREDIT_PAR_SCALE` | `par` rate: a credit's backing value, used by the solvency check. | none (required in production) |
+| `PAYOUT_RATE` / `PAYOUT_SCALE` | `payout` rate: what a creator's earned credits cash out at (equal to `par`). | none (required in production) |
+| `PROCESSOR_URL` | Endpoint of the real payout provider for the [processor port](/economy/ports/processor/). Also honored in dev if set. | none (required in production) |
+| `PROCESSOR_API_KEY` | Bearer token sent to `PROCESSOR_URL`. | unset |
+
+## Infrastructure adapters
+
+`DATABASE_URL` picks the storage backend, and the cache and dispatcher URLs pick their
+transports. Each is optional: unset means the dependency-free in-memory adapter. These belong
+to [storage and messaging](/economy/ports/storage-and-messaging/), read by
+`capabilitiesFromEnv` in `src/index.ts`.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `DATABASE_URL` | A `postgres://` or `mysql://` DSN selects that engine; any other scheme throws. | unset (in-memory store) |
+| `REDIS_URL` | Adds a Redis read-through cache the store consults before the database. | unset (no cache) |
+| `SQS_QUEUE_URL` | Delivers outgoing events via an Amazon SQS queue. Wins if `DISPATCHER_URL` is also set. | unset |
+| `DISPATCHER_URL` | Posts outgoing events over HTTP to your event bus. | unset (in-process delivery) |
+
+## HTTP server and worker loop
+
+The serve and worker entry point reads four more variables directly. They control the
+[HTTP service](/economy/reference/http-service/) port, shutdown grace, and the worker's tick
+cadence and batch size.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `PORT` | Port the HTTP API listens on. | `3000` |
+| `SHUTDOWN_TIMEOUT_MS` | How long a graceful shutdown waits for in-flight work before forcing exit. | `5000` |
+| `WORKER_INTERVAL_MS` | Gap between worker sweep ticks. | `60000` |
+| `WORKER_BATCH` | Rows a worker sweep processes per tick. | `100` |

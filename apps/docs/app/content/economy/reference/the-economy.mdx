@@ -1,0 +1,94 @@
+---
+title: "The Economy"
+summary: "Construct an Economy from its ports, then drive it through one submit entry point and read its state through read."
+order: 5
+status: stable
+sourceRefs: ["src/index.ts#L185 · compose", "src/economy.ts#L76 · createEconomy", "src/contract.ts#L321 · Economy"]
+related: ["economy/reference/operations", "economy/reference/reads", "economy/reference/outcomes-and-reason-codes", "economy/reference/configuration"]
+---
+
+An `Economy` is the object you hold and call. It has a small surface: one `submit` to change money, a `read` group to look at state, and `close` to shut down.
+
+You build it from a set of injected ports (a `Store`, a `Signer`, a `Processor`, a `Rates`, a `FeePolicy`, plus a clock and an id source) so the core never reaches for a database driver or a wall clock itself. Pass real ports and you get a real economy; pass in-memory ones and you get the same economy with no infrastructure behind it.
+
+## Construction
+
+`createEconomy(capabilities)` builds the `Economy` from a single `Capabilities` bundle: the `Store` that holds the ledger, the external ports (`Signer`, `Processor`, `Rates`, `FeePolicy`), and the runtime services (a clock and an id source, plus a digest, logger, and meter). It wires them together and returns the object. It opens no connections of its own:
+
+```ts
+const economy = createEconomy(capabilities);
+```
+
+You rarely assemble that bundle by hand. `compose(env, ports)` reads the environment, picks the matching adapters, and calls `createEconomy` for you. `DATABASE_URL` selects the store (a `postgres://` or `mysql://` DSN picks that engine, and an unset value falls back to the in-memory store) while you still supply the four external `ports`:
+
+```ts
+const economy = await compose(process.env, {
+  signer,
+  processor,
+  rates,
+  pricing,
+});
+```
+
+Each driver is imported only when its environment variable selects it, so a deployment installs only what it uses. See [configuration](/economy/reference/configuration/) for every variable `compose` reads.
+
+## submit
+
+`submit(operation)` applies one [`Operation`](/economy/reference/operations/) and resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/). The operation names the action and carries an `idempotencyKey`, so a retried request runs at most once.
+
+<SubmitPipeline />
+
+Here a user tops up their balance; the result tells you whether it `committed`, repeated an earlier request (`duplicate`), or was declined (`rejected`):
+
+```ts
+const outcome = await economy.submit({
+  kind: "topUp",
+  idempotencyKey: "ord_8821",
+  actor: { kind: "system", service: "billing" },
+  userId: "usr_a1",
+  amount: { currency: "CREDIT", minor: 5000n },
+  source: "stripe",
+});
+// → { status: "committed", transaction: { id: "txn_…", … } }
+```
+
+A `rejected` outcome is a normal "no" returned as data, not an error; a genuine fault throws instead. See [outcomes and reason codes](/economy/reference/outcomes-and-reason-codes/) for the full set.
+
+## read
+
+`read` is the look-but-don't-change surface: balances, statements, a posting or saga by id, entitlement checks, the account, payout, and posting journals, the pause status, and the solvency proof.
+
+Reading one account's balance is a single call that returns an `Amount`:
+
+```ts
+const balance = await economy.read.balance(spendable("usr_a1"));
+// → { currency: "CREDIT", minor: 5000n }
+```
+
+See [reads](/economy/reference/reads/) for the whole surface and what each method returns.
+
+## close
+
+`close()` releases the store's resources (a database pool, an open connection) and resolves when shutdown is done.
+
+```ts
+await economy.close();
+```
+
+## The request path
+
+Every `submit` runs the same path: validate the operation, authorize the caller, then post the money in one transaction that writes both the ledger entries and any outgoing events.
+
+```text
+submit(operation) ─▶ validate · authorize · post ─▶ Ledger (append-only · hash-chained)
+                                                      │
+                                  read · balance ◀────┤──▶ Outbox (same transaction)
+```
+
+Validation rejects a malformed operation before any work begins: a blank `idempotencyKey`, an ownerless wallet account, an out-of-range amount. Authorization decides whether this `actor` may run this kind of operation, so a forbidden request stops before money moves.
+
+The post then runs inside one all-or-nothing transaction. It appends the balanced [double-entry](/economy/concepts/accounts-and-double-entry/) legs to the ledger and enqueues the matching event into the outbox in that same transaction, so the two commit together or not at all: a rollback leaves no stray event, and a commit always has its event queued.
+
+A `read.balance` returns a stored running total, so it's a single O(1) read rather than a re-sum of history. The ledger entries stay the source of truth: the [prover](/economy/concepts/the-proof/) re-derives each balance from those entries and reports any account whose stored total has drifted from them.
+
+The background sweeps that drain the outbox and do the rest of the deferred work run off this path on their own schedule. See the [background worker](/economy/reference/background-worker/).

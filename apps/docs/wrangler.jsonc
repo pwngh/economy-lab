@@ -1,0 +1,13 @@
+{
+  // Cloudflare Pages — direct upload via `wrangler pages deploy` (no Git integration).
+  //
+  // This is a fully prerendered static site: only `build/client/` is uploaded.
+  // `build/server/` is a build-time artifact (it renders the HTML) and is never deployed,
+  // so Cloudflare serves pure static files — no Worker, no Functions, no runtime.
+  //
+  // `pages_build_output_dir` lets `wrangler pages deploy` run with no path argument.
+  // `name` is the Pages project (→ https://economy-lab-docs.pages.dev on first deploy).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "economy-lab-docs",
+  "pages_build_output_dir": "build/client"
+}

@@ -1,0 +1,166 @@
+---
+title: "HTTP service"
+summary: "The HTTP service: submit operations, receive provider webhooks, and health/readiness endpoints."
+order: 30
+status: stable
+sourceRefs: ["src/server.ts#L83 · createServer", "scripts/main.ts#L472 · runServe", "test/server.test.ts"]
+related: ["economy/scope-and-non-goals", "economy/ports/signer"]
+---
+
+## The request-path counterpart to the Economy
+
+Most of these docs talk about the [`Economy`](/economy/reference/the-economy/) as an in-process object: you hold a reference and call `submit` against it directly. But a deployed service has to take requests off a socket. That's what the HTTP service is: a thin wrapper that turns a Fetch `Request` into one `submit` call and a `Response`.
+
+The wrapper is <SourceLink to="src/server.ts#L83">createServer</SourceLink>. It takes an `Economy` and returns a handler with the signature `(request: Request) => Promise<Response>`:
+
+```ts
+import { createServer } from '#src/server.ts';
+
+let handler = createServer(economy);
+let response = await handler(request); // Request → Response
+```
+
+It uses only Fetch globals (`Request`, `Response`, `URL`, `crypto.subtle`) and no Node APIs. So the same handler runs on Node, Bun, Deno, and Cloudflare Workers. The wiring in `scripts/main.ts` (covered below) is what bridges it onto a concrete runtime.
+
+<Callout type="note">
+This page documents the HTTP edge: the routes, the wire format, and the webhook gate. It does not re-document what each operation *means*; that lives with the operations. The service decodes a body and hands it to `submit`; everything past that boundary is the in-process economy.
+</Callout>
+
+## What it exposes
+
+The handler routes four paths and answers `404` to everything else. Two move money or report state; two are for your orchestrator.
+
+| Method and path | What it does |
+|---|---|
+| `POST /submit` | Decode one operation from the JSON body, run it through `submit`, return the [`Outcome`](/economy/reference/outcomes-and-reason-codes/). |
+| `POST /webhooks/:provider` | Verify an inbound provider callback, then hand it to the injected handler. |
+| `GET /healthz` | Report liveness without touching storage. |
+| `GET /readyz` | Report readiness via one cheap store-touching read. |
+
+## Submitting an operation
+
+`POST /submit` is the request-path version of a `submit` call. You send one operation as a JSON object; you get back its `Outcome`. The body's `kind` selects the operation: `topUp`, `spend`, `refund`, and the rest.
+
+One detail matters on the wire: money never travels as a JSON number. A JSON number can't safely hold the integer minor-units an [`Amount`](/economy/concepts/money-model/) carries, so money fields arrive as decimal strings like `CREDIT:10.00` and the server decodes them back into `Amount` values. Here's a `topUp` body:
+
+```json
+{
+  "kind": "topUp",
+  "idempotencyKey": "idem_buyer_10",
+  "actor": { "kind": "system", "service": "checkout" },
+  "userId": "usr_buyer",
+  "source": "card",
+  "amount": "CREDIT:10.00"
+}
+```
+
+A committed operation comes back `200` with its transaction, each [leg's](/economy/concepts/accounts-and-double-entry/) amount written as the same decimal string:
+
+```json
+{
+  "status": "committed",
+  "transaction": { "legs": [{ "account": "...", "amount": "CREDIT:10.00" }] }
+}
+```
+
+A `rejected` outcome is not an error. When the economy declines a valid request for a business reason (say a `spend` the buyer can't cover) the response is still `200`, carrying the decline:
+
+```json
+{ "status": "rejected", "reason": "INSUFFICIENT_FUNDS" }
+```
+
+That distinction is the whole point of the status mapping below: a decline is a normal answer, a fault is an HTTP error.
+
+### How thrown faults map to status codes
+
+When `submit` throws an `EconomyError`, <SourceLink to="src/server.ts#L405">statusFor</SourceLink> maps it to a status code, and the response carries only the error's `message`, never its `detail`, `cause`, or stack. Those stay server-side.
+
+The mapping is by the error's stable code:
+
+| Condition | Status |
+|---|---|
+| Missing permission (`UNAUTHORIZED`) or bad webhook signature (`INVALID_SIGNATURE`) | `401` |
+| Caller's request was wrong: malformed operation, invalid amount, currency mismatch | `400` |
+| Retryable fault, like a transient storage failure | `503` |
+| Anything else | `500` |
+
+An unexpected throw that isn't an `EconomyError` is normalized into a retryable storage fault, so it goes out as a `503` with a generic message. The internals never reach the client.
+
+<Callout type="warning">
+The error body is exactly `{ "error": "<message>" }` and nothing more. A test pins this: a fault carrying SQL text and a connection string in its `detail`/`cause` still leaks only the one human-readable message (`test/server.test.ts`). Don't expect machine-readable error codes on the wire. The reason code lives in a `rejected` outcome, not a thrown fault.
+</Callout>
+
+## Receiving provider webhooks
+
+The other money-moving path is inbound. A payment provider calls `POST /webhooks/:provider` to report a real-world event: a user's purchase cleared, a payout settled, a charge was disputed. The `:provider` segment names who's calling (`steam`, `billing`, and so on); it comes from the route, not the body, so a caller can't spoof it.
+
+The server doesn't apply these itself. It verifies the callback, then hands the trusted bytes to a `WebhookHandler` you inject through <SourceLink to="src/server.ts#L40">ServerOptions</SourceLink>. With no handler wired, the path answers `404`. The handler is where the callback becomes a ledger operation: a cleared purchase maps to a `topUp`, a settled payout to a `settlePayout`, a dispute to a `clawback`. Those mappers (`toTopUp`, `toSettlePayout`, `toClawback`) and the event shapes they consume belong to the [processor port](/economy/ports/processor/), so see that page for the dispatch.
+
+### The verification gate
+
+When you pass a `Config` with a webhook secret, the server gates every callback before the handler runs. A forged request never reaches code that changes balances. The checks run in order:
+
+1. **Signature.** The hex `x-signature` header must be an HMAC-SHA256 of the raw body, keyed with the configured secret. A mismatch is `401 INVALID_SIGNATURE` and nothing downstream runs. The check uses `crypto.subtle.verify`, which compares in constant time.
+2. **Freshness.** The `x-timestamp` header must be finite and within `config.replayWindowMs` of the clock. A stale or missing timestamp is answered `200` with `{ "status": "duplicate" }`, not a `5xx` that would invite a retry storm.
+3. **Replay.** When you also wire a `ReplayStore`, the server claims the provider's `eventId` last, after signature and freshness. A repeat `eventId` is answered `200` and the handler never runs, so its work happens once. Claiming last means a forged or stale delivery can never burn a real `eventId` and block a later genuine one.
+
+This is the request-path half of [idempotency](/economy/concepts/integrity/): the replay store drops most redeliveries here, at the edge, before they reach the handler.
+
+<Callout type="note">
+The raw body is read exactly once. Verification, the replay decode, and the handler all work over that one buffer. The server rebuilds a fresh `Request` from the bytes so the handler can re-read the body the server already consumed for signing.
+</Callout>
+
+When no secret is configured, the webhook path is a bare pass-through: the server forwards straight to the handler and the host owns verification. That's a deliberate fallback, not the production posture. The wiring below fails to start without a secret.
+
+## Health and readiness
+
+The two `GET` probes are for your orchestrator, and they answer different questions.
+
+`GET /healthz` is liveness: the process is up and can serve a response. It does no I/O, so it answers even when a downstream dependency is down. The `Dockerfile` health check targets this path.
+
+```json
+{ "status": "ok" }
+```
+
+`GET /readyz` is readiness: a dependency is reachable, so the orchestrator can route traffic here. It does one cheap store-touching read through the economy: the balance of a known `SYSTEM` account. Any throw means the store is unreachable, reported as `503` with no detail:
+
+```json
+{ "status": "ready" }     // 200, store reachable
+{ "status": "unavailable" } // 503, store read threw
+```
+
+The probe goes through the economy's public read surface, not the ledger directly, since `createServer` only ever receives an `Economy`, so it can't reach past that boundary.
+
+## Wiring it onto a runtime
+
+`createServer` is runtime-agnostic on purpose, which means something has to mount it on a real listener. That's `scripts/main.ts`: the app entry point, and the one place environment variables are read.
+
+It runs in three modes, selected by `argv[2]`:
+
+| Mode | What it starts |
+|---|---|
+| `serve` | The HTTP API on `$PORT` (default `3000`); store, cache, and dispatcher come from the environment. |
+| `dev` | The same API, forced to in-memory adapters with dev secrets, no infrastructure, for `make dev`. |
+| `worker` | The [background worker](/economy/reference/background-worker/) loop, not the HTTP service. |
+
+In `serve` and `dev`, <SourceLink to="scripts/main.ts#L472">runServe</SourceLink> builds the economy from the environment and mounts the handler. It passes three things into `createServer`: the purchase-webhook handler, the `Config`, and the clock. Those last two are what *activate* the verification gate, so a genuine callback is persisted and a forged or stale one is rejected before it changes anything.
+
+```ts
+let handler = createServer(economy, {
+  webhook: purchaseWebhook(caps.store, caps.ids, caps.clock),
+  config,
+  clock: defaults.clock,
+});
+```
+
+On Bun and Deno, the Fetch handler is served directly. On Node, the entry bridges `node:http` requests into web `Request`/`Response` objects so the same Fetch-only handler runs unchanged, which is exactly why this translation lives in `scripts/` and the rest of `src/` stays runtime-agnostic.
+
+<Callout type="warning">
+The deployed process fails fast on missing secrets. `requireSecrets` rejects an unset or blank `SIGNING_SECRET` or `WEBHOOK_SECRET` at startup, naming each one, so an unset `WEBHOOK_SECRET` can't quietly leave inbound callbacks unverified. The full set of environment variables lives on [configuration](/economy/reference/configuration/).
+</Callout>
+
+## What's stubbed versus production-grade
+
+The HTTP edge itself (the routing, the wire codec, the webhook gate, the status mapping) is the real thing the tests exercise (`test/server.test.ts` covers `/submit`, the HMAC and freshness checks, the leak-proof error body, and both probes).
+
+The runtime bridge in `scripts/main.ts` is honest dev plumbing, not a hardened gateway. It reads the whole request body into memory before handing it over, applies no rate limiting or request-size cap, and the Node path is a minimal `node:http` translation. In a real deployment you'd typically sit this behind a reverse proxy that owns TLS, limits, and timeouts. The service's job is the economy boundary; the front door is the host's.

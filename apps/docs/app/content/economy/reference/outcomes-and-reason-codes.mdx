@@ -1,0 +1,160 @@
+---
+title: "Outcomes & reason codes"
+summary: "How a submission resolves (committed, duplicate, or rejected) and the reason codes that explain a decline."
+order: 20
+status: stable
+sourceRefs:
+  - "src/contract.ts#L216 · Outcome"
+  - "src/errors.ts#L26 · RejectionCode"
+  - "src/errors.ts#L64 · ERROR_CODES"
+related:
+  - economy/reference/the-economy
+  - economy/reference/configuration
+---
+
+## The shape of an answer
+
+Every call to `submit` resolves to one `Outcome`. You never have to guess what came back. The
+`status` field tells you which of three things happened, and the rest of the object carries exactly
+what that status implies.
+
+```ts
+type Outcome =
+  | { status: 'committed'; transaction: Transaction }
+  | { status: 'duplicate'; transaction: Transaction }
+  | { status: 'rejected'; reason: RejectionCode; detail?: Record<string, unknown> };
+```
+
+The three statuses answer three different questions, so it helps to read them as the three ways a
+request can land. The operation went through. The operation was a repeat of one already done. The
+operation was a valid request that the economy declined for a business reason.
+
+### `committed`: it went through
+
+A `committed` outcome means money moved. It carries the [`Transaction`](/economy/concepts/accounts-and-double-entry/)
+that posted: its id, the time it committed, and the balanced debit and credit legs that recorded
+the movement.
+
+```ts
+const result = await economy.submit(topUp);
+if (result.status === 'committed') {
+  console.log(result.transaction.id); // → "txn_…"
+}
+```
+
+The transaction is the receipt. Its `legs` are the lines that posted, and its `links` record how
+each touched account's hash chain advanced: the per-account integrity trail described under
+[the chain](/economy/concepts/integrity/).
+
+### `duplicate`: you already did this
+
+A `duplicate` outcome means you submitted an operation whose `idempotencyKey` matched one already
+processed, so the economy returned the earlier result instead of running it again. This is the
+visible side of [idempotency](/economy/concepts/integrity/): a retried request runs at most once.
+
+It carries the same `Transaction` the original commit did, so a `duplicate` is success, not a
+failure. A network retry, a double-clicked button, or an at-least-once delivery queue all land here,
+and the caller can treat `duplicate` exactly like `committed`.
+
+<Callout type="tip">
+If you only care whether the money moved, branch on `committed` and `duplicate` together, since both
+hand you the same `transaction`. Reserve a separate path for `rejected`.
+</Callout>
+
+### `rejected`: a declined-but-valid request
+
+A `rejected` outcome means the request was well-formed and the system was healthy, but the answer is
+no. It carries a [`RejectionCode`](#the-rejectioncode-catalog) in `reason` and an optional `detail`
+object with the specifics: the account that was short, the order that wasn't found, when writes
+resume.
+
+```ts
+const result = await economy.submit(spend);
+if (result.status === 'rejected' && result.reason === 'INSUFFICIENT_FUNDS') {
+  // show the buyer a "not enough funds" message
+}
+```
+
+A rejection is normal data, not an error. You handle it in an `if`, not a `catch`. That distinction
+is the whole point of the [throw-versus-decline rule](#rejected-versus-thrown) below, so it's worth
+holding onto: `rejected` is the economy answering your question, not failing to.
+
+## The `RejectionCode` catalog
+
+A `RejectionCode` names one expected reason a valid request gets declined on a healthy system. Each
+one is a stable string you can branch on, and each is raised by a specific set of operations.
+
+The table lists every code, what it means, and which operation kinds return it. The operation names
+map to the pages under [operations](/economy/reference/operations/).
+
+| Code | What it means | Raised by |
+|---|---|---|
+| `INSUFFICIENT_FUNDS` | The account can't cover the amount the request needs. | `spend`, `subscribe`, `requestPayout` |
+| `FUNDS_IMMATURE` | The funds exist but are still in their holding period, so they aren't usable yet. | `spend`, `requestPayout` |
+| `RISK_DENIED` | The [velocity / abuse check](/economy/concepts/spend-velocity/) declined this request. | `spend`, `subscribe`, `topUp`, `grantPromo`, `requestPayout` (every risk-screened write) |
+| `DUPLICATE_ORDER` | A `spend` reused an `orderId` that already has a completed sale, but carried a different `idempotencyKey`. | `spend` |
+| `UNKNOWN_ORDER` | No sale was found for the `orderId` the request refers to. | `refund` |
+| `NOT_ENTITLED` | The user doesn't own the item or feature the request needs. | `revokeEntitlement` |
+| `UNKNOWN_SUBSCRIPTION` | No subscription matched the request. | `cancelSubscription` |
+| `ALREADY_SUBSCRIBED` | The user already has an active subscription to this `sku` / seller; a second would double-bill. | `subscribe` |
+| `BELOW_MINIMUM` | A payout was requested for less than the configured minimum. | `requestPayout` |
+| `PAYOUT_TOO_SOON` | A payout was requested before the configured minimum gap since the user's last request. | `requestPayout` |
+| `ECONOMY_PAUSED` | A maintenance window is in effect, so an end user's discretionary write is declined. | Any paused user write |
+
+A few of these reward a closer look.
+
+`FUNDS_IMMATURE` is about timing, not amount. The money is there, it just hasn't cleared its
+maturity window yet, a concept that lives with the [payout and subscription lifecycles](/economy/concepts/lifecycles/).
+The `detail` names the `account` that was short and the `required` amount that hadn't cleared.
+
+`DUPLICATE_ORDER` catches a specific client mistake: a retried `spend` that lost its original
+`idempotencyKey`. The `orderId` identifies a unique purchase, so a second charge for the same order
+is a declined "no" rather than a thrown fault, an expected retry that lost its key, not a bug.
+
+`ECONOMY_PAUSED` only ever stops end-user writes. A `system` actor's settlement and an `operator`'s
+manual fix are never paused, per the rules on [actors and authorization](/economy/concepts/actors-and-authorization/).
+The decline carries `resumesAt` in its `detail` so the caller can tell the user when to come back.
+
+<Callout type="note">
+`ECONOMY_PAUSED` is a decline you can see coming. The `read.status()` reader exposes the live pause
+state directly, so a UI can show a maintenance banner without first submitting a write and reading
+the rejection back. See the [read surface](/economy/reference/reads/).
+</Callout>
+
+## Rejected versus thrown
+
+Here's the rule that ties the whole page together: a `rejected` outcome is the economy's considered
+"no" to a question it understood, while a thrown fault means the question itself was broken.
+
+A `RejectionCode` is data you handle. A fault is an exception you catch. They never overlap. The
+core decides up front which path a problem takes, so a given failure is always one or the other, not
+both.
+
+Thrown faults carry their own codes, kept deliberately separate from the rejection codes in
+`ERROR_CODES`. Four of them are the ones you'll meet when a request is malformed:
+
+| Thrown code | Constant | When it's thrown |
+|---|---|---|
+| `OP.MALFORMED` | `MALFORMED_OPERATION` | The request was structurally wrong: a missing or invalid field. |
+| `MONEY.INVALID_AMOUNT` | `INVALID_AMOUNT` | A money amount was invalid, such as negative or not a whole minor unit. |
+| `AUTH.UNAUTHORIZED` | `UNAUTHORIZED` | The actor isn't permitted to perform this action. |
+| `SAGA.INVALID_TRANSITION` | `INVALID_TRANSITION` | A [saga](/economy/concepts/lifecycles/) was told to move to a state it can't reach from its current one. |
+
+The line between the two is about cause, not severity. `INSUFFICIENT_FUNDS` is a healthy system
+giving an expected answer, so it's a rejection you show the user. `INVALID_AMOUNT` means the caller
+sent a number that can't be money, so it's a fault the caller has to fix in code.
+
+That separation has a practical payoff: ordinary "no" answers stay off the thrown-error path, so
+they never light up error dashboards or page an on-call engineer. A buyer running out of credits is
+a Tuesday, not an incident.
+
+<Callout type="warning">
+Don't reach for a `try`/`catch` to handle an empty balance or a duplicate order. Those come back as
+`rejected` outcomes, and a `catch` will never see them. Branch on `result.status` instead, and keep
+`catch` for the genuine faults.
+</Callout>
+
+`ERROR_CODES` also holds deeper safety faults you won't normally trigger from a well-formed request:
+`LEDGER.OVERDRAFT`, `CHAIN.BROKEN`, `LEDGER.COMMINGLING`, and others. Those are last-resort
+backstops deep in the posting and integrity paths; reaching one means an invariant was about to
+break, not that a caller asked for something reasonable.

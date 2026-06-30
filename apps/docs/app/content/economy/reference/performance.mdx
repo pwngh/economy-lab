@@ -1,0 +1,50 @@
+---
+title: "Performance"
+summary: "What `make bench` measures and how to read it: submit throughput per storage backend and integrity cost as the ledger grows. These are lab numbers — relative cost and scaling shape, not production capacity."
+order: 45
+status: stable
+sourceRefs: ["scripts/bench.ts#L64 · BASE_ENV", "scripts/bench.ts#L79 · CURVE_SIZES", "src/chain.ts#L122 · proveChain", "src/worker/checkpoint.ts#L57 · sealCheckpoint"]
+related: ["economy/reference/configuration", "economy/reference/reads"]
+---
+
+economy-lab ships a benchmark so its cost is measured, not asserted. It runs through the same composition root as the real service and reports two things: how fast operations commit on each storage backend, and how the integrity checks grow as history piles up. Run it with one command:
+
+```bash
+make bench   # in-memory, plus any Postgres/MySQL that's reachable
+```
+
+## What it measures
+
+The bench prints two tables.
+
+- **Submit throughput** — sequential `submit()` rate for `topUp`, `spend`, and `requestPayout`, one row per backend (in-memory, plus Postgres and MySQL when they're up). This is the engine cost of the double-entry and hash-chain work per operation.
+- **Integrity cost versus ledger size** — for a growing number of postings, the time to [prove](/economy/concepts/the-proof/) the ledger, to seal a [checkpoint](/economy/concepts/integrity/), and to verify the latest checkpoint.
+
+## How to read the numbers
+
+These are **lab numbers**, and the bench says so in its own header. It runs in a single process, submits sequentially with no pipelining, and neutralizes the policy gates through `BASE_ENV` — maturity horizon, [velocity](/economy/concepts/spend-velocity/) limit, and the payout interval are all turned off so the timings reflect ledger work, not rejections.
+
+<Callout type="warning">
+Read these as *relative cost and scaling shape*, not as a capacity figure. A single sequential process on one machine doesn't tell you production throughput; it tells you how the backends compare and how the curves bend as the ledger grows.
+</Callout>
+
+## The scaling shape
+
+The shape is the durable part — it follows from how the work is structured, not from any one machine.
+
+Submit cost is per operation. In memory it's the cost of building and hashing one balanced posting. On a SQL backend each `submit` is its own transaction, so it also pays a commit and an `fsync`, which dominates the per-operation time and puts the SQL backends well below the in-memory rate.
+
+Integrity cost splits by what each check has to read:
+
+- **`prove` and a checkpoint seal re-walk every posting from genesis.** Both re-derive the hash chain from the start, so their cost is O(postings) and climbs as history grows.
+- **Checkpoint verify reads only account heads.** It recomputes the signed root over current heads, so its cost is O(accounts) and stays roughly flat as postings accumulate.
+
+That gap is the reason a signed checkpoint exists. Verifying one in O(accounts) anchors ongoing integrity where a full re-prove — O(postings) — can't keep up once the ledger has years of history. The [background worker](/economy/reference/background-worker/) seals checkpoints on a schedule for exactly this reason.
+
+## Running it against a backend
+
+In-memory needs no setup. For the SQL rows, apply the schema first (`make db-migrate`) and bring the databases up; the bench skips any backend it can't reach. A heavier sample raises the op count:
+
+```bash
+BENCH_OPS=5000 make bench
+```

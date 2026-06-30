@@ -1,0 +1,21 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Permissions-Policy: geolocation=(), microphone=(), camera=()
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; img-src 'self' data:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'inline-speculation-rules' 'sha256-0xr6PrkTM/eu45EacXIuX6EVWTocVC9+KMweSk/Z4sI=' 'sha256-7bsSApYREnl3FN6h17aKGuMaTKgtTPusx6QOE2uHzQg=' 'sha256-lxfQLljhZoArkJCMaXtn95XQULBS9K3y4Ec5QXmyC+k='
+
+# Content-hashed bundles and self-hosted fonts: cache forever, the hash in the name busts on change.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/fonts/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Search assets are not content-hashed, so cache briefly (served from cache across navigations, but
+# picks up a new deploy quickly). search.js loads on every page; the index is fetched only on search.
+/search.js
+  Cache-Control: public, max-age=3600
+
+/search-index.json
+  Cache-Control: public, max-age=300

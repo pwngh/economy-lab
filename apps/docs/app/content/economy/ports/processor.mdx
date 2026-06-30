@@ -1,0 +1,115 @@
+---
+title: "Processor"
+summary: "The payout processor port that pays sellers, plus the provider adapters that satisfy it."
+order: 20
+status: stable
+sourceRefs: ["src/ports.ts#L130-L140 · Processor", "src/adapters/processor.ts#L66 · httpProcessor", "src/adapters/thunes-processor.ts#L120 · thunesProcessor", "src/adapters/thunes-processor.ts#L330 · decodeThunesPayoutCallback"]
+related: ["economy/reference/operations/request-payout", "economy/reference/operations/settle-payout", "economy/concepts/solvency"]
+---
+
+## The seam where real money leaves
+
+economy-lab never moves real money on its own. It keeps a double-entry ledger of credits and tracks what each seller is owed, but the actual USD disbursement lives at a payment provider you plug in. The `Processor` port is that seam.
+
+Think of it as the one place the platform reaches outside itself. Everything else (balances, reserves, the hash chain) stays inside the lab and is provable. A payout, by definition, is money the lab can no longer see once it lands, so the lab hands that step to a provider and records only the provider's reference.
+
+That split is deliberate. The lab proves it asked for a disbursement and proves the saga that tracks it; whether the cash actually reached the seller is the provider's account to settle, reported back later.
+
+## The interface
+
+`Processor` is one method. You give it a payout to send; it returns the provider's reference for that payout.
+
+```ts
+interface Processor {
+  submitPayout(
+    input: { key: string; userId: string; amount: Amount },
+    options?: Options,
+  ): Promise<{ providerRef: string }>;
+}
+```
+
+The three inputs are deliberately small. `key` is the [idempotency](/economy/concepts/integrity/) key that makes a resend safe. The background worker passes the payout saga id here, so a retried submit pays out at most once. `userId` is an opaque `usr_…` token, never personal data. `amount` is in real USD, already converted from the seller's reserved credits at the [payout rate](/economy/concepts/money-model/).
+
+The return is just `{ providerRef }`: the provider's own id for the disbursement, which the lab records on the [payout saga](/economy/concepts/lifecycles/) for the audit trail.
+
+There is deliberately no "did it settle?" method on this port. Settlement takes time, and polling for it would couple the request path to the provider's latency. Instead the provider reports settlement and disputes the other way, through inbound webhooks.
+
+<Callout type="note">
+`submitPayout` returns once the provider *accepts* the request, not once the money lands. The disbursement is in flight at that point; the saga stays in `SUBMITTED` until the settlement webhook arrives.
+</Callout>
+
+## Where the port is called
+
+You don't call `submitPayout` directly. [The background worker](/economy/reference/background-worker/) does, on its payout sweep, when a payout saga reaches `RESERVED`.
+
+The sweep converts the seller's reserved credits to USD at the current payout rate and calls `submitPayout`. It records the returned `providerRef` on the saga and advances it to `SUBMITTED`. That single attempt is all the adapter owns. Retry, backoff, and the attempt cap live in the worker (`src/worker/payouts.ts`), so the adapter's job is to either succeed or throw a retryable fault and let the next sweep try again.
+
+A failed submit never strands the seller. If the worker exhausts its attempts, it dead-letters the saga and posts the exact reverse of the request-time reservation, returning the reserved credits to the seller's earned account.
+
+## The stub adapter
+
+The default adapter, `httpProcessor`, POSTs the payout to an HTTP endpoint you configure. It's the reference implementation: enough to wire up a fake provider in a test or a sandbox, not a real rail.
+
+You give it an endpoint and an optional API key. It serializes the payout to JSON and POSTs it, then reads a `providerRef` back out of the 2xx body:
+
+```ts
+const processor = httpProcessor({
+  endpoint: "https://provider.example/payouts",
+  apiKey: process.env.PROVIDER_API_KEY,
+});
+```
+
+The amount crosses the wire as a decimal string like `"USD:12.34"`, since money is a `bigint` and `JSON.stringify` can't serialize one. The API key, when set, rides in an `Authorization: Bearer` header and is never written to logs or error details.
+
+Its failure handling encodes the one rule that matters for money. A failed send or a non-2xx status is **retryable**, nothing was paid, so trying again is safe. But a 2xx body with no `providerRef` is **non-retryable**: the money may already have gone out, so retrying could pay twice, and reconciliation resolves the ambiguity instead.
+
+<Callout type="warning">
+`httpProcessor` is a stub. It assumes a provider that already speaks economy-lab's one-shot request-and-reference shape, which a real payout rail rarely does. For production you write an adapter for your provider's actual API. The Thunes adapter below is the worked example.
+</Callout>
+
+## The Thunes adapter
+
+`thunesProcessor` is the real integration: a `Processor` backed by the Thunes Money Transfer v2 API, a cross-border payout rail. It exists to show what satisfying this port against a production provider actually takes.
+
+The gap it bridges is shape. economy-lab's seam is one call that returns one reference. Thunes Money Transfer is a three-step flow, and the adapter hides that orchestration behind the single port method:
+
+1. Create a **quotation** to lock the FX rate. No money moves.
+2. Create a **transaction** against that quotation, naming the beneficiary and credit party. Still no money moves.
+3. **Confirm** the transaction. This is the money-movement boundary.
+
+The transaction id minted at step 2 becomes the `providerRef`. Because the id exists before any money moves, there's no "2xx but no reference" ambiguity to resolve, confirm only has to succeed.
+
+The port carries only `userId`, but Thunes needs a destination service and beneficiary details that the lab never holds. So the host supplies a `resolveRecipient` function that maps a `usr_…` token to its Thunes routing: the payer, the credit-party identifier, and the beneficiary fields. Those live in the host's beneficiary and KYC store, never in this adapter.
+
+Idempotency rides on Thunes' `external_id`, which the adapter sets to the `key` it was passed: the saga id. That makes the whole three-step flow safe to re-run. On a retry, the adapter recovers an already-created transaction rather than failing, and treats an already-confirmed transaction as success, so a retried payout never pays twice and never strands the reserve.
+
+<Callout type="note">
+The two Thunes replay error codes (`1007001` for a reused `external_id`, `1007002` for an already-confirmed transaction) are derived from Thunes' documentation. The adapter's comments flag them to verify against the live sandbox before production: an honest limitation of a lab-grade integration.
+</Callout>
+
+## How settlement comes back
+
+Submitting is only half the loop. The other half (did the money land, or did the seller dispute a purchase) comes back through inbound webhooks, not a return value.
+
+A settlement webhook drives the `SUBMITTED → SETTLED` step. For Thunes, `decodeThunesPayoutCallback` maps the rail's transaction callback to a `PayoutSettledEvent`. Thunes POSTs the full transaction object on every status change, so the decoder fires the settle only on the terminal success status and returns `null` for any in-flight status, letting the edge acknowledge and wait for the next callback.
+
+That event flows into the same path a hand-built provider would use. The webhook edge maps it to a `settlePayout` operation via `toSettlePayout`, which clears the saga and moves the gross USD out of trust. The amounts actually posted are the rate-derived figures the lab recomputes from the reserve. The provider's reported amount is recorded for reconciliation but never trusted as the posted figure.
+
+A dispute comes back the same way. A chargeback callback maps to a [`clawback`](/economy/reference/operations/clawback/) via `toClawback`, reclaiming the disputed credits from the user's spendable balance.
+
+Both inbound events are persisted, not posted inline. The webhook edge writes the mapped operation to a transactional inbox and returns a fast acknowledgement; the [apply worker](/economy/reference/background-worker/) submits it through the normal economy path on its next sweep, where invariants and idempotency are enforced. You can read more about that ingress on [the HTTP service page](/economy/reference/http-service/).
+
+## What the core assumes
+
+The lab leans on the adapter to hold up two guarantees, because it can't check them from inside.
+
+- **At-most-once disbursement under retry.** The same `key` must never pay twice, however many times the worker resubmits. Both adapters honor this, the stub by refusing to retry an ambiguous 2xx, Thunes by keying the whole flow on `external_id`.
+- **A retryable failure throws, a permanent one is distinguishable.** The worker decides whether to retry by inspecting the thrown fault, so the adapter must mark a transient problem (a dropped connection, a `5xx`, a `429`) retryable and a terminal one not.
+
+## Out of scope
+
+The port stops at "ask a provider to send money." Several things sit deliberately outside it.
+
+- **Beneficiary and KYC data.** The port carries only an opaque `userId`. Resolving it to bank or wallet details is the host's job, supplied through the adapter's own configuration.
+- **No real provider ships with the lab.** `httpProcessor` is a stub and `thunesProcessor` is an integration against one specific rail's documented API. Wiring a provider, holding its credentials, and verifying its sandbox are the host's responsibility.
+- **The ledger.** An adapter asks the provider to move money; it never touches the lab's accounts. Every posting (the reserve, the settle, the dead-letter reversal) happens inside the economy, driven by the worker and the webhook edge, not by the adapter.

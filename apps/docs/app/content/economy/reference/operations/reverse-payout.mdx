@@ -1,0 +1,131 @@
+---
+title: "Reverse payout"
+summary: "Reverse an in-flight payout; refuses one that has already disbursed USD."
+order: 70
+status: stable
+sourceRefs: ["src/operations/reversePayout.ts#L42 · reversePayout", "src/contract.ts#L179 · kind 'reversePayout'", "src/operations/registry.ts#L45 · REGISTRY"]
+related: ["economy/reference/operations/request-payout", "economy/reference/operations/settle-payout"]
+---
+
+<Callout type="danger">
+  `reverse-payout` refuses a payout that has already disbursed USD: once the processor has paid the
+  seller, the saga can no longer be unwound by reversal.
+</Callout>
+
+## Reverse payout
+
+`reverse-payout` undoes an in-flight payout by hand. It does two things in one
+[`Transaction`](/economy/concepts/accounts-and-double-entry/): it marks the payout's
+[`Saga`](/economy/concepts/lifecycles/#the-payout-saga) as `FAILED`, and it returns the reserved
+credits to the seller's `earned` account.
+
+It is the manual version of the undo the [background payout worker](/economy/reference/background-worker/)
+does automatically when it gives up on a payout. Use it to pull a payout back before any USD has left
+trust.
+
+You name the payout by its `sagaId` and the seller by `userId`. You must also record a `reason`:
+
+```ts
+let outcome = await economy.submit({
+  kind: "reversePayout",
+  idempotencyKey: "idem_0",
+  actor: { kind: "operator", operatorId: "op_1" },
+  userId: "usr_seller",
+  sagaId: "pay_1",
+  reason: "fraud hold",
+});
+// → { status: "committed", transaction: { … } }
+// The reserve returned to usr_seller's earned account; the saga is now FAILED.
+```
+
+## Parameters
+
+The payload fields, beyond the `kind` tag, are:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `idempotencyKey` | `string` | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/integrity/). |
+| `actor` | [`Actor`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `operator` or `system`. |
+| `userId` | `string` | (required) | The seller whose payout this is. Names the account the engine locks. |
+| `sagaId` | `string` | (required) | The payout to reverse, of the form `pay_<uuid>`. |
+| `reason` | `string` | (required) | An audit note for the reversal. Must be non-empty after trimming whitespace. |
+
+The operation names no account directly. The seller's `earned` account and the
+[`PAYOUT_RESERVE`](/economy/concepts/accounts-and-double-entry/) account both come off the loaded
+`Saga` inside the handler.
+
+<Callout type="warning">
+  `userId` must equal the saga's own `userId`. The engine locks the account named by `userId`, but
+  the undo posting credits the seller recorded on the saga. A mismatch is refused, so the locked
+  account is the one that gets credited.
+</Callout>
+
+## Returns
+
+It returns an [`Outcome`](/economy/reference/outcomes-and-reason-codes/):
+
+- `committed`: the saga moved to `FAILED` and the undo posting committed.
+- `duplicate`: there was nothing left to undo (see preconditions below); no posting was made.
+
+A `reversePayout` never returns `rejected`. Its refusals are thrown faults, not declined outcomes,
+see [reason codes](#reason-codes).
+
+## Postings
+
+On commit, the undo posts one balanced transaction that mirrors the original reservation. It moves
+the full reserved amount out of `PAYOUT_RESERVE` and back into the seller's
+[`earned`](/economy/concepts/accounts-and-double-entry/) account:
+
+| Leg | Account | Amount |
+|---|---|---|
+| Debit | `PAYOUT_RESERVE` | `saga.reserve` |
+| Credit | `earned(saga.userId)` | `saga.reserve` |
+
+Both legs are in `CREDIT` and sum to zero, so the books stay
+[balanced](/economy/concepts/accounts-and-double-entry/).
+
+The `FAILED` state change and this posting commit in the same transaction. So the credits return only
+if the saga also stops. The two can never come apart.
+
+## Authorization
+
+`reverse-payout` is restricted to a privileged [`Actor`](/economy/concepts/actors-and-authorization/):
+an `operator` running a manual correction, or a trusted `system` service. An end user can never
+reverse a payout, even their own. A `user` principal is rejected with `UNAUTHORIZED`.
+
+## Reason codes
+
+`reverse-payout` does not return a `RejectionCode`. Its refusals are thrown faults: genuine "you
+can't do that" answers, not the declined-but-expected outcomes that
+[reason codes](/economy/reference/outcomes-and-reason-codes/) describe. The faults it can throw:
+
+| Code | When |
+|---|---|
+| `INVALID_TRANSITION` | The saga is `SETTLED` (already paid out, undoing would credit the seller twice), or it is `SUBMITTED` and still within its provider settlement window. Nothing is posted. |
+| `MALFORMED_OPERATION` | `sagaId` names no payout, `userId` does not match the saga's seller, or `reason` is empty. Nothing is posted. |
+| `UNAUTHORIZED` | The `actor` is an end user rather than `operator` or `system`. |
+
+## Preconditions and invariants
+
+Only a payout with credits still sitting in `PAYOUT_RESERVE` can be reversed. The handler keys off
+the saga's [state](/economy/concepts/lifecycles/):
+
+- `RESERVED`: the reserve is held but not yet handed to the provider. Reversal moves the saga to
+  `FAILED` and posts the undo.
+- `SUBMITTED`, aged past `config.maxPayoutAgeMs`: the provider is presumed never to have paid, so
+  reversal is allowed. This mirrors the worker's own timeout cutoff. The age is measured from
+  `updatedAt`, set when the payout entered `SUBMITTED`.
+- `SUBMITTED`, still within the window: refused with `INVALID_TRANSITION`. The disbursement is in the
+  provider's hands and may still settle externally; returning the reserve now risks a double-pay.
+- `SETTLED`: refused with `INVALID_TRANSITION`. Real USD already left trust; there is no reserve to
+  return.
+- Any other state (`REQUESTED`, or an already-`FAILED` saga): returned as `duplicate` with no
+  posting. There is nothing left in reserve to give back.
+
+The state change uses the same guarded `advance` the worker uses. It moves the saga to `FAILED` only
+if the saga is still in the state we read.
+
+If a concurrent worker advanced it first, the guard fails. The operation then returns `duplicate` and
+posts nothing, so two attempts can never both undo the same payout.
+
+The default for `maxPayoutAgeMs` is 24 hours, set from the `MAX_PAYOUT_AGE_MS` environment variable.

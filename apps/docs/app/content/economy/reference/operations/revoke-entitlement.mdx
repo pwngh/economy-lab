@@ -1,0 +1,85 @@
+---
+title: "Revoke entitlement"
+summary: "Revoke a previously granted entitlement."
+order: 110
+status: stable
+related: ["economy/reference/operations/spend", "economy/reference/operations/refund"]
+sourceRefs: ["src/operations/entitlements.ts#L65-L87 · revokeEntitlement", "src/operations/registry.ts#L54"]
+---
+
+## Revoke entitlement
+
+`revokeEntitlement` removes a user's ownership of a SKU, the mirror of [`grantEntitlement`](/economy/reference/operations/grant-entitlement/). Ownership is a record, not a balance. No money moves, and the ledger is untouched.
+
+You name the user and the SKU, and optionally a `reason` for the audit trail:
+
+```ts
+const outcome = await economy.submit({
+  kind: "revokeEntitlement",
+  idempotencyKey: "idem_revoke_1",
+  actor: { kind: "system", service: "fulfillment" },
+  userId: "usr_owner",
+  sku: "wrld_pass",
+  reason: "chargeback",
+});
+// → outcome.status === "committed"
+```
+
+Once this commits, [`read.entitled("usr_owner", "wrld_pass")`](/economy/reference/reads/) returns `false`. Any UI that gates access on that SKU stops granting it.
+
+## Parameters
+
+The payload is one `revokeEntitlement` variant of [`Operation`](/economy/reference/the-economy/), tagged by `kind`. The fields:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `kind` | `"revokeEntitlement"` | (required) | Selects this operation. |
+| `idempotencyKey` | `string` | (required) | Makes a retried request run at most once; a repeat with the same key returns the earlier result. See [idempotency](/economy/concepts/integrity/). |
+| `actor` | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`, see [Authorization](#authorization). |
+| `userId` | `string` | (required) | The user losing ownership. A blank or whitespace-only value throws. |
+| `sku` | `string` | (required) | The item or feature code to revoke, such as `"wrld_pass"`. A blank or whitespace-only value throws. |
+| `reason` | `string` | (omitted) | Optional note for the audit trail. |
+
+## Returns
+
+`revokeEntitlement` returns an [`Outcome`](/economy/reference/outcomes-and-reason-codes/):
+
+- `committed`: the user owned the SKU and the ownership record was dropped.
+- `duplicate`: a request with the same `idempotencyKey` already ran; the earlier `transaction` is returned unchanged.
+- `rejected`: the user did not own the SKU. The only `RejectionCode` here is `NOT_ENTITLED`.
+
+The `committed` [`transaction`](/economy/concepts/accounts-and-double-entry/) is a lifecycle marker. It carries a fresh id and commit time. Its `legs` and `links` lists are empty, because nothing posted to the ledger.
+
+## Postings
+
+None. Entitlements track ownership, not value. So `revokeEntitlement` writes no [double-entry posting](/economy/concepts/accounts-and-double-entry/) and touches no account.
+
+The handler drops the ownership record through `unit.entitlements.revoke`. The returned `transaction` exists only because a `committed` outcome must carry one; its leg and link lists are empty.
+
+## Authorization
+
+`revokeEntitlement` is platform-initiated only. An end user (`actor.kind === "user"`) may never run it, see [actors and authorization](/economy/concepts/actors-and-authorization/).
+
+A revoke names an arbitrary `userId` the caller need not own. It also posts no debit the ownership check could catch. So it is gated up front: only a `system` service or a human `operator` may call it.
+
+A `user` actor is declined with an `UNAUTHORIZED` fault before any work begins.
+
+## Reason codes
+
+`revokeEntitlement` returns one [`RejectionCode`](/economy/reference/outcomes-and-reason-codes/):
+
+| Code | When |
+|---|---|
+| `NOT_ENTITLED` | The user does not currently own `sku`, so there is nothing to revoke. |
+
+The rejection carries the `userId` and `sku` in its `detail`, so the caller knows which ownership check came back empty.
+
+A blank or whitespace-only `userId` or `sku` is not a rejection. It throws a `MALFORMED_OPERATION` fault. A blank user would revoke ownership against a phantom user, and a blank SKU against nothing. So a malformed request surfaces as a client error rather than a silent `NOT_ENTITLED`.
+
+## Preconditions and invariants
+
+The handler checks ownership before it revokes. It calls `entitlements.owns(userId, sku)` and returns `NOT_ENTITLED` when the user does not hold the SKU. A revoke of something never granted is therefore a clean decline, not an error.
+
+Revoking is idempotent through the `idempotencyKey`. A retry under the same key returns the first result as `duplicate` rather than re-running. So a revoke applies at most once per key, even under retries.
+
+The ledger's money invariants ([conservation, no-overdraft, and backing](/economy/concepts/integrity/)) are unaffected, because this operation moves no money.

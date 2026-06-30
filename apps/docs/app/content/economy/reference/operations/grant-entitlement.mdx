@@ -1,0 +1,110 @@
+---
+title: "Grant entitlement"
+summary: "Grant ownership of a SKU to an account."
+order: 100
+status: stable
+sourceRefs: ["src/operations/entitlements.ts#L41 · grantEntitlement", "src/operations/registry.ts#L45 · REGISTRY", "src/contract.ts#L137 · kind 'grantEntitlement'", "src/contract.ts#L41 · EntitlementAttrs", "src/economy.ts#L795 · RESTRICTED_TO_PRIVILEGED"]
+related: ["economy/reference/operations/revoke-entitlement"]
+---
+
+## Grant entitlement
+
+`grant-entitlement` records that a user owns an item or feature, named by a `sku` (a product code such
+as `wrld_pass`). It tracks ownership only. No money moves, and the ledger is untouched.
+
+A `spend` grants the buyer's entitlement as part of the sale. You reach for `grant-entitlement`
+directly when ownership comes from somewhere else: a manual fulfillment, a migration, or a comp.
+
+You name the user and the SKU. The actor is a trusted `system` service or a human `operator`:
+
+```ts
+let outcome = await economy.submit({
+  kind: "grantEntitlement",
+  idempotencyKey: "idem_0",
+  actor: { kind: "system", service: "fulfillment" },
+  userId: "usr_owner",
+  sku: "wrld_pass",
+});
+// → { status: "committed", transaction: { … } }
+// read.entitled("usr_owner", "wrld_pass") now returns true.
+```
+
+The grant always succeeds. It overwrites any previous record for the same user and SKU, and has no
+prerequisite: the user need not already own anything, and no balance is checked.
+
+## Parameters
+
+The payload fields, beyond the `kind` tag, are:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `idempotencyKey` | `string` | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/integrity/). |
+| `actor` | [`Actor`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`. |
+| `userId` | `string` | (required) | The user who gains ownership. Must be non-empty after trimming whitespace. |
+| `sku` | `string` | (required) | The item or feature owned. Must be non-empty after trimming whitespace. |
+| `attrs` | `EntitlementAttrs` | `{}` | Optional details stored with the grant (see below). |
+
+`EntitlementAttrs` carries four optional fields: `quantity` (a count), `version` (a number),
+`expiresAt` (an instant in epoch milliseconds, or `null` for "never expires"), and `source` (a free
+string). Omit `attrs` entirely to record the bare ownership fact without inventing defaults.
+
+<Callout type="note">
+  The core stores `attrs` with the grant; it does not act on them. `expiresAt`, for example, is kept
+  as data. No [sweep](/economy/reference/background-worker/) expires an entitlement the way the worker
+  expires a promo grant. Reading and enforcing these fields is the host's job.
+</Callout>
+
+## Returns
+
+It returns an [`Outcome`](/economy/reference/outcomes-and-reason-codes/):
+
+- `committed`: the ownership record was written. The
+  [`transaction`](/economy/concepts/accounts-and-double-entry/) is a marker with a fresh id and commit
+  time. Its `legs` and `links` are empty, since nothing posted to the ledger.
+- `duplicate`: the `idempotencyKey` was already used; the earlier outcome is returned unchanged and
+  the record is not rewritten.
+
+`grant-entitlement` returns no `rejected` outcome. A well-formed grant on a healthy system always
+commits. A malformed request throws instead; see [reason codes](#reason-codes).
+
+## Postings
+
+None. `grant-entitlement` changes ownership, not money, so it posts no double-entry legs.
+
+The committed `transaction` is a lifecycle marker: a receipt that an operation ran, with empty `legs`
+and `links` lists. Ownership lives in its own record, keyed by user and SKU, that the ledger never
+touches. You read it back with [`read.entitled`](/economy/reference/reads/).
+
+## Authorization
+
+`grant-entitlement` is restricted to a privileged `Actor`: a trusted `system` service or a human
+`operator`.
+
+An end `user` can never grant ownership. A `user` principal is refused with a thrown `UNAUTHORIZED`
+before the handler runs. Granting names an arbitrary account the caller need not own, and it posts no debit. The
+gate therefore stands in for the ownership check the posting path would otherwise apply.
+
+## Reason codes
+
+`grant-entitlement` returns no reason codes: it has no `rejected` path. The ways it can fail are thrown
+faults, broken requests, not expected declines:
+
+| Fault | When |
+|---|---|
+| `UNAUTHORIZED` | The `actor` is a `user`. Granting is `system`- or `operator`-only. |
+| `MALFORMED_OPERATION` | `userId` or `sku` is blank or whitespace; or `attrs.expiresAt` is present and not finite; or `attrs.quantity` is present and not a positive integer. |
+
+The blank-field check lives in the handler because an entitlement posts to no wallet account, so the
+central blank-owner guard (which only inspects accounts an operation debits) never sees these fields.
+
+## Preconditions and invariants
+
+`grant-entitlement` holds a few things true:
+
+- `userId` and `sku` are each non-empty after trimming, so ownership is never recorded against a
+  phantom user or of nothing.
+- The grant is idempotent on `idempotencyKey`: a retried submit writes the record at most once.
+- The grant is a full overwrite. Re-granting the same user and SKU with new `attrs` replaces the prior
+  record; there is no merge and no append.
+- No balance moves, so the ledger stays balanced and conserved. A grant can never unbalance the
+  books.

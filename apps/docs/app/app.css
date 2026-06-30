@@ -1,0 +1,850 @@
+/* economy-lab docs — design tokens (shared with preston-neal.com) + docs layout.
+   Fonts: Inter (sans) + JetBrains Mono (mono) preferred; system fallbacks so the site renders before
+   any self-hosted woff2 are dropped into /public/fonts. */
+
+:root {
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /* light theme */
+  --bg: #fbfaf6;
+  --surface: #f2f2ee;
+  --bg-subtle: #efeee8;
+  --border: #e2e1d8;
+  --text: #1c1d1a;
+  --text-muted: #5b5d57;
+  --text-faint: #8a8c84;
+  --link: #0e7c86;
+  --link-hover: #0a5d65;
+  --accent: #0e7c86;
+  --accent-weak: #dceef0;
+  --tag-text: #0a6a73;
+  --code-bg: #f2f2ee;
+  --warn-bg: #fbf3d0;
+  --warn-text: #7a5a0a;
+  --success: #2e7d46;
+  --danger: #b23a36;
+
+  --radius: 6px;
+  --measure: 70ch;
+  --prose-wide: 56rem;
+  --content: 46rem;
+  --wide: 78rem;
+  --sidebar: 16rem;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  --bg: #15171c;
+  --surface: #1c1f26;
+  --bg-subtle: #1a1d23;
+  --border: #2b2f38;
+  --text: #e7e8e3;
+  --text-muted: #a7a99f;
+  --text-faint: #74766d;
+  --link: #5fd0dd;
+  --link-hover: #8fe0ea;
+  --accent: #43c0cd;
+  --accent-weak: #1f3a3e;
+  --tag-text: #5fd0dd;
+  --code-bg: #1c1f26;
+  --warn-bg: #3a3617;
+  --warn-text: #e3cf86;
+  --success: #5fbe7c;
+  --danger: #e8736e;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+html {
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+a {
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+a:hover {
+  color: var(--link-hover);
+}
+
+/* Any link that opens in a new tab gets an "external" mark, except icon-only links (the GitHub mark
+   is already its own affordance). Applies to source chips and authored prose links alike. */
+a[target="_blank"]:not(.icon-link)::after {
+  content: "↗";
+  font-size: 0.78em;
+  margin-left: 0.15em;
+  color: var(--text-faint);
+  text-decoration: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+#main:focus {
+  outline: none;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--surface);
+  padding: var(--space-2) var(--space-4);
+}
+.skip-link:focus {
+  left: var(--space-4);
+  top: var(--space-4);
+  z-index: 10;
+}
+
+/* ---- header ---- */
+.site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  max-width: var(--wide);
+  margin: 0 auto;
+  width: 100%;
+  padding: var(--space-5) var(--space-5) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.wordmark {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--text);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.wordmark .accent {
+  color: var(--accent);
+}
+/* The header carries utility, not navigation: search, GitHub, theme. The sidebar owns the nav. */
+.site-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.site-search {
+  position: relative;
+}
+.search-input {
+  font-family: var(--font-sans);
+  font-size: 0.9rem;
+  color: var(--text);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.35rem 0.6rem;
+  width: 13rem;
+  max-width: 42vw;
+}
+.search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--surface);
+}
+.search-results {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.4rem);
+  width: min(30rem, 84vw);
+  max-height: 72vh;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  padding: var(--space-1);
+  z-index: 20;
+}
+.search-hit {
+  display: block;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 4px;
+  text-decoration: none;
+  color: var(--text);
+}
+.search-hit:hover,
+.search-hit.is-active {
+  background: var(--accent-weak);
+}
+.hit-section {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+}
+.hit-title {
+  display: block;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+.hit-summary {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+.icon-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+}
+.icon-link:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+.theme-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  cursor: pointer;
+  width: 2rem;
+  height: 2rem;
+  line-height: 1;
+  font-size: 1rem;
+}
+.theme-toggle:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+
+/* ---- shell: sidebar + content ---- */
+.site-shell {
+  flex: 1;
+  width: 100%;
+  max-width: var(--wide);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  gap: var(--space-6);
+  padding: var(--space-6) var(--space-5);
+}
+.site-sidebar {
+  align-self: start;
+  position: sticky;
+  top: var(--space-5);
+  max-height: calc(100vh - var(--space-7));
+  overflow-y: auto;
+}
+.site-main {
+  min-width: 0;
+}
+
+/* ---- sidebar nav ---- */
+.docs-sidebar {
+  font-size: 0.9rem;
+}
+.nav-group {
+  margin-bottom: var(--space-5);
+}
+.nav-group-title {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  text-decoration: none;
+  margin-bottom: var(--space-2);
+}
+.nav-group-title:hover {
+  color: var(--text-muted);
+}
+.docs-sidebar ul {
+  list-style: none;
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  border-left: 1px solid var(--border);
+}
+.docs-sidebar li a {
+  display: block;
+  padding: 0.2rem 0 0.2rem var(--space-3);
+  margin-left: -1px;
+  border-left: 2px solid transparent;
+  color: var(--text-muted);
+  text-decoration: none;
+}
+.docs-sidebar li a:hover {
+  color: var(--text);
+}
+.docs-sidebar li a[aria-current="page"] {
+  color: var(--accent);
+  border-left-color: var(--accent);
+  font-weight: 500;
+}
+.nav-subgroup {
+  margin: var(--space-3) 0 0;
+}
+.nav-subgroup-title {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  margin-bottom: var(--space-1);
+}
+
+/* ---- footer ---- */
+.site-footer {
+  max-width: var(--wide);
+  margin: 0 auto;
+  width: 100%;
+  padding: var(--space-5);
+  border-top: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+.muted {
+  color: var(--text-muted);
+}
+
+/* ---- prose ---- */
+/* Prose text stays at a readable measure, but code blocks, tables, and figures get more room — so a
+   wide code line or a many-column table doesn't clip or force horizontal scroll in the narrow column. */
+.prose {
+  max-width: var(--prose-wide);
+}
+.prose > * {
+  max-width: var(--measure);
+}
+.prose > pre,
+.prose > table,
+.prose > .figure {
+  max-width: 100%;
+}
+.prose h1 {
+  font-size: 1.9rem;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  margin: 0 0 var(--space-3);
+}
+/* H2 starts a major section: a hairline rule + generous space above makes the structure scannable. */
+.prose h2 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: var(--space-7) 0 var(--space-4);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+  letter-spacing: -0.01em;
+}
+.prose h3 {
+  font-size: 1.18rem;
+  margin: var(--space-6) 0 var(--space-2);
+}
+.prose h4 {
+  font-size: 1.02rem;
+  margin: var(--space-4) 0 var(--space-2);
+}
+.prose h5,
+.prose h6 {
+  font-size: 0.95rem;
+  margin: var(--space-4) 0 var(--space-2);
+  color: var(--text-muted);
+}
+.prose h2 a,
+.prose h3 a,
+.prose h4 a {
+  color: inherit;
+  text-decoration: none;
+}
+/* Hover affordance: each heading is a self-link; show a faint # so a reader can grab a section URL. */
+.prose h2 a:hover::after,
+.prose h3 a:hover::after,
+.prose h4 a:hover::after {
+  content: " #";
+  color: var(--text-faint);
+  font-weight: 400;
+}
+.prose p,
+.prose ul,
+.prose ol {
+  margin: 0 0 var(--space-4);
+}
+.prose code {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  background: var(--code-bg);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+.prose pre {
+  background: var(--code-bg);
+  padding: var(--space-4);
+  border-radius: var(--radius);
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+.prose pre code {
+  background: none;
+  padding: 0;
+}
+.prose blockquote {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  border-left: 3px solid var(--border);
+  color: var(--text-muted);
+}
+.prose table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0 0 var(--space-4);
+  font-size: 0.95rem;
+}
+.prose th,
+.prose td {
+  border: 1px solid var(--border);
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+}
+.prose th {
+  background: var(--bg-subtle);
+}
+
+/* ---- figures (the <Figure> component: captioned diagrams) ---- */
+.figure {
+  margin: var(--space-5) 0;
+  text-align: center;
+}
+.figure img {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.figure figcaption {
+  margin-top: var(--space-2);
+  font-size: 0.9rem;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+/* ---- diagrams (in-document SVG components: ChartOfAccounts, PayoutSaga, HashChain) ----
+   Authored in the page DOM, not as <img>, so fills/strokes read these CSS variables and recolor
+   with the data-theme toggle (an <img> SVG can only follow prefers-color-scheme). */
+.diagram svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 0 auto;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.diagram text {
+  font-family: var(--font-sans);
+}
+.diagram .mono {
+  font-family: var(--font-mono);
+}
+.diagram .d-box {
+  fill: var(--bg);
+  stroke: var(--border);
+  stroke-width: 1.25;
+}
+.diagram .d-box.usd {
+  fill: var(--accent-weak);
+  stroke: var(--accent);
+}
+.diagram .d-box.head {
+  stroke: var(--accent);
+  stroke-width: 1.75;
+}
+.diagram .d-box.ok {
+  stroke: var(--success);
+  stroke-width: 1.5;
+}
+.diagram .d-box.bad {
+  stroke: var(--danger);
+  stroke-width: 1.5;
+}
+.diagram .d-box.ghost {
+  fill: none;
+  stroke: var(--text-faint);
+  stroke-dasharray: 4 3;
+}
+.diagram .d-box.band {
+  fill: var(--accent-weak);
+  stroke: var(--accent);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+.diagram .d-head {
+  font-size: 11px;
+  letter-spacing: 0.07em;
+  fill: var(--text-faint);
+}
+.diagram .d-name {
+  font-size: 12.5px;
+  fill: var(--text);
+}
+.diagram .d-hash {
+  font-size: 11px;
+  fill: var(--text-muted);
+}
+.diagram .d-sub {
+  font-size: 10px;
+  fill: var(--text-muted);
+}
+.diagram .d-elabel {
+  font-size: 10.5px;
+  fill: var(--text-muted);
+}
+.diagram .d-note {
+  font-size: 11px;
+  font-style: italic;
+  fill: var(--text-faint);
+}
+.diagram .d-edge {
+  stroke: var(--text-faint);
+  stroke-width: 1.4;
+  fill: none;
+}
+.diagram .d-edge.bad {
+  stroke: var(--danger);
+}
+.diagram .d-arrow {
+  fill: var(--text-faint);
+}
+
+/* ---- shiki dual theme ---- */
+html[data-theme="dark"] .shiki,
+html[data-theme="dark"] .shiki span {
+  color: var(--shiki-dark) !important;
+  background-color: var(--shiki-dark-bg) !important;
+  font-style: var(--shiki-dark-font-style) !important;
+}
+
+/* ---- doc page chrome ---- */
+.crumb {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 0 0 var(--space-4);
+}
+.crumb a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+.crumb a:hover {
+  color: var(--text);
+}
+.crumb-sep {
+  color: var(--text-faint);
+}
+.status-badge {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: 4px;
+  padding: 0.15em 0.5em;
+  margin: 0 0 var(--space-3);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+.doc-summary {
+  font-size: 1.15rem;
+  color: var(--text-muted);
+  margin: 0 0 var(--space-4);
+}
+.source-refs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-6);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.source-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+.source-refs code {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.1em 0.45em;
+  color: var(--text-muted);
+}
+/* Each chip links to the file on GitHub at a pinned commit; the pill itself is the hit target. */
+.source-chip {
+  text-decoration: none;
+}
+.source-chip code {
+  cursor: pointer;
+}
+.source-chip:hover code {
+  border-color: var(--accent);
+  color: var(--text);
+}
+/* The symbol half of a source chip (`path  symbol`), set off by space + color, not a middle dot. */
+.chip-sym {
+  margin-left: 0.5em;
+  color: var(--text-faint);
+}
+.source-chip:hover .chip-sym {
+  color: var(--text-muted);
+}
+
+/* ---- callouts (status-driven; see DocPage) ---- */
+.callout {
+  margin: 0 0 var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+.callout strong {
+  color: var(--text);
+}
+.callout-draft {
+  border-left-color: var(--warn-text);
+}
+.callout-planned {
+  border-left-color: var(--text-faint);
+}
+
+/* Content callouts (the <Callout> MDX component). */
+.callout-note {
+  border-left-color: var(--accent);
+}
+.callout-tip {
+  border-left-color: var(--success);
+}
+.callout-warning {
+  border-left-color: var(--warn-text);
+}
+.callout-danger {
+  border-left-color: var(--danger);
+}
+.callout-label {
+  margin: 0 0 var(--space-1);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.callout-note .callout-label {
+  color: var(--accent);
+}
+.callout-tip .callout-label {
+  color: var(--success);
+}
+.callout-warning .callout-label {
+  color: var(--warn-text);
+}
+.callout-danger .callout-label {
+  color: var(--danger);
+}
+.callout-body > :last-child {
+  margin-bottom: 0;
+}
+
+/* ---- on-page table of contents: a light left-rule "Contents" list, not a heavy box ---- */
+.page-toc {
+  margin: var(--space-5) 0 var(--space-6);
+  padding: var(--space-1) 0 var(--space-1) var(--space-4);
+  border-left: 2px solid var(--border);
+  font-size: 0.92rem;
+}
+.page-toc-label {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+.page-toc ul {
+  margin: 0;
+  padding-left: var(--space-5);
+}
+.page-toc > ul {
+  padding-left: 0;
+  list-style: none;
+}
+.page-toc > ul > li {
+  margin-bottom: var(--space-1);
+}
+.page-toc li {
+  margin: 0.15rem 0;
+}
+.page-toc a {
+  text-decoration: none;
+}
+.page-toc a:hover {
+  text-decoration: underline;
+}
+
+/* ---- see also + prev/next ---- */
+.see-also {
+  margin-top: var(--space-7);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.see-also h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 var(--space-2);
+  padding-top: 0;
+  border-top: none;
+}
+.see-also ul {
+  margin: 0;
+  padding-left: var(--space-5);
+}
+.prev-next {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-top: var(--space-7);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.prev-next a {
+  display: flex;
+  flex-direction: column;
+  text-decoration: none;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  max-width: 48%;
+}
+.prev-next a:hover {
+  border-color: var(--accent);
+}
+.pn-next {
+  text-align: right;
+  margin-left: auto;
+}
+.pn-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+
+/* ---- section index cards ---- */
+.card-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.doc-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  background: var(--surface);
+}
+.doc-card h3 {
+  margin: 0 0 var(--space-1);
+  font-size: 1.02rem;
+}
+.doc-card h3 a {
+  color: var(--text);
+  text-decoration: none;
+}
+.doc-card h3 a:hover {
+  color: var(--accent);
+}
+.doc-card p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+/* ---- responsive: collapse the sidebar above the content ---- */
+@media (max-width: 60rem) {
+  .site-shell {
+    grid-template-columns: 1fr;
+    gap: var(--space-4);
+  }
+  .site-sidebar {
+    position: static;
+    max-height: 13rem;
+    overflow-y: auto;
+    padding: var(--space-3) 0;
+    border-bottom: 1px solid var(--border);
+  }
+}
+@media (max-width: 34rem) {
+  body {
+    font-size: 1rem;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

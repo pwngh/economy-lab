@@ -1,0 +1,101 @@
+---
+title: "Clawback"
+summary: "Recover funds after a dispute, driven by a processor dispute webhook."
+order: 40
+status: stable
+sourceRefs: ["src/operations/clawback.ts#L41 · handleClawback", "src/webhooks.ts#L185 · toClawback"]
+related: ["economy/reference/operations/adjust", "economy/reference/operations/reverse"]
+---
+
+## Clawback
+
+`clawback` reclaims credits from a user's [`spendable`](/economy/concepts/accounts-and-double-entry/) balance after a bank chargeback or fraud recovery. The dollars themselves move back at the payment [`Processor`](/economy/ports/processor/), outside this ledger. The handler books only the credit side of the loss.
+
+You name the user and how much to reclaim. When the dispute is tied to a purchase, you also name the disputed `orderId`:
+
+```ts
+const outcome = await economy.submit({
+  kind: "clawback",
+  idempotencyKey: "whk:evt_5521",
+  actor: { kind: "system", service: "webhook:billing" },
+  userId: "usr_a1",
+  amount: { currency: "CREDIT", minor: 5000n },
+  orderId: "ord_8821",
+  reason: "fraudulent_charge",
+});
+// → { status: "committed", transaction: { id: "txn_…", … } }
+```
+
+In practice you rarely build this by hand. A verified dispute webhook maps to a `clawback` through `toClawback`, so the inbound chargeback callback is the usual caller.
+
+## Parameters
+
+The payload fields, beyond the [`idempotencyKey`](/economy/concepts/integrity/) and `actor` every operation carries:
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `userId` | string | (required) | The user whose `spendable` credits the chargeback reclaims. |
+| `amount` | [`Amount`](/economy/concepts/money-model/) | (required) | How much to reclaim. Must be `CREDIT` and positive. |
+| `orderId` | string | (untied) | The disputed order, when the provider names one. Ties the clawback to a [`refund`](/economy/reference/operations/refund/) of the same order so the two stay mutually exclusive. |
+| `key` | string | (omitted) | A free-form reference recorded on the posting (e.g. the network's case id). |
+| `reason` | string | (omitted) | A free-form reason recorded on the posting (e.g. the chargeback reason code). |
+
+A present-but-blank `orderId` is malformed. Every blank id collapses to the same reversal key, which would falsely tie unrelated chargebacks together. The handler rejects it as a fault rather than claiming that key.
+
+## Returns
+
+`clawback` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/). A fresh reclaim returns `committed` with the posted `transaction`.
+
+When the order was already reversed (by a `refund` or an earlier clawback of the same `orderId`) it returns `duplicate`, carrying that earlier reversal's transaction unchanged rather than reversing the order twice.
+
+`clawback` returns no [`RejectionCode`](/economy/reference/outcomes-and-reason-codes/): every "no" it can give is a thrown fault, not a declined `Outcome`. See the [reason codes](#reason-codes) below.
+
+## Postings
+
+Every leg is in `CREDIT`, so there is no currency mixing. The handler splits `amount` into the part still recoverable from the user's `spendable` balance and the part already spent.
+
+It debits `recovered` from `spendable`, capped at the current balance so the debit can't drive the account below zero. It books the leftover `shortfall` as a debt the platform is owed in `RECEIVABLE`.
+
+The full `amount` is then credited to `STORED_VALUE`: the same account the original top-up raised when it issued these credits. The loss un-issues those credits rather than booking `REVENUE` the platform never earned.
+
+| Account | Side | Amount |
+| --- | --- | --- |
+| [`spendable(userId)`](/economy/concepts/accounts-and-double-entry/) | debit | `recovered` |
+| [`RECEIVABLE`](/economy/concepts/accounts-and-double-entry/) | debit | `shortfall` |
+| [`STORED_VALUE`](/economy/concepts/accounts-and-double-entry/) | credit | `amount` |
+
+The two debits sum to `amount`, and `STORED_VALUE` is credited that same `amount`, so the posting nets to zero.
+
+A zero piece is omitted, not posted as a zero line. A clawback fully covered by the balance writes no `RECEIVABLE` leg. One with nothing left to reclaim writes no `spendable` debit.
+
+## Authorization
+
+`clawback` is restricted to a `system` or `operator` [`Actor`](/economy/concepts/actors-and-authorization/); an end user may never call it. It takes money out of an account the caller need not own, which the ownership rule for ordinary user operations does not cover. So, like `adjust` and `reverse`, it is platform-initiated only.
+
+An end-user `actor` is refused with an `AUTH.UNAUTHORIZED` fault before any work begins. The dispute-webhook path satisfies the rule: `toClawback` builds the operation with a `system` actor (`webhook:${provider}`).
+
+## Reason codes
+
+`clawback` returns no `RejectionCode`. Its inputs are either valid or a programming error, so each bad input throws a fault rather than declining as data:
+
+| Code | When |
+| --- | --- |
+| `OP.MALFORMED` | `amount` is not `CREDIT`, or `orderId` is present but blank, or the handler received the wrong operation kind. |
+| `MONEY.INVALID_AMOUNT` | `amount` is zero or negative. |
+
+<Callout type="note">
+A clawback against a user who has already spent the disputed credits still commits. The recoverable part comes out of `spendable`, and the rest becomes a `RECEIVABLE` debt, the books stay balanced, and the user balance never goes negative.
+</Callout>
+
+## Preconditions and invariants
+
+`clawback` holds these regardless of how much of the disputed amount is still in the user's balance:
+
+- The `spendable` debit is capped at the current balance, so a clawback never drives a user account below zero.
+- The posting nets to zero in `CREDIT`: the `spendable` and `RECEIVABLE` debits together equal the `STORED_VALUE` credit.
+- The loss un-issues circulating credits against `STORED_VALUE`; `REVENUE` is untouched.
+- For an order-tied dispute, reversing the order once (by `clawback` or [`refund`](/economy/reference/operations/refund/)) blocks the other through the shared `reversed:${orderId}` key.
+
+<Callout type="warning">
+The dollar movement happens at the payment processor, not here. `clawback` books only the credit side; reconciling the returned USD with [`TRUST_CASH`](/economy/concepts/solvency/) is a separate step.
+</Callout>

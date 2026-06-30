@@ -1,0 +1,126 @@
+---
+title: "Storage & messaging"
+summary: "The storage and messaging ports (the ledger and sub-stores, plus the dispatcher, cache, and outbox/inbox) and their adapters."
+order: 50
+status: stable
+related: ["economy/concepts/lifecycles", "economy/ports/processor"]
+sourceRefs: ["src/ports.ts#L272 · Store", "src/ports.ts#L206 · Ledger", "src/adapters/memory.ts#L1167 · memoryStore", "src/engines/postgres.ts#L1579 · postgresStore", "src/worker/relay.ts#L55 · relayOutbox"]
+---
+
+## The seam between the core and the world
+
+Everything the economy persists or sends passes through one of a few narrow interfaces. The core never opens a connection, never knows whether it's talking to memory or Postgres, never speaks SQS or Redis directly. It calls a method on a port, and an adapter does the rest.
+
+These ports all live in `src/ports.ts`. This page covers the ones that hold state or move messages: the `Store` (the ledger and its sub-stores), the `Dispatcher` (events out), the `Cache`, and the transactional outbox and inbox.
+
+The payoff of drawing the seam here is that the same logic runs everywhere. The rules that keep money conserved are not re-implemented per backend. They're written once and verified against every adapter, and the SQL engines push them down into the database as well. We come back to that below.
+
+## The `Store`
+
+The `Store` is the one object that gathers everything the system reads and writes. It exposes the `ledger` plus a set of named sub-stores, and a `transaction` method that runs a block of work across all of them atomically.
+
+The `ledger` is the append-only, double-entry book itself, see [accounts and double-entry](/economy/concepts/accounts-and-double-entry/) for what a `Posting` and its `Leg`s are. The `Ledger` interface records a `Posting` with `append`, reads a `balance`, pages a `statement`, and streams history for the [integrity prover](/economy/concepts/integrity/) to replay.
+
+Everything else hangs off the `Store` as a purpose-built sub-store, one per concern:
+
+| Sub-store | What it holds |
+|---|---|
+| `idempotency` | A claim per [`idempotencyKey`](/economy/concepts/integrity/), so a repeated request runs at most once. |
+| `sales` | A summary of each completed sale, keyed by order id, so a refund can reverse it precisely. |
+| `outbox` | Pending outgoing events, written with the money move and relayed later. |
+| `inbox` | Verified inbound provider events, awaiting apply. |
+| `sagas` | Each in-flight [payout saga](/economy/concepts/lifecycles/) and its state. |
+| `subscriptions` | Recurring subscriptions and when each is next due to bill. |
+| `entitlements` | Which users own which SKUs. |
+| `promos` | Each promo grant, so the worker can reverse the unspent remainder at expiry. |
+| `trust` | Each subject's recent spending, the input to the risk gate. |
+| `checkpoints` | Signed ledger snapshots, written only by the worker. |
+| `replay` | Raw inbound webhook ids, deduped separately from the domain idempotency keys. |
+
+### Atomicity is the contract
+
+The reason all of these live behind one `Store` is `transaction`. When an operation handler posts money, it doesn't just write a ledger entry. It may also record the idempotency key, enqueue an outbox event, open a saga, and grant an entitlement. Those writes have to commit together or not at all.
+
+So `transaction` hands the handler a `Unit`: the subset of sub-stores that may participate in one database transaction. Everything the handler writes through that `Unit` commits as a group:
+
+```ts
+await store.transaction(async (tx) => {
+  await tx.ledger.append(posting);
+  await tx.idempotency.record(key, transaction);
+  await tx.outbox.enqueue(message);
+});
+```
+
+The `Unit` is deliberately narrower than the full `Store`. The `trust` and `checkpoints` stores are missing on purpose. Risk velocity is recorded outside the money transaction (so even a denied attempt still counts toward the limit), and checkpoints are written only by the worker. The `replay` store is absent for the same reason: the webhook dedupe check runs before any money moves.
+
+<Callout type="note">
+The in-memory adapter gets atomicity from a per-store undo log rather than a real database transaction: each write records a reverser, and a rollback replays them last-to-first. The observable contract (all-or-nothing) is the same as the SQL engines.
+</Callout>
+
+## One contract, every adapter
+
+A port is only useful if every adapter behaves the same way. economy-lab pins that down with a single conformance suite, `runStoreConformance`, that every `Store` adapter is run through. Memory, Postgres, MySQL, and the HTTP adapter all execute the identical test bodies in `test/conformance/store.ts`.
+
+So the choice of backend is an infrastructure decision, not a behavioral one. The same posting, the same overdraft rejection, the same hash chain comes back from each.
+
+### The in-memory default
+
+With no `DATABASE_URL` set, the system runs on `memoryStore()`: plain JavaScript `Map`s, no database, no setup. It's the zero-infrastructure default for tests and local development.
+
+It's also the reference implementation. Its hash function and clock default to deterministic versions, so a bare `memoryStore()` is reproducible run to run, and the conformance suite treats it as the oracle the other adapters must match.
+
+### Postgres and MySQL
+
+Point `DATABASE_URL` at a `postgres://` or `mysql://` DSN and the system loads that engine instead, and only then loads its driver. The SQL engines live in `src/engines/postgres.ts` and `src/engines/mysql.ts`; both pass the same conformance suite as memory.
+
+The SQL engines do something the in-memory one can't: they enforce the invariants a second time, in the database. Every `CHECK` constraint in the schema is also a rule in the TypeScript code, so a user account can't go negative and a posting's legs can't fail to sum to zero, even if a raw `INSERT` tried to write around the application:
+
+```sql
+-- A constraint trigger re-sums a posting's legs and rejects
+-- an unbalanced transaction; a per-account-balance trigger
+-- rejects an overdraft on the new total, not the delta.
+```
+
+That belongs to [integrity](/economy/concepts/integrity/), which owns the conservation and no-overdraft invariants. The storage layer is just where the database half of them is declared. Money is stored as whole minor units in `BIGINT` columns, returned as JavaScript `BigInt`, never as a float that could drift.
+
+<Callout type="warning">
+The schema is declarative and applied by hand or in CI, never on app startup. The engines fail fast instead: each checks the database's recorded schema version against the code's and refuses to run on a mismatch, rather than silently operating on a drifted shape.
+</Callout>
+
+## The `Dispatcher`: events out
+
+The `Dispatcher` is the simplest port here: a single function that takes an `EconomyEvent` and hands it off for delivery. The core builds the event; the adapter decides where it goes.
+
+```ts
+type Dispatcher = (event: EconomyEvent, options?) => Promise<void>;
+```
+
+Two adapters ship. `sqsDispatcher` in `src/adapters/sqs.ts` publishes each event to an Amazon SQS queue as JSON, and there's an HTTP dispatcher that POSTs it to a configured URL. With neither `SQS_QUEUE_URL` nor `DISPATCHER_URL` set, events are delivered in-process. The `Dispatcher` is optional in the first place. The economy runs without one.
+
+Delivery is at-least-once. SQS may deliver a message twice, so every event carries its id and the receiver drops duplicates, the same pattern as the outbox, which we turn to next.
+
+## The outbox and inbox
+
+There's a problem the `Dispatcher` alone doesn't solve: if the money commits but the event send fails, the event is lost; if you send first and the commit rolls back, you've announced a move that never happened. The fix is to make the event part of the transaction.
+
+That's the transactional outbox. When a money move commits, its outgoing event is written to the `outbox` sub-store *in the same database transaction*. A separate relay ([the background worker](/economy/reference/background-worker/)) picks up pending rows afterward and ships them through the `Dispatcher`. An event is never sent for a rolled-back move, nor lost for a committed one.
+
+The relay is `relayOutbox` in `src/worker/relay.ts`. It claims a batch of pending rows, sends each in its own try/catch so one failure can't stop the batch, and marks the delivered ones done. A send that throws is left pending with its attempt count bumped, retried next run; once it hits the configured cap it's dead-lettered to a terminal `failed` state, so one poison event can't wedge the queue behind it.
+
+The `inbox` is the mirror image, for events coming *in*. A verified provider webhook is mapped to the [`Operation`](/economy/reference/outcomes-and-reason-codes/) it should apply, then saved to the `inbox` in the same transaction as the webhook ingress that claimed it. A separate apply sweep submits each pending operation and marks the row applied. An inbound event is never applied without being recorded, nor recorded without eventually being applied or dead-lettered.
+
+Webhook ingress and the provider side of all this belong to the [processor port](/economy/ports/processor/); the outbox/inbox is the storage seam those flows write through.
+
+## The `Cache`
+
+The last port is a read-through key/value `Cache` for hot reads, mainly balances. It's strictly an accelerator: the core works without one, and it can only ever speed reads, never break them.
+
+That guarantee is built into the contract. When no cache is injected, the read path skips it and goes straight to the ledger. When a cache *is* present but errors, the read degrades to a direct ledger read rather than failing the request.
+
+Two adapters back it. `memoryCache` is an in-process `Map`: the zero-infrastructure reference, with its own conformance suite the way `memoryStore` is the reference for the `Store`. `redisCacheFrom` in `src/adapters/redis.ts` adapts an already-connected `ioredis` client; setting `REDIS_URL` wires it in. Either way the cache stores opaque strings and never parses them.
+
+## What the host owns
+
+These ports define the seam; the infrastructure behind them is the host's. The adapters are economy-lab's own: the in-memory reference, the Postgres and MySQL engines, the SQS and Redis and HTTP adapters, and the conformance suite that holds them all to one contract live in this repo, and a fair amount of the work here is making each driver fit that contract cleanly. What the host owns is the live infrastructure on the far side of each port: it creates and tunes the database pool, opens the Redis connection, constructs the SQS client, and applies the schema. economy-lab loads a driver only when a DSN selects it, and never reaches for a connection the host didn't ask for.
+
+The drivers themselves ([`pg`](https://node-postgres.com), [`mysql2`](https://github.com/sidorares/node-mysql2), [`ioredis`](https://github.com/redis/ioredis), and [`@aws-sdk/client-sqs`](https://docs.aws.amazon.com/AWSJavaScriptSDK/v3/latest/client/sqs/)) are peer dependencies, so the host pins the versions it runs. Each adapter types its driver's surface structurally, so the file compiles and unit-tests without the package installed; the real client is constructed only when the matching env var is set.

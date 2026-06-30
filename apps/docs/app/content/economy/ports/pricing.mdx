@@ -1,0 +1,123 @@
+---
+title: "Pricing"
+summary: "The pricing capability: a fee policy that splits a sale into recipient legs and platform revenue."
+order: 40
+status: stable
+sourceRefs: ["src/pricing.ts#L40 · flatFee", "src/pricing.ts#L51 · splitLegs", "src/contract.ts#L292 · FeePolicy"]
+related: ["economy/reference/configuration", "economy/ports/rates"]
+---
+
+## The seam
+
+Where does a sale's money go? The buyer pays one price, but that price fans out: some to each
+seller, the rest to the platform as its fee. The `Pricing` port is the one seam where that split
+lives, so you can change the rule without touching the spend handler that posts the result.
+
+A `FeePolicy` is a pure function. You hand it a price and the recipients; it hands back the
+[ledger legs](/economy/concepts/accounts-and-double-entry/) that distribute the money. It does no
+math on the chain, touches no store, and makes no decision about whether the buyer can afford the
+purchase. It only divides an amount you already decided to charge.
+
+The economy holds the policy as a capability, on `Ctx.pricing`, and supplies it the way it supplies
+any external service. You pass one in when you build the economy.
+
+## The contract
+
+`FeePolicy` takes one input object and returns an array of legs:
+
+```ts
+type FeePolicy = (input: {
+  price: Amount;
+  recipients: ReadonlyArray<Recipient>;
+  feeBps: number;
+  buyerId?: string;
+  sku?: string;
+}) => ReadonlyArray<Leg>;
+```
+
+Three fields drive the split. The `price` is the amount being divided. The `recipients` are the
+sellers and their shares. The `feeBps` is the platform's cut in basis points, where `10000` bps is
+the whole price.
+
+Each `Recipient` is a seller plus a share: `{ sellerId, shareBps }`. The shares are basis points of
+the part left *after* the fee comes off the top, so `100` bps means one percent. The `buyerId` and
+`sku` ride along for a policy that wants to price by buyer or item, but the reference policy ignores
+them.
+
+The output is credit-side only. Every leg is a credit, and a credit is
+[stored negated](/economy/concepts/accounts-and-double-entry/), so the legs sum to `-price`. They
+don't balance on their own, that's deliberate.
+
+<Callout type="note">
+The policy returns only the recipient and revenue credits. The spend handler adds the matching
+debit against the buyer's balance, which is what zeroes the posting. A `FeePolicy` never sees the
+buyer's account, so it can't accidentally move money out of the wrong place.
+</Callout>
+
+## The reference policy: a flat fee
+
+The built-in policy is `flatFee`. It applies one fixed rate (whatever `feeBps` you pass) to every
+sale, and the [spend operation](/economy/reference/operations/spend/) passes the platform's
+configured rate (`PLATFORM_FEE_BPS`, default `1530`, i.e. 15.3%).
+
+```ts
+let policy = flatFee();
+let legs = policy({
+  price: toAmount("CREDIT", 1000n),
+  feeBps: 3000,
+  recipients: [{ sellerId: "usr_seller", shareBps: 10000 }],
+});
+// Price 1000 at a 30% fee:
+//   seller credited 700, revenue credited 300.
+//   Both are credits (stored negative), so the legs sum to -1000.
+```
+
+The work happens in three steps, in order. The fee comes off the top first. Each recipient then
+takes its `shareBps` of what's left. Whatever the rounding leaves behind joins the fee in the
+platform's `REVENUE` account.
+
+That last step is the reason the split never loses a unit. Each seller's share rounds *down*, so the
+distributed shares can fall a minor unit or two short of the net. The leftover doesn't vanish and it
+isn't conjured. `revenueForSplit` hands it to `REVENUE` along with the fee, so the credits always
+sum to the exact price.
+
+The fee itself rounds in the other direction. `feeForPrice` rounds the basis-point fee *up* to a
+whole credit, then caps it at the price so the fee can never exceed what the buyer paid. The cap only
+bites below one whole credit; real listings are hundreds of credits, where the fee is an ordinary cut.
+
+For the split as money (par, buy, and the platform's spread) see the
+[money model](/economy/concepts/money-model/). Pricing only divides an amount; the spread is a
+separate idea about how a credit is valued.
+
+## What the core assumes
+
+The spend handler trusts the policy on one thing and checks it on another.
+
+It assumes the legs are credit-side and sum to `-price`, because it pairs them with a single buyer
+debit for the same price and expects the posting to balance. A policy that returns unbalanced legs
+would post a transaction that doesn't conserve value, and the
+[integrity checks](/economy/concepts/integrity/) would catch it, but as a failure, not a graceful
+decline.
+
+It does *not* trust the recipient shares blindly. Inside `splitLegs`, `assertShareSum` throws unless
+the shares sum to `10000` bps. The spend handler already validates this upstream, so in correct
+wiring the backstop never fires; it exists so a wiring mistake fails loudly here rather than
+silently under-crediting sellers and dumping the difference into revenue.
+
+An empty recipient list is allowed, not an error. With no seller to pay, the whole net becomes
+leftover and lands in `REVENUE`. The platform keeps the entire sale.
+
+<Callout type="warning">
+The recipient `shareBps` must sum to exactly `10000`. A non-empty list that sums to anything else is
+a `MALFORMED_OPERATION` fault, not a rejection. It signals a bug in the caller, not a bad request
+from a user.
+</Callout>
+
+## Out of scope
+
+A `FeePolicy` divides one price. It is not where you decide *whether* to charge, whether the buyer
+has funds, or how a refund reverses the split later. Those live in the spend and refund operations.
+
+It also has no say off the request path. The background worker that settles payouts and realizes fees
+writes its own balanced legs and is given no pricing rule at all, because a sweep isn't splitting a
+sale. It's moving money the ledger already recorded.

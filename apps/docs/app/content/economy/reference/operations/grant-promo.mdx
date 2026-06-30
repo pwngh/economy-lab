@@ -1,0 +1,99 @@
+---
+title: "Grant promo"
+summary: "Issue promotional credit that expires."
+order: 120
+status: stable
+sourceRefs: ["src/operations/promo.ts#L39 · grantPromo", "src/worker/promos.ts#L60 · sweepExpiredPromos"]
+related: ["economy/reference/operations/top-up", "economy/reference/configuration"]
+---
+
+## Grant promo
+
+`grantPromo` drops marketing credit into a user's [`promo`](/economy/concepts/accounts-and-double-entry/) balance with an expiry date. A campaign can hand out credit that reverts to the platform if it goes unspent.
+
+Here a marketing service grants a user 500 credits that expire 24 hours from now:
+
+```ts
+let outcome = await economy.submit({
+  kind: "grantPromo",
+  idempotencyKey: "promo_2026_06_27_usr_buyer",
+  actor: { kind: "system", service: "marketing" },
+  userId: "usr_buyer",
+  amount: toAmount("CREDIT", 500n),
+  expiresAt: Date.now() + 86_400_000,
+});
+// outcome.status === "committed"
+```
+
+The grant lands immediately. Promo credit carries no maturity hold, and a buyer's `promo` balance is drawn before their own money on the next [`spend`](/economy/reference/operations/spend/).
+
+## Parameters
+
+Every field is required. `grantPromo` takes no optional payload.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `idempotencyKey` | `string` | (required) | A retried request with the same key runs at most once and returns the original `Outcome`. |
+| `actor` | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be a `system` or `operator` principal. |
+| `userId` | `string` | (required) | The user whose `promo` balance the grant raises. |
+| `amount` | [`Amount`](/economy/concepts/money-model/) | (required) | How much credit to grant. Must be `CREDIT` and positive. |
+| `expiresAt` | `number` | (required) | When the grant expires, in epoch milliseconds. Must be a whole-millisecond timestamp strictly in the future, and no more than five years out. |
+
+## Returns
+
+`grantPromo` returns an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
+
+On success the status is `committed`, carrying the posted `transaction`. A repeat of the same `idempotencyKey` returns `duplicate` with the original transaction. The repeat moves no new money.
+
+`grantPromo` returns no `rejected` outcome, see [Reason codes](#reason-codes) below.
+
+## Postings
+
+The grant posts one balanced entry. It raises the user's `promo` balance and offsets it on the platform's `PROMO_FLOAT` account, so the two legs balance.
+
+| Leg | Account | Direction |
+|---|---|---|
+| 1 | `PROMO_FLOAT` (platform) | debit |
+| 2 | `promo(userId)` | credit |
+
+`PROMO_FLOAT` is debit-normal, so debiting it raises its balance to mirror the credit added to the user's `promo` account.
+
+<Callout type="note">
+Promo credit needs no USD backing, unlike topped-up money. A grant raises no obligation the platform must hold cash against, so it never increases the trust balance. Promo credit is spendable but never paid out: only earned credit cashes out.
+</Callout>
+
+The handler also records the grant in the same unit of work, reusing the posting's id. That id is how the [expiry sweep](/economy/reference/background-worker/) later finds the grant and reverses any unspent portion.
+
+## Authorization
+
+`grantPromo` is privileged: only a `system` or `operator` [`Actor`](/economy/concepts/actors-and-authorization/) may call it.
+
+An end-user principal is refused. The operation mints credit into an arbitrary user's account, so it sits in the engine's restricted-to-privileged set alongside `topUp` and the entitlement grants. A `user` principal raises an `AUTH.UNAUTHORIZED` fault before any work runs.
+
+## Reason codes
+
+`grantPromo` returns no [`RejectionCode`](/economy/reference/outcomes-and-reason-codes/).
+
+It declines no well-formed request. There is no affordability check to fail. The maintenance-window pause gate applies only to `user` principals, which can never call this privileged operation. So every failure path is a thrown fault, not a `rejected` outcome.
+
+The faults it can throw, all from malformed input, are:
+
+| Code | When |
+|---|---|
+| `OP.MALFORMED` | `amount` is not `CREDIT`, or `expiresAt` is not a whole-millisecond timestamp, is not in the future, or is more than five years out. |
+| `MONEY.INVALID_AMOUNT` | `amount` is zero or negative. |
+| `AUTH.UNAUTHORIZED` | The caller is a `user` principal. |
+
+<Callout type="warning">
+A zero, negative, or past `expiresAt` is rejected on purpose. The expiry sweep claims any grant whose `expiresAt` has already passed, so a past timestamp would let the sweep claw the credit straight back.
+</Callout>
+
+## Preconditions and invariants
+
+Every grant must expire. The five-year ceiling on `expiresAt` stops a caller from minting effectively never-expiring credit with an absurd far-future timestamp, which keeps the expiry sweep able to reclaim it.
+
+The grant and its bookkeeping row commit or roll back together. Because the recorded grant reuses the posting's id, and the row write is idempotent on that id, a retried grant never duplicates the row.
+
+When a grant expires, the worker's promo sweep reverses whatever is unspent. It reads the user's live `promo` balance and claws back `min(grant amount, balance)`. A partly-spent grant returns only the remainder, and a fully-spent one posts nothing.
+
+The reversal mirrors the original entry: it debits the user's `promo` account and credits `PROMO_FLOAT`. Grant and reversal cancel out.

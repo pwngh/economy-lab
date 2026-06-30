@@ -1,0 +1,46 @@
+---
+title: "Credit maturity"
+summary: "Funds clear on a delay: spends drain oldest-first, so the cashable balance is the matured part of the newest run of lots, never money still in its settlement wait."
+order: 65
+status: stable
+sourceRefs: ["src/maturity.ts#L90 · maturedBalance", "src/maturity.ts#L144 · maturedAtLeast", "src/maturity.ts#L46 · maturityHorizonMs"]
+related: ["economy/concepts/lifecycles", "economy/reference/operations/spend", "economy/reference/operations/request-payout"]
+---
+
+Not every credit a user holds can be cashed out the instant it lands. The money behind a fresh credit can still be pulled back by a card chargeback or a disputed payment, so the platform makes new funds wait out a settlement window before they count as cleared. Credit maturity is how that wait is modelled and measured.
+
+## The idea
+
+An account's balance isn't one undifferentiated number. It's a stack of dated **lots**: each top-up and each credit earned lands as a lot stamped with when it arrived. A lot **matures** once it has waited out its settlement window; until then it's still clearing.
+
+The cashable balance is the part of the live balance whose lots have matured. A cash-out can draw that, and it can't dip into funds still in their wait.
+
+<CreditMaturity />
+
+## Why it exists
+
+[Spending](/economy/reference/operations/spend/) and [paying out](/economy/reference/operations/request-payout/) move real value, and some of the money behind a fresh credit can still reverse. A card payment can be charged back days after it clears the app. If the platform let a user spend or cash out that credit immediately and the underlying payment then reversed, it would be out real money with nothing left to claw back.
+
+The maturity window closes that gap. It holds new funds just long enough that, by the time they're cashable, the risk of a reversal has passed.
+
+## Lots and the FIFO tail
+
+Spends draw **oldest-first**: first in, first out. So once past spends have drained the oldest lots, what's left is the *newest* run of lots, the ones that together sum to the current balance. That run is the **tail**.
+
+Maturity then splits the tail. A maturity horizon, "now minus the settlement wait", falls somewhere inside it. Lots older than the horizon have cleared and are cashable; the newest lots are still waiting. The cashable balance is the matured part of the tail.
+
+The horizon depends on how the funds arrived. `maturityHorizonMs` returns the wait per funding source, so a card top-up and a crypto top-up can clear on different schedules, and an unrecognized source falls back to a conservative `default`. A lot matures at its arrival time plus that wait.
+
+## How it's measured
+
+Computing the cashable balance never scans an account's whole history. Because the answer lives entirely in the tail, the read walks lots **newest-first** and stops the moment they cover the live balance.
+
+`maturedBalance` returns the full cashable amount as of `now`. `maturedAtLeast` answers the cheaper question its callers actually ask: *is the cashable balance at least this much?* It returns the instant its running sum clears the threshold. A request well within cleared funds settles after a lot or two, never the full history. By construction the two agree: `maturedAtLeast` is just `maturedBalance` stopped early. (`maturedBalanceFullScan` keeps the naive whole-history version, used only to differential-test the fast path.)
+
+The computation is currency-agnostic: the same call covers a user's spendable credits and a creator's earned balance.
+
+## What relies on it
+
+- [`spend`](/economy/reference/operations/spend/) gates on the cashable check for the buyer's spendable credits, so a spend can't draw funds still clearing.
+- [`requestPayout`](/economy/reference/operations/request-payout/) gates on the same check for a creator's earned balance, so a payout only ever draws cleared money.
+- The [lifecycle settlement windows](/economy/concepts/lifecycles/) define each wait, and [solvency](/economy/concepts/solvency/) is the backing those cleared funds draw against.

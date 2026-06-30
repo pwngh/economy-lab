@@ -1,0 +1,118 @@
+---
+title: "Background worker"
+summary: "The sweeps that run off the request path: payouts, subscriptions, fee realization, checkpoints, and the outbox/inbox relay."
+order: 35
+status: stable
+sourceRefs: ["src/worker/index.ts#L57-L68 · SWEEP_NAMES", "src/worker/payouts.ts#L49 · settleDuePayouts", "src/worker/relay.ts#L55 · relayOutbox"]
+related: ["economy/reference/http-service", "economy/reference/operations/request-payout", "economy/reference/configuration", "economy/reference/performance"]
+---
+
+The synchronous core posts to the ledger and returns an `Outcome` on the request path. But plenty of work outlives a single request.
+
+A payout waits on an external rail. A subscription bills over time. A promo grant expires. A platform fee only becomes the platform's once its refund window closes. The outbox holds events that still need to drain to the dispatcher.
+
+The worker advances each of these one safe step at a time, off the request path. It does not own new behavior. It pushes work that is already recorded toward its next state, and reports what moved.
+
+## The sweeps
+
+Each worker cycle runs a fixed set of jobs, named in `SWEEP_NAMES`. The array order is both the run order and the order results come back in.
+
+<WorkerSweeps />
+
+Here is what each sweep does:
+
+| Sweep | What it does |
+|---|---|
+| `payouts` | Advance each due payout [saga](/economy/concepts/lifecycles/) one step. |
+| `subscriptions` | Renew a due subscription, or lapse it when the buyer can't cover the price. |
+| `treasury` | Re-check that held USD still [backs](/economy/concepts/solvency/) every spendable credit. |
+| `feeSweep` | Realize the platform's matured fee surplus into cash. |
+| `checkpointVerify` | Re-check the previous signed [checkpoint](/economy/concepts/integrity/) against the live ledger. |
+| `checkpoint` | Seal a fresh signed checkpoint of the ledger. |
+| `relay` | Drain the [outbox](/economy/ports/storage-and-messaging/) to the dispatcher. |
+| `drainInbox` | Apply received provider events, deduping by event id. |
+| `reconcile` | Compare the provider's settled records against the ledger. |
+| `promos` | Claw back the unspent part of an expired promo grant. |
+
+Two pairs are deliberately adjacent. `feeSweep` runs right after `treasury`: treasury only measures the surplus, then `feeSweep` moves it. And `checkpointVerify` runs before `checkpoint`, so the old snapshot is checked against the ledger before a fresh one overwrites it.
+
+## How a sweep is shaped
+
+Every sweep claims a bounded batch of due rows, advances each row one step, and returns a summary that buckets the rows by outcome. The cap per pass is `limit`; the current time is `now`.
+
+The payout sweep is the clearest example. It claims the due payout sagas and pushes each one forward:
+
+```ts
+let summary = await settleDuePayouts(store, ctx, { now, limit });
+// → { submitted: [...], deadLettered: [...], retrying: [...] }
+```
+
+A `RESERVED` payout is submitted to the provider and moves to `SUBMITTED`. Settlement itself no longer happens here. It arrives through the provider's settlement webhook. The sweep only forces a `SUBMITTED` payout to fail when it has waited past `maxPayoutAgeMs` for a webhook that never came.
+
+When a payout is dead-lettered, the worker posts the exact reverse of the request-time reservation in the same transaction, so the seller's reserved credits are returned rather than stranded.
+
+## Each row is isolated
+
+A sweep handles its rows one at a time, and each row runs inside its own error boundary. One broken row can't stop the others in the batch.
+
+A failure that looks temporary (a flaky network or database) bumps an attempt counter and retries next run. A permanent failure, or one that has retried too many times, is set aside (dead-lettered) so the batch never wedges on a row that can't progress.
+
+The whole sweep is isolated too. `runSweeps` wraps each job, so a job that throws is recorded as a failed result against just that job, and the other sweeps still run. The run never throws.
+
+## Two sweeps can be skipped
+
+Most sweeps always run. Two carry an optional capability and short-circuit when it's absent.
+
+`relay` needs a dispatcher to deliver through. With none configured, it returns an empty successful summary and pending rows stay in the outbox for a later run.
+
+```ts
+let summary = await relayOutbox(store, ctx, { dispatcher, limit });
+// → { relayed: [...], failed: [...], deadLettered: [...] }
+```
+
+`drainInbox` needs an economy handle to submit through. With none, it likewise short-circuits and leaves pending inbox rows in place.
+
+<Callout type="note">
+`drainInbox` is never gated on the economy pause. A provider settlement the rail already confirmed must keep flowing through a maintenance window, so the inbox keeps draining even when discretionary user writes are refused.
+</Callout>
+
+## Delivery is at-least-once
+
+The relay drains the [outbox](/economy/ports/storage-and-messaging/), where each event was written in the same transaction as the money move it describes. It claims up to `limit` events, sends each through the dispatcher, and marks the delivered ones done.
+
+Delivery can happen more than once. For example, the send succeeded but marking the row done did not. The receiver must drop duplicates by event id.
+
+A delivery that keeps failing bumps the row's attempt count and retries, up to `config.maxOutboxAttempts` (default `10`). At the cap the event is dead-lettered, so one poison event can't block the events behind it.
+
+The inbox is the inbound mirror. Where the relay delivers committed money moves outward, `drainInbox` applies received events inward, submitting each stored `Operation` through the same economy a direct caller hits.
+
+A re-applied inbox row is deduped by the stored `idempotencyKey` (the provider event id), so a second apply resolves to a `duplicate` `Outcome` rather than a second posting. A `rejected` `Outcome` (a terminal business "no" like `INSUFFICIENT_FUNDS`) is dead-lettered, since retrying the same doomed apply every sweep would never succeed.
+
+## Driving the worker
+
+A host builds the worker with `createWorker(store, ctx)` and drives it with `runOnce`, which runs every sweep once over a shared input and returns the per-job batch plus the txn ids the run committed:
+
+```ts
+let worker = createWorker(store, ctx);
+let { batch, postings } = await worker.runOnce(input);
+```
+
+Pass a `Scheduler` to `createWorker` and the worker also gets `start(intervalMs, input)`, which runs the jobs on a timer and returns a stop function:
+
+```ts
+let worker = createWorker(store, ctx, scheduler);
+let stop = worker.start?.(60_000, input);
+```
+
+Using the scheduler rather than a built-in timer keeps start and stop on the same code path. Without a scheduler, only `runOnce` is present.
+
+## Treasury and checkpoints
+
+The treasury sweep is measure-only. It walks the custodial credit accounts, converts the total to required USD at par, and compares it against `TRUST_CASH`. A shortfall is logged and counted; nothing is posted to fix it.
+
+See [solvency](/economy/concepts/solvency/) for what backing means and how the same check runs inside the prover.
+
+`feeSweep` is the write the treasury sweep doesn't do. On each run it realizes the full amount the platform is allowed to take (the smaller of its cash surplus and its matured revenue) and skips cleanly when that amount is zero. A draw that would dip into users' money throws `COMMINGLING` and posts nothing.
+
+The checkpoint pair maintains the ledger's tamper-evidence. `checkpoint` seals a fresh signed snapshot of the per-account hash chains; `checkpointVerify` re-checks the previous one against the live ledger. A mismatch is a tamper signal, recorded on the summary and logged, not thrown. See [ledger integrity](/economy/concepts/integrity/) for the chain and checkpoint mechanics.
+

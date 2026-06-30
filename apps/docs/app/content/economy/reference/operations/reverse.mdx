@@ -1,0 +1,103 @@
+---
+title: "Reverse"
+summary: "An operator-only manual undo of a prior posting (distinct from reversing a payout)."
+order: 140
+status: stable
+sourceRefs: ["src/operations/reverse.ts#L39-L76 · reverse", "src/contract.ts#L170-L178 · kind 'reverse'"]
+related: ["economy/reference/the-economy", "economy/reference/configuration"]
+---
+
+## Reverse
+
+`reverse` undoes an earlier transaction by posting its exact opposite: every leg of the original, with its sign flipped.
+
+It's an operator's manual correction tool. You name the transaction to undo by its `txnId` and supply a written `reason`. The handler then posts a new, balanced transaction that cancels the original out.
+
+A reverse of `txn_1`, posted by an operator, with the reason recorded for the audit trail:
+
+```ts
+let outcome = await economy.submit({
+  kind: "reverse",
+  idempotencyKey: "idem_0",
+  actor: { kind: "operator", operatorId: "op_1" },
+  txnId: "txn_1",
+  reason: "reconciliation: duplicate posting",
+});
+// outcome.status === "committed"
+```
+
+This is the general undo for any past posting. To undo a payout that hasn't disbursed yet, reach for [`reverse-payout`](/economy/reference/operations/reverse-payout/) instead, which unwinds the payout saga rather than flipping ledger legs.
+
+## Parameters
+
+The `reverse` payload carries four fields beyond `kind`:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `idempotencyKey` | `string` | required | Lets a retried submit run at most once. See [idempotency](/economy/concepts/integrity/). |
+| `actor` | [`Actor`](/economy/concepts/actors-and-authorization/) | required | Must be an `operator` principal. |
+| `txnId` | `string` | required | The id of the transaction to undo. |
+| `reason` | `string` | required | Why the reversal happened, recorded on the reversing transaction. Must be non-empty. |
+
+There is no `amount` field. The amounts come from the original transaction's legs. The handler flips each one's sign.
+
+## Returns
+
+`reverse` returns an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
+
+A first reverse of a transaction returns `committed`, carrying the reversing `transaction`.
+
+A second reverse of the same `txnId` returns `duplicate`, carrying the first reversal's transaction. No money moves the second time.
+
+## Postings
+
+The reversal posts the original transaction's legs again, with every amount's sign flipped, same accounts, opposite direction.
+
+Because the original legs already sum to zero per currency, flipping every sign keeps that sum at zero, so the reversing transaction balances without any recomputation. See [double-entry and the balanced posting](/economy/concepts/accounts-and-double-entry/).
+
+For an original `txn_1` that debited account `A` and credited account `B`, the reversal mirrors it:
+
+```text
+txn_1 (original)     reversal
+  A  +amount           A  −amount
+  B  −amount           B  +amount
+```
+
+The reversing transaction records `kind: "reverse"`, the `txnId` it undoes, and the operator's `reason` in its metadata, so an audit can see who undid what and why.
+
+## Authorization
+
+Only an `operator` may call `reverse`. It's one of the privileged manual corrections, alongside [`adjust`](/economy/reference/operations/adjust/), that an end user can never run.
+
+The framework's privileged gate runs before the handler and throws `AUTH.UNAUTHORIZED` for a `user` actor. See [actors and authorization](/economy/concepts/actors-and-authorization/).
+
+A `system` actor clears that gate. The handler then rechecks the actor itself and throws `OP.MALFORMED` for any non-`operator` principal, so a `system` caller is refused too. That recheck also holds when the handler is called directly, outside the framework.
+
+## Reason codes
+
+`reverse` returns no [`RejectionCode`](/economy/reference/outcomes-and-reason-codes/). It has no business-decline path. A well-formed operator request either commits, or repeats a prior reverse as a `duplicate`.
+
+The caller mistakes it guards against are thrown as `OP.MALFORMED` faults, not returned as rejections:
+
+| Condition | Result |
+|---|---|
+| The `actor` is not an `operator`. | Throws `OP.MALFORMED`. |
+| The `reason` is blank or whitespace-only. | Throws `OP.MALFORMED`. |
+| The `txnId` names no existing posting. | Throws `OP.MALFORMED`. |
+| The `txnId` names a posting that is itself a reversal. | Throws `OP.MALFORMED`. |
+
+These are operator errors, not everyday "no" answers, unlike [`refund`](/economy/reference/operations/refund/), where an unknown order id is a normal rejection. The full throw-vs-decline split lives on [outcomes and reason codes](/economy/reference/outcomes-and-reason-codes/).
+
+<Callout type="warning">
+You cannot reverse a reversal. A reversal records `kind: "reverse"` in its metadata, and the handler refuses any `txnId` that carries that marker. Undoing an undo would loop the same money out and back in, and let an operator chain reversals to move a balance at will.
+</Callout>
+
+## Preconditions and invariants
+
+A transaction is reversed at most once. The handler stakes a shared `reversed:${txnId}` key before posting. This is the same `reversed:${id}` idempotency family that [`refund`](/economy/reference/operations/refund/) and [`clawback`](/economy/reference/operations/clawback/) use. The first reverse claims the key and posts the inverse. A second reverse loses the claim and gets the first reversal back as a `duplicate`.
+
+The claim is written inside this posting's database transaction, so a rollback releases it and a later retry can succeed.
+
+Before posting, the handler locks every account the original transaction touched. A `reverse` request names only a `txnId`, so the handler can't know the accounts up front. It discovers them from the loaded transaction and locks each one, keeping any other operation from changing those balances while the reversal posts.
+
+The reversing transaction is balanced, like every posting in the system. Flipping the sign of legs that already net to zero leaves them netting to zero.

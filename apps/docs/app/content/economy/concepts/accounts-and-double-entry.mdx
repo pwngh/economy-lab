@@ -1,0 +1,112 @@
+---
+title: "Accounts & double-entry"
+summary: "Every operation is a balanced double-entry posting across a fixed chart of accounts: spendable, earned, promo, and the system accounts."
+order: 30
+status: stable
+sourceRefs: ["src/accounts.ts#L59", "src/ledger.ts#L100", "src/pricing.ts#L51 · splitLegs"]
+related: ["economy/concepts/actors-and-authorization", "economy/reference/outcomes-and-reason-codes"]
+---
+
+Every balance lives in a named account. Every operation is a balanced double-entry `Posting`: value moves _between_ accounts as paired debit and credit lines (each line is a `Leg`), and those lines always net to zero per currency.
+
+You never add to one account without an equal, opposite line somewhere else. A user's accounts hold credits. The platform's own "house" accounts hold its cash, its revenue, and the obligations between them.
+
+## Why it exists
+
+A balance you can edit is a balance you can't trust. So balances aren't stored and mutated in place. They're _derived_. The ledger is an append-only book of postings, and an account's balance is the running sum of its lines.
+
+That only stays trustworthy if no posting can create or destroy value, which is exactly what double-entry guarantees. Because the lines of a posting cancel within each currency, the books as a whole always sum to zero. Fold the postings back and you get a balance that re-derives to the same number every time.
+
+Without the balanced-posting rule, a single edited or dropped line would mint or burn credits silently. A `topUp` could issue credits no dollars stand behind. A `spend` could pay a seller more than the buyer paid.
+
+The [solvency](/economy/concepts/solvency/) guarantee (every spendable credit backed by trust cash) rests on this. The cash set aside on a purchase and the credits issued are two legs of _one_ balanced posting, so they can't drift apart.
+
+## The chart of accounts
+
+The set of account kinds is fixed. A user has up to three accounts, keyed by `AccountKind`: `spendable`, `earned`, and `promo`. You build each one from a user id with the `spendable(userId)`, `earned(userId)`, and `promo(userId)` helpers.
+
+| Account     | Currency | Holds                                                                     |
+| ----------- | -------- | ------------------------------------------------------------------------- |
+| `spendable` | `CREDIT` | Credits bought and ready to spend: the only user balance backed by trust cash. |
+| `earned`    | `CREDIT` | Revenue owed to the user as a seller, waiting to be paid out.             |
+| `promo`     | `CREDIT` | A marketing grant that expires if unspent.                               |
+
+The platform's house accounts are the fixed `SYSTEM` map, each id prefixed `platform:`. They hold three things: the platform's cash, its revenue, and the offsetting (contra) entries that keep a one-sided user move balanced.
+
+| `SYSTEM` account | Currency | Holds                                                                       |
+| ---------------- | -------- | --------------------------------------------------------------------------- |
+| `TRUST_CASH`     | `USD`    | Real dollars held in trust, backing users' spendable credits.               |
+| `REVENUE_USD`    | `USD`    | The platform's dollar margin from the `buy`-vs-`par` spread, recognized at top-up. |
+| `USD_CLEARING`   | `USD`    | A mirror of cash that has cleared in or out of trust.                        |
+| `REVENUE`        | `CREDIT` | Platform fee income: the marketplace cut, plus rounding leftover.           |
+| `STORED_VALUE`   | `CREDIT` | The offsetting entry for every credit ever issued on a top-up.              |
+| `PAYOUT_RESERVE` | `CREDIT` | Earned credits set aside for a payout in flight.                            |
+| `RECEIVABLE`     | `CREDIT` | A shortfall a user owes back (e.g. a clawback that went negative).          |
+| `PROMO_FLOAT`    | `CREDIT` | The offsetting entry for credits granted as promos.                         |
+| `OPENING_EQUITY` | `CREDIT` | The offset used once, to seed balances on a cold start.                     |
+
+Currency is a property of the account, not the posting. Everything is `CREDIT` except `TRUST_CASH`, `USD_CLEARING`, and `REVENUE_USD`, which are `USD` (see [the money model](/economy/concepts/money-model/) for `Amount` and `Currency`). If a leg's amount currency doesn't match its account, the posting is rejected with `CURRENCY_MISMATCH`.
+
+<ChartOfAccounts />
+
+## Debit-normal and credit-normal
+
+Different accounts grow on opposite sides, and the ledger has to know which so a balance reads right-way-up. A user's `spendable` rises when you _credit_ it, because the platform owes them more. `TRUST_CASH` rises when you _debit_ it, because more cash is in.
+
+`isDebitNormal` records the side per account. The `USD` accounts, `STORED_VALUE`, `RECEIVABLE`, `PROMO_FLOAT`, and `OPENING_EQUITY` grow on a debit; the rest grow on a credit.
+
+Internally, leg amounts are stored debit-positive, credit-negative. `debit(account, amount)` stores the amount as given, and `credit(account, amount)` stores its negation, so a posting balances exactly when its leg amounts sum to zero.
+
+To turn a leg back into a balance change, `balanceDelta` flips the sign for credit-normal accounts and leaves debit-normal ones as-is. That one rule is what lets the no-overdraft check measure every account, of either polarity, against zero.
+
+<Callout type="note">
+A posting is also classified for solvency. `classify` sorts each account into one of four buckets:
+
+- `custodial`: users' `spendable`, the only credits that count toward the trust backing total.
+- `excluded`: `earned`, `promo`, and `PAYOUT_RESERVE`, obligations owed in credits, not dollars.
+- `house-asset`: value the platform holds or is owed.
+- `house-liability`: value the platform owes out.
+
+Only `custodial` balances raise the cash the platform must hold.
+</Callout>
+
+## The invariant: every posting balances, no user account goes negative
+
+Two rules guard every write. A posting is rejected unless its leg amounts sum to zero in each currency. And no posting may drive a user account (or the `PAYOUT_RESERVE` escrow) below zero.
+
+`postEntry` runs four checks before any write:
+
+1. Each leg's currency matches its account.
+2. The leg amounts balance per currency (`assertBalanced`).
+3. Every named account already exists.
+4. No guarded account goes negative (`assertNoOverdraft`).
+
+It drops zero-amount legs first, since a share that rounds down to zero is a no-op the row-level schema would otherwise reject.
+
+These app-side checks aren't the real enforcer. They're a courtesy that hands you a clear fault first: `LEDGER_UNBALANCED`, `OVERDRAFT`. The balance and no-overdraft invariants live in the database itself: Postgres constraint triggers and MySQL stored procedures. So a row written around the app is still refused.
+
+The [prover](/economy/concepts/integrity/) goes further still, re-checking conservation and overdraft after every committed operation.
+
+## How a sale splits: `splitLegs`
+
+A [`spend`](/economy/reference/operations/spend/) is the clearest worked example. The buyer pays from `promo` first, then `spendable`, and each funded part is its own balanced set of legs in one transaction.
+
+For the spendable-funded part, the injected [fee policy](/economy/ports/pricing/) builds the credit side through `splitLegs`. The fee comes off the top, the net is divided among the sale's recipients by share, and `REVENUE` receives the fee plus any rounding leftover so no minor unit of the price is lost.
+
+Recipient shares have to sum to `10000` basis points (`bps`), which is 100%. `splitLegs` enforces that, and the `spend` handler checks it first.
+
+```ts
+// A 1000-credit sale, 30% fee, one seller taking 100%:
+//   credit earned(seller)  700
+//   credit REVENUE         300   (fee + leftover)
+// Credits store negative, so the two lines sum to -1000, the price.
+// The spend handler adds the buyer's matching debit, zeroing the posting.
+```
+
+The promo-funded part works differently, because a promo grant isn't money the buyer paid. Sellers are paid from `REVENUE` rather than from the buyer, and the buyer's `promo` is spent down against `PROMO_FLOAT`. Either way, the lines net to zero, and trust cash still covers every spendable credit afterward.
+
+## What relies on it
+
+- [`spend`](/economy/reference/operations/spend/) and every other operation post through `postEntry`, so each commits a single balanced transaction or none at all.
+- [Solvency](/economy/concepts/solvency/) reads `classify` to total only `custodial` credits against `TRUST_CASH`; the backing line and the credit it backs are legs of one posting.
+- [Integrity](/economy/concepts/integrity/) hash-chains each account's legs and re-checks conservation, no-overdraft, and balance consistency after every committed posting.

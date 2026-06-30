@@ -1,0 +1,91 @@
+---
+title: "Refund"
+summary: "Return a completed spend, reversing the posting that recorded it."
+order: 30
+status: stable
+related: ["economy/reference/operations/reverse", "economy/reference/configuration"]
+sourceRefs: ["src/operations/refund.ts#L47 · refund", "src/operations/registry.ts#L48 · refund"]
+---
+
+## Refund
+
+`refund` reverses a completed [`spend`](/economy/reference/operations/spend/). It returns the buyer the full price they paid, then unwinds the sale account by account.
+
+You name the order, not the buyer or the amount. The handler reads those off the recorded sale. Pass the `orderId` from the original spend. A `reason` for the audit trail is optional:
+
+```ts
+const outcome = await economy.submit({
+  kind: "refund",
+  idempotencyKey: "idem_refund_1",
+  actor: { kind: "system", service: "support" },
+  orderId: "ord_1",
+  reason: "changed mind",
+});
+// → outcome.status === "committed"
+```
+
+The buyer gets the full price back. Each seller is debited only up to the balance they still hold. Any uncollectable remainder is booked as a debt to the platform.
+
+## Parameters
+
+The payload is one `refund` variant of [`Operation`](/economy/reference/the-economy/), tagged by `kind`. The fields:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `kind` | `"refund"` | (required) | Selects this operation. |
+| `idempotencyKey` | `string` | (required) | Makes a retried request run at most once. A repeat with the same key returns the earlier result. |
+| `actor` | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`, see [Authorization](#authorization). |
+| `orderId` | `string` | (required) | The order to reverse, from the original `spend`. A blank or whitespace-only value throws. |
+| `reason` | `string` | (omitted) | Optional note recorded in the reversing transaction's metadata. |
+
+## Returns
+
+`refund` returns an [`Outcome`](/economy/reference/outcomes-and-reason-codes/):
+
+- `committed`: the reversal posted; `transaction` is the reversing posting.
+- `duplicate`: the order was already reversed (by an earlier refund or a [`clawback`](/economy/reference/operations/clawback/)); `transaction` is the recorded reversal.
+- `rejected`: no sale was found for the order. The only `RejectionCode` here is `UNKNOWN_ORDER`.
+
+## Postings
+
+The reversal rebuilds the sale's [double-entry posting](/economy/concepts/accounts-and-double-entry/) in mirror image. It applies the opposite of each change the sale made.
+
+To do that, it splits the original sale's legs into three groups:
+
+- **Raise in full**: the buyer's `spendable` and `promo` accounts the sale debited, plus any platform account the sale drew down. Raising an account never pushes a balance below zero, so these apply with no cap.
+- **Claw back, capped**: each seller's `earned` balance the sale credited, and `REVENUE` if it took a fee. The clawback is limited to what that account still holds. If a seller already spent or paid out their cut, only the part still there comes back.
+- **Receivable**: the total that couldn't be clawed back is credited to `SYSTEM.RECEIVABLE`, the platform's IOU, so debits and credits still cancel.
+
+The shortfall is always denominated in `CREDIT`. A sale only moves `CREDIT`, so the receivable that stands in for an uncollectable part matches.
+
+<Callout type="note">
+  A refund never drives a user account negative. The ledger forbids that, which is why each seller
+  clawback is capped at the balance on hand and the rest becomes a receivable rather than a debit the
+  seller can't cover.
+</Callout>
+
+## Authorization
+
+`refund` is platform-initiated only. An end user (`actor.kind === "user"`) may never run it: a self-serve refund debits a seller's `earned` balance, which is a fraud vector. Only a `system` service or a human `operator` may call it, see [actors and authorization](/economy/concepts/actors-and-authorization/).
+
+A `user` actor is declined with an `UNAUTHORIZED` fault before any work begins.
+
+## Reason codes
+
+`refund` returns one [`RejectionCode`](/economy/reference/outcomes-and-reason-codes/):
+
+| Code | When |
+|---|---|
+| `UNKNOWN_ORDER` | No sale was recorded for `orderId`. |
+
+A blank or whitespace-only `orderId` is not a rejection. It throws a `MALFORMED_OPERATION` fault. That way a malformed request surfaces as a client error instead of degrading to a silent `UNKNOWN_ORDER`.
+
+## Preconditions and invariants
+
+A refund and an order-tied `clawback` both reverse the same sale, so only one may run. Before posting, `refund` claims a second, order-scoped key, `reversed:<orderId>`. That claim makes the two paths mutually exclusive per order. Whoever claims first reverses; the other path returns the recorded transaction as `duplicate`.
+
+The order-scoped claim is recorded in the same database transaction as the reversal. If the refund rolls back, the claim rolls back too, so the order can still be reversed later.
+
+After the reversal commits, `refund` revokes the buyer's entitlement to the SKU (for a gift, the recipient's). That revocation runs in the same database transaction, and it is ownership a UI checks through [`read.entitled`](/economy/reference/reads/). It is a no-op if that user was never granted the SKU; for a sale predating ownership-at-purchase, nothing is revoked.
+
+The reversing posting balances to zero across each currency, exactly as the sale did, so [conservation](/economy/concepts/integrity/) holds.

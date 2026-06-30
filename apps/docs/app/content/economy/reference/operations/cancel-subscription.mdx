@@ -1,0 +1,101 @@
+---
+title: "Cancel subscription"
+summary: "Cancel an active subscription."
+order: 90
+status: stable
+sourceRefs: ["src/operations/cancelSubscription.ts#L29 · handleCancelSubscription", "src/operations/cancelSubscription.ts#L71 · assertMayCancel", "src/operations/guards.ts#L54 · lifecycleMarker"]
+related: ["economy/reference/operations/grant-entitlement", "economy/reference/configuration"]
+---
+
+## Cancel subscription
+
+`cancelSubscription` marks an active [`Subscription`](/economy/concepts/lifecycles/) `CANCELED`,
+so the [background worker's](/economy/reference/background-worker/) renewal sweep stops billing
+it. It moves no money.
+
+You submit it with just the subscription id:
+
+```ts
+let outcome = await economy.submit({
+  kind: "cancelSubscription",
+  idempotencyKey: "idem_1",
+  actor: { kind: "user", userId: "usr_a" },
+  subscriptionId: "sub_abc",
+});
+// outcome.status === "committed"
+```
+
+Canceling forfeits the rest of the period already paid for. There is no refund, so
+there is nothing to post to the ledger.
+
+## Parameters
+
+Every field below is required; `cancelSubscription` carries no optional payload.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| [`idempotencyKey`](/economy/concepts/integrity/) | `string` | (required) | Makes a retried request run at most once. |
+| `actor` | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. |
+| `subscriptionId` | `string` | (required) | The subscription to cancel. Non-blank. |
+
+## Returns
+
+`cancelSubscription` returns an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
+
+On success the status is `committed`. The outcome carries a placeholder
+[`Transaction`](/economy/concepts/accounts-and-double-entry/) with empty legs, because the
+cancel only flips the subscription's state and records no money moving.
+
+A repeat of the same `idempotencyKey` returns `duplicate`. A subscription that is missing or
+already `CANCELED` returns `rejected` with `UNKNOWN_SUBSCRIPTION`. See [Reason codes](#reason-codes).
+
+## Postings
+
+None. A cancel is a status change only, so the placeholder transaction posts no
+[double-entry](/economy/concepts/accounts-and-double-entry/) legs and advances no
+account's hash chain.
+
+## Authorization
+
+A [`user`](/economy/concepts/actors-and-authorization/) actor may cancel only their own
+subscription. The handler loads the record and compares its owner to the actor's `userId`;
+a mismatch throws `AUTH.UNAUTHORIZED`.
+
+A `system` or `operator` actor may cancel anyone's subscription. `cancelSubscription` is
+not a privileged-only operation.
+
+<Callout type="note">
+The central [authorization](/economy/concepts/actors-and-authorization/) check can't enforce
+ownership here: a cancel debits no user account, so its ownership rule has nothing to inspect.
+The handler checks ownership itself, against the loaded subscription.
+</Callout>
+
+## Reason codes
+
+`cancelSubscription` returns one [`RejectionCode`](/economy/reference/outcomes-and-reason-codes/)
+as a `rejected` outcome, a normal "no", not a thrown fault:
+
+| Code | When |
+|---|---|
+| `UNKNOWN_SUBSCRIPTION` | No subscription matches the id, or it is already `CANCELED`. |
+| `ECONOMY_PAUSED` | A maintenance window is in effect and the actor is a `user`. The decline carries `resumesAt`. |
+
+A blank or whitespace-only `subscriptionId` throws `OP.MALFORMED` instead. That is malformed
+client input, caught before the store is touched. A `user` actor canceling a subscription they
+do not own throws `AUTH.UNAUTHORIZED`.
+
+## Preconditions and invariants
+
+The ownership check runs only after the subscription is confirmed to exist and be cancelable.
+So probing a missing or already-canceled id returns the same `UNKNOWN_SUBSCRIPTION` answer
+regardless of caller, and never reveals whether the id exists.
+
+Canceling is final for that record: a `CANCELED` subscription stays canceled, and a second
+cancel of the same id returns `UNKNOWN_SUBSCRIPTION` rather than committing again. To bill the
+same SKU and seller again, the user runs [`subscribe`](/economy/reference/operations/subscribe/)
+to open a fresh subscription.
+
+<Callout type="warning">
+Cancel takes effect immediately and forfeits the rest of the paid period. There is no
+proration and no refund.
+</Callout>

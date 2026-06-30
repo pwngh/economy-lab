@@ -1,0 +1,99 @@
+---
+title: "Adjust"
+summary: "An operator-only manual correction posted to the ledger."
+order: 130
+status: stable
+sourceRefs: ["src/operations/adjust.ts#L44 · adjust", "src/contract.ts#L161 · kind 'adjust'", "src/operations/registry.ts#L45 · REGISTRY", "src/economy.ts#L795 · RESTRICTED_TO_PRIVILEGED"]
+related: ["economy/reference/operations/reverse", "economy/reference/configuration"]
+---
+
+## Adjust
+
+`adjust` is the operator's manual correction. It moves one account by a signed `amount` and books the opposite entry to a platform account, so the books stay balanced.
+
+It exists for cases no ordinary operation covers, such as closing a gap found during reconciliation.
+
+You name the [account](/economy/concepts/accounts-and-double-entry/), the signed `amount` to move it by, and a written `reason` for the audit trail:
+
+```ts
+let outcome = await economy.submit({
+  kind: "adjust",
+  idempotencyKey: "idem_0",
+  actor: { kind: "operator", operatorId: "op_1" },
+  account: spendable("usr_alice"),
+  amount: toAmount("CREDIT", 250n),
+  reason: "reconciliation: missing genesis lot",
+});
+// → outcome.status === "committed"
+// usr_alice's spendable balance rose by 250 credits.
+```
+
+A negative `amount` is a valid downward correction. The same call with `toAmount("CREDIT", -250n)` lowers the account by `250` instead.
+
+## Parameters
+
+Beyond the `kind` tag, the payload carries these fields:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `idempotencyKey` | `string` | (required) | Makes a retried submit run at most once; see [idempotency](/economy/concepts/integrity/). A repeat with the same key returns `duplicate`. |
+| `actor` | [`Actor`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be an `operator`; see [Authorization](#authorization). |
+| `account` | [`AccountRef`](/economy/concepts/accounts-and-double-entry/) | (required) | The account to move. |
+| `amount` | [`Amount`](/economy/concepts/money-model/) | (required) | The signed change. Must be `CREDIT` and non-zero; negative corrects downward. |
+| `reason` | `string` | (required) | Why the correction was made, recorded on the posting. Must be non-empty after trimming whitespace. |
+
+The `amount` is signed on purpose. A positive value raises the account, a negative value lowers it, and only zero is disallowed. An adjustment that moves nothing is malformed.
+
+## Returns
+
+`adjust` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
+
+A fresh correction returns `committed` with the posted [`Transaction`](/economy/concepts/accounts-and-double-entry/). A retry under the same `idempotencyKey` returns `duplicate`. That duplicate carries the earlier transaction unchanged, so the correction isn't posted twice.
+
+`adjust` never returns `rejected`. It gives no business "no". Every bad input is a thrown fault, listed under [reason codes](#reason-codes).
+
+## Postings
+
+`adjust` posts one balanced [double-entry](/economy/concepts/accounts-and-double-entry/) transaction with two [legs](/economy/concepts/accounts-and-double-entry/). One leg moves `account` by the signed `amount`. The other posts the opposite to [`SYSTEM.OPENING_EQUITY`](/economy/concepts/accounts-and-double-entry/), so the two cancel and the books stay balanced.
+
+For the example above (raising `spendable(usr_alice)` by `250` credits) the legs are:
+
+| Account | Posting | Amount |
+|---|---|---|
+| `spendable(usr_alice)` | credit | `250` (CREDIT) |
+| `SYSTEM.OPENING_EQUITY` | debit | `250` (CREDIT) |
+
+The handler works in the account's natural direction rather than a fixed debit or credit. So the move reads as "raise the account by `amount`" whether the target grows on a debit or on a credit. The offset to `OPENING_EQUITY` is always the negation, so the two legs sum to zero.
+
+<Callout type="note">
+  The offset lands in `OPENING_EQUITY`, the platform's opening-balance account, not in any revenue or
+  trust account. A manual correction is bookkeeping, not a sale or a cash movement, so it doesn't touch
+  the accounts that track either.
+</Callout>
+
+## Authorization
+
+`adjust` is operator-only. It writes a privileged correction to an account the caller need not own, which the ownership rule that governs ordinary user operations doesn't cover. So a `user` actor may never call it; see [actors and authorization](/economy/concepts/actors-and-authorization/).
+
+The handler re-checks the actor itself, not only the pipeline. A non-`operator` actor throws a `MALFORMED_OPERATION` fault. Calling the handler directly with the wrong actor therefore fails loudly, instead of quietly writing a privileged correction.
+
+A `system` actor clears the pipeline's privileged gate but is still refused by that handler check. So in practice only an `operator` can adjust.
+
+## Reason codes
+
+`adjust` returns no [`RejectionCode`](/economy/reference/outcomes-and-reason-codes/). Its inputs are either valid or a caller error, so each bad input throws a fault rather than declining as data:
+
+| Code | When |
+|---|---|
+| `OP.MALFORMED` | The `actor` isn't an `operator`, the `reason` is blank or whitespace-only, the `amount` isn't `CREDIT`, or the handler received the wrong operation kind. |
+| `MONEY.INVALID_AMOUNT` | The `amount` is zero. |
+
+## Preconditions and invariants
+
+The pipeline checks the `amount` is in range before the handler runs. An `adjust` may move money in either direction, so it only has to be non-zero, where every other operation's amount must be strictly positive. The magnitude must still sit within the per-operation ceiling.
+
+The posted transaction is balanced. The account leg and its `OPENING_EQUITY` offset are exact negations, so debits and credits sum to zero and [conservation](/economy/concepts/integrity/) holds.
+
+Both legs are in `CREDIT`. The amount must be `CREDIT` because the `OPENING_EQUITY` account it balances against is `CREDIT`, so a single posting never mixes currencies.
+
+Every correction records its `reason`. The signed amount and the operator's `reason` are stored on the posting's metadata. From there they are hashed into the [tamper-evident chain](/economy/concepts/integrity/) along with the rest of the transaction, so the audit trail keeps what changed and why.

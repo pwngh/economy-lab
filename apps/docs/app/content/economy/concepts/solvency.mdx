@@ -1,0 +1,78 @@
+---
+title: "Solvency"
+summary: "Provably solvent: real USD held in trust covers users' spendable credits at par, and the backing check reports any shortfall."
+order: 40
+status: stable
+sourceRefs: ["src/integrity.ts#L83-L91 · backed", "src/reconcile.ts", "src/accounts.ts#L143-L169 · classify"]
+related: ["economy/concepts/lifecycles", "economy/concepts/actors-and-authorization"]
+---
+
+## The idea
+
+Solvency is the promise that a user can always cash out the credits they hold. The platform keeps enough real dollars in trust to redeem every spendable credit at the [`par` rate](/economy/concepts/money-model/), and it never issues a credit it hasn't backed.
+
+You don't have to take that promise on faith. You can check it. After every operation, a backing check re-derives the answer straight from the ledger: it sums the credits users can spend, converts them to the USD they're owed, and weighs that against the cash actually on hand. What you get back is a single `backed` flag, and a `shortfall` when the cash falls short.
+
+```ts
+const report = await economy.read.prove();
+report.backed; // true: trust cash covers every spendable credit at par
+report.shortfall; // an Amount in USD; zero when backed is true
+```
+
+## Why it exists
+
+A credits economy holds users' money on their behalf, and the hazard there is a quiet one. Issue more spendable credits than there is cash set aside to redeem them, and the books still balance. [Conservation](/economy/concepts/integrity/) only says debits equal credits, not that real dollars stand behind the obligation.
+
+The gap stays invisible until users try to cash out and the trust account runs dry. That's the failure that has sunk more than one custodian. Solvency turns the gap into a measured number that the [worker](/economy/reference/background-worker/) re-checks every cycle, so it never becomes a surprise at redemption time.
+
+## The invariant
+
+The backing invariant is `trust_cash ≥ spendable credits × par`: the dollars in the trust account cover every credit a user can spend, valued at par. Two consequences fall out of which credits count.
+
+Only spendable credits need backing. [`classify`](/economy/concepts/accounts-and-double-entry/) tags exactly the user `spendable` balances as `custodial`, and everything else is `excluded` from the backing total.
+
+The excluded credits are obligations owed in credits, not dollars, so they don't raise the cash the platform must hold. Three classes stay out of the backing total:
+
+- Credits a creator has `earned` but not yet cashed out.
+- Credits reserved for a payout in flight (`payout_reserve`).
+- Promo grants.
+
+The trust money stays segregated. The platform's margin from the buy-vs-par [spread](/economy/concepts/money-model/) lands in `revenue_usd`, not `trust_cash`, so it never enters the backing total.
+
+The platform gets paid only from the **surplus**: cash sitting beyond what's owed to users. The fee sweep refuses any draw that would pull `trust_cash` below the requirement.
+
+<Callout type="danger">
+The fee sweep enforces the backing floor at write time, not only in the audit. Before moving accrued fees into platform cash, `sweepFees` caps the draw at the smaller of the cash surplus and the matured revenue. A draw that would push `trust_cash` below what users are owed throws `COMMINGLING` and posts nothing.
+</Callout>
+
+## How it's enforced
+
+The backing check never blocks a write. It's an audit that re-derives the position from the ledger after the fact, not a write-path guard. `proveEconomy` runs it in three steps.
+
+First, it walks every account and sums the balances `classify` marks `custodial`, filtered to `CREDIT` so a stray USD balance can't slip in. Then it converts that total to required USD at par, rounding down. Finally it reads `trust_cash` directly and sets `shortfall` to `required − trust_cash` when the cash falls short, or zero otherwise.
+
+`backed` then holds whenever `shortfall === 0n`.
+
+| Term | Meaning |
+| --- | --- |
+| `custodial` credit | The user `spendable` balances that must be backed; the only class counted toward the trust total. |
+| required USD | The custodial credit total converted to USD at `par`, rounded down. |
+| `trust_cash` | The real USD held in trust right now (`platform:trust_cash`). |
+| `shortfall` | `required − trust_cash` when underheld, else zero; an `Amount` in USD. |
+| `backed` | True when `shortfall` is zero. |
+
+Two layers run this check. The background worker's **treasury** sweep (`sweepTreasury`) re-computes the backing position every cycle. It's measure-only: a shortfall is logged at error and counted, but nothing is posted to fix it.
+
+The deeper `proveEconomy` audit produces the same `backed` flag as one of the five fields on a [`ProveReport`](/economy/concepts/the-proof/). The other four are conservation, no-overdraft, chain integrity, and consistency.
+
+A second, independent check guards against a different kind of gap: **reconciliation**. `reconcile` matches the ledger's own records of cleared money in and out against the [payment processor's](/economy/ports/processor/) records for a window. Anything that shows up on one side but not the other surfaces as an orphan.
+
+A `processor_orphan` is the dangerous direction. It's real money the processor moved with no matching ledger entry, which means cash changed hands that the books don't reflect.
+
+## What relies on it
+
+[`requestPayout`](/economy/reference/operations/request-payout/) is the operation that turns credits back into dollars, so it depends on backing holding. When the treasury sweep flags a shortfall, payouts stop until you fill the gap, rather than draining a trust account that no longer covers what's owed.
+
+The fee sweep leans on the same surplus calculation to take only the platform's own money.
+
+The [storage engines](/economy/ports/storage-and-messaging/) carry the conservation, no-overdraft, and balance-integrity invariants in the database itself. The backing check is the independent audit layered over them: it re-derives solvency from the legs to catch a bug in the enforcement rather than trusting it.

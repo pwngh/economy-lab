@@ -1,0 +1,51 @@
+---
+title: "Idempotency & retries"
+summary: "Every operation carries an idempotency key. The first call claims it, runs, and records its outcome; a retry with the same key replays that outcome without running again."
+order: 55
+status: stable
+sourceRefs: ["src/ports.ts#L375 · IdempotencyStore", "src/economy.ts#L396 · runOnion"]
+related: ["economy/reference/the-economy", "economy/reference/outcomes-and-reason-codes", "economy/concepts/lifecycles"]
+---
+
+Networks drop responses, processes crash mid-write, clients retry. A caller that submits an operation and never hears back can't know whether it applied, so it sends the same request again. The platform has to make that safe: a retried operation must take effect at most once, never twice.
+
+Every operation carries an `idempotencyKey` for exactly this. The key is how the system recognizes a retry and replays the original result instead of repeating the work.
+
+## The idea
+
+The first time an operation arrives, the system **claims** its key, runs the operation, and **records** the outcome under that key. If the same key ever comes back, the recorded outcome is replayed verbatim. The operation does not run a second time.
+
+<IdempotentRetry />
+
+So a retry is cheap and exact: it returns the same transaction the first call produced, marked as a [`duplicate`](/economy/reference/outcomes-and-reason-codes/) rather than a fresh `committed`.
+
+## Why it exists
+
+[Conservation and solvency](/economy/concepts/solvency/) only hold if each operation posts once. A double-applied top-up would issue credits twice against a single payment; a double-applied payout would pay a creator twice for one request. Idempotency is what lets a client retry freely, as it must over an unreliable network, without risking either.
+
+It's also what makes the write path **exactly-once** rather than merely at-most-once: combined with the [atomic commit](/economy/ports/storage-and-messaging/), an operation's money moves either once or not at all, even across retries and crashes.
+
+## How a key is claimed
+
+Claiming is a database operation, so the database itself stops two requests with the same key from both proceeding. The mechanism differs by engine, but the contract is the same:
+
+- **Postgres** takes a transaction-scoped advisory lock on the key. A second request with the same key waits for the first to finish, then reads and replays its recorded row.
+- **MySQL** inserts a placeholder row to hold the key's lock, then fills in the recorded result on commit. A second insert collides on the primary key.
+
+Either way the key is a primary key, so a duplicate can never be written.
+
+## A rejected request leaves the key unused
+
+Claiming a key is not the same as consuming it. **Only a committed outcome records a result under the key.** If the operation is [rejected](/economy/reference/outcomes-and-reason-codes/) (declined for funds, a velocity limit, a bad request) or throws a fault, the transaction rolls back and the key is left **unused**.
+
+That's deliberate. A caller can retry a rejected request under the *same* key: a decline isn't permanent (funds may arrive, a limit window may pass), and reusing the key keeps the retry idempotent. Only a successful commit is final.
+
+<Callout type="note">
+The retry-after-reject rule is why a claim that rolls back must leave no committed row. Postgres releases its advisory lock and writes nothing; MySQL's placeholder insert is rolled back with the rest of the transaction. A later request under that key starts fresh.
+</Callout>
+
+## What relies on it
+
+- Every [`submit`](/economy/reference/the-economy/) runs through this guard, so the property is universal: no operation can be applied twice.
+- The [`duplicate` outcome](/economy/reference/outcomes-and-reason-codes/) is the visible result of a replay: the same transaction, no new work.
+- Inbound [provider webhooks](/economy/ports/processor/) carry their own, separate dedup guard keyed on the webhook's event id, kept apart from this table so the two layers can't collide on a shared key.

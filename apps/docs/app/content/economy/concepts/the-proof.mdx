@@ -1,0 +1,77 @@
+---
+title: "The proof"
+summary: "The independent prover: one report that re-derives conservation, backing, no-overdraft, and chain integrity from the ledger itself."
+order: 80
+status: stable
+sourceRefs: ["src/integrity.ts#L77 · proveEconomy", "src/contract.ts#L364 · ProveReport", "scripts/prove.ts"]
+related: ["economy/concepts/accounts-and-double-entry", "economy/reference/background-worker"]
+---
+
+## The idea
+
+You don't have to take "the books balance" on faith. You can re-derive it. The prover does exactly that: it rebuilds every money invariant straight from the ledger's [posted legs](/economy/concepts/accounts-and-double-entry/) and hands you one report, a `ProveReport`, telling you whether the books still hold.
+
+It only reads, it never writes. It sums the debit and credit lines itself instead of trusting any cached balance. It recomputes each account's hash chain from genesis. Then it compares the result against what the [ledger](/economy/concepts/integrity/) actually stored.
+
+You call it three ways. [`read.prove()`](/economy/reference/reads/) runs it on demand. `make prove` runs it after every operation in a randomized program. `make fuzz` runs it against every backend and checks they agree.
+
+```ts
+const report = await economy.read.prove();
+report.conserved && report.backed && report.noOverdraft &&
+  report.chainIntact && report.consistent;
+// → true: books balance, every credit backed, nothing overdrawn,
+//   no entry altered, no cached balance drifted
+```
+
+## Why it exists
+
+If the database already rejects a bad row, why re-check the books at all? Because the write path can only vouch for the writes it performs. The invariants are enforced at write time, pushed down into Postgres triggers and MySQL stored procedures so a violating row can't be committed (see [Integrity](/economy/concepts/integrity/)). The prover is the independent audit *on top of* that enforcement, not the enforcement itself.
+
+Its job is to catch the failures a write-path guard structurally can't see. A bug in the enforcement. A half-applied write. A row edited directly in the database. `proveEconomy` says as much in its own contract: it is the out-of-band cross-check, "run by an auditor/worker, never as the write-path guard" (see <SourceLink to="src/integrity.ts#L72">source</SourceLink>).
+
+That separation is what makes "provably solvent" a verb. Anyone holding the ledger can re-derive the answer. The proof doesn't depend on trusting the process that wrote the rows.
+
+## The invariant it maintains
+
+The prover checks five properties and reports each as a boolean flag on `ProveReport`. It maintains none of them on its own. It *observes* them. So a `false` flag never means the prover broke something; it means an upstream invariant already did.
+
+| Flag | Holds when |
+| --- | --- |
+| `conserved` | Debits and credits cancel to zero in every currency, so no value was minted or lost. |
+| `backed` | `TRUST_CASH` holds at least `custodial credits × par` in real USD, every spendable credit is covered (see [Solvency](/economy/concepts/solvency/)). |
+| `noOverdraft` | No wallet account has gone below zero. |
+| `chainIntact` | Every account's hash chain recomputes to its recorded head, no posted entry was altered. |
+| `consistent` | Every account's cached balance equals the sum of its posted legs; `drift` is empty. |
+
+Two more fields carry the detail behind a failing flag. `shortfall` is the missing USD when `backed` is false, and zero otherwise. `drift` lists each account whose cached balance disagrees with its legs. Each drift entry names both the `materialized` and the `derived` figure, so an operator can see the size and direction of the gap.
+
+`allInvariantsHold(report)` is the convenience roll-up. It is `true` only when all five flags are `true` (see <SourceLink to="src/integrity.ts#L253">source</SourceLink>). If you only care about one property, read its field directly.
+
+## How it's enforced
+
+The whole proof runs in one pass over the ledger. `foldLedger` walks every account, sums each account's legs, and folds those signed amounts into a per-currency total that must reach zero. The *derived* sum drives `conserved`, not the stored balance, so a mis-saved balance surfaces as `drift` instead of hiding a real imbalance. `backed` and `noOverdraft` read the cached balance directly, which is cheaper and is exactly the figure they vouch for.
+
+<Callout type="note">
+There are two provers, and they differ in one flag. [`read.prove()`](/economy/reference/reads/) is the lighter twin in `src/economy.ts`: its `chainIntact` is only a shape check on each account's latest hash. The thorough <SourceLink to="src/integrity.ts#L77">proveEconomy</SourceLink> calls `proveChain`, which walks every account from genesis, recomputes every hash, and names the first entry that no longer re-derives. The thorough prover also adds a phantom-row pass (`R33`) over `balanceAccounts()` that catches a stale balance row with no posting behind it. The other four flags come out the same either way.
+</Callout>
+
+The chain check is deliberately not duplicated inside the fold. `proveEconomy` hands it to `proveChain` so the hash chain is verified in exactly one place.
+
+Backing is the one flag that crosses currencies. It converts custodial credits to USD at the `par` rate (`(custodialCreditMinor × par.rate) / 10^par.scale`, rounded down) then compares against the live `TRUST_CASH` balance. Any positive gap is the `shortfall`.
+
+## What relies on it
+
+The proof is what the project's correctness gates rest on. The [`treasury` worker job](/economy/reference/background-worker/) re-checks backing every cycle, and two verification scripts double as CI gates.
+
+`make prove` drives the real economy through a seeded-random program (top-ups, promo grants, spends) and calls `read.prove()` after *every committed operation*, failing on the first violation. Each run is `8` seeds × `60` operations per backend. After each step it does two more checks:
+
+- It resubmits the operation to confirm a retry returns `duplicate` (`replayIsDuplicate`).
+- It checks that each touched account's stored head matches the hash the operation reported (`verifyChainLinks`).
+
+On the first violation, `make prove` shrinks to the shortest failing prefix and exits non-zero (`scripts/prove.ts`).
+
+`make fuzz` runs the same workload against every backend: `memory`, the in-process `http` adapter, `postgres`, and `mysql`. For the same inputs, it checks they produce byte-identical balances, chain heads, and `ProveReport`s. A backend that drifts from the reference is caught right away. Unreachable backends are skipped, not failed.
+
+<Callout type="warning">
+A passing report is a snapshot, not a continuous guarantee. The prover reflects the ledger at the moment it runs; it is an audit you invoke, and between runs the enforcement layer (the database triggers and stored procedures) is what keeps the books honest.
+</Callout>

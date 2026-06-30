@@ -1,0 +1,135 @@
+---
+title: "Reads"
+summary: "The read surface: balance, statement, postings, saga, entitlements, status, accounts, payouts, and the solvency proof."
+order: 10
+status: stable
+sourceRefs: ["src/contract.ts#L321-L359 · Economy.read", "src/economy.ts#L84-L98 · read", "test/economy.read.test.ts"]
+related: ["economy/reference/outcomes-and-reason-codes"]
+---
+
+`submit` changes money; `read` looks at it without touching it. If [the `Economy`](/economy/reference/the-economy/) has two halves, `read` is the query half, the place you go to answer "what's this balance?", "did this go through?", "does this user own that item?". Nothing under `read` writes a ledger entry, claims an idempotency key, or records a velocity attempt.
+
+Every method lives on the `economy.read` group, and the whole group is read-only. You call them the same way you'd call `submit`, just without the consequences:
+
+```ts
+const balance = await economy.read.balance(spendable("usr_a1"));
+// → { currency: "CREDIT", minor: 5000n }
+```
+
+A few of these return a single value you await; a few stream many rows you iterate; one (`status`) is synchronous because it's derived from config and the clock, not stored. The sections below group them by what you're asking for.
+
+## Balances and history
+
+These two answer "how much, and how did it get there?" for one account at a time.
+
+`read.balance(account)` returns the account's current balance as an [`Amount`](/economy/concepts/money-model/). It's a stored running total, so it's a single O(1) read rather than a re-sum over the account's whole history. Pass an account reference built from a helper like `spendable`, `earned`, or `promo`:
+
+```ts
+const balance = await economy.read.balance(earned("usr_seller"));
+// → { currency: "CREDIT", minor: 1200n }
+```
+
+`read.statement(account, range)` returns one page of that account's [entries](/economy/concepts/accounts-and-double-entry/) within a time range. The range is half-open in epoch milliseconds (`from` included, `to` not) and each page carries a `cursor` you pass back to fetch the next one, or `null` when you've reached the last page:
+
+```ts
+const page = await economy.read.statement(spendable("usr_a1"), {
+  from: 0,
+  to: Date.now(),
+});
+// → { account, entries: [{ txnId, amount, postedAt }, …], cursor: null }
+```
+
+Each entry names the transaction it came from, the signed amount applied to this account, and when it posted, enough to render a statement row without a second lookup.
+
+## A posting or a payout by id
+
+When you already hold an id and want the one record behind it, these resolve it. Both return `null` rather than throwing when the id is unknown, so a missing record is a value you handle, not an error you catch.
+
+`read.posting(txnId)` returns one committed [posting](/economy/concepts/accounts-and-double-entry/) by its transaction id (all of its legs and metadata) or `null` if no such transaction exists:
+
+```ts
+const posting = await economy.read.posting("txn_8821");
+// → { txnId: "txn_8821", legs: [{ account, amount }, …], meta: {…} }
+// (or null for an unknown id)
+```
+
+This lets a reader resolve a posting through `read` without reaching past it into the raw [`Store`](/economy/ports/storage-and-messaging/). Unlike a statement, it isn't scoped to one account. It returns the whole transaction with every leg it touched.
+
+`read.saga(id)` loads one payout [saga](/economy/concepts/lifecycles/) by its id: its current state, the provider reference once submitted, the attempt count, and the reason it failed if it did. It returns `null` for an unknown payout id:
+
+```ts
+const saga = await economy.read.saga("pay_4410");
+// → { id, userId, state: "SUBMITTED", providerRef: "…", … }
+// (or null for an unknown id)
+```
+
+The [background worker](/economy/reference/background-worker/) is what advances a saga through its states; `read.saga` is how a UI reads where one currently sits. For the states themselves and what moves a payout between them, see [the lifecycle of a payout](/economy/concepts/lifecycles/).
+
+## Ownership and status
+
+These two answer questions that aren't about money at all: what a user owns, and whether the economy is open for writes.
+
+`read.entitled(userId, sku)` returns `true` or `false`: does this user currently own this SKU (an item or feature)? Ownership is a record, not a balance, so it has its own reader: the readable side of the [`grantEntitlement` and `revokeEntitlement`](/economy/reference/operations/grant-entitlement/) operations that a UI gates access on:
+
+```ts
+const owns = await economy.read.entitled("usr_a1", "wrld_pass");
+// → true
+```
+
+`read.status()` returns the economy's pause state right now: whether a maintenance window is in effect, its configured bounds, and when writes resume. It's the only read that's synchronous. It's derived from config plus the clock, never stored, so it always reflects the live window:
+
+```ts
+const status = economy.read.status();
+// → { paused: false, pauseStart: null, pauseEnd: null, resumesAt: null }
+```
+
+This lets a UI render a maintenance banner directly, instead of inferring the pause from a declined write. While the window is active, a [`user` principal's](/economy/concepts/actors-and-authorization/) discretionary write is declined with `ECONOMY_PAUSED`; `system` and `operator` writes keep flowing so external money can still settle.
+
+<Callout type="note">
+A pause only ever blocks writes from a `user` actor. Reads (including `read.status` itself) never pass through the pause gate, so you can always read balances and statements during a maintenance window.
+</Callout>
+
+## Streaming the whole board
+
+The three readers above resolve one record. These three stream every record of a kind, newest first, one at a time, because a real ledger or a busy economy can hold far more than you'd want to collect into one array. Each returns an `AsyncIterable`, so you iterate with `for await` and stop whenever you've seen enough.
+
+`read.accounts()` streams every account that has a balance row. It's the prover's own enumeration, exposed so a reader can list accounts (and derive the users behind them) without tracking minted ids itself:
+
+```ts
+for await (const account of economy.read.accounts()) {
+  // … one AccountRef at a time
+}
+```
+
+`read.payouts()` streams every payout [saga](/economy/concepts/lifecycles/), newest first: the whole board, settled and failed payouts included, not only the due ones the worker claims. It lets a UI render payout status without tracking minted payout ids:
+
+```ts
+for await (const saga of economy.read.payouts()) {
+  // … one Saga at a time, newest updatedAt first
+}
+```
+
+`read.postings()` streams every committed posting, newest first: the whole journal. That's user operations and the worker's own postings alike, every account touched, not only the ones one reader happened to write. Each posting carries its full legs, so a row renders and expands without a second lookup:
+
+```ts
+for await (const posting of economy.read.postings()) {
+  // … one Posting at a time, newest commit first
+}
+```
+
+<Callout type="warning">
+"Newest first" on `read.postings` is the commit sequence, so the order is total and a page never reorders. But `read.payouts` orders by `updatedAt`, and ties on that timestamp come back in an unspecified order that varies by backend. Don't depend on the order of sagas that share an `updatedAt`.
+</Callout>
+
+## The solvency proof
+
+`read.prove()` runs the integrity check and returns a [`ProveReport`](/economy/concepts/the-proof/): a set of flags, each one a property the ledger is supposed to hold:
+
+```ts
+const report = await economy.read.prove();
+// → { conserved: true, backed: true, noOverdraft: true, … }
+```
+
+It walks every posted account once and re-derives each balance from the recorded debit and credit lines, rather than trusting the cached running total. So `conserved`, `backed`, `noOverdraft`, `chainIntact`, and `consistent` each report on the books as the entries actually describe them. This is the readable face of [solvency](/economy/concepts/solvency/) and the [hash-chain integrity](/economy/concepts/integrity/) the economy maintains.
+
+`read.prove` is a thorough enough check to deserve its own page. For what each flag means, how `shortfall` and `drift` are computed, and how this lighter in-process check relates to the full out-of-band prover, see [the proof](/economy/concepts/the-proof/).

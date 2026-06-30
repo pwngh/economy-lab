@@ -1,0 +1,53 @@
+---
+title: "Spend velocity"
+summary: "A per-subject cap on how much value one account can move within a rolling window. The gate records the attempt and measures the window in one step, so a burst of concurrent operations can't slip past the limit."
+order: 85
+status: stable
+sourceRefs: ["src/trust.ts#L128 · riskSubject", "src/trust.ts#L150 · attemptMinor", "src/economy.ts#L524 · screenRisk", "src/engines/postgres.ts#L1450 · recordVelocity"]
+related: ["economy/concepts/concurrency", "economy/concepts/solvency"]
+---
+
+A compromised or misbehaving account can try to move money faster than anyone reacts — draining a wallet or claiming payouts in a tight loop. Spend velocity is the gate that caps how much value one subject can move within a rolling window, checked before any money moves.
+
+## The idea
+
+Every money-moving [operation](/economy/reference/the-economy/) names a **subject**: the account whose recent activity is being limited. Before the operation posts, the gate records the attempt's amount and sums that subject's amounts over the recent window. If the total is over the limit, the operation comes back `rejected` with [`RISK_DENIED`](/economy/reference/outcomes-and-reason-codes/); otherwise it proceeds to post.
+
+Amounts are summed in `CREDIT` minor units, and the limit and window come from the `velocityLimitMinor` and `velocityWindowMs` [configuration](/economy/reference/configuration/). A spend that would push the buyer over the window never moves money:
+
+```ts
+const outcome = await economy.submit(spendOperation);
+// → { status: "rejected", reason: "RISK_DENIED" }   when the window is over the limit
+```
+
+## Why it exists
+
+A naive limit reads the recent total, compares it, then records the new attempt — three steps a second operation can interleave. Two concurrent spends read the same stale total, both pass, and together they blow the limit. That read-then-write race is the failure the gate is built to close, so it records *and* measures in one indivisible step per subject.
+
+Two consequences fall out of that design, and both matter for abuse:
+
+- **Denied attempts still count.** The amount is summed before the limit decision, so a flood of over-limit attempts keeps adding to the window. An attacker can't probe the limit for free, and a burst of rejections throttles itself.
+- **The record outlives a rollback.** The attempt is written on a connection independent of the money transaction, so an operation that rolls back still leaves its velocity mark. Tripping a rollback can't erase the footprint.
+
+## What counts as a subject
+
+`riskSubject` decides which operations are gated and whose account is the subject. An operation that moves no tracked subject's funds returns `null` and is always allowed.
+
+| Operation | Subject | Amount counted |
+| --- | --- | --- |
+| [`spend`](/economy/reference/operations/spend/), [`subscribe`](/economy/reference/operations/subscribe/) | the buyer | the `price` |
+| [`topUp`](/economy/reference/operations/top-up/), [`grantPromo`](/economy/reference/operations/grant-promo/), [`requestPayout`](/economy/reference/operations/request-payout/) | the user | the `amount` |
+| everything else | — | not gated |
+
+## How it's enforced
+
+`screenRisk` runs inside the submit pipeline, before the money transaction opens. It hands the attempt to `recordVelocity`, which does the whole record-and-measure as one unit: it takes a per-subject lock, dedup-inserts the attempt keyed on the [`idempotencyKey`](/economy/concepts/idempotency/) so a retry never double-counts, sums the subject's amounts where the timestamp falls inside the window, and returns that total. `screenRisk` compares it to `velocityLimitMinor` and rejects when it's over.
+
+<Callout type="note">
+The velocity record commits on its own connection, separate from the posting. That's deliberate: it's the one write that must survive a money-transaction rollback, so a rejected or reversed operation still counts against the window.
+</Callout>
+
+## What relies on it
+
+- The gated operations — [`spend`](/economy/reference/operations/spend/), [`topUp`](/economy/reference/operations/top-up/), [`requestPayout`](/economy/reference/operations/request-payout/), [`grantPromo`](/economy/reference/operations/grant-promo/), and [`subscribe`](/economy/reference/operations/subscribe/) — pass through `screenRisk` before any of them move money.
+- [`RISK_DENIED`](/economy/reference/outcomes-and-reason-codes/) is the `rejected` reason a caller sees when the window is over the limit.

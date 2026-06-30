@@ -1,0 +1,88 @@
+---
+title: "Signer"
+summary: "The signing port: sign and verify with rotating keys, backing the checkpoint that attests the ledger is intact."
+order: 10
+status: stable
+sourceRefs: ["src/ports.ts#L80-L86 · Signer", "src/runtime.ts#L133-L170 · systemSigner", "src/chain.ts#L228-L294 · recordCheckpoint / verifyCheckpoint"]
+related: ["economy/ports/storage-and-messaging", "economy/reference/http-service"]
+---
+
+## Why a signing seam
+
+A hash chain proves the ledger is *internally consistent*: that nobody edited a posting without the head hashes giving it away. It can't prove the chain you're looking at is the one the platform actually wrote. Someone with write access could rewrite a whole account's history, recompute every head, and present a chain that re-derives cleanly.
+
+That's the gap a signature closes. The platform periodically signs a snapshot of the ledger with a secret only it holds. An auditor with the matching public key can then confirm two things at once: the snapshot is intact, and it came from the platform. A forged chain won't carry a valid signature.
+
+The `Signer` port is that seam. The core never holds a key or picks an algorithm. It asks the port to `sign` some bytes and, later, to `verify` them. This is what lets the [signed checkpoint](/economy/concepts/integrity/) be tamper-evident rather than merely self-consistent.
+
+## The interface
+
+The port is two methods, both working on raw bytes (see <SourceLink to="src/ports.ts#L86-L92">source</SourceLink>):
+
+```ts
+interface Signer {
+  sign(bytes: Uint8Array): Promise<Uint8Array>;
+  verify(bytes: Uint8Array, signature: Uint8Array): Promise<boolean>;
+}
+```
+
+`sign` always signs with the current key. `verify` returns `true` when the signature is authentic, and it accepts the current key *plus* any still-valid older keys. That second part is what makes a key rotation safe: a signature made before the rotation keeps verifying afterward.
+
+<Callout type="note">
+There's no `keyId` on the port, and no key material crosses it. Which key signed a given checkpoint isn't recorded on the checkpoint; `verify` simply tries every key it trusts until one matches. Key selection lives entirely inside the adapter.
+</Callout>
+
+## The default signer
+
+The reference adapter is <SourceLink to="src/runtime.ts#L133-L170">systemSigner</SourceLink>. It signs with [Ed25519](https://ed25519.cr.yp.to/): the configured secret derives a private key that produces 64-byte signatures, and the matching public key verifies them.
+
+You construct it with a current signing key and an optional list of prior keys:
+
+```ts
+let signer = systemSigner({
+  signingKey: hexSecret,
+  priorKeys: [previousHexSecret],
+});
+```
+
+The secret is hex-encoded key bytes the host loads from its own config and passes in. This module never reads it from a global or the environment. A misconfigured deploy fails at startup, not deep inside a request. In a wired economy the secret arrives as `signingSecret`; see the [configuration reference](/economy/reference/configuration/) for where it's loaded.
+
+To publish the verification key, `signingPublicKeyHex` derives the hex-encoded Ed25519 public key from the same secret. An external party uses it to verify signed checkpoints without ever seeing the signing secret.
+
+<Callout type="warning">
+The webhook HMAC seam is a separate thing. Inbound provider callbacks are authenticated with an HMAC-SHA256 over the raw body using `webhookSecret`. That's request authentication at the HTTP boundary, not the `Signer` port. The signer signs the ledger's own checkpoints with `signingSecret`.
+</Callout>
+
+## How key rotation works
+
+Rotation is a configuration change, not an interface call. You move the current secret into `priorKeys` and set a fresh `signingKey`:
+
+```ts
+let signer = systemSigner({
+  signingKey: newHexSecret,
+  priorKeys: [oldHexSecret],
+});
+```
+
+From that point, every new checkpoint is signed with the new key. Old checkpoints stay verifiable because the old key is still in `priorKeys`. `verify` walks its trusted public keys in order and returns `true` on the first that matches, so a signature from any retained key still passes.
+
+Drop a key from `priorKeys` only once no checkpoint you still want to verify was signed under it. After that, signatures made with it stop verifying, which is the point of retiring it.
+
+## What the checkpoint relies on it for
+
+The signer has exactly one caller in the core: the checkpoint. The per-account hash chain doesn't use it. Chain links are *hashed*, not signed, so the signer never touches a [posting](/economy/concepts/accounts-and-double-entry/) or an account head directly.
+
+Instead, [the background worker](/economy/reference/background-worker/) periodically seals a checkpoint. <SourceLink to="src/chain.ts#L228-L262">recordCheckpoint</SourceLink> collects every account's head hash and reduces them to a single Merkle root. It then signs *that one root*, so one signature covers every account at once.
+
+The order matters: the proof comes before the signature. `recordCheckpoint` first runs [the chain prover](/economy/concepts/the-proof/) over every account. If a chain fails to re-derive, it throws `CHAIN_BROKEN` and persists nothing. It refuses to sign over a ledger it can't vouch for. Signing a tampered ledger would be a false attestation, so the code won't do it.
+
+Verification runs the same machinery in reverse. <SourceLink to="src/chain.ts#L275-L293">verifyCheckpoint</SourceLink> recomputes the Merkle root over the current heads and compares it to the checkpoint's stored root. When those match, it calls `signer.verify` over that root. A mismatch (a changed root, a dropped account, or an inauthentic signature) returns `false`.
+
+## Out of scope
+
+The port deliberately doesn't cover a few things:
+
+- **Key storage and loading.** The adapter receives ready secrets; where they come from (a secrets manager, an env var) is the host's job.
+- **A rotation schedule.** Rotation is a redeploy with new key arguments; nothing in the port drives it on a timer.
+- **Recording which key signed what.** No `keyId` is stored, so retiring a key is the only way a past signature is invalidated.
+- **Anchoring the root externally.** The checkpoint is *meant* to be anchored outside this system for independent proof, but publishing the signed root to a third party is left to the operator.

@@ -1,0 +1,49 @@
+{
+  "name": "economy-lab-docs",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "react-router dev",
+    "build": "react-router build",
+    "preview": "vite preview",
+    "typecheck": "react-router typegen && tsc",
+    "format": "biome format --write .",
+    "lint": "biome check .",
+    "test": "vitest run",
+    "check:csp": "node scripts/check-csp.mjs",
+    "verify": "npm run typecheck && npm run lint && npm run test",
+    "deploy": "npm run verify && npm run build && npm run check:csp && wrangler pages deploy"
+  },
+  "dependencies": {
+    "@react-router/node": "^7.18.0",
+    "isbot": "^5.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router": "^7.6.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@mdx-js/rollup": "^3.1.0",
+    "@react-router/dev": "^7.6.0",
+    "@shikijs/rehype": "^1.29.0",
+    "@stefanprobst/rehype-extract-toc": "^3.0.0",
+    "@types/node": "^26.0.1",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "gray-matter": "^4.0.3",
+    "rehype-autolink-headings": "^7.1.0",
+    "rehype-external-links": "^3.0.0",
+    "rehype-slug": "^6.0.0",
+    "remark-frontmatter": "^5.0.0",
+    "remark-gfm": "^4.0.0",
+    "remark-mdx-frontmatter": "^5.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0",
+    "vitest": "^4.1.9",
+    "wrangler": "^4.105.0",
+    "zod": "^3.24.0"
+  }
+}
