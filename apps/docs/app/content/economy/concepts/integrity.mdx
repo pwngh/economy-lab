@@ -21,7 +21,7 @@ You can balance a tampered ledger. Conservation and no-overdraft (two of the [pr
 
 Change two offsetting amounts, or move a credit from one account's history to another, and `conserved` stays true while the audit trail is now a lie. Integrity covers the gap those sum-based checks structurally cannot see. It attests that the individual rows are the ones that were actually posted, in the order they were posted.
 
-This matters most for double-entry bookkeeping presented as a system of record. The point of an append-only audit trail is that you can replay it, and that value drops to zero if history can be quietly rewritten between the write and the read.
+An append-only audit trail is useful because you can replay it, which only holds if history cannot be quietly rewritten between the write and the read.
 
 ## The invariant
 

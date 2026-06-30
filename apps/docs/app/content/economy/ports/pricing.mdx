@@ -46,7 +46,7 @@ them.
 
 The output is credit-side only. Every leg is a credit, and a credit is
 [stored negated](/economy/concepts/accounts-and-double-entry/), so the legs sum to `-price`. They
-don't balance on their own, that's deliberate.
+don't balance on their own.
 
 <Callout type="note">
 The policy returns only the recipient and revenue credits. The spend handler adds the matching
@@ -76,9 +76,8 @@ The work happens in three steps, in order. The fee comes off the top first. Each
 takes its `shareBps` of what's left. Whatever the rounding leaves behind joins the fee in the
 platform's `REVENUE` account.
 
-That last step is the reason the split never loses a unit. Each seller's share rounds *down*, so the
-distributed shares can fall a minor unit or two short of the net. The leftover doesn't vanish and it
-isn't conjured. `revenueForSplit` hands it to `REVENUE` along with the fee, so the credits always
+Each seller's share rounds *down*, so the
+distributed shares can fall a minor unit or two short of the net. `revenueForSplit` hands it to `REVENUE` along with the fee, so the credits always
 sum to the exact price.
 
 The fee itself rounds in the other direction. `feeForPrice` rounds the basis-point fee *up* to a

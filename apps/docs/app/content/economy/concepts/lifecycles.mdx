@@ -79,7 +79,7 @@ A long-lived operation moves through its states **once**, in order, no matter ho
 
 Every transition is a compare-and-set against the current state, so a step is applied by exactly one writer. The money posting that accompanies a transition commits in the same database transaction as the state flip, so the books and the record never diverge.
 
-A `RESERVED` payout pays at most once, and its reserve is released exactly once: by settlement, by timeout-fail, or by an operator reversal, whichever wins the CAS. Never twice, and never zero times.
+A `RESERVED` payout pays at most once, and its reserve is released exactly once: by settlement, by timeout-fail, or by an operator reversal, whichever wins the CAS.
 
 ## How it's enforced
 

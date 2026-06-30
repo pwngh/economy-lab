@@ -30,8 +30,6 @@ Read these as *relative cost and scaling shape*, not as a capacity figure. A sin
 
 ## The scaling shape
 
-The shape is the durable part — it follows from how the work is structured, not from any one machine.
-
 Submit cost is per operation. In memory it's the cost of building and hashing one balanced posting. On a SQL backend each `submit` is its own transaction, so it also pays a commit and an `fsync`, which dominates the per-operation time and puts the SQL backends well below the in-memory rate.
 
 Integrity cost splits by what each check has to read:
@@ -39,11 +37,11 @@ Integrity cost splits by what each check has to read:
 - **`prove` and a checkpoint seal re-walk every posting from genesis.** Both re-derive the hash chain from the start, so their cost is O(postings) and climbs as history grows.
 - **Checkpoint verify reads only account heads.** It recomputes the signed root over current heads, so its cost is O(accounts) and stays roughly flat as postings accumulate.
 
-That gap is the reason a signed checkpoint exists. Verifying one in O(accounts) anchors ongoing integrity where a full re-prove — O(postings) — can't keep up once the ledger has years of history. The [background worker](/economy/reference/background-worker/) seals checkpoints on a schedule for exactly this reason.
+Verifying a checkpoint in O(accounts) anchors ongoing integrity where a full re-prove — O(postings) — can't keep up once the ledger has years of history. The [background worker](/economy/reference/background-worker/) seals checkpoints on a schedule.
 
 ## Running it against a backend
 
-In-memory needs no setup. For the SQL rows, apply the schema first (`make db-migrate`) and bring the databases up; the bench skips any backend it can't reach. A heavier sample raises the op count:
+In-memory runs with no setup. For the SQL rows, apply the schema first (`make db-migrate`) and bring the databases up; the bench skips any backend it can't reach. A heavier sample raises the op count:
 
 ```bash
 BENCH_OPS=5000 make bench

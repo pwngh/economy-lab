@@ -44,7 +44,7 @@ The `amount` is always paid out later as USD; it never becomes spendable in-app.
 
 A successful request returns `committed` with the reservation transaction. When the same `idempotencyKey` repeats, a `duplicate` returns the earlier result unchanged.
 
-A business decline returns `rejected` with one of the [reason codes](#reason-codes) below: too small, too soon, not enough funds, or not yet matured. A `rejected` outcome is data you inspect, never an exception.
+A business decline returns `rejected` with one of the [reason codes](#reason-codes) below: too small, too soon, not enough funds, or not yet matured. A `rejected` outcome is returned data, not a thrown exception.
 
 A malformed request throws instead. An `amount` that isn't `CREDIT` raises `OP.MALFORMED`, and a zero or negative one raises `MONEY.INVALID_AMOUNT` (see <SourceLink to="src/operations/requestPayout.ts#L146 · payableCredit" />). Those are programming errors, not declines.
 
@@ -83,7 +83,7 @@ Each check below returns a `rejected` [`Outcome`](/economy/reference/outcomes-an
 | `FUNDS_IMMATURE` | The balance covers `amount`, but the cleared (matured) portion does not. |
 | `ECONOMY_PAUSED` | A `user`'s request lands inside a maintenance window; carries `resumesAt`. |
 
-The `FUNDS_IMMATURE` gate is the subtle one. The raw `earned` balance can pass `INSUFFICIENT_FUNDS` while part of it is still inside its chargeback window. So a second, stricter check asks whether the *matured* part alone covers `amount` (see <SourceLink to="src/operations/requestPayout.ts#L94-L105">source</SourceLink>). Maturity is the holding period that must elapse before earnings are payable. See [maturity](/economy/concepts/lifecycles/).
+The raw `earned` balance can pass `INSUFFICIENT_FUNDS` while part of it is still inside its chargeback window. So a second, stricter check asks whether the *matured* part alone covers `amount` (see <SourceLink to="src/operations/requestPayout.ts#L94-L105">source</SourceLink>). Maturity is the holding period that must elapse before earnings are payable. See [maturity](/economy/concepts/lifecycles/).
 
 <Callout type="warning">
 `requestPayout` only counts *matured* earnings. A seller can have plenty of `earned` credit and still get `FUNDS_IMMATURE` if too much of it is still clearing its chargeback window.

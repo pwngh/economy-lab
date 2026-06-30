@@ -10,9 +10,9 @@ related: ["economy/concepts/overview", "economy/reference/configuration"]
 
 ## A lab, not a product
 
-economy-lab is a study of one thing: the application layer of a credits economy, and the invariants that hold it together. It is not a deployable money system, and it does not try to be one. Knowing where the line falls is the difference between reading this code as a reference and mistaking it for something you could point at real money.
+economy-lab is a study of one thing: the application layer of a credits economy, and the invariants that hold it together. It is not a deployable money system, and it does not try to be one.
 
-The honest split runs straight down the middle. The ledger invariants (conservation, no-overdraft, [backing](/economy/concepts/solvency/), [chain continuity](/economy/concepts/integrity/)) are enforced to a production standard, pushed into the database and attacked by an adversarial suite that writes violating rows directly rather than trusting the app. The operational edges around that ledger are deliberately stubbed or simplified.
+The ledger invariants (conservation, no-overdraft, [backing](/economy/concepts/solvency/), [chain continuity](/economy/concepts/integrity/)) are enforced to a production standard, pushed into the database and attacked by an adversarial suite that writes violating rows directly rather than trusting the app. The operational edges around that ledger are deliberately stubbed or simplified.
 
 This page is the map of that second half: the things economy-lab leaves to a host, and why each one sits outside the lab.
 
@@ -26,7 +26,7 @@ economy-lab never moves real money. When a creator cashes out, the credits retir
 
 That somewhere is a port. The [`Processor`](/economy/ports/processor/) interface is the single seam through which all money leaves the platform, and it has exactly one method: `submitPayout`. The core asks the provider to send money and reads back a `providerRef`; it never learns "did it settle?" by polling. Settlement arrives later, as a webhook the provider sends back.
 
-The reference adapter (`src/adapters/processor.ts`) is an HTTP client that `POST`s a payout request to whatever endpoint you configure with `PROCESSOR_URL`. With no URL set, the host falls back to a dev stub that approves every payout. Neither one is a money-transmitter integration. They are the shape of the seam, not a connection to a real rail.
+The reference adapter (`src/adapters/processor.ts`) is an HTTP client that `POST`s a payout request to whatever endpoint you configure with `PROCESSOR_URL`. With no URL set, the host falls back to a dev stub that approves every payout. Neither one is a money-transmitter integration.
 
 <Callout type="warning">
 The stubbed processor approves payouts unconditionally. That is fine for studying the [payout saga](/economy/concepts/lifecycles/), and exactly wrong for anything holding real funds.
@@ -36,7 +36,7 @@ The stubbed processor approves payouts unconditionally. That is fine for studyin
 
 When an operation finishes, some emit a [domain event](/economy/ports/storage-and-messaging/): a sale completed, a payout settled. economy-lab writes that event to an outbox table in the same transaction as the money move, so it can't be lost or double-sent. Then a relay sweep ships it onward through a [`Dispatcher`](/economy/ports/storage-and-messaging/).
 
-But the thing that receives the event is not part of economy-lab. The `Dispatcher` is a one-function port that hands an event off for delivery; the SQS or HTTP adapter behind it sends it to *your* endpoint: an internal bus, a broker, a webhook receiver. economy-lab is the producer. The consumer is yours to build.
+But the thing that receives the event is not part of economy-lab. The `Dispatcher` is a one-function port that hands an event off for delivery; the SQS or HTTP adapter behind it sends it to *your* endpoint: an internal bus, a broker, a webhook receiver.
 
 The same is true in reverse for inbound provider callbacks. economy-lab verifies and applies them, but it does not host the messaging fabric they ride on. With no dispatcher configured, events simply stay in the outbox, undelivered, and nothing leaves the process.
 

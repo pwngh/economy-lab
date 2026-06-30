@@ -11,7 +11,7 @@ related: ["economy/ports/storage-and-messaging", "economy/reference/http-service
 
 A hash chain proves the ledger is *internally consistent*: that nobody edited a posting without the head hashes giving it away. It can't prove the chain you're looking at is the one the platform actually wrote. Someone with write access could rewrite a whole account's history, recompute every head, and present a chain that re-derives cleanly.
 
-That's the gap a signature closes. The platform periodically signs a snapshot of the ledger with a secret only it holds. An auditor with the matching public key can then confirm two things at once: the snapshot is intact, and it came from the platform. A forged chain won't carry a valid signature.
+A signature closes that gap. The platform periodically signs a snapshot of the ledger with a secret only it holds. An auditor with the matching public key can then confirm two things at once: the snapshot is intact, and it came from the platform. A forged chain won't carry a valid signature.
 
 The `Signer` port is that seam. The core never holds a key or picks an algorithm. It asks the port to `sign` some bytes and, later, to `verify` them. This is what lets the [signed checkpoint](/economy/concepts/integrity/) be tamper-evident rather than merely self-consistent.
 
@@ -26,7 +26,7 @@ interface Signer {
 }
 ```
 
-`sign` always signs with the current key. `verify` returns `true` when the signature is authentic, and it accepts the current key *plus* any still-valid older keys. That second part is what makes a key rotation safe: a signature made before the rotation keeps verifying afterward.
+`sign` always signs with the current key. `verify` returns `true` when the signature is authentic, and it accepts the current key *plus* any still-valid older keys. Because older keys still verify, a signature made before a rotation keeps verifying afterward.
 
 <Callout type="note">
 There's no `keyId` on the port, and no key material crosses it. Which key signed a given checkpoint isn't recorded on the checkpoint; `verify` simply tries every key it trusts until one matches. Key selection lives entirely inside the adapter.
@@ -66,7 +66,7 @@ let signer = systemSigner({
 
 From that point, every new checkpoint is signed with the new key. Old checkpoints stay verifiable because the old key is still in `priorKeys`. `verify` walks its trusted public keys in order and returns `true` on the first that matches, so a signature from any retained key still passes.
 
-Drop a key from `priorKeys` only once no checkpoint you still want to verify was signed under it. After that, signatures made with it stop verifying, which is the point of retiring it.
+Drop a key from `priorKeys` only once no checkpoint you still want to verify was signed under it. After that, signatures made with it stop verifying.
 
 ## What the checkpoint relies on it for
 
@@ -74,7 +74,7 @@ The signer has exactly one caller in the core: the checkpoint. The per-account h
 
 Instead, [the background worker](/economy/reference/background-worker/) periodically seals a checkpoint. <SourceLink to="src/chain.ts#L228-L262">recordCheckpoint</SourceLink> collects every account's head hash and reduces them to a single Merkle root. It then signs *that one root*, so one signature covers every account at once.
 
-The order matters: the proof comes before the signature. `recordCheckpoint` first runs [the chain prover](/economy/concepts/the-proof/) over every account. If a chain fails to re-derive, it throws `CHAIN_BROKEN` and persists nothing. It refuses to sign over a ledger it can't vouch for. Signing a tampered ledger would be a false attestation, so the code won't do it.
+The proof comes before the signature: `recordCheckpoint` first runs [the chain prover](/economy/concepts/the-proof/) over every account. If a chain fails to re-derive, it throws `CHAIN_BROKEN` and persists nothing.
 
 Verification runs the same machinery in reverse. <SourceLink to="src/chain.ts#L275-L293">verifyCheckpoint</SourceLink> recomputes the Merkle root over the current heads and compares it to the checkpoint's stored root. When those match, it calls `signer.verify` over that root. A mismatch (a changed root, a dropped account, or an inauthentic signature) returns `false`.
 

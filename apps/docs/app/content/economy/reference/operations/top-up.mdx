@@ -44,7 +44,7 @@ The payload fields, beyond the `kind` tag, are:
 | `amount` | [`Amount`](/economy/concepts/money-model/) | (required) | The credit to issue. Must be `CREDIT` and strictly positive. |
 | `source` | `string` | (required) | The funding rail (`card`, `steam`, …). Selects the credits' maturity horizon and must be non-empty after trimming whitespace. |
 
-The `source` is more than a label. It sets how long the new credits are held before they can be
+The `source` sets how long the new credits are held before they can be
 spent or cashed out, see [maturity](/economy/concepts/lifecycles/). An unrecognized `source` falls
 back to the long default horizon, never a fast one.
 
@@ -53,7 +53,7 @@ back to the long default horizon, never a fast one.
 It returns an [`Outcome`](/economy/reference/outcomes-and-reason-codes/):
 
 - `committed`: the credit was issued. The `transaction` carries the issuance posting (the buyer's
-  credits going up), the leg the buyer cares about.
+  credits going up).
 - `duplicate`: the `idempotencyKey` was already used. The earlier transaction is returned unchanged,
   and nothing new posts.
 - `rejected`: a velocity or maintenance-window decline; see [reason codes](#reason-codes).
@@ -117,7 +117,7 @@ A `top-up` can return these [reason codes](/economy/reference/outcomes-and-reaso
 
 Structurally invalid requests throw faults rather than returning a `rejected` outcome. A blank
 `source` or a non-`CREDIT` amount throws `MALFORMED_OPERATION`. A zero or negative amount throws
-`INVALID_AMOUNT`. These are broken requests, not expected declines.
+`INVALID_AMOUNT`.
 
 ## Preconditions and invariants
 

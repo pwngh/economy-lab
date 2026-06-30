@@ -42,7 +42,7 @@ Beyond the `kind` tag, the payload carries these fields:
 | `amount` | [`Amount`](/economy/concepts/money-model/) | (required) | The signed change. Must be `CREDIT` and non-zero; negative corrects downward. |
 | `reason` | `string` | (required) | Why the correction was made, recorded on the posting. Must be non-empty after trimming whitespace. |
 
-The `amount` is signed on purpose. A positive value raises the account, a negative value lowers it, and only zero is disallowed. An adjustment that moves nothing is malformed.
+The `amount` is signed on purpose. A positive value raises the account, a negative value lowers it, and only zero is disallowed.
 
 ## Returns
 
@@ -50,7 +50,7 @@ The `amount` is signed on purpose. A positive value raises the account, a negati
 
 A fresh correction returns `committed` with the posted [`Transaction`](/economy/concepts/accounts-and-double-entry/). A retry under the same `idempotencyKey` returns `duplicate`. That duplicate carries the earlier transaction unchanged, so the correction isn't posted twice.
 
-`adjust` never returns `rejected`. It gives no business "no". Every bad input is a thrown fault, listed under [reason codes](#reason-codes).
+`adjust` never returns `rejected`. Every bad input is a thrown fault, listed under [reason codes](#reason-codes).
 
 ## Postings
 
@@ -75,7 +75,7 @@ The handler works in the account's natural direction rather than a fixed debit o
 
 `adjust` is operator-only. It writes a privileged correction to an account the caller need not own, which the ownership rule that governs ordinary user operations doesn't cover. So a `user` actor may never call it; see [actors and authorization](/economy/concepts/actors-and-authorization/).
 
-The handler re-checks the actor itself, not only the pipeline. A non-`operator` actor throws a `MALFORMED_OPERATION` fault. Calling the handler directly with the wrong actor therefore fails loudly, instead of quietly writing a privileged correction.
+The handler re-checks the actor itself, not only the pipeline. A non-`operator` actor throws a `MALFORMED_OPERATION` fault. This guards against a wrong-actor call slipping through when the handler is invoked directly rather than through the pipeline.
 
 A `system` actor clears the pipeline's privileged gate but is still refused by that handler check. So in practice only an `operator` can adjust.
 

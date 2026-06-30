@@ -11,9 +11,9 @@ related: ["economy/reference/operations/request-payout", "economy/reference/oper
 
 economy-lab never moves real money on its own. It keeps a double-entry ledger of credits and tracks what each seller is owed, but the actual USD disbursement lives at a payment provider you plug in. The `Processor` port is that seam.
 
-Think of it as the one place the platform reaches outside itself. Everything else (balances, reserves, the hash chain) stays inside the lab and is provable. A payout, by definition, is money the lab can no longer see once it lands, so the lab hands that step to a provider and records only the provider's reference.
+Everything else (balances, reserves, the hash chain) stays inside the lab and is provable. A payout is money the lab can no longer see once it lands, so the lab hands that step to a provider and records only the provider's reference.
 
-That split is deliberate. The lab proves it asked for a disbursement and proves the saga that tracks it; whether the cash actually reached the seller is the provider's account to settle, reported back later.
+The lab proves it asked for a disbursement and proves the saga that tracks it; whether the cash actually reached the seller is the provider's account to settle, reported back later.
 
 ## The interface
 
@@ -28,7 +28,7 @@ interface Processor {
 }
 ```
 
-The three inputs are deliberately small. `key` is the [idempotency](/economy/concepts/integrity/) key that makes a resend safe. The background worker passes the payout saga id here, so a retried submit pays out at most once. `userId` is an opaque `usr_…` token, never personal data. `amount` is in real USD, already converted from the seller's reserved credits at the [payout rate](/economy/concepts/money-model/).
+`key` is the [idempotency](/economy/concepts/integrity/) key that makes a resend safe. The background worker passes the payout saga id here, so a retried submit pays out at most once. `userId` is an opaque `usr_…` token, never personal data. `amount` is in real USD, already converted from the seller's reserved credits at the [payout rate](/economy/concepts/money-model/).
 
 The return is just `{ providerRef }`: the provider's own id for the disbursement, which the lab records on the [payout saga](/economy/concepts/lifecycles/) for the audit trail.
 
@@ -61,7 +61,7 @@ const processor = httpProcessor({
 
 The amount crosses the wire as a decimal string like `"USD:12.34"`, since money is a `bigint` and `JSON.stringify` can't serialize one. The API key, when set, rides in an `Authorization: Bearer` header and is never written to logs or error details.
 
-Its failure handling encodes the one rule that matters for money. A failed send or a non-2xx status is **retryable**, nothing was paid, so trying again is safe. But a 2xx body with no `providerRef` is **non-retryable**: the money may already have gone out, so retrying could pay twice, and reconciliation resolves the ambiguity instead.
+A failed send or a non-2xx status is **retryable**, nothing was paid, so trying again is safe. But a 2xx body with no `providerRef` is **non-retryable**: the money may already have gone out, so retrying could pay twice, and reconciliation resolves the ambiguity instead.
 
 <Callout type="warning">
 `httpProcessor` is a stub. It assumes a provider that already speaks economy-lab's one-shot request-and-reference shape, which a real payout rail rarely does. For production you write an adapter for your provider's actual API. The Thunes adapter below is the worked example.
@@ -69,9 +69,9 @@ Its failure handling encodes the one rule that matters for money. A failed send 
 
 ## The Thunes adapter
 
-`thunesProcessor` is the real integration: a `Processor` backed by the Thunes Money Transfer v2 API, a cross-border payout rail. It exists to show what satisfying this port against a production provider actually takes.
+`thunesProcessor` is a `Processor` backed by the Thunes Money Transfer v2 API, a cross-border payout rail. It is a worked example of satisfying this port against a production provider.
 
-The gap it bridges is shape. economy-lab's seam is one call that returns one reference. Thunes Money Transfer is a three-step flow, and the adapter hides that orchestration behind the single port method:
+economy-lab's seam is one call that returns one reference. Thunes Money Transfer is a three-step flow, and the adapter hides that orchestration behind the single port method:
 
 1. Create a **quotation** to lock the FX rate. No money moves.
 2. Create a **transaction** against that quotation, naming the beneficiary and credit party. Still no money moves.

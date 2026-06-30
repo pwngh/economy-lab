@@ -52,7 +52,7 @@ When the order was already reversed (by a `refund` or an earlier clawback of the
 
 ## Postings
 
-Every leg is in `CREDIT`, so there is no currency mixing. The handler splits `amount` into the part still recoverable from the user's `spendable` balance and the part already spent.
+Every leg is in `CREDIT`. The handler splits `amount` into the part still recoverable from the user's `spendable` balance and the part already spent.
 
 It debits `recovered` from `spendable`, capped at the current balance so the debit can't drive the account below zero. It books the leftover `shortfall` as a debt the platform is owed in `RECEIVABLE`.
 

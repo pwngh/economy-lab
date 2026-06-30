@@ -15,14 +15,14 @@ The gap between `buy` and `par` is the platform spread, the single place the pla
 
 ## Amount: a currency and a scale
 
-A value should never lose track of what currency it's in. So every `Amount` carries its currency with it: it's `{ currency, minor, __brand }`, where `minor` is a `bigint` of minor units (cents, for `USD`) and `Currency` is the string union `'CREDIT' | 'USD'`. Minor units are exact integers, so large platform totals never lose precision the way a `number` does past `2^53`.
+Every `Amount` carries its currency with it: it's `{ currency, minor, __brand }`, where `minor` is a `bigint` of minor units (cents, for `USD`) and `Currency` is the string union `'CREDIT' | 'USD'`. Minor units are exact integers, so large platform totals never lose precision the way a `number` does past `2^53`.
 
 ```ts
 const price = toAmount('CREDIT', 1000n); // 10.00 CREDIT
 encodeAmount(price); // → 'CREDIT:10.00'
 ```
 
-A whole unit is `SCALE` (`100n`) minor units, two decimal places, fixed. `toAmount` is the only constructor, and the `__brand` field makes a plain `{ currency, minor }` object unassignable to `Amount`. So every value has to pass through `toAmount` or `decodeAmount`, and the rules here can't be quietly bypassed.
+A whole unit is `SCALE` (`100n`) minor units, two decimal places, fixed. `toAmount` is the only constructor, and the `__brand` field makes a plain `{ currency, minor }` object unassignable to `Amount`. So every value has to pass through `toAmount` or `decodeAmount`.
 
 Two guards keep currencies from mixing by accident. `add` and `compare` call `assertSameCurrency`, which throws `CURRENCY_MISMATCH` if you hand them two different currencies. Combining a `CREDIT` amount with a `USD` amount is always a bug. And `decodeAmount` rejects a string with more than two decimal places (`INVALID_AMOUNT`) rather than silently dropping the extra digits.
 
@@ -51,17 +51,15 @@ A `Rate` is stored as exact integers (`{ rate, scale, rateId }`) with the multip
 
 ## The invariant: buy ≥ par ≥ payout
 
-Why does the ordering matter? Each inequality protects a different promise the platform makes.
-
 `buy ≥ par` is what keeps the platform's margin non-negative. A top-up values the buyer's cash at `buy` and the backing held in trust at `par`. It recognizes the difference as USD revenue, added as a posting line only when it's positive. If `buy` ever dropped below `par`, that difference would go negative and a purchase would book a loss.
 
 The reference [`configuredRates`](/economy/ports/rates/) adapter takes `buy`, `par`, and `payout` as separate deployment constants. It doesn't enforce the ordering in code, so a deployment that miswires them breaks this invariant. The ordering is a contract on the rate source, documented on the `Rates` port.
 
-`par ≥ payout` (in practice `payout = par`) ties the creator's cash-out to the same value the platform reserved. It's why a credit earned is redeemable for exactly the dollars set aside for it. That's what [solvency](/economy/concepts/solvency/) checks: real USD in trust covers every spendable credit valued at `par`.
+`par ≥ payout` (in practice `payout = par`) ties the creator's cash-out to the same value the platform reserved. That's what [solvency](/economy/concepts/solvency/) checks: real USD in trust covers every spendable credit valued at `par`.
 
 ## How the spread is enforced, not a separate fee
 
-You won't find a "purchase fee" anywhere in the code, and that's by design. The spread is realized by the split at top-up, not by a deduction. Because cash is valued at `buy` going in and backing at `par`, the margin just falls out of `buy − par`.
+There is no "purchase fee" anywhere in the code. The spread is realized by the split at top-up, not by a deduction. Because cash is valued at `buy` going in and backing at `par`, the margin just falls out of `buy − par`.
 
 The marketplace **fee** on a sale is a different thing entirely, and not part of the money model. How a sale's price splits into recipient shares and platform revenue is the [pricing policy](/economy/ports/pricing/)'s job. You can see the balanced `Leg`s it produces in [accounts and double-entry](/economy/concepts/accounts-and-double-entry/).
 

@@ -56,7 +56,7 @@ To do that, it splits the original sale's legs into three groups:
 - **Claw back, capped**: each seller's `earned` balance the sale credited, and `REVENUE` if it took a fee. The clawback is limited to what that account still holds. If a seller already spent or paid out their cut, only the part still there comes back.
 - **Receivable**: the total that couldn't be clawed back is credited to `SYSTEM.RECEIVABLE`, the platform's IOU, so debits and credits still cancel.
 
-The shortfall is always denominated in `CREDIT`. A sale only moves `CREDIT`, so the receivable that stands in for an uncollectable part matches.
+The shortfall is always denominated in `CREDIT`, since a sale only moves `CREDIT`.
 
 <Callout type="note">
   A refund never drives a user account negative. The ledger forbids that, which is why each seller
@@ -82,7 +82,7 @@ A blank or whitespace-only `orderId` is not a rejection. It throws a `MALFORMED_
 
 ## Preconditions and invariants
 
-A refund and an order-tied `clawback` both reverse the same sale, so only one may run. Before posting, `refund` claims a second, order-scoped key, `reversed:<orderId>`. That claim makes the two paths mutually exclusive per order. Whoever claims first reverses; the other path returns the recorded transaction as `duplicate`.
+A refund and an order-tied `clawback` both reverse the same sale, so only one may run. Before posting, `refund` claims a second, order-scoped key, `reversed:<orderId>`. Whoever claims first reverses; the other path returns the recorded transaction as `duplicate`.
 
 The order-scoped claim is recorded in the same database transaction as the reversal. If the refund rolls back, the claim rolls back too, so the order can still be reversed later.
 

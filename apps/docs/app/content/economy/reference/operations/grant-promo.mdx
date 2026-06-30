@@ -96,4 +96,4 @@ The grant and its bookkeeping row commit or roll back together. Because the reco
 
 When a grant expires, the worker's promo sweep reverses whatever is unspent. It reads the user's live `promo` balance and claws back `min(grant amount, balance)`. A partly-spent grant returns only the remainder, and a fully-spent one posts nothing.
 
-The reversal mirrors the original entry: it debits the user's `promo` account and credits `PROMO_FLOAT`. Grant and reversal cancel out.
+The reversal mirrors the original entry: it debits the user's `promo` account and credits `PROMO_FLOAT`. 

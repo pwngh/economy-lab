@@ -106,5 +106,4 @@ central blank-owner guard (which only inspects accounts an operation debits) nev
 - The grant is idempotent on `idempotencyKey`: a retried submit writes the record at most once.
 - The grant is a full overwrite. Re-granting the same user and SKU with new `attrs` replaces the prior
   record; there is no merge and no append.
-- No balance moves, so the ledger stays balanced and conserved. A grant can never unbalance the
-  books.
+- No balance moves, so the ledger stays balanced and conserved.

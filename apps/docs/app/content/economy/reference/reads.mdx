@@ -9,7 +9,7 @@ related: ["economy/reference/outcomes-and-reason-codes"]
 
 `submit` changes money; `read` looks at it without touching it. If [the `Economy`](/economy/reference/the-economy/) has two halves, `read` is the query half, the place you go to answer "what's this balance?", "did this go through?", "does this user own that item?". Nothing under `read` writes a ledger entry, claims an idempotency key, or records a velocity attempt.
 
-Every method lives on the `economy.read` group, and the whole group is read-only. You call them the same way you'd call `submit`, just without the consequences:
+Every method lives on the `economy.read` group, and the whole group is read-only. You call them the same way you'd call `submit`:
 
 ```ts
 const balance = await economy.read.balance(spendable("usr_a1"));
@@ -43,7 +43,7 @@ Each entry names the transaction it came from, the signed amount applied to this
 
 ## A posting or a payout by id
 
-When you already hold an id and want the one record behind it, these resolve it. Both return `null` rather than throwing when the id is unknown, so a missing record is a value you handle, not an error you catch.
+When you already hold an id and want the one record behind it, these resolve it. Both return `null` rather than throwing when the id is unknown.
 
 `read.posting(txnId)` returns one committed [posting](/economy/concepts/accounts-and-double-entry/) by its transaction id (all of its legs and metadata) or `null` if no such transaction exists:
 

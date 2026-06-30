@@ -13,7 +13,7 @@ Everything the economy persists or sends passes through one of a few narrow inte
 
 These ports all live in `src/ports.ts`. This page covers the ones that hold state or move messages: the `Store` (the ledger and its sub-stores), the `Dispatcher` (events out), the `Cache`, and the transactional outbox and inbox.
 
-The payoff of drawing the seam here is that the same logic runs everywhere. The rules that keep money conserved are not re-implemented per backend. They're written once and verified against every adapter, and the SQL engines push them down into the database as well. We come back to that below.
+The rules that keep money conserved are written once, not re-implemented per backend. They're verified against every adapter, and the SQL engines push them down into the database as well. We come back to that below.
 
 ## The `Store`
 
@@ -61,7 +61,7 @@ The in-memory adapter gets atomicity from a per-store undo log rather than a rea
 
 A port is only useful if every adapter behaves the same way. economy-lab pins that down with a single conformance suite, `runStoreConformance`, that every `Store` adapter is run through. Memory, Postgres, MySQL, and the HTTP adapter all execute the identical test bodies in `test/conformance/store.ts`.
 
-So the choice of backend is an infrastructure decision, not a behavioral one. The same posting, the same overdraft rejection, the same hash chain comes back from each.
+The same posting, the same overdraft rejection, and the same hash chain come back from each backend, so the choice of backend is an infrastructure decision, not a behavioral one.
 
 ### The in-memory default
 
@@ -95,7 +95,7 @@ The `Dispatcher` is the simplest port here: a single function that takes an `Eco
 type Dispatcher = (event: EconomyEvent, options?) => Promise<void>;
 ```
 
-Two adapters ship. `sqsDispatcher` in `src/adapters/sqs.ts` publishes each event to an Amazon SQS queue as JSON, and there's an HTTP dispatcher that POSTs it to a configured URL. With neither `SQS_QUEUE_URL` nor `DISPATCHER_URL` set, events are delivered in-process. The `Dispatcher` is optional in the first place. The economy runs without one.
+Two adapters ship. `sqsDispatcher` in `src/adapters/sqs.ts` publishes each event to an Amazon SQS queue as JSON, and there's an HTTP dispatcher that POSTs it to a configured URL. With neither `SQS_QUEUE_URL` nor `DISPATCHER_URL` set, events are delivered in-process. The `Dispatcher` is optional; the economy runs without one.
 
 Delivery is at-least-once. SQS may deliver a message twice, so every event carries its id and the receiver drops duplicates, the same pattern as the outbox, which we turn to next.
 

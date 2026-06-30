@@ -69,7 +69,7 @@ A `rejected` outcome is not an error. When the economy declines a valid request 
 { "status": "rejected", "reason": "INSUFFICIENT_FUNDS" }
 ```
 
-That distinction is the whole point of the status mapping below: a decline is a normal answer, a fault is an HTTP error.
+In the status mapping below, a decline is a normal answer and a fault is an HTTP error.
 
 ### How thrown faults map to status codes
 
@@ -153,7 +153,7 @@ let handler = createServer(economy, {
 });
 ```
 
-On Bun and Deno, the Fetch handler is served directly. On Node, the entry bridges `node:http` requests into web `Request`/`Response` objects so the same Fetch-only handler runs unchanged, which is exactly why this translation lives in `scripts/` and the rest of `src/` stays runtime-agnostic.
+On Bun and Deno, the Fetch handler is served directly. On Node, the entry bridges `node:http` requests into web `Request`/`Response` objects so the same Fetch-only handler runs unchanged. This translation lives in `scripts/`, and the rest of `src/` stays runtime-agnostic.
 
 <Callout type="warning">
 The deployed process fails fast on missing secrets. `requireSecrets` rejects an unset or blank `SIGNING_SECRET` or `WEBHOOK_SECRET` at startup, naming each one, so an unset `WEBHOOK_SECRET` can't quietly leave inbound callbacks unverified. The full set of environment variables lives on [configuration](/economy/reference/configuration/).
@@ -163,4 +163,4 @@ The deployed process fails fast on missing secrets. `requireSecrets` rejects an 
 
 The HTTP edge itself (the routing, the wire codec, the webhook gate, the status mapping) is the real thing the tests exercise (`test/server.test.ts` covers `/submit`, the HMAC and freshness checks, the leak-proof error body, and both probes).
 
-The runtime bridge in `scripts/main.ts` is honest dev plumbing, not a hardened gateway. It reads the whole request body into memory before handing it over, applies no rate limiting or request-size cap, and the Node path is a minimal `node:http` translation. In a real deployment you'd typically sit this behind a reverse proxy that owns TLS, limits, and timeouts. The service's job is the economy boundary; the front door is the host's.
+The runtime bridge in `scripts/main.ts` is honest dev plumbing, not a hardened gateway. It reads the whole request body into memory before handing it over, applies no rate limiting or request-size cap, and the Node path is a minimal `node:http` translation. In a real deployment you'd typically sit this behind a reverse proxy that owns TLS, limits, and timeouts.

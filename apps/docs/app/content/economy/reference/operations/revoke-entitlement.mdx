@@ -54,7 +54,7 @@ The `committed` [`transaction`](/economy/concepts/accounts-and-double-entry/) is
 
 None. Entitlements track ownership, not value. So `revokeEntitlement` writes no [double-entry posting](/economy/concepts/accounts-and-double-entry/) and touches no account.
 
-The handler drops the ownership record through `unit.entitlements.revoke`. The returned `transaction` exists only because a `committed` outcome must carry one; its leg and link lists are empty.
+The handler drops the ownership record through `unit.entitlements.revoke`. The returned `transaction` carries empty leg and link lists.
 
 ## Authorization
 
@@ -78,8 +78,8 @@ A blank or whitespace-only `userId` or `sku` is not a rejection. It throws a `MA
 
 ## Preconditions and invariants
 
-The handler checks ownership before it revokes. It calls `entitlements.owns(userId, sku)` and returns `NOT_ENTITLED` when the user does not hold the SKU. A revoke of something never granted is therefore a clean decline, not an error.
+The handler checks ownership before it revokes. It calls `entitlements.owns(userId, sku)` and returns `NOT_ENTITLED` when the user does not hold the SKU.
 
-Revoking is idempotent through the `idempotencyKey`. A retry under the same key returns the first result as `duplicate` rather than re-running. So a revoke applies at most once per key, even under retries.
+Revoking is idempotent through the `idempotencyKey`. A retry under the same key returns the first result as `duplicate` rather than re-running.
 
 The ledger's money invariants ([conservation, no-overdraft, and backing](/economy/concepts/integrity/)) are unaffected, because this operation moves no money.

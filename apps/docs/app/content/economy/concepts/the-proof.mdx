@@ -29,7 +29,7 @@ If the database already rejects a bad row, why re-check the books at all? Becaus
 
 Its job is to catch the failures a write-path guard structurally can't see. A bug in the enforcement. A half-applied write. A row edited directly in the database. `proveEconomy` says as much in its own contract: it is the out-of-band cross-check, "run by an auditor/worker, never as the write-path guard" (see <SourceLink to="src/integrity.ts#L72">source</SourceLink>).
 
-That separation is what makes "provably solvent" a verb. Anyone holding the ledger can re-derive the answer. The proof doesn't depend on trusting the process that wrote the rows.
+Anyone holding the ledger can re-derive the answer. The proof doesn't depend on trusting the process that wrote the rows.
 
 ## The invariant it maintains
 
@@ -61,7 +61,7 @@ Backing is the one flag that crosses currencies. It converts custodial credits t
 
 ## What relies on it
 
-The proof is what the project's correctness gates rest on. The [`treasury` worker job](/economy/reference/background-worker/) re-checks backing every cycle, and two verification scripts double as CI gates.
+The [`treasury` worker job](/economy/reference/background-worker/) re-checks backing every cycle, and two verification scripts double as CI gates.
 
 `make prove` drives the real economy through a seeded-random program (top-ups, promo grants, spends) and calls `read.prove()` after *every committed operation*, failing on the first violation. Each run is `8` seeds × `60` operations per backend. After each step it does two more checks:
 

@@ -142,8 +142,7 @@ The handler enforces these before it posts anything:
 
 Like every operation, the posting is balanced: debits and credits sum to zero in `CREDIT`.
 
-The charge, the `Subscription` record, and the SKU grant all commit in one transaction. So a
-paying buyer always owns the SKU, and a rolled-back charge leaves no record behind.
+The charge, the `Subscription` record, and the SKU grant all commit in one transaction.
 
 <Callout type="note">
 `subscribe` bills only the first period. Later periods are billed by the worker's renewal

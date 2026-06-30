@@ -9,7 +9,7 @@ related: ["economy/reference/operations", "economy/reference/reads", "economy/re
 
 An `Economy` is the object you hold and call. It has a small surface: one `submit` to change money, a `read` group to look at state, and `close` to shut down.
 
-You build it from a set of injected ports (a `Store`, a `Signer`, a `Processor`, a `Rates`, a `FeePolicy`, plus a clock and an id source) so the core never reaches for a database driver or a wall clock itself. Pass real ports and you get a real economy; pass in-memory ones and you get the same economy with no infrastructure behind it.
+You build it from a set of injected ports (a `Store`, a `Signer`, a `Processor`, a `Rates`, a `FeePolicy`, plus a clock and an id source) so the core never reaches for a database driver or a wall clock itself. Pass in-memory ports to run the same economy with no external infrastructure.
 
 ## Construction
 

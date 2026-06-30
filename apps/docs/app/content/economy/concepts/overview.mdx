@@ -13,7 +13,7 @@ You drive it through one [`submit`](/economy/reference/the-economy/) entry point
 
 Balances aren't stored and mutated. Every action becomes a balanced posting in an append-only, hash-chained ledger, and balances are folded back from those postings.
 
-What the project is really about is a handful of [invariants](/economy/concepts/the-proof/): value is conserved, no account overdrafts, every spendable credit is backed by real cash, and history can't be silently rewritten. A [prover](/economy/concepts/the-proof/) re-checks all of them after every operation.
+The project enforces a handful of [invariants](/economy/concepts/the-proof/): value is conserved, no account overdrafts, every spendable credit is backed by real cash, and history can't be silently rewritten. A [prover](/economy/concepts/the-proof/) re-checks all of them after every operation.
 
 ## How it fits together
 
@@ -40,7 +40,7 @@ economy-lab invents no cryptography and no accounting. It composes four well-est
 - **Merkle trees, Certificate Transparency, and Ed25519.** The signed [checkpoint](/economy/concepts/integrity/) folds every account's head into a single Merkle root and signs it. The hash tree is Ralph Merkle's, from his [1979 thesis](https://www.ralphmerkle.com/papers/Thesis1979.pdf) and [later patent](https://patents.google.com/patent/US4881264A/); the leaf/node domain separation follows [RFC 6962](https://datatracker.ietf.org/doc/rfc6962/) (Certificate Transparency); and the signature is [Ed25519](https://ed25519.cr.yp.to/) (Bernstein and colleagues).
 - **Sagas.** A payout that reaches an outside rail is modeled as a long-lived transaction advanced one compensatable step at a time, the [saga](/economy/concepts/lifecycles/) pattern from Garcia-Molina and Salem's [*Sagas*](https://sigmodrecord.org/1987/12/09/sagas/) (SIGMOD 1987).
 
-The contribution isn't any one of these; it's binding them together (accounting conservation, cryptographic tamper-evidence, and compensatable long-lived transactions) under one [prover](/economy/concepts/the-proof/) that re-checks all of them after every operation.
+Binding them together (accounting conservation, cryptographic tamper-evidence, and compensatable long-lived transactions) under one [prover](/economy/concepts/the-proof/) that re-checks all of them after every operation.
 
 ## Where to go next
 

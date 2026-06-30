@@ -22,12 +22,12 @@ const outcome = await economy.submit(spendOperation);
 
 ## Why it exists
 
-A naive limit reads the recent total, compares it, then records the new attempt — three steps a second operation can interleave. Two concurrent spends read the same stale total, both pass, and together they blow the limit. That read-then-write race is the failure the gate is built to close, so it records *and* measures in one indivisible step per subject.
+A naive limit reads the recent total, compares it, then records the new attempt — three steps a second operation can interleave. Two concurrent spends read the same stale total, both pass, and together they blow the limit. To close that read-then-write race, the gate records *and* measures in one indivisible step per subject.
 
-Two consequences fall out of that design, and both matter for abuse:
+Two consequences fall out of that design:
 
-- **Denied attempts still count.** The amount is summed before the limit decision, so a flood of over-limit attempts keeps adding to the window. An attacker can't probe the limit for free, and a burst of rejections throttles itself.
-- **The record outlives a rollback.** The attempt is written on a connection independent of the money transaction, so an operation that rolls back still leaves its velocity mark. Tripping a rollback can't erase the footprint.
+- **Denied attempts still count.** The amount is summed before the limit decision, so a flood of over-limit attempts keeps adding to the window.
+- **The record outlives a rollback.** The attempt is written on a connection independent of the money transaction, so an operation that rolls back still leaves its velocity mark.
 
 ## What counts as a subject
 
@@ -44,7 +44,7 @@ Two consequences fall out of that design, and both matter for abuse:
 `screenRisk` runs inside the submit pipeline, before the money transaction opens. It hands the attempt to `recordVelocity`, which does the whole record-and-measure as one unit: it takes a per-subject lock, dedup-inserts the attempt keyed on the [`idempotencyKey`](/economy/concepts/idempotency/) so a retry never double-counts, sums the subject's amounts where the timestamp falls inside the window, and returns that total. `screenRisk` compares it to `velocityLimitMinor` and rejects when it's over.
 
 <Callout type="note">
-The velocity record commits on its own connection, separate from the posting. That's deliberate: it's the one write that must survive a money-transaction rollback, so a rejected or reversed operation still counts against the window.
+The velocity record commits on its own connection, separate from the posting. It's the one write that must survive a money-transaction rollback, so a rejected or reversed operation still counts against the window.
 </Callout>
 
 ## What relies on it

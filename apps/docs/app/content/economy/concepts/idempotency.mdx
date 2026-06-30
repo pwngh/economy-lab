@@ -9,7 +9,7 @@ related: ["economy/reference/the-economy", "economy/reference/outcomes-and-reaso
 
 Networks drop responses, processes crash mid-write, clients retry. A caller that submits an operation and never hears back can't know whether it applied, so it sends the same request again. The platform has to make that safe: a retried operation must take effect at most once, never twice.
 
-Every operation carries an `idempotencyKey` for exactly this. The key is how the system recognizes a retry and replays the original result instead of repeating the work.
+Every operation carries an `idempotencyKey`. The key is how the system recognizes a retry and replays the original result instead of repeating the work.
 
 ## The idea
 
@@ -17,7 +17,7 @@ The first time an operation arrives, the system **claims** its key, runs the ope
 
 <IdempotentRetry />
 
-So a retry is cheap and exact: it returns the same transaction the first call produced, marked as a [`duplicate`](/economy/reference/outcomes-and-reason-codes/) rather than a fresh `committed`.
+A retry returns the same transaction the first call produced, marked as a [`duplicate`](/economy/reference/outcomes-and-reason-codes/) rather than a fresh `committed`.
 
 ## Why it exists
 
@@ -38,7 +38,7 @@ Either way the key is a primary key, so a duplicate can never be written.
 
 Claiming a key is not the same as consuming it. **Only a committed outcome records a result under the key.** If the operation is [rejected](/economy/reference/outcomes-and-reason-codes/) (declined for funds, a velocity limit, a bad request) or throws a fault, the transaction rolls back and the key is left **unused**.
 
-That's deliberate. A caller can retry a rejected request under the *same* key: a decline isn't permanent (funds may arrive, a limit window may pass), and reusing the key keeps the retry idempotent. Only a successful commit is final.
+A caller can retry a rejected request under the *same* key: a decline isn't permanent (funds may arrive, a limit window may pass), and reusing the key keeps the retry idempotent. Only a successful commit is final.
 
 <Callout type="note">
 The retry-after-reject rule is why a claim that rolls back must leave no committed row. Postgres releases its advisory lock and writes nothing; MySQL's placeholder insert is rolled back with the rest of the transaction. A later request under that key starts fresh.

@@ -14,7 +14,7 @@ related:
 
 ## The shape of an answer
 
-Every call to `submit` resolves to one `Outcome`. You never have to guess what came back. The
+Every call to `submit` resolves to one `Outcome`. The
 `status` field tells you which of three things happened, and the rest of the object carries exactly
 what that status implies.
 
@@ -25,8 +25,7 @@ type Outcome =
   | { status: 'rejected'; reason: RejectionCode; detail?: Record<string, unknown> };
 ```
 
-The three statuses answer three different questions, so it helps to read them as the three ways a
-request can land. The operation went through. The operation was a repeat of one already done. The
+The three statuses describe three ways a request can land. The operation went through. The operation was a repeat of one already done. The
 operation was a valid request that the economy declined for a business reason.
 
 ### `committed`: it went through
@@ -42,7 +41,7 @@ if (result.status === 'committed') {
 }
 ```
 
-The transaction is the receipt. Its `legs` are the lines that posted, and its `links` record how
+Its `legs` are the lines that posted, and its `links` record how
 each touched account's hash chain advanced: the per-account integrity trail described under
 [the chain](/economy/concepts/integrity/).
 
@@ -75,9 +74,7 @@ if (result.status === 'rejected' && result.reason === 'INSUFFICIENT_FUNDS') {
 }
 ```
 
-A rejection is normal data, not an error. You handle it in an `if`, not a `catch`. That distinction
-is the whole point of the [throw-versus-decline rule](#rejected-versus-thrown) below, so it's worth
-holding onto: `rejected` is the economy answering your question, not failing to.
+A rejection is normal data, not an error. You handle it in an `if`, not a `catch`. See the [throw-versus-decline rule](#rejected-versus-thrown) below.
 
 ## The `RejectionCode` catalog
 
@@ -109,7 +106,7 @@ The `detail` names the `account` that was short and the `required` amount that h
 
 `DUPLICATE_ORDER` catches a specific client mistake: a retried `spend` that lost its original
 `idempotencyKey`. The `orderId` identifies a unique purchase, so a second charge for the same order
-is a declined "no" rather than a thrown fault, an expected retry that lost its key, not a bug.
+is a declined "no" rather than a thrown fault.
 
 `ECONOMY_PAUSED` only ever stops end-user writes. A `system` actor's settlement and an `operator`'s
 manual fix are never paused, per the rules on [actors and authorization](/economy/concepts/actors-and-authorization/).
@@ -123,7 +120,7 @@ the rejection back. See the [read surface](/economy/reference/reads/).
 
 ## Rejected versus thrown
 
-Here's the rule that ties the whole page together: a `rejected` outcome is the economy's considered
+A `rejected` outcome is the economy's considered
 "no" to a question it understood, while a thrown fault means the question itself was broken.
 
 A `RejectionCode` is data you handle. A fault is an exception you catch. They never overlap. The
@@ -145,8 +142,7 @@ giving an expected answer, so it's a rejection you show the user. `INVALID_AMOUN
 sent a number that can't be money, so it's a fault the caller has to fix in code.
 
 That separation has a practical payoff: ordinary "no" answers stay off the thrown-error path, so
-they never light up error dashboards or page an on-call engineer. A buyer running out of credits is
-a Tuesday, not an incident.
+they never light up error dashboards or page an on-call engineer.
 
 <Callout type="warning">
 Don't reach for a `try`/`catch` to handle an empty balance or a duplicate order. Those come back as

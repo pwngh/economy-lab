@@ -74,9 +74,9 @@ The privileged set is, per <SourceLink to="src/economy.ts#L838-L864">source</Sou
 
 ## How it's enforced
 
-The gate runs early, so a refused request costs nothing past the shape check. `authorize(operation)` runs near the top of `submit`, right after the request's shape is validated and before the money transaction opens (see <SourceLink to="src/economy.ts#L230-L231">source</SourceLink>).
+`authorize(operation)` runs near the top of `submit`, right after the request's shape is validated and before the money transaction opens, so a refused request never opens a transaction (see <SourceLink to="src/economy.ts#L230-L231">source</SourceLink>).
 
-The logic is short:
+The gate's logic:
 
 - An `operator` returns immediately, full access, postings fully audited.
 - A `system` actor returns immediately, full access.

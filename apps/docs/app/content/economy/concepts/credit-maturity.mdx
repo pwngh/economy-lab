@@ -13,7 +13,7 @@ Not every credit a user holds can be cashed out the instant it lands. The money 
 
 An account's balance isn't one undifferentiated number. It's a stack of dated **lots**: each top-up and each credit earned lands as a lot stamped with when it arrived. A lot **matures** once it has waited out its settlement window; until then it's still clearing.
 
-The cashable balance is the part of the live balance whose lots have matured. A cash-out can draw that, and it can't dip into funds still in their wait.
+The cashable balance is the part of the live balance whose lots have matured. A cash-out can draw only that part.
 
 <CreditMaturity />
 
@@ -21,7 +21,7 @@ The cashable balance is the part of the live balance whose lots have matured. A 
 
 [Spending](/economy/reference/operations/spend/) and [paying out](/economy/reference/operations/request-payout/) move real value, and some of the money behind a fresh credit can still reverse. A card payment can be charged back days after it clears the app. If the platform let a user spend or cash out that credit immediately and the underlying payment then reversed, it would be out real money with nothing left to claw back.
 
-The maturity window closes that gap. It holds new funds just long enough that, by the time they're cashable, the risk of a reversal has passed.
+The maturity window holds new funds just long enough that, by the time they're cashable, the risk of a reversal has passed.
 
 ## Lots and the FIFO tail
 
