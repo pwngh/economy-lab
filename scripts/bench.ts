@@ -25,6 +25,9 @@
 // velocity, payout interval and minimum) are neutralized via env so the timings reflect ledger work,
 // not rejections.
 //
+// See https://economy-lab-docs.pages.dev/economy/reference/performance/ for what these two tables
+// measure and how to read the scaling shape.
+//
 //   node scripts/bench.ts                 # or: make bench   (in-memory; + any DB that's up)
 //   BENCH_OPS=5000 node scripts/bench.ts  # heavier throughput sample
 //

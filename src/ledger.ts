@@ -61,6 +61,8 @@ export function balanceDelta(leg: Leg): Amount {
  * account acquire its lock in the same order, so neither can deadlock waiting on a lock the other
  * holds. Every lock-set goes through here, so the fixed-order discipline lives in one place rather
  * than being re-implemented, and possibly mis-ordered, at each call site.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/concurrency/ Concurrency} for the deadlock-free lock ordering and the no-fork constraint that backs it.
  */
 export async function lockAll(
   ledger: Ledger,
