@@ -10,6 +10,7 @@
  */
 
 import { rejected, fault, ERROR_CODES } from '#src/errors.ts';
+import { assertKind } from '#src/operations/guards.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { compare, encodeAmount, toAmount } from '#src/money.ts';
 import { promo, spendable, earned, SYSTEM } from '#src/accounts.ts';
@@ -61,9 +62,7 @@ export async function handleSubscribe(
   unit: Unit,
   ctx: Ctx,
 ): Promise<Outcome> {
-  if (operation.kind !== 'subscribe') {
-    throw kindMismatch(operation);
-  }
+  assertKind(operation, 'subscribe');
   rejectSelfSubscription(operation);
   validateFields(operation);
   let price = validatedPrice(operation.price);
@@ -328,14 +327,4 @@ async function openSubscription(
   // Return the id so the caller can record it on the grant's `source`, linking SKU ownership
   // to the subscription that created it.
   return subscription.id;
-}
-
-// This handler only handles `subscribe` ops. Any other kind means the operations were wired
-// up wrong, so throw a fault rather than risk posting the wrong money.
-function kindMismatch(operation: Operation): ReturnType<typeof fault> {
-  return fault(
-    ERROR_CODES.MALFORMED_OPERATION,
-    `handler received the wrong operation kind: ${operation.kind}.`,
-    { detail: { kind: operation.kind } },
-  );
 }

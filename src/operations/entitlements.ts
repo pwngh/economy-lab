@@ -10,13 +10,13 @@
  */
 
 import { rejected, fault, ERROR_CODES } from '#src/errors.ts';
+import { assertKind, lifecycleMarker } from '#src/operations/guards.ts';
 
 import type {
   EntitlementAttrs,
   Ctx,
   Operation,
   Outcome,
-  Transaction,
 } from '#src/contract.ts';
 import type { Unit } from '#src/ports.ts';
 
@@ -43,9 +43,7 @@ export async function grantEntitlement(
   unit: Unit,
   ctx: Ctx,
 ): Promise<Outcome> {
-  if (operation.kind !== 'grantEntitlement') {
-    throw kindMismatch(operation);
-  }
+  assertKind(operation, 'grantEntitlement');
 
   assertIdentified(operation.userId, operation.sku);
   assertAttrs(operation.attrs);
@@ -69,9 +67,7 @@ export async function revokeEntitlement(
   unit: Unit,
   ctx: Ctx,
 ): Promise<Outcome> {
-  if (operation.kind !== 'revokeEntitlement') {
-    throw kindMismatch(operation);
-  }
+  assertKind(operation, 'revokeEntitlement');
 
   assertIdentified(operation.userId, operation.sku);
 
@@ -145,26 +141,3 @@ function assertAttrs(attrs: EntitlementAttrs | undefined): void {
 // Holds the attributes for a grant with no details, such as no quantity or version. It
 // records the ownership fact without inventing defaults the caller never gave.
 const EMPTY_ATTRS: EntitlementAttrs = {};
-
-// Builds the transaction for an operation that changes ownership but moves no money. A
-// committed result must include a Transaction. This one is a receipt with a fresh id and a
-// commit time, but with empty leg and link lists, because nothing was posted to the ledger.
-function lifecycleMarker(ctx: Ctx): Transaction {
-  return {
-    id: ctx.ids.next('txn'),
-    postedAt: ctx.clock.now(),
-    legs: [],
-    links: [],
-  };
-}
-
-// Builds the fault for a handler that received the wrong operation kind. Each handler is
-// registered to one kind, so a wrong kind means the dispatch tables are miswired. The handler
-// throws this fault rather than process an operation it cannot handle.
-function kindMismatch(operation: Operation): ReturnType<typeof fault> {
-  return fault(
-    ERROR_CODES.MALFORMED_OPERATION,
-    `entitlement handler received the wrong operation kind: ${operation.kind}.`,
-    { detail: { kind: operation.kind } },
-  );
-}

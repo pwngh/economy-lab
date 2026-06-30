@@ -13,7 +13,12 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { chainHash, balanceDelta, GENESIS } from '#src/ledger.ts';
-import { toAmount, encodeAmount, decodeAmount, isAmount } from '#src/money.ts';
+import {
+  toAmount,
+  encodeAmount,
+  decodeAmountWire,
+  isAmount,
+} from '#src/money.ts';
 import { currency } from '#src/accounts.ts';
 import { byCodeUnit, fromHex } from '#src/bytes.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
@@ -1429,10 +1434,8 @@ function tryDecodeAmountString(encoded: string): Amount | null {
   if (colon < 0) {
     return null;
   }
-  let currencyTag = encoded.slice(0, colon) as Amount['currency'];
-  let decimal = encoded.slice(colon + 1);
   try {
-    return decodeAmount(decimal, currencyTag);
+    return decodeAmountWire(encoded);
   } catch {
     return null;
   }

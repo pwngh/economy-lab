@@ -12,6 +12,7 @@
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { postEntry } from '#src/ledger.ts';
 import { neg } from '#src/money.ts';
+import { assertKind, assertOperator } from '#src/operations/guards.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
@@ -48,9 +49,7 @@ export async function reverse(
   unit: Unit,
   ctx: Ctx,
 ): Promise<Outcome> {
-  if (operation.kind !== 'reverse') {
-    throw kindMismatch(operation);
-  }
+  assertKind(operation, 'reverse');
   assertOperator(operation);
   assertReason(operation.reason);
 
@@ -158,21 +157,6 @@ function reverseMeta(
   };
 }
 
-// Requires an operator actor. Only an operator may run a reverse. The framework checks this before
-// the handler runs, but the handler rechecks so it stays safe when called directly, such as from a
-// test. A non-operator caller throws a fault instead of performing this privileged write.
-function assertOperator(
-  operation: Extract<Operation, { kind: 'reverse' }>,
-): void {
-  if (operation.actor.kind !== 'operator') {
-    throw fault(
-      ERROR_CODES.MALFORMED_OPERATION,
-      'reverse requires an operator principal.',
-      { detail: { kind: operation.kind, actor: operation.actor.kind } },
-    );
-  }
-}
-
 // Requires a non-blank reason. A reversal must record why it happened. This rejects a missing or
 // whitespace-only reason so none is posted without a justification for the audit trail.
 function assertReason(reason: string): void {
@@ -183,15 +167,4 @@ function assertReason(reason: string): void {
       { detail: { kind: 'reverse' } },
     );
   }
-}
-
-// Builds the fault for an operation of the wrong kind. Operations are routed by `kind`, so this
-// handler should only receive a `reverse`. Any other kind means a wiring bug, so it throws a fault
-// rather than handle an operation it was not built for.
-function kindMismatch(operation: Operation): ReturnType<typeof fault> {
-  return fault(
-    ERROR_CODES.MALFORMED_OPERATION,
-    `handler received the wrong operation kind: ${operation.kind}.`,
-    { detail: { kind: operation.kind } },
-  );
 }

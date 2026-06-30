@@ -12,6 +12,7 @@
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
+import { assertKind } from '#src/operations/guards.ts';
 
 import type { Ctx, Operation, Outcome, Transaction } from '#src/contract.ts';
 import type { Saga, Unit } from '#src/ports.ts';
@@ -60,9 +61,7 @@ export async function reversePayout(
   unit: Unit,
   ctx: Ctx,
 ): Promise<Outcome> {
-  if (operation.kind !== 'reversePayout') {
-    throw kindMismatch(operation);
-  }
+  assertKind(operation, 'reversePayout');
   assertReason(operation.reason);
 
   let saga = await loadSaga(unit, operation.sagaId);
@@ -190,14 +189,4 @@ function assertReason(reason: string): void {
 // to carry a transaction. Return an empty placeholder with no entries.
 function noopTransaction(): Transaction {
   return { id: '', postedAt: 0, legs: [], links: [] };
-}
-
-// Operations route to handlers by `kind`, so a wrong kind here means routing is broken. It throws
-// rather than act on an operation this code was not built for.
-function kindMismatch(operation: Operation): ReturnType<typeof fault> {
-  return fault(
-    ERROR_CODES.MALFORMED_OPERATION,
-    `handler received the wrong operation kind: ${operation.kind}.`,
-    { detail: { kind: operation.kind } },
-  );
 }

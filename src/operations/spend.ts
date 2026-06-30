@@ -10,8 +10,9 @@
  */
 
 import { ERROR_CODES, fault, rejected } from '#src/errors.ts';
+import { assertKind } from '#src/operations/guards.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
-import { encodeAmount, toAmount } from '#src/money.ts';
+import { encodeAmount, requirePositiveCredit, toAmount } from '#src/money.ts';
 import {
   SYSTEM,
   earned,
@@ -74,11 +75,9 @@ export async function spend(
   unit: Unit,
   ctx: Ctx,
 ): Promise<Outcome> {
-  if (operation.kind !== 'spend') {
-    throw kindMismatch(operation);
-  }
+  assertKind(operation, 'spend');
   assertSpendShape(operation);
-  let price = positiveCredit(operation.price, 'spend.price');
+  let price = requirePositiveCredit(operation.price, 'spend.price');
   assertShares(operation);
   assertNoSelfDealing(operation);
   let recipientId = entitlementRecipient(operation);
@@ -311,22 +310,6 @@ function entitlementRecipient(
   return operation.giftTo;
 }
 
-// Require a positive CREDIT price. A spend is always priced in CREDIT, so a non-CREDIT or
-// non-positive price is a malformed request thrown as a fault, not an ordinary refusal.
-function positiveCredit(amount: Amount, label: string): Amount {
-  if (amount.currency !== 'CREDIT') {
-    throw fault(ERROR_CODES.MALFORMED_OPERATION, `${label} must be CREDIT.`, {
-      detail: { label, amount: encodeAmount(amount) },
-    });
-  }
-  if (amount.minor <= 0n) {
-    throw fault(ERROR_CODES.INVALID_AMOUNT, `${label} must be positive.`, {
-      detail: { label, amount: encodeAmount(amount) },
-    });
-  }
-  return amount;
-}
-
 // Validate the structured shape of the spend request, the fields the central guard can't know
 // about. These are programming/client errors, so each is thrown as a fault, not an ordinary
 // refusal:
@@ -460,14 +443,4 @@ function assertNoSelfDealing(
       );
     }
   }
-}
-
-// Middleware routes each request to the handler for its `kind`, so a non-spend reaching this
-// handler is a wiring bug. Throw a loud fault rather than mishandle it.
-function kindMismatch(operation: Operation): ReturnType<typeof fault> {
-  return fault(
-    ERROR_CODES.MALFORMED_OPERATION,
-    `handler received the wrong operation kind: ${operation.kind}.`,
-    { detail: { kind: operation.kind } },
-  );
 }

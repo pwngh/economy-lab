@@ -13,7 +13,7 @@
 // `bigint` an amount is stored as, so amounts travel as decimal strings (e.g. `'CREDIT:12.34'`)
 // and parse back on arrival. Client and server both import this file, so the format stays in sync.
 
-import { decodeAmount, encodeAmount, isAmount } from '#src/money.ts';
+import { decodeAmountWire, encodeAmount, isAmount } from '#src/money.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
@@ -55,9 +55,7 @@ function decodeLeg(wire: unknown): Leg {
 // the decimal value after it, as in `'CREDIT:12.34'`, so the string is self-contained. This splits
 // on the colon and passes both parts to `decodeAmount`.
 function amountFrom(wire: string): Amount {
-  let colon = wire.indexOf(':');
-  let currency = wire.slice(0, colon) as Amount['currency'];
-  return decodeAmount(wire.slice(colon + 1), currency);
+  return decodeAmountWire(wire);
 }
 
 // Behaves like `amountFrom` but returns null instead of throwing when the string is not an encoded
@@ -65,13 +63,11 @@ function amountFrom(wire: string): Amount {
 // merely contains a colon. The decimal tail must parse, since `decodeAmount` throws otherwise, and
 // that throw is caught here.
 function tryAmountFrom(wire: string): Amount | null {
-  let colon = wire.indexOf(':');
-  if (colon < 0) {
+  if (wire.indexOf(':') < 0) {
     return null;
   }
-  let currency = wire.slice(0, colon) as Amount['currency'];
   try {
-    return decodeAmount(wire.slice(colon + 1), currency);
+    return decodeAmountWire(wire);
   } catch {
     return null;
   }

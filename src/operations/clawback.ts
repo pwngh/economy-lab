@@ -16,7 +16,8 @@ import {
   postEntry,
   balance as ledgerBalance,
 } from '#src/ledger.ts';
-import { encodeAmount, toAmount } from '#src/money.ts';
+import { encodeAmount, requirePositiveCredit, toAmount } from '#src/money.ts';
+import { assertKind } from '#src/operations/guards.ts';
 import { SYSTEM, spendable } from '#src/accounts.ts';
 
 import type { Amount } from '#src/money.ts';
@@ -51,10 +52,8 @@ export async function handleClawback(
   unit: Unit,
   ctx: Ctx,
 ): Promise<Outcome> {
-  if (operation.kind !== 'clawback') {
-    throw kindMismatch(operation);
-  }
-  let amount = positiveCredit(operation.amount, 'clawback.amount');
+  assertKind(operation, 'clawback');
+  let amount = requirePositiveCredit(operation.amount, 'clawback.amount');
 
   // Claim the shared `reversed:${orderId}` key so clawback and refund stay mutually exclusive. A
   // lost claim means the order was already reversed. Return that reversal's transaction as a
@@ -167,31 +166,4 @@ function clawbackMeta(
     meta.reason = operation.reason;
   }
   return meta;
-}
-
-// Requires a positive CREDIT amount and returns it unchanged. A wrong currency or a non-positive
-// amount is a malformed request, not a recoverable decline, so each throws a fault rather than
-// returning a rejection.
-function positiveCredit(amount: Amount, label: string): Amount {
-  if (amount.currency !== 'CREDIT') {
-    throw fault(ERROR_CODES.MALFORMED_OPERATION, `${label} must be CREDIT.`, {
-      detail: { label, amount: encodeAmount(amount) },
-    });
-  }
-  if (amount.minor <= 0n) {
-    throw fault(ERROR_CODES.INVALID_AMOUNT, `${label} must be positive.`, {
-      detail: { label, amount: encodeAmount(amount) },
-    });
-  }
-  return amount;
-}
-
-// Builds the fault for a misrouted operation. A kind other than `clawback` means the dispatcher
-// sent the wrong operation here, so fail loudly rather than quietly posting the wrong thing.
-function kindMismatch(operation: Operation): ReturnType<typeof fault> {
-  return fault(
-    ERROR_CODES.MALFORMED_OPERATION,
-    `handler received the wrong operation kind: ${operation.kind}.`,
-    { detail: { kind: operation.kind } },
-  );
 }

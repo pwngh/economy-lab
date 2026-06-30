@@ -13,7 +13,7 @@ import { fault, rejected, ERROR_CODES } from '#src/errors.ts';
 import { balance as ledgerBalance, lockAll } from '#src/ledger.ts';
 import {
   compare,
-  decodeAmount,
+  decodeAmountWire,
   encodeAmount,
   isNegative,
   toAmount,
@@ -198,7 +198,7 @@ async function cachedBalance(
     null,
   );
   if (hit !== null) {
-    return amountFromCache(hit);
+    return decodeAmountWire(hit);
   }
   let fresh = await ledger.balance(account, options);
   await bestEffortCache<void>(
@@ -208,15 +208,6 @@ async function cachedBalance(
     undefined,
   );
   return fresh;
-}
-
-// Rebuilds an Amount from its cached `encodeAmount` form, such as `'CREDIT:12.34'`. The currency
-// comes before the colon and the decimal value after. This is the same split the wire and postgres
-// adapters use.
-function amountFromCache(encoded: string): Amount {
-  let colon = encoded.indexOf(':');
-  let cur = encoded.slice(0, colon) as Currency;
-  return decodeAmount(encoded.slice(colon + 1), cur);
 }
 
 // --- Request-processing pipeline ---------------------------------------------------

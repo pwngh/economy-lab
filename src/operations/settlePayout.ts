@@ -11,12 +11,13 @@
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
-import { encodeAmount, toAmount } from '#src/money.ts';
+import { convertFloor, encodeAmount, toAmount } from '#src/money.ts';
+import { assertKind } from '#src/operations/guards.ts';
 import { SYSTEM } from '#src/accounts.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { Ctx, Operation, Outcome, Transaction } from '#src/contract.ts';
-import type { Rate, Saga, SagaState, Unit } from '#src/ports.ts';
+import type { Saga, SagaState, Unit } from '#src/ports.ts';
 
 /**
  * Settles a submitted payout. This is the SUBMITTED to SETTLED step, driven by the provider's
@@ -51,16 +52,14 @@ export async function settlePayout(
   unit: Unit,
   ctx: Ctx,
 ): Promise<Outcome> {
-  if (operation.kind !== 'settlePayout') {
-    throw kindMismatch(operation);
-  }
+  assertKind(operation, 'settlePayout');
 
   let saga = await loadSaga(unit, operation.sagaId);
   refuseNotSubmitted(saga);
 
   // --- The worker's settle, computed identically (src/worker/payouts.ts `settle`). ---
   let rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
-  let usd = convert(saga.reserve, rate, 'USD');
+  let usd = convertFloor(saga.reserve, rate, 'USD');
   // The payout-rail fee (config.payoutFeeBps) is the rail's cut, not platform revenue. The gross
   // `usd` leaves trust, the rail keeps `fee`, and the creator gets `net`. The split happens at the
   // external rail downstream of USD_CLEARING, so `fee` and `net` are recorded for audit rather than
@@ -203,14 +202,6 @@ function payoutFee(gross: Amount, feeBps: number): Amount {
   return toAmount('USD', (gross.minor * BigInt(feeBps)) / 10_000n);
 }
 
-// Converts a CREDIT amount to USD at the given rate, rounding down. The rate is stored as integers
-// for exactness, with `rate` scaled by 10^scale, so the real multiplier is `rate / 10^scale`. The
-// conversion multiplies the credit amount by `rate`, then divides by 10^scale. This is the same
-// conversion as the worker's `convert`.
-function convert(amount: Amount, rate: Rate, to: Amount['currency']): Amount {
-  return toAmount(to, (amount.minor * rate.rate) / 10n ** BigInt(rate.scale));
-}
-
 // Fails loudly when the compare-and-set did not take, which means another worker or settle already
 // settled this payout. Throwing rolls back the two ledger entries posted alongside it, along with the
 // queued event, instead of paying the seller twice. The throw is safe to retry. A redelivered settle
@@ -224,15 +215,4 @@ function assertAdvanced(advanced: boolean, saga: Saga, to: SagaState): void {
       { detail: { sagaId: saga.id, from: saga.state, to } },
     );
   }
-}
-
-// Builds the fault for a wrong operation kind. Operations route to handlers by `kind`, so a wrong
-// kind here means broken routing. It throws rather than act on an operation this code was not built
-// for.
-function kindMismatch(operation: Operation): ReturnType<typeof fault> {
-  return fault(
-    ERROR_CODES.MALFORMED_OPERATION,
-    `settlePayout handler received the wrong operation kind: ${operation.kind}.`,
-    { detail: { kind: operation.kind } },
-  );
 }

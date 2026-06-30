@@ -16,15 +16,8 @@ import { topUp } from '#src/operations/topUp.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import {
   fixedClock,
-  sequentialIds,
   seededDigest,
-  seededSigner,
-  fixedRates,
-  testLogger,
-  noopMeter,
-  fakeProcessor,
-  defaultPricing,
-  testConfig,
+  makeCtx,
 } from '#test/support/capabilities.ts';
 import { topUp as topUpOp, credit, usd } from '#test/support/builders.ts';
 import { spendable, SYSTEM } from '#src/accounts.ts';
@@ -32,26 +25,6 @@ import { toAmount } from '#src/money.ts';
 
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
-
-// Builds the Ctx the topUp handler reads. Every outside service (clock, ids, rates, processor,
-// and the rest) is a deterministic test double, so runs are reproducible. Production routes
-// operations to the handler by kind, but that wiring isn't built yet, so tests call topUp directly.
-function makeCtx(): Ctx {
-  let digest = seededDigest(1);
-  let clock = fixedClock(0);
-  return {
-    clock,
-    ids: sequentialIds(),
-    digest,
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    config: testConfig(),
-    pricing: defaultPricing(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-  };
-}
 
 function makeStore(): Store {
   let digest = seededDigest(1);

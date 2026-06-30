@@ -10,6 +10,7 @@
  */
 
 import { fault, rejected, ERROR_CODES } from '#src/errors.ts';
+import { assertKind } from '#src/operations/guards.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { compare, encodeAmount, toAmount } from '#src/money.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
@@ -43,9 +44,7 @@ export async function requestPayout(
   unit: Unit,
   ctx: Ctx,
 ): Promise<Outcome> {
-  if (operation.kind !== 'requestPayout') {
-    throw kindMismatch(operation);
-  }
+  assertKind(operation, 'requestPayout');
   let amount = payableCredit(operation.amount);
 
   if (amount.minor < ctx.config.payoutMinimumEarnedMinor) {
@@ -180,14 +179,4 @@ function payableCredit(amount: Amount): Amount {
     );
   }
   return amount;
-}
-
-// Builds the fault thrown when this handler is called with the wrong operation kind. This only
-// happens through a wiring mistake, so it is a thrown fault rather than a declined result.
-function kindMismatch(operation: Operation): ReturnType<typeof fault> {
-  return fault(
-    ERROR_CODES.MALFORMED_OPERATION,
-    `requestPayout handler received the wrong operation kind: ${operation.kind}.`,
-    { detail: { kind: operation.kind } },
-  );
 }

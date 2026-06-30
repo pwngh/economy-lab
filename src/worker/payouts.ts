@@ -11,12 +11,11 @@
 
 import { normalizeError } from '#src/errors.ts';
 import { credit, debit, lockAll, postEntry } from '#src/ledger.ts';
-import { encodeAmount, toAmount } from '#src/money.ts';
+import { convertFloor, encodeAmount } from '#src/money.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
 
-import type { Amount } from '#src/money.ts';
 import type { WorkerCtx } from '#src/contract.ts';
-import type { Rate, Saga, Store } from '#src/ports.ts';
+import type { Saga, Store } from '#src/ports.ts';
 
 /**
  * Reports which payouts moved this run, bucketed by outcome. The worker submits RESERVED payouts to
@@ -235,7 +234,7 @@ async function submitToProvider(
   saga: Saga,
 ): Promise<void> {
   let rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
-  let usd = convert(saga.reserve, rate, 'USD');
+  let usd = convertFloor(saga.reserve, rate, 'USD');
 
   let { providerRef } = await ctx.processor.submitPayout({
     key: saga.id,
@@ -250,13 +249,6 @@ async function submitToProvider(
     dueAt: now + submittedSlaMs(ctx),
     updatedAt: now,
   });
-}
-
-// Converts a CREDIT amount to USD at the given rate, rounding down. The rate is stored as integers
-// for exactness, with `rate` scaled by 10^scale, so the real multiplier is `rate / 10^scale`:
-// multiply the credit amount by `rate`, then divide by 10^scale.
-function convert(amount: Amount, rate: Rate, to: Amount['currency']): Amount {
-  return toAmount(to, (amount.minor * rate.rate) / 10n ** BigInt(rate.scale));
 }
 
 // Returns the milliseconds to wait after submitting before the sweep next checks on the payout. It

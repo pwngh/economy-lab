@@ -10,6 +10,7 @@
  */
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
+import { assertKind, assertOperator } from '#src/operations/guards.ts';
 import { postEntry } from '#src/ledger.ts';
 import { encodeAmount, isZero, toAmount } from '#src/money.ts';
 import { SYSTEM, isDebitNormal } from '#src/accounts.ts';
@@ -47,9 +48,7 @@ export async function adjust(
   unit: Unit,
   ctx: Ctx,
 ): Promise<Outcome> {
-  if (operation.kind !== 'adjust') {
-    throw kindMismatch(operation);
-  }
+  assertKind(operation, 'adjust');
   assertOperator(operation);
   assertReason(operation.reason);
   let amount = creditDelta(operation.amount, 'adjust.amount');
@@ -98,22 +97,6 @@ function adjustMeta(
   };
 }
 
-// Requires an operator principal, because only an operator may adjust. The wrapping
-// middleware already checks the actor. Re-checking here means that calling the handler
-// directly with the wrong actor, for example from a test, fails loudly instead of quietly
-// writing a privileged correction.
-function assertOperator(
-  operation: Extract<Operation, { kind: 'adjust' }>,
-): void {
-  if (operation.actor.kind !== 'operator') {
-    throw fault(
-      ERROR_CODES.MALFORMED_OPERATION,
-      'adjust requires an operator principal.',
-      { detail: { kind: operation.kind, actor: operation.actor.kind } },
-    );
-  }
-}
-
 // Requires a non-blank reason, because a correction must record why for auditability. A
 // missing or blank reason is malformed and is rejected before anything posts.
 function assertReason(reason: string): void {
@@ -142,14 +125,4 @@ function creditDelta(amount: Amount, label: string): Amount {
     });
   }
   return amount;
-}
-
-// Builds the fault for a wrong operation kind. Operations route to handlers by `kind`, so a
-// different kind here means the wiring is wrong. It fails loudly rather than mishandle it.
-function kindMismatch(operation: Operation): ReturnType<typeof fault> {
-  return fault(
-    ERROR_CODES.MALFORMED_OPERATION,
-    `handler received the wrong operation kind: ${operation.kind}.`,
-    { detail: { kind: operation.kind } },
-  );
 }

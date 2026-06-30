@@ -12,6 +12,7 @@
 import { fault, rejected, ERROR_CODES } from '#src/errors.ts';
 import { balanceDelta, lockAll, postEntry } from '#src/ledger.ts';
 import { toAmount } from '#src/money.ts';
+import { assertKind } from '#src/operations/guards.ts';
 import { SYSTEM, isDebitNormal } from '#src/accounts.ts';
 
 import type { Amount } from '#src/money.ts';
@@ -54,9 +55,7 @@ export async function refund(
   unit: Unit,
   ctx: Ctx,
 ): Promise<Outcome> {
-  if (operation.kind !== 'refund') {
-    throw kindMismatch(operation);
-  }
+  assertKind(operation, 'refund');
   requireOrderId(operation.orderId);
 
   let sale = await unit.sales.get(operation.orderId);
@@ -274,15 +273,4 @@ function requireOrderId(orderId: string): void {
       },
     );
   }
-}
-
-// Builds the fault for a wrong operation kind. Operations route to handlers by `kind`, so reaching
-// this handler with any kind other than `refund` means the routing is wired wrong. This throws a
-// fault rather than handle an operation the function was not written for.
-function kindMismatch(operation: Operation): ReturnType<typeof fault> {
-  return fault(
-    ERROR_CODES.MALFORMED_OPERATION,
-    `handler received the wrong operation kind: ${operation.kind}.`,
-    { detail: { kind: operation.kind } },
-  );
 }

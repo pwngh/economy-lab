@@ -10,7 +10,7 @@
  */
 
 import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
-import { encodeAmount, toAmount } from '#src/money.ts';
+import { convertFloor, encodeAmount, toAmount } from '#src/money.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { maturedBalance } from '#src/maturity.ts';
 import { SYSTEM, classify, currency } from '#src/accounts.ts';
@@ -321,7 +321,7 @@ export async function sweepFees(
     // rate is for paying sellers, not for realizing the platform's surplus, so it is not used
     // here. Keep the rate so the CREDIT and USD entries below can be matched as one move.
     let rate = ctx.rates.par('CREDIT');
-    let usd = convertToUsd(amount, rate);
+    let usd = convertFloor(amount, rate, 'USD');
 
     let transaction = await postEntry(unit.ledger, {
       txnId: ctx.ids.next('txn'),
@@ -471,15 +471,6 @@ async function surplusCredit(
   let trustCash = await unit.ledger.balance(SYSTEM.TRUST_CASH);
   let trustInCredit = usdToCredit(trustCash.minor, par);
   return trustInCredit - custodialCreditMinor;
-}
-
-// Converts CREDIT to USD at the given rate, rounding down. The rate is stored scaled by
-// 10^scale, so this multiplies by rate.rate and then divides by 10^scale to undo the scaling.
-function convertToUsd(amount: Amount, rate: Rate): Amount {
-  return toAmount(
-    'USD',
-    (amount.minor * rate.rate) / 10n ** BigInt(rate.scale),
-  );
 }
 
 // Converts USD back to CREDIT at par, rounding down. This reverses `requiredBackingMinor`,

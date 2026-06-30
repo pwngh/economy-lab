@@ -29,7 +29,12 @@ interface PgModule {
 let pg = pgUntyped as PgModule;
 
 import { chainHash, balanceDelta, GENESIS } from '#src/ledger.ts';
-import { toAmount, encodeAmount, decodeAmount, isAmount } from '#src/money.ts';
+import {
+  toAmount,
+  encodeAmount,
+  decodeAmountWire,
+  isAmount,
+} from '#src/money.ts';
 import { currency } from '#src/accounts.ts';
 import { assertSchemaCurrent } from '#src/schema.ts';
 import { byCodeUnit, fromHex } from '#src/bytes.ts';
@@ -690,19 +695,10 @@ function decodeTransaction(encoded: EncodedTransaction): Transaction {
     postedAt: encoded.postedAt,
     legs: encoded.legs.map((leg) => ({
       account: leg.account as AccountRef,
-      amount: decodeAmountString(leg.amount),
+      amount: decodeAmountWire(leg.amount),
     })),
     links: encoded.links,
   };
-}
-
-// Decode one encoded amount back into an Amount. encodeAmount produces `CREDIT:12.34`; split
-// the currency before the colon and parse the decimal after it.
-function decodeAmountString(encoded: string): Amount {
-  let colon = encoded.indexOf(':');
-  let currency = encoded.slice(0, colon) as Amount['currency'];
-  let decimal = encoded.slice(colon + 1);
-  return decodeAmount(decimal, currency);
 }
 
 // --- Replay store -----------------------------------------------------------------
@@ -1047,14 +1043,11 @@ function decodeAmounts(value: unknown): unknown {
 // decimal part must parse (decodeAmount throws on a non-numeric tail). This function catches that
 // throw so an ordinary string that merely contains a colon falls through to "not an amount".
 function tryDecodeAmountString(encoded: string): Amount | null {
-  let colon = encoded.indexOf(':');
-  if (colon < 0) {
+  if (encoded.indexOf(':') < 0) {
     return null;
   }
-  let currency = encoded.slice(0, colon) as Amount['currency'];
-  let decimal = encoded.slice(colon + 1);
   try {
-    return decodeAmount(decimal, currency);
+    return decodeAmountWire(encoded);
   } catch {
     return null;
   }

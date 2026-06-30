@@ -25,7 +25,7 @@ import type {
   Signer,
 } from '#src/ports.ts';
 import type { Currency, Amount } from '#src/money.ts';
-import type { FeePolicy, Recipient } from '#src/contract.ts';
+import type { Ctx, FeePolicy, Recipient } from '#src/contract.ts';
 import type { Leg } from '#src/ports.ts';
 import type { Config } from '#src/config.ts';
 
@@ -262,5 +262,27 @@ export function testConfig(): Config {
     // No maintenance window by default; the pause test supplies its own bounds via the config override.
     pauseStartMs: null,
     pauseEndMs: null,
+  };
+}
+
+// --- Ctx --------------------------------------------------------------------------
+
+/**
+ * Builds the Ctx a handler reads, wired entirely from the deterministic doubles above so handler
+ * runs are reproducible. Production routes operations to handlers by kind through `submit`; a test
+ * builds the Ctx here and calls the handler directly.
+ */
+export function makeCtx(): Ctx {
+  return {
+    clock: fixedClock(0),
+    ids: sequentialIds(),
+    digest: seededDigest(1),
+    signer: seededSigner(1),
+    processor: fakeProcessor(),
+    config: testConfig(),
+    pricing: defaultPricing(),
+    rates: fixedRates(),
+    logger: testLogger(),
+    meter: noopMeter(),
   };
 }

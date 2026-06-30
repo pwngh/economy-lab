@@ -27,7 +27,7 @@
 // stored-value pool (credits owed to users), so "revenue" stays platform fee income only.
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
-import { decodeAmount } from '#src/money.ts';
+import { decodeAmountWire } from '#src/money.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { Operation } from '#src/contract.ts';
@@ -377,14 +377,10 @@ function decodeAmountField(value: unknown): Amount {
       "Webhook field 'amount' must be an encoded amount string.",
     );
   }
-  let colon = value.indexOf(':');
-  if (colon < 0) {
+  if (value.indexOf(':') < 0) {
     throw malformedEvent("Webhook field 'amount' must be 'CURRENCY:decimal'.");
   }
-  return decodeAmount(
-    value.slice(colon + 1),
-    value.slice(0, colon) as Amount['currency'],
-  );
+  return decodeAmountWire(value);
 }
 
 // Builds the fault for a wrong-shape webhook body, treated as a bad client request like a malformed

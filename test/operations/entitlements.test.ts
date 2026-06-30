@@ -19,15 +19,8 @@ import {
 import { memoryStore } from '#src/adapters/memory.ts';
 import {
   fixedClock,
-  sequentialIds,
   seededDigest,
-  seededSigner,
-  fixedRates,
-  testLogger,
-  noopMeter,
-  fakeProcessor,
-  defaultPricing,
-  testConfig,
+  makeCtx,
 } from '#test/support/capabilities.ts';
 import {
   grantEntitlement as grantEntitlementOp,
@@ -42,25 +35,6 @@ type EntitlementHandler = (
   unit: Unit,
   ctx: Ctx,
 ) => Promise<Outcome>;
-
-// Builds the Ctx of shared services passed to every handler. Every service is a
-// deterministic fake, so each run produces the same result.
-function makeCtx(): Ctx {
-  let digest = seededDigest(1);
-  let clock = fixedClock(0);
-  return {
-    clock,
-    ids: sequentialIds(),
-    digest,
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    config: testConfig(),
-    pricing: defaultPricing(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-  };
-}
 
 function makeStore(): Store {
   let digest = seededDigest(1);

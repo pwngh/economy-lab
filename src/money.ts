@@ -11,6 +11,8 @@
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 
+import type { Rate } from '#src/ports.ts';
+
 /**
  * The currencies the system handles: in-app CREDIT and real-world USD. This is a string
  * union rather than an enum so a new currency can be added here without touching call
@@ -131,6 +133,59 @@ export function decodeAmount(decimal: string, currency: Currency): Amount {
   let whole = BigInt(match[2]!);
   let frac = BigInt((match[3] ?? '').padEnd(FRACTION_DIGITS, '0'));
   return toAmount(currency, sign * (whole * SCALE + frac));
+}
+
+/**
+ * Requires a positive CREDIT amount and returns it unchanged. A wrong currency or a non-positive
+ * amount is a malformed request, not a recoverable decline, so it throws a fault. `label` names the
+ * offending field in the error.
+ */
+export function requirePositiveCredit(amount: Amount, label: string): Amount {
+  if (amount.currency !== 'CREDIT') {
+    throw fault(ERROR_CODES.MALFORMED_OPERATION, `${label} must be CREDIT.`, {
+      detail: { label, amount: encodeAmount(amount) },
+    });
+  }
+  if (amount.minor <= 0n) {
+    throw fault(ERROR_CODES.INVALID_AMOUNT, `${label} must be positive.`, {
+      detail: { label, amount: encodeAmount(amount) },
+    });
+  }
+  return amount;
+}
+
+/**
+ * Parses a wire amount such as `'CREDIT:12.34'` back into an `Amount`. The currency is the part
+ * before the colon, and the decimal value the part after. This is the inverse of `encodeAmount`,
+ * shared by every layer that stores or receives an amount as text: the cache, the HTTP wire, and the
+ * SQL engines.
+ */
+export function decodeAmountWire(encoded: string): Amount {
+  let colon = encoded.indexOf(':');
+  let currency = encoded.slice(0, colon) as Currency;
+  return decodeAmount(encoded.slice(colon + 1), currency);
+}
+
+/**
+ * Converts an amount to another currency at `rate`, rounding down. A rate is an integer scaled by
+ * `10^scale`, so the result is `floor(minor * rate / 10^scale)`. Use it where truncation is the safe
+ * direction, such as paying a creator out.
+ */
+export function convertFloor(amount: Amount, rate: Rate, to: Currency): Amount {
+  return toAmount(to, (amount.minor * rate.rate) / 10n ** BigInt(rate.scale));
+}
+
+/**
+ * Converts an amount to another currency at `rate`, rounding up. It computes `ceil(minor * rate /
+ * 10^scale)` by adding `denominator - 1` before the integer divide. Use it where rounding down would
+ * under-cover, such as the USD a top-up must hold in trust.
+ */
+export function convertCeil(amount: Amount, rate: Rate, to: Currency): Amount {
+  let denominator = 10n ** BigInt(rate.scale);
+  return toAmount(
+    to,
+    (amount.minor * rate.rate + denominator - 1n) / denominator,
+  );
 }
 
 // Throws CURRENCY_MISMATCH if the amounts are in different currencies. Combining two

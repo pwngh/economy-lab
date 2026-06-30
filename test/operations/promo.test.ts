@@ -16,15 +16,8 @@ import { grantPromo } from '#src/operations/promo.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import {
   fixedClock,
-  sequentialIds,
   seededDigest,
-  seededSigner,
-  fixedRates,
-  testLogger,
-  noopMeter,
-  fakeProcessor,
-  defaultPricing,
-  testConfig,
+  makeCtx,
 } from '#test/support/capabilities.ts';
 import {
   grantPromo as grantPromoOp,
@@ -36,26 +29,6 @@ import { toAmount } from '#src/money.ts';
 
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
-
-// Builds a Ctx from deterministic fakes so runs repeat exactly. The Ctx holds the clock, ids,
-// hashing, pricing, and the other capabilities a handler needs. Tests call grantPromo directly
-// because the routing layer that would normally dispatch to it is not built yet.
-function makeCtx(): Ctx {
-  let digest = seededDigest(1);
-  let clock = fixedClock(0);
-  return {
-    clock,
-    ids: sequentialIds(),
-    digest,
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    config: testConfig(),
-    pricing: defaultPricing(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-  };
-}
 
 function makeStore(): Store {
   let digest = seededDigest(1);

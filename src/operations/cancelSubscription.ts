@@ -10,8 +10,9 @@
  */
 
 import { rejected, fault, ERROR_CODES } from '#src/errors.ts';
+import { assertKind, lifecycleMarker } from '#src/operations/guards.ts';
 
-import type { Ctx, Operation, Outcome, Transaction } from '#src/contract.ts';
+import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Subscription, Unit } from '#src/ports.ts';
 
 /**
@@ -43,9 +44,7 @@ export async function handleCancelSubscription(
   unit: Unit,
   ctx: Ctx,
 ): Promise<Outcome> {
-  if (operation.kind !== 'cancelSubscription') {
-    throw kindMismatch(operation);
-  }
+  assertKind(operation, 'cancelSubscription');
 
   assertSubscriptionId(operation.subscriptionId);
 
@@ -105,28 +104,4 @@ function assertMayCancel(
       },
     );
   }
-}
-
-// Builds the placeholder transaction for a successful cancel. Cancel moves no money, but a
-// committed outcome must still carry a transaction. This one gets a fresh `txn_` id and the
-// current time, with empty legs (the debit and credit lines) and empty links (the per-account
-// history-chain updates).
-function lifecycleMarker(ctx: Ctx): Transaction {
-  return {
-    id: ctx.ids.next('txn'),
-    postedAt: ctx.clock.now(),
-    legs: [],
-    links: [],
-  };
-}
-
-// Builds the fault for an operation of the wrong kind. Requests are routed here by kind, so a
-// non-cancelSubscription operation arriving means something upstream is wired wrong. This
-// throws a malformed-operation fault.
-function kindMismatch(operation: Operation) {
-  return fault(
-    ERROR_CODES.MALFORMED_OPERATION,
-    `handleCancelSubscription received a ${operation.kind} operation.`,
-    { detail: { kind: operation.kind } },
-  );
 }

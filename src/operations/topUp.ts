@@ -11,12 +11,12 @@
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
-import { encodeAmount, toAmount } from '#src/money.ts';
+import { convertCeil, requirePositiveCredit, toAmount } from '#src/money.ts';
 import { SYSTEM, spendable } from '#src/accounts.ts';
+import { assertKind } from '#src/operations/guards.ts';
 
-import type { Amount, Currency } from '#src/money.ts';
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
-import type { Rate, Unit } from '#src/ports.ts';
+import type { Unit } from '#src/ports.ts';
 
 /**
  * Buys credits: the user pays real money and gets spendable credits in return. It posts twice,
@@ -39,11 +39,9 @@ export async function topUp(
   unit: Unit,
   ctx: Ctx,
 ): Promise<Outcome> {
-  if (operation.kind !== 'topUp') {
-    throw kindMismatch(operation);
-  }
+  assertKind(operation, 'topUp');
   requireSource(operation.source);
-  let amount = positiveCredit(operation.amount, 'topUp.amount');
+  let amount = requirePositiveCredit(operation.amount, 'topUp.amount');
 
   // Both conversions round up. The backing rounds up because the solvency check values the whole
   // spendable balance at par and floors it once. Flooring each top-up's backing separately would
@@ -83,22 +81,6 @@ export async function topUp(
   return { status: 'committed', transaction: issuance };
 }
 
-// Requires a positive CREDIT amount and returns it unchanged. A wrong currency or a non-positive
-// amount is a malformed request, not a recoverable decline, so it throws a fault.
-function positiveCredit(amount: Amount, label: string): Amount {
-  if (amount.currency !== 'CREDIT') {
-    throw fault(ERROR_CODES.MALFORMED_OPERATION, `${label} must be CREDIT.`, {
-      detail: { label, amount: encodeAmount(amount) },
-    });
-  }
-  if (amount.minor <= 0n) {
-    throw fault(ERROR_CODES.INVALID_AMOUNT, `${label} must be positive.`, {
-      detail: { label, amount: encodeAmount(amount) },
-    });
-  }
-  return amount;
-}
-
 // Requires a non-blank funding source. The source selects the credits' maturity horizon
 // (`maturityHorizonMs`), so a blank or whitespace-only value is malformed input.
 function requireSource(source: string): void {
@@ -109,24 +91,4 @@ function requireSource(source: string): void {
       { detail: { source } },
     );
   }
-}
-
-// Converts a CREDIT amount to USD at `rate`, rounding up. A rate is an integer scaled by 10^scale.
-// Rounding up keeps trust backing at or above the per-balance floor the solvency check uses.
-function convertCeil(amount: Amount, rate: Rate, to: Currency): Amount {
-  let denominator = 10n ** BigInt(rate.scale);
-  return toAmount(
-    to,
-    (amount.minor * rate.rate + denominator - 1n) / denominator,
-  );
-}
-
-// Builds the fault for an operation that reached the wrong handler. A mismatched kind means the
-// routing is broken, which is a programming bug rather than a bad request.
-function kindMismatch(operation: Operation): ReturnType<typeof fault> {
-  return fault(
-    ERROR_CODES.MALFORMED_OPERATION,
-    `handler received the wrong operation kind: ${operation.kind}.`,
-    { detail: { kind: operation.kind } },
-  );
 }

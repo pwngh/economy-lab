@@ -17,15 +17,8 @@ import { topUp } from '#src/operations/topUp.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import {
   fixedClock,
-  sequentialIds,
   seededDigest,
-  seededSigner,
-  fixedRates,
-  testLogger,
-  noopMeter,
-  fakeProcessor,
-  defaultPricing,
-  testConfig,
+  makeCtx,
 } from '#test/support/capabilities.ts';
 import {
   adjust as adjustOp,
@@ -37,26 +30,6 @@ import { spendable, SYSTEM } from '#src/accounts.ts';
 
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
-
-// Builds a Ctx from fixed-seed fakes so every run is deterministic, with the same ids,
-// timestamps, and hashes. The tests pass this Ctx straight to adjust, because production
-// routing does not exist yet and is out of scope here.
-function makeCtx(): Ctx {
-  let digest = seededDigest(1);
-  let clock = fixedClock(0);
-  return {
-    clock,
-    ids: sequentialIds(),
-    digest,
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    config: testConfig(),
-    pricing: defaultPricing(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-  };
-}
 
 function makeStore(): Store {
   let digest = seededDigest(1);

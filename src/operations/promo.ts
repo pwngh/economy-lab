@@ -10,11 +10,11 @@
  */
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
+import { assertKind } from '#src/operations/guards.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
-import { encodeAmount } from '#src/money.ts';
+import { requirePositiveCredit } from '#src/money.ts';
 import { SYSTEM, promo } from '#src/accounts.ts';
 
-import type { Amount } from '#src/money.ts';
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Unit } from '#src/ports.ts';
 
@@ -40,10 +40,8 @@ export async function grantPromo(
   unit: Unit,
   ctx: Ctx,
 ): Promise<Outcome> {
-  if (operation.kind !== 'grantPromo') {
-    throw kindMismatch(operation);
-  }
-  let amount = positiveCredit(operation.amount, 'grantPromo.amount');
+  assertKind(operation, 'grantPromo');
+  let amount = requirePositiveCredit(operation.amount, 'grantPromo.amount');
   let expiresAt = futureExpiresAt(
     operation.expiresAt,
     ctx,
@@ -75,23 +73,6 @@ export async function grantPromo(
   return { status: 'committed', transaction };
 }
 
-// Requires a positive CREDIT amount and returns it unchanged. A wrong currency or a non-positive
-// amount is a caller or programming mistake, so it throws a fault. A "rejected" outcome is reserved
-// for business "no" answers like insufficient funds.
-function positiveCredit(amount: Amount, label: string): Amount {
-  if (amount.currency !== 'CREDIT') {
-    throw fault(ERROR_CODES.MALFORMED_OPERATION, `${label} must be CREDIT.`, {
-      detail: { label, amount: encodeAmount(amount) },
-    });
-  }
-  if (amount.minor <= 0n) {
-    throw fault(ERROR_CODES.INVALID_AMOUNT, `${label} must be positive.`, {
-      detail: { label, amount: encodeAmount(amount) },
-    });
-  }
-  return amount;
-}
-
 // Caps how far in the future a grant may expire, in milliseconds. Every grant must expire so the
 // sweep can reclaim unspent credit. This ceiling of five years stops a caller from minting an
 // effectively never-expiring grant through an absurd far-future timestamp.
@@ -119,14 +100,4 @@ function futureExpiresAt(expiresAt: number, ctx: Ctx, label: string): number {
     );
   }
   return expiresAt;
-}
-
-// Operations dispatch to handlers by `kind`, so this one should only ever see 'grantPromo'.
-// Any other kind means the dispatch table is wired wrong, so build a loud fault.
-function kindMismatch(operation: Operation): ReturnType<typeof fault> {
-  return fault(
-    ERROR_CODES.MALFORMED_OPERATION,
-    `handler received the wrong operation kind: ${operation.kind}.`,
-    { detail: { kind: operation.kind } },
-  );
 }
