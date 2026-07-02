@@ -409,12 +409,16 @@ async function runOnion(step: Step): Promise<Outcome> {
   if (risk) {
     return risk;
   }
+
+  // Screen funds after the lock, so the read is current, and cache balances in `unit.balances` so the
+  // screen and handler share one read each. Risk still records before the lock, so denied attempts count.
+  await lockAccounts(step);
+  unit.balances = new Map();
   let funds = await screenFunds(step);
   if (funds) {
     return funds;
   }
 
-  await lockAccounts(step);
   let handler = resolveHandler(step.pipeline.registry, operation);
   let outcome = await handler(operation, unit, step.pipeline.ctx);
   if (outcome.status === 'committed') {
@@ -483,8 +487,8 @@ function debitedUserAccounts(operation: Operation): AccountRef[] {
 // violation. The engine is the backstop, and this is the kind error.
 async function screenFunds(step: Step): Promise<Outcome | null> {
   let { unit, operation, options } = step;
-  for (let need of await fundsNeeded(unit, operation)) {
-    let have = await unit.ledger.balance(need.account, options);
+  for (let need of await fundsNeeded(unit, operation, options)) {
+    let have = await readCachedBalance(unit, need.account, options);
     if (compare(have, need.amount) < 0) {
       return rejected('INSUFFICIENT_FUNDS', {
         account: need.account,
@@ -503,15 +507,36 @@ async function screenFunds(step: Step): Promise<Outcome | null> {
 async function fundsNeeded(
   unit: Unit,
   operation: Operation,
+  options?: Options,
 ): Promise<ReadonlyArray<{ account: AccountRef; amount: Amount }>> {
   if (operation.kind !== 'spend') {
     return [];
   }
-  let promoBalance = await unit.ledger.balance(promo(operation.buyerId));
+  let promoBalance = await readCachedBalance(
+    unit,
+    promo(operation.buyerId),
+    options,
+  );
   let plan = planSpend(operation.price, promoBalance);
   return [
     { account: spendable(operation.buyerId), amount: plan.spendablePart },
   ];
+}
+
+// Reads a balance once per operation: runOnion seeds `unit.balances` after locking, so the funds screen
+// and the handler share one read. Without the cache (a unit built outside the pipeline) it reads through.
+async function readCachedBalance(
+  unit: Unit,
+  account: AccountRef,
+  options?: Options,
+): Promise<Amount> {
+  let cached = unit.balances?.get(account);
+  if (cached !== undefined) {
+    return cached;
+  }
+  let balance = await unit.ledger.balance(account, options);
+  unit.balances?.set(account, balance);
+  return balance;
 }
 
 // Checks whether this operation would push the user past their recent-spending limit, returning

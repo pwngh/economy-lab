@@ -85,7 +85,13 @@ export async function spend(
     return rejected('DUPLICATE_ORDER', { orderId: operation.orderId });
   }
 
-  let promoBalance = await unit.ledger.balance(promo(operation.buyerId));
+  // The funds screen already read promo and spendable under the lock into `unit.balances`; reuse them
+  // here. Without that cache (the handler called directly), fall back to a live read.
+  let promoAccount = promo(operation.buyerId);
+  let spendableAccount = spendable(operation.buyerId);
+  let promoBalance =
+    unit.balances?.get(promoAccount) ??
+    (await unit.ledger.balance(promoAccount));
   let plan = planSpend(price, promoBalance);
 
   // Require the spendable-funded part to be covered by cleared (matured) funds. Promo draws first,
@@ -94,9 +100,13 @@ export async function spend(
   // fault, like INSUFFICIENT_FUNDS) rather than dip into uncleared funds.
   let cleared = await maturedAtLeast(
     unit.ledger,
-    spendable(operation.buyerId),
+    spendableAccount,
     ctx.clock.now(),
-    { config: ctx.config, amount: plan.spendablePart },
+    {
+      config: ctx.config,
+      amount: plan.spendablePart,
+      live: unit.balances?.get(spendableAccount),
+    },
   );
   if (!cleared) {
     return rejected('FUNDS_IMMATURE', {

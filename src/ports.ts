@@ -378,6 +378,9 @@ export interface Unit {
   entitlements: EntitlementStore;
   subscriptions: SubscriptionStore;
   promos: PromoStore;
+  // Balances cached for one operation so the funds screen and handler share one read each; the pipeline
+  // fills it after locking. Unset outside the pipeline (e.g. a test), where readers use `ledger.balance`.
+  balances?: Map<string, Amount>;
 }
 
 /** Makes a repeated request run at most once, keyed by the caller's idempotency key. */

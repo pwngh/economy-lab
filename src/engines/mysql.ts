@@ -185,6 +185,11 @@ async function isKnownAccount(
 // from the result, and the caller treats a missing account as the genesis hash (a new account's
 // head). The chain_links table stays the source of truth, since prove() still re-walks it, so a
 // head pointer that drifts from the chain surfaces there.
+//
+// It locks the rows (`FOR UPDATE`) so it reads the latest committed head, not this transaction's
+// REPEATABLE READ snapshot taken earlier in screenFunds. A stale head forks the chain on
+// chain_links_account_prev_uq (errno 1062) and costs a retry. lockAccounts already holds these rows,
+// so the lock is free here; Postgres, at READ COMMITTED, needs none of it.
 async function headsForAccounts(
   exec: MysqlExecutor,
   accounts: ReadonlyArray<AccountRef>,
@@ -197,7 +202,9 @@ async function headsForAccounts(
   let found = await rows(
     exec,
     `SELECT account_id, head_hash FROM account_balances
-      WHERE account_id IN (${marks})`,
+      WHERE account_id IN (${marks})
+      ORDER BY account_id
+        FOR UPDATE`,
     accounts,
   );
   for (let row of found) {

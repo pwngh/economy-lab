@@ -28,9 +28,13 @@ export type MaturityOptions = { config: Config; signal?: AbortSignal };
  * Carries {@link maturedAtLeast}'s options. It extends {@link MaturityOptions} with the `amount` the
  * cashable balance must reach. The `amount` rides in the options object rather than as its own
  * argument so the call stays parallel to {@link maturedBalance}'s `(ledger, account, now, options)`
- * and under the param-count limit.
+ * and under the param-count limit. A caller that already has the balance can pass it as `live` to avoid
+ * re-reading it; the spend handler does, with the balance read under the lock.
  */
-export type MaturedAtLeastOptions = MaturityOptions & { amount: Amount };
+export type MaturedAtLeastOptions = MaturityOptions & {
+  amount: Amount;
+  live?: Amount;
+};
 
 // Horizon lookup key for an unrecognized funding source. The 'default' horizon is configured
 // independently through MATURITY_HORIZON_DEFAULT_MS. It coincides with the card horizon only under
@@ -151,7 +155,8 @@ export async function maturedAtLeast(
   if (need <= 0n) {
     return true;
   }
-  let live = await ledger.balance(account, { signal: options.signal });
+  let live =
+    options.live ?? (await ledger.balance(account, { signal: options.signal }));
   if (live.minor <= 0n) {
     return false;
   }
