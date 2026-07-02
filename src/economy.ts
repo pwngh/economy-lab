@@ -108,6 +108,9 @@ type Step = {
   unit: Unit;
   operation: Operation;
   options?: Options;
+  // Called by screenRisk with the velocity attempt it is about to record inside the transaction,
+  // so `submit` can re-record the attempt if that transaction rolls back.
+  staged?: (subject: string, attempt: Attempt) => void;
 };
 
 // Builds the runtime context a handler may read. It holds every capability except the store, which
@@ -215,9 +218,11 @@ async function cachedBalance(
 // Runs one operation end to end. The order matters:
 //   1. authorize first, so a forbidden request is rejected before any work;
 //   2. then do the money work in one all-or-nothing transaction (see `runOnion`).
-// The risk-velocity attempt is recorded inside that transaction's `screenRisk` step. A per-subject
-// atomic record there, which a rollback does not undo, closes the velocity-limit TOCTOU. See
-// `screenRisk` for why recording at check time, not after the commit, is what prevents the bypass.
+// The risk-velocity attempt is recorded inside that transaction (`screenRisk`), so a committed
+// operation pays one durable commit, not two. If the transaction rolls back, the attempt is
+// re-recorded below on the store's own connection, because a denied attempt must still count or
+// the limit could be probed for free. See `screenRisk` for why recording at check time, not after
+// the commit, closes the velocity-limit TOCTOU.
 async function submit(
   pipeline: Pipeline,
   operation: Operation,
@@ -243,18 +248,44 @@ async function submit(
   // caller can retry under it (runOnion's contract). Committing would persist MySQL's claim
   // placeholder row, while Postgres holds only a transaction advisory lock and inserts nothing, so
   // the two engines would diverge. Throw the RejectedRollback sentinel to roll back exactly as a
-  // fault does, then recover the outcome outside the transaction. The velocity attempt that
-  // screenRisk recorded is on a separate connection, so it survives this rollback and denied attempts
-  // still count.
+  // fault does, then recover the outcome outside the transaction.
+  //
+  // The rollback also erases the velocity attempt screenRisk recorded inside the transaction, so
+  // re-record it here on the store's own connection. `bump` dedupes on the attempt's key, so a
+  // retried operation never double-counts. On a rejection, a failed re-record propagates as a
+  // fault: silently losing the attempt would let a caller probe the limit for free. On a genuine
+  // fault, the original error wins and the re-record is only best-effort, since the store is
+  // already suspect.
+  let staged: { subject: string; attempt: Attempt } | null = null;
   let outcome = await pipeline.store
     .transaction(
       (unit) =>
-        runRollingBackRejections({ pipeline, unit, operation, options }),
+        runRollingBackRejections({
+          pipeline,
+          unit,
+          operation,
+          options,
+          staged: (subject, attempt) => {
+            staged = { subject, attempt };
+          },
+        }),
       options,
     )
-    .catch((error: unknown) => {
+    .catch(async (error: unknown) => {
       if (error instanceof RejectedRollback) {
+        if (staged) {
+          await pipeline.store.trust.bump(
+            staged.subject,
+            staged.attempt,
+            options,
+          );
+        }
         return error.outcome;
+      }
+      if (staged) {
+        await pipeline.store.trust
+          .bump(staged.subject, staged.attempt, options)
+          .catch(() => {});
       }
       throw error;
     });
@@ -547,10 +578,11 @@ async function readCachedBalance(
 // per-subject step (`trust.record`), then denies if that total (already including this attempt) is
 // over the limit. Recording at check time, not reading-then-bumping after commit, closes the
 // velocity-limit TOCTOU: two concurrent same-subject submits cannot both read a stale total and pass.
-// The record goes straight through the trust store, not the transaction's view, so even a denied or
-// rolled-back attempt still counts and the limit cannot be probed for free.
+// The record goes through the transaction's trust view, so a committed operation carries its
+// attempt in the same durable commit. The attempt is staged with `submit` first, which re-records
+// it if the transaction rolls back — see there for why a denied attempt must still count.
 async function screenRisk(step: Step): Promise<Outcome | null> {
-  let { pipeline, operation, options } = step;
+  let { pipeline, unit, operation, options } = step;
   let subject = riskSubject(operation);
   if (subject === null) {
     return null;
@@ -566,7 +598,8 @@ async function screenRisk(step: Step): Promise<Outcome | null> {
     at: pipeline.ctx.clock.now(),
     outcome: 'committed',
   };
-  let velocity = await pipeline.store.trust.record(subject, attempt, options);
+  step.staged?.(subject, attempt);
+  let velocity = await unit.trust.record(subject, attempt, options);
   if (velocity.spent.minor > pipeline.ctx.config.velocityLimitMinor) {
     return rejected('RISK_DENIED', { subject });
   }

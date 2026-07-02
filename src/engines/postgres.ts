@@ -1438,13 +1438,14 @@ function rowToPromoGrant(row: Record<string, unknown>): PromoGrant {
   };
 }
 
-// --- Trust store (not part of a transaction) --------------------------------------
+// --- Trust store -------------------------------------------------------------------
 
-// Records each spend attempt by a user so a fraud check can see recent spend and cap it. These
-// writes go through the pool, not a transaction client, on purpose: even a rejected attempt
-// (whose money transaction rolls back) must still be counted, so the rollback must not undo it.
-// `bump` inserts keyed on the attempt's idempotency key (the primary key), so resending the same
-// attempt doesn't count it twice. `read` sums a user's recorded attempts.
+// Records each spend attempt by a user so a fraud check can see recent spend and cap it. Two
+// views: this pool-backed store commits on its own, and the Unit view (createUnitTrustStore
+// below) writes inside the money transaction. `submit` combines them so a committed attempt
+// shares the money commit and a rolled-back one still counts. `bump` inserts keyed on the
+// attempt's idempotency key (the primary key), so resending the same attempt doesn't count it
+// twice. `read` sums a user's recorded attempts.
 function createTrustStore(
   pool: PgPool,
   clock: Clock,
@@ -1467,11 +1468,11 @@ function createTrustStore(
 }
 
 async function readVelocity(
-  pool: PgPool,
+  q: Queryable,
   subject: string,
   cutoff: number,
 ): Promise<Velocity> {
-  let result = await pool.query(
+  let result = await q.query(
     `select coalesce(min(at), 0) as window_start,
             coalesce(sum(amount), 0) as spent,
             count(*)::int as attempts
@@ -1488,11 +1489,11 @@ async function readVelocity(
 }
 
 async function bumpVelocity(
-  pool: PgPool,
+  q: Queryable,
   subject: string,
   attempt: Attempt,
 ): Promise<void> {
-  await pool.query(
+  await q.query(
     `insert into trust_attempts (idempotency_key, subject, amount, outcome, at)
        values ($1, $2, $3, $4, $5)
        on conflict (idempotency_key) do nothing`,
@@ -1504,6 +1505,28 @@ async function bumpVelocity(
       attempt.at,
     ],
   );
+}
+
+// The transaction-scoped trust view a Unit carries. `record` runs on the money transaction's own
+// connection, so the inserted attempt commits with the money. The advisory lock holds until that
+// transaction commits or rolls back, and a concurrent same-subject `record` waits it out. That is
+// the same per-subject serialization `recordVelocity` below gets from its own short transaction.
+function createUnitTrustStore(
+  q: Queryable,
+  clock: Clock,
+  windowMs: number,
+): TrustStore {
+  return {
+    read: async (subject) => readVelocity(q, subject, clock.now() - windowMs),
+    bump: async (subject, attempt) => bumpVelocity(q, subject, attempt),
+    record: async (subject, attempt) => {
+      await q.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+        subject,
+      ]);
+      await bumpVelocity(q, subject, attempt);
+      return readVelocity(q, subject, clock.now() - windowMs);
+    },
+  };
 }
 
 // The atomic record-then-measure behind `record`. It checks out one client, runs BEGIN, and takes a
@@ -1593,8 +1616,14 @@ function createCheckpointStore(pool: PgPool): CheckpointStore {
 
 // --- The transaction unit ---------------------------------------------------------
 
-// Trust and checkpoint stores are left out: their writes must survive a transaction rollback.
-function buildUnit(q: Queryable, digest: Digest, clock: Clock): Unit {
+// The checkpoint store is left out: only the worker writes it, outside transactions. Trust rides
+// the transaction; see createUnitTrustStore.
+function buildUnit(
+  q: Queryable,
+  digest: Digest,
+  clock: Clock,
+  velocityWindowMs: number,
+): Unit {
   return {
     ledger: lockingLedger(q, digest, clock),
     idempotency: createIdempotencyStore(q),
@@ -1605,6 +1634,7 @@ function buildUnit(q: Queryable, digest: Digest, clock: Clock): Unit {
     entitlements: createEntitlementStore(q, clock),
     subscriptions: createSubscriptionStore(q),
     promos: createPromoStore(q),
+    trust: createUnitTrustStore(q, clock, velocityWindowMs),
   };
 }
 
@@ -1693,7 +1723,8 @@ export async function postgresStore(
     trust: createTrustStore(pool, clock, velocityWindowMs),
     checkpoints: createCheckpointStore(pool),
     replay: createReplayStore(pool),
-    transaction: async (work) => runInTransaction(pool, digest, clock, work),
+    transaction: async (work) =>
+      runInTransaction(pool, { digest, clock, velocityWindowMs }, work),
     close: async () => {
       if (schema) {
         await pool
@@ -1734,15 +1765,19 @@ async function applyIsolatedSchema(
 // @see https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/
 async function runInTransaction<T>(
   pool: PgPool,
-  digest: Digest,
-  clock: Clock,
+  deps: { digest: Digest; clock: Clock; velocityWindowMs: number },
   work: (tx: Unit) => Promise<T>,
 ): Promise<T> {
   return withTransientRetry(async () => {
     let client = await pool.connect();
     try {
       await client.query('begin');
-      let unit = buildUnit(client, digest, clock);
+      let unit = buildUnit(
+        client,
+        deps.digest,
+        deps.clock,
+        deps.velocityWindowMs,
+      );
       let result = await work(unit);
       await client.query('commit');
       return result;

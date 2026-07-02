@@ -361,9 +361,9 @@ export type StoredLink = {
 /**
  * The stores a single operation's handler may write to, all inside one database transaction so its
  * writes commit together. `promos` and `inbox` are included so their writes share the money
- * posting's transaction; a rolled-back grant or apply then leaves no orphan row. `trust` is
- * deliberately absent (the risk-velocity write happens outside the transaction) and so is
- * `checkpoints` (only the worker writes it).
+ * posting's transaction; a rolled-back grant or apply then leaves no orphan row. `trust` rides the
+ * transaction too, so a committed attempt shares the money commit; after a rollback, `submit`
+ * re-records the attempt so it still counts. `checkpoints` is absent (only the worker writes it).
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging}
  * for atomicity and the outbox/inbox.
@@ -378,6 +378,7 @@ export interface Unit {
   entitlements: EntitlementStore;
   subscriptions: SubscriptionStore;
   promos: PromoStore;
+  trust: TrustStore;
   // Balances cached for one operation so the funds screen and handler share one read each; the pipeline
   // fills it after locking. Unset outside the pipeline (e.g. a test), where readers use `ledger.balance`.
   balances?: Map<string, Amount>;
@@ -633,8 +634,10 @@ export interface PromoStore {
 }
 
 /**
- * Tracks how much each subject has spent recently, the input to the risk gate. Written outside
- * the money transaction, so even a denied attempt still counts toward the limit.
+ * Tracks how much each subject has spent recently, the input to the risk gate. It comes in two
+ * views: the store-level instance commits on its own connection, and the {@link Unit} view writes
+ * inside the money transaction. `submit` combines them so every attempt ends up counted exactly
+ * once, whether its operation commits or rolls back.
  */
 export interface TrustStore {
   read(subject: string, options?: Options): Promise<Velocity>;

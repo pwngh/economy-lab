@@ -218,10 +218,10 @@ function runConcurrency(
 
       // Fire 4 parallel 1.00 spends against a 2.00 wallet, so at most 2 are affordable. Parallelism is
       // kept under half the connection pool on purpose. Each in-flight spend holds its transaction
-      // connection and briefly needs a second pool connection for the velocity record. trust.record
-      // runs on the pool, outside the money transaction, so a rejected attempt still counts. Pushing
-      // parallelism past pool/2 exhausts the pool and deadlocks. That is a real operational limit worth
-      // sizing for, not a property of this safety check.
+      // connection and may briefly borrow a second one, to plant first-use rows or to re-record a
+      // rejected attempt after its rollback. Pushing parallelism to the full pool size starves those
+      // borrows and deadlocks. That is a real operational limit worth sizing for, not a property of
+      // this safety check.
       let parallelism = 4;
       let affordable = 2;
       await economy.submit(topUp({ userId: buyer, amount: credit('2.00') }));

@@ -49,6 +49,7 @@ import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Operation, Transaction } from '#src/contract.ts';
 import type {
+  Attempt,
   CheckpointStore,
   Clock,
   Digest,
@@ -1278,96 +1279,106 @@ function createPromoStore(exec: MysqlExecutor): PromoStore {
   };
 }
 
-// --- Trust store (kept outside money transactions) --------------------------------
+// --- Trust store -------------------------------------------------------------------
 
 // Records spending attempts per subject (a user or similar) to enforce spending-velocity limits.
-// Rows are written on the pool directly, outside the money transaction, so a rejected attempt still
-// counts toward the limit and is not rolled back with the money. `bump` uses each attempt's
-// idempotency key as the primary key (INSERT IGNORE), so retrying the same attempt does not
-// double-count. `read` sums a subject's recorded attempts.
+// Two views share the helpers below: the pool-backed store commits on its own, and the Unit view
+// writes inside the money transaction. `submit` combines them so a committed attempt shares the
+// money commit and a rolled-back one still counts. `bump` uses each attempt's idempotency key as
+// the primary key (INSERT IGNORE), so retrying the same attempt does not double-count. `read`
+// sums a subject's recorded attempts.
+
+// The windowed measure `read` and `record` share: only attempts newer than the cutoff are summed,
+// so each ages out on its own. The cutoff uses the injected clock (not SQL NOW()) so tests stay
+// deterministic.
+async function measureVelocity(
+  exec: MysqlExecutor,
+  subject: string,
+  cutoff: number,
+): Promise<Velocity> {
+  let found = await rows(
+    exec,
+    `SELECT COALESCE(MIN(at), 0) AS window_start,
+            COALESCE(SUM(amount), 0) AS spent,
+            COUNT(*) AS attempts
+       FROM trust_attempts WHERE subject = ? AND at > ?`,
+    [subject, cutoff],
+  );
+  let row = found[0]!;
+  return {
+    subject,
+    windowStart: Number(row.window_start),
+    spent: toAmount('CREDIT', readMinor(row.spent)),
+    attempts: Number(row.attempts),
+  } satisfies Velocity;
+}
+
+async function insertAttempt(
+  exec: MysqlExecutor,
+  subject: string,
+  attempt: Attempt,
+): Promise<void> {
+  await rows(
+    exec,
+    `INSERT IGNORE INTO trust_attempts (idempotency_key, subject, amount, outcome, at)
+     VALUES (?, ?, ?, ?, ?)`,
+    [
+      attempt.idempotencyKey,
+      subject,
+      attempt.amount.minor.toString(),
+      attempt.outcome,
+      attempt.at,
+    ],
+  );
+}
+
 function createTrustStore(
   pool: MysqlPool,
   clock: Clock,
   windowMs: number,
 ): TrustStore {
   return {
-    // Read the subject's spend inside the sliding window ending now: only attempts newer than
-    // `now - windowMs` are summed, so each ages out on its own. The cutoff uses the injected clock
-    // (not SQL NOW()) so tests stay deterministic.
-    read: async (subject) => {
-      let cutoff = clock.now() - windowMs;
-      let found = await rows(
-        pool,
-        `SELECT COALESCE(MIN(at), 0) AS window_start,
-                COALESCE(SUM(amount), 0) AS spent,
-                COUNT(*) AS attempts
-           FROM trust_attempts WHERE subject = ? AND at > ?`,
-        [subject, cutoff],
-      );
-      let row = found[0]!;
-      return {
-        subject,
-        windowStart: Number(row.window_start),
-        spent: toAmount('CREDIT', readMinor(row.spent)),
-        attempts: Number(row.attempts),
-      } satisfies Velocity;
-    },
-    bump: async (subject, attempt) => {
-      await rows(
-        pool,
-        `INSERT IGNORE INTO trust_attempts (idempotency_key, subject, amount, outcome, at)
-         VALUES (?, ?, ?, ?, ?)`,
-        [
-          attempt.idempotencyKey,
-          subject,
-          attempt.amount.minor.toString(),
-          attempt.outcome,
-          attempt.at,
-        ],
-      );
-    },
+    read: async (subject) =>
+      measureVelocity(pool, subject, clock.now() - windowMs),
+    bump: async (subject, attempt) => insertAttempt(pool, subject, attempt),
     // Record-and-measure atomically. Borrow one connection, take a per-subject named lock so two
-    // concurrent same-subject calls serialize, insert the attempt (INSERT IGNORE, deduped on the
-    // idempotency-key primary key like `bump`), then run the same windowed SUM `read` uses, now
-    // including this attempt. The lock is released and the connection returned in `finally`, so a
-    // borrower never inherits a stale lock. Serializing the insert and SUM behind one lock closes
-    // the velocity-limit TOCTOU that separate read+bump left.
+    // concurrent same-subject calls serialize, insert the attempt, then measure, now including
+    // this attempt. The lock is released and the connection returned in `finally`, so a borrower
+    // never inherits a stale lock. Serializing the insert and SUM behind one lock closes the
+    // velocity-limit TOCTOU that separate read+bump left.
     record: async (subject, attempt) => {
       let cutoff = clock.now() - windowMs;
       let connection = await pool.getConnection();
       try {
         await takeGetLock(connection, subjectLockName(subject));
-        await rows(
-          connection,
-          `INSERT IGNORE INTO trust_attempts (idempotency_key, subject, amount, outcome, at)
-           VALUES (?, ?, ?, ?, ?)`,
-          [
-            attempt.idempotencyKey,
-            subject,
-            attempt.amount.minor.toString(),
-            attempt.outcome,
-            attempt.at,
-          ],
-        );
-        let found = await rows(
-          connection,
-          `SELECT COALESCE(MIN(at), 0) AS window_start,
-                  COALESCE(SUM(amount), 0) AS spent,
-                  COUNT(*) AS attempts
-             FROM trust_attempts WHERE subject = ? AND at > ?`,
-          [subject, cutoff],
-        );
-        let row = found[0]!;
-        return {
-          subject,
-          windowStart: Number(row.window_start),
-          spent: toAmount('CREDIT', readMinor(row.spent)),
-          attempts: Number(row.attempts),
-        } satisfies Velocity;
+        await insertAttempt(connection, subject, attempt);
+        return await measureVelocity(connection, subject, cutoff);
       } finally {
         await releaseLocks(connection);
         connection.release();
       }
+    },
+  };
+}
+
+// The transaction-scoped trust view a Unit carries. `record` runs on the money transaction's own
+// connection, so the inserted attempt commits with the money. The named lock stays held until
+// `transaction()` releases it after commit or rollback, and a concurrent same-subject `record`
+// waits it out. That is the same per-subject serialization the pool-backed `record` gets from
+// its borrowed connection.
+function createUnitTrustStore(
+  exec: MysqlExecutor,
+  clock: Clock,
+  windowMs: number,
+): TrustStore {
+  return {
+    read: async (subject) =>
+      measureVelocity(exec, subject, clock.now() - windowMs),
+    bump: async (subject, attempt) => insertAttempt(exec, subject, attempt),
+    record: async (subject, attempt) => {
+      await takeGetLock(exec, subjectLockName(subject));
+      await insertAttempt(exec, subject, attempt);
+      return measureVelocity(exec, subject, clock.now() - windowMs);
     },
   };
 }
@@ -1621,7 +1632,10 @@ function parseMeta(value: unknown): Record<string, unknown> {
 // Bundles the stores a request handler may use, all sharing one database connection, so every write
 // commits or rolls back together as one transaction. The trust and checkpoint stores are left out
 // because they are written outside the money transaction (see their comments above).
-function buildUnit(deps: ExecDeps): Unit {
+// `trust` is passed in rather than built from deps. A transaction passes the transaction-scoped
+// view. The non-transactional unit gets the pool-backed store instead, because a named lock
+// taken through the pool would land on an arbitrary connection and never be released.
+function buildUnit(deps: ExecDeps, trust: TrustStore): Unit {
   return {
     ledger: createLedgerStore(deps),
     idempotency: createIdempotencyStore(deps.exec),
@@ -1632,6 +1646,7 @@ function buildUnit(deps: ExecDeps): Unit {
     entitlements: createEntitlementStore(deps),
     subscriptions: createSubscriptionStore(deps.exec),
     promos: createPromoStore(deps.exec),
+    trust,
   };
 }
 
@@ -1663,7 +1678,8 @@ export function mysqlStore(deps: {
   let velocityWindowMs = deps.velocityWindowMs ?? 60 * 60_000;
   let poolDeps: ExecDeps = { exec: pool, digest, clock, pool };
 
-  let auto = buildUnit(poolDeps);
+  let trust = createTrustStore(pool, clock, velocityWindowMs);
+  let auto = buildUnit(poolDeps, trust);
 
   return {
     ledger: auto.ledger,
@@ -1675,7 +1691,7 @@ export function mysqlStore(deps: {
     entitlements: auto.entitlements,
     subscriptions: auto.subscriptions,
     promos: auto.promos,
-    trust: createTrustStore(pool, clock, velocityWindowMs),
+    trust,
     checkpoints: createCheckpointStore(pool),
     replay: createReplayStore(pool),
 
@@ -1699,7 +1715,10 @@ export function mysqlStore(deps: {
             'SET TRANSACTION ISOLATION LEVEL READ COMMITTED',
           );
           await connection.query('START TRANSACTION');
-          let unit = buildUnit({ exec: connection, digest, clock, pool });
+          let unit = buildUnit(
+            { exec: connection, digest, clock, pool },
+            createUnitTrustStore(connection, clock, velocityWindowMs),
+          );
           let result = await work(unit);
           await connection.query('COMMIT');
           return result;

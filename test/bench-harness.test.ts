@@ -53,13 +53,13 @@ function driverError(
 }
 
 describe('Bench harness: resolveConfig', () => {
-  test('defaults to the default profile, all backends, throughput/gates-off, conns-per-op 2', () => {
+  test('defaults to the default profile, all backends, throughput/gates-off, conns-per-op 1', () => {
     const cfg = resolveConfig({});
     assert.equal(cfg.profile, 'default');
     assert.deepEqual(cfg.backends, ['in-memory', 'postgres', 'mysql']);
     assert.equal(cfg.mode, 'throughput');
     assert.equal(cfg.gates, 'off');
-    assert.equal(cfg.connsPerOp, 2);
+    assert.equal(cfg.connsPerOp, 1);
     assert.equal(cfg.poolHeadroom, 4);
     assert.equal(cfg.poolMax, null);
     assert.equal(cfg.concurrency, 32);

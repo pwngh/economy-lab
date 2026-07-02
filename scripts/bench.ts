@@ -459,7 +459,7 @@ console.warn(
 );
 console.warn(
   `Mode "${cfg.mode}" (${cfg.mode === 'throughput' ? 'fully funded — any rejection is a bug' : 'oversubscribed on purpose — rejections/retries are the measured signal'}), ` +
-    `gates ${cfg.gates}, pools sized ${cfg.connsPerOp}×concurrency + ${cfg.poolHeadroom} for the two-connection-per-op write path.`,
+    `gates ${cfg.gates}, pools sized ${cfg.connsPerOp}×concurrency + ${cfg.poolHeadroom} for the money-transaction write path (velocity rides the same transaction).`,
 );
 console.warn(
   'They show relative cost and scaling shape, not production capacity.',

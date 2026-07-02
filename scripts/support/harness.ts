@@ -76,8 +76,8 @@ export type BenchMode = 'throughput' | 'contention';
 
 // Whether the policy gates (maturity hold, velocity limit, payout interval/minimum) are neutralized
 // (`off` — measures pure ledger work, the historical default) or set to realistic production values
-// (`on` — measures the gated cost a real op pays). Note the velocity *record* runs in both modes (it
-// is the second-connection write every gated kind makes); `on` additionally lets the limit deny.
+// (`on` — measures the gated cost a real op pays). The velocity *record* runs in both modes, inside
+// every gated kind's money transaction; `on` additionally lets the limit deny.
 export type GatesMode = 'off' | 'on';
 
 export type HarnessConfig = {
@@ -94,11 +94,12 @@ export type HarnessConfig = {
   mode: BenchMode; // throughput (fund everything) or contention (oversubscribe on purpose)
   gates: GatesMode; // policy gates neutralized (off) or realistic (on)
   shards: number; // PLATFORM_SHARDS for the measured economy (BENCH_SHARDS); 1 = unsharded
-  // Pool sizing for the two-connection-per-op design: every gated op holds two pooled connections at
-  // once (its money transaction + the velocity record on a separate connection), so a pool sized to the
-  // concurrency alone self-deadlocks. The pool covers connsPerOp×concurrency + headroom — explicit and asserted.
-  connsPerOp: number; // peak pooled connections one in-flight op holds (2 for the gated kinds)
-  poolHeadroom: number; // spare connections above connsPerOp×concurrency (probes, seal, slack)
+  // Pool sizing: an in-flight op holds one pooled connection for its money transaction, which
+  // carries the velocity record too. Brief pool borrows (first-use row plants, a rollback's
+  // re-record) ride the headroom. The pool covers connsPerOp×concurrency + headroom, explicit
+  // and asserted.
+  connsPerOp: number; // pooled connections one in-flight op holds
+  poolHeadroom: number; // spare connections above connsPerOp×concurrency (borrows, probes, seal)
   poolMax: number | null; // explicit pool-size override; null = derive from the formula above
   urls: { postgres: string; mysql: string }; // production-faithful: point these anywhere
   // Integrity-curve knobs (scripts/bench.ts): a fixed user set so accounts stay flat while postings grow.
@@ -146,7 +147,7 @@ const PROFILES: Record<string, Partial<HarnessConfig>> = {
 // Build the Config the lab measures under, parsed through the real loadConfig so it can't drift from
 // production. Gates are either neutralized (`off`, the default) so a burst reflects ledger work, or set
 // to realistic values (`on`) to show the gated cost. The velocity *record* runs in both modes (the
-// second connection every gated op makes — see connsPerOp); `off` only stops the limit from denying.
+// record every gated op makes, inside its money transaction); `off` only stops the limit from denying.
 // `shards` becomes PLATFORM_SHARDS, so a sharded run routes the hot platform accounts exactly the way
 // production would.
 function buildBenchConfig(
@@ -232,9 +233,9 @@ export function resolveConfig(
     mode,
     gates,
     shards: intEnv(env.BENCH_SHARDS, 1),
-    // Default to 2: the bench's three kinds all record velocity on a second connection. A workload of
-    // only non-gated kinds could set BENCH_CONNS_PER_OP=1, but 2 is the safe sizing for what ships.
-    connsPerOp: intEnv(env.BENCH_CONNS_PER_OP, 2),
+    // Default to 1: the velocity record rides the money transaction, so an in-flight op holds
+    // one connection. Its brief borrows ride the headroom.
+    connsPerOp: intEnv(env.BENCH_CONNS_PER_OP, 1),
     poolHeadroom: intEnv(env.BENCH_POOL_HEADROOM, 4),
     poolMax: env.BENCH_POOL_MAX ? intEnv(env.BENCH_POOL_MAX, 0) || null : null,
     urls: resolveUrls(env),
@@ -260,17 +261,17 @@ export function poolSizeFor(cfg: HarnessConfig): number {
   return cfg.poolMax ?? requiredPoolSize(cfg);
 }
 
-// Fail fast (rather than hang) when a pool is too small for the two-connection-per-op design. Below the
-// floor connsPerOp×concurrency + 1, the in-flight transactions take every connection and the velocity
-// records block forever — a silent hang that looks like a wedged database. Returns the size on success.
+// Fail fast (rather than hang) when a pool is too small. Below the floor connsPerOp×concurrency
+// + 1, the in-flight transactions can take every connection, and their brief pool borrows then
+// block forever: a silent hang that looks like a wedged database. Returns the size on success.
 export function assertPoolSizing(cfg: HarnessConfig, poolMax: number): number {
   const floor = cfg.connsPerOp * cfg.concurrency + 1;
   if (poolMax < floor) {
     throw new Error(
       `pool too small: poolMax=${poolMax} but concurrency=${cfg.concurrency} × ${cfg.connsPerOp} conns/op ` +
         `needs ≥ ${floor} (recommended ${requiredPoolSize(cfg)} = ${cfg.connsPerOp}×${cfg.concurrency} + ${cfg.poolHeadroom} headroom). ` +
-        `Each gated op holds two connections at once (money txn + velocity record on a separate connection), ` +
-        `so a pool sized to the concurrency alone deadlocks. Raise BENCH_POOL_MAX/BENCH_POOL_HEADROOM or lower BENCH_CONCURRENCY.`,
+        `In-flight transactions must leave a free connection for their brief pool borrows, ` +
+        `so a pool sized below the concurrency deadlocks. Raise BENCH_POOL_MAX/BENCH_POOL_HEADROOM or lower BENCH_CONCURRENCY.`,
     );
   }
   return poolMax;
@@ -392,7 +393,7 @@ async function provisionInMemory(cfg: HarnessConfig): Promise<Provisioned> {
 
 async function provisionPostgres(cfg: HarnessConfig): Promise<Provisioned> {
   const { digest, clock } = digestAndClock();
-  // Size the pool for the two-connection-per-op design and assert it before opening (see assertPoolSizing).
+  // Size the pool for the concurrency (one held connection per op) and assert it before opening (see assertPoolSizing).
   // Then fit it to the server: a pool the shared server can't take dies mid-burst as opaque 53300
   // faults. Clamp while the pool still clears the self-deadlock floor; fail fast with the numbers
   // when it doesn't. The budget is a snapshot; postgresPoolBudget's reserve absorbs late arrivals.
@@ -451,7 +452,7 @@ async function provisionPostgres(cfg: HarnessConfig): Promise<Provisioned> {
 
 async function provisionMysql(cfg: HarnessConfig): Promise<Provisioned> {
   const { digest, clock } = digestAndClock();
-  // connectionLimit is sized for the two-connection-per-op design and asserted, as Postgres' poolMax is above.
+  // connectionLimit is sized for the concurrency and asserted, as Postgres' poolMax is above.
   const poolMax = assertPoolSizing(cfg, poolSizeFor(cfg));
   const store = await makeIsolatedMysqlStore({
     url: cfg.urls.mysql,
@@ -835,7 +836,7 @@ function pgThrowClass(
 }
 
 // A connection-acquisition timeout: pg rejects with this exact message and no SQLSTATE; mysql2 surfaces
-// a pool/queue-limit code. This is the symptom of a pool too small for the two-connection-per-op design.
+// a pool/queue-limit code. This is the symptom of a pool too small for the concurrency.
 function isPoolTimeout(code: unknown, text: string): boolean {
   return (
     text.includes('timeout exceeded when trying to connect') ||

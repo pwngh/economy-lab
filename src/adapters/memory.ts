@@ -1096,12 +1096,12 @@ function createPromoStore(): PromoStore & Participant {
   };
 }
 
-// --- Trust store (written outside transactions) -----------------------------------
+// --- Trust store ------------------------------------------------------------------
 
-// Counts how much a subject has spent and tried to spend recently, for rate/abuse limiting. Its
-// writes sit outside the money transaction, so even a rejected attempt counts toward the limit
-// (a rollback must not erase the attempt). `bump` dedupes a repeat attempt by idempotency key, so a
-// retry isn't counted twice.
+// Counts how much a subject has spent and tried to spend recently, for rate/abuse limiting. It
+// joins transactions as a participant: an attempt written through the unit rolls back with its
+// transaction, while one written on the store directly is permanent. `bump` dedupes a repeat
+// attempt by idempotency key, so a retry isn't counted twice.
 //
 // The windowed total is kept incrementally, not re-summed: each subject holds its in-window attempts
 // plus a running `sumMinor`, so read/record stays O(1) amortized as history grows. An earlier version
@@ -1113,12 +1113,40 @@ function createPromoStore(): PromoStore & Participant {
 // subtracted.
 type TrustWindow = { attempts: Attempt[]; head: number; sumMinor: bigint };
 
-function createTrustStore(clock: Clock, windowMs: number): TrustStore {
+function createTrustStore(
+  clock: Clock,
+  windowMs: number,
+): TrustStore & Participant {
   let bySubject = new Map<string, TrustWindow>();
   let seenAttempts = new Set<string>();
+  let journal = createJournal();
+
+  // The journal's undo for `insert`. Splicing keeps the window ordered by `at`. The sum only
+  // covers the live tail, so it is corrected when the attempt was still there; an attempt that
+  // had already aged out moves the head back instead.
+  let remove = (subject: string, attempt: Attempt): void => {
+    seenAttempts.delete(attempt.idempotencyKey);
+    let window = bySubject.get(subject);
+    if (window === undefined) {
+      return;
+    }
+    let i = window.attempts.findIndex(
+      (a) => a.idempotencyKey === attempt.idempotencyKey,
+    );
+    if (i < 0) {
+      return;
+    }
+    window.attempts.splice(i, 1);
+    if (i >= window.head) {
+      window.sumMinor -= attempt.amount.minor;
+    } else {
+      window.head -= 1;
+    }
+  };
 
   // `at` comes from the clock (only moves forward), so the appended attempt is the newest and the
-  // window stays ordered by `at` — which `measure`'s prefix-pruning relies on.
+  // window stays ordered by `at` — which `measure`'s prefix-pruning relies on. A dedup-skipped
+  // repeat changed nothing, so it records no undo.
   let insert = (subject: string, attempt: Attempt): void => {
     if (seenAttempts.has(attempt.idempotencyKey)) {
       return;
@@ -1131,6 +1159,7 @@ function createTrustStore(clock: Clock, windowMs: number): TrustStore {
     }
     window.attempts.push(attempt);
     window.sumMinor += attempt.amount.minor;
+    journal.record(() => remove(subject, attempt));
   };
 
   // Expired attempts are always a prefix (ordered by `at`), so advance `head` past just those and
@@ -1173,6 +1202,7 @@ function createTrustStore(clock: Clock, windowMs: number): TrustStore {
       insert(subject, attempt);
       return measure(subject, clock.now());
     },
+    journal,
   };
 }
 
@@ -1252,8 +1282,8 @@ export function memoryStore(deps?: {
   // lives only on the top-level store.
   let replay = createReplayStore();
 
-  // Stores a handler may use inside a transaction. The trust and checkpoint stores are left out
-  // because they are written outside transactions.
+  // Stores a handler may use inside a transaction. The checkpoint store is left out because only
+  // the worker writes it, outside transactions.
   let unit: Unit = {
     ledger,
     idempotency,
@@ -1264,6 +1294,7 @@ export function memoryStore(deps?: {
     entitlements,
     subscriptions,
     promos,
+    trust,
   };
   let participants: Participant[] = [
     ledger,
@@ -1275,6 +1306,7 @@ export function memoryStore(deps?: {
     entitlements,
     subscriptions,
     promos,
+    trust,
   ];
 
   return {

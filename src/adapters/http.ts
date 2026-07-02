@@ -615,6 +615,11 @@ function sessionUnit(
     entitlements: sessionEntitlements(transport, session),
     subscriptions: sessionSubscriptions(transport, session),
     promos: sessionPromos(transport, session),
+    // The root endpoints, not session-scoped ones: a trust write commits on the server by
+    // itself, so it survives a session rollback on its own and `submit`'s re-record dedupes into
+    // a no-op. Folding it into the money transaction is an engine-level optimization this
+    // adapter doesn't attempt.
+    trust: rootTrust(transport),
   };
 }
 
