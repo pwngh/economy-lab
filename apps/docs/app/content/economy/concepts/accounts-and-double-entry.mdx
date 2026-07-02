@@ -1,6 +1,7 @@
 ---
 title: 'Accounts & double-entry'
 summary: 'Every operation is a balanced double-entry posting across a fixed chart of accounts: spendable, earned, promo, and the system accounts.'
+plain: "A “chart of accounts” is simply the fixed, named set of buckets money is allowed to sit in. Nothing in the system holds value outside that list — every credit and every dollar lives in one of these named accounts, and moving money just means shifting it from one to another."
 order: 30
 status: stable
 sourceRefs:
@@ -24,7 +25,7 @@ You never add to one account without an equal, opposite line somewhere else. A u
 
 Balances aren't stored and mutated in place. They're _derived_. The ledger is an append-only book of postings, and an account's balance is the running sum of its lines.
 
-No posting can create or destroy value, because the lines of a posting cancel within each currency, so the books as a whole always sum to zero. Folding the postings back re-derives the same balance every time.
+No posting can create or destroy value: like a balanced scale, its lines cancel within each currency, so the books as a whole always sum to zero. Folding the postings back re-derives the same balance every time.
 
 Without the balanced-posting rule, a single edited or dropped line would mint or burn credits silently. A `topUp` could issue credits no dollars stand behind. A `spend` could pay a seller more than the buyer paid.
 

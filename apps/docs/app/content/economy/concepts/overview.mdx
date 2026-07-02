@@ -19,7 +19,14 @@ You drive it through one [`submit`](/economy/reference/the-economy/) entry point
 
 Balances aren't stored and mutated. Every action becomes a balanced posting in an append-only, hash-chained ledger, and balances are folded back from those postings.
 
-The project enforces several [invariants](/economy/concepts/the-proof/): value is conserved, no account overdrafts, every spendable credit is backed by real cash, and history can't be silently rewritten. A [prover](/economy/concepts/the-proof/) re-checks all of them after every operation.
+The project enforces several [invariants](/economy/concepts/the-proof/):
+
+- value is conserved
+- no account overdrafts
+- every spendable credit is backed by real cash
+- history can't be silently rewritten
+
+A [prover](/economy/concepts/the-proof/) re-checks all of them after every operation.
 
 ## How it fits together
 

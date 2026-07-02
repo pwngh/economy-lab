@@ -1,6 +1,7 @@
 ---
 title: 'Idempotency & retries'
 summary: 'Every operation carries an idempotency key. The first call claims it, runs, and records its outcome; a retry with the same key replays that outcome without running again.'
+plain: "“Idempotent” is a fancy word for “safe to repeat”: do it once or do it five times and you end up in the same place. Setting a switch to “on” is idempotent; pressing a toggle is not. That property is what lets a client resend a request it never got an answer to, without it taking effect twice."
 order: 55
 status: stable
 sourceRefs:

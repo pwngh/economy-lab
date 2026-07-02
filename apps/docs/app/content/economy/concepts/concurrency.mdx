@@ -1,6 +1,7 @@
 ---
 title: 'Concurrency'
 summary: 'Two operations touching the same account at once stay correct through one app-side rule and one database constraint: every operation locks its accounts in one global order, and a unique index makes a forked hash chain impossible.'
+plain: "A “deadlock” is the classic trap where two operations each hold something the other needs and neither lets go, so both wait forever. Taking every lock in the same fixed order is the textbook way to make that trap impossible — which is why the global order here is the whole point, not a detail."
 order: 90
 status: stable
 sourceRefs:
@@ -13,11 +14,11 @@ sourceRefs:
 related: ['economy/concepts/idempotency', 'economy/ports/storage-and-messaging']
 ---
 
-When two operations touch the same account at the same time, they can interleave and corrupt a balance, or both try to extend that account's [hash chain](/economy/concepts/integrity/) from the same point and fork it. economy-lab keeps concurrent writes correct with one rule on the application side and one constraint in the database.
+When two operations touch the same account at the same time, they can interleave and corrupt a balance. They can also both extend that account's [hash chain](/economy/concepts/integrity/) from the same point, which forks it. economy-lab keeps concurrent writes correct with an application-side rule and a database constraint.
 
 ## The idea
 
-Every operation locks all the accounts it will touch _before_ it posts, and it takes those locks in one global order. The order is a plain sort of the account ids, so any two operations that share an account acquire that account's lock in the same sequence — and a sort is identical on every machine, so the order is the same everywhere.
+Before it posts, every operation acquires a lock on each account it will touch, and it does so in one global order. That order is a plain sort of the account ids. Two operations that share an account therefore acquire its lock in the same sequence, and one waits for the other. A sort is identical on every machine, so the order is identical everywhere.
 
 `lockAll` de-duplicates the account set and sorts it, then takes each lock in turn:
 
@@ -29,22 +30,22 @@ for (const account of [...new Set(accounts)].sort()) {
 
 ## Why the order has to be deterministic
 
-Locks in an arbitrary order are how deadlocks form. One operation locks account `A` then waits for `B`; another locks `B` then waits for `A`; neither can proceed. A shared total order on the locks removes that circular wait: both operations reach for `A` before `B`, so one simply waits its turn and finishes.
+Acquire locks in an arbitrary order and you get deadlocks. One operation locks account `A` and waits for `B`; another locks `B` and waits for `A`; neither can proceed. A shared total order removes the circular wait: both operations acquire `A` before `B`, so one takes its turn while the other waits.
 
-A plain `.sort()` compares by code unit, which is the same on every machine and runtime — unlike a locale-aware comparison, which can order the same two ids differently in two places and quietly reintroduce the cycle. `lockAccounts` routes every operation through `lockAll` before its handler runs, so no operation can re-implement the ordering slightly wrong.
+The sort has to be identical everywhere it runs. `.sort()` compares by code unit, which is stable across machines and runtimes. A locale-aware comparison is not: it can order the same two ids differently in two places, which reintroduces the cycle. `lockAccounts` routes every operation through `lockAll` before its handler runs, so no handler can reimplement the ordering incorrectly.
 
 ## The no-fork constraint
 
-Locking serializes contending operations; the database makes the one outcome they must never produce — a forked chain — impossible to store. Each account's chain advances one link per posting, and a unique index on `(account_id, prev_hash)` means two postings can't both attach at the same prior head.
+Locking serializes contending operations, but the forked chain they could still produce has to be blocked at the database. Each account's chain advances one link per posting, and a unique index on `(account_id, prev_hash)` prevents two postings from attaching at the same prior head.
 
-Under a race the loser's insert hits that unique index and the engine raises a conflict. economy-lab classifies it as transient and retries the whole unit of work, which re-reads the account's new head and posts cleanly against it.
+Under a race, the losing insert hits that unique index and the engine raises a conflict. economy-lab classifies the conflict as transient and retries the whole unit of work; the retry re-reads the account's new head and posts against it.
 
 ## How the two layers divide the work
 
-- **App-side lock ordering** is the primary serialization. The write runs at the engine's default isolation, not `SERIALIZABLE`, so this fixed-order locking — not the engine — is what stops contending operations from interleaving.
-- **The unique index** enforces continuity natively and backstops the gap before a balance row exists, where the app lock has nothing to grab yet. The [conformance suite](/economy/concepts/integrity/) drives parallel same-account operations and checks they still conserve and never overdraw.
+- **The lock ordering** is the primary serialization. These writes run at the database's default isolation level rather than `SERIALIZABLE`, so preventing contending operations from interleaving falls to the ordering rather than the engine.
+- **The unique index** enforces chain continuity in the database, and it covers the window before an account has a balance row, when the application lock has nothing to acquire. The [conformance suite](/economy/concepts/integrity/) runs same-account operations in parallel and checks that they conserve value and never overdraw.
 
 ## What relies on it
 
-- Every operation acquires its locks through `lockAccounts` before its handler runs, so this holds for the whole [submit surface](/economy/reference/the-economy/) uniformly.
+- Every operation acquires its locks through `lockAccounts` before its handler runs, so this applies across the whole [submit surface](/economy/reference/the-economy/).
 - [Integrity](/economy/concepts/integrity/) depends on it: the per-account chain stays linear only because no two writers fork it.

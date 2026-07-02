@@ -1,6 +1,7 @@
 ---
 title: 'The proof'
 summary: 'The independent prover: one report that re-derives conservation, backing, no-overdraft, and chain integrity from the ledger itself.'
+plain: "An “invariant” is a rule that must hold true at every moment, no matter what just happened — for instance, that no account can ever go negative. economy-lab fixes a short list of these as its definition of a correct economy, and this page is about the check that catches any one of them breaking."
 order: 80
 status: stable
 sourceRefs:
@@ -18,7 +19,7 @@ related:
 
 ## The idea
 
-You don't have to take "the books balance" on faith. You can re-derive it. The prover does exactly that: it rebuilds every money invariant straight from the ledger's [posted legs](/economy/concepts/accounts-and-double-entry/) and hands you one report, a `ProveReport`, telling you whether the books still hold.
+You don't have to take "the books balance" on faith. You can re-derive it. The prover does exactly that: it rebuilds every money invariant from scratch, straight from the ledger's [posted legs](/economy/concepts/accounts-and-double-entry/), and hands you one report, a `ProveReport`, telling you whether the books still hold.
 
 It only reads, it never writes. It sums the debit and credit lines itself instead of trusting any cached balance. It recomputes each account's hash chain from genesis. Then it compares the result against what the [ledger](/economy/concepts/integrity/) actually stored.
 
@@ -37,7 +38,7 @@ report.conserved &&
 
 ## Why it exists
 
-If the database already rejects a bad row, why re-check the books at all? Because the write path can only vouch for the writes it performs. The invariants are enforced at write time, pushed down into Postgres triggers and MySQL stored procedures so a violating row can't be committed (see [Integrity](/economy/concepts/integrity/)). The prover is the independent audit _on top of_ that enforcement, not the enforcement itself.
+If the database already rejects a bad row, why re-check the books at all? Because the write path can only vouch for the writes it performs. The invariants are enforced at write time, pushed down into Postgres triggers and MySQL stored procedures so a violating row can't be committed (see [Integrity](/economy/concepts/integrity/)). The prover is the second line of defense: the independent audit _on top of_ that enforcement, not the enforcement itself.
 
 Its job is to catch the failures a write-path guard structurally can't see. A bug in the enforcement. A half-applied write. A row edited directly in the database. `proveEconomy` says as much in its own contract: it is the out-of-band cross-check, "run by an auditor/worker, never as the write-path guard" (see <SourceLink to="src/integrity.ts#L72">source</SourceLink>).
 
