@@ -1,6 +1,6 @@
 ---
 title: 'Performance'
-summary: 'What `make bench` measures and how to read it: submit throughput per storage backend and integrity cost as the ledger grows. These are lab numbers — relative cost and scaling shape, not production capacity.'
+summary: 'What `make bench` measures and how to read it: submit throughput per storage backend and integrity cost as the ledger grows. These are lab numbers: relative cost and scaling shape.'
 order: 45
 status: stable
 sourceRefs:
@@ -66,11 +66,11 @@ So "was the ledger tampered with?" becomes a check anyone can run against two ch
 
 Almost everything carries over; only the seal's full replay changes. The per-account [hash chains](/economy/concepts/integrity/) and the signed Merkle root over account heads are already how production ledgers commit to current state — Diem's Jellyfish Merkle tree, Ethereum's state trie.
 
-The replay isn't a cost-cutting shortcut — it's the deliberate choice. An incremental tree has to be maintained and persisted in the same transaction as every posting: a new write-path invariant, and another quiet place the guarantee could fail. The lab optimizes for something you can see at a glance, not throughput.
+The lab keeps the full replay on purpose. An incremental tree has to be maintained and persisted in the same transaction as every posting: a new write-path invariant. Miss one tree update and the signed root no longer matches the postings. It trades seal throughput for an integrity check a reader can follow line by line.
 
-If seal cost ever bit at real scale, the order matters: schedule a standalone full [`prove`](/economy/concepts/the-proof/) first — so the periodic deep audit doesn't vanish when the replay goes — then make the seal incremental.
+If seal cost ever bit at real scale, the order matters: schedule a standalone full [`prove`](/economy/concepts/the-proof/) first, then make the seal incremental; otherwise removing the replay also removes the periodic deep audit.
 
-One thing the proofs can't cover alone: they catch tampering relative to the checkpoints a server issued, but not a server that shows different histories to different readers. Production closes that with witnessing — independent parties co-sign or cross-check checkpoints — which is what makes a transparency log trustworthy without trusting the operator.
+One thing the proofs can't cover alone: they catch tampering relative to the checkpoints a server issued, but not a server that shows different histories to different readers. Production closes that with witnessing: independent parties co-sign or cross-check checkpoints, so a reader doesn't have to take the operator's word for the history.
 
 ## Running it against a backend
 
@@ -79,3 +79,7 @@ In-memory runs with no setup. For the SQL rows, apply the schema first (`make db
 ```bash
 BENCH_OPS=5000 make bench
 ```
+
+## The scale probe
+
+`make scale` asks a different question of the same backends: does per-op cost stay flat as one subject's history grows? It drives repeated `spend`s against a single buyer and repeated `requestPayout`s against a single creator, in fixed-size segments, and prints ops/sec per segment. A per-op cost that grows with that account's accumulated history shows up as the segments slowing from left to right.

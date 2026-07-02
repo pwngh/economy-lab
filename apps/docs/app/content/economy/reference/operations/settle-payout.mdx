@@ -76,7 +76,7 @@ The USD-side entry records the cash leaving trust. `USD_CLEARING` mirrors money 
 | [`USD_CLEARING`](/economy/concepts/accounts-and-double-entry/) | `usd` |        |
 | [`TRUST_CASH`](/economy/concepts/accounts-and-double-entry/)   |       | `usd`  |
 
-The gross `usd` is the reserve converted at the [`payout` rate](/economy/concepts/money-model/). The rail's fee (`config.payoutFeeBps`) and the seller's net are split downstream at the external rail. Both are recorded on the USD posting's metadata for the audit trail, not posted as ledger legs.
+The gross `usd` is the reserve converted at the [`payout` rate](/economy/concepts/money-model/). The rail's fee (`config.payoutFeeBps`) and the seller's net are split downstream at the external rail. Both are recorded on the USD posting's metadata for the audit trail; the ledger posts neither as a leg.
 
 The same operation also queues an internal `economy.payout.settled` event in this transaction, so the event is saved if and only if the payout actually settled.
 
@@ -94,7 +94,7 @@ Only a `system` or `operator` [actor](/economy/concepts/actors-and-authorization
 
 `settlePayout` returns no `rejected` [`Outcome`](/economy/reference/outcomes-and-reason-codes/). Its guards are faults, not declines.
 
-A settle is driven by a verified webhook or an operator. So a settle that can't apply is a mapping or timing error, thrown, rather than handed back as a normal "no".
+A settle is driven by a verified webhook or an operator. So a settle that can't apply is a mapping or timing error; the engine throws it rather than handing back a normal "no".
 
 The faults it can throw:
 

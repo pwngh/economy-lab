@@ -96,7 +96,7 @@ separate idea about how a credit is valued.
 
 ## What the core assumes
 
-The spend handler trusts the policy on one thing and checks it on another.
+The spend handler takes the legs on trust and checks the shares.
 
 It assumes the legs are credit-side and sum to `-price`, because it pairs them with a single buyer
 debit for the same price and expects the posting to balance. A policy that returns unbalanced legs
@@ -114,8 +114,8 @@ leftover and lands in `REVENUE`. The platform keeps the entire sale.
 
 <Callout type="warning">
   The recipient `shareBps` must sum to exactly `10000`. A non-empty list that
-  sums to anything else is a `MALFORMED_OPERATION` fault, not a rejection. It
-  signals a bug in the caller, not a bad request from a user.
+  sums to anything else is a `MALFORMED_OPERATION` fault, not a rejection: the
+  shares are wired by the caller, so a bad sum is a caller bug.
 </Callout>
 
 ## Out of scope

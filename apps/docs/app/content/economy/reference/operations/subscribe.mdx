@@ -79,8 +79,8 @@ price splits between the buyer's [`promo`](/economy/concepts/accounts-and-double
 grant and their [`spendable`](/economy/concepts/accounts-and-double-entry/) balance. Promo
 covers as much as it can, and spendable covers the rest.
 
-The spendable-funded part is the part that carries the platform fee. The buyer's `spendable`
-is debited the full part. The seller's [`earned`](/economy/concepts/accounts-and-double-entry/)
+The platform fee is charged on the spendable-funded part. The buyer's `spendable` is debited
+that part in full. The seller's [`earned`](/economy/concepts/accounts-and-double-entry/)
 is credited the net, and [`REVENUE`](/economy/concepts/accounts-and-double-entry/) takes the
 fee:
 
@@ -120,7 +120,7 @@ privileged-only operation.
 ## Reason codes
 
 `subscribe` returns these [`RejectionCode`](/economy/reference/outcomes-and-reason-codes/)
-values as a `rejected` outcome, a normal "no", not a thrown fault:
+values as a `rejected` outcome:
 
 | Code                 | When                                                                                                                                                                             |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

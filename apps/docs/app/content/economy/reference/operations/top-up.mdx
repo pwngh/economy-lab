@@ -111,7 +111,7 @@ margin at or above zero. The cost is at most one minor unit over the exact price
 
 `top-up` is restricted to a privileged [`Actor`](/economy/concepts/actors-and-authorization/): a
 trusted `system` service (the verified payment path) or a human `operator`. It mints spendable
-credit, so an end user can never issue one, a `user` principal is rejected with `UNAUTHORIZED`.
+credit, so an end user can never issue one: a `user` principal is rejected with `UNAUTHORIZED`.
 
 In production, the `system` top-up is driven by a verified [processor](/economy/ports/processor/)
 webhook. `toTopUp` builds the operation from a cleared `PurchaseEvent`, keyed off the provider's
@@ -119,13 +119,15 @@ webhook. `toTopUp` builds the operation from a cleared `PurchaseEvent`, keyed of
 
 ## Reason codes
 
-A `top-up` can return these [reason codes](/economy/reference/outcomes-and-reason-codes/) as a
+A `top-up` can return one [reason code](/economy/reference/outcomes-and-reason-codes/) as a
 `rejected` outcome:
 
-| Code             | When                                                                                                                                                    |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `RISK_DENIED`    | The user's recent top-up volume crossed the configured velocity limit. A top-up counts against the same per-user velocity window as a spend.            |
-| `ECONOMY_PAUSED` | A maintenance window is in effect. Only a `user` actor is paused (and a `user` can't top up at all) so a `system` or `operator` top-up is never paused. |
+| Code          | When                                                                                                                                         |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RISK_DENIED` | The user's recent top-up volume crossed the configured velocity limit. A top-up counts against the same per-user velocity window as a spend. |
+
+The pause gate applies only to `user` actors, and a `user` can't call `top-up`, so a top-up is
+never declined with `ECONOMY_PAUSED`.
 
 Structurally invalid requests throw faults rather than returning a `rejected` outcome. A blank
 `source` or a non-`CREDIT` amount throws `MALFORMED_OPERATION`. A zero or negative amount throws
@@ -139,7 +141,7 @@ A top-up holds the books straight on both currencies:
 - Both postings net to zero within their currency, so the ledger stays
   [balanced](/economy/concepts/accounts-and-double-entry/) and conserved.
 - `TRUST_CASH` rises by at least `amount × par`, so the credits are
-  [backed](/economy/concepts/solvency/) the moment they're issued, trust cash always covers the
+  [backed](/economy/concepts/solvency/) the moment they're issued: trust cash always covers the
   spendable balance valued at par.
 - The new credits carry their `source` and top-up time as a lot, which fixes when they
   [mature](/economy/concepts/lifecycles/) and become spendable and cashable.

@@ -54,7 +54,7 @@ On success the status is `committed`, carrying the posted `transaction`. A repea
 
 ## Postings
 
-The grant posts one balanced entry. It raises the user's `promo` balance and offsets it on the platform's `PROMO_FLOAT` account, so the two legs balance.
+The grant posts one entry with two legs: it raises the user's `promo` balance and books the offset on the platform's `PROMO_FLOAT` account.
 
 | Leg | Account                  | Direction |
 | --- | ------------------------ | --------- |
@@ -93,7 +93,7 @@ The faults it can throw, all from malformed input, are:
 | `AUTH.UNAUTHORIZED`    | The caller is a `user` principal.                                                                                                    |
 
 <Callout type="warning">
-  A zero, negative, or past `expiresAt` is rejected on purpose. The expiry sweep
+  A zero, negative, or past `expiresAt` throws `OP.MALFORMED` on purpose. The expiry sweep
   claims any grant whose `expiresAt` has already passed, so a past timestamp
   would let the sweep claw the credit straight back.
 </Callout>

@@ -57,7 +57,7 @@ A successful request returns `committed` with the reservation transaction. When 
 
 A business decline returns `rejected` with one of the [reason codes](#reason-codes) below: too small, too soon, not enough funds, or not yet matured. A `rejected` outcome is returned data, not a thrown exception.
 
-A malformed request throws instead. An `amount` that isn't `CREDIT` raises `OP.MALFORMED`, and a zero or negative one raises `MONEY.INVALID_AMOUNT` (see <SourceLink to="src/operations/requestPayout.ts#L146 · payableCredit" />). Those are programming errors, not declines.
+A malformed request throws instead. An `amount` that isn't `CREDIT` raises `OP.MALFORMED`, and a zero or negative one raises `MONEY.INVALID_AMOUNT` (see <SourceLink to="src/operations/requestPayout.ts#L146 · payableCredit" />). Both are programming errors.
 
 ## Postings
 
@@ -110,4 +110,4 @@ The request reserves credit; it never disburses USD. After a `committed` outcome
 
 - The reserved `amount` has left the seller's `earned` balance and sits in `PAYOUT_RESERVE`. Both legs are `CREDIT` and sum to zero, so the books stay balanced.
 - Exactly one `Saga` exists for the request, opened in `RESERVED`. The reservation and the saga commit in one transaction, so a record can't exist without its credits set aside, or the reverse.
-- No real USD has moved, and the credits are not spendable. They leave `PAYOUT_RESERVE` exactly once afterward, to `REVENUE` on settle, or back to `earned` on a reversal or timeout. Never twice, and never zero times, per [the payout saga](/economy/concepts/lifecycles/#the-payout-saga).
+- No real USD has moved, and the credits are not spendable. They leave `PAYOUT_RESERVE` exactly once afterward: to `REVENUE` on settle, or back to `earned` on a reversal or timeout (see [the payout saga](/economy/concepts/lifecycles/#the-payout-saga)).

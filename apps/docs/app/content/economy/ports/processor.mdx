@@ -59,7 +59,7 @@ The sweep converts the seller's reserved credits to USD at the current payout ra
 
 A failed submit never strands the seller. If the worker exhausts its attempts, it dead-letters the saga and posts the exact reverse of the request-time reservation, returning the reserved credits to the seller's earned account.
 
-## The stub adapter
+## The reference adapter
 
 The default adapter, `httpProcessor`, POSTs the payout to an HTTP endpoint you configure. It's the reference implementation: enough to wire up a fake provider in a test or a sandbox, not a real rail.
 
@@ -74,13 +74,13 @@ const processor = httpProcessor({
 
 The amount crosses the wire as a decimal string like `"USD:12.34"`, since money is a `bigint` and `JSON.stringify` can't serialize one. The API key, when set, rides in an `Authorization: Bearer` header and is never written to logs or error details.
 
-A failed send or a non-2xx status is **retryable**, nothing was paid, so trying again is safe. But a 2xx body with no `providerRef` is **non-retryable**: the money may already have gone out, so retrying could pay twice, and reconciliation resolves the ambiguity instead.
+A failed send or a non-2xx status is **retryable**: nothing was paid, so trying again is safe. But a 2xx body with no `providerRef` is **non-retryable**: the money may already have gone out, so retrying could pay twice, and reconciliation resolves the ambiguity instead.
 
 <Callout type="warning">
-  `httpProcessor` is a stub. It assumes a provider that already speaks
-  economy-lab's one-shot request-and-reference shape, which a real payout rail
-  rarely does. For production you write an adapter for your provider's actual
-  API. The Thunes adapter below is the worked example.
+  `httpProcessor` assumes a provider that already speaks economy-lab's
+  one-shot request-and-reference shape, which a real payout rail rarely does.
+  For production you write an adapter for your provider's actual API. The
+  Thunes adapter below is the worked example.
 </Callout>
 
 ## The Thunes adapter
@@ -93,7 +93,7 @@ economy-lab's seam is one call that returns one reference. Thunes Money Transfer
 2. Create a **transaction** against that quotation, naming the beneficiary and credit party. Still no money moves.
 3. **Confirm** the transaction. This is the money-movement boundary.
 
-The transaction id minted at step 2 becomes the `providerRef`. Because the id exists before any money moves, there's no "2xx but no reference" ambiguity to resolve, confirm only has to succeed.
+The transaction id minted at step 2 becomes the `providerRef`. Because the id exists before any money moves, there's no "2xx but no reference" ambiguity: the confirm step only has to succeed.
 
 The port carries only `userId`, but Thunes needs a destination service and beneficiary details that the lab never holds. So the host supplies a `resolveRecipient` function that maps a `usr_…` token to its Thunes routing: the payer, the credit-party identifier, and the beneficiary fields. Those live in the host's beneficiary and KYC store, never in this adapter.
 
@@ -103,7 +103,7 @@ Idempotency rides on Thunes' `external_id`, which the adapter sets to the `key` 
   The two Thunes replay error codes (`1007001` for a reused `external_id`,
   `1007002` for an already-confirmed transaction) are derived from Thunes'
   documentation. The adapter's comments flag them to verify against the live
-  sandbox before production: an honest limitation of a lab-grade integration.
+  sandbox before production.
 </Callout>
 
 ## How settlement comes back
@@ -122,7 +122,7 @@ Both inbound events are persisted, not posted inline. The webhook edge writes th
 
 The lab leans on the adapter to hold up two guarantees, because it can't check them from inside.
 
-- **At-most-once disbursement under retry.** The same `key` must never pay twice, however many times the worker resubmits. Both adapters honor this, the stub by refusing to retry an ambiguous 2xx, Thunes by keying the whole flow on `external_id`.
+- **At-most-once disbursement under retry.** The same `key` must never pay twice, however many times the worker resubmits. Both adapters honor this, the reference adapter by refusing to retry an ambiguous 2xx, Thunes by keying the whole flow on `external_id`.
 - **A retryable failure throws, a permanent one is distinguishable.** The worker decides whether to retry by inspecting the thrown fault, so the adapter must mark a transient problem (a dropped connection, a `5xx`, a `429`) retryable and a terminal one not.
 
 ## Out of scope
@@ -130,5 +130,5 @@ The lab leans on the adapter to hold up two guarantees, because it can't check t
 The port stops at "ask a provider to send money." Several things sit deliberately outside it.
 
 - **Beneficiary and KYC data.** The port carries only an opaque `userId`. Resolving it to bank or wallet details is the host's job, supplied through the adapter's own configuration.
-- **No real provider ships with the lab.** `httpProcessor` is a stub and `thunesProcessor` is an integration against one specific rail's documented API. Wiring a provider, holding its credentials, and verifying its sandbox are the host's responsibility.
-- **The ledger.** An adapter asks the provider to move money; it never touches the lab's accounts. Every posting (the reserve, the settle, the dead-letter reversal) happens inside the economy, driven by the worker and the webhook edge, not by the adapter.
+- **No real provider ships with the lab.** `httpProcessor` is the reference adapter and `thunesProcessor` is an integration against one specific rail's documented API. Wiring a provider, holding its credentials, and verifying its sandbox are the host's responsibility.
+- **The ledger.** An adapter asks the provider to move money; it never touches the lab's accounts. Every posting (the reserve, the settle, the dead-letter reversal) happens inside the economy, driven by the worker and the webhook edge.

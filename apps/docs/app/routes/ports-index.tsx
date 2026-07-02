@@ -15,7 +15,7 @@ import { pageMeta } from '~/seo.ts';
 
 export function meta() {
   return pageMeta({
-    title: 'Ports & edges - Economy Lab',
+    title: 'Ports & edges - economy-lab docs',
     description:
       'The interfaces economy-lab depends on, the adapters that satisfy them, and what is out of scope.',
     path: '/economy/ports/',

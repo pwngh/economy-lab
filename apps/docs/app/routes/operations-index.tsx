@@ -15,7 +15,7 @@ import { pageMeta } from '~/seo.ts';
 
 export function meta() {
   return pageMeta({
-    title: 'Operations - Economy Lab',
+    title: 'Operations - economy-lab docs',
     description: 'Every state-changing operation in the economy, one page each.',
     path: '/economy/reference/operations/',
   });

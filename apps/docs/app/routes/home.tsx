@@ -14,9 +14,9 @@ import { pageMeta } from '~/seo.ts';
 
 export function meta() {
   return pageMeta({
-    title: 'Economy Lab Docs',
+    title: 'economy-lab docs',
     description:
-      'Reference documentation for Economy Lab — a double-entry credit economy that is provably solvent and tamper-evident.',
+      'Reference documentation for economy-lab — a double-entry credit economy that is provably solvent and tamper-evident.',
     path: '/',
   });
 }
@@ -29,8 +29,9 @@ export default function Home() {
         <Brand /> documentation
       </h1>
       <p className="doc-summary">
-        A double-entry credit economy that is provably solvent and tamper-evident — built to
-        demonstrate correctness in systems that move money.
+        A double-entry credit economy, built as a lab to demonstrate correctness in systems that
+        move money: provably solvent and tamper-evident, with the invariants real and the
+        operational edges stubbed.
       </p>
       <p className="doc-plain">
         A “credit economy” is an app that runs on its own currency: you buy credits with real money,

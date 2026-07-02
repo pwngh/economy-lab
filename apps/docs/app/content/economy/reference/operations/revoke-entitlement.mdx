@@ -57,7 +57,7 @@ The `committed` [`transaction`](/economy/concepts/accounts-and-double-entry/) is
 
 ## Postings
 
-None. Entitlements track ownership, not value. So `revokeEntitlement` writes no [double-entry posting](/economy/concepts/accounts-and-double-entry/) and touches no account.
+None. Entitlements track ownership only, so `revokeEntitlement` writes no [double-entry posting](/economy/concepts/accounts-and-double-entry/) and touches no account.
 
 The handler drops the ownership record through `unit.entitlements.revoke`. The returned `transaction` carries empty leg and link lists.
 

@@ -1,7 +1,7 @@
 ---
 title: 'Concurrency'
 summary: 'Two operations touching the same account at once stay correct through one app-side rule and one database constraint: every operation locks its accounts in one global order, and a unique index makes a forked hash chain impossible.'
-plain: "A “deadlock” is the classic trap where two operations each hold something the other needs and neither lets go, so both wait forever. Taking every lock in the same fixed order is the textbook way to make that trap impossible — which is why the global order here is the whole point, not a detail."
+plain: "A “deadlock” is the classic trap where two operations each hold something the other needs and neither lets go, so both wait forever. Taking every lock in the same fixed order is the textbook way to make that trap impossible, and that ordering rule is what this page is about."
 order: 90
 status: stable
 sourceRefs:
@@ -18,7 +18,7 @@ When two operations touch the same account at the same time, they can interleave
 
 ## The idea
 
-Before it posts, every operation acquires a lock on each account it will touch, and it does so in one global order. That order is a plain sort of the account ids. Two operations that share an account therefore acquire its lock in the same sequence, and one waits for the other. A sort is identical on every machine, so the order is identical everywhere.
+Before it posts, every operation acquires a lock on each account it will touch, and it does so in one global order. That order is a plain sort of the account ids. Two operations that share an account therefore acquire its lock in the same sequence, and one waits for the other.
 
 `lockAll` de-duplicates the account set and sorts it, then takes each lock in turn:
 
@@ -43,9 +43,11 @@ Under a race, the losing insert hits that unique index and the engine raises a c
 ## How the two layers divide the work
 
 - **The lock ordering** is the primary serialization. These writes run at the database's default isolation level rather than `SERIALIZABLE`, so preventing contending operations from interleaving falls to the ordering rather than the engine.
-- **The unique index** enforces chain continuity in the database, and it covers the window before an account has a balance row, when the application lock has nothing to acquire. The [conformance suite](/economy/concepts/integrity/) runs same-account operations in parallel and checks that they conserve value and never overdraw.
+- **The unique index** enforces chain continuity in the database, and it covers the window before an account has a balance row, when the application lock has nothing to acquire. The [conformance suite](/economy/concepts/the-proof/) runs same-account operations in parallel and checks that they conserve value and never overdraw.
 
 ## What relies on it
 
 - Every operation acquires its locks through `lockAccounts` before its handler runs, so this applies across the whole [submit surface](/economy/reference/the-economy/).
-- [Integrity](/economy/concepts/integrity/) depends on it: the per-account chain stays linear only because no two writers fork it.
+- [Integrity](/economy/concepts/integrity/) depends on it: the per-account chain stays linear only because the lock order and the unique index stop two writers from extending the same head.
+
+Writes that survive the lock ordering and the no-fork index are still re-derived after the fact: [the prover](/economy/concepts/the-proof/) walks every account's chain and recomputes each hash. And all of this is contention on a single node — concurrency at scale is [out of scope](/economy/scope-and-non-goals/).

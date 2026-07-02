@@ -59,11 +59,11 @@ The reference [`configuredRates`](/economy/ports/rates/) adapter takes `buy`, `p
 
 `par ≥ payout` (in practice `payout = par`) ties the creator's cash-out to the same value the platform reserved. That's what [solvency](/economy/concepts/solvency/) checks: real USD in trust covers every spendable credit valued at `par`.
 
-## How the spread is enforced, not a separate fee
+## How the spread is enforced
 
-There is no "purchase fee" anywhere in the code. The spread is realized by the split at top-up, not by a deduction. Because cash is valued at `buy` going in and backing at `par`, the margin just falls out of `buy − par`.
+There is no "purchase fee" anywhere in the code. The spread is realized by the split at top-up. Because cash is valued at `buy` going in and backing at `par`, the margin just falls out of `buy − par`.
 
-The marketplace **fee** on a sale is a different thing entirely, and not part of the money model. How a sale's price splits into recipient shares and platform revenue is the [pricing policy](/economy/ports/pricing/)'s job. You can see the balanced `Leg`s it produces in [accounts and double-entry](/economy/concepts/accounts-and-double-entry/).
+The marketplace **fee** on a sale sits outside the money model entirely. How a sale's price splits into recipient shares and platform revenue is the [pricing policy](/economy/ports/pricing/)'s job. You can see the balanced `Leg`s it produces in [accounts and double-entry](/economy/concepts/accounts-and-double-entry/).
 
 ## What relies on it
 

@@ -9,11 +9,12 @@ sourceRefs:
     'src/ports.ts#L130-L140 · Processor',
     'src/ports.ts#L118-L121 · Dispatcher',
     'src/ports.ts#L154-L172 · Rates',
+    'test/conformance/invariants.adversarial.test.ts',
   ]
 related: ['economy/concepts/overview', 'economy/reference/configuration']
 ---
 
-## A lab, not a product
+## Where the lab draws the line
 
 economy-lab is a study of one thing: the application layer of a credits economy, and the invariants that hold it together. It is not a deployable money system, and it does not try to be one.
 
@@ -22,9 +23,8 @@ The ledger invariants (conservation, no-overdraft, [backing](/economy/concepts/s
 This page is the map of that second half: the things economy-lab leaves to a host, and why each one sits outside the lab.
 
 <Callout type="note">
-  Everything here is a non-goal *by design*, not a gap waiting to be filled. The
-  subject of study is the ledger and its invariants, so the rails underneath
-  stay thin on purpose.
+  Nothing on this page is a gap waiting to be filled. The subject of study is
+  the ledger and its invariants, so the rails underneath stay thin.
 </Callout>
 
 ## No real payment provider
@@ -33,12 +33,12 @@ economy-lab never moves real money. When a creator cashes out, the credits retir
 
 That somewhere is a port. The [`Processor`](/economy/ports/processor/) interface is the single seam through which all money leaves the platform, and it has exactly one method: `submitPayout`. The core asks the provider to send money and reads back a `providerRef`; it never learns "did it settle?" by polling. Settlement arrives later, as a webhook the provider sends back.
 
-The reference adapter (`src/adapters/processor.ts`) is an HTTP client that `POST`s a payout request to whatever endpoint you configure with `PROCESSOR_URL`. With no URL set, the host falls back to a dev stub that approves every payout. Neither one is a money-transmitter integration.
+The reference adapter (`src/adapters/processor.ts`) is an HTTP client that `POST`s a payout request to whatever endpoint you configure with `PROCESSOR_URL`. With no URL set, the host falls back to the dev stub, which approves every payout. Neither one is a money-transmitter integration.
 
 <Callout type="warning">
-  The stubbed processor approves payouts unconditionally. That is fine for
-  studying the [payout saga](/economy/concepts/lifecycles/), and exactly wrong
-  for anything holding real funds.
+  The dev stub approves payouts unconditionally. That is fine for studying the
+  [payout saga](/economy/concepts/lifecycles/). A processor handling real funds
+  must be able to decline.
 </Callout>
 
 ## No event consumer
@@ -51,7 +51,7 @@ The same is true in reverse for inbound provider callbacks. economy-lab verifies
 
 ## None of the money-transmitter plumbing
 
-A real credits economy sits on top of a regulated money transmitter, and that transmitter supplies a layer of plumbing economy-lab takes entirely for granted. The lab assumes a host has already handled it.
+A real credits economy sits on top of a regulated money transmitter, and that transmitter supplies a layer of plumbing that economy-lab assumes a host has already handled.
 
 That plumbing is the compliance and settlement machinery a custodian is legally required to run:
 
@@ -60,13 +60,13 @@ That plumbing is the compliance and settlement machinery a custodian is legally 
 - **Sanctions screening**: checking parties against restricted lists.
 - **Payout rails**: the actual bank and card connections that disburse funds.
 
-economy-lab models a `userId` as an opaque `usr_`-prefixed token and stops there. It never sees a real identity, never screens a transfer, and never touches a payout rail. Those are the host's responsibility, on the regulated side of the line the lab studies the application layer above.
+economy-lab models a `userId` as an opaque `usr_`-prefixed token and stops there. It never sees a real identity, never screens a transfer, and never touches a payout rail. Those are the host's responsibility, on the regulated side of the line; the lab studies the application layer above it.
 
 <Callout type="note">
   The [risk gates](/economy/concepts/actors-and-authorization/) the lab *does*
   implement (spend velocity, settlement maturity) are application-layer fraud
-  controls, not the regulated compliance plumbing above. They guard the ledger;
-  they are not KYC or sanctions screening.
+  controls guarding the ledger itself. KYC and sanctions screening remain part
+  of the host's regulated plumbing.
 </Callout>
 
 ## Simplified schema migrations
@@ -77,15 +77,15 @@ The database schema is real and the invariants live inside it, but the migration
 
 A production custodian needs versioned, forward-only migrations that never destroy committed history. economy-lab doesn't ship that, because the question it asks (can the engine enforce the invariants natively) doesn't depend on it.
 
-## Concurrency at lab scale, not at scale
+## Concurrency at lab scale
 
-economy-lab takes concurrency seriously where it touches correctness. A linearizability harness oversubscribes concurrent spends and checks every committed interleaving replays serially to identical balances, and the per-account row locks keep two operations from racing on a balance.
+economy-lab takes concurrency seriously where it touches correctness. A linearizability harness oversubscribes concurrent spends and checks that every committed interleaving replays serially to identical balances, and the per-account row locks keep two operations from racing on a balance.
 
 What it does not chase is throughput at scale. There's no sharding, no connection-pool tuning for thousands of writers, no horizontal partitioning of the ledger. The concurrency work proves the invariants hold _under contention_; it doesn't claim the single-table design would carry a production load.
 
 ## Fixed rates, no live FX
 
-Credits convert to dollars at fixed, platform-set rates, never a live market. The [`Rates`](/economy/ports/rates/) port supplies the [`buy`/`par`/`payout`](/economy/concepts/money-model/) rates as business constants a deployment configures, not as a feed.
+Credits convert to dollars at fixed, platform-set rates, never a live market. The [`Rates`](/economy/ports/rates/) port supplies the [`buy`/`par`/`payout`](/economy/concepts/money-model/) rates as business constants a deployment configures.
 
 The reference adapter (`src/adapters/rates.ts`) reads three integers from config and returns them; the only currencies are `CREDIT` and `USD`, and any other pair is treated as a wiring bug that throws. There is no foreign-exchange source, no rate that changes between two reads, no market risk to hedge. A credit is worth what the platform says it's worth, and the [spread](/economy/concepts/money-model/) between buying and cashing out is the platform's margin, set once.
 

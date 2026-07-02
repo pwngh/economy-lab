@@ -38,7 +38,7 @@ report.conserved &&
 
 ## Why it exists
 
-If the database already rejects a bad row, why re-check the books at all? Because the write path can only vouch for the writes it performs. The invariants are enforced at write time, pushed down into Postgres triggers and MySQL stored procedures so a violating row can't be committed (see [Integrity](/economy/concepts/integrity/)). The prover is the second line of defense: the independent audit _on top of_ that enforcement, not the enforcement itself.
+If the database already rejects a bad row, why re-check the books at all? Because the write path can only vouch for the writes it performs. The invariants are enforced at write time, pushed down into Postgres triggers and MySQL stored procedures so a violating row can't be committed (see [Integrity](/economy/concepts/integrity/)). The prover is the second line of defense: an independent audit that runs on top of that enforcement.
 
 Its job is to catch the failures a write-path guard structurally can't see. A bug in the enforcement. A half-applied write. A row edited directly in the database. `proveEconomy` says as much in its own contract: it is the out-of-band cross-check, "run by an auditor/worker, never as the write-path guard" (see <SourceLink to="src/integrity.ts#L72">source</SourceLink>).
 
@@ -46,7 +46,7 @@ Anyone holding the ledger can re-derive the answer. The proof doesn't depend on 
 
 ## The invariant it maintains
 
-The prover checks five properties and reports each as a boolean flag on `ProveReport`. It maintains none of them on its own. It _observes_ them. So a `false` flag never means the prover broke something; it means an upstream invariant already did.
+The prover checks five properties and reports each as a boolean flag on `ProveReport`. It maintains none of them on its own; it _observes_ them. A `false` flag means an upstream invariant was already violated before the prover looked.
 
 | Flag          | Holds when                                                                                                                                          |
 | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -62,7 +62,7 @@ Two more fields carry the detail behind a failing flag. `shortfall` is the missi
 
 ## How it's enforced
 
-The whole proof runs in one pass over the ledger. `foldLedger` walks every account, sums each account's legs, and folds those signed amounts into a per-currency total that must reach zero. The _derived_ sum drives `conserved`, not the stored balance, so a mis-saved balance surfaces as `drift` instead of hiding a real imbalance. `backed` and `noOverdraft` read the cached balance directly, which is cheaper and is exactly the figure they vouch for.
+The whole proof runs in one pass over the ledger. `foldLedger` walks every account, sums each account's legs, and folds those signed amounts into a per-currency total that must reach zero. `conserved` is driven by the _derived_ sum rather than the stored balance, so a mis-saved balance surfaces as `drift` instead of hiding a real imbalance. `backed` and `noOverdraft` read the cached balance directly, which is cheaper and is exactly the figure they vouch for.
 
 <Callout type="note">
   There are two provers, and they differ in one flag.
@@ -77,7 +77,7 @@ The whole proof runs in one pass over the ledger. `foldLedger` walks every accou
   either way.
 </Callout>
 
-The chain check is deliberately not duplicated inside the fold. `proveEconomy` hands it to `proveChain` so the hash chain is verified in exactly one place.
+The fold doesn't repeat the chain check: `proveEconomy` hands it to `proveChain` so the hash chain is verified in one place.
 
 Backing is the one flag that crosses currencies. It converts custodial credits to USD at the `par` rate (`(custodialCreditMinor × par.rate) / 10^par.scale`, rounded down) then compares against the live `TRUST_CASH` balance. Any positive gap is the `shortfall`.
 
@@ -100,3 +100,5 @@ On the first violation, `make prove` shrinks to the shortest failing prefix and 
   between runs the enforcement layer (the database triggers and stored
   procedures) is what keeps the books honest.
 </Callout>
+
+Everything on this page holds per operation. The two remaining concept pages cover the write path under hostile load: a runaway caller in [Spend velocity](/economy/concepts/spend-velocity/), and contending writers in [Concurrency](/economy/concepts/concurrency/).

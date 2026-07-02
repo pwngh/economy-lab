@@ -68,7 +68,7 @@ a minor unit is.
 | Variable                  | Meaning                                                                                                                                                                                | Default            |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
 | `PAYOUT_MIN_EARNED_MINOR` | Smallest payout a user may request, counted only against _earned_ CREDIT, not bought or promo-granted. The floor keeps a disbursement from costing more in rail fees than it pays out. | `2000000` (≈ $100) |
-| `PAYOUT_MIN_INTERVAL_MS`  | Minimum time between a user's payout requests. The shipped value matches the live docs; the legal requirement is 14 days (`1209600000`).                                               | `86400000` (24h)   |
+| `PAYOUT_MIN_INTERVAL_MS`  | Minimum time between a user's payout requests. The 24h default matches the creator docs of the real platform the example models; that platform's payout terms require 14 days, so a production deploy sets `1209600000`. | `86400000` (24h)   |
 | `MAX_PAYOUT_ATTEMPTS`     | Provider attempts for one payout before the system gives up and reverses it.                                                                                                           | `5`                |
 | `MAX_PAYOUT_AGE_MS`       | Longest a payout may sit in `SUBMITTED` before the worker force-fails it as timed out, because the provider never reported back.                                                       | `86400000` (24h)   |
 | `PAYOUT_FEE_BPS`          | Payout-rail fee in basis points, charged on the USD a creator cashes out. This is the rail's own cut, deducted from the disbursement, not platform revenue.                            | `150` (≈ 1.5%)     |
@@ -146,8 +146,8 @@ it holds, end-user discretionary writes are declined with `ECONOMY_PAUSED`; sett
 
 ## Production externals
 
-These pick adapters rather than tune policy, so the edge reads them when it wires the ports,
-not `loadConfig`. In production, `productionExternals` (`scripts/main.ts`) fails fast with one
+These choose which adapter fills each port, so the edge reads them at wiring time rather than
+through `loadConfig`. In production, `productionExternals` (`scripts/main.ts`) fails fast with one
 message if any rate or the provider URL is missing or malformed, so a prod process never runs
 on the 1:1 dev rate or an auto-approve payout stub. Outside production these fall back to dev
 stubs, and a local run needs none of them.

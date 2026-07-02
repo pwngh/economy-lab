@@ -13,7 +13,7 @@ import { pageMeta } from '~/seo.ts';
 
 export function meta() {
   return pageMeta({
-    title: 'Economy - Economy Lab',
+    title: 'Economy - economy-lab docs',
     description:
       'The economy: a double-entry credit economy that is provably solvent and tamper-evident. Concepts, reference, and ports.',
     path: '/economy/',

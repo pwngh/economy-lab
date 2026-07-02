@@ -53,9 +53,7 @@ The payload is one `refund` variant of [`Operation`](/economy/reference/the-econ
 
 ## Postings
 
-The reversal rebuilds the sale's [double-entry posting](/economy/concepts/accounts-and-double-entry/) in mirror image. It applies the opposite of each change the sale made.
-
-To do that, it splits the original sale's legs into three groups:
+The reversal rebuilds the sale's [double-entry posting](/economy/concepts/accounts-and-double-entry/) in mirror image. To do that, it splits the original sale's legs into three groups:
 
 - **Raise in full**: the buyer's `spendable` and `promo` accounts the sale debited, plus any platform account the sale drew down. Raising an account never pushes a balance below zero, so these apply with no cap.
 - **Claw back, capped**: each seller's `earned` balance the sale credited, and `REVENUE` if it took a fee. The clawback is limited to what that account still holds. If a seller already spent or paid out their cut, only the part still there comes back.
@@ -91,6 +89,6 @@ A refund and an order-tied `clawback` both reverse the same sale, so only one ma
 
 The order-scoped claim is recorded in the same database transaction as the reversal. If the refund rolls back, the claim rolls back too, so the order can still be reversed later.
 
-After the reversal commits, `refund` revokes the buyer's entitlement to the SKU (for a gift, the recipient's). That revocation runs in the same database transaction, and it is ownership a UI checks through [`read.entitled`](/economy/reference/reads/). It is a no-op if that user was never granted the SKU; for a sale predating ownership-at-purchase, nothing is revoked.
+After the reversal commits, `refund` revokes the buyer's entitlement to the SKU (for a gift, the recipient's). That revocation runs in the same database transaction. The entitlement it removes is what a UI checks through [`read.entitled`](/economy/reference/reads/). It is a no-op if that user was never granted the SKU; for a sale predating ownership-at-purchase, nothing is revoked.
 
 The reversing posting balances to zero across each currency, exactly as the sale did, so [conservation](/economy/concepts/integrity/) holds.

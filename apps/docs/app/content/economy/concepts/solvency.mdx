@@ -34,7 +34,7 @@ The gap stays invisible until users try to cash out and the trust account runs d
 
 ## The invariant
 
-The backing invariant is `trust_cash ≥ spendable credits × par`: the dollars in the trust account cover every credit a user can spend, valued at par. Two consequences fall out of which credits count.
+The backing invariant is `trust_cash ≥ spendable credits × par`: the dollars in the trust account cover every credit a user can spend, valued at par. Which credits count matters in two ways: only spendable credits need backing, and the trust cash that backs them stays segregated from platform revenue.
 
 Only spendable credits need backing. [`classify`](/economy/concepts/accounts-and-double-entry/) tags exactly the user `spendable` balances as `custodial`, and everything else is `excluded` from the backing total.
 
@@ -58,7 +58,7 @@ The platform gets paid only from the **surplus**: cash sitting beyond what's owe
 
 ## How it's enforced
 
-The backing check never blocks a write. It's an audit that re-derives the position from the ledger after the fact, not a write-path guard. `proveEconomy` runs it in three steps.
+The backing check never blocks a write. It's an audit that re-derives the position from the ledger after the fact. `proveEconomy` runs it in three steps.
 
 First, it walks every account and sums the balances `classify` marks `custodial`, filtered to `CREDIT` so a stray USD balance can't slip in. Then it converts that total to required USD at par, rounding down. Finally it reads `trust_cash` directly and sets `shortfall` to `required − trust_cash` when the cash falls short, or zero otherwise.
 
@@ -82,8 +82,10 @@ A `processor_orphan` is the dangerous direction. It's real money the processor m
 
 ## What relies on it
 
-[`requestPayout`](/economy/reference/operations/request-payout/) is the operation that turns credits back into dollars, so it depends on backing holding. When the treasury sweep flags a shortfall, payouts stop until you fill the gap, rather than draining a trust account that no longer covers what's owed.
+[`requestPayout`](/economy/reference/operations/request-payout/) is the operation that turns credits back into dollars, so it depends on backing holding. A shortfall flagged by the treasury sweep is the signal to halt payouts until the gap is filled, before they drain a trust account that no longer covers what's owed.
 
 The fee sweep leans on the same surplus calculation to take only the platform's own money.
 
 The [storage engines](/economy/ports/storage-and-messaging/) carry the conservation, no-overdraft, and balance-integrity invariants in the database itself. The backing check is the independent audit layered over them: it re-derives solvency from the legs to catch a bug in the enforcement rather than trusting it.
+
+The next four concepts are the gates that keep a request from ever putting the books in a bad state: [actors and authorization](/economy/concepts/actors-and-authorization/), [idempotency](/economy/concepts/idempotency/), [lifecycles](/economy/concepts/lifecycles/), and [credit maturity](/economy/concepts/credit-maturity/).

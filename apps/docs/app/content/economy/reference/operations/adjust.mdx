@@ -73,16 +73,16 @@ For the example above (raising `spendable(usr_alice)` by `250` credits) the legs
 The handler works in the account's natural direction rather than a fixed debit or credit. So the move reads as "raise the account by `amount`" whether the target grows on a debit or on a credit. The offset to `OPENING_EQUITY` is always the negation, so the two legs sum to zero.
 
 <Callout type="note">
-  The offset lands in `OPENING_EQUITY`, the platform's opening-balance account,
-  not in any revenue or trust account. A manual correction is bookkeeping, not a
-  sale or a cash movement, so it doesn't touch the accounts that track either.
+  The offset lands in `OPENING_EQUITY`, the platform's opening-balance account.
+  A manual correction involves no sale and no cash movement, so the revenue and
+  trust accounts stay untouched.
 </Callout>
 
 ## Authorization
 
-`adjust` is operator-only. It writes a privileged correction to an account the caller need not own, which the ownership rule that governs ordinary user operations doesn't cover. So a `user` actor may never call it; see [actors and authorization](/economy/concepts/actors-and-authorization/).
+`adjust` is operator-only. It writes a privileged correction to an account the caller need not own, a case the ownership rule that governs ordinary user operations doesn't cover. So a `user` actor may never call it; see [actors and authorization](/economy/concepts/actors-and-authorization/).
 
-The handler re-checks the actor itself, not only the pipeline. A non-`operator` actor throws a `MALFORMED_OPERATION` fault. This guards against a wrong-actor call slipping through when the handler is invoked directly rather than through the pipeline.
+The handler re-checks the actor even after the pipeline has run its own gate. A non-`operator` actor throws a `MALFORMED_OPERATION` fault. This guards against a wrong-actor call slipping through when the handler is invoked directly rather than through the pipeline.
 
 A `system` actor clears the pipeline's privileged gate but is still refused by that handler check. So in practice only an `operator` can adjust.
 

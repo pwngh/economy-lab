@@ -12,7 +12,7 @@
 import { pageMeta } from '~/seo.ts';
 
 export function meta() {
-  return pageMeta({ title: 'Not found - Economy Lab', path: '/404/' });
+  return pageMeta({ title: 'Not found - economy-lab docs', path: '/404/' });
 }
 
 /** In-app fallback for unmatched client navigation. Cold server requests are served public/404.html first. */

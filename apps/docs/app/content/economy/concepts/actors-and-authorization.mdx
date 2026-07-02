@@ -19,7 +19,7 @@ related:
 
 ## The idea
 
-Before any operation touches money, the economy has to answer one question: who is asking, and may they do this? Every [`Operation`](/economy/reference/the-economy/) carries an `actor` (the principal making the request) and a single gate, `authorize`, runs before any other work.
+Before any operation touches money, the economy has to answer one question: who is asking, and may they do this? Every [`Operation`](/economy/reference/the-economy/) carries an `actor`, the principal making the request. A single gate, `authorize`, runs before any other work.
 
 The actor is one of three kinds: a `user` acting for themself, a trusted `system` service, or a human `operator`. The gate decides whether that kind of caller may run that kind of operation. For a `user`, it also checks whether they own the accounts the operation drains.
 
@@ -47,9 +47,9 @@ await economy.submit({
 
 Money operations differ sharply in who should be allowed to run them. Minting credits with a [`topUp`](/economy/reference/operations/top-up/), clawing back a chargeback, or hand-posting a correction has to come from the platform, never from an end user requesting it on themself.
 
-Without a gate, that line disappears. An end user could call `topUp` to credit their own wallet. They could call [`refund`](/economy/reference/operations/refund/) to debit a seller's [`earned`](/economy/concepts/accounts-and-double-entry/) balance into their own, a self-serve fraud vector.
+Without a gate, that line disappears. An end user could call `topUp` to credit their own wallet, issuing credits with no backing dollar behind them and opening a [solvency](/economy/concepts/solvency/) gap. They could call [`refund`](/economy/reference/operations/refund/) to debit a seller's [`earned`](/economy/concepts/accounts-and-double-entry/) balance into their own, a self-serve fraud vector.
 
-Authorization closes those paths up front, before validation's shape checks turn into posted ledger entries. Keeping the decision in one function also keeps it auditable: one place says who may do what, instead of a scattered check per handler that can drift.
+Authorization closes those paths up front: the gate runs right after the request's shape is validated and refuses the caller before anything posts to the ledger. Keeping the decision in one function also keeps it auditable: one place says who may do what, instead of a scattered check per handler that can drift.
 
 ## The three actors
 
@@ -104,10 +104,10 @@ Accounts being paid _into_, and platform accounts, are left out. Only a drained 
 
 <Callout type="warning">
   A failed authorization is a thrown `UNAUTHORIZED` fault, not a `rejected`
-  [`Outcome`](/economy/reference/outcomes-and-reason-codes/). It isn't an
+  [`Outcome`](/economy/reference/outcomes-and-reason-codes/). Unlike an
   ordinary "no" the caller can retry under the same
-  [`idempotencyKey`](/economy/concepts/integrity/); it's a programming or
-  permission error. Over HTTP it maps to `401` (see{' '}
+  [`idempotencyKey`](/economy/concepts/idempotency/), it signals a programming
+  or permission error. Over HTTP it maps to `401` (see{' '}
   <SourceLink to="src/server.ts#L408-L411">source</SourceLink>).
 </Callout>
 

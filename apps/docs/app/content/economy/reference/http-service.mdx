@@ -121,7 +121,7 @@ This is the request-path half of [idempotency](/economy/concepts/integrity/): th
   for signing.
 </Callout>
 
-When no secret is configured, the webhook path is a bare pass-through: the server forwards straight to the handler and the host owns verification. That's a deliberate fallback, not the production posture. The wiring below fails to start without a secret.
+When no secret is configured, the webhook path is a bare pass-through: the server forwards straight to the handler and the host owns verification. The wiring below fails to start without a secret.
 
 ## Health and readiness
 

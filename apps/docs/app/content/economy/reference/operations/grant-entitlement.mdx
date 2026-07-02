@@ -90,13 +90,13 @@ touches. You read it back with [`read.entitled`](/economy/reference/reads/).
 `operator`.
 
 An end `user` can never grant ownership. A `user` principal is refused with a thrown `UNAUTHORIZED`
-before the handler runs. Granting names an arbitrary account the caller need not own, and it posts no debit. The
+before the handler runs. Granting names an arbitrary `userId` the caller need not own, and it posts no debit. The
 gate therefore stands in for the ownership check the posting path would otherwise apply.
 
 ## Reason codes
 
-`grant-entitlement` returns no reason codes: it has no `rejected` path. The ways it can fail are thrown
-faults, broken requests, not expected declines:
+`grant-entitlement` returns no reason codes: it has no `rejected` path. It fails only by throwing.
+Each fault marks a broken request rather than an expected decline:
 
 | Fault                 | When                                                                                                                                                 |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |

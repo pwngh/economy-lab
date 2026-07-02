@@ -12,7 +12,7 @@ sourceRefs:
 related: ['economy/reference/outcomes-and-reason-codes']
 ---
 
-`submit` changes money; `read` looks at it without touching it. If [the `Economy`](/economy/reference/the-economy/) has two halves, `read` is the query half, the place you go to answer "what's this balance?", "did this go through?", "does this user own that item?". Nothing under `read` writes a ledger entry, claims an idempotency key, or records a velocity attempt.
+`read` is the query half of [the `Economy`](/economy/reference/the-economy/): the place you go to answer "what's this balance?", "did this go through?", "does this user own that item?". Nothing under `read` writes a ledger entry, claims an idempotency key, or records a velocity attempt.
 
 Every method lives on the `economy.read` group, and the whole group is read-only. You call them the same way you'd call `submit`:
 
@@ -21,7 +21,7 @@ const balance = await economy.read.balance(spendable('usr_a1'));
 // → { currency: "CREDIT", minor: 5000n }
 ```
 
-A few of these return a single value you await; a few stream many rows you iterate; one (`status`) is synchronous because it's derived from config and the clock, not stored. The sections below group them by what you're asking for.
+A few of these return a single value you await; a few stream many rows you iterate; one (`status`) is synchronous. The sections below group them by what you're asking for.
 
 ## Balances and history
 
@@ -44,7 +44,7 @@ const page = await economy.read.statement(spendable('usr_a1'), {
 // → { account, entries: [{ txnId, amount, postedAt }, …], cursor: null }
 ```
 
-Each entry names the transaction it came from, the signed amount applied to this account, and when it posted, enough to render a statement row without a second lookup.
+Each entry names the transaction it came from, the signed amount applied to this account, and when it posted, enough to render a statement row with no follow-up query.
 
 ## A posting or a payout by id
 
@@ -68,11 +68,11 @@ const saga = await economy.read.saga('pay_4410');
 // (or null for an unknown id)
 ```
 
-The [background worker](/economy/reference/background-worker/) is what advances a saga through its states; `read.saga` is how a UI reads where one currently sits. For the states themselves and what moves a payout between them, see [the lifecycle of a payout](/economy/concepts/lifecycles/).
+The [background worker](/economy/reference/background-worker/) advances a saga through its states, and `read.saga` reports where one currently sits. For the states themselves and what moves a payout between them, see [the lifecycle of a payout](/economy/concepts/lifecycles/).
 
 ## Ownership and status
 
-These two answer questions that aren't about money at all: what a user owns, and whether the economy is open for writes.
+Not every question is about money: `read.entitled` reports what a user owns, and `read.status` whether the economy is open for writes.
 
 `read.entitled(userId, sku)` returns `true` or `false`: does this user currently own this SKU (an item or feature)? Ownership is a record, not a balance, so it has its own reader: the readable side of the [`grantEntitlement` and `revokeEntitlement`](/economy/reference/operations/grant-entitlement/) operations that a UI gates access on:
 
@@ -81,7 +81,7 @@ const owns = await economy.read.entitled('usr_a1', 'wrld_pass');
 // → true
 ```
 
-`read.status()` returns the economy's pause state right now: whether a maintenance window is in effect, its configured bounds, and when writes resume. It's the only read that's synchronous. It's derived from config plus the clock, never stored, so it always reflects the live window:
+`read.status()` returns the economy's pause state right now: whether a maintenance window is in effect, its configured bounds, and when writes resume. It's the only synchronous read: derived from config plus the clock rather than stored, it always reflects the live window:
 
 ```ts
 const status = economy.read.status();
@@ -116,7 +116,7 @@ for await (const saga of economy.read.payouts()) {
 }
 ```
 
-`read.postings()` streams every committed posting, newest first: the whole journal. That's user operations and the worker's own postings alike, every account touched, not only the ones one reader happened to write. Each posting carries its full legs, so a row renders and expands without a second lookup:
+`read.postings()` streams every committed posting, newest first: the whole journal. That's user operations and the worker's own postings alike, across every account — not only the postings your own service submitted. Each posting carries its full legs, so a row renders and expands without a second lookup:
 
 ```ts
 for await (const posting of economy.read.postings()) {

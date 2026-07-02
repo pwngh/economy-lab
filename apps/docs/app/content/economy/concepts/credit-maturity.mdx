@@ -38,7 +38,7 @@ The maturity window holds new funds just long enough that, by the time they're c
 
 Spends draw **oldest-first**: first in, first out. So once past spends have drained the oldest lots, what's left is the _newest_ run of lots, the ones that together sum to the current balance. That run is the **tail**.
 
-Maturity then splits the tail. A maturity horizon, "now minus the settlement wait", falls somewhere inside it. Lots older than the horizon have cleared and are cashable; the newest lots are still waiting. The cashable balance is the matured part of the tail.
+Maturity then splits the tail. A maturity horizon (now minus the settlement wait) falls somewhere along it. Lots older than the horizon have cleared and are cashable; the newest lots are still waiting. The cashable balance is the matured part of the tail.
 
 The horizon depends on how the funds arrived. `maturityHorizonMs` returns the wait per funding source, so a card top-up and a crypto top-up can clear on different schedules, and an unrecognized source falls back to a conservative `default`. A lot matures at its arrival time plus that wait.
 
@@ -54,4 +54,4 @@ The computation is currency-agnostic: the same call covers a user's spendable cr
 
 - [`spend`](/economy/reference/operations/spend/) gates on the cashable check for the buyer's spendable credits, so a spend can't draw funds still clearing.
 - [`requestPayout`](/economy/reference/operations/request-payout/) gates on the same check for a creator's earned balance, so a payout only ever draws cleared money.
-- The [lifecycle settlement windows](/economy/concepts/lifecycles/) define each wait, and [solvency](/economy/concepts/solvency/) is the backing those cleared funds draw against.
+- The configured [maturity horizons](/economy/reference/configuration/) set each wait, and [solvency](/economy/concepts/solvency/) is the backing those cleared funds draw against.

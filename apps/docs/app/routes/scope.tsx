@@ -16,7 +16,7 @@ import { pageMeta } from '~/seo.ts';
 export function meta() {
   const doc = docBySlug('economy/scope-and-non-goals');
   return pageMeta({
-    title: `${doc?.title ?? 'Scope and non-goals'} - Economy Lab`,
+    title: `${doc?.title ?? 'Scope and non-goals'} - economy-lab docs`,
     description: doc?.summary,
     path: '/economy/scope-and-non-goals/',
     ogType: 'article',

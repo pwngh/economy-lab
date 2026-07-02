@@ -67,7 +67,7 @@ To publish the verification key, `signingPublicKeyHex` derives the hex-encoded E
 
 ## How key rotation works
 
-Rotation is a configuration change, not an interface call. You move the current secret into `priorKeys` and set a fresh `signingKey`:
+The interface has no rotation call. You rotate by moving the current secret into `priorKeys` and setting a fresh `signingKey`:
 
 ```ts
 let signer = systemSigner({

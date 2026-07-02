@@ -59,7 +59,8 @@ Three guards let the worker retry a step without paying twice.
 - **A stuck payout is given up on.** Past `maxPayoutAttempts` failed attempts, or after `maxPayoutAgeMs` in `SUBMITTED` with no settlement webhook, the sweep force-fails it. It flips the saga to `FAILED` and, in the same transaction, posts the exact reverse of the reservation (`debit payout_reserve → credit earned`), returning the credits to the creator (see <SourceLink to="src/worker/payouts.ts#L125-L181 · deadLetter" />).
 
 <Callout type="warning">
-  `requestPayout` only pays out *matured* earnings. The raw `earned` balance can
+  `requestPayout` only pays out
+  [*matured* earnings](/economy/concepts/credit-maturity/). The raw `earned` balance can
   pass while part of it is still inside its chargeback window, so a second,
   stricter gate rejects with
   [`FUNDS_IMMATURE`](/economy/reference/outcomes-and-reason-codes/) unless the
@@ -86,7 +87,7 @@ ACTIVE ──▶ LAPSED      a renewal it can't pay, or one that keeps failing, 
                        not refunded
 ```
 
-`maxSubscriptionAttempts` separates a transient failure from a dead one. The sweep retries a failed charge a few times before the subscription lapses, and a success resets the count to `0`. Once the count reaches the cap, the sweep flips `ACTIVE → LAPSED`, revokes the entitlement, and emits the lapse event in one transaction (see <SourceLink to="src/worker/subscriptions.ts#L164-L172 · lapseAtomically" />).
+`maxSubscriptionAttempts` separates a transient charge failure from a subscription that is never going to pay. The sweep retries a failed charge a few times before the subscription lapses, and a success resets the count to `0`. Once the count reaches the cap, the sweep flips `ACTIVE → LAPSED`, revokes the entitlement, and emits the lapse event in one transaction (see <SourceLink to="src/worker/subscriptions.ts#L164-L172 · lapseAtomically" />).
 
 The first period may draw on promo credit; renewals come only from `spendable`.
 

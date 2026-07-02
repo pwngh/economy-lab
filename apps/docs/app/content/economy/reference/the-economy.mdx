@@ -98,7 +98,7 @@ submit(operation) ─▶ validate · authorize · post ─▶ Ledger (append-onl
 
 Validation rejects a malformed operation before any work begins: a blank `idempotencyKey`, an ownerless wallet account, an out-of-range amount. Authorization decides whether this `actor` may run this kind of operation, so a forbidden request stops before money moves.
 
-The post then runs inside one all-or-nothing transaction. It appends the balanced [double-entry](/economy/concepts/accounts-and-double-entry/) legs to the ledger and enqueues the matching event into the outbox in that same transaction, so the two commit together or not at all: a rollback leaves no stray event, and a commit always has its event queued.
+The post then runs inside one all-or-nothing transaction. It appends the balanced [double-entry](/economy/concepts/accounts-and-double-entry/) legs to the ledger and enqueues the matching event into the outbox in that same transaction, so the two commit together or not at all; a rollback can't leave a stray event in the outbox.
 
 A `read.balance` returns a stored running total, so it's a single O(1) read rather than a re-sum of history. The ledger entries stay the source of truth: the [prover](/economy/concepts/the-proof/) re-derives each balance from those entries and reports any account whose stored total has drifted from them.
 

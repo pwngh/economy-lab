@@ -29,8 +29,8 @@ type Outcome =
     };
 ```
 
-The three statuses describe three ways a request can land. The operation went through. The operation was a repeat of one already done. The
-operation was a valid request that the economy declined for a business reason.
+A request lands one of three ways: it went through, it repeated an operation already done, or it
+was valid but declined for a business reason.
 
 ### `committed`: it went through
 
@@ -55,8 +55,8 @@ A `duplicate` outcome means you submitted an operation whose `idempotencyKey` ma
 processed, so the economy returned the earlier result instead of running it again. This is the
 visible side of [idempotency](/economy/concepts/integrity/): a retried request runs at most once.
 
-It carries the same `Transaction` the original commit did, so a `duplicate` is success, not a
-failure. A network retry, a double-clicked button, or an at-least-once delivery queue all land here,
+It carries the same `Transaction` the original commit did, so a `duplicate` counts as success.
+A network retry, a double-clicked button, or an at-least-once delivery queue all land here,
 and the caller can treat `duplicate` exactly like `committed`.
 
 <Callout type="tip">
@@ -79,7 +79,7 @@ if (result.status === 'rejected' && result.reason === 'INSUFFICIENT_FUNDS') {
 }
 ```
 
-A rejection is normal data, not an error. You handle it in an `if`, not a `catch`. See the [throw-versus-decline rule](#rejected-versus-thrown) below.
+A rejection comes back as data, so you handle it in an ordinary `if` branch; see the [throw-versus-decline rule](#rejected-versus-thrown) below.
 
 ## The `RejectionCode` catalog
 
@@ -105,9 +105,9 @@ map to the pages under [operations](/economy/reference/operations/).
 
 A few of these reward a closer look.
 
-`FUNDS_IMMATURE` is about timing, not amount. The money is there, it just hasn't cleared its
+`FUNDS_IMMATURE` is a timing problem: the money is there, but it hasn't cleared its
 maturity window yet, a concept that lives with the [payout and subscription lifecycles](/economy/concepts/lifecycles/).
-The `detail` names the `account` that was short and the `required` amount that hadn't cleared.
+The `detail` names the `account` and the `required` amount that hadn't cleared.
 
 `DUPLICATE_ORDER` catches a specific client mistake: a retried `spend` that lost its original
 `idempotencyKey`. The `orderId` identifies a unique purchase, so a second charge for the same order
@@ -129,9 +129,8 @@ The decline carries `resumesAt` in its `detail` so the caller can tell the user 
 A `rejected` outcome is the economy's considered
 "no" to a question it understood, while a thrown fault means the question itself was broken.
 
-A `RejectionCode` is data you handle. A fault is an exception you catch. They never overlap. The
-core decides up front which path a problem takes, so a given failure is always one or the other, not
-both.
+They never overlap: the core decides up front which path a problem takes, so a given failure
+arrives either as a `RejectionCode` in the outcome or as a thrown exception, never as both.
 
 Thrown faults carry their own codes, kept deliberately separate from the rejection codes in
 `ERROR_CODES`. Four of them are the ones you'll meet when a request is malformed:
@@ -143,7 +142,7 @@ Thrown faults carry their own codes, kept deliberately separate from the rejecti
 | `AUTH.UNAUTHORIZED`       | `UNAUTHORIZED`        | The actor isn't permitted to perform this action.                                                        |
 | `SAGA.INVALID_TRANSITION` | `INVALID_TRANSITION`  | A [saga](/economy/concepts/lifecycles/) was told to move to a state it can't reach from its current one. |
 
-The line between the two is about cause, not severity. `INSUFFICIENT_FUNDS` is a healthy system
+The line between the two follows cause rather than severity. `INSUFFICIENT_FUNDS` is a healthy system
 giving an expected answer, so it's a rejection you show the user. `INVALID_AMOUNT` means the caller
 sent a number that can't be money, so it's a fault the caller has to fix in code.
 
@@ -160,4 +159,4 @@ they never light up error dashboards or page an on-call engineer.
 `ERROR_CODES` also holds deeper safety faults you won't normally trigger from a well-formed request:
 `LEDGER.OVERDRAFT`, `CHAIN.BROKEN`, `LEDGER.COMMINGLING`, and others. Those are last-resort
 backstops deep in the posting and integrity paths; reaching one means an invariant was about to
-break, not that a caller asked for something reasonable.
+break.

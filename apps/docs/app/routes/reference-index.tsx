@@ -15,7 +15,7 @@ import { pageMeta } from '~/seo.ts';
 
 export function meta() {
   return pageMeta({
-    title: 'Reference - Economy Lab',
+    title: 'Reference - economy-lab docs',
     description:
       'Every operation, the read surface, outcomes and reason codes, the HTTP service, and configuration.',
     path: '/economy/reference/',

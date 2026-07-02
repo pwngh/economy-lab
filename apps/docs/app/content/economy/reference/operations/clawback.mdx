@@ -84,7 +84,7 @@ An end-user `actor` is refused with an `AUTH.UNAUTHORIZED` fault before any work
 
 ## Reason codes
 
-`clawback` returns no `RejectionCode`. Its inputs are either valid or a programming error, so each bad input throws a fault rather than declining as data:
+`clawback` returns no `RejectionCode`. Each bad input is a programming error and throws:
 
 | Code                   | When                                                                                                           |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------- |

@@ -81,7 +81,7 @@ A `system` actor clears that gate. The handler then rechecks the actor itself an
 
 `reverse` returns no [`RejectionCode`](/economy/reference/outcomes-and-reason-codes/). It has no business-decline path. A well-formed operator request either commits, or repeats a prior reverse as a `duplicate`.
 
-The caller mistakes it guards against are thrown as `OP.MALFORMED` faults, not returned as rejections:
+The handler throws an `OP.MALFORMED` fault for each caller mistake it guards against; none is returned as a rejection:
 
 | Condition                                              | Result                 |
 | ------------------------------------------------------ | ---------------------- |
@@ -90,7 +90,7 @@ The caller mistakes it guards against are thrown as `OP.MALFORMED` faults, not r
 | The `txnId` names no existing posting.                 | Throws `OP.MALFORMED`. |
 | The `txnId` names a posting that is itself a reversal. | Throws `OP.MALFORMED`. |
 
-These are operator errors, not everyday "no" answers, unlike [`refund`](/economy/reference/operations/refund/), where an unknown order id is a normal rejection. The full throw-vs-decline split lives on [outcomes and reason codes](/economy/reference/outcomes-and-reason-codes/).
+These are operator errors. Compare [`refund`](/economy/reference/operations/refund/), where an unknown order id is an everyday "no" and comes back as a normal rejection. The full throw-vs-decline split lives on [outcomes and reason codes](/economy/reference/outcomes-and-reason-codes/).
 
 <Callout type="warning">
   You cannot reverse a reversal. A reversal records `kind: "reverse"` in its

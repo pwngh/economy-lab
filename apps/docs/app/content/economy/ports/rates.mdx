@@ -70,7 +70,7 @@ Only `CREDIT` and `USD` exist in the lab. A same-currency conversion returns a 1
 
 ## Fixed in the lab: no live feed
 
-This port does not track a market. Credits are platform-priced, not market-priced, so the rates are business constants a deployment sets, not quotes from an exchange. There is no FX feed, no refresh, and no clock-driven movement. `configuredRates` returns the same numbers every time it's asked.
+This port does not track a market. Credits are priced by the platform, so the rates are business constants a deployment sets. There is no exchange quote, no FX feed, no refresh, and no clock-driven movement. `configuredRates` returns the same numbers every time it's asked.
 
 That `at` timestamp on `payout` is the one place the contract leaves room for a live source. A real settlement feed would price `CREDIT`-to-`USD` as of a moment in time; the reference adapter accepts the timestamp and ignores it. Wiring a live feed would mean writing a new adapter that honors `at`, with the rest of the core unchanged, because everything downstream already reads through this seam.
 

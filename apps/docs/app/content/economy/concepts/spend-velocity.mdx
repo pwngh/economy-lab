@@ -14,7 +14,7 @@ sourceRefs:
 related: ['economy/concepts/concurrency', 'economy/concepts/solvency']
 ---
 
-A compromised or misbehaving account can try to move money faster than anyone reacts — draining a wallet or claiming payouts in a tight loop. Spend velocity is the gate that caps how much value one subject can move within a rolling window, checked before any money moves.
+Spend velocity is the gate that caps how much value one subject can move within a rolling window, checked before any money moves.
 
 ## The idea
 
@@ -29,16 +29,11 @@ const outcome = await economy.submit(spendOperation);
 
 ## Why it exists
 
-A naive limit reads the recent total, compares it, then records the new attempt — three steps a second operation can interleave. Two concurrent spends read the same stale total, both pass, and together they blow the limit. To close that read-then-write race, the gate records _and_ measures in one indivisible step per subject.
-
-Two consequences fall out of that design:
-
-- **Denied attempts still count.** The amount is summed before the limit decision, so a flood of over-limit attempts keeps adding to the window.
-- **The record outlives a rollback.** The attempt is written on a connection independent of the money transaction, so an operation that rolls back still leaves its velocity mark.
+A compromised or misbehaving account can try to move money faster than anyone reacts — draining a wallet or claiming payouts in a tight loop. Each operation in the run is one the balance covers, so nothing about it looks wrong in isolation. What gives the drain away is the total moved in a short window, and that total is what the gate caps.
 
 ## What counts as a subject
 
-`riskSubject` decides which operations are gated and whose account is the subject. An operation that moves no tracked subject's funds returns `null` and is always allowed.
+`riskSubject` decides which operations are gated and whose account is the subject. When an operation moves no tracked subject's funds, `riskSubject` returns `null` and the operation is always allowed.
 
 | Operation                                                                                                                                                                      | Subject   | Amount counted |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- | -------------- |
@@ -48,7 +43,11 @@ Two consequences fall out of that design:
 
 ## How it's enforced
 
+A naive limit reads the recent total, compares it, then records the new attempt — three steps another operation can interleave. Two concurrent spends read the same stale total, both pass, and together they blow the limit; it's the same interleaving hazard [concurrency](/economy/concepts/concurrency/) handles for balances. To close that read-then-write race, the gate records _and_ measures in one indivisible step per subject.
+
 `screenRisk` runs inside the submit pipeline, before the money transaction opens. It hands the attempt to `recordVelocity`, which does the whole record-and-measure as one unit: it takes a per-subject lock, dedup-inserts the attempt keyed on the [`idempotencyKey`](/economy/concepts/idempotency/) so a retry never double-counts, sums the subject's amounts where the timestamp falls inside the window, and returns that total. `screenRisk` compares it to `velocityLimitMinor` and rejects when it's over.
+
+The insert comes before the decision, so denied attempts still count: a flood of over-limit attempts keeps adding to the window.
 
 <Callout type="note">
   The velocity record commits on its own connection, separate from the posting.

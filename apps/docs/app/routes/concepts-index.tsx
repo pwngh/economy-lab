@@ -15,7 +15,7 @@ import { pageMeta } from '~/seo.ts';
 
 export function meta() {
   return pageMeta({
-    title: 'Concepts - Economy Lab',
+    title: 'Concepts - economy-lab docs',
     description:
       'The ideas the economy is built on: the money model, accounts, solvency, lifecycles, and integrity.',
     path: '/economy/concepts/',
