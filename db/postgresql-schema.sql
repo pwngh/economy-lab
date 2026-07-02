@@ -101,7 +101,8 @@ create table chain_links (
 );
 create index chain_links_account_idx on chain_links (account_id);
 -- A previous-hash can be used only once per account, so two postings can't both attach at
--- the same point and fork the chain into two branches.
+-- the same point and fork the chain into two branches. MySQL keys this same guard by a digest
+-- of the pair; db/mysql-schema.sql says why.
 create unique index chain_links_account_prev_uq on chain_links (account_id, prev_hash);
 -- The continuity trigger's non-genesis branch looks up an account's current head by
 -- (account_id, hash); without this it scans every link for the account, so the trigger's
@@ -519,7 +520,7 @@ create or replace trigger account_balances_integrity
 -- src/schema.ts together, whenever this file changes.
 -- ============================================================================
 create table schema_meta (version text not null);
-insert into schema_meta (version) values ('7');
+insert into schema_meta (version) values ('8');
 
 -- ============================================================================
 -- Column comments: short, deployed-schema documentation for every column. The

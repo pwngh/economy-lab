@@ -110,6 +110,9 @@ interface ExecDeps {
   exec: MysqlExecutor;
   digest: Digest;
   clock: Clock;
+  // The store's pool, for statements that must commit outside `exec`'s transaction (plantAndLock
+  // creates first-use rows there). In the non-transactional unit, `exec` is the pool itself.
+  pool: MysqlPool;
 }
 
 async function rows(
@@ -317,14 +320,18 @@ function rowKind(account: AccountRef): string {
   return account.slice(account.lastIndexOf(':') + 1);
 }
 
-// lockMany's body: lock what exists, plant what doesn't, lock the planted. Both orderings are
-// load-bearing. Locking rows that exist avoids gap locks (locking a missing key gap-locks, and
-// concurrent first-use inserts then deadlock in that gap); planting ONLY the missing avoids
-// dup-check S locks on existing rows (which deadlock against the FOR UPDATE); and using the FOR
-// UPDATE itself as the missing-check avoids a plain SELECT, which would pin the REPEATABLE READ
-// snapshot and make later reads in this transaction see pre-lock state.
+// lockMany's body: create any missing balance rows first, then lock the whole set in one ordered
+// FOR UPDATE. A row has to exist before it can be locked, so first-use accounts get a placeholder
+// row here. The plant runs on the pool, not in the transaction: doing it in the transaction
+// deadlocked under load, because locking a missing key takes a gap lock and a burst of new
+// accounts (neighboring ids, one shared gap) then blocked each other's inserts. A pool statement
+// commits and releases its locks immediately.
+//
+// A planted row therefore stays even if the operation rolls back. It is the same placeholder the
+// schema seeds for system accounts — zero balance, genesis head — which every reader treats
+// like no row at all.
 async function plantAndLock(
-  exec: MysqlExecutor,
+  deps: ExecDeps,
   accounts: ReadonlyArray<AccountRef>,
 ): Promise<void> {
   if (accounts.length === 0) {
@@ -332,39 +339,40 @@ async function plantAndLock(
   }
   let marks = accounts.map(() => '?').join(', ');
   let found = await rows(
-    exec,
+    deps.pool,
+    `SELECT account_id FROM account_balances
+      WHERE account_id IN (${marks})`,
+    [...accounts],
+  );
+  let have = new Set(found.map((row) => row.account_id as string));
+  // Sorted so concurrent plants insert in the same order and can't deadlock each other.
+  let missing = accounts
+    .filter((account) => !have.has(account))
+    .sort(byCodeUnit);
+  if (missing.length > 0) {
+    // INSERT IGNORE, so losing a plant race is fine: the row is there either way.
+    await execWrite(
+      deps.pool,
+      `INSERT IGNORE INTO accounts (id, kind, currency)
+        VALUES ${missing.map(() => '(?, ?, ?)').join(', ')}`,
+      missing.flatMap((a) => [a, rowKind(a), currency(a)]),
+    );
+    await execWrite(
+      deps.pool,
+      `INSERT IGNORE INTO account_balances (account_id, currency, balance, head_hash)
+        VALUES ${missing.map(() => `(?, ?, 0, REPEAT('0', 64))`).join(', ')}`,
+      missing.flatMap((a) => [a, currency(a)]),
+    );
+  }
+  // Every row exists now, so this takes plain record locks, in account_id order.
+  await rows(
+    deps.exec,
     `SELECT account_id FROM account_balances
       WHERE account_id IN (${marks})
       ORDER BY account_id
         FOR UPDATE`,
     [...accounts],
   );
-  let have = new Set(found.map((row) => row.account_id as string));
-  let missing = accounts.filter((account) => !have.has(account));
-  if (missing.length > 0) {
-    // Same placeholder shape the schema seeds for system accounts: zero balance, genesis head.
-    await execWrite(
-      exec,
-      `INSERT IGNORE INTO accounts (id, kind, currency)
-        VALUES ${missing.map(() => '(?, ?, ?)').join(', ')}`,
-      missing.flatMap((a) => [a, rowKind(a), currency(a)]),
-    );
-    await execWrite(
-      exec,
-      `INSERT IGNORE INTO account_balances (account_id, currency, balance, head_hash)
-        VALUES ${missing.map(() => `(?, ?, 0, REPEAT('0', 64))`).join(', ')}`,
-      missing.flatMap((a) => [a, currency(a)]),
-    );
-    // Lock the rows just planted; the existing ones are already held from the first statement.
-    await rows(
-      exec,
-      `SELECT account_id FROM account_balances
-        WHERE account_id IN (${missing.map(() => '?').join(', ')})
-        ORDER BY account_id
-          FOR UPDATE`,
-      [...missing],
-    );
-  }
 }
 
 function createLedgerStore(deps: ExecDeps): Ledger {
@@ -379,7 +387,7 @@ function createLedgerStore(deps: ExecDeps): Ledger {
     // Batched twin of `lock`: row-locks every touched balance row in one ordered statement, so
     // InnoDB acquires them in one global order (GET_LOCK above does not pin rows). The MySQL
     // counterpart to Postgres' `lockMany`.
-    lockMany: (accounts) => plantAndLock(deps.exec, accounts),
+    lockMany: (accounts) => plantAndLock(deps, accounts),
 
     append: async (posting) => insertPosting(deps, posting),
 
@@ -1653,7 +1661,7 @@ export function mysqlStore(deps: {
   let digest = deps.digest ?? defaultDigest();
   let clock = deps.clock ?? defaultClock();
   let velocityWindowMs = deps.velocityWindowMs ?? 60 * 60_000;
-  let poolDeps: ExecDeps = { exec: pool, digest, clock };
+  let poolDeps: ExecDeps = { exec: pool, digest, clock, pool };
 
   let auto = buildUnit(poolDeps);
 
@@ -1681,8 +1689,17 @@ export function mysqlStore(deps: {
       withTransientRetry(async () => {
         let connection = await pool.getConnection();
         try {
+          // Run the money transaction at READ COMMITTED, like Postgres. Correctness comes from
+          // the explicit FOR UPDATE locks, which behave the same at either level. REPEATABLE
+          // READ only ever hurt here: its pinned snapshot served stale mid-transaction reads,
+          // and its gap locks deadlocked concurrent first-use inserts. The reads the schema's
+          // own triggers make take those gap locks too. The SET covers just the next
+          // transaction, so the connection returns to the pool unchanged.
+          await connection.query(
+            'SET TRANSACTION ISOLATION LEVEL READ COMMITTED',
+          );
           await connection.query('START TRANSACTION');
-          let unit = buildUnit({ exec: connection, digest, clock });
+          let unit = buildUnit({ exec: connection, digest, clock, pool });
           let result = await work(unit);
           await connection.query('COMMIT');
           return result;

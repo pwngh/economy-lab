@@ -129,10 +129,20 @@ CREATE TABLE chain_links (
      -- O(1). A maintained projection, not the source of truth (prove() re-sums). Rationale in
      -- db/postgresql-schema.sql (chain_links.balance_after).
      balance_after BIGINT   NOT NULL DEFAULT 0 COMMENT 'Signed running balance right after this link; cached projection.',
+     -- Key of the no-fork unique index below. A digest rather than the raw pair because the raw
+     -- pair sorts every new account's first link next to its neighbors, and concurrent inserts
+     -- deadlocked on the unique check's gap locks. Hashing scatters the entries; a duplicate pair
+     -- still produces a duplicate digest, so the guard is unchanged.
+     account_prev_digest BINARY(32)
+       GENERATED ALWAYS AS (UNHEX(SHA2(CONCAT(account_id, ':', prev_hash), 256))) STORED
+       COMMENT 'SHA-256 of (account_id, prev_hash); key of the no-fork unique index.',
      PRIMARY KEY (posting_id, account_id),
      CONSTRAINT chain_links_posting_fk FOREIGN KEY (posting_id) REFERENCES postings (id),
      CONSTRAINT chain_links_account_fk FOREIGN KEY (account_id) REFERENCES accounts (id),
-     UNIQUE KEY chain_links_account_prev_uq (account_id, prev_hash),
+     -- A previous hash can be used only once per account, so two postings can't both attach at
+     -- the same point and fork the chain. The engine recognizes a fork by this index's name in
+     -- the 1062 error text (CHAIN_FORK_INDEX, src/engines/sql-shared.ts), so the name is load-bearing.
+     UNIQUE KEY chain_links_account_prev_uq (account_prev_digest),
      KEY chain_links_account_idx (account_id),
      -- The continuity trigger's non-genesis branch looks up an account's current head by
      -- (account_id, hash); without this it scans every link for the account, so the trigger's
@@ -519,4 +529,4 @@ INSERT INTO account_balances (account_id, currency, balance, head_hash)
 -- Schema version stamp. The engine reads this on startup and refuses to run if it does not match
 -- SCHEMA_VERSION in src/schema.ts. Keep the value in lockstep with the Postgres schema and src/schema.ts.
 CREATE TABLE schema_meta (version VARCHAR(32) NOT NULL COMMENT 'Schema version stamp; must match SCHEMA_VERSION at startup.') COMMENT='Single-row schema version stamp, checked at startup.';
-INSERT INTO schema_meta (version) VALUES ('7');
+INSERT INTO schema_meta (version) VALUES ('8');
