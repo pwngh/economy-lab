@@ -122,6 +122,16 @@ that gate.
 | `VELOCITY_LIMIT_MINOR` | Most a subject may spend within one window, in CREDIT minor units, before the risk check engages.                        | `100000`       |
 | `VELOCITY_WINDOW_MS`   | Length of the rolling spending window. Only a subject's attempts inside the last window count; each ages out once older. | `3600000` (1h) |
 
+## Platform sharding
+
+A hot platform account (`REVENUE`, `STORED_VALUE`, `TRUST_CASH`, ...) is one row, and concurrent postings of the same kind queue on its lock. `PLATFORM_SHARDS` splits each one across several rows so those postings spread out; [concurrency](/economy/concepts/concurrency/) covers which accounts shard and how a posting picks its row.
+
+| Variable          | Meaning                                                                                | Default |
+| ----------------- | -------------------------------------------------------------------------------------- | ------- |
+| `PLATFORM_SHARDS` | How many rows each hot platform account is split across. `1` is the unsharded ledger. | `1`     |
+
+Raising the count on a live ledger is safe: shard 0 keeps the bare account id, so existing balances already sit on shard 0 and new postings fan out from there. Lowering it is the careful direction. A smaller count reroutes every key, so rows that still hold balance can drop out of the rotation. Readers keep summing them and totals stay right, but nothing ever posts to them again, so drain before dropping the count back to `1`.
+
 ## Replay window and the maintenance pause
 
 `REPLAY_WINDOW_MS` bounds how stale a signed request may be before it's rejected as a possible

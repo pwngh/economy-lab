@@ -10,6 +10,8 @@ sourceRefs:
     'src/economy.ts#L557 · lockAccounts',
     'src/engines/postgres.ts#L305 · advanceChain',
     'db/postgresql-schema.sql#L105 · chain_links_account_prev_uq',
+    'src/accounts.ts · platformShard',
+    'test/sharding.test.ts',
   ]
 related: ['economy/concepts/idempotency', 'economy/ports/storage-and-messaging']
 ---
@@ -39,6 +41,20 @@ The sort has to be identical everywhere it runs. `.sort()` compares by code unit
 Locking serializes contending operations, but the forked chain they could still produce has to be blocked at the database. Each account's chain advances one link per posting, and a unique index on `(account_id, prev_hash)` prevents two postings from attaching at the same prior head.
 
 Under a race, the losing insert hits that unique index and the engine raises a conflict. economy-lab classifies the conflict as transient and retries the whole unit of work; the retry re-reads the account's new head and posts against it.
+
+## Sharding the hot platform accounts
+
+Per-account locking has a built-in ceiling: an account can only commit as fast as its one lock turns over. Users never feel it, because their wallets are all different accounts and the load spreads out. The platform's accounts sit on the other side of every one of those operations. Every top-up debits `STORED_VALUE` and every sale credits `REVENUE`, so a thousand concurrent buyers spread across a thousand wallets still meet at the same revenue row, and they wait there in line.
+
+[`PLATFORM_SHARDS`](/economy/reference/configuration/) breaks up that line. Set to four, say, each hot platform account becomes four rows (the bare id plus `platform:revenue#1` through `#3`), and concurrent postings spread across them instead of queueing on one. The seven accounts that take this traffic shard: `REVENUE`, `STORED_VALUE`, `TRUST_CASH`, `USD_CLEARING`, `REVENUE_USD`, `PROMO_FLOAT`, and `PAYOUT_RESERVE`. `RECEIVABLE` and `OPENING_EQUITY` move rarely and stay single rows.
+
+The routing can't be random, because a retry has to land on the same row the first attempt locked. So a posting picks its shard by hashing the operation's idempotency key, which is stable across retries and already known both when locks are taken and when legs are built.
+
+`PAYOUT_RESERVE` is the exception, and the reason is time. Credits enter the reserve when a payout is requested and leave when it settles or reverses, and that second step is a different operation, days later, carrying a different idempotency key. Hash that key and the debit would land on some other shard, quite possibly one holding nothing, and the reserve is overdraft-guarded: no shard may go negative. The user id is the one routing key both ends of a payout know, so the reserve routes by user.
+
+No reader cares which shard holds what. The logical balance is the sum over the rows: the [backing check](/economy/concepts/solvency/) totals `TRUST_CASH` across its shards before weighing it against what users are owed, and the fee sweep drains matured `REVENUE` from whichever shards hold it. A shard also inherits its parent's currency, class, and normal side, so everything downstream of [`classify`](/economy/concepts/accounts-and-double-entry/) already treats the rows as one account.
+
+The default is `1`: the unsharded ledger, byte-identical to before the knob existed. And because shard 0 keeps the bare account id, an existing ledger's balances already live on shard 0, so turning sharding on later is safe.
 
 ## How the two layers divide the work
 

@@ -80,6 +80,12 @@ In-memory runs with no setup. For the SQL rows, apply the schema first (`make db
 BENCH_OPS=5000 make bench
 ```
 
+`BENCH_SHARDS` sets [`PLATFORM_SHARDS`](/economy/reference/configuration/) for the economy under test, so back-to-back runs can show what [splitting the hot platform accounts](/economy/concepts/concurrency/) buys at each shard count:
+
+```bash
+BENCH_SHARDS=4 make bench
+```
+
 ## The scale probe
 
 `make scale` asks a different question of the same backends: does per-op cost stay flat as one subject's history grows? It drives repeated `spend`s against a single buyer and repeated `requestPayout`s against a single creator, in fixed-size segments, and prints ops/sec per segment. A per-op cost that grows with that account's accumulated history shows up as the segments slowing from left to right.

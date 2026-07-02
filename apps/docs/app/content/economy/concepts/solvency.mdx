@@ -60,7 +60,7 @@ The platform gets paid only from the **surplus**: cash sitting beyond what's owe
 
 The backing check never blocks a write. It's an audit that re-derives the position from the ledger after the fact. `proveEconomy` runs it in three steps.
 
-First, it walks every account and sums the balances `classify` marks `custodial`, filtered to `CREDIT` so a stray USD balance can't slip in. Then it converts that total to required USD at par, rounding down. Finally it reads `trust_cash` directly and sets `shortfall` to `required − trust_cash` when the cash falls short, or zero otherwise.
+First, it walks every account and sums the balances `classify` marks `custodial`, filtered to `CREDIT` so a stray USD balance can't slip in. Then it converts that total to required USD at par, rounding down. Finally it reads the trust cash on hand and sets `shortfall` to `required − trust_cash` when the cash falls short, or zero otherwise. On a [sharded ledger](/economy/concepts/concurrency/), that trust-cash figure is the sum of every `trust_cash` shard row.
 
 `backed` then holds whenever `shortfall === 0n`.
 
@@ -68,7 +68,7 @@ First, it walks every account and sums the balances `classify` marks `custodial`
 | ------------------ | ------------------------------------------------------------------------------------------------- |
 | `custodial` credit | The user `spendable` balances that must be backed; the only class counted toward the trust total. |
 | required USD       | The custodial credit total converted to USD at `par`, rounded down.                               |
-| `trust_cash`       | The real USD held in trust right now (`platform:trust_cash`).                                     |
+| `trust_cash`       | The real USD held in trust right now (`platform:trust_cash`, summed over its shard rows).         |
 | `shortfall`        | `required − trust_cash` when underheld, else zero; an `Amount` in USD.                            |
 | `backed`           | True when `shortfall` is zero.                                                                    |
 
