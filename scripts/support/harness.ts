@@ -20,6 +20,8 @@
 //   - Portable: point DATABASE_URL / the BENCH_* URLs at anything (local, the compose stack, a remote
 //     host); each backend's live durability settings are reported so a number's meaning is visible.
 //   - Fine-tuned: every dial is an env var with a profile default, resolved in resolveConfig.
+//     BENCH_SHARDS sets PLATFORM_SHARDS for the measured economy (default 1, the unsharded ledger),
+//     so a run can measure the hot platform accounts split across N rows.
 
 import { writeFile } from 'node:fs/promises';
 
@@ -91,6 +93,7 @@ export type HarnessConfig = {
   profile: string; // the named profile that set the defaults
   mode: BenchMode; // throughput (fund everything) or contention (oversubscribe on purpose)
   gates: GatesMode; // policy gates neutralized (off) or realistic (on)
+  shards: number; // PLATFORM_SHARDS for the measured economy (BENCH_SHARDS); 1 = unsharded
   // Pool sizing for the two-connection-per-op design: every gated op holds two pooled connections at
   // once (its money transaction + the velocity record on a separate connection), so a pool sized to the
   // concurrency alone self-deadlocks. The pool covers connsPerOp×concurrency + headroom — explicit and asserted.
@@ -144,7 +147,12 @@ const PROFILES: Record<string, Partial<HarnessConfig>> = {
 // production. Gates are either neutralized (`off`, the default) so a burst reflects ledger work, or set
 // to realistic values (`on`) to show the gated cost. The velocity *record* runs in both modes (the
 // second connection every gated op makes — see connsPerOp); `off` only stops the limit from denying.
-function buildBenchConfig(gates: GatesMode): ReturnType<typeof loadConfig> {
+// `shards` becomes PLATFORM_SHARDS, so a sharded run routes the hot platform accounts exactly the way
+// production would.
+function buildBenchConfig(
+  gates: GatesMode,
+  shards: number,
+): ReturnType<typeof loadConfig> {
   const secrets = {
     WEBHOOK_SECRET: 'bench-webhook-secret',
     SIGNING_SECRET: 'bench-signing-secret',
@@ -160,6 +168,7 @@ function buildBenchConfig(gates: GatesMode): ReturnType<typeof loadConfig> {
       MATURITY_HORIZON_DEFAULT_MS: '0',
       PAYOUT_MIN_EARNED_MINOR: '1',
       PAYOUT_MIN_INTERVAL_MS: '0',
+      PLATFORM_SHARDS: String(shards),
       VELOCITY_LIMIT_MINOR: '1000000000',
     });
   }
@@ -170,6 +179,7 @@ function buildBenchConfig(gates: GatesMode): ReturnType<typeof loadConfig> {
     MATURITY_HORIZON_DEFAULT_MS: '0',
     PAYOUT_MIN_EARNED_MINOR: '1',
     PAYOUT_MIN_INTERVAL_MS: '0',
+    PLATFORM_SHARDS: String(shards),
     VELOCITY_LIMIT_MINOR: '1000000000000000',
   });
 }
@@ -221,6 +231,7 @@ export function resolveConfig(
     profile: profileName in PROFILES ? profileName : 'default',
     mode,
     gates,
+    shards: intEnv(env.BENCH_SHARDS, 1),
     // Default to 2: the bench's three kinds all record velocity on a second connection. A workload of
     // only non-gated kinds could set BENCH_CONNS_PER_OP=1, but 2 is the safe sizing for what ships.
     connsPerOp: intEnv(env.BENCH_CONNS_PER_OP, 2),
@@ -320,12 +331,12 @@ export type Provisioned = {
 
 // The digest and clock must be the same instances the store was built with, so the chain heads agree.
 // `opts.seed` seeds the deterministic ids; `opts.gates` selects whether the policy gates are
-// neutralized or realistic (see buildBenchConfig).
+// neutralized or realistic; `opts.shards` is the platform-shard count (see buildBenchConfig).
 function assemble(
   store: Store,
   digest: Digest,
   clock: Clock,
-  opts: { seed: number; gates: GatesMode },
+  opts: { seed: number; gates: GatesMode; shards: number },
 ): { economy: Economy; workerCtx: WorkerCtx } {
   const caps: Capabilities = {
     store,
@@ -338,7 +349,7 @@ function assemble(
     logger: testLogger(),
     meter: noopMeter(),
     pricing: defaultPricing(),
-    config: buildBenchConfig(opts.gates),
+    config: buildBenchConfig(opts.gates, opts.shards),
   };
   return { economy: createEconomy(caps), workerCtx: workerCtxFrom(caps) };
 }
@@ -359,6 +370,7 @@ async function provisionInMemory(cfg: HarnessConfig): Promise<Provisioned> {
   const { economy, workerCtx } = assemble(store, digest, clock, {
     seed: cfg.seed,
     gates: cfg.gates,
+    shards: cfg.shards,
   });
   return {
     backend: 'in-memory',
@@ -381,7 +393,27 @@ async function provisionInMemory(cfg: HarnessConfig): Promise<Provisioned> {
 async function provisionPostgres(cfg: HarnessConfig): Promise<Provisioned> {
   const { digest, clock } = digestAndClock();
   // Size the pool for the two-connection-per-op design and assert it before opening (see assertPoolSizing).
-  const poolMax = assertPoolSizing(cfg, poolSizeFor(cfg));
+  // Then fit it to the server: a pool the shared server can't take dies mid-burst as opaque 53300
+  // faults. Clamp while the pool still clears the self-deadlock floor; fail fast with the numbers
+  // when it doesn't. The budget is a snapshot; postgresPoolBudget's reserve absorbs late arrivals.
+  const desired = assertPoolSizing(cfg, poolSizeFor(cfg));
+  const budget = await postgresPoolBudget(cfg.urls.postgres);
+  let poolMax = desired;
+  if (budget !== null && budget < desired) {
+    const floor = cfg.connsPerOp * cfg.concurrency + 1; // assertPoolSizing's floor
+    if (budget < floor) {
+      throw new Error(
+        `postgres cannot take the bench pool: the server has room for ~${budget} more client ` +
+          `connections, but concurrency=${cfg.concurrency} needs >= ${floor} ` +
+          `(${cfg.connsPerOp} conns/op x ${cfg.concurrency} + 1). Lower BENCH_CONCURRENCY, close ` +
+          `other clients, or raise the server's max_connections.`,
+      );
+    }
+    console.warn(
+      `    pool clamped ${desired} -> ${budget} conns — the server only has room for ~${budget} more clients`,
+    );
+    poolMax = budget;
+  }
   const store = await makeIsolatedPostgresStore({
     url: cfg.urls.postgres,
     digest,
@@ -393,6 +425,7 @@ async function provisionPostgres(cfg: HarnessConfig): Promise<Provisioned> {
   const { economy, workerCtx } = assemble(store, digest, clock, {
     seed: cfg.seed,
     gates: cfg.gates,
+    shards: cfg.shards,
   });
   const probe = await makePostgresCounterProbe(cfg.urls.postgres);
   return {
@@ -429,6 +462,7 @@ async function provisionMysql(cfg: HarnessConfig): Promise<Provisioned> {
   const { economy, workerCtx } = assemble(store, digest, clock, {
     seed: cfg.seed,
     gates: cfg.gates,
+    shards: cfg.shards,
   });
   const probe = await makeMysqlCounterProbe(cfg.urls.mysql);
   return {
@@ -460,6 +494,11 @@ export async function tryProvision(
   cfg: HarnessConfig,
 ): Promise<Provisioned | null> {
   try {
+    // A sharded run says so next to the backend's connection/durability lines. At the default of 1
+    // the output is unchanged, byte for byte.
+    if (cfg.shards > 1) {
+      console.warn(`    shards ${cfg.shards}`);
+    }
     if (backend === 'in-memory') return await provisionInMemory(cfg);
     if (backend === 'postgres') return await provisionPostgres(cfg);
     return await provisionMysql(cfg);
@@ -510,6 +549,57 @@ async function probePostgresDurability(url: string): Promise<string> {
     }
   } catch {
     return 'durability settings unavailable';
+  }
+}
+
+// Clients that may connect between the budget check and the pool filling up (another run starting,
+// a psql session, superuser slots). Subtracted from the budget so the check doesn't hand out the
+// server's last few connections.
+const POOL_BUDGET_RESERVE = 8;
+
+// How many more client connections the server can take right now: max_connections minus the clients
+// already connected, minus the reserve above. Null when the probe fails (no permissions, unreachable),
+// so an unreadable server changes nothing — the pool is then sized by the formula alone, as before.
+async function postgresPoolBudget(url: string): Promise<number | null> {
+  try {
+    const specifier = 'pg';
+    const pg = (await import(/* @vite-ignore */ specifier)) as unknown as {
+      Pool: new (c: {
+        connectionString: string;
+        max?: number;
+        connectionTimeoutMillis?: number;
+      }) => {
+        query: (
+          sql: string,
+        ) => Promise<{ rows: Array<Record<string, unknown>> }>;
+        end: () => Promise<void>;
+      };
+    };
+    const pool = new pg.Pool({
+      connectionString: url,
+      max: 1,
+      connectionTimeoutMillis: 5000,
+    });
+    try {
+      const max = Number(
+        (await pool.query('show max_connections')).rows[0]?.max_connections,
+      );
+      const used = Number(
+        (
+          await pool.query(
+            "select count(*) as used from pg_stat_activity where backend_type = 'client backend'",
+          )
+        ).rows[0]?.used,
+      );
+      if (!Number.isFinite(max) || !Number.isFinite(used)) {
+        return null;
+      }
+      return max - used - POOL_BUDGET_RESERVE;
+    } finally {
+      await pool.end();
+    }
+  } catch {
+    return null;
   }
 }
 

@@ -10,7 +10,7 @@
  */
 
 import { fault, rejected, ERROR_CODES } from '#src/errors.ts';
-import { balance as ledgerBalance, lockAll } from '#src/ledger.ts';
+import { lockAll } from '#src/ledger.ts';
 import {
   compare,
   decodeAmountWire,
@@ -20,6 +20,7 @@ import {
 } from '#src/money.ts';
 import {
   SYSTEM,
+  baseOf,
   classify,
   currency,
   earned,
@@ -222,7 +223,7 @@ async function submit(
   operation: Operation,
   options?: Options,
 ): Promise<Outcome> {
-  validateOperation(operation);
+  validateOperation(operation, pipeline.ctx.config.platformShards);
   authorize(operation);
 
   // Maintenance window. Refuse only an end user's discretionary write, never a 'system' settlement
@@ -294,8 +295,9 @@ let MAX_OP_AMOUNT_MINOR = 1_000_000_000_000_000n;
 // an empty user id builds a ":spendable"-style account and leaves a phantom, ownerless wallet. Third,
 // the money amount must be in range: positive, or merely non-zero for a two-way `adjust`, and within
 // the ceiling above. Handlers still re-check what is specific to them, such as currency, sufficiency,
-// and business rules.
-function validateOperation(operation: Operation): void {
+// and business rules. Shards reroute only platform accounts, so the shard count cannot change what
+// the blank-owner loop sees; it is passed so every accountsOf caller agrees.
+function validateOperation(operation: Operation, shards: number): void {
   if (
     typeof operation.idempotencyKey !== 'string' ||
     operation.idempotencyKey.trim() === ''
@@ -307,7 +309,7 @@ function validateOperation(operation: Operation): void {
     );
   }
 
-  for (let account of accountsOf(operation)) {
+  for (let account of accountsOf(operation, shards)) {
     if (isWalletAccount(account) && ownerOf(account).trim() === '') {
       throw fault(
         ERROR_CODES.MALFORMED_OPERATION,
@@ -368,8 +370,8 @@ function assertAmountInRange(operation: Operation): void {
 // Drops the cached balance of every account a committed transaction touched, so the next read
 // recomputes from the ledger instead of serving the stale pre-posting figure. It is a no-op when no
 // cache was injected, or when the outcome was not a commit, since a rejected or duplicate outcome
-// changed no balance. The touched accounts are `accountsOf(operation)`, the set `lockAccounts` locks,
-// de-duplicated so each key is invalidated once.
+// changed no balance. The touched accounts are `accountsOf(operation)` under the configured shard
+// count, the same set `lockAccounts` locks, de-duplicated so each key is invalidated once.
 async function invalidateCache(
   pipeline: Pipeline,
   operation: Operation,
@@ -379,7 +381,8 @@ async function invalidateCache(
   if (!cache || outcome.status !== 'committed') {
     return;
   }
-  for (let account of new Set(accountsOf(operation))) {
+  let shards = pipeline.ctx.config.platformShards;
+  for (let account of new Set(accountsOf(operation, shards))) {
     await bestEffortCache<void>(
       pipeline.ctx,
       'invalidate',
@@ -581,7 +584,8 @@ async function screenRisk(step: Step): Promise<Outcome | null> {
 // See https://economy-lab-docs.pages.dev/economy/concepts/integrity/ for the locking/isolation split.
 async function lockAccounts(step: Step): Promise<void> {
   let { unit, operation, options } = step;
-  await lockAll(unit.ledger, accountsOf(operation), options);
+  let shards = step.pipeline.ctx.config.platformShards;
+  await lockAll(unit.ledger, accountsOf(operation, shards), options);
 }
 
 // After a successful posting, queues the matching notification event, such as "credits topped up".
@@ -657,11 +661,10 @@ async function proveEconomy(
   ctx: Ctx,
   options?: Options,
 ): Promise<ProveReport> {
-  let fold = await foldLedger(store);
+  let fold = await foldLedger(store, options);
   let required = backingRequired(fold.custodialCredit, ctx.rates.par('CREDIT'));
-  let trustCash = await ledgerBalance(store.ledger, SYSTEM.TRUST_CASH, options);
   let shortfallMinor =
-    trustCash.minor < required ? required - trustCash.minor : 0n;
+    fold.trustCashMinor < required ? required - fold.trustCashMinor : 0n;
 
   return {
     conserved: [...fold.signedByCurrency.values()].every((sum) => sum === 0n),
@@ -683,6 +686,7 @@ type LedgerDrift = {
 type LedgerFold = {
   signedByCurrency: Map<Currency, bigint>;
   custodialCredit: bigint;
+  trustCashMinor: bigint;
   anyUserNegative: boolean;
   chainIntact: boolean;
   drift: LedgerDrift[];
@@ -696,20 +700,24 @@ type LedgerFold = {
 // per currency; a non-zero total means money was created or destroyed. A cached balance that
 // disagrees with the recomputed total is reported as drift instead of folded in.
 // See https://economy-lab-docs.pages.dev/economy/concepts/the-proof/ for what each figure proves.
-async function foldLedger(store: Store): Promise<LedgerFold> {
+async function foldLedger(
+  store: Store,
+  options?: Options,
+): Promise<LedgerFold> {
   let signedByCurrency = new Map<Currency, bigint>();
   let custodialCredit = 0n;
+  let trustCashMinor = 0n;
   let anyUserNegative = false;
   let chainIntact = true;
   let drift: LedgerDrift[] = [];
 
   for await (let [account, head] of store.ledger.heads()) {
-    let bal = await store.ledger.balance(account);
+    let bal = await store.ledger.balance(account, options);
     let cur = currency(account);
     // Recompute from the recorded entries, the source of truth, not the cached running balance. The
     // two are compared just below to flag an account whose cached balance has drifted from its
     // entries.
-    let derivedMinor = await deriveBalanceMinor(store, account);
+    let derivedMinor = await deriveBalanceMinor(store, account, options);
     let sign = isDebitNormal(account) ? 1n : -1n;
     signedByCurrency.set(
       cur,
@@ -725,6 +733,11 @@ async function foldLedger(store: Store): Promise<LedgerFold> {
     if (classify(account) === 'custodial' && cur === 'CREDIT') {
       custodialCredit += bal.minor;
     }
+    // Trust cash is one logical account split across shard rows, so the backing check compares
+    // `required` against the sum over every TRUST_CASH shard this pass visits, not one bare row.
+    if (baseOf(account) === SYSTEM.TRUST_CASH) {
+      trustCashMinor += bal.minor;
+    }
     if (isWalletAccount(account) && isNegative(bal)) {
       anyUserNegative = true;
     }
@@ -739,6 +752,7 @@ async function foldLedger(store: Store): Promise<LedgerFold> {
   return {
     signedByCurrency,
     custodialCredit,
+    trustCashMinor,
     anyUserNegative,
     chainIntact,
     drift,
@@ -752,9 +766,10 @@ async function foldLedger(store: Store): Promise<LedgerFold> {
 async function deriveBalanceMinor(
   store: Store,
   account: AccountRef,
+  options?: Options,
 ): Promise<bigint> {
   let derivedMinor = 0n;
-  let page = await store.ledger.statement(account, PROVE_RANGE);
+  let page = await store.ledger.statement(account, PROVE_RANGE, options);
   for (let entry of page.entries) {
     derivedMinor += entry.amount.minor;
   }

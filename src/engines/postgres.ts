@@ -40,7 +40,7 @@ import {
   decodeAmountWire,
   isAmount,
 } from '#src/money.ts';
-import { currency } from '#src/accounts.ts';
+import { currency, baseOf } from '#src/accounts.ts';
 import { assertSchemaCurrent } from '#src/schema.ts';
 import { byCodeUnit, fromHex } from '#src/bytes.ts';
 import {
@@ -232,36 +232,47 @@ async function advanceChain(
   return links;
 }
 
-// Create a user account row if absent, so the first entry posted to it has something to
-// reference. Platform accounts (ids starting `platform:`) are created up front by the schema
-// with kind `system`, which the schema's CHECK constraint would reject on insert here, so
-// skip them. `on conflict do nothing` keeps repeat calls safe.
+// A shard of a schema-seeded platform account (`platform:revenue#3`). Bare ids are seeded; a
+// shard row is created on first use. A typo with no seeded base stays excluded and faults upstream.
+function isPlatformShard(account: AccountRef): boolean {
+  let base = baseOf(account);
+  return base !== account && isSeededSystemAccount(base);
+}
+
+// The row a first-use id gets: kind is the `:kind` suffix for users, 'system' for shards.
+function accountRow(account: AccountRef) {
+  let kind = isKnownSuffix(account)
+    ? account.slice(account.lastIndexOf(':') + 1)
+    : 'system';
+  return { id: account, kind, currency: currency(account) };
+}
+
+// Create the account row if absent (user accounts and platform shards; bare platform ids are
+// schema-seeded, so skipped). `on conflict do nothing` keeps repeat calls safe.
 async function ensureAccount(q: Queryable, account: AccountRef): Promise<void> {
-  if (!isKnownSuffix(account)) {
+  if (!isKnownSuffix(account) && !isPlatformShard(account)) {
     return;
   }
-  let kind = account.slice(account.lastIndexOf(':') + 1);
+  let row = accountRow(account);
   await q.query(
     `insert into accounts (id, kind, currency) values ($1, $2, $3)
        on conflict (id) do nothing`,
-    [account, kind, currency(account)],
+    [row.id, row.kind, row.currency],
   );
 }
 
-// Batched twin of ensureAccount: one round trip for every user account; see ensureAccount.
+// Batched twin of ensureAccount: one round trip for every first-use account; see ensureAccount.
 async function ensureAccounts(
   q: Queryable,
   accounts: ReadonlyArray<AccountRef>,
 ): Promise<void> {
-  let userAccounts = accounts.filter(isKnownSuffix);
-  if (userAccounts.length === 0) {
+  let firstUse = accounts.filter(
+    (account) => isKnownSuffix(account) || isPlatformShard(account),
+  );
+  if (firstUse.length === 0) {
     return;
   }
-  let newRows = userAccounts.map((account) => ({
-    id: account,
-    kind: account.slice(account.lastIndexOf(':') + 1),
-    currency: currency(account),
-  }));
+  let newRows = firstUse.map(accountRow);
   await q.query(
     `insert into accounts (id, kind, currency)
        select a.id, a.kind, a.currency

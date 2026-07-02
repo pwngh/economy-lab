@@ -12,7 +12,7 @@
 import { normalizeError } from '#src/errors.ts';
 import { credit, debit, lockAll, postEntry } from '#src/ledger.ts';
 import { convertFloor, encodeAmount } from '#src/money.ts';
-import { earned, SYSTEM } from '#src/accounts.ts';
+import { earned, platformShard, SYSTEM } from '#src/accounts.ts';
 
 import type { WorkerCtx } from '#src/contract.ts';
 import type { Saga, Store } from '#src/ports.ts';
@@ -129,7 +129,14 @@ async function deadLetter(
   reason: string,
 ): Promise<boolean> {
   return store.transaction(async (unit) => {
-    await lockAll(unit.ledger, [SYSTEM.PAYOUT_RESERVE, earned(saga.userId)]);
+    // The reserve routes by the saga's user, the same key requestPayout credited by, so the
+    // routed shard, not the bare row, is what this locks and debits.
+    let reserveRef = platformShard(
+      SYSTEM.PAYOUT_RESERVE,
+      saga.userId,
+      ctx.config.platformShards,
+    );
+    await lockAll(unit.ledger, [reserveRef, earned(saga.userId)]);
     // Flip to FAILED only if the saga is still in the state we read, recording the failure reason in
     // the same write so it is read straight off the saga, not re-derived from posting meta. A false
     // return means a concurrent settle or reverse advanced the saga first, so leave the books to that actor.
@@ -143,7 +150,7 @@ async function deadLetter(
     await postEntry(unit.ledger, {
       txnId: ctx.ids.next('txn'),
       legs: [
-        debit(SYSTEM.PAYOUT_RESERVE, saga.reserve),
+        debit(reserveRef, saga.reserve),
         credit(earned(saga.userId), saga.reserve),
       ],
       meta: { kind: 'payout.deadLetter', sagaId: saga.id, reason },

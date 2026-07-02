@@ -91,6 +91,13 @@ export interface Config {
    */
   pauseStartMs: number | null;
   pauseEndMs: number | null;
+
+  /**
+   * Rows each hot platform account is split across, so concurrent postings stop queueing on one
+   * row. Default 1 = unsharded, identical to before the knob existed. Shard 0 keeps the bare id,
+   * so raising the count later is safe; only ever lower it back to 1.
+   */
+  platformShards: number;
 }
 
 // True in production, where a missing secret must fail rather than default to empty string.
@@ -170,6 +177,7 @@ export function loadConfig(env: EnvMap): Config {
     // other numeric tunables, except it falls to null instead of to a numeric default.
     pauseStartMs: toIntOrNull(env.ECONOMY_PAUSE_START_MS),
     pauseEndMs: toIntOrNull(env.ECONOMY_PAUSE_END_MS),
+    platformShards: toInt(env.PLATFORM_SHARDS, 1),
   };
 }
 

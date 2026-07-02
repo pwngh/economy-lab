@@ -10,10 +10,10 @@
  */
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
-import { credit, debit, postEntry } from '#src/ledger.ts';
+import { credit, debit, lockAll, postEntry } from '#src/ledger.ts';
 import { convertFloor, encodeAmount, toAmount } from '#src/money.ts';
 import { assertKind } from '#src/operations/guards.ts';
-import { SYSTEM } from '#src/accounts.ts';
+import { platformShard, SYSTEM } from '#src/accounts.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { Ctx, Operation, Outcome, Transaction } from '#src/contract.ts';
@@ -144,10 +144,21 @@ async function postSettlementEntries(
   entry: { saga: Saga; usd: Amount; fee: Amount; net: Amount; rateId: string },
 ): Promise<Transaction> {
   let { saga, usd, fee, net, rateId } = entry;
+  // The lock set only knew the sagaId, so it locked the bare reserve; the reserve actually sits on
+  // the shard routed by the saga's user — lock that one too before debiting it. The other platform
+  // legs stay bare: worker cadence, and unlike the reserve they may go negative safely.
+  let reserveRef = platformShard(
+    SYSTEM.PAYOUT_RESERVE,
+    saga.userId,
+    ctx.config.platformShards,
+  );
+  if (reserveRef !== SYSTEM.PAYOUT_RESERVE) {
+    await lockAll(unit.ledger, [reserveRef]);
+  }
   let transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs: [
-      debit(SYSTEM.PAYOUT_RESERVE, saga.reserve),
+      debit(reserveRef, saga.reserve),
       credit(SYSTEM.REVENUE, saga.reserve),
     ],
     meta: { kind: 'payout.settle', sagaId: saga.id, rateId },

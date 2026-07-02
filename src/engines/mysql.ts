@@ -19,7 +19,7 @@ import {
   decodeAmountWire,
   isAmount,
 } from '#src/money.ts';
-import { currency } from '#src/accounts.ts';
+import { currency, baseOf } from '#src/accounts.ts';
 import { byCodeUnit, fromHex } from '#src/bytes.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import {
@@ -167,8 +167,9 @@ async function isKnownAccount(
       return true;
     }
   }
-  // A schema-seeded system account always exists, so confirm it without a round trip; only a
-  // genuinely unknown id falls through to the existence query.
+  // A schema-seeded system account, or a shard of one, is confirmed without a round trip — the
+  // bare row always exists and a shard row is created on first use (post_entry's INSERT IGNORE);
+  // only a genuinely unknown id falls through to the existence query.
   if (isSeededSystemAccount(account)) {
     return true;
   }
@@ -261,6 +262,19 @@ async function insertPosting(
   // transaction, replacing a per-leg loop that cost a dozen-plus round-trips. The JSON arrays carry
   // the bigint amounts as strings to keep values past 2^53.
   let args = postEntryArgs(posting, links);
+  // postEntryArgs collects only first-use user accounts. A platform shard (`platform:revenue#3`)
+  // is also created on first use — the schema seeds just the bare ids — so add each one with kind
+  // `system` and its parent's currency; post_entry's INSERT IGNORE makes repeats free. At one
+  // shard no shard ref appears in a posting, so this adds nothing.
+  for (let account of distinctAccounts(posting.legs)) {
+    if (baseOf(account) !== account && isSeededSystemAccount(account)) {
+      args.newAccounts.push({
+        id: account,
+        kind: 'system',
+        currency: currency(account),
+      });
+    }
+  }
   await callProcedure(mysqlQuery(deps.exec), 'mysql', 'post_entry', [
     posting.txnId,
     postedAt,
@@ -294,6 +308,65 @@ function mysqlQuery(exec: MysqlExecutor) {
 // application decides each delta via `balanceDelta` (see postEntryArgs in sql-routines.ts); the
 // procedure only persists it.
 
+// The accounts-row kind for an id: 'system' for platform accounts (shards included), else the
+// wallet suffix ('spendable' | 'earned' | 'promo').
+function rowKind(account: AccountRef): string {
+  if (account.startsWith('platform:')) {
+    return 'system';
+  }
+  return account.slice(account.lastIndexOf(':') + 1);
+}
+
+// lockMany's body: lock what exists, plant what doesn't, lock the planted. Both orderings are
+// load-bearing. Locking rows that exist avoids gap locks (locking a missing key gap-locks, and
+// concurrent first-use inserts then deadlock in that gap); planting ONLY the missing avoids
+// dup-check S locks on existing rows (which deadlock against the FOR UPDATE); and using the FOR
+// UPDATE itself as the missing-check avoids a plain SELECT, which would pin the REPEATABLE READ
+// snapshot and make later reads in this transaction see pre-lock state.
+async function plantAndLock(
+  exec: MysqlExecutor,
+  accounts: ReadonlyArray<AccountRef>,
+): Promise<void> {
+  if (accounts.length === 0) {
+    return;
+  }
+  let marks = accounts.map(() => '?').join(', ');
+  let found = await rows(
+    exec,
+    `SELECT account_id FROM account_balances
+      WHERE account_id IN (${marks})
+      ORDER BY account_id
+        FOR UPDATE`,
+    [...accounts],
+  );
+  let have = new Set(found.map((row) => row.account_id as string));
+  let missing = accounts.filter((account) => !have.has(account));
+  if (missing.length > 0) {
+    // Same placeholder shape the schema seeds for system accounts: zero balance, genesis head.
+    await execWrite(
+      exec,
+      `INSERT IGNORE INTO accounts (id, kind, currency)
+        VALUES ${missing.map(() => '(?, ?, ?)').join(', ')}`,
+      missing.flatMap((a) => [a, rowKind(a), currency(a)]),
+    );
+    await execWrite(
+      exec,
+      `INSERT IGNORE INTO account_balances (account_id, currency, balance, head_hash)
+        VALUES ${missing.map(() => `(?, ?, 0, REPEAT('0', 64))`).join(', ')}`,
+      missing.flatMap((a) => [a, currency(a)]),
+    );
+    // Lock the rows just planted; the existing ones are already held from the first statement.
+    await rows(
+      exec,
+      `SELECT account_id FROM account_balances
+        WHERE account_id IN (${missing.map(() => '?').join(', ')})
+        ORDER BY account_id
+          FOR UPDATE`,
+      [...missing],
+    );
+  }
+}
+
 function createLedgerStore(deps: ExecDeps): Ledger {
   return {
     hasAccount: async (account) => isKnownAccount(deps.exec, account),
@@ -303,29 +376,10 @@ function createLedgerStore(deps: ExecDeps): Ledger {
     // blocking on itself, so locking one account twice is safe. Dropped on commit or rollback.
     lock: (account) => takeGetLock(deps.exec, lockName(account)),
 
-    // Batched twin of `lock`: row-locks every touched account's balance row in one statement, in
-    // account_id order, so InnoDB acquires them in one global order (the advisory GET_LOCK above does
-    // not pin rows, so post_entry's UPDATE would otherwise lock in plan order). The MySQL counterpart to
-    // Postgres' `lockMany`; lockAll calls it when present. A first-use account has no row yet, so it
-    // locks nothing here (the chain-fork UNIQUE index + withTransientRetry cover that cold-start race).
-    //
-    // NOTE: this is Postgres parity, NOT the cure for the bench's deadlocks — the dominant InnoDB
-    // deadlock (1213) was the idempotency claim's gap lock, not account_balances. The real fix is the
-    // atomic `INSERT IGNORE` claim in createIdempotencyStore below.
-    lockMany: async (accounts) => {
-      if (accounts.length === 0) {
-        return;
-      }
-      let marks = accounts.map(() => '?').join(', ');
-      await rows(
-        deps.exec,
-        `SELECT account_id FROM account_balances
-          WHERE account_id IN (${marks})
-          ORDER BY account_id
-            FOR UPDATE`,
-        [...accounts],
-      );
-    },
+    // Batched twin of `lock`: row-locks every touched balance row in one ordered statement, so
+    // InnoDB acquires them in one global order (GET_LOCK above does not pin rows). The MySQL
+    // counterpart to Postgres' `lockMany`.
+    lockMany: (accounts) => plantAndLock(deps.exec, accounts),
 
     append: async (posting) => insertPosting(deps, posting),
 

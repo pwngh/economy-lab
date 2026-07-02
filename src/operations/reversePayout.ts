@@ -11,7 +11,7 @@
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
-import { earned, SYSTEM } from '#src/accounts.ts';
+import { earned, routePlatformLegs, SYSTEM } from '#src/accounts.ts';
 import { assertKind } from '#src/operations/guards.ts';
 
 import type { Ctx, Operation, Outcome, Transaction } from '#src/contract.ts';
@@ -71,13 +71,19 @@ export async function reversePayout(
 
   // This is the same undo the worker posts. It moves the reserved amount out of PAYOUT_RESERVE
   // back into the seller's earned account. The debit and credit balance in CREDIT. It commits in
-  // the same transaction as the state change above, so the two cannot come apart.
+  // the same transaction as the state change above, so the two cannot come apart. The reserve
+  // debit routes by the user id, the same key the request credited by, so it lands on (and the
+  // lock set covered) the shard holding this payout's reserve.
   let transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
-    legs: [
-      debit(SYSTEM.PAYOUT_RESERVE, saga.reserve),
-      credit(earned(saga.userId), saga.reserve),
-    ],
+    legs: routePlatformLegs(
+      [
+        debit(SYSTEM.PAYOUT_RESERVE, saga.reserve),
+        credit(earned(saga.userId), saga.reserve),
+      ],
+      operation.userId,
+      ctx.config.platformShards,
+    ),
     meta: {
       kind: 'payout.reversePayout',
       sagaId: saga.id,

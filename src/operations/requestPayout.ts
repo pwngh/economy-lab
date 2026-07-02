@@ -13,7 +13,7 @@ import { fault, rejected, ERROR_CODES } from '#src/errors.ts';
 import { assertKind } from '#src/operations/guards.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { compare, encodeAmount, toAmount } from '#src/money.ts';
-import { earned, SYSTEM } from '#src/accounts.ts';
+import { earned, routePlatformLegs, SYSTEM } from '#src/accounts.ts';
 import { maturedAtLeast } from '#src/maturity.ts';
 
 import type { Amount } from '#src/money.ts';
@@ -90,12 +90,18 @@ export async function requestPayout(
   }
 
   let rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
+  // The reserve credit routes by the user id, not the idempotency key: settle and reverse know
+  // only the saga, and the saga knows the user, so this is the shard their later debit finds.
   let transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
-    legs: [
-      debit(earned(operation.userId), amount),
-      credit(SYSTEM.PAYOUT_RESERVE, amount),
-    ],
+    legs: routePlatformLegs(
+      [
+        debit(earned(operation.userId), amount),
+        credit(SYSTEM.PAYOUT_RESERVE, amount),
+      ],
+      operation.userId,
+      ctx.config.platformShards,
+    ),
     meta: { kind: 'requestPayout', rateId: rate.rateId },
   });
   await unit.sagas.open(sagaOf(operation, amount, rate.rateId, ctx));

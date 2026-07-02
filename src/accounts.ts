@@ -92,6 +92,94 @@ export const SYSTEM = {
   OPENING_EQUITY: 'platform:opening_equity' as AccountRef,
 } as const;
 
+// --- Platform-account sharding ------------------------------------------------------
+//
+// Every sale credits the one REVENUE row, so concurrent sales queue on its lock. Splitting each hot
+// account into `platformShards` rows (bare id + `id#1`…`id#S-1`) lets them run in parallel; readers
+// sum the shards. Shard 0 keeps the bare id, so shards=1 (the default) changes nothing.
+
+// The accounts worth sharding. RECEIVABLE and OPENING_EQUITY move too rarely to matter.
+let SHARDED: ReadonlySet<AccountRef> = new Set([
+  SYSTEM.REVENUE,
+  SYSTEM.PROMO_FLOAT,
+  SYSTEM.STORED_VALUE,
+  SYSTEM.TRUST_CASH,
+  SYSTEM.USD_CLEARING,
+  SYSTEM.REVENUE_USD,
+  SYSTEM.PAYOUT_RESERVE,
+]);
+
+/**
+ * Strips a shard suffix: `platform:revenue#3` → `platform:revenue`. The identity functions below
+ * normalize through this, so a shard behaves exactly like its parent.
+ */
+export function baseOf(ref: AccountRef): AccountRef {
+  if (!ref.startsWith('platform:')) {
+    return ref;
+  }
+  let hash = ref.indexOf('#');
+  return hash < 0 ? ref : (ref.slice(0, hash) as AccountRef);
+}
+
+/** The id of shard `k`: the bare id for 0, `base#k` otherwise. */
+export function shardRef(base: AccountRef, shard: number): AccountRef {
+  return shard === 0 ? base : (`${base}#${shard}` as AccountRef);
+}
+
+/** All shard ids of `base`, bare id first. Readers sum these to get the logical balance. */
+export function shardsOf(base: AccountRef, shards: number): AccountRef[] {
+  let refs: AccountRef[] = [];
+  for (let shard = 0; shard < Math.max(1, shards); shard += 1) {
+    refs.push(shardRef(base, shard));
+  }
+  return refs;
+}
+
+/**
+ * Picks a posting's shard: hash the key, mod the count. Outside the sharded set, or shards < 2,
+ * the bare id passes through. Ops key on their idempotency key (same shard on retry);
+ * PAYOUT_RESERVE keys on the user id, so a settle or reverse — which only knows the saga — drains
+ * the shard the request credited (the reserve may not go negative per row).
+ */
+export function platformShard(
+  ref: AccountRef,
+  key: string,
+  shards: number,
+): AccountRef {
+  if (shards < 2 || !SHARDED.has(ref)) {
+    return ref;
+  }
+  return shardRef(ref, fnv1a(key) % shards);
+}
+
+/**
+ * Applies {@link platformShard} to every leg. Handlers wrap their finished legs, so legs built by
+ * injected ports (the fee policy credits REVENUE) route without the port knowing about shards.
+ */
+export function routePlatformLegs<T extends { account: AccountRef }>(
+  legs: T[],
+  key: string,
+  shards: number,
+): T[] {
+  if (shards < 2) {
+    return legs;
+  }
+  return legs.map((leg) => {
+    let routed = platformShard(leg.account, key, shards);
+    return routed === leg.account ? leg : { ...leg, account: routed };
+  });
+}
+
+// FNV-1a 32-bit: tiny, deterministic, spreads keys evenly. Routing only, not crypto.
+function fnv1a(key: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < key.length; i += 1) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
 /**
  * Whether `ref` is a user wallet account rather than a platform ("house") account. A user id is
  * `usr_…:<kind>` (has a `:kind` suffix, no `platform:` prefix); every house account starts with
@@ -123,10 +211,11 @@ export function ownerOf(ref: AccountRef): string {
  * accounts, TRUST_CASH and USD_CLEARING.
  */
 export function currency(ref: AccountRef): Currency {
+  let base = baseOf(ref); // a shard is denominated like its parent
   if (
-    ref === SYSTEM.TRUST_CASH ||
-    ref === SYSTEM.USD_CLEARING ||
-    ref === SYSTEM.REVENUE_USD
+    base === SYSTEM.TRUST_CASH ||
+    base === SYSTEM.USD_CLEARING ||
+    base === SYSTEM.REVENUE_USD
   ) {
     return 'USD';
   }
@@ -143,24 +232,25 @@ export function currency(ref: AccountRef): Currency {
 export function classify(
   ref: AccountRef,
 ): 'custodial' | 'excluded' | 'house-asset' | 'house-liability' {
+  let base = baseOf(ref); // a shard is classed like its parent
   if (
-    ref === SYSTEM.TRUST_CASH ||
-    ref === SYSTEM.USD_CLEARING ||
-    ref === SYSTEM.REVENUE_USD ||
-    ref === SYSTEM.STORED_VALUE ||
-    ref === SYSTEM.RECEIVABLE ||
-    ref === SYSTEM.OPENING_EQUITY
+    base === SYSTEM.TRUST_CASH ||
+    base === SYSTEM.USD_CLEARING ||
+    base === SYSTEM.REVENUE_USD ||
+    base === SYSTEM.STORED_VALUE ||
+    base === SYSTEM.RECEIVABLE ||
+    base === SYSTEM.OPENING_EQUITY
   ) {
     return 'house-asset';
   }
   if (
-    ref === SYSTEM.REVENUE ||
-    ref === SYSTEM.PROMO_FLOAT ||
-    ref === SYSTEM.PAYOUT_RESERVE
+    base === SYSTEM.REVENUE ||
+    base === SYSTEM.PROMO_FLOAT ||
+    base === SYSTEM.PAYOUT_RESERVE
   ) {
     // PAYOUT_RESERVE is `excluded`, not `house-liability`, so neither it nor promo ever enters the
     // backing total or raises the USD the platform must hold.
-    return ref === SYSTEM.PAYOUT_RESERVE ? 'excluded' : 'house-liability';
+    return base === SYSTEM.PAYOUT_RESERVE ? 'excluded' : 'house-liability';
   }
   if (kindOf(ref) === 'spendable') {
     return 'custodial';
@@ -173,14 +263,15 @@ export function classify(
  * to sign a posted line; the no-negative-balance check uses it to read each balance right-way-up.
  */
 export function isDebitNormal(ref: AccountRef): boolean {
+  let base = baseOf(ref); // a shard keeps its parent's normal side
   return (
-    ref === SYSTEM.TRUST_CASH ||
-    ref === SYSTEM.USD_CLEARING ||
-    ref === SYSTEM.REVENUE_USD ||
-    ref === SYSTEM.STORED_VALUE ||
-    ref === SYSTEM.RECEIVABLE ||
-    ref === SYSTEM.PROMO_FLOAT ||
-    ref === SYSTEM.OPENING_EQUITY
+    base === SYSTEM.TRUST_CASH ||
+    base === SYSTEM.USD_CLEARING ||
+    base === SYSTEM.REVENUE_USD ||
+    base === SYSTEM.STORED_VALUE ||
+    base === SYSTEM.RECEIVABLE ||
+    base === SYSTEM.PROMO_FLOAT ||
+    base === SYSTEM.OPENING_EQUITY
   );
 }
 
@@ -196,15 +287,16 @@ export function isDebitNormal(ref: AccountRef): boolean {
  * returns only the system accounts those operations always touch. The handler loads the original
  * transaction and adds its accounts before posting, covering everything the posting reads.
  */
-export function accountsOf(operation: Operation): AccountRef[] {
+export function accountsOf(operation: Operation, shards = 1): AccountRef[] {
   // TypeScript can't see that each LOCK_SETS builder reads only the fields valid for its own kind,
   // so widen the looked-up builder to a plain function via this cast. The LOCK_SETS type still
   // requires an entry per operation kind, so a forgotten kind is a compile error, not an empty
   // lock set that races the pre-check.
   let touched = LOCK_SETS[operation.kind] as (
     operation: Operation,
+    shards: number,
   ) => AccountRef[];
-  return touched(operation);
+  return touched(operation, shards);
 }
 
 // The system accounts that a refund or reversal always touches, regardless of the original
@@ -216,23 +308,27 @@ let REVERSAL_CONTRAS: AccountRef[] = [
 ];
 
 // For each operation kind, the accounts that operation may touch. `accountsOf` looks up the
-// matching builder here and calls it.
+// matching builder here and calls it. Hot kinds route shards with the same key their handler
+// routes the legs with, so the lock covers the shard the posting will hit.
 let LOCK_SETS: {
   [K in Operation['kind']]: (
     operation: Extract<Operation, { kind: K }>,
+    shards: number,
   ) => AccountRef[];
 } = {
-  topUp: (o) => [
+  topUp: (o, s) => [
     spendable(o.userId),
-    SYSTEM.STORED_VALUE, // offsetting entry for the newly issued credits
-    SYSTEM.TRUST_CASH,
-    SYSTEM.USD_CLEARING,
+    platformShard(SYSTEM.STORED_VALUE, o.idempotencyKey, s), // offsetting entry for the newly issued credits
+    platformShard(SYSTEM.TRUST_CASH, o.idempotencyKey, s),
+    platformShard(SYSTEM.USD_CLEARING, o.idempotencyKey, s),
+    // The spread margin's account; locking it also plants a first-use shard row before posting.
+    platformShard(SYSTEM.REVENUE_USD, o.idempotencyKey, s),
   ],
-  spend: (o) => [
+  spend: (o, s) => [
     promo(o.buyerId),
     spendable(o.buyerId),
-    SYSTEM.PROMO_FLOAT,
-    SYSTEM.REVENUE,
+    platformShard(SYSTEM.PROMO_FLOAT, o.idempotencyKey, s),
+    platformShard(SYSTEM.REVENUE, o.idempotencyKey, s),
     ...(o.recipients ?? []).map((r) => earned(r.sellerId)),
   ],
   refund: () => [...REVERSAL_CONTRAS],
@@ -241,7 +337,10 @@ let LOCK_SETS: {
     SYSTEM.STORED_VALUE, // a chargeback cancels credits against STORED_VALUE, not REVENUE, the same way a top-up issued them
     SYSTEM.RECEIVABLE,
   ],
-  requestPayout: (o) => [earned(o.userId), SYSTEM.PAYOUT_RESERVE],
+  requestPayout: (o, s) => [
+    earned(o.userId),
+    platformShard(SYSTEM.PAYOUT_RESERVE, o.userId, s),
+  ],
   subscribe: (o) => [
     promo(o.userId),
     spendable(o.userId),
@@ -262,8 +361,11 @@ let LOCK_SETS: {
   // Undoing a payout by hand reverses the original: debit PAYOUT_RESERVE, credit the seller's
   // earned account, the same two the background payout worker touches when it gives up. Those two
   // are the only locks. The request names the seller by `userId`, so these cover it exactly (not an
-  // over-estimate).
-  reversePayout: (o) => [SYSTEM.PAYOUT_RESERVE, earned(o.userId)],
+  // over-estimate). The reserve routes by that user id, the same shard the request credited.
+  reversePayout: (o, s) => [
+    platformShard(SYSTEM.PAYOUT_RESERVE, o.userId, s),
+    earned(o.userId),
+  ],
   // Settling a payout posts two platform-only entries (the worker's settle): the credit side empties
   // PAYOUT_RESERVE into REVENUE, the USD side debits USD_CLEARING / credits TRUST_CASH. No user
   // wallet account is touched, so these four platform accounts are the full lock set. Named only by

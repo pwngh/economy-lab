@@ -11,7 +11,7 @@
 
 import { chainHash, balanceDelta, GENESIS } from '#src/ledger.ts';
 import { toAmount } from '#src/money.ts';
-import { currency, SYSTEM } from '#src/accounts.ts';
+import { baseOf, currency, SYSTEM } from '#src/accounts.ts';
 import { VELOCITY_CURRENCY } from '#src/trust.ts';
 import { byCodeUnit, fromHex, toHex } from '#src/bytes.ts';
 import { metaString, metaNumber } from '#src/meta.ts';
@@ -131,12 +131,10 @@ interface StoredPosting {
   links: ReadonlyArray<{ account: AccountRef; prevHash: string; hash: string }>;
 }
 
-// Reports whether the ledger accepts a posting against this account. It returns true for a
-// registered platform account, or for a user account whose id ends in a known kind (`:spendable`,
-// `:earned`, or `:promo`). Anything else is rejected upstream, where `postEntry` raises
-// UNKNOWN_ACCOUNT. This check reports existence only.
+// Whether the ledger accepts a posting against this account: a registered platform account or a
+// shard of one (baseOf strips the suffix), or a user account with a known `:kind` suffix.
 function isKnownAccount(account: AccountRef, registered: Set<string>): boolean {
-  if (registered.has(account)) {
+  if (registered.has(baseOf(account))) {
     return true;
   }
   let colon = account.lastIndexOf(':');

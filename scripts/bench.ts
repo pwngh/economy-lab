@@ -34,7 +34,7 @@
 //   make bench-prod                                 # run inside a Linux container vs the compose DBs
 //
 // Knobs (all optional): BENCH_PROFILE, BENCH_OPS, BENCH_REPS, BENCH_WARMUP, BENCH_CONCURRENCY,
-// BENCH_BUDGET_MS, BENCH_BACKENDS, BENCH_OUTPUT, BENCH_JSON_PATH, BENCH_SEED, and the connection URLs
+// BENCH_BUDGET_MS, BENCH_BACKENDS, BENCH_OUTPUT, BENCH_JSON_PATH, BENCH_SEED, BENCH_SHARDS, and the connection URLs
 // BENCH_POSTGRES_URL / BENCH_MYSQL_URL (else DATABASE_URL / MYSQL_TEST_URL). See harness.ts.
 
 import { sealCheckpoint, reverifyCheckpoint } from '#src/worker/checkpoint.ts';
@@ -62,7 +62,7 @@ import type {
   GatesMode,
   Provisioned,
 } from '#scripts/support/harness.ts';
-import type { Amount, Economy } from '#src/index.ts';
+import type { Amount, Economy, Operation } from '#src/index.ts';
 
 const cfg = resolveConfig();
 
@@ -221,29 +221,53 @@ function poolSizeForMode(concurrency: number, mode: BenchMode): number {
 }
 
 // A small fixed op sequence run on a fresh ledger to fingerprint the engine for the cross-engine
-// determinism check (see determinismRoot). Fixed ids/amounts (no pid tag, no clock dependence) so every
-// engine posts byte-identical entries; a representative cross-section (top-ups, fee-splitting sales, a
-// payout reserve) so a divergence in any path changes the root. Every op commits under both gate modes.
+// determinism check (see determinismRoot). Fixed ids/amounts/keys (no pid tag, no clock dependence) so
+// every engine posts byte-identical entries; a representative cross-section (top-ups, fee-splitting
+// sales, a payout reserve) so a divergence in any path changes the root. Every op commits under both
+// gate modes.
+//
+// The idempotency keys are pinned, overriding the builders' run-random, process-counted ones: at
+// shards > 1 the platform legs route by hashing this key, so every backend must submit identical keys
+// or the same sequence lands on different shard rows and the roots diverge. Constants are safe here
+// where the builders' comment warns they are not — each backend runs in a throwaway schema/database,
+// so a pinned key can never replay a previous run's row as a duplicate.
+const withKey = (op: Operation, idempotencyKey: string): Operation => ({
+  ...op,
+  idempotencyKey,
+});
+
 async function runDeterminismSequence(economy: Economy): Promise<void> {
   await economy.submit(
-    topUp({ userId: 'det_buyer_a', amount: credit('1000.00') }),
+    withKey(
+      topUp({ userId: 'det_buyer_a', amount: credit('1000.00') }),
+      'det_topup_a',
+    ),
   );
   await economy.submit(
-    topUp({ userId: 'det_buyer_b', amount: credit('1000.00') }),
+    withKey(
+      topUp({ userId: 'det_buyer_b', amount: credit('1000.00') }),
+      'det_topup_b',
+    ),
   );
   for (let i = 0; i < 2; i++) {
     await economy.submit(
-      spend({
-        buyerId: i === 0 ? 'det_buyer_a' : 'det_buyer_b',
-        sku: 'det_sku',
-        price: credit('100.00'),
-        orderId: `det_ord_${i}`,
-        recipients: [{ sellerId: 'det_creator', shareBps: 10_000 }],
-      }),
+      withKey(
+        spend({
+          buyerId: i === 0 ? 'det_buyer_a' : 'det_buyer_b',
+          sku: 'det_sku',
+          price: credit('100.00'),
+          orderId: `det_ord_${i}`,
+          recipients: [{ sellerId: 'det_creator', shareBps: 10_000 }],
+        }),
+        `det_spend_${i}`,
+      ),
     );
   }
   await economy.submit(
-    requestPayout({ userId: 'det_creator', amount: credit('1.00') }),
+    withKey(
+      requestPayout({ userId: 'det_creator', amount: credit('1.00') }),
+      'det_payout',
+    ),
   );
 }
 

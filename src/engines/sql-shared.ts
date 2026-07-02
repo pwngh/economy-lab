@@ -13,7 +13,7 @@ import { toAmount } from '#src/money.ts';
 import { toHex } from '#src/bytes.ts';
 import { GENESIS } from '#src/ledger.ts';
 import { sha256Digest } from '#src/digest.ts';
-import { SYSTEM } from '#src/accounts.ts';
+import { SYSTEM, baseOf } from '#src/accounts.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
 import type {
@@ -101,14 +101,14 @@ let SEEDED_SYSTEM_ACCOUNTS: ReadonlySet<string> = new Set(
   Object.values(SYSTEM),
 );
 
-// Whether an account is one the schema pre-seeds. `hasAccount` uses this to confirm a platform
-// account without a round trip, like a `usr_…:<kind>` suffix is confirmed without a query (the
-// write path creates that one on first use). A platform-looking id that is not seeded — a typo
-// like `platform:revenuee` — is absent here, so it falls through to the existence query and yields
-// a clean UNKNOWN_ACCOUNT rather than reaching the database as a raw foreign-key violation. This
-// matches the in-memory adapter, which recognizes the same set in-process.
+// Whether an account is schema-seeded, or a shard of one (`platform:revenue#3`). True skips the
+// existence query; the row itself is created elsewhere (schema for bare ids, first-use insert for
+// shards). A typo like `platform:revenuee` falls through and gets a clean UNKNOWN_ACCOUNT.
 export function isSeededSystemAccount(account: AccountRef): boolean {
-  return SEEDED_SYSTEM_ACCOUNTS.has(account);
+  return (
+    SEEDED_SYSTEM_ACCOUNTS.has(account) ||
+    SEEDED_SYSTEM_ACCOUNTS.has(baseOf(account))
+  );
 }
 
 // --- Transient-conflict retry -----------------------------------------------------

@@ -12,7 +12,7 @@
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { convertCeil, requirePositiveCredit, toAmount } from '#src/money.ts';
-import { SYSTEM, spendable } from '#src/accounts.ts';
+import { SYSTEM, routePlatformLegs, spendable } from '#src/accounts.ts';
 import { assertKind } from '#src/operations/guards.ts';
 
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
@@ -55,13 +55,18 @@ export async function topUp(
 
   // The issuance posts first, so the returned transaction is the one the buyer cares about: their
   // credits going up. Its matching debit records against STORED_VALUE, the running count of credits
-  // in circulation.
+  // in circulation. Both postings' platform legs route to a shard by the idempotency key, the same
+  // key the lock set routed by, so the rows locked are the rows posted.
   let issuance = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
-    legs: [
-      debit(SYSTEM.STORED_VALUE, amount),
-      credit(spendable(operation.userId), amount),
-    ],
+    legs: routePlatformLegs(
+      [
+        debit(SYSTEM.STORED_VALUE, amount),
+        credit(spendable(operation.userId), amount),
+      ],
+      operation.idempotencyKey,
+      ctx.config.platformShards,
+    ),
     meta: { kind: 'topUp', source: operation.source },
   });
   // The cash posting credits the gross paid to USD_CLEARING and splits the debit into backing
@@ -74,7 +79,11 @@ export async function topUp(
   cashLegs.push(credit(SYSTEM.USD_CLEARING, grossUsd));
   await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
-    legs: cashLegs,
+    legs: routePlatformLegs(
+      cashLegs,
+      operation.idempotencyKey,
+      ctx.config.platformShards,
+    ),
     meta: { kind: 'topUp.cash', rateId: buy.rateId, parRateId: par.rateId },
   });
 

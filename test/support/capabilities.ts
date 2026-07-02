@@ -262,6 +262,8 @@ export function testConfig(): Config {
     // No maintenance window by default; the pause test supplies its own bounds via the config override.
     pauseStartMs: null,
     pauseEndMs: null,
+    // Unsharded platform accounts, the byte-identical default; sharding tests override this.
+    platformShards: 1,
   };
 }
 

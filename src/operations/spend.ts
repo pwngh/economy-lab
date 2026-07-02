@@ -19,6 +19,7 @@ import {
   isWalletAccount,
   ownerOf,
   promo,
+  routePlatformLegs,
   spendable,
 } from '#src/accounts.ts';
 import { maturedAtLeast } from '#src/maturity.ts';
@@ -115,7 +116,14 @@ export async function spend(
     });
   }
 
-  let legs = buildSpendLegs(operation, plan, ctx);
+  // Route the finished legs' platform accounts (PROMO_FLOAT and REVENUE, including the REVENUE
+  // credits the injected fee policy built) to a shard by the idempotency key, the same key the
+  // lock set routed by. Routing after the build is what spares the policy knowing about shards.
+  let legs = routePlatformLegs(
+    buildSpendLegs(operation, plan, ctx),
+    operation.idempotencyKey,
+    ctx.config.platformShards,
+  );
 
   // Flag age-restricted items on the posting metadata. This ledger doesn't block on age; the
   // external payments/identity provider checks identity and age. Recording the flag on the

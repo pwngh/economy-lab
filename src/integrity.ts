@@ -12,6 +12,7 @@
 import { proveChain } from '#src/chain.ts';
 import { toAmount } from '#src/money.ts';
 import {
+  baseOf,
   classify,
   currency,
   isDebitNormal,
@@ -53,6 +54,10 @@ type LedgerFold = {
   // Total credits the platform owes users and must hold real USD against.
   custodialCreditMinor: bigint;
 
+  // USD held in trust, summed over every TRUST_CASH shard row, since the logical account is the
+  // sum over its shards.
+  trustCashMinor: bigint;
+
   // True if any user account dropped below zero.
   anyUserNegative: boolean;
 
@@ -85,9 +90,8 @@ export async function proveEconomy(
     ctx.rates.par('CREDIT'),
   );
 
-  let trustCash = await store.ledger.balance(SYSTEM.TRUST_CASH, options);
   let shortfallMinor =
-    trustCash.minor < required ? required - trustCash.minor : 0n;
+    fold.trustCashMinor < required ? required - fold.trustCashMinor : 0n;
 
   // Check that no stored entry was altered. `proveChain` walks each account's entries in order.
   // It recomputes each hash, checks it against the stored hash, and confirms that each entry
@@ -123,6 +127,7 @@ async function foldLedger(
 ): Promise<LedgerFold> {
   let signedByCurrency = new Map<Currency, bigint>();
   let custodialCreditMinor = 0n;
+  let trustCashMinor = 0n;
   let anyUserNegative = false;
   let drift: Drift[] = [];
   // Tracks the accounts the `heads()` fold visited. The phantom-row pass below uses this to find
@@ -152,6 +157,11 @@ async function foldLedger(
     if (classify(account) === 'custodial' && currency(account) === 'CREDIT') {
       custodialCreditMinor += balance.minor;
     }
+    // Trust cash is one logical account split across shard rows, so the backing check compares
+    // required USD against the sum over every TRUST_CASH shard this pass visits, not one bare row.
+    if (baseOf(account) === SYSTEM.TRUST_CASH) {
+      trustCashMinor += balance.minor;
+    }
     if (isWalletAccount(account) && balance.minor < 0n) {
       anyUserNegative = true;
     }
@@ -169,7 +179,13 @@ async function foldLedger(
     let balance = await ledger.balance(account, options);
     pushIfDrifted(account, balance, 0n, drift);
   }
-  return { signedByCurrency, custodialCreditMinor, anyUserNegative, drift };
+  return {
+    signedByCurrency,
+    custodialCreditMinor,
+    trustCashMinor,
+    anyUserNegative,
+    drift,
+  };
 }
 
 // Folds one account's entries into the per-currency conservation totals and returns that

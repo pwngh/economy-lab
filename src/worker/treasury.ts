@@ -13,11 +13,12 @@ import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
 import { convertFloor, encodeAmount, toAmount } from '#src/money.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { maturedBalance } from '#src/maturity.ts';
-import { SYSTEM, classify, currency } from '#src/accounts.ts';
+import { SYSTEM, baseOf, classify, currency, shardsOf } from '#src/accounts.ts';
 
 import type { Amount } from '#src/money.ts';
+import type { AccountRef } from '#src/accounts.ts';
 import type { Transaction, WorkerCtx } from '#src/contract.ts';
-import type { Rate, Store, Unit } from '#src/ports.ts';
+import type { Leg, Rate, Store, Unit } from '#src/ports.ts';
 
 /**
  * Holds the result of one backing check. The fields report the USD required against users'
@@ -35,7 +36,7 @@ export type BackingPosition = {
   // and rounded down.
   required: Amount;
 
-  // USD held in trust right now (TRUST_CASH balance).
+  // USD held in trust right now: the TRUST_CASH balance, summed over its shard rows.
   trustCash: Amount;
 
   // USD short. This is `required - trustCash` when cash is underheld, otherwise zero.
@@ -146,23 +147,29 @@ async function measureBacking(
   ctx: WorkerCtx,
 ): Promise<BackingPosition> {
   let custodialCreditMinor = 0n;
+  let trustCashMinor = 0n;
   for await (let [account] of store.ledger.heads()) {
     if (classify(account) === 'custodial' && currency(account) === 'CREDIT') {
       let balance = await store.ledger.balance(account);
       custodialCreditMinor += balance.minor;
     }
+    // Trust cash is one logical account split across shard rows, so the held figure is the sum
+    // over every TRUST_CASH shard this pass visits, not one bare row.
+    if (baseOf(account) === SYSTEM.TRUST_CASH) {
+      let balance = await store.ledger.balance(account);
+      trustCashMinor += balance.minor;
+    }
   }
 
   let par = ctx.rates.par('CREDIT');
   let requiredMinor = requiredBackingMinor(custodialCreditMinor, par);
-  let trustCash = await store.ledger.balance(SYSTEM.TRUST_CASH);
   let shortfallMinor =
-    trustCash.minor < requiredMinor ? requiredMinor - trustCash.minor : 0n;
+    trustCashMinor < requiredMinor ? requiredMinor - trustCashMinor : 0n;
 
   return {
     custodialCredit: toAmount('CREDIT', custodialCreditMinor),
     required: toAmount('USD', requiredMinor),
-    trustCash,
+    trustCash: toAmount('USD', trustCashMinor),
     shortfall: toAmount('USD', shortfallMinor),
     backed: shortfallMinor === 0n,
   };
@@ -298,10 +305,13 @@ export async function sweepFees(
 
     // Lock every account the surplus check reads and the posting writes, so a concurrent
     // sweep, payout settle, or top-up can't move the liability or custody cash between the
-    // check and the post.
+    // check and the post. REVENUE locks shard by shard, since the drain below may debit any
+    // shard holding matured balance.
     await unit.ledger.lock(SYSTEM.TRUST_CASH);
     await unit.ledger.lock(SYSTEM.USD_CLEARING);
-    await unit.ledger.lock(SYSTEM.REVENUE);
+    for (let shard of shardsOf(SYSTEM.REVENUE, ctx.config.platformShards)) {
+      await unit.ledger.lock(shard);
+    }
     await unit.ledger.lock(SYSTEM.STORED_VALUE);
 
     assertWithinSweepable(amount, await sweepableCredit(store, ctx, unit));
@@ -311,10 +321,13 @@ export async function sweepFees(
     let rate = ctx.rates.par('CREDIT');
     let usd = convertFloor(amount, rate, 'USD');
 
+    // The drain debits per REVENUE shard, since each shard holds only its own matured balance.
+    // The offsetting STORED_VALUE credit and the cash posting below stay on the bare rows: the
+    // sweep runs at worker cadence, so those rows see no contention worth spreading.
     let transaction = await postEntry(unit.ledger, {
       txnId: ctx.ids.next('txn'),
       legs: [
-        debit(SYSTEM.REVENUE, amount),
+        ...(await revenueDrainLegs(ctx, unit, amount)),
         credit(SYSTEM.STORED_VALUE, amount),
       ],
       meta: {
@@ -416,24 +429,61 @@ export async function realizeFees(
 
 // Returns the most credits realizable this run, the smaller of two ceilings. The first is the
 // cash surplus, the cash held beyond what is owed to users, converted to CREDIT at par so both
-// ceilings share units. The second is the revenue whose refund windows have closed. Taking the
-// smaller keeps a fee on a still-refundable sale off-limits until that sale can't be undone.
+// ceilings share units. The second is the revenue whose refund windows have closed, summed over
+// the REVENUE shards so fees accrued on any shard count. Taking the smaller keeps a fee on a
+// still-refundable sale off-limits until that sale can't be undone.
 async function sweepableCredit(
   store: Store,
   ctx: WorkerCtx,
   unit: Unit,
 ): Promise<bigint> {
   let surplus = await surplusCredit(store, ctx, unit);
-  let settled = await maturedBalance(
-    unit.ledger,
-    SYSTEM.REVENUE,
-    ctx.clock.now(),
-    {
-      config: ctx.config,
-    },
-  );
-  let ceiling = surplus < settled.minor ? surplus : settled.minor;
+  let settledMinor = 0n;
+  for (let { maturedMinor } of await maturedRevenueByShard(ctx, unit)) {
+    settledMinor += maturedMinor;
+  }
+  let ceiling = surplus < settledMinor ? surplus : settledMinor;
   return ceiling < 0n ? 0n : ceiling;
+}
+
+// The matured balance of each REVENUE shard, in shard order. sweepableCredit caps the draw by the
+// sum of these figures, and revenueDrainLegs debits shard by shard from the same per-shard reads,
+// so the cap and the drain agree on where the matured revenue sits.
+async function maturedRevenueByShard(
+  ctx: WorkerCtx,
+  unit: Unit,
+): Promise<Array<{ shard: AccountRef; maturedMinor: bigint }>> {
+  let byShard: Array<{ shard: AccountRef; maturedMinor: bigint }> = [];
+  for (let shard of shardsOf(SYSTEM.REVENUE, ctx.config.platformShards)) {
+    let matured = await maturedBalance(unit.ledger, shard, ctx.clock.now(), {
+      config: ctx.config,
+    });
+    byShard.push({ shard, maturedMinor: matured.minor });
+  }
+  return byShard;
+}
+
+// Splits the sweep's debit across the REVENUE shards: each gives min(its matured, still needed)
+// until the draw is covered. The draw was capped at the same per-shard sum and matured balances
+// only grow, so the legs always cover it. At one shard this is the old single debit.
+async function revenueDrainLegs(
+  ctx: WorkerCtx,
+  unit: Unit,
+  amount: Amount,
+): Promise<Leg[]> {
+  let legs: Leg[] = [];
+  let remaining = amount.minor;
+  for (let { shard, maturedMinor } of await maturedRevenueByShard(ctx, unit)) {
+    if (remaining === 0n) {
+      break;
+    }
+    let take = maturedMinor < remaining ? maturedMinor : remaining;
+    if (take > 0n) {
+      legs.push(debit(shard, toAmount(amount.currency, take)));
+      remaining -= take;
+    }
+  }
+  return legs;
 }
 
 // Returns the platform surplus in CREDIT: trust cash converted to CREDIT at par, minus what is owed
@@ -446,15 +496,20 @@ async function surplusCredit(
   unit: Unit,
 ): Promise<bigint> {
   let custodialCreditMinor = 0n;
+  let trustCashMinor = 0n;
   for await (let [account] of store.ledger.heads()) {
     if (classify(account) === 'custodial' && currency(account) === 'CREDIT') {
       let balance = await unit.ledger.balance(account);
       custodialCreditMinor += balance.minor;
     }
+    // The same logical-sum read as measureBacking: trust cash is the sum over its shard rows.
+    if (baseOf(account) === SYSTEM.TRUST_CASH) {
+      let balance = await unit.ledger.balance(account);
+      trustCashMinor += balance.minor;
+    }
   }
   let par = ctx.rates.par('CREDIT');
-  let trustCash = await unit.ledger.balance(SYSTEM.TRUST_CASH);
-  let trustInCredit = usdToCredit(trustCash.minor, par);
+  let trustInCredit = usdToCredit(trustCashMinor, par);
   return trustInCredit - custodialCreditMinor;
 }
 
