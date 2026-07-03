@@ -68,6 +68,7 @@ import type {
   Range,
   ReplayStore,
   Saga,
+  SagaState,
   SaleStore,
   Sale,
   SagaStore,
@@ -1014,36 +1015,8 @@ function createSagaStore(exec: MysqlExecutor): SagaStore {
       );
       return result.map(rowToSaga);
     },
-    advance: async (id, from, to, patch) => {
-      // MySQL has no partial-UPDATE coalesce (postgres twin does), so this read-modify-writes the whole row:
-      // a non-terminal advance re-writes payout_usd/reason from the loaded row, never disturbing them.
-      const next = {
-        ...(await loadSagaOrThrow(exec, id)),
-        ...patch,
-        state: to,
-      };
-      const affected = await execWrite(
-        exec,
-        `UPDATE payout_sagas SET
-           reserve = ?, rate_id = ?, state = ?, provider_ref = ?,
-           attempts = ?, due_at = ?, updated_at = ?, payout_usd = ?, reason = ?
-         WHERE id = ? AND state = ?`,
-        [
-          next.reserve.minor.toString(),
-          next.rateId,
-          to,
-          next.providerRef,
-          next.attempts,
-          next.dueAt,
-          next.updatedAt,
-          next.payoutUsd === null ? null : next.payoutUsd.minor.toString(),
-          next.reason,
-          id,
-          from,
-        ],
-      );
-      return affected > 0;
-    },
+    advance: (id, from, to, patch) =>
+      advanceSaga(exec, { id, from, to, patch }),
     deadLetter: async (id, reason) => {
       await rows(
         exec,
@@ -1053,6 +1026,44 @@ function createSagaStore(exec: MysqlExecutor): SagaStore {
     },
     lastPayoutAt: (userId) => lastPayoutOf(exec, userId),
   };
+}
+
+// The compare-and-set state change behind SagaStore.advance: the UPDATE takes effect only if the
+// saga is still in the state the caller expected (WHERE state = `from`), and a zero-row result
+// tells the caller it lost the race. MySQL has no partial-UPDATE coalesce (the postgres twin
+// does), so this read-modify-writes the whole row: a non-terminal advance re-writes
+// payout_usd/reason from the loaded row, never disturbing them.
+async function advanceSaga(
+  exec: MysqlExecutor,
+  input: { id: string; from: SagaState; to: SagaState; patch: Partial<Saga> },
+): Promise<boolean> {
+  const { id, from, to, patch } = input;
+  const next = {
+    ...(await loadSagaOrThrow(exec, id)),
+    ...patch,
+    state: to,
+  };
+  const affected = await execWrite(
+    exec,
+    `UPDATE payout_sagas SET
+       reserve = ?, rate_id = ?, state = ?, provider_ref = ?,
+       attempts = ?, due_at = ?, updated_at = ?, payout_usd = ?, reason = ?
+     WHERE id = ? AND state = ?`,
+    [
+      next.reserve.minor.toString(),
+      next.rateId,
+      to,
+      next.providerRef,
+      next.attempts,
+      next.dueAt,
+      next.updatedAt,
+      next.payoutUsd === null ? null : next.payoutUsd.minor.toString(),
+      next.reason,
+      id,
+      from,
+    ],
+  );
+  return affected > 0;
 }
 
 // MAX over no rows yields NULL, so a user with no sagas reads back null and their first request passes.
