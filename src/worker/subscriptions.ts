@@ -144,6 +144,13 @@ async function deadLetter(args: {
   // given-up subscription doesn't leave the buyer holding an unbilled perk. Recorded under
   // `deadLettered`, not `lapsed`.
   await lapseAtomically(store, ctx, sub);
+  // A permanently parked renewal is a lost revenue stream. Log at error like the other workers'
+  // dead-letters, so it is visible without unpacking the sweep summary.
+  ctx.logger.log('error', 'worker.subscriptions.dead_lettered', {
+    subscriptionId: sub.id,
+    userId: sub.userId,
+    reason,
+  });
   tally.deadLettered.push({ id: sub.id, reason });
 }
 
@@ -157,6 +164,12 @@ async function lapse(
   tally: SweepTally,
 ): Promise<void> {
   await lapseAtomically(store, ctx, sub);
+  // A lapse is an expected business outcome (the buyer couldn't cover the renewal), so it logs at
+  // warn rather than error.
+  ctx.logger.log('warn', 'worker.subscriptions.lapsed', {
+    subscriptionId: sub.id,
+    userId: sub.userId,
+  });
   tally.lapsed.push(sub.id);
 }
 

@@ -177,6 +177,14 @@ async function deadLetter(
       attempts: 0,
       reason: null,
     });
+    // A force-failed payout is money-significant: the seller's cash-out was abandoned and the
+    // reserve returned. Log at error like the inbox/outbox dead-letters, so an operator tailing
+    // logs sees it without unpacking the sweep summary.
+    ctx.logger.log('error', 'worker.payouts.dead_lettered', {
+      sagaId: saga.id,
+      userId: saga.userId,
+      reason,
+    });
     return true;
   });
 }
