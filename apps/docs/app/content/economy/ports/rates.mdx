@@ -1,14 +1,15 @@
 ---
 title: 'Rates'
-summary: 'The rates port supplying the fixed CREDIT↔USD buy, par, and payout rates.'
+summary: 'The rates port supplying the fixed CREDIT-to-USD buy, par, and payout rates.'
 order: 30
 status: stable
 sourceRefs:
-  - 'src/ports.ts#L154-L172 · Rates'
-  - 'src/ports.ts#L182 · Rate'
-  - 'src/adapters/rates.ts#L56-L100 · configuredRates'
-related:
-  - economy/ports/pricing
+  [
+    'src/ports.ts#L154-L172 · Rates',
+    'src/ports.ts#L182 · Rate',
+    'src/adapters/rates.ts#L56-L100 · configuredRates',
+  ]
+related: ['economy/ports/pricing']
 ---
 
 ## The seam
@@ -42,7 +43,7 @@ A `Rate` is three integers, not a float: `{ rate, scale, rateId }`, where the mu
 The default adapter is `configuredRates` in `src/adapters/rates.ts`. You hand it a `RatesConfig` (six integers, a `rate` and a `scale` for each of the three rates) and it returns a `Rates` instance that serves them back.
 
 ```ts
-let rates = configuredRates({
+const rates = configuredRates({
   buyRate: 8333n,
   buyScale: 6, // buy ~120 credits/USD ($0.00833)
   parRate: 5n,

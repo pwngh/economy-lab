@@ -8,8 +8,6 @@ sourceRefs:
 related: ['economy/reference/configuration']
 ---
 
-## Spend
-
 `spend` runs a marketplace purchase. It charges the buyer and pays the sellers as one balanced [double-entry posting](/economy/concepts/accounts-and-double-entry/).
 
 The same transaction also records a sale under `orderId` and grants the buyer the `sku`.
@@ -17,7 +15,7 @@ The same transaction also records a sale under `orderId` and grants the buyer th
 A purchase with a single seller taking the whole price looks like this:
 
 ```ts
-let outcome = await economy.submit({
+const outcome = await economy.submit({
   kind: 'spend',
   idempotencyKey: 'idem_0',
   actor: { kind: 'user', userId: 'usr_buyer' },
@@ -27,7 +25,7 @@ let outcome = await economy.submit({
   price: toAmount('CREDIT', 400n),
   recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
 });
-// → outcome.status === "committed"
+// → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
 The buyer's `promo` balance is drawn first, then `spendable`. The seller is credited to their `earned` balance, and the platform keeps its fee.
@@ -43,20 +41,19 @@ recipients: [
 
 ## Parameters
 
-Every field of the `spend` payload. Each type links to its canonical page:
+The payload fields, beyond the `kind` tag, are:
 
-| Field            | Type                                                   | Default   | Description                                                                               |
-| ---------------- | ------------------------------------------------------ | --------- | ----------------------------------------------------------------------------------------- |
-| `kind`           | `"spend"`                                              |           | Selects this operation.                                                                   |
-| `idempotencyKey` | `string`                                               |           | Makes a retried request run at most once. A repeat with the same key returns `duplicate`. |
-| `actor`          | [`Actor`](/economy/concepts/actors-and-authorization/) |           | Who is asking. A `user` actor must be the buyer.                                          |
-| `orderId`        | `string`                                               |           | The unique key for this purchase. A refund looks the sale up by it.                       |
-| `buyerId`        | `string`                                               |           | The user who pays.                                                                        |
-| `sku`            | `string`                                               |           | The item granted on success.                                                              |
-| `price`          | [`Amount`](/economy/concepts/money-model/)             |           | The total charge. Must be positive and in `CREDIT`.                                       |
-| `recipients`     | [`Recipient[]`](/economy/ports/pricing/)               | `[]`      | Sellers and their shares in bps. An empty list means the platform keeps the whole net.    |
-| `ageRestricted`  | `boolean`                                              | `false`   | Tags the posting for audit. The core does not block on age.                               |
-| `giftTo`         | `string`                                               | `buyerId` | Grants the `sku` to this user instead of the buyer. The buyer still pays.                 |
+| Field            | Type                                                        | Default    | Description                                                                                                       |
+| ---------------- | ----------------------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------- |
+| `idempotencyKey` | `string`                                                    | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/idempotency/).          |
+| `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/)  | (required) | Who is asking. A `user` actor must be the buyer.                                                                  |
+| `orderId`        | `string`                                                    | (required) | The unique key for this purchase. A refund looks the sale up by it.                                               |
+| `buyerId`        | `string`                                                    | (required) | The user who pays.                                                                                                |
+| `sku`            | `string`                                                    | (required) | The item granted on success.                                                                                      |
+| `price`          | [`Amount`](/economy/concepts/money-model/)                  | (required) | The total charge. Must be positive and in `CREDIT`.                                                               |
+| `recipients`     | [`Recipient[]`](/economy/ports/pricing/)                    | `[]`       | Sellers and their shares in bps. An empty list means the platform keeps the whole net.                            |
+| `ageRestricted`  | `boolean`                                                   | `false`    | Tags the posting for audit. The core does not block on age.                                                       |
+| `giftTo`         | `string`                                                    | `buyerId`  | Grants the `sku` to this user instead of the buyer. The buyer still pays.                                         |
 
 Each `Recipient` is `{ sellerId: string; shareBps: number }`. A `shareBps` must be `> 0` and `≤ 10_000`, and the shares must sum to exactly `10_000`.
 
@@ -64,7 +61,9 @@ Each `Recipient` is `{ sellerId: string; shareBps: number }`. A `shareBps` must 
 
 `spend` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
-On success it returns `committed` with the posted `Transaction`. A well-formed request that can't proceed returns `rejected` with a `RejectionCode`. A retry under the same `idempotencyKey` returns `duplicate`.
+- `committed`: on success, with the posted `Transaction`.
+- `duplicate`: a retry under the same `idempotencyKey`.
+- `rejected`: a well-formed request that can't proceed, with a `RejectionCode`.
 
 ## Postings
 
@@ -72,20 +71,20 @@ On success it returns `committed` with the posted `Transaction`. A well-formed r
 
 The `spendable`-funded part debits the buyer and lets the [pricing policy](/economy/ports/pricing/) split the credit across sellers and the house:
 
-| Account              | Side   | Amount                                       |
-| -------------------- | ------ | -------------------------------------------- |
-| `spendable(buyerId)` | debit  | the `spendable` part of the price            |
-| `earned(sellerId)`   | credit | each seller's share of the net               |
-| `SYSTEM.REVENUE`     | credit | the platform fee, plus any rounding leftover |
+| Account              | Side   | Amount                      |
+| -------------------- | ------ | --------------------------- |
+| `spendable(buyerId)` | debit  | `spendable part`            |
+| `earned(sellerId)`   | credit | `seller's share of the net` |
+| `SYSTEM.REVENUE`     | credit | `fee + rounding leftover`   |
 
 The `promo`-funded part spends down the buyer's marketing grant and funds the sellers from house revenue, since a promo grant is not money the buyer paid:
 
-| Account              | Side   | Amount                                  |
-| -------------------- | ------ | --------------------------------------- |
-| `promo(buyerId)`     | debit  | the `promo` part of the price           |
-| `SYSTEM.PROMO_FLOAT` | credit | the same `promo` part                   |
-| `SYSTEM.REVENUE`     | debit  | the total paid out to sellers           |
-| `earned(sellerId)`   | credit | each seller's share of the `promo` part |
+| Account              | Side   | Amount                             |
+| -------------------- | ------ | ---------------------------------- |
+| `promo(buyerId)`     | debit  | `promo part`                       |
+| `SYSTEM.PROMO_FLOAT` | credit | `promo part`                       |
+| `SYSTEM.REVENUE`     | debit  | `total paid to sellers`            |
+| `earned(sellerId)`   | credit | `seller's share of the promo part` |
 
 <Callout type="note">
   Only the `spendable`-funded part carries the platform fee. The `promo`-funded
@@ -111,14 +110,17 @@ A well-formed `spend` on a healthy system can be declined for these reasons, eac
 | `RISK_DENIED`        | The purchase would push the buyer past their recent-spending [velocity limit](/economy/concepts/spend-velocity/).                     |
 | `ECONOMY_PAUSED`     | A maintenance window is in effect, so an end user's purchase is declined. The decline carries `resumesAt`.                            |
 
-A structurally invalid request is different: it's a fault, thrown rather than returned as a `rejected` `Outcome`. A request is malformed when any of these hold:
+A malformed request throws instead:
 
-- The `price` is non-positive or not in `CREDIT`.
-- The `sku`, `orderId`, or `giftTo` is blank.
-- The recipient shares don't sum to `10_000`.
-- Two recipients name the same `sellerId`.
-- A recipient names a house account rather than a user wallet.
-- A recipient equals the `buyerId` (self-dealing).
+| Code                   | When                                                         |
+| ---------------------- | ------------------------------------------------------------ |
+| `MONEY.INVALID_AMOUNT` | The `price` is non-positive.                                 |
+| `OP.MALFORMED`         | The `price` is not in `CREDIT`.                              |
+| `OP.MALFORMED`         | The `sku`, `orderId`, or `giftTo` is blank.                  |
+| `OP.MALFORMED`         | The recipient shares don't sum to `10_000`.                  |
+| `OP.MALFORMED`         | Two recipients name the same `sellerId`.                     |
+| `OP.MALFORMED`         | A recipient names a house account rather than a user wallet. |
+| `OP.MALFORMED`         | A recipient equals the `buyerId` (self-dealing).             |
 
 ## Preconditions and invariants
 

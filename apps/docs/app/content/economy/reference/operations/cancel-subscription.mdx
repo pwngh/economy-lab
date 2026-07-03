@@ -1,6 +1,6 @@
 ---
 title: 'Cancel subscription'
-summary: 'Cancel an active subscription.'
+summary: 'Stop a subscription renewing: the paid period runs out, nothing more is billed, and nothing is refunded.'
 order: 90
 status: stable
 sourceRefs:
@@ -16,8 +16,6 @@ related:
   ]
 ---
 
-## Cancel subscription
-
 `cancelSubscription` marks an active [`Subscription`](/economy/concepts/lifecycles/) `CANCELED`,
 so the [background worker's](/economy/reference/background-worker/) renewal sweep stops billing
 it. It moves no money.
@@ -25,13 +23,13 @@ it. It moves no money.
 You submit it with just the subscription id:
 
 ```ts
-let outcome = await economy.submit({
+const outcome = await economy.submit({
   kind: 'cancelSubscription',
   idempotencyKey: 'idem_1',
   actor: { kind: 'user', userId: 'usr_a' },
   subscriptionId: 'sub_abc',
 });
-// outcome.status === "committed"
+// → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
 Canceling forfeits the rest of the period already paid for. There is no refund, so
@@ -39,24 +37,24 @@ there is nothing to post to the ledger.
 
 ## Parameters
 
-Every field below is required; `cancelSubscription` carries no optional payload.
+The payload fields, beyond the `kind` tag, are:
 
-| Field                                            | Type                                                       | Default    | Description                               |
-| ------------------------------------------------ | ---------------------------------------------------------- | ---------- | ----------------------------------------- |
-| [`idempotencyKey`](/economy/concepts/integrity/) | `string`                                                   | (required) | Makes a retried request run at most once. |
-| `actor`                                          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking.                            |
-| `subscriptionId`                                 | `string`                                                   | (required) | The subscription to cancel. Non-blank.    |
+| Field            | Type                                                       | Default    | Description                                                                                                                             |
+| ---------------- | ---------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `idempotencyKey` | `string`                                                   | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/idempotency/).                                 |
+| `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. A `user` actor may cancel only their own subscription; a `system` or `operator` actor may cancel anyone's.                |
+| `subscriptionId` | `string`                                                   | (required) | The subscription to cancel. Non-blank.                                                                                                   |
 
 ## Returns
 
-`cancelSubscription` returns an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
+`cancelSubscription` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
-On success the status is `committed`. The outcome carries a placeholder
-[`Transaction`](/economy/concepts/accounts-and-double-entry/) with empty legs, because the
-cancel only flips the subscription's state and records no money moving.
-
-A repeat of the same `idempotencyKey` returns `duplicate`. A subscription that is missing or
-already `CANCELED` returns `rejected` with `UNKNOWN_SUBSCRIPTION`. See [Reason codes](#reason-codes).
+- `committed`: the cancel succeeded. The outcome carries a placeholder
+  [`Transaction`](/economy/concepts/accounts-and-double-entry/) with empty legs, because the
+  cancel only flips the subscription's state and records no money moving.
+- `duplicate`: a repeat of the same `idempotencyKey`.
+- `rejected`: the subscription is missing or already `CANCELED`, with
+  `UNKNOWN_SUBSCRIPTION`. See [Reason codes](#reason-codes).
 
 ## Postings
 
@@ -82,7 +80,7 @@ not a privileged-only operation.
 
 ## Reason codes
 
-`cancelSubscription` returns one [`RejectionCode`](/economy/reference/outcomes-and-reason-codes/)
+`cancelSubscription` returns these [reason codes](/economy/reference/outcomes-and-reason-codes/)
 as a `rejected` outcome, a normal "no", not a thrown fault:
 
 | Code                   | When                                                                                          |
@@ -90,9 +88,12 @@ as a `rejected` outcome, a normal "no", not a thrown fault:
 | `UNKNOWN_SUBSCRIPTION` | No subscription matches the id, or it is already `CANCELED`.                                  |
 | `ECONOMY_PAUSED`       | A maintenance window is in effect and the actor is a `user`. The decline carries `resumesAt`. |
 
-A blank or whitespace-only `subscriptionId` throws `OP.MALFORMED` instead. That is malformed
-client input, caught before the store is touched. A `user` actor canceling a subscription they
-do not own throws `AUTH.UNAUTHORIZED`.
+A malformed request throws instead:
+
+| Code                | When                                                                                             |
+| ------------------- | ------------------------------------------------------------------------------------------------ |
+| `OP.MALFORMED`      | A blank or whitespace-only `subscriptionId`. Malformed client input, caught before the store is touched. |
+| `AUTH.UNAUTHORIZED` | A `user` actor cancels a subscription they do not own.                                            |
 
 ## Preconditions and invariants
 

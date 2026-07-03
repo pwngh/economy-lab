@@ -23,7 +23,7 @@ The `Signer` port is that seam. The core never holds a key or picks an algorithm
 
 ## The interface
 
-The port is two methods, both working on raw bytes (see <SourceLink to="src/ports.ts#L86-L92">source</SourceLink>):
+The port is two methods, both working on raw bytes (see <SourceLink to="src/ports.ts#L81-L85">source</SourceLink>):
 
 ```ts
 interface Signer {
@@ -48,7 +48,7 @@ The reference adapter is <SourceLink to="src/runtime.ts#L133-L170">systemSigner<
 You construct it with a current signing key and an optional list of prior keys:
 
 ```ts
-let signer = systemSigner({
+const signer = systemSigner({
   signingKey: hexSecret,
   priorKeys: [previousHexSecret],
 });
@@ -70,7 +70,7 @@ To publish the verification key, `signingPublicKeyHex` derives the hex-encoded E
 The interface has no rotation call. You rotate by moving the current secret into `priorKeys` and setting a fresh `signingKey`:
 
 ```ts
-let signer = systemSigner({
+const signer = systemSigner({
   signingKey: newHexSecret,
   priorKeys: [oldHexSecret],
 });

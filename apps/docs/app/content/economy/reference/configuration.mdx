@@ -31,15 +31,15 @@ That single read also means defaults live in one file. Every tunable below is pa
 rather than leaving the config half-applied. These are the same defaults the operation and
 [background-worker](/economy/reference/background-worker/) pages cite.
 
-A handful of variables (the signing secrets, the CREDIT↔USD rates, the payout provider, and
+A handful of variables (the signing secrets, the CREDIT-to-USD rates, the payout provider, and
 the infrastructure URLs) are read _outside_ `loadConfig`, when the edge wires up the
 [`Economy`](/economy/reference/the-economy/) and its ports. Those are grouped separately at
 the end, because they pick adapters rather than tune policy.
 
 <Callout type="note">
-  `.env.example` ships variable names only, never values. Copy it to `.env` and
-  fill it in. `.gitignore` excludes every `.env*` file so a real secret never
-  lands in the repo.
+  `.env.example` ships variable names and commented example values only, never
+  real secrets. Copy it to `.env` and fill it in. `.gitignore` excludes every
+  `.env*` file so a real secret never lands in the repo.
 </Callout>
 
 ## Required secrets
@@ -162,7 +162,7 @@ message if any rate or the provider URL is missing or malformed, so a prod proce
 on the 1:1 dev rate or an auto-approve payout stub. Outside production these fall back to dev
 stubs, and a local run needs none of them.
 
-The six rate variables configure the fixed-point CREDIT↔USD conversions for the
+The six rate variables configure the fixed-point CREDIT-to-USD conversions for the
 [rates port](/economy/ports/rates/): `usd_minor = floor(credit_minor × rate / 10^scale)`. The
 gap between `buy` and `par` is the platform [spread](/economy/concepts/money-model/).
 

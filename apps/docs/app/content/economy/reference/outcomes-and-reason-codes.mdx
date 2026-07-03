@@ -4,12 +4,12 @@ summary: 'How a submission resolves (committed, duplicate, or rejected) and the 
 order: 20
 status: stable
 sourceRefs:
-  - 'src/contract.ts#L216 · Outcome'
-  - 'src/errors.ts#L26 · RejectionCode'
-  - 'src/errors.ts#L64 · ERROR_CODES'
-related:
-  - economy/reference/the-economy
-  - economy/reference/configuration
+  [
+    'src/contract.ts#L216 · Outcome',
+    'src/errors.ts#L26 · RejectionCode',
+    'src/errors.ts#L64 · ERROR_CODES',
+  ]
+related: ['economy/reference/the-economy', 'economy/reference/configuration']
 ---
 
 ## The shape of an answer
@@ -53,7 +53,7 @@ each touched account's hash chain advanced: the per-account integrity trail desc
 
 A `duplicate` outcome means you submitted an operation whose `idempotencyKey` matched one already
 processed, so the economy returned the earlier result instead of running it again. This is the
-visible side of [idempotency](/economy/concepts/integrity/): a retried request runs at most once.
+visible side of [idempotency](/economy/concepts/idempotency/): a retried request runs at most once.
 
 It carries the same `Transaction` the original commit did, so a `duplicate` counts as success.
 A network retry, a double-clicked button, or an at-least-once delivery queue all land here,

@@ -98,7 +98,7 @@ This lets a UI render a maintenance banner directly, instead of inferring the pa
 
 ## Streaming the whole board
 
-The three readers above resolve one record. These three stream every record of a kind, newest first, one at a time, because a real ledger or a busy economy can hold far more than you'd want to collect into one array. Each returns an `AsyncIterable`, so you iterate with `for await` and stop whenever you've seen enough.
+The readers above resolve a single answer. These three stream every record of a kind, newest first, one at a time, because a real ledger or a busy economy can hold far more than you'd want to collect into one array. Each returns an `AsyncIterable`, so you iterate with `for await` and stop whenever you've seen enough.
 
 `read.accounts()` streams every account that has a balance row. It's the prover's own enumeration, exposed so a reader can list accounts (and derive the users behind them) without tracking minted ids itself:
 

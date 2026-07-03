@@ -23,12 +23,12 @@ make bench   # in-memory, plus any Postgres/MySQL that's reachable
 
 The bench prints two tables.
 
-- **Submit throughput** — sequential `submit()` rate for `topUp`, `spend`, and `requestPayout`, one row per backend (in-memory, plus Postgres and MySQL when they're up). This is the engine cost of the double-entry and hash-chain work per operation.
+- **Submit throughput** — `submit()` rate for `topUp`, `spend`, and `requestPayout`, per backend (in-memory, plus Postgres and MySQL when they're up), measured both sequentially (one op at a time, latency-bound) and concurrently (up to `BENCH_CONCURRENCY` in flight — the throughput the engine sustains). This is the engine cost of the double-entry and hash-chain work per operation.
 - **Integrity cost versus ledger size** — for a growing number of postings, the time to [prove](/economy/concepts/the-proof/) the ledger, to seal a [checkpoint](/economy/concepts/integrity/), and to verify the latest checkpoint.
 
 ## How to read the numbers
 
-These are **lab numbers**, and the bench says so in its own header. It runs in a single process, submits sequentially with no pipelining, and neutralizes the policy gates through `BASE_ENV` — maturity horizon, [velocity](/economy/concepts/spend-velocity/) limit, and the payout interval are all turned off so the timings reflect ledger work, not rejections.
+These are **lab numbers**, and the bench says so in its own header. It runs in a single process and, by default, neutralizes the policy gates (`BENCH_GATES=off`) — maturity horizon, [velocity](/economy/concepts/spend-velocity/) limit, and the payout interval are all turned off so the timings reflect ledger work, not rejections. The sequential number is not the engine's ceiling; the concurrent sample is the throughput signal.
 
 <Callout type="warning">
   Read these as *relative cost and scaling shape*, not as a capacity figure. A
@@ -74,7 +74,7 @@ One thing the proofs can't cover alone: they catch tampering relative to the che
 
 ## Running it against a backend
 
-In-memory runs with no setup. For the SQL rows, apply the schema first (`make db-migrate`) and bring the databases up; the bench skips any backend it can't reach. A heavier sample raises the op count:
+In-memory runs with no setup. For the SQL rows, apply the schema first (`make db-migrate`) and bring the databases up; the bench picks its targets from `BENCH_POSTGRES_URL` / `BENCH_MYSQL_URL` (falling back to `DATABASE_URL` / `MYSQL_TEST_URL`) and skips any backend it can't reach. `make bench-prod` runs the same bench inside a Linux container against the compose databases, so commits pay a production-parity fsync. A heavier sample raises the op count:
 
 ```bash
 BENCH_OPS=5000 make bench

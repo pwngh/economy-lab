@@ -12,14 +12,12 @@ related:
   ['economy/reference/operations/top-up', 'economy/reference/configuration']
 ---
 
-## Grant promo
-
 `grantPromo` drops marketing credit into a user's [`promo`](/economy/concepts/accounts-and-double-entry/) balance with an expiry date. A campaign can hand out credit that reverts to the platform if it goes unspent.
 
 Here a marketing service grants a user 500 credits that expire 24 hours from now:
 
 ```ts
-let outcome = await economy.submit({
+const outcome = await economy.submit({
   kind: 'grantPromo',
   idempotencyKey: 'promo_2026_06_27_usr_buyer',
   actor: { kind: 'system', service: 'marketing' },
@@ -27,18 +25,18 @@ let outcome = await economy.submit({
   amount: toAmount('CREDIT', 500n),
   expiresAt: Date.now() + 86_400_000,
 });
-// outcome.status === "committed"
+// → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
 The grant lands immediately. Promo credit carries no maturity hold, and a buyer's `promo` balance is drawn before their own money on the next [`spend`](/economy/reference/operations/spend/).
 
 ## Parameters
 
-Every field is required. `grantPromo` takes no optional payload.
+The payload fields, beyond the `kind` tag, are:
 
 | Field            | Type                                                       | Default    | Description                                                                                                                                   |
 | ---------------- | ---------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `idempotencyKey` | `string`                                                   | (required) | A retried request with the same key runs at most once and returns the original `Outcome`.                                                     |
+| `idempotencyKey` | `string`                                                   | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/idempotency/).                                     |
 | `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be a `system` or `operator` principal.                                                                                    |
 | `userId`         | `string`                                                   | (required) | The user whose `promo` balance the grant raises.                                                                                              |
 | `amount`         | [`Amount`](/economy/concepts/money-model/)                 | (required) | How much credit to grant. Must be `CREDIT` and positive.                                                                                      |
@@ -46,20 +44,21 @@ Every field is required. `grantPromo` takes no optional payload.
 
 ## Returns
 
-`grantPromo` returns an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
+`grantPromo` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
-On success the status is `committed`, carrying the posted `transaction`. A repeat of the same `idempotencyKey` returns `duplicate` with the original transaction. The repeat moves no new money.
+- `committed`: the success status, carrying the posted `transaction`.
+- `duplicate`: a repeat of the same `idempotencyKey` returns the original transaction. The repeat moves no new money.
 
-`grantPromo` returns no `rejected` outcome, see [Reason codes](#reason-codes) below.
+`grantPromo` returns no `rejected` outcome. A malformed request throws instead; see [reason codes](#reason-codes).
 
 ## Postings
 
 The grant posts one entry with two legs: it raises the user's `promo` balance and books the offset on the platform's `PROMO_FLOAT` account.
 
-| Leg | Account                  | Direction |
-| --- | ------------------------ | --------- |
-| 1   | `PROMO_FLOAT` (platform) | debit     |
-| 2   | `promo(userId)`          | credit    |
+| Account              | Side   | Amount   |
+| -------------------- | ------ | -------- |
+| `SYSTEM.PROMO_FLOAT` | debit  | `amount` |
+| `promo(userId)`      | credit | `amount` |
 
 `PROMO_FLOAT` is debit-normal, so debiting it raises its balance to mirror the credit added to the user's `promo` account.
 
@@ -80,7 +79,7 @@ An end-user principal is refused. The operation mints credit into an arbitrary u
 
 ## Reason codes
 
-`grantPromo` returns no [`RejectionCode`](/economy/reference/outcomes-and-reason-codes/).
+`grantPromo` returns no reason codes: it has no `rejected` path. It fails only by throwing.
 
 It declines no well-formed request. There is no affordability check to fail. The maintenance-window pause gate applies only to `user` principals, which can never call this privileged operation. So every failure path is a thrown fault, not a `rejected` outcome.
 

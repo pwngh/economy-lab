@@ -21,8 +21,8 @@ The wrapper is <SourceLink to="src/server.ts#L83">createServer</SourceLink>. It 
 ```ts
 import { createServer } from '#src/server.ts';
 
-let handler = createServer(economy);
-let response = await handler(request); // Request → Response
+const handler = createServer(economy);
+const response = await handler(request); // Request → Response
 ```
 
 It uses only Fetch globals (`Request`, `Response`, `URL`, `crypto.subtle`) and no Node APIs. So the same handler runs on Node, Bun, Deno, and Cloudflare Workers. The wiring in `scripts/main.ts` (covered below) is what bridges it onto a concrete runtime.
@@ -112,7 +112,7 @@ When you pass a `Config` with a webhook secret, the server gates every callback 
 2. **Freshness.** The `x-timestamp` header must be finite and within `config.replayWindowMs` of the clock. A stale or missing timestamp is answered `200` with `{ "status": "duplicate" }`, not a `5xx` that would invite a retry storm.
 3. **Replay.** When you also wire a `ReplayStore`, the server claims the provider's `eventId` last, after signature and freshness. A repeat `eventId` is answered `200` and the handler never runs, so its work happens once. Claiming last means a forged or stale delivery can never burn a real `eventId` and block a later genuine one.
 
-This is the request-path half of [idempotency](/economy/concepts/integrity/): the replay store drops most redeliveries here, at the edge, before they reach the handler.
+This is the request-path half of [idempotency](/economy/concepts/idempotency/): the replay store drops most redeliveries here, at the edge, before they reach the handler.
 
 <Callout type="note">
   The raw body is read exactly once. Verification, the replay decode, and the
@@ -157,7 +157,7 @@ It runs in three modes, selected by `argv[2]`:
 In `serve` and `dev`, <SourceLink to="scripts/main.ts#L472">runServe</SourceLink> builds the economy from the environment and mounts the handler. It passes three things into `createServer`: the purchase-webhook handler, the `Config`, and the clock. Those last two are what _activate_ the verification gate, so a genuine callback is persisted and a forged or stale one is rejected before it changes anything.
 
 ```ts
-let handler = createServer(economy, {
+const handler = createServer(economy, {
   webhook: purchaseWebhook(caps.store, caps.ids, caps.clock),
   config,
   clock: defaults.clock,

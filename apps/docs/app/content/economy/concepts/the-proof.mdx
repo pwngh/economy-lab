@@ -40,7 +40,7 @@ report.conserved &&
 
 If the database already rejects a bad row, why re-check the books at all? Because the write path can only vouch for the writes it performs. The invariants are enforced at write time, pushed down into Postgres triggers and MySQL stored procedures so a violating row can't be committed (see [Integrity](/economy/concepts/integrity/)). The prover is the second line of defense: an independent audit that runs on top of that enforcement.
 
-Its job is to catch the failures a write-path guard structurally can't see. A bug in the enforcement. A half-applied write. A row edited directly in the database. `proveEconomy` says as much in its own contract: it is the out-of-band cross-check, "run by an auditor/worker, never as the write-path guard" (see <SourceLink to="src/integrity.ts#L72">source</SourceLink>).
+Its job is to catch the failures a write-path guard structurally can't see. A bug in the enforcement. A half-applied write. A row edited directly in the database. That is `proveEconomy`'s stated contract: an independent audit, not the enforcer — it never guards the write path (see <SourceLink to="src/integrity.ts#L72">source</SourceLink>).
 
 Anyone holding the ledger can re-derive the answer. The proof doesn't depend on trusting the process that wrote the rows.
 

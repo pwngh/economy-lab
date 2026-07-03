@@ -15,8 +15,6 @@ related:
   ]
 ---
 
-## Subscribe
-
 `subscribe` does three things in one transaction. It charges a buyer for the first period
 of a recurring plan, grants them the SKU, and saves a
 [`Subscription`](/economy/concepts/lifecycles/) record. The
@@ -27,7 +25,7 @@ You submit it with the buyer, the seller, the SKU, the per-period `price`, and t
 length in milliseconds:
 
 ```ts
-let outcome = await economy.submit({
+const outcome = await economy.submit({
   kind: 'subscribe',
   idempotencyKey: 'idem_1',
   actor: { kind: 'user', userId: 'usr_a' },
@@ -37,7 +35,7 @@ let outcome = await economy.submit({
   price: toAmount('CREDIT', 50_000n),
   periodMs: 2_592_000_000,
 });
-// outcome.status === "committed"
+// → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
 The handler bills period one only. Every period after that, the worker's renewal sweep
@@ -45,12 +43,13 @@ bills the buyer again.
 
 ## Parameters
 
-Every field below is required; `subscribe` carries no optional payload.
+Every field below is required; `subscribe` carries no optional payload. The payload
+fields, beyond the `kind` tag, are:
 
 | Field            | Type                                                       | Default    | Description                                                               |
 | ---------------- | ---------------------------------------------------------- | ---------- | ------------------------------------------------------------------------- |
-| `idempotencyKey` | `string`                                                   | (required) | Makes a [retried request](/economy/concepts/integrity/) run at most once. |
-| `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking.                                                            |
+| `idempotencyKey` | `string`                                                   | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/idempotency/). |
+| `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. A `user` actor may run `subscribe` only for their own wallet: the buyer `userId` must match the actor. |
 | `userId`         | `string`                                                   | (required) | The buyer. Must differ from `sellerId`.                                   |
 | `sellerId`       | `string`                                                   | (required) | The seller who earns the price.                                           |
 | `sku`            | `string`                                                   | (required) | The item or feature the subscription grants. Non-blank.                   |
@@ -64,12 +63,12 @@ decline. See [Preconditions](#preconditions-and-invariants) below.
 
 ## Returns
 
-`subscribe` returns an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
+`subscribe` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
-On success the status is `committed`, carrying the first-period `Transaction`. A repeat
-of the same `idempotencyKey` returns `duplicate` with the original transaction. A valid
-request the system declines returns `rejected` with one of the [reason codes](#reason-codes)
-below.
+- `committed`: success, carrying the first-period `Transaction`.
+- `duplicate`: a repeat of the same `idempotencyKey`, carrying the original transaction.
+- `rejected`: a valid request the system declines, with one of the
+  [reason codes](#reason-codes) below.
 
 ## Postings
 
@@ -84,22 +83,23 @@ that part in full. The seller's [`earned`](/economy/concepts/accounts-and-double
 is credited the net, and [`REVENUE`](/economy/concepts/accounts-and-double-entry/) takes the
 fee:
 
-| Leg              | Account            | Direction |
-| ---------------- | ------------------ | --------- |
-| Buyer pays       | `userId:spendable` | debit     |
-| Seller earns net | `sellerId:earned`  | credit    |
-| Platform fee     | `platform:revenue` | credit    |
+| Account              | Side   | Amount                 |
+| -------------------- | ------ | ---------------------- |
+| `spendable(userId)`  | debit  | `spendable part`       |
+| `earned(sellerId)`   | credit | `spendable part − fee` |
+| `SYSTEM.REVENUE`     | credit | `fee`                  |
 
-The promo-funded part pays the seller real earnings out of platform revenue. Promo credit
+The promo-funded part pays the seller real earnings out of platform revenue, with the
+buyer's drawn-down grant offset against the outstanding promo float. Promo credit
 never reaches the seller as promo. The fee applies only to the spendable part, matching
 [`spend`](/economy/reference/operations/spend/):
 
-| Leg                         | Account                | Direction |
-| --------------------------- | ---------------------- | --------- |
-| Buyer's grant drawn down    | `userId:promo`         | debit     |
-| Outstanding promo offset    | `platform:promo_float` | credit    |
-| Revenue funds the seller    | `platform:revenue`     | debit     |
-| Seller earns the promo part | `sellerId:earned`      | credit    |
+| Account              | Side   | Amount       |
+| -------------------- | ------ | ------------ |
+| `promo(userId)`      | debit  | `promo part` |
+| `SYSTEM.PROMO_FLOAT` | credit | `promo part` |
+| `SYSTEM.REVENUE`     | debit  | `promo part` |
+| `earned(sellerId)`   | credit | `promo part` |
 
 The fee comes from [`feeForPrice`](/economy/ports/pricing/) at `platformFeeBps`, rounded up
 to a whole credit and capped at the charge. The first period, every renewal, and `spend` all
@@ -129,12 +129,14 @@ values as a `rejected` outcome:
 | `RISK_DENIED`        | The charge would push the buyer past their recent-spending [velocity limit](/economy/concepts/actors-and-authorization/). `subscribe` counts against the same window as `spend`. |
 | `ECONOMY_PAUSED`     | A maintenance window is in effect, so a `user` actor's subscribe is declined. The decline carries `resumesAt`; a `system` or `operator` actor is never paused.                   |
 
-Malformed input throws a fault instead of declining. Each of these throws `OP.MALFORMED`:
+A malformed request throws instead:
 
-- A buyer subscribing to themselves.
-- A `price` that isn't `CREDIT`, or one outside the credit band.
-- A non-positive or oversized `periodMs`.
-- A blank `sku`.
+| Code           | When                                                       |
+| -------------- | ---------------------------------------------------------- |
+| `OP.MALFORMED` | A buyer subscribing to themselves.                         |
+| `OP.MALFORMED` | A `price` that isn't `CREDIT`, or one outside the credit band. |
+| `OP.MALFORMED` | A non-positive or oversized `periodMs`.                    |
+| `OP.MALFORMED` | A blank `sku`.                                             |
 
 ## Preconditions and invariants
 

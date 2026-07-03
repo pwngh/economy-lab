@@ -15,8 +15,6 @@ related:
   ]
 ---
 
-## Clawback
-
 `clawback` reclaims credits from a user's [`spendable`](/economy/concepts/accounts-and-double-entry/) balance after a bank chargeback or fraud recovery. The dollars themselves move back at the payment [`Processor`](/economy/ports/processor/), outside this ledger. The handler books only the credit side of the loss.
 
 You name the user and how much to reclaim. When the dispute is tied to a purchase, you also name the disputed `orderId`:
@@ -27,7 +25,7 @@ const outcome = await economy.submit({
   idempotencyKey: 'whk:evt_5521',
   actor: { kind: 'system', service: 'webhook:billing' },
   userId: 'usr_a1',
-  amount: { currency: 'CREDIT', minor: 5000n },
+  amount: toAmount('CREDIT', 5000n),
   orderId: 'ord_8821',
   reason: 'fraudulent_charge',
 });
@@ -38,25 +36,28 @@ In practice you rarely build this by hand. A verified dispute webhook maps to a 
 
 ## Parameters
 
-The payload fields, beyond the [`idempotencyKey`](/economy/concepts/integrity/) and `actor` every operation carries:
+The payload fields, beyond the `kind` tag, are:
 
-| Field     | Type                                       | Default    | Description                                                                                                                                                                     |
-| --------- | ------------------------------------------ | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `userId`  | string                                     | (required) | The user whose `spendable` credits the chargeback reclaims.                                                                                                                     |
-| `amount`  | [`Amount`](/economy/concepts/money-model/) | (required) | How much to reclaim. Must be `CREDIT` and positive.                                                                                                                             |
-| `orderId` | string                                     | (untied)   | The disputed order, when the provider names one. Ties the clawback to a [`refund`](/economy/reference/operations/refund/) of the same order so the two stay mutually exclusive. |
-| `key`     | string                                     | (omitted)  | A free-form reference recorded on the posting (e.g. the network's case id).                                                                                                     |
-| `reason`  | string                                     | (omitted)  | A free-form reason recorded on the posting (e.g. the chargeback reason code).                                                                                                   |
+| Field            | Type                                                          | Default    | Description                                                                                                                                                                                                            |
+| ---------------- | ------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `idempotencyKey` | `string`                                                      | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/idempotency/).                                                                                                              |
+| `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/)    | (required) | Who is asking. Restricted to a `system` or `operator` actor; an end user may never call it.                                                                                                                            |
+| `userId`         | `string`                                                      | (required) | The user whose `spendable` credits the chargeback reclaims.                                                                                                                                                            |
+| `amount`         | [`Amount`](/economy/concepts/money-model/)                    | (required) | How much to reclaim. Must be `CREDIT` and positive.                                                                                                                                                                    |
+| `orderId`        | `string`                                                      | —          | The disputed order, when the provider names one; without it the clawback is untied to any order. Ties the clawback to a [`refund`](/economy/reference/operations/refund/) of the same order so the two stay mutually exclusive. |
+| `key`            | `string`                                                      | —          | A free-form reference recorded on the posting (e.g. the network's case id).                                                                                                                                            |
+| `reason`         | `string`                                                      | —          | A free-form reason recorded on the posting (e.g. the chargeback reason code).                                                                                                                                          |
 
 A present-but-blank `orderId` is malformed. Every blank id collapses to the same reversal key, which would falsely tie unrelated chargebacks together. The handler rejects it as a fault rather than claiming that key.
 
 ## Returns
 
-`clawback` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/). A fresh reclaim returns `committed` with the posted `transaction`.
+`clawback` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
-When the order was already reversed (by a `refund` or an earlier clawback of the same `orderId`) it returns `duplicate`, carrying that earlier reversal's transaction unchanged rather than reversing the order twice.
+- `committed`: a fresh reclaim, with the posted `transaction`.
+- `duplicate`: the order was already reversed (by a `refund` or an earlier clawback of the same `orderId`); the outcome carries that earlier reversal's transaction unchanged rather than reversing the order twice.
 
-`clawback` returns no [`RejectionCode`](/economy/reference/outcomes-and-reason-codes/): every "no" it can give is a thrown fault, not a declined `Outcome`. See the [reason codes](#reason-codes) below.
+`clawback` returns no `rejected` outcome. A malformed request throws instead; see [reason codes](#reason-codes).
 
 ## Postings
 
@@ -69,8 +70,8 @@ The full `amount` is then credited to `STORED_VALUE`: the same account the origi
 | Account                                                             | Side   | Amount      |
 | ------------------------------------------------------------------- | ------ | ----------- |
 | [`spendable(userId)`](/economy/concepts/accounts-and-double-entry/) | debit  | `recovered` |
-| [`RECEIVABLE`](/economy/concepts/accounts-and-double-entry/)        | debit  | `shortfall` |
-| [`STORED_VALUE`](/economy/concepts/accounts-and-double-entry/)      | credit | `amount`    |
+| [`SYSTEM.RECEIVABLE`](/economy/concepts/accounts-and-double-entry/) | debit  | `shortfall` |
+| [`SYSTEM.STORED_VALUE`](/economy/concepts/accounts-and-double-entry/) | credit | `amount`    |
 
 The two debits sum to `amount`, and `STORED_VALUE` is credited that same `amount`, so the posting nets to zero.
 
@@ -84,10 +85,11 @@ An end-user `actor` is refused with an `AUTH.UNAUTHORIZED` fault before any work
 
 ## Reason codes
 
-`clawback` returns no `RejectionCode`. Each bad input is a programming error and throws:
+`clawback` returns no reason codes: it has no `rejected` path. It fails only by throwing, whether the caller is forbidden or the input is a programming error:
 
 | Code                   | When                                                                                                           |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `AUTH.UNAUTHORIZED`    | The `actor` is an end user rather than `system` or `operator`; refused before any work begins.                 |
 | `OP.MALFORMED`         | `amount` is not `CREDIT`, or `orderId` is present but blank, or the handler received the wrong operation kind. |
 | `MONEY.INVALID_AMOUNT` | `amount` is zero or negative.                                                                                  |
 

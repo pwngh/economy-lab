@@ -3,7 +3,6 @@ title: 'Storage & messaging'
 summary: 'The storage and messaging ports (the ledger and sub-stores, plus the dispatcher, cache, and outbox/inbox) and their adapters.'
 order: 50
 status: stable
-related: ['economy/concepts/lifecycles', 'economy/ports/processor']
 sourceRefs:
   [
     'src/ports.ts#L272 · Store',
@@ -12,6 +11,7 @@ sourceRefs:
     'src/engines/postgres.ts#L1579 · postgresStore',
     'src/worker/relay.ts#L55 · relayOutbox',
   ]
+related: ['economy/concepts/lifecycles', 'economy/ports/processor']
 ---
 
 ## The seam between the core and the world
@@ -32,7 +32,7 @@ Everything else hangs off the `Store` as a purpose-built sub-store, one per conc
 
 | Sub-store       | What it holds                                                                                          |
 | --------------- | ------------------------------------------------------------------------------------------------------ |
-| `idempotency`   | A claim per [`idempotencyKey`](/economy/concepts/integrity/), so a repeated request runs at most once. |
+| `idempotency`   | A claim per [`idempotencyKey`](/economy/concepts/idempotency/), so a repeated request runs at most once. |
 | `sales`         | A summary of each completed sale, keyed by order id, so a refund can reverse it precisely.             |
 | `outbox`        | Pending outgoing events, written with the money move and relayed later.                                |
 | `inbox`         | Verified inbound provider events, awaiting apply.                                                      |
@@ -118,7 +118,7 @@ That belongs to [integrity](/economy/concepts/integrity/), which owns the conser
 The `Dispatcher` is the simplest port here: a single function that takes an `EconomyEvent` and hands it off for delivery. The core builds the event; the adapter decides where it goes.
 
 ```ts
-type Dispatcher = (event: EconomyEvent, options?) => Promise<void>;
+type Dispatcher = (event: EconomyEvent, options?: Options) => Promise<void>;
 ```
 
 Two adapters ship. `sqsDispatcher` in `src/adapters/sqs.ts` publishes each event to an Amazon SQS queue as JSON, and there's an HTTP dispatcher that POSTs it to a configured URL. With neither `SQS_QUEUE_URL` nor `DISPATCHER_URL` set, no dispatcher is wired: the worker's relay sweep short-circuits and outgoing events stay pending in the outbox. The `Dispatcher` is optional; the economy runs without one.

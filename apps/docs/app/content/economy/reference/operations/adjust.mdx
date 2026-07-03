@@ -14,8 +14,6 @@ related:
   ['economy/reference/operations/reverse', 'economy/reference/configuration']
 ---
 
-## Adjust
-
 `adjust` is the operator's manual correction. It moves one account by a signed `amount` and books the opposite entry to a platform account, so the books stay balanced.
 
 It exists for cases no ordinary operation covers, such as closing a gap found during reconciliation.
@@ -23,7 +21,7 @@ It exists for cases no ordinary operation covers, such as closing a gap found du
 You name the [account](/economy/concepts/accounts-and-double-entry/), the signed `amount` to move it by, and a written `reason` for the audit trail:
 
 ```ts
-let outcome = await economy.submit({
+const outcome = await economy.submit({
   kind: 'adjust',
   idempotencyKey: 'idem_0',
   actor: { kind: 'operator', operatorId: 'op_1' },
@@ -31,20 +29,19 @@ let outcome = await economy.submit({
   amount: toAmount('CREDIT', 250n),
   reason: 'reconciliation: missing genesis lot',
 });
-// → outcome.status === "committed"
-// usr_alice's spendable balance rose by 250 credits.
+// → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
-A negative `amount` is a valid downward correction. The same call with `toAmount("CREDIT", -250n)` lowers the account by `250` instead.
+usr_alice's spendable balance rose by 250 credits. A negative `amount` is a valid downward correction. The same call with `toAmount("CREDIT", -250n)` lowers the account by `250` instead.
 
 ## Parameters
 
-Beyond the `kind` tag, the payload carries these fields:
+The payload fields, beyond the `kind` tag, are:
 
 | Field            | Type                                                         | Default    | Description                                                                                                                               |
 | ---------------- | ------------------------------------------------------------ | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `idempotencyKey` | `string`                                                     | (required) | Makes a retried submit run at most once; see [idempotency](/economy/concepts/integrity/). A repeat with the same key returns `duplicate`. |
-| `actor`          | [`Actor`](/economy/concepts/actors-and-authorization/)       | (required) | Who is asking. Must be an `operator`; see [Authorization](#authorization).                                                                |
+| `idempotencyKey` | `string`                                                     | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/idempotency/).                                    |
+| `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/)       | (required) | Who is asking. Must be an `operator`; see [Authorization](#authorization).                                                                |
 | `account`        | [`AccountRef`](/economy/concepts/accounts-and-double-entry/) | (required) | The account to move.                                                                                                                      |
 | `amount`         | [`Amount`](/economy/concepts/money-model/)                   | (required) | The signed change. Must be `CREDIT` and non-zero; negative corrects downward.                                                             |
 | `reason`         | `string`                                                     | (required) | Why the correction was made, recorded on the posting. Must be non-empty after trimming whitespace.                                        |
@@ -55,9 +52,10 @@ The `amount` is signed on purpose. A positive value raises the account, a negati
 
 `adjust` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
-A fresh correction returns `committed` with the posted [`Transaction`](/economy/concepts/accounts-and-double-entry/). A retry under the same `idempotencyKey` returns `duplicate`. That duplicate carries the earlier transaction unchanged, so the correction isn't posted twice.
+- `committed`: A fresh correction, with the posted [`Transaction`](/economy/concepts/accounts-and-double-entry/).
+- `duplicate`: A retry under the same `idempotencyKey`. That duplicate carries the earlier transaction unchanged, so the correction isn't posted twice.
 
-`adjust` never returns `rejected`. Every bad input is a thrown fault, listed under [reason codes](#reason-codes).
+`adjust` returns no `rejected` outcome. A malformed request throws instead; see [reason codes](#reason-codes).
 
 ## Postings
 
@@ -65,10 +63,10 @@ A fresh correction returns `committed` with the posted [`Transaction`](/economy/
 
 For the example above (raising `spendable(usr_alice)` by `250` credits) the legs are:
 
-| Account                 | Posting | Amount         |
-| ----------------------- | ------- | -------------- |
-| `spendable(usr_alice)`  | credit  | `250` (CREDIT) |
-| `SYSTEM.OPENING_EQUITY` | debit   | `250` (CREDIT) |
+| Account                 | Side   | Amount         |
+| ----------------------- | ------ | -------------- |
+| `spendable(usr_alice)`  | credit | `250` (CREDIT) |
+| `SYSTEM.OPENING_EQUITY` | debit  | `250` (CREDIT) |
 
 The handler works in the account's natural direction rather than a fixed debit or credit. So the move reads as "raise the account by `amount`" whether the target grows on a debit or on a credit. The offset to `OPENING_EQUITY` is always the negation, so the two legs sum to zero.
 
@@ -82,13 +80,13 @@ The handler works in the account's natural direction rather than a fixed debit o
 
 `adjust` is operator-only. It writes a privileged correction to an account the caller need not own, a case the ownership rule that governs ordinary user operations doesn't cover. So a `user` actor may never call it; see [actors and authorization](/economy/concepts/actors-and-authorization/).
 
-The handler re-checks the actor even after the pipeline has run its own gate. A non-`operator` actor throws a `MALFORMED_OPERATION` fault. This guards against a wrong-actor call slipping through when the handler is invoked directly rather than through the pipeline.
+The handler re-checks the actor even after the pipeline has run its own gate. A non-`operator` actor throws an `OP.MALFORMED` fault. This guards against a wrong-actor call slipping through when the handler is invoked directly rather than through the pipeline.
 
 A `system` actor clears the pipeline's privileged gate but is still refused by that handler check. So in practice only an `operator` can adjust.
 
 ## Reason codes
 
-`adjust` returns no [`RejectionCode`](/economy/reference/outcomes-and-reason-codes/). Its inputs are either valid or a caller error, so each bad input throws a fault rather than declining as data:
+`adjust` returns no reason codes: it has no `rejected` path. It fails only by throwing. Its inputs are either valid or a caller error, so each bad input throws a fault rather than declining as data:
 
 | Code                   | When                                                                                                                                                      |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |

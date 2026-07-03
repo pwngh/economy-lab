@@ -1,6 +1,6 @@
 ---
 title: 'Settle payout'
-summary: 'Mark a submitted payout settled once the provider confirms, a privileged transition a user cannot make for their own payout.'
+summary: 'The webhook-driven step that settles a submitted payout: the reserve clears to revenue and the gross USD leaves trust.'
 order: 60
 status: stable
 sourceRefs:
@@ -17,8 +17,6 @@ related:
   ]
 ---
 
-## Settle a submitted payout
-
 `settlePayout` runs the `SUBMITTED → SETTLED` step of the [payout saga](/economy/concepts/lifecycles/#the-payout-saga). It empties the seller's reserved credits into platform revenue and moves the matching USD out of [trust](/economy/concepts/solvency/).
 
 It does not call the [rail](/economy/ports/processor/). The rail has already paid. This operation records that fact and posts the money.
@@ -26,25 +24,26 @@ It does not call the [rail](/economy/ports/processor/). The rail has already pai
 A verified "payout settled" webhook from the rail drives it. The webhook maps to a `system`-actor operation, named only by the payout's saga id:
 
 ```ts
-await economy.submit({
+const outcome = await economy.submit({
   kind: 'settlePayout',
   idempotencyKey: '550e8400-e29b-41d4-a716-446655440002',
   actor: { kind: 'system', service: 'webhook:thunes' },
   sagaId: 'pay_9f2c1b',
   providerRef: 'thunes_txn_8821',
-  providerAmount: decodeAmount('48.50', 'USD'),
+  providerAmount: toAmount('USD', 4_850n),
 });
+// → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
 The mapping from webhook to operation lives in <SourceLink to="src/webhooks.ts#L167-L176">toSettlePayout</SourceLink>; the [background worker](/economy/reference/background-worker/)'s inbox drain applies the result off the request path.
 
 ## Parameters
 
-The `settlePayout` variant of `Operation` carries five fields:
+The payload fields, beyond the `kind` tag, are:
 
 | Field            | Type                                                       | Default    | Description                                                                                                                                                           |
 | ---------------- | ---------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `idempotencyKey` | `string`                                                   | (required) | The [dedup key](/economy/concepts/integrity/). For a webhook-driven settle it derives from the provider's event id, so a redelivered settlement applies at most once. |
+| `idempotencyKey` | `string`                                                   | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/idempotency/). For a webhook-driven settle the key derives from the provider's event id, so a redelivered settlement applies at most once. |
 | `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`; a `user` is refused.                                                                                                   |
 | `sagaId`         | `string`                                                   | (required) | The payout to settle. The operation names no account directly. The saga record holds the seller and the reserved amount.                                              |
 | `providerRef`    | `string`                                                   | (required) | The rail's own id for the disbursement. Carried on the operation from the inbound webhook for the audit trail.                                                        |
@@ -52,29 +51,34 @@ The `settlePayout` variant of `Operation` carries five fields:
 
 ## Returns
 
-The result is an [`Outcome`](/economy/reference/outcomes-and-reason-codes/). On success it is `committed`, and its `transaction` is the credit-side posting: the primary settle entry that empties the reserve into revenue.
+`settlePayout` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
-A redelivered settle of an already-settled payout does not return `committed` a second time. It is turned away at the state guard before any money posts (see [Reason codes](#reason-codes)).
+- `committed`: the success result. Its `transaction` is the credit-side posting: the primary settle entry that empties the reserve into revenue.
+- `duplicate`: a redelivered settle carrying the same idempotency key; the settlement applies at most once, so nothing posts a second time.
+
+A redelivered settle of an already-settled payout does not return `committed` a second time: it is turned away at the state guard before any money posts.
+
+`settlePayout` returns no `rejected` outcome. A malformed request throws instead; see [reason codes](#reason-codes).
 
 ## Postings
 
 A settle posts two balanced entries, one per currency, in a single database transaction (see <SourceLink to="src/operations/settlePayout.ts#L141-L170 · postSettlementEntries" />).
 
-This settle logic was moved out of the [background worker](/economy/reference/background-worker/) and onto this operation. The worker now only re-drives or force-fails a stuck payout (`src/worker/payouts.ts`), and no longer settles one itself.
+Settlement lives on this operation, driven by the provider's webhook. The [background worker](/economy/reference/background-worker/) only re-drives or force-fails a stuck payout (`src/worker/payouts.ts`); it never settles one itself.
 
 The credit-side entry empties the reserve into revenue. The seller's set-aside credits become platform earnings, because the platform now owes the seller real money instead:
 
-| Account                                                          | Debit          | Credit         |
-| ---------------------------------------------------------------- | -------------- | -------------- |
-| [`PAYOUT_RESERVE`](/economy/concepts/accounts-and-double-entry/) | `saga.reserve` |                |
-| [`REVENUE`](/economy/concepts/accounts-and-double-entry/)        |                | `saga.reserve` |
+| Account                                                                 | Side   | Amount         |
+| ----------------------------------------------------------------------- | ------ | -------------- |
+| [`SYSTEM.PAYOUT_RESERVE`](/economy/concepts/accounts-and-double-entry/) | debit  | `saga.reserve` |
+| [`SYSTEM.REVENUE`](/economy/concepts/accounts-and-double-entry/)        | credit | `saga.reserve` |
 
 The USD-side entry records the cash leaving trust. `USD_CLEARING` mirrors money flowing out of the trust account; crediting `TRUST_CASH` lowers the real cash the platform holds for users:
 
-| Account                                                        | Debit | Credit |
-| -------------------------------------------------------------- | ----- | ------ |
-| [`USD_CLEARING`](/economy/concepts/accounts-and-double-entry/) | `usd` |        |
-| [`TRUST_CASH`](/economy/concepts/accounts-and-double-entry/)   |       | `usd`  |
+| Account                                                               | Side   | Amount |
+| --------------------------------------------------------------------- | ------ | ------ |
+| [`SYSTEM.USD_CLEARING`](/economy/concepts/accounts-and-double-entry/) | debit  | `usd`  |
+| [`SYSTEM.TRUST_CASH`](/economy/concepts/accounts-and-double-entry/)   | credit | `usd`  |
 
 The gross `usd` is the reserve converted at the [`payout` rate](/economy/concepts/money-model/). The rail's fee (`config.payoutFeeBps`) and the seller's net are split downstream at the external rail. Both are recorded on the USD posting's metadata for the audit trail; the ledger posts neither as a leg.
 
@@ -92,11 +96,9 @@ Only a `system` or `operator` [actor](/economy/concepts/actors-and-authorization
 
 ## Reason codes
 
-`settlePayout` returns no `rejected` [`Outcome`](/economy/reference/outcomes-and-reason-codes/). Its guards are faults, not declines.
+`settlePayout` returns no reason codes: it has no `rejected` path. It fails only by throwing.
 
-A settle is driven by a verified webhook or an operator. So a settle that can't apply is a mapping or timing error; the engine throws it rather than handing back a normal "no".
-
-The faults it can throw:
+A settle is driven by a verified webhook or an operator. So a settle that can't apply is a mapping or timing error; the engine throws it rather than handing back a normal "no". The faults it can throw:
 
 | Code                      | When                                                                                                                                                                                                             |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

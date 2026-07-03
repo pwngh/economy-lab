@@ -1,18 +1,16 @@
 ---
 title: 'Revoke entitlement'
-summary: 'Revoke a previously granted entitlement.'
+summary: "Remove a user's ownership of a SKU; declines with NOT_ENTITLED when they never owned it."
 order: 110
 status: stable
-related:
-  ['economy/reference/operations/spend', 'economy/reference/operations/refund']
 sourceRefs:
   [
     'src/operations/entitlements.ts#L65-L87 · revokeEntitlement',
-    'src/operations/registry.ts#L54',
+    'src/operations/registry.ts#L54 · REGISTRY',
   ]
+related:
+  ['economy/reference/operations/spend', 'economy/reference/operations/refund']
 ---
-
-## Revoke entitlement
 
 `revokeEntitlement` removes a user's ownership of a SKU, the mirror of [`grantEntitlement`](/economy/reference/operations/grant-entitlement/). Ownership is a record, not a balance. No money moves, and the ledger is untouched.
 
@@ -27,27 +25,26 @@ const outcome = await economy.submit({
   sku: 'wrld_pass',
   reason: 'chargeback',
 });
-// → outcome.status === "committed"
+// → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
 Once this commits, [`read.entitled("usr_owner", "wrld_pass")`](/economy/reference/reads/) returns `false`. Any UI that gates access on that SKU stops granting it.
 
 ## Parameters
 
-The payload is one `revokeEntitlement` variant of [`Operation`](/economy/reference/the-economy/), tagged by `kind`. The fields:
+The payload fields, beyond the `kind` tag, are:
 
-| Field            | Type                                                       | Default    | Description                                                                                                                                       |
-| ---------------- | ---------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`           | `"revokeEntitlement"`                                      | (required) | Selects this operation.                                                                                                                           |
-| `idempotencyKey` | `string`                                                   | (required) | Makes a retried request run at most once; a repeat with the same key returns the earlier result. See [idempotency](/economy/concepts/integrity/). |
-| `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`, see [Authorization](#authorization).                                                               |
-| `userId`         | `string`                                                   | (required) | The user losing ownership. A blank or whitespace-only value throws.                                                                               |
-| `sku`            | `string`                                                   | (required) | The item or feature code to revoke, such as `"wrld_pass"`. A blank or whitespace-only value throws.                                               |
-| `reason`         | `string`                                                   | (omitted)  | Optional note for the audit trail.                                                                                                                |
+| Field            | Type                                                       | Default    | Description                                                                                                                 |
+| ---------------- | ---------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `idempotencyKey` | `string`                                                   | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/idempotency/).                    |
+| `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`, see [Authorization](#authorization).                                         |
+| `userId`         | `string`                                                   | (required) | The user losing ownership. A blank or whitespace-only value throws.                                                         |
+| `sku`            | `string`                                                   | (required) | The item or feature code to revoke, such as `"wrld_pass"`. A blank or whitespace-only value throws.                         |
+| `reason`         | `string`                                                   | —          | Optional note for the audit trail; omitted when not given.                                                                  |
 
 ## Returns
 
-`revokeEntitlement` returns an [`Outcome`](/economy/reference/outcomes-and-reason-codes/):
+`revokeEntitlement` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
 - `committed`: the user owned the SKU and the ownership record was dropped.
 - `duplicate`: a request with the same `idempotencyKey` already ran; the earlier `transaction` is returned unchanged.
@@ -67,7 +64,7 @@ The handler drops the ownership record through `unit.entitlements.revoke`. The r
 
 A revoke names an arbitrary `userId` the caller need not own. It also posts no debit the ownership check could catch. So it is gated up front: only a `system` service or a human `operator` may call it.
 
-A `user` actor is declined with an `UNAUTHORIZED` fault before any work begins.
+A `user` actor is declined with an `AUTH.UNAUTHORIZED` fault before any work begins.
 
 ## Reason codes
 
@@ -79,7 +76,13 @@ A `user` actor is declined with an `UNAUTHORIZED` fault before any work begins.
 
 The rejection carries the `userId` and `sku` in its `detail`, so the caller knows which ownership check came back empty.
 
-A blank or whitespace-only `userId` or `sku` is not a rejection. It throws a `MALFORMED_OPERATION` fault. A blank user would revoke ownership against a phantom user, and a blank SKU against nothing. So a malformed request surfaces as a client error rather than a silent `NOT_ENTITLED`.
+A malformed request throws instead:
+
+| Code           | When                                          |
+| -------------- | --------------------------------------------- |
+| `OP.MALFORMED` | A blank or whitespace-only `userId` or `sku`. |
+
+A blank user would revoke ownership against a phantom user, and a blank SKU against nothing. So a malformed request surfaces as a client error rather than a silent `NOT_ENTITLED`.
 
 ## Preconditions and invariants
 

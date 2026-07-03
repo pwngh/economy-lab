@@ -18,7 +18,7 @@ related:
   ]
 ---
 
-`requestPayout` starts a seller's cashout. It reserves some of their earned credits and opens a payout [saga](/economy/concepts/lifecycles/) that a [background worker](/economy/reference/background-worker/) later finishes by paying real USD. It does not pay anyone itself.
+`requestPayout` starts a seller's cash-out. It reserves some of their earned credits and opens a payout [saga](/economy/concepts/lifecycles/) that a [background worker](/economy/reference/background-worker/) later finishes by paying real USD. It does not pay anyone itself.
 
 Here a seller asks to cash out `25,000.00` of their earned credits, clearing the default payout minimum. The amount is their own [`earned`](/economy/concepts/accounts-and-double-entry/) balance, in `CREDIT` minor units:
 
@@ -28,21 +28,20 @@ const outcome = await economy.submit({
   idempotencyKey: 'payout_2026_02',
   actor: { kind: 'user', userId: 'usr_a1' },
   userId: 'usr_a1',
-  amount: { currency: 'CREDIT', minor: 2_500_000n },
+  amount: toAmount('CREDIT', 2_500_000n),
 });
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
-The [`idempotencyKey`](/economy/concepts/integrity/) makes a retried request run at most once, so a double-tapped cashout opens one saga, not two.
+The [`idempotencyKey`](/economy/concepts/idempotency/) makes a retried request run at most once, so a double-tapped cash-out opens one saga, not two.
 
 ## Parameters
 
-The payload carries the seller and the amount of earned credit to reserve.
+The payload fields, beyond the `kind` tag, are:
 
-| Field            | Type                                                       | Default    | Description                                                                  |
-| ---------------- | ---------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------- |
-| `kind`           | `"requestPayout"`                                          | (required) | Tags this operation.                                                         |
-| `idempotencyKey` | `string`                                                   | (required) | Dedupe key; a retried request runs at most once.                             |
+| Field            | Type                                                       | Default    | Description                                                                                                       |
+| ---------------- | ---------------------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------- |
+| `idempotencyKey` | `string`                                                   | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/idempotency/).          |
 | `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. A `user` may request only their own payout.                   |
 | `userId`         | `string`                                                   | (required) | The seller whose `earned` balance is reserved.                               |
 | `amount`         | [`Amount`](/economy/concepts/money-model/)                 | (required) | How much earned credit to set aside. Must be `CREDIT` and strictly positive. |
@@ -53,20 +52,18 @@ The `amount` is always paid out later as USD; it never becomes spendable in-app.
 
 `requestPayout` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
-A successful request returns `committed` with the reservation transaction. When the same `idempotencyKey` repeats, a `duplicate` returns the earlier result unchanged.
-
-A business decline returns `rejected` with one of the [reason codes](#reason-codes) below: too small, too soon, not enough funds, or not yet matured. A `rejected` outcome is returned data, not a thrown exception.
-
-A malformed request throws instead. An `amount` that isn't `CREDIT` raises `OP.MALFORMED`, and a zero or negative one raises `MONEY.INVALID_AMOUNT` (see <SourceLink to="src/operations/requestPayout.ts#L146 · payableCredit" />). Both are programming errors.
+- `committed`: a successful request; carries the reservation transaction.
+- `duplicate`: the same `idempotencyKey` repeated; returns the earlier result unchanged.
+- `rejected`: a business decline with one of the [reason codes](#reason-codes) below: too small, too soon, not enough funds, or not yet matured. A `rejected` outcome is returned data, not a thrown exception.
 
 ## Postings
 
 The commit posts one balanced [double-entry](/economy/concepts/accounts-and-double-entry/) transaction. Both legs are `CREDIT` and cancel out. No USD moves here.
 
-| Leg | Account                                                          | Direction       |
-| --- | ---------------------------------------------------------------- | --------------- |
-| 1   | the seller's `earned`                                            | debit `amount`  |
-| 2   | [`PAYOUT_RESERVE`](/economy/concepts/accounts-and-double-entry/) | credit `amount` |
+| Account                                                                 | Side   | Amount   |
+| ----------------------------------------------------------------------- | ------ | -------- |
+| `earned(userId)`                                                        | debit  | `amount` |
+| [`SYSTEM.PAYOUT_RESERVE`](/economy/concepts/accounts-and-double-entry/) | credit | `amount` |
 
 This moves the credits out of the seller's reach and into `PAYOUT_RESERVE`, which holds credits owed out as a payout. The USD side posts later, when the worker settles the saga. See [the payout saga](/economy/concepts/lifecycles/#the-payout-saga).
 
@@ -96,13 +93,22 @@ Each check below returns a `rejected` [`Outcome`](/economy/reference/outcomes-an
 | `FUNDS_IMMATURE`     | The balance covers `amount`, but the cleared (matured) portion does not.                             |
 | `ECONOMY_PAUSED`     | A `user`'s request lands inside a maintenance window; carries `resumesAt`.                           |
 
-The raw `earned` balance can pass `INSUFFICIENT_FUNDS` while part of it is still inside its chargeback window. So a second, stricter check asks whether the _matured_ part alone covers `amount` (see <SourceLink to="src/operations/requestPayout.ts#L94-L105">source</SourceLink>). Maturity is the holding period that must elapse before earnings are payable. See [maturity](/economy/concepts/lifecycles/).
+The raw `earned` balance can pass `INSUFFICIENT_FUNDS` while part of it is still inside its chargeback window. So a second, stricter check asks whether the _matured_ part alone covers `amount` (see <SourceLink to="src/operations/requestPayout.ts#L94-L105">source</SourceLink>). Maturity is the holding period that must elapse before earnings are payable. See [credit maturity](/economy/concepts/credit-maturity/).
 
 <Callout type="warning">
   `requestPayout` only counts *matured* earnings. A seller can have plenty of
   `earned` credit and still get `FUNDS_IMMATURE` if too much of it is still
   clearing its chargeback window.
 </Callout>
+
+A malformed request throws instead:
+
+| Code                   | When                                                                                                                        |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `OP.MALFORMED`         | The `amount` isn't `CREDIT`.                                                                                                |
+| `MONEY.INVALID_AMOUNT` | The `amount` is zero or negative (see <SourceLink to="src/operations/requestPayout.ts#L146 · payableCredit" />).             |
+
+Both are programming errors.
 
 ## Preconditions and invariants
 

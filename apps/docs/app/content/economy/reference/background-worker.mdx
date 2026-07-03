@@ -54,11 +54,11 @@ Every sweep claims a bounded batch of due rows, advances each row one step, and 
 The payout sweep is the clearest example. It claims the due payout sagas and pushes each one forward:
 
 ```ts
-let summary = await settleDuePayouts(store, ctx, { now, limit });
+const summary = await settleDuePayouts(store, ctx, { now, limit });
 // → { submitted: [...], deadLettered: [...], retrying: [...] }
 ```
 
-A `RESERVED` payout is submitted to the provider and moves to `SUBMITTED`. Settlement itself no longer happens here. It arrives through the provider's settlement webhook. The sweep only forces a `SUBMITTED` payout to fail when it has waited past `maxPayoutAgeMs` for a webhook that never came.
+A `RESERVED` payout is submitted to the provider and moves to `SUBMITTED`. Settlement does not happen here; it arrives through the provider's settlement webhook. The sweep only forces a `SUBMITTED` payout to fail when it has waited past `maxPayoutAgeMs` for a webhook that never came.
 
 When a payout is dead-lettered, the worker posts the exact reverse of the request-time reservation in the same transaction, so the seller's reserved credits are returned rather than stranded.
 
@@ -77,7 +77,7 @@ Most sweeps always run. Two carry an optional capability and short-circuit when 
 `relay` needs a dispatcher to deliver through. With none configured, it returns an empty successful summary and pending rows stay in the outbox for a later run.
 
 ```ts
-let summary = await relayOutbox(store, ctx, { dispatcher, limit });
+const summary = await relayOutbox(store, ctx, { dispatcher, limit });
 // → { relayed: [...], failed: [...], deadLettered: [...] }
 ```
 
@@ -106,15 +106,15 @@ A re-applied inbox row is deduped by the stored `idempotencyKey` (the provider e
 A host builds the worker with `createWorker(store, ctx)` and drives it with `runOnce`, which runs every sweep once over a shared input and returns the per-job batch plus the txn ids the run committed:
 
 ```ts
-let worker = createWorker(store, ctx);
+const worker = createWorker(store, ctx);
 let { batch, postings } = await worker.runOnce(input);
 ```
 
 Pass a `Scheduler` to `createWorker` and the worker also gets `start(intervalMs, input)`, which runs the jobs on a timer and returns a stop function:
 
 ```ts
-let worker = createWorker(store, ctx, scheduler);
-let stop = worker.start?.(60_000, input);
+const worker = createWorker(store, ctx, scheduler);
+const stop = worker.start?.(60_000, input);
 ```
 
 Using the scheduler rather than a built-in timer keeps start and stop on the same code path. Without a scheduler, only `runOnce` is present.

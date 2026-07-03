@@ -39,7 +39,7 @@ interface Processor {
 }
 ```
 
-`key` is the [idempotency](/economy/concepts/integrity/) key that makes a resend safe. The background worker passes the payout saga id here, so a retried submit pays out at most once. `userId` is an opaque `usr_…` token, never personal data. `amount` is in real USD, already converted from the seller's reserved credits at the [payout rate](/economy/concepts/money-model/).
+`key` is the [idempotency](/economy/concepts/idempotency/) key that makes a resend safe. The background worker passes the payout saga id here, so a retried submit pays out at most once. `userId` is an opaque `usr_…` token, never personal data. `amount` is in real USD, already converted from the seller's reserved credits at the [payout rate](/economy/concepts/money-model/).
 
 The return is just `{ providerRef }`: the provider's own id for the disbursement, which the lab records on the [payout saga](/economy/concepts/lifecycles/) for the audit trail.
 
@@ -116,7 +116,7 @@ That event flows into the same path a hand-built provider would use. The webhook
 
 A dispute comes back the same way. A chargeback callback maps to a [`clawback`](/economy/reference/operations/clawback/) via `toClawback`, reclaiming the disputed credits from the user's spendable balance.
 
-Both inbound events are persisted, not posted inline. The webhook edge writes the mapped operation to a transactional inbox and returns a fast acknowledgement; the [apply worker](/economy/reference/background-worker/) submits it through the normal economy path on its next sweep, where invariants and idempotency are enforced. You can read more about that ingress on [the HTTP service page](/economy/reference/http-service/).
+Both inbound events are persisted, not posted inline. The webhook edge writes the mapped operation to a transactional inbox and returns a fast acknowledgment; the [apply worker](/economy/reference/background-worker/) submits it through the normal economy path on its next sweep, where invariants and idempotency are enforced. You can read more about that ingress on [the HTTP service page](/economy/reference/http-service/).
 
 ## What the core assumes
 

@@ -67,8 +67,8 @@ sale, and the [spend operation](/economy/reference/operations/spend/) passes the
 configured rate (`PLATFORM_FEE_BPS`, default `1530`, i.e. 15.3%).
 
 ```ts
-let policy = flatFee();
-let legs = policy({
+const policy = flatFee();
+const legs = policy({
   price: toAmount('CREDIT', 1000n),
   feeBps: 3000,
   recipients: [{ sellerId: 'usr_seller', shareBps: 10000 }],

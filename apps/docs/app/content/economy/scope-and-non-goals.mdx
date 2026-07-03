@@ -5,7 +5,6 @@ order: 10
 status: stable
 sourceRefs:
   [
-    'README.md#L29 · a lab, not a product',
     'src/ports.ts#L130-L140 · Processor',
     'src/ports.ts#L118-L121 · Dispatcher',
     'src/ports.ts#L154-L172 · Rates',
@@ -81,7 +80,7 @@ A production custodian needs versioned, forward-only migrations that never destr
 
 economy-lab takes concurrency seriously where it touches correctness. A linearizability harness oversubscribes concurrent spends and checks that every committed interleaving replays serially to identical balances, and the per-account row locks keep two operations from racing on a balance.
 
-What it does not chase is throughput at scale. There's no sharding, no connection-pool tuning for thousands of writers, no horizontal partitioning of the ledger. The concurrency work proves the invariants hold _under contention_; it doesn't claim the single-table design would carry a production load.
+What it does not chase is throughput at scale. There's no cross-node partitioning of the ledger and no connection-pool tuning for thousands of writers; the one scale lever is [platform-account sharding](/economy/concepts/concurrency/), which spreads the hot platform rows inside the same database. The concurrency work proves the invariants hold _under contention_; it doesn't claim the single-database design would carry a production load.
 
 ## Fixed rates, no live FX
 

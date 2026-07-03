@@ -3,16 +3,14 @@ title: 'Refund'
 summary: 'Return a completed spend, reversing the posting that recorded it.'
 order: 30
 status: stable
-related:
-  ['economy/reference/operations/reverse', 'economy/reference/configuration']
 sourceRefs:
   [
     'src/operations/refund.ts#L47 · refund',
     'src/operations/registry.ts#L48 · refund',
   ]
+related:
+  ['economy/reference/operations/reverse', 'economy/reference/configuration']
 ---
-
-## Refund
 
 `refund` reverses a completed [`spend`](/economy/reference/operations/spend/). It returns the buyer the full price they paid, then unwinds the sale account by account.
 
@@ -26,26 +24,25 @@ const outcome = await economy.submit({
   orderId: 'ord_1',
   reason: 'changed mind',
 });
-// → outcome.status === "committed"
+// → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
 The buyer gets the full price back. Each seller is debited only up to the balance they still hold. Any uncollectable remainder is booked as a debt to the platform.
 
 ## Parameters
 
-The payload is one `refund` variant of [`Operation`](/economy/reference/the-economy/), tagged by `kind`. The fields:
+The payload is one `refund` variant of [`Operation`](/economy/reference/the-economy/). The payload fields, beyond the `kind` tag, are:
 
-| Field            | Type                                                       | Default    | Description                                                                                      |
-| ---------------- | ---------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------ |
-| `kind`           | `"refund"`                                                 | (required) | Selects this operation.                                                                          |
-| `idempotencyKey` | `string`                                                   | (required) | Makes a retried request run at most once. A repeat with the same key returns the earlier result. |
-| `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`, see [Authorization](#authorization).              |
-| `orderId`        | `string`                                                   | (required) | The order to reverse, from the original `spend`. A blank or whitespace-only value throws.        |
-| `reason`         | `string`                                                   | (omitted)  | Optional note recorded in the reversing transaction's metadata.                                  |
+| Field            | Type                                                       | Default    | Description                                                                                                        |
+| ---------------- | ---------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------ |
+| `idempotencyKey` | `string`                                                   | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/idempotency/).           |
+| `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`, see [Authorization](#authorization).                                |
+| `orderId`        | `string`                                                   | (required) | The order to reverse, from the original `spend`. A blank or whitespace-only value throws.                          |
+| `reason`         | `string`                                                   | —          | Optional note recorded in the reversing transaction's metadata.                                                    |
 
 ## Returns
 
-`refund` returns an [`Outcome`](/economy/reference/outcomes-and-reason-codes/):
+`refund` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
 - `committed`: the reversal posted; `transaction` is the reversing posting.
 - `duplicate`: the order was already reversed (by an earlier refund or a [`clawback`](/economy/reference/operations/clawback/)); `transaction` is the recorded reversal.
@@ -71,7 +68,7 @@ The shortfall is always denominated in `CREDIT`, since a sale only moves `CREDIT
 
 `refund` is platform-initiated only. An end user (`actor.kind === "user"`) may never run it: a self-serve refund debits a seller's `earned` balance, which is a fraud vector. Only a `system` service or a human `operator` may call it, see [actors and authorization](/economy/concepts/actors-and-authorization/).
 
-A `user` actor is declined with an `UNAUTHORIZED` fault before any work begins.
+A `user` actor is declined with an `AUTH.UNAUTHORIZED` fault before any work begins.
 
 ## Reason codes
 
@@ -81,7 +78,11 @@ A `user` actor is declined with an `UNAUTHORIZED` fault before any work begins.
 | --------------- | ----------------------------------- |
 | `UNKNOWN_ORDER` | No sale was recorded for `orderId`. |
 
-A blank or whitespace-only `orderId` is not a rejection. It throws a `MALFORMED_OPERATION` fault. That way a malformed request surfaces as a client error instead of degrading to a silent `UNKNOWN_ORDER`.
+A malformed request throws instead:
+
+| Code           | When                                                                                                                                          |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OP.MALFORMED` | A blank or whitespace-only `orderId`. It is not a rejection: it surfaces as a client error instead of degrading to a silent `UNKNOWN_ORDER`. |
 
 ## Preconditions and invariants
 

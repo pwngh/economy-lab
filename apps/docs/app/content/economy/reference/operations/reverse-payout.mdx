@@ -16,17 +16,15 @@ related:
   ]
 ---
 
-<Callout type="danger">
-  `reversePayout` refuses a payout that has already disbursed USD: once the
-  processor has paid the seller, the saga can no longer be unwound by reversal.
-</Callout>
-
-## Reverse payout
-
 `reversePayout` undoes an in-flight payout by hand. It does two things in one
 [`Transaction`](/economy/concepts/accounts-and-double-entry/): it marks the payout's
 [`Saga`](/economy/concepts/lifecycles/#the-payout-saga) as `FAILED`, and it returns the reserved
 credits to the seller's `earned` account.
+
+<Callout type="danger">
+  `reversePayout` refuses a payout that has already disbursed USD: once the
+  processor has paid the seller, the saga can no longer be unwound by reversal.
+</Callout>
 
 It is the manual version of the undo the [background payout worker](/economy/reference/background-worker/)
 does automatically when it gives up on a payout. Use it to pull a payout back before any USD has left
@@ -35,7 +33,7 @@ trust.
 You name the payout by its `sagaId` and the seller by `userId`. You must also record a `reason`:
 
 ```ts
-let outcome = await economy.submit({
+const outcome = await economy.submit({
   kind: 'reversePayout',
   idempotencyKey: 'idem_0',
   actor: { kind: 'operator', operatorId: 'op_1' },
@@ -43,8 +41,7 @@ let outcome = await economy.submit({
   sagaId: 'pay_1',
   reason: 'fraud hold',
 });
-// → { status: "committed", transaction: { … } }
-// The reserve returned to usr_seller's earned account; the saga is now FAILED.
+// → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
 ## Parameters
@@ -53,7 +50,7 @@ The payload fields, beyond the `kind` tag, are:
 
 | Field            | Type                                                   | Default    | Description                                                                                            |
 | ---------------- | ------------------------------------------------------ | ---------- | ------------------------------------------------------------------------------------------------------ |
-| `idempotencyKey` | `string`                                               | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/integrity/). |
+| `idempotencyKey` | `string`                                               | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/idempotency/). |
 | `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `operator` or `system`.                                                     |
 | `userId`         | `string`                                               | (required) | The seller whose payout this is. Names the account the engine locks.                                   |
 | `sagaId`         | `string`                                               | (required) | The payout to reverse, of the form `pay_<uuid>`.                                                       |
@@ -72,13 +69,13 @@ The operation names no account directly. The seller's `earned` account and the
 
 ## Returns
 
-It returns an [`Outcome`](/economy/reference/outcomes-and-reason-codes/):
+`reversePayout` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
 - `committed`: the saga moved to `FAILED` and the undo posting committed.
 - `duplicate`: there was nothing left to undo (see preconditions below); no posting was made.
 
-A `reversePayout` never returns `rejected`. Its refusals are thrown faults, not declined outcomes,
-see [reason codes](#reason-codes).
+`reversePayout` returns no `rejected` outcome. A malformed request throws instead; see
+[reason codes](#reason-codes).
 
 ## Postings
 
@@ -86,10 +83,10 @@ On commit, the undo posts one balanced transaction that mirrors the original res
 the full reserved amount out of `PAYOUT_RESERVE` and back into the seller's
 [`earned`](/economy/concepts/accounts-and-double-entry/) account:
 
-| Leg    | Account               | Amount         |
-| ------ | --------------------- | -------------- |
-| Debit  | `PAYOUT_RESERVE`      | `saga.reserve` |
-| Credit | `earned(saga.userId)` | `saga.reserve` |
+| Account                 | Side   | Amount         |
+| ----------------------- | ------ | -------------- |
+| `SYSTEM.PAYOUT_RESERVE` | debit  | `saga.reserve` |
+| `earned(saga.userId)`   | credit | `saga.reserve` |
 
 Both legs are in `CREDIT` and sum to zero, so the books stay
 [balanced](/economy/concepts/accounts-and-double-entry/).
@@ -105,8 +102,7 @@ reverse a payout, even their own. A `user` principal is rejected with `AUTH.UNAU
 
 ## Reason codes
 
-`reversePayout` does not return a `RejectionCode`; every refusal is a thrown fault
-(see [Returns](#returns)). The faults it can throw:
+`reversePayout` returns no reason codes: it has no `rejected` path. It fails only by throwing.
 
 | Code                  | When                                                                                                                                                                      |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
