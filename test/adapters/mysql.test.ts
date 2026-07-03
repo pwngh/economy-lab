@@ -33,7 +33,15 @@ const url = process.env.MYSQL_TEST_URL;
 if (url) {
   runStoreConformance('mysql', async () => {
     const pool = await createMysqlPool(url);
-    await applyMysqlSchema(pool);
+    // End the pool if the schema apply throws (DDL contention when test files run in parallel).
+    // The conformance probe turns the throw into a skip, but a leaked open connection keeps this
+    // test process's event loop alive after its last test, so the run never exits.
+    try {
+      await applyMysqlSchema(pool);
+    } catch (error) {
+      await pool.end().catch(() => {});
+      throw error;
+    }
     return mysqlStore({ pool });
   });
 }

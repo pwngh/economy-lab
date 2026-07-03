@@ -120,7 +120,15 @@ export async function makeIsolatedMysqlStore(opts: {
 }): Promise<Store> {
   const database = safeDatabaseName(freshName('el_iso'));
   const admin = await createMysqlPool(withDatabase(opts.url, null));
-  await admin.query(`CREATE DATABASE \`${database}\``);
+  // CREATE DATABASE is the admin pool's first statement, so a throw here (DDL contention under a
+  // parallel test run) must end the pool before rethrowing: the pool's freshly opened connection
+  // otherwise keeps the test process's event loop alive forever after its tests finish.
+  try {
+    await admin.query(`CREATE DATABASE \`${database}\``);
+  } catch (error) {
+    await admin.end().catch(() => {});
+    throw error;
+  }
 
   // Drops the throwaway database and tears down the admin pool. It tolerates a missing database and
   // a failed drop so that cleanup on a half-built store still ends every pool.

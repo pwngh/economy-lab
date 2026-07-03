@@ -1703,13 +1703,20 @@ export async function postgresStore(
       ? { connectionTimeoutMillis: options.connectionTimeoutMillis }
       : {}),
   });
-  if (schema) {
-    await applyIsolatedSchema(pool, schema);
-  }
+  // End the pool if setup throws: this factory owns the pool it just created, and handing a
+  // leaked open connection to a caller that only sees the throw keeps the process alive.
+  try {
+    if (schema) {
+      await applyIsolatedSchema(pool, schema);
+    }
 
-  // Refuse to run against a database whose schema has drifted from this code. For an
-  // isolated test schema we just applied the current SQL, so this passes by construction.
-  assertSchemaCurrent(await readSchemaVersion(pool), 'Postgres');
+    // Refuse to run against a database whose schema has drifted from this code. For an
+    // isolated test schema we just applied the current SQL, so this passes by construction.
+    assertSchemaCurrent(await readSchemaVersion(pool), 'Postgres');
+  } catch (error) {
+    await pool.end().catch(() => {});
+    throw error;
+  }
 
   const ledger = createLedgerStore(pool, digest, clock);
 

@@ -1861,7 +1861,7 @@ export async function applyMysqlSchema(pool: MysqlPool): Promise<void> {
 // routine whose body contains `;` stays one statement: it is wrapped in `DELIMITER $$ ... $$` so the
 // inner semicolons are not read as statement ends. The directive line itself is not sent to the
 // server. Blank lines and `--` comment lines between statements are skipped, but a comment inside a
-// statement stays with it.
+// statement stays with it — and never terminates it, whatever its prose ends with.
 function splitSqlStatements(sql: string): string[] {
   const statements: string[] = [];
   let delimiter = ';';
@@ -1876,6 +1876,12 @@ function splitSqlStatements(sql: string): string[] {
       continue;
     }
     buffer += line + '\n';
+    // A `--` comment line stays with its statement but never terminates it: prose punctuation at
+    // a comment's end (a trailing `;`) is not a statement end. Only real SQL text can carry the
+    // delimiter.
+    if (trimmed.startsWith('--')) {
+      continue;
+    }
     if (buffer.trimEnd().endsWith(delimiter)) {
       const end = buffer.trimEnd();
       const statement = end.slice(0, end.length - delimiter.length).trim();

@@ -807,12 +807,16 @@ export function runStoreConformance(
     // standalone describes use, and the one ci.yml's `check` job relies on ("conformance tests skip
     // when no backend reachable").
     let store: Store | null = null;
+    let unreachable = 'backend unreachable';
 
     before(async () => {
       try {
         store = await makeStore();
-      } catch {
+      } catch (error) {
         store = null;
+        // Keep the probe's graceful-skip contract, but name the reason: a silent skip reads as
+        // "no backend configured" even when the real cause is a provisioning failure.
+        unreachable = `backend unreachable: ${error instanceof Error ? error.message : String(error)}`;
       }
     });
     after(async () => {
@@ -826,7 +830,7 @@ export function runStoreConformance(
       t: TestContext,
       body: (s: Store) => Promise<void> | void,
     ): Promise<void> | void =>
-      store ? body(store) : t.skip(`${name} backend unreachable`);
+      store ? body(store) : t.skip(`${name} ${unreachable}`);
 
     test('appends a posting and round-trips the balance as a bigint Amount', (t) =>
       withStore(t, appendRoundTripsBalance));

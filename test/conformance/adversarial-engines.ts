@@ -237,6 +237,10 @@ export async function adversarialMysql(): Promise<AdversarialEngine | null> {
     return null;
   }
   const database = safeDatabaseName(freshName('el_adv_my'));
+  // Every pool opened so far, so the catch below can end them all: a "skip this engine" null
+  // return must not leak an open connection, or it pins the test process's event loop and the
+  // run never exits.
+  const opened: MysqlPool[] = [];
   let admin: MysqlPool;
   let schemaPool: MysqlPool;
   let storePool: MysqlPool;
@@ -247,8 +251,10 @@ export async function adversarialMysql(): Promise<AdversarialEngine | null> {
     // DEFINER is the privileged admin: it stays the only writer of `legs` even when invoked by the
     // restricted role below.
     admin = await createMysqlPool(url);
+    opened.push(admin);
     await admin.query(`CREATE DATABASE \`${database}\``);
     schemaPool = await createMysqlPool(withDatabase(url, database));
+    opened.push(schemaPool);
     await applyMysqlSchema(schemaPool);
     await schemaPool.end().catch(() => {});
 
@@ -271,13 +277,18 @@ export async function adversarialMysql(): Promise<AdversarialEngine | null> {
 
     const appUrl = withUserAndDatabase(url, APP_USER, APP_PASSWORD, database);
     storePool = await createMysqlPool(appUrl);
+    opened.push(storePool);
     store = mysqlStore({
       pool: storePool,
       digest: seededDigest(1),
       clock: fixedClock(0),
     });
     rawPool = await createMysqlPool(appUrl);
+    opened.push(rawPool);
   } catch {
+    for (const pool of opened.reverse()) {
+      await pool.end().catch(() => {});
+    }
     return null;
   }
   return {
