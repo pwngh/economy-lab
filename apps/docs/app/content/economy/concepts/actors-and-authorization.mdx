@@ -113,7 +113,7 @@ Accounts being paid _into_, and platform accounts, are left out. Only a drained 
 
 ### Ownership the gate can't see
 
-Some operations name a resource that has no drained account in the request itself: a [subscription](/economy/concepts/lifecycles/) to cancel, a payout saga to act on. The request body carries the subscription id or saga id, not the underlying account, so `debitedUserAccounts` can't check it.
+Some operations name a resource that has no drained account in the request itself: a [subscription](/economy/concepts/subscriptions/) to cancel, a payout saga to act on. The request body carries the subscription id or saga id, not the underlying account, so `debitedUserAccounts` can't check it.
 
 Those operations carry their ownership check inside the handler instead, once the gate has confirmed the actor kind.
 

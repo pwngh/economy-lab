@@ -92,6 +92,20 @@ The `promo`-funded part spends down the buyer's marketing grant and funds the se
   platform nothing.
 </Callout>
 
+### How the split is computed
+
+For the `spendable`-funded part, the injected [fee policy](/economy/ports/pricing/) builds the credit side through `splitLegs`. The fee comes off the top, the net is divided among the sale's recipients by share, and `REVENUE` receives the fee plus any rounding leftover, so no minor unit of the price is lost.
+
+```ts
+// A 1000-credit sale, 30% fee, one seller taking 100%:
+//   credit earned(seller)  700
+//   credit REVENUE         300   (fee + leftover)
+// Credits store negative, so the two lines sum to -1000, the price.
+// The spend handler adds the buyer's matching debit, zeroing the posting.
+```
+
+The `promo`-funded part carries no fee, so it skips `splitLegs`: sellers are paid from `REVENUE` and the buyer's `promo` is spent down against `PROMO_FLOAT`, as the second table above shows. Either way the lines net to zero, and trust cash still covers every spendable credit afterward.
+
 ## Authorization
 
 `spend` is open to an end user: the buyer runs it on their own wallet. A `system` or `operator` [actor](/economy/concepts/actors-and-authorization/) may also call it.
@@ -105,7 +119,7 @@ A well-formed `spend` on a healthy system can be declined for these reasons, eac
 | Code                 | When                                                                                                                                  |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `INSUFFICIENT_FUNDS` | The buyer can't cover the price from `promo` plus `spendable`.                                                                        |
-| `FUNDS_IMMATURE`     | The buyer has the credits, but the `spendable` part would dip into funds still in a [settlement hold](/economy/concepts/lifecycles/). |
+| `FUNDS_IMMATURE`     | The buyer has the credits, but the `spendable` part would dip into funds still in a [settlement hold](/economy/concepts/credit-maturity/). |
 | `DUPLICATE_ORDER`    | A sale already exists for this `orderId` under a different `idempotencyKey`, so a second charge is refused.                           |
 | `RISK_DENIED`        | The purchase would push the buyer past their recent-spending [velocity limit](/economy/concepts/spend-velocity/).                     |
 | `ECONOMY_PAUSED`     | A maintenance window is in effect, so an end user's purchase is declined. The decline carries `resumesAt`.                            |

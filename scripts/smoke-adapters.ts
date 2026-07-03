@@ -21,8 +21,7 @@
  *
  * Services (docker compose up -d): Redis :6379, LocalStack/SQS :4566.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
- *   messaging} for the adapter wiring this exercises.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage} for the adapter wiring this exercises.
  */
 
 import { createServer } from 'node:http';

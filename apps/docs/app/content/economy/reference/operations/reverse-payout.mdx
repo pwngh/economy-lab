@@ -18,7 +18,7 @@ related:
 
 `reversePayout` undoes an in-flight payout by hand. It does two things in one
 [`Transaction`](/economy/concepts/accounts-and-double-entry/): it marks the payout's
-[`Saga`](/economy/concepts/lifecycles/#the-payout-saga) as `FAILED`, and it returns the reserved
+[`Saga`](/economy/concepts/payout-saga/) as `FAILED`, and it returns the reserved
 credits to the seller's `earned` account.
 
 <Callout type="danger">
@@ -113,7 +113,7 @@ reverse a payout, even their own. A `user` principal is rejected with `AUTH.UNAU
 ## Preconditions and invariants
 
 Only a payout with credits still sitting in `PAYOUT_RESERVE` can be reversed. The handler keys off
-the saga's [state](/economy/concepts/lifecycles/):
+the saga's [state](/economy/concepts/payout-saga/):
 
 - `RESERVED`: the reserve is held but not yet handed to the provider. Reversal moves the saga to
   `FAILED` and posts the undo.

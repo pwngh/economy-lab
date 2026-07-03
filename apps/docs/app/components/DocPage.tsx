@@ -21,6 +21,7 @@ import {
   PayoutSaga,
   RateLadder,
   SubmitPipeline,
+  SubscriptionStates,
   WorkerSweeps,
 } from '~/components/Diagrams.tsx';
 import { SourceLink } from '~/components/SourceLink.tsx';
@@ -33,6 +34,7 @@ const MDX_COMPONENTS = {
   Callout,
   ChartOfAccounts,
   PayoutSaga,
+  SubscriptionStates,
   HashChain,
   RateLadder,
   SubmitPipeline,

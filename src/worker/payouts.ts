@@ -116,7 +116,7 @@ async function bumpAttempt(
 // Returns true if THIS call set the saga aside, false if it lost the race. One transaction couples
 // the FAILED flip (a compare-and-set) with the reverse of the request-time reservation, so the
 // reserve is never returned twice on a lost race.
-// See https://economy-lab-docs.pages.dev/economy/concepts/lifecycles/ for the payout saga states
+// See https://economy-lab-docs.pages.dev/economy/concepts/payout-saga/ for the payout saga states
 // and the shared CAS guard that releases the reserve exactly once.
 //
 // Locking PAYOUT_RESERVE and the seller's earned account in the global sorted order serializes this

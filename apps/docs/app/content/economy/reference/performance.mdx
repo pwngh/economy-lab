@@ -80,7 +80,7 @@ In-memory runs with no setup. For the SQL rows, apply the schema first (`make db
 BENCH_OPS=5000 make bench
 ```
 
-`BENCH_SHARDS` sets [`PLATFORM_SHARDS`](/economy/reference/configuration/) for the economy under test, so back-to-back runs can show what [splitting the hot platform accounts](/economy/concepts/concurrency/) buys at each shard count:
+`BENCH_SHARDS` sets [`PLATFORM_SHARDS`](/economy/reference/configuration/) for the economy under test, so back-to-back runs can show what [splitting the hot platform accounts](/economy/concepts/platform-sharding/) buys at each shard count:
 
 ```bash
 BENCH_SHARDS=4 make bench

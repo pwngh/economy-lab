@@ -41,7 +41,7 @@ interface Processor {
 
 `key` is the [idempotency](/economy/concepts/idempotency/) key that makes a resend safe. The background worker passes the payout saga id here, so a retried submit pays out at most once. `userId` is an opaque `usr_…` token, never personal data. `amount` is in real USD, already converted from the seller's reserved credits at the [payout rate](/economy/concepts/money-model/).
 
-The return is just `{ providerRef }`: the provider's own id for the disbursement, which the lab records on the [payout saga](/economy/concepts/lifecycles/) for the audit trail.
+The return is just `{ providerRef }`: the provider's own id for the disbursement, which the lab records on the [payout saga](/economy/concepts/payout-saga/) for the audit trail.
 
 There is deliberately no "did it settle?" method on this port. Settlement takes time, and polling for it would couple the request path to the provider's latency. Instead the provider reports settlement and disputes the other way, through inbound webhooks.
 

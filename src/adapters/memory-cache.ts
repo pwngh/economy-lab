@@ -31,8 +31,7 @@ interface Entry {
  *   await cache.set('bal:usr_42:spendable', 'CREDIT:12.34', 60_000);
  *   await cache.get('bal:usr_42:spendable'); // 'CREDIT:12.34' | null
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
- *   messaging} for the cache and store port contracts.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage} for the cache and store port contracts.
  */
 export function memoryCache(clock: Clock = { now: () => Date.now() }): Cache {
   const store = new Map<string, Entry>();

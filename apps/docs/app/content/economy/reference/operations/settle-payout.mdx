@@ -17,7 +17,7 @@ related:
   ]
 ---
 
-`settlePayout` runs the `SUBMITTED → SETTLED` step of the [payout saga](/economy/concepts/lifecycles/#the-payout-saga). It empties the seller's reserved credits into platform revenue and moves the matching USD out of [trust](/economy/concepts/solvency/).
+`settlePayout` runs the `SUBMITTED → SETTLED` step of the [payout saga](/economy/concepts/payout-saga/). It empties the seller's reserved credits into platform revenue and moves the matching USD out of [trust](/economy/concepts/solvency/).
 
 It does not call the [rail](/economy/ports/processor/). The rail has already paid. This operation records that fact and posts the money.
 

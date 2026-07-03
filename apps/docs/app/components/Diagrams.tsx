@@ -191,7 +191,7 @@ function State({
 
 /**
  * The payout saga state machine: `RESERVED → SUBMITTED → SETTLED`, with a force-fail branch to
- * `FAILED` that returns the reserve to the seller. Mirrors `lifecycles` and `src/worker/payouts.ts`.
+ * `FAILED` that returns the reserve to the seller. Mirrors `payout-saga` and `src/worker/payouts.ts`.
  */
 export function PayoutSaga() {
   return (
@@ -242,6 +242,59 @@ export function PayoutSaga() {
       <text className="d-note" x={70} y={232}>
         SagaState also declares REQUESTED; a live payout opens already RESERVED, in the same
         transaction as the reservation.
+      </text>
+    </Diagram>
+  );
+}
+
+/**
+ * The subscription state machine: `ACTIVE` renews in place until a cap of failed charges lapses it
+ * or a cancel ends it. Mirrors `subscriptions` and `src/worker/subscriptions.ts`.
+ */
+export function SubscriptionStates() {
+  return (
+    <Diagram
+      viewBox="0 0 760 250"
+      label="The subscription state machine. A subscription starts ACTIVE and renews in place each period; a successful renewal resets its failure count. When a renewal keeps failing and the attempt count reaches the cap, the sweep moves it to LAPSED, revoking the SKU entitlement in the same step. The user or an operator can move it to CANCELED at any time; the current period is not refunded. LAPSED and CANCELED are terminal."
+      caption="A subscription only moves forward: it renews in place until a cap of failed charges lapses it or a cancel ends it. Both ends are terminal, and a lapse revokes the SKU entitlement in the same transaction."
+    >
+      <ArrowDefs />
+
+      <State x={70} y={88} name="ACTIVE" sub="renews each period" />
+      <State x={520} y={36} name="LAPSED" sub="terminal" variant="bad" />
+      <State x={520} y={158} name="CANCELED" sub="terminal" />
+
+      {/* successful renewal loops in place */}
+      <path
+        className="d-edge"
+        d="M104,84 C84,34 188,34 168,84"
+        fill="none"
+        markerEnd="url(#dgm-arrow)"
+      />
+      <text className="d-elabel" x={136} y={30} textAnchor="middle">
+        renewal succeeds — count resets
+      </text>
+
+      {/* involuntary exit */}
+      <line className="d-edge bad" x1={202} y1={100} x2={516} y2={62} markerEnd="url(#dgm-arrow)" />
+      <text className="d-elabel" x={359} y={44} textAnchor="middle">
+        renewals keep failing (cap)
+      </text>
+      <text className="d-elabel" x={359} y={60} textAnchor="middle">
+        → entitlement revoked, same step
+      </text>
+
+      {/* voluntary exit */}
+      <line className="d-edge" x1={202} y1={122} x2={516} y2={176} markerEnd="url(#dgm-arrow)" />
+      <text className="d-elabel" x={359} y={196} textAnchor="middle">
+        user or operator cancels
+      </text>
+      <text className="d-elabel" x={359} y={212} textAnchor="middle">
+        → current period not refunded
+      </text>
+
+      <text className="d-note" x={70} y={232}>
+        Renewals draw only from spendable; the first period may draw on promo credit.
       </text>
     </Diagram>
   );

@@ -11,7 +11,7 @@ sourceRefs:
     'src/accounts.ts#L235-L248 · classify',
   ]
 related:
-  ['economy/concepts/lifecycles', 'economy/concepts/actors-and-authorization']
+  ['economy/concepts/payout-saga', 'economy/concepts/actors-and-authorization']
 ---
 
 ## The idea
@@ -60,7 +60,7 @@ The platform gets paid only from the **surplus**: cash sitting beyond what's owe
 
 The backing check never blocks a write. It's an audit that re-derives the position from the ledger after the fact. `proveEconomy` runs it in three steps.
 
-First, it walks every account and sums the balances `classify` marks `custodial`, filtered to `CREDIT` so a stray USD balance can't slip in. Then it converts that total to required USD at par, rounding down. Finally it reads the trust cash on hand and sets `shortfall` to `required − trust_cash` when the cash falls short, or zero otherwise. On a [sharded ledger](/economy/concepts/concurrency/), that trust-cash figure is the sum of every `trust_cash` shard row.
+First, it walks every account and sums the balances `classify` marks `custodial`, filtered to `CREDIT` so a stray USD balance can't slip in. Then it converts that total to required USD at par, rounding down. Finally it reads the trust cash on hand and sets `shortfall` to `required − trust_cash` when the cash falls short, or zero otherwise. On a [sharded ledger](/economy/concepts/platform-sharding/), that trust-cash figure is the sum of every `trust_cash` shard row.
 
 `backed` then holds whenever `shortfall === 0n`.
 
@@ -86,6 +86,6 @@ A `processor_orphan` is the dangerous direction. It's real money the processor m
 
 The fee sweep leans on the same surplus calculation to take only the platform's own money.
 
-The [storage engines](/economy/ports/storage-and-messaging/) carry the conservation, no-overdraft, and balance-integrity invariants in the database itself. The backing check is the independent audit layered over them: it re-derives solvency from the legs to catch a bug in the enforcement rather than trusting it.
+The [storage engines](/economy/ports/storage/) carry the conservation, no-overdraft, and balance-integrity invariants in the database itself. The backing check is the independent audit layered over them: it re-derives solvency from the legs to catch a bug in the enforcement rather than trusting it.
 
-The next four concepts are the gates that keep a request from ever putting the books in a bad state: [actors and authorization](/economy/concepts/actors-and-authorization/), [idempotency](/economy/concepts/idempotency/), [lifecycles](/economy/concepts/lifecycles/), and [credit maturity](/economy/concepts/credit-maturity/).
+The next five concepts are the gates that keep a request from ever putting the books in a bad state: [actors and authorization](/economy/concepts/actors-and-authorization/), [idempotency](/economy/concepts/idempotency/), [the payout saga](/economy/concepts/payout-saga/), [subscriptions](/economy/concepts/subscriptions/), and [credit maturity](/economy/concepts/credit-maturity/).

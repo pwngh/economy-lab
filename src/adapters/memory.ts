@@ -1257,8 +1257,7 @@ function createReplayStore(): ReplayStore {
  * function and clock default to deterministic versions, so a plain `memoryStore()` is
  * reproducible.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
- *   messaging} for the store ports this adapter implements.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage} for the store ports this adapter implements.
  */
 export function memoryStore(deps?: {
   digest?: Digest;

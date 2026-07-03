@@ -192,7 +192,7 @@ function payoutFee(gross: Amount, feeBps: number): Amount {
 // two entries and the queued event so the seller is not paid twice. Safe to retry: a redelivered
 // settle reloads the saga, finds it no longer SUBMITTED, and is turned away at `refuseNotSubmitted`
 // before posting anything.
-// See https://economy-lab-docs.pages.dev/economy/concepts/lifecycles/ for how a compare-and-set
+// See https://economy-lab-docs.pages.dev/economy/concepts/payout-saga/ for how a compare-and-set
 // posts its money in the same transaction, so a re-driven step takes effect at most once.
 function assertAdvanced(advanced: boolean, saga: Saga, to: SagaState): void {
   if (!advanced) {

@@ -8,7 +8,6 @@ sourceRefs:
   [
     'src/accounts.ts#L60',
     'src/ledger.ts#L114',
-    'src/pricing.ts#L52 · splitLegs',
   ]
 related:
   [
@@ -55,7 +54,7 @@ The platform's house accounts are the fixed `SYSTEM` map, each id prefixed `plat
 | `PROMO_FLOAT`    | `CREDIT` | The offsetting entry for credits granted as promos.                                |
 | `OPENING_EQUITY` | `CREDIT` | The offset used once, to seed balances on a cold start.                            |
 
-One wrinkle on the table above: with [`PLATFORM_SHARDS`](/economy/reference/configuration/) set past `1`, each hot `SYSTEM` account splits into shard rows, the bare id plus `platform:revenue#1` and so on. A shard row behaves like its parent in every way that matters here (identity checks strip the `#` suffix first, so currency, class, and normal side all come from the base account), and the logical balance is the sum over the rows. [Concurrency](/economy/concepts/concurrency/) explains why the split exists and how a posting picks its shard.
+One wrinkle on the table above: with [`PLATFORM_SHARDS`](/economy/reference/configuration/) set past `1`, each hot `SYSTEM` account splits into shard rows, the bare id plus `platform:revenue#1` and so on. A shard row behaves like its parent in every way that matters here (identity checks strip the `#` suffix first, so currency, class, and normal side all come from the base account), and the logical balance is the sum over the rows. [Platform sharding](/economy/concepts/platform-sharding/) explains why the split exists and how a posting picks its shard.
 
 Currency is a property of the account, not the posting. Everything is `CREDIT` except `TRUST_CASH`, `USD_CLEARING`, and `REVENUE_USD`, which are `USD` (see [the money model](/economy/concepts/money-model/) for `Amount` and `Currency`). If a leg's amount currency doesn't match its account, the posting is rejected with `CURRENCY_MISMATCH`.
 
@@ -100,26 +99,8 @@ These app-side checks aren't the real enforcer. They're a courtesy that hands yo
 
 The [prover](/economy/concepts/integrity/) goes further still, re-checking conservation and overdraft after every committed operation.
 
-## How a sale splits: `splitLegs`
-
-A [`spend`](/economy/reference/operations/spend/) is the clearest worked example. The buyer pays from `promo` first, then `spendable`, and each funded part is its own balanced set of legs in one transaction.
-
-For the spendable-funded part, the injected [fee policy](/economy/ports/pricing/) builds the credit side through `splitLegs`. The fee comes off the top, the net is divided among the sale's recipients by share, and `REVENUE` receives the fee plus any rounding leftover so no minor unit of the price is lost.
-
-Recipient shares have to sum to `10000` basis points (`bps`), which is 100%. `splitLegs` enforces that, and the `spend` handler checks it first.
-
-```ts
-// A 1000-credit sale, 30% fee, one seller taking 100%:
-//   credit earned(seller)  700
-//   credit REVENUE         300   (fee + leftover)
-// Credits store negative, so the two lines sum to -1000, the price.
-// The spend handler adds the buyer's matching debit, zeroing the posting.
-```
-
-The promo-funded part works differently, because a promo grant isn't money the buyer paid. Sellers are paid from `REVENUE` rather than from the buyer, and the buyer's `promo` is spent down against `PROMO_FLOAT`. Either way, the lines net to zero, and trust cash still covers every spendable credit afterward.
-
 ## What relies on it
 
-- [`spend`](/economy/reference/operations/spend/) and every other operation post through `postEntry`, so each commits a single balanced transaction or none at all.
+- [`spend`](/economy/reference/operations/spend/) and every other operation post through `postEntry`, so each commits a single balanced transaction or none at all; the worked example of how a sale's legs split lives on the spend page.
 - [Solvency](/economy/concepts/solvency/) reads `classify` to total only `custodial` credits against `TRUST_CASH`; the backing line and the credit it backs are legs of one posting.
 - [Integrity](/economy/concepts/integrity/) hash-chains each account's legs and re-checks conservation, no-overdraft, and balance consistency after every committed posting.

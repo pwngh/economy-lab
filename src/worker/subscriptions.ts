@@ -84,7 +84,7 @@ export async function sweepDueSubscriptions(
 // Bills one subscription and catches any error so a single failure cannot break the batch. A
 // retryable error bumps `attempts` and retries next sweep until the cap, where the row LAPSES rather
 // than re-billing forever; any other error dead-letters the row right away.
-// See https://economy-lab-docs.pages.dev/economy/concepts/lifecycles/ for the subscription states
+// See https://economy-lab-docs.pages.dev/economy/concepts/subscriptions/ for the subscription states
 // and the retry-cap-to-lapse rule.
 //
 // The cap test is `next >= cap`, where `next` is `attempts + 1`. With the default cap of 10, the

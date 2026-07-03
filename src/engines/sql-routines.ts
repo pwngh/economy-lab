@@ -24,8 +24,7 @@ type Link = { account: AccountRef; prevHash: string; hash: string };
  * Selects which placeholder style the routines emit. Postgres uses `$1,$2,...` and MySQL uses
  * `?,?,...`.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
- *   messaging} for the stored-routine boundary.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage} for the stored-routine boundary.
  */
 export type SqlDialect = 'postgres' | 'mysql';
 

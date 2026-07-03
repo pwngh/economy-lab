@@ -187,7 +187,7 @@ create table sales (
 -- Outbox: events waiting to be published, written in the same transaction as the ledger change that
 -- caused them, so an event and its ledger effect always exist together. A background relay publishes
 -- pending rows at-least-once (consumers dedupe on event id); the partial index keeps that scan fast.
--- See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the outbox+inbox.
+-- See https://economy-lab-docs.pages.dev/economy/ports/messaging/ for the outbox+inbox.
 -- ============================================================================
 create table outbox (
   id                 text        primary key,                -- obx_<uuid>
@@ -208,7 +208,7 @@ create index outbox_pending_idx on outbox (created_at) where status = 'pending';
 -- submits pending rows oldest-first; `attempts`/dead-lettering keep a poison event from wedging the
 -- queue. `key` is the provider event id (UNIQUE -> redelivery is a no-op insert, applied at most once);
 -- the partial index keeps the pending-rows scan fast.
--- See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the outbox+inbox.
+-- See https://economy-lab-docs.pages.dev/economy/ports/messaging/ for the outbox+inbox.
 -- ============================================================================
 create table inbox (
   id                 text        primary key,                -- ibx_<uuid>

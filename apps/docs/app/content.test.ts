@@ -24,12 +24,14 @@ const CONTRACT = [
     'solvency',
     'actors-and-authorization',
     'idempotency',
-    'lifecycles',
+    'payout-saga',
+    'subscriptions',
     'credit-maturity',
     'integrity',
     'the-proof',
     'spend-velocity',
     'concurrency',
+    'platform-sharding',
   ].map((s) => `economy/concepts/${s}`),
   ...[
     'top-up',
@@ -56,7 +58,7 @@ const CONTRACT = [
     'configuration',
     'performance',
   ].map((s) => `economy/reference/${s}`),
-  ...['signer', 'processor', 'rates', 'pricing', 'storage-and-messaging'].map(
+  ...['signer', 'processor', 'rates', 'pricing', 'storage', 'messaging'].map(
     (s) => `economy/ports/${s}`,
   ),
   'economy/scope-and-non-goals',
@@ -68,9 +70,9 @@ describe('slug contract', () => {
     expect(missing).toEqual([]);
   });
 
-  it('has 39 leaf pages, all under the economy/ section root', () => {
-    expect(CONTRACT).toHaveLength(39);
-    expect(docs.length).toBeGreaterThanOrEqual(39);
+  it('has 42 leaf pages, all under the economy/ section root', () => {
+    expect(CONTRACT).toHaveLength(42);
+    expect(docs.length).toBeGreaterThanOrEqual(42);
     expect(docs.every((d) => d.slug.startsWith('economy/'))).toBe(true);
   });
 });

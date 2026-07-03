@@ -37,8 +37,7 @@ import type {
  * bytes hash to the same digest on every runtime, so the chain head an engine writes is
  * reproducible everywhere.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
- *   messaging} for how engines plug into the ledger.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage} for how engines plug into the ledger.
  */
 export function defaultDigest(): Digest {
   return sha256Digest();

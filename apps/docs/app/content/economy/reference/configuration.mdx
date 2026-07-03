@@ -14,7 +14,7 @@ related:
   [
     'economy/ports/rates',
     'economy/ports/processor',
-    'economy/ports/storage-and-messaging',
+    'economy/ports/storage',
     'economy/reference/http-service',
   ]
 ---
@@ -100,8 +100,8 @@ stuck past its threshold is overdue. `DEFAULT` covers any state not named.
 ## Maturity horizons
 
 Topped-up funds wait before they can be spent or paid out, keyed by funding source. An
-unlisted source falls back to the `default` entry. See [maturity in the
-lifecycle](/economy/concepts/lifecycles/) for why the holding period exists.
+unlisted source falls back to the `default` entry. See [credit
+maturity](/economy/concepts/credit-maturity/) for why the holding period exists.
 
 | Variable                      | Meaning                                                                                                   | Default                  |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------ |
@@ -124,7 +124,7 @@ that gate.
 
 ## Platform sharding
 
-A hot platform account (`REVENUE`, `STORED_VALUE`, `TRUST_CASH`, ...) is one row, and concurrent postings of the same kind queue on its lock. `PLATFORM_SHARDS` splits each one across several rows so those postings spread out; [concurrency](/economy/concepts/concurrency/) covers which accounts shard and how a posting picks its row.
+A hot platform account (`REVENUE`, `STORED_VALUE`, `TRUST_CASH`, ...) is one row, and concurrent postings of the same kind queue on its lock. `PLATFORM_SHARDS` splits each one across several rows so those postings spread out; [platform sharding](/economy/concepts/platform-sharding/) covers which accounts shard and how a posting picks its row.
 
 | Variable          | Meaning                                                                                | Default |
 | ----------------- | -------------------------------------------------------------------------------------- | ------- |
@@ -178,7 +178,7 @@ gap between `buy` and `par` is the platform [spread](/economy/concepts/money-mod
 
 `DATABASE_URL` picks the storage backend, and the cache and dispatcher URLs pick their
 transports. Each is optional: unset means the dependency-free in-memory adapter. These belong
-to [storage and messaging](/economy/ports/storage-and-messaging/), read by
+to [storage](/economy/ports/storage/), read by
 `capabilitiesFromEnv` in `src/index.ts`.
 
 | Variable         | Meaning                                                                                 | Default                     |

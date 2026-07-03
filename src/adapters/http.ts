@@ -662,8 +662,7 @@ function sessionUnit(
  * and points the client at it, so a bare `httpStore()` is a complete, working Store that
  * needs no running service or network.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
- *   messaging} for how this HTTP backend implements the storage port.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage} for how this HTTP backend implements the storage port.
  */
 export function httpStore(options?: HttpStoreOptions): Store {
   const backing = memoryStore();

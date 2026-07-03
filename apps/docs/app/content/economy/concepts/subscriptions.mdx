@@ -1,0 +1,57 @@
+---
+title: 'Subscriptions'
+summary: 'A subscription is a stored record the worker renews period by period: a one-charge-per-period claim keeps overlapping sweeps from double-billing, and a retry cap lapses a subscription that can no longer pay.'
+plain: "A subscription here is a saved note that says “bill this person again on this date.” A background job reads the note each period, charges once, and moves the date forward — and if the charge keeps failing, it stops the subscription rather than retrying forever."
+order: 62
+status: stable
+sourceRefs:
+  [
+    'src/ports.ts#L956-L957 · SUBSCRIPTION_STATES',
+    'src/worker/subscriptions.ts',
+  ]
+related:
+  [
+    'economy/reference/operations/cancel-subscription',
+    'economy/concepts/payout-saga',
+  ]
+---
+
+A subscription outlives the request that created it: it bills period after period. Like [the payout saga](/economy/concepts/payout-saga/), it's modeled as a stored record the [background worker](/economy/reference/background-worker/) advances, never as a thread the system holds open. A crash leaves it parked on a known step, and a step that runs twice still counts once.
+
+[`subscribe`](/economy/reference/operations/subscribe/) charges the first period and grants the buyer an `Entitlement` to the SKU. From there, the worker's `subscriptions` sweep does the recurring work.
+
+## Renewals
+
+Each period the sweep claims a one-charge-per-period key (so overlapping sweeps can't double-bill), debits the subscriber's `spendable`, pays the seller, and moves the next due date forward.
+
+The renewal claim is a compare-and-set. `subscriptions.markBilled` sets the next period only if the row still shows the period the sweep claimed, so the loser of a race treats it as a no-op (see <SourceLink to="src/ports.ts#L671-L676 · SubscriptionStore.markBilled" />).
+
+The first period may draw on promo credit; renewals come only from `spendable`.
+
+## The states
+
+A `Subscription` carries its own `SubscriptionState`: `ACTIVE`, `LAPSED`, `CANCELED` (see <SourceLink to="src/ports.ts#L956-L957 · SUBSCRIPTION_STATES" />).
+
+<SubscriptionStates />
+
+`maxSubscriptionAttempts` separates a transient charge failure from a subscription that is never going to pay. The sweep retries a failed charge a few times before the subscription lapses, and a success resets the count to `0`. Once the count reaches the cap, the sweep flips `ACTIVE → LAPSED`, revokes the entitlement, and emits the lapse event in one transaction (see <SourceLink to="src/worker/subscriptions.ts#L167-L175 · lapseAtomically" />).
+
+[`cancelSubscription`](/economy/reference/operations/cancel-subscription/) is the voluntary exit: the user or an operator flips `ACTIVE → CANCELED`. The current period is not refunded.
+
+## The invariant
+
+A subscription bills **once per period**, and its state only moves forward, no matter how many times the sweep re-runs or how its triggers race.
+
+Every transition is a compare-and-set against the current state, so a step is applied by exactly one writer. The charge that accompanies a renewal commits in the same database transaction as the due-date move, so the books and the record never diverge.
+
+## How it's enforced
+
+- **The store's compare-and-set method.** `SubscriptionStore.markBilled` is a conditional update that returns whether it changed a row, so a racing sweep can detect and stand down on a lost claim (see <SourceLink to="src/ports.ts#L638-L684 · SubscriptionStore" />).
+- **One transaction per step.** A renewal posts its charge and moves the due date inside `store.transaction`; a lapse flips the state, revokes the entitlement, and emits its event the same way. A partial step rolls back whole.
+- **The retry cap.** A subscription that can't pay doesn't retry forever: the attempt count is stored on the row, and the cap turns repeated failure into a single, terminal `LAPSED` transition.
+
+## Operations and ports that rely on it
+
+[`subscribe`](/economy/reference/operations/subscribe/) opens the record and [`cancelSubscription`](/economy/reference/operations/cancel-subscription/) ends it; the worker's `subscriptions` sweep drives everything in between.
+
+The records persist through the `SubscriptionStore` sub-store of the [`Store`](/economy/ports/storage/) port. Every transition is a compare-and-set and every step is one transaction — the same discipline [the payout saga](/economy/concepts/payout-saga/) relies on, applied to a record that recurs instead of one that completes.

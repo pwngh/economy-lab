@@ -1,0 +1,51 @@
+---
+title: 'Messaging: outbox, inbox, dispatcher'
+summary: 'Events leave through a transactional outbox and arrive through a verified inbox, with the Dispatcher as the delivery seam. Everything is at-least-once, deduped by event id.'
+order: 60
+status: stable
+notes:
+  - text: "The transactional outbox is a standard pattern; Chris Richardson's microservices.io catalog gives the canonical write-up."
+    href: 'https://microservices.io/patterns/data/transactional-outbox.html'
+  - text: "Dead-lettering is messaging's Dead Letter Channel pattern, from Hohpe and Woolf's Enterprise Integration Patterns (2003)."
+    href: 'https://www.enterpriseintegrationpatterns.com/patterns/messaging/DeadLetterChannel.html'
+sourceRefs: ['src/worker/relay.ts#L56 · relayOutbox', 'src/adapters/sqs.ts']
+related: ['economy/ports/storage', 'economy/ports/processor']
+---
+
+Money moves and messages about money are different things, and they fail differently. A posting either commits or it doesn't; a message can be sent and lost, sent twice, or sent about a move that never committed.
+
+This page covers the ports that keep the two honest with each other: the `Dispatcher` (events out), and the transactional outbox and inbox rows those events flow through. The rows themselves live on the [`Store`](/economy/ports/storage/); the patterns that use them live here.
+
+## The `Dispatcher`: events out
+
+The `Dispatcher` is the simplest port in the system: a single function that takes an `EconomyEvent` and hands it off for delivery. The core builds the event; the adapter decides where it goes.
+
+```ts
+type Dispatcher = (event: EconomyEvent, options?: Options) => Promise<void>;
+```
+
+Two adapters ship. `sqsDispatcher` in `src/adapters/sqs.ts` publishes each event to an Amazon SQS queue as JSON, and there's an HTTP dispatcher that POSTs it to a configured URL. With neither `SQS_QUEUE_URL` nor `DISPATCHER_URL` set, no dispatcher is wired: the worker's relay sweep short-circuits and outgoing events stay pending in the outbox. The `Dispatcher` is optional; the economy runs without one.
+
+Delivery is at-least-once. SQS may deliver a message twice, so every event carries its id and the receiver drops duplicates, the same pattern as the outbox below.
+
+## The outbox
+
+There's a problem the `Dispatcher` alone doesn't solve: if the money commits but the event send fails, the event is lost; if you send first and the commit rolls back, you've announced a move that never happened. The fix is to make the event part of the transaction.
+
+That's the transactional outbox.<Cite n={1} /> When a money move commits, its outgoing event is written to the `outbox` sub-store _in the same database transaction_. A separate relay ([the background worker](/economy/reference/background-worker/)) picks up pending rows afterward and ships them through the `Dispatcher`. An event is never sent for a rolled-back move, nor lost for a committed one.
+
+The relay is `relayOutbox` in `src/worker/relay.ts`. It claims a batch of pending rows, sends each in its own try/catch so one failure can't stop the batch, and marks the delivered ones done. A send that throws is left pending with its attempt count bumped, retried next run; once it hits the configured cap it's dead-lettered<Cite n={2} /> to a terminal `dead` state, so one poison event can't wedge the queue behind it.
+
+## The inbox
+
+The `inbox` is the mirror image, for events coming _in_. A verified provider webhook is mapped to the [`Operation`](/economy/reference/outcomes-and-reason-codes/) it should apply, then saved to the `inbox` in the same transaction as the webhook ingress that claimed it. A separate apply sweep submits each pending operation and marks the row applied.
+
+An inbound event can't be applied without first being recorded, and every recorded event is eventually applied or dead-lettered. The apply is off the request path: the webhook returns as soon as the row is safely stored, and the money moves when the worker drains it.
+
+Webhook ingress and the provider side of all this belong to the [processor port](/economy/ports/processor/); the outbox/inbox is the storage seam those flows write through.
+
+## What the host owns
+
+The dispatcher adapters are economy-lab's own; the queue on the far side is the host's. The host constructs the SQS client and owns the queue, its retention, and its consumers. economy-lab publishes to it only when `SQS_QUEUE_URL` selects it.
+
+The [`@aws-sdk/client-sqs`](https://docs.aws.amazon.com/AWSJavaScriptSDK/v3/latest/client/sqs/) driver is a peer dependency, so the host pins the version it runs. The adapter types the client's surface structurally, so the file compiles and unit-tests without the package installed.

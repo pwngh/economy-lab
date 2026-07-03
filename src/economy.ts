@@ -164,7 +164,7 @@ function cacheKey(account: AccountRef): string {
 // Runs a cache operation, logging and falling back on any error: a `get` becomes a miss and a `set`
 // or `invalidate` a no-op. The cache is best-effort, so adding one can only speed reads, never make
 // them fail (a driver's retryable STORE.FAILURE is absorbed here).
-// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for why the cache is
+// See https://economy-lab-docs.pages.dev/economy/ports/storage/ for why the cache is
 // best-effort and every miss is safe.
 async function bestEffortCache<T>(
   ctx: Ctx,
@@ -631,7 +631,7 @@ async function lockAccounts(step: Step): Promise<void> {
 // After a successful posting, queues the matching notification event, such as "credits topped up".
 // The event is written into the outbox in the same transaction as the posting, so it ships only if
 // the posting committed. A rollback leaves no stray event, and a commit always has its event queued.
-// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for how the legs and
+// See https://economy-lab-docs.pages.dev/economy/ports/messaging/ for how the legs and
 // the event commit in one transaction, so they all land or none do.
 async function emitEvents(
   step: Step,

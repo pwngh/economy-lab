@@ -113,7 +113,7 @@ export async function requestPayout(
 // Builds the saga record. It opens in RESERVED because the credits were set aside in the same
 // DB transaction as this record. `rateId` locks the CREDIT-to-USD rate so the worker later pays
 // at the rate that applied at request time, and `dueAt` is when the worker first tries to submit.
-// See https://economy-lab-docs.pages.dev/economy/concepts/lifecycles/ for the payout saga's
+// See https://economy-lab-docs.pages.dev/economy/concepts/payout-saga/ for the payout saga's
 // states and how the worker advances RESERVED to SUBMITTED to SETTLED.
 function sagaOf(
   operation: Extract<Operation, { kind: 'requestPayout' }>,

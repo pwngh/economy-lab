@@ -58,8 +58,7 @@ function storeFault(operation: string, cause: unknown): never {
  *   await cache.set('balance:usr_42:spendable', 'CREDIT:12.34', 60_000);
  *   await cache.get('balance:usr_42:spendable'); // 'CREDIT:12.34' | null
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
- *   messaging} for how the cache port backs hot reads.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage} for how the cache port backs hot reads.
  */
 export function redisCacheFrom(
   client: RedisClient,

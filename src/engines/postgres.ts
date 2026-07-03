@@ -876,7 +876,7 @@ function rowToSale(row: Record<string, unknown>): Sale {
 // money move, a relay later reads a batch (`claimBatch`), sends each, and calls `markRelayed`.
 // `claimBatch` uses `for update skip locked` so several relay workers run at once without two
 // grabbing the same row.
-// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the outbox
+// See https://economy-lab-docs.pages.dev/economy/ports/messaging/ for the outbox
 // pattern (write-with-the-transaction, relay-later, dedupe-by-id).
 function createOutboxStore(q: Queryable): OutboxStore {
   return {
@@ -954,7 +954,7 @@ function rowToOutbox(row: Record<string, unknown>): OutboxMessage {
 // SQL) so a redelivered event is a no-op that returns the existing row. A separate apply worker
 // reads a batch (`claimInbound`) and calls `markApplied`. `claimInbound` uses `for update skip
 // locked` so several apply workers run at once without two grabbing the same row.
-// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the inbox pattern
+// See https://economy-lab-docs.pages.dev/economy/ports/messaging/ for the inbox pattern
 // (record-in-the-ingress-transaction, apply-later, dedupe-by-id).
 function createInboxStore(q: Queryable): InboxStore {
   return {
@@ -1680,8 +1680,7 @@ export interface PostgresStoreOptions {
  * drops it. The hash dependency defaults to the deterministic SHA-256; the clock defaults to
  * wall-clock time. Pass a fixed clock when reproducible `postedAt` values matter.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
- *   messaging} for the port contracts this engine implements.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage} for the port contracts this engine implements.
  */
 export async function postgresStore(
   options: PostgresStoreOptions,
@@ -1766,7 +1765,7 @@ async function applyIsolatedSchema(
 // re-run all of `work` in a fresh connection + transaction atomically and idempotency-safe; a true
 // settle-vs-reverse conflict then retries into a clean SAGA.INVALID_TRANSITION rather than escaping
 // as a raw 40P01. Any non-transient error propagates unchanged on its first occurrence.
-// @see https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/
+// @see https://economy-lab-docs.pages.dev/economy/ports/messaging/
 async function runInTransaction<T>(
   pool: PgPool,
   deps: { digest: Digest; clock: Clock; velocityWindowMs: number },

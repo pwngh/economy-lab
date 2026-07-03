@@ -58,9 +58,9 @@ const posting = await economy.read.posting('txn_8821');
 // (or null for an unknown id)
 ```
 
-This lets a reader resolve a posting through `read` without reaching past it into the raw [`Store`](/economy/ports/storage-and-messaging/). Unlike a statement, it isn't scoped to one account. It returns the whole transaction with every leg it touched.
+This lets a reader resolve a posting through `read` without reaching past it into the raw [`Store`](/economy/ports/storage/). Unlike a statement, it isn't scoped to one account. It returns the whole transaction with every leg it touched.
 
-`read.saga(id)` loads one payout [saga](/economy/concepts/lifecycles/) by its id: its current state, the provider reference once submitted, the attempt count, and the reason it failed if it did. It returns `null` for an unknown payout id:
+`read.saga(id)` loads one payout [saga](/economy/concepts/payout-saga/) by its id: its current state, the provider reference once submitted, the attempt count, and the reason it failed if it did. It returns `null` for an unknown payout id:
 
 ```ts
 const saga = await economy.read.saga('pay_4410');
@@ -68,7 +68,7 @@ const saga = await economy.read.saga('pay_4410');
 // (or null for an unknown id)
 ```
 
-The [background worker](/economy/reference/background-worker/) advances a saga through its states, and `read.saga` reports where one currently sits. For the states themselves and what moves a payout between them, see [the lifecycle of a payout](/economy/concepts/lifecycles/).
+The [background worker](/economy/reference/background-worker/) advances a saga through its states, and `read.saga` reports where one currently sits. For the states themselves and what moves a payout between them, see [the payout saga](/economy/concepts/payout-saga/).
 
 ## Ownership and status
 
@@ -108,7 +108,7 @@ for await (const account of economy.read.accounts()) {
 }
 ```
 
-`read.payouts()` streams every payout [saga](/economy/concepts/lifecycles/), newest first: the whole board, settled and failed payouts included, not only the due ones the worker claims. It lets a UI render payout status without tracking minted payout ids:
+`read.payouts()` streams every payout [saga](/economy/concepts/payout-saga/), newest first: the whole board, settled and failed payouts included, not only the due ones the worker claims. It lets a UI render payout status without tracking minted payout ids:
 
 ```ts
 for await (const saga of economy.read.payouts()) {

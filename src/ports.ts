@@ -28,7 +28,7 @@ export type Options = { signal?: AbortSignal };
  * as the original signature did; `order: 'desc'` with `limit`/`offset` reads the newest run, the
  * order the maturity tail wants so it can stop once it has covered the live balance.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging}
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage}
  * for the SQL pushdown.
  */
 export type TimelineOptions = {
@@ -92,7 +92,7 @@ export interface Signer {
  * never breaks them. `memoryCache` is the in-process reference adapter; `redisCacheFrom` is the Redis
  * adapter.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging}
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage}
  * for the best-effort cache contract.
  */
 export interface Cache {
@@ -304,7 +304,7 @@ export interface Ledger {
  * The full set of stores the system reads and writes. `transaction` runs a block of work
  * with all of these committing atomically (all or nothing).
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging}
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage}
  * for the sub-stores, the outbox/inbox, and the adapters.
  */
 export interface Store {
@@ -403,7 +403,7 @@ export type StoredLink = {
  * transaction too, so a committed attempt shares the money commit; after a rollback, `submit`
  * re-records the attempt so it still counts. `checkpoints` is absent (only the worker writes it).
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging}
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage}
  * for atomicity and the outbox/inbox.
  */
 export interface Unit {
@@ -899,8 +899,8 @@ export interface Sale {
  * The states a payout saga moves through, from request to settled (or failed). A plain readonly
  * array of strings rather than a TypeScript enum.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/lifecycles/ Lifecycles} for the
- * payout saga and subscription state machines.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/payout-saga/ The payout saga} for the
+ * saga states; subscriptions have their own page.
  */
 export const SAGA_STATES = [
   'REQUESTED',

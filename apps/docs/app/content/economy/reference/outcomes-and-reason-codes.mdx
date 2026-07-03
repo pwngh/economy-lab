@@ -106,7 +106,7 @@ map to the pages under [operations](/economy/reference/operations/).
 A few of these reward a closer look.
 
 `FUNDS_IMMATURE` is a timing problem: the money is there, but it hasn't cleared its
-maturity window yet, a concept that lives with the [payout and subscription lifecycles](/economy/concepts/lifecycles/).
+maturity window yet, a concept that lives with [credit maturity](/economy/concepts/credit-maturity/).
 The `detail` names the `account` and the `required` amount that hadn't cleared.
 
 `DUPLICATE_ORDER` catches a specific client mistake: a retried `spend` that lost its original
@@ -140,7 +140,7 @@ Thrown faults carry their own codes, kept deliberately separate from the rejecti
 | `OP.MALFORMED`            | `MALFORMED_OPERATION` | The request was structurally wrong: a missing or invalid field.                                          |
 | `MONEY.INVALID_AMOUNT`    | `INVALID_AMOUNT`      | A money amount was invalid, such as negative or not a whole minor unit.                                  |
 | `AUTH.UNAUTHORIZED`       | `UNAUTHORIZED`        | The actor isn't permitted to perform this action.                                                        |
-| `SAGA.INVALID_TRANSITION` | `INVALID_TRANSITION`  | A [saga](/economy/concepts/lifecycles/) was told to move to a state it can't reach from its current one. |
+| `SAGA.INVALID_TRANSITION` | `INVALID_TRANSITION`  | A [saga](/economy/concepts/payout-saga/) was told to move to a state it can't reach from its current one. |
 
 The line between the two follows cause rather than severity. `INSUFFICIENT_FUNDS` is a healthy system
 giving an expected answer, so it's a rejection you show the user. `INVALID_AMOUNT` means the caller

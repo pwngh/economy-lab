@@ -1,6 +1,6 @@
 ---
-title: 'Storage & messaging'
-summary: 'The storage and messaging ports (the ledger and sub-stores, plus the dispatcher, cache, and outbox/inbox) and their adapters.'
+title: 'Storage: the Store and engines'
+summary: 'The Store gathers the ledger and its sub-stores behind one transaction boundary. Every adapter passes the same conformance suite, and the SQL engines enforce the invariants a second time, in the database.'
 order: 50
 status: stable
 sourceRefs:
@@ -9,16 +9,15 @@ sourceRefs:
     'src/ports.ts#L217 · Ledger',
     'src/adapters/memory.ts#L1263 · memoryStore',
     'src/engines/postgres.ts#L1685 · postgresStore',
-    'src/worker/relay.ts#L56 · relayOutbox',
   ]
-related: ['economy/concepts/lifecycles', 'economy/ports/processor']
+related: ['economy/ports/messaging', 'economy/concepts/accounts-and-double-entry']
 ---
 
 ## The seam between the core and the world
 
-Everything the economy persists or sends passes through one of a few narrow interfaces. The core never opens a connection, never knows whether it's talking to memory or Postgres, never speaks SQS or Redis directly. It calls a method on a port, and an adapter does the rest.
+Everything the economy persists passes through one of a few narrow interfaces. The core never opens a connection and never knows whether it's talking to memory or Postgres. It calls a method on a port, and an adapter does the rest.
 
-These ports all live in `src/ports.ts`. This page covers the ones that hold state or move messages: the `Store` (the ledger and its sub-stores), the `Dispatcher` (events out), the `Cache`, and the transactional outbox and inbox.
+These ports all live in `src/ports.ts`. This page covers the ones that hold state: the `Store` (the ledger and its sub-stores) and the read-through `Cache`. The ports that move messages — the outbox, the inbox, and the `Dispatcher` — write through the same `Store` and have [their own page](/economy/ports/messaging/).
 
 The rules that keep money conserved are written once, not re-implemented per backend. They're verified against every adapter, and the SQL engines push them down into the database as well.
 
@@ -36,13 +35,15 @@ Everything else hangs off the `Store` as a purpose-built sub-store, one per conc
 | `sales`         | A summary of each completed sale, keyed by order id, so a refund can reverse it precisely.             |
 | `outbox`        | Pending outgoing events, written with the money move and relayed later.                                |
 | `inbox`         | Verified inbound provider events, awaiting apply.                                                      |
-| `sagas`         | Each in-flight [payout saga](/economy/concepts/lifecycles/) and its state.                             |
-| `subscriptions` | Recurring subscriptions and when each is next due to bill.                                             |
+| `sagas`         | Each in-flight [payout saga](/economy/concepts/payout-saga/) and its state.                            |
+| `subscriptions` | Recurring [subscriptions](/economy/concepts/subscriptions/) and when each is next due to bill.         |
 | `entitlements`  | Which users own which SKUs.                                                                            |
 | `promos`        | Each promo grant, so the worker can reverse the unspent remainder at expiry.                           |
 | `trust`         | Each subject's recent spending, the input to the risk gate.                                            |
 | `checkpoints`   | Signed ledger snapshots, written only by the worker.                                                   |
 | `replay`        | Raw inbound webhook ids, deduped separately from the domain idempotency keys.                          |
+
+The `outbox` and `inbox` rows are storage; what flows through them is [messaging](/economy/ports/messaging/).
 
 ### Atomicity is the contract
 
@@ -113,33 +114,9 @@ That belongs to [integrity](/economy/concepts/integrity/), which owns the conser
   silently operating on a drifted shape.
 </Callout>
 
-## The `Dispatcher`: events out
-
-The `Dispatcher` is the simplest port here: a single function that takes an `EconomyEvent` and hands it off for delivery. The core builds the event; the adapter decides where it goes.
-
-```ts
-type Dispatcher = (event: EconomyEvent, options?: Options) => Promise<void>;
-```
-
-Two adapters ship. `sqsDispatcher` in `src/adapters/sqs.ts` publishes each event to an Amazon SQS queue as JSON, and there's an HTTP dispatcher that POSTs it to a configured URL. With neither `SQS_QUEUE_URL` nor `DISPATCHER_URL` set, no dispatcher is wired: the worker's relay sweep short-circuits and outgoing events stay pending in the outbox. The `Dispatcher` is optional; the economy runs without one.
-
-Delivery is at-least-once. SQS may deliver a message twice, so every event carries its id and the receiver drops duplicates, the same pattern as the outbox below.
-
-## The outbox and inbox
-
-There's a problem the `Dispatcher` alone doesn't solve: if the money commits but the event send fails, the event is lost; if you send first and the commit rolls back, you've announced a move that never happened. The fix is to make the event part of the transaction.
-
-That's the transactional outbox. When a money move commits, its outgoing event is written to the `outbox` sub-store _in the same database transaction_. A separate relay ([the background worker](/economy/reference/background-worker/)) picks up pending rows afterward and ships them through the `Dispatcher`. An event is never sent for a rolled-back move, nor lost for a committed one.
-
-The relay is `relayOutbox` in `src/worker/relay.ts`. It claims a batch of pending rows, sends each in its own try/catch so one failure can't stop the batch, and marks the delivered ones done. A send that throws is left pending with its attempt count bumped, retried next run; once it hits the configured cap it's dead-lettered to a terminal `dead` state, so one poison event can't wedge the queue behind it.
-
-The `inbox` is the mirror image, for events coming _in_. A verified provider webhook is mapped to the [`Operation`](/economy/reference/outcomes-and-reason-codes/) it should apply, then saved to the `inbox` in the same transaction as the webhook ingress that claimed it. A separate apply sweep submits each pending operation and marks the row applied. An inbound event can't be applied without first being recorded, and every recorded event is eventually applied or dead-lettered.
-
-Webhook ingress and the provider side of all this belong to the [processor port](/economy/ports/processor/); the outbox/inbox is the storage seam those flows write through.
-
 ## The `Cache`
 
-The last port is a read-through key/value `Cache` for hot reads, mainly balances. It's strictly an accelerator: the core works without one, and it can only ever speed reads, never break them.
+The `Cache` is a read-through key/value port for hot reads, mainly balances. It's strictly an accelerator: the core works without one, and it can only ever speed reads, never break them.
 
 That guarantee is built into the contract. When no cache is injected, the read path skips it and goes straight to the ledger. When a cache _is_ present but errors, the read degrades to a direct ledger read rather than failing the request.
 
@@ -147,6 +124,6 @@ Two adapters back it. `memoryCache` is an in-process `Map`: the zero-infrastruct
 
 ## What the host owns
 
-These ports define the seam; the infrastructure behind them is the host's. The adapters are economy-lab's own and live in this repo: the in-memory reference, the Postgres and MySQL engines, the SQS and Redis and HTTP adapters, and the conformance suite that holds them all to one contract. A fair amount of the work here is making each driver fit that contract cleanly. What the host owns is the live infrastructure on the far side of each port: it creates and tunes the database pool, opens the Redis connection, constructs the SQS client, and applies the schema. economy-lab loads a driver only when a DSN selects it, and never reaches for a connection the host didn't ask for.
+These ports define the seam; the infrastructure behind them is the host's. The store and cache adapters are economy-lab's own and live in this repo: the in-memory reference, the Postgres and MySQL engines, the Redis and HTTP adapters, and the conformance suite that holds them all to one contract. A fair amount of the work here is making each driver fit that contract cleanly. What the host owns is the live infrastructure on the far side of each port: it creates and tunes the database pool, opens the Redis connection, and applies the schema. economy-lab loads a driver only when a DSN selects it, and never reaches for a connection the host didn't ask for.
 
-The drivers themselves ([`pg`](https://node-postgres.com), [`mysql2`](https://github.com/sidorares/node-mysql2), [`ioredis`](https://github.com/redis/ioredis), and [`@aws-sdk/client-sqs`](https://docs.aws.amazon.com/AWSJavaScriptSDK/v3/latest/client/sqs/)) are peer dependencies, so the host pins the versions it runs. Each adapter types its driver's surface structurally, so the file compiles and unit-tests without the package installed; the real client is constructed only when the matching env var is set.
+The drivers themselves ([`pg`](https://node-postgres.com), [`mysql2`](https://github.com/sidorares/node-mysql2), and [`ioredis`](https://github.com/redis/ioredis)) are peer dependencies, so the host pins the versions it runs. Each adapter types its driver's surface structurally, so the file compiles and unit-tests without the package installed; the real client is constructed only when the matching env var is set.

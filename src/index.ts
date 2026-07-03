@@ -81,7 +81,7 @@ export type { Capabilities, Options, Range, Statement } from '#src/ports.ts';
 // Two source layers the directory names only half-express: src/engines/ are the systems of record
 // that enforce ledger invariants natively (Postgres, MySQL), and src/adapters/ are everything
 // pluggable that does not (in-memory and HTTP stores, Redis cache, SQS and HTTP dispatcher, payout
-// processor, FX rates). See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/
+// processor, FX rates). See https://economy-lab-docs.pages.dev/economy/ports/storage/
 // for how every adapter meets one contract and the SQL engines also enforce it in the database.
 
 /**

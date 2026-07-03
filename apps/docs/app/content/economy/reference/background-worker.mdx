@@ -34,13 +34,13 @@ Here is what each sweep does:
 
 | Sweep              | What it does                                                                                     |
 | ------------------ | ------------------------------------------------------------------------------------------------ |
-| `payouts`          | Advance each due payout [saga](/economy/concepts/lifecycles/) one step.                          |
+| `payouts`          | Advance each due payout [saga](/economy/concepts/payout-saga/) one step.                          |
 | `subscriptions`    | Renew a due subscription, or lapse it when the buyer can't cover the price.                      |
 | `treasury`         | Re-check that held USD still [backs](/economy/concepts/solvency/) every spendable credit.        |
 | `feeSweep`         | Realize the platform's matured fee surplus into cash.                                            |
 | `checkpointVerify` | Re-check the previous signed [checkpoint](/economy/concepts/integrity/) against the live ledger. |
 | `checkpoint`       | Seal a fresh signed checkpoint of the ledger.                                                    |
-| `relay`            | Drain the [outbox](/economy/ports/storage-and-messaging/) to the dispatcher.                     |
+| `relay`            | Drain the [outbox](/economy/ports/messaging/) to the dispatcher.                     |
 | `drainInbox`       | Apply received provider events, deduping by event id.                                            |
 | `reconcile`        | Compare the provider's settled records against the ledger.                                       |
 | `promos`           | Claw back the unspent part of an expired promo grant.                                            |
@@ -91,7 +91,7 @@ const summary = await relayOutbox(store, ctx, { dispatcher, limit });
 
 ## Delivery is at-least-once
 
-The relay drains the [outbox](/economy/ports/storage-and-messaging/), where each event was written in the same transaction as the money move it describes. It claims up to `limit` events, sends each through the dispatcher, and marks the delivered ones done.
+The relay drains the [outbox](/economy/ports/messaging/), where each event was written in the same transaction as the money move it describes. It claims up to `limit` events, sends each through the dispatcher, and marks the delivered ones done.
 
 Delivery can happen more than once. For example, the send succeeded but marking the row done did not. The receiver must drop duplicates by event id.
 

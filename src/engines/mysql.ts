@@ -804,7 +804,7 @@ function createSaleStore(exec: MysqlExecutor): SaleStore {
 // The transactional-outbox sub-store: `enqueue` saves the event in the same transaction as the
 // money posting, a relay later picks up a batch of pending events (`claimBatch`), and FOR UPDATE
 // SKIP LOCKED lets several relay workers grab different rows at once.
-// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the outbox
+// See https://economy-lab-docs.pages.dev/economy/ports/messaging/ for the outbox
 // pattern (write-with-the-transaction, relay-later, dedupe-by-id).
 function createOutboxStore(exec: MysqlExecutor): OutboxStore {
   return {
@@ -875,7 +875,7 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
 // redelivered event is a no-op insert that returns the existing row. A separate apply worker later
 // claims a batch of pending rows (`claimInbound`), and FOR UPDATE SKIP LOCKED lets several workers
 // grab different rows at once.
-// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the inbox pattern
+// See https://economy-lab-docs.pages.dev/economy/ports/messaging/ for the inbox pattern
 // (record-in-the-ingress-transaction, apply-later, dedupe-by-id).
 function createInboxStore(exec: MysqlExecutor): InboxStore {
   return {
@@ -1683,8 +1683,7 @@ function buildUnit(deps: ExecDeps, trust: TrustStore): Unit {
  * The hash service defaults to the deterministic web-standard SHA-256; the clock defaults to
  * wall-clock time. Pass a fixed clock when reproducible `postedAt` values matter.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
- *   messaging} for the store and outbox/inbox ports this backs.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage} for the store and outbox/inbox ports this backs.
  */
 export function mysqlStore(deps: {
   pool: MysqlPool;
@@ -1720,7 +1719,7 @@ export function mysqlStore(deps: {
     // connection + transaction, atomic and idempotency-safe. A true settle-vs-reverse conflict then
     // retries into a clean SAGA.INVALID_TRANSITION (the retried op reloads a now-terminal saga) rather
     // than escaping as a raw deadlock; any non-transient error propagates unchanged on its first throw.
-    // @see https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/
+    // @see https://economy-lab-docs.pages.dev/economy/ports/messaging/
     transaction: async (work) =>
       withTransientRetry(async () => {
         const connection = await pool.getConnection();

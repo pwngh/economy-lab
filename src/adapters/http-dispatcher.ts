@@ -40,8 +40,7 @@ export interface HttpDispatcherConfig {
  * redelivers later with backoff. Because a retry can duplicate an event, the event id goes in an
  * `Idempotency-Key` header for the receiver to dedupe.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
- *   messaging} for the outbox-to-relay flow, the dispatcher port, and at-least-once delivery.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/messaging/ Messaging} for the outbox-to-relay flow, the dispatcher port, and at-least-once delivery.
  */
 export function httpDispatcher(config: HttpDispatcherConfig): Dispatcher {
   const send = config.fetch ?? fetch;

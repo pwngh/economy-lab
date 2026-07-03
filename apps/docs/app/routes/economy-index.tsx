@@ -42,8 +42,8 @@ export default function EconomyIndex() {
             <a href="/economy/concepts/">Concepts</a>
           </h3>
           <p>
-            The money model, accounts and double-entry, solvency, lifecycles, integrity, and the
-            proof.
+            The money model, accounts and double-entry, solvency, the payout saga, integrity, and
+            the proof.
           </p>
         </li>
         <li className="doc-card">

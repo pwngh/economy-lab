@@ -36,13 +36,13 @@ The reference adapter (`src/adapters/processor.ts`) is an HTTP client that `POST
 
 <Callout type="warning">
   The dev stub approves payouts unconditionally. That is fine for studying the
-  [payout saga](/economy/concepts/lifecycles/). A processor handling real funds
+  [payout saga](/economy/concepts/payout-saga/). A processor handling real funds
   must be able to decline.
 </Callout>
 
 ## No event consumer
 
-When an operation finishes, some emit a [domain event](/economy/ports/storage-and-messaging/): a sale completed, a payout settled. economy-lab writes that event to an outbox table in the same transaction as the money move, so it can't be lost or double-sent. Then a relay sweep ships it onward through a [`Dispatcher`](/economy/ports/storage-and-messaging/).
+When an operation finishes, some emit a [domain event](/economy/ports/messaging/): a sale completed, a payout settled. economy-lab writes that event to an outbox table in the same transaction as the money move, so it can't be lost or double-sent. Then a relay sweep ships it onward through a [`Dispatcher`](/economy/ports/messaging/).
 
 But the thing that receives the event is not part of economy-lab. The `Dispatcher` is a one-function port that hands an event off for delivery; the SQS or HTTP adapter behind it sends it to _your_ endpoint: an internal bus, a broker, a webhook receiver.
 
@@ -80,7 +80,7 @@ A production custodian needs versioned, forward-only migrations that never destr
 
 economy-lab takes concurrency seriously where it touches correctness. A linearizability harness oversubscribes concurrent spends and checks that every committed interleaving replays serially to identical balances, and the per-account row locks keep two operations from racing on a balance.
 
-What it does not chase is throughput at scale. There's no cross-node partitioning of the ledger and no connection-pool tuning for thousands of writers; the one scale lever is [platform-account sharding](/economy/concepts/concurrency/), which spreads the hot platform rows inside the same database. The concurrency work proves the invariants hold _under contention_; it doesn't claim the single-database design would carry a production load.
+What it does not chase is throughput at scale. There's no cross-node partitioning of the ledger and no connection-pool tuning for thousands of writers; the one scale lever is [platform-account sharding](/economy/concepts/platform-sharding/), which spreads the hot platform rows inside the same database. The concurrency work proves the invariants hold _under contention_; it doesn't claim the single-database design would carry a production load.
 
 ## Fixed rates, no live FX
 

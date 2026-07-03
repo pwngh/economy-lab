@@ -1,9 +1,14 @@
 ---
-title: 'Lifecycles'
-summary: 'Operations that live over time (the payout saga and subscription states) modeled as explicit state machines.'
-plain: "A “state machine” is anything that can only be in one of a few named states at a time and can only move between them along set paths — think of a package that goes “shipped → out for delivery → delivered,” never the other way. A payout or a subscription runs exactly like that, so an interruption can only ever leave it parked on a known step."
+title: 'The payout saga'
+summary: 'A payout reaches an external rail that answers in its own time, so it runs as a stored state machine: reserve, submit, settle — every transition a compare-and-set that posts its money in the same transaction.'
+plain: "A “state machine” is anything that can only be in one of a few named states at a time and can only move between them along set paths — think of a package that goes “shipped → out for delivery → delivered,” never the other way. A payout runs exactly like that, so an interruption can only ever leave it parked on a known step."
 order: 60
 status: stable
+notes:
+  - text: "The saga pattern — one long-lived transaction run as a sequence of smaller, compensatable steps — is from Garcia-Molina and Salem's Sagas paper (SIGMOD 1987)."
+    href: 'https://sigmodrecord.org/1987/12/09/sagas/'
+  - text: 'Compare-and-set is the storage-level form of compare-and-swap, which shipped with IBM System/370 in 1970; the instruction is set out in IBM patent US 3,886,525 (Brown and Smith, 1975).'
+    href: 'https://patents.google.com/patent/US3886525'
 sourceRefs:
   [
     'src/ports.ts#L902-L909 · SAGA_STATES',
@@ -13,13 +18,13 @@ sourceRefs:
 related:
   [
     'economy/reference/operations/reverse-payout',
-    'economy/reference/operations/cancel-subscription',
+    'economy/concepts/subscriptions',
   ]
 ---
 
-A `topUp` or a `spend` finishes the instant you call it. A payout can't: it reaches an external rail that answers in its own time. A subscription can't either: it bills period after period.
+A `topUp` or a `spend` finishes the instant you call it. A payout can't: it reaches an external rail that answers in its own time.
 
-So economy-lab models each of these as an explicit state machine. The operation becomes a stored record (a `Saga` or a `Subscription`) that the [background worker](/economy/reference/background-worker/) advances one safe step at a time. If a crash interrupts the work, the record resumes from its last recorded state. A step that runs twice still counts once.
+So economy-lab models a payout as an explicit state machine. The operation becomes a stored record (a `Saga`) that the [background worker](/economy/reference/background-worker/) advances one safe step at a time.<Cite n={1} /> If a crash interrupts the work, the record resumes from its last recorded state. A step that runs twice still counts once.
 
 ## Why it exists
 
@@ -29,9 +34,9 @@ The failure modes are bad. If the call hangs, the request hangs. If the process 
 
 A long-lived record fixes the disagreement by making every intermediate state durable and named. The worker can read where a payout got to and drive it forward. An operator can see a stuck one rather than a silent gap.
 
-The same shape covers anything that outlives one request: a subscription that renews on a schedule, or a promo grant that expires later. Each is a row the worker sweeps, not a thread it holds open.
+The same shape covers anything that outlives one request. [Subscriptions](/economy/concepts/subscriptions/) reuse it to renew period after period, and a promo grant's expiry is likewise a row the worker sweeps, not a thread it holds open.
 
-## The payout saga
+## The states
 
 `requestPayout` does not pay. It reserves the credits (`debit earned → credit payout_reserve`, two [`CREDIT` legs](/economy/concepts/accounts-and-double-entry/) that cancel out) and opens a `Saga`, a record whose `state` walks through `SagaState` (see <SourceLink to="src/ports.ts#L902-L909 · SAGA_STATES" />).
 
@@ -46,16 +51,18 @@ The full enum declares `REQUESTED`, `RESERVED`, `SUBMITTED`, `SETTLED`, and `FAI
 
 <PayoutSaga />
 
+## The two triggers
+
 The two forward steps run on different triggers. The worker's `payouts` sweep handles only the first. It claims due `RESERVED` sagas, converts the reserve to USD at the locked rate, calls `processor.submitPayout`, records the `providerRef`, and advances `RESERVED → SUBMITTED` (see <SourceLink to="src/worker/payouts.ts#L228-L249 · submitToProvider" />).
 
 It does not settle itself. Settlement arrives on the provider's verified "payout settled" webhook. That webhook maps to a [`settlePayout`](/economy/reference/operations/settle-payout/) operation, which the worker's inbox drain applies off the request path. That operation runs the `SUBMITTED → SETTLED` step.
 
-### What makes it safe to re-drive
+## What makes it safe to re-drive
 
 Three guards let the worker retry a step without paying twice.
 
 - **The call to the rail is idempotent**, keyed by the saga id (`key: saga.id`), so a retried submit still pays once. The settlement webhook is deduped on the provider's event id, so a redelivered settlement settles once.
-- **Each state change is a compare-and-set.** `sagas.advance(id, from, to, patch)` moves a saga only if it is still in `from`, and returns `false` (changing nothing) otherwise, so two sweeps racing the same saga can't both advance it (see <SourceLink to="src/ports.ts#L599-L605 · SagaStore.advance" />).
+- **Each state change is a compare-and-set.**<Cite n={2} /> `sagas.advance(id, from, to, patch)` moves a saga only if it is still in `from`, and returns `false` (changing nothing) otherwise, so two sweeps racing the same saga can't both advance it (see <SourceLink to="src/ports.ts#L599-L605 · SagaStore.advance" />).
 - **A stuck payout is given up on.** Past `maxPayoutAttempts` failed attempts, or after `maxPayoutAgeMs` in `SUBMITTED` with no settlement webhook, the sweep force-fails it. It flips the saga to `FAILED` and, in the same transaction, posts the exact reverse of the reservation (`debit payout_reserve → credit earned`), returning the credits to the seller (see <SourceLink to="src/worker/payouts.ts#L125-L188 · deadLetter" />).
 
 <Callout type="warning">
@@ -70,45 +77,26 @@ Three guards let the worker retry a step without paying twice.
   `PAYOUT_TOO_SOON` within `payoutMinIntervalMs` of the user's last request.
 </Callout>
 
-That force-fail reversal and the operator's `reversePayout` share one CAS guard on the saga. A reversal posts the compensating entry _only if_ its compare-and-set wins. A lost CAS means a concurrent settle or reverse already accounted for the reserve, so posting again would return the credits a second time. An operator can force the same early reversal with `reversePayout`, but only while the money hasn't already left.
-
-## Subscriptions
-
-[`subscribe`](/economy/reference/operations/subscribe/) charges the first period and grants the buyer an `Entitlement` to the SKU. From there, the worker's `subscriptions` sweep renews it. Each period it claims a one-charge-per-period key (so overlapping sweeps can't double-bill), debits the subscriber's `spendable`, pays the seller, and moves the next due date forward.
-
-The renewal claim follows the same CAS pattern as the saga. `subscriptions.markBilled` sets the next period only if the row still shows the period the sweep claimed, so the loser of a race treats it as a no-op (see <SourceLink to="src/ports.ts#L671-L676 · SubscriptionStore.markBilled" />).
-
-A `Subscription` carries its own `SubscriptionState`: `ACTIVE`, `LAPSED`, `CANCELED` (see <SourceLink to="src/ports.ts#L956-L957 · SUBSCRIPTION_STATES" />):
-
-```text
-ACTIVE ──▶ LAPSED      a renewal it can't pay, or one that keeps failing, ends it;
-                       the SKU entitlement is revoked in the same step
-       ──▶ CANCELED    the user or an operator stops it; the current period is
-                       not refunded
-```
-
-`maxSubscriptionAttempts` separates a transient charge failure from a subscription that is never going to pay. The sweep retries a failed charge a few times before the subscription lapses, and a success resets the count to `0`. Once the count reaches the cap, the sweep flips `ACTIVE → LAPSED`, revokes the entitlement, and emits the lapse event in one transaction (see <SourceLink to="src/worker/subscriptions.ts#L167-L175 · lapseAtomically" />).
-
-The first period may draw on promo credit; renewals come only from `spendable`.
+That force-fail reversal and the operator's `reversePayout` share one compare-and-set guard on the saga. A reversal posts the compensating entry _only if_ its compare-and-set wins. A lost compare-and-set means a concurrent settle or reverse already accounted for the reserve, so posting again would return the credits a second time. An operator can force the same early reversal with `reversePayout`, but only while the money hasn't already left.
 
 ## The invariant
 
-A long-lived operation moves through its states **once**, in order, no matter how many times the worker re-drives it or how its triggers race.
+A payout moves through its states **once**, in order, no matter how many times the worker re-drives it or how its triggers race.
 
 Every transition is a compare-and-set against the current state, so a step is applied by exactly one writer. The money posting that accompanies a transition commits in the same database transaction as the state flip, so the books and the record never diverge.
 
-A `RESERVED` payout pays at most once, and its reserve is released exactly once: by settlement, by timeout-fail, or by an operator reversal, whichever wins the CAS.
+A `RESERVED` payout pays at most once, and its reserve is released exactly once: by settlement, by timeout-fail, or by an operator reversal, whichever wins the compare-and-set.
 
 ## How it's enforced
 
 The enforcement lives in three places, and you can verify each one in the source.
 
-- **The store's CAS methods.** `SagaStore.advance` and `SubscriptionStore.markBilled` are conditional updates that return whether they changed a row, so the handler can detect and stand down on a lost race (see <SourceLink to="src/ports.ts#L571-L618 · SagaStore" />, <SourceLink to="src/ports.ts#L638-L684 · SubscriptionStore" />).
+- **The store's compare-and-set method.** `SagaStore.advance` is a conditional update that returns whether it changed a row, so the handler can detect and stand down on a lost race (see <SourceLink to="src/ports.ts#L571-L618 · SagaStore" />).
 - **One transaction per step.** Each forward step posts its ledger entry and advances its record inside `store.transaction`, so a partial step rolls back whole: a flipped state with no posting, or a posting with no flip, can't persist.
 - **Idempotent external calls and dedupe.** `processor.submitPayout` is keyed by the saga id (see <SourceLink to="src/ports.ts#L132-L144 · Processor" />), and inbound provider events are deduped by event id before they apply, so a redelivered webhook or a retried submit resolves to the same money move at most once.
 
 ## Operations and ports that rely on it
 
-[`requestPayout`](/economy/reference/operations/request-payout/) opens the saga; `settlePayout` and `reversePayout` move it. The worker's `payouts` and `subscriptions` sweeps and its inbox drain drive transitions off the request path.
+[`requestPayout`](/economy/reference/operations/request-payout/) opens the saga; `settlePayout` and `reversePayout` move it. The worker's `payouts` sweep and its inbox drain drive transitions off the request path.
 
-The saga and subscription records persist through the `SagaStore` and `SubscriptionStore` sub-stores of the [`Store`](/economy/ports/storage-and-messaging/) port, and a payout's disbursement leaves through the [`Processor`](/economy/ports/processor/) port. The CAS-and-single-transaction discipline these lifecycles depend on is the same machinery that keeps the [ledger's integrity invariants](/economy/concepts/integrity/) intact under concurrency.
+The saga records persist through the `SagaStore` sub-store of the [`Store`](/economy/ports/storage/) port, and a payout's disbursement leaves through the [`Processor`](/economy/ports/processor/) port. The discipline the saga depends on — a compare-and-set on every transition, one transaction per step — is the same machinery that keeps the [ledger's integrity invariants](/economy/concepts/integrity/) intact under concurrency.

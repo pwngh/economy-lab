@@ -10,10 +10,8 @@ sourceRefs:
     'src/economy.ts#L619 · lockAccounts',
     'src/engines/postgres.ts#L212 · advanceChain',
     'db/postgresql-schema.sql#L106 · chain_links_account_prev_uq',
-    'src/accounts.ts#L145 · platformShard',
-    'test/sharding.test.ts',
   ]
-related: ['economy/concepts/idempotency', 'economy/ports/storage-and-messaging']
+related: ['economy/concepts/idempotency', 'economy/concepts/platform-sharding']
 ---
 
 When two operations touch the same account at the same time, they can interleave and corrupt a balance. They can also both extend that account's [hash chain](/economy/concepts/integrity/) from the same point, which forks it. economy-lab keeps concurrent writes correct with an application-side rule and a database constraint.
@@ -42,19 +40,9 @@ Locking serializes contending operations, but the forked chain they could still 
 
 Under a race, the losing insert hits that unique index and the engine raises a conflict. economy-lab classifies the conflict as transient and retries the whole unit of work; the retry re-reads the account's new head and posts against it.
 
-## Sharding the hot platform accounts
+## The hot-account ceiling
 
-Per-account locking has a built-in ceiling: an account can only commit as fast as its one lock turns over. Users never feel it, because their wallets are all different accounts and the load spreads out. The platform's accounts sit on the other side of every one of those operations. Every top-up debits `STORED_VALUE` and every sale credits `REVENUE`, so a thousand concurrent buyers spread across a thousand wallets still meet at the same revenue row, and they wait there in line.
-
-[`PLATFORM_SHARDS`](/economy/reference/configuration/) breaks up that line. Set to four, say, each hot platform account becomes four rows (the bare id plus `platform:revenue#1` through `#3`), and concurrent postings spread across them instead of queueing on one. The seven accounts that take this traffic shard: `REVENUE`, `STORED_VALUE`, `TRUST_CASH`, `USD_CLEARING`, `REVENUE_USD`, `PROMO_FLOAT`, and `PAYOUT_RESERVE`. `RECEIVABLE` and `OPENING_EQUITY` move rarely and stay single rows.
-
-The routing can't be random, because a retry has to land on the same row the first attempt locked. So a posting picks its shard by hashing the operation's idempotency key, which is stable across retries and already known both when locks are taken and when legs are built.
-
-`PAYOUT_RESERVE` is the exception, and the reason is time. Credits enter the reserve when a payout is requested and leave when it settles or reverses, and that second step is a different operation, days later, carrying a different idempotency key. Hash that key and the debit would land on some other shard, quite possibly one holding nothing, and the reserve is overdraft-guarded: no shard may go negative. The user id is the one routing key both ends of a payout know, so the reserve routes by user.
-
-No reader cares which shard holds what. The logical balance is the sum over the rows: the [backing check](/economy/concepts/solvency/) totals `TRUST_CASH` across its shards before weighing it against what users are owed, and the fee sweep drains matured `REVENUE` from whichever shards hold it. A shard also inherits its parent's currency, class, and normal side, so everything downstream of [`classify`](/economy/concepts/accounts-and-double-entry/) already treats the rows as one account.
-
-The default is `1`: the unsharded ledger, byte-identical to before the knob existed. And because shard 0 keeps the bare account id, an existing ledger's balances already live on shard 0, so turning sharding on later is safe.
+Per-account locking has a built-in ceiling: an account can only commit as fast as its one lock turns over, and the platform's own accounts sit on the other side of every operation. [Platform sharding](/economy/concepts/platform-sharding/) is the pressure valve: each hot platform account can split into shard rows that concurrent postings spread across. Nothing on this page changes when it's on — a shard row takes its own lock and extends its own chain like any other account, which is exactly the point of the split.
 
 ## How the two layers divide the work
 
