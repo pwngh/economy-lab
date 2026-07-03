@@ -31,8 +31,8 @@ A provably-solvent credits economy: wallets, payouts, subscriptions, and a marke
 ## Quick start
 
 Build an `Economy`, drive it through a single `submit`, and read derived state through `read`. From
-a clone of this repo: the in-memory build needs no infrastructure — `compose` picks adapters 
-from the environment. You supply four integrations: a `signer`, a payout `processor`, 
+a clone of this repo: the in-memory build needs no infrastructure — `compose` picks adapters
+from the environment. You supply four integrations: a `signer`, a payout `processor`,
 an FX `rates` source, and a fee `pricing` policy:
 
 ```ts
