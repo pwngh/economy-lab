@@ -42,6 +42,7 @@ import {
 } from '#src/money.ts';
 import { currency, baseOf } from '#src/accounts.ts';
 import { assertSchemaCurrent } from '#src/schema.ts';
+import { systemClock } from '#src/runtime.ts';
 import { byCodeUnit, fromHex } from '#src/bytes.ts';
 import {
   callProcedure,
@@ -50,7 +51,6 @@ import {
 } from '#src/engines/sql-routines.ts';
 import {
   defaultDigest,
-  defaultClock,
   GENESIS_HEX,
   CHAIN_FORK_INDEX,
   CHAIN_CONTINUITY_MARKER,
@@ -925,11 +925,11 @@ function createOutboxStore(q: Queryable): OutboxStore {
         [id],
       );
     },
-    // Give up on a poison message: flip it to 'failed' (so claimBatch never returns it again)
+    // Give up on a poison message: flip it to 'dead' (so claimBatch never returns it again)
     // and persist the reason. Same terminal-state guard as markRelayed above.
     deadLetter: async (id, reason) => {
       await q.query(
-        `update outbox set status = 'failed', dead_letter_reason = $2
+        `update outbox set status = 'dead', dead_letter_reason = $2
           where id = $1 and status = 'pending'`,
         [id, reason],
       );
@@ -1677,7 +1677,8 @@ export interface PostgresStoreOptions {
  * back if `work` throws. The trust and checkpoint stores hang off the pool directly, not off a
  * transaction, so their writes are never rolled back. If `schema` is given, a fresh schema with
  * that name is created, loaded with db/postgresql-schema.sql, and used for all queries; `close()`
- * drops it. The hashing and clock dependencies default to reproducible implementations.
+ * drops it. The hash dependency defaults to the deterministic SHA-256; the clock defaults to
+ * wall-clock time. Pass a fixed clock when reproducible `postedAt` values matter.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
  *   messaging} for the port contracts this engine implements.
@@ -1687,7 +1688,7 @@ export async function postgresStore(
 ): Promise<Store> {
   configureBigIntParsers();
   const digest = options.digest ?? defaultDigest();
-  const clock = options.clock ?? defaultClock();
+  const clock = options.clock ?? systemClock();
   const velocityWindowMs = options.velocityWindowMs ?? 60 * 60_000;
   const schema = options.schema ? safeSchemaName(options.schema) : null;
 
@@ -1769,7 +1770,7 @@ async function applyIsolatedSchema(
 async function runInTransaction<T>(
   pool: PgPool,
   deps: { digest: Digest; clock: Clock; velocityWindowMs: number },
-  work: (tx: Unit) => Promise<T>,
+  work: (unit: Unit) => Promise<T>,
 ): Promise<T> {
   return withTransientRetry(async () => {
     const client = await pool.connect();

@@ -226,15 +226,15 @@ describe('Store Conformance: postgres (Outbox)', () => {
     // A missing row has nothing to update, so the call must not throw.
     await live.outbox.recordFailure('obx_does_not_exist');
 
-    // A dead-lettered row is in the final 'failed' state, no longer retried; recordFailure must
+    // A dead-lettered row is in the final 'dead' state, no longer retried; recordFailure must
     // leave its attempts untouched.
     const id = 'obx_record_failure_terminal';
     await live.outbox.enqueue(outboxMessage(id));
     await live.outbox.deadLetter(id, 'DISPATCH.FAILURE');
     await live.outbox.recordFailure(id);
 
-    // The row is 'failed', so claimBatch never returns it. Assert by exhaustion: a pending claim
-    // cannot see a failed row.
+    // The row is 'dead', so claimBatch never returns it. Assert by exhaustion: a pending claim
+    // cannot see a dead row.
     const batch = await live.outbox.claimBatch(100);
     assert.equal(
       batch.some((message) => message.id === id),
@@ -242,7 +242,7 @@ describe('Store Conformance: postgres (Outbox)', () => {
     );
   });
 
-  test('outbox.deadLetter flips the row to failed so claimBatch never returns it', async (t) => {
+  test('outbox.deadLetter flips the row to dead so claimBatch never returns it', async (t) => {
     if (!store) {
       t.skip('Postgres unreachable');
       return;

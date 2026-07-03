@@ -325,7 +325,10 @@ export interface Store {
    * Runs `work` inside one database transaction, passing it the subset of stores that participate
    * in that transaction. Everything `work` writes commits together or not at all.
    */
-  transaction<T>(work: (tx: Unit) => Promise<T>, options?: Options): Promise<T>;
+  transaction<T>(
+    work: (unit: Unit) => Promise<T>,
+    options?: Options,
+  ): Promise<T>;
 
   close(): Promise<void>;
 }
@@ -482,7 +485,7 @@ export interface OutboxStore {
   /**
    * Grabs up to `limit` unsent messages for the relay. Each is locked so a concurrent relay skips it
    * and picks different ones. Only 'pending' rows are returned. A 'relayed' or dead-lettered
-   * ('failed') row is terminal and never re-claimed, so a poison message can't wedge the queue.
+   * ('dead') row is terminal and never re-claimed, so a poison message can't wedge the queue.
    */
   claimBatch(
     limit: number,
@@ -504,7 +507,7 @@ export interface OutboxStore {
   recordFailure(id: string, options?: Options): Promise<void>;
 
   /**
-   * Gives up on a poison message. Sets status to 'failed' so `claimBatch` never returns it again,
+   * Gives up on a poison message. Sets status to 'dead' so `claimBatch` never returns it again,
    * recording `reason` (the last failure's error code) for operators. Mirrors SagaStore.deadLetter.
    * A non-existent or already-terminal row is left untouched.
    */
@@ -797,10 +800,10 @@ export interface OutboxMessage {
    * Where the event is in its delivery lifecycle:
    * - 'pending': still needs sending; the only status `claimBatch` ever hands back.
    * - 'relayed': delivered (set by `markRelayed`); never re-claimed.
-   * - 'failed':  dead-lettered after too many attempts (set by `deadLetter`); a terminal, poison
+   * - 'dead':     dead-lettered after too many attempts (set by `deadLetter`); a terminal, poison
    *   state that `claimBatch` must skip so it can't wedge the queue.
    */
-  status: 'pending' | 'relayed' | 'failed';
+  status: 'pending' | 'relayed' | 'dead';
 
   /**
    * How many delivery attempts have been made. Incremented by `recordFailure` each time a dispatch
@@ -809,7 +812,7 @@ export interface OutboxMessage {
   attempts: number;
 
   /**
-   * Why the relay gave up on this message, set when it reaches the terminal 'failed' status; null
+   * Why the relay gave up on this message, set when it reaches the terminal 'dead' status; null
    * otherwise. Mirrors Saga.reason.
    */
   reason: string | null;

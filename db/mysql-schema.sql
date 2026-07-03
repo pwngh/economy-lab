@@ -189,10 +189,10 @@ CREATE TABLE idempotency (
 -- seen_webhooks: exactly-once replay dedup for inbound provider callbacks, claimed as the last
 -- gate (after HMAC and freshness). Only PK presence is used, so a duplicate delivery finds the row
 -- and does no work. Rationale/invariants documented in db/postgresql-schema.sql (seen_webhooks
--- banner). The metadata column name differs cosmetically (created_at here vs seen_at in PG).
+-- banner).
 CREATE TABLE seen_webhooks (
      event_id   VARCHAR(255) PRIMARY KEY COMMENT 'Provider stable event id; primary key for replay dedup.',
-     created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
+     seen_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time this event id was first claimed.'
    ) COMMENT='Replay-dedup guard for inbound provider webhooks, by event id.';
 
 -- sales: one recorded sale per orderId, read back by refund to reverse exactly what posted.
@@ -217,11 +217,11 @@ CREATE TABLE sales (
 CREATE TABLE outbox (
      id                 VARCHAR(64) PRIMARY KEY COMMENT 'Outbox row id; primary key, obx_<uuid>.',
      event              JSON        NOT NULL COMMENT 'JSON event payload to publish.',
-     status             VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'One of pending, relayed, failed.',
+     status             VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'One of pending, relayed, dead.',
      attempts           INT         NOT NULL DEFAULT 0 COMMENT 'Number of publish attempts so far.',
-     dead_letter_reason TEXT        NULL COMMENT 'Last error code if failed; else null.',
+     dead_letter_reason TEXT        NULL COMMENT 'Last error code if dead; else null.',
      created_at         TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC time the row was inserted.',
-     CHECK (status IN ('pending', 'relayed', 'failed')),
+     CHECK (status IN ('pending', 'relayed', 'dead')),
      KEY outbox_pending_idx (status, created_at)
    ) COMMENT='Pending outbound events awaiting relay to the dispatcher.';
 
@@ -553,4 +553,4 @@ INSERT INTO account_balances (account_id, currency, balance, head_hash)
 CREATE TABLE schema_meta (
      version VARCHAR(32) NOT NULL COMMENT 'Schema version stamp; must match SCHEMA_VERSION at startup.'
    ) COMMENT='Single-row schema version stamp, checked at startup.';
-INSERT INTO schema_meta (version) VALUES ('8');
+INSERT INTO schema_meta (version) VALUES ('9');

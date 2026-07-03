@@ -18,7 +18,6 @@ import { SYSTEM, baseOf } from '#src/accounts.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type {
   Checkpoint,
-  Clock,
   Digest,
   Leg,
   Saga,
@@ -43,10 +42,6 @@ import type {
  */
 export function defaultDigest(): Digest {
   return sha256Digest();
-}
-
-export function defaultClock(): Clock {
-  return { now: () => 0 };
 }
 
 export const GENESIS_HEX = toHex(GENESIS);

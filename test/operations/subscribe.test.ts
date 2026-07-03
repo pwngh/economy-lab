@@ -12,7 +12,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { handleSubscribe } from '#src/operations/subscribe.ts';
+import { subscribe } from '#src/operations/subscribe.ts';
 import { createEconomy } from '#src/economy.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { spendable, promo, earned, SYSTEM } from '#src/accounts.ts';
@@ -33,7 +33,7 @@ import {
 import {
   topUp,
   grantPromo,
-  subscribe,
+  subscribe as subscribeOp,
   credit,
   emptyVelocity,
 } from '#test/support/builders.ts';
@@ -42,8 +42,8 @@ import type { Economy, Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
 
 // The public `Economy` routes only topUp, grantPromo, and spend, not subscribe. That means
-// `economy.submit` cannot reach `handleSubscribe`. This harness exposes two ways into the same
-// store: the public `economy` seeds the buyer's funds, and a direct `run` calls `handleSubscribe`
+// `economy.submit` cannot reach `subscribe`. This harness exposes two ways into the same
+// store: the public `economy` seeds the buyer's funds, and a direct `run` calls `subscribe`
 // inside a transaction.
 type Harness = {
   economy: Economy;
@@ -84,14 +84,14 @@ function makeHarness(seed = 1): Harness {
     economy,
     store,
     run: (operation) =>
-      store.transaction((unit) => handleSubscribe(operation, unit, ctx)),
+      store.transaction((unit) => subscribe(operation, unit, ctx)),
   };
 }
 
 // Builds a subscribe for the fixed buyer, seller, and sku used across the suite. Each test then
 // supplies only the price, and an optional billing period, it cares about.
 function subscribeOf(price: string, periodMs?: number): Operation {
-  return subscribe({
+  return subscribeOp({
     userId: 'usr_buyer',
     sellerId: 'usr_seller',
     sku: 'club_pass',
@@ -312,7 +312,7 @@ async function rejectsANaNPeriod(harness: Harness): Promise<void> {
 }
 
 async function rejectsABlankSku(harness: Harness): Promise<void> {
-  const operation = subscribe({
+  const operation = subscribeOp({
     userId: 'usr_buyer',
     sellerId: 'usr_seller',
     sku: '   ',

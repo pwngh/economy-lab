@@ -703,7 +703,7 @@ async function proveEconomy(
 ): Promise<ProveReport> {
   const fold = await foldLedger(store, options);
   const required = backingRequired(
-    fold.custodialCredit,
+    fold.custodialCreditMinor,
     ctx.rates.par('CREDIT'),
   );
   const shortfallMinor =
@@ -728,7 +728,7 @@ type LedgerDrift = {
 
 type LedgerFold = {
   signedByCurrency: Map<Currency, bigint>;
-  custodialCredit: bigint;
+  custodialCreditMinor: bigint;
   trustCashMinor: bigint;
   anyUserNegative: boolean;
   chainIntact: boolean;
@@ -748,7 +748,7 @@ async function foldLedger(
   options?: Options,
 ): Promise<LedgerFold> {
   const signedByCurrency = new Map<Currency, bigint>();
-  let custodialCredit = 0n;
+  let custodialCreditMinor = 0n;
   let trustCashMinor = 0n;
   let anyUserNegative = false;
   let chainIntact = true;
@@ -774,7 +774,7 @@ async function foldLedger(
       });
     }
     if (classify(account) === 'custodial' && cur === 'CREDIT') {
-      custodialCredit += bal.minor;
+      custodialCreditMinor += bal.minor;
     }
     // Trust cash is one logical account split across shard rows, so the backing check compares
     // `required` against the sum over every TRUST_CASH shard this pass visits, not one bare row.
@@ -794,7 +794,7 @@ async function foldLedger(
   // trades that guarantee for speed, so it is not ported here unless this prover ever needs it.
   return {
     signedByCurrency,
-    custodialCredit,
+    custodialCreditMinor,
     trustCashMinor,
     anyUserNegative,
     chainIntact,
@@ -812,7 +812,7 @@ async function deriveBalanceMinor(
   options?: Options,
 ): Promise<bigint> {
   let derivedMinor = 0n;
-  const page = await store.ledger.statement(account, PROVE_RANGE, options);
+  const page = await store.ledger.statement(account, FULL_RANGE, options);
   for (const entry of page.entries) {
     derivedMinor += entry.amount.minor;
   }
@@ -822,7 +822,7 @@ async function deriveBalanceMinor(
 // A range wide enough to cover every entry ever recorded, so a statement over it returns the
 // account's whole history. The lower bound is inclusive and the upper bound is exclusive, matching
 // how the ledger reads a range elsewhere.
-const PROVE_RANGE = {
+const FULL_RANGE = {
   from: Number.MIN_SAFE_INTEGER,
   to: Number.MAX_SAFE_INTEGER,
 };
@@ -831,8 +831,8 @@ const PROVE_RANGE = {
 // The rate is a pair of exact integers, with a true value of `rate` / 10^`scale`, so this multiplies
 // by `rate` and divides by that power of ten. Bigint division drops the remainder and rounds down, so
 // the platform never reports needing less cash than it actually does.
-function backingRequired(custodialCredit: bigint, par: Rate): bigint {
-  return (custodialCredit * par.rate) / 10n ** BigInt(par.scale);
+function backingRequired(custodialCreditMinor: bigint, par: Rate): bigint {
+  return (custodialCreditMinor * par.rate) / 10n ** BigInt(par.scale);
 }
 
 // --- Small helpers ----------------------------------------------------------------

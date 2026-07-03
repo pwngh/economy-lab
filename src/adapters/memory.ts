@@ -657,7 +657,7 @@ function createOutboxStore(): OutboxStore & Participant {
           break;
         }
         const message = rows.get(id);
-        // Only 'pending' rows are handed back. The 'relayed' and 'failed' states are terminal, and
+        // Only 'pending' rows are handed back. The 'relayed' and 'dead' states are terminal, and
         // this `=== 'pending'` test excludes both.
         if (message && message.status === 'pending') {
           batch.push({ ...message });
@@ -694,15 +694,15 @@ function createOutboxStore(): OutboxStore & Participant {
     deadLetter: async (id, reason, _options?: Options) => {
       const message = rows.get(id);
       // Does nothing for a missing or already-terminal row, mirroring the saga store. Flipping the
-      // status to 'failed' keeps `claimBatch` from handing this poison message back again.
+      // status to 'dead' keeps `claimBatch` from handing this poison message back again.
       if (!message || message.status !== 'pending') {
         return;
       }
       const prior = { ...message };
       journal.record(() => rows.set(id, prior));
-      // Flip to 'failed' and record the failure reason on the message itself, so the dead-letter
+      // Flip to 'dead' and record the failure reason on the message itself, so the dead-letter
       // outcome travels with the row instead of a side map.
-      rows.set(id, { ...message, status: 'failed', reason });
+      rows.set(id, { ...message, status: 'dead', reason });
     },
   };
 }

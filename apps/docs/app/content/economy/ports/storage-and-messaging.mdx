@@ -51,10 +51,10 @@ The reason all of these live behind one `Store` is `transaction`. When an operat
 So `transaction` hands the handler a `Unit`: the subset of sub-stores that may participate in one database transaction. Everything the handler writes through that `Unit` commits as a group:
 
 ```ts
-await store.transaction(async (tx) => {
-  await tx.ledger.append(posting);
-  await tx.idempotency.record(key, transaction);
-  await tx.outbox.enqueue(message);
+await store.transaction(async (unit) => {
+  await unit.ledger.append(posting);
+  await unit.idempotency.record(key, transaction);
+  await unit.outbox.enqueue(message);
 });
 ```
 
@@ -131,7 +131,7 @@ There's a problem the `Dispatcher` alone doesn't solve: if the money commits but
 
 That's the transactional outbox. When a money move commits, its outgoing event is written to the `outbox` sub-store _in the same database transaction_. A separate relay ([the background worker](/economy/reference/background-worker/)) picks up pending rows afterward and ships them through the `Dispatcher`. An event is never sent for a rolled-back move, nor lost for a committed one.
 
-The relay is `relayOutbox` in `src/worker/relay.ts`. It claims a batch of pending rows, sends each in its own try/catch so one failure can't stop the batch, and marks the delivered ones done. A send that throws is left pending with its attempt count bumped, retried next run; once it hits the configured cap it's dead-lettered to a terminal `failed` state, so one poison event can't wedge the queue behind it.
+The relay is `relayOutbox` in `src/worker/relay.ts`. It claims a batch of pending rows, sends each in its own try/catch so one failure can't stop the batch, and marks the delivered ones done. A send that throws is left pending with its attempt count bumped, retried next run; once it hits the configured cap it's dead-lettered to a terminal `dead` state, so one poison event can't wedge the queue behind it.
 
 The `inbox` is the mirror image, for events coming _in_. A verified provider webhook is mapped to the [`Operation`](/economy/reference/outcomes-and-reason-codes/) it should apply, then saved to the `inbox` in the same transaction as the webhook ingress that claimed it. A separate apply sweep submits each pending operation and marks the row applied. An inbound event can't be applied without first being recorded, and every recorded event is eventually applied or dead-lettered.
 

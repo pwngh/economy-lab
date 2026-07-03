@@ -22,7 +22,7 @@ import {
   webhookIdempotencyKey,
 } from '#src/webhooks.ts';
 import { drainInbox } from '#src/worker/inbox.ts';
-import { settleDuePayouts } from '#src/worker/payouts.ts';
+import { advanceDuePayouts } from '#src/worker/payouts.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { encodeAmount, toAmount } from '#src/money.ts';
 import { earned, spendable, SYSTEM } from '#src/accounts.ts';
@@ -476,7 +476,7 @@ function payoutSettledEvent(o: {
 async function submitPayout(store: Store, userId: string): Promise<Saga> {
   const reserved = await onlySagaFor(store, userId);
   assert.equal(reserved.state, 'RESERVED');
-  const summary = await settleDuePayouts(store, workerCtxAt(60_000), {
+  const summary = await advanceDuePayouts(store, workerCtxAt(60_000), {
     now: 60_000,
     limit: 10,
   });

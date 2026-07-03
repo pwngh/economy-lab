@@ -615,7 +615,7 @@ function rootReplay(transport: {
 // server's backing store, so this client adds no transaction logic of its own.
 async function runTransaction<T>(
   transport: { fetch: FetchLike; baseUrl: string },
-  work: (tx: Unit) => Promise<T>,
+  work: (unit: Unit) => Promise<T>,
   options?: Options,
 ): Promise<T> {
   const { session } = (await call(transport, '/tx/begin', {}, options)) as {

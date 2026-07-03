@@ -10,7 +10,7 @@
  */
 
 import { normalizeError } from '#src/errors.ts';
-import { settleDuePayouts } from '#src/worker/payouts.ts';
+import { advanceDuePayouts } from '#src/worker/payouts.ts';
 import { sweepDueSubscriptions } from '#src/worker/subscriptions.ts';
 import { realizeFees, sweepTreasury } from '#src/worker/treasury.ts';
 import { reverifyCheckpoint, sealCheckpoint } from '#src/worker/checkpoint.ts';
@@ -28,7 +28,7 @@ import type {
   Scheduler,
   Store,
 } from '#src/ports.ts';
-import type { SettleSummary } from '#src/worker/payouts.ts';
+import type { PayoutSweepSummary } from '#src/worker/payouts.ts';
 import type { SweepSummary } from '#src/worker/subscriptions.ts';
 import type {
   FeeRealizationSummary,
@@ -97,7 +97,7 @@ export type SweepResult<TSummary> =
 // Combines the results from `runSweeps` into one entry per job, keyed by name. Each entry is the
 // job's summary if it ran or its caught error if it failed. One job failing never hides the others.
 export type SweepBatch = {
-  payouts: SweepResult<SettleSummary>;
+  payouts: SweepResult<PayoutSweepSummary>;
   subscriptions: SweepResult<SweepSummary>;
   treasury: SweepResult<TreasurySummary>;
   feeSweep: SweepResult<FeeRealizationSummary>;
@@ -138,7 +138,7 @@ export async function runSweeps(
 ): Promise<SweepBatch> {
   const { now, limit, options } = input;
   return {
-    payouts: await isolate(() => settleDuePayouts(store, ctx, { now, limit })),
+    payouts: await isolate(() => advanceDuePayouts(store, ctx, { now, limit })),
     subscriptions: await isolate(() =>
       sweepDueSubscriptions(store, ctx, { now, limit }),
     ),

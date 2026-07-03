@@ -143,7 +143,7 @@ async function postReversal(args: {
         debit(promo(grant.userId), amount),
         credit(SYSTEM.PROMO_FLOAT, amount),
       ],
-      meta: { kind: 'promoExpiry', grantId: grant.id },
+      meta: { kind: 'promos.expiry', grantId: grant.id },
     },
     options,
   );

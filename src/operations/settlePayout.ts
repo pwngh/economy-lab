@@ -162,7 +162,7 @@ async function postSettlementEntries(
       debit(reserveRef, saga.reserve),
       credit(SYSTEM.REVENUE, saga.reserve),
     ],
-    meta: { kind: 'payout.settle', sagaId: saga.id, rateId },
+    meta: { kind: 'settlePayout', sagaId: saga.id, rateId },
   });
   // The gross `usd` leaves the trust account. The rail keeps `payoutFee` and the seller receives
   // `netUsd`. That split happens downstream at the external rail, so it is recorded here on the
@@ -171,7 +171,7 @@ async function postSettlementEntries(
     txnId: ctx.ids.next('txn'),
     legs: [debit(SYSTEM.USD_CLEARING, usd), credit(SYSTEM.TRUST_CASH, usd)],
     meta: {
-      kind: 'payout.settle.cash',
+      kind: 'settlePayout.cash',
       sagaId: saga.id,
       rateId,
       payoutFee: encodeAmount(fee),

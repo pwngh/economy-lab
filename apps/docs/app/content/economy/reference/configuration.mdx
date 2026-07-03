@@ -84,7 +84,7 @@ attempts; the worker dead-letters once `attempts` reaches it.
 
 | Variable                    | Meaning                                                                                                                                  | Default |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `MAX_OUTBOX_ATTEMPTS`       | Delivery attempts an outbox event gets before the relay dead-letters it (status `failed`).                                               | `10`    |
+| `MAX_OUTBOX_ATTEMPTS`       | Delivery attempts an outbox event gets before the relay dead-letters it (status `dead`).                                               | `10`    |
 | `MAX_INBOX_ATTEMPTS`        | Apply attempts an inbox event gets before the apply worker dead-letters it (status `dead`). The inbound mirror of `MAX_OUTBOX_ATTEMPTS`. | `10`    |
 | `MAX_SUBSCRIPTION_ATTEMPTS` | Consecutive retryable renewal failures before the renewal sweep lapses a subscription instead of re-billing forever.                     | `10`    |
 

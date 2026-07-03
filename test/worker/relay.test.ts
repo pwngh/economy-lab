@@ -34,7 +34,7 @@ import type { Dispatcher, EconomyEvent, Store } from '#src/ports.ts';
 // we pass the full object to match the other worker tests.
 //
 // A "poison" row always throws on delivery, so retries never succeed. The relay caps failed
-// attempts and marks such a row permanently failed. This cap is called dead-lettering. It stops
+// attempts and marks such a row permanently 'dead'. This cap is called dead-lettering. It stops
 // the relay from retrying forever and blocking healthy rows behind the poison row.
 // `maxOutboxAttempts` is that cap. A small value drives a poison row to the cap in a few sweeps.
 function workerCtx(maxOutboxAttempts?: number): WorkerCtx {
@@ -250,7 +250,7 @@ describe('relayOutbox — Retry Cap', () => {
     };
 
     // The cap is 3. Failures 1 and 2 stay 'pending' because they are under the cap. Failure 3
-    // takes `attempts` to 3 and dead-letters the row, setting its status to 'failed'. The worker
+    // takes `attempts` to 3 and dead-letters the row, setting its status to 'dead'. The worker
     // uses a `>=` cap, so the row dead-letters at 3 rather than 4. The row is then terminal and
     // is never claimed again.
     const s1 = await sweep(store, dispatcher, 10, 3);

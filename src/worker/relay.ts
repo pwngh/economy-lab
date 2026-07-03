@@ -24,7 +24,7 @@ import type { Dispatcher, OutboxMessage, Options, Store } from '#src/ports.ts';
  * bumped, so the next run retries it.
  *
  * `deadLettered` lists events that hit the attempt cap (`config.maxOutboxAttempts`). Each is set
- * to 'failed' and never re-claimed, so a poison event cannot block the events behind it. Each
+ * to 'dead' and never re-claimed, so a poison event cannot block the events behind it. Each
  * entry carries the event id and the error code (`reason`). This matches the id and reason shape
  * the other background sweeps use.
  */

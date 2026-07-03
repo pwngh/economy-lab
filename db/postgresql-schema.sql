@@ -193,9 +193,9 @@ create table outbox (
   id                 text        primary key,                -- obx_<uuid>
   event              jsonb       not null,                   -- the event payload to publish
   status             text        not null default 'pending'
-                       check (status in ('pending', 'relayed', 'failed')),
+                       check (status in ('pending', 'relayed', 'dead')),
   attempts           int         not null default 0,
-  -- If the relay gives up after repeated failures it marks the row 'failed' and stores the
+  -- If the relay gives up after repeated failures it marks the row 'dead' and stores the
   -- last error code here; null while the row is still pending or already relayed.
   dead_letter_reason text,
   created_at         timestamptz not null default now()
@@ -529,7 +529,7 @@ create or replace trigger account_balances_integrity
 -- src/schema.ts together, whenever this file changes.
 -- ============================================================================
 create table schema_meta (version text not null);
-insert into schema_meta (version) values ('8');
+insert into schema_meta (version) values ('9');
 
 -- ============================================================================
 -- Column comments: short, deployed-schema documentation for every column. The
@@ -573,9 +573,9 @@ comment on column sales.txn_id is 'Posting transaction id; references postings.i
 comment on column sales.posted_at is 'When the sale posted, epoch ms.';
 comment on column outbox.id is 'Outbox row id; primary key, obx_<uuid>.';
 comment on column outbox.event is 'JSON event payload to publish.';
-comment on column outbox.status is 'One of pending, relayed, failed.';
+comment on column outbox.status is 'One of pending, relayed, dead.';
 comment on column outbox.attempts is 'Number of publish attempts so far.';
-comment on column outbox.dead_letter_reason is 'Last error code if failed; else null.';
+comment on column outbox.dead_letter_reason is 'Last error code if dead; else null.';
 comment on column outbox.created_at is 'UTC time the row was inserted.';
 comment on column inbox.id is 'Inbox row id; primary key, ibx_<uuid>.';
 comment on column inbox."key" is 'Provider event id; unique, dedupes redelivery.';

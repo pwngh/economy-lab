@@ -292,7 +292,7 @@ export type WorkerCtx = {
 /** A function that processes one operation, given an open transaction and its capabilities. */
 export type Handler = (
   operation: Operation,
-  tx: Unit,
+  unit: Unit,
   ctx: Ctx,
 ) => Promise<Outcome>;
 

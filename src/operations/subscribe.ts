@@ -44,7 +44,7 @@ type ChargePlan = { promoPart: Amount; spendablePart: Amount };
  *
  * @example
  *   // Inside an open transaction (`unit`), bill month one and open the record:
- *   const outcome = await handleSubscribe(
+ *   const outcome = await subscribe(
  *     { kind: 'subscribe', idempotencyKey: 'idem_1', actor: { kind: 'user', userId: 'usr_a' },
  *       userId: 'usr_a', sellerId: 'usr_s', sku: 'club_pass',
  *       price: toAmount('CREDIT', 50_000n), periodMs: 2_592_000_000 },
@@ -55,7 +55,7 @@ type ChargePlan = { promoPart: Amount; spendablePart: Amount };
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/subscribe/ Subscribe}
  *   for the first-month charge and renewal handoff.
  */
-export async function handleSubscribe(
+export async function subscribe(
   operation: Operation,
   unit: Unit,
   ctx: Ctx,

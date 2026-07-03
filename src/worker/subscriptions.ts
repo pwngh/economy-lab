@@ -337,7 +337,7 @@ async function postRenewal(
     txnId: ctx.ids.next('txn'),
     legs,
     meta: {
-      kind: 'subscribe.renew',
+      kind: 'subscriptions.renew',
       subscriptionId: sub.id,
       sku: sub.sku,
       sellerId: sub.sellerId,

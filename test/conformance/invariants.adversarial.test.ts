@@ -397,7 +397,7 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
       if (!engine) return t.skip(`${name} unreachable`);
       const live = engine;
       const id = `obx_adv_dead_${name}`;
-      // A poison message that is enqueued, then given up on. Dead-lettering sets its status to 'failed'.
+      // A poison message that is enqueued, then given up on. Dead-lettering sets its status to 'dead'.
       await live.store.transaction((unit: Unit) =>
         unit.outbox.enqueue({
           id,
@@ -426,8 +426,8 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
       )) as Array<{ status: string }>;
       assert.equal(
         observed[0]?.status,
-        'failed',
-        `${name}: markRelayed flipped a dead-lettered outbox row to '${String(observed[0]?.status)}' — a poison event must stay 'failed'`,
+        'dead',
+        `${name}: markRelayed flipped a dead-lettered outbox row to '${String(observed[0]?.status)}' — a poison event must stay 'dead'`,
       );
     });
 

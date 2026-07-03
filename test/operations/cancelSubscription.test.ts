@@ -12,9 +12,12 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { handleCancelSubscription } from '#src/operations/cancelSubscription.ts';
+import { cancelSubscription } from '#src/operations/cancelSubscription.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
-import { cancelSubscription, credit } from '#test/support/builders.ts';
+import {
+  cancelSubscription as cancelSubscriptionOp,
+  credit,
+} from '#test/support/builders.ts';
 import {
   fixedClock,
   sequentialIds,
@@ -79,7 +82,7 @@ async function cancel(
   subscriptionId: string,
 ): Promise<{ outcome: Outcome; after: Subscription | null }> {
   const outcome = await store.transaction((unit) =>
-    handleCancelSubscription(cancelSubscription({ subscriptionId }), unit, ctx),
+    cancelSubscription(cancelSubscriptionOp({ subscriptionId }), unit, ctx),
   );
   const after = await store.subscriptions.load(subscriptionId);
   return { outcome, after };
@@ -146,8 +149,8 @@ describe('cancelSubscription', () => {
 
     await assert.rejects(
       store.transaction((unit) =>
-        handleCancelSubscription(
-          cancelSubscription({ subscriptionId: '   ' }),
+        cancelSubscription(
+          cancelSubscriptionOp({ subscriptionId: '   ' }),
           unit,
           ctx,
         ),

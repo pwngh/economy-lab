@@ -22,6 +22,7 @@ import {
 import { currency, baseOf } from '#src/accounts.ts';
 import { byCodeUnit, fromHex } from '#src/bytes.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
+import { systemClock } from '#src/runtime.ts';
 import {
   callProcedure,
   callFunction,
@@ -29,7 +30,6 @@ import {
 } from '#src/engines/sql-routines.ts';
 import {
   defaultDigest,
-  defaultClock,
   GENESIS_HEX,
   CHAIN_FORK_INDEX,
   CHAIN_CONTINUITY_MARKER,
@@ -856,12 +856,12 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
         [id],
       );
     },
-    // Give up on a poison message: flip to 'failed' so claimBatch never hands it back, keep the
+    // Give up on a poison message: flip to 'dead' so claimBatch never hands it back, keep the
     // reason for operators. Same terminal-state guard as markSent above.
     deadLetter: async (id, reason) => {
       await rows(
         exec,
-        "UPDATE outbox SET status = 'failed', dead_letter_reason = ? WHERE id = ? AND status = 'pending'",
+        "UPDATE outbox SET status = 'dead', dead_letter_reason = ? WHERE id = ? AND status = 'pending'",
         [reason, id],
       );
     },
@@ -1680,8 +1680,8 @@ function buildUnit(deps: ExecDeps, trust: TrustStore): Unit {
  * reads/writes, plus the trust and checkpoint stores) runs directly on the pool and commits on its
  * own.
  *
- * The hashing and clock services default to the deterministic web-standard ones, so `mysqlStore({
- * pool })` produces reproducible results.
+ * The hash service defaults to the deterministic web-standard SHA-256; the clock defaults to
+ * wall-clock time. Pass a fixed clock when reproducible `postedAt` values matter.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
  *   messaging} for the store and outbox/inbox ports this backs.
@@ -1694,7 +1694,7 @@ export function mysqlStore(deps: {
 }): Store {
   const pool = deps.pool;
   const digest = deps.digest ?? defaultDigest();
-  const clock = deps.clock ?? defaultClock();
+  const clock = deps.clock ?? systemClock();
   const velocityWindowMs = deps.velocityWindowMs ?? 60 * 60_000;
   const poolDeps: ExecDeps = { exec: pool, digest, clock, pool };
 

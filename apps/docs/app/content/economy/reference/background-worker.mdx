@@ -6,7 +6,7 @@ status: stable
 sourceRefs:
   [
     'src/worker/index.ts#L57-L68 · SWEEP_NAMES',
-    'src/worker/payouts.ts#L50 · settleDuePayouts',
+    'src/worker/payouts.ts#L50 · advanceDuePayouts',
     'src/worker/relay.ts#L56 · relayOutbox',
   ]
 related:
@@ -54,7 +54,7 @@ Every sweep claims a bounded batch of due rows, advances each row one step, and 
 The payout sweep is the clearest example. It claims the due payout sagas and pushes each one forward:
 
 ```ts
-const summary = await settleDuePayouts(store, ctx, { now, limit });
+const summary = await advanceDuePayouts(store, ctx, { now, limit });
 // → { submitted: [...], deadLettered: [...], retrying: [...] }
 ```
 

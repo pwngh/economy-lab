@@ -39,7 +39,7 @@ export interface Config {
   maxPayoutAttempts: number;
 
   /**
-   * Delivery attempts an outbox message gets before the relay dead-letters it as status 'failed'.
+   * Delivery attempts an outbox message gets before the relay dead-letters it as status 'dead'.
    * The cap stops a poison event from wedging the queue forever.
    */
   maxOutboxAttempts: number;

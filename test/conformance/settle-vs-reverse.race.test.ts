@@ -81,10 +81,10 @@ import {
   adversarialPostgres,
   adversarialMysql,
 } from '#test/conformance/adversarial-engines.ts';
-import { settleDuePayouts } from '#src/worker/payouts.ts';
+import { advanceDuePayouts } from '#src/worker/payouts.ts';
 
 import type { AdversarialEngine } from '#test/conformance/adversarial-engines.ts';
-import type { SettleSummary } from '#src/worker/payouts.ts';
+import type { PayoutSweepSummary } from '#src/worker/payouts.ts';
 import type { Economy, Operation, Outcome, WorkerCtx } from '#src/contract.ts';
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
@@ -505,10 +505,10 @@ async function oneWorkerVsSettleRace(
   const before = await snapshot(store, earned(seller));
 
   const settle = () => settleOf(engine.submit(settlePayoutOp(sagaId)));
-  const sweep = () => settleDuePayouts(store, worker, { now: 0, limit: 50 });
+  const sweep = () => advanceDuePayouts(store, worker, { now: 0, limit: 50 });
 
   let settleResult: Settled;
-  let sweepSummary: SettleSummary;
+  let sweepSummary: PayoutSweepSummary;
   if (settleFirst) {
     const [s, w] = await Promise.all([settle(), sweep()]);
     settleResult = s;

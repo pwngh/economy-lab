@@ -246,7 +246,7 @@ async function dropsOutboxOnRollback(store: Store): Promise<void> {
 // Pins the same retry-and-dead-letter behavior across adapters. This is the outbound twin of
 // bumpsInboxAttemptThenDeadLetters. `recordFailure` counts one failed delivery: it bumps
 // `attempts`, leaves the row 'pending', and records no reason yet. `deadLetter` then gives up on
-// the poison message, flips it to 'failed', and persists the reason on the record so `claimBatch`
+// the poison message, flips it to 'dead', and persists the reason on the record so `claimBatch`
 // never hands it back. Like the relay worker, recordFailure and deadLetter run on the top-level
 // store, not inside store.transaction(...).
 async function recordsFailureThenDeadLettersOutbox(
@@ -269,7 +269,7 @@ async function recordsFailureThenDeadLettersOutbox(
   assert.equal(failed!.reason, null);
 
   // Give up on the poison message by dead-lettering it, after which it is never claimed again. The
-  // reason is persisted on the 'failed' record itself, not in a side-channel, mirroring the saga
+  // reason is persisted on the 'dead' record itself, not in a side-channel, mirroring the saga
   // terminal-outcome test. claimBatch never returns a terminal row, so this test cannot reload it
   // that way, but the SQL decoders carry dead_letter_reason through to reason off the row.
   await store.outbox.deadLetter(messageId, 'poison');

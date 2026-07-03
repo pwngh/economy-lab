@@ -86,7 +86,7 @@ export async function reversePayout(
       ctx.config.platformShards,
     ),
     meta: {
-      kind: 'payout.reversePayout',
+      kind: 'reversePayout',
       sagaId: saga.id,
       reason: operation.reason,
     },

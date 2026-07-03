@@ -12,10 +12,10 @@
 import { topUp } from '#src/operations/topUp.ts';
 import { spend } from '#src/operations/spend.ts';
 import { refund } from '#src/operations/refund.ts';
-import { handleClawback } from '#src/operations/clawback.ts';
+import { clawback } from '#src/operations/clawback.ts';
 import { requestPayout } from '#src/operations/requestPayout.ts';
-import { handleSubscribe } from '#src/operations/subscribe.ts';
-import { handleCancelSubscription } from '#src/operations/cancelSubscription.ts';
+import { subscribe } from '#src/operations/subscribe.ts';
+import { cancelSubscription } from '#src/operations/cancelSubscription.ts';
 import {
   grantEntitlement,
   revokeEntitlement,
@@ -35,10 +35,6 @@ import type { Handler, Operation } from '#src/contract.ts';
  * kind to `Operation` without registering a handler and the file fails to compile, rather than
  * throwing at runtime on the first submit of that kind.
  *
- * Most keys match the imported handler name. A few handlers are exported as `handle...`
- * (`handleClawback`, `handleSubscribe`, and `handleCancelSubscription`). Those are written as
- * `kind: handler` so the key stays the operation's kind.
- *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy} for the
  * submit entry point that dispatches through this registry.
  */
@@ -46,10 +42,10 @@ export const REGISTRY = {
   topUp,
   spend,
   refund,
-  clawback: handleClawback,
+  clawback,
   requestPayout,
-  subscribe: handleSubscribe,
-  cancelSubscription: handleCancelSubscription,
+  subscribe,
+  cancelSubscription,
   grantEntitlement,
   revokeEntitlement,
   grantPromo,

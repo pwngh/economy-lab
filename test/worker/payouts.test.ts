@@ -13,7 +13,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { settleDuePayouts } from '#src/worker/payouts.ts';
+import { advanceDuePayouts } from '#src/worker/payouts.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { credit as creditLeg, debit, postEntry } from '#src/ledger.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
@@ -138,7 +138,7 @@ async function submitsAReservedSagaToTheProvider(store: Store): Promise<void> {
     saga({ id: 'pay_1', state: 'RESERVED', reserve: credit('4.00') }),
   );
 
-  const summary = await settleDuePayouts(store, workerCtx({ processor }), {
+  const summary = await advanceDuePayouts(store, workerCtx({ processor }), {
     now: 1_000,
     limit: 10,
   });
@@ -168,7 +168,7 @@ async function leavesAWithinWindowSubmittedSagaForTheWebhook(
     saga({ id: 'pay_1', state: 'SUBMITTED', reserve: credit('4.00') }),
   );
 
-  const summary = await settleDuePayouts(store, workerCtx(), {
+  const summary = await advanceDuePayouts(store, workerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -215,7 +215,7 @@ async function forceFailsASubmittedSagaPastTheMaxAgeAndReturnsTheReserve(
     }),
   );
 
-  const summary = await settleDuePayouts(
+  const summary = await advanceDuePayouts(
     store,
     workerCtx({ config, clock: fixedClock(120_000) }),
     { now: 120_000, limit: 10 },
@@ -270,7 +270,7 @@ async function leavesASubmittedSagaAtTheAgeBoundaryForTheWebhook(
     }),
   );
 
-  const summary = await settleDuePayouts(
+  const summary = await advanceDuePayouts(
     store,
     workerCtx({ config, clock: fixedClock(60_000) }),
     { now: 60_000, limit: 10 },
@@ -307,7 +307,7 @@ async function deadLettersAProviderFaultPastTheAttemptCeiling(
     }),
   );
 
-  const summary = await settleDuePayouts(
+  const summary = await advanceDuePayouts(
     store,
     workerCtx({ processor: failingProcessor(), config }),
     { now: 1_000, limit: 10 },
@@ -344,7 +344,7 @@ async function leavesARetryableFaultUnderTheCeilingForTheNextSweep(
   const config: Config = { ...testConfig(), maxPayoutAttempts: 5 };
   await openSaga(store, saga({ id: 'pay_1', state: 'RESERVED', attempts: 0 }));
 
-  const summary = await settleDuePayouts(
+  const summary = await advanceDuePayouts(
     store,
     workerCtx({ processor: failingProcessor(), config }),
     { now: 1_000, limit: 10 },
@@ -375,16 +375,16 @@ async function climbsAttemptsEachRunThenDeadLettersAndReturnsTheReserve(
 
   // Runs 1 and 2 each fail under the limit, raising attempts to 1 and then 2 while leaving the
   // saga RESERVED. dueAt is unchanged, so the saga is picked up again every run.
-  const run1 = await settleDuePayouts(store, ctx, { now: 1_000, limit: 10 });
+  const run1 = await advanceDuePayouts(store, ctx, { now: 1_000, limit: 10 });
   assert.equal(run1.retrying.length, 1);
   assert.equal((await store.sagas.load('pay_1'))!.attempts, 1);
 
-  const run2 = await settleDuePayouts(store, ctx, { now: 1_000, limit: 10 });
+  const run2 = await advanceDuePayouts(store, ctx, { now: 1_000, limit: 10 });
   assert.equal(run2.retrying.length, 1);
   assert.equal((await store.sagas.load('pay_1'))!.attempts, 2);
 
   // Run 3 reaches the limit, so the payout is dead-lettered instead of retried.
-  const run3 = await settleDuePayouts(store, ctx, { now: 1_000, limit: 10 });
+  const run3 = await advanceDuePayouts(store, ctx, { now: 1_000, limit: 10 });
   assert.deepEqual(run3.retrying, []);
   assert.equal(run3.deadLettered.length, 1);
   assert.equal(run3.deadLettered[0]!.id, 'pay_1');
@@ -422,7 +422,7 @@ async function isolatesAPerItemFaultAndContinuesTheBatch(): Promise<void> {
     },
   };
 
-  const summary = await settleDuePayouts(
+  const summary = await advanceDuePayouts(
     store,
     workerCtx({ processor, config }),
     {
@@ -453,7 +453,7 @@ async function deadLetteringEmitsOnePayoutReversedEvent(
     }),
   );
 
-  await settleDuePayouts(
+  await advanceDuePayouts(
     store,
     workerCtx({ processor: failingProcessor(), config }),
     { now: 1_000, limit: 10 },
@@ -474,7 +474,7 @@ async function deadLetteringEmitsOnePayoutReversedEvent(
   assert.equal(event.data.reason, 'PROVIDER.FAILURE');
 }
 
-describe('settleDuePayouts', () => {
+describe('advanceDuePayouts', () => {
   test('submits a reserved saga to the provider as USD with no ledger posting', () =>
     submitsAReservedSagaToTheProvider(memoryStore()));
   test('leaves a within-window submitted saga untouched for the settlement webhook', () =>

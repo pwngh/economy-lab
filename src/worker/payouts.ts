@@ -19,20 +19,20 @@ import type { Saga, Store } from '#src/ports.ts';
 
 /**
  * Reports which payouts moved this run, bucketed by outcome. The worker submits RESERVED payouts to
- * the provider and force-fails SUBMITTED payouts that have timed out. Settlement does not run
- * here; it arrives through the provider's settlement webhook (see src/operations/settlePayout.ts).
+ * the provider and force-fails SUBMITTED payouts that have timed out. Settlement arrives later,
+ * through the provider's webhook (see src/operations/settlePayout.ts).
  * A failed payout goes to `deadLettered` if it can never succeed, including a timed-out submit. It
  * goes to `retrying` if it hit a temporary problem, such as a flaky network or database, and gets
  * another go next run.
  */
-export type SettleSummary = {
+export type PayoutSweepSummary = {
   submitted: ReadonlyArray<string>;
   deadLettered: ReadonlyArray<{ id: string; reason: string }>;
   retrying: ReadonlyArray<{ id: string; code: string }>;
 };
 
-// Mutable version of SettleSummary that the run fills in, returned read-only at the end.
-type SettleTally = {
+// Mutable version of PayoutSweepSummary that the run fills in, returned read-only at the end.
+type PayoutSweepTally = {
   submitted: string[];
   deadLettered: Array<{ id: string; reason: string }>;
   retrying: Array<{ id: string; code: string }>;
@@ -47,13 +47,13 @@ type SettleTally = {
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background
  *   worker} for how this sweep claims and advances due payouts.
  */
-export async function settleDuePayouts(
+export async function advanceDuePayouts(
   store: Store,
   ctx: WorkerCtx,
   input: { now: number; limit: number },
-): Promise<SettleSummary> {
+): Promise<PayoutSweepSummary> {
   const due = await store.sagas.claimDue(input.now, input.limit);
-  const tally: SettleTally = {
+  const tally: PayoutSweepTally = {
     submitted: [],
     deadLettered: [],
     retrying: [],
@@ -74,7 +74,7 @@ async function advanceOne(
   store: Store,
   ctx: WorkerCtx,
   saga: Saga,
-  tally: SettleTally,
+  tally: PayoutSweepTally,
 ): Promise<void> {
   try {
     await driveTransition(store, ctx, saga, tally);
@@ -153,7 +153,7 @@ async function deadLetter(
         debit(reserveRef, saga.reserve),
         credit(earned(saga.userId), saga.reserve),
       ],
-      meta: { kind: 'payout.deadLetter', sagaId: saga.id, reason },
+      meta: { kind: 'payouts.dead_letter', sagaId: saga.id, reason },
     });
     // Queue the "payout reversed" event in the same transaction, so it emits if and only if the
     // reversal committed: that is, if this worker, not a concurrent finisher, set the saga aside.
@@ -205,7 +205,7 @@ async function driveTransition(
   store: Store,
   ctx: WorkerCtx,
   saga: Saga,
-  tally: SettleTally,
+  tally: PayoutSweepTally,
 ): Promise<void> {
   if (saga.state === 'RESERVED') {
     await submitToProvider(store, ctx, saga);

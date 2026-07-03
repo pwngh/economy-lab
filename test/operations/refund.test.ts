@@ -101,7 +101,7 @@ function setup(): Fixture {
     drainEarned: async (userId, amount) => {
       await post(
         [debit(earned(userId), amount), credit(SYSTEM.PAYOUT_RESERVE, amount)],
-        { kind: 'payout.settle' },
+        { kind: 'settlePayout' },
       );
     },
     grant: (userId, sku, attrs) =>

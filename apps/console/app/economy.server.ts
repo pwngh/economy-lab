@@ -396,7 +396,7 @@ async function build(): Promise<ConsoleEngine> {
       };
     }
 
-    if (metaKind === 'payout.deadLetter') {
+    if (metaKind === 'payouts.dead_letter') {
       const reason = humanReason(String(meta.reason ?? ''));
       return {
         ...base,
@@ -406,7 +406,7 @@ async function build(): Promise<ConsoleEngine> {
         note: `Tilia payout failed (${reason}) after the retry cap. The ${cr} reserve was returned to ${user}'s earned balance — nothing is stranded.`,
       };
     }
-    if (metaKind === 'payout.settle') {
+    if (metaKind === 'settlePayout') {
       return {
         ...base,
         kind: 'payoutSettled',
@@ -419,7 +419,7 @@ async function build(): Promise<ConsoleEngine> {
     // the feed (newest first, the engine's posting log isn't re-stitched into one row per event). The
     // settled payout's "paid" caption on the board now comes from the saga's own payoutUsd field, so
     // this branch only builds the feed row.
-    if (metaKind === 'payout.settle.cash') {
+    if (metaKind === 'settlePayout.cash') {
       return {
         ...base,
         kind: 'payoutCash',
@@ -439,7 +439,7 @@ async function build(): Promise<ConsoleEngine> {
         note: `The platform swept ${cr} of accumulated marketplace fees out of revenue into its own treasury.`,
       };
     }
-    if (metaKind === 'promoExpiry') {
+    if (metaKind === 'promos.expiry') {
       return {
         ...base,
         kind: 'promoExpiry',

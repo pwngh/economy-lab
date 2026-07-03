@@ -39,7 +39,7 @@ import type { Leg, Unit } from '#src/ports.ts';
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/clawback/ Clawback}
  *   for the chargeback reversal and split accounting.
  */
-export async function handleClawback(
+export async function clawback(
   operation: Operation,
   unit: Unit,
   ctx: Ctx,

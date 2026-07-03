@@ -14,7 +14,7 @@
  * Proves the effect-level exactly-once guarantee the workers actually rely on, under the same claim
  * pattern the production workers use. The three background sweeps each claim a batch of due or pending
  * rows and then act on each one:
- *   - settleDuePayouts (src/worker/payouts.ts): claimDue, then advance(...), a compare-and-set.
+ *   - advanceDuePayouts (src/worker/payouts.ts): claimDue, then advance(...), a compare-and-set.
  *   - relayOutbox      (src/worker/relay.ts):   claimBatch, deliver, then markRelayed.
  *   - drainInbox       (src/worker/inbox.ts):   claimInbound, submit the stored Operation, then markApplied.
  * On the SQL engines every claim is `SELECT ... FOR UPDATE SKIP LOCKED`.
@@ -240,7 +240,7 @@ interface BoundMethod {
 }
 
 // Sagas: claimDue on the pool, then advance(SUBMITTED -> SETTLED) as a CAS in its own transaction.
-// This is the shape of settleDuePayouts: claimDue on the pool, and the state change is the advance
+// This is the shape of advanceDuePayouts: claimDue on the pool, and the state change is the advance
 // CAS. The exactly-once effect is per-saga: exactly one sweep's advance returns true. We tally
 // advance(true) per id across all sweeps and assert each due saga was advanced exactly once.
 function sagaMethod(): ClaimMethod {
@@ -260,7 +260,7 @@ function sagaMethod(): ClaimMethod {
         },
         sweepOnce: async () => {
           // Claim on the pool, in autocommit: the FOR UPDATE SKIP LOCKED lock drops the moment the
-          // SELECT returns, before any advance runs, exactly as settleDuePayouts claims.
+          // SELECT returns, before any advance runs, exactly as advanceDuePayouts claims.
           const due = await store.sagas.claimDue(NOW, LIMIT);
           for (const saga of due) {
             // The real state change: a CAS from SUBMITTED to SETTLED in its own transaction. Only the

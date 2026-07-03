@@ -12,7 +12,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { handleClawback } from '#src/operations/clawback.ts';
+import { clawback } from '#src/operations/clawback.ts';
 import { postEntry, debit, credit } from '#src/ledger.ts';
 import { spendable, SYSTEM } from '#src/accounts.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
@@ -28,7 +28,10 @@ import {
   defaultPricing,
   testConfig,
 } from '#test/support/capabilities.ts';
-import { clawback, credit as creditOf } from '#test/support/builders.ts';
+import {
+  clawback as clawbackOp,
+  credit as creditOf,
+} from '#test/support/builders.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
@@ -86,7 +89,7 @@ function setup(): Fixture {
       );
     },
     claw: (operation) =>
-      store.transaction((unit: Unit) => handleClawback(operation, unit, ctx)),
+      store.transaction((unit: Unit) => clawback(operation, unit, ctx)),
     // Stand in for a refund of `orderId`. A refund and a clawback of the same order both stake the
     // one-time marker `reversed:${orderId}`, so only one of them can reverse a given order. This
     // claims the marker, posts a balanced reversing entry that is all CREDIT and sums to zero, and
@@ -122,7 +125,7 @@ async function reclaimsFullAmountFromSpendable(): Promise<void> {
   await fx.issue('usr_buyer', creditOf('10.00'));
 
   const outcome = await fx.claw(
-    clawback({ userId: 'usr_buyer', amount: creditOf('4.00') }),
+    clawbackOp({ userId: 'usr_buyer', amount: creditOf('4.00') }),
   );
 
   assert.equal(outcome.status, 'committed');
@@ -139,7 +142,7 @@ async function booksRemainderToReceivableWhenShort(): Promise<void> {
   await fx.burn('usr_buyer', creditOf('7.00'));
 
   const outcome = await fx.claw(
-    clawback({
+    clawbackOp({
       userId: 'usr_buyer',
       amount: creditOf('5.00'),
       reason: 'chargeback',
@@ -157,7 +160,7 @@ async function booksRemainderToReceivableWhenShort(): Promise<void> {
 async function booksEntireAmountToReceivableWhenEmpty(): Promise<void> {
   const fx = setup();
 
-  await fx.claw(clawback({ userId: 'usr_buyer', amount: creditOf('3.00') }));
+  await fx.claw(clawbackOp({ userId: 'usr_buyer', amount: creditOf('3.00') }));
 
   assert.deepEqual(await fx.balanceOf(SYSTEM.RECEIVABLE), creditOf('3.00'));
 }
@@ -166,7 +169,7 @@ async function neverOverdrawsSpendable(): Promise<void> {
   const fx = setup();
   await fx.issue('usr_buyer', creditOf('2.00'));
 
-  await fx.claw(clawback({ userId: 'usr_buyer', amount: creditOf('9.00') }));
+  await fx.claw(clawbackOp({ userId: 'usr_buyer', amount: creditOf('9.00') }));
 
   const balance = await fx.balanceOf(spendable('usr_buyer'));
   assert.equal(balance.minor >= 0n, true);
@@ -181,7 +184,7 @@ async function balancesPostingRetiringToStoredValue(): Promise<void> {
   assert.deepEqual(await fx.balanceOf(SYSTEM.STORED_VALUE), creditOf('10.00'));
 
   const outcome = await fx.claw(
-    clawback({ userId: 'usr_buyer', amount: creditOf('4.00') }),
+    clawbackOp({ userId: 'usr_buyer', amount: creditOf('4.00') }),
   );
 
   assert.equal(outcome.status, 'committed');
@@ -213,7 +216,7 @@ async function duplicateWhenOrderAlreadyRefunded(): Promise<void> {
   const buyerBefore = await fx.balanceOf(spendable('usr_buyer'));
   const storedBefore = await fx.balanceOf(SYSTEM.STORED_VALUE);
   const outcome = await fx.claw(
-    clawback({
+    clawbackOp({
       userId: 'usr_buyer',
       amount: creditOf('4.00'),
       orderId: 'ord_1',
@@ -234,7 +237,7 @@ async function throwsMalformedForNonPositiveAmount(): Promise<void> {
   const fx = setup();
 
   await assert.rejects(
-    fx.claw(clawback({ userId: 'usr_buyer', amount: creditOf('0.00') })),
+    fx.claw(clawbackOp({ userId: 'usr_buyer', amount: creditOf('0.00') })),
     isCode('MONEY.INVALID_AMOUNT'),
   );
 }
@@ -248,7 +251,11 @@ async function throwsMalformedForBlankOrderId(): Promise<void> {
 
   await assert.rejects(
     fx.claw(
-      clawback({ userId: 'usr_buyer', amount: creditOf('4.00'), orderId: '' }),
+      clawbackOp({
+        userId: 'usr_buyer',
+        amount: creditOf('4.00'),
+        orderId: '',
+      }),
     ),
     isCode('OP.MALFORMED'),
   );
@@ -260,7 +267,7 @@ async function commitsWithNoOrderId(): Promise<void> {
   await fx.issue('usr_buyer', creditOf('10.00'));
 
   const outcome = await fx.claw(
-    clawback({ userId: 'usr_buyer', amount: creditOf('4.00') }),
+    clawbackOp({ userId: 'usr_buyer', amount: creditOf('4.00') }),
   );
 
   assert.equal(outcome.status, 'committed');
@@ -276,7 +283,7 @@ async function commitsWithRealOrderId(): Promise<void> {
   await fx.issue('usr_buyer', creditOf('10.00'));
 
   const outcome = await fx.claw(
-    clawback({
+    clawbackOp({
       userId: 'usr_buyer',
       amount: creditOf('4.00'),
       orderId: 'ord_real',
