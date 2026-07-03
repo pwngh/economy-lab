@@ -10,6 +10,7 @@
  */
 
 import { decodeWire, encodeWire } from '#src/adapters/http-wire.ts';
+import { EconomyError, normalizeError } from '#src/errors.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
 import type { Store, Unit } from '#src/ports.ts';
@@ -541,7 +542,19 @@ export function createStoreServer(
       const result = await dispatch(backing, sessions, segments, body);
       return jsonResponse({ ok: true, body: result ?? null });
     } catch (error) {
-      return jsonResponse({ ok: false, error: messageOf(error) });
+      // Carry the fault's stable code and retryable flag over the wire, so the client can
+      // reconstruct an equivalent EconomyError: a non-retryable OVERDRAFT must not arrive looking
+      // like a retryable storage blip. `detail` is for server logs only and stays here.
+      const normalized =
+        error instanceof EconomyError ? error : normalizeError(error);
+      return jsonResponse({
+        ok: false,
+        error: {
+          code: normalized.code,
+          message: normalized.message,
+          retryable: normalized.retryable,
+        },
+      });
     }
   };
 }
@@ -555,8 +568,4 @@ function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
     headers: { 'content-type': 'application/json' },
   });
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

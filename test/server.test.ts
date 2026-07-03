@@ -133,20 +133,26 @@ describe('createServer /submit', () => {
     assert.equal(payload.reason, 'INSUFFICIENT_FUNDS');
   });
 
-  test('maps a malformed body to 400 surfacing only the message', async () => {
+  test('maps a malformed body to a 400 problem+json with the stable code', async () => {
     const server = createServer(makeEconomy());
 
     const response = await server(submitRequest({ kind: 'no-such-kind' }));
     const payload = (await response.json()) as Record<string, unknown>;
 
     assert.equal(response.status, 400);
-    assert.equal(typeof payload.error, 'string');
-    // The error response carries only the message. The `detail` and `cause` fields stay server-side.
+    assert.equal(
+      response.headers.get('content-type'),
+      'application/problem+json',
+    );
+    assert.equal(typeof payload.title, 'string');
+    assert.equal(payload.status, 400);
+    assert.equal(payload.code, 'OP.MALFORMED');
+    // The problem carries only the caller-safe fields; `detail` and `cause` stay server-side.
     assert.equal('detail' in payload, false);
     assert.equal('cause' in payload, false);
   });
 
-  test('a thrown EconomyError carrying detail/cause leaks only { error: message }', async () => {
+  test('a thrown EconomyError carrying detail/cause leaks only the problem fields', async () => {
     // Submit faults with a fully-populated EconomyError (detail, cause, implicit stack). The boundary
     // must surface none of them.
     const economy = {
@@ -176,11 +182,19 @@ describe('createServer /submit', () => {
     const response = await server(submitRequest(topUpBody('usr_x', '1.00')));
     const payload = (await response.json()) as Record<string, unknown>;
 
-    // A retryable fault maps to 503, but the body is just the human-readable message.
+    // A retryable fault maps to 503; the problem body carries the message as `title` plus the
+    // stable code and retryable flag, and nothing else.
     assert.equal(response.status, 503);
-    assert.equal(payload.error, 'A storage layer failed.');
-    // Exactly one key; no detail, cause, or stack.
-    assert.deepEqual(Object.keys(payload), ['error']);
+    assert.equal(payload.title, 'A storage layer failed.');
+    assert.deepEqual(Object.keys(payload).sort(), [
+      'code',
+      'retryable',
+      'status',
+      'title',
+      'type',
+    ]);
+    assert.equal(payload.code, 'STORE.FAILURE');
+    assert.equal(payload.retryable, true);
     assert.equal('detail' in payload, false);
     assert.equal('cause' in payload, false);
     assert.equal('stack' in payload, false);
@@ -257,13 +271,13 @@ describe('createServer /webhooks HMAC Verification', () => {
         'x-timestamp': '0',
       }),
     );
-    const payload = (await response.json()) as { error: string };
+    const payload = (await response.json()) as { title: string };
 
     assert.equal(response.status, 401);
     // The handler (the only thing that would mutate the ledger) was never reached.
     assert.equal(invoked, false);
-    // Only the message escapes; internal detail stays server-side.
-    assert.equal(typeof payload.error, 'string');
+    // Only the caller-safe title escapes; internal detail stays server-side.
+    assert.equal(typeof payload.title, 'string');
     assert.equal('detail' in payload, false);
   });
 

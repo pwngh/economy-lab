@@ -33,6 +33,7 @@ import { createEconomy } from '#src/economy.ts';
 import { createServer } from '#src/server.ts';
 import { jsonlLogger, systemCapabilities, toHex } from '#src/runtime.ts';
 import { flatFee } from '#src/pricing.ts';
+import { ERROR_CODES, EconomyError } from '#src/errors.ts';
 import { httpProcessor } from '#src/adapters/processor.ts';
 import { configuredRates } from '#src/adapters/rates.ts';
 import { decodeWebhookEvent, handlePurchaseWebhook } from '#src/webhooks.ts';
@@ -250,12 +251,18 @@ function purchaseWebhook(store: Store, ids: Ids, clock: Clock): WebhookHandler {
         headers: { 'content-type': 'application/json' },
       });
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Webhook failed.';
-      return new Response(JSON.stringify({ error: message }), {
-        status: 500,
-        headers: { 'content-type': 'application/json' },
-      });
+      // A malformed body is the caller's fault and maps to 400, the same verdict server.ts's own
+      // fault mapping gives it; anything else stays a 500. Only the message leaves the process.
+      const isClientFault =
+        error instanceof EconomyError &&
+        (error.code === ERROR_CODES.MALFORMED_OPERATION ||
+          error.code === ERROR_CODES.INVALID_AMOUNT);
+      const status = isClientFault ? 400 : 500;
+      const title = error instanceof Error ? error.message : 'Webhook failed.';
+      return new Response(
+        JSON.stringify({ type: 'about:blank', title, status }),
+        { status, headers: { 'content-type': 'application/problem+json' } },
+      );
     }
   };
 }

@@ -15,10 +15,12 @@
  * (Request and Response). The rest of the system stays unaware that HTTP is involved.
  */
 
+import { ERROR_CODES, EconomyError } from '#src/errors.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { decodeWire, encodeWire } from '#src/adapters/http-wire.ts';
 import { createStoreServer } from '#src/adapters/http-server.ts';
 
+import type { ErrorCode } from '#src/errors.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type {
   Checkpoint,
@@ -58,11 +60,33 @@ export type HttpStoreOptions = {
   baseUrl?: string;
 };
 
-// Shape of every response body. It is either a successful result or a failure carrying the
-// server's error message. On failure the client re-throws the message as an Error. A
-// server-side handler failure then looks the same as an in-process failure, which lets the
-// transaction roll back.
-type WireResult = { ok: true; body: unknown } | { ok: false; error: string };
+// Shape of every response body: a successful result, or a failure carrying the fault's stable
+// code, caller-safe message, and retryable flag. The client rebuilds an equivalent EconomyError,
+// so a server-side failure looks exactly like an in-process one — same code to match on, same
+// retryable verdict — and the transaction rolls back the same way.
+type WireResult =
+  | { ok: true; body: unknown }
+  | { ok: false; error: { code: string; message: string; retryable: boolean } };
+
+// Every catalog code, for validating what the wire claims. An unknown code (a newer or older
+// server) degrades to a retryable STORE.FAILURE rather than being trusted verbatim.
+const KNOWN_CODES = new Set<string>(Object.values(ERROR_CODES));
+
+// Rebuilds the thrown fault from its wire form; see WireResult.
+function rebuildError(wire: {
+  code: string;
+  message: string;
+  retryable: boolean;
+}): EconomyError {
+  if (KNOWN_CODES.has(wire.code)) {
+    return new EconomyError(wire.code as ErrorCode, wire.message, {
+      retryable: wire.retryable,
+    });
+  }
+  return new EconomyError(ERROR_CODES.STORE_FAILURE, wire.message, {
+    retryable: true,
+  });
+}
 
 // --- The transport call -----------------------------------------------------------
 
@@ -84,7 +108,7 @@ async function call(
   const response = await transport.fetch(request);
   const result = (await response.json()) as WireResult;
   if (!result.ok) {
-    throw new Error(result.error);
+    throw rebuildError(result.error);
   }
   return result.body;
 }

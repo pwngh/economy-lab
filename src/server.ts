@@ -16,6 +16,8 @@ import {
   fault,
   normalizeError,
 } from '#src/errors.ts';
+
+import type { ErrorCode } from '#src/errors.ts';
 import { SYSTEM } from '#src/accounts.ts';
 import { fromHex } from '#src/bytes.ts';
 import { decodeWebhookEvent } from '#src/webhooks.ts';
@@ -75,8 +77,9 @@ const TIMESTAMP_HEADER = 'x-timestamp';
  * - `GET /healthz` reports liveness without touching storage.
  * - `GET /readyz` reports readiness via one cheap store-touching read through the economy.
  *
- * On a thrown {@link EconomyError}, {@link statusFor} maps it to a status code and only the error's
- * `message` is returned, never its internals.
+ * A thrown {@link EconomyError} becomes an RFC 9457 problem+json response: {@link statusFor} maps
+ * the status, `title` carries the caller-safe message, and the stable `code` and `retryable` ride
+ * as extensions. `detail`, `cause`, and stack never leave the server.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for
  *   the routes, codec, and webhook gate.
@@ -116,7 +119,7 @@ export function createServer(
     ) {
       return webhookRoute(options, segments[1]!, request);
     }
-    return errorResponse(404, 'Not found.');
+    return problemResponse(404, 'Not found.');
   };
 }
 
@@ -146,7 +149,7 @@ async function readinessRoute(economy: Economy): Promise<Response> {
 // --- /submit ----------------------------------------------------------------------
 
 // Reads the operation from the body, runs it, and sends the result back. A bad body or a thrown
-// EconomyError becomes an error response with the mapped status, carrying only the message. A
+// EconomyError becomes a problem+json response with the mapped status and stable code. A
 // `rejected` outcome is not an error. It happens when the economy declines a valid request for a
 // business reason, such as insufficient funds, and returns 200 holding the decline.
 async function submitRoute(
@@ -185,7 +188,7 @@ async function webhookRoute(
 ): Promise<Response> {
   const handler = options.webhook;
   if (handler === undefined) {
-    return errorResponse(404, 'No webhook handler configured.');
+    return problemResponse(404, 'No webhook handler configured.');
   }
 
   const config = options.config;
@@ -423,7 +426,10 @@ const BAD_REQUEST_CODES = new Set<string>([
 function faultResponse(error: unknown): Response {
   const normalized: EconomyError =
     error instanceof EconomyError ? error : normalizeError(error);
-  return errorResponse(statusFor(normalized), normalized.message);
+  return problemResponse(statusFor(normalized), normalized.message, {
+    code: normalized.code,
+    retryable: normalized.retryable,
+  });
 }
 
 // Empty or invalid-JSON body -> malformed fault, so the raw parser error never escapes and the
@@ -451,6 +457,25 @@ function jsonResponse(status: number, payload: unknown): Response {
   });
 }
 
-function errorResponse(status: number, message: string): Response {
-  return jsonResponse(status, { error: message });
+// RFC 9457 problem details (application/problem+json). `title` is the caller-safe message; a
+// catalog fault adds the stable `code` and `retryable` extensions, and `type` points at the code
+// taxonomy page. `detail`/`cause`/stack stay server-side.
+// See https://www.rfc-editor.org/rfc/rfc9457 for the format.
+function problemResponse(
+  status: number,
+  title: string,
+  fault?: { code: ErrorCode; retryable: boolean },
+): Response {
+  const body = {
+    type: fault
+      ? 'https://economy-lab-docs.pages.dev/economy/reference/outcomes-and-reason-codes/'
+      : 'about:blank',
+    title,
+    status,
+    ...fault,
+  };
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/problem+json' },
+  });
 }
