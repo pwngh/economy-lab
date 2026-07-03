@@ -57,7 +57,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 # The entry point is scripts/main.ts. The distroless ENTRYPOINT supplies `node`, so the args are just
 # the script path and the mode, and Node 22 strips the types at startup. The image does not run
-# migrations, so apply the schema in db/ out of band (for example, `npm run db:migrate`) before
+# migrations, so apply the schema in db/ out of band (for example, `make db-migrate`) before
 # pointing this at a real DATABASE_URL. To run the worker instead, override the args:
 # ["scripts/main.ts","worker"].
 CMD ["scripts/main.ts", "serve"]
