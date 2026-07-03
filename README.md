@@ -2,7 +2,7 @@
 
 A provably-solvent credits economy: wallets, payouts, subscriptions, and a marketplace, on one double-entry ledger.
 
-![tests](https://img.shields.io/badge/tests-751_passing-3fb950)
+[![ci](https://github.com/pwngh/economy-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/pwngh/economy-lab/actions/workflows/ci.yml)
 ![runtime deps](https://img.shields.io/badge/runtime_deps-0-3fb950)
 ![node](https://img.shields.io/badge/node-%E2%89%A522.18-1f6feb)
 ![license](https://img.shields.io/badge/license-MIT-1f6feb)
