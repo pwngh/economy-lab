@@ -9,10 +9,12 @@
  * @license MIT
  */
 
-// Leg `amount` is debit-positive, credit-negative everywhere. A posting balances when its
-// leg amounts sum to zero per currency. For an account's own balance change, flip the sign
-// on credit-normal accounts (see `balanceDelta`). The ledger keeps user balances non-negative
-// and every posting single-currency.
+/**
+ * Leg `amount` is debit-positive, credit-negative everywhere. A posting balances when its leg
+ * amounts sum to zero per currency. For an account's own balance change, flip the sign on
+ * credit-normal accounts (see `balanceDelta`). The ledger keeps user balances non-negative and
+ * every posting single-currency.
+ */
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { encodeAmount, toAmount } from '#src/money.ts';
