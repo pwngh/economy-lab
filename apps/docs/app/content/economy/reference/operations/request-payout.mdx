@@ -7,7 +7,7 @@ sourceRefs:
   [
     'src/operations/requestPayout.ts#L32 · requestPayout',
     "src/contract.ts#L110 · kind 'requestPayout'",
-    'src/operations/registry.ts#L45 · REGISTRY',
+    'src/operations/registry.ts#L46 · REGISTRY',
     'src/ports.ts#L902-L909 · SAGA_STATES',
   ]
 related:
@@ -71,7 +71,7 @@ The same transaction opens a `Saga` in state `RESERVED` (see <SourceLink to="src
 
 ## Authorization
 
-`requestPayout` is not a privileged operation, so an end `user` can run it, but only for their own account. The ownership check requires the caller to own the `earned` account being debited; a `user` requesting another seller's payout is refused with `AUTH.UNAUTHORIZED` (see <SourceLink to="src/economy.ts#L500 · debitedUserAccounts" />).
+`requestPayout` is not a privileged operation, so an end `user` can run it, but only for their own account. The ownership check requires the caller to own the `earned` account being debited; a `user` requesting another seller's payout is refused with `AUTH.UNAUTHORIZED` (see <SourceLink to="src/economy.ts#L506 · debitedUserAccounts" />).
 
 A `system` service or a human `operator` may also request a payout on a seller's behalf. See [actors and authorization](/economy/concepts/actors-and-authorization/) for the full rule.
 

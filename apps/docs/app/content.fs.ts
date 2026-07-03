@@ -54,3 +54,36 @@ export function getAllDocSlugs(): string[] {
         .join('/'),
     );
 }
+
+/**
+ * Reduces one page's MDX body to lowercase plain text for the search index: tags, JSX expressions,
+ * link targets, and markdown punctuation go; prose and code text stay, so a search can hit a
+ * function name that only appears in a code block. Matched against, never rendered.
+ */
+function plainText(body: string): string {
+  return body
+    .replace(/```[^\n]*/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[`*_#>|{}']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+    .trim();
+}
+
+/**
+ * Every page's body as searchable plain text, keyed by slug. Read off disk with the same walk the
+ * slug list uses; the search-index resource route joins this onto the content collection at
+ * prerender, so none of it reaches a client bundle.
+ */
+export function getDocBodies(): Map<string, string> {
+  return new Map(
+    walk(CONTENT_DIR).map((file) => [
+      relative(CONTENT_DIR, file)
+        .replace(/\.mdx$/, '')
+        .split(sep)
+        .join('/'),
+      plainText(matter(readFileSync(file, 'utf8')).content),
+    ]),
+  );
+}

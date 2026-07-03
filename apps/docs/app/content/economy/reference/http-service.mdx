@@ -5,8 +5,8 @@ order: 30
 status: stable
 sourceRefs:
   [
-    'src/server.ts#L84 · createServer',
-    'scripts/main.ts#L473 · runServe',
+    'src/server.ts#L87 · createServer',
+    'scripts/main.ts#L483 · runServe',
     'test/server.test.ts',
   ]
 related: ['economy/scope-and-non-goals', 'economy/ports/signer']
@@ -16,7 +16,7 @@ related: ['economy/scope-and-non-goals', 'economy/ports/signer']
 
 Most of these docs talk about the [`Economy`](/economy/reference/the-economy/) as an in-process object: you hold a reference and call `submit` against it directly. But a deployed service has to take requests off a socket. That's what the HTTP service is: a thin wrapper that turns a Fetch `Request` into one `submit` call and a `Response`.
 
-The wrapper is <SourceLink to="src/server.ts#L84">createServer</SourceLink>. It takes an `Economy` and returns a handler with the signature `(request: Request) => Promise<Response>`:
+The wrapper is <SourceLink to="src/server.ts#L87">createServer</SourceLink>. It takes an `Economy` and returns a handler with the signature `(request: Request) => Promise<Response>`:
 
 ```ts
 import { createServer } from '#src/server.ts';
@@ -102,7 +102,7 @@ The error body is exactly `{ "error": "<message>" }` and nothing more. A test pi
 
 The other money-moving path is inbound. A payment provider calls `POST /webhooks/:provider` to report a real-world event: a user's purchase cleared, a payout settled, a charge was disputed. The `:provider` segment names who's calling (`steam`, `billing`, and so on); it comes from the route, not the body, so a caller can't spoof it.
 
-The server doesn't apply these itself. It verifies the callback, then hands the trusted bytes to a `WebhookHandler` you inject through <SourceLink to="src/server.ts#L40">ServerOptions</SourceLink>. With no handler wired, the path answers `404`. The handler is where the callback becomes a ledger operation: a cleared purchase maps to a `topUp`, a settled payout to a `settlePayout`, a dispute to a `clawback`. Those mappers (`toTopUp`, `toSettlePayout`, `toClawback`) and the event shapes they consume belong to the [processor port](/economy/ports/processor/), so see that page for the dispatch.
+The server doesn't apply these itself. It verifies the callback, then hands the trusted bytes to a `WebhookHandler` you inject through <SourceLink to="src/server.ts#L42">ServerOptions</SourceLink>. With no handler wired, the path answers `404`. The handler is where the callback becomes a ledger operation: a cleared purchase maps to a `topUp`, a settled payout to a `settlePayout`, a dispute to a `clawback`. Those mappers (`toTopUp`, `toSettlePayout`, `toClawback`) and the event shapes they consume belong to the [processor port](/economy/ports/processor/), so see that page for the dispatch.
 
 ### The verification gate
 
@@ -154,7 +154,7 @@ It runs in three modes, selected by `argv[2]`:
 | `dev`    | The same API, forced to in-memory adapters with dev secrets, no infrastructure, for `make dev`.   |
 | `worker` | The [background worker](/economy/reference/background-worker/) loop, not the HTTP service.        |
 
-In `serve` and `dev`, <SourceLink to="scripts/main.ts#L473">runServe</SourceLink> builds the economy from the environment and mounts the handler. It passes three things into `createServer`: the purchase-webhook handler, the `Config`, and the clock. Those last two are what _activate_ the verification gate, so a genuine callback is persisted and a forged or stale one is rejected before it changes anything.
+In `serve` and `dev`, <SourceLink to="scripts/main.ts#L483">runServe</SourceLink> builds the economy from the environment and mounts the handler. It passes three things into `createServer`: the purchase-webhook handler, the `Config`, and the clock. Those last two are what _activate_ the verification gate, so a genuine callback is persisted and a forged or stale one is rejected before it changes anything.
 
 ```ts
 const handler = createServer(economy, {

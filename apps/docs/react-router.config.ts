@@ -29,8 +29,9 @@ export default {
   // the param-free routes (indexes, scope, sitemap, robots); the doc slugs expand the dynamic
   // section routes (concepts/:slug, reference/operations/:slug, …). Deduped because the root-level
   // scope-and-non-goals page is both a static route and a content file.
+  // '/404' renders the splat not-found route; copy-404.mjs publishes it as the platform 404.html.
   async prerender({ getStaticPaths }) {
-    const paths = [...getStaticPaths(), ...getAllDocSlugs().map((s) => `/${s}`)];
+    const paths = [...getStaticPaths(), ...getAllDocSlugs().map((s) => `/${s}`), '/404'];
     return [...new Set(paths)];
   },
 } satisfies Config;

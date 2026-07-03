@@ -10,7 +10,8 @@
  */
 
 // Lightweight client search for the docs. Vanilla, no framework, deferred and non-blocking. Lazily
-// fetches the prebuilt index (/search-index.json) on first use and filters on title/summary/slug.
+// fetches the prebuilt index (/search-index.json) on first use and filters on title, summary, slug,
+// and the page's full body text (pre-stripped to plain text at build; matched, never displayed).
 // Progressive enhancement: with JS off the input is simply inert and the sidebar handles navigation.
 (() => {
   const input = document.getElementById('site-search-input');
@@ -70,7 +71,11 @@
       return;
     }
     const matches = (index || [])
-      .filter((d) => `${d.title} ${d.summary} ${d.slug}`.toLowerCase().includes(q))
+      .filter(
+        (d) =>
+          `${d.title} ${d.summary} ${d.slug}`.toLowerCase().includes(q) ||
+          (d.body || '').includes(q),
+      )
       .slice(0, 8);
     render(matches);
   };

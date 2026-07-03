@@ -19,8 +19,13 @@ import {
 } from 'react-router';
 
 import type { ReactNode } from 'react';
+import type { LinksFunction } from 'react-router';
 import type { Route } from './+types/root';
 import './app.css';
+
+export const links: LinksFunction = () => [
+  { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' },
+];
 
 // The HTML document shell every page renders into.
 export function Layout({ children }: { children: ReactNode }) {

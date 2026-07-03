@@ -67,7 +67,9 @@ export const links: LinksFunction = () => [
  * Root document shell. Zero client React by default: <Scripts/> and <ScrollRestoration/> render only
  * when a matched route opts into hydration via handle.hydrate (none do), so content pages ship no
  * bundle. The header carries what the sidebar can't — search — plus the GitHub and theme controls;
- * primary navigation lives entirely in the sidebar, so it is not duplicated up here.
+ * primary navigation lives entirely in the sidebar, so it is not duplicated up here. On small
+ * screens the same sidebar tree renders a second time behind a native <details> disclosure and CSS
+ * picks which of the two shows, so navigation stays zero-JS at every width.
  */
 export function Layout({ children }: { children: ReactNode }) {
   const matches = useMatches();
@@ -143,6 +145,10 @@ export function Layout({ children }: { children: ReactNode }) {
         </header>
 
         <div className="site-shell">
+          <details className="mobile-nav">
+            <summary>Contents</summary>
+            <Sidebar />
+          </details>
           <aside className="site-sidebar">
             <Sidebar />
           </aside>

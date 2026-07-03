@@ -15,7 +15,7 @@ export function meta() {
   return pageMeta({ title: 'Not found - economy-lab docs', path: '/404/' });
 }
 
-/** Splat-route fallback for dev and prerender completeness. Cold requests on the deployed site are served public/404.html. */
+/** Splat-route fallback. Prerendered at /404 and published as the platform 404.html (see scripts/copy-404.mjs), so a cold miss gets the full chrome, not a bare static page. */
 export default function NotFound() {
   return (
     <article className="prose">

@@ -1,11 +1,10 @@
-/* economy-lab docs — design tokens (shared with preston-neal.com) + docs layout.
-   Fonts: Inter (sans) + JetBrains Mono (mono) preferred; system fallbacks so the site renders before
-   any self-hosted woff2 are dropped into /public/fonts. */
+/* economy-lab docs — design tokens (shared with preston-neal.com) + docs layout. System font
+   stacks throughout: no webfonts to load, nothing to block first paint. */
 
 :root {
-  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
     sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 
   /* light theme */
   --bg: #fbfaf6;
@@ -296,6 +295,11 @@ a[target="_blank"]:not(.icon-link)::after {
 }
 
 /* ---- sidebar nav ---- */
+/* The mobile nav disclosure: hidden until the small-screen block below swaps it in for the sidebar. */
+.mobile-nav {
+  display: none;
+}
+
 .docs-sidebar {
   font-size: 0.9rem;
 }
@@ -919,11 +923,24 @@ html[data-theme="dark"] .shiki span {
     gap: var(--space-4);
   }
   .site-sidebar {
-    position: static;
-    max-height: 13rem;
-    overflow-y: auto;
-    padding: var(--space-3) 0;
+    display: none;
+  }
+  .mobile-nav {
+    display: block;
     border-bottom: 1px solid var(--border);
+    padding-bottom: var(--space-2);
+  }
+  .mobile-nav summary {
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    padding: var(--space-2) 0;
+  }
+  .mobile-nav[open] summary {
+    margin-bottom: var(--space-2);
   }
 }
 @media (max-width: 34rem) {

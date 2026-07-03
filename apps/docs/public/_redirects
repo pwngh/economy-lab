@@ -1,6 +1,5 @@
-# Canonicalize www -> apex (forced 301). Cloudflare Pages serves the prerendered <slug>/index.html
-# for both /<slug> and /<slug>/, so inbound @see links written without a trailing slash resolve.
-https://www.economy-lab-docs.pages.dev/* https://economy-lab-docs.pages.dev/:splat 301!
+# Cloudflare Pages serves the prerendered <slug>/index.html for both /<slug> and /<slug>/, so
+# inbound @see links written without a trailing slash resolve with no redirect rule needed.
 
 # Split pages: old slugs land on the dominant successor.
 /economy/concepts/lifecycles /economy/concepts/payout-saga/ 301

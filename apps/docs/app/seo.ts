@@ -34,6 +34,15 @@ export interface PageMetaOptions {
 }
 
 /**
+ * The one social-share card, served from /og.png (1200x630, referenced from every page's meta).
+ * A single static card rather than per-page rendering: the pages differ by title and description,
+ * which crawlers read from their own tags.
+ */
+const OG_IMAGE = `${SITE}/og.png`;
+const OG_IMAGE_ALT =
+  'economy-lab / docs — a double-entry credits ledger; a per-account hash chain ending in a signed head.';
+
+/**
  * Build the `<head>` descriptors for one route in one place — title, canonical link, and Open
  * Graph/Twitter tags — so every page describes itself the same way. React Router writes these into
  * the prerendered HTML, so a crawler that runs no JavaScript still sees them.
@@ -52,8 +61,13 @@ export function pageMeta({
     { property: 'og:type', content: ogType },
     { property: 'og:url', content: url },
     { property: 'og:site_name', content: SITE_NAME },
-    { name: 'twitter:card', content: 'summary' },
+    { property: 'og:image', content: OG_IMAGE },
+    { property: 'og:image:width', content: '1200' },
+    { property: 'og:image:height', content: '630' },
+    { property: 'og:image:alt', content: OG_IMAGE_ALT },
+    { name: 'twitter:card', content: 'summary_large_image' },
     { name: 'twitter:title', content: title },
+    { name: 'twitter:image', content: OG_IMAGE },
   ];
   if (description) {
     tags.push(

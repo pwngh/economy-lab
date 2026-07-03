@@ -62,7 +62,7 @@ identically across runtimes and databases. Then it walks each account's postings
 from genesis, recomputes the head at each step with the same hash function the
 write path used, and stops at the first mismatch.
 
-The failure it returns is a <SourceLink to="src/chain.ts#L58">ChainBreak</SourceLink> that names the offending account and transaction, with a `reason` of one of two kinds:
+The failure it returns is a <SourceLink to="src/chain.ts#L61">ChainBreak</SourceLink> that names the offending account and transaction, with a `reason` of one of two kinds:
 
 | `reason`        | What it means                                                                                                            |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------ |

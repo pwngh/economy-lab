@@ -6,7 +6,7 @@ order: 62
 status: stable
 sourceRefs:
   [
-    'src/ports.ts#L956-L957 · SUBSCRIPTION_STATES',
+    'src/ports.ts#L959-L960 · SUBSCRIPTION_STATES',
     'src/worker/subscriptions.ts',
   ]
 related:
@@ -30,11 +30,11 @@ The first period may draw on promo credit; renewals come only from `spendable`.
 
 ## The states
 
-A `Subscription` carries its own `SubscriptionState`: `ACTIVE`, `LAPSED`, `CANCELED` (see <SourceLink to="src/ports.ts#L956-L957 · SUBSCRIPTION_STATES" />).
+A `Subscription` carries its own `SubscriptionState`: `ACTIVE`, `LAPSED`, `CANCELED` (see <SourceLink to="src/ports.ts#L959-L960 · SUBSCRIPTION_STATES" />).
 
 <SubscriptionStates />
 
-`maxSubscriptionAttempts` separates a transient charge failure from a subscription that is never going to pay. The sweep retries a failed charge a few times before the subscription lapses, and a success resets the count to `0`. Once the count reaches the cap, the sweep flips `ACTIVE → LAPSED`, revokes the entitlement, and emits the lapse event in one transaction (see <SourceLink to="src/worker/subscriptions.ts#L167-L175 · lapseAtomically" />).
+`maxSubscriptionAttempts` separates a transient charge failure from a subscription that is never going to pay. The sweep retries a failed charge a few times before the subscription lapses, and a success resets the count to `0`. Once the count reaches the cap, the sweep flips `ACTIVE → LAPSED`, revokes the entitlement, and emits the lapse event in one transaction (see <SourceLink to="src/worker/subscriptions.ts#L176-L184 · lapseAtomically" />).
 
 [`cancelSubscription`](/economy/reference/operations/cancel-subscription/) is the voluntary exit: the user or an operator flips `ACTIVE → CANCELED`. The current period is not refunded.
 
