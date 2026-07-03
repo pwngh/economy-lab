@@ -130,7 +130,7 @@ function refuseSettled(saga: Saga): void {
   if (saga.state === 'SETTLED') {
     throw fault(
       ERROR_CODES.INVALID_TRANSITION,
-      `cannot reverse a settled payout: ${saga.id}.`,
+      'Cannot reverse a settled payout.',
       { detail: { sagaId: saga.id, state: saga.state } },
     );
   }
@@ -149,7 +149,7 @@ function refuseLiveSubmitted(saga: Saga, ctx: Ctx): void {
   ) {
     throw fault(
       ERROR_CODES.INVALID_TRANSITION,
-      `cannot reverse a submitted payout still within its provider settlement window: ${saga.id}.`,
+      'Cannot reverse a payout still within its provider settlement window.',
       {
         detail: {
           sagaId: saga.id,

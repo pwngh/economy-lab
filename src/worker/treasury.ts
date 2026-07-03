@@ -291,7 +291,7 @@ export async function sweepFees(
   if (amount.minor <= 0n) {
     throw fault(
       ERROR_CODES.INVALID_AMOUNT,
-      'A fee sweep amount must be strictly positive.',
+      'A fee sweep amount must be positive.',
       { detail: { amount: encodeAmount(amount) } },
     );
   }

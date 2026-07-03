@@ -46,7 +46,7 @@ const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 
 function safeName(name: string): string {
   if (!IDENTIFIER.test(name)) {
-    throw new Error(`unsafe SQL routine name: ${JSON.stringify(name)}`);
+    throw new Error(`Unsafe SQL routine name: ${JSON.stringify(name)}.`);
   }
   return name;
 }

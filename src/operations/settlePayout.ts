@@ -127,7 +127,7 @@ function refuseNotSubmitted(saga: Saga): void {
   if (saga.state !== 'SUBMITTED') {
     throw fault(
       ERROR_CODES.INVALID_TRANSITION,
-      `cannot settle a payout that is not submitted: ${saga.id}.`,
+      'Cannot settle a payout that is not submitted.',
       { detail: { sagaId: saga.id, state: saga.state } },
     );
   }
@@ -198,7 +198,7 @@ function assertAdvanced(advanced: boolean, saga: Saga, to: SagaState): void {
   if (!advanced) {
     throw fault(
       ERROR_CODES.INVALID_TRANSITION,
-      `payout saga ${saga.id} lost the CAS advancing ${saga.state} -> ${to}.`,
+      'The payout was advanced by another actor first.',
       { detail: { sagaId: saga.id, from: saga.state, to } },
     );
   }

@@ -334,7 +334,7 @@ function validateOperation(operation: Operation, shards: number): void {
   ) {
     throw fault(
       ERROR_CODES.MALFORMED_OPERATION,
-      'operation is missing a non-empty idempotencyKey',
+      'operation is missing a non-empty idempotencyKey.',
       { detail: { kind: operation.kind } },
     );
   }
@@ -343,7 +343,7 @@ function validateOperation(operation: Operation, shards: number): void {
     if (isWalletAccount(account) && ownerOf(account).trim() === '') {
       throw fault(
         ERROR_CODES.MALFORMED_OPERATION,
-        'operation names a wallet account with a blank user id',
+        'operation names a wallet account with a blank user id.',
         { detail: { kind: operation.kind } },
       );
     }
@@ -384,8 +384,8 @@ function assertAmountInRange(operation: Operation): void {
     throw fault(
       ERROR_CODES.INVALID_AMOUNT,
       operation.kind === 'adjust'
-        ? 'operation amount must be non-zero'
-        : 'operation amount must be a positive value',
+        ? 'operation amount must be non-zero.'
+        : 'operation amount must be positive.',
       { detail: { kind: operation.kind, amount: encodeAmount(amount) } },
     );
   }
@@ -393,7 +393,7 @@ function assertAmountInRange(operation: Operation): void {
   if (magnitude > MAX_OP_AMOUNT_MINOR) {
     throw fault(
       ERROR_CODES.INVALID_AMOUNT,
-      'operation amount exceeds the maximum allowed',
+      'operation amount exceeds the maximum allowed.',
       { detail: { kind: operation.kind, amount: encodeAmount(amount) } },
     );
   }
@@ -837,7 +837,7 @@ function resolveHandler(registry: Registry, operation: Operation): Handler {
   if (!handler) {
     throw fault(
       ERROR_CODES.MALFORMED_OPERATION,
-      `no handler is registered for operation ${operation.kind}.`,
+      `No handler is registered for operation ${operation.kind}.`,
       { detail: { kind: operation.kind } },
     );
   }

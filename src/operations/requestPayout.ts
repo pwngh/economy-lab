@@ -160,7 +160,7 @@ function payableCredit(amount: Amount): Amount {
   if (amount.minor <= 0n) {
     throw fault(
       ERROR_CODES.INVALID_AMOUNT,
-      'requestPayout.amount must be a strictly positive amount.',
+      'requestPayout.amount must be positive.',
       { detail: { amount: encodeAmount(amount) } },
     );
   }

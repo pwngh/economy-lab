@@ -81,7 +81,7 @@ function assertMayCancel(
   if (actor.userId !== subscription.userId) {
     throw fault(
       ERROR_CODES.UNAUTHORIZED,
-      'a user may cancel only their own subscription.',
+      'A user may cancel only their own subscription.',
       {
         detail: {
           kind: operation.kind,

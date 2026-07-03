@@ -25,7 +25,7 @@ export function assertKind<K extends Operation['kind']>(
   if (operation.kind !== kind) {
     throw fault(
       ERROR_CODES.MALFORMED_OPERATION,
-      `handler received the wrong operation kind: ${operation.kind}.`,
+      `Handler received the wrong operation kind: ${operation.kind}.`,
       { detail: { kind: operation.kind, expected: kind } },
     );
   }

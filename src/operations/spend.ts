@@ -395,7 +395,7 @@ function assertShares(operation: Extract<Operation, { kind: 'spend' }>): void {
     if (recipient.shareBps <= 0 || recipient.shareBps > 10_000) {
       throw fault(
         ERROR_CODES.MALFORMED_OPERATION,
-        'each recipient share must be > 0 and <= 10000 basis points.',
+        'Each recipient share must be > 0 and <= 10000 basis points.',
         {
           detail: {
             kind: operation.kind,
@@ -413,7 +413,7 @@ function assertShares(operation: Extract<Operation, { kind: 'spend' }>): void {
   if (total !== 10_000) {
     throw fault(
       ERROR_CODES.MALFORMED_OPERATION,
-      'recipient shares must sum to 10000.',
+      'Recipient shareBps must sum to 10000.',
       { detail: { kind: operation.kind, total } },
     );
   }
@@ -432,7 +432,7 @@ function assertNoSelfDealing(
     if (recipient.sellerId === operation.buyerId) {
       throw fault(
         ERROR_CODES.MALFORMED_OPERATION,
-        'a spend recipient may not be the buyer (self-dealing).',
+        'A spend recipient may not be the buyer (self-dealing).',
         {
           detail: { kind: operation.kind, buyerId: operation.buyerId },
         },
