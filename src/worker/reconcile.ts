@@ -59,7 +59,8 @@ type ReconcileTally = {
  * handled independently, so one unreachable feed fails only its own window and the rest of
  * the batch still runs.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how the worker schedules and sweeps reconciliation windows.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background
+ *   worker} for how the worker schedules and sweeps reconciliation windows.
  */
 export async function reconcileDueWindows(
   feed: ReconcileFeed,
@@ -67,10 +68,10 @@ export async function reconcileDueWindows(
   input: { windows: ReadonlyArray<Range> },
   options?: Options,
 ): Promise<ReconcileSummary> {
-  let tally: ReconcileTally = { reconciled: [], drifted: [], failed: [] };
-  let sweep: Sweep = { feed, ctx, options };
+  const tally: ReconcileTally = { reconciled: [], drifted: [], failed: [] };
+  const sweep: Sweep = { feed, ctx, options };
 
-  for (let window of input.windows) {
+  for (const window of input.windows) {
     await reconcileOne(sweep, window, tally);
   }
 
@@ -92,10 +93,10 @@ async function reconcileOne(
   tally: ReconcileTally,
 ): Promise<void> {
   try {
-    let inputs = await sweep.feed.pull(window, sweep.options);
+    const inputs = await sweep.feed.pull(window, sweep.options);
     record(sweep.ctx, window, reconcile(window, inputs), tally);
   } catch (error) {
-    let normalized = normalizeError(error);
+    const normalized = normalizeError(error);
     tally.failed.push({
       window,
       code: normalized.code,

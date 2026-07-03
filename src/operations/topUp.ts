@@ -25,14 +25,15 @@ import type { Unit } from '#src/ports.ts';
  * (recognized as REVENUE_USD).
  *
  * @example
- *   let outcome = await topUp(
+ *   const outcome = await topUp(
  *     { kind: 'topUp', idempotencyKey: 'idem_0', actor: { kind: 'system', service: 'buy' },
  *       userId: 'usr_buyer', amount: toAmount('CREDIT', 1000n), source: 'card' },
  *     unit, ctx,
  *   );
  *   // outcome.status === 'committed'; spendable(usr_buyer) rose by 1000.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/top-up/ Top-up}
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/top-up/ Top-up} for
+ *   the issuance and cash postings.
  */
 export async function topUp(
   operation: Operation,
@@ -41,23 +42,23 @@ export async function topUp(
 ): Promise<Outcome> {
   assertKind(operation, 'topUp');
   requireSource(operation.source);
-  let amount = requirePositiveCredit(operation.amount, 'topUp.amount');
+  const amount = requirePositiveCredit(operation.amount, 'topUp.amount');
 
   // Both conversions round up. The backing rounds up because the solvency check values the whole
   // spendable balance at par and floors it once. Flooring each top-up's backing separately would
   // hold back less than that single floor, so the balance would read as unbacked. The gross paid
   // rounds up to match, which keeps buy at or above par and the margin non-negative.
-  let buy = ctx.rates.buy('CREDIT');
-  let par = ctx.rates.par('CREDIT');
-  let grossUsd = convertCeil(amount, buy, 'USD');
-  let backingUsd = convertCeil(amount, par, 'USD');
-  let marginUsd = toAmount('USD', grossUsd.minor - backingUsd.minor);
+  const buy = ctx.rates.buy('CREDIT');
+  const par = ctx.rates.par('CREDIT');
+  const grossUsd = convertCeil(amount, buy, 'USD');
+  const backingUsd = convertCeil(amount, par, 'USD');
+  const marginUsd = toAmount('USD', grossUsd.minor - backingUsd.minor);
 
   // The issuance posts first, so the returned transaction is the one the buyer cares about: their
   // credits going up. Its matching debit records against STORED_VALUE, the running count of credits
   // in circulation. Both postings' platform legs route to a shard by the idempotency key, the same
   // key the lock set routed by, so the rows locked are the rows posted.
-  let issuance = await postEntry(unit.ledger, {
+  const issuance = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs: routePlatformLegs(
       [
@@ -72,7 +73,7 @@ export async function topUp(
   // The cash posting credits the gross paid to USD_CLEARING and splits the debit into backing
   // (TRUST_CASH) and the buy-vs-par spread (REVENUE_USD). The spread leg is added only when it is
   // positive, so a purchase at exactly par has just two legs.
-  let cashLegs = [debit(SYSTEM.TRUST_CASH, backingUsd)];
+  const cashLegs = [debit(SYSTEM.TRUST_CASH, backingUsd)];
   if (marginUsd.minor > 0n) {
     cashLegs.push(debit(SYSTEM.REVENUE_USD, marginUsd));
   }

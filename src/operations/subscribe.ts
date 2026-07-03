@@ -22,14 +22,14 @@ import type { Leg, Subscription, Unit } from '#src/ports.ts';
 
 // A subscription price must be 100 to 10,000 credits per month, inclusive, expressed in minor
 // units (1 credit = 100 minor). A price outside this range is a malformed request.
-let MIN_PRICE_MINOR = 10_000n; // 100.00 credits
-let MAX_PRICE_MINOR = 1_000_000n; // 10,000.00 credits
+const MIN_PRICE_MINOR = 10_000n; // 100.00 credits
+const MAX_PRICE_MINOR = 1_000_000n; // 10,000.00 credits
 
 // The longest accepted billing period is ten 365-day years, in milliseconds. A longer period is
 // treated as garbage off the wire (a bad unit conversion, an overflow, or seconds used for ms)
 // and rejected as malformed. This ceiling also stays well below Number.MAX_SAFE_INTEGER, so
 // `postedAt + periodMs` cannot lose precision.
-let MAX_PERIOD_MS = 10 * 365 * 24 * 60 * 60_000; // 315,360,000,000 ms
+const MAX_PERIOD_MS = 10 * 365 * 24 * 60 * 60_000; // 315,360,000,000 ms
 
 // Splits the first-month price across the buyer's two balances. `promoPart` is funded from their
 // promo grant, and `spendablePart` is funded from topped-up real money. Promo is drawn first, and
@@ -44,7 +44,7 @@ type ChargePlan = { promoPart: Amount; spendablePart: Amount };
  *
  * @example
  *   // Inside an open transaction (`unit`), bill month one and open the record:
- *   let outcome = await handleSubscribe(
+ *   const outcome = await handleSubscribe(
  *     { kind: 'subscribe', idempotencyKey: 'idem_1', actor: { kind: 'user', userId: 'usr_a' },
  *       userId: 'usr_a', sellerId: 'usr_s', sku: 'club_pass',
  *       price: toAmount('CREDIT', 50_000n), periodMs: 2_592_000_000 },
@@ -52,7 +52,8 @@ type ChargePlan = { promoPart: Amount; spendablePart: Amount };
  *   );
  *   // outcome.status === 'committed'; the seller earned the net, the platform took the fee.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/subscribe/ Subscribe} for the first-month charge and renewal handoff.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/subscribe/ Subscribe}
+ *   for the first-month charge and renewal handoff.
  */
 export async function handleSubscribe(
   operation: Operation,
@@ -62,12 +63,12 @@ export async function handleSubscribe(
   assertKind(operation, 'subscribe');
   rejectSelfSubscription(operation);
   validateFields(operation);
-  let price = validatedPrice(operation.price);
+  const price = validatedPrice(operation.price);
 
   // Refuse a second ACTIVE subscription to the same (userId, sku, sellerId), because a second one
   // would double-bill. This is an ordinary business "no", so return a rejected outcome and post
   // nothing rather than throw a fault.
-  let existing = await unit.subscriptions.activeFor(
+  const existing = await unit.subscriptions.activeFor(
     operation.userId,
     operation.sku,
     operation.sellerId,
@@ -83,16 +84,16 @@ export async function handleSubscribe(
     });
   }
 
-  let promoBalance = await unit.ledger.balance(promo(operation.userId));
-  let plan = planCharge(price, promoBalance);
+  const promoBalance = await unit.ledger.balance(promo(operation.userId));
+  const plan = planCharge(price, promoBalance);
 
-  let shortfall = await screenSpendable(unit, operation.userId, plan);
+  const shortfall = await screenSpendable(unit, operation.userId, plan);
   if (shortfall) {
     return shortfall;
   }
 
-  let transaction = await postCharge(operation, plan, unit, ctx);
-  let subscriptionId = await openSubscription(
+  const transaction = await postCharge(operation, plan, unit, ctx);
+  const subscriptionId = await openSubscription(
     operation,
     transaction,
     unit,
@@ -103,7 +104,8 @@ export async function handleSubscribe(
   // in lockstep. `source` records which subscription this ownership came from. If this buyer had a
   // lapsed subscription to the same SKU, the old grant row was marked revoked rather than deleted;
   // this grant clears that mark and reactivates ownership instead of leaving the stale row.
-  // See https://economy-lab-docs.pages.dev/economy/reference/operations/subscribe/ for the same-transaction grant and renewal handoff.
+  // See https://economy-lab-docs.pages.dev/economy/reference/operations/subscribe/ for the
+  // same-transaction grant and renewal handoff.
   await unit.entitlements.grant(operation.userId, operation.sku, {
     expiresAt: transaction.postedAt + operation.periodMs,
     source: 'subscription:' + subscriptionId,
@@ -140,7 +142,7 @@ function rejectSelfSubscription(
 function validateFields(
   operation: Extract<Operation, { kind: 'subscribe' }>,
 ): void {
-  let periodMs = operation.periodMs;
+  const periodMs = operation.periodMs;
   if (
     !Number.isInteger(periodMs) ||
     periodMs <= 0 ||
@@ -194,17 +196,18 @@ function validatedPrice(price: Amount): Amount {
 // the price, and charges the rest to spendable. This is the same promo-first rule the marketplace
 // `spend` op uses.
 function planCharge(price: Amount, promoBalance: Amount): ChargePlan {
-  let available = promoBalance.minor > 0n ? promoBalance.minor : 0n;
-  let promoMinor = available < price.minor ? available : price.minor;
+  const available = promoBalance.minor > 0n ? promoBalance.minor : 0n;
+  const promoMinor = available < price.minor ? available : price.minor;
   return {
     promoPart: toAmount('CREDIT', promoMinor),
     spendablePart: toAmount('CREDIT', price.minor - promoMinor),
   };
 }
 
-// Confirms the buyer has enough spendable money for the spendable share; the middleware's up-front
-// funds check only runs for `spend`, so subscribe checks here. Short balance returns an
-// INSUFFICIENT_FUNDS rejection (a business "no" as data), sufficient returns null.
+// Confirms the buyer has enough spendable money for the spendable share; the submit pipeline's
+// up-front funds check (screenFunds) only runs for `spend`, so subscribe checks here. Short
+// balance returns an INSUFFICIENT_FUNDS rejection (a business "no" as data), sufficient returns
+// null.
 //
 // This is a pre-check, not the enforcer of overdrafts: the database's per-user non-negative CHECK
 // is what blocks them. This just returns a rejection before the engine would reject the entry.
@@ -213,7 +216,7 @@ async function screenSpendable(
   userId: string,
   plan: ChargePlan,
 ): Promise<Extract<Outcome, { status: 'rejected' }> | null> {
-  let have = await unit.ledger.balance(spendable(userId));
+  const have = await unit.ledger.balance(spendable(userId));
   if (compare(have, plan.spendablePart) < 0) {
     return rejected('INSUFFICIENT_FUNDS', {
       account: spendable(userId),
@@ -234,7 +237,7 @@ async function postCharge(
   unit: Unit,
   ctx: Ctx,
 ): Promise<Transaction> {
-  let legs: Leg[] = [];
+  const legs: Leg[] = [];
   appendPromoLegs(legs, operation, plan.promoPart);
   appendSpendableLegs(legs, operation, plan.spendablePart, ctx);
 
@@ -280,12 +283,10 @@ function appendSpendableLegs(
   if (spendablePart.minor === 0n) {
     return;
   }
-  // `feeForPrice` (pricing.ts) is the one place the transaction fee is computed. It takes the exact
-  // basis-point fee, rounds it up to a whole credit (credits are the indivisible billing unit), and
-  // caps it at the charge. Spend, first-month subscribe, and renewal all call it, so they all round
-  // identically.
-  let feeMinor = feeForPrice(spendablePart.minor, ctx.config.platformFeeBps);
-  let netMinor = spendablePart.minor - feeMinor;
+  // `feeForPrice` (pricing.ts) owns the fee rounding rule. Spend, first-month subscribe, and
+  // renewal all call it, so they all round identically.
+  const feeMinor = feeForPrice(spendablePart.minor, ctx.config.platformFeeBps);
+  const netMinor = spendablePart.minor - feeMinor;
   legs.push(debit(spendable(operation.userId), spendablePart));
   legs.push(credit(earned(operation.sellerId), toAmount('CREDIT', netMinor)));
   legs.push(credit(SYSTEM.REVENUE, toAmount('CREDIT', feeMinor)));
@@ -301,8 +302,8 @@ async function openSubscription(
   unit: Unit,
   ctx: Ctx,
 ): Promise<string> {
-  let now = transaction.postedAt;
-  let subscription: Subscription = {
+  const now = transaction.postedAt;
+  const subscription: Subscription = {
     id: ctx.ids.next('sub'),
     userId: operation.userId,
     sellerId: operation.sellerId,

@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 // @ts-expect-error -- untyped default import; typed at the binding via PgModule.
 import pgUntyped from 'pg';
 
-// The slice of `pg` this adapter uses: a Pool constructor and types.setTypeParser (overrides
+// The slice of `pg` this engine uses: a Pool constructor and types.setTypeParser (overrides
 // how a Postgres column type converts to a JS value). Declaring only what we call avoids
 // depending on the full vendor types.
 interface PgModule {
@@ -31,7 +31,7 @@ interface PgModule {
     setTypeParser(oid: number, parse: (value: string) => unknown): void;
   };
 }
-let pg = pgUntyped as PgModule;
+const pg = pgUntyped as PgModule;
 
 import { chainHash, balanceDelta, GENESIS } from '#src/ledger.ts';
 import {
@@ -135,7 +135,7 @@ function configureBigIntParsers(): void {
 // Read db/postgresql-schema.sql, the single SQL file defining all tables. Path resolved
 // relative to this module so it works regardless of the process's start directory.
 async function loadSchemaSql(): Promise<string> {
-  let path = fileURLToPath(
+  const path = fileURLToPath(
     new URL('../../db/postgresql-schema.sql', import.meta.url),
   );
   return readFile(path, 'utf8');
@@ -146,8 +146,8 @@ async function loadSchemaSql(): Promise<string> {
 // assertSchemaCurrent) rather than silently query a schema that doesn't match this code.
 async function readSchemaVersion(pool: PgPool): Promise<string | null> {
   try {
-    let result = await pool.query('select version from schema_meta limit 1');
-    let row = result.rows[0] as { version?: string } | undefined;
+    const result = await pool.query('select version from schema_meta limit 1');
+    const row = result.rows[0] as { version?: string } | undefined;
     return row?.version ?? null;
   } catch {
     return null;
@@ -170,11 +170,11 @@ function safeSchemaName(name: string): string {
 // looks like `usr_123:spendable`; the part after the last colon is the kind. Distinguishes a
 // user account from a platform account.
 function isKnownSuffix(account: AccountRef): boolean {
-  let colon = account.lastIndexOf(':');
+  const colon = account.lastIndexOf(':');
   if (colon < 0) {
     return false;
   }
-  let suffix = account.slice(colon + 1);
+  const suffix = account.slice(colon + 1);
   return suffix === 'spendable' || suffix === 'earned' || suffix === 'promo';
 }
 
@@ -188,17 +188,17 @@ async function headsForAccounts(
   q: Queryable,
   accounts: ReadonlyArray<AccountRef>,
 ): Promise<Map<string, string>> {
-  let heads = new Map<string, string>();
+  const heads = new Map<string, string>();
   if (accounts.length === 0) {
     return heads;
   }
-  let result = await q.query(
+  const result = await q.query(
     `select account_id, head_hash
        from account_balances
       where account_id = any($1::text[])`,
     [accounts],
   );
-  for (let row of result.rows) {
+  for (const row of result.rows) {
     heads.set(row.account_id as string, row.head_hash as string);
   }
   return heads;
@@ -214,13 +214,14 @@ async function advanceChain(
   digest: Digest,
   posting: Posting,
 ): Promise<ReadonlyArray<Link>> {
-  let accounts = distinctAccounts(posting.legs);
-  let heads = await headsForAccounts(q, accounts);
-  let links: Link[] = [];
-  for (let account of accounts) {
-    let prevHex = heads.get(account) ?? GENESIS_HEX;
-    let accountPrevHash = prevHex === GENESIS_HEX ? GENESIS : fromHex(prevHex);
-    let hash = await chainHash(digest, {
+  const accounts = distinctAccounts(posting.legs);
+  const heads = await headsForAccounts(q, accounts);
+  const links: Link[] = [];
+  for (const account of accounts) {
+    const prevHex = heads.get(account) ?? GENESIS_HEX;
+    const accountPrevHash =
+      prevHex === GENESIS_HEX ? GENESIS : fromHex(prevHex);
+    const hash = await chainHash(digest, {
       accountPrevHash,
       txnId: posting.txnId,
       account,
@@ -235,13 +236,13 @@ async function advanceChain(
 // A shard of a schema-seeded platform account (`platform:revenue#3`). Bare ids are seeded; a
 // shard row is created on first use. A typo with no seeded base stays excluded and faults upstream.
 function isPlatformShard(account: AccountRef): boolean {
-  let base = baseOf(account);
+  const base = baseOf(account);
   return base !== account && isSeededSystemAccount(base);
 }
 
 // The row a first-use id gets: kind is the `:kind` suffix for users, 'system' for shards.
 function accountRow(account: AccountRef) {
-  let kind = isKnownSuffix(account)
+  const kind = isKnownSuffix(account)
     ? account.slice(account.lastIndexOf(':') + 1)
     : 'system';
   return { id: account, kind, currency: currency(account) };
@@ -253,7 +254,7 @@ async function ensureAccount(q: Queryable, account: AccountRef): Promise<void> {
   if (!isKnownSuffix(account) && !isPlatformShard(account)) {
     return;
   }
-  let row = accountRow(account);
+  const row = accountRow(account);
   await q.query(
     `insert into accounts (id, kind, currency) values ($1, $2, $3)
        on conflict (id) do nothing`,
@@ -266,13 +267,13 @@ async function ensureAccounts(
   q: Queryable,
   accounts: ReadonlyArray<AccountRef>,
 ): Promise<void> {
-  let firstUse = accounts.filter(
+  const firstUse = accounts.filter(
     (account) => isKnownSuffix(account) || isPlatformShard(account),
   );
   if (firstUse.length === 0) {
     return;
   }
-  let newRows = firstUse.map(accountRow);
+  const newRows = firstUse.map(accountRow);
   await q.query(
     `insert into accounts (id, kind, currency)
        select a.id, a.kind, a.currency
@@ -282,8 +283,8 @@ async function ensureAccounts(
   );
 }
 
-// note: the per-leg balance fold (UPDATE existing row first so the non-negative CHECK runs
-// against the new total, then INSERT a first-time row) now lives in the `post_entry` stored
+// NOTE: the per-leg balance fold (UPDATE the existing row first so the non-negative CHECK runs
+// against the new total, then INSERT a first-time row) lives in the `post_entry` stored
 // procedure (db/postgresql-schema.sql), which applies every account's net delta in one
 // set-based step. The application still decides each delta via `balanceDelta` (postEntryArgs
 // in sql-routines.ts); the procedure only persists it.
@@ -293,7 +294,7 @@ async function ensureAccounts(
 // is keyed by (posting, account) — one link per distinct account, never one per leg — and
 // advanceChain yields exactly that. Storing every leg keeps lineageOf's recompute byte-identical
 // to the in-memory adapter.
-// @see https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry
+// @see https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/
 async function writePosting(
   q: Queryable,
   posting: Posting,
@@ -301,9 +302,9 @@ async function writePosting(
   links: ReadonlyArray<Link>,
 ): Promise<void> {
   // JSON arrays carry the bigint amounts as strings to avoid loss past 2^53.
-  let query = (sql: string, params: ReadonlyArray<unknown>) =>
+  const query = (sql: string, params: ReadonlyArray<unknown>) =>
     q.query(sql, params);
-  let args = postEntryArgs(posting, links);
+  const args = postEntryArgs(posting, links);
   await callProcedure(query, 'postgres', 'post_entry', [
     posting.txnId,
     postedAt,
@@ -321,7 +322,7 @@ function createLedgerStore(q: Queryable, digest: Digest, clock: Clock): Ledger {
       if (isKnownSuffix(account) || isSeededSystemAccount(account)) {
         return true;
       }
-      let result = await q.query(`select 1 from accounts where id = $1`, [
+      const result = await q.query(`select 1 from accounts where id = $1`, [
         account,
       ]);
       return result.rows.length > 0;
@@ -332,14 +333,14 @@ function createLedgerStore(q: Queryable, digest: Digest, clock: Clock): Ledger {
     lock: async () => {},
 
     append: async (posting) => {
-      let postedAt = clock.now();
-      let links = await advanceChain(q, digest, posting);
+      const postedAt = clock.now();
+      const links = await advanceChain(q, digest, posting);
       await writePosting(q, posting, postedAt, links);
       return { id: posting.txnId, postedAt, legs: posting.legs, links };
     },
 
     balance: async (account) => {
-      let raw = await callFunction(
+      const raw = await callFunction(
         (sql, params) => q.query(sql, params),
         'postgres',
         'account_balance',
@@ -369,7 +370,7 @@ function createLedgerStore(q: Queryable, digest: Digest, clock: Clock): Ledger {
 // of interleaving. Changes no data and advances no hash chain. Only used on a transaction
 // client, where the lock releases at commit.
 function lockingLedger(q: Queryable, digest: Digest, clock: Clock): Ledger {
-  let base = createLedgerStore(q, digest, clock);
+  const base = createLedgerStore(q, digest, clock);
   return {
     ...base,
     lock: async (account) => {
@@ -406,7 +407,7 @@ async function buildStatement(
   account: AccountRef,
   range: Range,
 ): Promise<Statement> {
-  let result = await q.query(
+  const result = await q.query(
     `select l.posting_id, l.amount, l.currency, p.posted_at
        from legs l
        join postings p on p.id = l.posting_id
@@ -414,7 +415,7 @@ async function buildStatement(
       order by p.seq asc`,
     [account, range.from, range.to],
   );
-  let entries = result.rows.map((row) => ({
+  const entries = result.rows.map((row) => ({
     txnId: row.posting_id as string,
     amount: balanceDelta({
       account,
@@ -440,20 +441,20 @@ async function* timelineOf(
   account: AccountRef,
   options?: TimelineOptions,
 ): AsyncIterable<Lot> {
-  let direction = options?.order === 'desc' ? 'desc' : 'asc';
-  let lotOffset = options?.offset ?? 0;
-  let lotLimit = options?.limit ?? Infinity;
+  const direction = options?.order === 'desc' ? 'desc' : 'asc';
+  const lotOffset = options?.offset ?? 0;
+  const lotLimit = options?.limit ?? Infinity;
 
   // Rows scanned per DB round-trip. Most balances are covered by the first page, so the second
   // query is rarely issued; a finite caller limit caps the page so we never over-fetch.
-  let pageSize = Number.isFinite(lotLimit)
+  const pageSize = Number.isFinite(lotLimit)
     ? Math.max(lotOffset + lotLimit, 1)
     : 256;
 
   let skipped = 0;
   let yielded = 0;
   for (let rowOffset = 0; yielded < lotLimit; rowOffset += pageSize) {
-    let result = await q.query(
+    const result = await q.query(
       `select l.posting_id, l.amount, l.currency, p.posted_at, p.meta
          from legs l
          join postings p on p.id = l.posting_id
@@ -465,8 +466,8 @@ async function* timelineOf(
     if (result.rows.length === 0) {
       return;
     }
-    for (let row of result.rows) {
-      let lot = rowToLot(account, row);
+    for (const row of result.rows) {
+      const lot = rowToLot(account, row);
       // A balance-lowering leg (a spend) is not a lot; skip it without consuming an offset/limit
       // slot, so the lot-granularity `offset`/`limit` count only real lots.
       if (lot === null) {
@@ -497,15 +498,15 @@ function rowToLot(
   account: AccountRef,
   row: Record<string, unknown>,
 ): Lot | null {
-  let delta = balanceDelta({
+  const delta = balanceDelta({
     account,
     amount: toAmount(row.currency as Amount['currency'], readMinor(row.amount)),
   });
   if (delta.minor <= 0n) {
     return null;
   }
-  let meta = (row.meta ?? {}) as Record<string, unknown>;
-  let postedAt = Number(row.posted_at);
+  const meta = (row.meta ?? {}) as Record<string, unknown>;
+  const postedAt = Number(row.posted_at);
   return {
     txnId: row.posting_id as string,
     amount: delta,
@@ -518,7 +519,7 @@ function rowToLot(
 async function* headsOf(
   q: Queryable,
 ): AsyncIterable<readonly [AccountRef, string]> {
-  let result = await q.query(
+  const result = await q.query(
     `select distinct on (c.account_id) c.account_id, c.hash
        from chain_links c
        join postings p on p.id = c.posting_id
@@ -528,7 +529,7 @@ async function* headsOf(
   result.rows.sort((a, b) =>
     byCodeUnit(a.account_id as string, b.account_id as string),
   );
-  for (let row of result.rows) {
+  for (const row of result.rows) {
     yield [row.account_id as AccountRef, row.hash as string] as const;
   }
 }
@@ -544,7 +545,7 @@ async function* headsOf(
 // pre-seed behavior and the in-memory adapter. The `or balance <> 0` is the exception: a genesis-head
 // row with a non-zero balance is no longer a placeholder, it is the drift this scan looks for.
 async function* balanceAccountsOf(q: Queryable): AsyncIterable<AccountRef> {
-  let result = await q.query(
+  const result = await q.query(
     `select account_id from account_balances
        where head_hash <> repeat('0', 64) or balance <> 0`,
   );
@@ -552,12 +553,13 @@ async function* balanceAccountsOf(q: Queryable): AsyncIterable<AccountRef> {
   result.rows.sort((a, b) =>
     byCodeUnit(a.account_id as string, b.account_id as string),
   );
-  for (let row of result.rows) {
+  for (const row of result.rows) {
     yield row.account_id as AccountRef;
   }
 }
 
-// @see https://economy-lab-docs.pages.dev/economy/concepts/integrity
+// See https://economy-lab-docs.pages.dev/economy/concepts/integrity/ for the per-account chain
+// this streams.
 async function* lineageOf(
   q: Queryable,
   account: AccountRef,
@@ -565,7 +567,7 @@ async function* lineageOf(
   // One chain_links row per posting that touched this account (a posting advances the chain
   // once however many legs it has to the account), so this yields one StoredLink per such
   // posting, matching the in-memory adapter.
-  let result = await q.query(
+  const result = await q.query(
     `select c.posting_id, c.prev_hash, c.hash, p.meta
        from chain_links c
        join postings p on p.id = c.posting_id
@@ -577,12 +579,12 @@ async function* lineageOf(
   // audit path, which walks the whole chain anyway). The whole posting's legs, not just this
   // account's: chainPreimage filters to the account's own legs, so the recompute matches the
   // in-memory reference.
-  let legsByTxn = await legsByPosting(
+  const legsByTxn = await legsByPosting(
     q,
     result.rows.map((row) => row.posting_id as string),
   );
-  for (let row of result.rows) {
-    let txnId = row.posting_id as string;
+  for (const row of result.rows) {
+    const txnId = row.posting_id as string;
     yield {
       txnId,
       legs: legsByTxn.get(txnId) ?? [],
@@ -597,14 +599,14 @@ async function* lineageOf(
 // account's, the way lineageOf works). Undoing a transaction needs every line to post the
 // opposite. Returns null when no posting has that id.
 async function postingOf(q: Queryable, txnId: string): Promise<Posting | null> {
-  let result = await q.query(`select meta from postings where id = $1`, [
+  const result = await q.query(`select meta from postings where id = $1`, [
     txnId,
   ]);
-  let row = result.rows[0];
+  const row = result.rows[0];
   if (!row) {
     return null;
   }
-  let legs = await legsOf(q, txnId);
+  const legs = await legsOf(q, txnId);
   return {
     txnId,
     legs,
@@ -615,16 +617,18 @@ async function postingOf(q: Queryable, txnId: string): Promise<Posting | null> {
 // Newest commit first via `order by seq desc` (bigserial unique: a total order, no tie to break).
 // Each posting carries its full legs so a reader can expand a row without a second round trip.
 async function* listPostingsOf(q: Queryable): AsyncIterable<Posting> {
-  let result = await q.query(`select id, meta from postings order by seq desc`);
+  const result = await q.query(
+    `select id, meta from postings order by seq desc`,
+  );
   // One batched legs read instead of a legsOf round trip per posting (the same N+1 fold as lineageOf).
   // ledger.list() consumers buffer the whole stream, so reading the legs up front changes nothing they
   // observe.
-  let legsByTxn = await legsByPosting(
+  const legsByTxn = await legsByPosting(
     q,
     result.rows.map((row) => row.id as string),
   );
-  for (let row of result.rows) {
-    let txnId = row.id as string;
+  for (const row of result.rows) {
+    const txnId = row.id as string;
     yield {
       txnId,
       legs: legsByTxn.get(txnId) ?? [],
@@ -637,7 +641,7 @@ async function* listPostingsOf(q: Queryable): AsyncIterable<Posting> {
 // plus signed amount). postingOf and lineageOf both use this; the hash is computed from the
 // whole posting, so every line is needed.
 async function legsOf(q: Queryable, txnId: string): Promise<Leg[]> {
-  let result = await q.query(
+  const result = await q.query(
     `select account_id, amount, currency from legs
       where posting_id = $1 order by id asc`,
     [txnId],
@@ -654,17 +658,17 @@ async function legsByPosting(
   q: Queryable,
   postingIds: ReadonlyArray<string>,
 ): Promise<Map<string, Leg[]>> {
-  let byPosting = new Map<string, Leg[]>();
+  const byPosting = new Map<string, Leg[]>();
   if (postingIds.length === 0) {
     return byPosting;
   }
-  let result = await q.query(
+  const result = await q.query(
     `select posting_id, account_id, amount, currency from legs
       where posting_id = any($1::text[]) order by posting_id, id asc`,
     [[...postingIds]],
   );
-  for (let row of result.rows) {
-    let txnId = row.posting_id as string;
+  for (const row of result.rows) {
+    const txnId = row.posting_id as string;
     let legs = byPosting.get(txnId);
     if (!legs) {
       legs = [];
@@ -692,11 +696,11 @@ async function legsByPosting(
 function createIdempotencyStore(q: Queryable): IdempotencyStore {
   return {
     claim: async (key) => {
-      let existing = await q.query(
+      const existing = await q.query(
         `select transaction from idempotency where key = $1`,
         [key],
       );
-      let prior = existing.rows[0];
+      const prior = existing.rows[0];
       if (prior) {
         return {
           claimed: false,
@@ -708,11 +712,11 @@ function createIdempotencyStore(q: Queryable): IdempotencyStore {
       await q.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [
         key,
       ]);
-      let recheck = await q.query(
+      const recheck = await q.query(
         `select transaction from idempotency where key = $1`,
         [key],
       );
-      let recorded = recheck.rows[0];
+      const recorded = recheck.rows[0];
       if (recorded) {
         return {
           claimed: false,
@@ -781,7 +785,7 @@ function decodeTransaction(encoded: EncodedTransaction): Transaction {
 function createReplayStore(q: Queryable): ReplayStore {
   return {
     claim: async (eventId) => {
-      let result = await q.query(
+      const result = await q.query(
         `insert into seen_webhooks (event_id) values ($1)
            on conflict (event_id) do nothing
            returning event_id`,
@@ -795,7 +799,7 @@ function createReplayStore(q: Queryable): ReplayStore {
 // --- Sale store -------------------------------------------------------------------
 
 // Entry lines stored as JSON, each amount as its minor-units string, since JSON can't hold BigInt.
-// @see https://economy-lab-docs.pages.dev/economy/reference/operations/refund
+// @see https://economy-lab-docs.pages.dev/economy/reference/operations/refund/
 function createSaleStore(q: Queryable): SaleStore {
   return {
     put: async (sale) => {
@@ -820,10 +824,10 @@ function createSaleStore(q: Queryable): SaleStore {
       );
     },
     get: async (orderId) => {
-      let result = await q.query(`select * from sales where order_id = $1`, [
+      const result = await q.query(`select * from sales where order_id = $1`, [
         orderId,
       ]);
-      let row = result.rows[0];
+      const row = result.rows[0];
       return row ? rowToSale(row) : null;
     },
   };
@@ -842,16 +846,16 @@ function encodeLegs(
 }
 
 function rowToSale(row: Record<string, unknown>): Sale {
-  let raw = row.legs as Array<{
+  const raw = row.legs as Array<{
     account: string;
     currency: string;
     minor: string;
   }>;
-  let legs: Leg[] = raw.map((leg) => ({
+  const legs: Leg[] = raw.map((leg) => ({
     account: leg.account as AccountRef,
     amount: toAmount(leg.currency as Amount['currency'], BigInt(leg.minor)),
   }));
-  let priceCurrency = (legs[0]?.amount.currency ??
+  const priceCurrency = (legs[0]?.amount.currency ??
     'CREDIT') as Amount['currency'];
   return {
     orderId: row.order_id as string,
@@ -872,7 +876,8 @@ function rowToSale(row: Record<string, unknown>): Sale {
 // money move, a relay later reads a batch (`claimBatch`), sends each, and calls `markRelayed`.
 // `claimBatch` uses `for update skip locked` so several relay workers run at once without two
 // grabbing the same row.
-// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the outbox pattern (write-with-the-transaction, relay-later, dedupe-by-id).
+// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the outbox
+// pattern (write-with-the-transaction, relay-later, dedupe-by-id).
 function createOutboxStore(q: Queryable): OutboxStore {
   return {
     enqueue: async (message) => {
@@ -888,7 +893,7 @@ function createOutboxStore(q: Queryable): OutboxStore {
       );
     },
     claimBatch: async (limit) => {
-      let result = await q.query(
+      const result = await q.query(
         `select id, event, status, attempts, dead_letter_reason from outbox
           where status = 'pending'
           order by created_at asc
@@ -912,8 +917,7 @@ function createOutboxStore(q: Queryable): OutboxStore {
       );
     },
     // Record a failed delivery: bump attempts by one but keep the row 'pending' so the
-    // next sweep retries it. The `and status = 'pending'` guard makes this a no-op on a
-    // missing, already-relayed, or already-dead-lettered row, matching memory.
+    // next sweep retries it. Same terminal-state guard as markRelayed above.
     recordFailure: async (id) => {
       await q.query(
         `update outbox set attempts = attempts + 1
@@ -922,8 +926,7 @@ function createOutboxStore(q: Queryable): OutboxStore {
       );
     },
     // Give up on a poison message: flip it to 'failed' (so claimBatch never returns it again)
-    // and persist the reason. Same `and status = 'pending'` guard, so it no-ops on a missing or
-    // already-terminal row, like the saga store's deadLetter.
+    // and persist the reason. Same terminal-state guard as markRelayed above.
     deadLetter: async (id, reason) => {
       await q.query(
         `update outbox set status = 'failed', dead_letter_reason = $2
@@ -951,14 +954,15 @@ function rowToOutbox(row: Record<string, unknown>): OutboxMessage {
 // SQL) so a redelivered event is a no-op that returns the existing row. A separate apply worker
 // reads a batch (`claimInbound`) and calls `markApplied`. `claimInbound` uses `for update skip
 // locked` so several apply workers run at once without two grabbing the same row.
-// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the inbox pattern (record-in-the-ingress-transaction, apply-later, dedupe-by-id).
+// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the inbox pattern
+// (record-in-the-ingress-transaction, apply-later, dedupe-by-id).
 function createInboxStore(q: Queryable): InboxStore {
   return {
     // A redelivery (no row from `on conflict do nothing ... returning`) falls through to re-reading
     // the canonical row by key. Operation amounts are decimal strings (encodeOperation): jsonb has
     // no BigInt.
     enqueueInbound: async (entry) => {
-      let inserted = await q.query(
+      const inserted = await q.query(
         `insert into inbox (id, key, operation, status, attempts, received_at)
            values ($1, $2, $3::jsonb, $4, $5, $6)
            on conflict (key) do nothing
@@ -972,11 +976,11 @@ function createInboxStore(q: Queryable): InboxStore {
           entry.receivedAt,
         ],
       );
-      let row = inserted.rows[0];
+      const row = inserted.rows[0];
       if (row) {
         return rowToInbox(row);
       }
-      let existing = await q.query(
+      const existing = await q.query(
         `select id, key, operation, status, attempts, received_at, dead_letter_reason from inbox
           where key = $1`,
         [entry.key],
@@ -988,7 +992,7 @@ function createInboxStore(q: Queryable): InboxStore {
     // re-claimed, so a poison event can't wedge the queue. `input.now` is accepted for parity with
     // the saga/relay claim; the inbox has no due-time gate.
     claimInbound: async (input) => {
-      let result = await q.query(
+      const result = await q.query(
         `select id, key, operation, status, attempts, received_at, dead_letter_reason from inbox
           where status = 'pending'
           order by received_at asc
@@ -999,8 +1003,7 @@ function createInboxStore(q: Queryable): InboxStore {
       return result.rows.map(rowToInbox);
     },
     // Mark a row applied once its operation has committed: flip 'pending' to 'applied' so
-    // `claimInbound` never returns it again. The `and status = 'pending'` guard makes this a no-op
-    // on a missing or already-terminal row, mirroring the outbox's `markRelayed`/saga semantics.
+    // `claimInbound` never returns it again. Same terminal-state guard as the outbox's markRelayed.
     markApplied: async (id) => {
       await q.query(
         `update inbox set status = 'applied' where id = $1 and status = 'pending'`,
@@ -1008,8 +1011,7 @@ function createInboxStore(q: Queryable): InboxStore {
       );
     },
     // Record a failed apply: bump attempts by one but keep the row 'pending' so the next sweep
-    // retries it. The `and status = 'pending'` guard makes this a no-op on a missing, already-
-    // applied, or already-dead-lettered row, matching OutboxStore.recordFailure.
+    // retries it. Same terminal-state guard as markApplied.
     bumpAttempt: async (id) => {
       await q.query(
         `update inbox set attempts = attempts + 1
@@ -1018,8 +1020,7 @@ function createInboxStore(q: Queryable): InboxStore {
       );
     },
     // Give up on a poison event: flip it to 'dead' (so claimInbound never returns it again) and
-    // persist the reason. Same `and status = 'pending'` guard, so it no-ops on a missing or
-    // already-terminal row, like OutboxStore.deadLetter.
+    // persist the reason. Same terminal-state guard as markApplied.
     deadLetter: async (id, reason) => {
       await q.query(
         `update inbox set status = 'dead', dead_letter_reason = $2
@@ -1068,8 +1069,8 @@ function encodeAmounts(value: unknown): unknown {
     return value.map(encodeAmounts);
   }
   if (value !== null && typeof value === 'object') {
-    let out: Record<string, unknown> = {};
-    for (let [key, inner] of Object.entries(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [key, inner] of Object.entries(value)) {
       out[key] = encodeAmounts(inner);
     }
     return out;
@@ -1081,15 +1082,15 @@ function encodeAmounts(value: unknown): unknown {
 // (tryDecodeAmountString); any other string (idempotencyKey, sku, reason, …) passes through.
 function decodeAmounts(value: unknown): unknown {
   if (typeof value === 'string') {
-    let amount = tryDecodeAmountString(value);
+    const amount = tryDecodeAmountString(value);
     return amount ?? value;
   }
   if (Array.isArray(value)) {
     return value.map(decodeAmounts);
   }
   if (value !== null && typeof value === 'object') {
-    let out: Record<string, unknown> = {};
-    for (let [key, inner] of Object.entries(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [key, inner] of Object.entries(value)) {
       out[key] = decodeAmounts(inner);
     }
     return out;
@@ -1116,10 +1117,10 @@ function tryDecodeAmountString(encoded: string): Amount | null {
 
 // No `for update`: a read-only enumeration, not a claim.
 async function* listSagasOf(q: Queryable): AsyncIterable<Saga> {
-  let result = await q.query(
+  const result = await q.query(
     `select * from payout_sagas order by updated_at desc`,
   );
-  for (let row of result.rows) {
+  for (const row of result.rows) {
     yield rowToSaga(row);
   }
 }
@@ -1151,10 +1152,10 @@ function createSagaStore(q: Queryable): SagaStore {
       );
     },
     load: async (id) => {
-      let result = await q.query(`select * from payout_sagas where id = $1`, [
+      const result = await q.query(`select * from payout_sagas where id = $1`, [
         id,
       ]);
-      let row = result.rows[0];
+      const row = result.rows[0];
       return row ? rowToSaga(row) : null;
     },
     list: () => listSagasOf(q),
@@ -1162,9 +1163,9 @@ function createSagaStore(q: Queryable): SagaStore {
     // step that first creates it, so a row left in the earlier REQUESTED state means that step
     // crashed partway. Such a stuck row is skipped on purpose: this query picks up only RESERVED
     // and SUBMITTED rows. (The matching index in db/postgresql-schema.sql excludes REQUESTED the
-    // same way, so this query can use it.) Matches the in-memory and mysql adapters.
+    // same way, so this query can use it.) Matches the in-memory reference and the MySQL engine.
     claimDue: async (now, limit) => {
-      let result = await q.query(
+      const result = await q.query(
         `select * from payout_sagas
           where due_at <= $1 and state in ('RESERVED', 'SUBMITTED')
           order by due_at asc
@@ -1179,7 +1180,7 @@ function createSagaStore(q: Queryable): SagaStore {
       // marks the saga SETTLED); `reason` is the terminal failure outcome (carried when the worker
       // CAS-fails a stuck/abandoned payout to FAILED). Both left as-is on every other advance via
       // coalesce, so a non-terminal advance never disturbs them.
-      let result = await q.query(
+      const result = await q.query(
         `update payout_sagas
             set state = $3,
                 provider_ref = coalesce($4, provider_ref),
@@ -1209,11 +1210,11 @@ function createSagaStore(q: Queryable): SagaStore {
     },
     // Null when the user has no sagas, so their first request always passes the min-interval gate.
     lastPayoutAt: async (userId) => {
-      let result = await q.query(
+      const result = await q.query(
         `select max(updated_at) as last from payout_sagas where user_id = $1`,
         [userId],
       );
-      let value = result.rows[0]?.last;
+      const value = result.rows[0]?.last;
       return value === null || value === undefined ? null : Number(value);
     },
   };
@@ -1269,7 +1270,7 @@ function createEntitlementStore(q: Queryable, clock: Clock): EntitlementStore {
       // Owned only if not revoked and not expired. Boundary is inclusive (owned while now <=
       // expiresAt, lapsed once now > expiresAt), so `expires_at >= now`. A null expires_at never
       // lapses. Read is side-effect-free (no auto-purge).
-      let result = await q.query(
+      const result = await q.query(
         `select 1 from entitlements
           where user_id = $1 and sku = $2 and revoked = false
             and (expires_at is null or expires_at >= $3)`,
@@ -1319,21 +1320,22 @@ function createSubscriptionStore(q: Queryable): SubscriptionStore {
       );
     },
     load: async (id) => {
-      let result = await q.query(`select * from subscriptions where id = $1`, [
-        id,
-      ]);
-      let row = result.rows[0];
+      const result = await q.query(
+        `select * from subscriptions where id = $1`,
+        [id],
+      );
+      const row = result.rows[0];
       return row ? rowToSubscription(row) : null;
     },
     // The subscribe handler reads this to refuse a duplicate active subscription that would double-bill.
     activeFor: async (userId, sku, sellerId) => {
-      let result = await q.query(
+      const result = await q.query(
         `select * from subscriptions
           where user_id = $1 and sku = $2 and seller_id = $3 and state = 'ACTIVE'
           limit 1`,
         [userId, sku, sellerId],
       );
-      let row = result.rows[0];
+      const row = result.rows[0];
       return row ? rowToSubscription(row) : null;
     },
     cancel: async (id) => {
@@ -1345,7 +1347,7 @@ function createSubscriptionStore(q: Queryable): SubscriptionStore {
     // `for update skip locked` (like the saga claimDue) lets overlapping sweepers each grab a
     // disjoint batch instead of two fighting over (and double-billing) the same due row.
     claimDue: async (now, limit) => {
-      let result = await q.query(
+      const result = await q.query(
         `select * from subscriptions
           where state = 'ACTIVE' and next_due_at <= $1
           order by next_due_at asc
@@ -1361,7 +1363,7 @@ function createSubscriptionStore(q: Queryable): SubscriptionStore {
     // moved next_due_at on, no row matches and this returns false, so the loser treats it as a
     // no-op and never double-charges. SagaStore.advance guards its state change the same way.
     markBilled: async (id, nextDueAt, expectedDueAt) => {
-      let result = await q.query(
+      const result = await q.query(
         `update subscriptions
             set next_due_at = $2, period = period + 1, attempts = 0
           where id = $1 and next_due_at = $3
@@ -1409,7 +1411,7 @@ function createPromoStore(q: Queryable): PromoStore {
       );
     },
     claimDue: async (now, limit) => {
-      let result = await q.query(
+      const result = await q.query(
         `select * from promo_grants
            where expires_at <= $1 and reversed = false
            order by expires_at asc
@@ -1460,8 +1462,8 @@ function createTrustStore(
     bump: async (subject, attempt) => bumpVelocity(pool, subject, attempt),
     // Record-and-measure atomically. The insert and the windowed SUM run in one transaction
     // guarded by a per-subject advisory lock, so two concurrent same-subject calls serialize: the
-    // second waits, then sums a total that already includes the first's insert. Closes the
-    // velocity-limit TOCTOU the separate read+bump left open.
+    // second waits, then sums a total that already includes the first's insert — the atomicity
+    // `TrustStore.record` requires (ports.ts).
     record: async (subject, attempt) =>
       recordVelocity(pool, subject, attempt, clock.now() - windowMs),
   };
@@ -1472,14 +1474,14 @@ async function readVelocity(
   subject: string,
   cutoff: number,
 ): Promise<Velocity> {
-  let result = await q.query(
+  const result = await q.query(
     `select coalesce(min(at), 0) as window_start,
             coalesce(sum(amount), 0) as spent,
             count(*)::int as attempts
        from trust_attempts where subject = $1 and at > $2`,
     [subject, cutoff],
   );
-  let row = result.rows[0]!;
+  const row = result.rows[0]!;
   return {
     subject,
     windowStart: Number(row.window_start),
@@ -1541,7 +1543,7 @@ async function recordVelocity(
   attempt: Attempt,
   cutoff: number,
 ): Promise<Velocity> {
-  let client = await pool.connect();
+  const client = await pool.connect();
   try {
     await client.query('begin');
     await client.query(
@@ -1560,7 +1562,7 @@ async function recordVelocity(
         attempt.at,
       ],
     );
-    let result = await client.query(
+    const result = await client.query(
       `select coalesce(min(at), 0) as window_start,
               coalesce(sum(amount), 0) as spent,
               count(*)::int as attempts
@@ -1568,7 +1570,7 @@ async function recordVelocity(
       [subject, cutoff],
     );
     await client.query('commit');
-    let row = result.rows[0]!;
+    const row = result.rows[0]!;
     return {
       subject,
       windowStart: Number(row.window_start),
@@ -1605,10 +1607,10 @@ function createCheckpointStore(pool: PgPool): CheckpointStore {
       );
     },
     latest: async () => {
-      let result = await pool.query(
+      const result = await pool.query(
         `select * from checkpoints order by seq desc limit 1`,
       );
-      let row = result.rows[0];
+      const row = result.rows[0];
       return row ? rowToCheckpoint(row) : null;
     },
   };
@@ -1659,13 +1661,13 @@ export interface PostgresStoreOptions {
   // Max connections in the pool. Each in-flight transaction holds one connection for its whole
   // BEGIN..COMMIT, so this caps how many submits can run at once: a caller that drives N concurrent
   // submits must size this to at least N or the extra ones block waiting for a connection. Left unset,
-  // `pg`'s default of 10 applies, which is the historical behaviour.
+  // `pg`'s default of 10 applies, which is the historical behavior.
   poolMax?: number;
 
   // Max time (ms) to wait for a connection before failing. `pg`'s default is no timeout, so a
   // routable-but-stalled host (firewall drop, mid-startup) would hang indefinitely; a caller that
   // wants to fail fast and move on (e.g. the bench skipping an unreachable backend) sets this. Left
-  // unset, the historical no-timeout behaviour applies.
+  // unset, the historical no-timeout behavior applies.
   connectionTimeoutMillis?: number;
 }
 
@@ -1677,22 +1679,23 @@ export interface PostgresStoreOptions {
  * that name is created, loaded with db/postgresql-schema.sql, and used for all queries; `close()`
  * drops it. The hashing and clock dependencies default to reproducible implementations.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for the port contracts this engine implements.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
+ *   messaging} for the port contracts this engine implements.
  */
 export async function postgresStore(
   options: PostgresStoreOptions,
 ): Promise<Store> {
   configureBigIntParsers();
-  let digest = options.digest ?? defaultDigest();
-  let clock = options.clock ?? defaultClock();
-  let velocityWindowMs = options.velocityWindowMs ?? 60 * 60_000;
-  let schema = options.schema ? safeSchemaName(options.schema) : null;
+  const digest = options.digest ?? defaultDigest();
+  const clock = options.clock ?? defaultClock();
+  const velocityWindowMs = options.velocityWindowMs ?? 60 * 60_000;
+  const schema = options.schema ? safeSchemaName(options.schema) : null;
 
   // Point every connection the pool opens at the dedicated schema by setting its search_path
   // (where Postgres looks up unqualified table names) through the connection options. Unqualified
   // table names then resolve to our schema on every connection the pool hands out, read or
   // transaction.
-  let pool = new pg.Pool({
+  const pool = new pg.Pool({
     connectionString: options.url,
     ...(schema ? { options: `-c search_path=${schema}` } : {}),
     ...(options.poolMax ? { max: options.poolMax } : {}),
@@ -1708,7 +1711,7 @@ export async function postgresStore(
   // isolated test schema we just applied the current SQL, so this passes by construction.
   assertSchemaCurrent(await readSchemaVersion(pool), 'Postgres');
 
-  let ledger = createLedgerStore(pool, digest, clock);
+  const ledger = createLedgerStore(pool, digest, clock);
 
   return {
     ledger,
@@ -1744,8 +1747,8 @@ async function applyIsolatedSchema(
   pool: PgPool,
   schema: string,
 ): Promise<void> {
-  let sql = await loadSchemaSql();
-  let client = await pool.connect();
+  const sql = await loadSchemaSql();
+  const client = await pool.connect();
   try {
     await client.query(`drop schema if exists ${schema} cascade`);
     await client.query(`create schema ${schema}`);
@@ -1769,16 +1772,16 @@ async function runInTransaction<T>(
   work: (tx: Unit) => Promise<T>,
 ): Promise<T> {
   return withTransientRetry(async () => {
-    let client = await pool.connect();
+    const client = await pool.connect();
     try {
       await client.query('begin');
-      let unit = buildUnit(
+      const unit = buildUnit(
         client,
         deps.digest,
         deps.clock,
         deps.velocityWindowMs,
       );
-      let result = await work(unit);
+      const result = await work(unit);
       await client.query('commit');
       return result;
     } catch (error) {
@@ -1796,12 +1799,12 @@ async function runInTransaction<T>(
 // surfaces on `error.code`. Anything else (a domain fault, a CHECK or constraint violation, a
 // connection error) is not retried.
 function isTransientConflict(error: unknown): boolean {
-  let e = error as {
+  const e = error as {
     code?: unknown;
     constraint?: unknown;
     message?: unknown;
   } | null;
-  let code = e?.code;
+  const code = e?.code;
   // 40P01 (deadlock) and 40001 (serialization failure) are the classic "try again" aborts. The third
   // case is subtler. Each account's history is a hash chain, and a new link names the current last
   // link (the head) as its parent. chain_links_account_prev_uq lets only one link claim a given

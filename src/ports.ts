@@ -37,9 +37,7 @@ export type TimelineOptions = {
   offset?: number;
 };
 
-/**
- * Allowed id prefixes. Every minted id is `<prefix>_<uuid>` (e.g. `txn_…`, `usr_…`).
- */
+/** Allowed id prefixes. Every minted id is `<prefix>_<uuid>` (e.g. `txn_…`, `usr_…`). */
 export type IdPrefix =
   | 'usr' // a user — host-supplied (not minted here); owns the wallet accounts
   | 'txn' // a ledger transaction: one posting of balanced legs
@@ -55,19 +53,19 @@ export type IdPrefix =
 
 /** Reads the current wall-clock time. */
 export interface Clock {
-  // Milliseconds since the Unix epoch (midnight UTC, 1 Jan 1970).
+  /** Milliseconds since the Unix epoch (midnight UTC, 1 Jan 1970). */
   now(): number;
 }
 
 /** Mints fresh unique ids. */
 export interface Ids {
-  // Returns a new id of the form `${prefix}_${uuidv4}`.
+  /** Returns a new id of the form `${prefix}_${uuidv4}`. */
   next(prefix: IdPrefix): string;
 }
 
 /** Hashes raw bytes. */
 export interface Digest {
-  // Returns the SHA-256 hash of the input, computed via the platform's crypto.subtle.
+  /** Returns the SHA-256 hash of the input, computed via the platform's crypto.subtle. */
   hash(bytes: Uint8Array): Promise<Uint8Array>;
 }
 
@@ -80,8 +78,10 @@ export interface Digest {
 export interface Signer {
   sign(bytes: Uint8Array): Promise<Uint8Array>;
 
-  // True if the signature is authentic. Accepts the current key plus still-valid older keys,
-  // so a signature made before a key rotation keeps verifying.
+  /**
+   * True if the signature is authentic. Accepts the current key plus still-valid older keys,
+   * so a signature made before a key rotation keeps verifying.
+   */
   verify(bytes: Uint8Array, signature: Uint8Array): Promise<boolean>;
 }
 
@@ -98,7 +98,7 @@ export interface Signer {
 export interface Cache {
   get(key: string): Promise<string | null>;
 
-  // Store a value, optionally expiring it after `ttlMs` milliseconds.
+  /** Store a value, optionally expiring it after `ttlMs` milliseconds. */
   set(key: string, value: string, ttlMs?: number): Promise<void>;
 
   invalidate(key: string): Promise<void>;
@@ -106,8 +106,10 @@ export interface Cache {
 
 /** Runs a task repeatedly on a fixed interval (used by the background worker). */
 export interface Scheduler {
-  // Runs `task` every `ms` milliseconds and returns a function that stops it. The loop lives behind
-  // this port rather than a raw setInterval, so start and stop share one code path.
+  /**
+   * Runs `task` every `ms` milliseconds and returns a function that stops it. The loop lives behind
+   * this port rather than a raw setInterval, so start and stop share one code path.
+   */
   every(ms: number, task: () => Promise<void>, options?: Options): () => void;
 }
 
@@ -128,8 +130,10 @@ export type Dispatcher = (
  * the Thunes adapter, and dispute webhooks.
  */
 export interface Processor {
-  // Pays a user. `amount` is in real USD. `key` makes the request safe to retry without paying
-  // twice. Returns the provider's reference for the payout.
+  /**
+   * Pays a user. `amount` is in real USD. `key` makes the request safe to retry without paying
+   * twice. Returns the provider's reference for the payout.
+   */
   submitPayout(
     input: { key: string; userId: string; amount: Amount },
     options?: Options,
@@ -152,8 +156,10 @@ export interface Processor {
  * configured adapter.
  */
 export interface Rates {
-  // Returns the settlement rate to convert one currency to another at a point in time. This is
-  // mainly used to convert CREDIT to USD on payout, where the rate equals `par`.
+  /**
+   * Returns the settlement rate to convert one currency to another at a point in time. This is
+   * mainly used to convert CREDIT to USD on payout, where the rate equals `par`.
+   */
   payout(
     from: Currency,
     to: Currency,
@@ -161,14 +167,18 @@ export interface Rates {
     options?: Options,
   ): Promise<Rate>;
 
-  // Returns the redemption and backing rate. The reconciliation check uses it to confirm the
-  // platform holds enough real USD to cover every user's spendable credits, valuing those credits
-  // in USD at this rate.
+  /**
+   * Returns the redemption and backing rate. The reconciliation check uses it to confirm the
+   * platform holds enough real USD to cover every user's spendable credits, valuing those credits
+   * in USD at this rate.
+   */
   par(currency: Currency): Rate;
 
-  // Returns the acquisition rate a user pays when buying credits. It is less favorable than `par`
-  // or `payout`. `topUp` values the buyer's cash at this rate. The gap between it and `par` is the
-  // platform spread (see this type's doc-comment).
+  /**
+   * Returns the acquisition rate a user pays when buying credits. It is less favorable than `par`
+   * or `payout`. `topUp` values the buyer's cash at this rate. The gap between it and `par` is the
+   * platform spread (see this type's doc-comment).
+   */
   buy(currency: Currency): Rate;
 }
 
@@ -200,74 +210,93 @@ export interface Meter {
 /**
  * The append-only double-entry ledger: records money movements, reads back balances and history.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/ Accounts & double-entry}
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/
+ *   Accounts & double-entry}
  * for postings, legs, and the chart of accounts.
  */
 export interface Ledger {
   hasAccount(account: AccountRef, options?: Options): Promise<boolean>;
 
-  // Takes a row lock on an account so concurrent operations can't race on its balance.
+  /** Takes a row lock on an account so concurrent operations can't race on its balance. */
   lock(account: AccountRef, options?: Options): Promise<void>;
 
-  // Locks several accounts in one round trip, in a single deadlock-free global order. Optional:
-  // `lockAll` (src/ledger.ts) uses it when present (Postgres' ordered `for update`), else falls back
-  // to per-account `lock` in that same order (in-memory no-op lock, MySQL's per-name GET_LOCK). Only
-  // meaningful inside a transaction, where locks release at commit, like `lock`.
+  /**
+   * Locks several accounts in one round trip, in a single deadlock-free global order. Optional:
+   * `lockAll` (src/ledger.ts) uses it when present (Postgres' ordered `for update`), else falls back
+   * to per-account `lock` in that same order (in-memory no-op lock, MySQL's per-name GET_LOCK). Only
+   * meaningful inside a transaction, where locks release at commit, like `lock`.
+   */
   lockMany?(
     accounts: ReadonlyArray<AccountRef>,
     options?: Options,
   ): Promise<void>;
 
-  // Records one posting, a balanced set of debit and credit lines, and returns the committed
-  // transaction.
+  /**
+   * Records one posting, a balanced set of debit and credit lines, and returns the committed
+   * transaction.
+   */
   append(posting: Posting, options?: Options): Promise<Transaction>;
 
-  // Returns the account's current balance. This is a maintained running total, so it is a single
-  // read rather than a sum over the account's whole history.
+  /**
+   * Returns the account's current balance. This is a maintained running total, so it is a single
+   * read rather than a sum over the account's whole history.
+   */
   balance(account: AccountRef, options?: Options): Promise<Amount>;
 
-  // Returns a page of the account's entries within a time range (see Statement).
+  /** Returns a page of the account's entries within a time range (see Statement). */
   statement(
     account: AccountRef,
     range: Range,
     options?: Options,
   ): Promise<Statement>;
 
-  // Streams the account's settlement lots. Each lot is a chunk of funds from a single top-up,
-  // tagged with the date it becomes eligible to be paid out (see {@link Lot}). Lots stream one at a
-  // time so a long history doesn't have to fit in memory. `options` bounds the read so a caller
-  // that only needs the newest run of lots (the maturity FIFO tail) never touches the whole account
-  // history; the default is the full history, oldest-first. See {@link TimelineOptions}.
+  /**
+   * Streams the account's settlement lots. Each lot is a chunk of funds from a single top-up,
+   * tagged with the date it becomes eligible to be paid out (see {@link Lot}). Lots stream one at a
+   * time so a long history doesn't have to fit in memory. `options` bounds the read so a caller
+   * that only needs the newest run of lots (the maturity FIFO tail) never touches the whole account
+   * history; the default is the full history, oldest-first. See {@link TimelineOptions}.
+   */
   timeline(account: AccountRef, options?: TimelineOptions): AsyncIterable<Lot>;
 
-  // Streams every account paired with its current chain-head hash, the latest hash in that
-  // account's tamper-evident chain.
+  /**
+   * Streams every account paired with its current chain-head hash, the latest hash in that
+   * account's tamper-evident chain.
+   */
   heads(): AsyncIterable<readonly [AccountRef, string]>;
 
-  // Streams every account that has a cached running-balance row, one at a time (SQL:
-  // `account_balances`; memory: keys of `state.balances`). Entries are the source of truth, so a
-  // cached row can exist with no posting behind it. `heads` never visits such an account, so the
-  // prover relies on this list to surface it as a mismatch.
+  /**
+   * Streams every account that has a cached running-balance row, one at a time (SQL:
+   * `account_balances`; memory: keys of `state.balances`). Entries are the source of truth, so a
+   * cached row can exist with no posting behind it. `heads` never visits such an account, so the
+   * prover relies on this list to surface it as a mismatch.
+   */
   balanceAccounts(options?: Options): AsyncIterable<AccountRef>;
 
-  // Streams every posting that touched `account`, in commit order, with each recorded hash. The
-  // integrity prover replays these to recompute the account's head hash and confirm nothing was
-  // altered. Head hashes alone only show the chain is well-formed; replaying the full postings
-  // catches an edited line.
+  /**
+   * Streams every posting that touched `account`, in commit order, with each recorded hash. The
+   * integrity prover replays these to recompute the account's head hash and confirm nothing was
+   * altered. Head hashes alone only show the chain is well-formed; replaying the full postings
+   * catches an edited line.
+   */
   lineage(account: AccountRef, options?: Options): AsyncIterable<StoredLink>;
 
-  // Returns the whole posting that committed under `txnId`, or null if no such id exists. A reversal
-  // loads this posting and negates its lines to post the exact opposite. Returning null on an
-  // unknown id lets the operator-reversal handler fail loudly. Unlike `lineage`, this is not scoped
-  // to one account: it returns the one transaction with all its lines.
+  /**
+   * Returns the whole posting that committed under `txnId`, or null if no such id exists. A reversal
+   * loads this posting and negates its lines to post the exact opposite. Returning null on an
+   * unknown id lets the operator-reversal handler fail loudly. Unlike `lineage`, this is not scoped
+   * to one account: it returns the one transaction with all its lines.
+   */
   posting(txnId: string, options?: Options): Promise<Posting | null>;
 
-  // Streams every committed posting, newest commit first, one at a time like `SagaStore.list`.
-  // Unlike `posting` (one transaction by id) or `lineage` (one account's chain), this is the whole
-  // ledger: every transaction type and every account touched. A UI can render the journal from it
-  // without tracking minted txn ids itself. Each posting carries its full legs, like `posting`, so a
-  // reader can expand a row without a second lookup. "Newest first" follows the commit sequence (the
-  // postings primary key and sequence), so the order is total and ties never reorder a page.
+  /**
+   * Streams every committed posting, newest commit first, one at a time like `SagaStore.list`.
+   * Unlike `posting` (one transaction by id) or `lineage` (one account's chain), this is the whole
+   * ledger: every transaction type and every account touched. A UI can render the journal from it
+   * without tracking minted txn ids itself. Each posting carries its full legs, like `posting`, so a
+   * reader can expand a row without a second lookup. "Newest first" follows the commit sequence (the
+   * postings primary key and sequence), so the order is total and ties never reorder a page.
+   */
   list(options?: Options): AsyncIterable<Posting>;
 }
 
@@ -292,8 +321,10 @@ export interface Store {
   checkpoints: CheckpointStore;
   replay: ReplayStore;
 
-  // Runs `work` inside one database transaction, passing it the subset of stores that participate
-  // in that transaction. Everything `work` writes commits together or not at all.
+  /**
+   * Runs `work` inside one database transaction, passing it the subset of stores that participate
+   * in that transaction. Everything `work` writes commits together or not at all.
+   */
   transaction<T>(work: (tx: Unit) => Promise<T>, options?: Options): Promise<T>;
 
   close(): Promise<void>;
@@ -349,12 +380,16 @@ export type StoredLink = {
   legs: ReadonlyArray<Leg>;
   meta: Record<string, unknown>;
 
-  // The account's head hash before this posting (a fixed all-zeros "genesis" hex for the
-  // account's first posting).
+  /**
+   * The account's head hash before this posting (a fixed all-zeros "genesis" hex for the
+   * account's first posting).
+   */
   prevHash: string;
 
-  // The account's head hash after this posting, recorded when it was appended; what the prover's
-  // recompute must reproduce.
+  /**
+   * The account's head hash after this posting, recorded when it was appended; what the prover's
+   * recompute must reproduce.
+   */
   hash: string;
 };
 
@@ -379,25 +414,31 @@ export interface Unit {
   subscriptions: SubscriptionStore;
   promos: PromoStore;
   trust: TrustStore;
-  // Balances cached for one operation so the funds screen and handler share one read each; the pipeline
-  // fills it after locking. Unset outside the pipeline (e.g. a test), where readers use `ledger.balance`.
+  /**
+   * Balances cached for one operation so the funds screen and handler share one read each; the pipeline
+   * fills it after locking. Unset outside the pipeline (e.g. a test), where readers use `ledger.balance`.
+   */
   balances?: Map<string, Amount>;
 }
 
 /** Makes a repeated request run at most once, keyed by the caller's idempotency key. */
 export interface IdempotencyStore {
-  // Stakes a claim on a key. The first caller gets `{ claimed: true }` and may proceed. If another
-  // caller is still mid-flight on the same key, this call waits for them. If that caller committed,
-  // this returns `{ claimed: false }` with their recorded transaction, so the duplicate returns the
-  // same result. If that caller rolled back, the key was never recorded, so a fresh
-  // `{ claimed: true }` is granted.
+  /**
+   * Stakes a claim on a key. The first caller gets `{ claimed: true }` and may proceed. If another
+   * caller is still mid-flight on the same key, this call waits for them. If that caller committed,
+   * this returns `{ claimed: false }` with their recorded transaction, so the duplicate returns the
+   * same result. If that caller rolled back, the key was never recorded, so a fresh
+   * `{ claimed: true }` is granted.
+   */
   claim(
     key: string,
     options?: Options,
   ): Promise<{ claimed: true } | { claimed: false; transaction: Transaction }>;
 
-  // Records the committed transaction for a key. Called inside the posting's transaction, so it only
-  // takes effect if the posting actually commits.
+  /**
+   * Records the committed transaction for a key. Called inside the posting's transaction, so it only
+   * takes effect if the posting actually commits.
+   */
   record(
     key: string,
     transaction: Transaction,
@@ -413,10 +454,12 @@ export interface IdempotencyStore {
  * Backed by the `seen_webhooks` table (SQL) or an in-memory Map (memory adapter).
  */
 export interface ReplayStore {
-  // Atomically inserts `eventId` if it is absent. Returns `{ claimed: true }` the first time an id is
-  // seen and `{ claimed: false }` on every later sighting, so a redelivered event is processed at
-  // most once. Unlike `IdempotencyStore.claim`, this carries no transaction payload, because the
-  // webhook handler only needs to know whether this is the first delivery.
+  /**
+   * Atomically inserts `eventId` if it is absent. Returns `{ claimed: true }` the first time an id is
+   * seen and `{ claimed: false }` on every later sighting, so a redelivered event is processed at
+   * most once. Unlike `IdempotencyStore.claim`, this carries no transaction payload, because the
+   * webhook handler only needs to know whether this is the first delivery.
+   */
   claim(eventId: string, options?: Options): Promise<{ claimed: boolean }>;
 }
 
@@ -433,30 +476,38 @@ export interface SaleStore {
  * for a committed one.
  */
 export interface OutboxStore {
-  // Saves an event to send later. Called inside the posting's transaction.
+  /** Saves an event to send later. Called inside the posting's transaction. */
   enqueue(message: OutboxMessage, options?: Options): Promise<void>;
 
-  // Grabs up to `limit` unsent messages for the relay. Each is locked so a concurrent relay skips it
-  // and picks different ones. Only 'pending' rows are returned. A 'relayed' or dead-lettered
-  // ('failed') row is terminal and never re-claimed, so a poison message can't wedge the queue.
+  /**
+   * Grabs up to `limit` unsent messages for the relay. Each is locked so a concurrent relay skips it
+   * and picks different ones. Only 'pending' rows are returned. A 'relayed' or dead-lettered
+   * ('failed') row is terminal and never re-claimed, so a poison message can't wedge the queue.
+   */
   claimBatch(
     limit: number,
     options?: Options,
   ): Promise<ReadonlyArray<OutboxMessage>>;
 
-  // Marks messages delivered. Delivery may still double-send, so the consumer drops duplicates by
-  // message id.
+  /**
+   * Marks messages delivered. Delivery may still double-send, so the consumer drops duplicates by
+   * message id.
+   */
   markRelayed(ids: ReadonlyArray<string>, options?: Options): Promise<void>;
 
-  // Records that delivering `id` failed. Bumps `attempts` by one and leaves the row 'pending' so the
-  // next sweep retries it. A non-existent row (already relayed, dead-lettered, or never enqueued) is
-  // left untouched. Mirrors the saga store's read-modify pattern. This must not flip the status;
-  // only `deadLetter` does that.
+  /**
+   * Records that delivering `id` failed. Bumps `attempts` by one and leaves the row 'pending' so the
+   * next sweep retries it. A non-existent row (already relayed, dead-lettered, or never enqueued) is
+   * left untouched. Mirrors the saga store's read-modify pattern. This must not flip the status;
+   * only `deadLetter` does that.
+   */
   recordFailure(id: string, options?: Options): Promise<void>;
 
-  // Gives up on a poison message. Sets status to 'failed' so `claimBatch` never returns it again,
-  // recording `reason` (the last failure's error code) for operators. Mirrors SagaStore.deadLetter.
-  // A non-existent or already-terminal row is left untouched.
+  /**
+   * Gives up on a poison message. Sets status to 'failed' so `claimBatch` never returns it again,
+   * recording `reason` (the last failure's error code) for operators. Mirrors SagaStore.deadLetter.
+   * A non-existent or already-terminal row is left untouched.
+   */
   deadLetter(id: string, reason: string, options?: Options): Promise<void>;
 }
 
@@ -464,39 +515,52 @@ export interface OutboxStore {
  * A transactional inbox: the inbound mirror of {@link OutboxStore}. A verified provider event,
  * already mapped to the {@link Operation} it should apply, is saved in the same database
  * transaction as the webhook ingress that claimed it, then a separate apply worker submits each
- * pending operation and marks the row applied. An inbound event is recorded before it is applied, and a recorded event is eventually applied (or dead-lettered). The outbox is outbound: a committed money move emits an event to deliver. The inbox is inbound: a received event drives a money move to post.
+ * pending operation and marks the row applied. An inbound event is recorded before it is applied,
+ * and a recorded event is eventually applied (or dead-lettered). The outbox is outbound: a
+ * committed money move emits an event to deliver. The inbox is inbound: a received event drives a
+ * money move to post.
  */
 export interface InboxStore {
-  // Saves a verified inbound event to apply later. Called inside the webhook handler's transaction.
-  // Dedupes on `entry.key` (the provider's event id): a duplicate is a no-op that returns the
-  // existing row rather than inserting a second, so a redelivered provider event is applied at most
-  // once.
+  /**
+   * Saves a verified inbound event to apply later. Called inside the webhook handler's transaction.
+   * Dedupes on `entry.key` (the provider's event id): a duplicate is a no-op that returns the
+   * existing row rather than inserting a second, so a redelivered provider event is applied at most
+   * once.
+   */
   enqueueInbound(entry: InboxEntry, options?: Options): Promise<InboxEntry>;
 
-  // Grabs up to `limit` pending rows for the apply worker, oldest `receivedAt` first. Each is locked
-  // so a concurrent worker skips it and picks different ones. Only 'pending' rows are returned. An
-  // 'applied' or dead-lettered ('dead') row is terminal and never re-claimed, so a poison event
-  // can't wedge the queue. Mirrors OutboxStore.claimBatch and the saga and relay claims.
+  /**
+   * Grabs up to `limit` pending rows for the apply worker, oldest `receivedAt` first. Each is locked
+   * so a concurrent worker skips it and picks different ones. Only 'pending' rows are returned. An
+   * 'applied' or dead-lettered ('dead') row is terminal and never re-claimed, so a poison event
+   * can't wedge the queue. Mirrors OutboxStore.claimBatch and the saga and relay claims.
+   */
   claimInbound(
     input: { now: number; limit: number },
     options?: Options,
   ): Promise<ReadonlyArray<InboxEntry>>;
 
-  // Marks a row applied once its operation has been submitted and committed. Called inside the
-  // apply's transaction, so it only takes effect if the money posting actually commits. A
-  // rolled-back apply leaves the row 'pending' for the next sweep. A non-existent or
-  // already-terminal row is left untouched.
+  /**
+   * Marks a row applied once its operation has been submitted and committed. Called inside the
+   * apply's transaction, so it only takes effect if the money posting actually commits. A
+   * rolled-back apply leaves the row 'pending' for the next sweep. A non-existent or
+   * already-terminal row is left untouched.
+   */
   markApplied(id: string, options?: Options): Promise<void>;
 
-  // Records that applying `id` failed. Bumps `attempts` by one and leaves the row 'pending' so the
-  // next sweep retries it. A non-existent row (already applied, dead-lettered, or never enqueued) is
-  // left untouched. Mirrors OutboxStore.recordFailure. This must not flip the status; only
-  // `deadLetter` does that.
+  /**
+   * Records that applying `id` failed. Bumps `attempts` by one and leaves the row 'pending' so the
+   * next sweep retries it. A non-existent row (already applied, dead-lettered, or never enqueued) is
+   * left untouched. Mirrors OutboxStore.recordFailure. This must not flip the status; only
+   * `deadLetter` does that.
+   */
   bumpAttempt(id: string, options?: Options): Promise<void>;
 
-  // Gives up on a poison event. Sets status to 'dead' so `claimInbound` never returns it again,
-  // recording `reason` (the last failure's error code) for operators. Mirrors
-  // OutboxStore.deadLetter. A non-existent or already-terminal row is left untouched.
+  /**
+   * Gives up on a poison event. Sets status to 'dead' so `claimInbound` never returns it again,
+   * recording `reason` (the last failure's error code) for operators. Mirrors
+   * OutboxStore.deadLetter. A non-existent or already-terminal row is left untouched.
+   */
   deadLetter(id: string, reason: string, options?: Options): Promise<void>;
 }
 
@@ -509,23 +573,29 @@ export interface SagaStore {
 
   load(id: string, options?: Options): Promise<Saga | null>;
 
-  // Streams every saga regardless of state, newest `updatedAt` first, one at a time like
-  // `LedgerStore.balanceAccounts`. Unlike `claimDue` (only due, in-progress sagas), this is the
-  // whole board, including settled and failed payouts, for a UI to render. Ties on `updatedAt` come
-  // back in an unspecified order that varies with each backend's collation, so a caller must not
-  // depend on it.
+  /**
+   * Streams every saga regardless of state, newest `updatedAt` first, one at a time like
+   * `Ledger.balanceAccounts`. Unlike `claimDue` (only due, in-progress sagas), this is the
+   * whole board, including settled and failed payouts, for a UI to render. Ties on `updatedAt` come
+   * back in an unspecified order that varies with each backend's collation, so a caller must not
+   * depend on it.
+   */
   list(options?: Options): AsyncIterable<Saga>;
 
-  // Grabs up to `limit` sagas whose `dueAt` has passed, for the background sweep to advance. Each is
-  // locked so concurrent sweeps take different sagas.
+  /**
+   * Grabs up to `limit` sagas whose `dueAt` has passed, for the background sweep to advance. Each is
+   * locked so concurrent sweeps take different sagas.
+   */
   claimDue(
     now: number,
     limit: number,
     options?: Options,
   ): Promise<ReadonlyArray<Saga>>;
 
-  // Moves a saga from `from` to `to` and applies `patch`, only if it is still in `from`. Returns
-  // false and changes nothing if it already moved on, so two sweeps can't both advance it.
+  /**
+   * Moves a saga from `from` to `to` and applies `patch`, only if it is still in `from`. Returns
+   * false and changes nothing if it already moved on, so two sweeps can't both advance it.
+   */
   advance(
     id: string,
     from: SagaState,
@@ -534,14 +604,16 @@ export interface SagaStore {
     options?: Options,
   ): Promise<boolean>;
 
-  // Gives up on a saga that can't make progress, recording why.
+  /** Gives up on a saga that can't make progress, recording why. */
   deadLetter(id: string, reason: string, options?: Options): Promise<void>;
 
-  // Returns the time of `userId`'s most recent payout request, used to enforce
-  // config.payoutMinIntervalMs between requests: the max `updatedAt` over all of the user's sagas in
-  // any state. `updatedAt` is set to the request time at open() and only advances, so the max never
-  // undershoots the latest request and lets no second request slip through the window.
-  // Returns null when the user has no sagas, so a first request is always allowed.
+  /**
+   * Returns the time of `userId`'s most recent payout request, used to enforce
+   * config.payoutMinIntervalMs between requests: the max `updatedAt` over all of the user's sagas in
+   * any state. `updatedAt` is set to the request time at open() and only advances, so the max never
+   * undershoots the latest request and lets no second request slip through the window.
+   * Returns null when the user has no sagas, so a first request is always allowed.
+   */
   lastPayoutAt(userId: string, options?: Options): Promise<number | null>;
 }
 
@@ -568,9 +640,11 @@ export interface SubscriptionStore {
 
   load(id: string, options?: Options): Promise<Subscription | null>;
 
-  // Returns the one ACTIVE subscription matching this (userId, sku, sellerId) triple, or null if
-  // none exists. The subscribe handler uses this to refuse a second active subscription to the same
-  // sku and seller, which would double-bill.
+  /**
+   * Returns the one ACTIVE subscription matching this (userId, sku, sellerId) triple, or null if
+   * none exists. The subscribe handler uses this to refuse a second active subscription to the same
+   * sku and seller, which would double-bill.
+   */
   activeFor(
     userId: string,
     sku: string,
@@ -580,18 +654,20 @@ export interface SubscriptionStore {
 
   cancel(id: string, options?: Options): Promise<void>;
 
-  // Finds up to `limit` subscriptions whose next charge is due, for the renewal sweep.
+  /** Finds up to `limit` subscriptions whose next charge is due, for the renewal sweep. */
   claimDue(
     now: number,
     limit: number,
     options?: Options,
   ): Promise<ReadonlyArray<Subscription>>;
 
-  // Records a successful renewal as a compare-and-set against the period the sweeper claimed:
-  // set next_due_at=nextDueAt, period=period+1, attempts=0 WHERE id=id AND next_due_at=expectedDueAt.
-  // Returns false and changes nothing when no row matched, which means another overlapping sweeper
-  // already billed this period and moved next_due_at on. The loser treats that as a no-op and never
-  // double-charges. Mirrors SagaStore.advance's compare-and-set guard.
+  /**
+   * Records a successful renewal as a compare-and-set against the period the sweeper claimed:
+   * set next_due_at=nextDueAt, period=period+1, attempts=0 WHERE id=id AND next_due_at=expectedDueAt.
+   * Returns false and changes nothing when no row matched, which means another overlapping sweeper
+   * already billed this period and moved next_due_at on. The loser treats that as a no-op and never
+   * double-charges. Mirrors SagaStore.advance's compare-and-set guard.
+   */
   markBilled(
     id: string,
     nextDueAt: number,
@@ -599,9 +675,11 @@ export interface SubscriptionStore {
     options?: Options,
   ): Promise<boolean>;
 
-  // Marks a subscription LAPSED because a renewal couldn't be paid, after the buyer ran out of
-  // spendable funds. This is distinct from a user-requested cancel, but either way the renewal sweep
-  // stops re-billing it.
+  /**
+   * Marks a subscription LAPSED because a renewal couldn't be paid, after the buyer ran out of
+   * spendable funds. This is distinct from a user-requested cancel, but either way the renewal sweep
+   * stops re-billing it.
+   */
   markLapsed(id: string, options?: Options): Promise<void>;
 }
 
@@ -612,24 +690,30 @@ export interface SubscriptionStore {
  * grants and reverses the unspent remainder against `SYSTEM.PROMO_FLOAT`.
  */
 export interface PromoStore {
-  // Records a new grant. Idempotent on `grant.id`: opening the same id twice is a no-op that never
-  // overwrites or duplicates the first row (mirrors SagaStore.open's `on conflict (id) do nothing`).
-  // Called inside the grant's transaction, so it only takes effect if that transaction commits.
+  /**
+   * Records a new grant. Idempotent on `grant.id`: opening the same id twice is a no-op that never
+   * overwrites or duplicates the first row (mirrors SagaStore.open's `on conflict (id) do nothing`).
+   * Called inside the grant's transaction, so it only takes effect if that transaction commits.
+   */
   open(grant: PromoGrant, options?: Options): Promise<void>;
 
-  // Grabs up to `limit` grants that have expired (`expiresAt <= now`) and whose `reversed` flag is
-  // still false, for the promo-expiry sweep to act on. Returns them oldest `expiresAt` first, so the
-  // most overdue grants are reversed first. A grant already reversed is never handed back, so a
-  // single grant is reversed at most once across sweeps.
+  /**
+   * Grabs up to `limit` grants that have expired (`expiresAt <= now`) and whose `reversed` flag is
+   * still false, for the promo-expiry sweep to act on. Returns them oldest `expiresAt` first, so the
+   * most overdue grants are reversed first. A grant already reversed is never handed back, so a
+   * single grant is reversed at most once across sweeps.
+   */
   claimDue(
     now: number,
     limit: number,
     options?: Options,
   ): Promise<ReadonlyArray<PromoGrant>>;
 
-  // Marks a grant reversed so `claimDue` never returns it again. A row that doesn't exist or is
-  // already reversed is a no-op (the same read-modify guard SagaStore.deadLetter and
-  // OutboxStore.deadLetter use), so re-running the sweep over the same grant is harmless.
+  /**
+   * Marks a grant reversed so `claimDue` never returns it again. A row that doesn't exist or is
+   * already reversed is a no-op (the same read-modify guard SagaStore.deadLetter and
+   * OutboxStore.deadLetter use), so re-running the sweep over the same grant is harmless.
+   */
   markReversed(id: string, options?: Options): Promise<void>;
 }
 
@@ -642,16 +726,19 @@ export interface PromoStore {
 export interface TrustStore {
   read(subject: string, options?: Options): Promise<Velocity>;
 
-  // Records one spending attempt. Idempotent on `attempt.idempotencyKey`, so a genuine retry doesn't
-  // double-count.
+  /**
+   * Records one spending attempt. Idempotent on `attempt.idempotencyKey`, so a genuine retry doesn't
+   * double-count.
+   */
   bump(subject: string, attempt: Attempt, options?: Options): Promise<void>;
 
-  // Records the attempt (idempotent on `attempt.idempotencyKey`) and returns the subject's windowed
-  // velocity including it, in one indivisible step. This is what the risk gate calls. The
-  // record-and-measure must be atomic and serialized per subject, so that two concurrent attempts
-  // for the same subject can't both read a stale pre-bump total and both slip past the limit. That
-  // is the velocity-limit TOCTOU that a `read`-then-`bump` pair left open. A genuine retry of an
-  // already-recorded key still returns the current total without counting twice.
+  /**
+   * Records the attempt (idempotent on `attempt.idempotencyKey`) and returns the subject's windowed
+   * velocity including it, in one indivisible step, atomic and serialized per subject. This is what
+   * the risk gate calls; see screenRisk in economy.ts for why record-and-measure must be one step
+   * (the velocity-limit TOCTOU). A genuine retry of an already-recorded key still returns the
+   * current total without counting twice.
+   */
   record(
     subject: string,
     attempt: Attempt,
@@ -663,7 +750,7 @@ export interface TrustStore {
 export interface CheckpointStore {
   put(checkpoint: Checkpoint, options?: Options): Promise<void>;
 
-  // The most recent checkpoint, or null if none exists yet.
+  /** The most recent checkpoint, or null if none exists yet. */
   latest(options?: Options): Promise<Checkpoint | null>;
 }
 
@@ -677,82 +764,100 @@ export interface CheckpointStore {
  * to connected clients over the WebSocket.
  */
 export interface EconomyEvent {
-  // Unique event id, of the form evt_<uuid>.
+  /** Unique event id, of the form evt_<uuid>. */
   id: string;
 
-  // The event name, e.g. 'economy.sale.completed'.
+  /** The event name, e.g. 'economy.sale.completed'. */
   type: string;
 
-  // Schema version of this event's shape, currently 1.
+  /** Schema version of this event's shape, currently 1. */
   version: number;
 
-  // When the event happened, in epoch milliseconds.
+  /** When the event happened, in epoch milliseconds. */
   occurredAt: number;
 
-  // What the event is about: a user id (usr_…) or transaction id (txn_…).
+  /** What the event is about: a user id (usr_…) or transaction id (txn_…). */
   subject: string;
 
-  // The event's payload.
+  /** The event's payload. */
   data: Record<string, unknown>;
 
-  // Whether the event is for internal consumers or to be pushed to clients.
+  /** Whether the event is for internal consumers or to be pushed to clients. */
   audience: 'internal' | 'client';
 }
 
 /** One stored outbox row: an event plus the bookkeeping for delivering it (see OutboxStore). */
 export interface OutboxMessage {
-  // Unique row id, of the form obx_<uuid>.
+  /** Unique row id, of the form obx_<uuid>. */
   id: string;
 
   event: EconomyEvent;
 
-  // Where the event is in its delivery lifecycle:
-  // - 'pending': still needs sending; the only status `claimBatch` ever hands back.
-  // - 'relayed': delivered (set by `markRelayed`); never re-claimed.
-  // - 'failed':  dead-lettered after too many attempts (set by `deadLetter`); a terminal, poison
-  //   state that `claimBatch` must skip so it can't wedge the queue.
+  /**
+   * Where the event is in its delivery lifecycle:
+   * - 'pending': still needs sending; the only status `claimBatch` ever hands back.
+   * - 'relayed': delivered (set by `markRelayed`); never re-claimed.
+   * - 'failed':  dead-lettered after too many attempts (set by `deadLetter`); a terminal, poison
+   *   state that `claimBatch` must skip so it can't wedge the queue.
+   */
   status: 'pending' | 'relayed' | 'failed';
 
-  // How many delivery attempts have been made. Incremented by `recordFailure` each time a dispatch
-  // throws; once it reaches the configured cap the relay dead-letters the row.
+  /**
+   * How many delivery attempts have been made. Incremented by `recordFailure` each time a dispatch
+   * throws; once it reaches the configured cap the relay dead-letters the row.
+   */
   attempts: number;
 
-  // Why the relay gave up on this message, set when it reaches the terminal 'failed' status; null
-  // otherwise. Mirrors Saga.reason.
+  /**
+   * Why the relay gave up on this message, set when it reaches the terminal 'failed' status; null
+   * otherwise. Mirrors Saga.reason.
+   */
   reason: string | null;
 }
 
 /** One stored inbox row: a verified inbound event mapped to the operation it applies (see InboxStore). */
 export interface InboxEntry {
-  // Unique row id, of the form ibx_<uuid>.
+  /** Unique row id, of the form ibx_<uuid>. */
   id: string;
 
-  // The provider's event id. Doubles as the dedupe key on enqueue (a duplicate provider event is a
-  // no-op that returns the existing row) and as the submitted operation's idempotencyKey, so a
-  // redelivered event resolves to the same money move at most once.
+  /**
+   * The provider's event id. Doubles as the dedupe key on enqueue (a duplicate provider event is a
+   * no-op that returns the existing row) and as the submitted operation's idempotencyKey, so a
+   * redelivered event resolves to the same money move at most once.
+   */
   key: string;
 
-  // The operation to submit when this row is applied (e.g. a topUp or clawback), already mapped
-  // from the verified provider event.
+  /**
+   * The operation to submit when this row is applied (e.g. a topUp or clawback), already mapped
+   * from the verified provider event.
+   */
   operation: Operation;
 
-  // Where the event is in its apply lifecycle:
-  // - 'pending': still needs applying; the only status `claimInbound` ever hands back.
-  // - 'applied': submitted and committed (set by `markApplied`); never re-claimed.
-  // - 'dead':    dead-lettered after too many attempts (set by `deadLetter`); a terminal, poison
-  //   state that `claimInbound` must skip so it can't wedge the queue.
+  /**
+   * Where the event is in its apply lifecycle:
+   * - 'pending': still needs applying; the only status `claimInbound` ever hands back.
+   * - 'applied': submitted and committed (set by `markApplied`); never re-claimed.
+   * - 'dead':    dead-lettered after too many attempts (set by `deadLetter`); a terminal, poison
+   *   state that `claimInbound` must skip so it can't wedge the queue.
+   */
   status: 'pending' | 'applied' | 'dead';
 
-  // How many apply attempts have been made. Incremented by `bumpAttempt` each time an apply
-  // throws; once it reaches the configured cap the worker dead-letters the row.
+  /**
+   * How many apply attempts have been made. Incremented by `bumpAttempt` each time an apply
+   * throws; once it reaches the configured cap the worker dead-letters the row.
+   */
   attempts: number;
 
-  // When the verified event was received and enqueued, in epoch milliseconds. `claimInbound`
-  // returns pending rows oldest `receivedAt` first.
+  /**
+   * When the verified event was received and enqueued, in epoch milliseconds. `claimInbound`
+   * returns pending rows oldest `receivedAt` first.
+   */
   receivedAt: number;
 
-  // Why the worker gave up on this row, set when it reaches the terminal 'dead' status; null
-  // otherwise. Mirrors Saga.reason.
+  /**
+   * Why the worker gave up on this row, set when it reaches the terminal 'dead' status; null
+   * otherwise. Mirrors Saga.reason.
+   */
   reason: string | null;
 }
 
@@ -765,20 +870,22 @@ export interface Sale {
   buyerId: string;
   sku: string;
 
-  // Who received the purchased SKU's entitlement. For an ordinary purchase this is the buyer; for
-  // a gift it's the recipient (`giftTo`) the buyer bought it for. A refund revokes ownership from
-  // this user, so a refunded gift takes the item back from the recipient, not the buyer. Optional
-  // for backward compatibility with sales recorded before gifting existed; a missing value means
-  // the buyer received it.
+  /**
+   * Who received the purchased SKU's entitlement. For an ordinary purchase this is the buyer; for
+   * a gift it's the recipient (`giftTo`) the buyer bought it for. A refund revokes ownership from
+   * this user, so a refunded gift takes the item back from the recipient, not the buyer. Optional
+   * for backward compatibility with sales recorded before gifting existed; a missing value means
+   * the buyer received it.
+   */
   recipientId?: string;
 
-  // What the buyer paid.
+  /** What the buyer paid. */
   price: Amount;
 
-  // The platform's cut of the price.
+  /** The platform's cut of the price. */
   fee: Amount;
 
-  // The exact debit/credit lines that posted for this sale.
+  /** The exact debit/credit lines that posted for this sale. */
   legs: ReadonlyArray<Leg>;
 
   txnId: string;
@@ -803,39 +910,45 @@ export type SagaState = (typeof SAGA_STATES)[number];
 
 /** The stored state of one in-flight payout. */
 export interface Saga {
-  // Unique saga id, of the form pay_<uuid>.
+  /** Unique saga id, of the form pay_<uuid>. */
   id: string;
 
   userId: string;
 
-  // The seller's earned credits set aside for this payout (moved into the
-  // payout-reserve account while it's in flight).
+  /**
+   * The seller's earned credits set aside for this payout (moved into the
+   * payout-reserve account while it's in flight).
+   */
   reserve: Amount;
 
-  // Names the exact CREDIT-to-USD rate this payout is locked to.
+  /** Names the exact CREDIT-to-USD rate this payout is locked to. */
   rateId: string;
 
   state: SagaState;
 
-  // The payment provider's reference once submitted, null before then.
+  /** The payment provider's reference once submitted, null before then. */
   providerRef: string | null;
 
-  // Why the worker gave up on this payout, set when it reaches FAILED; null otherwise. Stored on
-  // the saga so a reader takes it straight off the record instead of re-deriving it from posting
-  // meta.
+  /**
+   * Why the worker gave up on this payout, set when it reaches FAILED; null otherwise. Stored on
+   * the saga so a reader takes it straight off the record instead of re-deriving it from posting
+   * meta.
+   */
   reason: string | null;
 
-  // How many times the worker has tried to advance this saga.
+  /** How many times the worker has tried to advance this saga. */
   attempts: number;
 
-  // When the worker should next act on it, in epoch milliseconds.
+  /** When the worker should next act on it, in epoch milliseconds. */
   dueAt: number;
 
   updatedAt: number;
 
-  // The gross USD disbursed, set when settlePayout marks this payout SETTLED; null otherwise. Stored
-  // on the saga so a reader takes it straight off the record instead of re-deriving it from posting
-  // meta.
+  /**
+   * The gross USD disbursed, set when settlePayout marks this payout SETTLED; null otherwise. Stored
+   * on the saga so a reader takes it straight off the record instead of re-deriving it from posting
+   * meta.
+   */
   payoutUsd: Amount | null;
 }
 
@@ -845,32 +958,34 @@ export type SubscriptionState = (typeof SUBSCRIPTION_STATES)[number];
 
 /** The stored state of one recurring subscription. */
 export interface Subscription {
-  // Unique subscription id, of the form sub_<uuid>.
+  /** Unique subscription id, of the form sub_<uuid>. */
   id: string;
 
   userId: string;
   sellerId: string;
   sku: string;
 
-  // What each renewal charges.
+  /** What each renewal charges. */
   price: Amount;
 
-  // How long one billing period lasts, in milliseconds.
+  /** How long one billing period lasts, in milliseconds. */
   periodMs: number;
 
   state: SubscriptionState;
 
-  // Which billing period number it's on (increments each renewal).
+  /** Which billing period number it's on (increments each renewal). */
   period: number;
 
-  // Consecutive retryable (temporary) failures to bill this subscription. Starts at 0 at open.
-  // The sweep bumps it on a retryable failure and resets to 0 on a successful renewal; once it
-  // reaches the configured cap (config.maxSubscriptionAttempts) the sweep stops retrying and
-  // lapses the subscription instead of re-billing it forever. Adapters must round-trip this field
-  // through save/load (open/markBilled/markLapsed and every load path).
+  /**
+   * Consecutive retryable (temporary) failures to bill this subscription. Starts at 0 at open.
+   * The sweep bumps it on a retryable failure and resets to 0 on a successful renewal; once it
+   * reaches the configured cap (config.maxSubscriptionAttempts) the sweep stops retrying and
+   * lapses the subscription instead of re-billing it forever. Adapters must round-trip this field
+   * through save/load (open/markBilled/markLapsed and every load path).
+   */
   attempts: number;
 
-  // When the next renewal is due, in epoch milliseconds.
+  /** When the next renewal is due, in epoch milliseconds. */
   nextDueAt: number;
 
   updatedAt: number;
@@ -882,21 +997,27 @@ export interface Subscription {
  * `expiresAt` has passed, then sets `reversed` so it's never reversed twice.
  */
 export interface PromoGrant {
-  // Unique grant id. Reuses the transaction prefix (txn_<uuid>) of the grant's own posting,
-  // so a grant and the entry that created it share one id and `open` is idempotent on it.
+  /**
+   * Unique grant id. Reuses the transaction prefix (txn_<uuid>) of the grant's own posting,
+   * so a grant and the entry that created it share one id and `open` is idempotent on it.
+   */
   id: string;
 
   userId: string;
 
-  // The credits granted, in CREDIT. The full grant; the sweep reverses only as much of this as
-  // the user hasn't already spent (re-read per grant against the live promo balance).
+  /**
+   * The credits granted, in CREDIT. The full grant; the sweep reverses only as much of this as
+   * the user hasn't already spent (re-read per grant against the live promo balance).
+   */
   amount: Amount;
 
-  // When the grant expires, in epoch milliseconds. The sweep claims it once this is reached.
+  /** When the grant expires, in epoch milliseconds. The sweep claims it once this is reached. */
   expiresAt: number;
 
-  // Whether the worker has already reversed this grant. Starts false at `open`; set true by
-  // `markReversed` after the unspent remainder is reversed, so `claimDue` skips it thereafter.
+  /**
+   * Whether the worker has already reversed this grant. Starts false at `open`; set true by
+   * `markReversed` after the unspent remainder is reversed, so `claimDue` skips it thereafter.
+   */
   reversed: boolean;
 }
 
@@ -904,13 +1025,13 @@ export interface PromoGrant {
 export interface Velocity {
   subject: string;
 
-  // When the current window began, in epoch milliseconds.
+  /** When the current window began, in epoch milliseconds. */
   windowStart: number;
 
-  // Total spent so far in this window.
+  /** Total spent so far in this window. */
   spent: Amount;
 
-  // How many attempts happened in this window.
+  /** How many attempts happened in this window. */
   attempts: number;
 }
 
@@ -919,10 +1040,10 @@ export interface Attempt {
   idempotencyKey: string;
   amount: Amount;
 
-  // When the attempt happened, in epoch milliseconds.
+  /** When the attempt happened, in epoch milliseconds. */
   at: number;
 
-  // Whether the attempt went through or was turned down.
+  /** Whether the attempt went through or was turned down. */
   outcome: 'committed' | 'rejected';
 }
 
@@ -936,19 +1057,19 @@ export interface Attempt {
  * hash chain and signed-checkpoint construction.
  */
 export interface Checkpoint {
-  // Unique checkpoint id, of the form chk_<uuid>.
+  /** Unique checkpoint id, of the form chk_<uuid>. */
   id: string;
 
-  // The Merkle root over all account heads, as lowercase hex.
+  /** The Merkle root over all account heads, as lowercase hex. */
   root: string;
 
-  // The signature over `root`, as lowercase hex.
+  /** The signature over `root`, as lowercase hex. */
   signature: string;
 
-  // How many account heads the root covers.
+  /** How many account heads the root covers. */
   count: number;
 
-  // When the snapshot was taken, in epoch milliseconds.
+  /** When the snapshot was taken, in epoch milliseconds. */
   at: number;
 }
 
@@ -965,10 +1086,10 @@ export interface Range {
 export interface Statement {
   account: AccountRef;
 
-  // The entries on this page: which transaction, the amount applied, and when it posted.
+  /** The entries on this page: which transaction, the amount applied, and when it posted. */
   entries: ReadonlyArray<{ txnId: string; amount: Amount; postedAt: number }>;
 
-  // The token to fetch the next page, or null when this is the last page.
+  /** The token to fetch the next page, or null when this is the last page. */
   cursor: string | null;
 }
 
@@ -980,12 +1101,12 @@ export interface Lot {
   txnId: string;
   amount: Amount;
 
-  // Where the funds came from.
+  /** Where the funds came from. */
   source: string;
 
-  // When the lot was topped up, in epoch milliseconds.
+  /** When the lot was topped up, in epoch milliseconds. */
   toppedUpAt: number;
 
-  // When the lot matures, in epoch milliseconds.
+  /** When the lot matures, in epoch milliseconds. */
   maturesAt: number;
 }

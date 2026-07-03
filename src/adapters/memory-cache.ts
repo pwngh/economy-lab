@@ -27,17 +27,18 @@ interface Entry {
  * Values are opaque strings, and this never parses them.
  *
  * @example
- *   let cache = memoryCache(wallClock());
+ *   const cache = memoryCache();
  *   await cache.set('bal:usr_42:spendable', 'CREDIT:12.34', 60_000);
  *   await cache.get('bal:usr_42:spendable'); // 'CREDIT:12.34' | null
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for the cache and store port contracts.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
+ *   messaging} for the cache and store port contracts.
  */
 export function memoryCache(clock: Clock = { now: () => Date.now() }): Cache {
-  let store = new Map<string, Entry>();
+  const store = new Map<string, Entry>();
   return {
     get: async (key) => {
-      let entry = store.get(key);
+      const entry = store.get(key);
       if (entry === undefined) {
         return null;
       }

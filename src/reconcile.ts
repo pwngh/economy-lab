@@ -126,16 +126,17 @@ export interface ReconcileInputs {
  * accounted for exactly once and the reconciler must not drop one, so `report` self-checks
  * that the counts reconstruct both sides.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how reconciliation runs on a schedule.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background
+ *   worker} for how reconciliation runs on a schedule.
  */
 export function reconcile(
   window: Range,
   inputs: ReconcileInputs,
 ): ReconcileReport {
-  let processor = withinWindow(inputs.processor, window, (r) => r.settledAt);
-  let ledger = withinWindow(inputs.ledger, window, (r) => r.postedAt);
+  const processor = withinWindow(inputs.processor, window, (r) => r.settledAt);
+  const ledger = withinWindow(inputs.ledger, window, (r) => r.postedAt);
 
-  let match = matchSides(processor, ledger);
+  const match = matchSides(processor, ledger);
 
   return report(window, processor, ledger, match);
 }
@@ -146,9 +147,9 @@ function matchSides(
   processor: ReadonlyArray<ProcessorRecord>,
   ledger: ReadonlyArray<LedgerRecord>,
 ): Match {
-  let ledgerByKey = indexByKey(ledger);
-  let discrepancies: Discrepancy[] = [];
-  let matched = matchProcessorSide(processor, ledgerByKey, discrepancies);
+  const ledgerByKey = indexByKey(ledger);
+  const discrepancies: Discrepancy[] = [];
+  const matched = matchProcessorSide(processor, ledgerByKey, discrepancies);
   collectLedgerOrphans(ledgerByKey, discrepancies);
   return { matched, discrepancies };
 }
@@ -164,9 +165,9 @@ function matchProcessorSide(
   discrepancies: Discrepancy[],
 ): number {
   let matched = 0;
-  for (let record of processor) {
-    let key = keyOf(record.kind, record.matchKey);
-    let counterpart = ledgerByKey.get(key)?.shift();
+  for (const record of processor) {
+    const key = keyOf(record.kind, record.matchKey);
+    const counterpart = ledgerByKey.get(key)?.shift();
     if (counterpart === undefined) {
       discrepancies.push(processorOrphan(record));
       continue;
@@ -189,8 +190,8 @@ function collectLedgerOrphans(
   remaining: Map<string, LedgerRecord[]>,
   discrepancies: Discrepancy[],
 ): void {
-  for (let bucket of remaining.values()) {
-    for (let record of bucket) {
+  for (const bucket of remaining.values()) {
+    for (const record of bucket) {
       discrepancies.push(ledgerOrphan(record));
     }
   }
@@ -202,10 +203,10 @@ function report(
   ledger: ReadonlyArray<LedgerRecord>,
   match: Match,
 ): ReconcileReport {
-  let sorted = [...match.discrepancies].sort(byDiscrepancy);
-  let processorOrphans = countKind(sorted, 'processor_orphan');
-  let ledgerOrphans = countKind(sorted, 'ledger_orphan');
-  let amountDrifts = countKind(sorted, 'amount_drift');
+  const sorted = [...match.discrepancies].sort(byDiscrepancy);
+  const processorOrphans = countKind(sorted, 'processor_orphan');
+  const ledgerOrphans = countKind(sorted, 'ledger_orphan');
+  const amountDrifts = countKind(sorted, 'amount_drift');
   assertAccountedFor({
     matched: match.matched,
     amountDrifts,
@@ -243,9 +244,10 @@ function assertAccountedFor(counts: {
   processorCount: number;
   ledgerCount: number;
 }): void {
-  let processorSeen =
+  const processorSeen =
     counts.matched + counts.amountDrifts + counts.processorOrphans;
-  let ledgerSeen = counts.matched + counts.amountDrifts + counts.ledgerOrphans;
+  const ledgerSeen =
+    counts.matched + counts.amountDrifts + counts.ledgerOrphans;
   if (
     processorSeen !== counts.processorCount ||
     ledgerSeen !== counts.ledgerCount
@@ -270,7 +272,7 @@ function withinWindow<T>(
   at: (record: T) => number,
 ): ReadonlyArray<T> {
   return records.filter((record) => {
-    let when = at(record);
+    const when = at(record);
     return when >= window.from && when < window.to;
   });
 }
@@ -279,15 +281,14 @@ function withinWindow<T>(
 // matchKey is meant to be a unique join reference, so a repeated key should not occur and is
 // the kind of mismatch the reconciler catches. A repeated key keeps all its records, so
 // matchProcessorSide pairs each with a distinct processor record and any surplus still
-// surfaces as a ledger orphan. No record is dropped. The bug this replaced kept only
-// the first record per key and lost the rest.
+// surfaces as a ledger orphan. No record is dropped.
 function indexByKey(
   ledger: ReadonlyArray<LedgerRecord>,
 ): Map<string, LedgerRecord[]> {
-  let index = new Map<string, LedgerRecord[]>();
-  for (let record of ledger) {
-    let key = keyOf(record.kind, record.matchKey);
-    let bucket = index.get(key);
+  const index = new Map<string, LedgerRecord[]>();
+  for (const record of ledger) {
+    const key = keyOf(record.kind, record.matchKey);
+    const bucket = index.get(key);
     if (bucket === undefined) {
       index.set(key, [record]);
     } else {
@@ -352,7 +353,7 @@ function countKind(
   kind: DiscrepancyKind,
 ): number {
   let n = 0;
-  for (let discrepancy of discrepancies) {
+  for (const discrepancy of discrepancies) {
     if (discrepancy.kind === kind) {
       n += 1;
     }

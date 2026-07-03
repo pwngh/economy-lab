@@ -30,9 +30,10 @@ import type {
  * - `charged`: the renewal was funded and posted, and the due date advanced.
  * - `lapsed`: the buyer could not cover the price, so the row was marked LAPSED and nothing was charged.
  * - `deadLettered`: billing threw a non-retryable error, so the row was given up on and the reason recorded.
- * - `retrying`: billing threw a temporary error, so the row was left for the next sweep and the code recorded.
+ * - `retrying`: billing threw a temporary error, so the row was left for the next sweep and the
+ * code recorded.
  *
- * worker/payouts.ts returns the same shape from its own sweep.
+ * worker/payouts.ts reports its own sweep with the same `deadLettered` and `retrying` buckets.
  */
 export type SweepSummary = {
   charged: ReadonlyArray<string>;
@@ -57,22 +58,23 @@ type SweepTally = {
  *
  * `now` is epoch ms; `limit` caps how many due subscriptions this run claims.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how this sweep claims, bills, and advances due subscriptions.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background
+ *   worker} for how this sweep claims, bills, and advances due subscriptions.
  */
 export async function sweepDueSubscriptions(
   store: Store,
   ctx: WorkerCtx,
   input: { now: number; limit: number },
 ): Promise<SweepSummary> {
-  let due = await store.subscriptions.claimDue(input.now, input.limit);
-  let tally: SweepTally = {
+  const due = await store.subscriptions.claimDue(input.now, input.limit);
+  const tally: SweepTally = {
     charged: [],
     lapsed: [],
     deadLettered: [],
     retrying: [],
   };
 
-  for (let sub of due) {
+  for (const sub of due) {
     await billOne(store, ctx, sub, tally);
   }
 
@@ -82,7 +84,8 @@ export async function sweepDueSubscriptions(
 // Bills one subscription and catches any error so a single failure cannot break the batch. A
 // retryable error bumps `attempts` and retries next sweep until the cap, where the row LAPSES rather
 // than re-billing forever; any other error dead-letters the row right away.
-// See https://economy-lab-docs.pages.dev/economy/concepts/lifecycles/ for the subscription states and the retry-cap-to-lapse rule.
+// See https://economy-lab-docs.pages.dev/economy/concepts/lifecycles/ for the subscription states
+// and the retry-cap-to-lapse rule.
 //
 // The cap test is `next >= cap`, where `next` is `attempts + 1`. With the default cap of 10, the
 // 10th consecutive failure lapses the row.
@@ -95,7 +98,7 @@ async function billOne(
   try {
     await renew(store, ctx, sub, tally);
   } catch (error) {
-    let normalized = normalizeError(error);
+    const normalized = normalizeError(error);
     if (normalized.retryable) {
       await recordRetry({ store, ctx, sub, code: normalized.code, tally });
       return;
@@ -116,8 +119,8 @@ async function recordRetry(args: {
   code: string;
   tally: SweepTally;
 }): Promise<void> {
-  let { store, ctx, sub, code, tally } = args;
-  let next = sub.attempts + 1;
+  const { store, ctx, sub, code, tally } = args;
+  const next = sub.attempts + 1;
   if (next >= ctx.config.maxSubscriptionAttempts) {
     await lapse(store, ctx, sub, tally);
     return;
@@ -136,7 +139,7 @@ async function deadLetter(args: {
   reason: string;
   tally: SweepTally;
 }): Promise<void> {
-  let { store, ctx, sub, reason, tally } = args;
+  const { store, ctx, sub, reason, tally } = args;
   // Revoke the perk and emit the lapse in the same transaction as the flip to LAPSED, so a
   // given-up subscription doesn't leave the buyer holding an unbilled perk. Recorded under
   // `deadLettered`, not `lapsed`.
@@ -198,7 +201,7 @@ async function renew(
     // Lock the buyer's account before reading its balance, so concurrent sweeps take turns instead
     // of both reading the same pre-charge balance and both charging.
     await unit.ledger.lock(spendable(sub.userId));
-    let have = await unit.ledger.balance(spendable(sub.userId));
+    const have = await unit.ledger.balance(spendable(sub.userId));
     if (compare(have, sub.price) < 0) {
       lapsed = true;
       return;
@@ -209,8 +212,8 @@ async function renew(
     // this sweep. A lost claim means another sweep already billed it, so stop and post nothing. The
     // key uses period + 1 because that is the period this renewal bills into, since the period
     // counter bumps as part of billing.
-    let key = 'sub:' + sub.id + ':p' + (sub.period + 1);
-    let claim = await unit.idempotency.claim(key);
+    const key = 'sub:' + sub.id + ':p' + (sub.period + 1);
+    const claim = await unit.idempotency.claim(key);
     if (!claim.claimed) {
       return;
     }
@@ -221,8 +224,8 @@ async function renew(
     // we lost the race, returning without throwing commits the transaction, and that commit must
     // contain no charge. The period claim above already blocks a double charge; this is a second,
     // independent guard.
-    let newDueAt = sub.nextDueAt + sub.periodMs;
-    let billed = await unit.subscriptions.markBilled(
+    const newDueAt = sub.nextDueAt + sub.periodMs;
+    const billed = await unit.subscriptions.markBilled(
       sub.id,
       newDueAt,
       sub.nextDueAt,
@@ -231,7 +234,7 @@ async function renew(
       return;
     }
 
-    let transaction = await postRenewal(unit, ctx, sub);
+    const transaction = await postRenewal(unit, ctx, sub);
     await unit.idempotency.record(key, transaction);
 
     // Re-grant the perk through the new period end (clears any earlier revoke) and emit the
@@ -308,13 +311,11 @@ async function postRenewal(
   ctx: WorkerCtx,
   sub: Subscription,
 ): Promise<Transaction> {
-  // `feeForPrice` (pricing.ts) is the single source of truth for the fee: rounds the exact
-  // basis-point fee up to a whole credit (credits are the indivisible billing unit), capped at the
-  // charge. Spend, the first month (operations/subscribe.ts), and every renewal call it, so the fee
-  // is identical.
-  let feeMinor = feeForPrice(sub.price.minor, ctx.config.platformFeeBps);
-  let netMinor = sub.price.minor - feeMinor;
-  let legs: Leg[] = [
+  // `feeForPrice` (pricing.ts) owns the fee rounding rule. Spend, the first month
+  // (operations/subscribe.ts), and every renewal call it, so the fee is identical.
+  const feeMinor = feeForPrice(sub.price.minor, ctx.config.platformFeeBps);
+  const netMinor = sub.price.minor - feeMinor;
+  const legs: Leg[] = [
     debit(spendable(sub.userId), sub.price),
     credit(earned(sub.sellerId), toAmount('CREDIT', netMinor)),
     credit(SYSTEM.REVENUE, toAmount('CREDIT', feeMinor)),

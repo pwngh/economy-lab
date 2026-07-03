@@ -21,7 +21,8 @@ import type { Outcome } from '#src/contract.ts';
  * only fires if a balance went negative anyway. Keeping ordinary "no" answers off the
  * thrown-error path keeps them out of error dashboards and alerts.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/outcomes-and-reason-codes/ Outcomes & reason codes} for the full taxonomy.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/outcomes-and-reason-codes/
+ *   Outcomes & reason codes} for the full taxonomy.
  */
 export type RejectionCode =
   // The account doesn't have enough money to cover the request.
@@ -47,12 +48,11 @@ export type RejectionCode =
   // paid out (the minimum is set in config).
   | 'BELOW_MINIMUM'
   // A payout was requested before enough time had passed since the user's previous request
-  // (minimum gap is config payoutMinIntervalMs). Returned as a declined Outcome, not thrown;
-  // the caller shows the user when they may retry.
+  // (minimum gap is config payoutMinIntervalMs). The decline carries when the user may retry.
   | 'PAYOUT_TOO_SOON'
   // A scheduled maintenance window is in effect, so an end user's discretionary write is declined.
   // Settlement (actor 'system') and operator fixes are never paused; the decline carries `resumesAt`
-  // (the window's end) so the caller can tell the user when to retry. Returned, never thrown.
+  // (the window's end) so the caller can tell the user when to retry.
   | 'ECONOMY_PAUSED';
 
 /**
@@ -60,6 +60,9 @@ export type RejectionCode =
  * {@link RejectionCode}. Each value is a stable, namespaced string (e.g. `LEDGER.OVERDRAFT`)
  * so callers and dashboards match on a fixed code, not free-text. Always reference these
  * constants; never write the bare strings inline.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/outcomes-and-reason-codes/
+ *   Outcomes & reason codes} for how each code maps to an HTTP status and retry decision.
  */
 export const ERROR_CODES = {
   // The request was structurally wrong (missing or invalid fields).
@@ -91,10 +94,9 @@ export const ERROR_CODES = {
   // An external service we depend on (such as a payment processor) failed.
   PROVIDER_FAILURE: 'PROVIDER.FAILURE',
 
-  // A balance that's never supposed to go negative did. Last-resort safety check deep in the
-  // posting code, not the user-facing "not enough funds" answer: affordability is checked up
-  // front and returned as INSUFFICIENT_FUNDS, so reaching this fault means a bug let a balance
-  // slip below zero.
+  // A balance that's never supposed to go negative did. Last-resort backstop deep in the posting
+  // code; the type doc above explains how the up-front INSUFFICIENT_FUNDS check keeps ordinary
+  // shortfalls away from it, so reaching this fault means a bug let a balance slip below zero.
   OVERDRAFT: 'LEDGER.OVERDRAFT',
 
   // A single posting tried to combine two different currencies, which isn't allowed.
@@ -103,12 +105,6 @@ export const ERROR_CODES = {
   // Configuration failed to load or validate. Thrown at startup so a bad config stops
   // the service immediately rather than failing later.
   CONFIG_INVALID: 'CONFIG.INVALID',
-
-  // A payout was requested before the minimum interval since the user's last request elapsed.
-  // Namespaced, status-mappable code mirroring the PAYOUT_TOO_SOON rejection; the request path
-  // returns the rejection (an expected "no"), so this code is for status mapping/observability,
-  // not for throwing on the affordability path.
-  PAYOUT_TOO_SOON: 'PAYOUT.TOO_SOON',
 
   // The hash chain failed to verify: a stored hash no longer matches the one recomputed from its
   // posting, so the ledger has been tampered with. Thrown before a checkpoint is signed, so no

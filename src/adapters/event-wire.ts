@@ -20,7 +20,8 @@ import type { EconomyEvent } from '#src/ports.ts';
  * The fixed field order makes the bytes deterministic, so a receiver can dedupe by content. Money in
  * `data` is already a string by this point, because `JSON.stringify` throws on a bigint.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for how dispatchers carry events across transports.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
+ *   messaging} for how dispatchers carry events across transports.
  */
 export function encodeEvent(event: EconomyEvent): string {
   return JSON.stringify({

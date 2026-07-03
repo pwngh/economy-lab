@@ -29,14 +29,15 @@ import type { Unit } from '#src/ports.ts';
  * An outer layer enforces that only `system` and `operator` callers may grant.
  *
  * @example
- *   let outcome = await grantEntitlement(
+ *   const outcome = await grantEntitlement(
  *     { kind: 'grantEntitlement', idempotencyKey: 'idem_0',
  *       actor: { kind: 'system', service: 'fulfillment' }, userId: 'usr_owner', sku: 'wrld_pass' },
  *     unit, ctx,
  *   );
  *   // outcome.status === 'committed'; unit.entitlements.owns('usr_owner', 'wrld_pass') === true.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/grant-entitlement/ Grant entitlement} for ownership records and grant attributes.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/grant-entitlement/
+ *   Grant entitlement} for ownership records and grant attributes.
  */
 export async function grantEntitlement(
   operation: Operation,
@@ -61,6 +62,9 @@ export async function grantEntitlement(
  * Removes a user's ownership of an item or feature, named by `sku`. If the user does not own
  * it, this returns a `NOT_ENTITLED` rejection rather than throwing. Otherwise it drops the
  * ownership record. No money moves either way, because ownership has no balance.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/revoke-entitlement/
+ *   Revoke entitlement} for the revoke flow and the `NOT_ENTITLED` rejection.
  */
 export async function revokeEntitlement(
   operation: Operation,
@@ -71,7 +75,7 @@ export async function revokeEntitlement(
 
   assertIdentified(operation.userId, operation.sku);
 
-  let owns = await unit.entitlements.owns(operation.userId, operation.sku);
+  const owns = await unit.entitlements.owns(operation.userId, operation.sku);
   if (!owns) {
     return rejected('NOT_ENTITLED', {
       userId: operation.userId,

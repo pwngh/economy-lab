@@ -33,11 +33,10 @@ import {
 } from '#src/accounts.ts';
 import { REGISTRY } from '#src/operations/registry.ts';
 import { attemptMinor, riskSubject, VELOCITY_CURRENCY } from '#src/trust.ts';
+import { economyPaused } from '#src/config.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
 import type { Amount, Currency } from '#src/money.ts';
-import { economyPaused } from '#src/config.ts';
-
 import type {
   Ctx,
   Economy,
@@ -57,8 +56,10 @@ import type {
   Unit,
 } from '#src/ports.ts';
 
-// Re-exports the public `Economy` type, which is declared in contract.ts, so callers and test
-// support can import it from this factory.
+/**
+ * Re-exports the public `Economy` type, which is declared in contract.ts, so callers and test
+ * support can import it from this factory.
+ */
 export type { Economy } from '#src/contract.ts';
 
 type Handler = (operation: Operation, unit: Unit, ctx: Ctx) => Promise<Outcome>;
@@ -75,9 +76,9 @@ type Registry = Partial<Record<Operation['kind'], Handler>>;
  * construction, the submit/read surface, and the request path.
  */
 export function createEconomy(capabilities: Capabilities): Economy {
-  let store = capabilities.store;
-  let ctx = contextOf(capabilities);
-  let registry = REGISTRY;
+  const store = capabilities.store;
+  const ctx = contextOf(capabilities);
+  const registry = REGISTRY;
 
   return {
     submit: (operation, options) =>
@@ -137,8 +138,8 @@ function contextOf(capabilities: Capabilities): Ctx {
 // source. `resumesAt` is the window's end while paused, otherwise null. This mirrors the
 // ECONOMY_PAUSED gate in `submit`.
 function economyStatus(ctx: Ctx): EconomyStatus {
-  let { pauseStartMs, pauseEndMs } = ctx.config;
-  let paused = economyPaused(ctx.clock.now(), ctx.config);
+  const { pauseStartMs, pauseEndMs } = ctx.config;
+  const paused = economyPaused(ctx.clock.now(), ctx.config);
   return {
     paused,
     pauseStart: pauseStartMs,
@@ -149,8 +150,7 @@ function economyStatus(ctx: Ctx): EconomyStatus {
 
 // --- Read-through balance cache ----------------------------------------------------
 
-// Builds the cache key for one account's balance. The `bal:` prefix avoids collisions in a shared
-// cache.
+// The `bal:` prefix avoids collisions in a shared cache.
 function cacheKey(account: AccountRef): string {
   return `bal:${account}`;
 }
@@ -189,12 +189,12 @@ async function cachedBalance(
   account: AccountRef,
   options?: Options,
 ): Promise<Amount> {
-  let cache = ctx.cache;
+  const cache = ctx.cache;
   if (!cache) {
     return ledger.balance(account, options);
   }
-  let key = cacheKey(account);
-  let hit = await bestEffortCache<string | null>(
+  const key = cacheKey(account);
+  const hit = await bestEffortCache<string | null>(
     ctx,
     'get',
     () => cache.get(key),
@@ -203,7 +203,7 @@ async function cachedBalance(
   if (hit !== null) {
     return decodeAmountWire(hit);
   }
-  let fresh = await ledger.balance(account, options);
+  const fresh = await ledger.balance(account, options);
   await bestEffortCache<void>(
     ctx,
     'set',
@@ -220,9 +220,8 @@ async function cachedBalance(
 //   2. then do the money work in one all-or-nothing transaction (see `runOnion`).
 // The risk-velocity attempt is recorded inside that transaction (`screenRisk`), so a committed
 // operation pays one durable commit, not two. If the transaction rolls back, the attempt is
-// re-recorded below on the store's own connection, because a denied attempt must still count or
-// the limit could be probed for free. See `screenRisk` for why recording at check time, not after
-// the commit, closes the velocity-limit TOCTOU.
+// re-recorded below on the store's own connection. See `screenRisk` for why recording at check
+// time, not after the commit, closes the velocity-limit TOCTOU.
 async function submit(
   pipeline: Pipeline,
   operation: Operation,
@@ -236,7 +235,7 @@ async function submit(
   // no velocity attempt and touches no ledger. Reads never reach this path.
   // See https://economy-lab-docs.pages.dev/economy/concepts/actors-and-authorization/ for why the
   // pause tells actors apart by kind.
-  let ctx = pipeline.ctx;
+  const ctx = pipeline.ctx;
   if (
     operation.actor.kind === 'user' &&
     economyPaused(ctx.clock.now(), ctx.config)
@@ -257,7 +256,7 @@ async function submit(
   // fault, the original error wins and the re-record is only best-effort, since the store is
   // already suspect.
   let staged: { subject: string; attempt: Attempt } | null = null;
-  let outcome = await pipeline.store
+  const outcome = await pipeline.store
     .transaction(
       (unit) =>
         runRollingBackRejections({
@@ -308,7 +307,7 @@ class RejectedRollback extends Error {
 // Runs the onion, then forces a rollback on a `rejected` outcome by throwing the sentinel. A
 // committed or duplicate outcome returns normally, so the transaction commits.
 async function runRollingBackRejections(step: Step): Promise<Outcome> {
-  let outcome = await runOnion(step);
+  const outcome = await runOnion(step);
   if (outcome.status === 'rejected') {
     throw new RejectedRollback(outcome);
   }
@@ -317,7 +316,7 @@ async function runRollingBackRejections(step: Step): Promise<Outcome> {
 
 // The largest amount, in minor units, any single operation may move. The limit is high enough for
 // legitimate operations but blocks overflow-scale values from a typo or a hostile caller.
-let MAX_OP_AMOUNT_MINOR = 1_000_000_000_000_000n;
+const MAX_OP_AMOUNT_MINOR = 1_000_000_000_000_000n;
 
 // Rejects a malformed operation before any work begins. The check lives here, caught once, rather
 // than in each handler. It enforces three things for every kind. First, the operation needs a
@@ -340,7 +339,7 @@ function validateOperation(operation: Operation, shards: number): void {
     );
   }
 
-  for (let account of accountsOf(operation, shards)) {
+  for (const account of accountsOf(operation, shards)) {
     if (isWalletAccount(account) && ownerOf(account).trim() === '') {
       throw fault(
         ERROR_CODES.MALFORMED_OPERATION,
@@ -375,20 +374,22 @@ function operationAmount(operation: Operation): Amount | null {
 // may debit or credit, so it only has to be non-zero. Every other movement must be strictly
 // positive.
 function assertAmountInRange(operation: Operation): void {
-  let amount = operationAmount(operation);
+  const amount = operationAmount(operation);
   if (amount === null) {
     return;
   }
-  let signOk =
+  const signOk =
     operation.kind === 'adjust' ? amount.minor !== 0n : amount.minor > 0n;
   if (!signOk) {
     throw fault(
       ERROR_CODES.INVALID_AMOUNT,
-      'operation amount must be a positive value',
+      operation.kind === 'adjust'
+        ? 'operation amount must be non-zero'
+        : 'operation amount must be a positive value',
       { detail: { kind: operation.kind, amount: encodeAmount(amount) } },
     );
   }
-  let magnitude = amount.minor < 0n ? -amount.minor : amount.minor;
+  const magnitude = amount.minor < 0n ? -amount.minor : amount.minor;
   if (magnitude > MAX_OP_AMOUNT_MINOR) {
     throw fault(
       ERROR_CODES.INVALID_AMOUNT,
@@ -408,12 +409,12 @@ async function invalidateCache(
   operation: Operation,
   outcome: Outcome,
 ): Promise<void> {
-  let cache = pipeline.ctx.cache;
+  const cache = pipeline.ctx.cache;
   if (!cache || outcome.status !== 'committed') {
     return;
   }
-  let shards = pipeline.ctx.config.platformShards;
-  for (let account of new Set(accountsOf(operation, shards))) {
+  const shards = pipeline.ctx.config.platformShards;
+  for (const account of new Set(accountsOf(operation, shards))) {
     await bestEffortCache<void>(
       pipeline.ctx,
       'invalidate',
@@ -428,18 +429,17 @@ async function invalidateCache(
 // rejected or faulted request rolls back and leaves the key unused for a retry.
 // See https://economy-lab-docs.pages.dev/economy/concepts/idempotency/ for the claim/record model.
 async function runOnion(step: Step): Promise<Outcome> {
-  let { unit, operation, options } = step;
-  let claim = await unit.idempotency.claim(operation.idempotencyKey, options);
+  const { unit, operation, options } = step;
+  const claim = await unit.idempotency.claim(operation.idempotencyKey, options);
   if (!claim.claimed) {
     return { status: 'duplicate', transaction: claim.transaction };
   }
 
-  // Risk runs before funds. screenRisk records the velocity attempt at check time, so a burst of
-  // unaffordable spends still counts toward the limit, and a velocity-exceeded request is denied
-  // whether or not it could pay. Screening funds first would let an attacker hammer with no money and
-  // accrue no velocity, the opposite of the fraud signal the README's "even for denied attempts"
-  // describes. Both screens run before any money moves, so the order is free to choose.
-  let risk = await screenRisk(step);
+  // Risk runs before funds: a burst of unaffordable spends still counts toward the limit
+  // (screenRisk records the attempt at check time), and a velocity-exceeded request is denied
+  // whether or not it could pay. Both screens run before any money moves, so the order is free to
+  // choose.
+  const risk = await screenRisk(step);
   if (risk) {
     return risk;
   }
@@ -448,13 +448,13 @@ async function runOnion(step: Step): Promise<Outcome> {
   // screen and handler share one read each. Risk still records before the lock, so denied attempts count.
   await lockAccounts(step);
   unit.balances = new Map();
-  let funds = await screenFunds(step);
+  const funds = await screenFunds(step);
   if (funds) {
     return funds;
   }
 
-  let handler = resolveHandler(step.pipeline.registry, operation);
-  let outcome = await handler(operation, unit, step.pipeline.ctx);
+  const handler = resolveHandler(step.pipeline.registry, operation);
+  const outcome = await handler(operation, unit, step.pipeline.ctx);
   if (outcome.status === 'committed') {
     await unit.idempotency.record(
       operation.idempotencyKey,
@@ -471,7 +471,7 @@ async function runOnion(step: Step): Promise<Outcome> {
 // See https://economy-lab-docs.pages.dev/economy/concepts/actors-and-authorization/ for the actor
 // kinds, the user-may-only-debit-own-accounts rule, and the privileged-only set.
 function authorize(operation: Operation): void {
-  let actor = operation.actor;
+  const actor = operation.actor;
   if (actor.kind === 'operator') {
     // Human operator running manual corrections; postings are fully audited and record the reason.
     return;
@@ -486,7 +486,7 @@ function authorize(operation: Operation): void {
       'operation requires a system or operator principal',
     );
   }
-  for (let account of debitedUserAccounts(operation)) {
+  for (const account of debitedUserAccounts(operation)) {
     if (!ownedBy(account, actor.userId)) {
       throw unauthorized(operation, 'a user may not debit another account');
     }
@@ -520,9 +520,9 @@ function debitedUserAccounts(operation: Operation): AccountRef[] {
 // clean `rejected` outcome, submit()'s ordinary "no", instead of the engine throwing a constraint
 // violation. The engine is the backstop, and this is the kind error.
 async function screenFunds(step: Step): Promise<Outcome | null> {
-  let { unit, operation, options } = step;
-  for (let need of await fundsNeeded(unit, operation, options)) {
-    let have = await readCachedBalance(unit, need.account, options);
+  const { unit, operation, options } = step;
+  for (const need of await fundsNeeded(unit, operation, options)) {
+    const have = await readCachedBalance(unit, need.account, options);
     if (compare(have, need.amount) < 0) {
       return rejected('INSUFFICIENT_FUNDS', {
         account: need.account,
@@ -546,12 +546,12 @@ async function fundsNeeded(
   if (operation.kind !== 'spend') {
     return [];
   }
-  let promoBalance = await readCachedBalance(
+  const promoBalance = await readCachedBalance(
     unit,
     promo(operation.buyerId),
     options,
   );
-  let plan = planSpend(operation.price, promoBalance);
+  const plan = planSpend(operation.price, promoBalance);
   return [
     { account: spendable(operation.buyerId), amount: plan.spendablePart },
   ];
@@ -564,11 +564,11 @@ async function readCachedBalance(
   account: AccountRef,
   options?: Options,
 ): Promise<Amount> {
-  let cached = unit.balances?.get(account);
+  const cached = unit.balances?.get(account);
   if (cached !== undefined) {
     return cached;
   }
-  let balance = await unit.ledger.balance(account, options);
+  const balance = await unit.ledger.balance(account, options);
   unit.balances?.set(account, balance);
   return balance;
 }
@@ -580,10 +580,11 @@ async function readCachedBalance(
 // velocity-limit TOCTOU: two concurrent same-subject submits cannot both read a stale total and pass.
 // The record goes through the transaction's trust view, so a committed operation carries its
 // attempt in the same durable commit. The attempt is staged with `submit` first, which re-records
-// it if the transaction rolls back — see there for why a denied attempt must still count.
+// it if the transaction rolls back — see there for why a denied attempt must still count. The
+// store applies config.velocityWindowMs when summing a subject's windowed attempts.
 async function screenRisk(step: Step): Promise<Outcome | null> {
-  let { pipeline, unit, operation, options } = step;
-  let subject = riskSubject(operation);
+  const { pipeline, unit, operation, options } = step;
+  const subject = riskSubject(operation);
   if (subject === null) {
     return null;
   }
@@ -592,14 +593,14 @@ async function screenRisk(step: Step): Promise<Outcome | null> {
   // at check time is faithful. The returned velocity already includes this attempt, so compare the
   // raw windowed total against the limit without re-adding this attempt's amount, which would
   // double-count.
-  let attempt: Attempt = {
+  const attempt: Attempt = {
     idempotencyKey: operation.idempotencyKey,
     amount: toAmount(VELOCITY_CURRENCY, attemptMinor(operation)),
     at: pipeline.ctx.clock.now(),
     outcome: 'committed',
   };
   step.staged?.(subject, attempt);
-  let velocity = await unit.trust.record(subject, attempt, options);
+  const velocity = await unit.trust.record(subject, attempt, options);
   if (velocity.spent.minor > pipeline.ctx.config.velocityLimitMinor) {
     return rejected('RISK_DENIED', { subject });
   }
@@ -616,8 +617,8 @@ async function screenRisk(step: Step): Promise<Outcome | null> {
 // test/conformance/concurrency.adversarial.test.ts.
 // See https://economy-lab-docs.pages.dev/economy/concepts/integrity/ for the locking/isolation split.
 async function lockAccounts(step: Step): Promise<void> {
-  let { unit, operation, options } = step;
-  let shards = step.pipeline.ctx.config.platformShards;
+  const { unit, operation, options } = step;
+  const shards = step.pipeline.ctx.config.platformShards;
   await lockAll(unit.ledger, accountsOf(operation, shards), options);
 }
 
@@ -630,13 +631,13 @@ async function emitEvents(
   step: Step,
   outcome: Extract<Outcome, { status: 'committed' }>,
 ): Promise<void> {
-  let { unit, operation, options } = step;
-  let ctx = step.pipeline.ctx;
-  let descriptor = EVENTS[operation.kind];
+  const { unit, operation, options } = step;
+  const ctx = step.pipeline.ctx;
+  const descriptor = EVENTS[operation.kind];
   if (!descriptor) {
     return;
   }
-  let event: EconomyEvent = {
+  const event: EconomyEvent = {
     id: ctx.ids.next('evt'),
     type: descriptor.type,
     version: 1,
@@ -665,11 +666,11 @@ async function emitEvents(
 type SpendPlan = { promoPart: Amount; spendablePart: Amount };
 
 // Plans how a purchase is paid for: promo balance first, then spendable. The promo part is min(price,
-// available promo), and the spendable part is the rest. Both the up-front funds check and the posting
-// call this, so they cannot disagree on how much comes from each account.
+// available promo), and the spendable part is the rest. Deliberate private copy of the rule in
+// operations/spend.ts planSpend — keep the two in sync so the up-front check and the posting agree.
 function planSpend(price: Amount, promoBalance: Amount): SpendPlan {
-  let available = promoBalance.minor > 0n ? promoBalance.minor : 0n;
-  let promoMinor = available < price.minor ? available : price.minor;
+  const available = promoBalance.minor > 0n ? promoBalance.minor : 0n;
+  const promoMinor = available < price.minor ? available : price.minor;
   return {
     promoPart: toAmount(price.currency, promoMinor),
     spendablePart: toAmount(price.currency, price.minor - promoMinor),
@@ -694,9 +695,12 @@ async function proveEconomy(
   ctx: Ctx,
   options?: Options,
 ): Promise<ProveReport> {
-  let fold = await foldLedger(store, options);
-  let required = backingRequired(fold.custodialCredit, ctx.rates.par('CREDIT'));
-  let shortfallMinor =
+  const fold = await foldLedger(store, options);
+  const required = backingRequired(
+    fold.custodialCredit,
+    ctx.rates.par('CREDIT'),
+  );
+  const shortfallMinor =
     fold.trustCashMinor < required ? required - fold.trustCashMinor : 0n;
 
   return {
@@ -737,21 +741,21 @@ async function foldLedger(
   store: Store,
   options?: Options,
 ): Promise<LedgerFold> {
-  let signedByCurrency = new Map<Currency, bigint>();
+  const signedByCurrency = new Map<Currency, bigint>();
   let custodialCredit = 0n;
   let trustCashMinor = 0n;
   let anyUserNegative = false;
   let chainIntact = true;
-  let drift: LedgerDrift[] = [];
+  const drift: LedgerDrift[] = [];
 
-  for await (let [account, head] of store.ledger.heads()) {
-    let bal = await store.ledger.balance(account, options);
-    let cur = currency(account);
+  for await (const [account, head] of store.ledger.heads()) {
+    const bal = await store.ledger.balance(account, options);
+    const cur = currency(account);
     // Recompute from the recorded entries, the source of truth, not the cached running balance. The
     // two are compared just below to flag an account whose cached balance has drifted from its
     // entries.
-    let derivedMinor = await deriveBalanceMinor(store, account, options);
-    let sign = isDebitNormal(account) ? 1n : -1n;
+    const derivedMinor = await deriveBalanceMinor(store, account, options);
+    const sign = isDebitNormal(account) ? 1n : -1n;
     signedByCurrency.set(
       cur,
       (signedByCurrency.get(cur) ?? 0n) + derivedMinor * sign,
@@ -802,8 +806,8 @@ async function deriveBalanceMinor(
   options?: Options,
 ): Promise<bigint> {
   let derivedMinor = 0n;
-  let page = await store.ledger.statement(account, PROVE_RANGE, options);
-  for (let entry of page.entries) {
+  const page = await store.ledger.statement(account, PROVE_RANGE, options);
+  for (const entry of page.entries) {
     derivedMinor += entry.amount.minor;
   }
   return derivedMinor;
@@ -812,7 +816,7 @@ async function deriveBalanceMinor(
 // A range wide enough to cover every entry ever recorded, so a statement over it returns the
 // account's whole history. The lower bound is inclusive and the upper bound is exclusive, matching
 // how the ledger reads a range elsewhere.
-let PROVE_RANGE = {
+const PROVE_RANGE = {
   from: Number.MIN_SAFE_INTEGER,
   to: Number.MAX_SAFE_INTEGER,
 };
@@ -827,12 +831,9 @@ function backingRequired(custodialCredit: bigint, par: Rate): bigint {
 
 // --- Small helpers ----------------------------------------------------------------
 
-// The velocity pieces (riskSubject, attemptMinor, trust.record) are documented at screenRisk above.
-// The store applies config.velocityWindowMs when summing a subject's windowed attempts.
-
 // Finds the handler for this operation's kind. A missing entry throws a malformed-operation fault.
 function resolveHandler(registry: Registry, operation: Operation): Handler {
-  let handler = registry[operation.kind];
+  const handler = registry[operation.kind];
   if (!handler) {
     throw fault(
       ERROR_CODES.MALFORMED_OPERATION,
@@ -865,7 +866,7 @@ function unauthorized(operation: Operation, message: string) {
 // principal here instead.
 // See https://economy-lab-docs.pages.dev/economy/concepts/actors-and-authorization/ for the per-kind
 // reason each operation is barred to a user.
-let RESTRICTED_TO_PRIVILEGED = new Set<Operation['kind']>([
+const RESTRICTED_TO_PRIVILEGED = new Set<Operation['kind']>([
   'grantPromo',
   'grantEntitlement',
   'revokeEntitlement',
@@ -878,6 +879,8 @@ let RESTRICTED_TO_PRIVILEGED = new Set<Operation['kind']>([
   'settlePayout',
 ]);
 
+// --- Event descriptors --------------------------------------------------------------
+
 // The committed outcome an event builder is handed. Events emit only after the posting committed, so
 // the transaction is always present.
 type Committed = Extract<Outcome, { status: 'committed' }>;
@@ -887,7 +890,7 @@ type Committed = Extract<Outcome, { status: 'committed' }>;
 // client event carries only an allow-listed, PII-free summary (opt-in per field); internal events may
 // carry richer detail. Both builders get the committed result, so a payload can derive from the
 // entries that actually posted (refund needs this, since its operation names only an orderId).
-let EVENTS: Partial<
+const EVENTS: Partial<
   Record<
     Operation['kind'],
     {
@@ -941,8 +944,8 @@ let EVENTS: Partial<
     audience: 'internal',
     subject: (operation) => opOf<'clawback'>(operation).userId,
     data: (operation, outcome) => {
-      let op = opOf<'clawback'>(operation);
-      let data: Record<string, unknown> = {
+      const op = opOf<'clawback'>(operation);
+      const data: Record<string, unknown> = {
         txnId: outcome.transaction.id,
         userId: op.userId,
         amount: encodeAmount(op.amount),
@@ -953,14 +956,14 @@ let EVENTS: Partial<
       return data;
     },
   },
-  // A payout request. The seller is told their cashout was accepted. The requested amount is safe to
+  // A payout request. The seller is told their cash-out was accepted. The requested amount is safe to
   // send to the client, since it is the seller's own earned credits.
   requestPayout: {
     type: 'economy.payout.requested',
     audience: 'client',
     subject: (operation) => opOf<'requestPayout'>(operation).userId,
     data: (operation, outcome) => {
-      let op = opOf<'requestPayout'>(operation);
+      const op = opOf<'requestPayout'>(operation);
       return {
         txnId: outcome.transaction.id,
         userId: op.userId,
@@ -976,7 +979,7 @@ let EVENTS: Partial<
     audience: 'client',
     subject: (operation) => opOf<'subscribe'>(operation).userId,
     data: (operation, outcome) => {
-      let op = opOf<'subscribe'>(operation);
+      const op = opOf<'subscribe'>(operation);
       return {
         txnId: outcome.transaction.id,
         userId: op.userId,
@@ -1008,7 +1011,7 @@ let EVENTS: Partial<
     audience: 'internal',
     subject: (operation) => opOf<'reversePayout'>(operation).userId,
     data: (operation) => {
-      let op = opOf<'reversePayout'>(operation);
+      const op = opOf<'reversePayout'>(operation);
       return { sagaId: op.sagaId, reason: op.reason };
     },
   },
@@ -1028,7 +1031,7 @@ function spendData(
   operation: Operation,
   outcome: Committed,
 ): Record<string, unknown> {
-  let base = txnData(operation, outcome);
+  const base = txnData(operation, outcome);
   if (
     operation.kind === 'spend' &&
     operation.giftTo !== undefined &&
@@ -1055,12 +1058,12 @@ function opOf<K extends Operation['kind']>(
 // the single spendable-or-promo wallet entry. Read the userId off that entry's account id, the part
 // before the `:kind` suffix, rather than the operation, which carries no buyerId.
 function refundBuyer(outcome: Committed): string {
-  for (let leg of outcome.transaction.legs) {
+  for (const leg of outcome.transaction.legs) {
     if (!isWalletAccount(leg.account)) {
       continue;
     }
-    let colon = leg.account.lastIndexOf(':');
-    let kind = leg.account.slice(colon + 1);
+    const colon = leg.account.lastIndexOf(':');
+    const kind = leg.account.slice(colon + 1);
     if (kind === 'spendable' || kind === 'promo') {
       return leg.account.slice(0, colon);
     }

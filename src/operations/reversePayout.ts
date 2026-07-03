@@ -29,7 +29,7 @@ import type { Saga, Unit } from '#src/ports.ts';
  * disbursed, or one the provider may still settle, risks a double-pay.
  *
  * @example
- *   let outcome = await reversePayout(
+ *   const outcome = await reversePayout(
  *     { kind: 'reversePayout', idempotencyKey: 'idem_0',
  *       actor: { kind: 'operator', operatorId: 'op_1' },
  *       userId: 'usr_seller', sagaId: 'pay_1', reason: 'fraud hold' },
@@ -37,7 +37,8 @@ import type { Saga, Unit } from '#src/ports.ts';
  *   );
  *   // outcome.status === 'committed'; the reserve returned to usr_seller's earned, saga FAILED.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/reverse-payout/ Reverse payout} for manually unwinding an in-flight payout saga.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/reverse-payout/
+ *   Reverse payout} for manually unwinding an in-flight payout saga.
  */
 export async function reversePayout(
   operation: Operation,
@@ -47,7 +48,7 @@ export async function reversePayout(
   assertKind(operation, 'reversePayout');
   assertReason(operation.reason);
 
-  let saga = await loadSaga(unit, operation.sagaId);
+  const saga = await loadSaga(unit, operation.sagaId);
   assertUserMatchesSaga(operation.userId, saga);
   refuseSettled(saga);
   refuseLiveSubmitted(saga, ctx);
@@ -62,7 +63,7 @@ export async function reversePayout(
   // Move the saga to FAILED only if still in its current state (the worker's give-up change).
   // A false return means another worker advanced it between our read and now, leaving nothing to
   // undo.
-  let advanced = await unit.sagas.advance(saga.id, saga.state, 'FAILED', {
+  const advanced = await unit.sagas.advance(saga.id, saga.state, 'FAILED', {
     updatedAt: ctx.clock.now(),
   });
   if (!advanced) {
@@ -74,7 +75,7 @@ export async function reversePayout(
   // the same transaction as the state change above, so the two cannot come apart. The reserve
   // debit routes by the user id, the same key the request credited by, so it lands on (and the
   // lock set covered) the shard holding this payout's reserve.
-  let transaction = await postEntry(unit.ledger, {
+  const transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs: routePlatformLegs(
       [
@@ -94,8 +95,11 @@ export async function reversePayout(
   return { status: 'committed', transaction };
 }
 
+// Loads the saga by id. The operator supplied the id, so a missing saga is a caller error. It
+// throws a fault rather than treating the miss as a quiet "nothing to do", matching
+// settlePayout's loadSaga and reverse's unknown-txnId handling.
 async function loadSaga(unit: Unit, sagaId: string): Promise<Saga> {
-  let saga = await unit.sagas.load(sagaId);
+  const saga = await unit.sagas.load(sagaId);
   if (saga === null) {
     throw fault(
       ERROR_CODES.MALFORMED_OPERATION,
@@ -158,6 +162,8 @@ function refuseLiveSubmitted(saga: Saga, ctx: Ctx): void {
   }
 }
 
+// Requires a non-blank reason, because a correction must record why for auditability. A missing
+// or blank reason is malformed and is rejected before anything posts.
 function assertReason(reason: string): void {
   if (reason.trim() === '') {
     throw fault(
@@ -168,6 +174,8 @@ function assertReason(reason: string): void {
   }
 }
 
+// Receipt for the already-handled path: nothing posted this run and the original receipt is not
+// at hand, so return an empty marker rather than mint a fresh id for money that did not move.
 function noopTransaction(): Transaction {
   return { id: '', postedAt: 0, legs: [], links: [] };
 }

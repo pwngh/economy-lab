@@ -28,7 +28,7 @@ let probe: Promise<void> | null = null;
 // and a runtime that has it pulls it in lazily on the first hash, not at module load.
 async function probeSyncHash(): Promise<void> {
   try {
-    let { createHash } = await import('node:crypto');
+    const { createHash } = await import('node:crypto');
     syncHash = (bytes) =>
       new Uint8Array(createHash('sha256').update(bytes).digest());
   } catch {
@@ -44,12 +44,10 @@ async function subtleHash(bytes: Uint8Array): Promise<Uint8Array> {
 
 /**
  * Returns the system SHA-256 {@link Digest}. It prefers a synchronous node:crypto hash, which is
- * roughly 5x faster than Web Crypto for the few-hundred-byte chain preimages this hashes per posting
- * (measured), and falls back to Web Crypto on a runtime without node:crypto. Both compute the same
- * SHA-256 bytes, so an account's chain head and a checkpoint's Merkle root are identical whichever
- * path runs — the speed-up is invisible to every reader and verifier, and a hash written on one
- * runtime still re-derives on another. The async `hash` signature is unchanged, so `chainHash`,
- * `advanceChain`, and `merkleRoot` are untouched.
+ * faster than Web Crypto for the few-hundred-byte chain preimages this hashes per posting, and
+ * falls back to Web Crypto on a runtime without node:crypto. Both compute the same SHA-256
+ * bytes, so an account's chain head and a checkpoint's Merkle root are identical whichever path
+ * runs, and a hash written on one runtime still re-derives on another.
  */
 export function sha256Digest(): Digest {
   return {

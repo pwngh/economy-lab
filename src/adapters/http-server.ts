@@ -35,16 +35,16 @@ type Session = {
 // The commit and rollback routes resolve or reject the gate to finish it. Returns the session id
 // that callers pass on every follow-up request.
 function beginSession(backing: Store, sessions: Map<string, Session>): string {
-  let id = `sess_${sessions.size}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const id = `sess_${sessions.size}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   let settle!: (commit: boolean) => void;
-  let gate = new Promise<void>((resolve, reject) => {
+  const gate = new Promise<void>((resolve, reject) => {
     settle = (commit) =>
       commit ? resolve() : reject(new Error('transaction rolled back'));
   });
   // Record the session from inside the transaction body so it captures the unit. `done` starts as
   // a placeholder because the transaction promise does not exist yet. The line below overwrites it,
   // and nothing reads `done` before then.
-  let done = backing
+  const done = backing
     .transaction(async (unit) => {
       sessions.set(id, {
         unit,
@@ -105,7 +105,7 @@ async function ledgerRoute(
     return encodeWire.amount(await ledger.balance(body.account as AccountRef));
   }
   if (method === 'posting') {
-    let posting = await ledger.posting(body.txnId as string);
+    const posting = await ledger.posting(body.txnId as string);
     return posting === null ? null : encodeWire.posting(posting);
   }
   return ledgerReadRoute(ledger, method, body);
@@ -120,8 +120,8 @@ async function ledgerReadRoute(
   body: Record<string, unknown>,
 ): Promise<unknown> {
   if (method === 'statement') {
-    let range = body.range as { from: number; to: number };
-    let statement = await ledger.statement(body.account as AccountRef, range);
+    const range = body.range as { from: number; to: number };
+    const statement = await ledger.statement(body.account as AccountRef, range);
     return { ...statement, entries: statement.entries.map(encodeEntry) };
   }
   if (method === 'heads') {
@@ -133,7 +133,7 @@ async function ledgerReadRoute(
   if (method === 'timeline') {
     // Pass the order and limit straight through to the backing ledger. The engine then bounds its
     // own DB work, instead of fetching every row and trimming the result here.
-    let timelineOptions = {
+    const timelineOptions = {
       order: body.order as 'asc' | 'desc' | undefined,
       limit: body.limit as number | undefined,
       offset: body.offset as number | undefined,
@@ -171,8 +171,8 @@ async function collect<T>(
   source: AsyncIterable<T>,
   map: (item: T) => unknown,
 ): Promise<unknown[]> {
-  let rows: unknown[] = [];
-  for await (let item of source) {
+  const rows: unknown[] = [];
+  for await (const item of source) {
     rows.push(map(item));
   }
   return rows;
@@ -197,7 +197,7 @@ async function subStoreRoute(
   method: string,
   body: Record<string, unknown>,
 ): Promise<unknown> {
-  let handler = SUBSTORE_ROUTES[`${store}/${method}`];
+  const handler = SUBSTORE_ROUTES[`${store}/${method}`];
   if (!handler) {
     throw new Error(`unknown route ${store}/${method}`);
   }
@@ -212,9 +212,9 @@ type SubHandler = (
 // Holds every non-ledger sub-store call, with one entry per method. Each handler decodes the
 // body's wire form to domain values, calls the store method, and encodes the result back. The
 // client has a matching call for every entry.
-let SUBSTORE_ROUTES: Record<string, SubHandler> = {
+const SUBSTORE_ROUTES: Record<string, SubHandler> = {
   'idempotency/claim': async (unit, body) => {
-    let result = await unit.idempotency.claim(body.key as string);
+    const result = await unit.idempotency.claim(body.key as string);
     return result.claimed
       ? { claimed: true }
       : {
@@ -234,7 +234,7 @@ let SUBSTORE_ROUTES: Record<string, SubHandler> = {
     return null;
   },
   'sales/get': async (unit, body) => {
-    let sale = await unit.sales.get(body.orderId as string);
+    const sale = await unit.sales.get(body.orderId as string);
     return sale === null ? null : encodeWire.sale(sale);
   },
   'outbox/enqueue': async (unit, body) => {
@@ -258,13 +258,13 @@ let SUBSTORE_ROUTES: Record<string, SubHandler> = {
     return null;
   },
   'inbox/enqueueInbound': async (unit, body) => {
-    let stored = await unit.inbox.enqueueInbound(
+    const stored = await unit.inbox.enqueueInbound(
       decodeWire.inboxEntry(body.entry),
     );
     return encodeWire.inboxEntry(stored);
   },
   'inbox/claimInbound': async (unit, body) => {
-    let pending = await unit.inbox.claimInbound(
+    const pending = await unit.inbox.claimInbound(
       body as Parameters<typeof unit.inbox.claimInbound>[0],
     );
     return pending.map(encodeWire.inboxEntry);
@@ -286,12 +286,12 @@ let SUBSTORE_ROUTES: Record<string, SubHandler> = {
     return null;
   },
   'sagas/load': async (unit, body) => {
-    let saga = await unit.sagas.load(body.id as string);
+    const saga = await unit.sagas.load(body.id as string);
     return saga === null ? null : encodeWire.saga(saga);
   },
   'sagas/list': (unit) => collect(unit.sagas.list(), encodeWire.saga),
   'sagas/claimDue': async (unit, body) => {
-    let due = await unit.sagas.claimDue(
+    const due = await unit.sagas.claimDue(
       body.now as number,
       body.limit as number,
     );
@@ -329,11 +329,11 @@ let SUBSTORE_ROUTES: Record<string, SubHandler> = {
     return null;
   },
   'subscriptions/load': async (unit, body) => {
-    let sub = await unit.subscriptions.load(body.id as string);
+    const sub = await unit.subscriptions.load(body.id as string);
     return sub === null ? null : encodeWire.subscription(sub);
   },
   'subscriptions/activeFor': async (unit, body) => {
-    let sub = await unit.subscriptions.activeFor(
+    const sub = await unit.subscriptions.activeFor(
       body.userId as string,
       body.sku as string,
       body.sellerId as string,
@@ -345,7 +345,7 @@ let SUBSTORE_ROUTES: Record<string, SubHandler> = {
     return null;
   },
   'subscriptions/claimDue': async (unit, body) => {
-    let due = await unit.subscriptions.claimDue(
+    const due = await unit.subscriptions.claimDue(
       body.now as number,
       body.limit as number,
     );
@@ -366,7 +366,7 @@ let SUBSTORE_ROUTES: Record<string, SubHandler> = {
     return null;
   },
   'promos/claimDue': async (unit, body) => {
-    let due = await unit.promos.claimDue(
+    const due = await unit.promos.claimDue(
       body.now as number,
       body.limit as number,
     );
@@ -384,7 +384,7 @@ let SUBSTORE_ROUTES: Record<string, SubHandler> = {
 function decodeSagaPatch(
   patch: unknown,
 ): Parameters<Unit['sagas']['advance']>[3] {
-  let row = { ...(patch as Record<string, unknown>) };
+  const row = { ...(patch as Record<string, unknown>) };
   // The amount-typed fields `reserve` and `payoutUsd` ride the wire as encoded strings. Decode
   // them back to Amounts, and let every other field pass through. `payoutUsd` is null before
   // settlement, so decode it only when it is an actual encoded-amount string.
@@ -408,17 +408,20 @@ async function trustRoute(
   body: Record<string, unknown>,
 ): Promise<unknown> {
   if (method === 'read') {
-    let velocity = await backing.trust.read(body.subject as string);
+    const velocity = await backing.trust.read(body.subject as string);
     return { ...velocity, spent: encodeWire.amount(velocity.spent) };
   }
-  let wireAttempt = body.attempt as Record<string, unknown>;
-  let attempt = {
+  const wireAttempt = body.attempt as Record<string, unknown>;
+  const attempt = {
     ...wireAttempt,
     amount: decodeWire.amount(wireAttempt.amount),
   } as Parameters<typeof backing.trust.bump>[1];
 
   if (method === 'record') {
-    let velocity = await backing.trust.record(body.subject as string, attempt);
+    const velocity = await backing.trust.record(
+      body.subject as string,
+      attempt,
+    );
     return { ...velocity, spent: encodeWire.amount(velocity.spent) };
   }
   await backing.trust.bump(body.subject as string, attempt);
@@ -456,7 +459,7 @@ async function replayRoute(
 
 // --- The request router -----------------------------------------------------------
 
-// @see https://economy-lab-docs.pages.dev/economy/reference/http-service
+// @see https://economy-lab-docs.pages.dev/economy/reference/http-service/
 async function dispatch(
   backing: Store,
   sessions: Map<string, Session>,
@@ -491,8 +494,8 @@ async function txDispatch(
   if (segments[1] === 'begin') {
     return { session: beginSession(backing, sessions) };
   }
-  let session = segments[1]!;
-  let tail = segments.slice(2);
+  const session = segments[1]!;
+  const tail = segments.slice(2);
   if (tail[0] === 'commit') {
     await commitSession(sessions.get(session)!);
     sessions.delete(session);
@@ -524,17 +527,18 @@ async function txDispatch(
  * message, always HTTP 200. The client re-throws on that shape, so a failed call rolls its
  * transaction back like an in-process call would.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for the request protocol and route map.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for
+ *   the request protocol and route map.
  */
 export function createStoreServer(
   backing: Store,
 ): (request: Request) => Promise<Response> {
-  let sessions = new Map<string, Session>();
+  const sessions = new Map<string, Session>();
   return async (request) => {
-    let segments = new URL(request.url).pathname.split('/').filter(Boolean);
-    let body = (await readBody(request)) as Record<string, unknown>;
+    const segments = new URL(request.url).pathname.split('/').filter(Boolean);
+    const body = (await readBody(request)) as Record<string, unknown>;
     try {
-      let result = await dispatch(backing, sessions, segments, body);
+      const result = await dispatch(backing, sessions, segments, body);
       return jsonResponse({ ok: true, body: result ?? null });
     } catch (error) {
       return jsonResponse({ ok: false, error: messageOf(error) });
@@ -543,7 +547,7 @@ export function createStoreServer(
 }
 
 async function readBody(request: Request): Promise<unknown> {
-  let text = await request.text();
+  const text = await request.text();
   return text.length === 0 ? {} : JSON.parse(text);
 }
 

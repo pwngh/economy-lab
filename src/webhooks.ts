@@ -11,7 +11,8 @@
 
 // Inbound webhook event types and the dispatch that turns a verified provider callback into an
 // inbox Operation. The by-kind mapping and the at-most-once dedup live on `handleWebhook` below.
-// See https://economy-lab-docs.pages.dev/economy/ports/processor/ for the verified-callback-to-operation flow.
+// See https://economy-lab-docs.pages.dev/economy/ports/processor/ for the
+// verified-callback-to-operation flow.
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { decodeAmountWire } from '#src/money.ts';
@@ -41,7 +42,7 @@ type WebhookBase = {
  * `amount` is an {@link Amount}, not a number, so it carries its currency and stays an exact
  * integer (money is never a float or JSON number). `sku` is optional: a credit-pack purchase has
  * none, a product purchase carries the product id. `kind` is optional and defaults to `'purchase'`
- * so a bare purchase object (the original webhook shape) remains a valid `WebhookEvent`.
+ * so a bare purchase object is a valid `WebhookEvent`.
  */
 export type PurchaseEvent = WebhookBase & {
   kind?: 'purchase';
@@ -64,7 +65,7 @@ export type PurchaseEvent = WebhookBase & {
  * A verified payout-settled callback: the payout rail reports it disbursed the USD for one of our
  * submitted payouts. It drives the SUBMITTED -> SETTLED step of the named saga via `settlePayout`,
  * which empties the seller's reserve into REVENUE and moves the gross USD out of trust. The figures
- * actually posted are the rate-derived ones the worker computes; `providerRef`/`providerAmount`
+ * actually posted are the rate-derived ones `settlePayout` computes; `providerRef`/`providerAmount`
  * are carried on the operation for the audit trail only.
  */
 export type PayoutSettledEvent = WebhookBase & {
@@ -78,7 +79,7 @@ export type PayoutSettledEvent = WebhookBase & {
   providerRef: string;
 
   // The USD the provider reported settling. Recorded for reconciliation only. The posted figures are
-  // the rate-derived ones `settlePayout` computes from the reserve, identical to the worker's.
+  // the rate-derived ones `settlePayout` computes from the reserve.
   providerAmount: Amount;
 };
 
@@ -109,8 +110,7 @@ export type DisputeEvent = WebhookBase & {
 /**
  * A verified inbound provider callback, tagged by `kind`. The webhook edge decodes the raw body
  * into one of these and {@link handleWebhook} dispatches it by kind to the operation it applies. A
- * purchase carries no `kind` (it defaults to `'purchase'`) so the original bare purchase shape is
- * still a valid event.
+ * purchase may omit its `kind` (see {@link PurchaseEvent}).
  */
 export type WebhookEvent = PurchaseEvent | PayoutSettledEvent | DisputeEvent;
 
@@ -136,7 +136,7 @@ export function webhookIdempotencyKey(eventId: string): string {
 export function toTopUp(event: PurchaseEvent): Operation {
   // Provenance carried on the operation so the topUp handler can attach eventId/sku/provider to
   // the ledger entry, pointing each entry back to its provider callback for reconciliation.
-  let provenance: Record<string, unknown> = {
+  const provenance: Record<string, unknown> = {
     eventId: event.eventId,
     provider: event.provider,
     ...(event.sku === undefined ? {} : { sku: event.sku }),
@@ -160,9 +160,9 @@ export function toTopUp(event: PurchaseEvent): Operation {
  * The dedup key comes from `eventId`, so the settle applies at most once however many times the rail
  * redelivers. `sagaId` names the payout to settle. `providerRef` and `providerAmount` are carried for
  * the audit trail only. The figures actually posted are the rate-derived ones `settlePayout` computes
- * from the saga's reserve, identical to the worker's settle, so the provider's reported amount is
- * recorded but is not used as the posted figure. The actor is `system`, which `settlePayout`'s
- * privileged-only gate (RESTRICTED_TO_PRIVILEGED) requires.
+ * from the saga's reserve, so the provider's reported amount is recorded but is not used as the
+ * posted figure. The actor is `system`, which `settlePayout`'s privileged-only gate
+ * (RESTRICTED_TO_PRIVILEGED) requires.
  */
 export function toSettlePayout(event: PayoutSettledEvent): Operation {
   return {
@@ -198,12 +198,10 @@ export function toClawback(event: DisputeEvent): Operation {
  * Dispatches a verified {@link WebhookEvent} to the {@link Operation} it should apply, by its kind:
  * a cleared purchase to a `topUp`, a settled payout to a `settlePayout`, a dispute/chargeback to a
  * `clawback`. This is the single place provider-event kind maps to economy operation; every branch
- * derives the same `eventId`-based dedup key, so whichever kind arrives is applied at most once. A
- * purchase carries no `kind` (treated as `'purchase'`), so the original purchase shape still routes
- * here unchanged.
+ * derives the same `eventId`-based dedup key, so whichever kind arrives is applied at most once.
  */
 export function toOperation(event: WebhookEvent): Operation {
-  // A purchase event may omit `kind` (the original shape), so check it first via a guard. Pulling
+  // A purchase event may omit `kind`, so check it first via a guard. Pulling
   // the purchase out this way narrows the rest of the union to the kinds with a required `kind`
   // literal, so the switch below exhausts cleanly (the optional purchase discriminant would
   // otherwise defeat the `never` exhaustiveness check).
@@ -223,9 +221,9 @@ export function toOperation(event: WebhookEvent): Operation {
   }
 }
 
-// A purchase event carries no `kind` (the original bare purchase shape) or the explicit `'purchase'`.
-// Splitting it off with a guard lets `toOperation` narrow the remaining union to the kinds whose
-// `kind` is a required literal.
+// A purchase event may omit `kind` or carry the explicit `'purchase'`. Splitting it off with a
+// guard lets `toOperation` narrow the remaining union to the kinds whose `kind` is a required
+// literal.
 function isPurchase(event: WebhookEvent): event is PurchaseEvent {
   return event.kind === undefined || event.kind === 'purchase';
 }
@@ -233,7 +231,7 @@ function isPurchase(event: WebhookEvent): event is PurchaseEvent {
 /**
  * The result of accepting a verified webhook. The callback is persisted, not posted: the mapped
  * Operation is enqueued in the transactional inbox for the apply worker (`drainInbox`) to submit
- * later, so the provider gets a fast acknowledgement and the money move settles off the request path.
+ * later, so the provider gets a fast acknowledgment and the money move settles off the request path.
  * - `accepted`: a fresh provider event; its row was enqueued and will be applied by the next sweep.
  * - `duplicate`: a redelivery of an already-seen `eventId`; the existing row stood and no second was
  *   inserted, so the operation still applies at most once.
@@ -253,8 +251,10 @@ export type WebhookAck = {
  * invariants and idempotency apply there. A redelivery is still enqueued at most once: `enqueueInbound`
  * dedupes on the provider `eventId`, and an id mismatch on the returned row is exactly that case.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for the verification gate the edge runs first.
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for how verified callbacks flow through the inbox.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for
+ *   the verification gate the edge runs first.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for how
+ *   verified callbacks flow through the inbox.
  */
 export async function handleWebhook(
   store: Store,
@@ -266,7 +266,7 @@ export async function handleWebhook(
   // enqueues its event in the money move's transaction. `key` is the provider `eventId`, both the
   // dedupe key here and the submitted operation's idempotencyKey (see `toOperation`), so the two
   // layers agree on what "the same event" means whatever the operation kind.
-  let row: InboxEntry = {
+  const row: InboxEntry = {
     id: ctx.ids.next('ibx'),
     key: event.eventId,
     operation: toOperation(event),
@@ -275,7 +275,7 @@ export async function handleWebhook(
     receivedAt: ctx.clock.now(),
     reason: null,
   };
-  let stored = await store.transaction(
+  const stored = await store.transaction(
     (unit) => unit.inbox.enqueueInbound(row, options),
     options,
   );
@@ -289,10 +289,9 @@ export async function handleWebhook(
 
 /**
  * Handles a verified purchase webhook: the purchase case of {@link handleWebhook}, kept as a named
- * entry point so existing callers (and the original purchase tests) keep working unchanged. It
- * forwards a {@link PurchaseEvent} to the general handler, which maps it to a `topUp` and persists it
- * to the inbox exactly as before. New provider-callback kinds (payout settled, dispute) go through
- * `handleWebhook` directly.
+ * entry point for callers that only deal in purchases. It forwards a {@link PurchaseEvent} to the
+ * general handler, which maps it to a `topUp` and persists it to the inbox. Other
+ * provider-callback kinds (payout settled, dispute) go through `handleWebhook` directly.
  */
 export async function handlePurchaseWebhook(
   store: Store,
@@ -310,9 +309,8 @@ export async function handlePurchaseWebhook(
  * body, so the caller can't spoof it. A wrong-shape body or missing/invalid amount throws,
  * letting the server reply 400 before anything reaches the ledger.
  *
- * This decodes the purchase shape specifically (the existing, only wired-up edge). The new
- * settle/dispute kinds map straight from a {@link WebhookEvent} via {@link toOperation}; a decoder
- * for their bodies is additive and not part of this change.
+ * This decodes the purchase shape specifically, the only kind with a wired-up body decoder. The
+ * settle/dispute kinds map straight from a {@link WebhookEvent} via {@link toOperation}.
  */
 export function decodeWebhookEvent(
   provider: string,
@@ -321,12 +319,12 @@ export function decodeWebhookEvent(
   if (body === null || typeof body !== 'object') {
     throw malformedEvent('Webhook body must be a JSON object.');
   }
-  let row = body as Record<string, unknown>;
-  let eventId = requireString(row.eventId, 'eventId');
-  let userId = requireString(row.userId, 'userId');
-  let source = requireString(row.source, 'source');
-  let amount = decodeAmountField(row.amount);
-  let sku = row.sku === undefined ? undefined : requireString(row.sku, 'sku');
+  const row = body as Record<string, unknown>;
+  const eventId = requireString(row.eventId, 'eventId');
+  const userId = requireString(row.userId, 'userId');
+  const source = requireString(row.source, 'source');
+  const amount = decodeAmountField(row.amount);
+  const sku = row.sku === undefined ? undefined : requireString(row.sku, 'sku');
   return {
     provider,
     eventId,
@@ -374,7 +372,7 @@ function malformedEvent(message: string): ReturnType<typeof fault> {
 // cannot dispatch". That is a bad request at the edge, so it carries MALFORMED_OPERATION and the
 // server answers 400.
 function unreachableEvent(event: never): never {
-  let kind = (event as { kind?: unknown }).kind;
+  const kind = (event as { kind?: unknown }).kind;
   throw fault(
     ERROR_CODES.MALFORMED_OPERATION,
     `Webhook event has an unknown kind: ${String(kind)}.`,

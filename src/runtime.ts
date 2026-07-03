@@ -80,7 +80,7 @@ export function systemDigest(): Digest {
 // Fixed PKCS#8 DER header for an Ed25519 private key. The 32-byte seed is appended after it.
 // WebCrypto imports Ed25519 private keys in PKCS#8 form, so a bare seed must be wrapped in this
 // header first.
-let ED25519_PKCS8_HEADER = new Uint8Array([
+const ED25519_PKCS8_HEADER = new Uint8Array([
   0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04,
   0x22, 0x04, 0x20,
 ]);
@@ -92,21 +92,21 @@ let ED25519_PKCS8_HEADER = new Uint8Array([
 async function ed25519KeyPair(
   secret: string,
 ): Promise<{ privateKey: CryptoKey; publicKey: CryptoKey }> {
-  let seed = new Uint8Array(
+  const seed = new Uint8Array(
     await crypto.subtle.digest('SHA-256', fromHex(secret)),
   );
-  let pkcs8 = new Uint8Array(ED25519_PKCS8_HEADER.length + seed.length);
+  const pkcs8 = new Uint8Array(ED25519_PKCS8_HEADER.length + seed.length);
   pkcs8.set(ED25519_PKCS8_HEADER, 0);
   pkcs8.set(seed, ED25519_PKCS8_HEADER.length);
-  let privateKey = await crypto.subtle.importKey(
+  const privateKey = await crypto.subtle.importKey(
     'pkcs8',
     pkcs8,
     { name: 'Ed25519' },
     true,
     ['sign'],
   );
-  let jwk = await crypto.subtle.exportKey('jwk', privateKey);
-  let publicKey = await crypto.subtle.importKey(
+  const jwk = await crypto.subtle.exportKey('jwk', privateKey);
+  const publicKey = await crypto.subtle.importKey(
     'jwk',
     { kty: 'OKP', crv: 'Ed25519', x: jwk.x },
     { name: 'Ed25519' },
@@ -127,14 +127,15 @@ async function ed25519KeyPair(
  * Both work on raw bytes. Hex encoding of keys and stored signatures happens at the storage
  * boundary, not here.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/signer/ Signer} for the signing and key-rotation contract.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/signer/ Signer} for the signing and
+ *   key-rotation contract.
  */
 export function systemSigner(options: {
   signingKey: string;
   priorKeys?: ReadonlyArray<string>;
 }): Signer {
-  let current = ed25519KeyPair(options.signingKey);
-  let verifiers = [
+  const current = ed25519KeyPair(options.signingKey);
+  const verifiers = [
     current.then((pair) => pair.publicKey),
     ...(options.priorKeys ?? []).map((k) =>
       ed25519KeyPair(k).then((pair) => pair.publicKey),
@@ -151,7 +152,7 @@ export function systemSigner(options: {
         ),
       ),
     verify: async (bytes, signature) => {
-      for (let publicKey of verifiers) {
+      for (const publicKey of verifiers) {
         if (
           await crypto.subtle.verify(
             { name: 'Ed25519' },
@@ -173,7 +174,7 @@ export function systemSigner(options: {
  * party can verify signed checkpoints without the signing secret.
  */
 export async function signingPublicKeyHex(signingKey: string): Promise<string> {
-  let { publicKey } = await ed25519KeyPair(signingKey);
+  const { publicKey } = await ed25519KeyPair(signingKey);
   return toHex(new Uint8Array(await crypto.subtle.exportKey('raw', publicKey)));
 }
 
@@ -200,9 +201,10 @@ export function systemCapabilities(options: {
 /**
  * Structured logger for production hosts. Each call writes one JSONL object,
  * shaped `{ts, level, service, event, ...fields}`, for log collectors to parse
- * line by line. The info, debug, and warn levels go to stdout via `console.warn`.
- * The error level goes to stderr via `console.error`. Implements the same
- * `Logger` interface as the no-op default, so a host can swap it in directly.
+ * line by line. By default every level writes to stderr (info, debug, and warn
+ * via `console.warn`; error via `console.error`); supply `out` and `err` to
+ * route the two separately. Implements the same `Logger` interface as the
+ * no-op default, so a host can swap it in directly.
  *
  * Supply `now` (epoch ms) so a test can freeze the timestamp and check the exact
  * line; it defaults to wall-clock time. `service` names the emitting process and
@@ -216,13 +218,13 @@ export function jsonlLogger(
     err?: (line: string) => void;
   } = {},
 ): Logger {
-  let service = options.service ?? 'economy-lab';
-  let now = options.now ?? (() => Date.now());
-  let out = options.out ?? ((line) => console.warn(line));
-  let err = options.err ?? ((line) => console.error(line));
+  const service = options.service ?? 'economy-lab';
+  const now = options.now ?? (() => Date.now());
+  const out = options.out ?? ((line) => console.warn(line));
+  const err = options.err ?? ((line) => console.error(line));
   return {
     log: (level, event, fields) => {
-      let sink = level === 'error' ? err : out;
+      const sink = level === 'error' ? err : out;
       sink(JSON.stringify({ ts: now(), level, service, event, ...fields }));
     },
   };

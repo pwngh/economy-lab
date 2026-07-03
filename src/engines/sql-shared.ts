@@ -38,7 +38,8 @@ import type {
  * bytes hash to the same digest on every runtime, so the chain head an engine writes is
  * reproducible everywhere.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for how engines plug into the ledger.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
+ *   messaging} for how engines plug into the ledger.
  */
 export function defaultDigest(): Digest {
   return sha256Digest();
@@ -48,15 +49,15 @@ export function defaultClock(): Clock {
   return { now: () => 0 };
 }
 
-export let GENESIS_HEX = toHex(GENESIS);
+export const GENESIS_HEX = toHex(GENESIS);
 
 // The unique index guarding each account's hash-chain head, chain_links (account_id, prev_hash).
 // A 23505 (Postgres) or 1062 (MySQL) violation that names this index is a chain-head fork: two
-// writers used the same prev_hash and one of the inserts was rejected. withTransientRetry treats that fork as transient
-// and retries it. This name must match the index name in db/postgresql-schema.sql and
-// db/mysql-schema.sql. Rename the index there without renaming it here and the retry stops
-// firing, so the cold-start fork race resurfaces as an unretried error.
-export let CHAIN_FORK_INDEX = 'chain_links_account_prev_uq';
+// writers used the same prev_hash and one of the inserts was rejected. withTransientRetry treats
+// that fork as transient and retries it. This name must match the index name in
+// db/postgresql-schema.sql and db/mysql-schema.sql. Rename the index there without renaming it
+// here and the retry stops firing, so the cold-start fork race resurfaces as an unretried error.
+export const CHAIN_FORK_INDEX = 'chain_links_account_prev_uq';
 
 // The leading text of the chain-continuity trigger's error message in both schemas (Postgres
 // `raise exception 'chain continuity: ...'`, MySQL `SIGNAL ... MESSAGE_TEXT = 'chain continuity: ...'`).
@@ -68,7 +69,7 @@ export let CHAIN_FORK_INDEX = 'chain_links_account_prev_uq';
 // also raised for genuine `conservation` and `balance integrity` faults, which must never be retried --
 // their messages start differently, so the prefix match excludes them. Keep this string in lockstep
 // with the trigger MESSAGE_TEXT in db/postgresql-schema.sql and db/mysql-schema.sql.
-export let CHAIN_CONTINUITY_MARKER = 'chain continuity';
+export const CHAIN_CONTINUITY_MARKER = 'chain continuity';
 
 export function readMinor(value: unknown): bigint {
   return BigInt(value as bigint | number | string);
@@ -79,9 +80,9 @@ export function readMinor(value: unknown): bigint {
 // Returns the distinct accounts across these legs, in first-appearance order. A posting can touch
 // an account on several legs but advances its hash chain only once, so dedupe to one per account.
 export function distinctAccounts(legs: ReadonlyArray<Leg>): AccountRef[] {
-  let seen = new Set<AccountRef>();
-  let order: AccountRef[] = [];
-  for (let leg of legs) {
+  const seen = new Set<AccountRef>();
+  const order: AccountRef[] = [];
+  for (const leg of legs) {
     if (!seen.has(leg.account)) {
       seen.add(leg.account);
       order.push(leg.account);
@@ -97,7 +98,7 @@ export type Link = { account: AccountRef; prevHash: string; hash: string };
 
 // The platform ("system") accounts the schema seeds up front; db/*-schema.sql inserts exactly these
 // SYSTEM ids, so they always exist before any posting can name them.
-let SEEDED_SYSTEM_ACCOUNTS: ReadonlySet<string> = new Set(
+const SEEDED_SYSTEM_ACCOUNTS: ReadonlySet<string> = new Set(
   Object.values(SYSTEM),
 );
 

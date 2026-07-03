@@ -51,14 +51,16 @@ type CheckpointTally = {
  * run, and other failures are set aside for an operator. An empty ledger is skipped rather than
  * sealing an empty snapshot.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for how the signed Merkle root anchors the ledger and proves it is unaltered.
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how scheduled sweeps are driven and retried.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for how the
+ *   signed Merkle root anchors the ledger and proves it is unaltered.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background
+ *   worker} for how scheduled sweeps are driven and retried.
  */
 export async function sealCheckpoint(
   store: Store,
   ctx: WorkerCtx,
 ): Promise<CheckpointSummary> {
-  let tally: CheckpointTally = {
+  const tally: CheckpointTally = {
     sealed: null,
     skipped: false,
     deadLettered: [],
@@ -70,8 +72,8 @@ export async function sealCheckpoint(
   return tally;
 }
 
-// Runs the seal and catches what it throws so one failure cannot stop future runs. Retryable errors
-// such as a storage outage go to the next run. Anything else is set aside for an operator.
+// Runs the seal, sorting anything thrown per `sealCheckpoint`'s contract above: retryable errors
+// go to the next run, anything else to an operator.
 async function sealOne(
   store: Store,
   ctx: WorkerCtx,
@@ -80,7 +82,7 @@ async function sealOne(
   try {
     await driveSeal(store, ctx, tally);
   } catch (error) {
-    let normalized = normalizeError(error);
+    const normalized = normalizeError(error);
     if (normalized.retryable) {
       tally.retrying.push({ code: normalized.code });
       return;
@@ -113,7 +115,7 @@ async function driveSeal(
 }
 
 async function isEmpty(store: Store): Promise<boolean> {
-  for await (let _head of store.ledger.heads()) {
+  for await (const _head of store.ledger.heads()) {
     return false;
   }
   return true;
@@ -163,13 +165,14 @@ type VerifyTally = {
  * thrown. Only a thrown error (corrupt row, unavailable storage) goes through the retry and
  * dead-letter split as sealing does. Skipped when no checkpoint exists yet.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for why a head-count drop is itself a tamper signal and why a mismatch is logged, not thrown.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for why a
+ *   head-count drop is itself a tamper signal and why a mismatch is logged, not thrown.
  */
 export async function reverifyCheckpoint(
   store: Store,
   ctx: WorkerCtx,
 ): Promise<CheckpointVerifySummary> {
-  let tally: VerifyTally = {
+  const tally: VerifyTally = {
     verified: null,
     skipped: false,
     mismatch: false,
@@ -182,10 +185,8 @@ export async function reverifyCheckpoint(
   return tally;
 }
 
-// Runs the re-verification and catches what it throws so one failure cannot stop future runs.
-// Sorts errors like `sealOne`: retryable errors go to the next run, and others go to an operator. A
-// normal mismatch does not reach here. Instead, `verifyCheckpoint` returns false and `driveVerify`
-// records it as `mismatch`.
+// Runs the re-verification, sorting errors like `sealOne`: retryable to the next run, others to
+// an operator. A normal mismatch never throws (see `reverifyCheckpoint` above).
 async function verifyOne(
   store: Store,
   ctx: WorkerCtx,
@@ -194,7 +195,7 @@ async function verifyOne(
   try {
     await driveVerify(store, ctx, tally);
   } catch (error) {
-    let normalized = normalizeError(error);
+    const normalized = normalizeError(error);
     if (normalized.retryable) {
       tally.retrying.push({ code: normalized.code });
       return;
@@ -203,22 +204,22 @@ async function verifyOne(
   }
 }
 
-// Loads the latest checkpoint and verifies it against current heads. When no checkpoint exists, the
-// audit is skipped. Otherwise `verifyCheckpoint` (chain.ts) returns whether the signed root still
-// matches. A false result is recorded as a mismatch and logged at error level, and a true result
-// leaves `mismatch` false. The checked id is recorded either way.
+// Loads the latest checkpoint and verifies it against current heads via `verifyCheckpoint`
+// (chain.ts). When no checkpoint exists, the audit is skipped. The checked id is recorded either
+// way; a false verify is recorded as `mismatch` (the mismatch-vs-throw rule lives on
+// `reverifyCheckpoint` above).
 async function driveVerify(
   store: Store,
   ctx: WorkerCtx,
   tally: VerifyTally,
 ): Promise<void> {
-  let latest = await store.checkpoints.latest();
+  const latest = await store.checkpoints.latest();
   if (latest === null) {
     tally.skipped = true;
     return;
   }
 
-  let ok = await verifyCheckpoint(
+  const ok = await verifyCheckpoint(
     { ledger: store.ledger, digest: ctx.digest, signer: ctx.signer },
     latest,
   );

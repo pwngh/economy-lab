@@ -28,7 +28,8 @@ export type Currency = 'CREDIT' | 'USD';
  * `__brand` makes a plain `{ currency, minor }` unassignable to `Amount`. That forces
  * every amount through `toAmount` or `decodeAmount`, so the rules here cannot be bypassed.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/money-model/ The money model} for the exact-integer minor-unit design.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/money-model/ The money model} for
+ *   the exact-integer minor-unit design.
  */
 export type Amount = {
   readonly currency: Currency;
@@ -104,14 +105,15 @@ export function zero(currency: Currency): Amount {
  * Encodes an amount as text, such as `'CREDIT:12.34'`, for anywhere it leaves the program
  * (JSON, events, traces, HTTP). The result is a string because `JSON.stringify` cannot
  * serialize the `bigint`. It uses a fixed two decimals so the same amount always renders
- * identically.
+ * identically; posting metadata uses this form so the bytes hashed into the tamper-evident
+ * chain stay stable across replays.
  */
 export function encodeAmount(amount: Amount): string {
-  let negative = amount.minor < 0n;
-  let abs = negative ? -amount.minor : amount.minor;
-  let whole = abs / SCALE;
-  let frac = abs % SCALE;
-  let decimal = `${whole}.${frac.toString().padStart(FRACTION_DIGITS, '0')}`;
+  const negative = amount.minor < 0n;
+  const abs = negative ? -amount.minor : amount.minor;
+  const whole = abs / SCALE;
+  const frac = abs % SCALE;
+  const decimal = `${whole}.${frac.toString().padStart(FRACTION_DIGITS, '0')}`;
   return `${amount.currency}:${negative ? '-' : ''}${decimal}`;
 }
 
@@ -121,7 +123,7 @@ export function encodeAmount(amount: Amount): string {
  * extra digits.
  */
 export function decodeAmount(decimal: string, currency: Currency): Amount {
-  let match = /^(-?)(\d+)(?:\.(\d{1,2}))?$/.exec(decimal);
+  const match = /^(-?)(\d+)(?:\.(\d{1,2}))?$/.exec(decimal);
   if (!match) {
     throw fault(
       ERROR_CODES.INVALID_AMOUNT,
@@ -129,9 +131,9 @@ export function decodeAmount(decimal: string, currency: Currency): Amount {
       { detail: { decimal, currency } },
     );
   }
-  let sign = match[1] === '-' ? -1n : 1n;
-  let whole = BigInt(match[2]!);
-  let frac = BigInt((match[3] ?? '').padEnd(FRACTION_DIGITS, '0'));
+  const sign = match[1] === '-' ? -1n : 1n;
+  const whole = BigInt(match[2]!);
+  const frac = BigInt((match[3] ?? '').padEnd(FRACTION_DIGITS, '0'));
   return toAmount(currency, sign * (whole * SCALE + frac));
 }
 
@@ -161,8 +163,8 @@ export function requirePositiveCredit(amount: Amount, label: string): Amount {
  * SQL engines.
  */
 export function decodeAmountWire(encoded: string): Amount {
-  let colon = encoded.indexOf(':');
-  let currency = encoded.slice(0, colon) as Currency;
+  const colon = encoded.indexOf(':');
+  const currency = encoded.slice(0, colon) as Currency;
   return decodeAmount(encoded.slice(colon + 1), currency);
 }
 
@@ -181,7 +183,7 @@ export function convertFloor(amount: Amount, rate: Rate, to: Currency): Amount {
  * under-cover, such as the USD a top-up must hold in trust.
  */
 export function convertCeil(amount: Amount, rate: Rate, to: Currency): Amount {
-  let denominator = 10n ** BigInt(rate.scale);
+  const denominator = 10n ** BigInt(rate.scale);
   return toAmount(
     to,
     (amount.minor * rate.rate + denominator - 1n) / denominator,

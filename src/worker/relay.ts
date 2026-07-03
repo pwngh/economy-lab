@@ -50,7 +50,8 @@ type RelayTally = {
  * is left undelivered and retried next run. Delivery can therefore happen more than once (e.g.
  * delivery succeeded but marking done did not), so the receiver must drop duplicates by event id.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for outbox relay run semantics and retries.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background
+ *   worker} for outbox relay run semantics and retries.
  */
 export async function relayOutbox(
   store: Store,
@@ -58,10 +59,10 @@ export async function relayOutbox(
   input: { dispatcher: Dispatcher; limit: number },
   options?: Options,
 ): Promise<RelaySummary> {
-  let pending = await store.outbox.claimBatch(input.limit, options);
-  let tally: RelayTally = { relayed: [], failed: [], deadLettered: [] };
+  const pending = await store.outbox.claimBatch(input.limit, options);
+  const tally: RelayTally = { relayed: [], failed: [], deadLettered: [] };
 
-  for (let message of pending) {
+  for (const message of pending) {
     await dispatchOne(
       store,
       ctx,
@@ -77,13 +78,9 @@ export async function relayOutbox(
 
 // Sends one event and records the outcome in the tally. On success the id goes to `relayed`. If
 // the dispatcher throws, the failure is logged and persisted rather than re-thrown, so the batch
-// keeps going.
-//
-// Persisting the failure bounds retries. This failure makes the row's attempt count
-// `message.attempts + 1`. At the cap the row is dead-lettered: it is set to 'failed' so
-// `claimBatch` won't hand it back, and it is recorded in `deadLettered`. That keeps a poison
-// event from wedging the queue. Below the cap, `recordFailure` bumps `attempts`, the row stays
-// 'pending', the event lands in `failed`, and the next run retries it.
+// keeps going. The failure buckets and their store effects are specified on {@link RelaySummary};
+// this failure makes the row's attempt count `message.attempts + 1`, dead-lettering at the cap
+// and otherwise bumping `attempts` for the next run to retry.
 //
 // The cap test is `>=`, so the default `maxOutboxAttempts` of 10 dead-letters on the 10th
 // failure, the one that takes `attempts` to 10. This is the single off-by-one for the outbox,
@@ -95,13 +92,13 @@ async function dispatchOne(
   work: { dispatcher: Dispatcher; message: OutboxMessage; options?: Options },
   tally: RelayTally,
 ): Promise<void> {
-  let { dispatcher, message, options } = work;
+  const { dispatcher, message, options } = work;
   try {
     await dispatcher(message.event, options);
     tally.relayed.push(message.id);
   } catch (error) {
-    let normalized = normalizeError(error);
-    let next = message.attempts + 1;
+    const normalized = normalizeError(error);
+    const next = message.attempts + 1;
     if (next >= ctx.config.maxOutboxAttempts) {
       ctx.logger.log('error', 'outbox.relay.deadLettered', {
         messageId: message.id,
@@ -142,7 +139,7 @@ async function markRelayed(
   try {
     await store.outbox.markRelayed(relayed, options);
   } catch (error) {
-    let normalized = normalizeError(error);
+    const normalized = normalizeError(error);
     ctx.meter.count('economy.outbox.mark_relayed.failed', relayed.length, {
       code: normalized.code,
     });

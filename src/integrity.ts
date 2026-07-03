@@ -74,30 +74,31 @@ type LedgerFold = {
  * bug in the enforcement itself, so it never guards the write path.
  *
  * @example
- *   let report = await proveEconomy(store, { rates: fixedRates(), digest });
+ *   const report = await proveEconomy(store, { rates: fixedRates(), digest });
  *   report.conserved && report.chainIntact; // the books balance and no entry was altered
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/the-proof/ The proof} for how the prover re-derives every invariant.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/the-proof/ The proof} for how the
+ *   prover re-derives every invariant.
  */
 export async function proveEconomy(
   store: Store,
   ctx: ProveCtx,
   options?: Options,
 ): Promise<ProveReport> {
-  let fold = await foldLedger(store.ledger, options);
-  let required = backingRequiredMinor(
+  const fold = await foldLedger(store.ledger, options);
+  const required = backingRequiredMinor(
     fold.custodialCreditMinor,
     ctx.rates.par('CREDIT'),
   );
 
-  let shortfallMinor =
+  const shortfallMinor =
     fold.trustCashMinor < required ? required - fold.trustCashMinor : 0n;
 
   // Check that no stored entry was altered. `proveChain` walks each account's entries in order.
   // It recomputes each hash, checks it against the stored hash, and confirms that each entry
   // links to the previous one. This is the only place the chain is checked, and the result is
   // reused as-is below.
-  let chain = await proveChain(
+  const chain = await proveChain(
     { ledger: store.ledger, digest: ctx.digest },
     options,
   );
@@ -125,27 +126,27 @@ async function foldLedger(
   ledger: Ledger,
   options?: Options,
 ): Promise<LedgerFold> {
-  let signedByCurrency = new Map<Currency, bigint>();
+  const signedByCurrency = new Map<Currency, bigint>();
   let custodialCreditMinor = 0n;
   let trustCashMinor = 0n;
   let anyUserNegative = false;
-  let drift: Drift[] = [];
+  const drift: Drift[] = [];
   // Tracks the accounts the `heads()` fold visited. The phantom-row pass below uses this to find
   // which `balanceAccounts()` rows have no backing posting and still need a derived-zero check.
-  let seen = new Set<AccountRef>();
+  const seen = new Set<AccountRef>();
 
-  for await (let [account] of ledger.heads()) {
+  for await (const [account] of ledger.heads()) {
     seen.add(account);
     // Folding the legs serves two checks. It feeds the per-currency conservation total, and it
     // produces the per-account derived balance compared below against the cached running balance.
-    let derivedMinor = await accumulateLegs(
+    const derivedMinor = await accumulateLegs(
       ledger,
       account,
       signedByCurrency,
       options,
     );
 
-    let balance = await ledger.balance(account, options);
+    const balance = await ledger.balance(account, options);
     // R32: materialized balance row that drifted from what its legs sum to (a mis-saved or
     // directly-edited balance). Legs are authoritative; the materialized figure is the cache.
     pushIfDrifted(account, balance, derivedMinor, drift);
@@ -172,11 +173,11 @@ async function foldLedger(
   // any account the legs fold never touched, compare its stored balance against a derived 0. The
   // legs say the account should not exist, so any non-zero figure is drift. This reuses the R32
   // comparison, so a legs-less row surfaces in the same `drift` array.
-  for await (let account of ledger.balanceAccounts(options)) {
+  for await (const account of ledger.balanceAccounts(options)) {
     if (seen.has(account)) {
       continue;
     }
-    let balance = await ledger.balance(account, options);
+    const balance = await ledger.balance(account, options);
     pushIfDrifted(account, balance, 0n, drift);
   }
   return {
@@ -203,13 +204,13 @@ async function accumulateLegs(
   signedByCurrency: Map<Currency, bigint>,
   options?: Options,
 ): Promise<bigint> {
-  let sign = isDebitNormal(account) ? 1n : -1n;
+  const sign = isDebitNormal(account) ? 1n : -1n;
   let derivedMinor = 0n;
-  let page = await ledger.statement(account, FULL_RANGE, options);
-  for (let entry of page.entries) {
+  const page = await ledger.statement(account, FULL_RANGE, options);
+  for (const entry of page.entries) {
     derivedMinor += entry.amount.minor;
-    let rawMinor = entry.amount.minor * sign;
-    let cur = entry.amount.currency;
+    const rawMinor = entry.amount.minor * sign;
+    const cur = entry.amount.currency;
     signedByCurrency.set(cur, (signedByCurrency.get(cur) ?? 0n) + rawMinor);
   }
   return derivedMinor;
@@ -248,7 +249,7 @@ function backingRequiredMinor(custodialCreditMinor: bigint, par: Rate): bigint {
 function everyCurrencyBalances(
   signedByCurrency: Map<Currency, bigint>,
 ): boolean {
-  for (let total of signedByCurrency.values()) {
+  for (const total of signedByCurrency.values()) {
     if (total !== 0n) {
       return false;
     }
@@ -275,7 +276,7 @@ export function allInvariantsHold(report: ProveReport): boolean {
   );
 }
 
-let FULL_RANGE = {
+const FULL_RANGE = {
   from: Number.MIN_SAFE_INTEGER,
   to: Number.MAX_SAFE_INTEGER,
 };

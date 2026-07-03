@@ -13,8 +13,8 @@ import { ERROR_CODES, fault } from '#src/errors.ts';
 
 // Maps each byte (0-255) to its two lowercase hex chars, e.g. 0 -> "00", 255 -> "ff".
 // Built once at module load so encoding is a table lookup per byte rather than a format call.
-let HEX = (() => {
-  let table = new Array<string>(256);
+const HEX = (() => {
+  const table = new Array<string>(256);
   for (let byte = 0; byte < 256; byte += 1) {
     table[byte] = byte.toString(16).padStart(2, '0');
   }
@@ -56,10 +56,10 @@ export function fromHex(hex: string): Uint8Array {
       },
     );
   }
-  let bytes = new Uint8Array(hex.length / 2);
+  const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < bytes.length; i += 1) {
-    let high = hexDigit(hex.charCodeAt(i * 2));
-    let low = hexDigit(hex.charCodeAt(i * 2 + 1));
+    const high = hexDigit(hex.charCodeAt(i * 2));
+    const low = hexDigit(hex.charCodeAt(i * 2 + 1));
     bytes[i] = (high << 4) | low;
   }
   return bytes;

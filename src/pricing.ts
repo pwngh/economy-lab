@@ -21,8 +21,8 @@ import type { Leg } from '#src/ports.ts';
 // Fees and shares are in basis points (10000 bps = 100%). The share math and the
 // 100%-sum check share this constant in both number and bigint forms, so the two
 // can never disagree.
-let BPS_TOTAL = 10_000;
-let BPS_TOTAL_BIG = 10_000n;
+const BPS_TOTAL = 10_000;
+const BPS_TOTAL_BIG = 10_000n;
 
 /**
  * Fixed fee rate for every sale, taken from `input.feeBps` (the spend handler passes
@@ -35,7 +35,8 @@ let BPS_TOTAL_BIG = 10_000n;
  *   // Price 1000 with a 30% fee credits the seller 700 and revenue 300. Both are
  *   // credits, stored negative, so the lines sum to -1000, the full price.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/pricing/ Pricing} for how fee policies split a sale into ledger lines.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/pricing/ Pricing} for how fee
+ *   policies split a sale into ledger lines.
  */
 export function flatFee(): FeePolicy {
   return (input) => splitLegs(input.price, input.recipients, input.feeBps);
@@ -54,10 +55,10 @@ function splitLegs(
   feeBps: number,
 ): Leg[] {
   assertShareSum(recipients);
-  let net = price.minor - feeForPrice(price.minor, feeBps);
+  const net = price.minor - feeForPrice(price.minor, feeBps);
 
-  let legs: Leg[] = [];
-  for (let recipient of recipients) {
+  const legs: Leg[] = [];
+  for (const recipient of recipients) {
     legs.push(
       credit(
         earned(recipient.sellerId),
@@ -92,10 +93,10 @@ export function revenueForSplit(
   recipients: ReadonlyArray<Recipient>,
   feeBps: number,
 ): bigint {
-  let fee = feeForPrice(price.minor, feeBps);
-  let net = price.minor - fee;
+  const fee = feeForPrice(price.minor, feeBps);
+  const net = price.minor - fee;
   let distributed = 0n;
-  for (let recipient of recipients) {
+  for (const recipient of recipients) {
     distributed += applyBps(net, recipient.shareBps);
   }
   return fee + (net - distributed);
@@ -118,8 +119,8 @@ function applyBps(minor: bigint, bps: number): bigint {
  * raw fee is not a whole credit.
  */
 export function feeForPrice(minor: bigint, bps: number): bigint {
-  let units = ceilDiv(minor * BigInt(bps), BPS_TOTAL_BIG * SCALE);
-  let fee = units * SCALE;
+  const units = ceilDiv(minor * BigInt(bps), BPS_TOTAL_BIG * SCALE);
+  const fee = units * SCALE;
   return fee > minor ? minor : fee;
 }
 
@@ -139,7 +140,7 @@ function assertShareSum(recipients: ReadonlyArray<Recipient>): void {
     return;
   }
   let total = 0;
-  for (let recipient of recipients) {
+  for (const recipient of recipients) {
     total += recipient.shareBps;
   }
   if (total !== BPS_TOTAL) {

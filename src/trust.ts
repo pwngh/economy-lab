@@ -18,12 +18,12 @@ import type { RejectionCode } from '#src/errors.ts';
 
 // The limit and every running total are in CREDIT minor units. Holding both in one currency
 // lets the check compare them directly.
-export let VELOCITY_CURRENCY = 'CREDIT' as const;
+export const VELOCITY_CURRENCY = 'CREDIT' as const;
 
 /**
- * Reports the risk check's verdict: either allow, or deny with a reason. On a deny, the
- * `screenRisk` middleware turns this into `rejected(reason, ...)` for the caller. The reason
- * is never raised as an error.
+ * Reports the risk check's verdict: either allow, or deny with a reason. On a deny, `screenRisk`
+ * in economy.ts's submit pipeline turns this into `rejected(reason, ...)` for the caller. The
+ * reason is never raised as an error.
  */
 export type RiskDecision =
   | { allow: true }
@@ -45,11 +45,11 @@ export function windowedVelocity(
   now: number,
   windowMs: number,
 ): Velocity {
-  let cutoff = now - windowMs;
+  const cutoff = now - windowMs;
   let spentMinor = 0n;
   let windowStart = 0;
   let count = 0;
-  for (let attempt of attempts) {
+  for (const attempt of attempts) {
     if (attempt.at <= cutoff) {
       continue;
     }
@@ -74,7 +74,9 @@ export function windowedVelocity(
  * that moves no tracked subject's funds is always allowed, which is the case when `riskSubject`
  * returns null.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/spend-velocity/ Spend velocity} for the rolling window, why denied attempts still count, and how the record survives a rollback.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/spend-velocity/ Spend velocity}
+ *   for the rolling window, why denied attempts still count, and how the record survives a
+ *   rollback.
  */
 export function assessRisk(
   velocity: Velocity,
@@ -85,7 +87,7 @@ export function assessRisk(
     return { allow: true };
   }
   // Compute what the running total would become if this operation went through.
-  let projected = velocity.spent.minor + attemptMinor(operation);
+  const projected = velocity.spent.minor + attemptMinor(operation);
   if (projected > config.velocityLimitMinor) {
     return { allow: false, reason: 'RISK_DENIED' };
   }
@@ -122,7 +124,7 @@ export function riskAttempt(
 /**
  * Returns the id (user or account) whose running total this operation counts against, or null
  * when the operation is not subject to the risk check. This is the single source of the subject
- * rule, so the logic is identical wherever it is applied. The live middleware (economy.ts
+ * rule, so the logic is identical wherever it is applied. The live pipeline check (economy.ts
  * screenRisk) calls `riskSubject` and `attemptMinor` directly, while `assessRisk` and
  * `riskAttempt` are the test-facing pure twins. The guarantee is shared logic, not a shared
  * call path.

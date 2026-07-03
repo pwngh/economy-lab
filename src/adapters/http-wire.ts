@@ -45,13 +45,11 @@ function encodeLeg(leg: Leg): WireLeg {
 }
 
 function decodeLeg(wire: unknown): Leg {
-  let row = wire as WireLeg;
+  const row = wire as WireLeg;
   return { account: row.account as AccountRef, amount: amountFrom(row.amount) };
 }
 
-// Parses an encoded amount string back into an `Amount`. The currency sits before the colon and
-// the decimal value after it, as in `'CREDIT:12.34'`, so the string is self-contained. It delegates
-// to `decodeAmountWire`, which splits on the colon.
+// Local alias for `decodeAmountWire` (money.ts owns the `'CREDIT:12.34'` format).
 function amountFrom(wire: string): Amount {
   return decodeAmountWire(wire);
 }
@@ -85,8 +83,8 @@ function encodeAmounts(value: unknown): unknown {
     return value.map(encodeAmounts);
   }
   if (value !== null && typeof value === 'object') {
-    let out: Record<string, unknown> = {};
-    for (let [key, inner] of Object.entries(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [key, inner] of Object.entries(value)) {
       out[key] = encodeAmounts(inner);
     }
     return out;
@@ -105,8 +103,8 @@ function decodeAmounts(value: unknown): unknown {
     return value.map(decodeAmounts);
   }
   if (value !== null && typeof value === 'object') {
-    let out: Record<string, unknown> = {};
-    for (let [key, inner] of Object.entries(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [key, inner] of Object.entries(value)) {
       out[key] = decodeAmounts(inner);
     }
     return out;
@@ -118,9 +116,10 @@ function decodeAmounts(value: unknown): unknown {
  * Encode each domain record into a JSON-friendly wire shape. Amounts become decimal strings;
  * everything else copies through unchanged. One function per record type the adapter sends.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for how the store adapter ports move records over the wire.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
+ *   messaging} for how the store adapter ports move records over the wire.
  */
-export let encodeWire = {
+export const encodeWire = {
   amount: encodeAmount,
 
   posting: (
@@ -156,7 +155,7 @@ export let encodeWire = {
   // Only re-encode the amount-typed fields actually present on the patch (reserve, payoutUsd); the
   // rest pass through untouched.
   sagaPatch: (patch: Partial<Saga>): unknown => {
-    let out: Record<string, unknown> = { ...patch };
+    const out: Record<string, unknown> = { ...patch };
     if (patch.reserve !== undefined) {
       out.reserve = encodeAmount(patch.reserve);
     }
@@ -194,11 +193,11 @@ export let encodeWire = {
  * distinct id types in the domain (e.g. an account reference) are cast back on arrival. One
  * function per record type the adapter receives.
  */
-export let decodeWire = {
+export const decodeWire = {
   amount: (wire: unknown): Amount => amountFrom(wire as string),
 
   posting: (wire: unknown): Posting => {
-    let row = wire as {
+    const row = wire as {
       txnId: string;
       legs: unknown[];
       meta: Record<string, unknown>;
@@ -207,7 +206,7 @@ export let decodeWire = {
   },
 
   transaction: (wire: unknown): Transaction => {
-    let row = wire as {
+    const row = wire as {
       id: string;
       postedAt: number;
       legs: unknown[];
@@ -231,7 +230,7 @@ export let decodeWire = {
   claim: (
     wire: unknown,
   ): { claimed: true } | { claimed: false; transaction: Transaction } => {
-    let row = wire as { claimed: boolean; transaction?: unknown };
+    const row = wire as { claimed: boolean; transaction?: unknown };
     return row.claimed
       ? { claimed: true }
       : {
@@ -241,7 +240,7 @@ export let decodeWire = {
   },
 
   sale: (wire: unknown): Sale => {
-    let row = wire as Sale & { price: string; fee: string; legs: unknown[] };
+    const row = wire as Sale & { price: string; fee: string; legs: unknown[] };
     return {
       ...row,
       price: amountFrom(row.price),
@@ -251,7 +250,7 @@ export let decodeWire = {
   },
 
   saga: (wire: unknown): Saga => {
-    let row = wire as Saga & { reserve: string; payoutUsd: string | null };
+    const row = wire as Saga & { reserve: string; payoutUsd: string | null };
     return {
       ...row,
       reserve: amountFrom(row.reserve),
@@ -260,32 +259,32 @@ export let decodeWire = {
   },
 
   subscription: (wire: unknown): Subscription => {
-    let row = wire as Subscription & { price: string };
+    const row = wire as Subscription & { price: string };
     return { ...row, price: amountFrom(row.price) };
   },
 
   promoGrant: (wire: unknown): PromoGrant => {
-    let row = wire as PromoGrant & { amount: string };
+    const row = wire as PromoGrant & { amount: string };
     return { ...row, amount: amountFrom(row.amount) };
   },
 
   inboxEntry: (wire: unknown): InboxEntry => {
-    let row = wire as InboxEntry & { operation: unknown };
+    const row = wire as InboxEntry & { operation: unknown };
     return { ...row, operation: decodeAmounts(row.operation) as Operation };
   },
 
   velocity: (wire: unknown): Velocity => {
-    let row = wire as Velocity & { spent: string };
+    const row = wire as Velocity & { spent: string };
     return { ...row, spent: amountFrom(row.spent) };
   },
 
   lot: (wire: unknown): Lot => {
-    let row = wire as Lot & { amount: string };
+    const row = wire as Lot & { amount: string };
     return { ...row, amount: amountFrom(row.amount) };
   },
 
   statement: (wire: unknown): Statement => {
-    let row = wire as {
+    const row = wire as {
       account: string;
       entries: Array<{ txnId: string; amount: string; postedAt: number }>;
       cursor: string | null;
@@ -302,7 +301,7 @@ export let decodeWire = {
   },
 
   storedLink: (wire: unknown): StoredLink => {
-    let row = wire as {
+    const row = wire as {
       txnId: string;
       legs: unknown[];
       meta: Record<string, unknown>;

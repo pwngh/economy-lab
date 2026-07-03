@@ -32,9 +32,9 @@ export function assertKind<K extends Operation['kind']>(
 }
 
 /**
- * Requires an operator principal. The submit middleware already authorizes the actor, so re-checking
- * here matters only when a handler is called directly, such as from a test. It throws rather
- * than write a privileged change under the wrong actor.
+ * Requires an operator principal. The submit pipeline already authorizes the actor (authorize in
+ * economy.ts), so re-checking here matters only when a handler is called directly, such as from a
+ * test. It throws rather than write a privileged change under the wrong actor.
  */
 export function assertOperator(operation: Operation): void {
   if (operation.actor.kind !== 'operator') {

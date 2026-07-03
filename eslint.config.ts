@@ -15,9 +15,8 @@ import tseslint from 'typescript-eslint';
 
 // Node-only globals banned from the core. The core targets the cross-runtime surface (Node, Bun,
 // Deno, CF Workers), so each banned global has an injected replacement: time comes from Clock,
-// randomness and hashing from crypto.subtle, raw bytes from Uint8Array. Each entry pairs the
-// forbidden global with the ESLint message shown when it is used.
-let BANNED_GLOBALS = [
+// randomness and hashing from crypto.subtle, raw bytes from Uint8Array.
+const BANNED_GLOBALS = [
   {
     name: 'Buffer',
     message: 'Use Uint8Array and src/bytes.ts; Buffer is Node-only.',
@@ -28,11 +27,11 @@ let BANNED_GLOBALS = [
   },
   {
     name: 'setInterval',
-    message: 'Use the injected Scheduler, not raw timers (#58).',
+    message: 'Use the injected Scheduler, not raw timers.',
   },
   {
     name: 'setTimeout',
-    message: 'Use the injected Scheduler/Clock, not raw timers (#58).',
+    message: 'Use the injected Scheduler/Clock, not raw timers.',
   },
   {
     name: 'EventEmitter',
@@ -47,16 +46,15 @@ let BANNED_GLOBALS = [
 
 // Node-only module imports banned from the core. Only the Node-using layers (src/adapters/,
 // src/engines/) import these directly, wrapping each behind a portable interface.
-let BANNED_IMPORTS = {
+const BANNED_IMPORTS = {
   paths: [
     {
       name: 'node:crypto',
-      message: 'Use the injected Digest/Signer over crypto.subtle (#15).',
+      message: 'Use the injected Digest/Signer over crypto.subtle.',
     },
     {
       name: 'node:http',
-      message:
-        'Use the Fetch handler (Request → Response) over node:http (#7).',
+      message: 'Use the Fetch handler (Request → Response) over node:http.',
     },
   ],
   patterns: [
@@ -72,7 +70,7 @@ let BANNED_IMPORTS = {
 // statements. It uses `regex` rather than `group` because group patterns are gitignore-style, where
 // a leading `#` is a comment that matches nothing, so `#test/**` would never fire. The `regex` form
 // matches the `#test/` alias literally.
-let NON_SHIPPED_IMPORTS = [
+const NON_SHIPPED_IMPORTS = [
   {
     regex: '^#test/',
     message:
@@ -90,7 +88,7 @@ let NON_SHIPPED_IMPORTS = [
 // (src/index.ts) loads them via dynamic import(), so an unused driver is never required or bundled.
 // Forbidding static imports across the library keeps that guarantee. no-restricted-imports does not
 // flag dynamic import(), so legitimate `await import(...)` sites stay valid.
-let OPTIONAL_DRIVER_IMPORTS = [
+const OPTIONAL_DRIVER_IMPORTS = [
   '#src/engines/postgres.ts',
   '#src/engines/mysql.ts',
   '#src/adapters/redis.ts',
@@ -121,7 +119,7 @@ export default tseslint.config(
     },
     rules: {
       'no-console': ['error', { allow: ['warn', 'error'] }],
-      'prefer-const': 'off', // House style: prefer `let` over `const` for bindings.
+      'prefer-const': 'error',
       'no-var': 'error',
       '@typescript-eslint/no-unused-vars': [
         'error',

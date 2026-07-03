@@ -59,11 +59,11 @@ export interface ServerOptions {
 }
 
 // Names the signature header. It holds the hex-encoded HMAC-SHA256 of the raw body (see verifyHmac).
-let SIGNATURE_HEADER = 'x-signature';
+const SIGNATURE_HEADER = 'x-signature';
 
 // Names the timestamp header. It holds the provider's send time in milliseconds since 1 Jan 1970
 // UTC, used to reject stale deliveries (replay of a captured request).
-let TIMESTAMP_HEADER = 'x-timestamp';
+const TIMESTAMP_HEADER = 'x-timestamp';
 
 /**
  * HTTP entry point for an {@link Economy}: takes a Fetch `Request`, returns a `Response`. Uses only
@@ -78,14 +78,15 @@ let TIMESTAMP_HEADER = 'x-timestamp';
  * On a thrown {@link EconomyError}, {@link statusFor} maps it to a status code and only the error's
  * `message` is returned, never its internals.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for the routes, codec, and webhook gate.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for
+ *   the routes, codec, and webhook gate.
  */
 export function createServer(
   economy: Economy,
   options: ServerOptions = {},
 ): (request: Request) => Promise<Response> {
   return async (request) => {
-    let segments = new URL(request.url).pathname.split('/').filter(Boolean);
+    const segments = new URL(request.url).pathname.split('/').filter(Boolean);
 
     if (
       request.method === 'GET' &&
@@ -182,12 +183,12 @@ async function webhookRoute(
   provider: string,
   request: Request,
 ): Promise<Response> {
-  let handler = options.webhook;
+  const handler = options.webhook;
   if (handler === undefined) {
     return errorResponse(404, 'No webhook handler configured.');
   }
 
-  let config = options.config;
+  const config = options.config;
   if (config === undefined || config.webhookSecret === '') {
     // No secret configured: keep the bare pass-through (the host owns verification).
     try {
@@ -217,11 +218,11 @@ async function webhookRoute(
     return faultResponse(error);
   }
 
-  let now = (options.clock ?? systemClock).now();
+  const now = (options.clock ?? systemClock).now();
   // `Number(null)` is 0, finite, and would slip past the check below. Map a missing header to NaN so
   // a missing timestamp is rejected rather than read as the epoch.
-  let header = request.headers.get(TIMESTAMP_HEADER);
-  let timestamp = header === null ? Number.NaN : Number(header);
+  const header = request.headers.get(TIMESTAMP_HEADER);
+  const timestamp = header === null ? Number.NaN : Number(header);
   if (
     !Number.isFinite(timestamp) ||
     Math.abs(now - timestamp) > config.replayWindowMs
@@ -233,7 +234,7 @@ async function webhookRoute(
 
   // Last check: stop an already-processed event from running twice. Returns a Response to send
   // immediately (200 "duplicate" or an error), or null when the event is new and the handler runs.
-  let dedup = await replayGate(options, provider, rawBytes);
+  const dedup = await replayGate(options, provider, rawBytes);
   if (dedup !== null) {
     return dedup;
   }
@@ -241,7 +242,7 @@ async function webhookRoute(
   // Verified and not a repeat. Hand it to the handler over a fresh Request so it can read the body
   // again. The host's handler decodes the event and applies it once through its economy, such as
   // crediting the user on a payment callback.
-  let verified = rebuildRequest(request, rawBytes);
+  const verified = rebuildRequest(request, rawBytes);
   try {
     return await handler(provider, verified);
   } catch (error) {
@@ -263,7 +264,7 @@ async function replayGate(
   }
   let claimed: boolean;
   try {
-    let text = new TextDecoder().decode(rawBytes);
+    const text = new TextDecoder().decode(rawBytes);
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
@@ -271,7 +272,7 @@ async function replayGate(
       // A non-JSON body that passed HMAC is a malformed callback, not a server fault: 400.
       throw malformed('Webhook body is not valid JSON.', error);
     }
-    let event = decodeWebhookEvent(provider, parsed);
+    const event = decodeWebhookEvent(provider, parsed);
     claimed = (await options.replay.claim(event.eventId)).claimed;
   } catch (error) {
     return faultResponse(error);
@@ -296,7 +297,7 @@ async function verifyHmac(
   } catch {
     return false;
   }
-  let key = await crypto.subtle.importKey(
+  const key = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(secret),
     { name: 'HMAC', hash: 'SHA-256' },
@@ -322,7 +323,7 @@ function rebuildRequest(request: Request, rawBytes: Uint8Array): Request {
 
 // Defined here, not imported from runtime.ts, so this file pulls in no Node/signing/hashing deps and
 // stays cross-runtime (Node, Bun, Deno, Cloudflare Workers).
-let systemClock: Clock = { now: () => Date.now() };
+const systemClock: Clock = { now: () => Date.now() };
 
 // --- Operation codec (money travels as a decimal string) --------------------------
 
@@ -334,13 +335,13 @@ function decodeOperation(body: unknown): Operation {
   if (body === null || typeof body !== 'object') {
     throw malformed('Operation body must be a JSON object.');
   }
-  let row = body as Record<string, unknown>;
-  let kind = row.kind;
+  const row = body as Record<string, unknown>;
+  const kind = row.kind;
   if (typeof kind !== 'string' || !(kind in AMOUNT_FIELDS)) {
     throw malformed(`Unknown operation kind: ${String(kind)}.`);
   }
-  let decoded: Record<string, unknown> = { ...row };
-  for (let field of AMOUNT_FIELDS[kind]!) {
+  const decoded: Record<string, unknown> = { ...row };
+  for (const field of AMOUNT_FIELDS[kind]!) {
     decoded[field] = decodeAmountField(row[field], field);
   }
   return decoded as unknown as Operation;
@@ -420,7 +421,7 @@ const BAD_REQUEST_CODES = new Set<string>([
 // normalizeError wraps a non-EconomyError as a retryable storage failure -> 503 with a generic
 // message; its stack trace and cause never reach the client.
 function faultResponse(error: unknown): Response {
-  let normalized: EconomyError =
+  const normalized: EconomyError =
     error instanceof EconomyError ? error : normalizeError(error);
   return errorResponse(statusFor(normalized), normalized.message);
 }
@@ -428,7 +429,7 @@ function faultResponse(error: unknown): Response {
 // Empty or invalid-JSON body -> malformed fault, so the raw parser error never escapes and the
 // bad-request verdict stays here.
 async function readJson(request: Request): Promise<unknown> {
-  let text = await request.text();
+  const text = await request.text();
   if (text.length === 0) {
     throw malformed('Request body is empty.');
   }

@@ -18,7 +18,8 @@ import { ERROR_CODES, fault } from '#src/errors.ts';
  * {@link loadConfig}) and passes it in, so a misconfigured deploy fails at startup
  * rather than deep inside a request.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/configuration/ Configuration} for every tunable and its default.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/configuration/ Configuration}
+ *   for every tunable and its default.
  */
 export interface Config {
   /** Secret for verifying the HMAC signature on incoming webhook/settlement messages. */
@@ -37,16 +38,30 @@ export interface Config {
   /** Max provider attempts for a single payout before the system gives up and reverses it. */
   maxPayoutAttempts: number;
 
-  /** Delivery attempts an outbox message gets before the relay dead-letters it as status 'failed'. The cap stops a poison event from wedging the queue forever. */
+  /**
+   * Delivery attempts an outbox message gets before the relay dead-letters it as status 'failed'.
+   * The cap stops a poison event from wedging the queue forever.
+   */
   maxOutboxAttempts: number;
 
-  /** Apply attempts an inbox event gets before the apply worker dead-letters it as status 'dead'. The cap stops a poison inbound event from wedging the queue forever. This is the inbound mirror of `maxOutboxAttempts`. */
+  /**
+   * Apply attempts an inbox event gets before the apply worker dead-letters it as status 'dead'.
+   * The cap stops a poison inbound event from wedging the queue forever. This is the inbound
+   * mirror of `maxOutboxAttempts`.
+   */
   maxInboxAttempts: number;
 
-  /** Consecutive retryable renewal failures before the renewal sweep lapses a subscription instead of re-billing forever. Lapses once `attempts` reaches this cap. */
+  /**
+   * Consecutive retryable renewal failures before the renewal sweep lapses a subscription instead
+   * of re-billing forever. Lapses once `attempts` reaches this cap.
+   */
   maxSubscriptionAttempts: number;
 
-  /** Longest (ms) a payout may sit in SUBMITTED before the worker force-fails it as timed out, meaning the provider never reported back. This differs from `payoutSla.SUBMITTED`, which only schedules the next settle check. */
+  /**
+   * Longest (ms) a payout may sit in SUBMITTED before the worker force-fails it as timed out,
+   * meaning the provider never reported back. This differs from `payoutSla.SUBMITTED`, which only
+   * schedules the next settle check.
+   */
   maxPayoutAgeMs: number;
 
   /** Platform's cut in basis points (hundredths of a percent); 10000 = 100%, 1530 = 15.3%. */
@@ -70,7 +85,11 @@ export interface Config {
    */
   maturityHorizonMs: Record<string, number>;
 
-  /** Time budget (ms) per payout-processing step, keyed by state name (PENDING, SUBMITTED). A background worker uses these to decide when a step has been stuck too long. */
+  /**
+   * Time budget (ms) per payout-processing step, used to schedule when the worker next examines
+   * a saga. `PENDING` delays the first submit pass after a request, `SUBMITTED` delays the next
+   * check on a submitted payout, and `DEFAULT` covers either when unset.
+   */
   payoutSla: Record<string, number>;
 
   /**
@@ -80,7 +99,10 @@ export interface Config {
    */
   payoutMinimumEarnedMinor: bigint;
 
-  /** Min time (ms) between payout requests. The default is 24h to match the live docs. The legal requirement is 14 days (1_209_600_000). */
+  /**
+   * Min time (ms) between payout requests. The default is 24h to match the live docs. The legal
+   * requirement is 14 days (1_209_600_000).
+   */
   payoutMinIntervalMs: number;
 
   /**
@@ -116,21 +138,24 @@ type EnvMap = Record<string, string | undefined>;
  * at a time during requests.
  */
 export function loadConfig(env: EnvMap): Config {
-  let cardHorizonMs = toInt(env.MATURITY_HORIZON_CARD_MS, 7 * 24 * 60 * 60_000);
-  let production = isProduction(env);
+  const cardHorizonMs = toInt(
+    env.MATURITY_HORIZON_CARD_MS,
+    7 * 24 * 60 * 60_000,
+  );
+  const production = isProduction(env);
 
-  let webhookSecret = required(
+  const webhookSecret = required(
     env.WEBHOOK_SECRET,
     'WEBHOOK_SECRET',
     production,
   );
-  let signingSecret = required(
+  const signingSecret = required(
     env.SIGNING_SECRET,
     'SIGNING_SECRET',
     production,
   );
 
-  let missing = [webhookSecret, signingSecret]
+  const missing = [webhookSecret, signingSecret]
     .filter((r) => r.missing)
     .map((r) => r.key);
   if (missing.length > 0) {
@@ -190,7 +215,7 @@ export function economyPaused(
   now: number,
   config: Pick<Config, 'pauseStartMs' | 'pauseEndMs'>,
 ): boolean {
-  let { pauseStartMs, pauseEndMs } = config;
+  const { pauseStartMs, pauseEndMs } = config;
   if (pauseStartMs === null || pauseEndMs === null) {
     return false;
   }
@@ -214,7 +239,7 @@ function required(
 // Parse an integer, returning the fallback when unset or not a valid whole number, so a
 // bad override can never leave the config partly applied.
 function toInt(value: string | undefined, fallback: number): number {
-  let parsed = Number.parseInt(String(value), 10);
+  const parsed = Number.parseInt(String(value), 10);
   return Number.isSafeInteger(parsed) ? parsed : fallback;
 }
 
@@ -222,7 +247,7 @@ function toInt(value: string | undefined, fallback: number): number {
 // valid whole number. Used for the pause-window bounds, where "absent" must stay distinct from any
 // real epoch value so a missing bound leaves the window inactive rather than defaulting to one.
 function toIntOrNull(value: string | undefined): number | null {
-  let parsed = Number.parseInt(String(value), 10);
+  const parsed = Number.parseInt(String(value), 10);
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 

@@ -17,8 +17,8 @@ import type { Rate, Rates, Options } from '#src/ports.ts';
  * economy. Each rate is two integers (`rate` and `scale`), so conversion stays free of
  * floating-point error. These are business constants a deployment sets, not a live market feed.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/money-model/ Money model} for what
- *   the buy, par, and payout rates mean and how the buy-par spread funds the platform.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/money-model/ The money model} for
+ *   what the buy, par, and payout rates mean and how the buy-par spread funds the platform.
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/rates/ Rates} for the port these feed.
  */
 export interface RatesConfig {
@@ -44,27 +44,29 @@ function identityRate(from: Currency, to: Currency): Rate {
  * and throws.
  *
  * @example
- *   // Example rates: buy at ~120 credits/USD ($0.00833), backed and cashed out at ~200/USD ($0.005), a ~40% spread:
+ * // Example rates: buy at ~120 credits/USD ($0.00833), backed and cashed out at ~200/USD ($0.005),
+ * a ~40% spread:
  *   let rates = configuredRates({
  *     buyRate: 8333n, buyScale: 6,
  *     parRate: 5n, parScale: 3,
  *     payoutRate: 5n, payoutScale: 3,
  *   });
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/rates/ Rates} for the dual-rate credit economy this rate source feeds.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/rates/ Rates} for the dual-rate
+ *   credit economy this rate source feeds.
  */
 export function configuredRates(config: RatesConfig): Rates {
-  let buy: Rate = {
+  const buy: Rate = {
     rate: config.buyRate,
     scale: config.buyScale,
     rateId: `buy:CREDIT->USD:${config.buyRate}/${config.buyScale}`,
   };
-  let par: Rate = {
+  const par: Rate = {
     rate: config.parRate,
     scale: config.parScale,
     rateId: `par:CREDIT->USD:${config.parRate}/${config.parScale}`,
   };
-  let payout: Rate = {
+  const payout: Rate = {
     rate: config.payoutRate,
     scale: config.payoutScale,
     rateId: `payout:CREDIT->USD:${config.payoutRate}/${config.payoutScale}`,

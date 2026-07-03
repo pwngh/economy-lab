@@ -36,7 +36,8 @@ import type { Leg, Unit } from '#src/ports.ts';
  * of the same order; a lost claim returns that reversal's transaction as `duplicate`. Returns
  * `committed` or `duplicate`. A bad amount throws a fault.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/clawback/ Clawback} for the chargeback reversal and split accounting.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/clawback/ Clawback}
+ *   for the chargeback reversal and split accounting.
  */
 export async function handleClawback(
   operation: Operation,
@@ -44,24 +45,24 @@ export async function handleClawback(
   ctx: Ctx,
 ): Promise<Outcome> {
   assertKind(operation, 'clawback');
-  let amount = requirePositiveCredit(operation.amount, 'clawback.amount');
+  const amount = requirePositiveCredit(operation.amount, 'clawback.amount');
 
   // Claim the shared `reversed:${orderId}` key so clawback and refund stay mutually exclusive. A
   // lost claim means the order was already reversed. Return that reversal's transaction as a
   // duplicate instead of double-reversing.
   if (operation.orderId !== undefined) {
-    let orderId = presentOrderId(operation.orderId);
-    let claim = await unit.idempotency.claim(reversalKey(orderId));
+    const orderId = presentOrderId(operation.orderId);
+    const claim = await unit.idempotency.claim(reversalKey(orderId));
     if (!claim.claimed) {
       return { status: 'duplicate', transaction: claim.transaction };
     }
   }
 
-  let held = await ledgerBalance(unit.ledger, spendable(operation.userId));
-  let split = splitClawback(amount, held);
-  let legs = buildClawbackLegs(operation.userId, amount, split);
+  const held = await ledgerBalance(unit.ledger, spendable(operation.userId));
+  const split = splitClawback(amount, held);
+  const legs = buildClawbackLegs(operation.userId, amount, split);
 
-  let transaction = await postEntry(unit.ledger, {
+  const transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs,
     meta: clawbackMeta(operation, split),
@@ -105,8 +106,8 @@ function splitClawback(
   amount: Amount,
   held: Amount,
 ): { recovered: Amount; shortfall: Amount } {
-  let available = held.minor > 0n ? held.minor : 0n;
-  let recoveredMinor = available < amount.minor ? available : amount.minor;
+  const available = held.minor > 0n ? held.minor : 0n;
+  const recoveredMinor = available < amount.minor ? available : amount.minor;
   return {
     recovered: toAmount(amount.currency, recoveredMinor),
     shortfall: toAmount(amount.currency, amount.minor - recoveredMinor),
@@ -123,7 +124,7 @@ function buildClawbackLegs(
   amount: Amount,
   split: { recovered: Amount; shortfall: Amount },
 ): Leg[] {
-  let legs: Leg[] = [];
+  const legs: Leg[] = [];
   if (split.recovered.minor > 0n) {
     legs.push(debit(spendable(userId), split.recovered));
   }
@@ -134,15 +135,14 @@ function buildClawbackLegs(
   return legs;
 }
 
-// Builds the metadata stored with the posting. It holds the two split amounts plus any chargeback
-// references the caller passed: order id, idempotency key, and reason. Amounts use the `encodeAmount`
-// text form rather than raw bigints, so the record re-reads and re-hashes byte-for-byte the same
-// every time.
+// Builds the metadata stored with the posting. It holds the two split amounts (via `encodeAmount`,
+// which keeps the hashed bytes stable) plus any chargeback references the caller passed: order id,
+// idempotency key, and reason.
 function clawbackMeta(
   operation: Extract<Operation, { kind: 'clawback' }>,
   split: { recovered: Amount; shortfall: Amount },
 ): Record<string, unknown> {
-  let meta: Record<string, unknown> = {
+  const meta: Record<string, unknown> = {
     kind: 'clawback',
     recovered: encodeAmount(split.recovered),
     shortfall: encodeAmount(split.shortfall),

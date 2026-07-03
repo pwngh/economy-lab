@@ -21,7 +21,7 @@ import type { Options, PromoGrant, Store, Unit } from '#src/ports.ts';
 // Metric name for the sweep, the periodic pass that reverses expired promo grants. The sweep
 // bumps this counter twice per run, once per outcome ("reversed" and "failed"), so each outcome
 // can be graphed separately.
-let SWEEP_METRIC = 'economy.worker.promo.expiry';
+const SWEEP_METRIC = 'economy.worker.promo.expiry';
 
 /**
  * Result of one promo-expiry sweep. Each due grant lands in one of two lists, keyed by grant id:
@@ -55,7 +55,8 @@ type PromoExpiryTally = {
  *
  * `now` is epoch milliseconds. `limit` caps how many grants this run picks up.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how scheduled sweeps reverse expired promo grants.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background
+ *   worker} for how scheduled sweeps reverse expired promo grants.
  */
 export async function sweepExpiredPromos(
   store: Store,
@@ -63,14 +64,14 @@ export async function sweepExpiredPromos(
   input: { now: number; limit: number },
   options?: Options,
 ): Promise<PromoExpirySummary> {
-  let due = await store.promos.claimDue(input.now, input.limit, options);
-  let tally: PromoExpiryTally = { reversed: [], failed: [] };
+  const due = await store.promos.claimDue(input.now, input.limit, options);
+  const tally: PromoExpiryTally = { reversed: [], failed: [] };
 
-  for (let grant of due) {
+  for (const grant of due) {
     await reverseOne({ store, ctx, grant, tally, options });
   }
 
-  tally2(ctx, tally);
+  reportSweep(ctx, tally);
   return tally;
 }
 
@@ -86,12 +87,12 @@ async function reverseOne(args: {
   tally: PromoExpiryTally;
   options?: Options;
 }): Promise<void> {
-  let { grant, tally } = args;
+  const { grant, tally } = args;
   try {
-    let reversed = await settle(args);
+    const reversed = await settle(args);
     tally.reversed.push({ id: grant.id, amount: reversed });
   } catch (error) {
-    let normalized = normalizeError(error);
+    const normalized = normalizeError(error);
     tally.failed.push({ id: grant.id, code: normalized.code });
   }
 }
@@ -107,13 +108,13 @@ async function settle(args: {
   grant: PromoGrant;
   options?: Options;
 }): Promise<Amount> {
-  let { store, ctx, grant, options } = args;
+  const { store, ctx, grant, options } = args;
   return store.transaction(async (unit) => {
     await unit.ledger.lock(promo(grant.userId), options);
-    let bal = await unit.ledger.balance(promo(grant.userId), options);
-    let reverseMinor =
+    const bal = await unit.ledger.balance(promo(grant.userId), options);
+    const reverseMinor =
       bal.minor < grant.amount.minor ? bal.minor : grant.amount.minor;
-    let reversed = toAmount('CREDIT', reverseMinor);
+    const reversed = toAmount('CREDIT', reverseMinor);
     if (reverseMinor > 0n) {
       await postReversal({ unit, ctx, grant, amount: reversed, options });
     }
@@ -133,7 +134,7 @@ async function postReversal(args: {
   amount: Amount;
   options?: Options;
 }): Promise<void> {
-  let { unit, ctx, grant, amount, options } = args;
+  const { unit, ctx, grant, amount, options } = args;
   await postEntry(
     unit.ledger,
     {
@@ -152,7 +153,7 @@ async function postReversal(args: {
 // counts and the failed ids, then bumps the counter twice, once with the reversed count and once
 // with the failed count, so each outcome is tracked separately. Expiry reversal is internal worker
 // housekeeping, so nothing is published to the event stream.
-function tally2(ctx: WorkerCtx, summary: PromoExpirySummary): void {
+function reportSweep(ctx: WorkerCtx, summary: PromoExpirySummary): void {
   ctx.logger.log('info', 'worker.promo.expiry', {
     reversed: summary.reversed.length,
     failed: summary.failed.length,

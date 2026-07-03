@@ -34,7 +34,7 @@ import type { Leg, Sale, Unit } from '#src/ports.ts';
  * `rejected` with `UNKNOWN_ORDER`.
  *
  * @example
- *   let outcome = await refund(
+ *   const outcome = await refund(
  *     { kind: 'refund', idempotencyKey: 'idem_1',
  *       actor: { kind: 'system', service: 'support' }, orderId: 'ord_1', reason: 'changed mind' },
  *     unit, ctx,
@@ -42,7 +42,8 @@ import type { Leg, Sale, Unit } from '#src/ports.ts';
  *   // outcome.status === 'committed'; buyer gets the full price back, seller debited only
  *   // up to the balance they still hold.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/refund/ Refund} for the make-the-buyer-whole coverage plan.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/refund/ Refund} for
+ *   the make-the-buyer-whole coverage plan.
  */
 export async function refund(
   operation: Operation,
@@ -52,7 +53,7 @@ export async function refund(
   assertKind(operation, 'refund');
   requireOrderId(operation.orderId);
 
-  let sale = await unit.sales.get(operation.orderId);
+  const sale = await unit.sales.get(operation.orderId);
   if (sale === null) {
     return rejected('UNKNOWN_ORDER', { orderId: operation.orderId });
   }
@@ -62,15 +63,15 @@ export async function refund(
   // The inner, order-scoped claim. Refund and order-tied clawback both reverse this order, so
   // claiming `reversed:<orderId>` makes the two paths mutually exclusive. Whoever claims first
   // reverses, and the loser gets the recorded transaction back as a duplicate.
-  let claimKey = `reversed:${operation.orderId}`;
-  let claim = await unit.idempotency.claim(claimKey);
+  const claimKey = `reversed:${operation.orderId}`;
+  const claim = await unit.idempotency.claim(claimKey);
   if (!claim.claimed) {
     return { status: 'duplicate', transaction: claim.transaction };
   }
 
-  let legs = reversalLegs(await coverageOf(unit, sale));
+  const legs = reversalLegs(await coverageOf(unit, sale));
 
-  let transaction = await postEntry(unit.ledger, {
+  const transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs,
     meta: refundMeta(operation, sale),
@@ -132,14 +133,17 @@ type Coverage = {
   shortfall: bigint;
 };
 
+// Plans the refund: folds the sale's legs into per-account deltas, caps each user account's
+// restoration at what the account still holds, and books the uncollectable remainder as
+// `shortfall`.
 async function coverageOf(unit: Unit, sale: Sale): Promise<Coverage> {
-  let deltas = foldDeltas(sale.legs);
+  const deltas = foldDeltas(sale.legs);
 
-  let uncapped: AccountDelta[] = [];
-  let capped: Coverage['capped'] = [];
+  const uncapped: AccountDelta[] = [];
+  const capped: Coverage['capped'] = [];
   let shortfall = 0n;
 
-  for (let d of deltas) {
+  for (const d of deltas) {
     if (d.delta === 0n) {
       continue;
     }
@@ -156,9 +160,9 @@ async function coverageOf(unit: Unit, sale: Sale): Promise<Coverage> {
       });
       continue;
     }
-    let want = d.delta;
-    let onHand = await balanceUp(unit, d.account);
-    let covered = onHand < want ? (onHand > 0n ? onHand : 0n) : want;
+    const want = d.delta;
+    const onHand = await balanceUp(unit, d.account);
+    const covered = onHand < want ? (onHand > 0n ? onHand : 0n) : want;
     if (covered > 0n) {
       capped.push({ account: d.account, covered, currency: d.currency });
     }
@@ -172,11 +176,11 @@ async function coverageOf(unit: Unit, sale: Sale): Promise<Coverage> {
 // clawback, and credits RECEIVABLE for the uncollectable total. RECEIVABLE stands in for exactly
 // the missing amounts, so the lines balance to zero as the original sale's did.
 function reversalLegs(coverage: Coverage): Leg[] {
-  let legs: Leg[] = [];
-  for (let u of coverage.uncapped) {
+  const legs: Leg[] = [];
+  for (const u of coverage.uncapped) {
     legs.push(raiseLeg(u.account, toAmount(u.currency, u.delta)));
   }
-  for (let c of coverage.capped) {
+  for (const c of coverage.capped) {
     legs.push(lowerLeg(c.account, toAmount(c.currency, c.covered)));
   }
   if (coverage.shortfall > 0n) {
@@ -189,13 +193,16 @@ function reversalLegs(coverage: Coverage): Leg[] {
   return legs;
 }
 
+// A leg that raises `account` by `amount` whatever its normal side: a debit-normal account is
+// debited, a credit-normal account credited.
 function raiseLeg(account: AccountRef, amount: Amount): Leg {
-  let sign = isDebitNormal(account) ? 1n : -1n;
+  const sign = isDebitNormal(account) ? 1n : -1n;
   return { account, amount: toAmount(amount.currency, amount.minor * sign) };
 }
 
+// The mirror of `raiseLeg`: a leg that lowers `account` by `amount`.
 function lowerLeg(account: AccountRef, amount: Amount): Leg {
-  let sign = isDebitNormal(account) ? -1n : 1n;
+  const sign = isDebitNormal(account) ? -1n : 1n;
   return { account, amount: toAmount(amount.currency, amount.minor * sign) };
 }
 
@@ -205,10 +212,10 @@ function lowerLeg(account: AccountRef, amount: Amount): Leg {
 // debit is positive. Before summing, `balanceDelta` converts each line into its effect on that
 // account's balance, which depends on whether the account grows on a debit or a credit.
 function foldDeltas(legs: ReadonlyArray<Leg>): AccountDelta[] {
-  let byAccount = new Map<AccountRef, AccountDelta>();
-  for (let leg of legs) {
-    let effect = balanceDelta(leg);
-    let entry = byAccount.get(leg.account);
+  const byAccount = new Map<AccountRef, AccountDelta>();
+  for (const leg of legs) {
+    const effect = balanceDelta(leg);
+    const entry = byAccount.get(leg.account);
     if (entry === undefined) {
       byAccount.set(leg.account, {
         account: leg.account,
@@ -227,7 +234,7 @@ function foldDeltas(legs: ReadonlyArray<Leg>): AccountDelta[] {
 // account never holds a negative balance, but reading up-is-positive keeps the cap correct for a
 // house account that may.
 async function balanceUp(unit: Unit, account: AccountRef): Promise<bigint> {
-  let current = await unit.ledger.balance(account);
+  const current = await unit.ledger.balance(account);
   return current.minor;
 }
 
@@ -238,7 +245,7 @@ function refundMeta(
   operation: Extract<Operation, { kind: 'refund' }>,
   sale: Sale,
 ): Record<string, unknown> {
-  let meta: Record<string, unknown> = {
+  const meta: Record<string, unknown> = {
     kind: 'refund',
     orderId: operation.orderId,
     reversedTxnId: sale.txnId,
@@ -252,7 +259,8 @@ function refundMeta(
 // Requires a non-blank `orderId`. A blank or whitespace-only value is malformed input the central
 // guard cannot catch, because it carries no order to look up. Left unchecked it would return a
 // UNKNOWN_ORDER rejection that does not distinguish the malformed request from a genuine lookup
-// miss, so this throws a fault instead to report the client error. A genuinely unknown but non-blank orderId still flows through to the
+// miss, so this throws a fault instead to report the client error. A genuinely unknown but
+// non-blank orderId still flows through to the
 // UNKNOWN_ORDER rejection.
 function requireOrderId(orderId: string): void {
   if (orderId.trim() === '') {

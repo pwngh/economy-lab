@@ -11,6 +11,8 @@
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 
+import type { Cache } from '#src/ports.ts';
+
 // Hand-written shape of the ioredis methods we use. This lets the file typecheck even when
 // ioredis, an optional dependency, is not installed. The second `set` overload takes 'PX'
 // and a millisecond TTL, which ioredis forwards to the Redis SET command to expire the key.
@@ -22,11 +24,9 @@ interface RedisClient {
   quit(): Promise<unknown>;
 }
 
-import type { Cache } from '#src/ports.ts';
-
 // Prefixes every key. The prefix avoids collisions with other data in the same Redis
 // instance and lets an operator find or delete only this cache's keys.
-let KEY_PREFIX = 'economy:cache:';
+const KEY_PREFIX = 'economy:cache:';
 
 function namespaced(key: string): string {
   return `${KEY_PREFIX}${key}`;
@@ -58,7 +58,8 @@ function storeFault(operation: string, cause: unknown): never {
  *   await cache.set('balance:usr_42:spendable', 'CREDIT:12.34', 60_000);
  *   await cache.get('balance:usr_42:spendable'); // 'CREDIT:12.34' | null
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for how the cache port backs hot reads.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
+ *   messaging} for how the cache port backs hot reads.
  */
 export function redisCacheFrom(
   client: RedisClient,

@@ -26,7 +26,8 @@ import type { Saga, Unit } from '#src/ports.ts';
  * cancel out; the worker posts the USD side later. Only earned credit is payable. Insufficient
  * earned credit returns a `rejected` result; a malformed amount (not CREDIT, or not positive) throws.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/request-payout/ Request payout} for the full payout request lifecycle.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/request-payout/
+ *   Request payout} for the full payout request lifecycle.
  */
 export async function requestPayout(
   operation: Operation,
@@ -34,7 +35,7 @@ export async function requestPayout(
   ctx: Ctx,
 ): Promise<Outcome> {
   assertKind(operation, 'requestPayout');
-  let amount = payableCredit(operation.amount);
+  const amount = payableCredit(operation.amount);
 
   if (amount.minor < ctx.config.payoutMinimumEarnedMinor) {
     return rejected('BELOW_MINIMUM', {
@@ -50,7 +51,7 @@ export async function requestPayout(
   // first request passes. Strict `<`, so a request exactly the interval later is allowed. Runs
   // before the balance read so the cheap rejection comes first, and returns a rejection (not a
   // throw) so the caller can surface `retryAfter`.
-  let last = await unit.sagas.lastPayoutAt(operation.userId);
+  const last = await unit.sagas.lastPayoutAt(operation.userId);
   if (
     last !== null &&
     ctx.clock.now() - last < ctx.config.payoutMinIntervalMs
@@ -62,7 +63,7 @@ export async function requestPayout(
     });
   }
 
-  let available = await unit.ledger.balance(earned(operation.userId));
+  const available = await unit.ledger.balance(earned(operation.userId));
   if (compare(available, amount) < 0) {
     return rejected('INSUFFICIENT_FUNDS', {
       account: earned(operation.userId),
@@ -76,7 +77,7 @@ export async function requestPayout(
   // stops early. Like INSUFFICIENT_FUNDS it returns a rejection rather than throwing.
   // See https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/ for why fresh
   // earnings clear on a delay and how the matured tail is measured.
-  let cleared = await maturedAtLeast(
+  const cleared = await maturedAtLeast(
     unit.ledger,
     earned(operation.userId),
     ctx.clock.now(),
@@ -89,10 +90,10 @@ export async function requestPayout(
     });
   }
 
-  let rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
+  const rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
   // The reserve credit routes by the user id, not the idempotency key: settle and reverse know
   // only the saga, and the saga knows the user, so this is the shard their later debit finds.
-  let transaction = await postEntry(unit.ledger, {
+  const transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs: routePlatformLegs(
       [
@@ -120,7 +121,7 @@ function sagaOf(
   rateId: string,
   ctx: Ctx,
 ): Saga {
-  let now = ctx.clock.now();
+  const now = ctx.clock.now();
   return {
     id: ctx.ids.next('pay'),
     userId: operation.userId,
@@ -141,7 +142,7 @@ function sagaOf(
 // PENDING SLA if set, otherwise DEFAULT. Falling back to DEFAULT rather than 0 keeps an unset
 // config from making the payout due immediately and flooding the worker's sweep.
 function pendingSlaMs(ctx: Ctx): number {
-  let sla = ctx.config.payoutSla;
+  const sla = ctx.config.payoutSla;
   return sla.PENDING ?? sla.DEFAULT ?? 0;
 }
 

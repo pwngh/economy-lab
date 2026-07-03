@@ -136,7 +136,7 @@ export async function runSweeps(
   ctx: WorkerCtx,
   input: SweepInput,
 ): Promise<SweepBatch> {
-  let { now, limit, options } = input;
+  const { now, limit, options } = input;
   return {
     payouts: await isolate(() => settleDuePayouts(store, ctx, { now, limit })),
     subscriptions: await isolate(() =>
@@ -199,7 +199,7 @@ async function isolate<TSummary>(
   try {
     return { ok: true, summary: await run() };
   } catch (error) {
-    let normalized = normalizeError(error);
+    const normalized = normalizeError(error);
     return {
       ok: false,
       code: normalized.code,
@@ -214,29 +214,30 @@ async function isolate<TSummary>(
  * `intervalMs` ms via that scheduler and returns a stop function. Using the scheduler rather
  * than a built-in timer keeps start and stop on the same code path.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for the sweep cycle, ordering, and isolation model.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background
+ *   worker} for the sweep cycle, ordering, and isolation model.
  */
 export function createWorker(
   store: Store,
   ctx: WorkerCtx,
   scheduler?: Scheduler,
 ): Worker {
-  let runOnce = async (input: SweepInput): Promise<SweepRun> => {
+  const runOnce = async (input: SweepInput): Promise<SweepRun> => {
     // Records every txn id minted this run through a wrapped id generator, so the host gets the run's
     // ledger postings without intercepting `ctx.ids` itself. `start` below does not need this, so it
     // stays on the bare runSweeps.
-    let postings: string[] = [];
-    let recordingCtx: WorkerCtx = {
+    const postings: string[] = [];
+    const recordingCtx: WorkerCtx = {
       ...ctx,
       ids: {
         next: (prefix) => {
-          let id = ctx.ids.next(prefix);
+          const id = ctx.ids.next(prefix);
           if (prefix === 'txn') postings.push(id);
           return id;
         },
       } satisfies Ids,
     };
-    let batch = await runSweeps(store, recordingCtx, input);
+    const batch = await runSweeps(store, recordingCtx, input);
     return { batch, postings };
   };
   if (scheduler === undefined) {

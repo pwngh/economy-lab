@@ -119,7 +119,7 @@ function defaultClock(): Clock {
   return { now: () => 0 };
 }
 
-let GENESIS_HEX = toHex(GENESIS);
+const GENESIS_HEX = toHex(GENESIS);
 
 // --- Ledger store -----------------------------------------------------------------
 
@@ -137,11 +137,11 @@ function isKnownAccount(account: AccountRef, registered: Set<string>): boolean {
   if (registered.has(baseOf(account))) {
     return true;
   }
-  let colon = account.lastIndexOf(':');
+  const colon = account.lastIndexOf(':');
   if (colon < 0) {
     return false;
   }
-  let suffix = account.slice(colon + 1);
+  const suffix = account.slice(colon + 1);
   return suffix === 'spendable' || suffix === 'earned' || suffix === 'promo';
 }
 
@@ -192,9 +192,9 @@ export type MemoryLedger = Ledger &
 // account more than once, but each distinct account is wanted only once, because appending
 // advances one chain head per distinct account.
 function distinctAccounts(legs: ReadonlyArray<Leg>): AccountRef[] {
-  let seen = new Set<AccountRef>();
-  let order: AccountRef[] = [];
-  for (let leg of legs) {
+  const seen = new Set<AccountRef>();
+  const order: AccountRef[] = [];
+  for (const leg of legs) {
     if (!seen.has(leg.account)) {
       seen.add(leg.account);
       order.push(leg.account);
@@ -212,11 +212,12 @@ async function advanceChain(
   digest: Digest,
   posting: Posting,
 ): Promise<ReadonlyArray<Link>> {
-  let links: Link[] = [];
-  for (let account of distinctAccounts(posting.legs)) {
-    let prevHex = state.heads.get(account) ?? GENESIS_HEX;
-    let accountPrevHash = prevHex === GENESIS_HEX ? GENESIS : fromHex(prevHex);
-    let hash = await chainHash(digest, {
+  const links: Link[] = [];
+  for (const account of distinctAccounts(posting.legs)) {
+    const prevHex = state.heads.get(account) ?? GENESIS_HEX;
+    const accountPrevHash =
+      prevHex === GENESIS_HEX ? GENESIS : fromHex(prevHex);
+    const hash = await chainHash(digest, {
       accountPrevHash,
       txnId: posting.txnId,
       account,
@@ -233,11 +234,11 @@ async function advanceChain(
 // posting. The undo deletes any account this posting first created, so rollback leaves no leftover
 // zero-balance account.
 function commitPosting(state: LedgerState, stored: StoredPosting): void {
-  let priorHeads = stored.links.map((link) => ({
+  const priorHeads = stored.links.map((link) => ({
     account: link.account,
     prev: state.heads.get(link.account),
   }));
-  let created = state.journal.recording()
+  const created = state.journal.recording()
     ? new Set(
         stored.legs
           .filter((leg) => !state.balances.has(leg.account))
@@ -249,9 +250,9 @@ function commitPosting(state: LedgerState, stored: StoredPosting): void {
   // Index this posting under each account it raised (its lots), so `timeline` reads them directly
   // rather than scanning the whole log. One entry per distinct raised account, at the just-pushed
   // log position; undoPosting removes the same set.
-  let index = state.log.length - 1;
-  let lotted = lottedAccounts(stored.legs);
-  for (let account of lotted) {
+  const index = state.log.length - 1;
+  const lotted = lottedAccounts(stored.legs);
+  for (const account of lotted) {
     let positions = state.lotIndexByAccount.get(account);
     if (positions === undefined) {
       positions = [];
@@ -259,11 +260,11 @@ function commitPosting(state: LedgerState, stored: StoredPosting): void {
     }
     positions.push(index);
   }
-  for (let link of stored.links) {
+  for (const link of stored.links) {
     state.heads.set(link.account, link.hash);
   }
-  for (let leg of stored.legs) {
-    let next =
+  for (const leg of stored.legs) {
+    const next =
       (state.balances.get(leg.account) ?? 0n) + balanceDelta(leg).minor;
     state.balances.set(leg.account, next);
   }
@@ -276,9 +277,9 @@ function commitPosting(state: LedgerState, stored: StoredPosting): void {
 // The distinct accounts a posting raised: those with a balance-increasing leg, the lots `timeline`
 // yields. commitPosting indexes the posting under each; undoPosting removes it.
 function lottedAccounts(legs: ReadonlyArray<Leg>): AccountRef[] {
-  let seen = new Set<AccountRef>();
-  let order: AccountRef[] = [];
-  for (let leg of legs) {
+  const seen = new Set<AccountRef>();
+  const order: AccountRef[] = [];
+  for (const leg of legs) {
     if (balanceDelta(leg).minor > 0n && !seen.has(leg.account)) {
       seen.add(leg.account);
       order.push(leg.account);
@@ -307,8 +308,8 @@ function undoPosting(
 ): void {
   state.log.pop();
 
-  for (let account of undo.lotted) {
-    let positions = state.lotIndexByAccount.get(account);
+  for (const account of undo.lotted) {
+    const positions = state.lotIndexByAccount.get(account);
     if (positions !== undefined) {
       positions.pop();
       if (positions.length === 0) {
@@ -316,15 +317,15 @@ function undoPosting(
       }
     }
   }
-  for (let { account, prev } of undo.priorHeads) {
+  for (const { account, prev } of undo.priorHeads) {
     if (prev === undefined) {
       state.heads.delete(account);
     } else {
       state.heads.set(account, prev);
     }
   }
-  for (let leg of stored.legs) {
-    let next =
+  for (const leg of stored.legs) {
+    const next =
       (state.balances.get(leg.account) ?? 0n) - balanceDelta(leg).minor;
     if (next === 0n && undo.created?.has(leg.account)) {
       state.balances.delete(leg.account);
@@ -338,7 +339,7 @@ function createLedgerStore(deps: {
   digest: Digest;
   clock: Clock;
 }): MemoryLedger {
-  let state: LedgerState = {
+  const state: LedgerState = {
     journal: createJournal(),
     log: [],
 
@@ -360,9 +361,9 @@ function createLedgerStore(deps: {
     lock: async () => {},
 
     append: async (posting) => {
-      let postedAt = deps.clock.now();
-      let links = await advanceChain(state, deps.digest, posting);
-      let stored: StoredPosting = {
+      const postedAt = deps.clock.now();
+      const links = await advanceChain(state, deps.digest, posting);
+      const stored: StoredPosting = {
         txnId: posting.txnId,
         legs: posting.legs,
         meta: posting.meta,
@@ -384,7 +385,7 @@ function createLedgerStore(deps: {
     heads: async function* () {
       // Yields in code-unit order rather than Map insertion order, so every engine lists accounts
       // identically.
-      for (let [account, head] of [...state.heads].sort((a, b) =>
+      for (const [account, head] of [...state.heads].sort((a, b) =>
         byCodeUnit(a[0], b[0]),
       )) {
         yield [account, head] as const;
@@ -396,7 +397,7 @@ function createLedgerStore(deps: {
     // as a balance that shouldn't exist), whereas walking `heads` never would. Copy the keys first for
     // safe iteration, then sort by code unit so every engine lists accounts in the same order.
     balanceAccounts: async function* () {
-      for (let account of [...state.balances.keys()].sort(byCodeUnit)) {
+      for (const account of [...state.balances.keys()].sort(byCodeUnit)) {
         yield account;
       }
     },
@@ -423,12 +424,13 @@ function buildStatement(
   account: AccountRef,
   range: Range,
 ): Statement {
-  let entries: Array<{ txnId: string; amount: Amount; postedAt: number }> = [];
-  for (let row of log) {
+  const entries: Array<{ txnId: string; amount: Amount; postedAt: number }> =
+    [];
+  for (const row of log) {
     if (row.postedAt < range.from || row.postedAt >= range.to) {
       continue;
     }
-    for (let leg of row.legs) {
+    for (const leg of row.legs) {
       if (leg.account === account) {
         entries.push({
           txnId: row.txnId,
@@ -453,21 +455,21 @@ async function* timelineOf(
   account: AccountRef,
   options?: { order?: 'asc' | 'desc'; limit?: number; offset?: number },
 ): AsyncIterable<Lot> {
-  let order = options?.order ?? 'asc';
-  let offset = options?.offset ?? 0;
-  let limit = options?.limit ?? Infinity;
+  const order = options?.order ?? 'asc';
+  const offset = options?.offset ?? 0;
+  const limit = options?.limit ?? Infinity;
 
   // Walk only this account's lots, via its lot index, rather than scanning the whole log. The index
   // holds its log positions in commit (asc) order; 'desc' walks it newest-first. A log position is
   // the in-memory analogue of SQL `seq`, so reversing matches `order by seq desc`.
-  let positions = state.lotIndexByAccount.get(account) ?? [];
-  let step = order === 'desc' ? -1 : 1;
-  let start = order === 'desc' ? positions.length - 1 : 0;
+  const positions = state.lotIndexByAccount.get(account) ?? [];
+  const step = order === 'desc' ? -1 : 1;
+  const start = order === 'desc' ? positions.length - 1 : 0;
   let skipped = 0;
   let yielded = 0;
   for (let n = 0; n < positions.length && yielded < limit; n += 1) {
-    let row = state.log[positions[start + step * n]!]!;
-    for (let lot of lotsOfPosting(row, account)) {
+    const row = state.log[positions[start + step * n]!]!;
+    for (const lot of lotsOfPosting(row, account)) {
       if (skipped < offset) {
         skipped += 1;
         continue;
@@ -488,11 +490,11 @@ function* lotsOfPosting(
   row: StoredPosting,
   account: AccountRef,
 ): Generator<Lot> {
-  for (let leg of row.legs) {
+  for (const leg of row.legs) {
     if (leg.account !== account) {
       continue;
     }
-    let delta = balanceDelta(leg);
+    const delta = balanceDelta(leg);
     if (delta.minor <= 0n) {
       continue;
     }
@@ -515,8 +517,8 @@ async function* lineageOf(
   log: ReadonlyArray<StoredPosting>,
   account: AccountRef,
 ): AsyncIterable<StoredLink> {
-  for (let row of log) {
-    let link = row.links.find((entry) => entry.account === account);
+  for (const row of log) {
+    const link = row.links.find((entry) => entry.account === account);
     if (link) {
       yield {
         txnId: row.txnId,
@@ -536,7 +538,7 @@ function postingOf(
   log: ReadonlyArray<StoredPosting>,
   txnId: string,
 ): Posting | null {
-  let row = log.find((entry) => entry.txnId === txnId);
+  const row = log.find((entry) => entry.txnId === txnId);
   if (!row) {
     return null;
   }
@@ -550,8 +552,8 @@ function postingOf(
 async function* listPostingsOf(
   log: ReadonlyArray<StoredPosting>,
 ): AsyncIterable<Posting> {
-  let snapshot = [...log].reverse();
-  for (let posting of snapshot) {
+  const snapshot = [...log].reverse();
+  for (const posting of snapshot) {
     yield { txnId: posting.txnId, legs: posting.legs, meta: posting.meta };
   }
 }
@@ -563,7 +565,7 @@ function tamperPosting(
   txnId: string,
   mutate: (legs: Leg[]) => void,
 ): void {
-  let row = log.find((entry) => entry.txnId === txnId);
+  const row = log.find((entry) => entry.txnId === txnId);
   if (row) {
     mutate(row.legs as Leg[]);
   }
@@ -578,15 +580,15 @@ function tamperPosting(
 // pending is the only "claimed but not finished" state. On success, `record` turns a pending key
 // into a committed result.
 function createIdempotencyStore(): IdempotencyStore & Participant {
-  let journal = createJournal();
-  let committed = new Map<string, Transaction>();
-  let pending = new Set<string>();
+  const journal = createJournal();
+  const committed = new Map<string, Transaction>();
+  const pending = new Set<string>();
 
   return {
     journal,
 
     claim: async (key, _options?: Options) => {
-      let prior = committed.get(key);
+      const prior = committed.get(key);
       if (prior) {
         return { claimed: false, transaction: prior };
       }
@@ -611,13 +613,13 @@ function createIdempotencyStore(): IdempotencyStore & Participant {
 // Records each completed sale, keyed by order id (separate from the idempotency key), so a
 // later refund can reverse what the original purchase posted.
 function createSaleStore(): SaleStore & Participant {
-  let journal = createJournal();
-  let rows = new Map<string, Sale>();
+  const journal = createJournal();
+  const rows = new Map<string, Sale>();
   return {
     journal,
     put: async (sale, _options?: Options) => {
-      let prior = rows.get(sale.orderId);
-      let had = rows.has(sale.orderId);
+      const prior = rows.get(sale.orderId);
+      const had = rows.has(sale.orderId);
       rows.set(sale.orderId, sale);
       journal.record(() =>
         had ? rows.set(sale.orderId, prior!) : rows.delete(sale.orderId),
@@ -634,9 +636,9 @@ function createSaleStore(): SaleStore & Participant {
 // pending messages (`claimBatch`) and marks them sent (`markRelayed`). The receiver drops duplicates
 // by message id, so each event is delivered at least once but acted on only once.
 function createOutboxStore(): OutboxStore & Participant {
-  let journal = createJournal();
-  let rows = new Map<string, OutboxMessage>();
-  let order: string[] = [];
+  const journal = createJournal();
+  const rows = new Map<string, OutboxMessage>();
+  const order: string[] = [];
 
   return {
     journal,
@@ -649,12 +651,12 @@ function createOutboxStore(): OutboxStore & Participant {
       });
     },
     claimBatch: async (limit, _options?: Options) => {
-      let batch: OutboxMessage[] = [];
-      for (let id of order) {
+      const batch: OutboxMessage[] = [];
+      for (const id of order) {
         if (batch.length >= limit) {
           break;
         }
-        let message = rows.get(id);
+        const message = rows.get(id);
         // Only 'pending' rows are handed back. The 'relayed' and 'failed' states are terminal, and
         // this `=== 'pending'` test excludes both.
         if (message && message.status === 'pending') {
@@ -664,10 +666,10 @@ function createOutboxStore(): OutboxStore & Participant {
       return batch;
     },
     markRelayed: async (ids, _options?: Options) => {
-      for (let id of ids) {
-        let message = rows.get(id);
+      for (const id of ids) {
+        const message = rows.get(id);
         if (message && message.status === 'pending') {
-          let prior = message.status;
+          const prior = message.status;
           journal.record(() => {
             message.status = prior;
           });
@@ -676,27 +678,27 @@ function createOutboxStore(): OutboxStore & Participant {
       }
     },
     recordFailure: async (id, _options?: Options) => {
-      let message = rows.get(id);
+      const message = rows.get(id);
       // Does nothing for a missing or already-terminal row. Only a still-'pending' message gets its
       // attempt counted. This does not change the status, which is deadLetter's job. It only bumps
       // the retry counter so the next sweep can try again.
       if (!message || message.status !== 'pending') {
         return;
       }
-      let prior = message.attempts;
+      const prior = message.attempts;
       journal.record(() => {
         message.attempts = prior;
       });
       message.attempts += 1;
     },
     deadLetter: async (id, reason, _options?: Options) => {
-      let message = rows.get(id);
+      const message = rows.get(id);
       // Does nothing for a missing or already-terminal row, mirroring the saga store. Flipping the
       // status to 'failed' keeps `claimBatch` from handing this poison message back again.
       if (!message || message.status !== 'pending') {
         return;
       }
-      let prior = { ...message };
+      const prior = { ...message };
       journal.record(() => rows.set(id, prior));
       // Flip to 'failed' and record the failure reason on the message itself, so the dead-letter
       // outcome travels with the row instead of a side map.
@@ -713,12 +715,12 @@ function createOutboxStore(): OutboxStore & Participant {
 // operation, and marks them applied (`markApplied`). At enqueue it dedupes on `key`, the provider
 // event id, returning the existing row for a redelivered event so it is applied at most once.
 function createInboxStore(): InboxStore & Participant {
-  let journal = createJournal();
-  let rows = new Map<string, InboxEntry>();
-  let order: string[] = [];
+  const journal = createJournal();
+  const rows = new Map<string, InboxEntry>();
+  const order: string[] = [];
   // Maps a provider event id (`key`) to the row id it was first enqueued under, so a redelivered
   // event resolves to the existing row instead of inserting a duplicate.
-  let byKey = new Map<string, string>();
+  const byKey = new Map<string, string>();
 
   return {
     journal,
@@ -726,7 +728,7 @@ function createInboxStore(): InboxStore & Participant {
       // Dedupes on the provider event id. A duplicate does nothing and returns the row already
       // stored under that key, so a redelivered event is applied at most once. Only a first sighting
       // inserts a row and records an undo.
-      let existingId = byKey.get(entry.key);
+      const existingId = byKey.get(entry.key);
       if (existingId !== undefined) {
         return { ...rows.get(existingId)! };
       }
@@ -747,9 +749,9 @@ function createInboxStore(): InboxStore & Participant {
       // and this `=== 'pending'` test excludes both. `input.now` is accepted for parity with the
       // saga and relay claims. The inbox has no due-time gate, so every pending row is immediately
       // claimable.
-      let pending: InboxEntry[] = [];
-      for (let id of order) {
-        let entry = rows.get(id);
+      const pending: InboxEntry[] = [];
+      for (const id of order) {
+        const entry = rows.get(id);
         if (entry && entry.status === 'pending') {
           pending.push({ ...entry });
         }
@@ -758,39 +760,39 @@ function createInboxStore(): InboxStore & Participant {
       return pending.slice(0, input.limit);
     },
     markApplied: async (id, _options?: Options) => {
-      let entry = rows.get(id);
+      const entry = rows.get(id);
       // Does nothing for a missing or already-terminal row. Only a still-'pending' row flips to
       // 'applied', so `claimInbound` never hands it back again.
       if (!entry || entry.status !== 'pending') {
         return;
       }
-      let prior = entry.status;
+      const prior = entry.status;
       journal.record(() => {
         entry.status = prior;
       });
       entry.status = 'applied';
     },
     bumpAttempt: async (id, _options?: Options) => {
-      let entry = rows.get(id);
+      const entry = rows.get(id);
       // Does nothing for a missing or already-terminal row. Only a still-'pending' row gets its
       // attempt counted. This does not change the status, which is deadLetter's job. It only bumps
       // the retry counter so the next sweep can try again.
       if (!entry || entry.status !== 'pending') {
         return;
       }
-      let prior = entry.attempts;
+      const prior = entry.attempts;
       journal.record(() => {
         entry.attempts = prior;
       });
       entry.attempts += 1;
     },
     deadLetter: async (id, reason, _options?: Options) => {
-      let entry = rows.get(id);
+      const entry = rows.get(id);
 
       if (!entry || entry.status !== 'pending') {
         return;
       }
-      let prior = { ...entry };
+      const prior = { ...entry };
       journal.record(() => rows.set(id, prior));
       // Flip to 'dead' and record the failure reason on the row itself, so the dead-letter outcome
       // travels with the row instead of a side map.
@@ -807,8 +809,8 @@ function createInboxStore(): InboxStore & Participant {
 // so a consumer can't mutate stored state. Defined at module level (like lineageOf) to keep
 // createSagaStore short.
 async function* listSagasOf(rows: Map<string, Saga>): AsyncIterable<Saga> {
-  let snapshot = [...rows.values()].sort((a, b) => b.updatedAt - a.updatedAt);
-  for (let saga of snapshot) {
+  const snapshot = [...rows.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+  for (const saga of snapshot) {
     yield { ...saga };
   }
 }
@@ -817,17 +819,17 @@ async function* listSagasOf(rows: Map<string, Saga>): AsyncIterable<Saga> {
 // the expected state (`from`). Otherwise it returns false and changes nothing. This guards against
 // two background runs advancing the same saga twice.
 function createSagaStore(): SagaStore & Participant {
-  let journal = createJournal();
-  let rows = new Map<string, Saga>();
+  const journal = createJournal();
+  const rows = new Map<string, Saga>();
   // Maintained max `updatedAt` per user, so `lastPayoutAt` is an O(1) read, not a scan over every
   // saga. Sagas are only added or moved forward (never deleted outside rollback) and `updatedAt`
   // only increases, so this index only rises on a write and is restored on rollback.
-  let lastByUser = new Map<string, number>();
+  const lastByUser = new Map<string, number>();
 
   // Raises a user's most-recent-payout time and records the undo. Only ever raises, so a rolled-back
   // saga write restores the prior max (or clears it when this was the user's first saga).
-  let bumpLast = (userId: string, updatedAt: number): void => {
-    let prior = lastByUser.get(userId);
+  const bumpLast = (userId: string, updatedAt: number): void => {
+    const prior = lastByUser.get(userId);
     if (prior !== undefined && prior >= updatedAt) {
       return;
     }
@@ -842,8 +844,8 @@ function createSagaStore(): SagaStore & Participant {
   return {
     journal,
     open: async (saga, _options?: Options) => {
-      let prior = rows.get(saga.id);
-      let had = rows.has(saga.id);
+      const prior = rows.get(saga.id);
+      const had = rows.has(saga.id);
       rows.set(saga.id, { ...saga });
       journal.record(() =>
         had ? rows.set(saga.id, prior!) : rows.delete(saga.id),
@@ -851,13 +853,13 @@ function createSagaStore(): SagaStore & Participant {
       bumpLast(saga.userId, saga.updatedAt);
     },
     load: async (id, _options?: Options) => {
-      let saga = rows.get(id);
+      const saga = rows.get(id);
       return saga ? { ...saga } : null;
     },
     list: () => listSagasOf(rows),
     claimDue: async (now, limit, _options?: Options) => {
-      let due: Saga[] = [];
-      for (let saga of rows.values()) {
+      const due: Saga[] = [];
+      for (const saga of rows.values()) {
         if (due.length >= limit) {
           break;
         }
@@ -876,11 +878,11 @@ function createSagaStore(): SagaStore & Participant {
     // Keeping the param would trip the repo's four-parameter cap. The other sub-store methods take
     // four params or fewer, so they keep `options?` for signature parity.
     advance: async (id, from, to, patch) => {
-      let saga = rows.get(id);
+      const saga = rows.get(id);
       if (!saga || saga.state !== from) {
         return false;
       }
-      let prior = { ...saga };
+      const prior = { ...saga };
       journal.record(() => rows.set(id, prior));
       rows.set(id, { ...saga, ...patch, state: to });
       bumpLast(saga.userId, patch.updatedAt ?? saga.updatedAt);
@@ -893,11 +895,11 @@ function createSagaStore(): SagaStore & Participant {
       return lastByUser.get(userId) ?? null;
     },
     deadLetter: async (id, reason, _options?: Options) => {
-      let saga = rows.get(id);
+      const saga = rows.get(id);
       if (!saga) {
         return;
       }
-      let prior = { ...saga };
+      const prior = { ...saga };
       journal.record(() => rows.set(id, prior));
 
       rows.set(id, { ...saga, state: 'FAILED', reason });
@@ -921,13 +923,13 @@ interface EntitlementRow {
 function createEntitlementStore(deps: {
   clock: Clock;
 }): EntitlementStore & Participant {
-  let journal = createJournal();
-  let rows = new Map<string, EntitlementRow>();
-  let keyOf = (userId: string, sku: string): string => `${userId}::${sku}`;
+  const journal = createJournal();
+  const rows = new Map<string, EntitlementRow>();
+  const keyOf = (userId: string, sku: string): string => `${userId}::${sku}`;
 
   function recordUndo(key: string): void {
-    let prior = rows.get(key);
-    let had = rows.has(key);
+    const prior = rows.get(key);
+    const had = rows.has(key);
     journal.record(() => (had ? rows.set(key, prior!) : rows.delete(key)));
   }
 
@@ -936,13 +938,13 @@ function createEntitlementStore(deps: {
     grant: async (userId, sku, attrs, _options?: Options) => {
       // Inserts or overwrites the row, clearing any earlier revoke by setting `revoked: false`, so
       // re-buying after a refund makes the user own the item again.
-      let key = keyOf(userId, sku);
+      const key = keyOf(userId, sku);
       recordUndo(key);
       rows.set(key, { attrs: { ...attrs }, revoked: false });
     },
     revoke: async (userId, sku, _options?: Options) => {
-      let key = keyOf(userId, sku);
-      let row = rows.get(key);
+      const key = keyOf(userId, sku);
+      const row = rows.get(key);
       if (!row || row.revoked) {
         return;
       }
@@ -951,11 +953,11 @@ function createEntitlementStore(deps: {
     },
     owns: async (userId, sku, _options?: Options) => {
       // Expiry check is inclusive of `expiresAt`; null `expiresAt` never expires.
-      let row = rows.get(keyOf(userId, sku));
+      const row = rows.get(keyOf(userId, sku));
       if (!row || row.revoked) {
         return false;
       }
-      let expiresAt = row.attrs.expiresAt;
+      const expiresAt = row.attrs.expiresAt;
       return expiresAt == null || deps.clock.now() <= expiresAt;
     },
   };
@@ -967,25 +969,25 @@ function createEntitlementStore(deps: {
 // until the user cancels it or it lapses because a renewal couldn't be funded. `claimDue` finds the
 // active subscriptions whose next charge is due, for the recurring billing sweep.
 function createSubscriptionStore(): SubscriptionStore & Participant {
-  let journal = createJournal();
-  let rows = new Map<string, Subscription>();
+  const journal = createJournal();
+  const rows = new Map<string, Subscription>();
 
   return {
     journal,
     open: async (sub, _options?: Options) => {
-      let prior = rows.get(sub.id);
-      let had = rows.has(sub.id);
+      const prior = rows.get(sub.id);
+      const had = rows.has(sub.id);
       rows.set(sub.id, { ...sub });
       journal.record(() =>
         had ? rows.set(sub.id, prior!) : rows.delete(sub.id),
       );
     },
     load: async (id, _options?: Options) => {
-      let sub = rows.get(id);
+      const sub = rows.get(id);
       return sub ? { ...sub } : null;
     },
     activeFor: async (userId, sku, sellerId, _options?: Options) => {
-      for (let sub of rows.values()) {
+      for (const sub of rows.values()) {
         if (
           sub.userId === userId &&
           sub.sku === sku &&
@@ -998,17 +1000,17 @@ function createSubscriptionStore(): SubscriptionStore & Participant {
       return null;
     },
     cancel: async (id, _options?: Options) => {
-      let sub = rows.get(id);
+      const sub = rows.get(id);
       if (!sub) {
         return;
       }
-      let prior = { ...sub };
+      const prior = { ...sub };
       journal.record(() => rows.set(id, prior));
       rows.set(id, { ...sub, state: 'CANCELED' });
     },
     claimDue: async (now, limit, _options?: Options) => {
-      let due: Subscription[] = [];
-      for (let sub of rows.values()) {
+      const due: Subscription[] = [];
+      for (const sub of rows.values()) {
         if (due.length >= limit) {
           break;
         }
@@ -1025,11 +1027,11 @@ function createSubscriptionStore(): SubscriptionStore & Participant {
       // The second then no longer matches and bails out, so a billing period is charged at most
       // once. SagaStore.advance guards itself the same way: it checks the expected state, then
       // updates.
-      let sub = rows.get(id);
+      const sub = rows.get(id);
       if (!sub || sub.nextDueAt !== expectedDueAt) {
         return false;
       }
-      let prior = { ...sub };
+      const prior = { ...sub };
       journal.record(() => rows.set(id, prior));
       // A successful renewal resets the retryable-failure counter to 0, so a subscription that
       // recovered after a few transient failures doesn't carry old failures toward the lapse cap.
@@ -1038,11 +1040,11 @@ function createSubscriptionStore(): SubscriptionStore & Participant {
       return true;
     },
     markLapsed: async (id, _options?: Options) => {
-      let sub = rows.get(id);
+      const sub = rows.get(id);
       if (!sub) {
         return;
       }
-      let prior = { ...sub };
+      const prior = { ...sub };
       journal.record(() => rows.set(id, prior));
       rows.set(id, { ...sub, state: 'LAPSED' });
     },
@@ -1057,8 +1059,8 @@ function createSubscriptionStore(): SubscriptionStore & Participant {
 // `expiresAt` has passed and that are not yet reversed. It reverses the unspent remainder, then
 // marks each one reversed so it is never reversed twice.
 function createPromoStore(): PromoStore & Participant {
-  let journal = createJournal();
-  let rows = new Map<string, PromoGrant>();
+  const journal = createJournal();
+  const rows = new Map<string, PromoGrant>();
 
   return {
     journal,
@@ -1075,8 +1077,8 @@ function createPromoStore(): PromoStore & Participant {
       // Returns every still-live grant whose `expiresAt` has passed. It sorts oldest first across
       // the whole table before applying the `limit` cap, so oldest-first holds globally rather than
       // in map-iteration order. Read-only, so it records no journal undo.
-      let due: PromoGrant[] = [];
-      for (let grant of rows.values()) {
+      const due: PromoGrant[] = [];
+      for (const grant of rows.values()) {
         if (grant.reversed === false && grant.expiresAt <= now) {
           due.push({ ...grant });
         }
@@ -1085,11 +1087,11 @@ function createPromoStore(): PromoStore & Participant {
       return due.slice(0, limit);
     },
     markReversed: async (id, _options?: Options) => {
-      let grant = rows.get(id);
+      const grant = rows.get(id);
       if (!grant || grant.reversed) {
         return;
       }
-      let prior = { ...grant };
+      const prior = { ...grant };
       journal.record(() => rows.set(id, prior));
       rows.set(id, { ...grant, reversed: true });
     },
@@ -1117,20 +1119,20 @@ function createTrustStore(
   clock: Clock,
   windowMs: number,
 ): TrustStore & Participant {
-  let bySubject = new Map<string, TrustWindow>();
-  let seenAttempts = new Set<string>();
-  let journal = createJournal();
+  const bySubject = new Map<string, TrustWindow>();
+  const seenAttempts = new Set<string>();
+  const journal = createJournal();
 
   // The journal's undo for `insert`. Splicing keeps the window ordered by `at`. The sum only
   // covers the live tail, so it is corrected when the attempt was still there; an attempt that
   // had already aged out moves the head back instead.
-  let remove = (subject: string, attempt: Attempt): void => {
+  const remove = (subject: string, attempt: Attempt): void => {
     seenAttempts.delete(attempt.idempotencyKey);
-    let window = bySubject.get(subject);
+    const window = bySubject.get(subject);
     if (window === undefined) {
       return;
     }
-    let i = window.attempts.findIndex(
+    const i = window.attempts.findIndex(
       (a) => a.idempotencyKey === attempt.idempotencyKey,
     );
     if (i < 0) {
@@ -1147,7 +1149,7 @@ function createTrustStore(
   // `at` comes from the clock (only moves forward), so the appended attempt is the newest and the
   // window stays ordered by `at` — which `measure`'s prefix-pruning relies on. A dedup-skipped
   // repeat changed nothing, so it records no undo.
-  let insert = (subject: string, attempt: Attempt): void => {
+  const insert = (subject: string, attempt: Attempt): void => {
     if (seenAttempts.has(attempt.idempotencyKey)) {
       return;
     }
@@ -1164,11 +1166,11 @@ function createTrustStore(
 
   // Expired attempts are always a prefix (ordered by `at`), so advance `head` past just those and
   // never scan the live tail; compact the consumed prefix once it dominates so memory stays bounded.
-  let measure = (subject: string, now: number): Velocity => {
-    let window = bySubject.get(subject);
-    let cutoff = now - windowMs;
+  const measure = (subject: string, now: number): Velocity => {
+    const window = bySubject.get(subject);
+    const cutoff = now - windowMs;
     if (window !== undefined) {
-      let attempts = window.attempts;
+      const attempts = window.attempts;
       while (
         window.head < attempts.length &&
         attempts[window.head]!.at <= cutoff
@@ -1181,7 +1183,8 @@ function createTrustStore(
         window.head = 0;
       }
     }
-    let live = window === undefined ? 0 : window.attempts.length - window.head;
+    const live =
+      window === undefined ? 0 : window.attempts.length - window.head;
     return {
       subject,
       windowStart: live > 0 ? window!.attempts[window!.head]!.at : 0,
@@ -1197,7 +1200,7 @@ function createTrustStore(
     // Records and measures in one step. Because JS is single-threaded, the dedup-insert and the
     // windowing below run with no `await` between them. Two concurrent same-subject `record` calls
     // therefore can't interleave, and each sees its own attempt already counted when it measures —
-    // the atomicity that closes the velocity-limit TOCTOU the old separate read+bump left open.
+    // the atomicity `TrustStore.record` requires (ports.ts).
     record: async (subject, attempt, _options?: Options) => {
       insert(subject, attempt);
       return measure(subject, clock.now());
@@ -1210,13 +1213,13 @@ function createTrustStore(
 
 // Append-only and never part of a money transaction, so a rollback can't delete a recorded checkpoint.
 function createCheckpointStore(): CheckpointStore {
-  let rows: Checkpoint[] = [];
+  const rows: Checkpoint[] = [];
   return {
     put: async (checkpoint, _options?: Options) => {
       rows.push({ ...checkpoint });
     },
     latest: async (_options?: Options) => {
-      let last = rows[rows.length - 1];
+      const last = rows[rows.length - 1];
       return last ? { ...last } : null;
     },
   };
@@ -1229,7 +1232,7 @@ function createCheckpointStore(): CheckpointStore {
 // signature + recency, outside any money transaction, so this store registers no undo and is never
 // rolled back. SQL adapters back it with the `seen_webhooks` table; here it is a Set.
 function createReplayStore(): ReplayStore {
-  let seen = new Set<string>();
+  const seen = new Set<string>();
   return {
     claim: async (eventId, _options?: Options) => {
       // Atomic insert-if-absent. The first sighting of an id wins and returns `claimed: true`. Every
@@ -1250,41 +1253,42 @@ function createReplayStore(): ReplayStore {
  * Build an in-memory {@link Store} with working transaction rollback, for tests and
  * development. If the work inside a `transaction` throws, every store that joined the
  * transaction is rolled back, each independently so one store's failing rollback can't stop the
- * others. The trust and checkpoint stores are written outside transactions and aren't rolled
- * back. The hash function and clock default to deterministic versions, so a plain
- * `memoryStore()` is reproducible.
+ * others. The checkpoint store is written outside transactions and isn't rolled back. The hash
+ * function and clock default to deterministic versions, so a plain `memoryStore()` is
+ * reproducible.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for the store ports this adapter implements.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
+ *   messaging} for the store ports this adapter implements.
  */
 export function memoryStore(deps?: {
   digest?: Digest;
   clock?: Clock;
   velocityWindowMs?: number;
 }): Store {
-  let digest = deps?.digest ?? defaultDigest();
-  let clock = deps?.clock ?? defaultClock();
+  const digest = deps?.digest ?? defaultDigest();
+  const clock = deps?.clock ?? defaultClock();
 
-  let velocityWindowMs = deps?.velocityWindowMs ?? 60 * 60_000;
+  const velocityWindowMs = deps?.velocityWindowMs ?? 60 * 60_000;
 
-  let ledger = createLedgerStore({ digest, clock });
-  let idempotency = createIdempotencyStore();
-  let sales = createSaleStore();
-  let outbox = createOutboxStore();
-  let inbox = createInboxStore();
-  let sagas = createSagaStore();
-  let entitlements = createEntitlementStore({ clock });
-  let subscriptions = createSubscriptionStore();
-  let promos = createPromoStore();
-  let trust = createTrustStore(clock, velocityWindowMs);
-  let checkpoints = createCheckpointStore();
+  const ledger = createLedgerStore({ digest, clock });
+  const idempotency = createIdempotencyStore();
+  const sales = createSaleStore();
+  const outbox = createOutboxStore();
+  const inbox = createInboxStore();
+  const sagas = createSagaStore();
+  const entitlements = createEntitlementStore({ clock });
+  const subscriptions = createSubscriptionStore();
+  const promos = createPromoStore();
+  const trust = createTrustStore(clock, velocityWindowMs);
+  const checkpoints = createCheckpointStore();
   // The webhook duplicate check runs outside any money transaction (the final check when a
   // webhook arrives), so it takes no part in rollback and isn't handed to operation handlers; it
   // lives only on the top-level store.
-  let replay = createReplayStore();
+  const replay = createReplayStore();
 
   // Stores a handler may use inside a transaction. The checkpoint store is left out because only
   // the worker writes it, outside transactions.
-  let unit: Unit = {
+  const unit: Unit = {
     ledger,
     idempotency,
     sales,
@@ -1296,7 +1300,7 @@ export function memoryStore(deps?: {
     promos,
     trust,
   };
-  let participants: Participant[] = [
+  const participants: Participant[] = [
     ledger,
     idempotency,
     sales,
@@ -1325,12 +1329,12 @@ export function memoryStore(deps?: {
     transaction: async (work) => {
       let begun = 0;
       try {
-        for (let participant of participants) {
+        for (const participant of participants) {
           participant.journal.begin();
           begun += 1;
         }
-        let result = await work(unit);
-        for (let participant of participants) {
+        const result = await work(unit);
+        for (const participant of participants) {
           participant.journal.commit();
         }
         return result;

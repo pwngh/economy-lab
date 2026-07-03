@@ -30,7 +30,7 @@ import type { Leg, Unit } from '#src/ports.ts';
  * CREDIT, reason non-empty.
  *
  * @example
- *   let outcome = await adjust(
+ *   const outcome = await adjust(
  *     { kind: 'adjust', idempotencyKey: 'idem_0',
  *       actor: { kind: 'operator', operatorId: 'op_1' },
  *       account: spendable('usr_alice'), amount: toAmount('CREDIT', 250n),
@@ -39,7 +39,8 @@ import type { Leg, Unit } from '#src/ports.ts';
  *   );
  *   // outcome.status === 'committed'; spendable(usr_alice) rose by 250, balanced to OPENING_EQUITY.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/adjust/ Adjust} for when and how operators book manual corrections.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/adjust/ Adjust} for
+ *   when and how operators book manual corrections.
  */
 export async function adjust(
   operation: Operation,
@@ -49,9 +50,9 @@ export async function adjust(
   assertKind(operation, 'adjust');
   assertOperator(operation);
   assertReason(operation.reason);
-  let amount = creditDelta(operation.amount, 'adjust.amount');
+  const amount = creditDelta(operation.amount, 'adjust.amount');
 
-  let transaction = await postEntry(unit.ledger, {
+  const transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs: buildAdjustLegs(operation.account, amount),
     meta: adjustMeta(operation),
@@ -70,7 +71,7 @@ function buildAdjustLegs(account: AccountRef, amount: Amount): Leg[] {
   // credit-normal account the stored amount has the opposite sign from the balance change.
   // So to raise `account` by `amount.minor`, store +amount.minor when the account is
   // debit-normal and -amount.minor when it is credit-normal.
-  let accountMinor = isDebitNormal(account) ? amount.minor : -amount.minor;
+  const accountMinor = isDebitNormal(account) ? amount.minor : -amount.minor;
   return [
     { account, amount: toAmount(amount.currency, accountMinor) },
     {
@@ -81,10 +82,9 @@ function buildAdjustLegs(account: AccountRef, amount: Amount): Leg[] {
   ];
 }
 
-// Builds the metadata stored with the posting: the encoded signed amount and the operator
-// reason. The amount is encoded with `encodeAmount` rather than stored as a raw bigint so
-// the bytes hashed into the tamper-evident chain stay stable across replays. The reason
-// gives the audit trail a record of what changed and why.
+// Builds the metadata stored with the posting: the signed amount (via `encodeAmount`, which
+// keeps the hashed bytes stable) and the operator reason, giving the audit trail a record of
+// what changed and why.
 function adjustMeta(
   operation: Extract<Operation, { kind: 'adjust' }>,
 ): Record<string, unknown> {

@@ -75,14 +75,14 @@ async function call(
   payload: unknown,
   options?: Options,
 ): Promise<unknown> {
-  let request = new Request(new URL(path, transport.baseUrl), {
+  const request = new Request(new URL(path, transport.baseUrl), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
     signal: options?.signal,
   });
-  let response = await transport.fetch(request);
-  let result = (await response.json()) as WireResult;
+  const response = await transport.fetch(request);
+  const result = (await response.json()) as WireResult;
   if (!result.ok) {
     throw new Error(result.error);
   }
@@ -99,7 +99,7 @@ function sessionLedger(
   transport: { fetch: FetchLike; baseUrl: string },
   session: string,
 ): Ledger {
-  let at = (method: string): string => `/tx/${session}/ledger/${method}`;
+  const at = (method: string): string => `/tx/${session}/ledger/${method}`;
   return {
     hasAccount: (account, options) =>
       call(
@@ -125,7 +125,7 @@ function sessionLedger(
         await call(transport, at('balance'), { account }, options),
       ),
     posting: async (txnId, options) => {
-      let row = await call(transport, at('posting'), { txnId }, options);
+      const row = await call(transport, at('posting'), { txnId }, options);
       return row === null ? null : decodeWire.posting(row);
     },
     statement: async (account, range, options) =>
@@ -151,12 +151,12 @@ async function* streamHeads(
   transport: { fetch: FetchLike; baseUrl: string },
   session: string,
 ): AsyncIterable<readonly [AccountRef, string]> {
-  let rows = (await call(
+  const rows = (await call(
     transport,
     `/tx/${session}/ledger/heads`,
     {},
   )) as Array<[string, string]>;
-  for (let [account, head] of rows) {
+  for (const [account, head] of rows) {
     yield [account as AccountRef, head] as const;
   }
 }
@@ -170,13 +170,13 @@ async function* streamBalanceAccounts(
   session: string,
   options?: Options,
 ): AsyncIterable<AccountRef> {
-  let rows = (await call(
+  const rows = (await call(
     transport,
     `/tx/${session}/ledger/balanceAccounts`,
     {},
     options,
   )) as string[];
-  for (let account of rows) {
+  for (const account of rows) {
     yield account as AccountRef;
   }
 }
@@ -190,13 +190,13 @@ async function* streamLots(
   // Forward the bounded read (order, limit, and offset) to the server. The server passes it
   // through to the backing ledger, so the bound is honoured at the real engine rather than
   // after fetching all rows over the wire.
-  let rows = (await call(transport, `/tx/${session}/ledger/timeline`, {
+  const rows = (await call(transport, `/tx/${session}/ledger/timeline`, {
     account,
     order: options?.order,
     limit: options?.limit,
     offset: options?.offset,
   })) as unknown[];
-  for (let row of rows) {
+  for (const row of rows) {
     yield decodeWire.lot(row);
   }
 }
@@ -207,13 +207,13 @@ async function* streamLineage(
   session: string,
   options?: Options,
 ): AsyncIterable<StoredLink> {
-  let rows = (await call(
+  const rows = (await call(
     transport,
     `/tx/${session}/ledger/lineage`,
     { account },
     options,
   )) as unknown[];
-  for (let row of rows) {
+  for (const row of rows) {
     yield decodeWire.storedLink(row);
   }
 }
@@ -226,13 +226,13 @@ async function* streamPostings(
   session: string,
   options?: Options,
 ): AsyncIterable<Posting> {
-  let rows = (await call(
+  const rows = (await call(
     transport,
     `/tx/${session}/ledger/list`,
     {},
     options,
   )) as unknown[];
-  for (let row of rows) {
+  for (const row of rows) {
     yield decodeWire.posting(row);
   }
 }
@@ -247,7 +247,7 @@ function sessionIdempotency(
   transport: { fetch: FetchLike; baseUrl: string },
   session: string,
 ): IdempotencyStore {
-  let at = (method: string): string => `/tx/${session}/idempotency/${method}`;
+  const at = (method: string): string => `/tx/${session}/idempotency/${method}`;
   return {
     claim: async (key, options) =>
       decodeWire.claim(await call(transport, at('claim'), { key }, options)),
@@ -266,7 +266,7 @@ function sessionSales(
   transport: { fetch: FetchLike; baseUrl: string },
   session: string,
 ): SaleStore {
-  let at = (method: string): string => `/tx/${session}/sales/${method}`;
+  const at = (method: string): string => `/tx/${session}/sales/${method}`;
   return {
     put: async (sale, options) => {
       await call(
@@ -277,7 +277,7 @@ function sessionSales(
       );
     },
     get: async (orderId, options) => {
-      let row = await call(transport, at('get'), { orderId }, options);
+      const row = await call(transport, at('get'), { orderId }, options);
       return row === null ? null : decodeWire.sale(row);
     },
   };
@@ -287,7 +287,7 @@ function sessionOutbox(
   transport: { fetch: FetchLike; baseUrl: string },
   session: string,
 ): OutboxStore {
-  let at = (method: string): string => `/tx/${session}/outbox/${method}`;
+  const at = (method: string): string => `/tx/${session}/outbox/${method}`;
   return {
     enqueue: async (message, options) => {
       await call(transport, at('enqueue'), { message }, options);
@@ -312,7 +312,7 @@ function sessionInbox(
   transport: { fetch: FetchLike; baseUrl: string },
   session: string,
 ): InboxStore {
-  let at = (method: string): string => `/tx/${session}/inbox/${method}`;
+  const at = (method: string): string => `/tx/${session}/inbox/${method}`;
   return {
     // Dedupes on `key`. The server returns the existing row for a duplicate provider event,
     // so the resolved entry must survive the round trip. Unlike the outbox message, an
@@ -348,7 +348,7 @@ function sessionSagas(
   transport: { fetch: FetchLike; baseUrl: string },
   session: string,
 ): SagaStore {
-  let at = (method: string): string => `/tx/${session}/sagas/${method}`;
+  const at = (method: string): string => `/tx/${session}/sagas/${method}`;
   return {
     open: async (saga, options) => {
       await call(
@@ -359,20 +359,25 @@ function sessionSagas(
       );
     },
     load: async (id, options) => {
-      let row = await call(transport, at('load'), { id }, options);
+      const row = await call(transport, at('load'), { id }, options);
       return row === null ? null : decodeWire.saga(row);
     },
     // Streams the whole payout board (see SagaStore.list). Like the ledger stream reads, the
     // in-process server returns every row in one response, so yield them one at a time to
     // honor the AsyncIterable.
     list: async function* (options) {
-      let rows = (await call(transport, at('list'), {}, options)) as unknown[];
-      for (let row of rows) {
+      const rows = (await call(
+        transport,
+        at('list'),
+        {},
+        options,
+      )) as unknown[];
+      for (const row of rows) {
         yield decodeWire.saga(row);
       }
     },
     claimDue: async (now, limit, options) => {
-      let rows = (await call(
+      const rows = (await call(
         transport,
         at('claimDue'),
         { now, limit },
@@ -405,7 +410,8 @@ function sessionEntitlements(
   transport: { fetch: FetchLike; baseUrl: string },
   session: string,
 ): EntitlementStore {
-  let at = (method: string): string => `/tx/${session}/entitlements/${method}`;
+  const at = (method: string): string =>
+    `/tx/${session}/entitlements/${method}`;
   return {
     grant: async (userId, sku, attrs, options) => {
       await call(transport, at('grant'), { userId, sku, attrs }, options);
@@ -422,7 +428,8 @@ function sessionSubscriptions(
   transport: { fetch: FetchLike; baseUrl: string },
   session: string,
 ): SubscriptionStore {
-  let at = (method: string): string => `/tx/${session}/subscriptions/${method}`;
+  const at = (method: string): string =>
+    `/tx/${session}/subscriptions/${method}`;
   return {
     open: async (sub, options) => {
       await call(
@@ -433,11 +440,11 @@ function sessionSubscriptions(
       );
     },
     load: async (id, options) => {
-      let row = await call(transport, at('load'), { id }, options);
+      const row = await call(transport, at('load'), { id }, options);
       return row === null ? null : decodeWire.subscription(row);
     },
     activeFor: async (userId, sku, sellerId, options) => {
-      let row = await call(
+      const row = await call(
         transport,
         at('activeFor'),
         { userId, sku, sellerId },
@@ -449,7 +456,7 @@ function sessionSubscriptions(
       await call(transport, at('cancel'), { id }, options);
     },
     claimDue: async (now, limit, options) => {
-      let rows = (await call(
+      const rows = (await call(
         transport,
         at('claimDue'),
         { now, limit },
@@ -477,7 +484,7 @@ function sessionPromos(
   transport: { fetch: FetchLike; baseUrl: string },
   session: string,
 ): PromoStore {
-  let at = (method: string): string => `/tx/${session}/promos/${method}`;
+  const at = (method: string): string => `/tx/${session}/promos/${method}`;
   return {
     open: async (grant, options) => {
       await call(
@@ -488,7 +495,7 @@ function sessionPromos(
       );
     },
     claimDue: async (now, limit, options) => {
-      let rows = (await call(
+      const rows = (await call(
         transport,
         at('claimDue'),
         { now, limit },
@@ -510,7 +517,7 @@ function rootTrust(transport: {
   fetch: FetchLike;
   baseUrl: string;
 }): TrustStore {
-  let at = (method: string): string => `/trust/${method}`;
+  const at = (method: string): string => `/trust/${method}`;
   return {
     read: async (subject, options) =>
       decodeWire.velocity(
@@ -547,13 +554,13 @@ function rootCheckpoints(transport: {
   fetch: FetchLike;
   baseUrl: string;
 }): CheckpointStore {
-  let at = (method: string): string => `/checkpoints/${method}`;
+  const at = (method: string): string => `/checkpoints/${method}`;
   return {
     put: async (checkpoint, options) => {
       await call(transport, at('put'), { checkpoint }, options);
     },
     latest: async (options) => {
-      let row = await call(transport, at('latest'), {}, options);
+      const row = await call(transport, at('latest'), {}, options);
       return row === null ? null : (row as Checkpoint);
     },
   };
@@ -567,7 +574,7 @@ function rootReplay(transport: {
   fetch: FetchLike;
   baseUrl: string;
 }): ReplayStore {
-  let at = (method: string): string => `/replay/${method}`;
+  const at = (method: string): string => `/replay/${method}`;
   return {
     claim: (eventId, options) =>
       call(transport, at('claim'), { eventId }, options) as Promise<{
@@ -587,12 +594,12 @@ async function runTransaction<T>(
   work: (tx: Unit) => Promise<T>,
   options?: Options,
 ): Promise<T> {
-  let { session } = (await call(transport, '/tx/begin', {}, options)) as {
+  const { session } = (await call(transport, '/tx/begin', {}, options)) as {
     session: string;
   };
-  let unit = sessionUnit(transport, session);
+  const unit = sessionUnit(transport, session);
   try {
-    let result = await work(unit);
+    const result = await work(unit);
     await call(transport, `/tx/${session}/commit`, {}, options);
     return result;
   } catch (error) {
@@ -631,13 +638,14 @@ function sessionUnit(
  * and points the client at it, so a bare `httpStore()` is a complete, working Store that
  * needs no running service or network.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for how this HTTP backend implements the storage port.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
+ *   messaging} for how this HTTP backend implements the storage port.
  */
 export function httpStore(options?: HttpStoreOptions): Store {
-  let backing = memoryStore();
-  let fetch = options?.fetch ?? createStoreServer(backing);
-  let baseUrl = options?.baseUrl ?? 'http://economy.local';
-  let transport = { fetch, baseUrl };
+  const backing = memoryStore();
+  const fetch = options?.fetch ?? createStoreServer(backing);
+  const baseUrl = options?.baseUrl ?? 'http://economy.local';
+  const transport = { fetch, baseUrl };
 
   return {
     ledger: sessionLedger(transport, 'root'),

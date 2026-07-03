@@ -121,7 +121,7 @@ async function rows(
   sql: string,
   params: ReadonlyArray<unknown> = [],
 ): Promise<Row[]> {
-  let [result] = await exec.query(sql, params);
+  const [result] = await exec.query(sql, params);
   return result as Row[];
 }
 
@@ -132,7 +132,7 @@ async function execWrite(
   sql: string,
   params: ReadonlyArray<unknown> = [],
 ): Promise<number> {
-  let [header] = await exec.query(sql, params);
+  const [header] = await exec.query(sql, params);
   return (header as ResultHeader).affectedRows ?? 0;
 }
 
@@ -144,7 +144,7 @@ async function execWrite(
 // It uses errno 1205, the code a real InnoDB lock-wait timeout carries, so that isTransientConflict
 // classifies it and withTransientRetry re-runs it in a fresh transaction.
 async function takeGetLock(exec: MysqlExecutor, name: string): Promise<void> {
-  let result = await rows(exec, 'SELECT GET_LOCK(?, 10) AS acquired', [name]);
+  const result = await rows(exec, 'SELECT GET_LOCK(?, 10) AS acquired', [name]);
   if (Number(result[0]?.acquired) !== 1) {
     throw Object.assign(new Error(`GET_LOCK did not acquire: ${name}`), {
       errno: 1205,
@@ -164,9 +164,9 @@ async function isKnownAccount(
   exec: MysqlExecutor,
   account: AccountRef,
 ): Promise<boolean> {
-  let colon = account.lastIndexOf(':');
+  const colon = account.lastIndexOf(':');
   if (colon >= 0) {
-    let suffix = account.slice(colon + 1);
+    const suffix = account.slice(colon + 1);
     if (suffix === 'spendable' || suffix === 'earned' || suffix === 'promo') {
       return true;
     }
@@ -177,34 +177,35 @@ async function isKnownAccount(
   if (isSeededSystemAccount(account)) {
     return true;
   }
-  let found = await rows(exec, 'SELECT 1 FROM accounts WHERE id = ? LIMIT 1', [
-    account,
-  ]);
+  const found = await rows(
+    exec,
+    'SELECT 1 FROM accounts WHERE id = ? LIMIT 1',
+    [account],
+  );
   return found.length > 0;
 }
 
 // Reads the head hash of each account's chain in one query. `account_balances.head_hash` is the
 // maintained head pointer. post_entry advances it to the account's new link hash in the same
-// transaction that writes chain_links, so this is an O(1) primary-key read per account rather than
-// the old ROW_NUMBER-over-the-whole-chain join-and-sort. Accounts with no balance row are absent
-// from the result, and the caller treats a missing account as the genesis hash (a new account's
-// head). The chain_links table stays the source of truth, since prove() still re-walks it, so a
-// head pointer that drifts from the chain surfaces there.
+// transaction that writes chain_links, so this is an O(1) primary-key read per account. Accounts
+// with no balance row are absent from the result, and the caller treats a missing account as the
+// genesis hash (a new account's head). The chain_links table stays the source of truth, since
+// prove() still re-walks it, so a head pointer that drifts from the chain surfaces there.
 //
-// It locks the rows (`FOR UPDATE`) so it reads the latest committed head, not this transaction's
-// REPEATABLE READ snapshot taken earlier in screenFunds. A stale head forks the chain on
-// chain_links_account_prev_uq (errno 1062) and costs a retry. lockAccounts already holds these rows,
-// so the lock is free here; Postgres, at READ COMMITTED, needs none of it.
+// It locks the rows (`FOR UPDATE`) so this is a locking read of the latest committed head,
+// a guarantee that holds at any isolation level. A stale head would fork the chain on
+// chain_links_account_prev_uq (errno 1062) and cost a retry. lockAccounts already holds these
+// rows, so the lock is free here.
 async function headsForAccounts(
   exec: MysqlExecutor,
   accounts: ReadonlyArray<AccountRef>,
 ): Promise<Map<string, string>> {
-  let heads = new Map<string, string>();
+  const heads = new Map<string, string>();
   if (accounts.length === 0) {
     return heads;
   }
-  let marks = accounts.map(() => '?').join(', ');
-  let found = await rows(
+  const marks = accounts.map(() => '?').join(', ');
+  const found = await rows(
     exec,
     `SELECT account_id, head_hash FROM account_balances
       WHERE account_id IN (${marks})
@@ -212,7 +213,7 @@ async function headsForAccounts(
         FOR UPDATE`,
     accounts,
   );
-  for (let row of found) {
+  for (const row of found) {
     heads.set(row.account_id as string, row.head_hash as string);
   }
   return heads;
@@ -227,13 +228,14 @@ async function advanceChain(
   deps: ExecDeps,
   posting: Posting,
 ): Promise<ReadonlyArray<Link>> {
-  let accounts = distinctAccounts(posting.legs);
-  let heads = await headsForAccounts(deps.exec, accounts);
-  let links: Link[] = [];
-  for (let account of accounts) {
-    let prevHex = heads.get(account) ?? GENESIS_HEX;
-    let accountPrevHash = prevHex === GENESIS_HEX ? GENESIS : fromHex(prevHex);
-    let hash = await chainHash(deps.digest, {
+  const accounts = distinctAccounts(posting.legs);
+  const heads = await headsForAccounts(deps.exec, accounts);
+  const links: Link[] = [];
+  for (const account of accounts) {
+    const prevHex = heads.get(account) ?? GENESIS_HEX;
+    const accountPrevHash =
+      prevHex === GENESIS_HEX ? GENESIS : fromHex(prevHex);
+    const hash = await chainHash(deps.digest, {
       accountPrevHash,
       txnId: posting.txnId,
       account,
@@ -257,20 +259,19 @@ async function insertPosting(
   deps: ExecDeps,
   posting: Posting,
 ): Promise<Transaction> {
-  let postedAt = deps.clock.now();
-  let links = await advanceChain(deps, posting);
+  const postedAt = deps.clock.now();
+  const links = await advanceChain(deps, posting);
 
   // One CALL persists the whole posting. The application has already decided everything: the chain
   // hashes, the per-account net balance deltas, and which user accounts are new. `post_entry` then
   // writes the posting, legs, chain links, and balance changes as one set-based unit in this
-  // transaction, replacing a per-leg loop that cost a dozen-plus round-trips. The JSON arrays carry
-  // the bigint amounts as strings to keep values past 2^53.
-  let args = postEntryArgs(posting, links);
+  // transaction. The JSON arrays carry the bigint amounts as strings to keep values past 2^53.
+  const args = postEntryArgs(posting, links);
   // postEntryArgs collects only first-use user accounts. A platform shard (`platform:revenue#3`)
   // is also created on first use — the schema seeds just the bare ids — so add each one with kind
   // `system` and its parent's currency; post_entry's INSERT IGNORE makes repeats free. At one
   // shard no shard ref appears in a posting, so this adds nothing.
-  for (let account of distinctAccounts(posting.legs)) {
+  for (const account of distinctAccounts(posting.legs)) {
     if (baseOf(account) !== account && isSeededSystemAccount(account)) {
       args.newAccounts.push({
         id: account,
@@ -304,7 +305,7 @@ function mysqlQuery(exec: MysqlExecutor) {
 // NOTE: creating a first-time user account's `accounts` row happens inside the `post_entry` stored
 // procedure (db/mysql-schema.sql), from the new-accounts list the application computes (see
 // postEntryArgs in sql-routines.ts). MySQL's `lock` uses a named lock (GET_LOCK), not a row, so it
-// needs no account row up front the way the Postgres adapter's row lock does.
+// needs no account row up front the way the Postgres engine's row lock does.
 
 // NOTE: the per-account balance fold (UPDATE existing rows first so the non-negative CHECK tests
 // the new total, then INSERT first-time rows) lives inside the `post_entry` stored procedure
@@ -323,10 +324,10 @@ function rowKind(account: AccountRef): string {
 
 // lockMany's body: create any missing balance rows first, then lock the whole set in one ordered
 // FOR UPDATE. A row has to exist before it can be locked, so first-use accounts get a placeholder
-// row here. The plant runs on the pool, not in the transaction: doing it in the transaction
-// deadlocked under load, because locking a missing key takes a gap lock and a burst of new
-// accounts (neighboring ids, one shared gap) then blocked each other's inserts. A pool statement
-// commits and releases its locks immediately.
+// row here. The plant runs on the pool, not in the transaction: locking a missing key inside the
+// transaction takes a gap lock, and a burst of new accounts (neighboring ids, one shared gap)
+// would deadlock on each other's inserts. A pool statement commits and releases its locks
+// immediately.
 //
 // A planted row therefore stays even if the operation rolls back. It is the same placeholder the
 // schema seeds for system accounts — zero balance, genesis head — which every reader treats
@@ -338,16 +339,16 @@ async function plantAndLock(
   if (accounts.length === 0) {
     return;
   }
-  let marks = accounts.map(() => '?').join(', ');
-  let found = await rows(
+  const marks = accounts.map(() => '?').join(', ');
+  const found = await rows(
     deps.pool,
     `SELECT account_id FROM account_balances
       WHERE account_id IN (${marks})`,
     [...accounts],
   );
-  let have = new Set(found.map((row) => row.account_id as string));
+  const have = new Set(found.map((row) => row.account_id as string));
   // Sorted so concurrent plants insert in the same order and can't deadlock each other.
-  let missing = accounts
+  const missing = accounts
     .filter((account) => !have.has(account))
     .sort(byCodeUnit);
   if (missing.length > 0) {
@@ -393,7 +394,7 @@ function createLedgerStore(deps: ExecDeps): Ledger {
     append: async (posting) => insertPosting(deps, posting),
 
     balance: async (account) => {
-      let raw = await callFunction(
+      const raw = await callFunction(
         mysqlQuery(deps.exec),
         'mysql',
         'account_balance',
@@ -409,7 +410,7 @@ function createLedgerStore(deps: ExecDeps): Ledger {
 
     heads: async function* () {
       // MySQL has no DISTINCT ON, so this MAX(seq)-per-account subquery + join is the portable equivalent.
-      let result = await rows(
+      const result = await rows(
         deps.exec,
         `SELECT c.account_id, c.hash FROM chain_links c
            JOIN postings p ON p.id = c.posting_id
@@ -424,7 +425,7 @@ function createLedgerStore(deps: ExecDeps): Ledger {
       result.sort((a, b) =>
         byCodeUnit(a.account_id as string, b.account_id as string),
       );
-      for (let row of result) {
+      for (const row of result) {
         yield [row.account_id as AccountRef, row.hash as string] as const;
       }
     },
@@ -433,7 +434,7 @@ function createLedgerStore(deps: ExecDeps): Ledger {
       // The seeded house-account placeholder (genesis head, zero balance, planted so the first lock has a
       // row to grab) is excluded -- it reads like no row -- except `OR balance <> 0` catches the very
       // drift this scan hunts: a placeholder that gained a balance.
-      let result = await rows(
+      const result = await rows(
         deps.exec,
         `SELECT account_id FROM account_balances WHERE head_hash <> REPEAT('0', 64) OR balance <> 0`,
       );
@@ -441,7 +442,7 @@ function createLedgerStore(deps: ExecDeps): Ledger {
       result.sort((a, b) =>
         byCodeUnit(a.account_id as string, b.account_id as string),
       );
-      for (let row of result) {
+      for (const row of result) {
         yield row.account_id as AccountRef;
       }
     },
@@ -471,7 +472,7 @@ async function buildStatement(
   account: AccountRef,
   range: Range,
 ): Promise<Statement> {
-  let result = await rows(
+  const result = await rows(
     exec,
     `SELECT p.id AS txn_id, l.account_id AS account_id, l.currency AS currency,
             l.amount AS amount, p.posted_at AS posted_at
@@ -480,7 +481,7 @@ async function buildStatement(
       ORDER BY p.posted_at, l.id`,
     [account, range.from, range.to],
   );
-  let entries = result.map((row) => ({
+  const entries = result.map((row) => ({
     txnId: row.txn_id as string,
     amount: naturalDelta(account, row),
     postedAt: Number(row.posted_at),
@@ -500,18 +501,18 @@ async function* timelineOf(
   account: AccountRef,
   options?: TimelineOptions,
 ): AsyncIterable<Lot> {
-  let direction = options?.order === 'desc' ? 'DESC' : 'ASC';
-  let lotOffset = options?.offset ?? 0;
-  let lotLimit = options?.limit ?? Infinity;
+  const direction = options?.order === 'desc' ? 'DESC' : 'ASC';
+  const lotOffset = options?.offset ?? 0;
+  const lotLimit = options?.limit ?? Infinity;
 
-  let pageSize = Number.isFinite(lotLimit)
+  const pageSize = Number.isFinite(lotLimit)
     ? Math.max(lotOffset + lotLimit, 1)
     : 256;
 
   let skipped = 0;
   let yielded = 0;
   for (let rowOffset = 0; yielded < lotLimit; rowOffset += pageSize) {
-    let result = await rows(
+    const result = await rows(
       exec,
       `SELECT p.id AS txn_id, p.meta AS meta, l.currency AS currency,
               l.amount AS amount, p.posted_at AS posted_at
@@ -524,8 +525,8 @@ async function* timelineOf(
     if (result.length === 0) {
       return;
     }
-    for (let row of result) {
-      let delta = naturalDelta(account, row);
+    for (const row of result) {
+      const delta = naturalDelta(account, row);
       if (delta.minor <= 0n) {
         continue;
       }
@@ -537,7 +538,7 @@ async function* timelineOf(
         return;
       }
       yielded += 1;
-      let meta = parseMeta(row.meta);
+      const meta = parseMeta(row.meta);
       yield {
         txnId: row.txn_id as string,
         amount: delta,
@@ -560,21 +561,22 @@ async function* lineageOf(
   exec: MysqlExecutor,
   account: AccountRef,
 ): AsyncIterable<StoredLink> {
-  let postings = await rows(
+  const postings = await rows(
     exec,
     `SELECT c.posting_id AS txn_id, p.meta AS meta,
             c.prev_hash AS prev_hash, c.hash AS hash
        FROM chain_links c JOIN postings p ON p.id = c.posting_id
-      WHERE c.account_id = ? ORDER BY p.seq ASC`,
+      WHERE c.account_id = ?
+      ORDER BY p.seq ASC`,
     [account],
   );
   // chainPreimage filters legs itself, so this loads the whole posting's legs, not just this account's.
-  let legsByTxn = await legsByPosting(
+  const legsByTxn = await legsByPosting(
     exec,
     postings.map((posting) => posting.txn_id as string),
   );
-  for (let posting of postings) {
-    let txnId = posting.txn_id as string;
+  for (const posting of postings) {
+    const txnId = posting.txn_id as string;
     yield {
       txnId,
       legs: legsByTxn.get(txnId) ?? [],
@@ -590,7 +592,7 @@ async function legsOf(
   exec: MysqlExecutor,
   txnId: string,
 ): Promise<ReadonlyArray<Leg>> {
-  let result = await rows(
+  const result = await rows(
     exec,
     'SELECT account_id, currency, amount FROM legs WHERE posting_id = ? ORDER BY id',
     [txnId],
@@ -609,19 +611,19 @@ async function legsByPosting(
   exec: MysqlExecutor,
   postingIds: ReadonlyArray<string>,
 ): Promise<Map<string, Leg[]>> {
-  let byPosting = new Map<string, Leg[]>();
+  const byPosting = new Map<string, Leg[]>();
   if (postingIds.length === 0) {
     return byPosting;
   }
-  let marks = postingIds.map(() => '?').join(', ');
-  let result = await rows(
+  const marks = postingIds.map(() => '?').join(', ');
+  const result = await rows(
     exec,
     `SELECT posting_id, account_id, currency, amount FROM legs
       WHERE posting_id IN (${marks}) ORDER BY posting_id, id`,
     [...postingIds],
   );
-  for (let row of result) {
-    let txnId = row.posting_id as string;
+  for (const row of result) {
+    const txnId = row.posting_id as string;
     let legs = byPosting.get(txnId);
     if (!legs) {
       legs = [];
@@ -645,7 +647,7 @@ async function postingOf(
   exec: MysqlExecutor,
   txnId: string,
 ): Promise<Posting | null> {
-  let found = await rows(
+  const found = await rows(
     exec,
     'SELECT meta FROM postings WHERE id = ? LIMIT 1',
     [txnId],
@@ -653,7 +655,7 @@ async function postingOf(
   if (!found.length) {
     return null;
   }
-  let legs = await legsOf(exec, txnId);
+  const legs = await legsOf(exec, txnId);
   return { txnId, legs, meta: parseMeta(found[0]!.meta) };
 }
 
@@ -663,19 +665,19 @@ async function postingOf(
 // posting carries its full legs, the way postingOf returns them, so a reader can expand a row without
 // a second round-trip.
 async function* listPostingsOf(exec: MysqlExecutor): AsyncIterable<Posting> {
-  let postings = await rows(
+  const postings = await rows(
     exec,
     'SELECT id, meta FROM postings ORDER BY seq DESC',
   );
   // One batched legs read instead of a legsOf round trip per posting (the same N+1 fold as lineageOf).
   // ledger.list() consumers buffer the whole stream, so reading the legs up front changes nothing they
   // observe.
-  let legsByTxn = await legsByPosting(
+  const legsByTxn = await legsByPosting(
     exec,
     postings.map((row) => row.id as string),
   );
-  for (let row of postings) {
-    let txnId = row.id as string;
+  for (const row of postings) {
+    const txnId = row.id as string;
     yield {
       txnId,
       legs: legsByTxn.get(txnId) ?? [],
@@ -688,7 +690,7 @@ async function* listPostingsOf(exec: MysqlExecutor): AsyncIterable<Posting> {
 // convention (positive for a debit). This rebuilds the leg and applies the account's sign rule: some
 // accounts go up on a debit, others on a credit.
 function naturalDelta(account: AccountRef, row: Row): Amount {
-  let leg: Leg = {
+  const leg: Leg = {
     account,
     amount: toAmount(row.currency as Amount['currency'], readMinor(row.amount)),
   };
@@ -703,24 +705,23 @@ function naturalDelta(account: AccountRef, row: Row): Amount {
 // on the placeholder row (locked by the unfinished transaction) until that call commits or rolls
 // back. A rollback drops the placeholder with it, so a failed attempt frees the key for a real retry.
 //
-// The claim is a single atomic `INSERT IGNORE` of the placeholder, not a `SELECT ... FOR UPDATE` then
-// `INSERT`. The old read-then-write took an exclusive *gap lock* when the `FOR UPDATE` probed a
-// not-yet-present key, and two concurrent claims whose keys fall in the same index gap then deadlocked
-// on each other's insert-intention lock -- the dominant source of InnoDB deadlocks (err 1213) under
-// concurrency, since every op claims a key. `INSERT IGNORE` takes only an insert-intention lock (which
-// does not conflict with another insert-intention), so claims of distinct keys no longer deadlock,
-// while a claim that collides with an *in-flight* holder still blocks on that row's lock until the
-// holder commits or rolls back -- the exactly-once wait is unchanged, only the gap lock is gone.
+// The claim is a single atomic `INSERT IGNORE` of the placeholder, not a `SELECT ... FOR UPDATE`
+// then `INSERT`. A read-then-write would take an exclusive *gap lock* when the `FOR UPDATE` probes
+// a not-yet-present key, and two concurrent claims whose keys fall in the same index gap would then
+// deadlock on each other's insert-intention lock -- the dominant InnoDB deadlock shape (err 1213)
+// under concurrency, since every op claims a key. `INSERT IGNORE` takes only an insert-intention
+// lock (which does not conflict with another insert-intention), so claims of distinct keys never
+// deadlock, while a claim that collides with an *in-flight* holder still blocks on that row's lock
+// until the holder commits or rolls back -- the exactly-once wait, with no gap lock.
 // @see https://economy-lab-docs.pages.dev/economy/concepts/idempotency/
 function createIdempotencyStore(exec: MysqlExecutor): IdempotencyStore {
   return {
     claim: async (key) => {
-      // affectedRows: 1 means we inserted the placeholder and won the claim. 0 means the key already
-      // existed -- and if a concurrent holder's placeholder was still uncommitted, this INSERT IGNORE
-      // already blocked on its row lock until it resolved (exactly as the old FOR UPDATE did), so by
-      // here the holder has committed (replay its recorded result) or rolled back (its placeholder is
-      // gone, so the INSERT IGNORE would have *succeeded* and we'd be in the affectedRows=1 branch).
-      let inserted = await execWrite(
+      // affectedRows: 1 means we inserted the placeholder and won the claim. 0 means the key
+      // exists and its holder has committed: a still-uncommitted holder would have blocked this
+      // INSERT IGNORE on its row lock, and a rolled-back one would have freed the key so the
+      // insert succeeded. So on 0, replay the recorded result.
+      const inserted = await execWrite(
         exec,
         'INSERT IGNORE INTO idempotency (`key`, transaction) VALUES (?, NULL)',
         [key],
@@ -728,12 +729,12 @@ function createIdempotencyStore(exec: MysqlExecutor): IdempotencyStore {
       if (inserted > 0) {
         return { claimed: true };
       }
-      let existing = await rows(
+      const existing = await rows(
         exec,
         'SELECT transaction FROM idempotency WHERE `key` = ? LIMIT 1',
         [key],
       );
-      let recorded = existing[0]?.transaction ?? null;
+      const recorded = existing[0]?.transaction ?? null;
       if (recorded !== null) {
         return {
           claimed: false,
@@ -787,7 +788,7 @@ function createSaleStore(exec: MysqlExecutor): SaleStore {
       );
     },
     get: async (orderId) => {
-      let found = await rows(
+      const found = await rows(
         exec,
         'SELECT * FROM sales WHERE order_id = ? LIMIT 1',
         [orderId],
@@ -802,7 +803,8 @@ function createSaleStore(exec: MysqlExecutor): SaleStore {
 // The transactional-outbox sub-store: `enqueue` saves the event in the same transaction as the
 // money posting, a relay later picks up a batch of pending events (`claimBatch`), and FOR UPDATE
 // SKIP LOCKED lets several relay workers grab different rows at once.
-// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the outbox pattern (write-with-the-transaction, relay-later, dedupe-by-id).
+// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the outbox
+// pattern (write-with-the-transaction, relay-later, dedupe-by-id).
 function createOutboxStore(exec: MysqlExecutor): OutboxStore {
   return {
     enqueue: async (message) => {
@@ -818,11 +820,13 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
       );
     },
     claimBatch: async (limit) => {
-      let result = await rows(
+      const result = await rows(
         exec,
         `SELECT id, event, status, attempts, dead_letter_reason FROM outbox
-          WHERE status = 'pending' ORDER BY created_at, id
-          LIMIT ? FOR UPDATE SKIP LOCKED`,
+          WHERE status = 'pending'
+          ORDER BY created_at, id
+          LIMIT ?
+          FOR UPDATE SKIP LOCKED`,
         [limit],
       );
       return result.map(rowToOutbox);
@@ -834,7 +838,7 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
       // The `AND status = 'pending'` guard stops a stale resend from flipping a row that has since
       // been dead-lettered (or already relayed) back to 'relayed'. It is the same terminal-state guard
       // recordFailure uses and the in-memory reference applies (which skips any non-'pending' row).
-      let placeholders = ids.map(() => '?').join(', ');
+      const placeholders = ids.map(() => '?').join(', ');
       await rows(
         exec,
         `UPDATE outbox SET status = 'relayed'
@@ -843,8 +847,7 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
       );
     },
     // Record a failed delivery: bump `attempts` and leave the row pending so the next sweep
-    // retries it. The `AND status = 'pending'` guard makes this a no-op on a missing, relayed,
-    // or dead-lettered row, matching the in-memory reference (which skips a non-'pending' row).
+    // retries it. Same terminal-state guard as markSent above.
     recordFailure: async (id) => {
       await rows(
         exec,
@@ -853,8 +856,7 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
       );
     },
     // Give up on a poison message: flip to 'failed' so claimBatch never hands it back, keep the
-    // reason for operators. The `AND status = 'pending'` guard makes a missing or already-terminal
-    // row a no-op, mirroring the saga store and the in-memory reference.
+    // reason for operators. Same terminal-state guard as markSent above.
     deadLetter: async (id, reason) => {
       await rows(
         exec,
@@ -872,11 +874,13 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
 // redelivered event is a no-op insert that returns the existing row. A separate apply worker later
 // claims a batch of pending rows (`claimInbound`), and FOR UPDATE SKIP LOCKED lets several workers
 // grab different rows at once.
-// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the inbox pattern (record-in-the-ingress-transaction, apply-later, dedupe-by-id).
+// See https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ for the inbox pattern
+// (record-in-the-ingress-transaction, apply-later, dedupe-by-id).
 function createInboxStore(exec: MysqlExecutor): InboxStore {
   return {
     // MySQL has no RETURNING, so the inserted/existing row is fetched in a second read (postgres hands it
-    // back from the insert). encodeOperation carries the bigint amounts as decimal strings (JSON can't hold BigInt).
+    // back from the insert). encodeOperation carries the bigint amounts as decimal strings (JSON
+    // can't hold BigInt).
     enqueueInbound: async (entry) => {
       await rows(
         exec,
@@ -891,9 +895,11 @@ function createInboxStore(exec: MysqlExecutor): InboxStore {
           entry.receivedAt,
         ],
       );
-      let found = await rows(
+      const found = await rows(
         exec,
-        'SELECT id, `key`, operation, status, attempts, received_at, dead_letter_reason FROM inbox WHERE `key` = ? LIMIT 1',
+        `SELECT id, \`key\`, operation, status, attempts, received_at, dead_letter_reason FROM inbox
+          WHERE \`key\` = ?
+          LIMIT 1`,
         [entry.key],
       );
       return rowToInbox(found[0]!);
@@ -903,18 +909,19 @@ function createInboxStore(exec: MysqlExecutor): InboxStore {
     // accepted for parity with the saga/relay claim; the inbox has no due-time gate, so every
     // pending row is immediately claimable.
     claimInbound: async (input) => {
-      let result = await rows(
+      const result = await rows(
         exec,
         `SELECT id, \`key\`, operation, status, attempts, received_at, dead_letter_reason FROM inbox
-          WHERE status = 'pending' ORDER BY received_at, id
-          LIMIT ? FOR UPDATE SKIP LOCKED`,
+          WHERE status = 'pending'
+          ORDER BY received_at, id
+          LIMIT ?
+          FOR UPDATE SKIP LOCKED`,
         [input.limit],
       );
       return result.map(rowToInbox);
     },
-    // Flip a still-pending row to 'applied' so claimInbound never hands it back. The
-    // `AND status = 'pending'` guard makes this a no-op on a missing or already-terminal
-    // (applied/dead) row, matching the in-memory reference.
+    // Flip a still-pending row to 'applied' so claimInbound never hands it back. Same
+    // terminal-state guard as the outbox's markSent: a missing or already-terminal row is a no-op.
     markApplied: async (id) => {
       await rows(
         exec,
@@ -922,9 +929,8 @@ function createInboxStore(exec: MysqlExecutor): InboxStore {
         [id],
       );
     },
-    // Record a failed apply: bump `attempts` and leave the row pending so the next sweep retries it.
-    // The `AND status = 'pending'` guard makes this a no-op on a missing or already-terminal row,
-    // and (like the outbox) it never touches status. Only deadLetter does that.
+    // Record a failed apply: bump `attempts` and leave the row pending so the next sweep retries
+    // it. Same terminal-state guard as markApplied; only deadLetter ever changes status.
     bumpAttempt: async (id) => {
       await rows(
         exec,
@@ -932,9 +938,8 @@ function createInboxStore(exec: MysqlExecutor): InboxStore {
         [id],
       );
     },
-    // Give up on a poison event: flip to 'dead' so claimInbound never hands it back, keep the reason
-    // for operators. The `AND status = 'pending'` guard makes a missing or already-terminal row a
-    // no-op, mirroring the outbox/saga dead-letter guards and the in-memory reference.
+    // Give up on a poison event: flip to 'dead' so claimInbound never hands it back, keep the
+    // reason for operators. Same terminal-state guard as markApplied.
     deadLetter: async (id, reason) => {
       await rows(
         exec,
@@ -952,7 +957,7 @@ function createInboxStore(exec: MysqlExecutor): InboxStore {
 // trip, yielded one at a time so a consumer can stop early. It is module-level (like loadSagaOrThrow)
 // to keep createSagaStore short.
 async function* listSagasOf(exec: MysqlExecutor): AsyncIterable<Saga> {
-  for (let row of await rows(
+  for (const row of await rows(
     exec,
     'SELECT * FROM payout_sagas ORDER BY updated_at DESC',
   )) {
@@ -991,7 +996,7 @@ function createSagaStore(exec: MysqlExecutor): SagaStore {
       );
     },
     load: async (id) => {
-      let found = await rows(
+      const found = await rows(
         exec,
         'SELECT * FROM payout_sagas WHERE id = ? LIMIT 1',
         [id],
@@ -1000,7 +1005,7 @@ function createSagaStore(exec: MysqlExecutor): SagaStore {
     },
     list: () => listSagasOf(exec),
     claimDue: async (now, limit) => {
-      let result = await rows(
+      const result = await rows(
         exec,
         `SELECT * FROM payout_sagas
           WHERE due_at <= ? AND state IN ('RESERVED', 'SUBMITTED')
@@ -1012,8 +1017,12 @@ function createSagaStore(exec: MysqlExecutor): SagaStore {
     advance: async (id, from, to, patch) => {
       // MySQL has no partial-UPDATE coalesce (postgres twin does), so this read-modify-writes the whole row:
       // a non-terminal advance re-writes payout_usd/reason from the loaded row, never disturbing them.
-      let next = { ...(await loadSagaOrThrow(exec, id)), ...patch, state: to };
-      let affected = await execWrite(
+      const next = {
+        ...(await loadSagaOrThrow(exec, id)),
+        ...patch,
+        state: to,
+      };
+      const affected = await execWrite(
         exec,
         `UPDATE payout_sagas SET
            reserve = ?, rate_id = ?, state = ?, provider_ref = ?,
@@ -1051,12 +1060,12 @@ async function lastPayoutOf(
   exec: MysqlExecutor,
   userId: string,
 ): Promise<number | null> {
-  let found = await rows(
+  const found = await rows(
     exec,
     'SELECT MAX(updated_at) AS last FROM payout_sagas WHERE user_id = ?',
     [userId],
   );
-  let last = found[0]?.last;
+  const last = found[0]?.last;
   return last === null || last === undefined ? null : Number(last);
 }
 
@@ -1064,7 +1073,7 @@ async function lastPayoutOf(
 // overlays the few it is changing. A missing saga here means a caller bug, since under normal use the
 // saga exists by the time advance runs.
 async function loadSagaOrThrow(exec: MysqlExecutor, id: string): Promise<Saga> {
-  let found = await rows(
+  const found = await rows(
     exec,
     'SELECT * FROM payout_sagas WHERE id = ? LIMIT 1',
     [id],
@@ -1085,7 +1094,7 @@ async function loadSagaOrThrow(exec: MysqlExecutor, id: string): Promise<Saga> {
 // on-conflict path, so re-buying re-activates. `owns` honors expiry: owned while now <= expiresAt,
 // lost once now > expiresAt, checked against the injected clock, matching the older reference.
 function createEntitlementStore(deps: ExecDeps): EntitlementStore {
-  let exec = deps.exec;
+  const exec = deps.exec;
   return {
     grant: async (userId, sku, attrs) => {
       await rows(
@@ -1116,7 +1125,7 @@ function createEntitlementStore(deps: ExecDeps): EntitlementStore {
     owns: async (userId, sku) => {
       // `expires_at IS NULL` is a perpetual grant; otherwise owned up to and including
       // `expiresAt` (>= now), expiring only once the clock passes it.
-      let found = await rows(
+      const found = await rows(
         exec,
         `SELECT 1 FROM entitlements
           WHERE user_id = ? AND sku = ? AND revoked = false
@@ -1163,7 +1172,7 @@ function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
       );
     },
     load: async (id) => {
-      let found = await rows(
+      const found = await rows(
         exec,
         'SELECT * FROM subscriptions WHERE id = ? LIMIT 1',
         [id],
@@ -1173,7 +1182,7 @@ function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
     // The one ACTIVE subscription for this (user, sku, seller) triple, or null. The subscribe
     // handler reads this to refuse a duplicate active subscription that would double-bill.
     activeFor: async (userId, sku, sellerId) => {
-      let found = await rows(
+      const found = await rows(
         exec,
         `SELECT * FROM subscriptions
           WHERE user_id = ? AND sku = ? AND seller_id = ? AND state = 'ACTIVE'
@@ -1192,7 +1201,7 @@ function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
     // FOR UPDATE SKIP LOCKED, like the saga/promo claimDue, lets overlapping sweepers grab
     // disjoint batches instead of contending over the same due rows.
     claimDue: async (now, limit) => {
-      let result = await rows(
+      const result = await rows(
         exec,
         `SELECT * FROM subscriptions WHERE state = 'ACTIVE' AND next_due_at <= ?
           ORDER BY next_due_at LIMIT ? FOR UPDATE SKIP LOCKED`,
@@ -1203,7 +1212,7 @@ function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
     markBilled: async (id, nextDueAt, expectedDueAt) => {
       // Compare-and-set on next_due_at = `expectedDueAt`: a worker that already billed this period moved the
       // date on, so the loser matches no row and never double-charges. attempts resets to 0 on success.
-      let affected = await execWrite(
+      const affected = await execWrite(
         exec,
         `UPDATE subscriptions SET next_due_at = ?, period = period + 1, attempts = 0
           WHERE id = ? AND next_due_at = ?`,
@@ -1257,7 +1266,7 @@ function createPromoStore(exec: MysqlExecutor): PromoStore {
     // FOR UPDATE SKIP LOCKED matches the saga/outbox claim queries so two sweeps grab
     // different grants.
     claimDue: async (now, limit) => {
-      let result = await rows(
+      const result = await rows(
         exec,
         `SELECT * FROM promo_grants
           WHERE expires_at <= ? AND reversed = false
@@ -1267,8 +1276,7 @@ function createPromoStore(exec: MysqlExecutor): PromoStore {
       return result.map(rowToPromoGrant);
     },
     // Mark a grant reversed so `claimDue` never hands it back again. The `AND reversed = false`
-    // guard makes this a no-op on a row that is missing or already reversed, mirroring the
-    // saga/outbox dead-letter guards and the in-memory reference.
+    // guard is the outbox markSent terminal-state guard in boolean form.
     markReversed: async (id) => {
       await rows(
         exec,
@@ -1296,7 +1304,7 @@ async function measureVelocity(
   subject: string,
   cutoff: number,
 ): Promise<Velocity> {
-  let found = await rows(
+  const found = await rows(
     exec,
     `SELECT COALESCE(MIN(at), 0) AS window_start,
             COALESCE(SUM(amount), 0) AS spent,
@@ -1304,7 +1312,7 @@ async function measureVelocity(
        FROM trust_attempts WHERE subject = ? AND at > ?`,
     [subject, cutoff],
   );
-  let row = found[0]!;
+  const row = found[0]!;
   return {
     subject,
     windowStart: Number(row.window_start),
@@ -1344,11 +1352,11 @@ function createTrustStore(
     // Record-and-measure atomically. Borrow one connection, take a per-subject named lock so two
     // concurrent same-subject calls serialize, insert the attempt, then measure, now including
     // this attempt. The lock is released and the connection returned in `finally`, so a borrower
-    // never inherits a stale lock. Serializing the insert and SUM behind one lock closes the
-    // velocity-limit TOCTOU that separate read+bump left.
+    // never inherits a stale lock. Serializing the insert and SUM behind one lock gives the
+    // atomicity `TrustStore.record` requires (ports.ts).
     record: async (subject, attempt) => {
-      let cutoff = clock.now() - windowMs;
-      let connection = await pool.getConnection();
+      const cutoff = clock.now() - windowMs;
+      const connection = await pool.getConnection();
       try {
         await takeGetLock(connection, subjectLockName(subject));
         await insertAttempt(connection, subject, attempt);
@@ -1387,7 +1395,7 @@ function createUnitTrustStore(
 // serialize. It uses the same 64-byte cap and prefix#length scheme as `lockName`, kept separate so a
 // subject lock cannot collide with an account lock of the same string.
 function subjectLockName(subject: string): string {
-  let tagged = `trust:${subject}`;
+  const tagged = `trust:${subject}`;
   return tagged.length <= 56
     ? tagged
     : `${tagged.slice(0, 48)}#${tagged.length}`;
@@ -1414,7 +1422,7 @@ function createCheckpointStore(pool: MysqlPool): CheckpointStore {
       );
     },
     latest: async () => {
-      let found = await rows(
+      const found = await rows(
         pool,
         'SELECT * FROM checkpoints ORDER BY seq DESC LIMIT 1',
       );
@@ -1434,12 +1442,12 @@ function createCheckpointStore(pool: MysqlPool): CheckpointStore {
 //
 // `claim` inserts the id only if not already present: `INSERT IGNORE` adds the row the first time
 // and does nothing on a redelivery, rather than raising a duplicate-key error (same effect as the
-// postgres adapter's `on conflict do nothing`). The driver reports affectedRows = 1 on the call
+// Postgres engine's `on conflict do nothing`). The driver reports affectedRows = 1 on the call
 // that inserted and 0 on every later one, so the count distinguishes first delivery from duplicate.
 function createReplayStore(pool: MysqlPool): ReplayStore {
   return {
     claim: async (eventId) => {
-      let affected = await execWrite(
+      const affected = await execWrite(
         pool,
         'INSERT IGNORE INTO seen_webhooks (event_id) VALUES (?)',
         [eventId],
@@ -1510,8 +1518,8 @@ function encodeAmounts(value: unknown): unknown {
     return value.map(encodeAmounts);
   }
   if (value !== null && typeof value === 'object') {
-    let out: Record<string, unknown> = {};
-    for (let [key, inner] of Object.entries(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [key, inner] of Object.entries(value)) {
       out[key] = encodeAmounts(inner);
     }
     return out;
@@ -1523,15 +1531,15 @@ function encodeAmounts(value: unknown): unknown {
 // through, so plain fields (idempotencyKey, sku, reason) are left alone.
 function decodeAmounts(value: unknown): unknown {
   if (typeof value === 'string') {
-    let amount = tryDecodeAmountString(value);
+    const amount = tryDecodeAmountString(value);
     return amount ?? value;
   }
   if (Array.isArray(value)) {
     return value.map(decodeAmounts);
   }
   if (value !== null && typeof value === 'object') {
-    let out: Record<string, unknown> = {};
-    for (let [key, inner] of Object.entries(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [key, inner] of Object.entries(value)) {
       out[key] = decodeAmounts(inner);
     }
     return out;
@@ -1542,7 +1550,7 @@ function decodeAmounts(value: unknown): unknown {
 // A colon alone is not enough: decodeAmountWire throws on a non-numeric tail, and that throw is caught
 // so a plain string containing a colon falls through to null instead of throwing.
 function tryDecodeAmountString(encoded: string): Amount | null {
-  let colon = encoded.indexOf(':');
+  const colon = encoded.indexOf(':');
   if (colon < 0) {
     return null;
   }
@@ -1577,7 +1585,7 @@ function encodeTransaction(transaction: Transaction): string {
 }
 
 function parseTransaction(value: unknown): Transaction {
-  let parsed = parseJson(value) as {
+  const parsed = parseJson(value) as {
     id: string;
     postedAt: number;
     legs: ReadonlyArray<{ account: string; amount: string }>;
@@ -1605,9 +1613,9 @@ function decodeLegs(
   legs: ReadonlyArray<{ account: string; amount: string }>,
 ): ReadonlyArray<Leg> {
   return legs.map((leg) => {
-    let colon = leg.amount.indexOf(':');
-    let currencyTag = leg.amount.slice(0, colon) as Amount['currency'];
-    let minor = BigInt(leg.amount.slice(colon + 1));
+    const colon = leg.amount.indexOf(':');
+    const currencyTag = leg.amount.slice(0, colon) as Amount['currency'];
+    const minor = BigInt(leg.amount.slice(colon + 1));
     return {
       account: leg.account as AccountRef,
       amount: toAmount(currencyTag, minor),
@@ -1621,7 +1629,7 @@ function parseJson(value: unknown): unknown {
 }
 
 function parseMeta(value: unknown): Record<string, unknown> {
-  let parsed = parseJson(value);
+  const parsed = parseJson(value);
   return parsed !== null && typeof parsed === 'object'
     ? (parsed as Record<string, unknown>)
     : {};
@@ -1664,7 +1672,8 @@ function buildUnit(deps: ExecDeps, trust: TrustStore): Unit {
  * The hashing and clock services default to the deterministic web-standard ones, so `mysqlStore({
  * pool })` produces reproducible results.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for the store and outbox/inbox ports this backs.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
+ *   messaging} for the store and outbox/inbox ports this backs.
  */
 export function mysqlStore(deps: {
   pool: MysqlPool;
@@ -1672,14 +1681,14 @@ export function mysqlStore(deps: {
   clock?: Clock;
   velocityWindowMs?: number;
 }): Store {
-  let pool = deps.pool;
-  let digest = deps.digest ?? defaultDigest();
-  let clock = deps.clock ?? defaultClock();
-  let velocityWindowMs = deps.velocityWindowMs ?? 60 * 60_000;
-  let poolDeps: ExecDeps = { exec: pool, digest, clock, pool };
+  const pool = deps.pool;
+  const digest = deps.digest ?? defaultDigest();
+  const clock = deps.clock ?? defaultClock();
+  const velocityWindowMs = deps.velocityWindowMs ?? 60 * 60_000;
+  const poolDeps: ExecDeps = { exec: pool, digest, clock, pool };
 
-  let trust = createTrustStore(pool, clock, velocityWindowMs);
-  let auto = buildUnit(poolDeps, trust);
+  const trust = createTrustStore(pool, clock, velocityWindowMs);
+  const auto = buildUnit(poolDeps, trust);
 
   return {
     ledger: auto.ledger,
@@ -1703,7 +1712,7 @@ export function mysqlStore(deps: {
     // @see https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/
     transaction: async (work) =>
       withTransientRetry(async () => {
-        let connection = await pool.getConnection();
+        const connection = await pool.getConnection();
         try {
           // Run the money transaction at READ COMMITTED, like Postgres. Correctness comes from
           // the explicit FOR UPDATE locks, which behave the same at either level. REPEATABLE
@@ -1715,11 +1724,11 @@ export function mysqlStore(deps: {
             'SET TRANSACTION ISOLATION LEVEL READ COMMITTED',
           );
           await connection.query('START TRANSACTION');
-          let unit = buildUnit(
+          const unit = buildUnit(
             { exec: connection, digest, clock, pool },
             createUnitTrustStore(connection, clock, velocityWindowMs),
           );
-          let result = await work(unit);
+          const result = await work(unit);
           await connection.query('COMMIT');
           return result;
         } catch (error) {
@@ -1743,12 +1752,12 @@ export function mysqlStore(deps: {
 // that timed out without committing). Both surface on mysql2's `error.errno`. Anything else (a domain
 // fault, a CHECK/constraint violation, a connection error) is not retried.
 function isTransientConflict(error: unknown): boolean {
-  let e = error as {
+  const e = error as {
     errno?: unknown;
     sqlMessage?: unknown;
     message?: unknown;
   } | null;
-  let errno = e?.errno;
+  const errno = e?.errno;
   // 1213 (deadlock) and 1205 (lock-wait timeout) are the classic "try again" aborts. 1062 (duplicate
   // entry) on chain_links_account_prev_uq is the subtler one. Each account's history is a hash chain,
   // and a new link names the current head as its parent. That index lets only one link claim a given
@@ -1764,7 +1773,7 @@ function isTransientConflict(error: unknown): boolean {
   // the head first), equally fixed by re-reading the head. It is matched only when the message names
   // "chain continuity", because 1644 is also the state of the genuine `conservation` and
   // `balance integrity` faults, which must fail fast and are never retried.
-  let text = String(e?.sqlMessage ?? e?.message ?? '');
+  const text = String(e?.sqlMessage ?? e?.message ?? '');
   return (
     errno === 1213 ||
     errno === 1205 ||
@@ -1805,8 +1814,8 @@ export async function readSchemaVersion(
   pool: MysqlPool,
 ): Promise<string | null> {
   try {
-    let [rows] = await pool.query('SELECT version FROM schema_meta LIMIT 1');
-    let row = (rows as Array<{ version?: string }>)[0];
+    const [rows] = await pool.query('SELECT version FROM schema_meta LIMIT 1');
+    const row = (rows as Array<{ version?: string }>)[0];
     return row?.version ?? null;
   } catch {
     return null;
@@ -1814,7 +1823,7 @@ export async function readSchemaVersion(
 }
 
 /**
- * Create all tables and stored routines this adapter needs, from the canonical schema file
+ * Create all tables and stored routines this engine needs, from the canonical schema file
  * `db/mysql-schema.sql` (the MySQL counterpart to `db/postgresql-schema.sql`). The file drops and
  * recreates the tables, so running this resets to a clean schema (convenient for tests). Run once
  * during setup (operations tooling or CI), never automatically at app startup.
@@ -1823,15 +1832,15 @@ export async function readSchemaVersion(
  * (see {@link splitSqlStatements}), then each is run in order.
  */
 export async function applyMysqlSchema(pool: MysqlPool): Promise<void> {
-  let path = fileURLToPath(
+  const path = fileURLToPath(
     new URL('../../db/mysql-schema.sql', import.meta.url),
   );
-  let sql = await readFile(path, 'utf8');
+  const sql = await readFile(path, 'utf8');
   // The schema file pins the database collation (its leading ALTER DATABASE) before any DROP/CREATE,
   // so the freshly created tables match the utf8mb4_0900_ai_ci strings JSON_TABLE produces inside
   // post_entry. That is the same pin `mysql < db/mysql-schema.sql` (scripts/migrate.sh) applies. This
   // just runs the file statement by statement.
-  for (let statement of splitSqlStatements(sql)) {
+  for (const statement of splitSqlStatements(sql)) {
     await pool.query(statement);
   }
 }
@@ -1844,11 +1853,11 @@ export async function applyMysqlSchema(pool: MysqlPool): Promise<void> {
 // server. Blank lines and `--` comment lines between statements are skipped, but a comment inside a
 // statement stays with it.
 function splitSqlStatements(sql: string): string[] {
-  let statements: string[] = [];
+  const statements: string[] = [];
   let delimiter = ';';
   let buffer = '';
-  for (let line of sql.split('\n')) {
-    let trimmed = line.trim();
+  for (const line of sql.split('\n')) {
+    const trimmed = line.trim();
     if (/^DELIMITER\s+/i.test(trimmed)) {
       delimiter = trimmed.replace(/^DELIMITER\s+/i, '').trim();
       continue;
@@ -1858,8 +1867,8 @@ function splitSqlStatements(sql: string): string[] {
     }
     buffer += line + '\n';
     if (buffer.trimEnd().endsWith(delimiter)) {
-      let end = buffer.trimEnd();
-      let statement = end.slice(0, end.length - delimiter.length).trim();
+      const end = buffer.trimEnd();
+      const statement = end.slice(0, end.length - delimiter.length).trim();
       if (statement !== '') {
         statements.push(statement);
       }
@@ -1873,11 +1882,11 @@ function splitSqlStatements(sql: string): string[] {
  * Create a `mysql2` connection pool from a connection URL. `mysql2` is imported here, only when
  * this function runs, since it's an optional dependency the rest of the code never needs. The pool
  * returns large integer columns (the money columns, stored as 64-bit integers) as strings, which
- * the adapter then converts to bigint exactly.
+ * the engine then converts to bigint exactly.
  *
  * `connectionLimit` caps the pool. Each in-flight transaction holds one connection for its whole
  * BEGIN..COMMIT, so a caller driving N concurrent submits must size this to at least N. Left unset,
- * `mysql2`'s default of 10 applies, which is the historical behaviour.
+ * `mysql2`'s default of 10 applies, which is the historical behavior.
  */
 export async function createMysqlPool(
   url: string,
@@ -1885,12 +1894,12 @@ export async function createMysqlPool(
 ): Promise<MysqlPool> {
   // Hold the module name in a variable instead of writing it directly in import(), so the
   // type-checker does not try to resolve this optional dependency at build time (it need only be
-  // installed wherever this adapter runs). `@vite-ignore` tells a bundler (Vite/Rollup) the same
+  // installed wherever this engine runs). `@vite-ignore` tells a bundler (Vite/Rollup) the same
   // thing: leave it a runtime import rather than warning that it cannot statically analyze the
   // variable specifier. mysql2 is a server-only optional driver that consumers externalize, never
   // bundled.
-  let specifier = 'mysql2/promise';
-  let mysql = (await import(/* @vite-ignore */ specifier)) as unknown as {
+  const specifier = 'mysql2/promise';
+  const mysql = (await import(/* @vite-ignore */ specifier)) as unknown as {
     createPool(config: unknown): MysqlPool;
   };
   return mysql.createPool({

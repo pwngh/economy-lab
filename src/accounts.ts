@@ -18,7 +18,8 @@ import type { Operation } from '#src/contract.ts';
  * The three kinds of account a single user can have. This is a category, not a currency. The
  * currency of any money movement comes from the amount's own `Currency`.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/ Accounts & double-entry} for how these accounts and their normal sides balance.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/
+ *   Accounts & double-entry} for how these accounts and their normal sides balance.
  */
 export type AccountKind = 'spendable' | 'earned' | 'promo';
 
@@ -99,7 +100,7 @@ export const SYSTEM = {
 // sum the shards. Shard 0 keeps the bare id, so shards=1 (the default) changes nothing.
 
 // The accounts worth sharding. RECEIVABLE and OPENING_EQUITY move too rarely to matter.
-let SHARDED: ReadonlySet<AccountRef> = new Set([
+const SHARDED: ReadonlySet<AccountRef> = new Set([
   SYSTEM.REVENUE,
   SYSTEM.PROMO_FLOAT,
   SYSTEM.STORED_VALUE,
@@ -117,7 +118,7 @@ export function baseOf(ref: AccountRef): AccountRef {
   if (!ref.startsWith('platform:')) {
     return ref;
   }
-  let hash = ref.indexOf('#');
+  const hash = ref.indexOf('#');
   return hash < 0 ? ref : (ref.slice(0, hash) as AccountRef);
 }
 
@@ -128,7 +129,7 @@ export function shardRef(base: AccountRef, shard: number): AccountRef {
 
 /** All shard ids of `base`, bare id first. Readers sum these to get the logical balance. */
 export function shardsOf(base: AccountRef, shards: number): AccountRef[] {
-  let refs: AccountRef[] = [];
+  const refs: AccountRef[] = [];
   for (let shard = 0; shard < Math.max(1, shards); shard += 1) {
     refs.push(shardRef(base, shard));
   }
@@ -165,7 +166,7 @@ export function routePlatformLegs<T extends { account: AccountRef }>(
     return legs;
   }
   return legs.map((leg) => {
-    let routed = platformShard(leg.account, key, shards);
+    const routed = platformShard(leg.account, key, shards);
     return routed === leg.account ? leg : { ...leg, account: routed };
   });
 }
@@ -202,7 +203,7 @@ export function isWalletAccount(ref: AccountRef): boolean {
  * {@link isWalletAccount} identifies.
  */
 export function ownerOf(ref: AccountRef): string {
-  let colon = ref.lastIndexOf(':');
+  const colon = ref.lastIndexOf(':');
   return colon < 0 ? ref : ref.slice(0, colon);
 }
 
@@ -211,7 +212,7 @@ export function ownerOf(ref: AccountRef): string {
  * accounts, TRUST_CASH and USD_CLEARING.
  */
 export function currency(ref: AccountRef): Currency {
-  let base = baseOf(ref); // a shard is denominated like its parent
+  const base = baseOf(ref); // a shard is denominated like its parent
   if (
     base === SYSTEM.TRUST_CASH ||
     base === SYSTEM.USD_CLEARING ||
@@ -227,12 +228,14 @@ export function currency(ref: AccountRef): Currency {
  * `house-liability`. The DB schema and the USD-backing solvency check both rely on these, and only
  * `custodial` (users' spendable) counts toward the trust total.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/ Accounts & double-entry} for what each bucket holds and why only custodial raises the required cash.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/
+ *   Accounts & double-entry} for what each bucket holds and why only custodial raises the required
+ *   cash.
  */
 export function classify(
   ref: AccountRef,
 ): 'custodial' | 'excluded' | 'house-asset' | 'house-liability' {
-  let base = baseOf(ref); // a shard is classed like its parent
+  const base = baseOf(ref); // a shard is classed like its parent
   if (
     base === SYSTEM.TRUST_CASH ||
     base === SYSTEM.USD_CLEARING ||
@@ -263,7 +266,7 @@ export function classify(
  * to sign a posted line; the no-negative-balance check uses it to read each balance right-way-up.
  */
 export function isDebitNormal(ref: AccountRef): boolean {
-  let base = baseOf(ref); // a shard keeps its parent's normal side
+  const base = baseOf(ref); // a shard keeps its parent's normal side
   return (
     base === SYSTEM.TRUST_CASH ||
     base === SYSTEM.USD_CLEARING ||
@@ -276,8 +279,8 @@ export function isDebitNormal(ref: AccountRef): boolean {
 }
 
 /**
- * The accounts an operation might touch, which the middleware locks before posting so concurrent
- * operations can't race on the same balances.
+ * The accounts an operation might touch, which the submit pipeline locks (lockAccounts in
+ * economy.ts) before posting so concurrent operations can't race on the same balances.
  *
  * Returns a superset on purpose: a few extra locks are harmless, too few would let operations
  * interleave. Locking the full set up front gives the funds pre-check a consistent view and makes
@@ -292,7 +295,7 @@ export function accountsOf(operation: Operation, shards = 1): AccountRef[] {
   // so widen the looked-up builder to a plain function via this cast. The LOCK_SETS type still
   // requires an entry per operation kind, so a forgotten kind is a compile error, not an empty
   // lock set that races the pre-check.
-  let touched = LOCK_SETS[operation.kind] as (
+  const touched = LOCK_SETS[operation.kind] as (
     operation: Operation,
     shards: number,
   ) => AccountRef[];
@@ -301,7 +304,7 @@ export function accountsOf(operation: Operation, shards = 1): AccountRef[] {
 
 // The system accounts that a refund or reversal always touches, regardless of the original
 // transaction. The handler adds the original transaction's own accounts on top of these.
-let REVERSAL_CONTRAS: AccountRef[] = [
+const REVERSAL_CONTRAS: AccountRef[] = [
   SYSTEM.REVENUE,
   SYSTEM.PROMO_FLOAT,
   SYSTEM.RECEIVABLE,
@@ -310,7 +313,7 @@ let REVERSAL_CONTRAS: AccountRef[] = [
 // For each operation kind, the accounts that operation may touch. `accountsOf` looks up the
 // matching builder here and calls it. Hot kinds route shards with the same key their handler
 // routes the legs with, so the lock covers the shard the posting will hit.
-let LOCK_SETS: {
+const LOCK_SETS: {
   [K in Operation['kind']]: (
     operation: Extract<Operation, { kind: K }>,
     shards: number,
@@ -334,7 +337,9 @@ let LOCK_SETS: {
   refund: () => [...REVERSAL_CONTRAS],
   clawback: (o) => [
     spendable(o.userId),
-    SYSTEM.STORED_VALUE, // a chargeback cancels credits against STORED_VALUE, not REVENUE, the same way a top-up issued them
+    // A chargeback cancels credits against STORED_VALUE, not REVENUE, the same way a top-up
+    // issued them.
+    SYSTEM.STORED_VALUE,
     SYSTEM.RECEIVABLE,
   ],
   requestPayout: (o, s) => [
@@ -379,13 +384,14 @@ let LOCK_SETS: {
 };
 
 // Pull the account kind out of an id like `usr_123:spendable`. Returns null if there's no `:kind`
-// suffix or it isn't a known kind. The only place that parses the raw `usr_…:<kind>` string shape.
+// suffix or it isn't a known kind. The store adapters parse the same shape in their
+// isKnownAccount checks.
 function kindOf(ref: AccountRef): AccountKind | null {
-  let colon = ref.lastIndexOf(':');
+  const colon = ref.lastIndexOf(':');
   if (colon < 0) {
     return null;
   }
-  let suffix = ref.slice(colon + 1);
+  const suffix = ref.slice(colon + 1);
   if (suffix === 'spendable' || suffix === 'earned' || suffix === 'promo') {
     return suffix;
   }

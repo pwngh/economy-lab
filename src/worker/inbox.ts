@@ -54,8 +54,10 @@ type Applier = Pick<Economy, 'submit'>;
  * committed but `markApplied` did not). Exactly-once rests on the stored Operation's idempotencyKey
  * (the provider event id the row deduped on): a re-apply resolves to a `duplicate` Outcome.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how inbox draining fits the sweep loop.
- * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/idempotency/ Idempotency} for the idempotencyKey dedupe.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background
+ *   worker} for how inbox draining fits the sweep loop.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/idempotency/ Idempotency} for the
+ *   idempotencyKey dedupe.
  */
 export async function drainInbox(
   store: Store,
@@ -63,13 +65,13 @@ export async function drainInbox(
   input: { economy: Applier; now: number; limit: number },
   options?: Options,
 ): Promise<InboxSummary> {
-  let pending = await store.inbox.claimInbound(
+  const pending = await store.inbox.claimInbound(
     { now: input.now, limit: input.limit },
     options,
   );
-  let tally: InboxTally = { applied: [], failed: [], deadLettered: [] };
+  const tally: InboxTally = { applied: [], failed: [], deadLettered: [] };
 
-  for (let entry of pending) {
+  for (const entry of pending) {
     await applyOne(
       store,
       ctx,
@@ -81,18 +83,17 @@ export async function drainInbox(
   return tally;
 }
 
-// Submits one stored Operation and records the outcome in the tally. A committed or duplicate
-// Outcome marks the row 'applied'. A `rejected` Outcome is a terminal business "no" (e.g.
-// INSUFFICIENT_FUNDS) that retrying cannot fix, so it dead-letters the row rather than retrying the
-// same apply that will fail every sweep. A thrown fault is the retryable case and goes to `recordFailure`,
-// which bumps-and-retries or dead-letters at the cap rather than re-throwing.
+// Submits one stored Operation and sorts the outcome into {@link InboxSummary}'s buckets: a
+// committed or duplicate Outcome marks the row 'applied', a `rejected` Outcome dead-letters it
+// (terminal; see the type doc), and a thrown fault goes to `recordFailure`, which bumps-and-retries
+// or dead-letters at the cap rather than re-throwing.
 async function applyOne(
   store: Store,
   ctx: WorkerCtx,
   work: { economy: Applier; entry: InboxEntry; options?: Options },
   tally: InboxTally,
 ): Promise<void> {
-  let { economy, entry, options } = work;
+  const { economy, entry, options } = work;
   let outcome: Outcome;
   try {
     outcome = await economy.submit(entry.operation, options);
@@ -107,10 +108,9 @@ async function applyOne(
   }
 
   if (outcome.status === 'rejected') {
-    // A declined but well-formed request: a normal "no" the economy returns as data, not a fault.
-    // It is terminal for this row, because the same Operation will be declined the same way on every
-    // retry, so dead-letter it rather than burning attempts. The reason code stands in for the
-    // failure code so operators see why it parked.
+    // A declined but well-formed request is terminal for this row: the same Operation would be
+    // declined the same way on every retry, so dead-letter it rather than burning attempts. The
+    // reason code stands in for the failure code so operators see why it parked.
     ctx.logger.log('warn', 'inbox.apply.rejected', {
       entryId: entry.id,
       reason: outcome.reason,
@@ -145,8 +145,8 @@ async function recordFailure(
   },
   tally: InboxTally,
 ): Promise<void> {
-  let { entry, normalized, options } = work;
-  let next = entry.attempts + 1;
+  const { entry, normalized, options } = work;
+  const next = entry.attempts + 1;
   if (next >= ctx.config.maxInboxAttempts) {
     ctx.logger.log('error', 'inbox.apply.deadLettered', {
       entryId: entry.id,

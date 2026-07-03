@@ -24,7 +24,8 @@ import type { Subscription, Unit } from '#src/ports.ts';
  * than throwing. The ownership check runs only after the record is confirmed cancelable, so a
  * missing or canceled id gets that same answer for every caller and never leaks whether it exists.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/cancel-subscription/ Cancel subscription} for the cancel flow and ownership rules.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/cancel-subscription/
+ *   Cancel subscription} for the cancel flow and ownership rules.
  */
 export async function handleCancelSubscription(
   operation: Operation,
@@ -35,7 +36,7 @@ export async function handleCancelSubscription(
 
   assertSubscriptionId(operation.subscriptionId);
 
-  let subscription = await unit.subscriptions.load(operation.subscriptionId);
+  const subscription = await unit.subscriptions.load(operation.subscriptionId);
   if (subscription === null || subscription.state === 'CANCELED') {
     return rejected('UNKNOWN_SUBSCRIPTION', {
       subscriptionId: operation.subscriptionId,
@@ -67,12 +68,13 @@ function assertSubscriptionId(subscriptionId: string): void {
 // catch this because cancel debits no user account, so the ownership check lives here against the
 // loaded record; without it the handler would cancel any named id, an IDOR. System/operator pass;
 // a user passes only when their id matches the owner, else UNAUTHORIZED.
-// See https://economy-lab-docs.pages.dev/economy/reference/operations/cancel-subscription/ for the ownership rules and why the central check can't enforce them.
+// See https://economy-lab-docs.pages.dev/economy/reference/operations/cancel-subscription/ for the
+// ownership rules and why the central check can't enforce them.
 function assertMayCancel(
   operation: Extract<Operation, { kind: 'cancelSubscription' }>,
   subscription: Subscription,
 ): void {
-  let actor = operation.actor;
+  const actor = operation.actor;
   if (actor.kind !== 'user') {
     return;
   }

@@ -14,10 +14,10 @@ import type { AccountRef } from '#src/accounts.ts';
 import type { RejectionCode } from '#src/errors.ts';
 import type {
   Cache,
-  Capabilities,
   Clock,
   Digest,
   Ids,
+  Leg,
   Logger,
   Meter,
   Options,
@@ -31,7 +31,6 @@ import type {
   Unit,
 } from '#src/ports.ts';
 import type { Config } from '#src/config.ts';
-import type { Leg } from '#src/ports.ts';
 
 /**
  * Optional details on an entitlement grant (a user owning an item or feature). Lives here rather
@@ -83,10 +82,12 @@ export type Operation =
       price: Amount;
       recipients?: Recipient[];
       ageRestricted?: boolean;
-      // A gift. The buyer still pays and is screened for funds and velocity, but the SKU is granted
-      // to this recipient user id instead of the buyer. A gift is modelled as an ordinary purchase
-      // that carries a recipient, not a separate transaction type, with no wallet-to-wallet credit
-      // or ownership transfer. Omitted (or equal to `buyerId`) for a self-purchase.
+      /**
+       * A gift. The buyer still pays and is screened for funds and velocity, but the SKU is granted
+       * to this recipient user id instead of the buyer. A gift is modeled as an ordinary purchase
+       * that carries a recipient, not a separate transaction type, with no wallet-to-wallet credit
+       * or ownership transfer. Omitted (or equal to `buyerId`) for a self-purchase.
+       */
       giftTo?: string;
     }
   | {
@@ -111,8 +112,10 @@ export type Operation =
       idempotencyKey: string;
       actor: Principal;
       userId: string;
-      // amount is the seller's earned credits. It is set aside in the payout-reserve account
-      // and ultimately paid out to them as real USD.
+      /**
+       * amount is the seller's earned credits. It is set aside in the payout-reserve account
+       * and ultimately paid out to them as real USD.
+       */
       amount: Amount;
     }
   | {
@@ -157,6 +160,8 @@ export type Operation =
       amount: Amount;
       expiresAt: number;
     }
+  // A manual correction an operator posts by hand; ordinary users can't run it. The offsetting
+  // entry goes to the opening-equity account so the books still balance.
   | {
       kind: 'adjust';
       idempotencyKey: string;
@@ -164,18 +169,20 @@ export type Operation =
       account: AccountRef;
       amount: Amount;
       reason: string;
-      // A manual correction an operator posts by hand; ordinary users can't run it. The
-      // offsetting entry goes to the opening-equity account so the books still balance.
     }
+  // A manual undo an operator runs by hand; ordinary users can't run it. It posts the exact
+  // opposite of the transaction named by txnId, canceling it out.
   | {
       kind: 'reverse';
       idempotencyKey: string;
       actor: Principal;
       txnId: string;
       reason: string;
-      // A manual undo an operator runs by hand; ordinary users can't run it. It posts the
-      // exact opposite of the transaction named by txnId, cancelling it out.
     }
+  // Operator-only correction to undo a not-yet-paid payout. Marks the saga FAILED and returns the
+  // set-aside credits to the seller's earned account, but only if it is still pre-paid, so two
+  // attempts can't both undo it; a payout that already disbursed real USD is refused. `userId`
+  // names the seller (which account to lock); the operation is otherwise identified only by sagaId.
   | {
       kind: 'reversePayout';
       idempotencyKey: string;
@@ -183,29 +190,29 @@ export type Operation =
       userId: string;
       sagaId: string;
       reason: string;
-      // Operator-only correction to undo a not-yet-paid payout. Marks the saga FAILED and returns the
-      // set-aside credits to the seller's earned account, but only if it is still pre-paid, so two
-      // attempts can't both undo it; a payout that already disbursed real USD is refused. `userId`
-      // names the seller (which account to lock); the operation is otherwise identified only by sagaId.
     }
+  // System- or operator-only (RESTRICTED_TO_PRIVILEGED in economy.ts): the SUBMITTED -> SETTLED
+  // step that empties the seller's reserve into REVENUE and moves gross USD out of trust. An end
+  // user must never settle their own payout. Named only by `sagaId`; postings touch platform
+  // accounts only.
   | {
       kind: 'settlePayout';
       idempotencyKey: string;
       actor: Principal;
       sagaId: string;
-      // The provider's settlement reference for this payout (the rail's own id for the
-      // disbursement), recorded for the audit trail. Carried from the inbound provider webhook that
-      // drives the settle.
+      /**
+       * The provider's settlement reference for this payout (the rail's own id for the
+       * disbursement), recorded for the audit trail. Carried from the inbound provider webhook that
+       * drives the settle.
+       */
       providerRef: string;
-      // The USD amount the provider reported settling. Recorded for audit/reconciliation only: the
-      // figures actually posted are the rate-derived ones the worker computes (gross USD from the
-      // reserve at the payout rate, less the rail fee), so a webhook-driven settle moves exactly what
-      // the worker's own settle moved.
+      /**
+       * The USD amount the provider reported settling. Recorded for audit/reconciliation only: the
+       * figures actually posted are the rate-derived ones settlePayout computes (gross USD from
+       * the reserve at the payout rate, less the rail fee), so the provider's report never sets
+       * the posted amount.
+       */
       providerAmount: Amount;
-      // System- or operator-only (RESTRICTED_TO_PRIVILEGED in economy.ts): the SUBMITTED -> SETTLED
-      // step that empties the seller's reserve into REVENUE and moves gross USD out of trust. An end
-      // user must never settle their own payout. Named only by `sagaId`; postings touch platform
-      // accounts only.
     };
 
 /**
@@ -224,17 +231,19 @@ export type Outcome =
 
 /** A committed posting: the record of money that actually moved. */
 export interface Transaction {
-  // Unique id, of the form txn_<uuid>.
+  /** Unique id, of the form txn_<uuid>. */
   id: string;
 
-  // When it committed, in epoch milliseconds.
+  /** When it committed, in epoch milliseconds. */
   postedAt: number;
 
-  // The individual debit and credit lines that posted. A refund reverses exactly these.
+  /** The individual debit and credit lines that posted. A refund reverses exactly these. */
   legs: ReadonlyArray<{ account: AccountRef; amount: Amount }>;
 
-  // For each account this transaction touched, how its tamper-evident hash chain advanced:
-  // prevHash was that account's latest hash before this posting, hash is the one after.
+  /**
+   * For each account this transaction touched, how its tamper-evident hash chain advanced:
+   * prevHash was that account's latest hash before this posting, hash is the one after.
+   */
   links: ReadonlyArray<{ account: AccountRef; prevHash: string; hash: string }>;
 }
 
@@ -250,8 +259,10 @@ export type Ctx = {
   rates: Rates;
   logger: Logger;
   meter: Meter;
-  // Optional read-through balance cache. Present only when a cache capability was injected;
-  // when absent, every balance read goes straight to the ledger.
+  /**
+   * Optional read-through balance cache. Present only when a cache capability was injected;
+   * when absent, every balance read goes straight to the ledger.
+   */
   cache?: Cache;
 };
 
@@ -278,9 +289,6 @@ export type Handler = (
   tx: Unit,
   ctx: Ctx,
 ) => Promise<Outcome>;
-
-/** Wraps a handler with extra behavior, returning a new handler that calls `next` inside it. */
-export type Middleware = (next: Handler) => Handler;
 
 /**
  * Splits a sale's `price` across recipients and the platform into the debit/credit lines (legs) to
@@ -327,33 +335,47 @@ export interface Economy {
       range: Range,
       options?: Options,
     ): Promise<Statement>;
-    // One committed posting by transaction id (its legs and meta), or null if unknown. Lets a reader
-    // resolve a posting without reaching past `read` into the raw Store.
+    /**
+     * One committed posting by transaction id (its legs and meta), or null if unknown. Lets a reader
+     * resolve a posting without reaching past `read` into the raw Store.
+     */
     posting(txnId: string, options?: Options): Promise<Posting | null>;
-    // One payout saga by id (state, provider ref, attempts), or null if unknown. The background
-    // worker advances these; a UI reads them to render payout status.
+    /**
+     * One payout saga by id (state, provider ref, attempts), or null if unknown. The background
+     * worker advances these; a UI reads them to render payout status.
+     */
     saga(id: string, options?: Options): Promise<Saga | null>;
-    // Whether a user currently owns an entitlement (a SKU: an item or feature), true or false.
-    // Ownership is a record, not a balance, so it has its own reader. This is the readable side of
-    // `grantEntitlement`/`revokeEntitlement` that a UI gates access on.
+    /**
+     * Whether a user currently owns an entitlement (a SKU: an item or feature), true or false.
+     * Ownership is a record, not a balance, so it has its own reader. This is the readable side of
+     * `grantEntitlement`/`revokeEntitlement` that a UI gates access on.
+     */
     entitled(userId: string, sku: string, options?: Options): Promise<boolean>;
-    // The economy's current pause state (see EconomyStatus): whether a maintenance window is in
-    // effect right now, its configured bounds, and when writes resume. Derived from config + the
-    // clock, not stored, so it always reflects the live window. Lets a UI render a maintenance banner
-    // without inferring the state from an ECONOMY_PAUSED decline.
+    /**
+     * The economy's current pause state (see EconomyStatus): whether a maintenance window is in
+     * effect right now, its configured bounds, and when writes resume. Derived from config + the
+     * clock, not stored, so it always reflects the live window. Lets a UI render a maintenance banner
+     * without inferring the state from an ECONOMY_PAUSED decline.
+     */
     status(): EconomyStatus;
-    // Every account that has a balance row, streamed. A real ledger can hold many, so iterate and
-    // stop when you've seen enough rather than collecting them all. Lets a reader enumerate accounts
-    // (and derive users) without tracking them itself. This is the prover's own enumeration.
+    /**
+     * Every account that has a balance row, streamed. A real ledger can hold many, so iterate and
+     * stop when you've seen enough rather than collecting them all. Lets a reader enumerate accounts
+     * (and derive users) without tracking them itself. This is the prover's own enumeration.
+     */
     accounts(options?: Options): AsyncIterable<AccountRef>;
-    // Every payout saga, newest first, streamed (a busy economy can have many). Includes settled
-    // and failed payouts, not only the due ones the worker claims. Lets a UI
-    // render payout status without tracking minted payout ids itself. Delegates to `SagaStore.list`.
+    /**
+     * Every payout saga, newest first, streamed (a busy economy can have many). Includes settled
+     * and failed payouts, not only the due ones the worker claims. Lets a UI
+     * render payout status without tracking minted payout ids itself. Delegates to `SagaStore.list`.
+     */
     payouts(options?: Options): AsyncIterable<Saga>;
-    // Every committed posting, newest first, streamed (a busy ledger can have many). Includes user
-    // and worker postings alike, every account touched, not only the ones a given reader
-    // minted. Each posting carries its full legs, so a UI renders a row without a second lookup.
-    // Delegates to `Ledger.list`.
+    /**
+     * Every committed posting, newest first, streamed (a busy ledger can have many). Includes user
+     * and worker postings alike, every account touched, not only the ones a given reader
+     * minted. Each posting carries its full legs, so a UI renders a row without a second lookup.
+     * Delegates to `Ledger.list`.
+     */
     postings(options?: Options): AsyncIterable<Posting>;
     prove(options?: Options): Promise<ProveReport>;
   };
@@ -362,41 +384,48 @@ export interface Economy {
 
 /** The result of the integrity check: each flag is one property the ledger is supposed to hold. */
 export interface ProveReport {
-  // True when debits and credits cancel out within each currency, so no money was created or lost.
+  /**
+   * True when debits and credits cancel out within each currency, so no money was created or lost.
+   */
   conserved: boolean;
 
-  // True when the real USD the platform holds in trust covers every credit it owes back to
-  // users: the credits sitting in their spendable balances. Credits are converted to USD at the
-  // peg, the fixed CREDIT-to-USD rate.
+  /**
+   * True when the real USD the platform holds in trust covers every credit it owes back to
+   * users: the credits sitting in their spendable balances. Credits are converted to USD at the
+   * peg, the fixed CREDIT-to-USD rate.
+   */
   backed: boolean;
 
-  // True when no user account has gone below zero.
+  /** True when no user account has gone below zero. */
   noOverdraft: boolean;
 
-  // True when every account's hash chain recomputes to its recorded value, proving no posting
-  // was tampered with after the fact.
+  /**
+   * True when every account's hash chain recomputes to its recorded value, proving no posting
+   * was tampered with after the fact.
+   */
   chainIntact: boolean;
 
-  // True when, for every account, the cached running balance matches the balance re-added from its
-  // debit and credit lines (i.e. `drift` is empty). The lines are the source of truth; the cached
-  // figure can be wrong. A diverged cached balance (mis-saved or directly-edited row) shows up here
-  // even when the books still balance.
+  /**
+   * True when, for every account, the cached running balance matches the balance re-added from its
+   * debit and credit lines (i.e. `drift` is empty). The lines are the source of truth; the cached
+   * figure can be wrong. A diverged cached balance (mis-saved or directly-edited row) shows up here
+   * even when the books still balance.
+   */
   consistent: boolean;
 
-  // Every account whose cached balance disagrees with the balance re-added from its debit and credit
-  // lines; empty when `consistent` is true. Each entry names the account and both figures, so an
-  // operator sees the gap's size and direction. Catches both a real account whose cached total
-  // drifted and a leftover balance row with no postings (re-added to zero, so any cached figure is
-  // wrong).
+  /**
+   * Every account whose cached balance disagrees with the balance re-added from its debit and credit
+   * lines; empty when `consistent` is true. Each entry names the account and both figures, so an
+   * operator sees the gap's size and direction. Catches both a real account whose cached total
+   * drifted and a leftover balance row with no postings (re-added to zero, so any cached figure is
+   * wrong).
+   */
   drift: ReadonlyArray<{
     account: AccountRef;
     materialized: Amount;
     derived: Amount;
   }>;
 
-  // How much USD backing is missing; zero when `backed` is true.
+  /** How much USD backing is missing; zero when `backed` is true. */
   shortfall: Amount;
 }
-
-/** Build a ready-to-use {@link Economy} from the full set of injected capabilities. */
-export declare function createEconomy(capabilities: Capabilities): Economy;

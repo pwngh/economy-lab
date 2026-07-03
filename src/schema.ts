@@ -14,13 +14,15 @@
  * this code.
  *
  * Both SQL schema files seed a `schema_meta` row with this value. Startup reads it back and fails fast
- * on a mismatch (see {@link assertSchemaCurrent}), so a drift is reported as an error instead of going undetected.
+ * on a mismatch (see {@link assertSchemaCurrent}), so a drift is reported as an error instead of
+ * going undetected.
  *
  * Bump this AND the matching `insert into schema_meta` in BOTH schema files
  * (db/postgresql-schema.sql, db/mysql-schema.sql) in the same change, whenever a running database
  * would need re-migrating to pick up the edit: a new column, a renamed account id, an added index.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/configuration/ Configuration} for schema versioning and drift guard.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/configuration/ Configuration}
+ *   for schema versioning and drift guard.
  */
 export const SCHEMA_VERSION = '8';
 
@@ -36,13 +38,13 @@ export function assertSchemaCurrent(
   backend: string,
 ): void {
   if (found === SCHEMA_VERSION) return;
-  let state =
+  const state =
     found === null
       ? 'has no schema_meta row (an un-migrated or pre-versioning database)'
       : `is at schema version ${found}`;
   throw new Error(
     `economy-lab: the ${backend} database ${state}, but this build expects schema version ` +
-      `${SCHEMA_VERSION}. Re-apply the schema with \`make db:migrate\` so the database matches ` +
+      `${SCHEMA_VERSION}. Re-apply the schema with \`make db-migrate\` so the database matches ` +
       'this code.',
   );
 }

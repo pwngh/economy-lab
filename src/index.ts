@@ -38,8 +38,8 @@ import type {
 
 // --- Public surface (re-exports only) ---------------------------------------------
 
-// createEconomy builds an economy from its services. memoryStore is the in-memory backend, which runs with no database.
 export { createEconomy } from '#src/economy.ts';
+// memoryStore: the in-memory backend, which runs with no database.
 export { memoryStore } from '#src/adapters/memory.ts';
 // memoryCache: in-process read-through cache, the zero-infra counterpart to the Redis adapter.
 export { memoryCache } from '#src/adapters/memory-cache.ts';
@@ -128,11 +128,11 @@ export async function capabilitiesFromEnv(
   ports: ExternalPorts,
   defaults: RuntimeDefaults = {},
 ): Promise<Capabilities> {
-  let config = loadConfig(env);
-  let clock = defaults.clock ?? wallClock();
-  let digest = defaults.digest ?? sha256Digest();
-  let cache = await selectCache(env);
-  let dispatcher = await selectDispatcher(env);
+  const config = loadConfig(env);
+  const clock = defaults.clock ?? wallClock();
+  const digest = defaults.digest ?? sha256Digest();
+  const cache = await selectCache(env);
+  const dispatcher = await selectDispatcher(env);
   return {
     store: await selectStore(env, {
       digest,
@@ -179,7 +179,8 @@ export function workerCtxFrom(caps: Capabilities): WorkerCtx {
  * `env`, falling back to the in-memory store when `DATABASE_URL` is unset. Thin over
  * {@link capabilitiesFromEnv}.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy} for composing an economy from env.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy} for
+ *   composing an economy from env.
  */
 export async function compose(
   env: Record<string, string | undefined>,
@@ -210,7 +211,7 @@ export async function composeWorker(
   store: Store;
   dispatcher: Dispatcher | undefined;
 }> {
-  let caps = await capabilitiesFromEnv(env, ports, defaults);
+  const caps = await capabilitiesFromEnv(env, ports, defaults);
   return {
     worker: createWorker(caps.store, workerCtxFrom(caps)),
     store: caps.store,
@@ -241,12 +242,12 @@ async function selectStore(
   env: Record<string, string | undefined>,
   deps: { digest: Digest; clock: Clock; velocityWindowMs: number },
 ): Promise<Store> {
-  let url = env.DATABASE_URL;
+  const url = env.DATABASE_URL;
   if (url === undefined || url === '') {
     return memoryStore(deps);
   }
   if (url.startsWith('postgres://') || url.startsWith('postgresql://')) {
-    let { postgresStore } = await import('#src/engines/postgres.ts');
+    const { postgresStore } = await import('#src/engines/postgres.ts');
     return postgresStore({
       url,
       digest: deps.digest,
@@ -255,14 +256,14 @@ async function selectStore(
     });
   }
   if (url.startsWith('mysql://')) {
-    let { createMysqlPool, mysqlStore, readSchemaVersion } =
+    const { createMysqlPool, mysqlStore, readSchemaVersion } =
       await import('#src/engines/mysql.ts');
     // Build the pool via the engine's helper, which sets supportBigNumbers and bigNumberStrings so a
     // BIGINT money column comes back as a string (then a bigint), not a lossy JS number. Raw `mysql2`
     // `createPool` leaves those off, so wiring it directly would silently round any amount above
     // 2^53 (~9 quadrillion). This is the same createMysqlPool the engine's conformance and adversarial
     // tests use.
-    let pool = await createMysqlPool(url);
+    const pool = await createMysqlPool(url);
     // Fail fast if the database schema has drifted from this code (postgresStore does the same for
     // its branch). Postgres makes its own pool inside the store; MySQL's pool is created here.
     assertSchemaCurrent(await readSchemaVersion(pool), 'MySQL');
@@ -285,14 +286,14 @@ async function selectStore(
 async function selectCache(
   env: Record<string, string | undefined>,
 ): Promise<Cache | undefined> {
-  let url = env.REDIS_URL;
+  const url = env.REDIS_URL;
   if (url === undefined || url === '') {
     return undefined;
   }
-  let { redisCacheFrom } = await import('#src/adapters/redis.ts');
+  const { redisCacheFrom } = await import('#src/adapters/redis.ts');
   // ioredis' default export is the client constructor at runtime; the cast pins it to the
   // adapter's minimal RedisClient surface (its module types don't expose the construct signature).
-  let Redis = (await import('ioredis')).default as unknown as {
+  const Redis = (await import('ioredis')).default as unknown as {
     new (connection: string): Parameters<typeof redisCacheFrom>[0];
   };
   return redisCacheFrom(new Redis(url));
@@ -305,11 +306,12 @@ async function selectCache(
 async function selectDispatcher(
   env: Record<string, string | undefined>,
 ): Promise<Dispatcher | undefined> {
-  let queueUrl = env.SQS_QUEUE_URL;
+  const queueUrl = env.SQS_QUEUE_URL;
   if (queueUrl !== undefined && queueUrl !== '') {
-    let { SQSClient, SendMessageCommand } = await import('@aws-sdk/client-sqs');
-    let { sqsDispatcher } = await import('#src/adapters/sqs.ts');
-    let raw = new SQSClient({});
+    const { SQSClient, SendMessageCommand } =
+      await import('@aws-sdk/client-sqs');
+    const { sqsDispatcher } = await import('#src/adapters/sqs.ts');
+    const raw = new SQSClient({});
     // The adapter speaks an SDK-free `{ input }` command so it stays importable and unit-testable
     // without @aws-sdk/client-sqs. Translate it into a real `SendMessageCommand` here, the one place
     // that imports the SDK. A raw `SQSClient.send` rejects a plain `{ input }`: it needs a Command
@@ -331,9 +333,9 @@ async function selectDispatcher(
       },
     });
   }
-  let dispatcherUrl = env.DISPATCHER_URL;
+  const dispatcherUrl = env.DISPATCHER_URL;
   if (dispatcherUrl !== undefined && dispatcherUrl !== '') {
-    let { httpDispatcher } = await import('#src/adapters/http-dispatcher.ts');
+    const { httpDispatcher } = await import('#src/adapters/http-dispatcher.ts');
     return httpDispatcher({ url: dispatcherUrl });
   }
   return undefined;

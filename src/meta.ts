@@ -22,7 +22,7 @@ export function metaString(
   key: string,
   fallback: string,
 ): string {
-  let value = meta[key];
+  const value = meta[key];
   return typeof value === 'string' ? value : fallback;
 }
 
@@ -32,6 +32,6 @@ export function metaNumber(
   key: string,
   fallback: number,
 ): number {
-  let value = meta[key];
+  const value = meta[key];
   return typeof value === 'number' ? value : fallback;
 }

@@ -16,7 +16,7 @@ import type { AccountRef } from '#src/accounts.ts';
 import type { Posting } from '#src/ports.ts';
 
 // One account's step in its hash chain for a posting: the head hash before this entry (`prevHash`)
-// and after (`hash`). The adapter computes the SHA-256 hash in application code and passes the link
+// and after (`hash`). The engine computes the SHA-256 hash in application code and passes the link
 // in. This module only writes the link to the database.
 type Link = { account: AccountRef; prevHash: string; hash: string };
 
@@ -24,12 +24,13 @@ type Link = { account: AccountRef; prevHash: string; hash: string };
  * Selects which placeholder style the routines emit. Postgres uses `$1,$2,…` and MySQL uses
  * `?,?,…`.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for the stored-routine boundary.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
+ *   messaging} for the stored-routine boundary.
  */
 export type SqlDialect = 'postgres' | 'mysql';
 
 /**
- * Runs SQL with positional params and returns the rows. Each adapter wraps its driver to this
+ * Runs SQL with positional params and returns the rows. Each engine wraps its driver to this
  * shape (Postgres `pool.query`, MySQL `rows()`), so the routines below are written once for both
  * backends.
  */
@@ -58,7 +59,7 @@ function placeholders(dialect: SqlDialect, count: number): string {
 
 // Invokes a stored procedure for its side effects, reading no value back. Builds the `CALL` in the
 // backend's placeholder style and runs it. This is call mechanics shared by the Postgres and MySQL
-// adapters, with no business logic. The application prepares the values (see {@link postEntryArgs})
+// engines, with no business logic. The application prepares the values (see {@link postEntryArgs})
 // and the routine only persists them.
 export async function callProcedure(
   query: SqlQuery,
@@ -66,7 +67,7 @@ export async function callProcedure(
   name: string,
   args: ReadonlyArray<unknown>,
 ): Promise<void> {
-  let sql = `CALL ${safeName(name)}(${placeholders(dialect, args.length)})`;
+  const sql = `CALL ${safeName(name)}(${placeholders(dialect, args.length)})`;
   await query(sql, args);
 }
 
@@ -78,8 +79,8 @@ export async function callFunction(
   name: string,
   args: ReadonlyArray<unknown>,
 ): Promise<unknown> {
-  let sql = `SELECT ${safeName(name)}(${placeholders(dialect, args.length)}) AS result`;
-  let out = await query(sql, args);
+  const sql = `SELECT ${safeName(name)}(${placeholders(dialect, args.length)}) AS result`;
+  const out = await query(sql, args);
   return out.rows[0]?.result ?? null;
 }
 
@@ -106,21 +107,20 @@ export interface PostEntryArgs {
 
 /**
  * Turns a posting and its pre-computed chain links into the {@link PostEntryArgs} the `post_entry`
- * procedure persists. This is the one place the per-account math lives. It mirrors the old per-leg
- * `foldBalance` and `ensureAccount` path, so the single procedure write produces the same result as
- * the old many round-trips.
+ * procedure persists. This is the one place the per-account math lives: the balance deltas and
+ * first-use accounts are decided here, and the procedure only writes them.
  */
 export function postEntryArgs(
   posting: Posting,
   links: ReadonlyArray<Link>,
 ): PostEntryArgs {
-  let legs = posting.legs.map((leg) => ({
+  const legs = posting.legs.map((leg) => ({
     account: leg.account,
     currency: leg.amount.currency,
     amount: leg.amount.minor.toString(),
   }));
 
-  let linkRows = links.map((link) => ({
+  const linkRows = links.map((link) => ({
     account: link.account,
     prev_hash: link.prevHash,
     hash: link.hash,
@@ -129,28 +129,28 @@ export function postEntryArgs(
   // Compute the net balance delta per account. A posting can touch one account in several legs (for
   // example, a promo-funded spend credits a seller twice), so sum each account's `balanceDelta` into
   // one figure. This is the same total the per-leg `foldBalance` would reach.
-  let deltaByAccount = new Map<string, bigint>();
-  let currencyByAccount = new Map<string, string>();
-  for (let leg of posting.legs) {
-    let prior = deltaByAccount.get(leg.account) ?? 0n;
+  const deltaByAccount = new Map<string, bigint>();
+  const currencyByAccount = new Map<string, string>();
+  for (const leg of posting.legs) {
+    const prior = deltaByAccount.get(leg.account) ?? 0n;
     deltaByAccount.set(leg.account, prior + balanceDelta(leg).minor);
     currencyByAccount.set(leg.account, leg.amount.currency);
   }
-  let balances = [...deltaByAccount].map(([account, delta]) => ({
+  const balances = [...deltaByAccount].map(([account, delta]) => ({
     account,
     currency: currencyByAccount.get(account) as string,
     delta: delta.toString(),
   }));
 
   // Collect the user accounts to create on first use, distinct and in first-seen order.
-  let newAccounts: PostEntryArgs['newAccounts'] = [];
-  let seen = new Set<string>();
-  for (let leg of posting.legs) {
+  const newAccounts: PostEntryArgs['newAccounts'] = [];
+  const seen = new Set<string>();
+  for (const leg of posting.legs) {
     if (seen.has(leg.account)) {
       continue;
     }
     seen.add(leg.account);
-    let kind = userAccountKind(leg.account);
+    const kind = userAccountKind(leg.account);
     if (kind !== null) {
       newAccounts.push({
         id: leg.account,
@@ -165,15 +165,15 @@ export function postEntryArgs(
 
 // Returns the kind of a user account (`usr_…:spendable|earned|promo`), or null for a platform
 // account, which the schema seeds and this code never creates. Uses the same suffix rule as the
-// adapters' account-ensure.
+// engines' account-ensure.
 function userAccountKind(
   account: string,
 ): 'spendable' | 'earned' | 'promo' | null {
-  let colon = account.lastIndexOf(':');
+  const colon = account.lastIndexOf(':');
   if (colon < 0) {
     return null;
   }
-  let suffix = account.slice(colon + 1);
+  const suffix = account.slice(colon + 1);
   if (suffix === 'spendable' || suffix === 'earned' || suffix === 'promo') {
     return suffix;
   }

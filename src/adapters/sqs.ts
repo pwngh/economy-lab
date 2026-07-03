@@ -19,8 +19,8 @@ import type { Dispatcher, EconomyEvent, Options } from '#src/ports.ts';
 /**
  * Describes the one SQS client method this adapter calls. The structural shape lets the file
  * compile without the optional `@aws-sdk/client-sqs` dependency installed. It captures only
- * what we use: a command holding `input` plus an optional `abortSignal`. A real `SQSClient`
- * satisfies it.
+ * what we use: a command holding `input`, and a `send` that takes an optional `abortSignal`.
+ * A real `SQSClient` satisfies it.
  */
 export interface SqsCommand {
   readonly input: Record<string, unknown>;
@@ -60,14 +60,15 @@ export interface SqsDispatcherConfig {
  * On failure it throws a retryable `PROVIDER.FAILURE` so the caller's backoff wrapper retries.
  * The event id is attached so the receiver can drop duplicates, because SQS may deliver twice.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for how dispatchers deliver events.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
+ *   messaging} for how dispatchers deliver events.
  */
 export function sqsDispatcher(config: SqsDispatcherConfig): Dispatcher {
-  let client = config.client;
+  const client = config.client;
   // The FIFO-only params (MessageGroupId, MessageDeduplicationId) draw InvalidParameterValue on a
   // standard queue. So decide once from the URL suffix and attach them only for FIFO queues. The
   // documented deployment (.env.example) uses a standard queue.
-  let fifo = config.queueUrl.endsWith('.fifo');
+  const fifo = config.queueUrl.endsWith('.fifo');
 
   return async (event: EconomyEvent, options?: Options): Promise<void> => {
     try {
@@ -96,7 +97,7 @@ export function sqsDispatcher(config: SqsDispatcherConfig): Dispatcher {
 // Wraps a failed SQS call as a retryable `PROVIDER.FAILURE`. `normalizeError` keeps the
 // original error as `cause`.
 function transportFault(message: string, error: unknown): Error {
-  let normalized = normalizeError(error);
+  const normalized = normalizeError(error);
   return fault(ERROR_CODES.PROVIDER_FAILURE, message, {
     cause: normalized,
     retryable: true,

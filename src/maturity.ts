@@ -39,7 +39,7 @@ export type MaturedAtLeastOptions = MaturityOptions & {
 // Horizon lookup key for an unrecognized funding source. The 'default' horizon is configured
 // independently through MATURITY_HORIZON_DEFAULT_MS. It coincides with the card horizon only under
 // the shipped defaults, so an unknown source settles on its own conservative wait.
-let DEFAULT_SOURCE: string = 'default';
+const DEFAULT_SOURCE: string = 'default';
 
 /**
  * Returns the wait in milliseconds before credits from a funding source can be cashed out. The wait
@@ -48,8 +48,8 @@ let DEFAULT_SOURCE: string = 'default';
  * is treated cautiously rather than as instantly available.
  */
 export function maturityHorizonMs(source: string, config: Config): number {
-  let horizons = config.maturityHorizonMs;
-  let exact = horizons[source];
+  const horizons = config.maturityHorizonMs;
+  const exact = horizons[source];
   if (exact !== undefined) {
     return exact;
   }
@@ -61,6 +61,8 @@ export function maturityHorizonMs(source: string, config: Config): number {
  * source's required wait. A lot is one batch of credits from a single top-up, tagged with when it
  * was added and its funding source. The wait is computed here from `source` rather than read from
  * the lot's own `maturesAt`, because a top-up may record the source without a maturity time.
+ * This depends on a caller rule: any handler issuing spendable credits records the funding source
+ * on the posting (a missing source falls back to the 'default' horizon, just less precisely).
  */
 export function lotMaturesAt(lot: Lot, config: Config): number {
   return lot.toppedUpAt + maturityHorizonMs(lot.source, config);
@@ -78,7 +80,7 @@ export function isMatured(lot: Lot, now: number, config: Config): boolean {
 // lot or two, so the first page almost always suffices. A wider tail, such as many small unspent
 // top-ups, just pulls the next page. The size keeps the common case to one round-trip while
 // bounding memory.
-let TAIL_PAGE = 64;
+const TAIL_PAGE = 64;
 
 /**
  * Returns the cashable part of an account's balance as of `now`: how much a cash-out may draw
@@ -97,8 +99,8 @@ export async function maturedBalance(
   now: number,
   options: MaturityOptions,
 ): Promise<Amount> {
-  let live = await ledger.balance(account, { signal: options.signal });
-  let unit = currency(account);
+  const live = await ledger.balance(account, { signal: options.signal });
+  const unit = currency(account);
 
   if (live.minor <= 0n) {
     return zero(unit);
@@ -111,7 +113,7 @@ export async function maturedBalance(
   // `remaining` hits zero.
   for (let offset = 0; remaining > 0n; offset += TAIL_PAGE) {
     let drained = 0;
-    for await (let lot of ledger.timeline(account, {
+    for await (const lot of ledger.timeline(account, {
       order: 'desc',
       limit: TAIL_PAGE,
       offset,
@@ -119,7 +121,7 @@ export async function maturedBalance(
       drained += 1;
       // The boundary lot contributes only what is left to cover. A fully-included lot contributes
       // its whole amount.
-      let take = lot.amount.minor < remaining ? lot.amount.minor : remaining;
+      const take = lot.amount.minor < remaining ? lot.amount.minor : remaining;
       if (lotMaturesAt(lot, options.config) <= now) {
         matured += take;
       }
@@ -143,7 +145,8 @@ export async function maturedBalance(
  * but stops early, so a request well within cleared funds costs O(amount-worth-of-lots). A
  * non-positive `amount` is trivially covered.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/ Credit maturity}.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/ Credit maturity}
+ *   for the dated-lot model behind the running sum.
  */
 export async function maturedAtLeast(
   ledger: Ledger,
@@ -151,11 +154,11 @@ export async function maturedAtLeast(
   now: number,
   options: MaturedAtLeastOptions,
 ): Promise<boolean> {
-  let need = options.amount.minor;
+  const need = options.amount.minor;
   if (need <= 0n) {
     return true;
   }
-  let live =
+  const live =
     options.live ?? (await ledger.balance(account, { signal: options.signal }));
   if (live.minor <= 0n) {
     return false;
@@ -165,7 +168,7 @@ export async function maturedAtLeast(
   let matured = 0n;
   for (let offset = 0; remaining > 0n; offset += TAIL_PAGE) {
     let drained = 0;
-    for await (let lot of ledger.timeline(account, {
+    for await (const lot of ledger.timeline(account, {
       order: 'desc',
       limit: TAIL_PAGE,
       offset,
@@ -174,7 +177,7 @@ export async function maturedAtLeast(
       // This is the same FIFO-tail split as maturedBalance. The boundary lot contributes only what
       // is left to cover the live balance, and a fully-included lot contributes its whole amount.
       // Only matured lots count.
-      let take = lot.amount.minor < remaining ? lot.amount.minor : remaining;
+      const take = lot.amount.minor < remaining ? lot.amount.minor : remaining;
       if (lotMaturesAt(lot, options.config) <= now) {
         matured += take;
         if (matured >= need) {
@@ -206,14 +209,14 @@ export async function maturedBalanceFullScan(
   now: number,
   options: MaturityOptions,
 ): Promise<Amount> {
-  let live = await ledger.balance(account, { signal: options.signal });
-  let unit = currency(account);
+  const live = await ledger.balance(account, { signal: options.signal });
+  const unit = currency(account);
   if (live.minor <= 0n) {
     return zero(unit);
   }
 
-  let lots = await collectLots(ledger, account, options.config);
-  let tail = fifoTail(lots, live.minor);
+  const lots = await collectLots(ledger, account, options.config);
+  const tail = fifoTail(lots, live.minor);
   return sumMatured(tail, now, unit);
 }
 
@@ -227,8 +230,8 @@ export async function immatureBalance(
   now: number,
   options: MaturityOptions,
 ): Promise<Amount> {
-  let live = await ledger.balance(account, { signal: options.signal });
-  let matured = await maturedBalance(ledger, account, now, options);
+  const live = await ledger.balance(account, { signal: options.signal });
+  const matured = await maturedBalance(ledger, account, now, options);
   return toAmount(currency(account), live.minor - matured.minor);
 }
 
@@ -244,8 +247,8 @@ async function collectLots(
   account: AccountRef,
   config: Config,
 ): Promise<Settled[]> {
-  let lots: Settled[] = [];
-  for await (let lot of ledger.timeline(account)) {
+  const lots: Settled[] = [];
+  for await (const lot of ledger.timeline(account)) {
     lots.push({
       minor: lot.amount.minor,
       maturesAt: lotMaturesAt(lot, config),
@@ -261,13 +264,13 @@ function fifoTail(
   lots: ReadonlyArray<Settled>,
   balanceMinor: bigint,
 ): Settled[] {
-  let total = lots.reduce((sum, lot) => sum + lot.minor, 0n);
+  const total = lots.reduce((sum, lot) => sum + lot.minor, 0n);
   let toDrain = total - balanceMinor;
   if (toDrain <= 0n) {
     return [...lots];
   }
-  let tail: Settled[] = [];
-  for (let lot of lots) {
+  const tail: Settled[] = [];
+  for (const lot of lots) {
     if (toDrain <= 0n) {
       tail.push(lot);
       continue;
@@ -289,19 +292,10 @@ function sumMatured(
   unit: Amount['currency'],
 ): Amount {
   let matured = zero(unit);
-  for (let lot of tail) {
+  for (const lot of tail) {
     if (lot.maturesAt <= now) {
       matured = add(matured, toAmount(unit, lot.minor));
     }
   }
   return matured;
 }
-
-// --- Why this module computes maturity instead of trusting the lot ----------------
-//
-// Caller rule this depends on: any handler issuing spendable credits must record the funding source on
-// the posting (a missing source falls back to the 'default' horizon, just less precise).
-// Maturity is (top-up time) + (source's required wait); it is computed here rather than read from the lot's own
-// `maturesAt`, which the ledger defaults to the top-up time (immediately cashable) when the posting
-// recorded no maturity.
-// See https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/ for the dated-lot model.

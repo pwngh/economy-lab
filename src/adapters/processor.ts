@@ -61,10 +61,11 @@ export interface HttpProcessorConfig {
  * retryable failure. A 2xx with no reference id is non-retryable: the money may already
  * have been sent, so retrying could pay twice; reconciliation resolves the ambiguity.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for how the payout port plugs into the ledger.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for how the
+ *   payout port plugs into the ledger.
  */
 export function httpProcessor(config: HttpProcessorConfig): Processor {
-  let doFetch = config.fetch ?? (globalThis.fetch as unknown as FetchLike);
+  const doFetch = config.fetch ?? (globalThis.fetch as unknown as FetchLike);
 
   return {
     submitPayout: async (input, options) =>
@@ -163,7 +164,9 @@ function parseProviderRef(body: string): string {
 // --- Local helpers ----------------------------------------------------------------
 
 function headersFor(config: HttpProcessorConfig): Record<string, string> {
-  let headers: Record<string, string> = { 'content-type': 'application/json' };
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+  };
   if (config.apiKey !== undefined) {
     headers.authorization = `Bearer ${config.apiKey}`;
   }
@@ -177,9 +180,9 @@ function transportFault(
   message: string,
   options: { cause?: unknown; status?: number; body?: string },
 ) {
-  let cause =
+  const cause =
     options.cause === undefined ? undefined : normalizeError(options.cause);
-  let detail: Record<string, unknown> = {};
+  const detail: Record<string, unknown> = {};
   if (options.status !== undefined) {
     detail.status = options.status;
   }

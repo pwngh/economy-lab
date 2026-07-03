@@ -47,12 +47,12 @@ type SpendPlan = { promoPart: Amount; spendablePart: Amount };
  * or to `giftTo` when present). A second request reusing an `orderId` already on file is refused
  * with `DUPLICATE_ORDER` so the buyer is never double-charged for one order.
  *
- * Middleware has already authorized, deduplicated, checked affordability, and locked the accounts;
- * this only validates its own inputs and posts. Malformed input (bad price, shares that don't sum)
- * throws a fault, not a refusal.
+ * The submit pipeline has already authorized, deduplicated, checked affordability, and locked the
+ * accounts; this only validates its own inputs and posts. Malformed input (bad price, shares that
+ * don't sum) throws a fault, not a refusal.
  *
  * @example
- *   let outcome = await spend(
+ *   const outcome = await spend(
  *     { kind: 'spend', idempotencyKey: 'idem_0', actor: { kind: 'user', userId: 'usr_buyer' },
  *       orderId: 'ord_1', buyerId: 'usr_buyer', sku: 'wrld_pass', price: toAmount('CREDIT', 400n),
  *       recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }] },
@@ -70,10 +70,10 @@ export async function spend(
 ): Promise<Outcome> {
   assertKind(operation, 'spend');
   assertSpendShape(operation);
-  let price = requirePositiveCredit(operation.price, 'spend.price');
+  const price = requirePositiveCredit(operation.price, 'spend.price');
   assertShares(operation);
   assertNoSelfDealing(operation);
-  let recipientId = entitlementRecipient(operation);
+  const recipientId = entitlementRecipient(operation);
 
   // Refuse a second purchase that reuses an orderId already on file, so the buyer is never
   // double-charged for one order. spend runs with the affected accounts locked, so reading the
@@ -81,25 +81,25 @@ export async function spend(
   // shape as FUNDS_IMMATURE below) so no second debit posts.
   // See https://economy-lab-docs.pages.dev/economy/reference/operations/spend/ for why orderId is
   // distinct from the idempotency key and how DUPLICATE_ORDER protects against the double charge.
-  let existing = await unit.sales.get(operation.orderId);
+  const existing = await unit.sales.get(operation.orderId);
   if (existing !== null) {
     return rejected('DUPLICATE_ORDER', { orderId: operation.orderId });
   }
 
   // The funds screen already read promo and spendable under the lock into `unit.balances`; reuse them
   // here. Without that cache (the handler called directly), fall back to a live read.
-  let promoAccount = promo(operation.buyerId);
-  let spendableAccount = spendable(operation.buyerId);
-  let promoBalance =
+  const promoAccount = promo(operation.buyerId);
+  const spendableAccount = spendable(operation.buyerId);
+  const promoBalance =
     unit.balances?.get(promoAccount) ??
     (await unit.ledger.balance(promoAccount));
-  let plan = planSpend(price, promoBalance);
+  const plan = planSpend(price, promoBalance);
 
   // Require the spendable-funded part to be covered by cleared (matured) funds. Promo draws first,
   // so only the spendable part is checked; the pipeline's affordability check sees the raw balance
   // and can pass on funds still in a settlement wait. Refuse with FUNDS_IMMATURE (a rejection, not a
   // fault, like INSUFFICIENT_FUNDS) rather than dip into uncleared funds.
-  let cleared = await maturedAtLeast(
+  const cleared = await maturedAtLeast(
     unit.ledger,
     spendableAccount,
     ctx.clock.now(),
@@ -119,7 +119,7 @@ export async function spend(
   // Route the finished legs' platform accounts (PROMO_FLOAT and REVENUE, including the REVENUE
   // credits the injected fee policy built) to a shard by the idempotency key, the same key the
   // lock set routed by. Routing after the build is what spares the policy knowing about shards.
-  let legs = routePlatformLegs(
+  const legs = routePlatformLegs(
     buildSpendLegs(operation, plan, ctx),
     operation.idempotencyKey,
     ctx.config.platformShards,
@@ -128,7 +128,7 @@ export async function spend(
   // Flag age-restricted items on the posting metadata. This ledger doesn't block on age; the
   // external payments/identity provider checks identity and age. Recording the flag on the
   // immutable posting leaves an audit trail without a new interface or store. Only added when true.
-  let meta: Record<string, unknown> = {
+  const meta: Record<string, unknown> = {
     kind: 'spend',
     orderId: operation.orderId,
   };
@@ -142,7 +142,7 @@ export async function spend(
     meta.giftTo = recipientId;
   }
 
-  let transaction = await postEntry(unit.ledger, {
+  const transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs,
     meta,
@@ -165,11 +165,11 @@ export async function spend(
 }
 
 // Split the price across balances: take as much as possible from promo first (capped at the
-// price), charge the remainder to spendable. The middleware's affordability check uses this same
-// rule, so the up-front check and the posting agree on the split.
+// price), charge the remainder to spendable. economy.ts screenFunds keeps a deliberate copy of
+// this rule — keep the two in sync so the up-front check and the posting agree on the split.
 function planSpend(price: Amount, promoBalance: Amount): SpendPlan {
-  let available = promoBalance.minor > 0n ? promoBalance.minor : 0n;
-  let promoMinor = available < price.minor ? available : price.minor;
+  const available = promoBalance.minor > 0n ? promoBalance.minor : 0n;
+  const promoMinor = available < price.minor ? available : price.minor;
   return {
     promoPart: toAmount(price.currency, promoMinor),
     spendablePart: toAmount(price.currency, price.minor - promoMinor),
@@ -181,7 +181,7 @@ function buildSpendLegs(
   plan: SpendPlan,
   ctx: Ctx,
 ): Leg[] {
-  let legs: Leg[] = [];
+  const legs: Leg[] = [];
   appendPromoLegs(legs, operation, plan);
   appendSpendableLegs(legs, operation, plan, ctx);
   return legs;
@@ -207,7 +207,7 @@ function appendPromoLegs(
   legs.push(debit(promo(operation.buyerId), plan.promoPart));
   legs.push(credit(SYSTEM.PROMO_FLOAT, plan.promoPart));
 
-  let distributed = distributeEarned(
+  const distributed = distributeEarned(
     legs,
     plan.promoPart,
     operation.recipients ?? [],
@@ -229,7 +229,7 @@ function appendSpendableLegs(
     return;
   }
   legs.push(debit(spendable(operation.buyerId), plan.spendablePart));
-  for (let leg of ctx.pricing({
+  for (const leg of ctx.pricing({
     price: plan.spendablePart,
     recipients: operation.recipients ?? [],
     feeBps: ctx.config.platformFeeBps,
@@ -249,8 +249,8 @@ function distributeEarned(
   recipients: ReadonlyArray<Recipient>,
 ): Amount {
   let distributed = 0n;
-  for (let recipient of recipients) {
-    let share = (amount.minor * BigInt(recipient.shareBps)) / 10_000n;
+  for (const recipient of recipients) {
+    const share = (amount.minor * BigInt(recipient.shareBps)) / 10_000n;
     distributed += share;
 
     if (share > 0n) {
@@ -268,14 +268,14 @@ function distributeEarned(
 //
 // Use `revenueForSplit` (the same computation splitLegs uses for the REVENUE credit: fee plus the
 // rounding residual), so the recorded fee always equals what REVENUE actually kept even on an uneven
-// multi-seller split. Recording the bare `feeForPrice` understated it on those splits.
+// multi-seller split. Recording the bare `feeForPrice` would understate it on those splits.
 function saleOf(
   operation: Extract<Operation, { kind: 'spend' }>,
   plan: SpendPlan,
   transaction: Transaction,
   feeBps: number,
 ): Sale {
-  let feeMinor = revenueForSplit(
+  const feeMinor = revenueForSplit(
     plan.spendablePart,
     operation.recipients ?? [],
     feeBps,
@@ -342,8 +342,8 @@ function assertSpendShape(
     );
   }
 
-  let seen = new Set<string>();
-  for (let recipient of operation.recipients ?? []) {
+  const seen = new Set<string>();
+  for (const recipient of operation.recipients ?? []) {
     if (seen.has(recipient.sellerId)) {
       throw fault(
         ERROR_CODES.MALFORMED_OPERATION,
@@ -362,7 +362,7 @@ function assertSpendShape(
     // A recipient is paid into its EARNED (cash-outable) balance, so its sellerId must resolve to a
     // real user wallet. A house/system account (e.g. `platform:revenue`) isn't a wallet owner; routing
     // earnings there would credit a platform account as if it were a seller.
-    let account = earned(recipient.sellerId);
+    const account = earned(recipient.sellerId);
     if (!isWalletAccount(account) || ownerOf(account).trim() === '') {
       throw fault(
         ERROR_CODES.MALFORMED_OPERATION,
@@ -387,11 +387,11 @@ function assertSpendShape(
 // share is a hidden debit and a >100% share pays out more of the part than exists. So each share
 // must also be strictly positive and at most 10000 bps on its own.
 function assertShares(operation: Extract<Operation, { kind: 'spend' }>): void {
-  let recipients = operation.recipients ?? [];
+  const recipients = operation.recipients ?? [];
   if (recipients.length === 0) {
     return;
   }
-  for (let recipient of recipients) {
+  for (const recipient of recipients) {
     if (recipient.shareBps <= 0 || recipient.shareBps > 10_000) {
       throw fault(
         ERROR_CODES.MALFORMED_OPERATION,
@@ -406,7 +406,7 @@ function assertShares(operation: Extract<Operation, { kind: 'spend' }>): void {
       );
     }
   }
-  let total = recipients.reduce(
+  const total = recipients.reduce(
     (sum, recipient) => sum + recipient.shareBps,
     0,
   );
@@ -428,7 +428,7 @@ function assertShares(operation: Extract<Operation, { kind: 'spend' }>): void {
 function assertNoSelfDealing(
   operation: Extract<Operation, { kind: 'spend' }>,
 ): void {
-  for (let recipient of operation.recipients ?? []) {
+  for (const recipient of operation.recipients ?? []) {
     if (recipient.sellerId === operation.buyerId) {
       throw fault(
         ERROR_CODES.MALFORMED_OPERATION,

@@ -26,7 +26,7 @@ import type { Leg, Posting, Unit } from '#src/ports.ts';
  * a reversal is refused with `OP.MALFORMED`, as it would just loop the money back out and in.
  *
  * @example
- *   let outcome = await reverse(
+ *   const outcome = await reverse(
  *     { kind: 'reverse', idempotencyKey: 'idem_0',
  *       actor: { kind: 'operator', operatorId: 'op_1' },
  *       txnId: 'txn_1', reason: 'reconciliation: duplicate posting' },
@@ -34,7 +34,8 @@ import type { Leg, Posting, Unit } from '#src/ports.ts';
  *   );
  *   // outcome.status === 'committed'; every leg of txn_1 posted with its sign flipped.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/reverse/ Reverse} for the operator-only undo-by-inverse correction flow.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/reverse/ Reverse} for
+ *   the operator-only undo-by-inverse correction flow.
  */
 export async function reverse(
   operation: Operation,
@@ -45,7 +46,7 @@ export async function reverse(
   assertOperator(operation);
   assertReason(operation.reason);
 
-  let original = await loadPosting(unit, operation.txnId);
+  const original = await loadPosting(unit, operation.txnId);
   assertNotReversal(operation, original);
   await extendLocks(unit, original.legs);
 
@@ -54,13 +55,13 @@ export async function reverse(
   // first reversal's transaction as a duplicate. This mirrors how refund and clawback stake
   // `reversed:${orderId}`. The claim lives inside this posting's db transaction, so a rollback
   // releases it and a retry succeeds.
-  let claimKey = reversalKey(operation.txnId);
-  let claim = await unit.idempotency.claim(claimKey);
+  const claimKey = reversalKey(operation.txnId);
+  const claim = await unit.idempotency.claim(claimKey);
   if (!claim.claimed) {
     return { status: 'duplicate', transaction: claim.transaction };
   }
 
-  let transaction = await postEntry(unit.ledger, {
+  const transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs: reverseLegs(original.legs),
     meta: reverseMeta(operation),
@@ -81,7 +82,7 @@ function reversalKey(txnId: string): string {
 // Loads the transaction to undo. The operator typed this id, so an unknown one is operator error
 // and throws a fault. Compare `refund`, where an unknown order id is an everyday caller decline.
 async function loadPosting(unit: Unit, txnId: string): Promise<Posting> {
-  let posting = await unit.ledger.posting(txnId);
+  const posting = await unit.ledger.posting(txnId);
   if (posting === null) {
     throw fault(
       ERROR_CODES.MALFORMED_OPERATION,
@@ -94,9 +95,9 @@ async function loadPosting(unit: Unit, txnId: string): Promise<Posting> {
 
 // Rejects a txnId that names a reversal. A reversal must never be reversed. It would loop the same
 // money out and in with no net effect, and it would let an operator chain reversals to adjust a
-// balance by an arbitrary amount. A reversal records `kind: 'reverse'` in its metadata (see `reverseMeta`), so
-// this rejects any posting carrying that marker. This is an operator mistake, so it throws a fault,
-// the same as an unknown txnId.
+// balance by an arbitrary amount. A reversal records `kind: 'reverse'` in its metadata (see
+// `reverseMeta`), so this rejects any posting carrying that marker. This is an operator mistake,
+// so it throws a fault, the same as an unknown txnId.
 function assertNotReversal(
   operation: Extract<Operation, { kind: 'reverse' }>,
   original: Posting,
@@ -118,8 +119,8 @@ async function extendLocks(
   unit: Unit,
   legs: ReadonlyArray<Leg>,
 ): Promise<void> {
-  let seen = new Set<AccountRef>();
-  for (let leg of legs) {
+  const seen = new Set<AccountRef>();
+  for (const leg of legs) {
     if (!seen.has(leg.account)) {
       seen.add(leg.account);
       await unit.ledger.lock(leg.account);

@@ -58,7 +58,10 @@ export interface ThunesRecipient {
   destinationCurrency: string;
 }
 
-/** Resolves an economy-lab `userId` to its Thunes routing. Host-supplied; backed by a KYC/beneficiary store. */
+/**
+ * Resolves an economy-lab `userId` to its Thunes routing. Host-supplied; backed by a
+ * KYC/beneficiary store.
+ */
 export type ResolveRecipient = (
   userId: string,
   options?: Options,
@@ -85,7 +88,10 @@ export interface ThunesProcessorConfig {
   /** Maps a payout's `userId` to its Thunes routing (payer + credit party + beneficiary). */
   resolveRecipient: ResolveRecipient;
 
-  /** Quotation mode. `SOURCE_AMOUNT` (the default) fixes the USD we send and lets Thunes compute the destination. */
+  /**
+   * Quotation mode. `SOURCE_AMOUNT` (the default) fixes the USD we send and lets Thunes compute
+   * the destination.
+   */
   quotationMode?: 'SOURCE_AMOUNT' | 'DESTINATION_AMOUNT';
 
   /** Thunes transaction type. Defaults to `B2C` (the platform business pays a consumer creator). */
@@ -115,10 +121,11 @@ const ALREADY_CONFIRMED = '1007002';
  * Build a {@link Processor} that pays creators over the Thunes Money Transfer v2 rail. It asks Thunes
  * to send money (quotation -> transaction -> confirm); it does not touch our ledger.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for the payout-rail seam and dispute handling.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for the
+ *   payout-rail seam and dispute handling.
  */
 export function thunesProcessor(config: ThunesProcessorConfig): Processor {
-  let doFetch = config.fetch ?? (globalThis.fetch as unknown as FetchLike);
+  const doFetch = config.fetch ?? (globalThis.fetch as unknown as FetchLike);
   return {
     submitPayout: (input, options) =>
       submitPayout({ config, doFetch }, input, options),
@@ -134,16 +141,16 @@ async function submitPayout(
   input: { key: string; userId: string; amount: Amount },
   options?: Options,
 ): Promise<{ providerRef: string }> {
-  let recipient = await transport.config.resolveRecipient(
+  const recipient = await transport.config.resolveRecipient(
     input.userId,
     options,
   );
-  let quotationId = await createQuotation(
+  const quotationId = await createQuotation(
     transport,
     { input, recipient },
     options,
   );
-  let transactionId = await createTransaction(
+  const transactionId = await createTransaction(
     transport,
     { input, recipient, quotationId },
     options,
@@ -163,8 +170,8 @@ async function createQuotation(
   },
   options?: Options,
 ): Promise<string> {
-  let { input, recipient } = draft;
-  let res = await request(
+  const { input, recipient } = draft;
+  const res = await request(
     transport,
     {
       method: 'POST',
@@ -199,8 +206,8 @@ async function createTransaction(
   },
   options?: Options,
 ): Promise<string> {
-  let { input, recipient, quotationId } = draft;
-  let res = await request(
+  const { input, recipient, quotationId } = draft;
+  const res = await request(
     transport,
     {
       method: 'POST',
@@ -235,7 +242,7 @@ async function confirmTransaction(
   transactionId: string,
   options?: Options,
 ): Promise<void> {
-  let res = await request(
+  const res = await request(
     transport,
     {
       method: 'POST',
@@ -257,7 +264,7 @@ async function recoverTransactionId(
   key: string,
   options?: Options,
 ): Promise<string> {
-  let res = await request(
+  const res = await request(
     transport,
     { method: 'GET', path: `/v2/money-transfer/transactions/ext-${key}` },
     options,
@@ -324,8 +331,10 @@ async function request(
  * rate-derived figures it recomputes from the reserve, not this. `provider` comes from the webhook
  * route, never the body, so it can't be spoofed.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for settlement and the settle event.
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for the webhook edge.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for settlement
+ *   and the settle event.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for
+ *   the webhook edge.
  */
 export function decodeThunesPayoutCallback(
   provider: string,
@@ -334,11 +343,11 @@ export function decodeThunesPayoutCallback(
   if (body === null || typeof body !== 'object') {
     throw malformed('Thunes callback body must be a JSON object.');
   }
-  let row = body as Record<string, unknown>;
+  const row = body as Record<string, unknown>;
   if (!isCompleted(row)) {
     return null;
   }
-  let transactionId = requireId(row, 'transaction');
+  const transactionId = requireId(row, 'transaction');
   return {
     kind: 'payoutSettled',
     provider,
@@ -353,7 +362,7 @@ export function decodeThunesPayoutCallback(
 // five-digit code whose first digit is the status_class. `70000 COMPLETED` (class 7) is the only
 // success terminal, so key on the leading 7 rather than the exact string, which varies by payer.
 function isCompleted(row: Record<string, unknown>): boolean {
-  let status = row.status;
+  const status = row.status;
   return typeof status === 'string' && status.startsWith('7');
 }
 
@@ -364,12 +373,12 @@ function sourceAmount(source: unknown): Amount {
   if (source === null || typeof source !== 'object') {
     throw malformed("Thunes callback 'source' must be an amount object.");
   }
-  let row = source as Record<string, unknown>;
-  let currency = requireStringField(
+  const row = source as Record<string, unknown>;
+  const currency = requireStringField(
     row.currency,
     'source.currency',
   ) as Currency;
-  let amount = row.amount;
+  const amount = row.amount;
   if (typeof amount !== 'number' && typeof amount !== 'string') {
     throw malformed(
       "Thunes callback 'source.amount' must be a number or string.",
@@ -386,8 +395,8 @@ function sourceAmount(source: unknown): Amount {
 // the one place a money value crosses into a float. The value is bounded to two decimals and stays
 // well within range for any real payout.
 function wireAmount(amount: Amount): { amount: number; currency: Currency } {
-  let text = encodeAmount(amount);
-  let decimal = text.slice(text.indexOf(':') + 1);
+  const text = encodeAmount(amount);
+  const decimal = text.slice(text.indexOf(':') + 1);
   return { amount: Number(decimal), currency: amount.currency };
 }
 
@@ -397,7 +406,7 @@ function wireAmount(amount: Amount): { amount: number; currency: Currency } {
 // (quotation or transaction) it is treated as retryable so the worker redoes the safe step.
 function requireId(body: unknown, step: string): string {
   if (body !== null && typeof body === 'object') {
-    let id = (body as { id?: unknown }).id;
+    const id = (body as { id?: unknown }).id;
     if (typeof id === 'string' && id.length > 0) {
       return id;
     }
@@ -419,11 +428,11 @@ function errorCodeOf(body: unknown): string | undefined {
   if (body === null || typeof body !== 'object') {
     return undefined;
   }
-  let errors = (body as { errors?: unknown }).errors;
+  const errors = (body as { errors?: unknown }).errors;
   if (!Array.isArray(errors) || errors.length === 0) {
     return undefined;
   }
-  let code = (errors[0] as { code?: unknown }).code;
+  const code = (errors[0] as { code?: unknown }).code;
   return code === undefined ? undefined : String(code);
 }
 
@@ -456,7 +465,7 @@ function headersFor(config: ThunesProcessorConfig): Record<string, string> {
 // terminal, so the worker stops re-submitting and reverses the reserve rather than burning attempts.
 // The step, status, and Thunes error code are recorded for diagnostics; no credentials are included.
 function httpFault(step: string, res: ThunesResponse) {
-  let transient = res.status === 429 || res.status >= 500;
+  const transient = res.status === 429 || res.status >= 500;
   return fault(
     ERROR_CODES.PROVIDER_FAILURE,
     `Thunes ${step} returned a ${res.status} status.`,

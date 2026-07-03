@@ -28,8 +28,8 @@ import type { Leg, Rate, Store, Unit } from '#src/ports.ts';
  */
 export type BackingPosition = {
   // Credits the platform owes users and must hold USD against. This sums every user's spendable
-  // balance plus the escrow for pending purchases in HELD accounts. It excludes earned revenue,
-  // promo grants, and payout reserves, none of which a user can spend.
+  // balance. It excludes earned revenue, promo grants, and payout reserves, none of which a user
+  // can spend.
   custodialCredit: Amount;
 
   // USD required to back `custodialCredit`. This is the credit total converted to USD at par
@@ -92,14 +92,15 @@ type TreasuryTally = {
  *   let summary = await sweepTreasury(store, ctx, { now: ctx.clock.now() });
  *   summary.position?.backed === true; // every spendable credit is fully cash-backed
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how the treasury sweep checks backing on a schedule.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background
+ *   worker} for how the treasury sweep checks backing on a schedule.
  */
 export async function sweepTreasury(
   store: Store,
   ctx: WorkerCtx,
   input: { now: number },
 ): Promise<TreasurySummary> {
-  let tally: TreasuryTally = {
+  const tally: TreasuryTally = {
     position: null,
     breaches: [],
     retrying: [],
@@ -121,14 +122,14 @@ async function assess(
   tally: TreasuryTally,
 ): Promise<void> {
   try {
-    let position = await measureBacking(store, ctx);
+    const position = await measureBacking(store, ctx);
     tally.position = position;
     record(ctx, position, now);
     if (!position.backed) {
       raiseBreach(ctx, position, now, tally);
     }
   } catch (error) {
-    let normalized = normalizeError(error);
+    const normalized = normalizeError(error);
     if (normalized.retryable) {
       tally.retrying.push({ code: normalized.code });
       return;
@@ -138,32 +139,31 @@ async function assess(
 }
 
 // Computes the backing position. It walks every ledger account and sums the balances that must
-// be backed: the custodial CREDIT accounts, which are users' spendable balances and the HELD
-// escrow funded from them. It converts that sum to required USD at par and compares it against
-// TRUST_CASH. Keying on `classify` excludes earned, promo, and payout-reserve balances, the
-// same as the deep integrity check.
+// be backed: the custodial CREDIT accounts, which are users' spendable balances. It converts
+// that sum to required USD at par and compares it against TRUST_CASH. Keying on `classify`
+// excludes earned, promo, and payout-reserve balances, the same as the deep integrity check.
 async function measureBacking(
   store: Store,
   ctx: WorkerCtx,
 ): Promise<BackingPosition> {
   let custodialCreditMinor = 0n;
   let trustCashMinor = 0n;
-  for await (let [account] of store.ledger.heads()) {
+  for await (const [account] of store.ledger.heads()) {
     if (classify(account) === 'custodial' && currency(account) === 'CREDIT') {
-      let balance = await store.ledger.balance(account);
+      const balance = await store.ledger.balance(account);
       custodialCreditMinor += balance.minor;
     }
     // Trust cash is one logical account split across shard rows, so the held figure is the sum
     // over every TRUST_CASH shard this pass visits, not one bare row.
     if (baseOf(account) === SYSTEM.TRUST_CASH) {
-      let balance = await store.ledger.balance(account);
+      const balance = await store.ledger.balance(account);
       trustCashMinor += balance.minor;
     }
   }
 
-  let par = ctx.rates.par('CREDIT');
-  let requiredMinor = requiredBackingMinor(custodialCreditMinor, par);
-  let shortfallMinor =
+  const par = ctx.rates.par('CREDIT');
+  const requiredMinor = requiredBackingMinor(custodialCreditMinor, par);
+  const shortfallMinor =
     trustCashMinor < requiredMinor ? requiredMinor - trustCashMinor : 0n;
 
   return {
@@ -213,7 +213,7 @@ function raiseBreach(
   now: number,
   tally: TreasuryTally,
 ): void {
-  let breach = {
+  const breach = {
     shortfall: encodeAmount(position.shortfall),
     required: encodeAmount(position.required),
     held: encodeAmount(position.trustCash),
@@ -248,7 +248,8 @@ export type FeeSweepResult =
 // Enforces that the platform takes only its own money before posting: `amount` may not exceed
 // `sweepable`, the smaller of the cash surplus and matured revenue. A draw over the limit throws
 // COMMINGLING, a hard error rather than a returned value, so the worker loop marks the run failed.
-// See https://economy-lab-docs.pages.dev/economy/concepts/solvency/ for why a sweep may take only the surplus and never users' money.
+// See https://economy-lab-docs.pages.dev/economy/concepts/solvency/ for why a sweep may take only
+// the surplus and never users' money.
 function assertWithinSweepable(amount: Amount, sweepable: bigint): void {
   if (amount.minor <= sweepable) {
     return;
@@ -278,14 +279,15 @@ function assertWithinSweepable(amount: Amount, sweepable: bigint): void {
  *
  * @throws {EconomyError} INVALID_AMOUNT for a non-positive `amount`; COMMINGLING when the
  *   draw would exceed the surplus the platform is allowed to take.
- * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/solvency/ Solvency} for why a sweep may take only the surplus.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/solvency/ Solvency} for why a
+ *   sweep may take only the surplus.
  */
 export async function sweepFees(
   store: Store,
   ctx: WorkerCtx,
   input: { amount: Amount; key?: string },
 ): Promise<FeeSweepResult> {
-  let { amount, key } = input;
+  const { amount, key } = input;
   if (amount.minor <= 0n) {
     throw fault(
       ERROR_CODES.INVALID_AMOUNT,
@@ -297,7 +299,7 @@ export async function sweepFees(
   return store.transaction(async (unit) => {
     // Claim before any read or posting, so a retry stops here.
     if (key !== undefined) {
-      let claim = await unit.idempotency.claim(`sweep:${key}`);
+      const claim = await unit.idempotency.claim(`sweep:${key}`);
       if (!claim.claimed) {
         return { duplicate: true, swept: toAmount('CREDIT', 0n) };
       }
@@ -309,7 +311,7 @@ export async function sweepFees(
     // shard holding matured balance.
     await unit.ledger.lock(SYSTEM.TRUST_CASH);
     await unit.ledger.lock(SYSTEM.USD_CLEARING);
-    for (let shard of shardsOf(SYSTEM.REVENUE, ctx.config.platformShards)) {
+    for (const shard of shardsOf(SYSTEM.REVENUE, ctx.config.platformShards)) {
       await unit.ledger.lock(shard);
     }
     await unit.ledger.lock(SYSTEM.STORED_VALUE);
@@ -318,13 +320,13 @@ export async function sweepFees(
 
     // Use par, not the payout rate: par is the peg trust-cash is held against, so the cash and
     // credit sides stay reconciled. Keep the rate so the two entries below match as one move.
-    let rate = ctx.rates.par('CREDIT');
-    let usd = convertFloor(amount, rate, 'USD');
+    const rate = ctx.rates.par('CREDIT');
+    const usd = convertFloor(amount, rate, 'USD');
 
     // The drain debits per REVENUE shard, since each shard holds only its own matured balance.
     // The offsetting STORED_VALUE credit and the cash posting below stay on the bare rows: the
     // sweep runs at worker cadence, so those rows see no contention worth spreading.
-    let transaction = await postEntry(unit.ledger, {
+    const transaction = await postEntry(unit.ledger, {
       txnId: ctx.ids.next('txn'),
       legs: [
         ...(await revenueDrainLegs(ctx, unit, amount)),
@@ -405,7 +407,7 @@ export async function realizeFees(
 ): Promise<FeeRealizationSummary> {
   // Read sweepable surplus first, outside the posting path: if zero, skip without claiming a
   // key or posting anything.
-  let available = await store.transaction((unit) =>
+  const available = await store.transaction((unit) =>
     sweepableCredit(store, ctx, unit),
   );
   if (available <= 0n) {
@@ -416,7 +418,7 @@ export async function realizeFees(
     };
   }
 
-  let result = await sweepFees(store, ctx, {
+  const result = await sweepFees(store, ctx, {
     amount: toAmount('CREDIT', available),
     key: `fees:${input.now}`,
   });
@@ -437,12 +439,12 @@ async function sweepableCredit(
   ctx: WorkerCtx,
   unit: Unit,
 ): Promise<bigint> {
-  let surplus = await surplusCredit(store, ctx, unit);
+  const surplus = await surplusCredit(store, ctx, unit);
   let settledMinor = 0n;
-  for (let { maturedMinor } of await maturedRevenueByShard(ctx, unit)) {
+  for (const { maturedMinor } of await maturedRevenueByShard(ctx, unit)) {
     settledMinor += maturedMinor;
   }
-  let ceiling = surplus < settledMinor ? surplus : settledMinor;
+  const ceiling = surplus < settledMinor ? surplus : settledMinor;
   return ceiling < 0n ? 0n : ceiling;
 }
 
@@ -453,9 +455,9 @@ async function maturedRevenueByShard(
   ctx: WorkerCtx,
   unit: Unit,
 ): Promise<Array<{ shard: AccountRef; maturedMinor: bigint }>> {
-  let byShard: Array<{ shard: AccountRef; maturedMinor: bigint }> = [];
-  for (let shard of shardsOf(SYSTEM.REVENUE, ctx.config.platformShards)) {
-    let matured = await maturedBalance(unit.ledger, shard, ctx.clock.now(), {
+  const byShard: Array<{ shard: AccountRef; maturedMinor: bigint }> = [];
+  for (const shard of shardsOf(SYSTEM.REVENUE, ctx.config.platformShards)) {
+    const matured = await maturedBalance(unit.ledger, shard, ctx.clock.now(), {
       config: ctx.config,
     });
     byShard.push({ shard, maturedMinor: matured.minor });
@@ -471,13 +473,16 @@ async function revenueDrainLegs(
   unit: Unit,
   amount: Amount,
 ): Promise<Leg[]> {
-  let legs: Leg[] = [];
+  const legs: Leg[] = [];
   let remaining = amount.minor;
-  for (let { shard, maturedMinor } of await maturedRevenueByShard(ctx, unit)) {
+  for (const { shard, maturedMinor } of await maturedRevenueByShard(
+    ctx,
+    unit,
+  )) {
     if (remaining === 0n) {
       break;
     }
-    let take = maturedMinor < remaining ? maturedMinor : remaining;
+    const take = maturedMinor < remaining ? maturedMinor : remaining;
     if (take > 0n) {
       legs.push(debit(shard, toAmount(amount.currency, take)));
       remaining -= take;
@@ -489,7 +494,8 @@ async function revenueDrainLegs(
 // Returns the platform surplus in CREDIT: trust cash converted to CREDIT at par, minus what is owed
 // to users. The owed total counts the same custodial accounts as the backing check above (via
 // `classify`), so revenue, promo grants, and payout reserves are not counted as owed.
-// See https://economy-lab-docs.pages.dev/economy/concepts/solvency/ for what surplus is and which credits count toward the backing total.
+// See https://economy-lab-docs.pages.dev/economy/concepts/solvency/ for what surplus is and which
+// credits count toward the backing total.
 async function surplusCredit(
   store: Store,
   ctx: WorkerCtx,
@@ -497,26 +503,26 @@ async function surplusCredit(
 ): Promise<bigint> {
   let custodialCreditMinor = 0n;
   let trustCashMinor = 0n;
-  for await (let [account] of store.ledger.heads()) {
+  for await (const [account] of store.ledger.heads()) {
     if (classify(account) === 'custodial' && currency(account) === 'CREDIT') {
-      let balance = await unit.ledger.balance(account);
+      const balance = await unit.ledger.balance(account);
       custodialCreditMinor += balance.minor;
     }
     // The same logical-sum read as measureBacking: trust cash is the sum over its shard rows.
     if (baseOf(account) === SYSTEM.TRUST_CASH) {
-      let balance = await unit.ledger.balance(account);
+      const balance = await unit.ledger.balance(account);
       trustCashMinor += balance.minor;
     }
   }
-  let par = ctx.rates.par('CREDIT');
-  let trustInCredit = usdToCredit(trustCashMinor, par);
+  const par = ctx.rates.par('CREDIT');
+  const trustInCredit = usdToCredit(trustCashMinor, par);
   return trustInCredit - custodialCreditMinor;
 }
 
-// Reverses `requiredBackingMinor` (CREDIT->USD). Both round down, so a credits->USD->credits
-// round trip lands at or below where it started.
+// Reverses `requiredBackingMinor`, converting USD back to CREDIT at par. Both round down, so
+// converting credits to USD and back lands at or below where it started.
 function usdToCredit(usdMinor: bigint, par: Rate): bigint {
-  let factor = par.rate;
+  const factor = par.rate;
   if (factor === 0n) {
     return 0n;
   }

@@ -19,8 +19,8 @@ import type { Saga, Store } from '#src/ports.ts';
 
 /**
  * Reports which payouts moved this run, bucketed by outcome. The worker submits RESERVED payouts to
- * the provider and force-fails SUBMITTED payouts that have timed out. Settlement itself no longer runs
- * here. It arrives through the provider's settlement webhook (see src/operations/settlePayout.ts).
+ * the provider and force-fails SUBMITTED payouts that have timed out. Settlement does not run
+ * here; it arrives through the provider's settlement webhook (see src/operations/settlePayout.ts).
  * A failed payout goes to `deadLettered` if it can never succeed, including a timed-out submit. It
  * goes to `retrying` if it hit a temporary problem, such as a flaky network or database, and gets
  * another go next run.
@@ -44,21 +44,22 @@ type SettleTally = {
  * A payout runs as a multi-step saga. This job claims the ones whose next step is due and pushes each
  * forward in its own error boundary, so one broken payout cannot stop the others.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background worker} for how this sweep claims and advances due payouts.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background
+ *   worker} for how this sweep claims and advances due payouts.
  */
 export async function settleDuePayouts(
   store: Store,
   ctx: WorkerCtx,
   input: { now: number; limit: number },
 ): Promise<SettleSummary> {
-  let due = await store.sagas.claimDue(input.now, input.limit);
-  let tally: SettleTally = {
+  const due = await store.sagas.claimDue(input.now, input.limit);
+  const tally: SettleTally = {
     submitted: [],
     deadLettered: [],
     retrying: [],
   };
 
-  for (let saga of due) {
+  for (const saga of due) {
     await advanceOne(store, ctx, saga, tally);
   }
 
@@ -78,16 +79,14 @@ async function advanceOne(
   try {
     await driveTransition(store, ctx, saga, tally);
   } catch (error) {
-    let normalized = normalizeError(error);
+    const normalized = normalizeError(error);
     if (
       normalized.retryable &&
       saga.attempts + 1 < ctx.config.maxPayoutAttempts
     ) {
-      // Raise the attempt count, leaving the step unchanged. Without this a down provider would
-      // retry forever. The count only rose on a successful submit (see submitToProvider), so a
-      // payout whose submit kept failing never hit the limit, never dead-lettered, and left the
-      // seller's reserved credits stuck. Bumping here means the payout eventually hits the limit and
-      // the reserve is returned to the seller.
+      // Raise the attempt count, leaving the step unchanged. Without this a payout whose submit
+      // kept failing would retry forever and leave the seller's reserved credits stuck. Bumping
+      // here means the payout eventually hits the limit and the reserve is returned to the seller.
       await bumpAttempt(store, ctx, saga);
       tally.retrying.push({ id: saga.id, code: normalized.code });
       return;
@@ -117,7 +116,8 @@ async function bumpAttempt(
 // Returns true if THIS call set the saga aside, false if it lost the race. One transaction couples
 // the FAILED flip (a compare-and-set) with the reverse of the request-time reservation, so the
 // reserve is never returned twice on a lost race.
-// See https://economy-lab-docs.pages.dev/economy/concepts/lifecycles/ for the payout saga states and the shared CAS guard that releases the reserve exactly once.
+// See https://economy-lab-docs.pages.dev/economy/concepts/lifecycles/ for the payout saga states
+// and the shared CAS guard that releases the reserve exactly once.
 //
 // Locking PAYOUT_RESERVE and the seller's earned account in the global sorted order serializes this
 // with the pipeline ops on the shared reserve. Without the lock, a late settle could win the chain
@@ -131,7 +131,7 @@ async function deadLetter(
   return store.transaction(async (unit) => {
     // The reserve routes by the saga's user, the same key requestPayout credited by, so the
     // routed shard, not the bare row, is what this locks and debits.
-    let reserveRef = platformShard(
+    const reserveRef = platformShard(
       SYSTEM.PAYOUT_RESERVE,
       saga.userId,
       ctx.config.platformShards,
@@ -140,7 +140,7 @@ async function deadLetter(
     // Flip to FAILED only if the saga is still in the state we read, recording the failure reason in
     // the same write so it is read straight off the saga, not re-derived from posting meta. A false
     // return means a concurrent settle or reverse advanced the saga first, so leave the books to that actor.
-    let advanced = await unit.sagas.advance(saga.id, saga.state, 'FAILED', {
+    const advanced = await unit.sagas.advance(saga.id, saga.state, 'FAILED', {
       updatedAt: ctx.clock.now(),
       reason,
     });
@@ -230,16 +230,16 @@ async function submitToProvider(
   ctx: WorkerCtx,
   saga: Saga,
 ): Promise<void> {
-  let rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
-  let usd = convertFloor(saga.reserve, rate, 'USD');
+  const rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
+  const usd = convertFloor(saga.reserve, rate, 'USD');
 
-  let { providerRef } = await ctx.processor.submitPayout({
+  const { providerRef } = await ctx.processor.submitPayout({
     key: saga.id,
     userId: saga.userId,
     amount: usd,
   });
 
-  let now = ctx.clock.now();
+  const now = ctx.clock.now();
   await store.sagas.advance(saga.id, 'RESERVED', 'SUBMITTED', {
     providerRef,
     attempts: saga.attempts + 1,
@@ -250,10 +250,10 @@ async function submitToProvider(
 
 // Returns the milliseconds to wait after submitting before the sweep next checks on the payout. It
 // uses the configured SUBMITTED delay, falling back to DEFAULT, and the final `?? 0` guards against
-// both being unset. (requestPayout reads the config the same way.) The sweep no longer settles a
-// SUBMITTED payout, since that arrives via the settlement webhook, but it still re-examines the
-// payout on this cadence to apply the `maxPayoutAgeMs` timeout if no settlement ever arrives.
+// both being unset. (requestPayout reads the config the same way.) Settlement arrives via the
+// settlement webhook, not this sweep; the sweep re-examines the payout on this cadence only to
+// apply the `maxPayoutAgeMs` timeout if no settlement ever arrives.
 function submittedSlaMs(ctx: WorkerCtx): number {
-  let sla = ctx.config.payoutSla;
+  const sla = ctx.config.payoutSla;
   return sla.SUBMITTED ?? sla.DEFAULT ?? 0;
 }
