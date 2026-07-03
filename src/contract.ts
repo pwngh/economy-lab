@@ -9,6 +9,12 @@
  * @license MIT
  */
 
+/**
+ * The shared types between callers and the engine: the Operation union (every request a caller
+ * can submit), the Outcome it resolves to, and the Economy interface. economy.ts implements what
+ * this file declares.
+ */
+
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { RejectionCode } from '#src/errors.ts';

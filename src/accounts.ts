@@ -9,6 +9,12 @@
  * @license MIT
  */
 
+/**
+ * The sole source of account ids: user wallets (`usr_...:spendable|earned|promo`), the platform's
+ * SYSTEM accounts, and the shard routing that splits hot platform accounts across rows. Also owns
+ * account classification (custodial vs house) and the per-operation lock sets.
+ */
+
 import type { Currency } from '#src/money.ts';
 // Type-only import. This file and contract.ts reference each other, but type-only imports are
 // erased at compile time, so there's no runtime circular import.

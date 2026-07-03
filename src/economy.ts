@@ -9,6 +9,12 @@
  * @license MIT
  */
 
+/**
+ * The submit pipeline: validate, authorize, then one all-or-nothing transaction that claims the
+ * idempotency key, screens risk and funds, runs the handler, and queues the event. `createEconomy`
+ * builds the public Economy (submit + read + close); the handlers live in src/operations/.
+ */
+
 import { fault, rejected, ERROR_CODES } from '#src/errors.ts';
 import { lockAll } from '#src/ledger.ts';
 import {

@@ -9,6 +9,13 @@
  * @license MIT
  */
 
+/**
+ * Per-account hash chains and the signed Merkle checkpoint over their heads. `advanceHeads`
+ * computes new links on the write path, `proveChain` re-derives every chain from genesis, and
+ * `recordCheckpoint`/`verifyCheckpoint` sign and re-check the root. Tampering with stored history
+ * is detectable.
+ */
+
 import { chainHash } from '#src/ledger.ts';
 import { toHex, fromHex, byCodeUnit } from '#src/bytes.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
