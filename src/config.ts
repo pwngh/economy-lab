@@ -67,9 +67,9 @@ export interface Config {
   /** Platform's cut in basis points (hundredths of a percent); 10000 = 100%, 1530 = 15.3%. */
   platformFeeBps: number;
 
-  /** Payout-rail fee in basis points, charged on the USD a creator cashes out (~1.5%, varies by
+  /** Payout-rail fee in basis points, charged on the USD a seller cashes out (~1.5%, varies by
    *  destination). This is the payout processor's own cut (e.g. PayPal's), deducted from the
-   *  disbursement so the creator receives the net; it is not platform revenue. */
+   *  disbursement so the seller receives the net; it is not platform revenue. */
   payoutFeeBps: number;
 
   /** Most a user may spend within one window before the risk check steps in, in CREDIT minor units. */

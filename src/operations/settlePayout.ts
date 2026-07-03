@@ -46,7 +46,7 @@ export async function settlePayout(
   const rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
   const usd = convertFloor(saga.reserve, rate, 'USD');
   // The payout-rail fee (config.payoutFeeBps) is the rail's cut, not platform revenue. The gross
-  // `usd` leaves trust, the rail keeps `fee`, and the creator gets `net`. The split happens at the
+  // `usd` leaves trust, the rail keeps `fee`, and the seller gets `net`. The split happens at the
   // external rail downstream of USD_CLEARING, so `fee` and `net` are recorded for audit rather than
   // posted as legs.
   const fee = payoutFee(usd, ctx.config.payoutFeeBps);
@@ -164,7 +164,7 @@ async function postSettlementEntries(
     ],
     meta: { kind: 'payout.settle', sagaId: saga.id, rateId },
   });
-  // The gross `usd` leaves the trust account. The rail keeps `payoutFee` and the creator receives
+  // The gross `usd` leaves the trust account. The rail keeps `payoutFee` and the seller receives
   // `netUsd`. That split happens downstream at the external rail, so it is recorded here on the
   // posting for the audit trail rather than posted as ledger legs.
   await postEntry(unit.ledger, {
@@ -183,7 +183,7 @@ async function postSettlementEntries(
 
 // Computes the payout-rail fee on a gross USD disbursement, rounded down to whole minor units.
 // `feeBps` is in basis points, so 150 means 1.5%. The fee is the rail's cut, such as a payment
-// processor's, and it is deducted so the creator gets the net.
+// processor's, and it is deducted so the seller gets the net.
 function payoutFee(gross: Amount, feeBps: number): Amount {
   return toAmount('USD', (gross.minor * BigInt(feeBps)) / 10_000n);
 }

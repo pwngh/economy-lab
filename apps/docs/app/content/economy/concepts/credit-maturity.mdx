@@ -48,10 +48,10 @@ Computing the cashable balance never scans an account's whole history. Because t
 
 `maturedBalance` returns the full cashable amount as of `now`. `maturedAtLeast` answers the cheaper question its callers actually ask: _is the cashable balance at least this much?_ It returns the instant its running sum clears the threshold. A request well within cleared funds settles after a lot or two, never the full history. By construction the two agree: `maturedAtLeast` is just `maturedBalance` stopped early. (`maturedBalanceFullScan` keeps the naive whole-history version, used only to differential-test the fast path.)
 
-The computation is currency-agnostic: the same call covers a user's spendable credits and a creator's earned balance.
+The computation is currency-agnostic: the same call covers a user's spendable credits and a seller's earned balance.
 
 ## What relies on it
 
 - [`spend`](/economy/reference/operations/spend/) gates on the cashable check for the buyer's spendable credits, so a spend can't draw funds still clearing.
-- [`requestPayout`](/economy/reference/operations/request-payout/) gates on the same check for a creator's earned balance, so a payout only ever draws cleared money.
+- [`requestPayout`](/economy/reference/operations/request-payout/) gates on the same check for a seller's earned balance, so a payout only ever draws cleared money.
 - The configured [maturity horizons](/economy/reference/configuration/) set each wait, and [solvency](/economy/concepts/solvency/) is the backing those cleared funds draw against.

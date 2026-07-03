@@ -23,7 +23,7 @@ So economy-lab models each of these as an explicit state machine. The operation 
 
 ## Why it exists
 
-Picture the alternative: paying a creator synchronously inside `requestPayout`. You call the provider, wait, post the money, and return. That couples a money posting to a network call the ledger doesn't control.
+Picture the alternative: paying a seller synchronously inside `requestPayout`. You call the provider, wait, post the money, and return. That couples a money posting to a network call the ledger doesn't control.
 
 The failure modes are bad. If the call hangs, the request hangs. If the process dies after the provider pays but before the ledger records it, the books and the provider disagree, with no record of why.
 
@@ -41,8 +41,8 @@ The full enum declares `REQUESTED`, `RESERVED`, `SUBMITTED`, `SETTLED`, and `FAI
 | ----------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
 | `RESERVED`  | Credits locked in `payout_reserve`; nothing sent to the rail yet.                                                | The worker's `payouts` sweep.      |
 | `SUBMITTED` | The sweep converted the reserve to USD and called the payout rail.                                               | The provider's settlement webhook. |
-| `SETTLED`   | The rail confirmed; the reserve clears to `revenue` and an equal sum of USD leaves `trust_cash` for the creator. | Terminal.                          |
-| `FAILED`    | The payout was given up on; the reserve returns to the creator's `earned`.                                       | Terminal.                          |
+| `SETTLED`   | The rail confirmed; the reserve clears to `revenue` and an equal sum of USD leaves `trust_cash` for the seller. | Terminal.                          |
+| `FAILED`    | The payout was given up on; the reserve returns to the seller's `earned`.                                       | Terminal.                          |
 
 <PayoutSaga />
 
@@ -56,7 +56,7 @@ Three guards let the worker retry a step without paying twice.
 
 - **The call to the rail is idempotent**, keyed by the saga id (`key: saga.id`), so a retried submit still pays once. The settlement webhook is deduped on the provider's event id, so a redelivered settlement settles once.
 - **Each state change is a compare-and-set.** `sagas.advance(id, from, to, patch)` moves a saga only if it is still in `from`, and returns `false` (changing nothing) otherwise, so two sweeps racing the same saga can't both advance it (see <SourceLink to="src/ports.ts#L599-L605 · SagaStore.advance" />).
-- **A stuck payout is given up on.** Past `maxPayoutAttempts` failed attempts, or after `maxPayoutAgeMs` in `SUBMITTED` with no settlement webhook, the sweep force-fails it. It flips the saga to `FAILED` and, in the same transaction, posts the exact reverse of the reservation (`debit payout_reserve → credit earned`), returning the credits to the creator (see <SourceLink to="src/worker/payouts.ts#L125-L188 · deadLetter" />).
+- **A stuck payout is given up on.** Past `maxPayoutAttempts` failed attempts, or after `maxPayoutAgeMs` in `SUBMITTED` with no settlement webhook, the sweep force-fails it. It flips the saga to `FAILED` and, in the same transaction, posts the exact reverse of the reservation (`debit payout_reserve → credit earned`), returning the credits to the seller (see <SourceLink to="src/worker/payouts.ts#L125-L188 · deadLetter" />).
 
 <Callout type="warning">
   `requestPayout` only pays out

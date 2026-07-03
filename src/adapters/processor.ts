@@ -49,7 +49,7 @@ export interface HttpProcessorConfig {
 }
 
 /**
- * Build a {@link Processor} that pays creators via an external provider (e.g. a payment
+ * Build a {@link Processor} that pays sellers via an external provider (e.g. a payment
  * processor) over HTTP. It asks the provider to send money; it does not touch our ledger.
  *
  * `submitPayout` POSTs a request carrying:

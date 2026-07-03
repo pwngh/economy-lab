@@ -167,12 +167,12 @@ const economy = await compose(env, {
 // Fresh ids per run so the printed balances are clean regardless of accumulated DB state.
 const tag = Math.random().toString(36).slice(2, 8);
 const buyer = `usr_buyer_${tag}`;
-const creatorA = `usr_creator_a_${tag}`;
-const creatorB = `usr_creator_b_${tag}`;
+const sellerA = `usr_seller_a_${tag}`;
+const sellerB = `usr_seller_b_${tag}`;
 const bundle = `prod_${tag}`;
 
 console.warn(
-  '\n--- flow: top up, buy from two creators, request a payout, prove ---',
+  '\n--- flow: top up, buy from two sellers, request a payout, prove ---',
 );
 
 // 1. Platform credits the buyer's wallet after a card charge clears (trusted service, not the user).
@@ -181,27 +181,27 @@ const r1 = await economy.submit(
 );
 console.warn(`topUp 50.00 -> buyer:            ${r1.status}`);
 
-// 2. Buyer spends 12.00 on a listing; price splits 60/40 between two creators, platform keeps its fee.
+// 2. Buyer spends 12.00 on a listing; price splits 60/40 between two sellers, platform keeps its fee.
 const r2 = await economy.submit(
   spend({
     buyerId: buyer,
     sku: bundle,
     price: credit('12.00'),
     recipients: [
-      { sellerId: creatorA, shareBps: 6_000 },
-      { sellerId: creatorB, shareBps: 4_000 },
+      { sellerId: sellerA, shareBps: 6_000 },
+      { sellerId: sellerB, shareBps: 4_000 },
     ],
   }),
 );
 console.warn(`spend 12.00 (60/40 split):      ${r2.status}`);
 
-// 3. Creator requests a payout. Brand-new earnings can come back 'rejected', because a minimum and a
+// 3. Seller requests a payout. Brand-new earnings can come back 'rejected', because a minimum and a
 //    post-sale hold gate the request. The demo prints whichever status it gets.
 const r3 = await economy.submit(
-  requestPayout({ userId: creatorA, amount: credit('5.00') }),
+  requestPayout({ userId: sellerA, amount: credit('5.00') }),
 );
 console.warn(
-  `requestPayout 5.00 <- creatorA:  ${r3.status}` +
+  `requestPayout 5.00 <- sellerA:  ${r3.status}` +
     (r3.status === 'rejected' ? ` (${r3.reason})` : ''),
 );
 
@@ -210,10 +210,10 @@ console.warn(
   `buyer:spendable     = ${fmt(await economy.read.balance(spendable(buyer)))}`,
 );
 console.warn(
-  `creatorA:earned     = ${fmt(await economy.read.balance(earned(creatorA)))}`,
+  `sellerA:earned     = ${fmt(await economy.read.balance(earned(sellerA)))}`,
 );
 console.warn(
-  `creatorB:earned     = ${fmt(await economy.read.balance(earned(creatorB)))}`,
+  `sellerB:earned     = ${fmt(await economy.read.balance(earned(sellerB)))}`,
 );
 console.warn(
   `REVENUE (platform)  = ${fmt(await economy.read.balance(SYSTEM.REVENUE))}`,

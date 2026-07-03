@@ -28,7 +28,7 @@ This page is the map of that second half: the things economy-lab leaves to a hos
 
 ## No real payment provider
 
-economy-lab never moves real money. When a creator cashes out, the credits retire on the ledger and an equal sum of dollars is meant to leave a trust account, but the actual disbursement to a bank or card happens somewhere the lab doesn't reach.
+economy-lab never moves real money. When a seller cashes out, the credits retire on the ledger and an equal sum of dollars is meant to leave a trust account, but the actual disbursement to a bank or card happens somewhere the lab doesn't reach.
 
 That somewhere is a port. The [`Processor`](/economy/ports/processor/) interface is the single seam through which all money leaves the platform, and it has exactly one method: `submitPayout`. The core asks the provider to send money and reads back a `providerRef`; it never learns "did it settle?" by polling. Settlement arrives later, as a webhook the provider sends back.
 

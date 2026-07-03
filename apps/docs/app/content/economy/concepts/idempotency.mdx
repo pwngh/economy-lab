@@ -28,7 +28,7 @@ A retry returns the same transaction the first call produced, marked as a [`dupl
 
 ## Why it exists
 
-[Conservation and solvency](/economy/concepts/solvency/) only hold if each operation posts once. A double-applied top-up would issue credits twice against a single payment; a double-applied payout would pay a creator twice for one request. Idempotency is what lets a client retry freely, as it must over an unreliable network, without risking either.
+[Conservation and solvency](/economy/concepts/solvency/) only hold if each operation posts once. A double-applied top-up would issue credits twice against a single payment; a double-applied payout would pay a seller twice for one request. Idempotency is what lets a client retry freely, as it must over an unreliable network, without risking either.
 
 It's also what upgrades the write path from at-most-once to **exactly-once**: the [atomic commit](/economy/ports/storage-and-messaging/) lands each attempt fully or not at all, and idempotent retries let the caller resend until one attempt commits. The money moves once, however many tries that takes.
 

@@ -80,7 +80,7 @@ export interface ThunesProcessorConfig {
   apiSecret: string;
 
   /**
-   * The sending party for the transaction. economy-lab pays creators on the platform's behalf, so
+   * The sending party for the transaction. economy-lab pays sellers on the platform's behalf, so
    * this is the platform's sending business (a B2C transfer). Passed through to Thunes verbatim.
    */
   sender: Record<string, unknown>;
@@ -94,7 +94,7 @@ export interface ThunesProcessorConfig {
    */
   quotationMode?: 'SOURCE_AMOUNT' | 'DESTINATION_AMOUNT';
 
-  /** Thunes transaction type. Defaults to `B2C` (the platform business pays a consumer creator). */
+  /** Thunes transaction type. Defaults to `B2C` (the platform business pays an individual seller). */
   transactionType?: string;
 
   /** Regulatory purpose-of-remittance code, attached to the transaction when set. */
@@ -118,7 +118,7 @@ const ALREADY_CONFIRMED = '1007002';
 // --- The port ---------------------------------------------------------------------
 
 /**
- * Build a {@link Processor} that pays creators over the Thunes Money Transfer v2 rail. It asks Thunes
+ * Build a {@link Processor} that pays sellers over the Thunes Money Transfer v2 rail. It asks Thunes
  * to send money (quotation -> transaction -> confirm); it does not touch our ledger.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for the

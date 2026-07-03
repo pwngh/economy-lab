@@ -226,7 +226,7 @@ create table inbox (
 create index inbox_pending_idx on inbox (received_at) where status = 'pending';
 
 -- ============================================================================
--- Payouts: a multi-step saga that moves a creator's earned credits out to real money. Only the
+-- Payouts: a multi-step saga that moves a seller's earned credits out to real money. Only the
 -- background worker advances it, never a normal request. `reserve` is the earned credit set
 -- aside for this payout; `rate_id` pins the CREDIT-to-USD rate so the settlement can be
 -- reproduced and disputed later.
@@ -647,7 +647,7 @@ comment on table idempotency is 'Exactly-once guard recording each operation out
 comment on table sales is 'Summary of each purchase, keyed by its order id.';
 comment on table outbox is 'Pending outbound events awaiting relay to the dispatcher.';
 comment on table inbox is 'Verified inbound provider events awaiting apply by the worker.';
-comment on table payout_sagas is 'Payout state machine: one row per creator cash-out.';
+comment on table payout_sagas is 'Payout state machine: one row per seller cash-out.';
 comment on table promo_grants is 'Promotional credit grants with their expiry and reversal state.';
 comment on table entitlements is 'What each user owns (SKU ownership), with version and expiry.';
 comment on table subscriptions is 'Recurring charges: one row per subscription and its billing state.';

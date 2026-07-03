@@ -171,7 +171,7 @@ export function decodeAmountWire(encoded: string): Amount {
 /**
  * Converts an amount to another currency at `rate`, rounding down. A rate is an integer scaled by
  * `10^scale`, so the result is `floor(minor * rate / 10^scale)`. Use it where truncation is the safe
- * direction, such as paying a creator out.
+ * direction, such as paying a seller out.
  */
 export function convertFloor(amount: Amount, rate: Rate, to: Currency): Amount {
   return toAmount(to, (amount.minor * rate.rate) / 10n ** BigInt(rate.scale));

@@ -68,10 +68,10 @@ a minor unit is.
 | Variable                  | Meaning                                                                                                                                                                                | Default            |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
 | `PAYOUT_MIN_EARNED_MINOR` | Smallest payout a user may request, counted only against _earned_ CREDIT, not bought or promo-granted. The floor keeps a disbursement from costing more in rail fees than it pays out. | `2000000` (≈ $100) |
-| `PAYOUT_MIN_INTERVAL_MS`  | Minimum time between a user's payout requests. The 24h default matches the creator docs of the real platform the example models; that platform's payout terms require 14 days, so a production deploy sets `1209600000`. | `86400000` (24h)   |
+| `PAYOUT_MIN_INTERVAL_MS`  | Minimum time between a user's payout requests. The 24h default matches the public payout docs of the platform the example models; that platform's payout terms require 14 days, so a production deploy sets `1209600000`. | `86400000` (24h)   |
 | `MAX_PAYOUT_ATTEMPTS`     | Provider attempts for one payout before the system gives up and reverses it.                                                                                                           | `5`                |
 | `MAX_PAYOUT_AGE_MS`       | Longest a payout may sit in `SUBMITTED` before the worker force-fails it as timed out, because the provider never reported back.                                                       | `86400000` (24h)   |
-| `PAYOUT_FEE_BPS`          | Payout-rail fee in basis points, charged on the USD a creator cashes out. This is the rail's own cut, deducted from the disbursement, not platform revenue.                            | `150` (≈ 1.5%)     |
+| `PAYOUT_FEE_BPS`          | Payout-rail fee in basis points, charged on the USD a seller cashes out. This is the rail's own cut, deducted from the disbursement, not platform revenue.                            | `150` (≈ 1.5%)     |
 
 The `payout` rate and the per-state payout SLAs also feed the saga; the SLAs live under the
 worker group below, and the rate under [externals](#production-externals).
@@ -170,7 +170,7 @@ gap between `buy` and `par` is the platform [spread](/economy/concepts/money-mod
 | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
 | `CREDIT_BUY_RATE` / `CREDIT_BUY_SCALE` | `buy` rate: USD a user pays per credit at top-up.                                                                     | none (required in production) |
 | `CREDIT_PAR_RATE` / `CREDIT_PAR_SCALE` | `par` rate: a credit's backing value, used by the solvency check.                                                     | none (required in production) |
-| `PAYOUT_RATE` / `PAYOUT_SCALE`         | `payout` rate: what a creator's earned credits cash out at (equal to `par`).                                          | none (required in production) |
+| `PAYOUT_RATE` / `PAYOUT_SCALE`         | `payout` rate: what a seller's earned credits cash out at (equal to `par`).                                          | none (required in production) |
 | `PROCESSOR_URL`                        | Endpoint of the real payout provider for the [processor port](/economy/ports/processor/). Also honored in dev if set. | none (required in production) |
 | `PROCESSOR_API_KEY`                    | Bearer token sent to `PROCESSOR_URL`.                                                                                 | unset                         |
 

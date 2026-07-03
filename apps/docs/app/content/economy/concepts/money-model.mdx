@@ -10,7 +10,7 @@ related: ['economy/reference/operations/top-up', 'economy/concepts/the-proof']
 
 Two kinds of value move through the economy: in-app <Code variant="value">CREDIT</Code> and real-world <Code variant="value">USD</Code>. Both are an <Code variant="type">Amount</Code>: a <Code variant="type">Currency</Code> plus a count of minor units held as a <Code variant="type">bigint</Code>. They convert to each other only at fixed, platform-set rates, never a live market.
 
-Almost the whole model follows from three of those rates, ordered `buy ≥ par ≥ payout`. You pay the `buy` rate to acquire a credit. The platform backs and cashes out each credit at `par`. A creator settles earned credits at `payout`, which equals `par`.
+Almost the whole model follows from three of those rates, ordered `buy ≥ par ≥ payout`. You pay the `buy` rate to acquire a credit. The platform backs and cashes out each credit at `par`. A seller settles earned credits at `payout`, which equals `par`.
 
 The gap between `buy` and `par` is the platform spread, the single place the platform takes a margin.
 
@@ -41,13 +41,13 @@ If a credit cashed out for exactly what you paid, the platform would earn nothin
 | -------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------- |
 | `buy`    | The acquisition rate: what a user pays per credit when buying.                                                  | ~120 credits / USD ($0.00833) |
 | `par`    | The redemption/backing rate: a credit's cash-out floor, and the value the backing check holds real USD against. | ~200 credits / USD ($0.005)   |
-| `payout` | The creator settlement rate: what an earned credit converts to USD at. Equals `par`.                            | ~200 credits / USD ($0.005)   |
+| `payout` | The seller settlement rate: what an earned credit converts to USD at. Equals `par`.                            | ~200 credits / USD ($0.005)   |
 
 The `buy`-to-`par` gap is the platform spread, about 40% on the example rates above. It's the platform's margin, and it funds fees, payment processing, reserves, and operating costs. The spread is taken **once, at purchase**, and never mixed into the cash held to back users.
 
 <RateLadder />
 
-Walk a `$10` purchase through: it becomes `1,200` credits. Of those, `$6.00` (`1,200 × par`) is set aside as backing, and `$4.00` is the platform's to keep. And because `payout = par`, a credit a creator earns is worth exactly the dollars reserved for it.
+Walk a `$10` purchase through: it becomes `1,200` credits. Of those, `$6.00` (`1,200 × par`) is set aside as backing, and `$4.00` is the platform's to keep. And because `payout = par`, a credit a seller earns is worth exactly the dollars reserved for it.
 
 A `Rate` is stored as exact integers (`{ rate, scale, rateId }`) with the multiplier `rate / 10^scale` (so `rate: 5n, scale: 3` is `$0.005` per credit). The `rateId` names the exact rate. That lets a [transaction](/economy/concepts/accounts-and-double-entry/) record which rate it used, and lets a [payout saga](/economy/concepts/lifecycles/) lock to one. Conversion floors: `usd_minor = floor(credit_minor × rate / 10^scale)`.
 
@@ -57,7 +57,7 @@ A `Rate` is stored as exact integers (`{ rate, scale, rateId }`) with the multip
 
 The reference [`configuredRates`](/economy/ports/rates/) adapter takes `buy`, `par`, and `payout` as separate deployment constants. It doesn't enforce the ordering in code, so a deployment that miswires them breaks this invariant. The ordering is a contract on the rate source, documented on the `Rates` port.
 
-`par ≥ payout` (in practice `payout = par`) ties the creator's cash-out to the same value the platform reserved. That's what [solvency](/economy/concepts/solvency/) checks: real USD in trust covers every spendable credit valued at `par`.
+`par ≥ payout` (in practice `payout = par`) ties the seller's cash-out — the creator payout, in marketplace terms — to the same value the platform reserved. That's what [solvency](/economy/concepts/solvency/) checks: real USD in trust covers every spendable credit valued at `par`.
 
 ## How the spread is enforced
 

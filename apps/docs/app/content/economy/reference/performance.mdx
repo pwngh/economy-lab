@@ -88,4 +88,4 @@ BENCH_SHARDS=4 make bench
 
 ## The scale probe
 
-`make scale` asks a different question of the same backends: does per-op cost stay flat as one subject's history grows? It drives repeated `spend`s against a single buyer and repeated `requestPayout`s against a single creator, in fixed-size segments, and prints ops/sec per segment. A per-op cost that grows with that account's accumulated history shows up as the segments slowing from left to right.
+`make scale` asks a different question of the same backends: does per-op cost stay flat as one subject's history grows? It drives repeated `spend`s against a single buyer and repeated `requestPayout`s against a single seller, in fixed-size segments, and prints ops/sec per segment. A per-op cost that grows with that account's accumulated history shows up as the segments slowing from left to right.

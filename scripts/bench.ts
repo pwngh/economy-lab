@@ -87,7 +87,7 @@ type Kind = {
 
 function sale(
   economy: Economy,
-  o: { buyer: string; creator: string; label: string; price?: Amount },
+  o: { buyer: string; seller: string; label: string; price?: Amount },
 ): Promise<unknown> {
   return economy.submit(
     spend({
@@ -95,7 +95,7 @@ function sale(
       sku: `prod_${tag}`,
       price: o.price ?? credit('1.00'),
       orderId: `ord_${o.label}_${tag}`,
-      recipients: [{ sellerId: o.creator, shareBps: 10_000 }],
+      recipients: [{ sellerId: o.seller, shareBps: 10_000 }],
     }),
   );
 }
@@ -111,7 +111,7 @@ const warmupOpsFor = (poolSize: number): number =>
 const poolIdx = (k: number, size: number): number => ((k % size) + size) % size;
 
 // Why pools: real traffic is many independent users transacting at once. Hammering one buyer/one
-// creator measures single-row lock contention, not throughput — at depth every op fights over the
+// seller measures single-row lock contention, not throughput — at depth every op fights over the
 // same rows, so the rate collapses and MySQL deadlocks. Spreading each kind across a pool of subjects
 // (>= the concurrency) leaves concurrent ops touching disjoint user rows, contending only on the
 // genuinely-shared platform account every posting touches (the funding float for topUp, REVENUE for a
@@ -130,15 +130,15 @@ function topUpKind(): Kind {
   };
 }
 
-// spend: a pool of buyers and creators, round-robin per op. With the pool, concurrent sales contend
+// spend: a pool of buyers and sellers, round-robin per op. With the pool, concurrent sales contend
 // only on REVENUE (every sale credits the platform fee there), not on one buyer's spendable and one
-// creator's earned.
+// seller's earned.
 function spendKind(poolSize: number): Kind {
   const buyers = Array.from(
     { length: poolSize },
     (_, i) => `usr_spb_${tag}_${i}`,
   );
-  const creators = Array.from(
+  const sellers = Array.from(
     { length: poolSize },
     (_, i) => `usr_spc_${tag}_${i}`,
   );
@@ -161,26 +161,26 @@ function spendKind(poolSize: number): Kind {
       const i = poolIdx(k, poolSize);
       return sale(economy, {
         buyer: buyers[i]!,
-        creator: creators[i]!,
+        seller: sellers[i]!,
         label: `sp_${k}`,
       });
     },
   };
 }
 
-// requestPayout: the synchronous reserve step (not the worker settlement) against a pool of creators'
-// earned balances. Each creator is pre-funded with large sales from one bank buyer; the funding is
+// requestPayout: the synchronous reserve step (not the worker settlement) against a pool of sellers'
+// earned balances. Each seller is pre-funded with large sales from one bank buyer; the funding is
 // generous because the exact fee split belongs to the injected pricing policy and is not assumed here.
 function payoutKind(poolSize: number): Kind {
   const bank = `usr_pob_${tag}`;
-  const creators = Array.from(
+  const sellers = Array.from(
     { length: poolSize },
     (_, i) => `usr_poc_${tag}_${i}`,
   );
 
-  const perCreator =
+  const perSeller =
     Math.ceil((timedOps + warmupOpsFor(poolSize)) / poolSize) + 50; // reserves of 1.00 each
-  const salesPerCreator = Math.ceil(perCreator / 300) + 1; // sales of 1000.00, creator keeps >=30%
+  const salesPerSeller = Math.ceil(perSeller / 300) + 1; // sales of 1000.00, seller keeps >=30%
   return {
     name: 'requestPayout',
     poolSize,
@@ -189,10 +189,10 @@ function payoutKind(poolSize: number): Kind {
         topUp({ userId: bank, amount: credit('1000000000.00') }),
       );
       for (let c = 0; c < poolSize; c++) {
-        for (let s = 0; s < salesPerCreator; s++) {
+        for (let s = 0; s < salesPerSeller; s++) {
           await sale(economy, {
             buyer: bank,
-            creator: creators[c]!,
+            seller: sellers[c]!,
             label: `pof_${c}_${s}`,
             price: credit('1000.00'),
           });
@@ -202,7 +202,7 @@ function payoutKind(poolSize: number): Kind {
     perOp: (economy, k) =>
       economy.submit(
         requestPayout({
-          userId: creators[poolIdx(k, poolSize)]!,
+          userId: sellers[poolIdx(k, poolSize)]!,
           amount: credit('1.00'),
         }),
       ),
@@ -260,7 +260,7 @@ async function runDeterminismSequence(economy: Economy): Promise<void> {
           sku: 'det_sku',
           price: credit('100.00'),
           orderId: `det_ord_${i}`,
-          recipients: [{ sellerId: 'det_creator', shareBps: 10_000 }],
+          recipients: [{ sellerId: 'det_seller', shareBps: 10_000 }],
         }),
         `det_spend_${i}`,
       ),
@@ -268,7 +268,7 @@ async function runDeterminismSequence(economy: Economy): Promise<void> {
   }
   await economy.submit(
     withKey(
-      requestPayout({ userId: 'det_creator', amount: credit('1.00') }),
+      requestPayout({ userId: 'det_seller', amount: credit('1.00') }),
       'det_payout',
     ),
   );

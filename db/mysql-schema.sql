@@ -246,7 +246,7 @@ CREATE TABLE inbox (
 -- db/postgresql-schema.sql (payout_sagas banner).
 CREATE TABLE payout_sagas (
      id                 VARCHAR(64) PRIMARY KEY COMMENT 'Saga primary key, pay_ prefixed uuid.',
-     user_id            VARCHAR(64) NOT NULL COMMENT 'Creator the payout belongs to.',
+     user_id            VARCHAR(64) NOT NULL COMMENT 'Seller the payout belongs to.',
      reserve            BIGINT      NOT NULL COMMENT 'Earned credits set aside; always positive.',
      rate_id            VARCHAR(64) NOT NULL COMMENT 'Pinned CREDIT-to-USD rate for this settlement.',
      state              VARCHAR(16) NOT NULL COMMENT 'One of REQUESTED, RESERVED, SUBMITTED, SETTLED, FAILED.',
@@ -266,7 +266,7 @@ CREATE TABLE payout_sagas (
      -- without this it scans every saga that user has ever had, so the check's cost grows with their
      -- payout history on each new request.
      KEY payout_sagas_user_updated_idx (user_id, updated_at)
-   ) COMMENT='Payout state machine: one row per creator cash-out.';
+   ) COMMENT='Payout state machine: one row per seller cash-out.';
 
 -- promo_grants: one row per promotional credit handed out; swept for expired, not-yet-reversed
 -- grants. Rationale/invariants documented in db/postgresql-schema.sql (promo_grants banner).

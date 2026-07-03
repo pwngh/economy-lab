@@ -510,7 +510,7 @@ async function build(): Promise<ConsoleEngine> {
     await api.deposit({ userId: 'usr_alice', credits: 5000 }); // ~$41.67 at the buy rate
     await api.deposit({ userId: 'usr_bjorn', credits: 3000 }); // ~$25.00 at the buy rate
     await api.grantPromo({ userId: 'usr_alice', credits: 500 }); // alice spends hers below
-    await api.grantPromo({ userId: 'usr_pixel', credits: 600 }); // a creator incentive, left unspent
+    await api.grantPromo({ userId: 'usr_pixel', credits: 600 }); // a seller incentive, left unspent
     await api.purchase({
       buyerId: 'usr_alice',
       sellerId: 'usr_nova',

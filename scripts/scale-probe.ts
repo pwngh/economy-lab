@@ -10,7 +10,7 @@
  */
 
 // Scale probe: does per-op cost stay flat as one subject's history grows? It hammers one buyer
-// (spend) and one creator (payout) and measures throughput in segments, so O(history) cost shows up
+// (spend) and one seller (payout) and measures throughput in segments, so O(history) cost shows up
 // as ops/sec falling segment over segment — a flat row is O(1) in that subject's history.
 //
 // Built on the shared harness (scripts/support/harness.ts), so it runs over the same backends the
@@ -79,7 +79,7 @@ async function curve(
 
 async function spendCurve(economy: Economy): Promise<void> {
   const buyer = `usr_sp_${tag}`;
-  const creator = `usr_cr_${tag}`;
+  const seller = `usr_cr_${tag}`;
   // Fund the buyer for every sale the whole curve will run — the warmup segment plus all timed
   // segments — with margin.
   const credits = (SEG * (SEGMENTS + 1) + 1000).toString();
@@ -93,7 +93,7 @@ async function spendCurve(economy: Economy): Promise<void> {
         sku: `prod_${tag}`,
         price: credit('1.00'),
         orderId: `ord_${tag}_${k}`,
-        recipients: [{ sellerId: creator, shareBps: 10_000 }],
+        recipients: [{ sellerId: seller, shareBps: 10_000 }],
       }),
     ),
   );
@@ -101,11 +101,11 @@ async function spendCurve(economy: Economy): Promise<void> {
 
 async function payoutCurve(economy: Economy): Promise<void> {
   const buyer = `usr_pb_${tag}`;
-  const creator = `usr_pc_${tag}`;
+  const seller = `usr_pc_${tag}`;
   await economy.submit(
     topUp({ userId: buyer, amount: credit('1000000000.00') }),
   );
-  // Over-fund the creator's earned balance so every payout below is affordable and mature — covering
+  // Over-fund the seller's earned balance so every payout below is affordable and mature — covering
   // the warmup segment plus all timed segments.
   const funding = Math.ceil((SEG * (SEGMENTS + 1) * 1.5) / 300) + 5;
   for (let i = 0; i < funding; i++) {
@@ -115,12 +115,12 @@ async function payoutCurve(economy: Economy): Promise<void> {
         sku: `prod_${tag}`,
         price: credit('1000.00'),
         orderId: `fund_${tag}_${i}`,
-        recipients: [{ sellerId: creator, shareBps: 10_000 }],
+        recipients: [{ sellerId: seller, shareBps: 10_000 }],
       }),
     );
   }
-  await curve('requestPayout (one creator)', () =>
-    economy.submit(requestPayout({ userId: creator, amount: credit('1.00') })),
+  await curve('requestPayout (one seller)', () =>
+    economy.submit(requestPayout({ userId: seller, amount: credit('1.00') })),
   );
 }
 

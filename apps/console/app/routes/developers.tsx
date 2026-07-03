@@ -112,7 +112,7 @@ export default function Developers() {
         </p>
         <ul>
           <li>
-            <b>Payouts to creators</b> go out through a payment partner (Tilia).
+            <b>Payouts to sellers</b> go out through a payment partner (Tilia).
             The ledger reserves the credits; the partner moves the USD. The
             Payouts page tracks each one from reserve to settlement.
           </li>
