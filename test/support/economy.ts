@@ -65,3 +65,19 @@ export function makeEconomy(
     config: { ...testConfig(), ...config },
   });
 }
+
+/**
+ * Builds an economy plus a handle on its store, for tests that submit through the public surface
+ * and then inspect what persisted. Same seed-1 doubles as `makeEconomy()`; the store shares the
+ * economy's digest and clock so hashes agree.
+ */
+export function economyWithStore(
+  seed = 1,
+  config?: Partial<Config>,
+): { economy: Economy; store: Store } {
+  const store = memoryStore({
+    digest: seededDigest(seed),
+    clock: fixedClock(0),
+  });
+  return { economy: makeEconomy(seed, store, config), store };
+}

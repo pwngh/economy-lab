@@ -272,9 +272,11 @@ export function testConfig(): Config {
 /**
  * Builds the Ctx a handler reads, wired entirely from the deterministic doubles above so handler
  * runs are reproducible. Production routes operations to handlers by kind through `submit`; a test
- * builds the Ctx here and calls the handler directly.
+ * builds the Ctx here and calls the handler directly. Pass `overrides` to swap individual
+ * capabilities (a frozen clock at a different instant, a small `config.velocityLimitMinor`)
+ * without re-spelling the other nine.
  */
-export function makeCtx(): Ctx {
+export function makeCtx(overrides: Partial<Ctx> = {}): Ctx {
   return {
     clock: fixedClock(0),
     ids: sequentialIds(),
@@ -286,5 +288,16 @@ export function makeCtx(): Ctx {
     rates: fixedRates(),
     logger: testLogger(),
     meter: noopMeter(),
+    ...overrides,
   };
+}
+
+/**
+ * Predicate for `assert.throws` / `assert.rejects`: the thrown value is an `EconomyError` carrying
+ * exactly this stable code (e.g. `'OP.MALFORMED'`). The one shared implementation, so every suite
+ * matches thrown faults the same way.
+ */
+export function hasCode(code: string): (error: unknown) => boolean {
+  return (error) =>
+    error instanceof Error && (error as { code?: string }).code === code;
 }
