@@ -53,6 +53,11 @@ export { spendable, earned, promo, currency, SYSTEM } from '#src/accounts.ts';
 
 export { loadConfig } from '#src/config.ts';
 
+// The error surface. submit() throws EconomyError for genuine faults; a caller needs the class for
+// instanceof, the ERROR_CODES catalog to match on, and the code/reason unions to type its handling.
+export { EconomyError, ERROR_CODES } from '#src/errors.ts';
+export type { ErrorCode, RejectionCode } from '#src/errors.ts';
+
 export type { Economy } from '#src/economy.ts';
 export type { Worker } from '#src/worker/index.ts';
 export type { WorkerCtx } from '#src/contract.ts';

@@ -65,58 +65,76 @@ export type RejectionCode =
  *   Outcomes & reason codes} for how each code maps to an HTTP status and retry decision.
  */
 export const ERROR_CODES = {
-  // The request was structurally wrong (missing or invalid fields).
+  /** The request was structurally wrong (missing or invalid fields). */
   MALFORMED_OPERATION: 'OP.MALFORMED',
 
-  // A money amount was invalid (for example, negative or not a whole minor unit).
+  /** A money amount was invalid (for example, negative or not a whole minor unit). */
   INVALID_AMOUNT: 'MONEY.INVALID_AMOUNT',
 
-  // A posting's debits and credits didn't add up to zero, so the books wouldn't balance.
+  /** A posting's debits and credits didn't add up to zero, so the books wouldn't balance. */
   LEDGER_UNBALANCED: 'LEDGER.UNBALANCED',
 
-  // A posting referenced an account that doesn't exist.
+  /** A posting referenced an account that doesn't exist. */
   UNKNOWN_ACCOUNT: 'LEDGER.UNKNOWN_ACCOUNT',
 
-  // A multi-step saga was told to move to a state it can't reach from its
-  // current one.
-  INVALID_TRANSITION: 'SAGA.INVALID_TRANSITION',
-
-  // The caller isn't permitted to perform this action.
-  UNAUTHORIZED: 'AUTH.UNAUTHORIZED',
-
-  // A cryptographic signature didn't verify. Thrown in src/server.ts when an inbound webhook's
-  // HMAC signature fails to match, before any state is changed; outer layers map this to HTTP 401.
-  INVALID_SIGNATURE: 'AUTH.INVALID_SIGNATURE',
-
-  // The underlying storage layer (database, etc.) failed.
-  STORE_FAILURE: 'STORE.FAILURE',
-
-  // An external service we depend on (such as a payment processor) failed.
-  PROVIDER_FAILURE: 'PROVIDER.FAILURE',
-
-  // A balance that's never supposed to go negative did. Last-resort backstop deep in the posting
-  // code; the type doc above explains how the up-front INSUFFICIENT_FUNDS check keeps ordinary
-  // shortfalls away from it, so reaching this fault means a bug let a balance slip below zero.
-  OVERDRAFT: 'LEDGER.OVERDRAFT',
-
-  // A single posting tried to combine two different currencies, which isn't allowed.
+  /** A single posting tried to combine two different currencies, which isn't allowed. */
   CURRENCY_MISMATCH: 'LEDGER.CURRENCY_MISMATCH',
 
-  // Configuration failed to load or validate. Thrown at startup so a bad config stops
-  // the service immediately rather than failing later.
+  /**
+   * A balance that's never supposed to go negative did. Last-resort backstop deep in the posting
+   * code; the type doc above explains how the up-front INSUFFICIENT_FUNDS check keeps ordinary
+   * shortfalls away from it, so reaching this fault means a bug let a balance slip below zero.
+   */
+  OVERDRAFT: 'LEDGER.OVERDRAFT',
+
+  /**
+   * A posting tried to mix custodial funds (money the platform owes users and must hold real money
+   * against) with funds it does not owe, such as revenue. Those two kinds must stay in separate
+   * accounts, so this is a thrown safety fault deep in the treasury path, never an expected "no".
+   */
+  COMMINGLING: 'LEDGER.COMMINGLING',
+
+  /**
+   * A multi-step saga was told to move to a state it can't reach from its
+   * current one.
+   */
+  INVALID_TRANSITION: 'SAGA.INVALID_TRANSITION',
+
+  /** The caller isn't permitted to perform this action. */
+  UNAUTHORIZED: 'AUTH.UNAUTHORIZED',
+
+  /**
+   * A cryptographic signature didn't verify. Thrown in src/server.ts when an inbound webhook's
+   * HMAC signature fails to match, before any state is changed; outer layers map this to HTTP 401.
+   */
+  INVALID_SIGNATURE: 'AUTH.INVALID_SIGNATURE',
+
+  /** The underlying storage layer (database, etc.) failed. */
+  STORE_FAILURE: 'STORE.FAILURE',
+
+  /** An external service we depend on (such as a payment processor) failed. */
+  PROVIDER_FAILURE: 'PROVIDER.FAILURE',
+
+  /**
+   * Configuration failed to load or validate. Thrown at startup so a bad config stops
+   * the service immediately rather than failing later.
+   */
   CONFIG_INVALID: 'CONFIG.INVALID',
 
-  // The hash chain failed to verify: a stored hash no longer matches the one recomputed from its
-  // posting, so the ledger has been tampered with. Thrown before a checkpoint is signed, so no
-  // attestation is produced over a broken chain. Last-resort integrity fault, never an expected
-  // "no", hence a thrown fault rather than a RejectionCode.
+  /**
+   * The hash chain failed to verify: a stored hash no longer matches the one recomputed from its
+   * posting, so the ledger has been tampered with. Thrown before a checkpoint is signed, so no
+   * attestation is produced over a broken chain. Last-resort integrity fault, never an expected
+   * "no", hence a thrown fault rather than a RejectionCode.
+   */
   CHAIN_BROKEN: 'CHAIN.BROKEN',
-
-  // A posting tried to mix custodial funds (money the platform owes users and must hold real money
-  // against) with funds it does not owe, such as revenue. Those two kinds must stay in separate
-  // accounts, so this is a thrown safety fault deep in the treasury path, never an expected "no".
-  COMMINGLING: 'LEDGER.COMMINGLING',
 } as const;
+
+/**
+ * The union of every {@link ERROR_CODES} value, so a caller matching on `error.code` gets
+ * autocompletion and exhaustiveness instead of comparing against free-typed strings.
+ */
+export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
 
 /**
  * Thrown-error type for every fault in this system. Carries one of the stable
@@ -127,12 +145,12 @@ export const ERROR_CODES = {
  * they are for logging only; don't surface them in a response.
  */
 export class EconomyError extends Error {
-  readonly code: string;
+  readonly code: ErrorCode;
   readonly retryable: boolean;
   readonly detail: Record<string, unknown>;
 
   constructor(
-    code: string,
+    code: ErrorCode,
     message: string,
     options?: {
       cause?: unknown;
@@ -152,7 +170,7 @@ export class EconomyError extends Error {
 }
 
 export function fault(
-  code: string,
+  code: ErrorCode,
   message: string,
   options?: {
     cause?: unknown;
