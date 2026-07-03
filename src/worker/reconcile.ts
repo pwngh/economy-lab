@@ -102,7 +102,7 @@ async function reconcileOne(
       code: normalized.code,
       retryable: normalized.retryable,
     });
-    sweep.ctx.logger.log('error', 'reconcile.window.failed', {
+    sweep.ctx.logger.log('error', 'worker.reconcile.failed', {
       from: window.from,
       to: window.to,
       code: normalized.code,
@@ -122,12 +122,12 @@ function record(
   tally: ReconcileTally,
 ): void {
   ctx.meter.observe(
-    'economy.reconcile.discrepancies',
+    'worker.reconcile.discrepancies',
     report.discrepancies.length,
   );
   if (report.reconciled) {
     tally.reconciled.push(report);
-    ctx.logger.log('info', 'reconcile.window.reconciled', {
+    ctx.logger.log('info', 'worker.reconcile.reconciled', {
       from: window.from,
       to: window.to,
       matched: report.matched,
@@ -135,7 +135,7 @@ function record(
     return;
   }
   tally.drifted.push(report);
-  ctx.logger.log('warn', 'reconcile.window.drifted', {
+  ctx.logger.log('warn', 'worker.reconcile.drifted', {
     from: window.from,
     to: window.to,
     processorOrphans: report.processorOrphans,

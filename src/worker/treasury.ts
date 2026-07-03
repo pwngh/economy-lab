@@ -186,18 +186,18 @@ function requiredBackingMinor(custodialCreditMinor: bigint, par: Rate): bigint {
 // `raiseBreach`.
 function record(ctx: WorkerCtx, position: BackingPosition, now: number): void {
   ctx.meter.observe(
-    'economy.treasury.custodial_credit',
+    'worker.treasury.custodial_credit',
     toNumber(position.custodialCredit.minor),
   );
   ctx.meter.observe(
-    'economy.treasury.trust_cash',
+    'worker.treasury.trust_cash',
     toNumber(position.trustCash.minor),
   );
   ctx.meter.observe(
-    'economy.treasury.shortfall',
+    'worker.treasury.shortfall',
     toNumber(position.shortfall.minor),
   );
-  ctx.logger.log('debug', 'economy.treasury.swept', {
+  ctx.logger.log('debug', 'worker.treasury.swept', {
     backed: position.backed,
     at: now,
   });
@@ -219,8 +219,8 @@ function raiseBreach(
     held: encodeAmount(position.trustCash),
   };
   tally.breaches.push(breach);
-  ctx.meter.count('economy.treasury.breach', 1);
-  ctx.logger.log('error', 'economy.treasury.under_backed', {
+  ctx.meter.count('worker.treasury.breach', 1);
+  ctx.logger.log('error', 'worker.treasury.under_backed', {
     ...breach,
     at: now,
   });

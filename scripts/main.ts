@@ -403,7 +403,10 @@ async function runWorker(env: Env): Promise<RunningWorker> {
           log.log('warn', 'worker.sweep', { ok: false, failed });
         }
       } catch (error) {
-        log.log('error', 'worker.sweep_failed', {
+        // Same event as the per-tick lines above: the outcome lives in the fields (`ok`, `error`)
+        // and the level, not in a differently named event.
+        log.log('error', 'worker.sweep', {
+          ok: false,
           error: error instanceof Error ? error.message : String(error),
         });
       } finally {

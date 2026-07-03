@@ -238,7 +238,7 @@ describe('sweepTreasury', () => {
       logger.lines.some(
         (line) =>
           line.level === 'error' &&
-          line.event === 'economy.treasury.under_backed',
+          line.event === 'worker.treasury.under_backed',
       ),
     );
   });

@@ -227,7 +227,7 @@ async function driveVerify(
   tally.mismatch = !ok;
   if (!ok) {
     ctx.logger.log('error', 'worker.checkpoint.mismatch', { id: latest.id });
-    ctx.meter.count('economy.worker.checkpoint.verify', 1, {
+    ctx.meter.count('worker.checkpoint.verify', 1, {
       outcome: 'mismatch',
     });
   }

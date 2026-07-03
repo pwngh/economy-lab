@@ -337,7 +337,7 @@ async function countsReversedAndFailedOnTheMeter(): Promise<void> {
 
   const reversed = counts.find((c) => c.outcome === 'reversed');
   const failed = counts.find((c) => c.outcome === 'failed');
-  assert.equal(reversed?.name, 'economy.worker.promo.expiry');
+  assert.equal(reversed?.name, 'worker.promos.expired');
   assert.equal(reversed?.n, 1);
   assert.equal(failed?.n, 0);
   await store.close();

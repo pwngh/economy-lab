@@ -111,7 +111,7 @@ async function applyOne(
     // A declined but well-formed request is terminal for this row: the same Operation would be
     // declined the same way on every retry, so dead-letter it rather than burning attempts. The
     // reason code stands in for the failure code so operators see why it parked.
-    ctx.logger.log('warn', 'inbox.apply.rejected', {
+    ctx.logger.log('warn', 'worker.inbox.rejected', {
       entryId: entry.id,
       reason: outcome.reason,
     });
@@ -148,7 +148,7 @@ async function recordFailure(
   const { entry, normalized, options } = work;
   const next = entry.attempts + 1;
   if (next >= ctx.config.maxInboxAttempts) {
-    ctx.logger.log('error', 'inbox.apply.deadLettered', {
+    ctx.logger.log('error', 'worker.inbox.dead_lettered', {
       entryId: entry.id,
       code: normalized.code,
       attempts: next,
@@ -157,7 +157,7 @@ async function recordFailure(
     tally.deadLettered.push({ id: entry.id, reason: normalized.code });
     return;
   }
-  ctx.logger.log('warn', 'inbox.apply.failed', {
+  ctx.logger.log('warn', 'worker.inbox.failed', {
     entryId: entry.id,
     code: normalized.code,
     retryable: normalized.retryable,

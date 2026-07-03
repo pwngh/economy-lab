@@ -100,7 +100,7 @@ async function dispatchOne(
     const normalized = normalizeError(error);
     const next = message.attempts + 1;
     if (next >= ctx.config.maxOutboxAttempts) {
-      ctx.logger.log('error', 'outbox.relay.deadLettered', {
+      ctx.logger.log('error', 'worker.relay.dead_lettered', {
         messageId: message.id,
         code: normalized.code,
         attempts: next,
@@ -109,7 +109,7 @@ async function dispatchOne(
       tally.deadLettered.push({ id: message.id, reason: normalized.code });
       return;
     }
-    ctx.logger.log('warn', 'outbox.relay.failed', {
+    ctx.logger.log('warn', 'worker.relay.failed', {
       messageId: message.id,
       code: normalized.code,
       retryable: normalized.retryable,
@@ -140,10 +140,10 @@ async function markRelayed(
     await store.outbox.markRelayed(relayed, options);
   } catch (error) {
     const normalized = normalizeError(error);
-    ctx.meter.count('economy.outbox.mark_relayed.failed', relayed.length, {
+    ctx.meter.count('worker.relay.mark_failed', relayed.length, {
       code: normalized.code,
     });
-    ctx.logger.log('error', 'outbox.markRelayed.failed', {
+    ctx.logger.log('error', 'worker.relay.mark_failed', {
       count: relayed.length,
       code: normalized.code,
     });

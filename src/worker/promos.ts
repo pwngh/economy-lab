@@ -21,7 +21,7 @@ import type { Options, PromoGrant, Store, Unit } from '#src/ports.ts';
 // Metric name for the sweep, the periodic pass that reverses expired promo grants. The sweep
 // bumps this counter twice per run, once per outcome ("reversed" and "failed"), so each outcome
 // can be graphed separately.
-const SWEEP_METRIC = 'economy.worker.promo.expiry';
+const SWEEP_METRIC = 'worker.promos.expired';
 
 /**
  * Result of one promo-expiry sweep. Each due grant lands in one of two lists, keyed by grant id:
@@ -154,7 +154,7 @@ async function postReversal(args: {
 // with the failed count, so each outcome is tracked separately. Expiry reversal is internal worker
 // housekeeping, so nothing is published to the event stream.
 function reportSweep(ctx: WorkerCtx, summary: PromoExpirySummary): void {
-  ctx.logger.log('info', 'worker.promo.expiry', {
+  ctx.logger.log('info', 'worker.promos.swept', {
     reversed: summary.reversed.length,
     failed: summary.failed.length,
     failedIds: summary.failed.map((f) => f.id),
