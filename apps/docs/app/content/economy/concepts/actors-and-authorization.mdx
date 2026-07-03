@@ -6,8 +6,8 @@ order: 50
 status: stable
 sourceRefs:
   [
-    'src/contract.ts#L49-L55 · Principal',
-    'src/economy.ts#L435-L456 · authorize',
+    'src/contract.ts#L48-L54 · Principal',
+    'src/economy.ts#L473-L478 · authorize',
   ]
 related:
   [
@@ -65,7 +65,7 @@ Each kind of principal carries its own identifier and its own reach.
   `system` has full access for now; the source notes per-service permission
   lists as future work, so a `payments` service and a `risk` service aren't yet
   distinguished. The model already carries the field needed to split them later
-  (see <SourceLink to="src/economy.ts#L486-L488">source</SourceLink>).
+  (see <SourceLink to="src/economy.ts#L480">source</SourceLink>).
 </Callout>
 
 ## The invariant it maintains
@@ -75,7 +75,7 @@ A `user` actor can only move money out of accounts it owns, and can never run a 
 1. **Privileged operations are closed to `user` actors.** The set `RESTRICTED_TO_PRIVILEGED` lists every kind a `user` may never run.
 2. **A `user` may only debit accounts it owns.** The gate pulls out the accounts the operation will _drain_ and checks that each one belongs to the caller. Paying _into_ a stranger's account is fine; draining one is not.
 
-The privileged set is, per <SourceLink to="src/economy.ts#L838-L864">source</SourceLink>:
+The privileged set is, per <SourceLink to="src/economy.ts#L869-L880">source</SourceLink>:
 
 | Restricted operation                     | Why a `user` is barred                                                                                     |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
@@ -96,11 +96,11 @@ The gate's logic:
 
 - An `operator` returns immediately, full access, postings fully audited.
 - A `system` actor returns immediately, full access.
-- A `user` is checked against `RESTRICTED_TO_PRIVILEGED`; a match throws `UNAUTHORIZED`. Otherwise, for each account in `debitedUserAccounts(operation)`, the gate verifies `ownedBy(account, userId)`. An account belongs to a user when its id is prefixed `userId:` (see <SourceLink to="src/economy.ts#L817-L817">source</SourceLink>).
+- A `user` is checked against `RESTRICTED_TO_PRIVILEGED`; a match throws `UNAUTHORIZED`. Otherwise, for each account in `debitedUserAccounts(operation)`, the gate verifies `ownedBy(account, userId)`. An account belongs to a user when its id is prefixed `userId:` (see <SourceLink to="src/economy.ts#L847">source</SourceLink>).
 
 `debitedUserAccounts` is deliberately narrow: it returns only the _drained_ user accounts an operation touches, not every account it locks. For a `spend` those are the buyer's [`promo`](/economy/concepts/accounts-and-double-entry/) and `spendable`; for a `subscribe`, the same; for a `requestPayout`, the user's `earned`.
 
-Accounts being paid _into_, and platform accounts, are left out. Only a drained account has to belong to the caller (see <SourceLink to="src/economy.ts#L506-L517">source</SourceLink>).
+Accounts being paid _into_, and platform accounts, are left out. Only a drained account has to belong to the caller (see <SourceLink to="src/economy.ts#L500-L511">source</SourceLink>).
 
 <Callout type="warning">
   A failed authorization is a thrown `UNAUTHORIZED` fault, not a `rejected`
@@ -108,7 +108,7 @@ Accounts being paid _into_, and platform accounts, are left out. Only a drained 
   ordinary "no" the caller can retry under the same
   [`idempotencyKey`](/economy/concepts/idempotency/), it signals a programming
   or permission error. Over HTTP it maps to `401` (see{' '}
-  <SourceLink to="src/server.ts#L408-L411">source</SourceLink>).
+  <SourceLink to="src/server.ts#L398-L403">source</SourceLink>).
 </Callout>
 
 ### Ownership the gate can't see
@@ -123,4 +123,4 @@ Authorization sits in front of the whole `submit` pipeline, so every operation p
 
 **Privileged operations** trust the gate to keep `user` callers out, so their handlers assume a `system` or `operator` principal. See [`settlePayout`](/economy/reference/operations/settle-payout/) and the operator-only [`adjust`](/economy/reference/operations/adjust/).
 
-**The maintenance pause** tells actors apart by kind. A `user`'s discretionary write is declined with `ECONOMY_PAUSED` while the economy is paused. A `system` settlement webhook and an `operator` fix keep flowing, so external money can still settle (see <SourceLink to="src/economy.ts#L233-L243">source</SourceLink>).
+**The maintenance pause** tells actors apart by kind. A `user`'s discretionary write is declined with `ECONOMY_PAUSED` while the economy is paused. A `system` settlement webhook and an `operator` fix keep flowing, so external money can still settle (see <SourceLink to="src/economy.ts#L233-L244">source</SourceLink>).

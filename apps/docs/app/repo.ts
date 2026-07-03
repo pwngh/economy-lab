@@ -12,9 +12,10 @@
 // Where the source chips point. Pinned to a commit SHA, not a branch, so a chip's file contents and
 // any #Lnn line anchor can't drift out from under the link when the source changes later — the same
 // "pin the version so the reference can't rot" instinct as the docs base URL. Bump REPO_REF when you
-// re-point the docs at a newer snapshot of economy-lab.
+// re-point the docs at a newer snapshot of economy-lab, then re-anchor the chips; app/anchors.test.ts
+// fails whenever the anchors and the library tree disagree.
 export const REPO_URL = 'https://github.com/pwngh/economy-lab';
-export const REPO_REF = '4c80bbe8dae01e6a2c70ad9e9588d8836a36061d';
+export const REPO_REF = '38b17841742c2a4f8289e845337ab52dca4740c4';
 
 /**
  * Turn a `sourceRefs` chip into a GitHub blob URL at the pinned ref. A chip is `path · symbol` (the

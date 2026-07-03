@@ -15,10 +15,10 @@ import { sourceUrl } from '~/repo.ts';
 
 /**
  * An inline link from prose to a source symbol on GitHub at the pinned commit. Used in MDX as
- * `<SourceLink to="src/ports.ts#L511-L517 · SagaStore.advance" />`, which renders the symbol as a
+ * `<SourceLink to="src/ports.ts#L599-L605 · SagaStore.advance" />`, which renders the symbol as a
  * monospace external link (the ↗ mark comes from the global `a[target="_blank"]` rule). Pass
  * `children` to override the visible label when the symbol is already named in the surrounding
- * sentence: `<SourceLink to="src/chain.ts#L96">advanceHeads</SourceLink>`.
+ * sentence: `<SourceLink to="src/chain.ts#L100">advanceHeads</SourceLink>`.
  *
  * The href runs through {@link sourceUrl}, so the pinned SHA lives in one place ({@link REPO_REF}):
  * re-pinning the docs at a newer snapshot updates every inline link and every `sourceRefs` chip at

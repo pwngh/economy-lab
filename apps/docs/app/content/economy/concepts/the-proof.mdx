@@ -6,8 +6,8 @@ order: 80
 status: stable
 sourceRefs:
   [
-    'src/integrity.ts#L77 · proveEconomy',
-    'src/contract.ts#L364 · ProveReport',
+    'src/integrity.ts#L83 · proveEconomy',
+    'src/contract.ts#L386 · ProveReport',
     'scripts/prove.ts',
   ]
 related:
@@ -58,7 +58,7 @@ The prover checks five properties and reports each as a boolean flag on `ProveRe
 
 Two more fields carry the detail behind a failing flag. `shortfall` is the missing USD when `backed` is false, and zero otherwise. `drift` lists each account whose cached balance disagrees with its legs. Each drift entry names both the `materialized` and the `derived` figure, so an operator can see the size and direction of the gap.
 
-`allInvariantsHold(report)` is the convenience roll-up. It is `true` only when all five flags are `true` (see <SourceLink to="src/integrity.ts#L253">source</SourceLink>). If you only care about one property, read its field directly.
+`allInvariantsHold(report)` is the convenience roll-up. It is `true` only when all five flags are `true` (see <SourceLink to="src/integrity.ts#L267">source</SourceLink>). If you only care about one property, read its field directly.
 
 ## How it's enforced
 
@@ -69,7 +69,7 @@ The whole proof runs in one pass over the ledger. `foldLedger` walks every accou
   [`read.prove()`](/economy/reference/reads/) is the lighter twin in
   `src/economy.ts`: its `chainIntact` is only a shape check on each account's
   latest hash. The thorough{' '}
-  <SourceLink to="src/integrity.ts#L77">proveEconomy</SourceLink> calls
+  <SourceLink to="src/integrity.ts#L83">proveEconomy</SourceLink> calls
   `proveChain`, which walks every account from genesis, recomputes every hash,
   and names the first entry that no longer re-derives. The thorough prover also
   adds a phantom-row pass (`R33`) over `balanceAccounts()` that catches a stale
