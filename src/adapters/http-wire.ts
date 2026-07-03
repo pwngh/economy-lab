@@ -94,7 +94,7 @@ function encodeAmounts(value: unknown): unknown {
 
 // Reverse of `encodeAmounts`: turn every encoded-amount string back into an Amount. A string is an
 // encoded amount only when it parses as `CURRENCY:decimal`; any other string (idempotencyKey, sku,
-// source, …) passes through unchanged.
+// source, ...) passes through unchanged.
 function decodeAmounts(value: unknown): unknown {
   if (typeof value === 'string') {
     return tryAmountFrom(value) ?? value;

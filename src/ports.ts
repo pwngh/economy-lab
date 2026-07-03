@@ -37,7 +37,7 @@ export type TimelineOptions = {
   offset?: number;
 };
 
-/** Allowed id prefixes. Every minted id is `<prefix>_<uuid>` (e.g. `txn_…`, `usr_…`). */
+/** Allowed id prefixes. Every minted id is `<prefix>_<uuid>` (e.g. `txn_...`, `usr_...`). */
 export type IdPrefix =
   | 'usr' // a user — host-supplied (not minted here); owns the wallet accounts
   | 'txn' // a ledger transaction: one posting of balanced legs
@@ -187,7 +187,7 @@ export interface Rates {
  * is `rate / 10^scale` (e.g. rate 50, scale 2 = 0.50 USD per credit). `rateId` names this
  * rate so a transaction can record which one it used.
  *
- * Convert: usd_minor = floor(credit_minor × rate / 10^scale).
+ * Convert: usd_minor = floor(credit_minor * rate / 10^scale).
  */
 export type Rate = { rate: bigint; scale: number; rateId: string };
 
@@ -776,7 +776,7 @@ export interface EconomyEvent {
   /** When the event happened, in epoch milliseconds. */
   occurredAt: number;
 
-  /** What the event is about: a user id (usr_…) or transaction id (txn_…). */
+  /** What the event is about: a user id (usr_...) or transaction id (txn_...). */
   subject: string;
 
   /** The event's payload. */

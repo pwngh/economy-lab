@@ -520,7 +520,7 @@ async function txDispatch(
 // --- The Fetch handler ------------------------------------------------------------
 
 /**
- * Server side of the HTTP store adapter: a {@link Request} → {@link Response} function
+ * Server side of the HTTP store adapter: a {@link Request} -> {@link Response} function
  * answering each request against the backing {@link Store}.
  *
  * Success sends `{ ok: true, body }`; a thrown handler sends `{ ok: false, error }` with the

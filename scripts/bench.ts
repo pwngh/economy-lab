@@ -368,7 +368,7 @@ let determinismChecked = false;
 async function throughputFor(p: Provisioned): Promise<BackendResult> {
   console.warn(`    ${p.durability}`);
   console.warn(
-    `    pool ${p.poolMax} conns (${p.connsPerOp}×${p.concurrency} concurrency + headroom) · mode ${p.mode} · gates ${p.gates}`,
+    `    pool ${p.poolMax} conns (${p.connsPerOp}*${p.concurrency} concurrency + headroom) · mode ${p.mode} · gates ${p.gates}`,
   );
   // Cross-engine determinism fingerprint: run a fixed sequence on the fresh ledger and snapshot its
   // Merkle root before the workload perturbs it, so every backend's root covers the identical postings.
@@ -462,13 +462,13 @@ console.warn(
 );
 console.warn(
   `Mode "${cfg.mode}" (${cfg.mode === 'throughput' ? 'fully funded — any rejection is a bug' : 'oversubscribed on purpose — rejections/retries are the measured signal'}), ` +
-    `gates ${cfg.gates}, pools sized ${cfg.connsPerOp}×concurrency + ${cfg.poolHeadroom} for the money-transaction write path (velocity rides the same transaction).`,
+    `gates ${cfg.gates}, pools sized ${cfg.connsPerOp}*concurrency + ${cfg.poolHeadroom} for the money-transaction write path (velocity rides the same transaction).`,
 );
 console.warn(
   'They show relative cost and scaling shape, not production capacity.',
 );
 console.warn(
-  `\nsubmit throughput (best of ${cfg.reps} × ${cfg.ops}; seq = one at a time, con = ${cfg.concurrency} in flight; rate over committed ops only):`,
+  `\nsubmit throughput (best of ${cfg.reps} * ${cfg.ops}; seq = one at a time, con = ${cfg.concurrency} in flight; rate over committed ops only):`,
 );
 
 const results: BackendResult[] = [];
@@ -516,7 +516,7 @@ printTable(
   ]),
 );
 printTable(
-  `Concurrent throughput — ops/sec, up to ${cfg.concurrency} in flight (pipelined; in-memory is serial so con≈seq)`,
+  `Concurrent throughput — ops/sec, up to ${cfg.concurrency} in flight (pipelined; in-memory is serial so con~seq)`,
   ['backend', ...kindNames, 'provable'],
   results.map((r) => [
     r.backend,
@@ -543,7 +543,7 @@ printTable(
 // Surface what did NOT commit under concurrency, split by cause — never a blanket "deadlock". Each line
 // names the rejections (data, no money moved), the throws past the retry budget (with the REAL class +
 // driver code), the retries withTransientRetry absorbed, and — authoritatively — the deadlocks the
-// ENGINE itself detected (counter Δ). App-side throws are what surfaced; the DB counter is ground truth.
+// ENGINE itself detected (counter delta). App-side throws are what surfaced; the DB counter is ground truth.
 for (const r of results) {
   for (const k of r.kinds) {
     const c = k.con;
@@ -575,7 +575,7 @@ for (const r of results) {
 // Cross-engine determinism: the same fixed sequence must reach the same Merkle root on every backend
 // that ran; a mismatch is a real correctness bug, so it is loud and flips the exit code. The reference
 // is in-memory when present, else any backend that ran (so two SQL engines are still compared when
-// in-memory is excluded). Fewer than two backends → nothing to compare, reported as "not run".
+// in-memory is excluded). Fewer than two backends -> nothing to compare, reported as "not run".
 if (results.length >= 2) {
   determinismChecked = true;
   const reference =
@@ -585,15 +585,15 @@ if (results.length >= 2) {
   );
   if (disagree.length === 0) {
     console.warn(
-      `\ncross-engine determinism: PASS — ${results.length} backends reached identical chain root ${reference.determinismRoot.slice(0, 16)}…`,
+      `\ncross-engine determinism: PASS — ${results.length} backends reached identical chain root ${reference.determinismRoot.slice(0, 16)}...`,
     );
   } else {
     anyProveFailed = true;
     determinismOk = false;
     console.warn(
-      `\ncross-engine determinism: FAIL — ${reference.backend} root ${reference.determinismRoot.slice(0, 16)}… but ` +
+      `\ncross-engine determinism: FAIL — ${reference.backend} root ${reference.determinismRoot.slice(0, 16)}... but ` +
         disagree
-          .map((r) => `${r.backend}=${r.determinismRoot.slice(0, 16)}…`)
+          .map((r) => `${r.backend}=${r.determinismRoot.slice(0, 16)}...`)
           .join(', '),
     );
   }
@@ -639,7 +639,7 @@ await emitJson(cfg, {
     poolHeadroom: cfg.poolHeadroom,
     backends: cfg.backends,
   },
-  // Each backend's `kinds[].con` carries the full taxonomy, latency, retry pressure, and deadlock Δ, so
+  // Each backend's `kinds[].con` carries the full taxonomy, latency, retry pressure, and deadlock delta, so
   // the JSON is as complete as the table.
   throughput: results,
   // Run-level verdicts a CI job can assert on. `provable` requires at least one backend to have completed;

@@ -48,7 +48,7 @@ export { createWorker } from '#src/worker/index.ts';
 
 // Account-naming helpers. spendable/earned/promo/currency build account ids; SYSTEM holds the
 // platform's own accounts. Lets a host refer to an account without hand-writing the id string
-// (a user account id looks like `usr_…:<kind>`).
+// (a user account id looks like `usr_...:<kind>`).
 export { spendable, earned, promo, currency, SYSTEM } from '#src/accounts.ts';
 
 export { loadConfig } from '#src/config.ts';

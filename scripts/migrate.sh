@@ -22,7 +22,7 @@ set -eu
 cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
 # For local runs, fall back to .env (CI passes DATABASE_URL in the environment). Only when it is
-# not already set, so an explicit `DATABASE_URL=… sh scripts/migrate.sh` always wins.
+# not already set, so an explicit `DATABASE_URL=... sh scripts/migrate.sh` always wins.
 if [ -z "${DATABASE_URL:-}" ] && [ -f .env ]; then
   set -a
   . ./.env
@@ -54,7 +54,7 @@ postgres* | postgresql*)
   command -v psql >/dev/null 2>&1 ||
     { echo "scripts/migrate.sh: psql not found on PATH" >&2; exit 1; }
   # psql takes the connection URL directly. Reset, then apply; stop on the first error.
-  # client_min_messages=warning hushes the routine "drop cascades to …" NOTICEs from the reset.
+  # client_min_messages=warning hushes the routine "drop cascades to ..." NOTICEs from the reset.
   psql "$url" -v ON_ERROR_STOP=1 -q \
     -c 'set client_min_messages=warning; drop schema public cascade; create schema public;'
   psql "$url" -v ON_ERROR_STOP=1 -q \

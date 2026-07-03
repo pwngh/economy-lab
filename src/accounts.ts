@@ -96,7 +96,7 @@ export const SYSTEM = {
 // --- Platform-account sharding ------------------------------------------------------
 //
 // Every sale credits the one REVENUE row, so concurrent sales queue on its lock. Splitting each hot
-// account into `platformShards` rows (bare id + `id#1`…`id#S-1`) lets them run in parallel; readers
+// account into `platformShards` rows (bare id + `id#1`...`id#S-1`) lets them run in parallel; readers
 // sum the shards. Shard 0 keeps the bare id, so shards=1 (the default) changes nothing.
 
 // The accounts worth sharding. RECEIVABLE and OPENING_EQUITY move too rarely to matter.
@@ -111,7 +111,7 @@ const SHARDED: ReadonlySet<AccountRef> = new Set([
 ]);
 
 /**
- * Strips a shard suffix: `platform:revenue#3` → `platform:revenue`. The identity functions below
+ * Strips a shard suffix: `platform:revenue#3` -> `platform:revenue`. The identity functions below
  * normalize through this, so a shard behaves exactly like its parent.
  */
 export function baseOf(ref: AccountRef): AccountRef {
@@ -183,7 +183,7 @@ function fnv1a(key: string): number {
 
 /**
  * Whether `ref` is a user wallet account rather than a platform ("house") account. A user id is
- * `usr_…:<kind>` (has a `:kind` suffix, no `platform:` prefix); every house account starts with
+ * `usr_...:<kind>` (has a `:kind` suffix, no `platform:` prefix); every house account starts with
  * `platform:`.
  *
  * Guards against money laundering: escrow for a pending purchase must come back out only by

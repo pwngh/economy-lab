@@ -198,7 +198,7 @@ function assertAdvanced(advanced: boolean, saga: Saga, to: SagaState): void {
   if (!advanced) {
     throw fault(
       ERROR_CODES.INVALID_TRANSITION,
-      `payout saga ${saga.id} lost the CAS advancing ${saga.state} → ${to}.`,
+      `payout saga ${saga.id} lost the CAS advancing ${saga.state} -> ${to}.`,
       { detail: { sagaId: saga.id, from: saga.state, to } },
     );
   }

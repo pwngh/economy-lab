@@ -127,7 +127,7 @@ create table account_balances (
   -- post_entry, so headsForAccounts reads each head by primary key instead of scanning and sorting. A
   -- projection (chain_links stays source of truth); defaults to the genesis hash (64 zeros).
   head_hash  text   not null default repeat('0', 64),
-  -- A user account (`usr_…:<kind>`) may never go negative; a system account may.
+  -- A user account (`usr_...:<kind>`) may never go negative; a system account may.
   constraint user_account_non_negative
     check (account_id like 'platform:%' or balance >= 0)
 );
@@ -372,7 +372,7 @@ create procedure post_entry(
   p_txn          text,
   p_posted_at    bigint,
   p_meta         jsonb,
-  p_legs         jsonb,   -- [{account, currency, amount}]   raw signed: debit +, credit −
+  p_legs         jsonb,   -- [{account, currency, amount}]   raw signed: debit +, credit -
   p_links        jsonb,   -- [{account, prev_hash, hash}]    one per distinct account
   p_balances     jsonb,   -- [{account, currency, delta}]    per-account net balanceDelta
   p_new_accounts jsonb    -- [{id, kind, currency}]          user accounts created on first use

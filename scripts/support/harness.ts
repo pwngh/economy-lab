@@ -96,10 +96,10 @@ export type HarnessConfig = {
   shards: number; // PLATFORM_SHARDS for the measured economy (BENCH_SHARDS); 1 = unsharded
   // Pool sizing: an in-flight op holds one pooled connection for its money transaction, which
   // carries the velocity record too. Brief pool borrows (first-use row plants, a rollback's
-  // re-record) ride the headroom. The pool covers connsPerOp×concurrency + headroom, explicit
+  // re-record) ride the headroom. The pool covers connsPerOp*concurrency + headroom, explicit
   // and asserted.
   connsPerOp: number; // pooled connections one in-flight op holds
-  poolHeadroom: number; // spare connections above connsPerOp×concurrency (borrows, probes, seal)
+  poolHeadroom: number; // spare connections above connsPerOp*concurrency (borrows, probes, seal)
   poolMax: number | null; // explicit pool-size override; null = derive from the formula above
   urls: { postgres: string; mysql: string }; // production-faithful: point these anywhere
   // Integrity-curve knobs (scripts/bench.ts): a fixed user set so accounts stay flat while postings grow.
@@ -250,7 +250,7 @@ export function resolveConfig(
 // --- Pool sizing -----------------------------------------------------------------
 
 // The smallest pool that will not self-deadlock for this config (see the connsPerOp note on
-// HarnessConfig): connsPerOp × concurrency, plus headroom.
+// HarnessConfig): connsPerOp * concurrency, plus headroom.
 export function requiredPoolSize(cfg: HarnessConfig): number {
   return cfg.connsPerOp * cfg.concurrency + cfg.poolHeadroom;
 }
@@ -261,15 +261,15 @@ export function poolSizeFor(cfg: HarnessConfig): number {
   return cfg.poolMax ?? requiredPoolSize(cfg);
 }
 
-// Fail fast (rather than hang) when a pool is too small. Below the floor connsPerOp×concurrency
+// Fail fast (rather than hang) when a pool is too small. Below the floor connsPerOp*concurrency
 // + 1, the in-flight transactions can take every connection, and their brief pool borrows then
 // block forever: a silent hang that looks like a wedged database. Returns the size on success.
 export function assertPoolSizing(cfg: HarnessConfig, poolMax: number): number {
   const floor = cfg.connsPerOp * cfg.concurrency + 1;
   if (poolMax < floor) {
     throw new Error(
-      `pool too small: poolMax=${poolMax} but concurrency=${cfg.concurrency} × ${cfg.connsPerOp} conns/op ` +
-        `needs ≥ ${floor} (recommended ${requiredPoolSize(cfg)} = ${cfg.connsPerOp}×${cfg.concurrency} + ${cfg.poolHeadroom} headroom). ` +
+      `pool too small: poolMax=${poolMax} but concurrency=${cfg.concurrency} * ${cfg.connsPerOp} conns/op ` +
+        `needs >= ${floor} (recommended ${requiredPoolSize(cfg)} = ${cfg.connsPerOp}*${cfg.concurrency} + ${cfg.poolHeadroom} headroom). ` +
         `In-flight transactions must leave a free connection for their brief pool borrows, ` +
         `so a pool sized below the concurrency deadlocks. Raise BENCH_POOL_MAX/BENCH_POOL_HEADROOM or lower BENCH_CONCURRENCY.`,
     );
@@ -302,7 +302,7 @@ export function resolveUrls(env: Record<string, string | undefined>): {
 // The engine's own contention counters, read from the database not guessed app-side: `deadlocks`
 // (MySQL ER_LOCK_DEADLOCK / Postgres pg_stat_database.deadlocks) and `lockWaits` (MySQL
 // ER_LOCK_WAIT_TIMEOUT; Postgres has none, stays 0). They count even deadlocks a retry recovered — the
-// contention a clean number hides. Cumulative; the bench reads a Δ per sample (see counterDelta).
+// contention a clean number hides. Cumulative; the bench reads a delta per sample (see counterDelta).
 export type EngineCounters = { deadlocks: number; lockWaits: number };
 
 // Reads the engine counters now, or null when the engine has no counter or the probe failed. Held open
@@ -629,8 +629,8 @@ async function probeMysqlDurability(url: string): Promise<string> {
 //
 // The only honest deadlock number is the database's own counter (the app can't see one a retry already
 // recovered). Each probe holds one connection for the whole run, outside the bench's pool, and the
-// bench takes a Δ per sample. Isolation caveat: MySQL's counter is server-global, Postgres' is
-// per-database; the Δ is honest as long as the bench is the only writer for the sample's duration,
+// bench takes a delta per sample. Isolation caveat: MySQL's counter is server-global, Postgres' is
+// per-database; the delta is honest as long as the bench is the only writer for the sample's duration,
 // which holds for a normal `make bench` run.
 
 // Postgres exposes detected deadlocks as a per-database counter in pg_stat_database; it has no
@@ -719,7 +719,7 @@ async function makeMysqlCounterProbe(
   };
 }
 
-// The change in the engine's counters across a sample: after − before, floored at 0 per field so a
+// The change in the engine's counters across a sample: after - before, floored at 0 per field so a
 // counter reset (or a missing read) can never report a negative or spurious delta. Returns null when
 // either endpoint is missing, so the report shows "n/a" rather than a fabricated number.
 export function counterDelta(
@@ -939,7 +939,7 @@ export async function measureSequential(
 // What a concurrent sample produced: throughput over committed ops, plus the breakdown to trust it.
 // Every op is tallied into committed / duplicate / rejected / threw (classifyOutcome + classifyThrow),
 // with `rejectReasons` / `throwClasses` naming which. `latency`, `retries`, and `dbCounters` carry what
-// the app can't see itself (the engine's own deadlock Δ included). `errors` is rejected+threw combined.
+// the app can't see itself (the engine's own deadlock delta included). `errors` is rejected+threw combined.
 export type ConcurrentResult = {
   rate: number;
   completed: number;
@@ -960,7 +960,7 @@ export type ConcurrentResult = {
 // group-commit, so it can beat the sequential rate; in-memory (serial, concurrency 1) tracks sequential.
 // A perOp that throws is classified and the run continues; the rate is over committed ops only.
 //
-// `counters`, when given, is read before and after the sample for the engine's own deadlock Δ. The retry
+// `counters`, when given, is read before and after the sample for the engine's own deadlock delta. The retry
 // observer is installed for the sample and restored after, so its retries never leak into another tally.
 export async function measureConcurrent(
   cfg: HarnessConfig,

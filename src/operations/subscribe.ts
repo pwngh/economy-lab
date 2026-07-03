@@ -177,7 +177,7 @@ function validatedPrice(price: Amount): Amount {
   if (price.minor < MIN_PRICE_MINOR || price.minor > MAX_PRICE_MINOR) {
     throw fault(
       ERROR_CODES.MALFORMED_OPERATION,
-      'subscribe.price is outside the 100–10000 credit/month band.',
+      'subscribe.price is outside the 100-10000 credit/month band.',
       {
         detail: {
           amount: encodeAmount(price),

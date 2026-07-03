@@ -35,7 +35,7 @@ import type { Handler, Operation } from '#src/contract.ts';
  * kind to `Operation` without registering a handler and the file fails to compile, rather than
  * throwing at runtime on the first submit of that kind.
  *
- * Most keys match the imported handler name. A few handlers are exported as `handle…`
+ * Most keys match the imported handler name. A few handlers are exported as `handle...`
  * (`handleClawback`, `handleSubscribe`, and `handleCancelSubscription`). Those are written as
  * `kind: handler` so the key stays the operation's kind.
  *

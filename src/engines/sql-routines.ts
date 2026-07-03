@@ -21,8 +21,8 @@ import type { Posting } from '#src/ports.ts';
 type Link = { account: AccountRef; prevHash: string; hash: string };
 
 /**
- * Selects which placeholder style the routines emit. Postgres uses `$1,$2,…` and MySQL uses
- * `?,?,…`.
+ * Selects which placeholder style the routines emit. Postgres uses `$1,$2,...` and MySQL uses
+ * `?,?,...`.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
  *   messaging} for the stored-routine boundary.
@@ -163,7 +163,7 @@ export function postEntryArgs(
   return { legs, links: linkRows, balances, newAccounts };
 }
 
-// Returns the kind of a user account (`usr_…:spendable|earned|promo`), or null for a platform
+// Returns the kind of a user account (`usr_...:spendable|earned|promo`), or null for a platform
 // account, which the schema seeds and this code never creates. Uses the same suffix rule as the
 // engines' account-ensure.
 function userAccountKind(

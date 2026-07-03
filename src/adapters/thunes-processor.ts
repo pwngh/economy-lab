@@ -34,7 +34,7 @@ import type { FetchLike } from '#src/adapters/processor.ts';
 // --- Recipient resolution ---------------------------------------------------------
 
 /**
- * The Thunes-specific routing for one payout, resolved from economy-lab's opaque `usr_…` token. The
+ * The Thunes-specific routing for one payout, resolved from economy-lab's opaque `usr_...` token. The
  * port carries only `userId`; Thunes needs the destination service (`payerId`) and the credit-party
  * details, which live in the host's beneficiary/KYC store, never in this adapter. The host supplies a
  * {@link ResolveRecipient} that maps a user id to this shape.

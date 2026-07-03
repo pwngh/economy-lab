@@ -1232,7 +1232,7 @@ function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
       return affected > 0;
     },
     // End a subscription because a renewal charge couldn't be funded (distinct from the user
-    // canceling). The UPDATE only applies while still active, so it moves active → lapsed exactly
+    // canceling). The UPDATE only applies while still active, so it moves active -> lapsed exactly
     // once; once lapsed it no longer matches the renewal job (active-only), so billing stops.
     markLapsed: async (id) => {
       await rows(

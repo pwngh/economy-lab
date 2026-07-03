@@ -43,7 +43,7 @@ const tag = `s${process.pid.toString(36)}`;
 
 const nowMs = (): number => performance.now();
 
-// Runs `op(k)` SEG×SEGMENTS times, printing ops/sec per SEG-sized segment. Flat column = O(1) per op
+// Runs `op(k)` SEG*SEGMENTS times, printing ops/sec per SEG-sized segment. Flat column = O(1) per op
 // in this subject's history; falling column = per-op cost grows with accumulated history.
 async function curve(
   name: string,
@@ -66,13 +66,13 @@ async function curve(
   const first = rates[0]!;
   const last = rates[rates.length - 1]!;
   console.warn(
-    `\n  ${name}: ops/sec per ${SEG}-op segment (history grows left→right)`,
+    `\n  ${name}: ops/sec per ${SEG}-op segment (history grows left->right)`,
   );
   console.warn(
     '    ' + rates.map((r) => String(Math.round(r)).padStart(7)).join(' '),
   );
   console.warn(
-    `    first ${Math.round(first).toLocaleString()} → last ${Math.round(last).toLocaleString()} ops/sec  (${(last / first).toFixed(2)}× — 1.00 is flat)`,
+    `    first ${Math.round(first).toLocaleString()} -> last ${Math.round(last).toLocaleString()} ops/sec  (${(last / first).toFixed(2)}* — 1.00 is flat)`,
   );
   return rates;
 }
@@ -125,7 +125,7 @@ async function payoutCurve(economy: Economy): Promise<void> {
 }
 
 console.warn(
-  `=== scale probe: ${SEGMENTS} segments × ${SEG} ops, Node ${process.version} ===`,
+  `=== scale probe: ${SEGMENTS} segments * ${SEG} ops, Node ${process.version} ===`,
 );
 
 // Set if any backend's prove gate fails, so the probe exits non-zero rather than reporting a

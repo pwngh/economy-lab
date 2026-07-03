@@ -22,7 +22,7 @@
  *
  * The in-memory backend is self-contained. SQL backends use the existing schema, so run
  * `make db-migrate` first. Setting DEMO_RESET=1 drops and recreates that schema, which DESTROYS all
- * data. It is a demo convenience (issue #20).
+ * data. It is a demo convenience.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy} for the
  * money flow this sample walks through.
@@ -179,7 +179,7 @@ console.warn(
 const r1 = await economy.submit(
   topUp({ userId: buyer, amount: credit('50.00'), source: 'card' }),
 );
-console.warn(`topUp 50.00 → buyer:            ${r1.status}`);
+console.warn(`topUp 50.00 -> buyer:            ${r1.status}`);
 
 // 2. Buyer spends 12.00 on a listing; price splits 60/40 between two creators, platform keeps its fee.
 const r2 = await economy.submit(
@@ -201,7 +201,7 @@ const r3 = await economy.submit(
   requestPayout({ userId: creatorA, amount: credit('5.00') }),
 );
 console.warn(
-  `requestPayout 5.00 ← creatorA:  ${r3.status}` +
+  `requestPayout 5.00 <- creatorA:  ${r3.status}` +
     (r3.status === 'rejected' ? ` (${r3.reason})` : ''),
 );
 

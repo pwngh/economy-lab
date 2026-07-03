@@ -389,7 +389,7 @@ async function proveAdapter(
     }
   }
   console.warn(
-    `prove [${adapter.name}]: ${seeds.length} seeds × ${length} ops — all ` +
+    `prove [${adapter.name}]: ${seeds.length} seeds * ${length} ops — all ` +
       `invariants hold.`,
   );
   return true;

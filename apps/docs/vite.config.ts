@@ -21,6 +21,7 @@ import rehypeSlug from 'rehype-slug';
 import remarkFrontmatter from 'remark-frontmatter';
 import remarkGfm from 'remark-gfm';
 import remarkMdxFrontmatter from 'remark-mdx-frontmatter';
+import remarkSmartypants from 'remark-smartypants';
 import { defineConfig } from 'vite';
 
 // The slice of the HTML AST (hast) this file walks. Declared locally so no @types/hast dependency is
@@ -85,7 +86,15 @@ export default defineConfig({
       // enforce:'pre' runs MDX->JSX before the React Router transform, which only understands JSX.
       enforce: 'pre',
       ...mdx({
-        remarkPlugins: [remarkFrontmatter, remarkMdxFrontmatter, remarkGfm],
+        remarkPlugins: [
+          remarkFrontmatter,
+          remarkMdxFrontmatter,
+          remarkGfm,
+          // Typography at build time: straight quotes and '...' in MDX body text render as curly
+          // quotes and ellipses, so source stays ASCII-greppable and the page ships real
+          // typography. Code spans and fences are untouched.
+          remarkSmartypants,
+        ],
         rehypePlugins: [
           // slug must run before autolink (the link needs an id to point at).
           rehypeSlug,
