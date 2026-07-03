@@ -81,6 +81,8 @@ create table legs (
 -- bigserial in commit order, so ordering by it gives FIFO without a sort. Leading account_id also covers
 -- plain account_id lookups, so this replaces a bare legs(account_id) index rather than adding to it.
 create index legs_account_idx on legs (account_id, id);
+-- Serves loads of a posting's legs by id: the chain recompute re-reads each stored posting's legs
+-- to re-derive its hash.
 create index legs_posting_idx on legs (posting_id);
 
 -- One hash-chain link per (posting, account): each posting advances an account's chain once, however
@@ -99,6 +101,8 @@ create table chain_links (
   -- The composite PK enforces the one-link-per-(posting,account) invariant stated above.
   primary key (posting_id, account_id)
 );
+-- Serves the per-account chain walk (lineage's `where account_id = ?`), which prove() runs for
+-- every account.
 create index chain_links_account_idx on chain_links (account_id);
 -- A previous-hash can be used only once per account, so two postings can't both attach at
 -- the same point and fork the chain into two branches. MySQL keys this same guard by a digest
@@ -329,6 +333,8 @@ create table trust_attempts (
   outcome         text   not null check (outcome in ('committed', 'rejected')),
   at              bigint not null
 );
+-- Serves the velocity window's per-subject sum (`where subject = ? and at >= ?`) inside every
+-- record-and-measure.
 create index trust_attempts_subject_at_idx on trust_attempts (subject, at);
 
 -- ============================================================================

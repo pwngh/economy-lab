@@ -38,6 +38,7 @@ DROP TRIGGER IF EXISTS account_balances_integrity_ins;
 DROP TRIGGER IF EXISTS account_balances_integrity_upd;
 
 DROP TABLE IF EXISTS schema_meta;
+
 DROP TABLE IF EXISTS seen_webhooks;
 
 DROP TABLE IF EXISTS checkpoints;
@@ -70,6 +71,8 @@ DROP TABLE IF EXISTS postings;
 
 DROP TABLE IF EXISTS accounts;
 
+-- accounts: every account money can post to; `currency` pins each to CREDIT or USD.
+-- Rationale documented in db/postgresql-schema.sql (accounts banner).
 CREATE TABLE accounts (
      id         VARCHAR(96)  PRIMARY KEY COMMENT 'Account id; platform:<name> or usr_<uuid>:<kind>.',
      kind       VARCHAR(16)  NOT NULL COMMENT 'One of spendable, earned, promo, system.',
@@ -92,6 +95,8 @@ INSERT INTO accounts (id, kind, currency) VALUES
      ('platform:revenue_usd',    'system', 'USD'),
      ('platform:opening_equity', 'system', 'CREDIT');
 
+-- postings: one committed transaction per row; its legs and chain links reference it.
+-- Rationale documented in db/postgresql-schema.sql (postings banner).
 CREATE TABLE postings (
      id         VARCHAR(64) PRIMARY KEY COMMENT 'Transaction id, like txn_<uuid>.',
      meta       JSON        NOT NULL COMMENT 'JSON metadata bag for the posting.',
@@ -100,6 +105,8 @@ CREATE TABLE postings (
      created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
    ) COMMENT='Append-only record of every posting; one balanced set of legs each.';
 
+-- legs: the signed debit/credit lines of each posting; `post_entry` is the sole writer.
+-- Rationale documented in db/postgresql-schema.sql (postings banner).
 CREATE TABLE legs (
      id         BIGINT       AUTO_INCREMENT PRIMARY KEY COMMENT 'Auto-increment leg id in commit order.',
      posting_id VARCHAR(64)  NOT NULL COMMENT 'Parent posting id; FK to postings.',
@@ -119,6 +126,8 @@ CREATE TABLE legs (
      KEY legs_posting_idx (posting_id)
    ) COMMENT='The signed debit/credit lines that make up each posting.';
 
+-- chain_links: one hash-chain link per (posting, account); the hash is computed in application
+-- code, never in SQL. Rationale/invariants documented in db/postgresql-schema.sql (chain_links banner).
 CREATE TABLE chain_links (
      posting_id VARCHAR(64) NOT NULL COMMENT 'Posting that advanced this account chain; FK to postings.',
      account_id VARCHAR(96) NOT NULL COMMENT 'Account whose hash chain this link extends; FK to accounts.',
@@ -177,6 +186,17 @@ CREATE TABLE idempotency (
      created_at  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
    ) COMMENT='Exactly-once guard recording each operation outcome by key.';
 
+-- seen_webhooks: exactly-once replay dedup for inbound provider callbacks, claimed as the last
+-- gate (after HMAC and freshness). Only PK presence is used, so a duplicate delivery finds the row
+-- and does no work. Rationale/invariants documented in db/postgresql-schema.sql (seen_webhooks
+-- banner). The metadata column name differs cosmetically (created_at here vs seen_at in PG).
+CREATE TABLE seen_webhooks (
+     event_id   VARCHAR(255) PRIMARY KEY COMMENT 'Provider stable event id; primary key for replay dedup.',
+     created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
+   ) COMMENT='Replay-dedup guard for inbound provider webhooks, by event id.';
+
+-- sales: one recorded sale per orderId, read back by refund to reverse exactly what posted.
+-- Rationale documented in db/postgresql-schema.sql (sales banner).
 CREATE TABLE sales (
      order_id     VARCHAR(64) PRIMARY KEY COMMENT 'Order id; primary key, distinct from idempotency key.',
      buyer_id     VARCHAR(64) NOT NULL COMMENT 'Account that paid for the purchase.',
@@ -232,13 +252,13 @@ CREATE TABLE payout_sagas (
      state              VARCHAR(16) NOT NULL COMMENT 'One of REQUESTED, RESERVED, SUBMITTED, SETTLED, FAILED.',
      provider_ref       VARCHAR(128) COMMENT 'Payout provider reference; null until submitted.',
      attempts           INT         NOT NULL DEFAULT 0 COMMENT 'Consecutive worker attempt count.',
-     due_at             BIGINT      NOT NULL COMMENT 'Epoch ms when the worker may next advance it.',
-     updated_at         BIGINT      NOT NULL COMMENT 'Epoch ms the row was last updated.',
      -- The payout's terminal outcome, stored on the saga (see db/postgresql-schema.sql). `reason` is
      -- the worker's failure reason (FAILED); `payout_usd` is the gross USD disbursed (SETTLED). Both
      -- null until the saga reaches its terminal state.
      reason             VARCHAR(255) COMMENT 'Failure reason set when dead-lettered; null otherwise.',
      payout_usd         BIGINT COMMENT 'Gross USD disbursed; null until SETTLED.',
+     due_at             BIGINT      NOT NULL COMMENT 'Epoch ms when the worker may next advance it.',
+     updated_at         BIGINT      NOT NULL COMMENT 'Epoch ms the row was last updated.',
      CHECK (reserve > 0),
      CHECK (state IN ('REQUESTED', 'RESERVED', 'SUBMITTED', 'SETTLED', 'FAILED')),
      KEY payout_sagas_due_idx (state, due_at),
@@ -262,6 +282,8 @@ CREATE TABLE promo_grants (
      KEY promo_grants_due_idx (reversed, expires_at)
    ) COMMENT='Promotional credit grants with their expiry and reversal state.';
 
+-- entitlements: ownership records by (user, sku); no money moves through this table.
+-- Rationale documented in db/postgresql-schema.sql (entitlements banner).
 CREATE TABLE entitlements (
      user_id    VARCHAR(64) NOT NULL COMMENT 'Owner of the entitlement; part of primary key.',
      sku        VARCHAR(64) NOT NULL COMMENT 'SKU the user owns; part of primary key.',
@@ -299,6 +321,8 @@ CREATE TABLE subscriptions (
      KEY subscriptions_user_sku_seller_idx (user_id, sku, seller_id)
    ) COMMENT='Recurring charges: one row per subscription and its billing state.';
 
+-- trust_attempts: one row per velocity attempt, summed over a rolling per-subject window.
+-- Rationale documented in db/postgresql-schema.sql (trust_attempts banner).
 CREATE TABLE trust_attempts (
      idempotency_key VARCHAR(255) PRIMARY KEY COMMENT 'Attempt idempotency key; primary key, dedupes retries.',
      subject         VARCHAR(64)  NOT NULL COMMENT 'Identity whose spend velocity is summed.',
@@ -321,14 +345,6 @@ CREATE TABLE checkpoints (
      created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
    ) COMMENT='Signed Merkle checkpoints over the per-account hash chains.';
 
--- seen_webhooks: exactly-once replay dedup for inbound provider callbacks, claimed as the last
--- gate (after HMAC and freshness). Only PK presence is used, so a duplicate delivery finds the row
--- and does no work. Rationale/invariants documented in db/postgresql-schema.sql (seen_webhooks
--- banner). The metadata column name differs cosmetically (created_at here vs seen_at in PG).
-CREATE TABLE seen_webhooks (
-     event_id   VARCHAR(255) PRIMARY KEY COMMENT 'Provider stable event id; primary key for replay dedup.',
-     created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
-   ) COMMENT='Replay-dedup guard for inbound provider webhooks, by event id.';
 
 -- ============================================================================
 -- Stored routines (MySQL), counterpart to the Postgres routines in db/postgresql-schema.sql. The
@@ -521,7 +537,9 @@ END$$
 
 DELIMITER ;
 
--- Pre-plant an empty balance row (balance 0, genesis head_hash) for each system account. It reads
+-- Pre-plant an empty balance row (balance 0, genesis head_hash) for each system account. This sits
+-- after the routines (unlike the Postgres seed beside its table) so the integrity triggers exist and
+-- fire on — and pass — these genesis rows. It reads
 -- identically to no row (headsForAccounts treats a missing row as genesis); its only job is to exist
 -- so lockAccounts can take `FOR UPDATE` on it. Without it, the first concurrent writers to a hot shared
 -- account (STORED_VALUE, touched by every top-up) find no row to lock, so none wait and they race to
