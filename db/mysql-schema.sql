@@ -159,7 +159,9 @@ CREATE TABLE account_balances (
      -- Chain-head pointer (hash of the latest chain_links row), written with the balance by post_entry
      -- so headsForAccounts reads each head by primary key instead of scanning and sorting. A projection
      -- under the same trust model; defaults to the genesis hash (64 zeros). See db/postgresql-schema.sql.
-     head_hash  CHAR(64)    NOT NULL DEFAULT '0000000000000000000000000000000000000000000000000000000000000000' COMMENT 'Hash of this account''s latest chain_links row; defaults to genesis zeros.',
+     head_hash  CHAR(64)    NOT NULL
+       DEFAULT '0000000000000000000000000000000000000000000000000000000000000000'
+       COMMENT 'Hash of this account''s latest chain_links row; defaults to genesis zeros.',
      CHECK (currency IN ('CREDIT', 'USD')),
      CHECK (account_id LIKE 'platform:%' OR balance >= 0),
      CONSTRAINT account_balances_account_fk FOREIGN KEY (account_id) REFERENCES accounts (id)
@@ -169,7 +171,9 @@ CREATE TABLE account_balances (
 -- db/postgresql-schema.sql (idempotency banner).
 CREATE TABLE idempotency (
      `key`     VARCHAR(255) PRIMARY KEY COMMENT 'Idempotency key; PK that blocks duplicate request execution.',
-     transaction JSON        NULL COMMENT 'Recorded result, replayed verbatim on a duplicate request.',  -- The recorded result, replayed verbatim on a duplicate. It is NULL while a row is claimed but not yet recorded. Claim inserts a NULL placeholder to hold the row lock, then record fills it in.
+     -- NULL while a row is claimed but not yet recorded: claim inserts a NULL placeholder to hold
+     -- the row lock, then record fills it in.
+     transaction JSON        NULL COMMENT 'Recorded result, replayed verbatim on a duplicate request.',
      created_at  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
    ) COMMENT='Exactly-once guard recording each operation outcome by key.';
 
@@ -238,7 +242,7 @@ CREATE TABLE payout_sagas (
      CHECK (reserve > 0),
      CHECK (state IN ('REQUESTED', 'RESERVED', 'SUBMITTED', 'SETTLED', 'FAILED')),
      KEY payout_sagas_due_idx (state, due_at),
-     -- requestPayout's min-interval gate reads MAX(updated_at) for one user across all their sagas,
+     -- requestPayout's min-interval gate reads MAX(updated_at) for one user across all their sagas;
      -- without this it scans every saga that user has ever had, so the check's cost grows with their
      -- payout history on each new request.
      KEY payout_sagas_user_updated_idx (user_id, updated_at)
@@ -289,7 +293,7 @@ CREATE TABLE subscriptions (
      CHECK (period_ms > 0),
      CHECK (state IN ('ACTIVE', 'LAPSED', 'CANCELED')),
      KEY subscriptions_due_idx (state, next_due_at),
-     -- subscribe's activeFor lookup filters by (user_id, sku, seller_id) to find the one ACTIVE row,
+     -- subscribe's activeFor lookup filters by (user_id, sku, seller_id) to find the one ACTIVE row;
      -- without this it scans every subscription a user holds, so the duplicate-guard's cost grows with
      -- their subscription count on each new subscribe.
      KEY subscriptions_user_sku_seller_idx (user_id, sku, seller_id)
@@ -528,5 +532,7 @@ INSERT INTO account_balances (account_id, currency, balance, head_hash)
 
 -- Schema version stamp. The engine reads this on startup and refuses to run if it does not match
 -- SCHEMA_VERSION in src/schema.ts. Keep the value in lockstep with the Postgres schema and src/schema.ts.
-CREATE TABLE schema_meta (version VARCHAR(32) NOT NULL COMMENT 'Schema version stamp; must match SCHEMA_VERSION at startup.') COMMENT='Single-row schema version stamp, checked at startup.';
+CREATE TABLE schema_meta (
+     version VARCHAR(32) NOT NULL COMMENT 'Schema version stamp; must match SCHEMA_VERSION at startup.'
+   ) COMMENT='Single-row schema version stamp, checked at startup.';
 INSERT INTO schema_meta (version) VALUES ('8');

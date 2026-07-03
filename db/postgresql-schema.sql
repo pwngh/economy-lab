@@ -143,7 +143,10 @@ insert into account_balances (account_id, currency, balance, head_hash)
 -- ============================================================================
 create table idempotency (
   key         text        primary key,
-  transaction jsonb       not null,                         -- the recorded result, replayed verbatim on a duplicate; NOT NULL because PG claims via an advisory lock (pg_advisory_xact_lock), so the row is only ever written with a result, never a placeholder
+  -- The recorded result, replayed verbatim on a duplicate. NOT NULL because PG claims via an
+  -- advisory lock (pg_advisory_xact_lock), so the row is only ever written with a result, never a
+  -- placeholder.
+  transaction jsonb       not null,
   created_at  timestamptz not null default now()
 );
 
