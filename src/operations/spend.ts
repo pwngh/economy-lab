@@ -319,7 +319,7 @@ function entitlementRecipient(
 //   - `orderId` must be non-blank; it's the unique key for DUPLICATE_ORDER protection, and a blank
 //     one would make two different purchases look like one order.
 //   - No two recipients may name the same `sellerId`: a duplicate double-counts in the share math.
-//   - No recipient may be a house/system account: earnings are credited to a cash-outable EARNED
+//   - No recipient may be a house/system account: earnings are credited to a payable EARNED
 //     balance, which only a real user wallet may receive. (Self-dealing/share-bounds checked separately.)
 function assertSpendShape(
   operation: Extract<Operation, { kind: 'spend' }>,
@@ -359,7 +359,7 @@ function assertSpendShape(
     }
     seen.add(recipient.sellerId);
 
-    // A recipient is paid into its EARNED (cash-outable) balance, so its sellerId must resolve to a
+    // A recipient is paid into its EARNED (payable) balance, so its sellerId must resolve to a
     // real user wallet. A house/system account (e.g. `platform:revenue`) isn't a wallet owner; routing
     // earnings there would credit a platform account as if it were a seller.
     const account = earned(recipient.sellerId);
@@ -420,10 +420,10 @@ function assertShares(operation: Extract<Operation, { kind: 'spend' }>): void {
 }
 
 // Refuse a spend where the buyer names themselves as a recipient. A spend pays each recipient's
-// earned (cash-outable) balance out of platform REVENUE for the promo-funded part and out of the
+// earned (payable) balance out of platform REVENUE for the promo-funded part and out of the
 // buyer's payment for the spendable part. If the buyer is also a recipient, they convert their own
-// non-cashable spendable/promo credit into cash-outable EARNED credit, laundering grant/top-up
-// balance into cash-outable money funded by the house. Buyer and seller must be different parties,
+// non-payable spendable/promo credit into payable EARNED credit, laundering grant/top-up
+// balance into payable money funded by the house. Buyer and seller must be different parties,
 // so this is a malformed request thrown as a fault.
 function assertNoSelfDealing(
   operation: Extract<Operation, { kind: 'spend' }>,

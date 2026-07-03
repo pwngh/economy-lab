@@ -143,7 +143,7 @@ A malformed request throws instead:
 The handler enforces these before it posts anything:
 
 - **The buyer is not the seller.** `userId` must differ from `sellerId`; a self-subscription
-  would turn the buyer's own promo credit into cashable earnings.
+  would turn the buyer's own promo credit into payable earnings.
 - **No active duplicate.** At most one `ACTIVE` subscription exists per
   `(userId, sku, sellerId)`.
 - **Funds cover the spendable share.** The pre-check declines a short balance with

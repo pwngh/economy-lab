@@ -24,10 +24,10 @@ import type { Economy } from '#src/contract.ts';
 
 // Drives the spend handler's two input guards through the full public economy.submit path. This
 // mirrors how entitlements.submit.test.ts exercises the authorization layer, whereas spend.test.ts
-// calls the handler directly. Both guards protect one invariant: a spend can never mint cash-outable
+// calls the handler directly. Both guards protect one invariant: a spend can never mint payable
 // earned credit out of nothing.
-//   1. Self-dealing. A buyer who names themselves as a recipient would turn their non-cashable
-//      spendable or promo balance into cashable earned credit funded by platform revenue.
+//   1. Self-dealing. A buyer who names themselves as a recipient would turn their non-payable
+//      spendable or promo balance into payable earned credit funded by platform revenue.
 //   2. Per-recipient bounds. Shares like [-5000, 15000] sum to 10000 but assign one recipient a
 //      negative cut and another more than the whole net. Each share must be strictly positive and
 //      at most 10000 bps.
@@ -58,8 +58,8 @@ describe('Spend Input Guards Through economy.submit', () => {
           buyerId: 'usr_buyer',
           sku: 'wrld_pass',
           price: credit('4.00'),
-          // Naming the buyer as sole recipient would mint cash-outable earned credit from their
-          // own non-cashable balance.
+          // Naming the buyer as sole recipient would mint payable earned credit from their
+          // own non-payable balance.
           recipients: [{ sellerId: 'usr_buyer', shareBps: 10_000 }],
         }),
       ),

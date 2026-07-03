@@ -115,7 +115,7 @@ describe('Accounts: Lock Sets & Wallet Classification', () => {
   });
 
   test('treats every user account as a wallet and house accounts as not', () => {
-    // isWalletAccount flags an instantly-cashable destination, which matters for money-laundering
+    // isWalletAccount flags an instantly-spendable destination, which matters for money-laundering
     // checks. A user's own account (`usr_…:<kind>`) is a wallet. Every `platform:` house account is not.
     assert.equal(isWalletAccount(spendable('usr_a')), true);
     assert.equal(isWalletAccount(earned('usr_a')), true);

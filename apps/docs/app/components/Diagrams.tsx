@@ -576,8 +576,8 @@ export function CreditMaturity() {
   return (
     <Diagram
       viewBox="0 0 760 262"
-      label="Credit maturity. An account's funds are dated lots, oldest on the left. Past spends drained the two oldest lots, because spends draw oldest-first. The five newest lots are the live balance, the FIFO tail. A maturity horizon falls inside that tail: the three lots older than the horizon have matured and are cashable now; the two newest are still in their settlement wait. Cashable balance is the matured part of the tail."
-      caption="Spends drain oldest-first, so the live balance is the newest run of lots. The cashable part is only the lots within that run that have passed their maturity horizon (now minus the settlement wait) — the tail read sums them newest-first and stops once it covers the balance."
+      label="Credit maturity. An account's funds are dated lots, oldest on the left. Past spends drained the two oldest lots, because spends draw oldest-first. The five newest lots are the live balance, the FIFO tail. A maturity horizon falls inside that tail: the three lots older than the horizon have matured; the two newest are still in their settlement wait. The matured balance is the cleared part of the tail."
+      caption="Spends drain oldest-first, so the live balance is the newest run of lots. The matured part is only the lots within that run that have passed their maturity horizon (now minus the settlement wait) — the tail read sums them newest-first and stops once it covers the balance."
     >
       <ArrowDefs />
 
@@ -606,14 +606,14 @@ export function CreditMaturity() {
       <Pill x={xs[5]} y={116} w={w} h={42} name="t6" />
       <Pill x={xs[6]} y={116} w={w} h={42} name="t7" />
 
-      {/* cashable bracket under the matured lots */}
+      {/* matured bracket under the cleared lots */}
       <path
         className="d-edge"
         d={`M${xs[2]},166 L${xs[2]},176 L${xs[4] + w},176 L${xs[4] + w},166`}
         fill="none"
       />
       <text className="d-name" x={(xs[2] + xs[4] + w) / 2} y={196} textAnchor="middle">
-        cashable now — matured
+        matured — spendable and payable
       </text>
 
       <text className="d-sub" x={xs[0]} y={196} textAnchor="start">

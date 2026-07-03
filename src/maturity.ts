@@ -26,7 +26,7 @@ export type MaturityOptions = { config: Config; signal?: AbortSignal };
 
 /**
  * Carries {@link maturedAtLeast}'s options. It extends {@link MaturityOptions} with the `amount` the
- * cashable balance must reach. The `amount` rides in the options object rather than as its own
+ * matured balance must reach. The `amount` rides in the options object rather than as its own
  * argument so the call stays parallel to {@link maturedBalance}'s `(ledger, account, now, options)`
  * and under the param-count limit. A caller that already has the balance can pass it as `live` to avoid
  * re-reading it; the spend handler does, with the balance read under the lock.
@@ -57,7 +57,7 @@ export function maturityHorizonMs(source: string, config: Config): number {
 }
 
 /**
- * Returns the moment in epoch milliseconds a lot becomes cashable, which is the top-up time plus the
+ * Returns the moment in epoch milliseconds a lot matures, which is the top-up time plus the
  * source's required wait. A lot is one batch of credits from a single top-up, tagged with when it
  * was added and its funding source. The wait is computed here from `source` rather than read from
  * the lot's own `maturesAt`, because a top-up may record the source without a maturity time.
@@ -69,7 +69,7 @@ export function lotMaturesAt(lot: Lot, config: Config): number {
 }
 
 /**
- * Reports whether a lot is cashable as of `now`. The boundary is inclusive, so the lot is cashable
+ * Reports whether a lot has matured as of `now`. The boundary is inclusive, so the lot is matured
  * the moment its wait elapses.
  */
 export function isMatured(lot: Lot, now: number, config: Config): boolean {
@@ -83,7 +83,7 @@ export function isMatured(lot: Lot, now: number, config: Config): boolean {
 const TAIL_PAGE = 64;
 
 /**
- * Returns the cashable part of an account's balance as of `now`: how much a cash-out may draw
+ * Returns the matured part of an account's balance as of `now`: how much a cash-out may draw
  * without dipping into funds still in their settlement wait. It reads the newest-first FIFO tail and
  * stops the instant the lots cover the live balance, so it never scans the already-spent history.
  * {@link maturedBalanceFullScan} keeps the naive O(account history) version for the differential
@@ -91,7 +91,7 @@ const TAIL_PAGE = 64;
  * alike.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/ Credit maturity}
- * for the dated-lot model, the FIFO tail, and why only the matured run is cashable.
+ * for the dated-lot model, the FIFO tail, and why only the matured run may be drawn.
  */
 export async function maturedBalance(
   ledger: Ledger,
@@ -140,7 +140,7 @@ export async function maturedBalance(
 }
 
 /**
- * Reports whether an account has at least `amount` of cashable balance as of `now`, short-circuiting
+ * Reports whether an account has at least `amount` of matured balance as of `now`, short-circuiting
  * once the matured running sum reaches `amount`. Equals `maturedBalance(...).minor >= amount.minor`
  * but stops early, so a request well within cleared funds costs O(amount-worth-of-lots). A
  * non-positive `amount` is trivially covered.
@@ -197,7 +197,7 @@ export async function maturedAtLeast(
 }
 
 /**
- * Computes the cashable balance by scanning the full history. This is the original implementation,
+ * Computes the matured balance by scanning the full history. This is the original implementation,
  * kept verbatim as the oracle the differential test checks the bounded {@link maturedBalance}
  * against. It reads every lot oldest-first, derives the spent amount from the total, keeps the FIFO
  * tail, then sums the matured ones. It is correct but O(account history), which is the very cost the
@@ -221,7 +221,7 @@ export async function maturedBalanceFullScan(
 }
 
 /**
- * Returns the part of an account's balance still in its settlement wait as of `now`. The cashable
+ * Returns the part of an account's balance still in its settlement wait as of `now`. The matured
  * and still-waiting amounts sum to the current balance.
  */
 export async function immatureBalance(
@@ -285,7 +285,7 @@ function fifoTail(
   return tail;
 }
 
-// Adds up the remaining lots whose wait has elapsed by `now` to get the cashable balance.
+// Adds up the remaining lots whose wait has elapsed by `now` to get the matured balance.
 function sumMatured(
   tail: ReadonlyArray<Settled>,
   now: number,

@@ -254,7 +254,7 @@ describe('maturedBalance FIFO Consumption', () => {
     const options: MaturityOptions = { config: horizonConfig() };
 
     // At day 3 the crypto lot would have matured, but the spend already consumed it; the
-    // remaining card lot doesn't mature until day 9, so nothing is cashable yet.
+    // remaining card lot doesn't mature until day 9, so nothing is matured yet.
     const matured = await maturedBalance(
       store.ledger,
       spendable('usr_a'),

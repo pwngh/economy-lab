@@ -84,7 +84,7 @@ async function rejectsInsufficientFundsCleanly(): Promise<void> {
 }
 
 // A buyer may not subscribe to themselves. When userId equals sellerId, the charge would draw
-// the buyer's non-cashable spendable and credit it back as cash-outable EARNED, with the
+// the buyer's non-payable spendable and credit it back as payable EARNED, with the
 // platform's REVENUE funding the difference. That drains the treasury. The handler throws
 // OP.MALFORMED through economy.submit, a thrown error rather than a rejected outcome, and no
 // money moves.

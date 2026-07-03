@@ -117,9 +117,9 @@ export async function handleSubscribe(
 // --- Validation -------------------------------------------------------------------
 
 // Rejects a buyer who tries to subscribe to themselves. When `userId` equals `sellerId`, the
-// charge draws the buyer's non-cashable balances (promo and non-payable spendable) and credits
-// them back as EARNED, which is cash-outable and funded by platform REVENUE. That would turn
-// gift and promo grants into cash-outable cash and drain the treasury, so this is malformed
+// charge draws the buyer's non-payable balances (promo and spendable) and credits
+// them back as EARNED, which is payable and funded by platform REVENUE. That would turn
+// gift and promo grants into payable money and drain the treasury, so this is malformed
 // rather than a business "no". Throw a fault.
 function rejectSelfSubscription(
   operation: Extract<Operation, { kind: 'subscribe' }>,
