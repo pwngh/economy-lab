@@ -11,6 +11,7 @@
 
 import type { Route } from './+types/actions.record';
 import { getEconomy } from '~/economy.server';
+import { humanReason } from '~/views.server';
 
 // Plain-English text for a rejection code. A rejection is the engine declining a valid request for
 // a business reason (immature funds, below minimum); it comes back as data, not a thrown fault.
@@ -23,8 +24,16 @@ const REJECTION_TEXT: Record<string, string> = {
   DUPLICATE_ORDER: 'That order has already been recorded.',
 };
 function rejectionText(code: string): string {
-  return REJECTION_TEXT[code] ?? `Declined: ${code}.`;
+  return REJECTION_TEXT[code] ?? `Declined: ${humanReason(code)}.`;
 }
+
+// Human noun for each record type, for the success notice ("Recorded payout request.").
+const TYPE_LABEL: Record<string, string> = {
+  deposit: 'deposit',
+  promo: 'promo grant',
+  payout: 'payout request',
+  purchase: 'purchase',
+};
 
 // The record action: submit one operation through the engine. A rejection renders as an inline
 // notice; a thrown fault (malformed input) is caught and returned the same way.
@@ -68,7 +77,7 @@ export async function action({ request }: Route.ActionArgs) {
     if (outcome.status === 'rejected') {
       return { error: rejectionText(outcome.reason) };
     }
-    return { note: `Recorded ${type}.`, ok: true };
+    return { note: `Recorded ${TYPE_LABEL[type] ?? type}.`, ok: true };
   } catch (err) {
     return {
       error: err instanceof Error ? err.message : 'The operation failed.',

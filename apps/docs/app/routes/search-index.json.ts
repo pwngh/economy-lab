@@ -15,9 +15,9 @@ import { SECTION_LABEL } from '~/nav.ts';
 /**
  * Resource-route loader emitting the client search index as JSON, prerendered to a static file. Built
  * from the same content collection the pages render from, so it can never list a page that does not
- * exist. The client `search.js` fetches this once on first use. Today it carries title/summary/slug
- * (full-text isn't useful while bodies are scaffolds); when content lands this can grow to index body
- * text, or be swapped for a build-time full-text indexer.
+ * exist. The client `search.js` fetches this once on first use. It carries title/summary/slug only;
+ * body text is not indexed, so growing it into a full-text index (or a build-time indexer) is the
+ * natural next step.
  */
 export function loader() {
   const index = docs.map((d) => ({

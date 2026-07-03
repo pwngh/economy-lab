@@ -190,10 +190,9 @@ async function build(): Promise<ConsoleEngine> {
 
   // Memoized solvency snapshot. solvency() sums a balance across every user and runs a full
   // prove(), so it's the most expensive read — and _chrome.tsx calls it on *every* page
-  // navigation. We compute it at most once per short TTL and clear it whenever the economy
+  // navigation. It is computed at most once per short TTL and cleared whenever the economy
   // mutates (any submit, worker run, time advance, reset/clear), so the figure stays exact while
-  // costing O(1) on the common navigation path. Without this, every click paid for a full ledger
-  // scan plus 3·N balance reads.
+  // costing O(1) on the common navigation path.
   let solvencyCache: { at: number; value: SolvencyView } | null = null;
   const SOLVENCY_TTL_MS = 5_000;
   function invalidateSolvency(): void {
@@ -348,11 +347,10 @@ async function build(): Promise<ConsoleEngine> {
     };
 
     // User operations, read back from their own posting (kind in meta) the same way worker postings
-    // are. The console's submit path no longer records into a side feed — the engine's posting log is
-    // the one source — so these render straight from legs + meta, like everything else. The display
-    // figures the old in-memory feed carried (a listing name, friendly buyer/seller labels) aren't on
-    // the immutable posting, so each derives what the legs imply: the user the operation concerns, and
-    // a generic listing line. A direct-to-DB posting (e.g. the bench's) now shows up here too.
+    // are. The engine's posting log is the one source, so these render straight from legs + meta,
+    // like everything else — including a direct-to-DB posting (e.g. the bench's). Display niceties
+    // that aren't on the immutable posting (a listing name, friendly buyer/seller labels) are
+    // derived from what the legs imply: the user the operation concerns, and a generic listing line.
     if (metaKind === 'topUp') {
       return {
         ...base,
@@ -615,11 +613,11 @@ async function build(): Promise<ConsoleEngine> {
         expiresAt: clock.now() + 30 * 24 * 60 * 60_000,
       } as Operation),
 
-    // One bounded page of user wallets, ordered by user id so paging is stable across requests
-    // (the previous sort-by-total forced reading *every* user's three balances just to order
-    // them). We enumerate user ids — itself a bounded scan of the account list, no balance reads —
-    // sort that id list for a deterministic page window, then read the three balances only for the
-    // `limit` users on the page. Per-page DB work is O(limit), independent of the user count.
+    // One bounded page of user wallets, ordered by user id so paging is stable across requests.
+    // Ordering by id needs no balance reads (a sort by total would read every user's three
+    // balances just to order them): enumerate user ids, sort that list for a deterministic page
+    // window, then read the three balances only for the `limit` users on the page. Per-page DB
+    // work is O(limit), independent of the user count.
     wallets: async (req) => {
       const { offset, limit } = clampPage(req);
       const ids = (await userIds()).sort();
@@ -700,8 +698,7 @@ async function build(): Promise<ConsoleEngine> {
           attempts: saga.attempts,
           dueAt: saga.dueAt,
           // The failure reason is a raw code on the saga; humanize it the way the feed does. USD is
-          // a USD Amount, rendered to dollars with toCredits (minor-units / scale), like the cash
-          // leg's figure that used to feed this caption.
+          // a USD Amount, rendered to dollars with toCredits (minor-units / scale).
           reason: saga.reason === null ? null : humanReason(saga.reason),
           payoutUsd: saga.payoutUsd === null ? null : toCredits(saga.payoutUsd),
         });
@@ -711,8 +708,8 @@ async function build(): Promise<ConsoleEngine> {
 
     // Per-state payout tallies, counted in a single streaming pass over the saga list. REQUESTED
     // folds into RESERVED to match the board's columns (requestPayout opens directly in RESERVED).
-    // This streams every saga but holds only four integers, never an array of sagas — so the board
-    // can show accurate column counts without the unbounded materialization the old payouts() did.
+    // This streams every saga but holds only four integers, never an array of sagas, so the board
+    // shows accurate column counts without materializing the whole list.
     payoutCounts: async () => {
       const counts: PayoutCounts = {
         RESERVED: 0,
@@ -883,7 +880,7 @@ async function build(): Promise<ConsoleEngine> {
           notes.push(`${name} ${acted}`);
         }
       }
-      return notes.length ? notes.join(' · ') : 'No due items';
+      return notes.length ? notes.join(' · ') : 'no due items';
     },
   };
 

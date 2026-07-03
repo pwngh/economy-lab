@@ -19,7 +19,6 @@
   --link-hover: #0a5d65;
   --accent: #0e7c86;
   --accent-weak: #dceef0;
-  --tag-text: #0a6a73;
   --code-bg: #f2f2ee;
   --warn-bg: #fbf3d0;
   --warn-text: #7a5a0a;
@@ -38,7 +37,6 @@
   --radius: 6px;
   --measure: 70ch;
   --prose-wide: 56rem;
-  --content: 46rem;
   --wide: 78rem;
   --sidebar: 16rem;
   --space-1: 0.25rem;
@@ -64,7 +62,6 @@ html[data-theme="dark"] {
   --link-hover: #8fe0ea;
   --accent: #43c0cd;
   --accent-weak: #1f3a3e;
-  --tag-text: #5fd0dd;
   --code-bg: #1c1f26;
   --warn-bg: #3a3617;
   --warn-text: #e3cf86;
@@ -500,13 +497,6 @@ a[target="_blank"]:not(.icon-link)::after {
 .figure {
   margin: var(--space-5) 0;
   text-align: center;
-}
-.figure img {
-  max-width: 100%;
-  height: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
 }
 .figure figcaption {
   margin-top: var(--space-2);

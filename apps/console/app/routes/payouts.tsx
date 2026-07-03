@@ -11,7 +11,11 @@
 
 import type { Route } from './+types/payouts';
 import { getEconomy, PAGE_SIZE } from '~/economy.server';
-import { Credits, Pager, StatusPill, dayLabel, pageOffset } from '~/ui';
+import { Credits, Pager, StatusPill, dayLabel, fmtAmount, pageOffset } from '~/ui';
+
+export function meta(_: Route.MetaArgs) {
+  return [{ title: 'Payouts — Economy Console' }];
+}
 
 export async function loader({ request }: Route.LoaderArgs) {
   const eco = await getEconomy();
@@ -81,7 +85,11 @@ export default function Payouts({ loaderData }: Route.ComponentProps) {
           const items = byState(col.state);
           const colTotal = countFor(col.state);
           return (
-            <div className="kanban-col" key={col.state}>
+            <div
+              className="kanban-col"
+              data-state={col.state.toLowerCase()}
+              key={col.state}
+            >
               <div className="kanban-head">
                 <span>{col.title}</span>
                 <StatusPill tone={col.tone}>{colTotal}</StatusPill>
@@ -134,7 +142,7 @@ function Card({ p, cap }: { p: PayoutView; cap: number }) {
         </span>
         {p.state === 'SETTLED' && p.payoutUsd !== null ? (
           <span>
-            paid <b>${p.payoutUsd.toFixed(2)}</b>
+            paid <b>${fmtAmount(p.payoutUsd)}</b>
           </span>
         ) : null}
         {failed ? <span>reserve returned to seller</span> : null}

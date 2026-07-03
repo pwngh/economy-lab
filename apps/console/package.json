@@ -2,7 +2,8 @@
   "name": "economy-console-app",
   "private": true,
   "type": "module",
-  "description": "Economy Console",
+  "description": "Demo admin console for economy-lab: accounts, ledger, payouts, and integrity, driven by the live engine.",
+  "license": "MIT",
   "scripts": {
     "dev": "react-router dev",
     "build": "react-router build",

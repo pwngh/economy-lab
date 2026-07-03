@@ -1,5 +1,10 @@
 # Economy Console
 
+A demo admin UI for [economy-lab](../../README.md), driven by the live engine: browse accounts and
+the double-entry ledger, watch payouts move through their saga, and check solvency on the Integrity
+page. The collapsible Simulation panel at the foot of every page advances time, runs the background
+jobs, and toggles a payment-provider outage; it seeds demo data on first run.
+
 ## Run it
 
 ```bash

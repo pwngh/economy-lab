@@ -42,24 +42,20 @@ const THEME_TOGGLE = `document.addEventListener('click',function(e){var b=e.targ
 
 /**
  * Keep the sidebar's active item in view. Each page is its own document (no client router), so the
- * sidebar reloads at scroll 0 every navigation. Rather than save/restore a scroll position — which is
- * non-deterministic once prerendering and view transitions are in play, and was making the sidebar
- * jump around — this is stateless and deterministic: scroll the sidebar only if the current page's
- * link (the [aria-current] item) is not already visible, positioning it a third from the top. It runs
- * before paint (this <script> sits right after the sidebar), so there is no visible movement, and the
- * result depends only on which page you are on — so it cannot jump randomly. Navigating between items
- * that are both already visible moves nothing at all.
+ * sidebar reloads at scroll 0 every navigation. The scroll depends only on which page you are on:
+ * if the current page's link (the [aria-current] item) is already visible, nothing moves;
+ * otherwise the sidebar scrolls to place it a third from the top. It runs before paint (this
+ * <script> sits right after the sidebar), so there is no visible movement.
  */
 const SIDEBAR_REVEAL = `(function(){var sb=document.querySelector('.site-sidebar');if(!sb)return;var c=sb.querySelector('[aria-current="page"]');if(!c)return;var sr=sb.getBoundingClientRect(),cr=c.getBoundingClientRect();if(cr.top<sr.top||cr.bottom>sr.bottom){sb.scrollTop+=cr.top-sr.top-sb.clientHeight/3;}})();`;
 
 /**
- * Speculate on intent — declaratively, no executable JS we wrote. A Speculation Rules document rule
- * that prerenders (not just prefetches) any same-origin /economy/* link on hover/focus ("moderate"
- * eagerness): the browser renders the next page fully in the background, so a click activates it
- * instantly. `not selector_matches "[aria-current]"` excludes the link to the page you're already on
- * (the active sidebar/nav item), so the current page is never re-speculated. JSON the browser reads,
- * not a script we run — the page still ships zero executable JS. Chromium-only and ignored elsewhere,
- * so it degrades to plain navigation. Allowed by the CSP `'inline-speculation-rules'` source.
+ * Speculation Rules document rule that prerenders (not just prefetches) any same-origin /economy/*
+ * link on hover/focus ("moderate" eagerness): the browser renders the next page fully in the
+ * background, so a click activates it instantly. `not selector_matches "[aria-current]"` excludes
+ * the link to the page you're already on. It is declarative JSON, so the page still ships zero
+ * executable JS. Chromium-only and ignored elsewhere, so it degrades to plain navigation. Allowed
+ * by the CSP `'inline-speculation-rules'` source.
  */
 const SPECULATION_RULES = `{"prerender":[{"source":"document","where":{"and":[{"href_matches":"/economy/*"},{"not":{"selector_matches":"[aria-current]"}}]},"eagerness":"moderate"}]}`;
 

@@ -231,13 +231,6 @@ input[type='number'] {
   color: var(--ink-2);
   max-width: 74ch;
 }
-.toolbar {
-  display: flex;
-  gap: var(--s3);
-  align-items: center;
-  margin-bottom: var(--s5);
-  flex-wrap: wrap;
-}
 
 /* --- Cards and grids. A card is a plain white panel set off by a hairline — no drop shadow,
    no heavy rounding. Sections lean on rules and whitespace before they reach for a box. --- */
@@ -423,25 +416,6 @@ input[type='number'] {
   white-space: nowrap;
 }
 
-/* A small dot that color-codes a credit type beside its number. */
-.swatch {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  margin-right: 7px;
-  vertical-align: middle;
-}
-.swatch.purchased {
-  background: var(--accent);
-}
-.swatch.earned {
-  background: var(--pos);
-}
-.swatch.promo {
-  background: var(--warn);
-}
-
 /* --- Tags (formerly "pills"): a small uppercase label in mono, set off by a thin rule and a
    status color carried by the text — not a filled, rounded badge. --- */
 .pill {
@@ -547,10 +521,6 @@ select:focus {
   font-size: var(--t-sm);
   color: var(--ink-2);
   font-weight: 500;
-}
-.field .hint {
-  font-size: var(--t-xs);
-  color: var(--ink-3);
 }
 
 /* --- Notices: an inline message, set off by a left rule in the status color over a faint
@@ -751,9 +721,9 @@ select:focus {
   font-family: var(--mono);
   font-size: var(--t-xs);
   color: var(--ink-3);
-  /* The id is one long unbreakable token (pay_<uuid>); keep it to a single line and ellipsize
-     rather than letting it wrap mid-token or push the card wider than its grid column. Full id is on
-     hover (title attribute). Same treatment for the provider ref in .kc-meta below. */
+  /* The id is one unbreakable token; keep it to a single line and ellipsize rather than letting
+     it wrap mid-token or push the card wider than its grid column. Full id is on hover (title
+     attribute). Same treatment for the provider ref in .kc-meta below. */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

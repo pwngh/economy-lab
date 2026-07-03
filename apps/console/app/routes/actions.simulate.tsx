@@ -26,7 +26,7 @@ export async function action({ request }: Route.ActionArgs) {
       case 'advance': {
         const days = Number(form.get('days') ?? 0);
         eco.advanceTime(days * DAY);
-        return { note: `Advanced time by ${days} day(s).` };
+        return { note: `Advanced time by ${days} ${days === 1 ? 'day' : 'days'}.` };
       }
       case 'runJobs': {
         const note = await eco.runJobs();
@@ -46,7 +46,7 @@ export async function action({ request }: Route.ActionArgs) {
         return {
           note:
             days > 0
-              ? `Maturity horizon set to ${days} day(s). New earned credits are now held until mature.`
+              ? `Maturity horizon set to ${days} ${days === 1 ? 'day' : 'days'}. New earned credits are now held until mature.`
               : 'Maturity horizon cleared (0 days).',
         };
       }

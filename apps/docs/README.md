@@ -1,6 +1,6 @@
 # economy-lab-docs
 
-Documentation site for [economy-lab](https://github.com/pwngh) — _correctness in systems that move money._
+Documentation site for [economy-lab](https://github.com/pwngh/economy-lab) — _correctness in systems that move money._
 
 A static, prerendered docs site (React Router 7 + Vite + MDX) that ships **zero client JavaScript** on content pages and deploys to Cloudflare Pages as flat HTML.
 
@@ -23,15 +23,15 @@ Pages are MDX under `app/content/economy/<section>/<slug>.mdx`; the file path mi
 title: 'Spend'
 summary: 'A marketplace sale: the buyer spends, the seller earns, the platform fee is split out.'
 order: 20
-status: stable # stable | draft | planned
-sourceRefs: ['src/operations/spend.ts', 'src/pricing.ts · splitLegs']
-related: ['concepts/money-model', 'reference/outcomes-and-reason-codes']
+status: stable # stable | draft | planned (a display badge)
+sourceRefs: ['src/operations/spend.ts#L65 · spend', 'src/pricing.ts#L51 · splitLegs']
+related: ['economy/concepts/money-model', 'economy/reference/outcomes-and-reason-codes']
 ---
 
 Body in Markdown/MDX.
 ```
 
-It then appears in the sidebar, its section index, the prev/next sequence, and the sitemap automatically. `status: draft` keeps it out of production builds.
+It then appears in the sidebar, its section index, the prev/next sequence, and the sitemap automatically. `draft: true` keeps a page out of production builds; `status` is only a display badge, so a `status: draft` page still ships (visibly marked in-progress).
 
 ## Deploy
 

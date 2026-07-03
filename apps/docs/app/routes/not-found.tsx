@@ -15,7 +15,7 @@ export function meta() {
   return pageMeta({ title: 'Not found - economy-lab docs', path: '/404/' });
 }
 
-/** In-app fallback for unmatched client navigation. Cold server requests are served public/404.html first. */
+/** Splat-route fallback for dev and prerender completeness. Cold requests on the deployed site are served public/404.html. */
 export default function NotFound() {
   return (
     <article className="prose">

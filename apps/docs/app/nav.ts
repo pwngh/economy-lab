@@ -11,7 +11,8 @@
 
 // The site's information architecture, derived from the content collection. The sidebar tree, the
 // breadcrumb trail, and the prev/next sequence all read from here, so there is one ordering to keep
-// in step with the pages themselves. Everything is section-rooted under economy/, so slugs and hrefs all begin /economy/.
+// in step with the pages themselves. Everything is section-rooted under economy/, so slugs and
+// hrefs all begin /economy/.
 import { docs, docsInSection } from '~/content.ts';
 
 export type NavLeaf = { slug: string; title: string };
@@ -37,14 +38,14 @@ export const SECTION_LABEL: Record<string, string> = {
 };
 
 /**
- * The single ordered nav definition. The sidebar renders it directly and prev/next falls out of its
- * flattened reading order (see flatSequence), so the two literally cannot disagree — there is one
- * list, not a parallel ordering rule. Operations are listed in lifecycle order (top-up → spend →
- * refund → clawback → the payout saga → subscriptions → entitlements → promo → operator corrections),
- * which is just their frontmatter `order`; reorder there and both the sidebar and prev/next follow.
+ * The single ordered nav definition: the sidebar renders it directly and prev/next falls out of
+ * its flattened reading order (see flatSequence). Operations are listed in lifecycle order
+ * (top-up → spend → refund → clawback → the payout saga → subscriptions → entitlements → promo →
+ * operator corrections), which is just their frontmatter `order`; reorder there and both the
+ * sidebar and prev/next follow.
  *
- * Concepts, then Reference (its standalone pages plus an Operations subgroup), then Ports & edges (the
- * ports plus the root-level scope-and-non-goals page).
+ * Concepts, then Reference (its standalone pages plus an Operations subgroup), then Ports & edges
+ * (the ports plus the root-level scope-and-non-goals page).
  */
 export function buildNav(): NavGroup[] {
   const operations = docs.filter((d) => isOperation(d.slug)).map(leaf);

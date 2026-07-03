@@ -53,7 +53,10 @@ export const docSchema = z.object({
 // The compiled MDX default export accepts an optional `components` map (how custom components like
 // <Callout> are injected at render — see DocPage). Typed loosely because MDX merges whatever it's given.
 type MdxComponent = ComponentType<{ components?: Record<string, unknown> }>;
-/** One heading in a page's table of contents, as exported by rehype-extract-toc (depth 2 = `##`, 3 = `###`). */
+/**
+ * One heading in a page's table of contents, as exported by rehype-extract-toc
+ * (depth 2 = `##`, 3 = `###`).
+ */
 export type TocEntry = {
   value: string;
   depth: number;
@@ -86,7 +89,10 @@ const sectionOf = (slug: string) => {
   return rel.includes('/') ? (rel.split('/')[0] ?? '') : '';
 };
 
-/** A documentation page after validation: the schema's fields plus the slug, its sub-section, and the compiled MDX component. */
+/**
+ * A documentation page after validation: the schema's fields plus the slug, its sub-section, and
+ * the compiled MDX component.
+ */
 export type DocPage = z.infer<typeof docSchema> & {
   slug: string;
   // Sub-section below economy/ ('concepts' | 'reference' | 'ports'), or '' for a root-level page.
@@ -115,7 +121,10 @@ export const docs: DocPage[] = Object.entries(modules)
   .filter((d) => DEV || !d.draft)
   .sort((a, b) => a.order - b.order || a.title.localeCompare(b.title));
 
-/** Find the one page whose slug matches, or `undefined` when nothing does — the caller decides whether a miss means a not-found view. */
+/**
+ * Find the one page whose slug matches, or `undefined` when nothing does — the caller decides
+ * whether a miss means a not-found view.
+ */
 export const docBySlug = (slug: string) => docs.find((d) => d.slug === slug);
 /** Every page in a top-level section ('concepts' | 'reference' | 'ports'), in sidebar order. */
 export const docsInSection = (section: string) => docs.filter((d) => d.section === section);

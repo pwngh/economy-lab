@@ -20,6 +20,10 @@ import { Credits, DataTable, Usd } from '~/ui';
 // summing the page, so it stays correct and the figures don't shift as you'd page.
 const PREVIEW = 8;
 
+export function meta(_: Route.MetaArgs) {
+  return [{ title: 'Overview — Economy Console' }];
+}
+
 export async function loader(_: Route.LoaderArgs) {
   const eco = await getEconomy();
   const [walletPage, accounts, solvency] = await Promise.all([

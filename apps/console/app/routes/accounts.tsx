@@ -18,6 +18,11 @@ import { Credits, DataTable, Pager, StatCard, pageOffset } from '~/ui';
 // One bounded page of wallets, with an optional ?user= detail showing the per-account breakdown.
 // The detail wallet is read directly (eco.wallet) rather than searched within the page, so a user
 // who isn't on the current page still resolves.
+
+export function meta(_: Route.MetaArgs) {
+  return [{ title: 'Accounts — Economy Console' }];
+}
+
 export async function loader({ request }: Route.LoaderArgs) {
   const eco = await getEconomy();
   const offset = pageOffset(request.url, PAGE_SIZE);

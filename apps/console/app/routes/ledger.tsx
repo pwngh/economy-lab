@@ -27,6 +27,10 @@ import {
 
 type Txn = Route.ComponentProps['loaderData']['page']['rows'][number];
 
+export function meta(_: Route.MetaArgs) {
+  return [{ title: 'Ledger — Economy Console' }];
+}
+
 export async function loader({ request }: Route.LoaderArgs) {
   const eco = await getEconomy();
   const offset = pageOffset(request.url, PAGE_SIZE);
@@ -61,7 +65,11 @@ export default function Ledger({ loaderData }: Route.ComponentProps) {
   function toggle(id: string) {
     setOpen((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
   }

@@ -9,11 +9,12 @@
  * @license MIT
  */
 
-import { type Dirent, readFileSync, readdirSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
 // The config-time content reader: bare Node (node:fs + gray-matter) only, no Vite/import.meta.glob,
 // because react-router.config.ts runs in plain Node before the bundler exists. Its one job is to
 // enumerate the slugs to prerender; the runtime index that loads MDX components is app/content.ts.
+
+import { type Dirent, readFileSync, readdirSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
 import matter from 'gray-matter';
 
 const CONTENT_DIR = join(process.cwd(), 'app/content');

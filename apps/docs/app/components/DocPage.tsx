@@ -23,7 +23,6 @@ import {
   SubmitPipeline,
   WorkerSweeps,
 } from '~/components/Diagrams.tsx';
-import { Figure } from '~/components/Figure.tsx';
 import { SourceLink } from '~/components/SourceLink.tsx';
 import { type TocEntry, docBySlug } from '~/content.ts';
 import { crumbsFor, prevNext } from '~/nav.ts';
@@ -32,7 +31,6 @@ import { sourceUrl } from '~/repo.ts';
 // Custom components available to every page's MDX without a per-file import.
 const MDX_COMPONENTS = {
   Callout,
-  Figure,
   ChartOfAccounts,
   PayoutSaga,
   HashChain,

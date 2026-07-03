@@ -17,7 +17,7 @@ import { NavLink, Outlet, useFetcher } from 'react-router';
 import { useState, type ReactNode } from 'react';
 import type { Route } from './+types/_chrome';
 import { getEconomy } from '~/economy.server';
-import { StatusPill, dayLabel } from '~/ui';
+import { StatusPill, dayLabel, fmtAmount } from '~/ui';
 
 // What the frame needs on every page: the sim settings (for the panel's controls) and the headline
 // solvency figure. Both reads.
@@ -96,7 +96,7 @@ function SimulationPanel({
         </span>
         <StatusPill tone={solvency.backed ? 'green' : 'red'} dot>
           Backing {solvency.backed ? 'covered' : 'short'} · trust $
-          {solvency.trustCashUsd.toFixed(2)}
+          {fmtAmount(solvency.trustCashUsd)}
         </StatusPill>
       </button>
 

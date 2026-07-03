@@ -11,7 +11,11 @@
 
 import type { Route } from './+types/integrity';
 import { getEconomy } from '~/economy.server';
-import { Credits, StatCard, StatusPill, Usd } from '~/ui';
+import { Credits, StatCard, StatusPill, Usd, fmtAmount } from '~/ui';
+
+export function meta(_: Route.MetaArgs) {
+  return [{ title: 'Integrity — Economy Console' }];
+}
 
 export async function loader(_: Route.LoaderArgs) {
   const eco = await getEconomy();
@@ -89,7 +93,7 @@ export default function Integrity({ loaderData }: Route.ComponentProps) {
               <p className="card-sub mt-2">{c.desc}</p>
               {c.key === 'backed' && !ok ? (
                 <p className="notice err mt-2">
-                  Shortfall ${prove.shortfallUsd.toFixed(2)}.
+                  Shortfall ${fmtAmount(prove.shortfallUsd)}.
                 </p>
               ) : null}
               {c.key === 'consistent' && !ok ? (
