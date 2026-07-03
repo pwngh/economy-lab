@@ -369,15 +369,15 @@ type Step =
 // memory and on the SQL engines, which require post_entry to run in a transaction. The clock time
 // at posting becomes a top-up lot's top-up time.
 function postStep(store: Store, step: Step): Promise<unknown> {
-  let userPart =
+  const userPart =
     step.kind === 'topUp'
       ? creditLeg(spendable(step.userId), step.amount)
       : debit(spendable(step.userId), step.amount);
-  let systemPart =
+  const systemPart =
     step.kind === 'topUp'
       ? debit(SYSTEM.REVENUE, step.amount)
       : creditLeg(SYSTEM.REVENUE, step.amount);
-  let meta =
+  const meta =
     step.kind === 'topUp'
       ? { kind: 'topUp', source: step.source }
       : { kind: 'spend' };

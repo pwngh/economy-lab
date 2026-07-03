@@ -81,32 +81,32 @@ function batch(
   fundingOps: Operation[];
   spendOps: Operation[];
 } {
-  let seller = `usr_lin_seller_${tag}`;
-  let buyers: string[] = [];
-  let fundingOps: Operation[] = [];
-  let funding: number[] = [];
-  let buyerCount = 1 + Math.floor(rng() * 2);
+  const seller = `usr_lin_seller_${tag}`;
+  const buyers: string[] = [];
+  const fundingOps: Operation[] = [];
+  const funding: number[] = [];
+  const buyerCount = 1 + Math.floor(rng() * 2);
   for (let b = 0; b < buyerCount; b += 1) {
-    let buyer = `usr_lin_b${b}_${tag}`;
-    let fund = 2 + Math.floor(rng() * 3);
+    const buyer = `usr_lin_b${b}_${tag}`;
+    const fund = 2 + Math.floor(rng() * 3);
     buyers.push(buyer);
     funding.push(fund);
     fundingOps.push(topUp({ userId: buyer, amount: credit(`${fund}.00`) }));
   }
 
-  let plan = Array.from({ length: 4 }, () => ({
+  const plan = Array.from({ length: 4 }, () => ({
     buyer: buyers[Math.floor(rng() * buyers.length)]!,
     price: 1 + Math.floor(rng() * 3),
   }));
   // Guarantee oversubscription: make total demand exceed total funding so at least one wallet must
   // turn a spend away. Bumping a single price keeps the seed reproducible and the workload varied.
-  let totalFunding = funding.reduce((sum, f) => sum + f, 0);
-  let totalDemand = plan.reduce((sum, p) => sum + p.price, 0);
+  const totalFunding = funding.reduce((sum, f) => sum + f, 0);
+  const totalDemand = plan.reduce((sum, p) => sum + p.price, 0);
   if (totalDemand <= totalFunding) {
     plan[0]!.price += totalFunding - totalDemand + 1;
   }
 
-  let spendOps = plan.map((p) =>
+  const spendOps = plan.map((p) =>
     spend({
       buyerId: p.buyer,
       sku: 'wrld_pass',
@@ -130,13 +130,13 @@ async function assertLinearizable(
   seed: number,
   tag: string,
 ): Promise<void> {
-  let { seller, buyers, fundingOps, spendOps } = batch(mulberry32(seed), tag);
+  const { seller, buyers, fundingOps, spendOps } = batch(mulberry32(seed), tag);
 
-  for (let op of fundingOps) {
+  for (const op of fundingOps) {
     assert.equal((await engine.submit(op)).status, 'committed');
   }
 
-  let committed: Operation[] = [];
+  const committed: Operation[] = [];
   await Promise.all(
     spendOps.map((op) =>
       engine.submit(op).then(
@@ -156,19 +156,19 @@ async function assertLinearizable(
     `${tag}: all ${spendOps.length} spends committed on an oversubscribed batch — the engine oversold or never contended`,
   );
 
-  let model = makeEconomy(1);
+  const model = makeEconomy(1);
   try {
-    for (let op of fundingOps) {
+    for (const op of fundingOps) {
       assert.equal((await model.submit(op)).status, 'committed');
     }
-    for (let op of committed) {
+    for (const op of committed) {
       assert.equal(
         (await model.submit(op)).status,
         'committed',
         `${tag}: the engine committed a spend the sequential model rejects — over-admitted under concurrency`,
       );
     }
-    for (let buyer of buyers) {
+    for (const buyer of buyers) {
       assert.equal(
         (await engine.read.balance(spendable(buyer))).minor,
         (await model.read.balance(spendable(buyer))).minor,
@@ -180,7 +180,7 @@ async function assertLinearizable(
       (await model.read.balance(earned(seller))).minor,
       `${tag}: seller earned diverged from the sequential model`,
     );
-    let report = await engine.read.prove();
+    const report = await engine.read.prove();
     assert.ok(
       report.conserved,
       `${tag}: conservation broken under concurrency`,
@@ -213,8 +213,8 @@ function runConcurrency(
 
     test('N parallel same-account spends never oversell', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
-      let economy = makeEconomy(1, engine.store);
-      let buyer = `usr_conc_${name}_${(seq += 1)}`;
+      const economy = makeEconomy(1, engine.store);
+      const buyer = `usr_conc_${name}_${(seq += 1)}`;
 
       // Fire 4 parallel 1.00 spends against a 2.00 wallet, so at most 2 are affordable. Parallelism is
       // kept under half the connection pool on purpose. Each in-flight spend holds its transaction
@@ -222,17 +222,17 @@ function runConcurrency(
       // rejected attempt after its rollback. Pushing parallelism to the full pool size starves those
       // borrows and deadlocks. That is a real operational limit worth sizing for, not a property of
       // this safety check.
-      let parallelism = 4;
-      let affordable = 2;
+      const parallelism = 4;
+      const affordable = 2;
       await economy.submit(topUp({ userId: buyer, amount: credit('2.00') }));
-      let attempts = Array.from({ length: parallelism }, () =>
+      const attempts = Array.from({ length: parallelism }, () =>
         spend({ buyerId: buyer, sku: 'wrld_pass', price: credit('1.00') }),
       );
-      let settled = await Promise.allSettled(
+      const settled = await Promise.allSettled(
         attempts.map((op) => economy.submit(op)),
       );
 
-      let committed = settled.filter(
+      const committed = settled.filter(
         (s): s is PromiseFulfilledResult<Outcome> =>
           s.status === 'fulfilled' && s.value.status === 'committed',
       ).length;
@@ -243,7 +243,7 @@ function runConcurrency(
         `oversold: ${committed} commits against a ${affordable}.00 balance`,
       );
       // Money is conserved across the race: the wallet holds exactly what wasn't spent, never < 0.
-      let balance = await economy.read.balance(spendable(buyer));
+      const balance = await economy.read.balance(spendable(buyer));
       assert.equal(
         balance.minor,
         BigInt((affordable - committed) * 100),
@@ -254,7 +254,7 @@ function runConcurrency(
         `wallet went negative: ${encodeAmount(balance)}`,
       );
       // And the whole ledger still proves out.
-      let report = await economy.read.prove();
+      const report = await economy.read.prove();
       assert.ok(report.conserved, 'conservation broken under concurrency');
       assert.ok(report.noOverdraft, 'overdraft under concurrency');
     });
@@ -262,14 +262,14 @@ function runConcurrency(
     test('a randomized concurrent batch is linearizable to a sequential model', async (t: TestContext) => {
       // This test provisions its own engine, isolated from the oversell test's store above. A second
       // economy over a shared store would restart the seeded txn-id counter and collide on postings.
-      let lin = await provision();
+      const lin = await provision();
       if (!lin) return t.skip(`${name} unreachable`);
       try {
         // One economy spans all seeds, so its generated txn ids stay unique, and each seed gets its
         // own account namespace. It runs a handful of seeds, each a different oversubscribed batch,
         // replayed identically every run.
-        let economy = makeEconomy(1, lin.store);
-        for (let seed of [0xc0ffee, 0xbeef, 0xf00d, 0xcafe, 0x1dea]) {
+        const economy = makeEconomy(1, lin.store);
+        for (const seed of [0xc0ffee, 0xbeef, 0xf00d, 0xcafe, 0x1dea]) {
           await assertLinearizable(
             economy,
             seed,

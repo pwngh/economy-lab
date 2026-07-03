@@ -123,11 +123,11 @@ function failingProcessor(): Processor {
   };
 }
 
-// --- The cases (one behaviour each) ---
+// --- The cases (one behavior each) ---
 
 async function submitsAReservedSagaToTheProvider(store: Store): Promise<void> {
-  let recorded: Array<{ key: string; userId: string; amount: Amount }> = [];
-  let processor: Processor = {
+  const recorded: Array<{ key: string; userId: string; amount: Amount }> = [];
+  const processor: Processor = {
     submitPayout: async (input) => {
       recorded.push(input);
       return { providerRef: `prov_${input.key}` };
@@ -138,7 +138,7 @@ async function submitsAReservedSagaToTheProvider(store: Store): Promise<void> {
     saga({ id: 'pay_1', state: 'RESERVED', reserve: credit('4.00') }),
   );
 
-  let summary = await settleDuePayouts(store, workerCtx({ processor }), {
+  const summary = await settleDuePayouts(store, workerCtx({ processor }), {
     now: 1_000,
     limit: 10,
   });
@@ -151,7 +151,7 @@ async function submitsAReservedSagaToTheProvider(store: Store): Promise<void> {
   assert.deepEqual(recorded[0]!.amount, usd('0.02'));
   // Submitting writes nothing to the ledger. The credits moved into the reserve account at
   // request time.
-  let advanced = await store.sagas.load('pay_1');
+  const advanced = await store.sagas.load('pay_1');
   assert.equal(advanced!.state, 'SUBMITTED');
   assert.equal(advanced!.providerRef, 'prov_pay_1');
 }
@@ -168,7 +168,7 @@ async function leavesAWithinWindowSubmittedSagaForTheWebhook(
     saga({ id: 'pay_1', state: 'SUBMITTED', reserve: credit('4.00') }),
   );
 
-  let summary = await settleDuePayouts(store, workerCtx(), {
+  const summary = await settleDuePayouts(store, workerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -191,7 +191,7 @@ async function leavesAWithinWindowSubmittedSagaForTheWebhook(
     usd('0.00'),
   );
   // The saga stays SUBMITTED, waiting on the settlement webhook.
-  let stillSubmitted = await store.sagas.load('pay_1');
+  const stillSubmitted = await store.sagas.load('pay_1');
   assert.equal(stillSubmitted!.state, 'SUBMITTED');
 }
 
@@ -203,7 +203,7 @@ async function forceFailsASubmittedSagaPastTheMaxAgeAndReturnsTheReserve(
   // sweep then runs with the clock two minutes later, past the cap, so the age check
   // force-fails the saga instead of settling it. dueAt is in the past, so the sweep still
   // selects it.
-  let config: Config = { ...testConfig(), maxPayoutAgeMs: 60_000 };
+  const config: Config = { ...testConfig(), maxPayoutAgeMs: 60_000 };
   await openSaga(
     store,
     saga({
@@ -215,7 +215,7 @@ async function forceFailsASubmittedSagaPastTheMaxAgeAndReturnsTheReserve(
     }),
   );
 
-  let summary = await settleDuePayouts(
+  const summary = await settleDuePayouts(
     store,
     workerCtx({ config, clock: fixedClock(120_000) }),
     { now: 120_000, limit: 10 },
@@ -225,7 +225,7 @@ async function forceFailsASubmittedSagaPastTheMaxAgeAndReturnsTheReserve(
   assert.equal(summary.deadLettered.length, 1);
   assert.equal(summary.deadLettered[0]!.id, 'pay_1');
   assert.equal(summary.deadLettered[0]!.reason, 'payout.timeout');
-  let failed = await store.sagas.load('pay_1');
+  const failed = await store.sagas.load('pay_1');
   assert.equal(failed!.state, 'FAILED');
   // The terminal failure reason is persisted on the saga record itself, where the console reads it
   // directly rather than harvesting it from posting metadata. The settle never ran, so payoutUsd
@@ -258,7 +258,7 @@ async function leavesASubmittedSagaAtTheAgeBoundaryForTheWebhook(
   // cap (age 60_000, not strictly greater than maxPayoutAgeMs), so it is not force-failed. The worker
   // no longer self-settles either, so at the boundary the saga is left untouched for the settlement
   // webhook. Only a strictly-past-cap age, covered by the timeout test, force-fails it.
-  let config: Config = { ...testConfig(), maxPayoutAgeMs: 60_000 };
+  const config: Config = { ...testConfig(), maxPayoutAgeMs: 60_000 };
   await openSaga(
     store,
     saga({
@@ -270,7 +270,7 @@ async function leavesASubmittedSagaAtTheAgeBoundaryForTheWebhook(
     }),
   );
 
-  let summary = await settleDuePayouts(
+  const summary = await settleDuePayouts(
     store,
     workerCtx({ config, clock: fixedClock(60_000) }),
     { now: 60_000, limit: 10 },
@@ -280,7 +280,7 @@ async function leavesASubmittedSagaAtTheAgeBoundaryForTheWebhook(
   // that. The saga is left untouched.
   assert.deepEqual(summary.deadLettered, []);
   assert.deepEqual(summary.submitted, []);
-  let stillSubmitted = await store.sagas.load('pay_1');
+  const stillSubmitted = await store.sagas.load('pay_1');
   assert.equal(stillSubmitted!.state, 'SUBMITTED');
   // No settle posting ran, so the reserve is intact and REVENUE is still empty.
   assert.deepEqual(
@@ -296,7 +296,7 @@ async function deadLettersAProviderFaultPastTheAttemptCeiling(
   // The attempt limit is 1, so this single failure reaches it and the saga is set aside rather
   // than retried. openSaga seeds PAYOUT_RESERVE the way requestPayout would, so the dead-letter
   // has the reserved credits to hand back.
-  let config: Config = { ...testConfig(), maxPayoutAttempts: 1 };
+  const config: Config = { ...testConfig(), maxPayoutAttempts: 1 };
   await openSaga(
     store,
     saga({
@@ -307,7 +307,7 @@ async function deadLettersAProviderFaultPastTheAttemptCeiling(
     }),
   );
 
-  let summary = await settleDuePayouts(
+  const summary = await settleDuePayouts(
     store,
     workerCtx({ processor: failingProcessor(), config }),
     { now: 1_000, limit: 10 },
@@ -317,7 +317,7 @@ async function deadLettersAProviderFaultPastTheAttemptCeiling(
   assert.equal(summary.deadLettered.length, 1);
   assert.equal(summary.deadLettered[0]!.id, 'pay_1');
   assert.equal(summary.deadLettered[0]!.reason, 'PROVIDER.FAILURE');
-  let failed = await store.sagas.load('pay_1');
+  const failed = await store.sagas.load('pay_1');
   assert.equal(failed!.state, 'FAILED');
   // The failure reason is persisted on the saga's own terminal-outcome field. payoutUsd is left null.
   assert.equal(failed!.reason, 'PROVIDER.FAILURE');
@@ -341,10 +341,10 @@ async function leavesARetryableFaultUnderTheCeilingForTheNextSweep(
   // The attempt limit is high enough (5) that this one failure stays below it, so a temporary
   // error is left for the next run instead of being set aside. Only payouts that can never make
   // progress leave the queue.
-  let config: Config = { ...testConfig(), maxPayoutAttempts: 5 };
+  const config: Config = { ...testConfig(), maxPayoutAttempts: 5 };
   await openSaga(store, saga({ id: 'pay_1', state: 'RESERVED', attempts: 0 }));
 
-  let summary = await settleDuePayouts(
+  const summary = await settleDuePayouts(
     store,
     workerCtx({ processor: failingProcessor(), config }),
     { now: 1_000, limit: 10 },
@@ -357,7 +357,7 @@ async function leavesARetryableFaultUnderTheCeilingForTheNextSweep(
   // The saga stays RESERVED for the next run, but the failed try is recorded: attempts rose
   // from 0 to 1. The rising count is what lets a provider that stays down eventually reach the
   // limit instead of retrying forever.
-  let pending = await store.sagas.load('pay_1');
+  const pending = await store.sagas.load('pay_1');
   assert.equal(pending!.state, 'RESERVED');
   assert.equal(pending!.attempts, 1);
 }
@@ -369,27 +369,27 @@ async function leavesARetryableFaultUnderTheCeilingForTheNextSweep(
 async function climbsAttemptsEachRunThenDeadLettersAndReturnsTheReserve(
   store: Store,
 ): Promise<void> {
-  let config: Config = { ...testConfig(), maxPayoutAttempts: 3 };
-  let ctx = workerCtx({ processor: failingProcessor(), config });
+  const config: Config = { ...testConfig(), maxPayoutAttempts: 3 };
+  const ctx = workerCtx({ processor: failingProcessor(), config });
   await openSaga(store, saga({ id: 'pay_1', state: 'RESERVED', attempts: 0 }));
 
   // Runs 1 and 2 each fail under the limit, raising attempts to 1 and then 2 while leaving the
   // saga RESERVED. dueAt is unchanged, so the saga is picked up again every run.
-  let run1 = await settleDuePayouts(store, ctx, { now: 1_000, limit: 10 });
+  const run1 = await settleDuePayouts(store, ctx, { now: 1_000, limit: 10 });
   assert.equal(run1.retrying.length, 1);
   assert.equal((await store.sagas.load('pay_1'))!.attempts, 1);
 
-  let run2 = await settleDuePayouts(store, ctx, { now: 1_000, limit: 10 });
+  const run2 = await settleDuePayouts(store, ctx, { now: 1_000, limit: 10 });
   assert.equal(run2.retrying.length, 1);
   assert.equal((await store.sagas.load('pay_1'))!.attempts, 2);
 
   // Run 3 reaches the limit, so the payout is dead-lettered instead of retried.
-  let run3 = await settleDuePayouts(store, ctx, { now: 1_000, limit: 10 });
+  const run3 = await settleDuePayouts(store, ctx, { now: 1_000, limit: 10 });
   assert.deepEqual(run3.retrying, []);
   assert.equal(run3.deadLettered.length, 1);
   assert.equal(run3.deadLettered[0]!.id, 'pay_1');
 
-  let failed = await store.sagas.load('pay_1');
+  const failed = await store.sagas.load('pay_1');
   assert.equal(failed!.state, 'FAILED');
   // Giving up returns the reserve. PAYOUT_RESERVE drains to zero and the seller's earned
   // credits come back, so an undeliverable payout never strands the escrowed credits.
@@ -404,14 +404,14 @@ async function climbsAttemptsEachRunThenDeadLettersAndReturnsTheReserve(
 }
 
 async function isolatesAPerItemFaultAndContinuesTheBatch(): Promise<void> {
-  let store = memoryStore();
-  let config: Config = { ...testConfig(), maxPayoutAttempts: 1 };
+  const store = memoryStore();
+  const config: Config = { ...testConfig(), maxPayoutAttempts: 1 };
   await openSaga(store, saga({ id: 'pay_bad', state: 'RESERVED' }));
   await openSaga(store, saga({ id: 'pay_good', state: 'RESERVED' }));
 
   // The bad payout's submit always fails, but the good one must still go through. One broken
   // payout must not stop the rest of the batch.
-  let processor: Processor = {
+  const processor: Processor = {
     submitPayout: async (input) => {
       if (input.key === 'pay_bad') {
         throw fault(ERROR_CODES.PROVIDER_FAILURE, 'provider down', {
@@ -422,7 +422,7 @@ async function isolatesAPerItemFaultAndContinuesTheBatch(): Promise<void> {
     },
   };
 
-  let summary = await settleDuePayouts(
+  const summary = await settleDuePayouts(
     store,
     workerCtx({ processor, config }),
     {
@@ -442,7 +442,7 @@ async function isolatesAPerItemFaultAndContinuesTheBatch(): Promise<void> {
 async function deadLetteringEmitsOnePayoutReversedEvent(
   store: Store,
 ): Promise<void> {
-  let config: Config = { ...testConfig(), maxPayoutAttempts: 1 };
+  const config: Config = { ...testConfig(), maxPayoutAttempts: 1 };
   await openSaga(
     store,
     saga({
@@ -462,12 +462,12 @@ async function deadLetteringEmitsOnePayoutReversedEvent(
   // The reversed event is enqueued in the same transaction as the entry that undoes the
   // reservation, so a dead-lettered payout leaves exactly one such event. The event carries
   // the failure reason.
-  let messages = await store.outbox.claimBatch(10);
-  let reversed = messages.filter(
+  const messages = await store.outbox.claimBatch(10);
+  const reversed = messages.filter(
     (m) => m.event.type === 'economy.payout.reversed',
   );
   assert.equal(reversed.length, 1);
-  let event = reversed[0]!.event;
+  const event = reversed[0]!.event;
   assert.equal(event.audience, 'internal');
   assert.equal(event.subject, 'usr_seller');
   assert.equal(event.data.sagaId, 'pay_1');

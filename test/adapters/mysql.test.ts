@@ -23,7 +23,7 @@ import { spendable } from '#src/accounts.ts';
 
 import type { MysqlPool } from '#src/engines/mysql.ts';
 
-let url = process.env.MYSQL_TEST_URL;
+const url = process.env.MYSQL_TEST_URL;
 
 // Runs the shared Store conformance suite against this SQL engine. The suite needs a real database,
 // so it only runs when MYSQL_TEST_URL points at a live MySQL. With no URL, it registers no tests.
@@ -32,7 +32,7 @@ let url = process.env.MYSQL_TEST_URL;
 // The factory builds a fresh store per run. It opens a pool, creates the tables, then wraps the pool.
 if (url) {
   runStoreConformance('mysql', async () => {
-    let pool = await createMysqlPool(url);
+    const pool = await createMysqlPool(url);
     await applyMysqlSchema(pool);
     return mysqlStore({ pool });
   });
@@ -61,9 +61,9 @@ function poolReturningGetLock(acquired: number | null): MysqlPool {
 }
 
 describe('MySQL ledger.lock GET_LOCK return handling', () => {
-  for (let acquired of [0, null] as Array<number | null>) {
+  for (const acquired of [0, null] as Array<number | null>) {
     test(`throws a transient conflict (errno 1205) when GET_LOCK returns ${acquired}`, async () => {
-      let store = mysqlStore({ pool: poolReturningGetLock(acquired) });
+      const store = mysqlStore({ pool: poolReturningGetLock(acquired) });
       await assert.rejects(
         store.ledger.lock(spendable('usr_x')),
         (error: unknown) =>
@@ -75,7 +75,7 @@ describe('MySQL ledger.lock GET_LOCK return handling', () => {
   }
 
   test('resolves when GET_LOCK returns 1 (the lock is held)', async () => {
-    let store = mysqlStore({ pool: poolReturningGetLock(1) });
+    const store = mysqlStore({ pool: poolReturningGetLock(1) });
     await store.ledger.lock(spendable('usr_x'));
   });
 });

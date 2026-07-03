@@ -79,7 +79,7 @@ async function openReservedSaga(
   store: Store,
   overrides: Partial<Saga> & Pick<Saga, 'id' | 'state'>,
 ): Promise<Saga> {
-  let row: Saga = {
+  const row: Saga = {
     userId: 'usr_seller',
     reserve: credit('4.00'),
     rateId: 'payout:CREDIT->USD:1',
@@ -137,7 +137,7 @@ async function stateOf(
   store: Store,
   sagaId: string,
 ): Promise<SagaState | undefined> {
-  let saga = await store.sagas.load(sagaId);
+  const saga = await store.sagas.load(sagaId);
   return saga?.state;
 }
 
@@ -147,13 +147,13 @@ async function balanceOf(store: Store, account: AccountRef): Promise<Amount> {
 
 describe('reversePayout', () => {
   test('a RESERVED payout returns the reserve to earned and fails the saga', async () => {
-    let store = newStore();
-    let saga = await openReservedSaga(store, {
+    const store = newStore();
+    const saga = await openReservedSaga(store, {
       id: 'pay_1',
       state: 'RESERVED',
     });
 
-    let outcome = await run(
+    const outcome = await run(
       store,
       newCtx(),
       buildReversePayout({ sagaId: 'pay_1' }),
@@ -162,16 +162,16 @@ describe('reversePayout', () => {
     assert.equal(outcome.status, 'committed');
     assert.equal(await stateOf(store, 'pay_1'), 'FAILED');
     // The full reserved amount is back in the seller's earned account.
-    let earnedBalance = await balanceOf(store, earned(saga.userId));
+    const earnedBalance = await balanceOf(store, earned(saga.userId));
     assert.deepEqual(earnedBalance, credit('4.00'));
     // The reserve account was emptied back out.
-    let reserveBalance = await balanceOf(store, SYSTEM.PAYOUT_RESERVE);
+    const reserveBalance = await balanceOf(store, SYSTEM.PAYOUT_RESERVE);
     assert.deepEqual(reserveBalance, credit('0.00'));
   });
 
   test('a SUBMITTED payout aged past maxPayoutAgeMs is reversible', async () => {
-    let store = newStore();
-    let ctx = newCtx();
+    const store = newStore();
+    const ctx = newCtx();
     // A SUBMITTED payout is gated until it's waited longer than maxPayoutAgeMs (the cutoff the
     // worker uses to give up on a stuck submission). Set `updatedAt` (when it entered SUBMITTED)
     // far enough back that `now - updatedAt` is past the cutoff, so the provider is presumed never
@@ -182,7 +182,7 @@ describe('reversePayout', () => {
       updatedAt: ctx.clock.now() - ctx.config.maxPayoutAgeMs - 1,
     });
 
-    let outcome = await run(
+    const outcome = await run(
       store,
       ctx,
       buildReversePayout({ sagaId: 'pay_2' }),
@@ -198,8 +198,8 @@ describe('reversePayout', () => {
   });
 
   test('a freshly-SUBMITTED payout still within maxPayoutAgeMs is refused and posts nothing', async () => {
-    let store = newStore();
-    let ctx = newCtx();
+    const store = newStore();
+    const ctx = newCtx();
     // A SUBMITTED payout the provider may still settle must not be reversed: handing the reserve
     // back now would double-pay the seller if the provider later pays out. Enter SUBMITTED "just
     // now" (updatedAt == now), so `now - updatedAt` is 0, well inside the cutoff.
@@ -227,20 +227,28 @@ describe('reversePayout', () => {
   });
 
   test('replay (a saga already FAILED) is a duplicate no-op that posts nothing', async () => {
-    let store = newStore();
+    const store = newStore();
     await openReservedSaga(store, { id: 'pay_3', state: 'RESERVED' });
-    let ctx = newCtx();
+    const ctx = newCtx();
 
-    let first = await run(store, ctx, buildReversePayout({ sagaId: 'pay_3' }));
+    const first = await run(
+      store,
+      ctx,
+      buildReversePayout({ sagaId: 'pay_3' }),
+    );
     assert.equal(first.status, 'committed');
-    let afterFirst = await balanceOf(store, earned('usr_seller'));
+    const afterFirst = await balanceOf(store, earned('usr_seller'));
 
     // A second reversal finds the saga already FAILED, so the guarded state change refuses to move
     // it again. The result is `duplicate`, the earned balance is unchanged, and the reserve was
     // returned only once.
-    let second = await run(store, ctx, buildReversePayout({ sagaId: 'pay_3' }));
+    const second = await run(
+      store,
+      ctx,
+      buildReversePayout({ sagaId: 'pay_3' }),
+    );
     assert.equal(second.status, 'duplicate');
-    let afterSecond = await balanceOf(store, earned('usr_seller'));
+    const afterSecond = await balanceOf(store, earned('usr_seller'));
     assert.deepEqual(afterSecond, afterFirst);
     assert.deepEqual(afterSecond, credit('4.00'));
   });
@@ -248,7 +256,7 @@ describe('reversePayout', () => {
 
 describe('reversePayout — Refusals & Validation', () => {
   test('a SETTLED payout throws INVALID_TRANSITION and posts nothing', async () => {
-    let store = newStore();
+    const store = newStore();
     await openReservedSaga(store, { id: 'pay_4', state: 'SETTLED' });
 
     await assert.rejects(
@@ -258,12 +266,12 @@ describe('reversePayout — Refusals & Validation', () => {
 
     // Nothing was returned: the seller's earned account stayed at zero and the saga stays SETTLED.
     assert.equal(await stateOf(store, 'pay_4'), 'SETTLED');
-    let earnedBalance = await balanceOf(store, earned('usr_seller'));
+    const earnedBalance = await balanceOf(store, earned('usr_seller'));
     assert.deepEqual(earnedBalance, credit('0.00'));
   });
 
   test('an unknown sagaId is operator error (a thrown fault)', async () => {
-    let store = newStore();
+    const store = newStore();
     await assert.rejects(
       run(store, newCtx(), buildReversePayout({ sagaId: 'pay_missing' })),
       (error: unknown) => codeOf(error) === 'OP.MALFORMED',
@@ -271,7 +279,7 @@ describe('reversePayout — Refusals & Validation', () => {
   });
 
   test('a blank reason is rejected', async () => {
-    let store = newStore();
+    const store = newStore();
     await openReservedSaga(store, { id: 'pay_5', state: 'RESERVED' });
     await assert.rejects(
       run(
@@ -284,7 +292,7 @@ describe('reversePayout — Refusals & Validation', () => {
   });
 
   test('a userId that does not match the saga is rejected and posts nothing', async () => {
-    let store = newStore();
+    const store = newStore();
     await openReservedSaga(store, { id: 'pay_8', state: 'RESERVED' });
 
     // The payout's seller is usr_seller. The framework locks the earned account named by the
@@ -310,17 +318,20 @@ describe('reversePayout — Refusals & Validation', () => {
 
 describe('reversePayout Through Submit', () => {
   test('an operator reversal emits one economy.payout.reversed', async () => {
-    let store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
-    let economy: Economy = makeEconomy(1, store);
+    const store = memoryStore({
+      digest: seededDigest(1),
+      clock: fixedClock(0),
+    });
+    const economy: Economy = makeEconomy(1, store);
     await openReservedSaga(store, { id: 'pay_6', state: 'RESERVED' });
 
-    let outcome = await economy.submit(
+    const outcome = await economy.submit(
       buildReversePayout({ sagaId: 'pay_6', reason: 'chargeback' }),
     );
     assert.equal(outcome.status, 'committed');
 
-    let events = await drainEvents(store);
-    let reversed = events.filter((e) => e.type === 'economy.payout.reversed');
+    const events = await drainEvents(store);
+    const reversed = events.filter((e) => e.type === 'economy.payout.reversed');
     assert.equal(reversed.length, 1);
     assert.equal(reversed[0]!.audience, 'internal');
     assert.equal(reversed[0]!.subject, 'usr_seller');
@@ -331,8 +342,11 @@ describe('reversePayout Through Submit', () => {
   });
 
   test('a non-privileged user actor is UNAUTHORIZED', async () => {
-    let store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
-    let economy: Economy = makeEconomy(1, store);
+    const store = memoryStore({
+      digest: seededDigest(1),
+      clock: fixedClock(0),
+    });
+    const economy: Economy = makeEconomy(1, store);
     await openReservedSaga(store, { id: 'pay_7', state: 'RESERVED' });
 
     await assert.rejects(
@@ -355,7 +369,7 @@ describe('reversePayout Through Submit', () => {
 // same transaction, then to subscribers later. This claims a batch and marks it delivered, so a
 // second call won't see the same events.
 async function drainEvents(store: Store): Promise<EconomyEvent[]> {
-  let batch = await store.outbox.claimBatch(100);
+  const batch = await store.outbox.claimBatch(100);
   await store.outbox.markRelayed(batch.map((message) => message.id));
   return batch.map((message) => message.event);
 }

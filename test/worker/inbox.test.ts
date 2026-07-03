@@ -37,7 +37,7 @@ import type { InboxEntry, Store } from '#src/ports.ts';
 // drainInbox only reads the logger, meter, and config, but we pass the full object to match the other
 // worker tests. A small `maxInboxAttempts` drives a poison row to its dead-letter cap in a few sweeps.
 function workerCtx(maxInboxAttempts?: number): WorkerCtx {
-  let config = testConfig();
+  const config = testConfig();
   return {
     clock: fixedClock(0),
     ids: sequentialIds(),
@@ -96,7 +96,7 @@ function committed(): Outcome {
 function scriptedEconomy(
   respond: (operation: Operation, call: number) => Outcome,
 ): Pick<Economy, 'submit'> & { submitted: Operation[] } {
-  let submitted: Operation[] = [];
+  const submitted: Operation[] = [];
   return {
     submitted,
     submit: async (operation) => {
@@ -123,12 +123,12 @@ function sweep(
 
 describe('drainInbox', () => {
   test('applies every pending row and marks it applied', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await enqueue(store, 'e1');
     await enqueue(store, 'e2');
-    let economy = scriptedEconomy(() => committed());
+    const economy = scriptedEconomy(() => committed());
 
-    let summary = await sweep(store, economy);
+    const summary = await sweep(store, economy);
 
     assert.deepEqual(summary.applied, ['ibx_e1', 'ibx_e2']);
     assert.deepEqual(summary.failed, []);
@@ -142,12 +142,12 @@ describe('drainInbox', () => {
   });
 
   test('does not re-claim a row already applied by an earlier run', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await enqueue(store, 'e1');
-    let economy = scriptedEconomy(() => committed());
+    const economy = scriptedEconomy(() => committed());
 
     await sweep(store, economy);
-    let second = await sweep(store, economy);
+    const second = await sweep(store, economy);
 
     assert.deepEqual(second.applied, []);
     // The economy saw the row only once: the applied row isn't re-claimed, so it isn't re-submitted.
@@ -156,16 +156,16 @@ describe('drainInbox', () => {
   });
 
   test('a duplicate Outcome still marks the row applied (re-apply deduped by the operation key)', async () => {
-    let store = memoryStore();
-    let entry = await enqueue(store, 'e1');
+    const store = memoryStore();
+    const entry = await enqueue(store, 'e1');
     // The economy reports that the money move already happened. A prior run committed it, but
     // markApplied never landed. The row should still flip to applied so it isn't claimed forever.
-    let economy = scriptedEconomy(() => ({
+    const economy = scriptedEconomy(() => ({
       status: 'duplicate',
       transaction: { id: 'txn_x', postedAt: 0, legs: [], links: [] },
     }));
 
-    let summary = await sweep(store, economy);
+    const summary = await sweep(store, economy);
 
     assert.deepEqual(summary.applied, [entry.id]);
     assert.deepEqual(summary.failed, []);
@@ -175,10 +175,10 @@ describe('drainInbox', () => {
 
 describe('drainInbox — Retryable Failure', () => {
   test('leaves a row pending after a retryable throw so the next run retries it', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await enqueue(store, 'e1');
     let calls = 0;
-    let economy = scriptedEconomy(() => {
+    const economy = scriptedEconomy(() => {
       calls += 1;
       if (calls === 1) {
         throw fault('STORE.FAILURE', 'db blip', { retryable: true });
@@ -186,7 +186,7 @@ describe('drainInbox — Retryable Failure', () => {
       return committed();
     });
 
-    let first = await sweep(store, economy);
+    const first = await sweep(store, economy);
     assert.deepEqual(first.applied, []);
     assert.deepEqual(first.failed, [
       { id: 'ibx_e1', code: 'STORE.FAILURE', retryable: true },
@@ -194,23 +194,23 @@ describe('drainInbox — Retryable Failure', () => {
     assert.deepEqual(first.deadLettered, []);
 
     // The row stayed pending with its attempt bumped; the next run claims it again and succeeds.
-    let second = await sweep(store, economy);
+    const second = await sweep(store, economy);
     assert.deepEqual(second.applied, ['ibx_e1']);
     await store.close();
   });
 
   test('one failing row does not stop the rest of the batch', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await enqueue(store, 'bad');
     await enqueue(store, 'good');
-    let economy = scriptedEconomy((operation) => {
+    const economy = scriptedEconomy((operation) => {
       if (operation.idempotencyKey === 'whk:bad') {
         throw fault('STORE.FAILURE', 'boom', { retryable: true });
       }
       return committed();
     });
 
-    let summary = await sweep(store, economy);
+    const summary = await sweep(store, economy);
 
     assert.deepEqual(summary.applied, ['ibx_good']);
     assert.deepEqual(
@@ -223,30 +223,30 @@ describe('drainInbox — Retryable Failure', () => {
 
 describe('drainInbox — Dead-Letter', () => {
   test('dead-letters a poison row once attempts reach the cap and stops re-claiming it', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await enqueue(store, 'poison');
     // Always throws a retryable fault, so retries never succeed. The cap is 2, so the row
     // dead-letters on the second failure, the one that takes attempts to 2.
-    let economy = scriptedEconomy(() => {
+    const economy = scriptedEconomy(() => {
       throw fault('STORE.FAILURE', 'always down', { retryable: true });
     });
 
-    let first = await sweep(store, economy, 10, 2);
+    const first = await sweep(store, economy, 10, 2);
     assert.deepEqual(
       first.failed.map((f) => f.id),
       ['ibx_poison'],
     );
     assert.deepEqual(first.deadLettered, []);
 
-    let second = await sweep(store, economy, 10, 2);
+    const second = await sweep(store, economy, 10, 2);
     assert.deepEqual(second.failed, []);
     assert.deepEqual(second.deadLettered, [
       { id: 'ibx_poison', reason: 'STORE.FAILURE' },
     ]);
 
     // The dead row is terminal: a later sweep never claims it again, so the economy isn't called.
-    let submittedBefore = economy.submitted.length;
-    let third = await sweep(store, economy, 10, 2);
+    const submittedBefore = economy.submitted.length;
+    const third = await sweep(store, economy, 10, 2);
     assert.deepEqual(third.applied, []);
     assert.deepEqual(third.deadLettered, []);
     assert.equal(economy.submitted.length, submittedBefore);
@@ -254,16 +254,16 @@ describe('drainInbox — Dead-Letter', () => {
   });
 
   test('dead-letters a row the economy rejects (a terminal business no, not retried)', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await enqueue(store, 'e1');
     // A well-formed request the economy declines as data, not as a thrown fault. Retrying would be
     // declined the same way forever, so the row is parked rather than burning attempts.
-    let economy = scriptedEconomy(() => ({
+    const economy = scriptedEconomy(() => ({
       status: 'rejected',
       reason: 'INSUFFICIENT_FUNDS',
     }));
 
-    let summary = await sweep(store, economy);
+    const summary = await sweep(store, economy);
 
     assert.deepEqual(summary.applied, []);
     assert.deepEqual(summary.failed, []);
@@ -272,7 +272,7 @@ describe('drainInbox — Dead-Letter', () => {
     ]);
 
     // Parked immediately: a later sweep doesn't re-submit it.
-    let second = await sweep(store, economy);
+    const second = await sweep(store, economy);
     assert.deepEqual(second.deadLettered, []);
     assert.equal(economy.submitted.length, 1);
     await store.close();

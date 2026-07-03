@@ -43,8 +43,8 @@ import type { Amount } from '#src/money.ts';
 // fixed at 0, so ledger hashes are deterministic. The store is returned so tests can read back
 // the events a submit queued.
 function makePair(): { economy: Economy; store: Store } {
-  let store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
-  let economy = makeEconomy(1, store);
+  const store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
+  const economy = makeEconomy(1, store);
   return { economy, store };
 }
 
@@ -52,7 +52,7 @@ function makePair(): { economy: Economy; store: Store } {
 // most one event. claimBatch reads unsent rows without removing them, so this marks them relayed
 // afterward. Otherwise a later call would hand back the same events.
 async function eventsOf(store: Store): Promise<EconomyEvent[]> {
-  let batch = await store.outbox.claimBatch(100);
+  const batch = await store.outbox.claimBatch(100);
   await store.outbox.markRelayed(batch.map((message) => message.id));
   return batch.map((message) => message.event);
 }
@@ -63,7 +63,7 @@ async function fund(
   userId: string,
   amount: string,
 ): Promise<void> {
-  let outcome = await economy.submit(
+  const outcome = await economy.submit(
     buildTopUp({ userId, amount: credit(amount) }),
   );
   assert.equal(outcome.status, 'committed');
@@ -91,33 +91,33 @@ async function fundEarned(
 
 // Returns the single event a submit enqueued, asserting that exactly one was emitted.
 async function onlyEvent(store: Store): Promise<EconomyEvent> {
-  let events = await eventsOf(store);
+  const events = await eventsOf(store);
   assert.equal(events.length, 1);
   return events[0];
 }
 
 describe('Submit-Path Domain Events', () => {
   test('a refund emits economy.sale.refunded whose subject is the buyer derived from the debit/credit lines', async () => {
-    let { economy, store } = makePair();
+    const { economy, store } = makePair();
     await fund(economy, 'usr_buyer', '10.00');
 
-    let spend = buildSpend({
+    const spend = buildSpend({
       buyerId: 'usr_buyer',
       sku: 'wrld_pass',
       price: credit('4.00'),
       orderId: 'ord_refund_1',
       recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
     });
-    let bought = await economy.submit(spend);
+    const bought = await economy.submit(spend);
     assert.equal(bought.status, 'committed');
     await eventsOf(store); // discard topUp + spend events
 
-    let refunded = await economy.submit(
+    const refunded = await economy.submit(
       buildRefund({ orderId: 'ord_refund_1' }),
     );
     assert.equal(refunded.status, 'committed');
 
-    let event = await onlyEvent(store);
+    const event = await onlyEvent(store);
     assert.equal(event.type, 'economy.sale.refunded');
     assert.equal(event.audience, 'client');
     // The refund request named only an orderId; the buyer is derived from the reversing
@@ -128,11 +128,11 @@ describe('Submit-Path Domain Events', () => {
   });
 
   test('a clawback emits an internal economy.credits.clawed_back for the affected user', async () => {
-    let { economy, store } = makePair();
+    const { economy, store } = makePair();
     await fund(economy, 'usr_disputer', '10.00');
     await eventsOf(store);
 
-    let outcome = await economy.submit(
+    const outcome = await economy.submit(
       buildClawback({
         userId: 'usr_disputer',
         amount: credit('4.00'),
@@ -141,7 +141,7 @@ describe('Submit-Path Domain Events', () => {
     );
     assert.equal(outcome.status, 'committed');
 
-    let event = await onlyEvent(store);
+    const event = await onlyEvent(store);
     assert.equal(event.type, 'economy.credits.clawed_back');
     assert.equal(event.audience, 'internal');
     assert.equal(event.subject, 'usr_disputer');
@@ -153,15 +153,15 @@ describe('Submit-Path Domain Events', () => {
 
 describe('Submit-Path Domain Events (Payouts & Subscriptions)', () => {
   test('a committed requestPayout emits economy.payout.requested for the seller', async () => {
-    let { economy, store } = makePair();
+    const { economy, store } = makePair();
     await fundEarned(store, 'usr_seller', credit('20.00'));
 
-    let outcome = await economy.submit(
+    const outcome = await economy.submit(
       buildRequestPayout({ userId: 'usr_seller', amount: credit('20.00') }),
     );
     assert.equal(outcome.status, 'committed');
 
-    let event = await onlyEvent(store);
+    const event = await onlyEvent(store);
     assert.equal(event.type, 'economy.payout.requested');
     assert.equal(event.audience, 'client');
     assert.equal(event.subject, 'usr_seller');
@@ -170,11 +170,11 @@ describe('Submit-Path Domain Events (Payouts & Subscriptions)', () => {
   });
 
   test('subscribe emits economy.subscription.started with {userId,sku,period}', async () => {
-    let { economy, store } = makePair();
+    const { economy, store } = makePair();
     await fund(economy, 'usr_buyer', '100.00');
     await eventsOf(store);
 
-    let outcome = await economy.submit(
+    const outcome = await economy.submit(
       buildSubscribe({
         userId: 'usr_buyer',
         sellerId: 'usr_seller',
@@ -184,7 +184,7 @@ describe('Submit-Path Domain Events (Payouts & Subscriptions)', () => {
     );
     assert.equal(outcome.status, 'committed');
 
-    let event = await onlyEvent(store);
+    const event = await onlyEvent(store);
     assert.equal(event.type, 'economy.subscription.started');
     assert.equal(event.audience, 'client');
     assert.equal(event.subject, 'usr_buyer');
@@ -194,10 +194,10 @@ describe('Submit-Path Domain Events (Payouts & Subscriptions)', () => {
   });
 
   test('cancelSubscription emits economy.subscription.canceled even though it records no debit/credit lines', async () => {
-    let { economy, store } = makePair();
+    const { economy, store } = makePair();
     await fund(economy, 'usr_buyer', '100.00');
 
-    let started = await economy.submit(
+    const started = await economy.submit(
       buildSubscribe({
         userId: 'usr_buyer',
         sellerId: 'usr_seller',
@@ -208,10 +208,10 @@ describe('Submit-Path Domain Events (Payouts & Subscriptions)', () => {
     assert.equal(started.status, 'committed');
     // The subscribe handler generates the subscription id internally; read it back from the
     // stored record so the cancel below targets a real subscription.
-    let subscriptionId = await onlySubscriptionId(store, 'usr_buyer');
+    const subscriptionId = await onlySubscriptionId(store, 'usr_buyer');
     await eventsOf(store); // discard topUp + started events
 
-    let outcome = await economy.submit(
+    const outcome = await economy.submit(
       buildCancelSubscription({ subscriptionId }),
     );
     assert.equal(outcome.status, 'committed');
@@ -224,7 +224,7 @@ describe('Submit-Path Domain Events (Payouts & Subscriptions)', () => {
       [],
     );
 
-    let event = await onlyEvent(store);
+    const event = await onlyEvent(store);
     assert.equal(event.type, 'economy.subscription.canceled');
     assert.equal(event.audience, 'client');
     assert.equal(event.subject, subscriptionId);
@@ -238,8 +238,8 @@ async function onlySubscriptionId(
   store: Store,
   userId: string,
 ): Promise<string> {
-  let due = await store.subscriptions.claimDue(Number.MAX_SAFE_INTEGER, 100);
-  let mine = due.filter((subscription) => subscription.userId === userId);
+  const due = await store.subscriptions.claimDue(Number.MAX_SAFE_INTEGER, 100);
+  const mine = due.filter((subscription) => subscription.userId === userId);
   assert.equal(mine.length, 1);
   return mine[0].id;
 }

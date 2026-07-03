@@ -60,7 +60,7 @@ interface PgModule {
     options?: string;
   }) => PgPoolLike;
 }
-let pg = pgUntyped as PgModule;
+const pg = pgUntyped as PgModule;
 
 /**
  * Holds one engine wired for adversarial testing. The `store` is a live {@link Store} whose clean
@@ -104,7 +104,7 @@ function postgresUrl(): string {
 let run = 0;
 function freshName(prefix: string): string {
   run += 1;
-  let stamp = Date.now().toString(36);
+  const stamp = Date.now().toString(36);
   return `${prefix}_${process.pid}_${stamp}_${run}`;
 }
 
@@ -114,7 +114,7 @@ function freshName(prefix: string): string {
  * cases use to write around `postEntry`.
  */
 export function adversarialMemory(): AdversarialMemory {
-  let store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
+  const store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
   return {
     name: 'memory',
     store,
@@ -129,8 +129,8 @@ export function adversarialMemory(): AdversarialMemory {
  * raw INSERT lands in the very table `post_entry` writes. Mirrors postgresStore's own isolation.
  */
 export async function adversarialPostgres(): Promise<AdversarialEngine | null> {
-  let url = postgresUrl();
-  let schema = freshName('el_adv_pg');
+  const url = postgresUrl();
+  const schema = freshName('el_adv_pg');
   let store: Store;
   try {
     store = await postgresStore({
@@ -143,7 +143,7 @@ export async function adversarialPostgres(): Promise<AdversarialEngine | null> {
     return null;
   }
   // A second pool, aimed at the same schema, carries the raw writes around the app.
-  let rawPool = new pg.Pool({
+  const rawPool = new pg.Pool({
     connectionString: url,
     options: `-c search_path=${schema}`,
   });
@@ -151,7 +151,7 @@ export async function adversarialPostgres(): Promise<AdversarialEngine | null> {
     name: 'postgres',
     store,
     raw: async (sql, params) => {
-      let result = await rawPool.query(sql, params);
+      const result = await rawPool.query(sql, params);
       return result.rows;
     },
     close: async () => {
@@ -174,7 +174,7 @@ function safeDatabaseName(name: string): string {
 
 // Points a MySQL URL at a different database, preserving host and credentials.
 function withDatabase(url: string, database: string): string {
-  let parsed = new URL(url);
+  const parsed = new URL(url);
   parsed.pathname = `/${database}`;
   return parsed.toString();
 }
@@ -186,7 +186,7 @@ function withUserAndDatabase(
   password: string,
   database: string,
 ): string {
-  let parsed = new URL(url);
+  const parsed = new URL(url);
   parsed.username = user;
   parsed.password = password;
   parsed.pathname = `/${database}`;
@@ -198,9 +198,9 @@ function withUserAndDatabase(
 // by the admin, so a raw unbalanced-leg insert is refused. The other tables keep direct DML so the
 // chain continuity, balance integrity, overdraft, and exactly-once raw cases still reach their own
 // engine mechanisms rather than a blanket privilege denial.
-let APP_USER = 'el_adv_app';
-let APP_PASSWORD = 'el_adv_app';
-let APP_DML_TABLES = [
+const APP_USER = 'el_adv_app';
+const APP_PASSWORD = 'el_adv_app';
+const APP_DML_TABLES = [
   'accounts',
   'postings',
   'chain_links',
@@ -232,11 +232,11 @@ let APP_DML_TABLES = [
  * restricted role may not write directly.
  */
 export async function adversarialMysql(): Promise<AdversarialEngine | null> {
-  let url = process.env.MYSQL_TEST_URL;
+  const url = process.env.MYSQL_TEST_URL;
   if (!url) {
     return null;
   }
-  let database = safeDatabaseName(freshName('el_adv_my'));
+  const database = safeDatabaseName(freshName('el_adv_my'));
   let admin: MysqlPool;
   let schemaPool: MysqlPool;
   let storePool: MysqlPool;
@@ -263,13 +263,13 @@ export async function adversarialMysql(): Promise<AdversarialEngine | null> {
     await admin.query(
       `GRANT SELECT, EXECUTE ON \`${database}\`.* TO '${APP_USER}'@'%'`,
     );
-    for (let table of APP_DML_TABLES) {
+    for (const table of APP_DML_TABLES) {
       await admin.query(
         `GRANT INSERT, UPDATE, DELETE ON \`${database}\`.\`${table}\` TO '${APP_USER}'@'%'`,
       );
     }
 
-    let appUrl = withUserAndDatabase(url, APP_USER, APP_PASSWORD, database);
+    const appUrl = withUserAndDatabase(url, APP_USER, APP_PASSWORD, database);
     storePool = await createMysqlPool(appUrl);
     store = mysqlStore({
       pool: storePool,
@@ -285,7 +285,7 @@ export async function adversarialMysql(): Promise<AdversarialEngine | null> {
     store,
     raw: async (sql, params) => {
       // mysql2 returns [rows, fields]. Surface the rows as an array for symmetry with pg.
-      let [result] = await rawPool.query(sql, params);
+      const [result] = await rawPool.query(sql, params);
       return Array.isArray(result) ? (result as unknown[]) : [];
     },
     close: async () => {

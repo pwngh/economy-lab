@@ -45,7 +45,7 @@ function postgresUrl(): string {
 let run = 0;
 export function freshName(prefix: string): string {
   run += 1;
-  let stamp = Date.now().toString(36);
+  const stamp = Date.now().toString(36);
   return `${prefix}_${process.pid}_${stamp}_${run}`;
 }
 
@@ -64,7 +64,7 @@ function safeDatabaseName(name: string): string {
 // credentials intact. A null database strips it so the connection has no default database, which is
 // what the admin pool needs to run CREATE DATABASE and DROP DATABASE.
 function withDatabase(url: string, database: string | null): string {
-  let parsed = new URL(url);
+  const parsed = new URL(url);
   parsed.pathname = database ? `/${database}` : '/';
   return parsed.toString();
 }
@@ -118,13 +118,13 @@ export async function makeIsolatedMysqlStore(opts: {
   clock: Clock;
   connectionLimit?: number;
 }): Promise<Store> {
-  let database = safeDatabaseName(freshName('el_iso'));
-  let admin = await createMysqlPool(withDatabase(opts.url, null));
+  const database = safeDatabaseName(freshName('el_iso'));
+  const admin = await createMysqlPool(withDatabase(opts.url, null));
   await admin.query(`CREATE DATABASE \`${database}\``);
 
   // Drops the throwaway database and tears down the admin pool. It tolerates a missing database and
   // a failed drop so that cleanup on a half-built store still ends every pool.
-  let dropDatabase = async () => {
+  const dropDatabase = async () => {
     try {
       await admin.query(`DROP DATABASE IF EXISTS \`${database}\``);
     } finally {
@@ -147,7 +147,7 @@ export async function makeIsolatedMysqlStore(opts: {
     throw error;
   }
 
-  let store = mysqlStore({ pool, digest: opts.digest, clock: opts.clock });
+  const store = mysqlStore({ pool, digest: opts.digest, clock: opts.clock });
   return {
     ...store,
     close: async () => {
@@ -191,7 +191,7 @@ export function adapterMatrix(): AdapterCase[] {
     {
       name: 'mysql',
       makeStore: async () => {
-        let url = process.env.MYSQL_TEST_URL;
+        const url = process.env.MYSQL_TEST_URL;
         if (!url) {
           throw new Error('MYSQL_TEST_URL not set');
         }
@@ -207,7 +207,7 @@ export function adapterMatrix(): AdapterCase[] {
       makeStore: async () => {
         // Runs in-process. The memory backing store carries the seeded digest and fixed clock, and
         // the HTTP client talks to a server over it. The HTTP path therefore hashes like the others.
-        let backing = memoryStore({
+        const backing = memoryStore({
           digest: seededDigest(1),
           clock: fixedClock(0),
         });

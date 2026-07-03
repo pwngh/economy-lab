@@ -33,8 +33,8 @@ runCacheConformance('memory', () => memoryCache());
 
 describe('memoryCache: ttl expiry', () => {
   test('an entry past its ttl reads back null', async () => {
-    let clock = manualClock();
-    let cache = memoryCache(clock);
+    const clock = manualClock();
+    const cache = memoryCache(clock);
 
     await cache.set('bal:usr_1', 'CREDIT:1.00', 1_000);
     assert.equal(await cache.get('bal:usr_1'), 'CREDIT:1.00');
@@ -44,8 +44,8 @@ describe('memoryCache: ttl expiry', () => {
   });
 
   test('an entry without a ttl never expires', async () => {
-    let clock = manualClock();
-    let cache = memoryCache(clock);
+    const clock = manualClock();
+    const cache = memoryCache(clock);
 
     await cache.set('bal:usr_1', 'CREDIT:1.00');
     clock.advance(10_000_000);

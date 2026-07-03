@@ -25,7 +25,7 @@ import type {
 
 // Wide enough to include every record here, so window filtering is a no-op. Window logic
 // has its own test below.
-let ALL_TIME = { from: 0, to: 1_000_000 };
+const ALL_TIME = { from: 0, to: 1_000_000 };
 
 // Builds a processor record, which is one settled payment the processor reports. Fields a
 // test does not care about get defaults.
@@ -62,9 +62,9 @@ function ledgerRecord(o: {
 }
 
 function reconcilesAMatchedPair(): void {
-  let amount = usd('5.00');
+  const amount = usd('5.00');
 
-  let report = reconcile(ALL_TIME, {
+  const report = reconcile(ALL_TIME, {
     processor: [processorRecord({ matchKey: 'pay_1', amount })],
     ledger: [ledgerRecord({ matchKey: 'pay_1', amount })],
   });
@@ -75,7 +75,7 @@ function reconcilesAMatchedPair(): void {
 }
 
 function flagsAProcessorOrphan(): void {
-  let report = reconcile(ALL_TIME, {
+  const report = reconcile(ALL_TIME, {
     processor: [
       processorRecord({ matchKey: 'pay_orphan', amount: usd('9.00') }),
     ],
@@ -96,7 +96,7 @@ function flagsAProcessorOrphan(): void {
 }
 
 function flagsALedgerOrphan(): void {
-  let report = reconcile(ALL_TIME, {
+  const report = reconcile(ALL_TIME, {
     processor: [],
     ledger: [ledgerRecord({ matchKey: 'pay_stuck', amount: usd('7.00') })],
   });
@@ -114,7 +114,7 @@ function flagsALedgerOrphan(): void {
 }
 
 function flagsAmountDrift(): void {
-  let report = reconcile(ALL_TIME, {
+  const report = reconcile(ALL_TIME, {
     processor: [processorRecord({ matchKey: 'pay_2', amount: usd('5.00') })],
     ledger: [ledgerRecord({ matchKey: 'pay_2', amount: usd('5.01') })],
   });
@@ -134,11 +134,11 @@ function flagsAmountDrift(): void {
 }
 
 function neverMatchesABuyToAPayout(): void {
-  let amount = usd('5.00');
+  const amount = usd('5.00');
 
   // Same match key and amount, but one is a buy and the other a payout. Matcher pairs only
   // when kind matches too, so these stay separate.
-  let report = reconcile(ALL_TIME, {
+  const report = reconcile(ALL_TIME, {
     processor: [processorRecord({ kind: 'buy', matchKey: 'ref_1', amount })],
     ledger: [ledgerRecord({ kind: 'payout', matchKey: 'ref_1', amount })],
   });
@@ -149,11 +149,11 @@ function neverMatchesABuyToAPayout(): void {
 }
 
 function scopesTheHalfOpenWindow(): void {
-  let amount = usd('1.00');
+  const amount = usd('1.00');
 
   // The window [10, 20) is half-open. 10 is inside, and 20 belongs to the next window. So the
   // "in" records count and the "out" records are dropped.
-  let report = reconcile(
+  const report = reconcile(
     { from: 10, to: 20 },
     {
       processor: [
@@ -176,7 +176,7 @@ function scopesTheHalfOpenWindow(): void {
 function treatsCrossCurrencyAsDrift(): void {
   // Same match key, but amounts are in different currencies (USD vs CREDIT). Cross-currency
   // amounts can't be compared, so report drift rather than treat them as equal.
-  let report = reconcile(ALL_TIME, {
+  const report = reconcile(ALL_TIME, {
     processor: [processorRecord({ matchKey: 'pay_3', amount: usd('5.00') })],
     ledger: [ledgerRecord({ matchKey: 'pay_3', amount: credit('5.00') })],
   });
@@ -195,14 +195,14 @@ function treatsCrossCurrencyAsDrift(): void {
 }
 
 function emitsAByteStableReportRegardlessOfInputOrder(): void {
-  let amount = usd('2.00');
-  let processor = [
+  const amount = usd('2.00');
+  const processor = [
     processorRecord({ matchKey: 'orphan_b', amount }),
     processorRecord({ matchKey: 'orphan_a', amount }),
   ];
 
-  let forward = reconcile(ALL_TIME, { processor, ledger: [] });
-  let reversed = reconcile(ALL_TIME, {
+  const forward = reconcile(ALL_TIME, { processor, ledger: [] });
+  const reversed = reconcile(ALL_TIME, {
     processor: [...processor].reverse(),
     ledger: [],
   });
@@ -215,9 +215,9 @@ function emitsAByteStableReportRegardlessOfInputOrder(): void {
 }
 
 function reportsCountsAndKeepsThemConsistentWithTheList(): void {
-  let amount = usd('1.00');
+  const amount = usd('1.00');
 
-  let report = reconcile(ALL_TIME, {
+  const report = reconcile(ALL_TIME, {
     processor: [
       processorRecord({ matchKey: 'ok', amount }),
       processorRecord({ matchKey: 'p_only', amount }),
@@ -249,8 +249,8 @@ function reportsCountsAndKeepsThemConsistentWithTheList(): void {
 // ledger record surfaces as a ledger orphan rather than being dropped, so the report is not a
 // false all-clear.
 function surfacesADuplicateLedgerRecordAsAnOrphan(): void {
-  let amount = usd('5.00');
-  let report = reconcile(ALL_TIME, {
+  const amount = usd('5.00');
+  const report = reconcile(ALL_TIME, {
     processor: [processorRecord({ matchKey: 'dup', amount })],
     ledger: [
       ledgerRecord({ matchKey: 'dup', amount }),
@@ -268,8 +268,8 @@ function surfacesADuplicateLedgerRecordAsAnOrphan(): void {
 // N duplicate ledger records with no processor side. All N surface as ledger orphans rather than
 // collapsing to one. The old index kept only the first record per key.
 function surfacesEveryDuplicateLedgerOrphan(): void {
-  let amount = usd('3.00');
-  let report = reconcile(ALL_TIME, {
+  const amount = usd('3.00');
+  const report = reconcile(ALL_TIME, {
     processor: [],
     ledger: [
       ledgerRecord({ matchKey: 'dup', amount }),
@@ -287,8 +287,8 @@ function surfacesEveryDuplicateLedgerOrphan(): void {
 // The processor side is symmetric. Two processor records share a key with one ledger record. One
 // pair forms, and the surplus surfaces as a processor orphan.
 function surfacesADuplicateProcessorRecordAsAnOrphan(): void {
-  let amount = usd('4.00');
-  let report = reconcile(ALL_TIME, {
+  const amount = usd('4.00');
+  const report = reconcile(ALL_TIME, {
     processor: [
       processorRecord({ matchKey: 'dup', amount }),
       processorRecord({ matchKey: 'dup', amount }),
@@ -305,7 +305,7 @@ function surfacesADuplicateProcessorRecordAsAnOrphan(): void {
 // Duplicates pair up oldest-first; a surplus pair whose amounts disagree is a drift, and every
 // record on both sides is still accounted for exactly once.
 function pairsDuplicatesOldestFirstAndDriftsTheSurplus(): void {
-  let report = reconcile(ALL_TIME, {
+  const report = reconcile(ALL_TIME, {
     processor: [
       processorRecord({ matchKey: 'dup', amount: usd('5.00') }),
       processorRecord({ matchKey: 'dup', amount: usd('9.99') }),

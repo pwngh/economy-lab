@@ -40,12 +40,12 @@ import type { Logger, Meter, Rates, Store, Unit } from '#src/ports.ts';
 // round. The shared `fixedRates()` uses $0.005, which would give fractional figures. The fee sweep
 // reads par from `rates` and works at any value, so the chosen peg is only a test fixture.
 function treasuryRates(): Rates {
-  let credCons = (kind: string, rate: bigint, scale: number) => ({
+  const credCons = (kind: string, rate: bigint, scale: number) => ({
     rate,
     scale,
     rateId: `${kind}:CREDIT->USD:${rate}/${scale}`,
   });
-  let identity = (kind: string, c: Currency) => ({
+  const identity = (kind: string, c: Currency) => ({
     rate: 1n,
     scale: 0,
     rateId: `${kind}:${c}->USD:1`,
@@ -167,7 +167,7 @@ async function seedSurplus(
 function capturingLogger(): Logger & {
   lines: Array<{ level: string; event: string }>;
 } {
-  let lines: Array<{ level: string; event: string }> = [];
+  const lines: Array<{ level: string; event: string }> = [];
   return {
     lines,
     log: (level, event) => {
@@ -193,12 +193,12 @@ function poisonHeads(store: Store, error: Error): Store {
 
 describe('sweepTreasury', () => {
   test('reports a fully backed position when custody cash matches the credits owed to users', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await store.transaction((unit) =>
       seedBacked(unit, 'usr_backed', credit('100.00'), usd('1.00')),
     );
 
-    let summary = await sweepTreasury(store, workerCtx(), { now: 0 });
+    const summary = await sweepTreasury(store, workerCtx(), { now: 0 });
 
     assert.equal(summary.position?.backed, true);
     assert.deepEqual(summary.position?.shortfall, usd('0.00'));
@@ -206,12 +206,12 @@ describe('sweepTreasury', () => {
   });
 
   test('measures the credits owed to users excluding earned, promo, and the reserve', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await store.transaction((unit) =>
       seedBacked(unit, 'usr_backed', credit('40.00'), usd('0.40')),
     );
 
-    let summary = await sweepTreasury(store, workerCtx(), { now: 0 });
+    const summary = await sweepTreasury(store, workerCtx(), { now: 0 });
 
     assert.deepEqual(summary.position?.custodialCredit, credit('40.00'));
     assert.deepEqual(summary.position?.required, usd('0.40'));
@@ -219,13 +219,15 @@ describe('sweepTreasury', () => {
   });
 
   test('raises a breach when spendable is issued without matching custody cash', async () => {
-    let store = memoryStore();
-    let logger = capturingLogger();
+    const store = memoryStore();
+    const logger = capturingLogger();
     await store.transaction((unit) =>
       seedUnbacked(unit, 'usr_short', credit('75.00')),
     );
 
-    let summary = await sweepTreasury(store, workerCtx({ logger }), { now: 0 });
+    const summary = await sweepTreasury(store, workerCtx({ logger }), {
+      now: 0,
+    });
 
     assert.equal(summary.position?.backed, false);
     assert.deepEqual(summary.position?.shortfall, usd('0.75'));
@@ -242,13 +244,13 @@ describe('sweepTreasury', () => {
   });
 
   test('books no posting for a breach, leaving the ledger untouched', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await store.transaction((unit) =>
       seedUnbacked(unit, 'usr_short', credit('30.00')),
     );
 
     await sweepTreasury(store, workerCtx(), { now: 0 });
-    let spendableAfter = await store.ledger.balance(spendable('usr_short'));
+    const spendableAfter = await store.ledger.balance(spendable('usr_short'));
 
     assert.deepEqual(spendableAfter, credit('30.00'));
     assert.deepEqual(
@@ -258,12 +260,12 @@ describe('sweepTreasury', () => {
   });
 
   test('leaves the position for the next sweep on a retryable store failure', async () => {
-    let store = poisonHeads(
+    const store = poisonHeads(
       memoryStore(),
       fault('STORE.FAILURE', 'transient read failure', { retryable: true }),
     );
 
-    let summary = await sweepTreasury(store, workerCtx(), { now: 0 });
+    const summary = await sweepTreasury(store, workerCtx(), { now: 0 });
 
     assert.equal(summary.position, null);
     assert.deepEqual(summary.retrying, [{ code: 'STORE.FAILURE' }]);
@@ -271,14 +273,14 @@ describe('sweepTreasury', () => {
   });
 
   test('records a terminal fault without throwing out of the worker loop', async () => {
-    let store = poisonHeads(
+    const store = poisonHeads(
       memoryStore(),
       fault('LEDGER.UNKNOWN_ACCOUNT', 'terminal read fault', {
         retryable: false,
       }),
     );
 
-    let summary = await sweepTreasury(store, workerCtx(), { now: 0 });
+    const summary = await sweepTreasury(store, workerCtx(), { now: 0 });
 
     assert.equal(summary.position, null);
     assert.deepEqual(summary.failed, [{ code: 'LEDGER.UNKNOWN_ACCOUNT' }]);
@@ -288,7 +290,7 @@ describe('sweepTreasury', () => {
 
 describe('sweepFees', () => {
   test('realizes revenue as cash: REVENUE and TRUST_CASH each drop by the swept amount', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await store.transaction((unit) =>
       seedSurplus(unit, {
         spendableCredit: credit('100.00'),
@@ -297,7 +299,7 @@ describe('sweepFees', () => {
       }),
     );
 
-    let result = await sweepFees(store, workerCtx(), {
+    const result = await sweepFees(store, workerCtx(), {
       amount: credit('30.00'),
     });
 
@@ -320,7 +322,7 @@ describe('sweepFees', () => {
   });
 
   test('throws COMMINGLING and posts nothing when the draw exceeds the sweepable surplus', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await store.transaction((unit) =>
       seedSurplus(unit, {
         spendableCredit: credit('100.00'),
@@ -351,7 +353,7 @@ describe('sweepFees', () => {
 
 describe('sweepFees: Caps, Idempotency & Validation', () => {
   test('caps the sweep at matured REVENUE so a fee inside its refund window cannot be swept', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await store.transaction((unit) =>
       seedSurplus(unit, {
         spendableCredit: credit('100.00'),
@@ -365,7 +367,7 @@ describe('sweepFees: Caps, Idempotency & Validation', () => {
     // posted at time 0 with no source, so it uses the card window of 1000ms set below. The clock is
     // still at 0, so nothing has matured and the sweepable ceiling is 0 even though the surplus is
     // 30.
-    let config: Config = {
+    const config: Config = {
       ...testConfig(),
       maturityHorizonMs: { card: 1000, default: 1000 },
     };
@@ -383,7 +385,7 @@ describe('sweepFees: Caps, Idempotency & Validation', () => {
   });
 
   test('a replayed sweep key is a no-op: it posts and realizes nothing the second time', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await store.transaction((unit) =>
       seedSurplus(unit, {
         spendableCredit: credit('100.00'),
@@ -392,12 +394,12 @@ describe('sweepFees: Caps, Idempotency & Validation', () => {
       }),
     );
 
-    let ctx = workerCtx();
-    let first = await sweepFees(store, ctx, {
+    const ctx = workerCtx();
+    const first = await sweepFees(store, ctx, {
       amount: credit('10.00'),
       key: '2026-06',
     });
-    let second = await sweepFees(store, ctx, {
+    const second = await sweepFees(store, ctx, {
       amount: credit('10.00'),
       key: '2026-06',
     });
@@ -413,7 +415,7 @@ describe('sweepFees: Caps, Idempotency & Validation', () => {
   });
 
   test('rejects a non-positive sweep amount as INVALID_AMOUNT', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
 
     await assert.rejects(
       () => sweepFees(store, workerCtx(), { amount: credit('0.00') }),
@@ -426,7 +428,7 @@ describe('sweepFees: Caps, Idempotency & Validation', () => {
 
 describe('sweepFees: Event Emission', () => {
   test('emits exactly one internal economy.fees.swept co-committed with the posting', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await store.transaction((unit) =>
       seedSurplus(unit, {
         spendableCredit: credit('100.00'),
@@ -435,13 +437,13 @@ describe('sweepFees: Event Emission', () => {
       }),
     );
 
-    let result = await sweepFees(store, workerCtx(), {
+    const result = await sweepFees(store, workerCtx(), {
       amount: credit('30.00'),
     });
     assert.equal(result.duplicate, false);
 
-    let queued = await store.outbox.claimBatch(10);
-    let swept = queued.filter((m) => m.event.type === 'economy.fees.swept');
+    const queued = await store.outbox.claimBatch(10);
+    const swept = queued.filter((m) => m.event.type === 'economy.fees.swept');
     assert.equal(swept.length, 1);
     assert.equal(swept[0].event.audience, 'internal');
     // Subject is the realizing CREDIT posting's txn id so a consumer can tie the two together.
@@ -453,7 +455,7 @@ describe('sweepFees: Event Emission', () => {
   });
 
   test('a replayed sweep key emits no second economy.fees.swept', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await store.transaction((unit) =>
       seedSurplus(unit, {
         spendableCredit: credit('100.00'),
@@ -462,19 +464,19 @@ describe('sweepFees: Event Emission', () => {
       }),
     );
 
-    let ctx = workerCtx();
+    const ctx = workerCtx();
     await sweepFees(store, ctx, { amount: credit('10.00'), key: '2026-06' });
     await sweepFees(store, ctx, { amount: credit('10.00'), key: '2026-06' });
 
-    let queued = await store.outbox.claimBatch(10);
-    let swept = queued.filter((m) => m.event.type === 'economy.fees.swept');
+    const queued = await store.outbox.claimBatch(10);
+    const swept = queued.filter((m) => m.event.type === 'economy.fees.swept');
     assert.equal(swept.length, 1);
   });
 });
 
 describe('realizeFees: The Per-Cycle Policy', () => {
   test('sweeps the full available surplus and emits one economy.fees.swept', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     // $1.30 of trust is 130 credits at par. Minus 100 owed, the surplus is 30, and matured REVENUE
     // is 30, so the cycle sweeps the full 30.
     await store.transaction((unit) =>
@@ -485,7 +487,7 @@ describe('realizeFees: The Per-Cycle Policy', () => {
       }),
     );
 
-    let summary = await realizeFees(store, workerCtx(), { now: 1_000 });
+    const summary = await realizeFees(store, workerCtx(), { now: 1_000 });
 
     assert.equal(summary.skipped, false);
     assert.equal(summary.duplicate, false);
@@ -500,14 +502,14 @@ describe('realizeFees: The Per-Cycle Policy', () => {
       usd('1.00'),
     );
 
-    let queued = await store.outbox.claimBatch(10);
-    let swept = queued.filter((m) => m.event.type === 'economy.fees.swept');
+    const queued = await store.outbox.claimBatch(10);
+    const swept = queued.filter((m) => m.event.type === 'economy.fees.swept');
     assert.equal(swept.length, 1);
     assert.equal(swept[0].event.audience, 'internal');
   });
 
   test('caps the cycle sweep at the lesser of surplus and matured revenue', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     // The surplus is 30, because $1.30 of trust is 130 credits at par minus 100 owed. REVENUE is
     // only 20, so the matured-revenue cap binds and the cycle realizes 20, not 30.
     await store.transaction((unit) =>
@@ -518,7 +520,7 @@ describe('realizeFees: The Per-Cycle Policy', () => {
       }),
     );
 
-    let summary = await realizeFees(store, workerCtx(), { now: 1_000 });
+    const summary = await realizeFees(store, workerCtx(), { now: 1_000 });
 
     assert.equal(summary.skipped, false);
     assert.equal(summary.swept, 'CREDIT:20.00');
@@ -531,7 +533,7 @@ describe('realizeFees: The Per-Cycle Policy', () => {
 
 describe('realizeFees: Skip And Idempotency', () => {
   test('skips with no posting or event when the available surplus is zero', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     // The position is fully backed with no accrued revenue, so the surplus is 0 and there is nothing
     // to realize.
     await store.transaction((unit) =>
@@ -542,7 +544,7 @@ describe('realizeFees: Skip And Idempotency', () => {
       }),
     );
 
-    let summary = await realizeFees(store, workerCtx(), { now: 1_000 });
+    const summary = await realizeFees(store, workerCtx(), { now: 1_000 });
 
     assert.equal(summary.skipped, true);
     assert.equal(summary.duplicate, false);
@@ -556,7 +558,7 @@ describe('realizeFees: Skip And Idempotency', () => {
       usd('1.00'),
     );
 
-    let queued = await store.outbox.claimBatch(10);
+    const queued = await store.outbox.claimBatch(10);
     assert.deepEqual(
       queued.filter((m) => m.event.type === 'economy.fees.swept'),
       [],
@@ -564,7 +566,7 @@ describe('realizeFees: Skip And Idempotency', () => {
   });
 
   test('a repeated cycle (same now) is idempotent: the second sweep is a no-op', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await store.transaction((unit) =>
       seedSurplus(unit, {
         spendableCredit: credit('100.00'),
@@ -573,12 +575,12 @@ describe('realizeFees: Skip And Idempotency', () => {
       }),
     );
 
-    let ctx = workerCtx();
-    let first = await realizeFees(store, ctx, { now: 1_000 });
+    const ctx = workerCtx();
+    const first = await realizeFees(store, ctx, { now: 1_000 });
     // Each cycle derives a dedup key from its time, so the same time gives the same key, and a sweep
     // already run under a key is not re-applied. This test never reaches that check. The first run
     // realized all 30, so the second sees surplus 0 and short-circuits to skip.
-    let second = await realizeFees(store, ctx, { now: 1_000 });
+    const second = await realizeFees(store, ctx, { now: 1_000 });
 
     assert.equal(first.swept, 'CREDIT:30.00');
     assert.equal(second.skipped, true);
@@ -603,7 +605,7 @@ describe('runSweeps: Fee Realization Is Wired Into The Worker Cycle', () => {
   }
 
   test('a cycle with realized surplus posts one fee sweep and one economy.fees.swept', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await store.transaction((unit) =>
       seedSurplus(unit, {
         spendableCredit: credit('100.00'),
@@ -612,7 +614,7 @@ describe('runSweeps: Fee Realization Is Wired Into The Worker Cycle', () => {
       }),
     );
 
-    let batch = await runSweeps(store, workerCtx(), cycleInput(1_000));
+    const batch = await runSweeps(store, workerCtx(), cycleInput(1_000));
 
     assert.equal(batch.feeSweep.ok, true);
     assert.equal(
@@ -624,7 +626,7 @@ describe('runSweeps: Fee Realization Is Wired Into The Worker Cycle', () => {
       credit('0.00'),
     );
 
-    let queued = await store.outbox.claimBatch(10);
+    const queued = await store.outbox.claimBatch(10);
     assert.equal(
       queued.filter((m) => m.event.type === 'economy.fees.swept').length,
       1,
@@ -632,7 +634,7 @@ describe('runSweeps: Fee Realization Is Wired Into The Worker Cycle', () => {
   });
 
   test('a cycle with zero surplus posts and emits nothing for the fee sweep', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await store.transaction((unit) =>
       seedSurplus(unit, {
         spendableCredit: credit('100.00'),
@@ -641,14 +643,14 @@ describe('runSweeps: Fee Realization Is Wired Into The Worker Cycle', () => {
       }),
     );
 
-    let batch = await runSweeps(store, workerCtx(), cycleInput(1_000));
+    const batch = await runSweeps(store, workerCtx(), cycleInput(1_000));
 
     assert.equal(batch.feeSweep.ok, true);
     assert.equal(
       (batch.feeSweep as { summary: { skipped: boolean } }).summary.skipped,
       true,
     );
-    let queued = await store.outbox.claimBatch(10);
+    const queued = await store.outbox.claimBatch(10);
     assert.deepEqual(
       queued.filter((m) => m.event.type === 'economy.fees.swept'),
       [],

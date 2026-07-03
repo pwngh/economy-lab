@@ -59,17 +59,17 @@ export function runDispatcherConformance(
 ): void {
   describe(`Dispatcher Conformance: ${name}`, () => {
     test('sends the event as the one canonical encoded body', async () => {
-      let h = makeHarness();
+      const h = makeHarness();
       await h.dispatcher(sampleEvent());
       assert.equal(h.bodies.length, 1);
       assert.equal(h.bodies[0], encodeEvent(sampleEvent()));
     });
 
     test('a transport failure throws a retryable PROVIDER.FAILURE', async () => {
-      let h = makeHarness();
+      const h = makeHarness();
       h.failNext(new Error('transport down'));
       await assert.rejects(h.dispatcher(sampleEvent()), (error: unknown) => {
-        let fault = error as { code?: string; retryable?: boolean };
+        const fault = error as { code?: string; retryable?: boolean };
         assert.equal(fault.code, 'PROVIDER.FAILURE');
         assert.equal(fault.retryable, true);
         return true;
@@ -77,8 +77,8 @@ export function runDispatcherConformance(
     });
 
     test('forwards the caller abort signal to the transport', async () => {
-      let h = makeHarness();
-      let signal = new AbortController().signal;
+      const h = makeHarness();
+      const signal = new AbortController().signal;
       await h.dispatcher(sampleEvent(), { signal });
       assert.equal(h.signals.at(-1), signal);
     });

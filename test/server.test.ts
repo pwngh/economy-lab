@@ -27,14 +27,14 @@ import type { WebhookHandler } from '#src/server.ts';
 // Signs the body with HMAC-SHA256 under `secret` and returns a lowercase hex digest, the form the
 // `x-signature` header carries. Uses Web Crypto so the test runs on every target runtime.
 async function signHex(body: string, secret: string): Promise<string> {
-  let key = await crypto.subtle.importKey(
+  const key = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(secret),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign'],
   );
-  let signature = await crypto.subtle.sign(
+  const signature = await crypto.subtle.sign(
     'HMAC',
     key,
     new TextEncoder().encode(body),
@@ -95,10 +95,12 @@ function spendBody(buyerId: string, dollars: string): Record<string, unknown> {
 
 describe('createServer /submit', () => {
   test('commits a valid operation and returns 200 with the encoded transaction', async () => {
-    let server = createServer(makeEconomy());
+    const server = createServer(makeEconomy());
 
-    let response = await server(submitRequest(topUpBody('usr_buyer', '10.00')));
-    let payload = (await response.json()) as {
+    const response = await server(
+      submitRequest(topUpBody('usr_buyer', '10.00')),
+    );
+    const payload = (await response.json()) as {
       status: string;
       transaction: { legs: Array<{ account: string; amount: string }> };
     };
@@ -114,10 +116,15 @@ describe('createServer /submit', () => {
   });
 
   test('returns 200 with the rejected Outcome for a valid decline', async () => {
-    let server = createServer(makeEconomy());
+    const server = createServer(makeEconomy());
 
-    let response = await server(submitRequest(spendBody('usr_broke', '5.00')));
-    let payload = (await response.json()) as { status: string; reason: string };
+    const response = await server(
+      submitRequest(spendBody('usr_broke', '5.00')),
+    );
+    const payload = (await response.json()) as {
+      status: string;
+      reason: string;
+    };
 
     // Declining a valid request (here, not enough money) is a normal result, not a server error: 200
     // with the rejection reason in the body.
@@ -127,10 +134,10 @@ describe('createServer /submit', () => {
   });
 
   test('maps a malformed body to 400 surfacing only the message', async () => {
-    let server = createServer(makeEconomy());
+    const server = createServer(makeEconomy());
 
-    let response = await server(submitRequest({ kind: 'no-such-kind' }));
-    let payload = (await response.json()) as Record<string, unknown>;
+    const response = await server(submitRequest({ kind: 'no-such-kind' }));
+    const payload = (await response.json()) as Record<string, unknown>;
 
     assert.equal(response.status, 400);
     assert.equal(typeof payload.error, 'string');
@@ -142,7 +149,7 @@ describe('createServer /submit', () => {
   test('a thrown EconomyError carrying detail/cause leaks only { error: message }', async () => {
     // Submit faults with a fully-populated EconomyError (detail, cause, implicit stack). The boundary
     // must surface none of them.
-    let economy = {
+    const economy = {
       submit: async () => {
         throw fault(ERROR_CODES.STORE_FAILURE, 'A storage layer failed.', {
           retryable: true,
@@ -164,10 +171,10 @@ describe('createServer /submit', () => {
       close: async () => {},
     } as unknown as Economy;
 
-    let server = createServer(economy);
+    const server = createServer(economy);
 
-    let response = await server(submitRequest(topUpBody('usr_x', '1.00')));
-    let payload = (await response.json()) as Record<string, unknown>;
+    const response = await server(submitRequest(topUpBody('usr_x', '1.00')));
+    const payload = (await response.json()) as Record<string, unknown>;
 
     // A retryable fault maps to 503, but the body is just the human-readable message.
     assert.equal(response.status, 503);
@@ -182,9 +189,9 @@ describe('createServer /submit', () => {
 
 describe('createServer Routing', () => {
   test('returns 404 for an unknown route', async () => {
-    let server = createServer(makeEconomy());
+    const server = createServer(makeEconomy());
 
-    let response = await server(
+    const response = await server(
       new Request('https://economy.test/nope', { method: 'POST' }),
     );
 
@@ -194,28 +201,28 @@ describe('createServer Routing', () => {
 
 describe('createServer /webhooks HMAC Verification', () => {
   test('a correctly-signed body passes through to the handler', async () => {
-    let secret = 'sek_test';
-    let body = JSON.stringify({ eventId: 'evt_1', amount: '10.00' });
-    let signature = await signHex(body, secret);
+    const secret = 'sek_test';
+    const body = JSON.stringify({ eventId: 'evt_1', amount: '10.00' });
+    const signature = await signHex(body, secret);
 
     let invoked = false;
-    let webhook: WebhookHandler = async (_provider, request) => {
+    const webhook: WebhookHandler = async (_provider, request) => {
       invoked = true;
       // The handler must be able to read the body the server already consumed for verification.
-      let received = await request.text();
+      const received = await request.text();
       assert.equal(received, body);
       return new Response(JSON.stringify({ status: 'committed' }), {
         status: 200,
       });
     };
 
-    let server = createServer(makeEconomy(), {
+    const server = createServer(makeEconomy(), {
       webhook,
       config: { ...testConfig(), webhookSecret: secret },
       clock: fixedClock(0),
     });
 
-    let response = await server(
+    const response = await server(
       webhookRequest('billing', body, {
         'x-signature': signature,
         'x-timestamp': '0',
@@ -227,30 +234,30 @@ describe('createServer /webhooks HMAC Verification', () => {
   });
 
   test('a forged signature returns 401 and the handler never runs (no mutation)', async () => {
-    let secret = 'sek_test';
-    let body = JSON.stringify({ eventId: 'evt_2', amount: '10.00' });
+    const secret = 'sek_test';
+    const body = JSON.stringify({ eventId: 'evt_2', amount: '10.00' });
     // Produces a valid-hex but wrong signature by signing with a different secret.
-    let forged = await signHex(body, 'wrong-secret');
+    const forged = await signHex(body, 'wrong-secret');
 
     let invoked = false;
-    let webhook: WebhookHandler = async () => {
+    const webhook: WebhookHandler = async () => {
       invoked = true;
       return new Response(null, { status: 200 });
     };
 
-    let server = createServer(makeEconomy(), {
+    const server = createServer(makeEconomy(), {
       webhook,
       config: { ...testConfig(), webhookSecret: secret },
       clock: fixedClock(0),
     });
 
-    let response = await server(
+    const response = await server(
       webhookRequest('billing', body, {
         'x-signature': forged,
         'x-timestamp': '0',
       }),
     );
-    let payload = (await response.json()) as { error: string };
+    const payload = (await response.json()) as { error: string };
 
     assert.equal(response.status, 401);
     // The handler (the only thing that would mutate the ledger) was never reached.
@@ -261,22 +268,22 @@ describe('createServer /webhooks HMAC Verification', () => {
   });
 
   test('an absent signature returns 401 and the handler never runs', async () => {
-    let secret = 'sek_test';
-    let body = JSON.stringify({ eventId: 'evt_3', amount: '10.00' });
+    const secret = 'sek_test';
+    const body = JSON.stringify({ eventId: 'evt_3', amount: '10.00' });
 
     let invoked = false;
-    let webhook: WebhookHandler = async () => {
+    const webhook: WebhookHandler = async () => {
       invoked = true;
       return new Response(null, { status: 200 });
     };
 
-    let server = createServer(makeEconomy(), {
+    const server = createServer(makeEconomy(), {
       webhook,
       config: { ...testConfig(), webhookSecret: secret },
       clock: fixedClock(0),
     });
 
-    let response = await server(
+    const response = await server(
       webhookRequest('billing', body, { 'x-timestamp': '0' }),
     );
 
@@ -287,32 +294,32 @@ describe('createServer /webhooks HMAC Verification', () => {
 
 describe('createServer /webhooks Freshness', () => {
   test('a stale timestamp is acknowledged as a duplicate (no mutation)', async () => {
-    let secret = 'sek_test';
-    let body = JSON.stringify({ eventId: 'evt_4', amount: '10.00' });
-    let signature = await signHex(body, secret);
-    let config = { ...testConfig(), webhookSecret: secret };
+    const secret = 'sek_test';
+    const body = JSON.stringify({ eventId: 'evt_4', amount: '10.00' });
+    const signature = await signHex(body, secret);
+    const config = { ...testConfig(), webhookSecret: secret };
     // Clock is at 0; send a timestamp older than the window so it is out of range.
-    let staleTimestamp = -(config.replayWindowMs + 1);
+    const staleTimestamp = -(config.replayWindowMs + 1);
 
     let invoked = false;
-    let webhook: WebhookHandler = async () => {
+    const webhook: WebhookHandler = async () => {
       invoked = true;
       return new Response(null, { status: 200 });
     };
 
-    let server = createServer(makeEconomy(), {
+    const server = createServer(makeEconomy(), {
       webhook,
       config,
       clock: fixedClock(0),
     });
 
-    let response = await server(
+    const response = await server(
       webhookRequest('billing', body, {
         'x-signature': signature,
         'x-timestamp': String(staleTimestamp),
       }),
     );
-    let payload = (await response.json()) as { status: string };
+    const payload = (await response.json()) as { status: string };
 
     // A request too late to be fresh is treated as an already-handled repeat: 200, status
     // 'duplicate', nothing changed.
@@ -322,26 +329,26 @@ describe('createServer /webhooks Freshness', () => {
   });
 
   test('a missing timestamp is treated as non-finite and acknowledged as duplicate', async () => {
-    let secret = 'sek_test';
-    let body = JSON.stringify({ eventId: 'evt_5', amount: '10.00' });
-    let signature = await signHex(body, secret);
+    const secret = 'sek_test';
+    const body = JSON.stringify({ eventId: 'evt_5', amount: '10.00' });
+    const signature = await signHex(body, secret);
 
     let invoked = false;
-    let webhook: WebhookHandler = async () => {
+    const webhook: WebhookHandler = async () => {
       invoked = true;
       return new Response(null, { status: 200 });
     };
 
-    let server = createServer(makeEconomy(), {
+    const server = createServer(makeEconomy(), {
       webhook,
       config: { ...testConfig(), webhookSecret: secret },
       clock: fixedClock(0),
     });
 
-    let response = await server(
+    const response = await server(
       webhookRequest('billing', body, { 'x-signature': signature }),
     );
-    let payload = (await response.json()) as { status: string };
+    const payload = (await response.json()) as { status: string };
 
     assert.equal(response.status, 200);
     assert.equal(payload.status, 'duplicate');
@@ -349,25 +356,25 @@ describe('createServer /webhooks Freshness', () => {
   });
 
   test('a fresh, signed webhook within the window passes to the handler', async () => {
-    let secret = 'sek_test';
-    let body = JSON.stringify({ eventId: 'evt_6', amount: '10.00' });
-    let signature = await signHex(body, secret);
+    const secret = 'sek_test';
+    const body = JSON.stringify({ eventId: 'evt_6', amount: '10.00' });
+    const signature = await signHex(body, secret);
 
     let invoked = false;
-    let webhook: WebhookHandler = async () => {
+    const webhook: WebhookHandler = async () => {
       invoked = true;
       return new Response(JSON.stringify({ status: 'committed' }), {
         status: 200,
       });
     };
 
-    let server = createServer(makeEconomy(), {
+    const server = createServer(makeEconomy(), {
       webhook,
       config: { ...testConfig(), webhookSecret: secret },
       clock: fixedClock(0),
     });
 
-    let response = await server(
+    const response = await server(
       webhookRequest('billing', body, {
         'x-signature': signature,
         'x-timestamp': '0',
@@ -381,24 +388,24 @@ describe('createServer /webhooks Freshness', () => {
 
 describe('createServer Health And Readiness', () => {
   test('GET /healthz returns 200 without touching the store', async () => {
-    let server = createServer(makeEconomy());
+    const server = createServer(makeEconomy());
 
-    let response = await server(
+    const response = await server(
       new Request('https://economy.test/healthz', { method: 'GET' }),
     );
-    let payload = (await response.json()) as { status: string };
+    const payload = (await response.json()) as { status: string };
 
     assert.equal(response.status, 200);
     assert.equal(payload.status, 'ok');
   });
 
   test('GET /readyz returns 200 when the store read succeeds', async () => {
-    let server = createServer(makeEconomy());
+    const server = createServer(makeEconomy());
 
-    let response = await server(
+    const response = await server(
       new Request('https://economy.test/readyz', { method: 'GET' }),
     );
-    let payload = (await response.json()) as { status: string };
+    const payload = (await response.json()) as { status: string };
 
     assert.equal(response.status, 200);
     assert.equal(payload.status, 'ready');
@@ -407,7 +414,7 @@ describe('createServer Health And Readiness', () => {
   test('GET /readyz returns 503 when the store read throws', async () => {
     // Builds a minimal economy whose readiness probe, read.balance, throws to stand in for an
     // unreachable store. Only the parts that /readyz touches need to be real.
-    let economy = {
+    const economy = {
       submit: async () => {
         throw new Error('not used');
       },
@@ -425,12 +432,12 @@ describe('createServer Health And Readiness', () => {
       close: async () => {},
     } as unknown as Economy;
 
-    let server = createServer(economy);
+    const server = createServer(economy);
 
-    let response = await server(
+    const response = await server(
       new Request('https://economy.test/readyz', { method: 'GET' }),
     );
-    let payload = (await response.json()) as { status: string };
+    const payload = (await response.json()) as { status: string };
 
     assert.equal(response.status, 503);
     assert.equal(payload.status, 'unavailable');

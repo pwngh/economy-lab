@@ -32,8 +32,8 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
 
 function makeStore(): Store {
-  let digest = seededDigest(1);
-  let clock = fixedClock(0);
+  const digest = seededDigest(1);
+  const clock = fixedClock(0);
   return memoryStore({ digest, clock });
 }
 
@@ -75,9 +75,9 @@ function hasCode(code: string): (error: unknown) => boolean {
 
 describe('Adjust Direction', () => {
   test('raises a credit-side account by the signed amount', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
-    let outcome = await applyAdjust(
+    const outcome = await applyAdjust(
       store,
       ctx,
       adjustOp({
@@ -95,7 +95,7 @@ describe('Adjust Direction', () => {
   });
 
   test('lowers a credit-side account on a negative amount', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
     await issue(store, ctx, 'usr_alice', credit('10.00'));
 
     await applyAdjust(
@@ -115,7 +115,7 @@ describe('Adjust Direction', () => {
   });
 
   test('raises a debit-side house account by the signed amount', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     await applyAdjust(
       store,
@@ -142,9 +142,9 @@ describe('Adjust Direction', () => {
 
 describe('Adjust Conservation', () => {
   test('offsets the move against OPENING_EQUITY so the legs sum to zero', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
-    let outcome = await applyAdjust(
+    const outcome = await applyAdjust(
       store,
       ctx,
       adjustOp({
@@ -156,7 +156,7 @@ describe('Adjust Conservation', () => {
 
     assert.equal(outcome.status, 'committed');
     if (outcome.status !== 'committed') return;
-    let signed = outcome.transaction.legs.reduce(
+    const signed = outcome.transaction.legs.reduce(
       (sum, leg) => sum + leg.amount.minor,
       0n,
     );
@@ -168,9 +168,9 @@ describe('Adjust Conservation', () => {
   });
 
   test('posts only against the account and OPENING_EQUITY', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
-    let outcome = await applyAdjust(
+    const outcome = await applyAdjust(
       store,
       ctx,
       adjustOp({
@@ -182,7 +182,7 @@ describe('Adjust Conservation', () => {
 
     assert.equal(outcome.status, 'committed');
     if (outcome.status !== 'committed') return;
-    let accounts = outcome.transaction.legs.map((leg) => leg.account);
+    const accounts = outcome.transaction.legs.map((leg) => leg.account);
     assert.deepEqual(
       [...accounts].sort(),
       [SYSTEM.OPENING_EQUITY, spendable('usr_alice')].sort(),
@@ -192,7 +192,7 @@ describe('Adjust Conservation', () => {
 
 describe('Adjust Guards', () => {
   test('throws OVERDRAFT when correcting a user account below zero', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
     await issue(store, ctx, 'usr_alice', credit('3.00'));
 
     await assert.rejects(
@@ -212,7 +212,7 @@ describe('Adjust Guards', () => {
 
 describe('Adjust Validation', () => {
   test('throws MALFORMED_OPERATION when the amount is USD', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     await assert.rejects(
       applyAdjust(
@@ -229,7 +229,7 @@ describe('Adjust Validation', () => {
   });
 
   test('throws INVALID_AMOUNT when the amount is zero', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     await assert.rejects(
       applyAdjust(
@@ -246,7 +246,7 @@ describe('Adjust Validation', () => {
   });
 
   test('throws MALFORMED_OPERATION when the reason is blank', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     await assert.rejects(
       applyAdjust(
@@ -263,7 +263,7 @@ describe('Adjust Validation', () => {
   });
 
   test('throws MALFORMED_OPERATION for a non-operator principal', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     await assert.rejects(
       applyAdjust(
@@ -281,8 +281,8 @@ describe('Adjust Validation', () => {
   });
 
   test('throws MALFORMED_OPERATION on the wrong operation kind', async () => {
-    let { store, ctx } = fixture();
-    let wrongKind: Operation = {
+    const { store, ctx } = fixture();
+    const wrongKind: Operation = {
       kind: 'refund',
       idempotencyKey: 'idem_wrong',
       actor: { kind: 'system', service: 'test' },

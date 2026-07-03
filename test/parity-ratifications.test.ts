@@ -49,8 +49,8 @@ import type { Store, EconomyEvent } from '#src/ports.ts';
 // same transaction as the money move. An event is therefore never sent for a rolled-back move and
 // never lost for a committed one.
 function makePair(): { economy: Economy; store: Store } {
-  let store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
-  let economy = makeEconomy(1, store);
+  const store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
+  const economy = makeEconomy(1, store);
   return { economy, store };
 }
 
@@ -58,48 +58,48 @@ function makePair(): { economy: Economy; store: Store } {
 // will not see it again. The limit of 100 is well above what any one request produces, so this
 // drains the whole queue.
 async function eventsOf(store: Store): Promise<EconomyEvent[]> {
-  let batch = await store.outbox.claimBatch(100);
+  const batch = await store.outbox.claimBatch(100);
   await store.outbox.markRelayed(batch.map((message) => message.id));
   return batch.map((message) => message.event);
 }
 
 describe('Submit Emits The Exact Agreed Event-Type Strings', () => {
   test('topUp emits economy.credits.topped_up', async () => {
-    let { economy, store } = makePair();
+    const { economy, store } = makePair();
 
-    let outcome = await economy.submit(
+    const outcome = await economy.submit(
       topUp({ userId: 'usr_buyer', amount: credit('10.00') }),
     );
     assert.equal(outcome.status, 'committed');
 
-    let events = await eventsOf(store);
+    const events = await eventsOf(store);
     assert.equal(events.length, 1);
     assert.equal(events[0].type, 'economy.credits.topped_up');
   });
 
   test('grantPromo emits economy.promo.granted', async () => {
-    let { economy, store } = makePair();
+    const { economy, store } = makePair();
 
-    let outcome = await economy.submit(
+    const outcome = await economy.submit(
       grantPromo({ userId: 'usr_buyer', amount: credit('5.00') }),
     );
     assert.equal(outcome.status, 'committed');
 
-    let events = await eventsOf(store);
+    const events = await eventsOf(store);
     assert.equal(events.length, 1);
     assert.equal(events[0].type, 'economy.promo.granted');
   });
 
   test('spend emits economy.sale.completed', async () => {
-    let { economy, store } = makePair();
+    const { economy, store } = makePair();
     // Fund the buyer's spendable so the sale commits, then drop the top-up's own event.
-    let funded = await economy.submit(
+    const funded = await economy.submit(
       topUp({ userId: 'usr_buyer', amount: credit('10.00') }),
     );
     assert.equal(funded.status, 'committed');
     await eventsOf(store);
 
-    let outcome = await economy.submit(
+    const outcome = await economy.submit(
       spend({
         buyerId: 'usr_buyer',
         sku: 'wrld_pass',
@@ -109,7 +109,7 @@ describe('Submit Emits The Exact Agreed Event-Type Strings', () => {
     );
     assert.equal(outcome.status, 'committed');
 
-    let events = await eventsOf(store);
+    const events = await eventsOf(store);
     assert.equal(events.length, 1);
     assert.equal(events[0].type, 'economy.sale.completed');
   });
@@ -126,10 +126,10 @@ describe('No Money-Laundering-Detection Background Job Exists', () => {
 
 describe('The Server Has No Asset-Download Route', () => {
   test('a download-style path 404s', async () => {
-    let { economy } = makePair();
-    let handler = createServer(economy);
+    const { economy } = makePair();
+    const handler = createServer(economy);
 
-    let res = await handler(
+    const res = await handler(
       new Request('http://economy.local/assets/wrld_pass', { method: 'GET' }),
     );
 

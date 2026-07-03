@@ -31,8 +31,8 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
 
 function makeStore(): Store {
-  let digest = seededDigest(1);
-  let clock = fixedClock(0);
+  const digest = seededDigest(1);
+  const clock = fixedClock(0);
   return memoryStore({ digest, clock });
 }
 
@@ -59,9 +59,9 @@ function hasCode(code: string): (error: unknown) => boolean {
 
 describe('grantPromo Issuance', () => {
   test('mints promo credits against the PROMO_FLOAT offset account', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
-    let outcome = await applyGrantPromo(
+    const outcome = await applyGrantPromo(
       store,
       ctx,
       grantPromoOp({ userId: 'usr_buyer', amount: credit('5.00') }),
@@ -75,7 +75,7 @@ describe('grantPromo Issuance', () => {
   });
 
   test('offsets the grant by debiting the PROMO_FLOAT account', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     await applyGrantPromo(
       store,
@@ -93,7 +93,7 @@ describe('grantPromo Issuance', () => {
   });
 
   test('keeps the promo credit and PROMO_FLOAT debit canceling to zero', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     await applyGrantPromo(
       store,
@@ -104,15 +104,15 @@ describe('grantPromo Issuance', () => {
     // The grant posts one balanced entry: promo is credited 5.00 and PROMO_FLOAT is debited 5.00.
     // Both read +5.00 (500 minor), so their difference is zero. That confirms the two halves are
     // equal and opposite.
-    let promoBalance = await store.ledger.balance(promo('usr_buyer'));
-    let floatBalance = await store.ledger.balance(SYSTEM.PROMO_FLOAT);
+    const promoBalance = await store.ledger.balance(promo('usr_buyer'));
+    const floatBalance = await store.ledger.balance(SYSTEM.PROMO_FLOAT);
     assert.equal(promoBalance.minor - floatBalance.minor, 0n);
   });
 
   test('returns the grant transaction crediting the promo account', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
-    let outcome = await applyGrantPromo(
+    const outcome = await applyGrantPromo(
       store,
       ctx,
       grantPromoOp({ userId: 'usr_buyer', amount: credit('5.00') }),
@@ -129,9 +129,9 @@ describe('grantPromo Issuance', () => {
   });
 
   test('records expiresAt on the posting for the background expiry job', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
-    let outcome = await applyGrantPromo(
+    const outcome = await applyGrantPromo(
       store,
       ctx,
       grantPromoOp({
@@ -144,7 +144,7 @@ describe('grantPromo Issuance', () => {
     // The grant posts exactly one statement entry. The next test verifies that its `expiresAt` is
     // recorded for the expiry job, via promos.claimDue.
     assert.equal(outcome.status, 'committed');
-    let statement = await store.ledger.statement(promo('usr_buyer'), {
+    const statement = await store.ledger.statement(promo('usr_buyer'), {
       from: 0,
       to: Number.MAX_SAFE_INTEGER,
     });
@@ -154,9 +154,9 @@ describe('grantPromo Issuance', () => {
 
 describe('grantPromo Recording For The Expiry Background Job', () => {
   test('records a recoverable grant the expiry job can claim once it is due', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
-    let outcome = await applyGrantPromo(
+    const outcome = await applyGrantPromo(
       store,
       ctx,
       grantPromoOp({
@@ -170,9 +170,9 @@ describe('grantPromo Recording For The Expiry Background Job', () => {
     // or after `expiresAt` can claim it. The stored grant reuses the posting id, carries the full
     // amount and expiry, and starts unreversed.
     assert.equal(outcome.status, 'committed');
-    let txnId =
+    const txnId =
       outcome.status === 'committed' ? outcome.transaction.id : 'unreachable';
-    let due = await store.promos.claimDue(172_800_000, 10);
+    const due = await store.promos.claimDue(172_800_000, 10);
     assert.equal(due.length, 1);
     assert.equal(due[0]!.id, txnId);
     assert.equal(due[0]!.userId, 'usr_buyer');
@@ -182,7 +182,7 @@ describe('grantPromo Recording For The Expiry Background Job', () => {
   });
 
   test('does not surface the grant before it is due', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     await applyGrantPromo(
       store,
@@ -202,7 +202,7 @@ describe('grantPromo Recording For The Expiry Background Job', () => {
 
 describe('grantPromo Backing', () => {
   test('never raises the USD the platform must hold — spendable credits untouched', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     await applyGrantPromo(
       store,
@@ -226,7 +226,7 @@ describe('grantPromo Backing', () => {
 
 describe('grantPromo Validation', () => {
   test('throws MALFORMED_OPERATION when the amount is USD', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     await assert.rejects(
       applyGrantPromo(
@@ -239,7 +239,7 @@ describe('grantPromo Validation', () => {
   });
 
   test('throws INVALID_AMOUNT when the amount is not positive', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     await assert.rejects(
       applyGrantPromo(
@@ -252,7 +252,7 @@ describe('grantPromo Validation', () => {
   });
 
   test('throws MALFORMED_OPERATION when expiresAt is in the past', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     // The clock reads now = 0, so any non-positive timestamp is at or before now. That is a
     // dead-on-arrival expiry the sweep would reclaim immediately.
@@ -271,7 +271,7 @@ describe('grantPromo Validation', () => {
   });
 
   test('throws MALFORMED_OPERATION when expiresAt is NaN', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     await assert.rejects(
       applyGrantPromo(
@@ -288,7 +288,7 @@ describe('grantPromo Validation', () => {
   });
 
   test('throws MALFORMED_OPERATION when expiresAt is Infinity', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     await assert.rejects(
       applyGrantPromo(
@@ -305,9 +305,9 @@ describe('grantPromo Validation', () => {
   });
 
   test('commits when expiresAt is a normal future timestamp', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
-    let outcome = await applyGrantPromo(
+    const outcome = await applyGrantPromo(
       store,
       ctx,
       grantPromoOp({
@@ -325,7 +325,7 @@ describe('grantPromo Validation', () => {
   });
 
   test('throws MALFORMED_OPERATION when expiresAt is absurdly far in the future', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     // This timestamp is beyond the sane ceiling, which sits years out. Refusing it stops an
     // effectively non-expiring grant that the sweep would never reclaim.
@@ -344,8 +344,8 @@ describe('grantPromo Validation', () => {
   });
 
   test('throws MALFORMED_OPERATION on the wrong operation kind', async () => {
-    let { store, ctx } = fixture();
-    let wrongKind: Operation = {
+    const { store, ctx } = fixture();
+    const wrongKind: Operation = {
       kind: 'refund',
       idempotencyKey: 'idem_wrong',
       actor: { kind: 'system', service: 'test' },

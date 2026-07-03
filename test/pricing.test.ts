@@ -27,7 +27,7 @@ import type { Leg } from '#src/ports.ts';
 // currency, so a plain integer sum is correct.
 function signedSum(legs: ReadonlyArray<Leg>): bigint {
   let total = 0n;
-  for (let leg of legs) {
+  for (const leg of legs) {
     total += leg.amount.minor;
   }
   return total;
@@ -36,7 +36,7 @@ function signedSum(legs: ReadonlyArray<Leg>): bigint {
 // Returns the amount crediting the given account as a positive value (credits are stored
 // negative, so the sign is flipped). Fails if the account was never credited.
 function creditedTo(legs: ReadonlyArray<Leg>, account: string): Amount {
-  let leg = legs.find((l) => l.account === account);
+  const leg = legs.find((l) => l.account === account);
   assert.ok(leg, `expected a leg crediting ${account}`);
   return toAmount(leg.amount.currency, -leg.amount.minor);
 }
@@ -47,14 +47,14 @@ function codeIs(code: string) {
 }
 
 // One seller taking the whole net after fee. shareBps is basis points (10000 = 100%).
-let soloSeller: Recipient[] = [{ sellerId: 'usr_seller', shareBps: 10_000 }];
+const soloSeller: Recipient[] = [{ sellerId: 'usr_seller', shareBps: 10_000 }];
 
 // --- The conservation property ----------------------------------------------------
 
 // Cases that check the price is fully accounted for. Some prices divide evenly. Others leave
 // a rounding remainder that the split must park somewhere. Each case asserts the credit lines
 // sum to -price.
-let CONSERVATION_CASES: ReadonlyArray<{
+const CONSERVATION_CASES: ReadonlyArray<{
   name: string;
   price: Amount;
   feeBps: number;
@@ -123,10 +123,10 @@ let CONSERVATION_CASES: ReadonlyArray<{
 // --- The cases --------------------------------------------------------------------
 
 function conservesPriceAcrossPricesAndSplits(): void {
-  let policy = flatFee();
+  const policy = flatFee();
 
-  for (let testCase of CONSERVATION_CASES) {
-    let legs = policy({
+  for (const testCase of CONSERVATION_CASES) {
+    const legs = policy({
       price: testCase.price,
       recipients: testCase.recipients,
       feeBps: testCase.feeBps,
@@ -143,7 +143,7 @@ function conservesPriceAcrossPricesAndSplits(): void {
 function splitsFeeOffGrossAndShareOffNet(): void {
   // A 10.00 sale at a 30% fee. The 3.00 fee comes off the gross and goes to revenue. The 7.00
   // net goes to the seller. The amounts divide evenly, so there is no leftover.
-  let legs = flatFee()({
+  const legs = flatFee()({
     price: credit('10.00'),
     recipients: soloSeller,
     feeBps: 3000,
@@ -156,16 +156,16 @@ function splitsFeeOffGrossAndShareOffNet(): void {
 function postsRoundingResidualToRevenue(): void {
   // 10.01 split three ways does not divide evenly, so each share rounds down. The dropped
   // cents go to REVENUE rather than vanishing, which keeps the whole price accounted for.
-  let price = credit('10.01');
-  let recipients: Recipient[] = [
+  const price = credit('10.01');
+  const recipients: Recipient[] = [
     { sellerId: 'usr_a', shareBps: 3_334 },
     { sellerId: 'usr_b', shareBps: 3_333 },
     { sellerId: 'usr_c', shareBps: 3_333 },
   ];
 
-  let legs = flatFee()({ price, recipients, feeBps: 0 });
+  const legs = flatFee()({ price, recipients, feeBps: 0 });
 
-  let toSellers =
+  const toSellers =
     creditedTo(legs, earned('usr_a')).minor +
     creditedTo(legs, earned('usr_b')).minor +
     creditedTo(legs, earned('usr_c')).minor;
@@ -176,7 +176,7 @@ function postsRoundingResidualToRevenue(): void {
 function sendsWholePriceToRevenueWhenNoRecipients(): void {
   // There are no sellers, so the fee plus the leftover net make up the whole price. That whole
   // price goes to REVENUE as a single credit line, which still sums to -price.
-  let legs = flatFee()({
+  const legs = flatFee()({
     price: credit('4.00'),
     recipients: [],
     feeBps: 3000,

@@ -40,10 +40,10 @@ function recordingCache(): Cache & {
   readonly sets: ReadonlyArray<string>;
   readonly invalidations: ReadonlyArray<string>;
 } {
-  let store = new Map<string, string>();
-  let gets: string[] = [];
-  let sets: string[] = [];
-  let invalidations: string[] = [];
+  const store = new Map<string, string>();
+  const gets: string[] = [];
+  const sets: string[] = [];
+  const invalidations: string[] = [];
   return {
     gets,
     sets,
@@ -67,7 +67,7 @@ function recordingCache(): Cache & {
 // degrade to the ledger and a committed posting must still succeed. This is the Cache port's
 // best-effort contract: a cache only speeds reads, it never breaks them.
 function throwingCache(): Cache {
-  let boom = (): never => {
+  const boom = (): never => {
     throw new Error('redis unavailable');
   };
   return {
@@ -81,8 +81,8 @@ function throwingCache(): Cache {
 // in-memory store. Mirrors `makeEconomy` but injects a `cache` capability, which `makeEconomy`
 // leaves unset.
 function makeCachedEconomy(cache: Cache, seed = 1): Economy {
-  let digest = seededDigest(seed);
-  let clock = fixedClock(0);
+  const digest = seededDigest(seed);
+  const clock = fixedClock(0);
   return createEconomy({
     store: memoryStore({ digest, clock }),
     clock,
@@ -101,9 +101,9 @@ function makeCachedEconomy(cache: Cache, seed = 1): Economy {
 
 describe('Read-Through Balance Cache', () => {
   test('first read populates the cache, second read hits it', async () => {
-    let cache = recordingCache();
-    let economy = makeCachedEconomy(cache);
-    let account = spendable('usr_buyer');
+    const cache = recordingCache();
+    const economy = makeCachedEconomy(cache);
+    const account = spendable('usr_buyer');
 
     // Fund the account so it has a non-zero balance to cache.
     await economy.submit(
@@ -111,7 +111,7 @@ describe('Read-Through Balance Cache', () => {
     );
 
     // First read misses: get finds nothing, then set populates.
-    let first = await economy.read.balance(account);
+    const first = await economy.read.balance(account);
     assert.deepEqual(first, credit('10.00'));
     assert.deepEqual(cache.gets, [`bal:${account}`]);
     assert.deepEqual(cache.sets, [`bal:${account}`]);
@@ -119,16 +119,16 @@ describe('Read-Through Balance Cache', () => {
     // The second read hits the cache and returns the stored value without populating again. The
     // cache holds strings, so the balance is serialized in and parsed back out. Assert the round
     // trip returns the same amount.
-    let second = await economy.read.balance(account);
+    const second = await economy.read.balance(account);
     assert.deepEqual(second, credit('10.00'));
     assert.deepEqual(cache.gets, [`bal:${account}`, `bal:${account}`]);
     assert.deepEqual(cache.sets, [`bal:${account}`]); // still just the one populate
   });
 
   test('a committed posting invalidates every account it touched', async () => {
-    let cache = recordingCache();
-    let economy = makeCachedEconomy(cache);
-    let account = spendable('usr_buyer');
+    const cache = recordingCache();
+    const economy = makeCachedEconomy(cache);
+    const account = spendable('usr_buyer');
 
     // Fund and warm the cache so the account's balance is cached at 10.00.
     await economy.submit(
@@ -146,14 +146,14 @@ describe('Read-Through Balance Cache', () => {
 
     // The next read is a fresh miss. It re-derives the balance by summing the recorded entries, so
     // it returns the new balance rather than the stale cached 10.00.
-    let after = await economy.read.balance(account);
+    const after = await economy.read.balance(account);
     assert.deepEqual(after, credit('15.00'));
   });
 
   test('a rejected operation invalidates nothing', async () => {
-    let cache = recordingCache();
-    let economy = makeCachedEconomy(cache);
-    let account = spendable('usr_buyer');
+    const cache = recordingCache();
+    const economy = makeCachedEconomy(cache);
+    const account = spendable('usr_buyer');
 
     await economy.submit(
       topUp({ userId: 'usr_buyer', amount: credit('10.00') }),
@@ -162,11 +162,11 @@ describe('Read-Through Balance Cache', () => {
 
     // The committed top-up already invalidated its touched accounts; snapshot that count to assert
     // the rejected op below adds nothing.
-    let invalidationsBefore = cache.invalidations.length;
+    const invalidationsBefore = cache.invalidations.length;
 
     // A spend the buyer can't afford is rejected and records no ledger entry, so it changes no
     // balance and drops no cache entry.
-    let outcome = await economy.submit({
+    const outcome = await economy.submit({
       kind: 'spend',
       idempotencyKey: 'idem_overspend',
       actor: { kind: 'user', userId: 'usr_buyer' },
@@ -180,8 +180,8 @@ describe('Read-Through Balance Cache', () => {
   });
 
   test('a cache outage degrades to a direct ledger read, never fails the request', async () => {
-    let economy = makeCachedEconomy(throwingCache());
-    let account = spendable('usr_buyer');
+    const economy = makeCachedEconomy(throwingCache());
+    const account = spendable('usr_buyer');
 
     await economy.submit(
       topUp({ userId: 'usr_buyer', amount: credit('10.00') }),
@@ -190,16 +190,16 @@ describe('Read-Through Balance Cache', () => {
     // The get throws and is absorbed as a miss, so the read falls back to the ledger. The set then
     // throws and is also absorbed. The read returns the right balance instead of propagating the
     // cache failure.
-    let balance = await economy.read.balance(account);
+    const balance = await economy.read.balance(account);
     assert.deepEqual(balance, credit('10.00'));
   });
 
   test('a cache outage during invalidation still commits the posting', async () => {
-    let economy = makeCachedEconomy(throwingCache());
+    const economy = makeCachedEconomy(throwingCache());
 
     // The top-up commits; invalidateCache hits the throwing cache after commit, but the failure is
     // absorbed so the operation reports committed rather than failing post-commit.
-    let outcome = await economy.submit(
+    const outcome = await economy.submit(
       topUp({ userId: 'usr_buyer', amount: credit('10.00') }),
     );
     assert.equal(outcome.status, 'committed');

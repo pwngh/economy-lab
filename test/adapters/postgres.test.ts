@@ -23,14 +23,14 @@ import type { OutboxMessage, Saga, Store, Subscription } from '#src/ports.ts';
 
 // Resolves the test database DSN. Uses an env var when one is set, otherwise falls back to local
 // Postgres on the default port and database.
-let url = process.env.DATABASE_URL ?? process.env.PG_URL ?? testDsn();
+const url = process.env.DATABASE_URL ?? process.env.PG_URL ?? testDsn();
 
 // Builds a unique schema name per run so concurrent suites (or a rerun) get isolated tables and
 // don't collide. The name combines the pid, a base-36 timestamp, and a per-call counter.
 let run = 0;
 function freshSchema(): string {
   run += 1;
-  let stamp = Date.now().toString(36);
+  const stamp = Date.now().toString(36);
   return `el_conf_${process.pid}_${stamp}_${run}`;
 }
 
@@ -79,15 +79,15 @@ describe('Store Conformance: postgres (Posting Onto A Funded Account)', () => {
       t.skip('Postgres unreachable');
       return;
     }
-    let live = store;
-    let userId = 'usr_fold_regression';
-    let account = spendable(userId);
+    const live = store;
+    const userId = 'usr_fold_regression';
+    const account = spendable(userId);
 
     // The first posting credits 500.00 into the user's spendable (top-up) account. Each entry is a
     // pair of debit and credit lines that cancel, so the other line here debits SYSTEM.REVENUE.
     // Amounts are minor units (cents), so 500.00 is 50000. This posting creates the account row at
     // that balance.
-    let funded = decodeAmount('500.00', 'CREDIT');
+    const funded = decodeAmount('500.00', 'CREDIT');
     await live.transaction((unit) =>
       postEntry(unit.ledger, {
         txnId: 'txn_fold_credit',
@@ -103,7 +103,7 @@ describe('Store Conformance: postgres (Posting Onto A Funded Account)', () => {
     // The second posting debits 120.00 out of the same account. This is the path the bug broke.
     // Before the fix, the fold rejected this debit on the non-negative check even though the
     // resulting balance (38000) is positive.
-    let spent = decodeAmount('120.00', 'CREDIT');
+    const spent = decodeAmount('120.00', 'CREDIT');
     await live.transaction((unit) =>
       postEntry(unit.ledger, {
         txnId: 'txn_fold_debit',
@@ -203,15 +203,15 @@ describe('Store Conformance: postgres (Outbox)', () => {
       t.skip('Postgres unreachable');
       return;
     }
-    let live = store;
-    let id = 'obx_record_failure';
+    const live = store;
+    const id = 'obx_record_failure';
     await live.outbox.enqueue(outboxMessage(id));
 
     await live.outbox.recordFailure(id);
     await live.outbox.recordFailure(id);
 
-    let batch = await live.outbox.claimBatch(10);
-    let row = batch.find((message) => message.id === id);
+    const batch = await live.outbox.claimBatch(10);
+    const row = batch.find((message) => message.id === id);
     assert.notEqual(row, undefined);
     assert.equal(row!.attempts, 2);
     assert.equal(row!.status, 'pending');
@@ -222,20 +222,20 @@ describe('Store Conformance: postgres (Outbox)', () => {
       t.skip('Postgres unreachable');
       return;
     }
-    let live = store;
+    const live = store;
     // A missing row has nothing to update, so the call must not throw.
     await live.outbox.recordFailure('obx_does_not_exist');
 
     // A dead-lettered row is in the final 'failed' state, no longer retried; recordFailure must
     // leave its attempts untouched.
-    let id = 'obx_record_failure_terminal';
+    const id = 'obx_record_failure_terminal';
     await live.outbox.enqueue(outboxMessage(id));
     await live.outbox.deadLetter(id, 'DISPATCH.FAILURE');
     await live.outbox.recordFailure(id);
 
     // The row is 'failed', so claimBatch never returns it. Assert by exhaustion: a pending claim
     // cannot see a failed row.
-    let batch = await live.outbox.claimBatch(100);
+    const batch = await live.outbox.claimBatch(100);
     assert.equal(
       batch.some((message) => message.id === id),
       false,
@@ -247,16 +247,16 @@ describe('Store Conformance: postgres (Outbox)', () => {
       t.skip('Postgres unreachable');
       return;
     }
-    let live = store;
-    let poison = 'obx_dead_letter';
-    let healthy = 'obx_dead_letter_sibling';
+    const live = store;
+    const poison = 'obx_dead_letter';
+    const healthy = 'obx_dead_letter_sibling';
     await live.outbox.enqueue(outboxMessage(poison));
     await live.outbox.enqueue(outboxMessage(healthy));
 
     await live.outbox.deadLetter(poison, 'DISPATCH.FAILURE');
 
-    let batch = await live.outbox.claimBatch(100);
-    let ids = batch.map((message) => message.id);
+    const batch = await live.outbox.claimBatch(100);
+    const ids = batch.map((message) => message.id);
     // The poison row is excluded; the healthy sibling is still claimable.
     assert.equal(ids.includes(poison), false);
     assert.equal(ids.includes(healthy), true);
@@ -287,8 +287,8 @@ describe('Store Conformance: postgres (Sagas)', () => {
       t.skip('Postgres unreachable');
       return;
     }
-    let live = store;
-    let userId = 'usr_last_payout';
+    const live = store;
+    const userId = 'usr_last_payout';
 
     // No sagas yet: the user's first request is always allowed.
     assert.equal(await live.sagas.lastPayoutAt(userId), null);
@@ -314,15 +314,15 @@ describe('Store Conformance: postgres (Sagas)', () => {
       t.skip('Postgres unreachable');
       return;
     }
-    let live = store;
-    let id = 'pay_dead_letter';
+    const live = store;
+    const id = 'pay_dead_letter';
     await live.sagas.open(
       sagaRow({ id, userId: 'usr_dl', state: 'SUBMITTED' }),
     );
 
     await live.sagas.deadLetter(id, 'PROVIDER.FAILURE');
 
-    let loaded = await live.sagas.load(id);
+    const loaded = await live.sagas.load(id);
     assert.notEqual(loaded, null);
     assert.equal(loaded!.state, 'FAILED');
   });
@@ -349,8 +349,8 @@ describe('Store Conformance: postgres (Subscriptions)', () => {
       t.skip('Postgres unreachable');
       return;
     }
-    let live = store;
-    let id = 'sub_attempts';
+    const live = store;
+    const id = 'sub_attempts';
 
     // Open with attempts=2 and confirm it round-trips through load.
     await live.subscriptions.open(subscriptionRow({ id, attempts: 2 }));
@@ -358,7 +358,7 @@ describe('Store Conformance: postgres (Subscriptions)', () => {
 
     // Re-open with a bumped attempt (the worker's retry-persist path): open must upsert, not keep
     // the old count.
-    let prior = (await live.subscriptions.load(id))!;
+    const prior = (await live.subscriptions.load(id))!;
     await live.subscriptions.open({ ...prior, attempts: prior.attempts + 1 });
     assert.equal((await live.subscriptions.load(id))!.attempts, 3);
 
@@ -367,14 +367,14 @@ describe('Store Conformance: postgres (Subscriptions)', () => {
     // subscriptionRow). The prior re-open didn't touch next_due_at, so it still matches and the
     // update lands.
     await live.subscriptions.markBilled(id, 1_000, 0);
-    let billed = (await live.subscriptions.load(id))!;
+    const billed = (await live.subscriptions.load(id))!;
     assert.equal(billed.attempts, 0);
     assert.equal(billed.period, 2);
 
     // markLapsed leaves attempts as-is (only the state changes).
     await live.subscriptions.open(subscriptionRow({ id, attempts: 5 }));
     await live.subscriptions.markLapsed(id);
-    let lapsed = (await live.subscriptions.load(id))!;
+    const lapsed = (await live.subscriptions.load(id))!;
     assert.equal(lapsed.state, 'LAPSED');
     assert.equal(lapsed.attempts, 5);
   });

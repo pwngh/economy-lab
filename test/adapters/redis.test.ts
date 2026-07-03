@@ -34,9 +34,9 @@ interface FakeRedis {
 }
 
 function fakeRedis(): FakeRedis {
-  let store = new Map<string, string>();
-  let setCalls: unknown[][] = [];
-  let fake: FakeRedis = {
+  const store = new Map<string, string>();
+  const setCalls: unknown[][] = [];
+  const fake: FakeRedis = {
     store,
     setCalls,
     get: async (key) => store.get(key) ?? null,
@@ -54,7 +54,7 @@ function fakeRedis(): FakeRedis {
 // Builds a fake whose every command rejects. This lets a test check that the adapter converts
 // a driver error into the project's own error type.
 function failingRedis(cause: Error): FakeRedis {
-  let base = fakeRedis();
+  const base = fakeRedis();
   return {
     ...base,
     get: async () => Promise.reject(cause),
@@ -65,11 +65,11 @@ function failingRedis(cause: Error): FakeRedis {
 
 describe('redisCacheFrom', () => {
   test('round-trips a value under the namespaced key', async () => {
-    let client = fakeRedis();
-    let cache = redisCacheFrom(client);
+    const client = fakeRedis();
+    const cache = redisCacheFrom(client);
 
     await cache.set('balance:usr_42:spendable', 'CREDIT:12.34');
-    let read = await cache.get('balance:usr_42:spendable');
+    const read = await cache.get('balance:usr_42:spendable');
 
     assert.equal(read, 'CREDIT:12.34');
     assert.equal(
@@ -79,16 +79,16 @@ describe('redisCacheFrom', () => {
   });
 
   test('returns null for a missing key', async () => {
-    let cache = redisCacheFrom(fakeRedis());
+    const cache = redisCacheFrom(fakeRedis());
 
-    let read = await cache.get('balance:usr_absent:spendable');
+    const read = await cache.get('balance:usr_absent:spendable');
 
     assert.equal(read, null);
   });
 
   test('forwards a TTL as the PX millisecond flag', async () => {
-    let client = fakeRedis();
-    let cache = redisCacheFrom(client);
+    const client = fakeRedis();
+    const cache = redisCacheFrom(client);
 
     await cache.set('balance:usr_7:spendable', 'CREDIT:1.00', 60_000);
 
@@ -101,8 +101,8 @@ describe('redisCacheFrom', () => {
   });
 
   test('omits the TTL flag when no ttl is given', async () => {
-    let client = fakeRedis();
-    let cache = redisCacheFrom(client);
+    const client = fakeRedis();
+    const cache = redisCacheFrom(client);
 
     await cache.set('balance:usr_7:earned', 'CREDIT:2.00');
 
@@ -113,25 +113,25 @@ describe('redisCacheFrom', () => {
   });
 
   test('invalidates the namespaced key', async () => {
-    let client = fakeRedis();
-    let cache = redisCacheFrom(client);
+    const client = fakeRedis();
+    const cache = redisCacheFrom(client);
     await cache.set('balance:usr_9:spendable', 'CREDIT:5.00');
 
     await cache.invalidate('balance:usr_9:spendable');
-    let read = await cache.get('balance:usr_9:spendable');
+    const read = await cache.get('balance:usr_9:spendable');
 
     assert.equal(read, null);
     assert.equal(client.store.size, 0);
   });
 
   test('translates a driver failure into a retryable STORE.FAILURE fault', async () => {
-    let cause = new Error('ECONNRESET');
-    let cache = redisCacheFrom(failingRedis(cause));
+    const cause = new Error('ECONNRESET');
+    const cache = redisCacheFrom(failingRedis(cause));
 
     await assert.rejects(
       cache.get('balance:usr_1:spendable'),
       (error: unknown) => {
-        let fault = error as {
+        const fault = error as {
           code?: string;
           retryable?: boolean;
           cause?: unknown;
@@ -145,12 +145,12 @@ describe('redisCacheFrom', () => {
   });
 
   test('translates a set failure into a retryable STORE.FAILURE fault', async () => {
-    let cache = redisCacheFrom(failingRedis(new Error('ECONNRESET')));
+    const cache = redisCacheFrom(failingRedis(new Error('ECONNRESET')));
 
     await assert.rejects(
       cache.set('balance:usr_1:spendable', 'CREDIT:1.00'),
       (error: unknown) => {
-        let fault = error as { code?: string; retryable?: boolean };
+        const fault = error as { code?: string; retryable?: boolean };
         assert.equal(fault.code, 'STORE.FAILURE');
         assert.equal(fault.retryable, true);
         return true;
@@ -159,12 +159,12 @@ describe('redisCacheFrom', () => {
   });
 
   test('translates an invalidate failure into a retryable STORE.FAILURE fault', async () => {
-    let cache = redisCacheFrom(failingRedis(new Error('ECONNRESET')));
+    const cache = redisCacheFrom(failingRedis(new Error('ECONNRESET')));
 
     await assert.rejects(
       cache.invalidate('balance:usr_1:spendable'),
       (error: unknown) => {
-        let fault = error as { code?: string; retryable?: boolean };
+        const fault = error as { code?: string; retryable?: boolean };
         assert.equal(fault.code, 'STORE.FAILURE');
         assert.equal(fault.retryable, true);
         return true;
@@ -173,9 +173,9 @@ describe('redisCacheFrom', () => {
   });
 
   test('closes by quitting the underlying client', async () => {
-    let client = fakeRedis();
+    const client = fakeRedis();
     let quit = false;
-    let cache = redisCacheFrom({
+    const cache = redisCacheFrom({
       ...client,
       quit: async () => {
         quit = true;

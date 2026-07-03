@@ -54,7 +54,7 @@ function workerCtx(): WorkerCtx {
 function feedOf(byWindow: Map<number, ReconcileInputs>): ReconcileFeed {
   return {
     pull: async (window) => {
-      let inputs = byWindow.get(window.from);
+      const inputs = byWindow.get(window.from);
       if (inputs === undefined) {
         return { processor: [], ledger: [] };
       }
@@ -73,11 +73,11 @@ function throwingFeed(error: unknown): ReconcileFeed {
   };
 }
 
-let WINDOW: Range = { from: 0, to: 1_000 };
+const WINDOW: Range = { from: 0, to: 1_000 };
 
 // One $5.00 payout, same amount on processor and ledger sides. Both agree, so
 // reconciliation finds no problem.
-let MATCHED: ReconcileInputs = {
+const MATCHED: ReconcileInputs = {
   processor: [
     {
       kind: 'payout',
@@ -100,7 +100,7 @@ let MATCHED: ReconcileInputs = {
 
 // Same payout on both sides, amounts off by one cent ($5.00 vs $4.99). Reconciliation
 // matches by key, then reports the amount mismatch.
-let DRIFTED: ReconcileInputs = {
+const DRIFTED: ReconcileInputs = {
   processor: [
     {
       kind: 'payout',
@@ -124,7 +124,7 @@ let DRIFTED: ReconcileInputs = {
 // Processor-cleared money with no matching ledger entry, so the ledger side is empty. Real
 // money moved, but nothing on our books accounts for it. Reconciliation reports a
 // "processor orphan".
-let PROCESSOR_ORPHAN: ReconcileInputs = {
+const PROCESSOR_ORPHAN: ReconcileInputs = {
   processor: [
     {
       kind: 'buy',
@@ -139,9 +139,9 @@ let PROCESSOR_ORPHAN: ReconcileInputs = {
 
 describe('reconcileDueWindows', () => {
   test('tallies a fully matched window as reconciled', async () => {
-    let feed = feedOf(new Map([[WINDOW.from, MATCHED]]));
+    const feed = feedOf(new Map([[WINDOW.from, MATCHED]]));
 
-    let summary = await reconcileDueWindows(feed, workerCtx(), {
+    const summary = await reconcileDueWindows(feed, workerCtx(), {
       windows: [WINDOW],
     });
 
@@ -153,9 +153,9 @@ describe('reconcileDueWindows', () => {
   });
 
   test('tallies a window with an amount drift as drifted, not failed', async () => {
-    let feed = feedOf(new Map([[WINDOW.from, DRIFTED]]));
+    const feed = feedOf(new Map([[WINDOW.from, DRIFTED]]));
 
-    let summary = await reconcileDueWindows(feed, workerCtx(), {
+    const summary = await reconcileDueWindows(feed, workerCtx(), {
       windows: [WINDOW],
     });
 
@@ -167,9 +167,9 @@ describe('reconcileDueWindows', () => {
   });
 
   test('flags a processor record with no ledger counterpart as a processor orphan', async () => {
-    let feed = feedOf(new Map([[WINDOW.from, PROCESSOR_ORPHAN]]));
+    const feed = feedOf(new Map([[WINDOW.from, PROCESSOR_ORPHAN]]));
 
-    let summary = await reconcileDueWindows(feed, workerCtx(), {
+    const summary = await reconcileDueWindows(feed, workerCtx(), {
       windows: [WINDOW],
     });
 
@@ -179,11 +179,11 @@ describe('reconcileDueWindows', () => {
   });
 
   test('records a feed fault as failed, classified on retryable, never throwing the batch', async () => {
-    let feed = throwingFeed(
+    const feed = throwingFeed(
       fault('STORE.FAILURE', 'feed unreachable', { retryable: true }),
     );
 
-    let summary = await reconcileDueWindows(feed, workerCtx(), {
+    const summary = await reconcileDueWindows(feed, workerCtx(), {
       windows: [WINDOW],
     });
 
@@ -194,14 +194,14 @@ describe('reconcileDueWindows', () => {
   });
 
   test('isolates a feed fault per window and continues the batch', async () => {
-    let second: Range = { from: 1_000, to: 2_000 };
-    let cases: Array<{ window: Range; throws: boolean }> = [
+    const second: Range = { from: 1_000, to: 2_000 };
+    const cases: Array<{ window: Range; throws: boolean }> = [
       { window: WINDOW, throws: true },
       { window: second, throws: false },
     ];
-    let feed: ReconcileFeed = {
+    const feed: ReconcileFeed = {
       pull: async (window) => {
-        let match = cases.find((c) => c.window.from === window.from);
+        const match = cases.find((c) => c.window.from === window.from);
         if (match?.throws) {
           throw fault('PROVIDER.FAILURE', 'down', { retryable: true });
         }
@@ -209,7 +209,7 @@ describe('reconcileDueWindows', () => {
       },
     };
 
-    let summary = await reconcileDueWindows(feed, workerCtx(), {
+    const summary = await reconcileDueWindows(feed, workerCtx(), {
       windows: [WINDOW, second],
     });
 
@@ -222,12 +222,12 @@ describe('reconcileDueWindows', () => {
 
 describe('reconcileDueWindows Determinism', () => {
   test('emits a byte-identical report across two runs over the same feed', async () => {
-    let feed = feedOf(new Map([[WINDOW.from, MATCHED]]));
+    const feed = feedOf(new Map([[WINDOW.from, MATCHED]]));
 
-    let first = await reconcileDueWindows(feed, workerCtx(), {
+    const first = await reconcileDueWindows(feed, workerCtx(), {
       windows: [WINDOW],
     });
-    let second = await reconcileDueWindows(feed, workerCtx(), {
+    const second = await reconcileDueWindows(feed, workerCtx(), {
       windows: [WINDOW],
     });
 

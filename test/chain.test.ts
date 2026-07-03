@@ -46,13 +46,13 @@ import type {
 
 // The prevHash an account's first posting points back to. It is 64 zero characters,
 // which is 32 zero bytes written as lowercase hex.
-let GENESIS_HEX = '0'.repeat(64);
+const GENESIS_HEX = '0'.repeat(64);
 
 // Builds a balanced double-entry posting that credits 500 to the user's spendable account
 // and debits 500 from REVENUE. The two legs touch distinct accounts, so advanceHeads
 // produces two separate chain links to assert on.
 function balancedPosting(txnId: string, user: string): Posting {
-  let amount = toAmount('CREDIT', 500n);
+  const amount = toAmount('CREDIT', 500n);
   return {
     txnId,
     legs: [credit(spendable(user), amount), debit(SYSTEM.REVENUE, amount)],
@@ -64,7 +64,7 @@ function balancedPosting(txnId: string, user: string): Posting {
 // so a test can assert recordCheckpoint saved exactly one checkpoint. The production store
 // lives in the db adapter and writes outside the money-posting transaction by design.
 function captureCheckpoints(): CheckpointStore & { rows: () => number } {
-  let rows: number[] = [];
+  const rows: number[] = [];
   return {
     put: async () => {
       rows.push(1);
@@ -79,8 +79,8 @@ function captureCheckpoints(): CheckpointStore & { rows: () => number } {
 // proveChain has genuine history to re-check. The returned digest is the one the write used,
 // so a later verify re-hashes identically.
 async function populatedStore(): Promise<{ store: Store; digest: Digest }> {
-  let digest = seededDigest(1);
-  let store = memoryStore({ digest });
+  const digest = seededDigest(1);
+  const store = memoryStore({ digest });
   await store.transaction((unit) =>
     postEntry(unit.ledger, balancedPosting('txn_seed', 'usr_a')),
   );
@@ -90,10 +90,10 @@ async function populatedStore(): Promise<{ store: Store; digest: Digest }> {
 // --- advanceHeads: extend each account's hash chain when a posting is written ------
 
 async function advancesOneHeadPerDistinctAccount(): Promise<void> {
-  let digest = seededDigest(1);
-  let posting = balancedPosting('txn_1', 'usr_a');
+  const digest = seededDigest(1);
+  const posting = balancedPosting('txn_1', 'usr_a');
 
-  let links = await advanceHeads(digest, posting, () => undefined);
+  const links = await advanceHeads(digest, posting, () => undefined);
 
   assert.equal(links.length, 2);
   assert.deepEqual(
@@ -103,24 +103,24 @@ async function advancesOneHeadPerDistinctAccount(): Promise<void> {
 }
 
 async function usesGenesisForANewAccount(): Promise<void> {
-  let digest = seededDigest(1);
-  let posting = balancedPosting('txn_1', 'usr_a');
+  const digest = seededDigest(1);
+  const posting = balancedPosting('txn_1', 'usr_a');
 
-  let links = await advanceHeads(digest, posting, () => undefined);
+  const links = await advanceHeads(digest, posting, () => undefined);
 
   assert.equal(links[0]!.prevHash, GENESIS_HEX);
   assert.match(links[0]!.hash, /^[0-9a-f]{64}$/);
 }
 
 async function agreesWithTheChainHashSeam(): Promise<void> {
-  let digest = seededDigest(1);
-  let posting = balancedPosting('txn_1', 'usr_a');
+  const digest = seededDigest(1);
+  const posting = balancedPosting('txn_1', 'usr_a');
 
-  let links = await advanceHeads(digest, posting, () => undefined);
+  const links = await advanceHeads(digest, posting, () => undefined);
 
   // advanceHeads must hash via the shared chainHash, not its own copy. Call chainHash
   // directly with the same inputs and require the link's hash to match exactly.
-  let expected = await chainHash(digest, {
+  const expected = await chainHash(digest, {
     accountPrevHash: new Uint8Array(32),
     txnId: posting.txnId,
     account: spendable('usr_a'),
@@ -131,15 +131,15 @@ async function agreesWithTheChainHashSeam(): Promise<void> {
 }
 
 async function threadsThePriorHeadForward(): Promise<void> {
-  let digest = seededDigest(1);
-  let first = await advanceHeads(
+  const digest = seededDigest(1);
+  const first = await advanceHeads(
     digest,
     balancedPosting('txn_1', 'usr_a'),
     () => undefined,
   );
-  let priorHead = first[0]!.hash;
+  const priorHead = first[0]!.hash;
 
-  let second = await advanceHeads(
+  const second = await advanceHeads(
     digest,
     balancedPosting('txn_2', 'usr_a'),
     (account) => (account === spendable('usr_a') ? priorHead : undefined),
@@ -152,11 +152,11 @@ async function threadsThePriorHeadForward(): Promise<void> {
 // --- proveChain: re-walk every account's chain and report the first thing that's wrong
 
 async function reportsIntactOverAHealthyLedger(): Promise<void> {
-  let { store, digest } = await populatedStore();
+  const { store, digest } = await populatedStore();
 
   // proveChain re-hashes every chain from its start with the same digest the write used. An
   // untampered ledger reproduces its stored hashes, so a break here means the verifier is broken.
-  let report = await proveChain({ ledger: store.ledger, digest });
+  const report = await proveChain({ ledger: store.ledger, digest });
 
   assert.equal(report.intact, true);
   assert.equal(report.firstBreak, null);
@@ -167,13 +167,13 @@ async function detectsATamperedLegOnACommittedPosting(): Promise<void> {
   // __tamper edits a written entry but leaves its recorded hash untouched, mimicking an
   // attacker editing stored data. Re-hashing no longer matches the stored hash, so proveChain
   // catches it.
-  let { store, digest } = await populatedStore();
-  let ledger = store.ledger as MemoryLedger;
+  const { store, digest } = await populatedStore();
+  const ledger = store.ledger as MemoryLedger;
   ledger.__tamper('txn_seed', (legs: Leg[]) => {
     legs[0] = { account: legs[0]!.account, amount: toAmount('CREDIT', 999n) };
   });
 
-  let report = await proveChain({ ledger: store.ledger, digest });
+  const report = await proveChain({ ledger: store.ledger, digest });
 
   assert.equal(report.intact, false);
   assert.equal(report.firstBreak?.txnId, 'txn_seed');
@@ -186,8 +186,8 @@ async function detectsATamperedLegOnACommittedPosting(): Promise<void> {
 async function pinpointsTheTamperedAccountAcrossAMultiPostingChain(): Promise<void> {
   // Writes two postings to one account and tampers only the second. proveChain should pin the
   // break to txn_2, not the still-valid txn_1, because it reports where the chain first fails.
-  let digest = seededDigest(1);
-  let store = memoryStore({ digest });
+  const digest = seededDigest(1);
+  const store = memoryStore({ digest });
   await store.transaction((unit) =>
     postEntry(unit.ledger, balancedPosting('txn_1', 'usr_b')),
   );
@@ -198,7 +198,7 @@ async function pinpointsTheTamperedAccountAcrossAMultiPostingChain(): Promise<vo
     legs[0] = { account: legs[0]!.account, amount: toAmount('CREDIT', 1n) };
   });
 
-  let report = await proveChain({ ledger: store.ledger, digest });
+  const report = await proveChain({ ledger: store.ledger, digest });
 
   assert.equal(report.intact, false);
   assert.equal(report.firstBreak?.txnId, 'txn_2');
@@ -208,9 +208,9 @@ async function pinpointsTheTamperedAccountAcrossAMultiPostingChain(): Promise<vo
 // --- merkleRoot: fold every account's head hash (the latest hash in its chain) into one summary hash
 
 async function rootsAnEmptyHeadSetToGenesis(): Promise<void> {
-  let digest = seededDigest(1);
+  const digest = seededDigest(1);
 
-  let root = await merkleRoot(digest, []);
+  const root = await merkleRoot(digest, []);
 
   assert.deepEqual(root, new Uint8Array(32));
 }
@@ -218,31 +218,31 @@ async function rootsAnEmptyHeadSetToGenesis(): Promise<void> {
 async function producesTheSameRootForTheSameHeadsOnEveryRuntime(): Promise<void> {
   // merkleRoot sorts accounts first, so the root is order-independent: the same set in two
   // orders gives identical bytes, letting a checkpoint reproduce on any runtime.
-  let heads: ReadonlyArray<readonly [AccountRef, string]> = [
+  const heads: ReadonlyArray<readonly [AccountRef, string]> = [
     [spendable('usr_a'), 'a'.repeat(64)],
     [SYSTEM.REVENUE, 'c'.repeat(64)],
     [spendable('usr_b'), 'e'.repeat(64)],
   ];
 
-  let rootA = await merkleRoot(seededDigest(7), heads);
-  let rootB = await merkleRoot(seededDigest(7), [...heads].reverse());
+  const rootA = await merkleRoot(seededDigest(7), heads);
+  const rootB = await merkleRoot(seededDigest(7), [...heads].reverse());
 
   assert.deepEqual(rootA, rootB); // reversed order, identical root, because merkleRoot sorts first
 }
 
 async function changesTheRootWhenAnyHeadChanges(): Promise<void> {
-  let digest = seededDigest(1);
-  let base: ReadonlyArray<readonly [AccountRef, string]> = [
+  const digest = seededDigest(1);
+  const base: ReadonlyArray<readonly [AccountRef, string]> = [
     [spendable('usr_a'), 'a'.repeat(64)],
     [SYSTEM.REVENUE, 'c'.repeat(64)],
   ];
-  let tampered: ReadonlyArray<readonly [AccountRef, string]> = [
+  const tampered: ReadonlyArray<readonly [AccountRef, string]> = [
     [spendable('usr_a'), 'a'.repeat(63) + 'b'], // one hex character differs from base
     [SYSTEM.REVENUE, 'c'.repeat(64)],
   ];
 
-  let rootBase = toHex(await merkleRoot(digest, base));
-  let rootTampered = toHex(await merkleRoot(digest, tampered));
+  const rootBase = toHex(await merkleRoot(digest, base));
+  const rootTampered = toHex(await merkleRoot(digest, tampered));
 
   assert.notEqual(rootBase, rootTampered);
 }
@@ -250,11 +250,11 @@ async function changesTheRootWhenAnyHeadChanges(): Promise<void> {
 // --- recordCheckpoint / verifyCheckpoint: sign a snapshot of the ledger, then check it
 
 async function recordsASignedCheckpointOverTheCurrentHeads(): Promise<void> {
-  let { store } = await populatedStore();
-  let digest = seededDigest(1);
-  let checkpoints = captureCheckpoints();
+  const { store } = await populatedStore();
+  const digest = seededDigest(1);
+  const checkpoints = captureCheckpoints();
 
-  let checkpoint = await recordCheckpoint({
+  const checkpoint = await recordCheckpoint({
     ledger: store.ledger,
     checkpoints,
     digest,
@@ -273,11 +273,11 @@ async function refusesToCheckpointATamperedChainAndWritesNothing(): Promise<void
   // recordCheckpoint re-verifies the whole chain before signing. Tamper a committed leg
   // (hash left intact, so re-hashing no longer matches), then checkpoint. proveChain finds
   // the break, so recordCheckpoint throws CHAIN.BROKEN and never reaches the store.
-  let { store, digest } = await populatedStore();
+  const { store, digest } = await populatedStore();
   (store.ledger as MemoryLedger).__tamper('txn_seed', (legs: Leg[]) => {
     legs[0] = { account: legs[0]!.account, amount: toAmount('CREDIT', 999n) };
   });
-  let checkpoints = captureCheckpoints();
+  const checkpoints = captureCheckpoints();
 
   await assert.rejects(
     () =>
@@ -296,10 +296,10 @@ async function refusesToCheckpointATamperedChainAndWritesNothing(): Promise<void
 }
 
 async function recordedRootEqualsTheDirectMerkleRoot(): Promise<void> {
-  let { store } = await populatedStore();
-  let digest = seededDigest(1);
+  const { store } = await populatedStore();
+  const digest = seededDigest(1);
 
-  let checkpoint = await recordCheckpoint({
+  const checkpoint = await recordCheckpoint({
     ledger: store.ledger,
     checkpoints: captureCheckpoints(),
     digest,
@@ -307,8 +307,8 @@ async function recordedRootEqualsTheDirectMerkleRoot(): Promise<void> {
     clock: fixedClock(0),
     ids: sequentialIds(),
   });
-  let heads: Array<readonly [AccountRef, string]> = [];
-  for await (let pair of store.ledger.heads()) {
+  const heads: Array<readonly [AccountRef, string]> = [];
+  for await (const pair of store.ledger.heads()) {
     heads.push(pair);
   }
 
@@ -316,10 +316,10 @@ async function recordedRootEqualsTheDirectMerkleRoot(): Promise<void> {
 }
 
 async function verifiesAFreshlyRecordedCheckpoint(): Promise<void> {
-  let { store } = await populatedStore();
-  let digest = seededDigest(1);
-  let signer = seededSigner(1);
-  let checkpoint = await recordCheckpoint({
+  const { store } = await populatedStore();
+  const digest = seededDigest(1);
+  const signer = seededSigner(1);
+  const checkpoint = await recordCheckpoint({
     ledger: store.ledger,
     checkpoints: captureCheckpoints(),
     digest,
@@ -328,7 +328,7 @@ async function verifiesAFreshlyRecordedCheckpoint(): Promise<void> {
     ids: sequentialIds(),
   });
 
-  let ok = await verifyCheckpoint(
+  const ok = await verifyCheckpoint(
     { ledger: store.ledger, digest, signer },
     checkpoint,
   );
@@ -337,10 +337,10 @@ async function verifiesAFreshlyRecordedCheckpoint(): Promise<void> {
 }
 
 async function rejectsACheckpointWhenTheLedgerMoved(): Promise<void> {
-  let { store } = await populatedStore();
-  let digest = seededDigest(1);
-  let signer = seededSigner(1);
-  let checkpoint = await recordCheckpoint({
+  const { store } = await populatedStore();
+  const digest = seededDigest(1);
+  const signer = seededSigner(1);
+  const checkpoint = await recordCheckpoint({
     ledger: store.ledger,
     checkpoints: captureCheckpoints(),
     digest,
@@ -354,7 +354,7 @@ async function rejectsACheckpointWhenTheLedgerMoved(): Promise<void> {
   await store.transaction((unit) =>
     postEntry(unit.ledger, balancedPosting('txn_after', 'usr_a')),
   );
-  let ok = await verifyCheckpoint(
+  const ok = await verifyCheckpoint(
     { ledger: store.ledger, digest, signer },
     checkpoint,
   );
@@ -363,9 +363,9 @@ async function rejectsACheckpointWhenTheLedgerMoved(): Promise<void> {
 }
 
 async function rejectsAForgedSignature(): Promise<void> {
-  let { store } = await populatedStore();
-  let digest = seededDigest(1);
-  let checkpoint = await recordCheckpoint({
+  const { store } = await populatedStore();
+  const digest = seededDigest(1);
+  const checkpoint = await recordCheckpoint({
     ledger: store.ledger,
     checkpoints: captureCheckpoints(),
     digest,
@@ -376,7 +376,7 @@ async function rejectsAForgedSignature(): Promise<void> {
 
   // Verify with seed 2, but the checkpoint was signed with seed 1. Key 2 never produced this
   // signature, so verify rejects it.
-  let ok = await verifyCheckpoint(
+  const ok = await verifyCheckpoint(
     { ledger: store.ledger, digest, signer: seededSigner(2) },
     checkpoint,
   );
@@ -388,11 +388,11 @@ async function verifiesAcrossAKeyRotation(): Promise<void> {
   // A checkpoint signed with the old key must still verify after rotation: given the new key
   // plus the old key as a still-accepted prior key, verify tries the prior key and accepts.
   // Uses the real production Ed25519 signer, not the seeded test stand-in.
-  let oldKey = 'aa'.repeat(32);
-  let newKey = 'bb'.repeat(32);
-  let { store } = await populatedStore();
-  let digest = seededDigest(1);
-  let checkpoint = await recordCheckpoint({
+  const oldKey = 'aa'.repeat(32);
+  const newKey = 'bb'.repeat(32);
+  const { store } = await populatedStore();
+  const digest = seededDigest(1);
+  const checkpoint = await recordCheckpoint({
     ledger: store.ledger,
     checkpoints: captureCheckpoints(),
     digest,
@@ -401,8 +401,8 @@ async function verifiesAcrossAKeyRotation(): Promise<void> {
     ids: sequentialIds(),
   });
 
-  let rotated = systemSigner({ signingKey: newKey, priorKeys: [oldKey] });
-  let ok = await verifyCheckpoint(
+  const rotated = systemSigner({ signingKey: newKey, priorKeys: [oldKey] });
+  const ok = await verifyCheckpoint(
     { ledger: store.ledger, digest, signer: rotated },
     checkpoint,
   );
@@ -415,35 +415,35 @@ async function separatesLeafAndNodeHashDomains(): Promise<void> {
   // H(0x01 || left || right). This rebuilds both preimages by hand and checks that merkleRoot
   // agrees, which locks in the one-byte tags. Without those tags, leaves and nodes would share
   // one hash domain, and a leaf could be reinterpreted as an interior left||right pair.
-  let digest = seededDigest(1);
-  let encoder = new TextEncoder();
-  let tagged = (prefix: number, body: Uint8Array): Uint8Array => {
-    let out = new Uint8Array(1 + body.length);
+  const digest = seededDigest(1);
+  const encoder = new TextEncoder();
+  const tagged = (prefix: number, body: Uint8Array): Uint8Array => {
+    const out = new Uint8Array(1 + body.length);
     out[0] = prefix;
     out.set(body, 1);
     return out;
   };
-  let leafHash = (account: AccountRef, head: string): Promise<Uint8Array> =>
+  const leafHash = (account: AccountRef, head: string): Promise<Uint8Array> =>
     digest.hash(tagged(0x00, encoder.encode(`${account}:${head}`)));
 
-  let a = spendable('usr_a');
-  let b = spendable('usr_b');
-  let headA = 'a'.repeat(64);
-  let headB = 'b'.repeat(64);
+  const a = spendable('usr_a');
+  const b = spendable('usr_b');
+  const headA = 'a'.repeat(64);
+  const headB = 'b'.repeat(64);
 
   // With a single leaf, the root is that leaf's 0x00-tagged hash, left unchanged.
-  let one: ReadonlyArray<readonly [AccountRef, string]> = [[a, headA]];
+  const one: ReadonlyArray<readonly [AccountRef, string]> = [[a, headA]];
   assert.deepEqual(await merkleRoot(digest, one), await leafHash(a, headA));
 
   // With two leaves, the root is the 0x01-tagged hash of the two leaf hashes, left then right.
   // merkleRoot sorts by account id, so usr_a is the left child even though it is passed second.
-  let left = await leafHash(a, headA);
-  let right = await leafHash(b, headB);
-  let node = new Uint8Array(1 + left.length + right.length);
+  const left = await leafHash(a, headA);
+  const right = await leafHash(b, headB);
+  const node = new Uint8Array(1 + left.length + right.length);
   node[0] = 0x01;
   node.set(left, 1);
   node.set(right, 1 + left.length);
-  let two: ReadonlyArray<readonly [AccountRef, string]> = [
+  const two: ReadonlyArray<readonly [AccountRef, string]> = [
     [b, headB],
     [a, headA],
   ];

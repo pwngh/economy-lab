@@ -88,7 +88,7 @@ async function fundSpendable(
   dollars: string,
   txnId: string,
 ): Promise<void> {
-  let amount = decodeAmount(dollars, 'CREDIT');
+  const amount = decodeAmount(dollars, 'CREDIT');
   await store.transaction((unit: Unit) =>
     postEntry(unit.ledger, {
       txnId,
@@ -124,14 +124,14 @@ function rawInsertPosting(id: string): string {
 // Builds SQL that inserts a duplicate idempotency row. `key` is a reserved word in MySQL and
 // needs backticks, but it is plain in Postgres, so this picks the column spelling by engine.
 function rawInsertIdempotency(engineName: string, key: string): string {
-  let column = engineName === 'mysql' ? '`key`' : 'key';
+  const column = engineName === 'mysql' ? '`key`' : 'key';
   return `insert into idempotency (${column}, transaction) values ('${key}', '{}')`;
 }
 
 // Reads the head hash an account currently chains from, straight off the store. A continuous next
 // link must carry this value as its prev_hash. Returns genesis when the account has no link yet.
 async function currentHead(store: Store, account: AccountRef): Promise<string> {
-  for await (let [acct, head] of store.ledger.heads()) {
+  for await (const [acct, head] of store.ledger.heads()) {
     if (acct === account) {
       return head;
     }
@@ -165,9 +165,9 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
     // is the only write door.
     test('conservation: a raw unbalanced leg is refused', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
-      let live = engine;
-      let userId = `usr_adv_i1_${seq()}`;
-      let account = spendable(userId);
+      const live = engine;
+      const userId = `usr_adv_i1_${seq()}`;
+      const account = spendable(userId);
       await fundSpendable(
         live.store,
         userId,
@@ -175,7 +175,7 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
         `txn_adv_i1_setup_${userId}`,
       );
 
-      let txn = `txn_adv_i1_${userId}`;
+      const txn = `txn_adv_i1_${userId}`;
       await live.raw(rawInsertPosting(txn));
       // One lone credit leg, so the CREDIT sum is not zero. A balanced posting must pair it with a debit.
       await assertRawRejected(
@@ -193,9 +193,9 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
     // leg currency a distinct invariant from conservation.
     test('leg currency: a raw cross-currency leg pair is refused even though it conserves', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
-      let live = engine;
-      let userId = `usr_adv_legcur_${seq()}`;
-      let account = spendable(userId);
+      const live = engine;
+      const userId = `usr_adv_legcur_${seq()}`;
+      const account = spendable(userId);
       await fundSpendable(
         live.store,
         userId,
@@ -203,7 +203,7 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
         `txn_adv_legcur_setup_${userId}`,
       );
 
-      let txn = `txn_adv_legcur_${userId}`;
+      const txn = `txn_adv_legcur_${userId}`;
       await live.raw(rawInsertPosting(txn));
       // USD legs on CREDIT accounts (a user's spendable and REVENUE) that sum to zero in USD.
       // Per-currency conservation would pass, so only the composite FK rejects the currency mismatch.
@@ -220,9 +220,9 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
     // is hard.
     test('overdraft: a raw negative user balance is refused', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
-      let live = engine;
-      let userId = `usr_adv_i2_${seq()}`;
-      let account = spendable(userId);
+      const live = engine;
+      const userId = `usr_adv_i2_${seq()}`;
+      const account = spendable(userId);
       await fundSpendable(
         live.store,
         userId,
@@ -246,8 +246,8 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
     // the same way is rejected, as shown in the case above.
     test('overdraft: a legitimately negative SYSTEM balance is allowed (exempt)', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
-      let live = engine;
-      let userId = `usr_adv_i2sys_${seq()}`;
+      const live = engine;
+      const userId = `usr_adv_i2sys_${seq()}`;
       await live.store.transaction(async (unit: Unit) => {
         await postEntry(unit.ledger, {
           txnId: `txn_adv_i2sys_${userId}`,
@@ -259,7 +259,7 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
         });
       });
 
-      let rows = (await live.raw(
+      const rows = (await live.raw(
         `select balance from account_balances where account_id = '${SYSTEM.RECEIVABLE}'`,
       )) as Array<{ balance: bigint | number | string }>;
       assert.equal(rows.length, 1);
@@ -271,9 +271,9 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
     // assertion is hard.
     test('continuity: a raw forked chain link (same prev_hash) is refused', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
-      let live = engine;
-      let userId = `usr_adv_i3fork_${seq()}`;
-      let account = spendable(userId);
+      const live = engine;
+      const userId = `usr_adv_i3fork_${seq()}`;
+      const account = spendable(userId);
       await fundSpendable(
         live.store,
         userId,
@@ -283,7 +283,7 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
 
       // The funding posting already wrote one link from genesis for this account. A second link
       // claiming the same previous hash would fork the chain into two branches.
-      let txn = `txn_adv_i3fork2_${userId}`;
+      const txn = `txn_adv_i3fork2_${userId}`;
       await live.raw(rawInsertPosting(txn));
       await assertRawRejected(
         live,
@@ -299,9 +299,9 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
     // point, while this trigger blocks a wrong one.
     test('continuity: a raw discontinuous chain link (wrong prev_hash) is refused', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
-      let live = engine;
-      let userId = `usr_adv_i3disc_${seq()}`;
-      let account = spendable(userId);
+      const live = engine;
+      const userId = `usr_adv_i3disc_${seq()}`;
+      const account = spendable(userId);
       await fundSpendable(
         live.store,
         userId,
@@ -309,12 +309,12 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
         `txn_adv_i3disc_${userId}`,
       );
 
-      let head = await currentHead(live.store, account);
+      const head = await currentHead(live.store, account);
       // A prev_hash that equals neither the current head nor any prior one, so the link is discontinuous.
-      let bogusPrev = 'a'.repeat(64);
+      const bogusPrev = 'a'.repeat(64);
       assert.notEqual(bogusPrev, head);
 
-      let txn = `txn_adv_i3disc2_${userId}`;
+      const txn = `txn_adv_i3disc2_${userId}`;
       await live.raw(rawInsertPosting(txn));
       await assertRawRejected(
         live,
@@ -328,16 +328,16 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
     // assertion is hard.
     test('exactly-once: a duplicate idempotency key is refused', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
-      let live = engine;
-      let key = `idem_adv_${seq()}`;
-      let userId = `usr_adv_i4_${seq()}`;
+      const live = engine;
+      const key = `idem_adv_${seq()}`;
+      const userId = `usr_adv_i4_${seq()}`;
       // Claim and record through the app so a committed primary-key row exists. On Postgres, claim
       // alone does not insert, because only record writes the row. The duplicate must therefore
       // collide with a recorded key, which is the genuine exactly-once scenario.
       await live.store.transaction(async (unit: Unit) => {
-        let claim = await unit.idempotency.claim(key);
+        const claim = await unit.idempotency.claim(key);
         assert.equal(claim.claimed, true);
-        let txn = await postEntry(unit.ledger, {
+        const txn = await postEntry(unit.ledger, {
           txnId: `txn_adv_i4_${userId}`,
           legs: [
             credit(spendable(userId), toAmount('CREDIT', 100n)),
@@ -358,10 +358,10 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
 
     test('exactly-once: a duplicate webhook event id is refused', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
-      let live = engine;
-      let eventId = `evt_adv_${seq()}`;
+      const live = engine;
+      const eventId = `evt_adv_${seq()}`;
       // Record the first sighting through the app's replay store, which inserts the primary-key row.
-      let first = await live.store.replay.claim(eventId);
+      const first = await live.store.replay.claim(eventId);
       assert.equal(first.claimed, true);
 
       // A second row for the same event id, written around the app, must hit the primary key.
@@ -378,9 +378,9 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
     // a hand-edited balance that drifts from the legs is rejected.
     test('balance integrity: a raw drifted balance (≠ SUM legs) is refused', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
-      let live = engine;
-      let userId = `usr_adv_i5_${seq()}`;
-      let account = spendable(userId);
+      const live = engine;
+      const userId = `usr_adv_i5_${seq()}`;
+      const account = spendable(userId);
       await fundSpendable(live.store, userId, '5.00', `txn_adv_i5_${userId}`);
 
       // Inflate the cached balance to a value the legs do not sum to (500 to 999), staying
@@ -395,8 +395,8 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
 
     test('outbox: markRelayed never resurrects a dead-lettered row', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
-      let live = engine;
-      let id = `obx_adv_dead_${name}`;
+      const live = engine;
+      const id = `obx_adv_dead_${name}`;
       // A poison message that is enqueued, then given up on. Dead-lettering sets its status to 'failed'.
       await live.store.transaction((unit: Unit) =>
         unit.outbox.enqueue({
@@ -421,7 +421,7 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
       // a no-op. Without that guard the dead row is silently flipped to 'relayed' and the poison
       // event looks delivered. claimBatch never returns a terminal row, so read the status directly.
       await live.store.outbox.markRelayed([id]);
-      let observed = (await live.raw(
+      const observed = (await live.raw(
         `select status from outbox where id = '${id}'`,
       )) as Array<{ status: string }>;
       assert.equal(
@@ -433,15 +433,15 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
 
     test('idempotency: a rejected request leaves the key unused (no row)', async (t: TestContext) => {
       if (!engine) return t.skip(`${name} unreachable`);
-      let live = engine;
-      let economy = makeEconomy(1, live.store);
-      let key = `idem_adv_reject_${name}`;
+      const live = engine;
+      const economy = makeEconomy(1, live.store);
+      const key = `idem_adv_reject_${name}`;
       // A refund of an order that does not exist. The pipeline claims the key, then the handler
       // returns rejected(UNKNOWN_ORDER) with nothing posted. A rejected outcome rolls the
       // transaction back, so the key is left unused. MySQL's claim placeholder must not survive.
       // It once did, which diverged from Postgres, which holds a transaction advisory lock and
       // inserts no row at all.
-      let outcome = await economy.submit({
+      const outcome = await economy.submit({
         kind: 'refund',
         idempotencyKey: key,
         actor: { kind: 'system', service: 'support' },
@@ -451,8 +451,8 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
       assert.equal(outcome.status, 'rejected');
 
       // `key` is a reserved word on MySQL, so quote the column per engine.
-      let keyCol = name === 'mysql' ? '`key`' : 'key';
-      let counted = (await live.raw(
+      const keyCol = name === 'mysql' ? '`key`' : 'key';
+      const counted = (await live.raw(
         `select count(*) as n from idempotency where ${keyCol} = '${key}'`,
       )) as Array<{ n: number | string }>;
       assert.equal(
@@ -487,11 +487,11 @@ describe('Adversarial: memory (oracle)', () => {
   // This stays pending: memory is the oracle and gets no engine enforcement, so the SQL engines
   // carry the conservation worklist.
   test('conservation: append accepts an unbalanced posting', async (t: TestContext) => {
-    let userId = `usr_mem_i1_${seq()}`;
-    let account = spendable(userId);
-    let amount = toAmount('CREDIT', 500n);
+    const userId = `usr_mem_i1_${seq()}`;
+    const account = spendable(userId);
+    const amount = toAmount('CREDIT', 500n);
 
-    let accepted = await oracle.store
+    const accepted = await oracle.store
       .transaction((unit: Unit) =>
         // One leg only, so the sum is not zero. postEntry would throw, but append does not check.
         unit.ledger.append({
@@ -517,11 +517,11 @@ describe('Adversarial: memory (oracle)', () => {
   // overdraft: __seedBalance plants a negative user balance with no guard. This stays pending for
   // the same reason: memory is the oracle and gets no engine enforcement.
   test('overdraft: a seeded negative user balance is accepted', async (t: TestContext) => {
-    let userId = `usr_mem_i2_${seq()}`;
-    let account = spendable(userId);
+    const userId = `usr_mem_i2_${seq()}`;
+    const account = spendable(userId);
 
     oracle.ledger.__seedBalance(account, toAmount('CREDIT', -100n));
-    let stored = await oracle.store.ledger.balance(account);
+    const stored = await oracle.store.ledger.balance(account);
 
     if (stored.minor < 0n) {
       t.todo(
@@ -537,12 +537,12 @@ describe('Adversarial: memory (oracle)', () => {
   // structural: the oracle simply has no way to express the violation, so the SQL engines carry
   // the continuity worklist.
   test('continuity: append cannot express a discontinuous link', async (t: TestContext) => {
-    let userId = `usr_mem_i3_${seq()}`;
-    let account = spendable(userId);
-    let amount = toAmount('CREDIT', 500n);
+    const userId = `usr_mem_i3_${seq()}`;
+    const account = spendable(userId);
+    const amount = toAmount('CREDIT', 500n);
 
     // Append a balanced posting. The store forces the link's prev_hash to GENESIS, not the caller.
-    let txn = await oracle.store.transaction((unit: Unit) =>
+    const txn = await oracle.store.transaction((unit: Unit) =>
       unit.ledger.append({
         txnId: `txn_mem_i3_${userId}`,
         legs: [
@@ -552,7 +552,7 @@ describe('Adversarial: memory (oracle)', () => {
         meta: {},
       }),
     );
-    let link = txn.links.find((candidate) => candidate.account === account);
+    const link = txn.links.find((candidate) => candidate.account === account);
     assert.notEqual(link, undefined);
     // The store computed prev_hash itself (GENESIS for a first link); the caller never supplied it.
     assert.equal(link!.prevHash, GENESIS_HEX);
@@ -563,11 +563,11 @@ describe('Adversarial: memory (oracle)', () => {
 
   // exactly-once is real on memory: a second claim of a recorded key does not re-grant.
   test('exactly-once: a duplicate idempotency claim does not re-grant', async () => {
-    let key = `idem_mem_${seq()}`;
-    let recorded = await oracle.store.transaction(async (unit: Unit) => {
-      let claim = await unit.idempotency.claim(key);
+    const key = `idem_mem_${seq()}`;
+    const recorded = await oracle.store.transaction(async (unit: Unit) => {
+      const claim = await unit.idempotency.claim(key);
       assert.equal(claim.claimed, true);
-      let txn = await postEntry(unit.ledger, {
+      const txn = await postEntry(unit.ledger, {
         txnId: `txn_mem_i4_${key}`,
         legs: [
           {
@@ -582,7 +582,7 @@ describe('Adversarial: memory (oracle)', () => {
       return txn;
     });
 
-    let replay = await oracle.store.transaction((unit: Unit) =>
+    const replay = await oracle.store.transaction((unit: Unit) =>
       unit.idempotency.claim(key),
     );
     assert.equal(replay.claimed, false);
@@ -594,9 +594,9 @@ describe('Adversarial: memory (oracle)', () => {
 
   // exactly-once is real on memory: a redelivered webhook event id is not re-claimed.
   test('exactly-once: a duplicate webhook event id is not re-claimed', async () => {
-    let eventId = `evt_mem_${seq()}`;
-    let first = await oracle.store.replay.claim(eventId);
-    let second = await oracle.store.replay.claim(eventId);
+    const eventId = `evt_mem_${seq()}`;
+    const first = await oracle.store.replay.claim(eventId);
+    const second = await oracle.store.replay.claim(eventId);
     assert.equal(first.claimed, true);
     assert.equal(second.claimed, false);
   });
@@ -605,13 +605,13 @@ describe('Adversarial: memory (oracle)', () => {
   // keeps and the prover later reports. The store does not refuse it. This stays pending for the
   // same reason: memory is the oracle and gets no engine enforcement.
   test('balance integrity: a seeded drifted balance is accepted', async (t: TestContext) => {
-    let userId = `usr_mem_i5_${seq()}`;
-    let account = spendable(userId);
+    const userId = `usr_mem_i5_${seq()}`;
+    const account = spendable(userId);
     await fundSpendable(oracle.store, userId, '5.00', `txn_mem_i5_${userId}`);
 
     // Inflate the cached balance away from SUM(legs) (500 to 999), staying non-negative.
     oracle.ledger.__seedBalance(account, toAmount('CREDIT', 999n));
-    let stored = await oracle.store.ledger.balance(account);
+    const stored = await oracle.store.ledger.balance(account);
 
     if (stored.minor === 999n) {
       t.todo(

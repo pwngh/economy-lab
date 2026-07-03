@@ -55,9 +55,9 @@ type Fixture = {
 };
 
 function setup(): Fixture {
-  let digest = seededDigest(1);
-  let clock = fixedClock(0);
-  let ctx: Ctx = {
+  const digest = seededDigest(1);
+  const clock = fixedClock(0);
+  const ctx: Ctx = {
     clock,
     ids: sequentialIds(),
     digest,
@@ -69,8 +69,8 @@ function setup(): Fixture {
     logger: testLogger(),
     meter: noopMeter(),
   };
-  let store: Store = memoryStore({ digest, clock });
-  let post = (
+  const store: Store = memoryStore({ digest, clock });
+  const post = (
     legs: Leg[],
     meta: Record<string, unknown>,
   ): Promise<{ id: string }> =>
@@ -82,7 +82,7 @@ function setup(): Fixture {
     // the same amount, so the two lines sum to zero. A later `reverse` undoes this entry. Returns the
     // transaction id.
     issue: async (userId, amount) => {
-      let transaction = await post(
+      const transaction = await post(
         [debit(SYSTEM.STORED_VALUE, amount), credit(spendable(userId), amount)],
         { kind: 'topUp', source: 'card' },
       );
@@ -104,10 +104,10 @@ function isCode(code: string): (error: unknown) => boolean {
 
 describe('Reverse', () => {
   test('posts the exact inverse of the named posting, unwinding it to zero', async () => {
-    let fx = setup();
-    let txnId = await fx.issue('usr_buyer', creditOf('10.00'));
+    const fx = setup();
+    const txnId = await fx.issue('usr_buyer', creditOf('10.00'));
 
-    let outcome = await fx.rev(
+    const outcome = await fx.rev(
       reverseOp({ txnId, reason: 'duplicate posting' }),
     );
 
@@ -120,14 +120,16 @@ describe('Reverse', () => {
   });
 
   test('balances the reversing posting — every line sign flipped and all amounts sum to zero', async () => {
-    let fx = setup();
-    let txnId = await fx.issue('usr_buyer', creditOf('4.00'));
+    const fx = setup();
+    const txnId = await fx.issue('usr_buyer', creditOf('4.00'));
 
-    let outcome = await fx.rev(reverseOp({ txnId, reason: 'reconciliation' }));
+    const outcome = await fx.rev(
+      reverseOp({ txnId, reason: 'reconciliation' }),
+    );
 
     assert.equal(outcome.status, 'committed');
     if (outcome.status !== 'committed') return;
-    let signed = outcome.transaction.legs.reduce(
+    const signed = outcome.transaction.legs.reduce(
       (sum, leg) => sum + leg.amount.minor,
       0n,
     );
@@ -141,10 +143,12 @@ describe('Reverse', () => {
   });
 
   test('reversing the same transaction twice moves money only once', async () => {
-    let fx = setup();
-    let txnId = await fx.issue('usr_buyer', creditOf('10.00'));
+    const fx = setup();
+    const txnId = await fx.issue('usr_buyer', creditOf('10.00'));
 
-    let first = await fx.rev(reverseOp({ txnId, reason: 'duplicate posting' }));
+    const first = await fx.rev(
+      reverseOp({ txnId, reason: 'duplicate posting' }),
+    );
     assert.equal(first.status, 'committed');
     // After one reversal the top-up is fully unwound: both accounts are back to zero.
     assert.deepEqual(
@@ -152,7 +156,7 @@ describe('Reverse', () => {
       creditOf('0.00'),
     );
 
-    let second = await fx.rev(
+    const second = await fx.rev(
       reverseOp({ txnId, reason: 'duplicate posting' }),
     );
     // The second reverse of the same transaction is a no-op duplicate, not another money movement. It
@@ -171,10 +175,12 @@ describe('Reverse', () => {
   });
 
   test('refuses to reverse a reversal', async () => {
-    let fx = setup();
-    let txnId = await fx.issue('usr_buyer', creditOf('5.00'));
+    const fx = setup();
+    const txnId = await fx.issue('usr_buyer', creditOf('5.00'));
 
-    let first = await fx.rev(reverseOp({ txnId, reason: 'duplicate posting' }));
+    const first = await fx.rev(
+      reverseOp({ txnId, reason: 'duplicate posting' }),
+    );
     assert.equal(first.status, 'committed');
     if (first.status !== 'committed') return;
 
@@ -192,7 +198,7 @@ describe('Reverse', () => {
   });
 
   test('throws a malformed fault when the txnId names no posting', async () => {
-    let fx = setup();
+    const fx = setup();
 
     await assert.rejects(
       fx.rev(reverseOp({ txnId: 'txn_missing', reason: 'no such posting' })),
@@ -201,8 +207,8 @@ describe('Reverse', () => {
   });
 
   test('throws a malformed fault when the actor is not an operator', async () => {
-    let fx = setup();
-    let txnId = await fx.issue('usr_buyer', creditOf('1.00'));
+    const fx = setup();
+    const txnId = await fx.issue('usr_buyer', creditOf('1.00'));
 
     await assert.rejects(
       fx.rev(
@@ -217,8 +223,8 @@ describe('Reverse', () => {
   });
 
   test('throws a malformed fault when the reason is blank', async () => {
-    let fx = setup();
-    let txnId = await fx.issue('usr_buyer', creditOf('1.00'));
+    const fx = setup();
+    const txnId = await fx.issue('usr_buyer', creditOf('1.00'));
 
     await assert.rejects(
       fx.rev(reverseOp({ txnId, reason: '   ' })),
@@ -227,7 +233,7 @@ describe('Reverse', () => {
   });
 
   test('throws a malformed fault when handed the wrong operation kind', async () => {
-    let fx = setup();
+    const fx = setup();
 
     await assert.rejects(
       fx.rev({

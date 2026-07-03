@@ -52,7 +52,7 @@ function stubFetch(replies: Reply[], calls: Recorded[]): FetchLike {
   let next = 0;
   return async (input, init) => {
     calls.push({ input, init });
-    let reply = replies[next++];
+    const reply = replies[next++];
     if (reply === undefined) {
       throw new Error(`stubFetch: no queued reply for call ${next}`);
     }
@@ -124,14 +124,14 @@ function payout(over?: { key?: string; amount?: string }): {
 // Drives the happy three-call flow of quotation, then transaction, then confirm. It returns the
 // transaction id as the provider reference.
 async function submitDrivesQuotationTransactionConfirm(): Promise<void> {
-  let calls: Recorded[] = [];
-  let fetch = stubFetch(
+  const calls: Recorded[] = [];
+  const fetch = stubFetch(
     [withId('quo_1'), withId('txn_1'), { ok: true, status: 200, body: '' }],
     calls,
   );
-  let processor = thunesProcessor(config({ fetch }));
+  const processor = thunesProcessor(config({ fetch }));
 
-  let result = await processor.submitPayout(payout({ key: 'pay_1' }));
+  const result = await processor.submitPayout(payout({ key: 'pay_1' }));
 
   assert.deepEqual(result, { providerRef: 'txn_1' });
   assert.equal(calls.length, 3);
@@ -147,20 +147,20 @@ async function submitDrivesQuotationTransactionConfirm(): Promise<void> {
 
 // The amount is sent as a Thunes amount object and the saga id rides on every step as external_id.
 async function submitEncodesAmountAndThreadsExternalId(): Promise<void> {
-  let calls: Recorded[] = [];
-  let fetch = stubFetch(
+  const calls: Recorded[] = [];
+  const fetch = stubFetch(
     [withId('quo_2'), withId('txn_2'), { ok: true, status: 200, body: '' }],
     calls,
   );
-  let processor = thunesProcessor(config({ fetch }));
+  const processor = thunesProcessor(config({ fetch }));
 
   await processor.submitPayout(payout({ key: 'pay_2', amount: '3.00' }));
 
-  let quotation = JSON.parse(calls[0]!.init!.body!);
+  const quotation = JSON.parse(calls[0]!.init!.body!);
   assert.deepEqual(quotation.source, { amount: 3, currency: 'USD' });
   assert.equal(quotation.external_id, 'pay_2');
   assert.equal(quotation.payer_id, 'payer_gh_wallet');
-  let transaction = JSON.parse(calls[1]!.init!.body!);
+  const transaction = JSON.parse(calls[1]!.init!.body!);
   assert.equal(transaction.external_id, 'pay_2');
   assert.deepEqual(transaction.credit_party_identifier, {
     msisdn: '+233200000000',
@@ -169,50 +169,50 @@ async function submitEncodesAmountAndThreadsExternalId(): Promise<void> {
 
 // Every request carries the HTTP Basic authorization header built from the credentials.
 async function submitSendsBasicAuth(): Promise<void> {
-  let calls: Recorded[] = [];
-  let fetch = stubFetch(
+  const calls: Recorded[] = [];
+  const fetch = stubFetch(
     [withId('quo_3'), withId('txn_3'), { ok: true, status: 200, body: '' }],
     calls,
   );
-  let processor = thunesProcessor(config({ fetch }));
+  const processor = thunesProcessor(config({ fetch }));
 
   await processor.submitPayout(payout({ key: 'pay_3' }));
 
-  let expected = `Basic ${btoa('key_abc:secret_xyz')}`;
-  for (let call of calls) {
+  const expected = `Basic ${btoa('key_abc:secret_xyz')}`;
+  for (const call of calls) {
     assert.equal(call.init?.headers?.authorization, expected);
   }
 }
 
 // The caller's abort signal is forwarded onto every underlying request.
 async function submitForwardsAbortSignal(): Promise<void> {
-  let calls: Recorded[] = [];
-  let fetch = stubFetch(
+  const calls: Recorded[] = [];
+  const fetch = stubFetch(
     [withId('quo_4'), withId('txn_4'), { ok: true, status: 200, body: '' }],
     calls,
   );
-  let processor = thunesProcessor(config({ fetch }));
-  let controller = new AbortController();
+  const processor = thunesProcessor(config({ fetch }));
+  const controller = new AbortController();
 
   await processor.submitPayout(payout({ key: 'pay_4' }), {
     signal: controller.signal,
   });
 
-  for (let call of calls) {
+  for (const call of calls) {
     assert.equal(call.init?.signal, controller.signal);
   }
 }
 
 // A transient (5xx) status is a retryable provider fault, so the worker re-submits next sweep.
 async function submitFaultsRetryablyOnTransientStatus(): Promise<void> {
-  let calls: Recorded[] = [];
-  let fetch = stubFetch(
+  const calls: Recorded[] = [];
+  const fetch = stubFetch(
     [{ ok: false, status: 503, body: 'upstream down' }],
     calls,
   );
-  let processor = thunesProcessor(config({ fetch }));
+  const processor = thunesProcessor(config({ fetch }));
 
-  let error = await processor
+  const error = await processor
     .submitPayout(payout({ key: 'pay_5' }))
     .catch((caught: unknown) => caught);
 
@@ -225,11 +225,11 @@ async function submitFaultsRetryablyOnTransientStatus(): Promise<void> {
 // A client-error (4xx) status that is not an idempotent-replay code is terminal and not retryable.
 // The worker then stops re-submitting and reverses the seller's reserve rather than burning attempts.
 async function submitFaultsTerminallyOnClientStatus(): Promise<void> {
-  let calls: Recorded[] = [];
-  let fetch = stubFetch([withErrorCode(400, '1003011')], calls);
-  let processor = thunesProcessor(config({ fetch }));
+  const calls: Recorded[] = [];
+  const fetch = stubFetch([withErrorCode(400, '1003011')], calls);
+  const processor = thunesProcessor(config({ fetch }));
 
-  let error = await processor
+  const error = await processor
     .submitPayout(payout({ key: 'pay_6' }))
     .catch((caught: unknown) => caught);
 
@@ -240,10 +240,12 @@ async function submitFaultsTerminallyOnClientStatus(): Promise<void> {
 
 // A transport failure (thrown fetch) is a retryable provider fault, preserving the original cause.
 async function submitFaultsRetryablyPreservingCause(): Promise<void> {
-  let underlying = new Error('connection reset');
-  let processor = thunesProcessor(config({ fetch: throwingFetch(underlying) }));
+  const underlying = new Error('connection reset');
+  const processor = thunesProcessor(
+    config({ fetch: throwingFetch(underlying) }),
+  );
 
-  let error = await processor
+  const error = await processor
     .submitPayout(payout({ key: 'pay_7' }))
     .catch((caught: unknown) => caught);
 
@@ -257,14 +259,14 @@ async function submitFaultsRetryablyPreservingCause(): Promise<void> {
 // confirmed counts as success, because the disbursement is in flight. It returns the transaction id
 // as the provider reference.
 async function confirmAlreadyConfirmedIsSuccess(): Promise<void> {
-  let calls: Recorded[] = [];
-  let fetch = stubFetch(
+  const calls: Recorded[] = [];
+  const fetch = stubFetch(
     [withId('quo_8'), withId('txn_8'), withErrorCode(409, '1007002')],
     calls,
   );
-  let processor = thunesProcessor(config({ fetch }));
+  const processor = thunesProcessor(config({ fetch }));
 
-  let result = await processor.submitPayout(payout({ key: 'pay_8' }));
+  const result = await processor.submitPayout(payout({ key: 'pay_8' }));
 
   assert.deepEqual(result, { providerRef: 'txn_8' });
 }
@@ -272,8 +274,8 @@ async function confirmAlreadyConfirmedIsSuccess(): Promise<void> {
 // Tests idempotent replay of transaction creation. A reused external_id means the transaction already
 // exists, so the adapter recovers it by partner reference and continues to confirm.
 async function reusedExternalIdRecoversTransaction(): Promise<void> {
-  let calls: Recorded[] = [];
-  let fetch = stubFetch(
+  const calls: Recorded[] = [];
+  const fetch = stubFetch(
     [
       withId('quo_9'),
       withErrorCode(409, '1007001'),
@@ -282,9 +284,9 @@ async function reusedExternalIdRecoversTransaction(): Promise<void> {
     ],
     calls,
   );
-  let processor = thunesProcessor(config({ fetch }));
+  const processor = thunesProcessor(config({ fetch }));
 
-  let result = await processor.submitPayout(payout({ key: 'pay_9' }));
+  const result = await processor.submitPayout(payout({ key: 'pay_9' }));
 
   assert.deepEqual(result, { providerRef: 'txn_9' });
   assert.equal(
@@ -298,7 +300,7 @@ async function reusedExternalIdRecoversTransaction(): Promise<void> {
 // applies. The mapping sends external_id to sagaId, the transaction id to providerRef and eventId,
 // and the source amount to providerAmount.
 function callbackCompletedMapsToSettleEvent(): void {
-  let event = decodeThunesPayoutCallback('thunes', {
+  const event = decodeThunesPayoutCallback('thunes', {
     id: 'txn_10',
     external_id: 'pay_10',
     status: '70000',
@@ -316,7 +318,7 @@ function callbackCompletedMapsToSettleEvent(): void {
 
 // An in-flight (non-terminal) status yields no settle event, so the edge acks and waits.
 function callbackInFlightYieldsNull(): void {
-  let event = decodeThunesPayoutCallback('thunes', {
+  const event = decodeThunesPayoutCallback('thunes', {
     id: 'txn_11',
     external_id: 'pay_11',
     status: '50000',
@@ -328,7 +330,7 @@ function callbackInFlightYieldsNull(): void {
 
 // A wrong-shape callback body is rejected at the edge as a malformed operation (server answers 400).
 function callbackRejectsMalformedBody(): void {
-  let error = (() => {
+  const error = (() => {
     try {
       decodeThunesPayoutCallback('thunes', 'not-an-object');
       return null;

@@ -35,8 +35,10 @@ const N = 5;
 // spend brings the window to exactly the limit and is allowed, and any further spend pushes it over
 // and is denied.
 async function fundedEconomyAtLimit(): Promise<Economy> {
-  let economy = makeEconomy(1, undefined, { velocityLimitMinor: PRICE_MINOR });
-  let funded = await economy.submit(
+  const economy = makeEconomy(1, undefined, {
+    velocityLimitMinor: PRICE_MINOR,
+  });
+  const funded = await economy.submit(
     adjust({
       account: spendable('usr_buyer'),
       amount: credit('100.00'),
@@ -67,7 +69,7 @@ function tally(outcomes: ReadonlyArray<Outcome>): {
 } {
   let committed = 0;
   let riskDenied = 0;
-  for (let outcome of outcomes) {
+  for (const outcome of outcomes) {
     if (outcome.status === 'committed') {
       committed += 1;
     } else if (
@@ -111,18 +113,18 @@ describe('Velocity limit under concurrency', () => {
   // below asserts this). JS microtask interleaving makes both outcomes deterministic and repeatable
   // on the memory adapter.
   test('exactly one of N concurrent same-subject attempts stays within the limit', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
 
-    let velocities = await Promise.all(
+    const velocities = await Promise.all(
       Array.from({ length: N }, (_unused, i) =>
         store.trust.record('usr_buyer', attemptAtLimit(i)),
       ),
     );
-    let totals = velocities.map((v) => v.spent.minor);
+    const totals = velocities.map((v) => v.spent.minor);
 
     // Atomic record-and-measure returns N distinct totals one ceiling apart, so exactly one is
     // within the limit. The burst does not exceed the rolling ceiling.
-    let withinLimit = totals.filter((t) => t <= PRICE_MINOR).length;
+    const withinLimit = totals.filter((t) => t <= PRICE_MINOR).length;
     assert.equal(
       withinLimit,
       1,
@@ -142,12 +144,12 @@ describe('Velocity limit under concurrency', () => {
   // the TOCTOU the fix closes. This test pins down that the bug was real and that `record`, not
   // `read`, makes the difference.
   test('the old read-then-bump pattern would let every concurrent attempt pass', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
 
-    let velocities = await Promise.all(
+    const velocities = await Promise.all(
       Array.from({ length: N }, () => store.trust.read('usr_buyer')),
     );
-    let withinLimit = velocities.filter(
+    const withinLimit = velocities.filter(
       (v) => v.spent.minor <= PRICE_MINOR,
     ).length;
     assert.equal(
@@ -165,16 +167,16 @@ describe('Velocity limit under concurrency', () => {
   // at a time, so the submit-level concurrency burst lives at the trust layer above. This sequential
   // pass guards the steady-state rule the gate enforces on every request.
   test('exactly one of N sequential same-subject spends commits', async () => {
-    let economy = await fundedEconomyAtLimit();
+    const economy = await fundedEconomyAtLimit();
 
-    let outcomes: Outcome[] = [];
+    const outcomes: Outcome[] = [];
     for (let i = 0; i < N; i += 1) {
       outcomes.push(
         await economy.submit(spendAtLimit(`ord_velocity_sequential_${i}`)),
       );
     }
 
-    let { committed, riskDenied } = tally(outcomes);
+    const { committed, riskDenied } = tally(outcomes);
     assert.equal(committed, 1, 'exactly one sequential spend may commit');
     assert.equal(riskDenied, N - 1, 'the rest must be turned away for risk');
   });
@@ -186,12 +188,12 @@ describe('Velocity limit under concurrency', () => {
   // the unaffordable attempts recorded nothing and the second was just another INSUFFICIENT_FUNDS,
   // so a broke attacker could hammer forever and never raise a flag.
   test('unaffordable spends still accrue velocity, so a burst is risk-denied not just under-funded', async () => {
-    let economy = makeEconomy(1, undefined, {
+    const economy = makeEconomy(1, undefined, {
       velocityLimitMinor: PRICE_MINOR,
     });
     // The buyer is never funded, so every spend fails the funds check on its own.
-    let first = await economy.submit(spendAtLimit('ord_velocity_broke_1'));
-    let second = await economy.submit(spendAtLimit('ord_velocity_broke_2'));
+    const first = await economy.submit(spendAtLimit('ord_velocity_broke_1'));
+    const second = await economy.submit(spendAtLimit('ord_velocity_broke_2'));
 
     assert.equal(
       reasonOf(first),

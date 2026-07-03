@@ -113,14 +113,14 @@ function settlePayoutOp(sagaId: string): Operation {
 // reserve converts at the payout rate of $0.005 to $0.02 USD. These are the same two coupled
 // postings settlePayout.test.ts pins. Assertions check deltas against these figures, so a shared
 // store that accumulates across iterations is fine.
-let RESERVE = credit('4.00');
-let SETTLE_USD = usd('0.02');
-let INVALID = 'SAGA.INVALID_TRANSITION';
-let ITERATIONS = 50;
+const RESERVE = credit('4.00');
+const SETTLE_USD = usd('0.02');
+const INVALID = 'SAGA.INVALID_TRANSITION';
+const ITERATIONS = 50;
 // The worker-vs-settle race uses fewer iterations. Each iteration adds to the same growing ledger
 // that prove() re-walks, and this many genuinely concurrent attempts already catch the narrow
 // timeout-vs-late-settle window.
-let WORKER_ITERATIONS = 15;
+const WORKER_ITERATIONS = 15;
 
 // How a refused loser must surface on every backend: the clean domain fault. Whoever takes the
 // PAYOUT_RESERVE lock first transitions the saga. The loser reloads a no-longer-SUBMITTED saga and
@@ -131,7 +131,7 @@ let WORKER_ITERATIONS = 15;
 // back and re-runs the whole transaction, which reloads the terminal saga and is refused with the
 // same SAGA.INVALID_TRANSITION. So no raw DB lock error escapes to the caller, and the loser is the
 // clean domain refusal on memory, Postgres, and MySQL alike.
-let CLEAN_REFUSAL = [INVALID];
+const CLEAN_REFUSAL = [INVALID];
 
 // Seeds one payout in SUBMITTED with its reserve already in escrow. It credits PAYOUT_RESERVE and
 // debits STORED_VALUE, a platform account exempt from the overdraft rule, exactly as the two op
@@ -144,8 +144,8 @@ async function seedSubmittedSaga(
   id: string,
   userId: string,
 ): Promise<void> {
-  let stale = fixedClock(0).now() - testConfig().maxPayoutAgeMs - 1;
-  let row: Saga = {
+  const stale = fixedClock(0).now() - testConfig().maxPayoutAgeMs - 1;
+  const row: Saga = {
     id,
     userId,
     reserve: RESERVE,
@@ -206,12 +206,12 @@ type Settled =
 
 async function settleOf(submit: Promise<Outcome>): Promise<Settled> {
   try {
-    let outcome = await submit;
+    const outcome = await submit;
     return outcome.status === 'committed'
       ? { kind: 'committed' }
       : { kind: 'other', status: outcome.status };
   } catch (error) {
-    let code =
+    const code =
       error instanceof Error ? (error as { code?: string }).code : undefined;
     return { kind: 'rejected', code };
   }
@@ -294,7 +294,7 @@ function assertReverseWonBooks(
 // Runs prove() after every race. It checks that no money was created or lost, no account overdrew,
 // the hash chain is intact, and cached balances are consistent with the legs.
 async function assertInvariants(engine: Economy, tag: string): Promise<void> {
-  let report = await engine.read.prove();
+  const report = await engine.read.prove();
   assert.ok(report.conserved, `${tag}: conservation broken after the race`);
   assert.ok(report.noOverdraft, `${tag}: overdraft after the race`);
   assert.ok(report.chainIntact, `${tag}: hash chain broken after the race`);
@@ -313,27 +313,28 @@ async function oneConcurrentRace(
   tag: string,
   settleFirst: boolean,
 ): Promise<void> {
-  let sagaId = `pay_race_${tag}`;
-  let seller = `usr_race_seller_${tag}`;
+  const sagaId = `pay_race_${tag}`;
+  const seller = `usr_race_seller_${tag}`;
   await seedSubmittedSaga(store, sagaId, seller);
-  let before = await snapshot(store, earned(seller));
+  const before = await snapshot(store, earned(seller));
 
-  let settle = () => settleOf(engine.submit(settlePayoutOp(sagaId)));
-  let reverse = () => settleOf(engine.submit(reversePayoutOp(sagaId, seller)));
+  const settle = () => settleOf(engine.submit(settlePayoutOp(sagaId)));
+  const reverse = () =>
+    settleOf(engine.submit(reversePayoutOp(sagaId, seller)));
 
   // Fire both against the engine's lock barrier. The order handed to Promise.all is the firing order
   // under test. Each result is tagged so the winner is known regardless of order.
-  let [a, b] = settleFirst
+  const [a, b] = settleFirst
     ? await Promise.all([settle(), reverse()])
     : await Promise.all([reverse(), settle()]);
-  let settleResult = settleFirst ? a : b;
-  let reverseResult = settleFirst ? b : a;
+  const settleResult = settleFirst ? a : b;
+  const reverseResult = settleFirst ? b : a;
 
-  let saga = await engine.read.saga(sagaId);
-  let after = await snapshot(store, earned(seller));
+  const saga = await engine.read.saga(sagaId);
+  const after = await snapshot(store, earned(seller));
 
-  let settleWon = settleResult.kind === 'committed';
-  let reverseWon = reverseResult.kind === 'committed';
+  const settleWon = settleResult.kind === 'committed';
+  const reverseWon = reverseResult.kind === 'committed';
 
   // Exactly one committed: never both (double-pay), never neither (lost work).
   assert.ok(
@@ -370,7 +371,7 @@ function assertLoserRefused(
     'rejected',
     `${tag}: the ${which} loser did not reject (got ${JSON.stringify(loser)})`,
   );
-  let code = (loser as { code?: string }).code;
+  const code = (loser as { code?: string }).code;
   assert.ok(
     code !== undefined && allowed.includes(code),
     `${tag}: the ${which} loser must be refused with one of [${allowed.join(', ')}], got ${String(code)}`,
@@ -402,13 +403,13 @@ async function oneDeterministicRace(
   tag: string,
   settleWins: boolean,
 ): Promise<void> {
-  let sagaId = `pay_det_${tag}`;
-  let seller = `usr_det_seller_${tag}`;
+  const sagaId = `pay_det_${tag}`;
+  const seller = `usr_det_seller_${tag}`;
   await seedSubmittedSaga(store, sagaId, seller);
-  let before = await snapshot(store, earned(seller));
+  const before = await snapshot(store, earned(seller));
 
   // The winner commits first, moving its money and pre-empting the saga's state.
-  let winner = settleWins
+  const winner = settleWins
     ? await settleOf(engine.submit(settlePayoutOp(sagaId)))
     : await settleOf(engine.submit(reversePayoutOp(sagaId, seller)));
   assert.equal(
@@ -419,7 +420,7 @@ async function oneDeterministicRace(
 
   // The loser now finds the saga already out of SUBMITTED and must be refused with INVALID_TRANSITION,
   // posting nothing.
-  let loser = settleWins
+  const loser = settleWins
     ? await settleOf(engine.submit(reversePayoutOp(sagaId, seller)))
     : await settleOf(engine.submit(settlePayoutOp(sagaId)));
   // No contention here (winner already committed), so the loser must be the clean domain refusal.
@@ -430,8 +431,8 @@ async function oneDeterministicRace(
     CLEAN_REFUSAL,
   );
 
-  let saga = await engine.read.saga(sagaId);
-  let after = await snapshot(store, earned(seller));
+  const saga = await engine.read.saga(sagaId);
+  const after = await snapshot(store, earned(seller));
   if (settleWins) {
     assertSettleWonBooks(tag, saga?.state, before, after);
   } else {
@@ -465,7 +466,7 @@ async function runDeterministicRaces(
 // The sweep posts its reversal with its own id stream. Prefix it so the sweep's txn, obx, and evt
 // ids never collide with the economy's over the shared store, since both otherwise count from zero.
 function prefixedIds(prefix: string): WorkerCtx['ids'] {
-  let base = sequentialIds();
+  const base = sequentialIds();
   return { next: (kind) => base.next(`${prefix}-${kind}`) };
 }
 
@@ -497,34 +498,34 @@ async function oneWorkerVsSettleRace(
   tag: string,
   settleFirst: boolean,
 ): Promise<void> {
-  let { engine, store, worker } = fixtures;
-  let sagaId = `pay_wkr_${tag}`;
-  let seller = `usr_wkr_seller_${tag}`;
+  const { engine, store, worker } = fixtures;
+  const sagaId = `pay_wkr_${tag}`;
+  const seller = `usr_wkr_seller_${tag}`;
   await seedSubmittedSaga(store, sagaId, seller);
-  let before = await snapshot(store, earned(seller));
+  const before = await snapshot(store, earned(seller));
 
-  let settle = () => settleOf(engine.submit(settlePayoutOp(sagaId)));
-  let sweep = () => settleDuePayouts(store, worker, { now: 0, limit: 50 });
+  const settle = () => settleOf(engine.submit(settlePayoutOp(sagaId)));
+  const sweep = () => settleDuePayouts(store, worker, { now: 0, limit: 50 });
 
   let settleResult: Settled;
   let sweepSummary: SettleSummary;
   if (settleFirst) {
-    let [s, w] = await Promise.all([settle(), sweep()]);
+    const [s, w] = await Promise.all([settle(), sweep()]);
     settleResult = s;
     sweepSummary = w;
   } else {
-    let [w, s] = await Promise.all([sweep(), settle()]);
+    const [w, s] = await Promise.all([sweep(), settle()]);
     settleResult = s;
     sweepSummary = w;
   }
 
-  let saga = await engine.read.saga(sagaId);
-  let after = await snapshot(store, earned(seller));
-  let failedByWorker = sweepSummary.deadLettered.some((d) => d.id === sagaId);
+  const saga = await engine.read.saga(sagaId);
+  const after = await snapshot(store, earned(seller));
+  const failedByWorker = sweepSummary.deadLettered.some((d) => d.id === sagaId);
 
   // Exactly one terminal outcome: SETTLED (settle won) or FAILED (the sweep won), never neither.
-  let settleWon = saga?.state === 'SETTLED';
-  let workerWon = saga?.state === 'FAILED';
+  const settleWon = saga?.state === 'SETTLED';
+  const workerWon = saga?.state === 'FAILED';
   assert.ok(
     settleWon !== workerWon,
     `${tag} (settleFirst=${settleFirst}): saga ended ${String(saga?.state)}; expected exactly one of SETTLED/FAILED`,
@@ -568,8 +569,11 @@ async function runWorkerVsSettleRaces(
 // real engine.
 describe('Concurrency: settle-vs-reverse (memory, deterministic interleaving)', () => {
   test('exactly one of settle/reverse wins each race; money moves once, the loser is INVALID_TRANSITION, prove() holds', async () => {
-    let store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
-    let economy = makeEconomy(1, store);
+    const store = memoryStore({
+      digest: seededDigest(1),
+      clock: fixedClock(0),
+    });
+    const economy = makeEconomy(1, store);
     try {
       await runDeterministicRaces(economy, store, 'mem');
     } finally {
@@ -604,7 +608,7 @@ function runSqlRace(
       // would double-close. Both race suites run on the one economy. The worker sweep uses its own
       // prefixed id stream (raceWorkerCtx) so its postings never collide with the economy's over the
       // shared store.
-      let economy = makeEconomy(1, provisioned.store);
+      const economy = makeEconomy(1, provisioned.store);
       await runConcurrentRaces(economy, provisioned.store, name);
       await runWorkerVsSettleRaces(
         { engine: economy, store: provisioned.store, worker: raceWorkerCtx() },

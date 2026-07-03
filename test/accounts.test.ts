@@ -43,9 +43,9 @@ describe('Accounts', () => {
     // An "excluded" balance is something the platform owes but need not hold USD against, so it stays
     // out of the cash-backing total. An earned balance is owed to a seller. A promo balance is a
     // marketing grant. PAYOUT_RESERVE is set aside for a pending payout.
-    let cases = [earned('usr_a'), promo('usr_a'), SYSTEM.PAYOUT_RESERVE];
+    const cases = [earned('usr_a'), promo('usr_a'), SYSTEM.PAYOUT_RESERVE];
 
-    for (let account of cases) {
+    for (const account of cases) {
       assert.equal(classify(account), 'excluded');
     }
   });
@@ -54,7 +54,7 @@ describe('Accounts', () => {
     // A "debit-normal" account grows on a debit. isDebitNormal tells the ledger each line's sign.
     // These house accounts grow on debits. REVENUE and a spendable balance grow on credits, so they
     // return false.
-    let debitNormal = [
+    const debitNormal = [
       SYSTEM.TRUST_CASH,
       SYSTEM.USD_CLEARING,
       SYSTEM.RECEIVABLE,
@@ -62,7 +62,7 @@ describe('Accounts', () => {
       SYSTEM.OPENING_EQUITY,
     ];
 
-    for (let account of debitNormal) {
+    for (const account of debitNormal) {
       assert.equal(isDebitNormal(account), true);
     }
     assert.equal(isDebitNormal(SYSTEM.REVENUE), false);
@@ -72,7 +72,7 @@ describe('Accounts', () => {
 
 describe('Accounts: Lock Sets & Wallet Classification', () => {
   test('locks the buyer, seller, and system offset accounts a spend touches', () => {
-    let operation = spend({
+    const operation = spend({
       buyerId: 'usr_buyer',
       sku: 'wrld_pass',
       price: credit('4.00'),
@@ -83,7 +83,7 @@ describe('Accounts: Lock Sets & Wallet Classification', () => {
     // (offsetting entry). The whole set is locked before posting so two operations cannot change one
     // balance concurrently. A spend can draw the buyer's promo grant and spendable balance, and it
     // pays the seller, so all of those are locked.
-    let locked = new Set(accountsOf(operation));
+    const locked = new Set(accountsOf(operation));
 
     assert.equal(locked.has(promo('usr_buyer')), true);
     assert.equal(locked.has(spendable('usr_buyer')), true);
@@ -93,7 +93,7 @@ describe('Accounts: Lock Sets & Wallet Classification', () => {
   });
 
   test('locks the buyer credit account and the USD cash accounts for a topUp', () => {
-    let locked = new Set(
+    const locked = new Set(
       accountsOf(topUp({ userId: 'usr_buyer', amount: credit('10.00') })),
     );
 
@@ -104,7 +104,7 @@ describe('Accounts: Lock Sets & Wallet Classification', () => {
 
   test('locks the promo account and its offset account for a grant', () => {
     // A promo grant credits the user's promo account; PROMO_FLOAT is its contra. Only those two.
-    let locked = new Set(
+    const locked = new Set(
       accountsOf(grantPromo({ userId: 'usr_buyer', amount: credit('5.00') })),
     );
 

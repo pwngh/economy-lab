@@ -38,7 +38,7 @@ import type { Dispatcher, EconomyEvent, Store } from '#src/ports.ts';
 // the relay from retrying forever and blocking healthy rows behind the poison row.
 // `maxOutboxAttempts` is that cap. A small value drives a poison row to the cap in a few sweeps.
 function workerCtx(maxOutboxAttempts?: number): WorkerCtx {
-  let config = testConfig();
+  const config = testConfig();
   return {
     clock: fixedClock(0),
     ids: sequentialIds(),
@@ -86,8 +86,8 @@ async function enqueue(store: Store, id: string): Promise<void> {
 // Builds a dispatcher that records every event it receives. A test then asserts what was
 // delivered.
 function recordingDispatcher(): Dispatcher & { delivered: string[] } {
-  let delivered: string[] = [];
-  let dispatcher = (async (e: EconomyEvent) => {
+  const delivered: string[] = [];
+  const dispatcher = (async (e: EconomyEvent) => {
     delivered.push(e.id);
   }) as Dispatcher & { delivered: string[] };
   dispatcher.delivered = delivered;
@@ -111,12 +111,12 @@ function sweep(
 
 describe('relayOutbox', () => {
   test('relays every pending row and marks it relayed', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await enqueue(store, '1');
     await enqueue(store, '2');
-    let dispatcher = recordingDispatcher();
+    const dispatcher = recordingDispatcher();
 
-    let summary = await sweep(store, dispatcher);
+    const summary = await sweep(store, dispatcher);
 
     assert.deepEqual(summary.relayed, ['obx_1', 'obx_2']);
     assert.deepEqual(summary.failed, []);
@@ -125,12 +125,12 @@ describe('relayOutbox', () => {
   });
 
   test('does not re-claim a row already relayed by an earlier run', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await enqueue(store, '1');
-    let dispatcher = recordingDispatcher();
+    const dispatcher = recordingDispatcher();
 
     await sweep(store, dispatcher);
-    let second = await sweep(store, dispatcher);
+    const second = await sweep(store, dispatcher);
 
     assert.deepEqual(second.relayed, []);
     assert.deepEqual(dispatcher.delivered, ['evt_1']);
@@ -138,18 +138,18 @@ describe('relayOutbox', () => {
   });
 
   test('leaves a failed row pending so the next run retries it', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await enqueue(store, '1');
     let attempts = 0;
-    let dispatcher: Dispatcher = async () => {
+    const dispatcher: Dispatcher = async () => {
       attempts += 1;
       if (attempts === 1) {
         throw new Error('subscriber down');
       }
     };
 
-    let first = await sweep(store, dispatcher);
-    let second = await sweep(store, dispatcher);
+    const first = await sweep(store, dispatcher);
+    const second = await sweep(store, dispatcher);
 
     assert.deepEqual(first.relayed, []);
     assert.equal(first.failed.length, 1);
@@ -159,16 +159,16 @@ describe('relayOutbox', () => {
   });
 
   test('isolates a row that always fails delivery so a healthy one behind it still relays', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await enqueue(store, 'bad');
     await enqueue(store, 'good');
-    let dispatcher: Dispatcher = async (e) => {
+    const dispatcher: Dispatcher = async (e) => {
       if (e.id === 'evt_bad') {
         throw new Error('poison');
       }
     };
 
-    let summary = await sweep(store, dispatcher);
+    const summary = await sweep(store, dispatcher);
 
     assert.deepEqual(summary.relayed, ['obx_good']);
     assert.deepEqual(
@@ -181,13 +181,13 @@ describe('relayOutbox', () => {
 
 describe('relayOutbox — Classification And Limit', () => {
   test('reports a failed dispatch with an error code and whether it is retryable', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await enqueue(store, '1');
-    let dispatcher: Dispatcher = async () => {
+    const dispatcher: Dispatcher = async () => {
       throw new Error('transient');
     };
 
-    let summary = await sweep(store, dispatcher);
+    const summary = await sweep(store, dispatcher);
 
     assert.equal(summary.failed[0]?.code, 'STORE.FAILURE');
     assert.equal(summary.failed[0]?.retryable, true);
@@ -195,13 +195,13 @@ describe('relayOutbox — Classification And Limit', () => {
   });
 
   test('honors the claim limit, leaving the remainder for the next run', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await enqueue(store, '1');
     await enqueue(store, '2');
     await enqueue(store, '3');
-    let dispatcher = recordingDispatcher();
+    const dispatcher = recordingDispatcher();
 
-    let summary = await sweep(store, dispatcher, 2);
+    const summary = await sweep(store, dispatcher, 2);
 
     assert.deepEqual(summary.relayed, ['obx_1', 'obx_2']);
     assert.deepEqual(dispatcher.delivered, ['evt_1', 'evt_2']);
@@ -211,16 +211,16 @@ describe('relayOutbox — Classification And Limit', () => {
 
 describe('relayOutbox — Retry Cap', () => {
   test('bumps attempts on each under-cap failure, keeping the row claimable', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await enqueue(store, '1');
-    let dispatcher: Dispatcher = async () => {
+    const dispatcher: Dispatcher = async () => {
       throw new Error('subscriber down');
     };
 
     // The cap is 3. The first two failures are under the cap, so each one bumps `attempts` and
     // leaves the row 'pending' to be re-claimed. Neither sweep dead-letters the row.
-    let first = await sweep(store, dispatcher, 10, 3);
-    let second = await sweep(store, dispatcher, 10, 3);
+    const first = await sweep(store, dispatcher, 10, 3);
+    const second = await sweep(store, dispatcher, 10, 3);
 
     assert.deepEqual(
       first.failed.map((f) => f.id),
@@ -233,7 +233,7 @@ describe('relayOutbox — Retry Cap', () => {
     );
     assert.deepEqual(second.deadLettered, []);
     // `attempts` has been bumped to 2. The row is still pending and still claimable.
-    let claimable = await store.outbox.claimBatch(10);
+    const claimable = await store.outbox.claimBatch(10);
     assert.deepEqual(
       claimable.map((m) => m.id),
       ['obx_1'],
@@ -243,9 +243,9 @@ describe('relayOutbox — Retry Cap', () => {
   });
 
   test('dead-letters an always-failing row at the cap and stops re-claiming it', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await enqueue(store, '1');
-    let dispatcher: Dispatcher = async () => {
+    const dispatcher: Dispatcher = async () => {
       throw new Error('always poison');
     };
 
@@ -253,9 +253,9 @@ describe('relayOutbox — Retry Cap', () => {
     // takes `attempts` to 3 and dead-letters the row, setting its status to 'failed'. The worker
     // uses a `>=` cap, so the row dead-letters at 3 rather than 4. The row is then terminal and
     // is never claimed again.
-    let s1 = await sweep(store, dispatcher, 10, 3);
-    let s2 = await sweep(store, dispatcher, 10, 3);
-    let s3 = await sweep(store, dispatcher, 10, 3);
+    const s1 = await sweep(store, dispatcher, 10, 3);
+    const s2 = await sweep(store, dispatcher, 10, 3);
+    const s3 = await sweep(store, dispatcher, 10, 3);
 
     assert.deepEqual(s1.deadLettered, []);
     assert.deepEqual(s2.deadLettered, []);
@@ -267,7 +267,7 @@ describe('relayOutbox — Retry Cap', () => {
 
     // The poison row is terminal, so `claimBatch` never returns it again. A further sweep is a
     // no-op, and the queue is not wedged behind it.
-    let s4 = await sweep(store, dispatcher, 10, 3);
+    const s4 = await sweep(store, dispatcher, 10, 3);
     assert.deepEqual(s4.relayed, []);
     assert.deepEqual(s4.failed, []);
     assert.deepEqual(s4.deadLettered, []);
@@ -276,10 +276,10 @@ describe('relayOutbox — Retry Cap', () => {
   });
 
   test('a dead-lettered always-failing row does not block a healthy row behind it', async () => {
-    let store = memoryStore();
+    const store = memoryStore();
     await enqueue(store, 'bad');
     await enqueue(store, 'good');
-    let dispatcher: Dispatcher = async (e) => {
+    const dispatcher: Dispatcher = async (e) => {
       if (e.id === 'evt_bad') {
         throw new Error('poison');
       }
@@ -287,7 +287,7 @@ describe('relayOutbox — Retry Cap', () => {
 
     // The cap is 1. The first failure of 'bad' reaches the cap and dead-letters it in the same
     // sweep that relays 'good'. One pass clears both: 'good' is delivered and 'bad' is terminal.
-    let summary = await sweep(store, dispatcher, 10, 1);
+    const summary = await sweep(store, dispatcher, 10, 1);
 
     assert.deepEqual(summary.relayed, ['obx_good']);
     assert.deepEqual(

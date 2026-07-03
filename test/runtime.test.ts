@@ -21,8 +21,8 @@ import { fromHex } from '#src/bytes.ts';
 
 describe('jsonlLogger', () => {
   test('writes one parseable JSON line per call', () => {
-    let lines: string[] = [];
-    let log = jsonlLogger({
+    const lines: string[] = [];
+    const log = jsonlLogger({
       service: 'svc',
       now: () => 1234,
       out: (line) => lines.push(line),
@@ -43,9 +43,9 @@ describe('jsonlLogger', () => {
   });
 
   test('routes error to the err sink and others to out', () => {
-    let out: string[] = [];
-    let err: string[] = [];
-    let log = jsonlLogger({
+    const out: string[] = [];
+    const err: string[] = [];
+    const log = jsonlLogger({
       now: () => 0,
       out: (line) => out.push(line),
       err: (line) => err.push(line),
@@ -62,8 +62,8 @@ describe('jsonlLogger', () => {
   });
 
   test('defaults the service tag', () => {
-    let lines: string[] = [];
-    let log = jsonlLogger({ now: () => 0, out: (line) => lines.push(line) });
+    const lines: string[] = [];
+    const log = jsonlLogger({ now: () => 0, out: (line) => lines.push(line) });
 
     log.log('info', 'e', {});
 
@@ -73,16 +73,16 @@ describe('jsonlLogger', () => {
 
 describe('systemSigner (Ed25519)', () => {
   test('a signature verifies with the published public key alone — no secret', async () => {
-    let secret = 'a1b2c3d4'.repeat(8);
-    let signer = systemSigner({ signingKey: secret });
-    let root = new TextEncoder().encode('merkle-root-of-a-checkpoint');
-    let sig = await signer.sign(root);
+    const secret = 'a1b2c3d4'.repeat(8);
+    const signer = systemSigner({ signingKey: secret });
+    const root = new TextEncoder().encode('merkle-root-of-a-checkpoint');
+    const sig = await signer.sign(root);
 
     // Ed25519 signatures are 64 bytes (HMAC-SHA-256 tags were 32).
     assert.equal(sig.length, 64);
 
     // An external auditor holds just the published public key, never the signing secret.
-    let publicKey = await crypto.subtle.importKey(
+    const publicKey = await crypto.subtle.importKey(
       'raw',
       fromHex(await signingPublicKeyHex(secret)),
       { name: 'Ed25519' },
@@ -106,8 +106,8 @@ describe('systemSigner (Ed25519)', () => {
   });
 
   test('a different secret cannot forge or verify; the same secret is deterministic', async () => {
-    let root = new TextEncoder().encode('x');
-    let sigA = await systemSigner({ signingKey: 'aa'.repeat(16) }).sign(root);
+    const root = new TextEncoder().encode('x');
+    const sigA = await systemSigner({ signingKey: 'aa'.repeat(16) }).sign(root);
 
     // A signer built from a different secret rejects A's signature.
     assert.equal(

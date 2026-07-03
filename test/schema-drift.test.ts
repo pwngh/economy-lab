@@ -39,11 +39,11 @@ import { fileURLToPath } from 'node:url';
 // balance app-side via balanceDelta and stores it in chain_links.balance_after, so no such list
 // should exist and this function should return an empty array.
 function accountIdInListIds(relativePath: string): string[] {
-  let path = fileURLToPath(new URL(`../${relativePath}`, import.meta.url));
-  let sql = readFileSync(path, 'utf8');
-  let ids = new Set<string>();
-  for (let list of sql.matchAll(/account_id in \(([\s\S]*?)\)/gi)) {
-    for (let id of list[1]!.matchAll(/'(platform:[a-z_]+)'/g)) {
+  const path = fileURLToPath(new URL(`../${relativePath}`, import.meta.url));
+  const sql = readFileSync(path, 'utf8');
+  const ids = new Set<string>();
+  for (const list of sql.matchAll(/account_id in \(([\s\S]*?)\)/gi)) {
+    for (const id of list[1]!.matchAll(/'(platform:[a-z_]+)'/g)) {
       ids.add(id[1]!);
     }
   }
@@ -51,7 +51,7 @@ function accountIdInListIds(relativePath: string): string[] {
 }
 
 describe('Schema does not hand-copy the debit-normal set', () => {
-  for (let schema of ['db/postgresql-schema.sql', 'db/mysql-schema.sql']) {
+  for (const schema of ['db/postgresql-schema.sql', 'db/mysql-schema.sql']) {
     test(`${schema} has no hand-copied debit-normal account_id IN (...) list`, () => {
       assert.deepEqual(
         accountIdInListIds(schema),

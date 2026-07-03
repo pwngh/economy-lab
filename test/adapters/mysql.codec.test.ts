@@ -62,15 +62,15 @@ function topUpEntry(): InboxEntry {
 // JSON string the engine hands it. That way `parseJson` on read goes through the real JSON.parse path
 // a JSON column would take, which is the same round-trip a live MySQL exercises but without a driver.
 function fakePool(): MysqlPool {
-  let inbox = new Map<string, Record<string, unknown>>();
+  const inbox = new Map<string, Record<string, unknown>>();
 
-  let run = async (
+  const run = async (
     sql: string,
     params: ReadonlyArray<unknown> = [],
   ): Promise<[unknown, unknown]> => {
-    let text = sql.trim();
+    const text = sql.trim();
     if (/^INSERT IGNORE INTO inbox/i.test(text)) {
-      let [id, key, operation, status, attempts, receivedAt] = params;
+      const [id, key, operation, status, attempts, receivedAt] = params;
       // INSERT IGNORE treats a duplicate `key` as a no-op, so the existing row wins.
       if (!inbox.has(key as string)) {
         inbox.set(key as string, {
@@ -85,14 +85,14 @@ function fakePool(): MysqlPool {
       return [{ affectedRows: 1 }, undefined];
     }
     if (/FROM inbox/i.test(text) && /WHERE `key` = \?/i.test(text)) {
-      let row = inbox.get(params[0] as string);
+      const row = inbox.get(params[0] as string);
       return [row ? [row] : [], undefined];
     }
     // START TRANSACTION / COMMIT / ROLLBACK / SELECT RELEASE_ALL_LOCKS(): no-ops for this fake.
     return [{ affectedRows: 0 }, undefined];
   };
 
-  let connection = {
+  const connection = {
     query: run,
     release: () => {},
   };
@@ -106,13 +106,13 @@ function fakePool(): MysqlPool {
 
 describe('mysql inbox Operation codec', () => {
   test('round-trips an amount-bearing operation, decoding minor back to a bigint Amount', async () => {
-    let store = mysqlStore({ pool: fakePool() });
-    let entry = topUpEntry();
+    const store = mysqlStore({ pool: fakePool() });
+    const entry = topUpEntry();
 
     // enqueueInbound encodes the operation's Amounts before JSON.stringify, then reads the row back
     // and decodes it through rowToInbox. The bug was stringifying the branded Amount directly, which
     // throws on its bigint minor.
-    let stored = await store.transaction((unit) =>
+    const stored = await store.transaction((unit) =>
       unit.inbox.enqueueInbound(entry),
     );
 
@@ -125,7 +125,7 @@ describe('mysql inbox Operation codec', () => {
 
     // The Amount is a real branded Amount again, with its bigint minor intact across the JSON
     // round-trip. That proves the codec carried it, not a raw JSON.stringify.
-    let amount = (stored.operation as Extract<Operation, { kind: 'topUp' }>)
+    const amount = (stored.operation as Extract<Operation, { kind: 'topUp' }>)
       .amount;
     assert.equal(isAmount(amount), true);
     assert.equal(amount.currency, 'CREDIT');

@@ -36,12 +36,12 @@ function sampleEvent(): EconomyEvent {
 
 describe('sqsDispatcher: FIFO Param Detection', () => {
   test('a standard (non-.fifo) queue omits the FIFO-only params', async () => {
-    let captured = captureClient();
+    const captured = captureClient();
 
-    let dispatch = sqsDispatcher({ queueUrl: 'q', client: captured });
+    const dispatch = sqsDispatcher({ queueUrl: 'q', client: captured });
     await dispatch(sampleEvent());
 
-    let input = captured.inputs[0];
+    const input = captured.inputs[0];
     // AWS rejects MessageGroupId/MessageDeduplicationId on a standard queue (InvalidParameterValue),
     // so the dispatcher omits both when the queue URL has no `.fifo` suffix. Default deployment is
     // a standard queue.
@@ -50,12 +50,12 @@ describe('sqsDispatcher: FIFO Param Detection', () => {
   });
 
   test('a .fifo queue includes MessageGroupId and MessageDeduplicationId', async () => {
-    let captured = captureClient();
+    const captured = captureClient();
 
-    let dispatch = sqsDispatcher({ queueUrl: 'q.fifo', client: captured });
+    const dispatch = sqsDispatcher({ queueUrl: 'q.fifo', client: captured });
     await dispatch(sampleEvent());
 
-    let input = captured.inputs[0];
+    const input = captured.inputs[0];
     // On a FIFO queue the subject sets MessageGroupId (the key SQS orders within) and the event
     // id sets MessageDeduplicationId, so resending the same event delivers it once.
     assert.equal(input.MessageGroupId, 'usr_conf_1');
@@ -66,7 +66,7 @@ describe('sqsDispatcher: FIFO Param Detection', () => {
 // Records the raw SendMessage input of each call, so a test can assert which request
 // parameters the dispatcher attached.
 function captureClient(): SqsClient & { inputs: Record<string, unknown>[] } {
-  let inputs: Record<string, unknown>[] = [];
+  const inputs: Record<string, unknown>[] = [];
   return {
     inputs,
     send: async (command: SqsCommand) => {
@@ -79,18 +79,18 @@ function captureClient(): SqsClient & { inputs: Record<string, unknown>[] } {
 // Builds a harness that runs the shared Dispatcher contract against the SQS adapter. The fake
 // client records message bodies and abort signals, and it can be told to fail the next send.
 function sqsHarness(): DispatcherHarness {
-  let bodies: string[] = [];
-  let signals: Array<AbortSignal | undefined> = [];
+  const bodies: string[] = [];
+  const signals: Array<AbortSignal | undefined> = [];
   let fail: Error | null = null;
-  let client: SqsClient = {
+  const client: SqsClient = {
     send: async (command: SqsCommand, options) => {
       signals.push(options?.abortSignal);
       if (fail) {
-        let error = fail;
+        const error = fail;
         fail = null;
         throw error;
       }
-      let input = command.input;
+      const input = command.input;
       if ('MessageBody' in input) {
         bodies.push(input.MessageBody as string);
       }

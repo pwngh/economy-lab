@@ -63,8 +63,8 @@ function ctx(rec: Recorder): {
 }
 
 function recorder(): Recorder {
-  let digest = seededDigest(1);
-  let store = memoryStore({ digest });
+  const digest = seededDigest(1);
+  const store = memoryStore({ digest });
   let id = 0;
 
   async function record(
@@ -73,7 +73,7 @@ function recorder(): Recorder {
     via: 'post' | 'raw',
   ): Promise<void> {
     id += 1;
-    let posting: Posting = { txnId: `txn_${id}`, legs, meta };
+    const posting: Posting = { txnId: `txn_${id}`, legs, meta };
     if (via === 'post') {
       await postEntry(store.ledger, posting);
     } else {
@@ -101,8 +101,8 @@ async function topUp(
   userId: string,
   dollars: string,
 ): Promise<void> {
-  let amount = credit(dollars);
-  let cash = usd(dollars);
+  const amount = credit(dollars);
+  const cash = usd(dollars);
   await rec.post(
     [debit(SYSTEM.REVENUE, amount), creditLeg(spendable(userId), amount)],
     {
@@ -121,19 +121,19 @@ async function topUp(
 
 describe('proveEconomy', () => {
   test('reports every invariant holding on a fresh empty economy', async () => {
-    let rec = recorder();
+    const rec = recorder();
 
-    let report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(rec.store, ctx(rec));
 
     assert.equal(allInvariantsHold(report), true);
     assert.deepEqual(report.shortfall, zero('USD'));
   });
 
   test('reports conserved, backed, and no overdraft after a topUp', async () => {
-    let rec = recorder();
+    const rec = recorder();
     await topUp(rec, 'usr_buyer', '10.00');
 
-    let report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(rec.store, ctx(rec));
 
     assert.equal(report.conserved, true);
     assert.equal(report.backed, true);
@@ -142,7 +142,7 @@ describe('proveEconomy', () => {
   });
 
   test('conserves per currency across an N-way credit distribution', async () => {
-    let rec = recorder();
+    const rec = recorder();
     await topUp(rec, 'usr_buyer', '12.00');
     // Move 12.00 out of the buyer, split between two sellers (7.00 and 5.00). The balance check
     // sums every account's lines, not one running total, so it must hold when a single transaction
@@ -153,14 +153,14 @@ describe('proveEconomy', () => {
       creditLeg(earned('usr_b'), credit('5.00')),
     ]);
 
-    let report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(rec.store, ctx(rec));
 
     assert.equal(report.conserved, true);
     assert.equal(report.backed, true);
   });
 
   test('sums the debit and credit lines, not just the stored balance', async () => {
-    let rec = recorder();
+    const rec = recorder();
     // Buyer gets 4.00 then spends all 4.00, so its stored balance ends at 0. The balance check
     // should still sum the two lines (+4.00 in, -4.00 out) to 0 on its own, confirming it sums
     // recorded transactions rather than reading the stored balance.
@@ -170,7 +170,7 @@ describe('proveEconomy', () => {
       creditLeg(earned('usr_seller'), credit('4.00')),
     ]);
 
-    let report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(rec.store, ctx(rec));
 
     assert.equal(report.conserved, true);
   });
@@ -180,7 +180,7 @@ describe('proveEconomy', () => {
 
 describe('proveEconomy On A Broken Book', () => {
   test('flags an unbalanced posting as not conserved', async () => {
-    let rec = recorder();
+    const rec = recorder();
     // Write straight to the ledger to skip the debits-equal-credits check: 5.00 leaves the buyer
     // but only 3.00 reaches the seller.
     await rec.appendRaw([
@@ -188,13 +188,13 @@ describe('proveEconomy On A Broken Book', () => {
       creditLeg(earned('usr_seller'), credit('3.00')),
     ]);
 
-    let report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(rec.store, ctx(rec));
 
     assert.equal(report.conserved, false);
   });
 
   test('flags an overdrawn user account as an overdraft', async () => {
-    let rec = recorder();
+    const rec = recorder();
     // Write straight to the ledger to skip the no-negative-balance check: take 5.00 out of a buyer
     // who has nothing, with the platform's revenue account as the matching side.
     await rec.appendRaw([
@@ -202,14 +202,14 @@ describe('proveEconomy On A Broken Book', () => {
       creditLeg(SYSTEM.REVENUE, credit('5.00')),
     ]);
 
-    let report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(rec.store, ctx(rec));
 
     assert.equal(report.noOverdraft, false);
     assert.equal(report.conserved, true); // the debit and credit still cancel, so the books balance
   });
 
   test('reports the USD shortfall when credits owed to users lack backing', async () => {
-    let rec = recorder();
+    const rec = recorder();
     // Hand the buyer 8.00 spendable credits but skip the step that brings in the backing USD. At
     // the $0.005 par rate, 8.00 credits (800 minor) need floor(800 × $0.005) = $0.04 of backing,
     // and none is held, so the platform is $0.04 short.
@@ -218,7 +218,7 @@ describe('proveEconomy On A Broken Book', () => {
       creditLeg(spendable('usr_buyer'), credit('8.00')),
     ]);
 
-    let report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(rec.store, ctx(rec));
 
     assert.equal(report.backed, false);
     assert.deepEqual(report.shortfall, usd('0.04'));
@@ -226,7 +226,7 @@ describe('proveEconomy On A Broken Book', () => {
   });
 
   test('excludes earned, promo, and payout reserve from the backing requirement', async () => {
-    let rec = recorder();
+    const rec = recorder();
     // Give a seller 20.00 of earnings with no USD held. The backing check only counts credits a
     // user can spend or cash out now; earned balances (like promo grants and pending-payout
     // reserves) aren't in that group, so the book is still fully backed.
@@ -235,7 +235,7 @@ describe('proveEconomy On A Broken Book', () => {
       creditLeg(earned('usr_seller'), credit('20.00')),
     ]);
 
-    let report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(rec.store, ctx(rec));
 
     assert.equal(report.backed, true);
     assert.deepEqual(report.shortfall, usd('0.00'));
@@ -252,10 +252,10 @@ describe('proveEconomy On A Broken Book', () => {
 
 describe('proveEconomy Drift Detection', () => {
   test('reports consistent with empty drift on a clean book', async () => {
-    let rec = recorder();
+    const rec = recorder();
     await topUp(rec, 'usr_buyer', '10.00');
 
-    let report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(rec.store, ctx(rec));
 
     assert.equal(report.consistent, true);
     assert.deepEqual(report.drift, []);
@@ -263,7 +263,7 @@ describe('proveEconomy Drift Detection', () => {
   });
 
   test('flags an account whose stored balance drifted from its debit and credit lines', async () => {
-    let rec = recorder();
+    const rec = recorder();
     await topUp(rec, 'usr_buyer', '10.00'); // txn_1 credits the buyer's spendable
     // Edit the buyer's leg downward after it committed. The cached (materialized) balance was
     // written at commit and left untouched, so it still reads 10.00 while the lines now sum to
@@ -272,10 +272,10 @@ describe('proveEconomy Drift Detection', () => {
       legs[1] = creditLeg(spendable('usr_buyer'), credit('3.00'));
     });
 
-    let report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(rec.store, ctx(rec));
 
     assert.equal(report.consistent, false);
-    let drifted = report.drift.find(
+    const drifted = report.drift.find(
       (row) => row.account === spendable('usr_buyer'),
     );
     assert.ok(drifted, 'the buyer account is listed in drift');
@@ -285,20 +285,20 @@ describe('proveEconomy Drift Detection', () => {
   });
 
   test('flags a stored balance row with no posting behind it', async () => {
-    let rec = recorder();
+    const rec = recorder();
     await topUp(rec, 'usr_buyer', '10.00');
     // Plant a cached balance into the store's balance table with no posting behind it, the way a
     // direct DB edit or half-applied write could leave a row in `account_balances` that no line
     // supports. `heads()` only visits accounts with a posting, so this row is reachable only via
     // `balanceAccounts()`; with no lines behind it the prover derives 0, and the non-zero stored
     // figure no longer matches. That is drift.
-    let phantom = earned('usr_ghost');
+    const phantom = earned('usr_ghost');
     rec.seedBalance(phantom, credit('5.00'));
 
-    let report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(rec.store, ctx(rec));
 
     assert.equal(report.consistent, false);
-    let drifted = report.drift.find((row) => row.account === phantom);
+    const drifted = report.drift.find((row) => row.account === phantom);
     assert.ok(drifted, 'the phantom account is listed in drift');
     assert.deepEqual(drifted!.materialized, credit('5.00'));
     assert.deepEqual(drifted!.derived, credit('0.00')); // legs say it should not exist
@@ -306,7 +306,7 @@ describe('proveEconomy Drift Detection', () => {
   });
 
   test('detects drift independently of conservation', async () => {
-    let rec = recorder();
+    const rec = recorder();
     await topUp(rec, 'usr_buyer', '6.00');
     // Nudge txn_1's two legs by equal and opposite amounts. Materialized balances stay at their
     // committed values, but each account's legs now sum to a different figure, so both accounts
@@ -323,7 +323,7 @@ describe('proveEconomy Drift Detection', () => {
       };
     });
 
-    let report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(rec.store, ctx(rec));
 
     assert.equal(report.consistent, false);
     assert.equal(report.conserved, true);
@@ -339,7 +339,7 @@ describe('proveEconomy Drift Detection', () => {
 
 describe('proveEconomy Chain Verification', () => {
   test('recomputes every account chain and reports a clean book intact', async () => {
-    let rec = recorder();
+    const rec = recorder();
     await topUp(rec, 'usr_buyer', '6.00');
     // Spend too, so a few accounts have more than one transaction and the recompute walks real
     // chains, not single entries.
@@ -348,13 +348,13 @@ describe('proveEconomy Chain Verification', () => {
       creditLeg(earned('usr_seller'), credit('6.00')),
     ]);
 
-    let report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(rec.store, ctx(rec));
 
     assert.equal(report.chainIntact, true);
   });
 
   test('detects a tampered line on a committed posting', async () => {
-    let rec = recorder();
+    const rec = recorder();
     await topUp(rec, 'usr_buyer', '6.00'); // txn_1 hands out the credits, txn_2 brings in the USD
     // Change an amount on a stored transaction but leave its saved hash untouched. The prover's
     // re-hash no longer matches the saved hash, which is how it spots the edit.
@@ -362,13 +362,13 @@ describe('proveEconomy Chain Verification', () => {
       legs[1] = { account: legs[1]!.account, amount: credit('999.00') };
     });
 
-    let report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(rec.store, ctx(rec));
 
     assert.equal(report.chainIntact, false);
   });
 
   test('a tampered line fails the chain check while the books still balance', async () => {
-    let rec = recorder();
+    const rec = recorder();
     await topUp(rec, 'usr_buyer', '6.00');
     // Edit both lines by the smallest step, one up and one down, so the transaction still cancels
     // to zero and the balance check passes. Any edit changes the hashed bytes, so the chain check
@@ -384,7 +384,7 @@ describe('proveEconomy Chain Verification', () => {
       };
     });
 
-    let report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(rec.store, ctx(rec));
 
     assert.equal(report.chainIntact, false);
     assert.equal(report.conserved, true); // the two edits cancel, so the books still balance
@@ -402,10 +402,10 @@ function nudge(amount: Amount, delta: bigint): Amount {
 
 describe('The All-Checks Roll-Up', () => {
   test('allInvariantsHold is true exactly when every report field is', async () => {
-    let rec = recorder();
+    const rec = recorder();
     await topUp(rec, 'usr_buyer', '3.00');
 
-    let report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(rec.store, ctx(rec));
 
     assert.equal(
       allInvariantsHold(report),

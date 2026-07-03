@@ -94,8 +94,8 @@ type Wallet = { spendable: bigint; promo: bigint; earned: bigint };
 // Formats minor units (cents) as a two-decimal string like "12.34", the text form decodeAmount
 // expects. Same helper as the scripts.
 function dollars(minor: bigint): string {
-  let whole = minor / 100n;
-  let frac = (minor % 100n).toString().padStart(2, '0');
+  const whole = minor / 100n;
+  const frac = (minor % 100n).toString().padStart(2, '0');
   return `${whole}.${frac}`;
 }
 
@@ -127,14 +127,14 @@ function spendOperation(
   step: number,
   parties: { userId: string; wallet: Wallet; seller: Wallet },
 ): Operation {
-  let { userId, wallet, seller } = parties;
-  let available = wallet.spendable + wallet.promo;
+  const { userId, wallet, seller } = parties;
+  const available = wallet.spendable + wallet.promo;
   let priceMinor =
     BigInt(1 + Math.floor(next() * Number(available / 100n))) * 100n;
   if (priceMinor > available) {
     priceMinor = available;
   }
-  let fromPromo = wallet.promo < priceMinor ? wallet.promo : priceMinor;
+  const fromPromo = wallet.promo < priceMinor ? wallet.promo : priceMinor;
   wallet.promo -= fromPromo;
   wallet.spendable -= priceMinor - fromPromo;
   seller.earned += priceMinor;
@@ -157,7 +157,7 @@ function spendOperation(
 // no worker to keep the ledger sound, because the credits are already reserved by this committed
 // posting.
 function payoutOperation(step: number, seller: Wallet): Operation {
-  let askMinor =
+  const askMinor =
     seller.earned >= 100n
       ? // Claims a whole-credit slice of what the seller has earned so far.
         (seller.earned / 100n / 2n + 1n) * 100n < seller.earned
@@ -183,13 +183,13 @@ function nextOperation(
   step: number,
   wallets: Map<string, Wallet>,
 ): Operation {
-  let userId = `usr_p${1 + Math.floor(next() * 3)}`;
-  let wallet = walletOf(wallets, userId);
-  let seller = walletOf(wallets, SELLER);
-  let roll = next();
+  const userId = `usr_p${1 + Math.floor(next() * 3)}`;
+  const wallet = walletOf(wallets, userId);
+  const seller = walletOf(wallets, SELLER);
+  const roll = next();
 
   if (roll < 0.45 || wallet.spendable + wallet.promo < 100n) {
-    let minor = BigInt(1 + Math.floor(next() * 50)) * 100n;
+    const minor = BigInt(1 + Math.floor(next() * 50)) * 100n;
     wallet.spendable += minor;
     return op('topUp', step, {
       userId,
@@ -198,7 +198,7 @@ function nextOperation(
     });
   }
   if (roll < 0.6) {
-    let minor = BigInt(1 + Math.floor(next() * 20)) * 100n;
+    const minor = BigInt(1 + Math.floor(next() * 20)) * 100n;
     wallet.promo += minor;
     return op('grantPromo', step, {
       userId,
@@ -230,9 +230,9 @@ function op(
 
 // Builds the full fixed operation sequence for one seed.
 function program(seed: number, length: number): Operation[] {
-  let next = rng(seed);
-  let wallets = new Map<string, Wallet>();
-  let operations: Operation[] = [];
+  const next = rng(seed);
+  const wallets = new Map<string, Wallet>();
+  const operations: Operation[] = [];
   for (let step = 0; step < length; step += 1) {
     operations.push(nextOperation(next, step, wallets));
   }
@@ -260,12 +260,12 @@ async function assertInvariants(
   at: number,
   total: number,
 ): Promise<void> {
-  let report: ProveReport = await economy.read.prove();
-  let where =
+  const report: ProveReport = await economy.read.prove();
+  const where =
     `seed 0x${seed.toString(16)} after ${at}/${total} ops ` +
     `(reproduce: program(0x${seed.toString(16)}, ${OPS_PER_SEED}))`;
 
-  for (let flag of FLAGS) {
+  for (const flag of FLAGS) {
     assert.equal(report[flag], true, `invariant "${flag}" violated — ${where}`);
   }
   // An empty `drift` is the detail behind `consistent`. Pinning it directly guards against a
@@ -296,18 +296,18 @@ async function assertInvariants(
 // --- The property test ------------------------------------------------------------------
 
 describe('property: ledger invariants hold over randomized operation sequences', () => {
-  for (let seed of SEEDS) {
+  for (const seed of SEEDS) {
     test(`seed 0x${seed.toString(16)} keeps every invariant across ${OPS_PER_SEED} ops`, async () => {
-      let operations = program(seed, OPS_PER_SEED);
-      let economy = makeEconomy(seed);
+      const operations = program(seed, OPS_PER_SEED);
+      const economy = makeEconomy(seed);
       try {
         // Checkpoints spread evenly through the stream, so a violation is caught near the op that
         // introduced it. The set always includes the final op, so the end state is proven too.
-        let stride = Math.ceil(OPS_PER_SEED / CHECKPOINTS);
+        const stride = Math.ceil(OPS_PER_SEED / CHECKPOINTS);
         for (let i = 0; i < operations.length; i += 1) {
           await economy.submit(operations[i]!);
-          let opsDone = i + 1;
-          let lastOp = opsDone === operations.length;
+          const opsDone = i + 1;
+          const lastOp = opsDone === operations.length;
           if (lastOp || opsDone % stride === 0) {
             await assertInvariants(economy, seed, opsDone, operations.length);
           }

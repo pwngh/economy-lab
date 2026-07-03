@@ -47,8 +47,8 @@ export function makeEconomy(
   store?: Store,
   config?: Partial<Config>,
 ): Economy {
-  let digest = seededDigest(seed);
-  let clock = fixedClock(0);
+  const digest = seededDigest(seed);
+  const clock = fixedClock(0);
   return createEconomy({
     store: store ?? memoryStore({ digest, clock }),
     clock,

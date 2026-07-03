@@ -35,7 +35,7 @@ function hasCode(code: string): (error: unknown) => boolean {
 // a known id and owner. The test then drives cancel through the full submit pipeline, where both
 // authorize() and the handler's ownership guard run.
 function makeEconomyWithStore(): { eco: Economy; store: Store } {
-  let store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
+  const store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
   return { eco: makeEconomy(1, store), store };
 }
 
@@ -64,7 +64,7 @@ function activeSubscription(id: string, userId: string): Subscription {
 // prove the in-handler guard holds.
 describe('cancelSubscription ownership (via submit)', () => {
   test("a user cannot cancel another user's subscription (IDOR) and it stays ACTIVE", async () => {
-    let { eco, store } = makeEconomyWithStore();
+    const { eco, store } = makeEconomyWithStore();
     await store.subscriptions.open(
       activeSubscription('sub_alice', 'usr_alice'),
     );
@@ -79,17 +79,17 @@ describe('cancelSubscription ownership (via submit)', () => {
       hasCode('AUTH.UNAUTHORIZED'),
     );
 
-    let after = await store.subscriptions.load('sub_alice');
+    const after = await store.subscriptions.load('sub_alice');
     assert.equal(after?.state, 'ACTIVE');
   });
 
   test('the owner can cancel their own subscription', async () => {
-    let { eco, store } = makeEconomyWithStore();
+    const { eco, store } = makeEconomyWithStore();
     await store.subscriptions.open(
       activeSubscription('sub_alice', 'usr_alice'),
     );
 
-    let outcome = await eco.submit(
+    const outcome = await eco.submit(
       cancelSubscription({
         subscriptionId: 'sub_alice',
         actor: principal('usr_alice'),
@@ -97,17 +97,17 @@ describe('cancelSubscription ownership (via submit)', () => {
     );
 
     assert.equal(outcome.status, 'committed');
-    let after = await store.subscriptions.load('sub_alice');
+    const after = await store.subscriptions.load('sub_alice');
     assert.equal(after?.state, 'CANCELED');
   });
 
   test('an operator can cancel any subscription', async () => {
-    let { eco, store } = makeEconomyWithStore();
+    const { eco, store } = makeEconomyWithStore();
     await store.subscriptions.open(
       activeSubscription('sub_alice', 'usr_alice'),
     );
 
-    let outcome = await eco.submit(
+    const outcome = await eco.submit(
       cancelSubscription({
         subscriptionId: 'sub_alice',
         actor: { kind: 'operator', operatorId: 'op_support' },
@@ -115,7 +115,7 @@ describe('cancelSubscription ownership (via submit)', () => {
     );
 
     assert.equal(outcome.status, 'committed');
-    let after = await store.subscriptions.load('sub_alice');
+    const after = await store.subscriptions.load('sub_alice');
     assert.equal(after?.state, 'CANCELED');
   });
 });

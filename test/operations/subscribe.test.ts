@@ -52,10 +52,10 @@ type Harness = {
 };
 
 function makeHarness(seed = 1): Harness {
-  let digest = seededDigest(seed);
-  let clock = fixedClock(0);
-  let store = memoryStore({ digest, clock });
-  let ctx: Ctx = {
+  const digest = seededDigest(seed);
+  const clock = fixedClock(0);
+  const store = memoryStore({ digest, clock });
+  const ctx: Ctx = {
     clock,
     ids: sequentialIds(),
     digest,
@@ -67,7 +67,7 @@ function makeHarness(seed = 1): Harness {
     logger: testLogger(),
     meter: noopMeter(),
   };
-  let economy = createEconomy({
+  const economy = createEconomy({
     store,
     clock,
     ids: ctx.ids,
@@ -124,7 +124,7 @@ async function chargesFirstMonthFromSpendable(harness: Harness): Promise<void> {
     topUp({ userId: 'usr_buyer', amount: credit('200.00') }),
   );
 
-  let outcome = await harness.run(subscribeOf('100.50'));
+  const outcome = await harness.run(subscribeOf('100.50'));
 
   assert.equal(outcome.status, 'committed');
   assert.deepEqual(
@@ -189,8 +189,8 @@ async function keepsPromoFloatSummingToZero(harness: Harness): Promise<void> {
 
   // PROMO_FLOAT offsets outstanding promo grants. Every credit in a user's promo balance has an
   // opposite entry in PROMO_FLOAT, so the two cancel to zero.
-  let promoBalance = await harness.economy.read.balance(promo('usr_buyer'));
-  let promoFloat = await harness.economy.read.balance(SYSTEM.PROMO_FLOAT);
+  const promoBalance = await harness.economy.read.balance(promo('usr_buyer'));
+  const promoFloat = await harness.economy.read.balance(SYSTEM.PROMO_FLOAT);
   assert.equal(promoBalance.minor + promoFloat.minor, 0n);
 }
 
@@ -201,7 +201,7 @@ async function rejectsWhenSpendableIsInsufficient(
     topUp({ userId: 'usr_buyer', amount: credit('50.00') }),
   );
 
-  let outcome = await harness.run(subscribeOf('100.00'));
+  const outcome = await harness.run(subscribeOf('100.00'));
 
   assert.equal(rejectionOf(outcome).reason, 'INSUFFICIENT_FUNDS');
 }
@@ -210,14 +210,14 @@ async function opensAnActiveSubscription(harness: Harness): Promise<void> {
   await harness.economy.submit(
     topUp({ userId: 'usr_buyer', amount: credit('200.00') }),
   );
-  let periodMs = 2_592_000_000;
+  const periodMs = 2_592_000_000;
 
-  let outcome = await harness.run(subscribeOf('100.00', periodMs));
+  const outcome = await harness.run(subscribeOf('100.00', periodMs));
 
   assert.equal(outcome.status, 'committed');
   // After billing month one, the subscription should be saved as ACTIVE on period 1, with its next
   // charge due one period out. `claimDue` returns the subscriptions due to bill by the given time.
-  let due = await harness.store.subscriptions.claimDue(periodMs, 10);
+  const due = await harness.store.subscriptions.claimDue(periodMs, 10);
   assert.equal(due.length, 1);
   assert.equal(due[0]!.state, 'ACTIVE');
   assert.equal(due[0]!.period, 1);
@@ -240,12 +240,12 @@ async function grantsTheSkuEntitlement(harness: Harness): Promise<void> {
     topUp({ userId: 'usr_buyer', amount: credit('200.00') }),
   );
 
-  let outcome = await harness.run(subscribeOf('100.00'));
+  const outcome = await harness.run(subscribeOf('100.00'));
 
   assert.equal(outcome.status, 'committed');
   // The SKU is granted in the same transaction as the first-month charge. Ownership lives in the
   // entitlement store, which is reachable only inside a transaction, so open one to read it back.
-  let owned = await harness.store.transaction((unit) =>
+  const owned = await harness.store.transaction((unit) =>
     unit.entitlements.owns('usr_buyer', 'club_pass'),
   );
   assert.equal(owned, true);
@@ -256,16 +256,16 @@ async function grantsTheSkuEntitlement(harness: Harness): Promise<void> {
 // its price would push that total over the configured limit. `assessRisk` is the pure decision
 // function the live pipeline calls, so testing it directly checks the shared rule.
 function deniesSubscribeOverTheVelocityLimit(): void {
-  let config = testConfig();
+  const config = testConfig();
   // A limit low enough that one max-band subscribe (10,000 credits = 1,000,000 minor) trips it
   // once the window already holds a little spend.
   config.velocityLimitMinor = 1_500_000n;
-  let velocity = emptyVelocity('usr_buyer');
+  const velocity = emptyVelocity('usr_buyer');
   velocity.spent = toAmount('CREDIT', 600_000n); // 6,000 credits already this window
 
-  let operation = subscribeOf('10000.00'); // 1,000,000 minor; projected 1,600,000 > 1,500,000
+  const operation = subscribeOf('10000.00'); // 1,000,000 minor; projected 1,600,000 > 1,500,000
 
-  let decision = assessRisk(velocity, operation, config);
+  const decision = assessRisk(velocity, operation, config);
   assert.equal(decision.allow, false);
   assert.equal(
     decision.allow === false ? decision.reason : null,
@@ -284,20 +284,20 @@ async function committedSubscribeAccruesPriceMinor(
     topUp({ userId: 'usr_buyer', amount: credit('200.00') }),
   );
 
-  let operation = subscribeOf('100.00');
-  let outcome = await harness.run(operation);
+  const operation = subscribeOf('100.00');
+  const outcome = await harness.run(operation);
   assert.equal(outcome.status, 'committed');
 
   // The funding top-up above also counts toward the spending window and already added its own
   // amount, so measure how much the subscribe adds on top rather than the absolute total.
-  let before = (await harness.store.trust.read('usr_buyer')).spent.minor;
+  const before = (await harness.store.trust.read('usr_buyer')).spent.minor;
 
   // Build the attempt exactly as the pipeline does and write it through the trust store.
-  let attempt = riskAttempt(operation, outcome, 0);
+  const attempt = riskAttempt(operation, outcome, 0);
   assert.notEqual(attempt, null);
   await harness.store.trust.bump('usr_buyer', attempt!);
 
-  let velocity = await harness.store.trust.read('usr_buyer');
+  const velocity = await harness.store.trust.read('usr_buyer');
   // Amount added equals the price in minor units (100.00 credits = 10,000 minor; 1 credit = 100 minor).
   assert.equal(velocity.spent.minor - before, attemptMinor(operation));
   assert.equal(velocity.spent.minor - before, credit('100.00').minor);
@@ -312,7 +312,7 @@ async function rejectsANaNPeriod(harness: Harness): Promise<void> {
 }
 
 async function rejectsABlankSku(harness: Harness): Promise<void> {
-  let operation = subscribe({
+  const operation = subscribe({
     userId: 'usr_buyer',
     sellerId: 'usr_seller',
     sku: '   ',
@@ -326,7 +326,7 @@ async function commitsANormalSubscribe(harness: Harness): Promise<void> {
     topUp({ userId: 'usr_buyer', amount: credit('200.00') }),
   );
 
-  let outcome = await harness.run(subscribeOf('100.00'));
+  const outcome = await harness.run(subscribeOf('100.00'));
 
   assert.equal(outcome.status, 'committed');
 }
@@ -341,7 +341,7 @@ async function preservesConservation(harness: Harness): Promise<void> {
 
   await harness.run(subscribeOf('120.00'));
 
-  let report = await harness.economy.read.prove();
+  const report = await harness.economy.read.prove();
   // `conserved` is true when, in every currency, the debits and credits across the whole ledger
   // cancel to zero.
   assert.equal(report.conserved, true);

@@ -71,28 +71,28 @@ function payout(over?: { key?: string; amount?: string }): {
 }
 
 async function submitReturnsProviderRef(): Promise<void> {
-  let calls: Recorded[] = [];
-  let fetch = stubFetch(
+  const calls: Recorded[] = [];
+  const fetch = stubFetch(
     { ok: true, status: 200, body: JSON.stringify({ providerRef: 'po_1' }) },
     calls,
   );
-  let processor = httpProcessor({
+  const processor = httpProcessor({
     endpoint: 'https://provider/payouts',
     fetch,
   });
 
-  let result = await processor.submitPayout(payout({ key: 'idem_payout_1' }));
+  const result = await processor.submitPayout(payout({ key: 'idem_payout_1' }));
 
   assert.deepEqual(result, { providerRef: 'po_1' });
 }
 
 async function submitEncodesAmountAndKey(): Promise<void> {
-  let calls: Recorded[] = [];
-  let fetch = stubFetch(
+  const calls: Recorded[] = [];
+  const fetch = stubFetch(
     { ok: true, status: 200, body: JSON.stringify({ providerRef: 'po_2' }) },
     calls,
   );
-  let processor = httpProcessor({
+  const processor = httpProcessor({
     endpoint: 'https://provider/payouts',
     fetch,
   });
@@ -111,16 +111,16 @@ async function submitEncodesAmountAndKey(): Promise<void> {
 }
 
 async function submitForwardsAbortSignal(): Promise<void> {
-  let calls: Recorded[] = [];
-  let fetch = stubFetch(
+  const calls: Recorded[] = [];
+  const fetch = stubFetch(
     { ok: true, status: 200, body: JSON.stringify({ providerRef: 'po_3' }) },
     calls,
   );
-  let processor = httpProcessor({
+  const processor = httpProcessor({
     endpoint: 'https://provider/payouts',
     fetch,
   });
-  let controller = new AbortController();
+  const controller = new AbortController();
 
   await processor.submitPayout(payout({ key: 'idem_payout_3' }), {
     signal: controller.signal,
@@ -130,17 +130,17 @@ async function submitForwardsAbortSignal(): Promise<void> {
 }
 
 async function submitFaultsRetryablyOnNon2xx(): Promise<void> {
-  let calls: Recorded[] = [];
-  let fetch = stubFetch(
+  const calls: Recorded[] = [];
+  const fetch = stubFetch(
     { ok: false, status: 503, body: 'upstream down' },
     calls,
   );
-  let processor = httpProcessor({
+  const processor = httpProcessor({
     endpoint: 'https://provider/payouts',
     fetch,
   });
 
-  let error = await processor
+  const error = await processor
     .submitPayout(payout({ key: 'idem_payout_4' }))
     .catch((caught: unknown) => caught);
 
@@ -150,13 +150,13 @@ async function submitFaultsRetryablyOnNon2xx(): Promise<void> {
 }
 
 async function submitFaultsRetryablyPreservingCause(): Promise<void> {
-  let underlying = new Error('connection reset');
-  let processor = httpProcessor({
+  const underlying = new Error('connection reset');
+  const processor = httpProcessor({
     endpoint: 'https://provider/payouts',
     fetch: throwingFetch(underlying),
   });
 
-  let error = await processor
+  const error = await processor
     .submitPayout(payout({ key: 'idem_payout_5' }))
     .catch((caught: unknown) => caught);
 
@@ -167,17 +167,17 @@ async function submitFaultsRetryablyPreservingCause(): Promise<void> {
 }
 
 async function submitFaultsTerminallyOnMissingProviderRef(): Promise<void> {
-  let calls: Recorded[] = [];
-  let fetch = stubFetch(
+  const calls: Recorded[] = [];
+  const fetch = stubFetch(
     { ok: true, status: 200, body: JSON.stringify({ status: 'accepted' }) },
     calls,
   );
-  let processor = httpProcessor({
+  const processor = httpProcessor({
     endpoint: 'https://provider/payouts',
     fetch,
   });
 
-  let error = await processor
+  const error = await processor
     .submitPayout(payout({ key: 'idem_payout_6' }))
     .catch((caught: unknown) => caught);
 

@@ -56,14 +56,14 @@ import type { Clock, Ids, Saga, Store } from '#src/ports.ts';
 // Signs raw bytes with HMAC-SHA256 under `secret`. Returns the lowercase hex digest the server
 // expects in `x-signature`. Uses Web Crypto so the test runs unchanged on every runtime.
 async function signHex(body: string, secret: string): Promise<string> {
-  let key = await crypto.subtle.importKey(
+  const key = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(secret),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign'],
   );
-  let signature = await crypto.subtle.sign(
+  const signature = await crypto.subtle.sign(
     'HMAC',
     key,
     new TextEncoder().encode(body),
@@ -103,7 +103,7 @@ function purchaseBody(o: {
   });
 }
 
-let SAMPLE: WebhookEvent = {
+const SAMPLE: WebhookEvent = {
   provider: 'billing',
   eventId: 'evt_provider_1',
   userId: 'usr_buyer',
@@ -149,7 +149,7 @@ function drainOnce(
 
 describe('Webhooks toTopUp / Idempotency', () => {
   test('derives the topUp idempotency key from the provider eventId', () => {
-    let op = toTopUp(SAMPLE);
+    const op = toTopUp(SAMPLE);
 
     assert.equal(op.kind, 'topUp');
     assert.equal(op.idempotencyKey, webhookIdempotencyKey('evt_provider_1'));
@@ -160,7 +160,7 @@ describe('Webhooks toTopUp / Idempotency', () => {
   });
 
   test('copies eventId / sku / provider as origin info onto the posting metadata', () => {
-    let op = toTopUp(SAMPLE) as unknown as { meta?: Record<string, unknown> };
+    const op = toTopUp(SAMPLE) as unknown as { meta?: Record<string, unknown> };
 
     // Origin details (provider, event, item) ride on the operation so the topUp handler can stamp
     // them onto the meta of the ledger posting, giving each created-credits entry a back-pointer to
@@ -173,7 +173,7 @@ describe('Webhooks toTopUp / Idempotency', () => {
   });
 
   test('omits sku from the origin info for a plain credit-pack purchase', () => {
-    let op = toTopUp({ ...SAMPLE, sku: undefined }) as unknown as {
+    const op = toTopUp({ ...SAMPLE, sku: undefined }) as unknown as {
       meta?: Record<string, unknown>;
     };
 
@@ -186,7 +186,7 @@ describe('Webhooks toTopUp / Idempotency', () => {
 
 describe('Webhooks decodeWebhookEvent', () => {
   test('round-trips the amount through the decimal-string codec', () => {
-    let event = decodeWebhookEvent('billing', {
+    const event = decodeWebhookEvent('billing', {
       eventId: 'evt_1',
       userId: 'usr_x',
       amount: 'CREDIT:12.34',
@@ -212,12 +212,12 @@ describe('Webhooks decodeWebhookEvent', () => {
 
 describe('Webhooks handlePurchaseWebhook (Persist To Inbox, Apply Later)', () => {
   test('persists the topUp instead of posting it inline; the apply sweep credits the buyer', async () => {
-    let store = memoryStore();
-    let economy = makeEconomy(1, store);
+    const store = memoryStore();
+    const economy = makeEconomy(1, store);
 
     // The handler enqueues and returns immediately: the balance has not moved yet, decoupling the
-    // provider's acknowledgement from the ledger.
-    let ack = await handlePurchaseWebhook(store, webhookCtx(), SAMPLE);
+    // provider's acknowledgment from the ledger.
+    const ack = await handlePurchaseWebhook(store, webhookCtx(), SAMPLE);
     assert.equal(ack.status, 'accepted');
     assert.equal(ack.entry.status, 'pending');
     assert.equal(ack.entry.key, 'evt_provider_1');
@@ -227,7 +227,7 @@ describe('Webhooks handlePurchaseWebhook (Persist To Inbox, Apply Later)', () =>
     );
 
     // The apply worker submits the stored Operation; the credit posts here, not at handler return.
-    let summary = await drainOnce(store, economy);
+    const summary = await drainOnce(store, economy);
     assert.deepEqual(summary.applied, [ack.entry.id]);
     assert.deepEqual(summary.failed, []);
     assert.equal(
@@ -237,24 +237,24 @@ describe('Webhooks handlePurchaseWebhook (Persist To Inbox, Apply Later)', () =>
   });
 
   test('a redelivery of the same eventId enqueues nothing new and applies at most once', async () => {
-    let store = memoryStore();
-    let economy = makeEconomy(1, store);
+    const store = memoryStore();
+    const economy = makeEconomy(1, store);
     // One id generator across both deliveries, as a single serving process has. A real `Ids` mints a
     // globally-unique id each call, so the second delivery's freshly-minted id differs from the row
     // already stored under the key. That difference is how the handler tells a duplicate apart.
-    let ctx = webhookCtx();
+    const ctx = webhookCtx();
 
-    let first = await handlePurchaseWebhook(store, ctx, SAMPLE);
+    const first = await handlePurchaseWebhook(store, ctx, SAMPLE);
     assert.equal(first.status, 'accepted');
 
     // Same eventId again. The inbox dedupes on it (the row `key`), so no second row is inserted and
     // the existing one is returned as a duplicate. The credit is queued exactly once, however many
     // times the provider redelivers.
-    let second = await handlePurchaseWebhook(store, ctx, SAMPLE);
+    const second = await handlePurchaseWebhook(store, ctx, SAMPLE);
     assert.equal(second.status, 'duplicate');
     assert.equal(second.entry.id, first.entry.id);
 
-    let summary = await drainOnce(store, economy);
+    const summary = await drainOnce(store, economy);
     assert.deepEqual(summary.applied, [first.entry.id]);
     assert.equal(
       encodeAmount(await economy.read.balance(spendable('usr_buyer'))),
@@ -263,16 +263,16 @@ describe('Webhooks handlePurchaseWebhook (Persist To Inbox, Apply Later)', () =>
   });
 
   test('re-draining an applied row is a no-op; the operation idempotency key holds exactly-once', async () => {
-    let store = memoryStore();
-    let economy = makeEconomy(1, store);
+    const store = memoryStore();
+    const economy = makeEconomy(1, store);
 
-    let ack = await handlePurchaseWebhook(store, webhookCtx(), SAMPLE);
+    const ack = await handlePurchaseWebhook(store, webhookCtx(), SAMPLE);
     await drainOnce(store, economy);
 
     // The row is 'applied' and no longer claimed, so a second sweep applies nothing and the balance
     // stays put. Even if a row were re-submitted, the topUp's idempotency key (the provider event id)
     // would dedupe it to the same money move.
-    let second = await drainOnce(store, economy);
+    const second = await drainOnce(store, economy);
     assert.deepEqual(second.applied, []);
     assert.deepEqual(second.failed, []);
     assert.equal(ack.status, 'accepted');
@@ -293,23 +293,23 @@ function gatedServer(secret: string): {
   store: Store;
   economy: ReturnType<typeof makeEconomy>;
 } {
-  let digest = seededDigest(1);
-  let clock = fixedClock(0);
-  let store = memoryStore({ digest, clock });
-  let economy = makeEconomy(1, store);
-  let replay = store.replay;
-  let ids = sequentialIds();
-  let webhook: WebhookHandler = async (provider, request) => {
-    let event = decodeWebhookEvent(provider, await request.json());
+  const digest = seededDigest(1);
+  const clock = fixedClock(0);
+  const store = memoryStore({ digest, clock });
+  const economy = makeEconomy(1, store);
+  const replay = store.replay;
+  const ids = sequentialIds();
+  const webhook: WebhookHandler = async (provider, request) => {
+    const event = decodeWebhookEvent(provider, await request.json());
     // The handler persists the verified callback to the inbox and returns immediately. The apply
     // sweep (`drainInbox`) settles it. The status is 'accepted' on first sight, or 'duplicate'.
-    let ack = await handlePurchaseWebhook(store, { ids, clock }, event);
+    const ack = await handlePurchaseWebhook(store, { ids, clock }, event);
     return new Response(JSON.stringify({ status: ack.status }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     });
   };
-  let server = createServer(economy, {
+  const server = createServer(economy, {
     webhook,
     config: { ...testConfig(), webhookSecret: secret },
     clock,
@@ -320,18 +320,18 @@ function gatedServer(secret: string): {
 
 describe('createServer /webhooks Replay Dedup', () => {
   test('two valid deliveries of the same eventId credit once (second enqueues nothing)', async () => {
-    let secret = 'sek_test';
-    let { server, store, economy } = gatedServer(secret);
-    let body = purchaseBody({
+    const secret = 'sek_test';
+    const { server, store, economy } = gatedServer(secret);
+    const body = purchaseBody({
       eventId: 'evt_dup',
       userId: 'usr_buyer',
       amount: '10.00',
       sku: 'sku_pack',
     });
-    let signature = await signHex(body, secret);
-    let headers = { 'x-signature': signature, 'x-timestamp': '0' };
+    const signature = await signHex(body, secret);
+    const headers = { 'x-signature': signature, 'x-timestamp': '0' };
 
-    let first = await server(webhookRequest('billing', body, headers));
+    const first = await server(webhookRequest('billing', body, headers));
     assert.equal(first.status, 200);
     assert.equal(
       ((await first.json()) as { status: string }).status,
@@ -340,7 +340,7 @@ describe('createServer /webhooks Replay Dedup', () => {
 
     // The replay store has already claimed the eventId. The redelivery gets a 200 duplicate and the
     // handler never runs, so no second inbox row is enqueued.
-    let second = await server(webhookRequest('billing', body, headers));
+    const second = await server(webhookRequest('billing', body, headers));
     assert.equal(second.status, 200);
     assert.equal(
       ((await second.json()) as { status: string }).status,
@@ -358,9 +358,9 @@ describe('createServer /webhooks Replay Dedup', () => {
 
 describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin Info', () => {
   test('a forged signature does not consume the eventId (a later valid delivery still credits)', async () => {
-    let secret = 'sek_test';
-    let { server, store, economy } = gatedServer(secret);
-    let body = purchaseBody({
+    const secret = 'sek_test';
+    const { server, store, economy } = gatedServer(secret);
+    const body = purchaseBody({
       eventId: 'evt_forge',
       userId: 'usr_buyer',
       amount: '10.00',
@@ -369,8 +369,8 @@ describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin I
     // Forged delivery, signed with the wrong secret. The signature check runs before the replay
     // store records the eventId. A rejected forgery therefore never records the id and cannot block a
     // later genuine delivery of the same id.
-    let forged = await signHex(body, 'wrong-secret');
-    let rejected = await server(
+    const forged = await signHex(body, 'wrong-secret');
+    const rejected = await server(
       webhookRequest('billing', body, {
         'x-signature': forged,
         'x-timestamp': '0',
@@ -384,8 +384,8 @@ describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin I
 
     // The genuine delivery of that same eventId is recorded for the first time and enqueued. This
     // proves the earlier forgery did not use up the id. Draining the inbox then credits the buyer.
-    let valid = await signHex(body, secret);
-    let ok = await server(
+    const valid = await signHex(body, secret);
+    const ok = await server(
       webhookRequest('billing', body, {
         'x-signature': valid,
         'x-timestamp': '0',
@@ -401,17 +401,17 @@ describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin I
   });
 
   test('a verified purchase credits the buyer and carries eventId/sku/provider origin info', async () => {
-    let secret = 'sek_test';
-    let { server, store, economy } = gatedServer(secret);
-    let body = purchaseBody({
+    const secret = 'sek_test';
+    const { server, store, economy } = gatedServer(secret);
+    const body = purchaseBody({
       eventId: 'evt_prov',
       userId: 'usr_buyer',
       amount: '25.00',
       sku: 'sku_hat',
     });
-    let signature = await signHex(body, secret);
+    const signature = await signHex(body, secret);
 
-    let response = await server(
+    const response = await server(
       webhookRequest('billing', body, {
         'x-signature': signature,
         'x-timestamp': '0',
@@ -426,7 +426,7 @@ describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin I
     );
 
     // Origin details the posting should carry, built by the same `toTopUp` mapper the handler runs.
-    let op = toTopUp({
+    const op = toTopUp({
       provider: 'billing',
       eventId: 'evt_prov',
       userId: 'usr_buyer',
@@ -445,7 +445,7 @@ describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin I
 // Reads back the one open saga for a user. The test can then name it in the settlement webhook
 // without depending on the economy's id sequence.
 async function onlySagaFor(store: Store, userId: string): Promise<Saga> {
-  for await (let saga of store.sagas.list()) {
+  for await (const saga of store.sagas.list()) {
     if (saga.userId === userId) {
       return saga;
     }
@@ -474,14 +474,14 @@ function payoutSettledEvent(o: {
 // Drives a payout from RESERVED to SUBMITTED through the real submit sweep and returns the now-
 // SUBMITTED saga. The sweep clock is past the request-time PENDING SLA so the saga is due.
 async function submitPayout(store: Store, userId: string): Promise<Saga> {
-  let reserved = await onlySagaFor(store, userId);
+  const reserved = await onlySagaFor(store, userId);
   assert.equal(reserved.state, 'RESERVED');
-  let summary = await settleDuePayouts(store, workerCtxAt(60_000), {
+  const summary = await settleDuePayouts(store, workerCtxAt(60_000), {
     now: 60_000,
     limit: 10,
   });
   assert.deepEqual(summary.submitted, [reserved.id]);
-  let submitted = await onlySagaFor(store, userId);
+  const submitted = await onlySagaFor(store, userId);
   assert.equal(submitted.state, 'SUBMITTED');
   return submitted;
 }
@@ -519,39 +519,42 @@ describe('Webhooks payout settled (worker submits, the settlement webhook settle
       }),
     );
     // Pay out the seller's whole earned balance (no minimum in the test config).
-    let reserve = (await economy.read.balance(earned(seller))) as ReturnType<
+    const reserve = (await economy.read.balance(earned(seller))) as ReturnType<
       typeof credit
     >;
-    let reserved = await economy.submit(
+    const reserved = await economy.submit(
       buildRequestPayout({ userId: seller, amount: reserve }),
     );
     assert.equal(reserved.status, 'committed');
 
     // The worker sweep submits the reserved payout to the provider (RESERVED -> SUBMITTED). It does
     // not settle.
-    let saga = await submitPayout(store, seller);
+    const saga = await submitPayout(store, seller);
     return { saga, reserve };
   }
 
   test('a verified payout-settled webhook settles the matching submitted saga', async () => {
-    let store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
-    let economy = makeEconomy(1, store);
-    let seller = 'usr_seller';
+    const store = memoryStore({
+      digest: seededDigest(1),
+      clock: fixedClock(0),
+    });
+    const economy = makeEconomy(1, store);
+    const seller = 'usr_seller';
 
-    let { saga, reserve } = await bookToSubmitted(store, economy, seller);
+    const { saga, reserve } = await bookToSubmitted(store, economy, seller);
     // After submit, the reserve is still escrowed and REVENUE holds only the platform's sale fee. No
     // settle has run.
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
       reserve,
     );
-    let revenueBefore = await store.ledger.balance(SYSTEM.REVENUE);
-    let trustBefore = await store.ledger.balance(SYSTEM.TRUST_CASH);
-    let clearingBefore = await store.ledger.balance(SYSTEM.USD_CLEARING);
+    const revenueBefore = await store.ledger.balance(SYSTEM.REVENUE);
+    const trustBefore = await store.ledger.balance(SYSTEM.TRUST_CASH);
+    const clearingBefore = await store.ledger.balance(SYSTEM.USD_CLEARING);
 
     // The provider reports the disbursement settled. The verified callback is mapped to a
     // settlePayout operation and persisted to the inbox. Nothing has settled yet.
-    let ack = await handleWebhook(
+    const ack = await handleWebhook(
       store,
       webhookCtx(),
       payoutSettledEvent({ eventId: 'evt_settle_1', sagaId: saga.id }),
@@ -563,7 +566,7 @@ describe('Webhooks payout settled (worker submits, the settlement webhook settle
     );
 
     // drainInbox submits the stored settlePayout through the economy: the SUBMITTED -> SETTLED step.
-    let drain = await drainOnce(store, economy);
+    const drain = await drainOnce(store, economy);
     assert.deepEqual(drain.applied, [ack.entry.id]);
     assert.deepEqual(drain.failed, []);
 
@@ -578,7 +581,7 @@ describe('Webhooks payout settled (worker submits, the settlement webhook settle
       await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
       credit('0.00'),
     );
-    let usdMoved = toAmount('USD', (reserve.minor * 5n) / 1000n); // reserve at the $0.005 payout rate
+    const usdMoved = toAmount('USD', (reserve.minor * 5n) / 1000n); // reserve at the $0.005 payout rate
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.REVENUE),
       toAmount('CREDIT', revenueBefore.minor + reserve.minor),
@@ -595,43 +598,46 @@ describe('Webhooks payout settled (worker submits, the settlement webhook settle
 
     // The books still hold every rule after the webhook-driven settle. Each currency is conserved,
     // and the book is still backed: TRUST_CASH covers the buyer's remaining spendable credits.
-    let report = await economy.read.prove();
+    const report = await economy.read.prove();
     assert.equal(report.conserved, true);
     assert.equal(report.backed, true);
   });
 
   test('a duplicate payout-settled webhook settles the saga exactly once (no double settle)', async () => {
-    let store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
-    let economy = makeEconomy(1, store);
-    let seller = 'usr_seller';
+    const store = memoryStore({
+      digest: seededDigest(1),
+      clock: fixedClock(0),
+    });
+    const economy = makeEconomy(1, store);
+    const seller = 'usr_seller';
     // One id generator across both deliveries, as a single serving process has. A redelivery then
     // mints a fresh id that differs from the row already stored under the event key.
-    let webhook = webhookCtx();
+    const webhook = webhookCtx();
 
-    let { saga } = await bookToSubmitted(store, economy, seller);
-    let event = payoutSettledEvent({
+    const { saga } = await bookToSubmitted(store, economy, seller);
+    const event = payoutSettledEvent({
       eventId: 'evt_settle_dup',
       sagaId: saga.id,
     });
 
     // First delivery: enqueued and applied. The saga settles and the reserve clears to REVENUE.
-    let first = await handleWebhook(store, webhook, event);
+    const first = await handleWebhook(store, webhook, event);
     assert.equal(first.status, 'accepted');
-    let firstDrain = await drainOnce(store, economy);
+    const firstDrain = await drainOnce(store, economy);
     assert.deepEqual(firstDrain.applied, [first.entry.id]);
     assert.equal(
       await onlySagaFor(store, seller).then((s) => s.state),
       'SETTLED',
     );
-    let revenueOnce = await store.ledger.balance(SYSTEM.REVENUE);
-    let trustOnce = await store.ledger.balance(SYSTEM.TRUST_CASH);
+    const revenueOnce = await store.ledger.balance(SYSTEM.REVENUE);
+    const trustOnce = await store.ledger.balance(SYSTEM.TRUST_CASH);
 
     // Same eventId again. The inbox dedupes on it (the row key), so no second row is inserted and the
     // existing, already-applied row is returned as a duplicate. Draining claims nothing new.
-    let second = await handleWebhook(store, webhook, event);
+    const second = await handleWebhook(store, webhook, event);
     assert.equal(second.status, 'duplicate');
     assert.equal(second.entry.id, first.entry.id);
-    let secondDrain = await drainOnce(store, economy);
+    const secondDrain = await drainOnce(store, economy);
     assert.deepEqual(secondDrain.applied, []);
 
     // The settle happened exactly once. REVENUE and TRUST_CASH are unchanged from the single settle.
@@ -646,7 +652,7 @@ describe('Webhooks payout settled (worker submits, the settlement webhook settle
       await onlySagaFor(store, seller).then((s) => s.state),
       'SETTLED',
     );
-    let report = await economy.read.prove();
+    const report = await economy.read.prove();
     assert.equal(report.conserved, true);
     assert.equal(report.backed, true);
   });

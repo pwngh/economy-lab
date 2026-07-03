@@ -48,9 +48,9 @@ type Fixture = {
 };
 
 function setup(): Fixture {
-  let digest = seededDigest(1);
-  let clock = fixedClock(0);
-  let ctx: Ctx = {
+  const digest = seededDigest(1);
+  const clock = fixedClock(0);
+  const ctx: Ctx = {
     clock,
     ids: sequentialIds(),
     digest,
@@ -62,8 +62,8 @@ function setup(): Fixture {
     logger: testLogger(),
     meter: noopMeter(),
   };
-  let store: Store = memoryStore({ digest, clock });
-  let post = (legs: Leg[], meta: Record<string, unknown>): Promise<unknown> =>
+  const store: Store = memoryStore({ digest, clock });
+  const post = (legs: Leg[], meta: Record<string, unknown>): Promise<unknown> =>
     store.transaction((unit) =>
       postEntry(unit.ledger, { txnId: ctx.ids.next('txn'), legs, meta }),
     );
@@ -95,7 +95,7 @@ function setup(): Fixture {
     reverseOrder: (orderId) =>
       store.transaction(async (unit: Unit) => {
         await unit.idempotency.claim(`reversed:${orderId}`);
-        let txn = await postEntry(unit.ledger, {
+        const txn = await postEntry(unit.ledger, {
           txnId: ctx.ids.next('txn'),
           legs: [
             debit(SYSTEM.STORED_VALUE, creditOf('1.00')),
@@ -118,10 +118,10 @@ function isCode(code: string): (error: unknown) => boolean {
 // --- The cases --------------------------------------------------------------------
 
 async function reclaimsFullAmountFromSpendable(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
 
-  let outcome = await fx.claw(
+  const outcome = await fx.claw(
     clawback({ userId: 'usr_buyer', amount: creditOf('4.00') }),
   );
 
@@ -134,11 +134,11 @@ async function reclaimsFullAmountFromSpendable(): Promise<void> {
 }
 
 async function booksRemainderToReceivableWhenShort(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
   await fx.burn('usr_buyer', creditOf('7.00'));
 
-  let outcome = await fx.claw(
+  const outcome = await fx.claw(
     clawback({
       userId: 'usr_buyer',
       amount: creditOf('5.00'),
@@ -155,7 +155,7 @@ async function booksRemainderToReceivableWhenShort(): Promise<void> {
 }
 
 async function booksEntireAmountToReceivableWhenEmpty(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
 
   await fx.claw(clawback({ userId: 'usr_buyer', amount: creditOf('3.00') }));
 
@@ -163,36 +163,36 @@ async function booksEntireAmountToReceivableWhenEmpty(): Promise<void> {
 }
 
 async function neverOverdrawsSpendable(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
   await fx.issue('usr_buyer', creditOf('2.00'));
 
   await fx.claw(clawback({ userId: 'usr_buyer', amount: creditOf('9.00') }));
 
-  let balance = await fx.balanceOf(spendable('usr_buyer'));
+  const balance = await fx.balanceOf(spendable('usr_buyer'));
   assert.equal(balance.minor >= 0n, true);
   assert.deepEqual(balance, creditOf('0.00'));
 }
 
 async function balancesPostingRetiringToStoredValue(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
   // `issue` debited STORED_VALUE by 10.00. STORED_VALUE rises when debited, so it now reads +10.00,
   // the credits in circulation. Reclaiming 4.00 later un-issues them and drops it to +6.00.
   assert.deepEqual(await fx.balanceOf(SYSTEM.STORED_VALUE), creditOf('10.00'));
 
-  let outcome = await fx.claw(
+  const outcome = await fx.claw(
     clawback({ userId: 'usr_buyer', amount: creditOf('4.00') }),
   );
 
   assert.equal(outcome.status, 'committed');
   if (outcome.status !== 'committed') return;
   // The posting is a single balanced CREDIT entry. Every line is CREDIT and the signed sum is zero.
-  let signed = outcome.transaction.legs.reduce(
+  const signed = outcome.transaction.legs.reduce(
     (s, leg) => s + leg.amount.minor,
     0n,
   );
   assert.equal(signed, 0n);
-  for (let leg of outcome.transaction.legs) {
+  for (const leg of outcome.transaction.legs) {
     assert.equal(leg.amount.currency, 'CREDIT');
   }
   // Reclaimed credits are un-issued back to STORED_VALUE (the account the top-up raised), not
@@ -205,14 +205,14 @@ async function balancesPostingRetiringToStoredValue(): Promise<void> {
 // Refund runs first and takes the marker; the later clawback finds it taken, posts nothing, and
 // hands back the refund's transaction as a duplicate, leaving the buyer's balance untouched.
 async function duplicateWhenOrderAlreadyRefunded(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
-  let priorReversal = await fx.reverseOrder('ord_1');
+  const priorReversal = await fx.reverseOrder('ord_1');
 
   // Snapshot the balances the reversal left behind; a duplicate clawback must move none of them.
-  let buyerBefore = await fx.balanceOf(spendable('usr_buyer'));
-  let storedBefore = await fx.balanceOf(SYSTEM.STORED_VALUE);
-  let outcome = await fx.claw(
+  const buyerBefore = await fx.balanceOf(spendable('usr_buyer'));
+  const storedBefore = await fx.balanceOf(SYSTEM.STORED_VALUE);
+  const outcome = await fx.claw(
     clawback({
       userId: 'usr_buyer',
       amount: creditOf('4.00'),
@@ -231,7 +231,7 @@ async function duplicateWhenOrderAlreadyRefunded(): Promise<void> {
 }
 
 async function throwsMalformedForNonPositiveAmount(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
 
   await assert.rejects(
     fx.claw(clawback({ userId: 'usr_buyer', amount: creditOf('0.00') })),
@@ -243,7 +243,7 @@ async function throwsMalformedForNonPositiveAmount(): Promise<void> {
 // marker, which would falsely tie unrelated chargebacks together. So the handler throws instead of
 // claiming the marker.
 async function throwsMalformedForBlankOrderId(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
 
   await assert.rejects(
@@ -256,10 +256,10 @@ async function throwsMalformedForBlankOrderId(): Promise<void> {
 
 // An untied chargeback omits `orderId` entirely; that is the common case and must still commit.
 async function commitsWithNoOrderId(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
 
-  let outcome = await fx.claw(
+  const outcome = await fx.claw(
     clawback({ userId: 'usr_buyer', amount: creditOf('4.00') }),
   );
 
@@ -272,10 +272,10 @@ async function commitsWithNoOrderId(): Promise<void> {
 
 // A real, non-blank `orderId` on a fresh order claims the marker and commits normally.
 async function commitsWithRealOrderId(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
 
-  let outcome = await fx.claw(
+  const outcome = await fx.claw(
     clawback({
       userId: 'usr_buyer',
       amount: creditOf('4.00'),
@@ -291,7 +291,7 @@ async function commitsWithRealOrderId(): Promise<void> {
 }
 
 async function throwsMalformedForWrongOperationKind(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
 
   await assert.rejects(
     fx.claw({

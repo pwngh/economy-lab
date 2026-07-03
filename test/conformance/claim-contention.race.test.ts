@@ -114,18 +114,18 @@ import type { InboxEntry, OutboxMessage, Saga, Store } from '#src/ports.ts';
 // show. N is kept modest so the in-flight sweeps stay well under the connection pool, since each mark
 // holds one transaction connection. This is the same pool-sizing discipline concurrency.adversarial
 // documents.
-let M = 80;
-let N = 6;
-let LIMIT = 4;
-let ITERATIONS = 20;
+const M = 80;
+const N = 6;
+const LIMIT = 4;
+const ITERATIONS = 20;
 
 // `now` for the due-time gate. Sagas are seeded due in the past, so any non-negative sweep time
 // claims them. The inbox and outbox have no due gate. A constant keeps the seeded set deterministic.
-let NOW = 1;
+const NOW = 1;
 
 // The CREDIT amount each seeded inbox topUp mints. The exactly-once-effect assertion is that the
 // user's spendable balance ends at exactly this one top-up's worth, never two.
-let TOPUP_MINOR = 1_000n;
+const TOPUP_MINOR = 1_000n;
 
 // One unique tag per drain so seeded ids never collide across iterations on a shared store. A base-36
 // counter is plenty. The store is fresh per engine anyway, but distinct ids keep a failure message
@@ -186,7 +186,7 @@ function outboxRow(id: string): OutboxMessage {
 // `system` actor and `card` source mirror a real settlement webhook's stored Operation, which the
 // pause gate exempts so drainInbox runs continuously.
 function inboxRow(id: string): InboxEntry {
-  let userId = `usr_claim_${id}`;
+  const userId = `usr_claim_${id}`;
   return {
     id,
     key: `key_${id}`,
@@ -249,11 +249,11 @@ function sagaMethod(): ClaimMethod {
     code: 'saga',
     bind: (store, engineName) => {
       // id -> how many sweeps' advance() returned true for it. Exactly-once means every value is 1.
-      let advancedTrue = new Map<string, number>();
+      const advancedTrue = new Map<string, number>();
       return {
         seed: async (ids) => {
           await store.transaction(async (unit) => {
-            for (let id of ids) {
+            for (const id of ids) {
               await unit.sagas.open(sagaRow(id));
             }
           });
@@ -261,12 +261,12 @@ function sagaMethod(): ClaimMethod {
         sweepOnce: async () => {
           // Claim on the pool, in autocommit: the FOR UPDATE SKIP LOCKED lock drops the moment the
           // SELECT returns, before any advance runs, exactly as settleDuePayouts claims.
-          let due = await store.sagas.claimDue(NOW, LIMIT);
-          for (let saga of due) {
+          const due = await store.sagas.claimDue(NOW, LIMIT);
+          for (const saga of due) {
             // The real state change: a CAS from SUBMITTED to SETTLED in its own transaction. Only the
             // sweep that finds the saga still in SUBMITTED wins and returns true. A sweep that
             // transiently re-claimed an already-advanced saga gets false. Tally only the winners.
-            let advanced = await store.transaction((unit) =>
+            const advanced = await store.transaction((unit) =>
               unit.sagas.advance(saga.id, 'SUBMITTED', 'SETTLED', {
                 updatedAt: NOW,
               }),
@@ -281,8 +281,8 @@ function sagaMethod(): ClaimMethod {
           // Every due saga advanced exactly once. A 2 is a double-submit: two sweeps' advance both
           // returned true for the same saga, so the CAS failed to serialize. A 0 means it never
           // advanced, so a row was dropped.
-          for (let id of ids) {
-            let wins = advancedTrue.get(id) ?? 0;
+          for (const id of ids) {
+            const wins = advancedTrue.get(id) ?? 0;
             assert.equal(
               wins,
               1,
@@ -296,8 +296,8 @@ function sagaMethod(): ClaimMethod {
             );
           }
           // Every saga ends terminal SETTLED.
-          for (let id of ids) {
-            let saga = await store.sagas.load(id);
+          for (const id of ids) {
+            const saga = await store.sagas.load(id);
             assert.equal(
               saga?.state,
               'SETTLED',
@@ -329,11 +329,11 @@ function outboxMethod(): ClaimMethod {
     code: 'obx',
     bind: (store, engineName) => {
       // Every delivery the receiver saw, by row id (duplicates allowed and expected).
-      let deliveries: string[] = [];
+      const deliveries: string[] = [];
       return {
         seed: async (ids) => {
           await store.transaction(async (unit) => {
-            for (let id of ids) {
+            for (const id of ids) {
               await unit.outbox.enqueue(outboxRow(id));
             }
           });
@@ -341,9 +341,9 @@ function outboxMethod(): ClaimMethod {
         sweepOnce: async () => {
           // Claim on the pool, in autocommit, as relayOutbox does: the FOR UPDATE SKIP LOCKED lock
           // drops when the SELECT returns, so two sweeps can claim the same still-pending row at once.
-          let pending = await store.outbox.claimBatch(LIMIT);
-          let claimed = pending.map((m) => m.id);
-          for (let m of pending) {
+          const pending = await store.outbox.claimBatch(LIMIT);
+          const claimed = pending.map((m) => m.id);
+          for (const m of pending) {
             // Deliver, at-least-once. A duplicate from a transient double-claim is the contract.
             deliveries.push(m.id);
           }
@@ -354,8 +354,8 @@ function outboxMethod(): ClaimMethod {
         verify: async (ids) => {
           // At-least-once delivery: every row delivered one or more times. Duplicates are the
           // contract, not asserted away.
-          let deliveredSet = new Set(deliveries);
-          for (let id of ids) {
+          const deliveredSet = new Set(deliveries);
+          for (const id of ids) {
             assert.ok(
               deliveredSet.has(id),
               `[${engineName}] OutboxStore: row ${id} was never delivered ` +
@@ -363,7 +363,7 @@ function outboxMethod(): ClaimMethod {
             );
           }
           // Every row ends terminal 'relayed': nothing left claimable.
-          let stillPending = await store.outbox.claimBatch(M);
+          const stillPending = await store.outbox.claimBatch(M);
           assert.equal(
             stillPending.length,
             0,
@@ -390,7 +390,7 @@ function inboxMethod(): ClaimMethod {
       // re-submit of the same idempotencyKey is deduped by `submit`'s atomic key claim, the
       // production mechanism. It must share the store's seeded digest and fixed clock, or hashes
       // diverge.
-      let economy: Economy = createEconomy({
+      const economy: Economy = createEconomy({
         store,
         clock: fixedClock(0),
         ids: sequentialIds(),
@@ -406,7 +406,7 @@ function inboxMethod(): ClaimMethod {
       return {
         seed: async (ids) => {
           await store.transaction(async (unit) => {
-            for (let id of ids) {
+            for (const id of ids) {
               await unit.inbox.enqueueInbound(inboxRow(id));
             }
           });
@@ -414,11 +414,11 @@ function inboxMethod(): ClaimMethod {
         sweepOnce: async () => {
           // Claim on the pool, in autocommit: the lock drops the moment the SELECT returns, before any
           // submit or markApplied, exactly as drainInbox claims.
-          let pending = await store.inbox.claimInbound({
+          const pending = await store.inbox.claimInbound({
             now: NOW,
             limit: LIMIT,
           });
-          for (let entry of pending) {
+          for (const entry of pending) {
             // Submit through the real economy, mirroring drainInbox's applyOne. A first submit posts
             // the topUp and records the idempotencyKey. A transient re-submit (this row was claimed by
             // a prior sweep that had not yet marked it) claims the already-recorded key and returns
@@ -454,9 +454,9 @@ function inboxMethod(): ClaimMethod {
           // The ledger effect happened exactly once per row: each user's spendable balance equals
           // exactly one top-up. A doubled balance is a double-apply, where the idempotencyKey dedup
           // failed to absorb a transient double-claim.
-          for (let id of ids) {
-            let userId = `usr_claim_${id}`;
-            let balance = await store.ledger.balance(spendable(userId));
+          for (const id of ids) {
+            const userId = `usr_claim_${id}`;
+            const balance = await store.ledger.balance(spendable(userId));
             assert.equal(
               balance.minor,
               TOPUP_MINOR,
@@ -470,7 +470,7 @@ function inboxMethod(): ClaimMethod {
             );
           }
           // Every row ends terminal: nothing left claimable.
-          let stillPending = await store.inbox.claimInbound({
+          const stillPending = await store.inbox.claimInbound({
             now: NOW,
             limit: M,
           });
@@ -504,18 +504,18 @@ async function drainOnce(input: {
   engineName: string;
   sweeps?: number;
 }): Promise<void> {
-  let { store, method, expected, engineName } = input;
-  let sweeps = input.sweeps ?? N;
-  let bound = method.bind(store, engineName);
+  const { store, method, expected, engineName } = input;
+  const sweeps = input.sweeps ?? N;
+  const bound = method.bind(store, engineName);
   await bound.seed(expected);
 
   // The barrier: every sweep awaits this before its first claim, so all of them hit the locks at once.
   let release: () => void = () => {};
-  let barrier = new Promise<void>((resolve) => {
+  const barrier = new Promise<void>((resolve) => {
     release = resolve;
   });
 
-  let sweep = async (): Promise<void> => {
+  const sweep = async (): Promise<void> => {
     await barrier;
     // Loop until a claim round comes back empty: this sweep sees nothing left to do. Stopping on the
     // claim count, not the marked count, means a sweep that claimed rows but could not mark them this
@@ -523,14 +523,14 @@ async function drainOnce(input: {
     // sweeps may still be draining their own rows, but the method's `verify` checks the effect over
     // every seeded id, so an early-stopping sweep cannot hide an unprocessed row.
     for (;;) {
-      let claimedCount = await bound.sweepOnce();
+      const claimedCount = await bound.sweepOnce();
       if (claimedCount === 0) {
         return;
       }
     }
   };
 
-  let runs = Array.from({ length: sweeps }, () => sweep());
+  const runs = Array.from({ length: sweeps }, () => sweep());
   release();
   await Promise.all(runs);
 
@@ -564,7 +564,7 @@ function runClaimContention(
       }
     });
 
-    for (let method of [sagaMethod(), outboxMethod(), inboxMethod()]) {
+    for (const method of [sagaMethod(), outboxMethod(), inboxMethod()]) {
       test(`${method.name}: ${N} concurrent sweeps, ${M} rows, exactly-once-EFFECT over ${ITERATIONS} drains`, async (t: TestContext) => {
         if (!reachable) {
           return t.skip(`${name} unreachable`);
@@ -572,15 +572,15 @@ function runClaimContention(
         for (let i = 0; i < ITERATIONS; i += 1) {
           // A fresh isolated namespace per drain: a clean seeded set with no rows left from a prior
           // iteration, so the effect assertions see exactly the M ids this drain seeded.
-          let engine = await provision();
+          const engine = await provision();
           if (!engine) {
             return t.skip(`${name} became unreachable mid-run`);
           }
           try {
             // Compact tag (engine, short method code, and iteration). The verbose method name cannot
             // go in an id, which is VARCHAR(64) on MySQL. The base-36 counter keeps it globally unique.
-            let tag = freshTag(`${name}_${method.code}_i${i}`);
-            let ids = Array.from(
+            const tag = freshTag(`${name}_${method.code}_i${i}`);
+            const ids = Array.from(
               { length: M },
               (_unused, k) => `${tag}_row${k}`,
             );
@@ -612,15 +612,15 @@ runClaimContention('mysql', adversarialMysql);
 // with no genuine parallelism a second sweep adds nothing. This is a trivial pass. The real
 // exactly-once-effect-under-parallelism proof is the SQL suites above.
 describe('Claim contention: memory (single-threaded reference)', () => {
-  for (let method of [sagaMethod(), outboxMethod(), inboxMethod()]) {
+  for (const method of [sagaMethod(), outboxMethod(), inboxMethod()]) {
     test(`${method.name}: drains the seeded set with the effect happening exactly once`, async () => {
-      let store = memoryStore({
+      const store = memoryStore({
         digest: seededDigest(1),
         clock: fixedClock(0),
       });
       try {
-        let tag = freshTag(`memory_${method.code}`);
-        let ids = Array.from({ length: M }, (_unused, k) => `${tag}_row${k}`);
+        const tag = freshTag(`memory_${method.code}`);
+        const ids = Array.from({ length: M }, (_unused, k) => `${tag}_row${k}`);
         await drainOnce({
           store,
           method,

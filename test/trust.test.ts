@@ -60,13 +60,13 @@ function velocityAt(windowStart: number, spentMinor: bigint): Velocity {
 
 // An operation that finished but was denied by the risk check. Denied attempts still count
 // toward the spending limit, so denial-path tests use this outcome.
-let REJECTED: Outcome = { status: 'rejected', reason: 'RISK_DENIED' };
+const REJECTED: Outcome = { status: 'rejected', reason: 'RISK_DENIED' };
 
 // Builds an outcome carrying a transaction. The contents do not matter here because the attempt
 // builder reads only the outcome's status and the operation's key, so the detail fields are left
 // empty. Legs are the debit and credit lines. Links are the per-account hash-chain entries.
 function withTransaction(status: 'committed' | 'duplicate'): Outcome {
-  let transaction: Transaction = {
+  const transaction: Transaction = {
     id: 'txn_test',
     postedAt: 0,
     legs: [],
@@ -78,48 +78,48 @@ function withTransaction(status: 'committed' | 'duplicate'): Outcome {
 // --- assessRisk: deciding whether to allow an operation ----------------------------
 
 function allowsWhenProjectedUnderCeiling(): void {
-  let velocity = velocityAt(0, 600n); // 600 minor units = 6.00 already spent this window
-  let operation = spend({
+  const velocity = velocityAt(0, 600n); // 600 minor units = 6.00 already spent this window
+  const operation = spend({
     buyerId: 'usr_buyer',
     sku: 'wrld_pass',
     price: credit('3.00'),
   });
 
-  let decision = assessRisk(velocity, operation, gateConfig(1_000n));
+  const decision = assessRisk(velocity, operation, gateConfig(1_000n));
 
   assert.deepEqual(decision, { allow: true });
 }
 
 function deniesWithRiskDeniedWhenProjectedOverCeiling(): void {
-  let velocity = velocityAt(0, 800n); // 800 minor units = 8.00 already spent this window
-  let operation = spend({
+  const velocity = velocityAt(0, 800n); // 800 minor units = 8.00 already spent this window
+  const operation = spend({
     buyerId: 'usr_buyer',
     sku: 'wrld_pass',
     price: credit('3.00'),
   });
 
-  let decision = assessRisk(velocity, operation, gateConfig(1_000n));
+  const decision = assessRisk(velocity, operation, gateConfig(1_000n));
 
   assert.deepEqual(decision, { allow: false, reason: 'RISK_DENIED' });
 }
 
 function allowsAtExactlyTheCeiling(): void {
-  let velocity = velocityAt(0, 700n);
-  let operation = spend({
+  const velocity = velocityAt(0, 700n);
+  const operation = spend({
     buyerId: 'usr_buyer',
     sku: 'wrld_pass',
     price: credit('3.00'),
   });
 
   // 7.00 + 3.00 lands exactly on the 10.00 limit. Denial is strictly over, so on the limit is allowed.
-  let decision = assessRisk(velocity, operation, gateConfig(1_000n));
+  const decision = assessRisk(velocity, operation, gateConfig(1_000n));
 
   assert.deepEqual(decision, { allow: true });
 }
 
 function allowsAnOperationOutsideTheRiskSurface(): void {
-  let velocity = velocityAt(0, 1_000_000n); // a spend total far past any limit
-  let operation: Operation = {
+  const velocity = velocityAt(0, 1_000_000n); // a spend total far past any limit
+  const operation: Operation = {
     // cancelSubscription moves no money, so the risk check never applies to it.
     kind: 'cancelSubscription',
     idempotencyKey: 'idem_cancel',
@@ -127,7 +127,7 @@ function allowsAnOperationOutsideTheRiskSurface(): void {
     subscriptionId: 'sub_1',
   };
 
-  let decision = assessRisk(velocity, operation, gateConfig(1n));
+  const decision = assessRisk(velocity, operation, gateConfig(1n));
 
   assert.deepEqual(decision, { allow: true });
 }
@@ -138,13 +138,13 @@ function allowsAnOperationOutsideTheRiskSurface(): void {
 // the whole total resetting to zero at a fixed boundary.
 
 function readsAnEmptyWindowForAFreshSubject(): void {
-  let velocity = windowedVelocity('usr_new', [], 5_000, 3_600_000);
+  const velocity = windowedVelocity('usr_new', [], 5_000, 3_600_000);
 
   assert.deepEqual(velocity, emptyVelocity('usr_new'));
 }
 
 function sumsAttemptsInsideTheWindow(): void {
-  let attempts: Attempt[] = [
+  const attempts: Attempt[] = [
     {
       idempotencyKey: 'a1',
       amount: credit('5.00'),
@@ -161,7 +161,7 @@ function sumsAttemptsInsideTheWindow(): void {
 
   // now (2_500) is within an hour of both attempts, so both count. windowStart comes back as the
   // earliest `at` still in the window.
-  let velocity = windowedVelocity('usr_buyer', attempts, 2_500, 3_600_000);
+  const velocity = windowedVelocity('usr_buyer', attempts, 2_500, 3_600_000);
 
   assert.deepEqual(velocity, {
     subject: 'usr_buyer',
@@ -172,7 +172,7 @@ function sumsAttemptsInsideTheWindow(): void {
 }
 
 function dropsAttemptsOlderThanTheWindow(): void {
-  let attempts: Attempt[] = [
+  const attempts: Attempt[] = [
     {
       idempotencyKey: 'old',
       amount: credit('5.00'),
@@ -190,8 +190,8 @@ function dropsAttemptsOlderThanTheWindow(): void {
   // Read exactly one window after the first attempt: its `at` (1_000) equals the cutoff
   // (now - windowMs), and the cutoff is exclusive (`at > cutoff`), so it ages out. Only the
   // second attempt remains.
-  let now = 1_000 + 3_600_000;
-  let velocity = windowedVelocity('usr_buyer', attempts, now, 3_600_000);
+  const now = 1_000 + 3_600_000;
+  const velocity = windowedVelocity('usr_buyer', attempts, now, 3_600_000);
 
   assert.deepEqual(velocity, {
     subject: 'usr_buyer',
@@ -202,7 +202,7 @@ function dropsAttemptsOlderThanTheWindow(): void {
 }
 
 function agesAttemptsOutOneAtATimeAsTheWindowSlides(): void {
-  let attempts: Attempt[] = [
+  const attempts: Attempt[] = [
     {
       idempotencyKey: 'a1',
       amount: credit('5.00'),
@@ -220,8 +220,8 @@ function agesAttemptsOutOneAtATimeAsTheWindowSlides(): void {
   // Read when the first attempt has just aged out but the second is still inside the window. The
   // total reflects only the second, so attempts drop individually as the window slides rather than
   // all at once at a fixed reset boundary (which would zero both).
-  let now = 1_000 + 3_600_001;
-  let velocity = windowedVelocity('usr_buyer', attempts, now, 3_600_000);
+  const now = 1_000 + 3_600_001;
+  const velocity = windowedVelocity('usr_buyer', attempts, now, 3_600_000);
 
   assert.deepEqual(velocity, {
     subject: 'usr_buyer',
@@ -234,7 +234,7 @@ function agesAttemptsOutOneAtATimeAsTheWindowSlides(): void {
 // --- riskAttempt: building the record added to the spending total after an operation runs
 
 function buildsARejectedAttemptKeyedOnTheOperationKey(): void {
-  let operation = spend({
+  const operation = spend({
     buyerId: 'usr_buyer',
     sku: 'wrld_pass',
     price: credit('4.00'),
@@ -243,7 +243,7 @@ function buildsARejectedAttemptKeyedOnTheOperationKey(): void {
   // A denied operation still gets recorded: many declines in a row is itself a fraud signal, so
   // each counts toward the limit. Keyed on the operation's idempotency key so a true retry of the
   // same request isn't counted twice.
-  let attempt = riskAttempt(operation, REJECTED, 9_000);
+  const attempt = riskAttempt(operation, REJECTED, 9_000);
 
   assert.deepEqual(attempt, {
     idempotencyKey: operation.idempotencyKey,
@@ -254,9 +254,9 @@ function buildsARejectedAttemptKeyedOnTheOperationKey(): void {
 }
 
 function buildsACommittedAttemptFromASettledOperation(): void {
-  let operation = topUp({ userId: 'usr_buyer', amount: credit('5.00') });
+  const operation = topUp({ userId: 'usr_buyer', amount: credit('5.00') });
 
-  let attempt = riskAttempt(operation, withTransaction('committed'), 12_000);
+  const attempt = riskAttempt(operation, withTransaction('committed'), 12_000);
 
   assert.deepEqual(attempt, {
     idempotencyKey: operation.idempotencyKey,
@@ -267,7 +267,7 @@ function buildsACommittedAttemptFromASettledOperation(): void {
 }
 
 function recordsNoAttemptForADuplicate(): void {
-  let operation = spend({
+  const operation = spend({
     buyerId: 'usr_buyer',
     sku: 'wrld_pass',
     price: credit('4.00'),
@@ -275,13 +275,13 @@ function recordsNoAttemptForADuplicate(): void {
 
   // A duplicate outcome means the request already ran and was counted. Replaying it must not add a
   // second record, so the builder returns null.
-  let attempt = riskAttempt(operation, withTransaction('duplicate'), 9_000);
+  const attempt = riskAttempt(operation, withTransaction('duplicate'), 9_000);
 
   assert.equal(attempt, null);
 }
 
 function recordsNoAttemptOutsideTheRiskSurface(): void {
-  let operation: Operation = {
+  const operation: Operation = {
     // cancelSubscription moves no money, so there is nothing to record toward the limit.
     kind: 'cancelSubscription',
     idempotencyKey: 'idem_cancel',
@@ -289,7 +289,7 @@ function recordsNoAttemptOutsideTheRiskSurface(): void {
     subscriptionId: 'sub_1',
   };
 
-  let attempt = riskAttempt(operation, withTransaction('committed'), 9_000);
+  const attempt = riskAttempt(operation, withTransaction('committed'), 9_000);
 
   assert.equal(attempt, null);
 }
@@ -299,7 +299,7 @@ function recordsNoAttemptOutsideTheRiskSurface(): void {
 // money). attemptMinor returns how much it adds to the total, in CREDIT minor units (cents).
 
 function keysFundsMovingOperationsOnTheirSubject(): void {
-  let cases: ReadonlyArray<{
+  const cases: ReadonlyArray<{
     operation: Operation;
     subject: string | null;
     minor: bigint;
@@ -326,14 +326,14 @@ function keysFundsMovingOperationsOnTheirSubject(): void {
     },
   ];
 
-  for (let { operation, subject, minor } of cases) {
+  for (const { operation, subject, minor } of cases) {
     assert.equal(riskSubject(operation), subject);
     assert.equal(attemptMinor(operation), minor);
   }
 }
 
 function keysNoSubjectForNonFundsOperations(): void {
-  let cases: ReadonlyArray<Operation> = [
+  const cases: ReadonlyArray<Operation> = [
     {
       kind: 'cancelSubscription',
       idempotencyKey: 'k1',
@@ -349,7 +349,7 @@ function keysNoSubjectForNonFundsOperations(): void {
     },
   ];
 
-  for (let operation of cases) {
+  for (const operation of cases) {
     assert.equal(riskSubject(operation), null);
     assert.equal(attemptMinor(operation), 0n);
   }
@@ -358,9 +358,9 @@ function keysNoSubjectForNonFundsOperations(): void {
 // --- The whole loop end to end: adding attempts until the limit blocks --------------
 
 function accumulatesUntilTheCeilingThenClearsAsTheWindowSlides(): void {
-  let config = gateConfig(1_000n); // limit of 1000 minor units = 10.00
-  let windowMs = config.velocityWindowMs;
-  let operation = spend({
+  const config = gateConfig(1_000n); // limit of 1000 minor units = 10.00
+  const windowMs = config.velocityWindowMs;
+  const operation = spend({
     buyerId: 'usr_buyer',
     sku: 'wrld_pass',
     price: credit('4.00'),
@@ -368,7 +368,7 @@ function accumulatesUntilTheCeilingThenClearsAsTheWindowSlides(): void {
 
   // Two prior 4.00 attempts inside the window, each under its own idempotency key so both count
   // (a repeated key is treated as a retry and ignored).
-  let attempts: Attempt[] = [
+  const attempts: Attempt[] = [
     {
       idempotencyKey: 'a1',
       amount: credit('4.00'),
@@ -384,15 +384,20 @@ function accumulatesUntilTheCeilingThenClearsAsTheWindowSlides(): void {
   ];
 
   // With nothing counted yet, a 4.00 spend is allowed.
-  let none = windowedVelocity('usr_buyer', [], 300, windowMs);
+  const none = windowedVelocity('usr_buyer', [], 300, windowMs);
   assert.deepEqual(assessRisk(none, operation, config), { allow: true });
 
   // With one attempt counted (4.00), a 4.00 spend projects to 8.00, still within the 10.00 limit.
-  let one = windowedVelocity('usr_buyer', attempts.slice(0, 1), 300, windowMs);
+  const one = windowedVelocity(
+    'usr_buyer',
+    attempts.slice(0, 1),
+    300,
+    windowMs,
+  );
   assert.deepEqual(assessRisk(one, operation, config), { allow: true });
 
   // With both counted (8.00), a 4.00 spend projects to 12.00, past the 10.00 limit, so it denies.
-  let both = windowedVelocity('usr_buyer', attempts, 300, windowMs);
+  const both = windowedVelocity('usr_buyer', attempts, 300, windowMs);
   assert.deepEqual(assessRisk(both, operation, config), {
     allow: false,
     reason: 'RISK_DENIED',
@@ -400,7 +405,7 @@ function accumulatesUntilTheCeilingThenClearsAsTheWindowSlides(): void {
 
   // Once both attempts age out, the subject is allowed again. The limit doesn't stick forever; the
   // bug this fixes was a running total that never reset.
-  let later = windowedVelocity(
+  const later = windowedVelocity(
     'usr_buyer',
     attempts,
     200 + windowMs + 1,
@@ -415,7 +420,7 @@ function accumulatesUntilTheCeilingThenClearsAsTheWindowSlides(): void {
 // original bug, where the store kept a running total that never reset.
 async function theStoreAgesAttemptsOutOfReadOnceTheWindowPasses(): Promise<void> {
   let nowMs = 0;
-  let store = memoryStore({
+  const store = memoryStore({
     clock: { now: () => nowMs },
     velocityWindowMs: 3_600_000,
   });

@@ -31,38 +31,38 @@ export function runCacheConformance(
 ): void {
   describe(`Cache Conformance: ${name}`, () => {
     test('a missing key reads back null', async () => {
-      let cache = makeCache();
+      const cache = makeCache();
       assert.equal(await cache.get('bal:absent'), null);
     });
 
     test('a value round-trips under its key', async () => {
-      let cache = makeCache();
+      const cache = makeCache();
       await cache.set('bal:usr_1', 'CREDIT:12.34');
       assert.equal(await cache.get('bal:usr_1'), 'CREDIT:12.34');
     });
 
     test('a later set overwrites the prior value', async () => {
-      let cache = makeCache();
+      const cache = makeCache();
       await cache.set('bal:usr_1', 'CREDIT:1.00');
       await cache.set('bal:usr_1', 'CREDIT:2.00');
       assert.equal(await cache.get('bal:usr_1'), 'CREDIT:2.00');
     });
 
     test('invalidate removes a key, so it reads back null', async () => {
-      let cache = makeCache();
+      const cache = makeCache();
       await cache.set('bal:usr_1', 'CREDIT:1.00');
       await cache.invalidate('bal:usr_1');
       assert.equal(await cache.get('bal:usr_1'), null);
     });
 
     test('invalidating an absent key is a no-op', async () => {
-      let cache = makeCache();
+      const cache = makeCache();
       await cache.invalidate('bal:never_set'); // must not throw
       assert.equal(await cache.get('bal:never_set'), null);
     });
 
     test('a value set with a ttl still reads back before it expires', async () => {
-      let cache = makeCache();
+      const cache = makeCache();
       await cache.set('bal:usr_1', 'CREDIT:1.00', 60_000);
       assert.equal(await cache.get('bal:usr_1'), 'CREDIT:1.00');
     });

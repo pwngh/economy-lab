@@ -37,8 +37,8 @@ type EntitlementHandler = (
 ) => Promise<Outcome>;
 
 function makeStore(): Store {
-  let digest = seededDigest(1);
-  let clock = fixedClock(0);
+  const digest = seededDigest(1);
+  const clock = fixedClock(0);
   return memoryStore({ digest, clock });
 }
 
@@ -56,10 +56,10 @@ function apply(
 
 describe('grantEntitlement', () => {
   test('establishes ownership of a sku', async () => {
-    let store = makeStore();
-    let ctx = makeCtx();
+    const store = makeStore();
+    const ctx = makeCtx();
 
-    let outcome = await apply(
+    const outcome = await apply(
       store,
       ctx,
       grantEntitlement,
@@ -71,10 +71,10 @@ describe('grantEntitlement', () => {
   });
 
   test('commits a marker transaction with no debit/credit lines and no hash-chain links', async () => {
-    let store = makeStore();
-    let ctx = makeCtx();
+    const store = makeStore();
+    const ctx = makeCtx();
 
-    let outcome = await apply(
+    const outcome = await apply(
       store,
       ctx,
       grantEntitlement,
@@ -93,8 +93,8 @@ describe('grantEntitlement', () => {
   });
 
   test('overwrites prior ownership without an ownership precondition', async () => {
-    let store = makeStore();
-    let ctx = makeCtx();
+    const store = makeStore();
+    const ctx = makeCtx();
     await apply(
       store,
       ctx,
@@ -106,7 +106,7 @@ describe('grantEntitlement', () => {
       }),
     );
 
-    let outcome = await apply(
+    const outcome = await apply(
       store,
       ctx,
       grantEntitlement,
@@ -122,8 +122,8 @@ describe('grantEntitlement', () => {
   });
 
   test('throws MALFORMED_OPERATION on the wrong operation kind', async () => {
-    let store = makeStore();
-    let ctx = makeCtx();
+    const store = makeStore();
+    const ctx = makeCtx();
 
     await assert.rejects(
       apply(
@@ -139,8 +139,8 @@ describe('grantEntitlement', () => {
   });
 
   test('throws MALFORMED_OPERATION on a blank userId', async () => {
-    let store = makeStore();
-    let ctx = makeCtx();
+    const store = makeStore();
+    const ctx = makeCtx();
 
     await assert.rejects(
       apply(
@@ -156,8 +156,8 @@ describe('grantEntitlement', () => {
   });
 
   test('throws MALFORMED_OPERATION on a blank sku', async () => {
-    let store = makeStore();
-    let ctx = makeCtx();
+    const store = makeStore();
+    const ctx = makeCtx();
 
     await assert.rejects(
       apply(
@@ -173,8 +173,8 @@ describe('grantEntitlement', () => {
   });
 
   test('throws MALFORMED_OPERATION when attrs.expiresAt is not finite', async () => {
-    let store = makeStore();
-    let ctx = makeCtx();
+    const store = makeStore();
+    const ctx = makeCtx();
 
     await assert.rejects(
       apply(
@@ -194,10 +194,10 @@ describe('grantEntitlement', () => {
   });
 
   test('allows a null attrs.expiresAt (never expires)', async () => {
-    let store = makeStore();
-    let ctx = makeCtx();
+    const store = makeStore();
+    const ctx = makeCtx();
 
-    let outcome = await apply(
+    const outcome = await apply(
       store,
       ctx,
       grantEntitlement,
@@ -213,8 +213,8 @@ describe('grantEntitlement', () => {
   });
 
   test('throws MALFORMED_OPERATION when attrs.quantity is not a positive integer', async () => {
-    let store = makeStore();
-    let ctx = makeCtx();
+    const store = makeStore();
+    const ctx = makeCtx();
 
     await assert.rejects(
       apply(
@@ -252,8 +252,8 @@ describe('grantEntitlement', () => {
 
 describe('revokeEntitlement', () => {
   test('removes ownership of a held sku', async () => {
-    let store = makeStore();
-    let ctx = makeCtx();
+    const store = makeStore();
+    const ctx = makeCtx();
     await apply(
       store,
       ctx,
@@ -261,7 +261,7 @@ describe('revokeEntitlement', () => {
       grantEntitlementOp({ userId: 'usr_owner', sku: 'wrld_pass' }),
     );
 
-    let outcome = await apply(
+    const outcome = await apply(
       store,
       ctx,
       revokeEntitlement,
@@ -276,10 +276,10 @@ describe('revokeEntitlement', () => {
   });
 
   test('rejects NOT_ENTITLED when the user does not own the sku', async () => {
-    let store = makeStore();
-    let ctx = makeCtx();
+    const store = makeStore();
+    const ctx = makeCtx();
 
-    let outcome = await apply(
+    const outcome = await apply(
       store,
       ctx,
       revokeEntitlement,
@@ -294,8 +294,8 @@ describe('revokeEntitlement', () => {
   });
 
   test('throws MALFORMED_OPERATION on the wrong operation kind', async () => {
-    let store = makeStore();
-    let ctx = makeCtx();
+    const store = makeStore();
+    const ctx = makeCtx();
 
     await assert.rejects(
       apply(
@@ -311,8 +311,8 @@ describe('revokeEntitlement', () => {
   });
 
   test('throws MALFORMED_OPERATION on a blank userId', async () => {
-    let store = makeStore();
-    let ctx = makeCtx();
+    const store = makeStore();
+    const ctx = makeCtx();
 
     await assert.rejects(
       apply(
@@ -328,8 +328,8 @@ describe('revokeEntitlement', () => {
   });
 
   test('throws MALFORMED_OPERATION on a blank sku', async () => {
-    let store = makeStore();
-    let ctx = makeCtx();
+    const store = makeStore();
+    const ctx = makeCtx();
 
     await assert.rejects(
       apply(

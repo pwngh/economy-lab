@@ -88,7 +88,7 @@ async function openSubmittedSaga(
   store: Store,
   overrides: Partial<Saga> & Pick<Saga, 'id' | 'state'>,
 ): Promise<Saga> {
-  let row: Saga = {
+  const row: Saga = {
     userId: 'usr_seller',
     reserve: credit('4.00'),
     rateId: 'payout:CREDIT->USD:1',
@@ -150,10 +150,10 @@ function raceSettleOnce(store: Store, id: string): Store {
 
 describe('settlePayout', () => {
   test('settles a submitted saga with both the credit-side and USD-side postings', async () => {
-    let store = newStore();
+    const store = newStore();
     await openSubmittedSaga(store, { id: 'pay_1', state: 'SUBMITTED' });
 
-    let outcome = await run(
+    const outcome = await run(
       store,
       newCtx(),
       buildSettlePayout({ sagaId: 'pay_1' }),
@@ -185,7 +185,7 @@ describe('settlePayout', () => {
     // The saga is now SETTLED, with the gross USD disbursed persisted on the record itself and no
     // failure reason. The console reads this terminal settle outcome straight from the saga, with no
     // posting-meta harvest.
-    let settled = await store.sagas.load('pay_1');
+    const settled = await store.sagas.load('pay_1');
     assert.equal(settled!.state, 'SETTLED');
     assert.deepEqual(settled!.payoutUsd, usd('0.02'));
     assert.equal(settled!.reason, null);
@@ -194,21 +194,23 @@ describe('settlePayout', () => {
   test('emits exactly one economy.payout.settled event carrying the money detail', async () => {
     // Drive through the full economy.submit entry point so the submit pipeline commits the event the
     // settle enqueued in the same transaction as the postings.
-    let store = newStore();
-    let economy: Economy = makeEconomy(1, store);
+    const store = newStore();
+    const economy: Economy = makeEconomy(1, store);
     await openSubmittedSaga(store, { id: 'pay_1', state: 'SUBMITTED' });
 
-    let outcome = await economy.submit(buildSettlePayout({ sagaId: 'pay_1' }));
+    const outcome = await economy.submit(
+      buildSettlePayout({ sagaId: 'pay_1' }),
+    );
     assert.equal(outcome.status, 'committed');
 
     // The settled event is enqueued in the same transaction as the ledger postings and the guarded
     // state advance, so a settled payout leaves exactly one such event on the outbox.
-    let messages = await store.outbox.claimBatch(10);
-    let settled = messages.filter(
+    const messages = await store.outbox.claimBatch(10);
+    const settled = messages.filter(
       (m) => m.event.type === 'economy.payout.settled',
     );
     assert.equal(settled.length, 1);
-    let event = settled[0]!.event;
+    const event = settled[0]!.event;
     assert.equal(event.audience, 'internal');
     assert.equal(event.subject, 'usr_seller');
     assert.equal(event.data.sagaId, 'pay_1');
@@ -219,7 +221,7 @@ describe('settlePayout', () => {
     // Another settle clears this saga first (see raceSettleOnce), so this run's guarded SUBMITTED ->
     // SETTLED move finds nothing to advance and throws, rolling back its two postings rather than
     // emptying the reserve into REVENUE and moving USD a second time.
-    let store = newStore();
+    const store = newStore();
     await openSubmittedSaga(store, { id: 'pay_1', state: 'SUBMITTED' });
 
     await assert.rejects(
@@ -257,7 +259,7 @@ describe('settlePayout', () => {
     // settlePayout enqueues its event in the same transaction as the postings, so the lost-CAS throw
     // rolls the enqueued event back with them: no settled event is left behind for a settle that never
     // took.
-    let store = newStore();
+    const store = newStore();
     await openSubmittedSaga(store, { id: 'pay_1', state: 'SUBMITTED' });
 
     await assert.rejects(() =>
@@ -279,7 +281,7 @@ describe('settlePayout', () => {
   test('refuses a non-SUBMITTED saga with INVALID_TRANSITION and posts nothing', async () => {
     // Only a SUBMITTED payout has a disbursement the provider can report settled. A RESERVED saga (not
     // yet handed to the provider) has nothing to settle, so the settle is refused and posts nothing.
-    let store = newStore();
+    const store = newStore();
     await openSubmittedSaga(store, { id: 'pay_resv', state: 'RESERVED' });
 
     await assert.rejects(
@@ -299,7 +301,7 @@ describe('settlePayout', () => {
   });
 
   test('throws a mapping fault for an unknown saga id', async () => {
-    let store = newStore();
+    const store = newStore();
 
     await assert.rejects(
       () => run(store, newCtx(), buildSettlePayout({ sagaId: 'pay_missing' })),
@@ -310,8 +312,8 @@ describe('settlePayout', () => {
   test('an end user may not settle their own payout (UNAUTHORIZED)', async () => {
     // settlePayout is system/operator-only (RESTRICTED_TO_PRIVILEGED): a seller must never settle
     // their own payout. The privileged gate lives at the economy.submit entry point, so drive it there.
-    let store = newStore();
-    let economy: Economy = makeEconomy(1, store);
+    const store = newStore();
+    const economy: Economy = makeEconomy(1, store);
     await openSubmittedSaga(store, { id: 'pay_1', state: 'SUBMITTED' });
 
     await assert.rejects(

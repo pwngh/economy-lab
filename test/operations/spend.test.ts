@@ -148,7 +148,7 @@ describe('Spend', () => {
     assert.equal(report.conserved, true);
 
     // Credits owed to users are backed by cash: trust_cash holds at least the USD to cover every
-    // user's spendable balance, at the credit-to-USD rate.
+    // user's spendable balance, at the CREDIT-to-USD rate.
     assert.equal(report.backed, true);
   });
 });
@@ -166,9 +166,9 @@ function maturityFixture(horizonMs: number): {
   ctx: Ctx;
   clock: ReturnType<typeof fixedClock>;
 } {
-  let clock = fixedClock(0);
-  let store = memoryStore({ digest: seededDigest(1), clock });
-  let config: Config = {
+  const clock = fixedClock(0);
+  const store = memoryStore({ digest: seededDigest(1), clock });
+  const config: Config = {
     ...testConfig(),
     maturityHorizonMs: {
       card: horizonMs,
@@ -176,7 +176,7 @@ function maturityFixture(horizonMs: number): {
       default: horizonMs,
     },
   };
-  let ctx: Ctx = {
+  const ctx: Ctx = {
     clock,
     ids: sequentialIds(),
     digest: seededDigest(1),
@@ -327,10 +327,10 @@ describe('Spend Maturity Gate', () => {
 // Builds a Ctx and store that share one fixed clock, with maturity off so a topUp clears at t=0.
 // The platform fee is set to `feeBps` so the spendable-funded fee posted to REVENUE is predictable.
 function spendFixture(feeBps = 3000): { store: Store; ctx: Ctx } {
-  let clock = fixedClock(0);
-  let store = memoryStore({ digest: seededDigest(1), clock });
-  let config: Config = { ...testConfig(), platformFeeBps: feeBps };
-  let ctx: Ctx = {
+  const clock = fixedClock(0);
+  const store = memoryStore({ digest: seededDigest(1), clock });
+  const config: Config = { ...testConfig(), platformFeeBps: feeBps };
+  const ctx: Ctx = {
     clock,
     ids: sequentialIds(),
     digest: seededDigest(1),
@@ -346,14 +346,14 @@ function spendFixture(feeBps = 3000): { store: Store; ctx: Ctx } {
 }
 
 async function grantsEntitlementOnSpend(): Promise<void> {
-  let { store, ctx } = spendFixture();
+  const { store, ctx } = spendFixture();
   await runOp(
     store,
     ctx,
     buildTopUp({ userId: 'usr_buyer', amount: credit('10.00') }),
   );
 
-  let outcome = await runOp(
+  const outcome = await runOp(
     store,
     ctx,
     buildSpend({
@@ -365,21 +365,21 @@ async function grantsEntitlementOnSpend(): Promise<void> {
 
   assert.equal(outcome.status, 'committed');
   // Buyer owns the SKU after a committed spend; the grant rode in the same transaction.
-  let owned = await store.transaction((unit) =>
+  const owned = await store.transaction((unit) =>
     unit.entitlements.owns('usr_buyer', 'wrld_pass'),
   );
   assert.equal(owned, true);
 }
 
 async function rejectsDuplicateOrderId(): Promise<void> {
-  let { store, ctx } = spendFixture();
+  const { store, ctx } = spendFixture();
   await runOp(
     store,
     ctx,
     buildTopUp({ userId: 'usr_buyer', amount: credit('10.00') }),
   );
 
-  let first = await runOp(
+  const first = await runOp(
     store,
     ctx,
     buildSpend({
@@ -393,7 +393,7 @@ async function rejectsDuplicateOrderId(): Promise<void> {
 
   // A second request reusing the same orderId (a fresh idempotencyKey is irrelevant; the handler
   // does not see it) is refused as a returned rejection, not a fault.
-  let second = await runOp(
+  const second = await runOp(
     store,
     ctx,
     buildSpend({
@@ -403,7 +403,7 @@ async function rejectsDuplicateOrderId(): Promise<void> {
       orderId: 'ord_dup',
     }),
   );
-  let rejection = second as Extract<Outcome, { status: 'rejected' }>;
+  const rejection = second as Extract<Outcome, { status: 'rejected' }>;
   assert.equal(rejection.status, 'rejected');
   assert.equal(rejection.reason, 'DUPLICATE_ORDER');
   assert.equal(rejection.detail?.orderId, 'ord_dup');
@@ -419,14 +419,14 @@ async function recordsFeeEqualToRevenuePosted(): Promise<void> {
   // Platform fee of 1530 bps (15.30%) on the 400.00 price is 61.20. Not a whole credit, so the
   // fee charged rounds up to 62.00 (an earlier version kept the un-rounded 61.20). The fee in the
   // Sale record must equal the fee moved into REVENUE, not the un-rounded figure.
-  let { store, ctx } = spendFixture(1530);
+  const { store, ctx } = spendFixture(1530);
   await runOp(
     store,
     ctx,
     buildTopUp({ userId: 'usr_buyer', amount: credit('500.00') }),
   );
 
-  let outcome = await runOp(
+  const outcome = await runOp(
     store,
     ctx,
     buildSpend({
@@ -441,13 +441,13 @@ async function recordsFeeEqualToRevenuePosted(): Promise<void> {
   );
   assert.equal(outcome.status, 'committed');
 
-  let sale = await store.transaction((unit) => unit.sales.get('ord_fee'));
+  const sale = await store.transaction((unit) => unit.sales.get('ord_fee'));
   assert.notEqual(sale, null);
-  let committed = outcome as Extract<Outcome, { status: 'committed' }>;
+  const committed = outcome as Extract<Outcome, { status: 'committed' }>;
   // Whole price came from spendable (no promo), so the posting touches REVENUE in one line: the
   // credit line recording the fee. Credit lines store as negatives, so negate to compare against
   // the positive fee.
-  let revenueLeg = committed.transaction.legs.find(
+  const revenueLeg = committed.transaction.legs.find(
     (leg) => leg.account === SYSTEM.REVENUE,
   );
   assert.notEqual(revenueLeg, undefined);
@@ -460,14 +460,14 @@ async function recordsFeeIncludingResidualOnUnevenSplit(): Promise<void> {
   // that REVENUE keeps on top of the fee. Sale.fee must record the full 62.02 the platform actually
   // took, not the bare 62.00 fee. The old bug recorded `feeForPrice` and so came up short by the
   // residual on uneven splits.
-  let { store, ctx } = spendFixture(1530);
+  const { store, ctx } = spendFixture(1530);
   await runOp(
     store,
     ctx,
     buildTopUp({ userId: 'usr_buyer', amount: credit('500.00') }),
   );
 
-  let outcome = await runOp(
+  const outcome = await runOp(
     store,
     ctx,
     buildSpend({
@@ -484,14 +484,14 @@ async function recordsFeeIncludingResidualOnUnevenSplit(): Promise<void> {
   );
   assert.equal(outcome.status, 'committed');
 
-  let sale = await store.transaction((unit) =>
+  const sale = await store.transaction((unit) =>
     unit.sales.get('ord_fee_uneven'),
   );
   assert.notEqual(sale, null);
-  let committed = outcome as Extract<Outcome, { status: 'committed' }>;
+  const committed = outcome as Extract<Outcome, { status: 'committed' }>;
   // Whole price from spendable (no promo), so REVENUE is touched in one credit line: the fee plus
   // the rounding residual. Credit lines store negative, so negate to compare against the positive fee.
-  let revenueLeg = committed.transaction.legs.find(
+  const revenueLeg = committed.transaction.legs.find(
     (leg) => leg.account === SYSTEM.REVENUE,
   );
   assert.notEqual(revenueLeg, undefined);
@@ -527,7 +527,7 @@ function isCode(code: string): (error: unknown) => boolean {
 
 describe('Spend Field Shape', () => {
   test('throws MALFORMED for a blank sku', async () => {
-    let { store, ctx } = spendFixture();
+    const { store, ctx } = spendFixture();
     await runOp(
       store,
       ctx,
@@ -550,7 +550,7 @@ describe('Spend Field Shape', () => {
   });
 
   test('throws MALFORMED for a blank orderId', async () => {
-    let { store, ctx } = spendFixture();
+    const { store, ctx } = spendFixture();
     await runOp(
       store,
       ctx,
@@ -573,7 +573,7 @@ describe('Spend Field Shape', () => {
   });
 
   test('throws MALFORMED when two recipients name the same sellerId', async () => {
-    let { store, ctx } = spendFixture();
+    const { store, ctx } = spendFixture();
     await runOp(
       store,
       ctx,
@@ -600,7 +600,7 @@ describe('Spend Field Shape', () => {
   });
 
   test('throws MALFORMED when a recipient sellerId is a house account', async () => {
-    let { store, ctx } = spendFixture();
+    const { store, ctx } = spendFixture();
     await runOp(
       store,
       ctx,
@@ -626,14 +626,14 @@ describe('Spend Field Shape', () => {
   });
 
   test('commits a normal spend with a well-shaped recipient', async () => {
-    let { store, ctx } = spendFixture();
+    const { store, ctx } = spendFixture();
     await runOp(
       store,
       ctx,
       buildTopUp({ userId: 'usr_buyer', amount: credit('10.00') }),
     );
 
-    let outcome = await runOp(
+    const outcome = await runOp(
       store,
       ctx,
       buildSpend({

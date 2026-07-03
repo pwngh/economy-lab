@@ -38,7 +38,7 @@ async function fund(
   userId: string,
   amount: string,
 ): Promise<void> {
-  let outcome = await economy.submit(
+  const outcome = await economy.submit(
     buildTopUp({ userId, amount: credit(amount) }),
   );
   assert.equal(outcome.status, 'committed');
@@ -48,7 +48,7 @@ async function fund(
 // usr_attacker and the charged account is usr_victim. The permission check rejects with
 // AUTH.UNAUTHORIZED before any money moves.
 async function rejectsAForeignAccount(): Promise<void> {
-  let economy = makeEconomy();
+  const economy = makeEconomy();
   await assert.rejects(
     economy.submit(
       buildSubscribe({
@@ -67,8 +67,8 @@ async function rejectsAForeignAccount(): Promise<void> {
 // A subscribe by a broke buyer is an expected rejection, not a crash. The handler checks the
 // balance and returns status 'rejected' with reason INSUFFICIENT_FUNDS; it does not throw.
 async function rejectsInsufficientFundsCleanly(): Promise<void> {
-  let economy = makeEconomy();
-  let outcome = await economy.submit(
+  const economy = makeEconomy();
+  const outcome = await economy.submit(
     buildSubscribe({
       userId: 'usr_buyer',
       sellerId: 'usr_seller',
@@ -89,7 +89,7 @@ async function rejectsInsufficientFundsCleanly(): Promise<void> {
 // OP.MALFORMED through economy.submit, a thrown error rather than a rejected outcome, and no
 // money moves.
 async function rejectsSelfSubscription(): Promise<void> {
-  let economy = makeEconomy();
+  const economy = makeEconomy();
   await fund(economy, 'usr_self', '100.00');
 
   await assert.rejects(
@@ -120,10 +120,10 @@ async function rejectsSelfSubscription(): Promise<void> {
 // 100.00 → 0.00. Seller's earned gains price minus the platform fee (30% in test config), so
 // 100.00 - 30.00 = 70.00. (Fee rounds up to a whole credit, but 30.00 is already whole.)
 async function chargesBuyerAndAccruesSellerMonthOne(): Promise<void> {
-  let economy = makeEconomy();
+  const economy = makeEconomy();
   await fund(economy, 'usr_buyer', '100.00');
 
-  let outcome = await economy.submit(
+  const outcome = await economy.submit(
     buildSubscribe({
       userId: 'usr_buyer',
       sellerId: 'usr_seller',
@@ -149,10 +149,10 @@ async function chargesBuyerAndAccruesSellerMonthOne(): Promise<void> {
 // ALREADY_SUBSCRIBED rejection that moves no money. So the buyer shows one charge and the
 // seller accrued one month.
 async function rejectsSecondActiveSubscription(): Promise<void> {
-  let economy = makeEconomy();
+  const economy = makeEconomy();
   await fund(economy, 'usr_buyer', '200.00');
 
-  let first = await economy.submit(
+  const first = await economy.submit(
     buildSubscribe({
       userId: 'usr_buyer',
       sellerId: 'usr_seller',
@@ -162,7 +162,7 @@ async function rejectsSecondActiveSubscription(): Promise<void> {
   );
   assert.equal(first.status, 'committed');
 
-  let second = await economy.submit(
+  const second = await economy.submit(
     buildSubscribe({
       userId: 'usr_buyer',
       sellerId: 'usr_seller',
@@ -192,10 +192,10 @@ async function rejectsSecondActiveSubscription(): Promise<void> {
 // does not block a different sku or seller. Both follow-up subscribes commit and bill. Three
 // 100.00 charges drain the funded 300.00 to 0.00.
 async function allowsDifferentSkuOrSeller(): Promise<void> {
-  let economy = makeEconomy();
+  const economy = makeEconomy();
   await fund(economy, 'usr_buyer', '300.00');
 
-  let first = await economy.submit(
+  const first = await economy.submit(
     buildSubscribe({
       userId: 'usr_buyer',
       sellerId: 'usr_seller',
@@ -206,7 +206,7 @@ async function allowsDifferentSkuOrSeller(): Promise<void> {
   assert.equal(first.status, 'committed');
 
   // Same buyer and seller but a different sku is a separate product, so it commits.
-  let otherSku = await economy.submit(
+  const otherSku = await economy.submit(
     buildSubscribe({
       userId: 'usr_buyer',
       sellerId: 'usr_seller',
@@ -217,7 +217,7 @@ async function allowsDifferentSkuOrSeller(): Promise<void> {
   assert.equal(otherSku.status, 'committed');
 
   // Same buyer and sku but a different seller is a separate seller's offering, so it commits too.
-  let otherSeller = await economy.submit(
+  const otherSeller = await economy.submit(
     buildSubscribe({
       userId: 'usr_buyer',
       sellerId: 'usr_other_seller',
@@ -238,13 +238,13 @@ async function allowsDifferentSkuOrSeller(): Promise<void> {
 // owner, looking up the live subscription id from the backing store. The buyer funds 200.00 and
 // is charged twice across the two committed subscribes, ending at 0.00.
 async function allowsResubscribeAfterCancel(): Promise<void> {
-  let digest = seededDigest(1);
-  let clock = fixedClock(0);
-  let store: Store = memoryStore({ digest, clock });
-  let economy = makeEconomy(1, store);
+  const digest = seededDigest(1);
+  const clock = fixedClock(0);
+  const store: Store = memoryStore({ digest, clock });
+  const economy = makeEconomy(1, store);
   await fund(economy, 'usr_buyer', '200.00');
 
-  let first = await economy.submit(
+  const first = await economy.submit(
     buildSubscribe({
       userId: 'usr_buyer',
       sellerId: 'usr_seller',
@@ -255,13 +255,13 @@ async function allowsResubscribeAfterCancel(): Promise<void> {
   assert.equal(first.status, 'committed');
 
   // Find the active subscription's id from the backing store, then cancel it as its owner.
-  let active = await store.subscriptions.activeFor(
+  const active = await store.subscriptions.activeFor(
     'usr_buyer',
     'sub_pro',
     'usr_seller',
   );
   assert.notEqual(active, null);
-  let canceled = await economy.submit(
+  const canceled = await economy.submit(
     buildCancelSubscription({
       subscriptionId: active!.id,
       actor: principal('usr_buyer'),
@@ -270,7 +270,7 @@ async function allowsResubscribeAfterCancel(): Promise<void> {
   assert.equal(canceled.status, 'committed');
 
   // No ACTIVE subscription left for the triple, so re-subscribing commits again.
-  let second = await economy.submit(
+  const second = await economy.submit(
     buildSubscribe({
       userId: 'usr_buyer',
       sellerId: 'usr_seller',

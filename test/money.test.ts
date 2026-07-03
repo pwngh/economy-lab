@@ -26,22 +26,22 @@ import {
 
 describe('Money', () => {
   test('round-trips a decimal through decode and encode unchanged', () => {
-    let cases = ['0.00', '12.34', '0.05', '1000000.99', '-0.01', '-99.50'];
+    const cases = ['0.00', '12.34', '0.05', '1000000.99', '-0.01', '-99.50'];
 
-    for (let decimal of cases) {
-      let amount = decodeAmount(decimal, 'CREDIT');
+    for (const decimal of cases) {
+      const amount = decodeAmount(decimal, 'CREDIT');
       assert.equal(encodeAmount(amount), `CREDIT:${decimal}`);
     }
   });
 
   test('decodes minor units exactly as a bigint', () => {
-    let amount = decodeAmount('12.34', 'CREDIT');
+    const amount = decodeAmount('12.34', 'CREDIT');
 
     assert.deepEqual(amount, toAmount('CREDIT', 1234n));
   });
 
   test('decodes a bare integer as whole units with zero cents', () => {
-    let amount = decodeAmount('7', 'USD');
+    const amount = decodeAmount('7', 'USD');
 
     assert.deepEqual(amount, toAmount('USD', 700n));
   });
@@ -55,7 +55,7 @@ describe('Money', () => {
   });
 
   test('adds two same-currency amounts in minor units', () => {
-    let sum = add(
+    const sum = add(
       decodeAmount('1.50', 'CREDIT'),
       decodeAmount('2.25', 'CREDIT'),
     );
@@ -79,8 +79,8 @@ describe('Money', () => {
   });
 
   test('orders two same-currency amounts by minor value', () => {
-    let lo = decodeAmount('1.00', 'CREDIT');
-    let hi = decodeAmount('2.00', 'CREDIT');
+    const lo = decodeAmount('1.00', 'CREDIT');
+    const hi = decodeAmount('2.00', 'CREDIT');
 
     assert.equal(compare(lo, hi), -1);
     assert.equal(compare(hi, lo), 1);

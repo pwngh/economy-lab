@@ -68,10 +68,10 @@ export function sequentialIds(seed = 0): { next: (prefix: string) => string } {
 // Prefixes the bytes with `seed:<seed>:` before hashing. Different seeds produce different hashes
 // for the same input, and a given seed is stable across runs. The caller hashes the framed bytes
 // with the platform's SHA-256, so results match across runtimes.
-let ENCODER = new TextEncoder();
+const ENCODER = new TextEncoder();
 function withSeed(seed: number, bytes: Uint8Array): Uint8Array {
-  let prefix = ENCODER.encode(`seed:${seed}:`);
-  let framed = new Uint8Array(prefix.length + bytes.length);
+  const prefix = ENCODER.encode(`seed:${seed}:`);
+  const framed = new Uint8Array(prefix.length + bytes.length);
   framed.set(prefix, 0);
   framed.set(bytes, prefix.length);
   return framed;
@@ -97,14 +97,14 @@ export function seededDigest(seed = 1): Digest {
  * crypto. It only does enough to exercise the sign and verify path.
  */
 export function seededSigner(seed = 1): Signer {
-  let sign = async (bytes: Uint8Array): Promise<Uint8Array> =>
+  const sign = async (bytes: Uint8Array): Promise<Uint8Array> =>
     new Uint8Array(
       await crypto.subtle.digest('SHA-256', withSeed(seed, bytes)),
     );
   return {
     sign,
     verify: async (bytes, signature) => {
-      let expected = await sign(bytes);
+      const expected = await sign(bytes);
       return equalBytes(expected, signature);
     },
   };
@@ -133,9 +133,9 @@ function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
 // the exact 120/200 rates. Each rate is exact integers, where the value is `rate / 10^scale`, plus
 // a `rateId`. The trailing "r/s" in a `rateId` is rate over scale, not a fraction: 1/2 means
 // 1·10^-2 = $0.01, and 5/3 means 5·10^-3 = $0.005.
-let BUY_CREDIT: Rate = { rate: 1n, scale: 2, rateId: 'buy:CREDIT->USD:1/2' };
-let PAR_CREDIT: Rate = { rate: 5n, scale: 3, rateId: 'par:CREDIT->USD:5/3' };
-let PAYOUT_CREDIT: Rate = {
+const BUY_CREDIT: Rate = { rate: 1n, scale: 2, rateId: 'buy:CREDIT->USD:1/2' };
+const PAR_CREDIT: Rate = { rate: 5n, scale: 3, rateId: 'par:CREDIT->USD:5/3' };
+const PAYOUT_CREDIT: Rate = {
   rate: 5n,
   scale: 3,
   rateId: 'payout:CREDIT->USD:5/3',
@@ -144,7 +144,7 @@ let PAYOUT_CREDIT: Rate = {
 /**
  * Builds a test rate source with buy $0.01, par $0.005, and payout $0.005. `payout` gives the
  * conversion rate for a payout. It returns the pinned CREDIT-to-USD payout rate when converting
- * CREDIT to USD, and 1-to-1 for any other pair. `par` gives the backing peg. `buy` gives the rate a
+ * CREDIT to USD, and one-for-one for any other pair. `par` gives the backing peg. `buy` gives the rate a
  * user pays at top-up.
  */
 export function fixedRates(): Rates {
@@ -209,18 +209,18 @@ function splitLegs(
   recipients: ReadonlyArray<Recipient>,
   feeBps: number,
 ): Leg[] {
-  let fee = feeForPrice(price.minor, feeBps);
-  let net = price.minor - fee;
-  let legs: Leg[] = [];
+  const fee = feeForPrice(price.minor, feeBps);
+  const net = price.minor - fee;
+  const legs: Leg[] = [];
   let distributed = 0n;
-  for (let recipient of recipients) {
-    let share = applyBps(net, recipient.shareBps);
+  for (const recipient of recipients) {
+    const share = applyBps(net, recipient.shareBps);
     distributed += share;
     legs.push(
       creditLeg(earned(recipient.sellerId), toAmount(price.currency, share)),
     );
   }
-  let residual = net - distributed;
+  const residual = net - distributed;
   legs.push(
     creditLeg(SYSTEM.REVENUE, toAmount(price.currency, fee + residual)),
   );

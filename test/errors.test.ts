@@ -29,7 +29,7 @@ describe('Error Codes', () => {
   });
 
   test('builds a throwable fault carrying the chain-broken code', () => {
-    let error = fault(ERROR_CODES.CHAIN_BROKEN, 'chain tampered', {
+    const error = fault(ERROR_CODES.CHAIN_BROKEN, 'chain tampered', {
       detail: { firstBreak: 'pst_2' },
     });
 
@@ -40,7 +40,7 @@ describe('Error Codes', () => {
   });
 
   test('builds a throwable fault carrying the commingling code', () => {
-    let error = fault(ERROR_CODES.COMMINGLING, 'custodial funds mixed');
+    const error = fault(ERROR_CODES.COMMINGLING, 'custodial funds mixed');
 
     assert.ok(error instanceof EconomyError);
     assert.equal(error.code, 'LEDGER.COMMINGLING');
@@ -53,13 +53,13 @@ describe('normalizeError', () => {
     // An EconomyError already carries a specific code, so it passes through unchanged. Re-wrapping
     // would overwrite that code with a generic one. It could also flip a "do not retry" failure into
     // a "safe to retry" one.
-    let original = fault(ERROR_CODES.OVERDRAFT, 'balance went negative', {
+    const original = fault(ERROR_CODES.OVERDRAFT, 'balance went negative', {
       cause: new Error('inner'),
       retryable: false,
       detail: { account: 'usr_a:spendable' },
     });
 
-    let normalized = normalizeError(original);
+    const normalized = normalizeError(original);
 
     assert.equal(normalized, original);
     assert.equal(normalized.code, ERROR_CODES.OVERDRAFT);
@@ -69,11 +69,11 @@ describe('normalizeError', () => {
   });
 
   test('does not re-wrap or flip a retryable EconomyError', () => {
-    let original = fault(ERROR_CODES.PROVIDER_FAILURE, 'provider timed out', {
+    const original = fault(ERROR_CODES.PROVIDER_FAILURE, 'provider timed out', {
       retryable: true,
     });
 
-    let normalized = normalizeError(original);
+    const normalized = normalizeError(original);
 
     assert.equal(normalized, original);
     assert.equal(normalized.code, ERROR_CODES.PROVIDER_FAILURE);
@@ -81,9 +81,9 @@ describe('normalizeError', () => {
   });
 
   test('wraps a non-EconomyError as a storage failure, keeping the original as cause', () => {
-    let raw = new TypeError('something blew up');
+    const raw = new TypeError('something blew up');
 
-    let normalized = normalizeError(raw);
+    const normalized = normalizeError(raw);
 
     assert.ok(normalized instanceof EconomyError);
     assert.equal(normalized.code, ERROR_CODES.STORE_FAILURE);
@@ -93,7 +93,7 @@ describe('normalizeError', () => {
   });
 
   test('wraps a non-Error throw as a storage failure too', () => {
-    let normalized = normalizeError('a bare string');
+    const normalized = normalizeError('a bare string');
 
     assert.ok(normalized instanceof EconomyError);
     assert.equal(normalized.code, ERROR_CODES.STORE_FAILURE);

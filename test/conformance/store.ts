@@ -44,7 +44,7 @@ async function fundSpendable(
   dollars: string,
   txnId: string,
 ): Promise<Transaction> {
-  let amount = decodeAmount(dollars, 'CREDIT');
+  const amount = decodeAmount(dollars, 'CREDIT');
   return postEntry(unit.ledger, {
     txnId,
     legs: [credit(spendable(userId), amount), debit(SYSTEM.REVENUE, amount)],
@@ -113,7 +113,7 @@ function inboxRow(userId: string, rowId: string, key: string): InboxEntry {
 }
 
 async function appendRoundTripsBalance(store: Store): Promise<void> {
-  let userId = freshUser();
+  const userId = freshUser();
 
   await store.transaction((unit) =>
     fundSpendable(unit, userId, '5.00', 'txn_conf_balance'),
@@ -126,8 +126,8 @@ async function appendRoundTripsBalance(store: Store): Promise<void> {
 }
 
 async function commitsDurablyAndRollsBack(store: Store): Promise<void> {
-  let committedUser = freshUser();
-  let thrownUser = freshUser();
+  const committedUser = freshUser();
+  const thrownUser = freshUser();
   await store.transaction((unit) =>
     fundSpendable(unit, committedUser, '3.00', 'txn_conf_durable'),
   );
@@ -150,13 +150,13 @@ async function commitsDurablyAndRollsBack(store: Store): Promise<void> {
 }
 
 async function claimsOnceAndReplays(store: Store): Promise<void> {
-  let userId = freshUser();
-  let key = `idem_conf_${userId}`;
+  const userId = freshUser();
+  const key = `idem_conf_${userId}`;
 
-  let recorded = await store.transaction(async (unit) => {
-    let first = await unit.idempotency.claim(key);
+  const recorded = await store.transaction(async (unit) => {
+    const first = await unit.idempotency.claim(key);
     assert.equal(first.claimed, true);
-    let transaction = await fundSpendable(
+    const transaction = await fundSpendable(
       unit,
       userId,
       '2.00',
@@ -166,7 +166,7 @@ async function claimsOnceAndReplays(store: Store): Promise<void> {
     return transaction;
   });
 
-  let replay = await store.transaction((unit) => unit.idempotency.claim(key));
+  const replay = await store.transaction((unit) => unit.idempotency.claim(key));
 
   assert.equal(replay.claimed, false);
   assert.deepEqual(
@@ -176,8 +176,8 @@ async function claimsOnceAndReplays(store: Store): Promise<void> {
 }
 
 async function freesKeyOnRollback(store: Store): Promise<void> {
-  let userId = freshUser();
-  let key = `idem_conf_rollback_${userId}`;
+  const userId = freshUser();
+  const key = `idem_conf_rollback_${userId}`;
 
   await assert.rejects(
     store.transaction(async (unit) => {
@@ -186,7 +186,7 @@ async function freesKeyOnRollback(store: Store): Promise<void> {
     }),
   );
 
-  let afterRollback = await store.transaction((unit) =>
+  const afterRollback = await store.transaction((unit) =>
     unit.idempotency.claim(key),
   );
 
@@ -194,7 +194,7 @@ async function freesKeyOnRollback(store: Store): Promise<void> {
 }
 
 async function grantsLocksWithoutDeadlock(store: Store): Promise<void> {
-  let userId = freshUser();
+  const userId = freshUser();
 
   await store.transaction(async (unit) => {
     await unit.ledger.lock(spendable(userId));
@@ -206,16 +206,16 @@ async function grantsLocksWithoutDeadlock(store: Store): Promise<void> {
 }
 
 async function relaysOutboxOnce(store: Store): Promise<void> {
-  let userId = freshUser();
-  let messageId = `obx_conf_${userId}`;
+  const userId = freshUser();
+  const messageId = `obx_conf_${userId}`;
   await store.transaction(async (unit) => {
     await fundSpendable(unit, userId, '1.00', 'txn_conf_outbox');
     await unit.outbox.enqueue(outboxRow(userId, messageId));
   });
 
-  let batch = await store.outbox.claimBatch(10);
+  const batch = await store.outbox.claimBatch(10);
   await store.outbox.markRelayed(batch.map((message) => message.id));
-  let afterRelay = await store.outbox.claimBatch(10);
+  const afterRelay = await store.outbox.claimBatch(10);
 
   assert.deepEqual(
     batch.map((message) => message.id),
@@ -225,8 +225,8 @@ async function relaysOutboxOnce(store: Store): Promise<void> {
 }
 
 async function dropsOutboxOnRollback(store: Store): Promise<void> {
-  let userId = freshUser();
-  let messageId = `obx_conf_rollback_${userId}`;
+  const userId = freshUser();
+  const messageId = `obx_conf_rollback_${userId}`;
 
   await assert.rejects(
     store.transaction(async (unit) => {
@@ -235,7 +235,7 @@ async function dropsOutboxOnRollback(store: Store): Promise<void> {
     }),
   );
 
-  let batch = await store.outbox.claimBatch(100);
+  const batch = await store.outbox.claimBatch(100);
 
   assert.equal(
     batch.some((message) => message.id === messageId),
@@ -243,7 +243,7 @@ async function dropsOutboxOnRollback(store: Store): Promise<void> {
   );
 }
 
-// Pins the same retry-and-dead-letter behaviour across adapters. This is the outbound twin of
+// Pins the same retry-and-dead-letter behavior across adapters. This is the outbound twin of
 // bumpsInboxAttemptThenDeadLetters. `recordFailure` counts one failed delivery: it bumps
 // `attempts`, leaves the row 'pending', and records no reason yet. `deadLetter` then gives up on
 // the poison message, flips it to 'failed', and persists the reason on the record so `claimBatch`
@@ -252,8 +252,8 @@ async function dropsOutboxOnRollback(store: Store): Promise<void> {
 async function recordsFailureThenDeadLettersOutbox(
   store: Store,
 ): Promise<void> {
-  let userId = freshUser();
-  let messageId = `obx_conf_dead_${userId}`;
+  const userId = freshUser();
+  const messageId = `obx_conf_dead_${userId}`;
   await store.transaction((unit) =>
     unit.outbox.enqueue(outboxRow(userId, messageId)),
   );
@@ -261,8 +261,8 @@ async function recordsFailureThenDeadLettersOutbox(
   // One failed delivery bumps attempts from 0 to 1. The row stays pending and is re-claimable. A
   // still-pending row carries no dead-letter reason yet.
   await store.outbox.recordFailure(messageId);
-  let afterFail = await store.outbox.claimBatch(10);
-  let failed = afterFail.find((message) => message.id === messageId);
+  const afterFail = await store.outbox.claimBatch(10);
+  const failed = afterFail.find((message) => message.id === messageId);
   assert.notEqual(failed, undefined);
   assert.equal(failed!.attempts, 1);
   assert.equal(failed!.status, 'pending');
@@ -273,7 +273,7 @@ async function recordsFailureThenDeadLettersOutbox(
   // terminal-outcome test. claimBatch never returns a terminal row, so this test cannot reload it
   // that way, but the SQL decoders carry dead_letter_reason through to reason off the row.
   await store.outbox.deadLetter(messageId, 'poison');
-  let afterDead = await store.outbox.claimBatch(10);
+  const afterDead = await store.outbox.claimBatch(10);
   assert.equal(
     afterDead.some((message) => message.id === messageId),
     false,
@@ -284,7 +284,7 @@ async function recordsFailureThenDeadLettersOutbox(
   await store.outbox.recordFailure(messageId);
   await store.outbox.markRelayed([messageId]);
   await store.outbox.deadLetter(messageId, 'again');
-  let stillDead = await store.outbox.claimBatch(10);
+  const stillDead = await store.outbox.claimBatch(10);
   assert.equal(
     stillDead.some((message) => message.id === messageId),
     false,
@@ -296,16 +296,16 @@ async function recordsFailureThenDeadLettersOutbox(
 // rows. `markApplied` flips the row to the terminal 'applied' state, so the second claim is empty.
 // The inbox applies each event at most once, just as the outbox relays each at most once.
 async function appliesInboxOnce(store: Store): Promise<void> {
-  let userId = freshUser();
-  let rowId = `ibx_conf_${userId}`;
+  const userId = freshUser();
+  const rowId = `ibx_conf_${userId}`;
   await store.transaction(async (unit) => {
     await fundSpendable(unit, userId, '1.00', 'txn_conf_inbox');
     await unit.inbox.enqueueInbound(inboxRow(userId, rowId, `evt_${rowId}`));
   });
 
-  let batch = await store.inbox.claimInbound({ now: 0, limit: 10 });
+  const batch = await store.inbox.claimInbound({ now: 0, limit: 10 });
   await store.inbox.markApplied(rowId);
-  let afterApply = await store.inbox.claimInbound({ now: 0, limit: 10 });
+  const afterApply = await store.inbox.claimInbound({ now: 0, limit: 10 });
 
   assert.deepEqual(
     batch.map((entry) => entry.id),
@@ -318,8 +318,8 @@ async function appliesInboxOnce(store: Store): Promise<void> {
 // inbox row, so a rolled-back webhook ingress never queues an apply. This is the same
 // all-or-nothing contract the outbox holds for a rolled-back money move.
 async function dropsInboxOnRollback(store: Store): Promise<void> {
-  let userId = freshUser();
-  let rowId = `ibx_conf_rollback_${userId}`;
+  const userId = freshUser();
+  const rowId = `ibx_conf_rollback_${userId}`;
 
   await assert.rejects(
     store.transaction(async (unit) => {
@@ -328,7 +328,7 @@ async function dropsInboxOnRollback(store: Store): Promise<void> {
     }),
   );
 
-  let batch = await store.inbox.claimInbound({ now: 0, limit: 100 });
+  const batch = await store.inbox.claimInbound({ now: 0, limit: 100 });
 
   assert.equal(
     batch.some((entry) => entry.id === rowId),
@@ -336,22 +336,22 @@ async function dropsInboxOnRollback(store: Store): Promise<void> {
   );
 }
 
-// Pins the same dedupe-by-key behaviour across adapters. Enqueuing the same provider event id
+// Pins the same dedupe-by-key behavior across adapters. Enqueuing the same provider event id
 // twice inserts one row, and the duplicate enqueue returns that existing row, so a redelivered
 // provider event is applied at most once. The two enqueues use different row ids but share one
 // `key`. Only the first row id is ever stored or claimed.
 async function dedupesInboxByKey(store: Store): Promise<void> {
-  let userId = freshUser();
-  let key = `evt_conf_dedupe_${userId}`;
-  let firstId = `ibx_conf_dedupe_a_${userId}`;
-  let secondId = `ibx_conf_dedupe_b_${userId}`;
+  const userId = freshUser();
+  const key = `evt_conf_dedupe_${userId}`;
+  const firstId = `ibx_conf_dedupe_a_${userId}`;
+  const secondId = `ibx_conf_dedupe_b_${userId}`;
 
-  let first = await store.transaction((unit) =>
+  const first = await store.transaction((unit) =>
     unit.inbox.enqueueInbound(inboxRow(userId, firstId, key)),
   );
   // Redelivery uses the same provider event id with a fresh row id. It is a no-op that returns the
   // already-stored row.
-  let duplicate = await store.transaction((unit) =>
+  const duplicate = await store.transaction((unit) =>
     unit.inbox.enqueueInbound(inboxRow(userId, secondId, key)),
   );
 
@@ -360,15 +360,15 @@ async function dedupesInboxByKey(store: Store): Promise<void> {
   assert.equal(duplicate.key, key);
 
   // Only the first row exists, so a claim returns exactly one entry, under the first id.
-  let batch = await store.inbox.claimInbound({ now: 0, limit: 10 });
-  let mine = batch.filter((entry) => entry.key === key);
+  const batch = await store.inbox.claimInbound({ now: 0, limit: 10 });
+  const mine = batch.filter((entry) => entry.key === key);
   assert.deepEqual(
     mine.map((entry) => entry.id),
     [firstId],
   );
 }
 
-// Pins the same retry-and-dead-letter behaviour across adapters. `bumpAttempt` counts one failed
+// Pins the same retry-and-dead-letter behavior across adapters. `bumpAttempt` counts one failed
 // apply: it increments `attempts` but leaves the row 'pending', so the next sweep re-claims it. It
 // never flips the status, since only `deadLetter` does that. `deadLetter` then gives up on the
 // poison event and flips it to 'dead' so `claimInbound` never hands it back again. This is the
@@ -377,8 +377,8 @@ async function dedupesInboxByKey(store: Store): Promise<void> {
 // bumpAttempt and deadLetter run on the top-level store, not inside store.transaction(...),
 // matching how the apply worker calls them.
 async function bumpsInboxAttemptThenDeadLetters(store: Store): Promise<void> {
-  let userId = freshUser();
-  let rowId = `ibx_conf_dead_${userId}`;
+  const userId = freshUser();
+  const rowId = `ibx_conf_dead_${userId}`;
   await store.transaction((unit) =>
     unit.inbox.enqueueInbound(inboxRow(userId, rowId, `evt_${rowId}`)),
   );
@@ -386,8 +386,8 @@ async function bumpsInboxAttemptThenDeadLetters(store: Store): Promise<void> {
   // One failed apply bumps attempts from 0 to 1. The row stays pending and is re-claimable. A
   // still-pending row carries no dead-letter reason yet.
   await store.inbox.bumpAttempt(rowId);
-  let afterBump = await store.inbox.claimInbound({ now: 0, limit: 10 });
-  let bumped = afterBump.find((entry) => entry.id === rowId);
+  const afterBump = await store.inbox.claimInbound({ now: 0, limit: 10 });
+  const bumped = afterBump.find((entry) => entry.id === rowId);
   assert.notEqual(bumped, undefined);
   assert.equal(bumped!.attempts, 1);
   assert.equal(bumped!.status, 'pending');
@@ -395,7 +395,7 @@ async function bumpsInboxAttemptThenDeadLetters(store: Store): Promise<void> {
 
   // Give up on the poison event: dead-letter it, and it's never claimed again.
   await store.inbox.deadLetter(rowId, 'poison');
-  let afterDead = await store.inbox.claimInbound({ now: 0, limit: 10 });
+  const afterDead = await store.inbox.claimInbound({ now: 0, limit: 10 });
   assert.equal(
     afterDead.some((entry) => entry.id === rowId),
     false,
@@ -404,7 +404,7 @@ async function bumpsInboxAttemptThenDeadLetters(store: Store): Promise<void> {
   // The failure reason is persisted on the dead row itself, not in a side-channel, so re-resolving
   // the row by its key reads it back on every backend, mirroring the saga terminal-outcome test. A
   // duplicate enqueue on the same key returns the stored row, terminal status and all.
-  let resolved = await store.transaction((unit) =>
+  const resolved = await store.transaction((unit) =>
     unit.inbox.enqueueInbound(inboxRow(userId, rowId, `evt_${rowId}`)),
   );
   assert.equal(resolved.status, 'dead');
@@ -416,28 +416,28 @@ async function bumpsInboxAttemptThenDeadLetters(store: Store): Promise<void> {
   await store.inbox.markApplied(rowId);
   await store.inbox.bumpAttempt(rowId);
   await store.inbox.deadLetter(rowId, 'again');
-  let stillDead = await store.inbox.claimInbound({ now: 0, limit: 10 });
+  const stillDead = await store.inbox.claimInbound({ now: 0, limit: 10 });
   assert.equal(
     stillDead.some((entry) => entry.id === rowId),
     false,
   );
-  let stillResolved = await store.transaction((unit) =>
+  const stillResolved = await store.transaction((unit) =>
     unit.inbox.enqueueInbound(inboxRow(userId, rowId, `evt_${rowId}`)),
   );
   assert.equal(stillResolved.reason, 'poison');
 }
 
 async function recomputesChainHead(store: Store): Promise<void> {
-  let userId = freshUser();
-  let transaction = await store.transaction((unit) =>
+  const userId = freshUser();
+  const transaction = await store.transaction((unit) =>
     fundSpendable(unit, userId, '4.00', 'txn_conf_chain'),
   );
 
-  let heads = new Map<string, string>();
-  for await (let [account, head] of store.ledger.heads()) {
+  const heads = new Map<string, string>();
+  for await (const [account, head] of store.ledger.heads()) {
     heads.set(account, head);
   }
-  let link = transaction.links.find(
+  const link = transaction.links.find(
     (candidate) => candidate.account === spendable(userId),
   );
 
@@ -453,11 +453,11 @@ async function recomputesChainHead(store: Store): Promise<void> {
 // must accept it, sum both lines into one balance, and extend the account's hash chain by exactly
 // one step. Pinned for all stores, not just whatever the `prove` fuzzer happens to generate.
 async function storesMultipleLegsToOneAccount(store: Store): Promise<void> {
-  let userId = freshUser();
-  let first = decodeAmount('3.00', 'CREDIT');
-  let second = decodeAmount('5.00', 'CREDIT');
+  const userId = freshUser();
+  const first = decodeAmount('3.00', 'CREDIT');
+  const second = decodeAmount('5.00', 'CREDIT');
 
-  let transaction = await store.transaction((unit) =>
+  const transaction = await store.transaction((unit) =>
     postEntry(unit.ledger, {
       txnId: 'txn_conf_multileg',
       legs: [
@@ -478,11 +478,11 @@ async function storesMultipleLegsToOneAccount(store: Store): Promise<void> {
 
   // The account's chain head must match the hash the posting reports: it grew by one step from the
   // all-zeros start, and the stored head equals that step's hash (same check as recomputesChainHead).
-  let heads = new Map<string, string>();
-  for await (let [account, head] of store.ledger.heads()) {
+  const heads = new Map<string, string>();
+  for await (const [account, head] of store.ledger.heads()) {
     heads.set(account, head);
   }
-  let link = transaction.links.find(
+  const link = transaction.links.find(
     (candidate) => candidate.account === spendable(userId),
   );
 
@@ -491,7 +491,7 @@ async function storesMultipleLegsToOneAccount(store: Store): Promise<void> {
   assert.equal(link!.prevHash, '0'.repeat(64));
 }
 
-// Pins the same promo-grant behaviour across adapters, covering three rules. First, opening the
+// Pins the same promo-grant behavior across adapters, covering three rules. First, opening the
 // same grant twice leaves one row, because a repeat open by id is a no-op that does not overwrite.
 // Second, claimDue returns a grant once its expiry is at or before `now`, oldest expiry first.
 // Third, markReversed removes a grant from the due set and is a no-op if rerun on an
@@ -500,9 +500,9 @@ async function storesMultipleLegsToOneAccount(store: Store): Promise<void> {
 // claimDue and markReversed run on the top-level store, not inside store.transaction(...),
 // matching how the background worker calls them.
 async function reversesPromoGrantExactlyOnce(store: Store): Promise<void> {
-  let userId = freshUser();
-  let id = `txn_conf_promo_${userId}`;
-  let grant = {
+  const userId = freshUser();
+  const id = `txn_conf_promo_${userId}`;
+  const grant = {
     id,
     userId,
     amount: toAmount('CREDIT', 500n),
@@ -511,7 +511,7 @@ async function reversesPromoGrantExactlyOnce(store: Store): Promise<void> {
   };
   await store.transaction((unit) => unit.promos.open(grant));
   await store.transaction((unit) => unit.promos.open(grant)); // idempotent: still one row
-  let due = await store.promos.claimDue(1_000, 10); // expiresAt <= now, inclusive
+  const due = await store.promos.claimDue(1_000, 10); // expiresAt <= now, inclusive
   assert.equal(due.length, 1);
   assert.equal(due[0]!.id, id);
   assert.deepEqual(due[0]!.amount, toAmount('CREDIT', 500n));
@@ -527,23 +527,23 @@ async function reversesPromoGrantExactlyOnce(store: Store): Promise<void> {
 async function claimsDuePromosOldestFirstUpToLimit(
   store: Store,
 ): Promise<void> {
-  let userId = freshUser();
-  let mk = (suffix: string, expiresAt: number) => ({
+  const userId = freshUser();
+  const mk = (suffix: string, expiresAt: number) => ({
     id: `txn_conf_promo_order_${userId}_${suffix}`,
     userId,
     amount: toAmount('CREDIT', 100n),
     expiresAt,
     reversed: false,
   });
-  let newest = mk('c', 3_000);
-  let middle = mk('b', 2_000);
-  let oldest = mk('a', 1_000);
+  const newest = mk('c', 3_000);
+  const middle = mk('b', 2_000);
+  const oldest = mk('a', 1_000);
   // Insert newest first so insertion order is the reverse of the required claim order.
   await store.transaction((unit) => unit.promos.open(newest));
   await store.transaction((unit) => unit.promos.open(middle));
   await store.transaction((unit) => unit.promos.open(oldest));
 
-  let due = await store.promos.claimDue(5_000, 2);
+  const due = await store.promos.claimDue(5_000, 2);
   assert.deepEqual(
     due.map((grant) => grant.id),
     [oldest.id, middle.id],
@@ -556,8 +556,8 @@ async function claimsDuePromosOldestFirstUpToLimit(
 // flight) and asserts list re-sorts them newest first. The result is filtered to this test's user
 // so a future saga test sharing the store cannot perturb it.
 async function listsSagasNewestFirst(store: Store): Promise<void> {
-  let userId = freshUser();
-  let mk = (suffix: string, updatedAt: number, state: SagaState): Saga => ({
+  const userId = freshUser();
+  const mk = (suffix: string, updatedAt: number, state: SagaState): Saga => ({
     id: `pay_conf_list_${userId}_${suffix}`,
     userId,
     reserve: toAmount('CREDIT', 100n),
@@ -570,16 +570,16 @@ async function listsSagasNewestFirst(store: Store): Promise<void> {
     updatedAt,
     payoutUsd: null,
   });
-  let oldest = mk('a', 1_000, 'SETTLED');
-  let middle = mk('b', 2_000, 'FAILED');
-  let newest = mk('c', 3_000, 'RESERVED');
+  const oldest = mk('a', 1_000, 'SETTLED');
+  const middle = mk('b', 2_000, 'FAILED');
+  const newest = mk('c', 3_000, 'RESERVED');
   // Open out of updatedAt order so insertion order isn't the expected list order.
   await store.transaction((unit) => unit.sagas.open(middle));
   await store.transaction((unit) => unit.sagas.open(oldest));
   await store.transaction((unit) => unit.sagas.open(newest));
 
-  let mine: string[] = [];
-  for await (let saga of store.sagas.list()) {
+  const mine: string[] = [];
+  for await (const saga of store.sagas.list()) {
     if (saga.userId === userId) {
       mine.push(saga.id);
     }
@@ -594,8 +594,8 @@ async function listsSagasNewestFirst(store: Store): Promise<void> {
 // state, and asserts load round-trips the stored outcome. It also asserts that a still-in-flight
 // saga carries neither outcome field.
 async function persistsTerminalOutcomeOnTheSaga(store: Store): Promise<void> {
-  let userId = freshUser();
-  let mk = (suffix: string, state: SagaState): Saga => ({
+  const userId = freshUser();
+  const mk = (suffix: string, state: SagaState): Saga => ({
     id: `pay_conf_term_${userId}_${suffix}`,
     userId,
     reserve: toAmount('CREDIT', 400n),
@@ -608,26 +608,26 @@ async function persistsTerminalOutcomeOnTheSaga(store: Store): Promise<void> {
     updatedAt: 0,
     payoutUsd: null,
   });
-  let settling = mk('settle', 'SUBMITTED');
-  let failing = mk('fail', 'SUBMITTED');
+  const settling = mk('settle', 'SUBMITTED');
+  const failing = mk('fail', 'SUBMITTED');
   await store.transaction((unit) => unit.sagas.open(settling));
   await store.transaction((unit) => unit.sagas.open(failing));
 
   // Before any terminal step, neither outcome field is set.
-  let inflight = await store.sagas.load(settling.id);
+  const inflight = await store.sagas.load(settling.id);
   assert.equal(inflight!.reason, null);
   assert.equal(inflight!.payoutUsd, null);
 
   // SETTLED: the USD disbursed is persisted on the record, failure reason stays null.
-  let paid = toAmount('USD', 2n);
-  let advanced = await store.transaction((unit) =>
+  const paid = toAmount('USD', 2n);
+  const advanced = await store.transaction((unit) =>
     unit.sagas.advance(settling.id, 'SUBMITTED', 'SETTLED', {
       updatedAt: 1,
       payoutUsd: paid,
     }),
   );
   assert.equal(advanced, true);
-  let settled = await store.sagas.load(settling.id);
+  const settled = await store.sagas.load(settling.id);
   assert.equal(settled!.state, 'SETTLED');
   assert.deepEqual(settled!.payoutUsd, paid);
   assert.equal(settled!.reason, null);
@@ -636,7 +636,7 @@ async function persistsTerminalOutcomeOnTheSaga(store: Store): Promise<void> {
   await store.transaction((unit) =>
     unit.sagas.deadLetter(failing.id, 'PROVIDER.FAILURE'),
   );
-  let failed = await store.sagas.load(failing.id);
+  const failed = await store.sagas.load(failing.id);
   assert.equal(failed!.state, 'FAILED');
   assert.equal(failed!.reason, 'PROVIDER.FAILURE');
   assert.equal(failed!.payoutUsd, null);
@@ -649,20 +649,20 @@ async function persistsTerminalOutcomeOnTheSaga(store: Store): Promise<void> {
 // appended, and each posting arrives with its full legs intact. The result is filtered to this
 // test's txn ids so other postings already in the store cannot perturb it.
 async function listsPostingsNewestFirst(store: Store): Promise<void> {
-  let userId = freshUser();
-  let ids = [
+  const userId = freshUser();
+  const ids = [
     `txn_conf_list_${userId}_a`,
     `txn_conf_list_${userId}_b`,
     `txn_conf_list_${userId}_c`,
   ];
   // Append in order a, b, c so insertion order isn't the expected list order (which is its reverse).
-  for (let id of ids) {
+  for (const id of ids) {
     await store.transaction((unit) => fundSpendable(unit, userId, '1.00', id));
   }
 
-  let mine: string[] = [];
-  let legsById = new Map<string, number>();
-  for await (let posting of store.ledger.list()) {
+  const mine: string[] = [];
+  const legsById = new Map<string, number>();
+  for await (const posting of store.ledger.list()) {
     if (ids.includes(posting.txnId)) {
       mine.push(posting.txnId);
       legsById.set(posting.txnId, posting.legs.length);
@@ -671,12 +671,12 @@ async function listsPostingsNewestFirst(store: Store): Promise<void> {
   // Newest commit first: the reverse of the append order.
   assert.deepEqual(mine, [ids[2], ids[1], ids[0]]);
   // Each posting carries its full legs (the funding posting has two), not just an id and meta.
-  for (let id of ids) {
+  for (const id of ids) {
     assert.equal(legsById.get(id), 2);
   }
 }
 
-// Pins the same webhook-dedup behaviour across adapters. An inbound provider webhook is processed
+// Pins the same webhook-dedup behavior across adapters. An inbound provider webhook is processed
 // at most once, even on redelivery. The replay store uses an atomic insert-if-absent on the event
 // id. The first claim returns `{ claimed: true }`, which means process it, and later claims of the
 // same id return `{ claimed: false }`, which means skip it. A different id is unaffected.
@@ -684,19 +684,19 @@ async function listsPostingsNewestFirst(store: Store): Promise<void> {
 // claim runs on the top-level store, not inside store.transaction(...), since the webhook entry
 // point checks it as a standalone final gate, not as part of a domain transaction.
 async function claimsWebhookEventIdOnce(store: Store): Promise<void> {
-  let eventId = `evt_replay_${freshUser()}`;
-  let other = `evt_replay_${freshUser()}`;
+  const eventId = `evt_replay_${freshUser()}`;
+  const other = `evt_replay_${freshUser()}`;
 
-  let first = await store.replay.claim(eventId);
-  let second = await store.replay.claim(eventId);
-  let different = await store.replay.claim(other);
+  const first = await store.replay.claim(eventId);
+  const second = await store.replay.claim(eventId);
+  const different = await store.replay.claim(other);
 
   assert.equal(first.claimed, true); // first sighting wins
   assert.equal(second.claimed, false); // redelivery of the same id is a no-op
   assert.equal(different.claimed, true); // an unrelated id is unaffected
 }
 
-// Pins the same behaviour across adapters for `balanceAccounts`, which lists every account that has
+// Pins the same behavior across adapters for `balanceAccounts`, which lists every account that has
 // a cached running-balance row. The cache lets reads skip re-summing entries. Entries remain the
 // source of truth, so a cached row can be wrong or even orphaned with no entries behind it. Every
 // account with a cached row must appear, which lets the integrity checker inspect rows that walking
@@ -705,13 +705,13 @@ async function claimsWebhookEventIdOnce(store: Store): Promise<void> {
 async function balanceAccountsEnumeratesBalanceRow(
   store: Store,
 ): Promise<void> {
-  let userId = freshUser();
+  const userId = freshUser();
   await store.transaction((unit) =>
     fundSpendable(unit, userId, '6.00', 'txn_conf_balacct'),
   );
 
-  let seen = new Set<string>();
-  for await (let account of store.ledger.balanceAccounts()) {
+  const seen = new Set<string>();
+  for await (const account of store.ledger.balanceAccounts()) {
     seen.add(account);
   }
 
@@ -725,38 +725,38 @@ async function balanceAccountsEnumeratesBalanceRow(
 async function balanceAccountsListsInCodeUnitOrder(
   store: Store,
 ): Promise<void> {
-  let base = freshUser();
-  let ids = [`${base}_c`, `${base}_a`, `${base}_b`];
-  for (let id of ids) {
+  const base = freshUser();
+  const ids = [`${base}_c`, `${base}_a`, `${base}_b`];
+  for (const id of ids) {
     await store.transaction((unit) =>
       fundSpendable(unit, id, '1.00', `txn_conf_ord_${id}`),
     );
   }
 
-  let seen: string[] = [];
-  for await (let account of store.ledger.balanceAccounts()) {
+  const seen: string[] = [];
+  for await (const account of store.ledger.balanceAccounts()) {
     seen.push(account);
   }
 
-  for (let id of ids) {
+  for (const id of ids) {
     assert.equal(seen.includes(spendable(id)), true);
   }
   // Already sorted on every engine: equal to its own code-unit-sorted copy.
   assert.deepEqual(seen, [...seen].sort(byCodeUnit));
 }
 
-// Pins the same markBilled behaviour across adapters, which stops two concurrent renewal sweeps
+// Pins the same markBilled behavior across adapters, which stops two concurrent renewal sweeps
 // from charging a subscription twice in one period. markBilled updates the row only if the caller's
 // expected due date still matches next_due_at. The first sweeper passes the current due date, so
 // its update applies: it returns true and advances the due date. A second sweeper starting from the
 // now-stale due date matches no row and does nothing, returning false. The net result is that the
 // subscription is billed at most once per period.
 async function markBilledIsCompareAndSet(store: Store): Promise<void> {
-  let userId = freshUser();
-  let id = `sub_conf_cas_${userId}`;
-  let firstDue = 1_000;
-  let secondDue = 2_000;
-  let thirdDue = 3_000;
+  const userId = freshUser();
+  const id = `sub_conf_cas_${userId}`;
+  const firstDue = 1_000;
+  const secondDue = 2_000;
+  const thirdDue = 3_000;
 
   await store.transaction((unit) =>
     unit.subscriptions.open({
@@ -775,23 +775,23 @@ async function markBilledIsCompareAndSet(store: Store): Promise<void> {
   );
 
   // Winning sweeper claimed next_due_at=firstDue and bills with that expected value.
-  let won = await store.subscriptions.markBilled(id, secondDue, firstDue);
+  const won = await store.subscriptions.markBilled(id, secondDue, firstDue);
   assert.equal(won, true);
 
   // Second sweeper also claimed firstDue, but the row has advanced to secondDue, so its
   // conditional update matches no row and bills nothing.
-  let lost = await store.subscriptions.markBilled(id, thirdDue, firstDue);
+  const lost = await store.subscriptions.markBilled(id, thirdDue, firstDue);
   assert.equal(lost, false);
 
   // The losing call changed nothing: next_due_at is still secondDue, not thirdDue.
-  let reloaded = await store.subscriptions.load(id);
+  const reloaded = await store.subscriptions.load(id);
   assert.equal(reloaded!.nextDueAt, secondDue);
 }
 
 /**
  * Registers the shared tests every Store implementation (in-memory and each db-backed adapter)
  * must pass. Each adapter calls this once with its name and a factory, holding all adapters to
- * the same behaviour.
+ * the same behavior.
  *
  * @param name - Label for this adapter, used in the test group title.
  * @param makeStore - Builds a fresh Store to run the tests against.
@@ -803,7 +803,7 @@ export function runStoreConformance(
   describe(`Store Conformance: ${name}`, () => {
     // The backend may be unreachable, for example in CI's no-services `check` job or with a missing
     // local database. Probe it once here. If makeStore throws, every test below skips, rather than
-    // this before hook throwing and cancelling the whole suite. That is the graceful contract the
+    // this before hook throwing and canceling the whole suite. That is the graceful contract the
     // standalone describes use, and the one ci.yml's `check` job relies on ("conformance tests skip
     // when no backend reachable").
     let store: Store | null = null;
@@ -822,7 +822,7 @@ export function runStoreConformance(
     });
 
     // Run one conformance body against the live store, or skip when the backend was unreachable.
-    let withStore = (
+    const withStore = (
       t: TestContext,
       body: (s: Store) => Promise<void> | void,
     ): Promise<void> | void =>

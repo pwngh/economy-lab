@@ -33,10 +33,10 @@ function codeIs(code: string) {
     (error as { code?: string }).code === code;
 }
 
-// --- Test cases: one behaviour each -----------------------------------------------
+// --- Test cases: one behavior each -----------------------------------------------
 
 function signsDebitPositiveAndCreditNegative(): void {
-  let amount = toAmount('CREDIT', 500n);
+  const amount = toAmount('CREDIT', 500n);
 
   assert.deepEqual(
     debit(SYSTEM.REVENUE, amount).amount,
@@ -49,7 +49,7 @@ function signsDebitPositiveAndCreditNegative(): void {
 }
 
 function appliesNormalBalanceSign(): void {
-  let amount = toAmount('CREDIT', 500n);
+  const amount = toAmount('CREDIT', 500n);
 
   // A spendable account grows on credit. Credits are stored negative (−500), but the balance
   // moves up by 500, so balanceDelta flips the stored sign back to +500.
@@ -66,7 +66,7 @@ function appliesNormalBalanceSign(): void {
 }
 
 async function postsAndFoldsBalance(store: Store): Promise<void> {
-  let amount = toAmount('CREDIT', 300n);
+  const amount = toAmount('CREDIT', 300n);
 
   await store.transaction((unit) =>
     postEntry(unit.ledger, {
@@ -121,7 +121,7 @@ async function throwsCurrencyMismatch(store: Store): Promise<void> {
 }
 
 async function throwsUnknownAccount(store: Store): Promise<void> {
-  let amount = toAmount('CREDIT', 100n);
+  const amount = toAmount('CREDIT', 100n);
 
   await assert.rejects(
     store.transaction((unit) =>
@@ -139,7 +139,7 @@ async function throwsUnknownAccount(store: Store): Promise<void> {
 }
 
 async function throwsOverdraftBackstop(store: Store): Promise<void> {
-  let amount = toAmount('CREDIT', 100n);
+  const amount = toAmount('CREDIT', 100n);
 
   // Debiting a zero-balance user account would go negative, which the ledger refuses with
   // LEDGER.OVERDRAFT. An earlier funds check should already have rejected the short caller

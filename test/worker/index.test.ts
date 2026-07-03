@@ -88,7 +88,7 @@ function sweepInput(overrides?: Partial<SweepInput>): SweepInput {
 // Builds a balanced posting that moves 500 credits from platform revenue to a user's spendable
 // balance. This gives the ledger two real accounts, so the checkpoint job has something to snapshot.
 function seedPosting(): Posting {
-  let amount = toAmount('CREDIT', 500n);
+  const amount = toAmount('CREDIT', 500n);
   return {
     txnId: 'txn_seed',
     legs: [credit(spendable('usr_a'), amount), debit(SYSTEM.REVENUE, amount)],
@@ -99,8 +99,8 @@ function seedPosting(): Posting {
 // Builds an in-memory store with the seed posting already committed, so the checkpoint and treasury
 // jobs read real accounts. Returns the store plus its hasher for passing into the worker context.
 async function seededStore(): Promise<{ store: Store; digest: Digest }> {
-  let digest = seededDigest(1);
-  let store = memoryStore({ digest });
+  const digest = seededDigest(1);
+  const store = memoryStore({ digest });
   await store.transaction((unit) => postEntry(unit.ledger, seedPosting()));
   return { store, digest };
 }
@@ -132,9 +132,9 @@ function recordingStore(
   touched: Touched,
   faults?: Partial<Record<keyof Touched, Error>>,
 ): Store {
-  let trip = (key: keyof Touched): void => {
+  const trip = (key: keyof Touched): void => {
     touched[key] = true;
-    let error = faults?.[key];
+    const error = faults?.[key];
     if (error !== undefined) {
       throw error;
     }
@@ -212,10 +212,10 @@ function freshTouched(): Touched {
 // --- runSweeps invokes every sweep ------------------------------------------------
 
 async function invokesEverySweep(): Promise<void> {
-  let { store, digest } = await seededStore();
-  let touched = freshTouched();
-  let reconcileTouched = { reconcile: false };
-  let recording = recordingStore(store, touched);
+  const { store, digest } = await seededStore();
+  const touched = freshTouched();
+  const reconcileTouched = { reconcile: false };
+  const recording = recordingStore(store, touched);
 
   await runSweeps(
     recording,
@@ -237,11 +237,11 @@ async function invokesEverySweep(): Promise<void> {
 }
 
 async function reportsEverySweepUnderItsName(): Promise<void> {
-  let { store, digest } = await seededStore();
+  const { store, digest } = await seededStore();
 
-  let batch = await runSweeps(store, workerCtx(digest), sweepInput());
+  const batch = await runSweeps(store, workerCtx(digest), sweepInput());
 
-  for (let name of [
+  for (const name of [
     'payouts',
     'subscriptions',
     'treasury',
@@ -260,13 +260,13 @@ async function reportsEverySweepUnderItsName(): Promise<void> {
 // --- isolation: a thrown sweep stays in its own slot ------------------------------
 
 async function isolatesAThrownSweepFromTheBatch(): Promise<void> {
-  let { store, digest } = await seededStore();
-  let touched = freshTouched();
-  let recording = recordingStore(store, touched, {
+  const { store, digest } = await seededStore();
+  const touched = freshTouched();
+  const recording = recordingStore(store, touched, {
     payouts: fault('STORE.FAILURE', 'sagas down', { retryable: true }),
   });
 
-  let batch = await runSweeps(recording, workerCtx(digest), sweepInput());
+  const batch = await runSweeps(recording, workerCtx(digest), sweepInput());
 
   assert.equal(batch.payouts.ok, false);
   // The jobs that run after the failing one all completed and reported success.
@@ -282,12 +282,12 @@ async function isolatesAThrownSweepFromTheBatch(): Promise<void> {
 }
 
 async function classifiesTheIsolatedFaultOnItsRetryVerdict(): Promise<void> {
-  let { store, digest } = await seededStore();
-  let recording = recordingStore(store, freshTouched(), {
+  const { store, digest } = await seededStore();
+  const recording = recordingStore(store, freshTouched(), {
     subscriptions: fault('LEDGER.UNBALANCED', 'terminal', { retryable: false }),
   });
 
-  let batch = await runSweeps(recording, workerCtx(digest), sweepInput());
+  const batch = await runSweeps(recording, workerCtx(digest), sweepInput());
 
   assert.equal(batch.subscriptions.ok, false);
   assert.equal(
@@ -302,12 +302,12 @@ async function classifiesTheIsolatedFaultOnItsRetryVerdict(): Promise<void> {
 }
 
 async function wrapsANonEconomyThrowAsRetryableStoreFailure(): Promise<void> {
-  let { store, digest } = await seededStore();
-  let recording = recordingStore(store, freshTouched(), {
+  const { store, digest } = await seededStore();
+  const recording = recordingStore(store, freshTouched(), {
     relay: new Error('raw boom'),
   });
 
-  let batch = await runSweeps(recording, workerCtx(digest), sweepInput());
+  const batch = await runSweeps(recording, workerCtx(digest), sweepInput());
 
   assert.equal(batch.relay.ok, false);
   assert.equal(batch.relay.ok === false && batch.relay.code, 'STORE.FAILURE');
@@ -318,10 +318,10 @@ async function wrapsANonEconomyThrowAsRetryableStoreFailure(): Promise<void> {
 // --- createWorker composition root ------------------------------------------------
 
 async function runOnceDrivesOneBatch(): Promise<void> {
-  let { store, digest } = await seededStore();
-  let worker = createWorker(store, workerCtx(digest));
+  const { store, digest } = await seededStore();
+  const worker = createWorker(store, workerCtx(digest));
 
-  let run = await worker.runOnce(sweepInput());
+  const run = await worker.runOnce(sweepInput());
 
   assert.equal(run.batch.payouts.ok, true);
   assert.equal(worker.start, undefined); // no scheduler injected
@@ -329,10 +329,10 @@ async function runOnceDrivesOneBatch(): Promise<void> {
 }
 
 async function startSchedulesTheBatchOnTheInjectedScheduler(): Promise<void> {
-  let { store, digest } = await seededStore();
+  const { store, digest } = await seededStore();
   let scheduled: { ms: number; task: () => Promise<void> } | null = null;
   let canceled = false;
-  let scheduler: Scheduler = {
+  const scheduler: Scheduler = {
     every: (ms, task) => {
       scheduled = { ms, task };
       return () => {
@@ -340,10 +340,10 @@ async function startSchedulesTheBatchOnTheInjectedScheduler(): Promise<void> {
       };
     },
   };
-  let worker = createWorker(store, workerCtx(digest), scheduler);
+  const worker = createWorker(store, workerCtx(digest), scheduler);
 
   assert.notEqual(worker.start, undefined);
-  let stop = worker.start!(5_000, sweepInput());
+  const stop = worker.start!(5_000, sweepInput());
   // start registered the interval with the scheduler and received a cancel function in return.
   assert.equal(scheduled!.ms, 5_000);
   // Running the registered task once executes a full batch of every job without throwing.
@@ -356,7 +356,7 @@ async function startSchedulesTheBatchOnTheInjectedScheduler(): Promise<void> {
 // When no dispatcher is configured, the relay sweep skips cleanly. It reports success with an empty
 // summary, never touches the outbox, and leaves pending events queued for a later run.
 async function skipsTheRelaySweepWhenNoDispatcherIsConfigured(): Promise<void> {
-  let { store, digest } = await seededStore();
+  const { store, digest } = await seededStore();
   // Queue one event. A relay run that actually happened would deliver it and mark it, changing the
   // outbox. A skipped run leaves it pending and untouched.
   await store.transaction((unit) =>
@@ -378,7 +378,7 @@ async function skipsTheRelaySweepWhenNoDispatcherIsConfigured(): Promise<void> {
   );
 
   // An undefined `dispatcher` is the no-dispatcher deployment (see selectDispatcher in src/index.ts).
-  let batch = await runSweeps(
+  const batch = await runSweeps(
     store,
     workerCtx(digest),
     sweepInput({ dispatcher: undefined }),
@@ -395,7 +395,7 @@ async function skipsTheRelaySweepWhenNoDispatcherIsConfigured(): Promise<void> {
   assert.equal(batch.payouts.ok, true);
   assert.equal(batch.reconcile.ok, true);
   // The queued event was not dropped: it is still pending and claimable by a future run.
-  let pending = await store.outbox.claimBatch(10);
+  const pending = await store.outbox.claimBatch(10);
   assert.deepEqual(
     pending.map((m) => m.id),
     ['obx_skip'],

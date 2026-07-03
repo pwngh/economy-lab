@@ -27,8 +27,8 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
 
 function makeStore(): Store {
-  let digest = seededDigest(1);
-  let clock = fixedClock(0);
+  const digest = seededDigest(1);
+  const clock = fixedClock(0);
   return memoryStore({ digest, clock });
 }
 
@@ -55,9 +55,9 @@ function hasCode(code: string): (error: unknown) => boolean {
 
 describe('topUp Issuance', () => {
   test('issues spendable credits against STORED_VALUE', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
-    let outcome = await applyTopUp(
+    const outcome = await applyTopUp(
       store,
       ctx,
       topUpOp({ userId: 'usr_buyer', amount: credit('10.00') }),
@@ -75,7 +75,7 @@ describe('topUp Issuance', () => {
   });
 
   test('splits the buyer cash into trust backing and purchase-fee revenue', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     await applyTopUp(
       store,
@@ -103,7 +103,7 @@ describe('topUp Issuance', () => {
   });
 
   test('never debits REVENUE — issuance is not house revenue', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     await applyTopUp(
       store,
@@ -118,9 +118,9 @@ describe('topUp Issuance', () => {
   });
 
   test('returns the CREDIT issuance transaction, not the cash posting', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
-    let outcome = await applyTopUp(
+    const outcome = await applyTopUp(
       store,
       ctx,
       topUpOp({ userId: 'usr_buyer', amount: credit('10.00') }),
@@ -138,8 +138,8 @@ describe('topUp Issuance', () => {
 });
 
 describe('topUp Validation', () => {
-  test('throws MALFORMED_OPERATION when the amount is USD', async () => {
-    let { store, ctx } = fixture();
+  test('throws OP.MALFORMED when the amount is USD', async () => {
+    const { store, ctx } = fixture();
 
     await assert.rejects(
       applyTopUp(
@@ -151,8 +151,8 @@ describe('topUp Validation', () => {
     );
   });
 
-  test('throws INVALID_AMOUNT when the amount is not positive', async () => {
-    let { store, ctx } = fixture();
+  test('throws MONEY.INVALID_AMOUNT when the amount is not positive', async () => {
+    const { store, ctx } = fixture();
 
     await assert.rejects(
       applyTopUp(
@@ -165,12 +165,12 @@ describe('topUp Validation', () => {
   });
 
   test('rounds a sub-cent purchase up so the issued credits are always backed', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     // Backing rounds up, so a sub-cent backing still holds at least one cent in trust; credits are
     // never issued unbacked. A 0.50-credit top-up is 50 minor; backing = ceil(50 × $0.005) =
     // ceil($0.0025) = $0.01.
-    let outcome = await applyTopUp(
+    const outcome = await applyTopUp(
       store,
       ctx,
       topUpOp({ userId: 'usr_buyer', amount: credit('0.50') }),
@@ -188,11 +188,11 @@ describe('topUp Validation', () => {
   });
 
   test('commits a normal top-up whose backing is at least one cent', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
     // A 2.00-credit top-up backs at floor(200/200) = $0.01, which sits just above the zero-backing
     // floor. The top-up still issues credits and holds the matching cash in trust.
-    let outcome = await applyTopUp(
+    const outcome = await applyTopUp(
       store,
       ctx,
       topUpOp({ userId: 'usr_buyer', amount: credit('2.00') }),
@@ -209,8 +209,8 @@ describe('topUp Validation', () => {
     );
   });
 
-  test('throws MALFORMED_OPERATION when the source is blank', async () => {
-    let { store, ctx } = fixture();
+  test('throws OP.MALFORMED when the source is blank', async () => {
+    const { store, ctx } = fixture();
 
     // The funding source selects the maturity horizon for the new credits, so a
     // whitespace-only source is malformed input, not a recoverable refusal.
@@ -235,9 +235,9 @@ describe('topUp Validation', () => {
   });
 
   test('commits a top-up with a normal funding source', async () => {
-    let { store, ctx } = fixture();
+    const { store, ctx } = fixture();
 
-    let outcome = await applyTopUp(
+    const outcome = await applyTopUp(
       store,
       ctx,
       topUpOp({ userId: 'usr_buyer', amount: credit('10.00'), source: 'card' }),
@@ -250,9 +250,9 @@ describe('topUp Validation', () => {
     );
   });
 
-  test('throws MALFORMED_OPERATION on the wrong operation kind', async () => {
-    let { store, ctx } = fixture();
-    let wrongKind: Operation = {
+  test('throws OP.MALFORMED on the wrong operation kind', async () => {
+    const { store, ctx } = fixture();
+    const wrongKind: Operation = {
       kind: 'refund',
       idempotencyKey: 'idem_wrong',
       actor: { kind: 'system', service: 'test' },

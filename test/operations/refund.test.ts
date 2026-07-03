@@ -62,9 +62,9 @@ type Fixture = {
 };
 
 function setup(): Fixture {
-  let digest = seededDigest(1);
-  let clock = fixedClock(0);
-  let ctx: Ctx = {
+  const digest = seededDigest(1);
+  const clock = fixedClock(0);
+  const ctx: Ctx = {
     clock,
     ids: sequentialIds(),
     digest,
@@ -76,8 +76,8 @@ function setup(): Fixture {
     logger: testLogger(),
     meter: noopMeter(),
   };
-  let store: Store = memoryStore({ digest, clock });
-  let post = (legs: Leg[], meta: Record<string, unknown>): Promise<unknown> =>
+  const store: Store = memoryStore({ digest, clock });
+  const post = (legs: Leg[], meta: Record<string, unknown>): Promise<unknown> =>
     store.transaction((unit) =>
       postEntry(unit.ledger, { txnId: ctx.ids.next('txn'), legs, meta }),
     );
@@ -120,7 +120,7 @@ function isCode(code: string): (error: unknown) => boolean {
 // --- The cases --------------------------------------------------------------------
 
 async function returnsBuyerFullPriceReversingSale(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
   await fx.sell(
     spendOf({
@@ -132,7 +132,7 @@ async function returnsBuyerFullPriceReversingSale(): Promise<void> {
     }),
   );
 
-  let outcome = await fx.refund(refundOf({ orderId: 'ord_refund_1' }));
+  const outcome = await fx.refund(refundOf({ orderId: 'ord_refund_1' }));
 
   assert.equal(outcome.status, 'committed');
   assert.deepEqual(
@@ -142,7 +142,7 @@ async function returnsBuyerFullPriceReversingSale(): Promise<void> {
 }
 
 async function unwindsSellerEarnedAndPlatformFee(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
   await fx.sell(
     spendOf({
@@ -164,7 +164,7 @@ async function unwindsSellerEarnedAndPlatformFee(): Promise<void> {
 }
 
 async function postsBalancedReversingEntry(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
   await fx.issue('usr_buyer', creditOf('20.00'));
   await fx.sell(
     spendOf({
@@ -179,11 +179,11 @@ async function postsBalancedReversingEntry(): Promise<void> {
     }),
   );
 
-  let outcome = await fx.refund(refundOf({ orderId: 'ord_refund_3' }));
+  const outcome = await fx.refund(refundOf({ orderId: 'ord_refund_3' }));
 
   assert.equal(outcome.status, 'committed');
   if (outcome.status !== 'committed') return;
-  let signed = outcome.transaction.legs.reduce(
+  const signed = outcome.transaction.legs.reduce(
     (sum: bigint, leg: Leg) => sum + leg.amount.minor,
     0n,
   );
@@ -191,20 +191,20 @@ async function postsBalancedReversingEntry(): Promise<void> {
 }
 
 async function rejectsUnknownOrderWhenNoSaleRecorded(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
 
-  let outcome = await fx.refund(refundOf({ orderId: 'ord_missing' }));
+  const outcome = await fx.refund(refundOf({ orderId: 'ord_missing' }));
 
   assert.equal(outcome.status, 'rejected');
   if (outcome.status !== 'rejected') return;
   assert.equal(outcome.reason, 'UNKNOWN_ORDER');
 }
 
-// R16: a refund must make the buyer whole even when the seller already paid out the cut the sale
+// A refund must make the buyer whole even when the seller already paid out the cut the sale
 // credited them. The seller is debited only by what's still in earned (here nothing); the
 // uncollectable remainder goes to RECEIVABLE so the posting balances.
 async function refundsBuyerEvenAfterSellerPaidOut(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
   await fx.sell(
     spendOf({
@@ -218,10 +218,10 @@ async function refundsBuyerEvenAfterSellerPaidOut(): Promise<void> {
 
   // Seller cashes out their whole earned cut before the refund, so a naive sign-flip reversal would
   // overdraw earned and roll the whole refund back.
-  let sellerCut = await fx.balanceOf(earned('usr_seller'));
+  const sellerCut = await fx.balanceOf(earned('usr_seller'));
   await fx.drainEarned('usr_seller', sellerCut);
 
-  let outcome = await fx.refund(refundOf({ orderId: 'ord_paidout' }));
+  const outcome = await fx.refund(refundOf({ orderId: 'ord_paidout' }));
 
   // The refund still commits and the buyer is made whole for the full 4.00 price.
   assert.equal(outcome.status, 'committed');
@@ -235,11 +235,11 @@ async function refundsBuyerEvenAfterSellerPaidOut(): Promise<void> {
   assert.deepEqual(await fx.balanceOf(SYSTEM.RECEIVABLE), sellerCut);
 }
 
-// R17: an order can be reversed at most once. A refund takes a one-time lock keyed by order id
+// An order can be reversed at most once. A refund takes a one-time lock keyed by order id
 // (`reversed:<orderId>`) before posting. The first refund takes the lock and posts the reversal; a
 // second finds it held and gets the first reversal handed back as a duplicate, never crediting twice.
 async function secondRefundOfSameOrderIsDuplicate(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
   await fx.sell(
     spendOf({
@@ -251,13 +251,13 @@ async function secondRefundOfSameOrderIsDuplicate(): Promise<void> {
     }),
   );
 
-  let first = await fx.refund(refundOf({ orderId: 'ord_twice' }));
+  const first = await fx.refund(refundOf({ orderId: 'ord_twice' }));
   assert.equal(first.status, 'committed');
 
   // Even with a brand-new idempotency key (so the framework's retry dedup would let it through), the
   // second refund is blocked: the first already took the per-order claim, and only one refund per
   // order can win it.
-  let second = await fx.refund(refundOf({ orderId: 'ord_twice' }));
+  const second = await fx.refund(refundOf({ orderId: 'ord_twice' }));
   assert.equal(second.status, 'duplicate');
   if (first.status !== 'committed' || second.status !== 'duplicate') return;
   // The duplicate returns the very transaction the first refund posted, not a fresh reversal.
@@ -269,10 +269,10 @@ async function secondRefundOfSameOrderIsDuplicate(): Promise<void> {
   );
 }
 
-// R14/R19: a refund revokes the buyer's entitlement to the SKU in the same transaction, so a
+// A refund revokes the buyer's entitlement to the SKU in the same transaction, so a
 // refunded buyer no longer owns the item.
 async function refundRevokesBuyerEntitlement(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
   await fx.sell(
     spendOf({
@@ -296,7 +296,7 @@ async function refundRevokesBuyerEntitlement(): Promise<void> {
 // sale's recorded `recipientId`), not the buyer who paid: the gift granted to the recipient, so the
 // refund revokes from the recipient.
 async function refundingAGiftTakesItBackFromTheRecipient(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
   await fx.sell(
     spendOf({
@@ -322,10 +322,10 @@ async function refundingAGiftTakesItBackFromTheRecipient(): Promise<void> {
   assert.equal(await fx.owns('usr_friend', 'wrld_pass'), false);
 }
 
-// R14/R19: revoke is idempotent. Refunding a sale whose buyer was never granted the SKU still
+// Revoke is idempotent. Refunding a sale whose buyer was never granted the SKU still
 // commits and leaves ownership false, rather than throwing on the absent row.
 async function refundRevokeIsIdempotentWhenNeverGranted(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
   await fx.sell(
     spendOf({
@@ -337,7 +337,7 @@ async function refundRevokeIsIdempotentWhenNeverGranted(): Promise<void> {
     }),
   );
 
-  let outcome = await fx.refund(refundOf({ orderId: 'ord_nogrant' }));
+  const outcome = await fx.refund(refundOf({ orderId: 'ord_nogrant' }));
 
   assert.equal(outcome.status, 'committed');
   assert.equal(await fx.owns('usr_buyer', 'wrld_pass'), false);
@@ -347,7 +347,7 @@ async function refundRevokeIsIdempotentWhenNeverGranted(): Promise<void> {
 // degrade to an UNKNOWN_ORDER rejected outcome, which would hide the malformed request behind an
 // ordinary "no".
 async function throwsMalformedForBlankOrderId(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
 
   await assert.rejects(
     fx.refund(refundOf({ orderId: '   ' })),
@@ -356,7 +356,7 @@ async function throwsMalformedForBlankOrderId(): Promise<void> {
 }
 
 async function throwsMalformedForWrongOperationKind(): Promise<void> {
-  let fx = setup();
+  const fx = setup();
 
   await assert.rejects(
     fx.refund({

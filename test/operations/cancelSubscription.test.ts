@@ -34,8 +34,8 @@ import type { Store, Subscription, SubscriptionState } from '#src/ports.ts';
 // Builds a fresh in-memory store and a deterministic Ctx. Tests call the handler directly rather
 // than routing a request through HTTP, so the wiring is assembled here by hand.
 function makeContext(): { store: Store; ctx: Ctx } {
-  let store = memoryStore();
-  let ctx: Ctx = {
+  const store = memoryStore();
+  const ctx: Ctx = {
     clock: fixedClock(0),
     ids: sequentialIds(),
     digest: seededDigest(1),
@@ -78,10 +78,10 @@ async function cancel(
   ctx: Ctx,
   subscriptionId: string,
 ): Promise<{ outcome: Outcome; after: Subscription | null }> {
-  let outcome = await store.transaction((unit) =>
+  const outcome = await store.transaction((unit) =>
     handleCancelSubscription(cancelSubscription({ subscriptionId }), unit, ctx),
   );
-  let after = await store.subscriptions.load(subscriptionId);
+  const after = await store.subscriptions.load(subscriptionId);
   return { outcome, after };
 }
 
@@ -93,20 +93,20 @@ function isCode(code: string): (error: unknown) => boolean {
 
 describe('cancelSubscription', () => {
   test('cancels an active subscription', async () => {
-    let { store, ctx } = makeContext();
+    const { store, ctx } = makeContext();
     await store.subscriptions.open(activeSubscription('sub_active'));
 
-    let { outcome, after } = await cancel(store, ctx, 'sub_active');
+    const { outcome, after } = await cancel(store, ctx, 'sub_active');
 
     assert.equal(outcome.status, 'committed');
     assert.equal(after?.state, 'CANCELED');
   });
 
   test('writes no ledger entries — cancellation only changes state', async () => {
-    let { store, ctx } = makeContext();
+    const { store, ctx } = makeContext();
     await store.subscriptions.open(activeSubscription('sub_marker'));
 
-    let { outcome } = await cancel(store, ctx, 'sub_marker');
+    const { outcome } = await cancel(store, ctx, 'sub_marker');
 
     assert.equal(outcome.status, 'committed');
     assert.equal(
@@ -120,19 +120,19 @@ describe('cancelSubscription', () => {
   });
 
   test('cancels a lapsed subscription, transitioning it to canceled', async () => {
-    let { store, ctx } = makeContext();
+    const { store, ctx } = makeContext();
     await store.subscriptions.open(activeSubscription('sub_lapsed', 'LAPSED'));
 
-    let { outcome, after } = await cancel(store, ctx, 'sub_lapsed');
+    const { outcome, after } = await cancel(store, ctx, 'sub_lapsed');
 
     assert.equal(outcome.status, 'committed');
     assert.equal(after?.state, 'CANCELED');
   });
 
   test('rejects an unknown subscription as UNKNOWN_SUBSCRIPTION', async () => {
-    let { store, ctx } = makeContext();
+    const { store, ctx } = makeContext();
 
-    let { outcome } = await cancel(store, ctx, 'sub_absent');
+    const { outcome } = await cancel(store, ctx, 'sub_absent');
 
     assert.equal(outcome.status, 'rejected');
     assert.equal(
@@ -142,7 +142,7 @@ describe('cancelSubscription', () => {
   });
 
   test('throws MALFORMED for a blank subscriptionId instead of degrading to UNKNOWN_SUBSCRIPTION', async () => {
-    let { store, ctx } = makeContext();
+    const { store, ctx } = makeContext();
 
     await assert.rejects(
       store.transaction((unit) =>
@@ -157,10 +157,10 @@ describe('cancelSubscription', () => {
   });
 
   test('rejects an already-canceled subscription as UNKNOWN_SUBSCRIPTION', async () => {
-    let { store, ctx } = makeContext();
+    const { store, ctx } = makeContext();
     await store.subscriptions.open(activeSubscription('sub_done', 'CANCELED'));
 
-    let { outcome } = await cancel(store, ctx, 'sub_done');
+    const { outcome } = await cancel(store, ctx, 'sub_done');
 
     assert.equal(outcome.status, 'rejected');
     assert.equal(
