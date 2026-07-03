@@ -1,4 +1,4 @@
-<h2 align="left">economy-lab</h2>
+# economy-lab
 
 A provably-solvent credits economy: wallets, payouts, subscriptions, and a marketplace, on one double-entry ledger.
 
@@ -30,10 +30,10 @@ A provably-solvent credits economy: wallets, payouts, subscriptions, and a marke
 
 ## Quick start
 
-Build an `Economy`, drive it through a single `submit`, and read derived state through `read`. The
-in-memory build needs no infrastructure — `compose` picks adapters from the environment — and either
-way you supply four integrations: a `signer`, a payout `processor`, an FX `rates` source, and a fee
-`pricing` policy:
+Build an `Economy`, drive it through a single `submit`, and read derived state through `read`. From
+a clone of this repo: the in-memory build needs no infrastructure — `compose` picks adapters 
+from the environment. You supply four integrations: a `signer`, a payout `processor`, 
+an FX `rates` source, and a fee `pricing` policy:
 
 ```ts
 import { compose } from './src/index.ts';
@@ -124,6 +124,13 @@ The bundled host process runs as an HTTP service (`POST /submit`, `POST /webhook
 `/healthz` and `/readyz`) and a background worker (ten sweeps on an interval). Every backend is
 selected by an environment variable.
 
+## Apps
+
+- [apps/console](apps/console) — a demo admin UI driven by the live engine: accounts, the ledger
+  feed, the payout board, and an integrity page, with a simulation panel to advance time and run
+  the background jobs.
+- [apps/docs](apps/docs) — the source of the [documentation site](https://economy-lab-docs.pages.dev/economy/).
+
 ## Documentation
 
 - [The Economy surface](https://economy-lab-docs.pages.dev/economy/reference/the-economy/) — the whole `submit` / `read` / `close` API.
@@ -134,4 +141,4 @@ selected by an environment variable.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE.md](LICENSE.md).

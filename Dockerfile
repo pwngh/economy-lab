@@ -5,17 +5,16 @@
 #
 #   docker build --build-arg ADAPTERS="pg @aws-sdk/client-sqs" -t economy-lab .
 #
-# Base-image digests below are the multi-arch index digests for each tag, looked
-# up from the Docker Hub registry API (docker / `docker manifest inspect` were
-# unavailable in the authoring env). Pinning means an upstream re-push of the tag
-# won't change what we pull until someone re-pins. Refresh with
-# `docker manifest inspect <tag>`.
+# Base images are pinned by tag, not digest. For a real deploy, pin each tag to its
+# multi-arch index digest: `docker manifest inspect <tag>` (or `crane digest <tag>`)
+# and replace the tag with tag@sha256:<index-digest>, so an upstream re-push of the
+# tag cannot change what is pulled.
 
 # ---- builder: full Node image (has npm + a shell) -------------------------
 # Installs the optional adapters when ADAPTERS is non-empty; otherwise materializes
 # an empty node_modules so the runtime COPY below is uniform.
-# Node 22 is required. The engines field requires >=22.18.0, the version where TypeScript type-stripping is on by default.
-# Re-pin a digest for a real deploy: `docker manifest inspect node:22-slim`.
+# Node 22 is required. The engines field requires >=22.18.0, the version where
+# TypeScript type-stripping is on by default.
 FROM node:22-slim AS builder
 
 WORKDIR /app
@@ -32,13 +31,10 @@ RUN if [ -n "$ADAPTERS" ]; then \
 # gcr.io/distroless/nodejs22-debian12:nonroot
 #   - ENTRYPOINT is already ["/nodejs/bin/node"], so CMD carries only the script
 #     path ("node" dropped from the original CMD).
-#   - :nonroot runs as UID 65532. The --chown on each COPY below keeps the copied files owned by that UID.
-#   - Pinned by tag, not digest: the authoring env could only resolve per-arch
-#     child digests, and pinning one locks the image to a single architecture. To
-#     pin the multi-arch index digest at build time, run:
-#         crane digest gcr.io/distroless/nodejs22-debian12:nonroot
-#     (or `docker buildx imagetools inspect`) and replace the tag with
-#     tag@sha256:<index-digest>.
+#   - :nonroot runs as UID 65532. The --chown on each COPY below keeps the copied
+#     files owned by that UID.
+#   - Pin per the header note; a per-arch child digest would lock the image to a
+#     single architecture, so use the multi-arch index digest.
 FROM gcr.io/distroless/nodejs22-debian12:nonroot AS runtime
 
 WORKDIR /app
@@ -61,6 +57,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 # The entry point is scripts/main.ts. The distroless ENTRYPOINT supplies `node`, so the args are just
 # the script path and the mode, and Node 22 strips the types at startup. The image does not run
-# migrations, so apply db/schema.sql out of band (for example, `npm run db:migrate`) before pointing
-# this at a real DATABASE_URL. To run the worker instead, override the args: ["scripts/main.ts","worker"].
+# migrations, so apply the schema in db/ out of band (for example, `npm run db:migrate`) before
+# pointing this at a real DATABASE_URL. To run the worker instead, override the args:
+# ["scripts/main.ts","worker"].
 CMD ["scripts/main.ts", "serve"]

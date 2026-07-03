@@ -1,7 +1,8 @@
 services:
+  # Postgres for the Postgres engine (src/engines/postgres.ts).
   postgres:
-    # Pinned by multi-arch index digest (Docker Hub registry API lookup; refresh
-    # with `docker manifest inspect postgres:16-alpine`).
+    # Pinned by multi-arch index digest; refresh with
+    # `docker manifest inspect postgres:16-alpine`.
     image: postgres:16-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb
     environment:
       POSTGRES_USER: economy
@@ -17,8 +18,7 @@ services:
 
   # SQS for the outbox worker's dispatcher (see src/adapters/sqs.ts).
   localstack:
-    # Pinned by digest (Docker Hub registry API lookup). The API reported an
-    # implausibly old last-updated date for this tag; re-verify with
+    # Pinned by multi-arch index digest; refresh with
     # `docker manifest inspect localstack/localstack:3`.
     image: localstack/localstack:3@sha256:b279c01f4cfb8f985a482e4014cabc1e2697b9d7a6c8c8db2e40f4d9f93687c7
     environment:
@@ -31,14 +31,14 @@ services:
       timeout: 5s
       retries: 5
 
-  # MySQL for the mysql Store adapter (src/adapters/mysql.ts). The fixtures and tests
+  # MySQL for the MySQL engine (src/engines/mysql.ts). The fixtures and tests
   # connect via MYSQL_TEST_URL and create a throwaway database per run, so they use root.
   mysql:
     image: mysql:8.4
-    # Drop the binary log: on a single node it is a redundant second fsync per commit, so a "durable"
-    # commit would pay two fsyncs where Postgres pays one. `--skip-log-bin` keeps full redo-log
-    # durability (innodb_flush_log_at_trx_commit stays 1) and just removes the binlog fsync — MySQL at
-    # Postgres's one-fsync parity, with no durability traded away (the lossy flush=2 knob is left unset).
+    # Drop the binary log: on a single node it is a redundant second fsync per commit, where
+    # Postgres pays one. `--skip-log-bin` keeps full redo-log durability
+    # (innodb_flush_log_at_trx_commit stays 1) and just removes the binlog fsync, with no
+    # durability traded away (the lossy flush=2 knob is left unset).
     command: ['--skip-log-bin']
     environment:
       MYSQL_ROOT_PASSWORD: economy
