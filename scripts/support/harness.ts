@@ -317,7 +317,8 @@ export type Provisioned = {
   label: string;
   durable: boolean; // whether a committed op survives process exit (false for in-memory)
   durability: string; // human note: engine version + the commit-durability settings, probed live
-  // In-memory store runs one transaction at a time, so its concurrency is 1; SQL engines overlap via the pool.
+  // In-memory store runs one transaction at a time, so its concurrency is 1; SQL engines overlap
+  // via the pool.
   concurrency: number;
   poolMax: number; // the pool the store was built with (1 for in-memory's serial store)
   connsPerOp: number; // peak pooled connections one op holds, for the report and the sizing assertion
@@ -355,7 +356,7 @@ function assemble(
   return { economy: createEconomy(caps), workerCtx: workerCtxFrom(caps) };
 }
 
-// Use the production digest (the synchronous node:crypto SHA-256, ~5x faster than Web Crypto for
+// Use the production digest (the synchronous node:crypto SHA-256, faster than Web Crypto for
 // these small preimages), not the test seededDigest — the bench must measure the code path production
 // runs, and the chain hash is on the hot path of every submit and every prove/seal. A fixed clock
 // plus sequential ids still make a run reproducible; the digest is plain SHA-256, so its output is
@@ -393,7 +394,8 @@ async function provisionInMemory(cfg: HarnessConfig): Promise<Provisioned> {
 
 async function provisionPostgres(cfg: HarnessConfig): Promise<Provisioned> {
   const { digest, clock } = digestAndClock();
-  // Size the pool for the concurrency (one held connection per op) and assert it before opening (see assertPoolSizing).
+  // Size the pool for the concurrency (one held connection per op) and assert it before opening
+  // (see assertPoolSizing).
   // Then fit it to the server: a pool the shared server can't take dies mid-burst as opaque 53300
   // faults. Clamp while the pool still clears the self-deadlock floor; fail fast with the numbers
   // when it doesn't. The budget is a snapshot; postgresPoolBudget's reserve absorbs late arrivals.
@@ -759,9 +761,10 @@ export const isCommitted = (r: unknown): boolean =>
 
 // --- Outcome / fault classification ------------------------------------------------
 //
-// A submit ends in exactly one of four ways, and conflating them is how the old bench lied: `committed`
-// (money moved), `duplicate` (an idempotency replay — should be 0 with unique ids), `rejected` (a normal
-// "no" with a RejectionCode, no money moved), or a thrown fault (classified by classifyThrow).
+// A submit ends in exactly one of four ways, and conflating them hides which operations moved money:
+// `committed` (money moved), `duplicate` (an idempotency replay — should be 0 with unique ids),
+// `rejected` (a normal "no" with a RejectionCode, no money moved), or a thrown fault (classified by
+// classifyThrow).
 export type OutcomeClass =
   | { status: 'committed' }
   | { status: 'duplicate' }
@@ -936,7 +939,7 @@ export async function measureSequential(
 // What a concurrent sample produced: throughput over committed ops, plus the breakdown to trust it.
 // Every op is tallied into committed / duplicate / rejected / threw (classifyOutcome + classifyThrow),
 // with `rejectReasons` / `throwClasses` naming which. `latency`, `retries`, and `dbCounters` carry what
-// the app can't see itself (the engine's own deadlock Δ included). `errors` is the legacy rejected+threw.
+// the app can't see itself (the engine's own deadlock Δ included). `errors` is rejected+threw combined.
 export type ConcurrentResult = {
   rate: number;
   completed: number;

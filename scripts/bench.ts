@@ -22,7 +22,8 @@
 //      re-prove, anchors ongoing integrity as history grows.
 //
 // Each SQL backend runs in its own throwaway schema/database, created fresh and
-// dropped on teardown, so a run never inherits another run's rows (a bloated database is measurably slower). Each backend is also proven after its workload — a reported number always comes from a
+// dropped on teardown, so a run never inherits another run's rows (a bloated database is measurably
+// slower). Each backend is also proven after its workload — a reported number always comes from a
 // ledger that just passed every invariant — and annotated with its live durability settings, so the
 // reader can see whether the measured commit is as durable as production.
 //
@@ -33,9 +34,11 @@
 //   BENCH_OUTPUT=json BENCH_JSON_PATH=bench.json node scripts/bench.ts
 //   make bench-prod                                 # run inside a Linux container vs the compose DBs
 //
-// Knobs (all optional): BENCH_PROFILE, BENCH_OPS, BENCH_REPS, BENCH_WARMUP, BENCH_CONCURRENCY,
-// BENCH_BUDGET_MS, BENCH_BACKENDS, BENCH_OUTPUT, BENCH_JSON_PATH, BENCH_SEED, BENCH_SHARDS, and the connection URLs
-// BENCH_POSTGRES_URL / BENCH_MYSQL_URL (else DATABASE_URL / MYSQL_TEST_URL). See harness.ts.
+// Knobs (all optional): BENCH_PROFILE, BENCH_MODE, BENCH_GATES, BENCH_OPS, BENCH_REPS,
+// BENCH_WARMUP, BENCH_CONCURRENCY, BENCH_BUDGET_MS, BENCH_BACKENDS, BENCH_OUTPUT, BENCH_JSON_PATH,
+// BENCH_SEED, BENCH_SHARDS, the pool sizing (BENCH_POOL_MAX, BENCH_POOL_HEADROOM,
+// BENCH_CONNS_PER_OP), and the connection URLs BENCH_POSTGRES_URL / BENCH_MYSQL_URL (else
+// DATABASE_URL / MYSQL_TEST_URL). See harness.ts.
 
 import { sealCheckpoint, reverifyCheckpoint } from '#src/worker/checkpoint.ts';
 import { topUp, spend, requestPayout, credit } from '#test/support/builders.ts';

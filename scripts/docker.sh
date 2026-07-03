@@ -7,7 +7,7 @@
 #   sh scripts/docker.sh down       # any compose subcommand passes straight through
 #   sh scripts/docker.sh logs -f
 #   sh scripts/docker.sh ps
-#   sh scripts/docker.sh bootstrap  # up -d, wait for health, then run db:migrate
+#   sh scripts/docker.sh bootstrap  # up -d, wait for health, then apply the schema (migrate.sh)
 #
 # Via npm, extra args need the `--` separator: `npm run docker -- down`.
 #

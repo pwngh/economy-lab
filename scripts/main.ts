@@ -23,7 +23,7 @@
 //
 // Three externals have no safe default: the request signer, the CREDIT-to-USD rates, and the payout
 // provider. In production (NODE_ENV=production) they must be real and configured; `wiring` refuses to
-// start if any is missing. Otherwise they fall back to dev stand-ins (fixed 1:1 rate, approve-all
+// start if any is missing. Otherwise they fall back to dev stand-ins (fixed dev rates, approve-all
 // payout) so a local run needs no setup.
 
 import { createServer as nodeHttpServer } from 'node:http';
@@ -135,7 +135,7 @@ function isProduction(env: Env): boolean {
 }
 
 // Builds the real externals a production deploy requires from env. Fails fast with one message
-// listing everything missing or malformed, so a prod process never runs on the 1:1 dev rate or an
+// listing everything missing or malformed, so a prod process never runs on the fixed dev rates or an
 // auto-approve payout stub. The rates are the configured fixed-point CREDIT-to-USD par and payout.
 // The payout provider is the real HTTP provider at PROCESSOR_URL.
 function productionExternals(env: Env): { rates: Rates; processor: Processor } {
@@ -171,7 +171,7 @@ function productionExternals(env: Env): { rates: Rates; processor: Processor } {
   if (bad.length > 0) {
     throw new Error(
       `NODE_ENV=production requires real externals; missing or malformed: ${bad.join(', ')}. ` +
-        `Set the CREDIT↔USD rates (CREDIT_BUY_RATE + CREDIT_BUY_SCALE, CREDIT_PAR_RATE + ` +
+        `Set the CREDIT-to-USD rates (CREDIT_BUY_RATE + CREDIT_BUY_SCALE, CREDIT_PAR_RATE + ` +
         `CREDIT_PAR_SCALE, PAYOUT_RATE + PAYOUT_SCALE) and the payout provider (PROCESSOR_URL) — ` +
         `there is no production default for these.`,
     );
@@ -193,9 +193,9 @@ function productionExternals(env: Env): { rates: Rates; processor: Processor } {
   };
 }
 
-// Builds the dev externals. The rate is a deterministic 1:1 stub and the payout provider approves
-// everything, or it is the real HTTP provider if PROCESSOR_URL is set. This way a local run and the
-// tests need no setup.
+// Builds the dev externals. The rates are the fixed dev rates (`fixedRates`) and the payout
+// provider approves everything, or it is the real HTTP provider if PROCESSOR_URL is set. This way a
+// local run and the tests need no setup.
 function devExternals(env: Env): { rates: Rates; processor: Processor } {
   const endpoint = env.PROCESSOR_URL;
   return {
@@ -242,15 +242,16 @@ function wiring(env: Env): {
 function purchaseWebhook(store: Store, ids: Ids, clock: Clock): WebhookHandler {
   return async (provider, request) => {
     try {
-      let body = await request.json();
-      let event = decodeWebhookEvent(provider, body);
-      let ack = await handlePurchaseWebhook(store, { ids, clock }, event);
+      const body = await request.json();
+      const event = decodeWebhookEvent(provider, body);
+      const ack = await handlePurchaseWebhook(store, { ids, clock }, event);
       return new Response(JSON.stringify({ status: ack.status }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
     } catch (error) {
-      let message = error instanceof Error ? error.message : 'Webhook failed.';
+      const message =
+        error instanceof Error ? error.message : 'Webhook failed.';
       return new Response(JSON.stringify({ error: message }), {
         status: 500,
         headers: { 'content-type': 'application/json' },

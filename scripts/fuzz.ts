@@ -95,7 +95,7 @@ async function replay(
   store: Store,
   operations: ReadonlyArray<Operation>,
 ): Promise<Snapshot> {
-  let economy = makeEconomy(ECONOMY_SEED, store);
+  const economy = makeEconomy(ECONOMY_SEED, store);
   try {
     let fault: { at: number; code: string } | null = null;
     for (let i = 0; i < operations.length; i += 1) {
@@ -124,9 +124,9 @@ async function snapshot(
   store: Store,
   fault: { at: number; code: string } | null,
 ): Promise<Snapshot> {
-  let balances = new Map<AccountRef, string>();
-  let heads = new Map<AccountRef, string>();
-  for await (let [account, head] of store.ledger.heads()) {
+  const balances = new Map<AccountRef, string>();
+  const heads = new Map<AccountRef, string>();
+  for await (const [account, head] of store.ledger.heads()) {
     balances.set(account, encodeAmount(await economy.read.balance(account)));
     heads.set(account, head);
   }
@@ -138,13 +138,13 @@ async function snapshot(
 // balances, the per-account head hashes, and every integrity-report flag must all match. The
 // shortfall amount, which is how much USD backing is missing, must match too.
 function diverge(reference: Snapshot, candidate: Snapshot): string | null {
-  let accounts = new Set<AccountRef>([
+  const accounts = new Set<AccountRef>([
     ...reference.balances.keys(),
     ...candidate.balances.keys(),
   ]);
-  for (let account of accounts) {
-    let want = reference.balances.get(account) ?? '<absent>';
-    let got = candidate.balances.get(account) ?? '<absent>';
+  for (const account of accounts) {
+    const want = reference.balances.get(account) ?? '<absent>';
+    const got = candidate.balances.get(account) ?? '<absent>';
     if (want !== got) {
       return `balance[${account}] memory=${want} adapter=${got}`;
     }
@@ -153,21 +153,21 @@ function diverge(reference: Snapshot, candidate: Snapshot): string | null {
   // Every account's head hash must match memory's byte for byte. This catches wrong-order posting
   // bugs that leave balances equal. The detail is worded so the caller's `adapter <X> diverged from
   // memory at <detail>` reads as `adapter <X> head diverged at <account>`.
-  let headAccounts = new Set<AccountRef>([
+  const headAccounts = new Set<AccountRef>([
     ...reference.heads.keys(),
     ...candidate.heads.keys(),
   ]);
-  for (let account of headAccounts) {
-    let want = reference.heads.get(account) ?? '<absent>';
-    let got = candidate.heads.get(account) ?? '<absent>';
+  for (const account of headAccounts) {
+    const want = reference.heads.get(account) ?? '<absent>';
+    const got = candidate.heads.get(account) ?? '<absent>';
     if (want !== got) {
       return `head diverged at ${account} (memory=${want} adapter=${got})`;
     }
   }
 
-  let want = reference.report;
-  let got = candidate.report;
-  for (let flag of [
+  const want = reference.report;
+  const got = candidate.report;
+  for (const flag of [
     'conserved',
     'backed',
     'noOverdraft',
@@ -182,10 +182,10 @@ function diverge(reference: Snapshot, candidate: Snapshot): string | null {
     return `prove.shortfall memory=${encodeAmount(want.shortfall)} adapter=${encodeAmount(got.shortfall)}`;
   }
 
-  let wantFault = reference.fault
+  const wantFault = reference.fault
     ? `${reference.fault.code}@${reference.fault.at}`
     : '<none>';
-  let gotFault = candidate.fault
+  const gotFault = candidate.fault
     ? `${candidate.fault.code}@${candidate.fault.at}`
     : '<none>';
   if (wantFault !== gotFault) {
@@ -215,14 +215,14 @@ async function runDifferential(
   operations: ReadonlyArray<Operation>,
   include: ReadonlySet<string>,
 ): Promise<CaseResult> {
-  let matrix = adapterMatrix().filter(
+  const matrix = adapterMatrix().filter(
     (adapter) => adapter.name === 'memory' || include.has(adapter.name),
   );
   let reference: Snapshot | null = null;
-  let compared: string[] = [];
-  let skipped: string[] = [];
+  const compared: string[] = [];
+  const skipped: string[] = [];
 
-  for (let adapter of matrix) {
+  for (const adapter of matrix) {
     let store: Store;
     try {
       store = await adapter.makeStore();
@@ -235,7 +235,7 @@ async function runDifferential(
       continue;
     }
 
-    let result = await replay(store, operations);
+    const result = await replay(store, operations);
     if (adapter.name === 'memory') {
       reference = result;
       compared.push(adapter.name);
@@ -246,7 +246,7 @@ async function runDifferential(
       reference !== null,
       'memory reference must run before any other adapter',
     );
-    let detail = diverge(reference!, result);
+    const detail = diverge(reference!, result);
     check(
       detail === null,
       `adapter ${adapter.name} diverged from memory at ${detail} [${label}]`,
@@ -281,8 +281,8 @@ type Wallet = { spendable: bigint; promo: bigint };
 // Format a count of minor units (cents) as a two-decimal string like "12.34", the text form
 // `decodeAmount` expects.
 function dollars(minor: bigint): string {
-  let whole = minor / 100n;
-  let frac = (minor % 100n).toString().padStart(2, '0');
+  const whole = minor / 100n;
+  const frac = (minor % 100n).toString().padStart(2, '0');
   return `${whole}.${frac}`;
 }
 
@@ -309,13 +309,13 @@ function spendOperation(
   userId: string,
   wallet: Wallet,
 ): Operation {
-  let available = wallet.spendable + wallet.promo;
+  const available = wallet.spendable + wallet.promo;
   let priceMinor =
     BigInt(1 + Math.floor(next() * Number(available / 100n))) * 100n;
   if (priceMinor > available) {
     priceMinor = available;
   }
-  let fromPromo = wallet.promo < priceMinor ? wallet.promo : priceMinor;
+  const fromPromo = wallet.promo < priceMinor ? wallet.promo : priceMinor;
   wallet.promo -= fromPromo;
   wallet.spendable -= priceMinor - fromPromo;
   return op('spend', step, {
@@ -332,10 +332,10 @@ function spendOperation(
 }
 
 // What a generated sequence may contain. `promo` stays a toggle because a promo-credit spend posts
-// more than one debit/credit line to a single account. That shape once broke the SQL adapters, which
-// inserted those lines one at a time. The bug is fixed, since every adapter now handles the repeated
-// (account, previous-hash) pair. Both the deep memory/http loop and the bounded SQL seeds therefore
-// run with `promo: true`, exercising every operation kind on every backend.
+// more than one debit/credit line to a single account — the hardest shape for an adapter to store,
+// since it repeats an (account, previous-hash) pair. Every adapter handles it, so both the deep
+// memory/http loop and the bounded SQL seeds run with `promo: true`, exercising every operation
+// kind on every backend.
 type ProgramOptions = { promo: boolean };
 
 // Picks one valid operation for the next step and updates the local tally so the next step stays
@@ -347,12 +347,12 @@ function nextOperation(
   wallets: Map<string, Wallet>,
   options: ProgramOptions,
 ): Operation {
-  let userId = `usr_f${1 + Math.floor(next() * 3)}`;
-  let wallet = walletOf(wallets, userId);
-  let roll = next();
+  const userId = `usr_f${1 + Math.floor(next() * 3)}`;
+  const wallet = walletOf(wallets, userId);
+  const roll = next();
 
   if (roll < 0.45 || wallet.spendable + wallet.promo < 100n) {
-    let minor = BigInt(1 + Math.floor(next() * 50)) * 100n;
+    const minor = BigInt(1 + Math.floor(next() * 50)) * 100n;
     wallet.spendable += minor;
     return op('topUp', step, {
       userId,
@@ -361,7 +361,7 @@ function nextOperation(
     });
   }
   if (options.promo && roll < 0.6) {
-    let minor = BigInt(1 + Math.floor(next() * 20)) * 100n;
+    const minor = BigInt(1 + Math.floor(next() * 20)) * 100n;
     wallet.promo += minor;
     return op('grantPromo', step, {
       userId,
@@ -394,9 +394,9 @@ function program(
   length: number,
   options: ProgramOptions,
 ): Operation[] {
-  let next = rng(seed);
-  let wallets = new Map<string, Wallet>();
-  let operations: Operation[] = [];
+  const next = rng(seed);
+  const wallets = new Map<string, Wallet>();
+  const operations: Operation[] = [];
   for (let step = 0; step < length; step += 1) {
     operations.push(nextOperation(next, step, wallets, options));
   }
@@ -414,12 +414,11 @@ function adversarialFixtures(): Array<{
   name: string;
   operations: Operation[];
   // Optionally restricts a fixture to the no-database adapters (memory and http) instead of the full
-  // matrix. No fixture needs this today, since the bug that once forced the promo-draw fixture to
-  // skip the SQL backends is fixed. It is kept for a future fixture that cannot reach a real
+  // matrix. No fixture needs this today; it is kept for a future fixture that cannot reach a real
   // database.
   inProcessOnly?: boolean;
 }> {
-  let duplicatePurchase = spend({
+  const duplicatePurchase = spend({
     buyerId: 'usr_d',
     sku: 'wrld_pass',
     price: creditAmount('4.00'),
@@ -472,8 +471,7 @@ function adversarialFixtures(): Array<{
     {
       // A spend covered by promo credit draws the promo balance down before the user's spendable
       // credit, and the platform's promo accounting still balances afterward. It posts two
-      // debit/credit lines to one account. With the multi-line write bug fixed, every adapter stores
-      // it, so it runs across the full matrix.
+      // debit/credit lines to one account, and it runs across the full matrix.
       name: 'promo spend conserves the float',
       operations: [
         topUp({ userId: 'usr_pr', amount: creditAmount('2.00') }),
@@ -497,7 +495,7 @@ function adversarialFixtures(): Array<{
 // cannot catch a change that broke spend ordering the same way on every adapter at once. Pinning the
 // expected numbers here does catch it. Runs after the adapter comparison.
 async function assertReferenceBalances(): Promise<void> {
-  let promoEconomy = makeEconomy(ECONOMY_SEED);
+  const promoEconomy = makeEconomy(ECONOMY_SEED);
   await promoEconomy.submit(
     topUp({ userId: 'usr_pr', amount: creditAmount('2.00') }),
   );
@@ -534,16 +532,16 @@ async function assertReferenceBalances(): Promise<void> {
 async function main(): Promise<void> {
   // Tracks which non-memory adapters were actually compared, so the success line says memory matched
   // postgres rather than claiming a comparison that a down database skipped.
-  let comparedAdapters = new Set<string>();
-  let skippedAdapters = new Set<string>();
+  const comparedAdapters = new Set<string>();
+  const skippedAdapters = new Set<string>();
 
-  let note = (result: CaseResult): void => {
-    for (let name of result.compared) {
+  const note = (result: CaseResult): void => {
+    for (const name of result.compared) {
       if (name !== 'memory') {
         comparedAdapters.add(name);
       }
     }
-    for (let name of result.skipped) {
+    for (const name of result.skipped) {
       skippedAdapters.add(name);
     }
   };
@@ -552,14 +550,14 @@ async function main(): Promise<void> {
   // http, both always available, carries the long deep loop, which keeps the real-database operation
   // count small. (runDifferential always forces memory in, so naming only http here still compares
   // memory against http.)
-  let fullMatrix = new Set(adapterMatrix().map((adapter) => adapter.name));
-  let inProcess = new Set(['http']);
+  const fullMatrix = new Set(adapterMatrix().map((adapter) => adapter.name));
+  const inProcess = new Set(['http']);
 
   try {
     // Adversarial cases are small and hand-built. Each runs across the whole matrix unless it sets
     // inProcessOnly, which restricts it to the no-database adapters. No case sets that flag today.
-    let fixtures = adversarialFixtures();
-    for (let fixture of fixtures) {
+    const fixtures = adversarialFixtures();
+    for (const fixture of fixtures) {
       note(
         await runDifferential(
           `fixture: ${fixture.name}`,
@@ -573,18 +571,17 @@ async function main(): Promise<void> {
     // Generated seeds. Memory carries the deep loop, which is many seeds, each a long sequence,
     // alongside http, which has no database and is cheap. The SQL databases run few seeds and a
     // short sequence, since each operation is a round trip to a live database.
-    let deepSeeds = Array.from({ length: 12 }, (_, i) => 0xf00 + i);
-    let deepLength = 80;
-    let sqlSeeds = 3; // run the SQL backends on only the first few seeds
-    let sqlLength = 16; // and only a short sequence per seed
+    const deepSeeds = Array.from({ length: 12 }, (_, i) => 0xf00 + i);
+    const deepLength = 80;
+    const sqlSeeds = 3; // run the SQL backends on only the first few seeds
+    const sqlLength = 16; // and only a short sequence per seed
 
     for (let i = 0; i < deepSeeds.length; i += 1) {
-      let seed = deepSeeds[i]!;
+      const seed = deepSeeds[i]!;
       if (i < sqlSeeds) {
-        // Full matrix, SQL backends too, on a short sequence with promos included. With the
-        // multi-line write bug fixed, the SQL adapters store promo-draw spends, which post two lines
-        // to one account. Memory and postgres therefore compare cleanly on the full set of operation
-        // kinds.
+        // Full matrix, SQL backends too, on a short sequence with promos included, so memory and
+        // postgres compare on the full set of operation kinds — promo-draw spends (two lines to
+        // one account) included.
         note(
           await runDifferential(
             `seed 0x${seed.toString(16)} (sql-bounded)`,
@@ -605,10 +602,10 @@ async function main(): Promise<void> {
       }
     }
 
-    let fixtureCount = fixtures.length;
-    let seedCount = deepSeeds.length;
-    let matched = [...comparedAdapters].sort();
-    let skipped = [...skippedAdapters].sort();
+    const fixtureCount = fixtures.length;
+    const seedCount = deepSeeds.length;
+    const matched = [...comparedAdapters].sort();
+    const skipped = [...skippedAdapters].sort();
 
     if (matched.length === 0) {
       console.warn(

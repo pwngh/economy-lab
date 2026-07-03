@@ -46,10 +46,10 @@ async function makeProvable(
   adapter: AdapterCase,
   seed: number,
 ): Promise<Provable> {
-  let digest = seededDigest(1);
-  let clock = fixedClock(0);
-  let store = await adapter.makeStore();
-  let economy = createEconomy({
+  const digest = seededDigest(1);
+  const clock = fixedClock(0);
+  const store = await adapter.makeStore();
+  const economy = createEconomy({
     store,
     clock,
     ids: sequentialIds(),
@@ -87,8 +87,8 @@ type Wallet = { spendable: bigint; promo: bigint };
 // Formats minor units (cents) as a two-decimal string like "12.34". That is the form
 // decodeAmount expects when building an Amount.
 function dollars(minor: bigint): string {
-  let whole = minor / 100n;
-  let frac = (minor % 100n).toString().padStart(2, '0');
+  const whole = minor / 100n;
+  const frac = (minor % 100n).toString().padStart(2, '0');
   return `${whole}.${frac}`;
 }
 
@@ -102,17 +102,17 @@ function nextOperation(
   step: number,
   wallets: Map<string, Wallet>,
 ): Operation {
-  let userId = `usr_p${1 + Math.floor(next() * 3)}`;
-  let wallet = walletOf(wallets, userId);
-  let roll = next();
+  const userId = `usr_p${1 + Math.floor(next() * 3)}`;
+  const wallet = walletOf(wallets, userId);
+  const roll = next();
 
   if (roll < 0.45 || wallet.spendable + wallet.promo < 100n) {
-    let minor = BigInt(1 + Math.floor(next() * 50)) * 100n;
+    const minor = BigInt(1 + Math.floor(next() * 50)) * 100n;
     wallet.spendable += minor;
     return op('topUp', step, { userId, amount: credit(minor), source: 'card' });
   }
   if (roll < 0.6) {
-    let minor = BigInt(1 + Math.floor(next() * 20)) * 100n;
+    const minor = BigInt(1 + Math.floor(next() * 20)) * 100n;
     wallet.promo += minor;
     return op('grantPromo', step, {
       userId,
@@ -132,13 +132,13 @@ function spendOperation(
   userId: string,
   wallet: Wallet,
 ): Operation {
-  let available = wallet.spendable + wallet.promo;
+  const available = wallet.spendable + wallet.promo;
   let priceMinor =
     BigInt(1 + Math.floor(next() * Number(available / 100n))) * 100n;
   if (priceMinor > available) {
     priceMinor = available;
   }
-  let fromPromo = wallet.promo < priceMinor ? wallet.promo : priceMinor;
+  const fromPromo = wallet.promo < priceMinor ? wallet.promo : priceMinor;
   wallet.promo -= fromPromo;
   wallet.spendable -= priceMinor - fromPromo;
   // `orderId` is required by the contract and is the sale row's primary key. Deriving it from
@@ -184,9 +184,9 @@ function credit(minor: bigint) {
 }
 
 function program(seed: number, length: number): Operation[] {
-  let next = rng(seed);
-  let wallets = new Map<string, Wallet>();
-  let operations: Operation[] = [];
+  const next = rng(seed);
+  const wallets = new Map<string, Wallet>();
+  const operations: Operation[] = [];
   for (let step = 0; step < length; step += 1) {
     operations.push(nextOperation(next, step, wallets));
   }
@@ -204,7 +204,7 @@ async function checkInvariants(
   outcome: Outcome,
   heads: Map<AccountRef, string>,
 ): Promise<Failure | null> {
-  let report = await provable.economy.read.prove();
+  const report = await provable.economy.read.prove();
   if (!report.conserved) {
     return { invariant: 'conserves', detail: {} };
   }
@@ -239,15 +239,15 @@ async function verifyChainLinks(
   heads: Map<AccountRef, string>,
 ): Promise<Failure | null> {
   if (outcome.status === 'committed') {
-    for (let link of outcome.transaction.links) {
+    for (const link of outcome.transaction.links) {
       heads.set(link.account, link.hash);
     }
   }
-  let live = new Map<AccountRef, string>();
-  for await (let [account, head] of provable.store.ledger.heads()) {
+  const live = new Map<AccountRef, string>();
+  for await (const [account, head] of provable.store.ledger.heads()) {
     live.set(account, head);
   }
-  for (let [account, expected] of heads) {
+  for (const [account, expected] of heads) {
     if (live.get(account) !== expected) {
       return {
         invariant: 'chainVerifies',
@@ -268,7 +268,7 @@ async function replayIsDuplicate(
   operations: Operation[],
   upTo: number,
 ): Promise<Failure | null> {
-  let { economy, store } = await makeProvable(adapter, seed);
+  const { economy, store } = await makeProvable(adapter, seed);
   try {
     let last: Outcome | null = null;
     for (let i = 0; i <= upTo; i += 1) {
@@ -277,7 +277,7 @@ async function replayIsDuplicate(
     if (!last || last.status !== 'committed') {
       return null;
     }
-    let replay = await economy.submit(operations[upTo]!);
+    const replay = await economy.submit(operations[upTo]!);
     if (replay.status !== 'duplicate') {
       return {
         invariant: 'replayIsDuplicate',
@@ -297,16 +297,16 @@ async function runSeed(
   seed: number,
   operations: Operation[],
 ): Promise<{ at: number; failure: Failure } | null> {
-  let provable = await makeProvable(adapter, seed);
+  const provable = await makeProvable(adapter, seed);
   try {
-    let heads = new Map<AccountRef, string>();
+    const heads = new Map<AccountRef, string>();
     for (let i = 0; i < operations.length; i += 1) {
-      let outcome = await provable.economy.submit(operations[i]!);
-      let failure = await checkInvariants(provable, outcome, heads);
+      const outcome = await provable.economy.submit(operations[i]!);
+      const failure = await checkInvariants(provable, outcome, heads);
       if (failure) {
         return { at: i, failure };
       }
-      let replay = await replayIsDuplicate(adapter, seed, operations, i);
+      const replay = await replayIsDuplicate(adapter, seed, operations, i);
       if (replay) {
         return { at: i, failure: replay };
       }
@@ -328,7 +328,7 @@ async function shrink(
 ): Promise<number> {
   let minimal = at;
   for (let length = 0; length <= at; length += 1) {
-    let prefix = operations.slice(0, length + 1);
+    const prefix = operations.slice(0, length + 1);
     if (await runSeed(adapter, seed, prefix)) {
       minimal = length;
       break;
@@ -342,7 +342,7 @@ async function shrink(
 // is unset. An unreachable adapter is skipped, not failed, which is correct for local work.
 async function reachable(adapter: AdapterCase): Promise<boolean> {
   try {
-    let probe = await adapter.makeStore();
+    const probe = await adapter.makeStore();
     await probe.close();
     return true;
   } catch {
@@ -359,8 +359,8 @@ async function proveAdapter(
   seeds: number[],
   length: number,
 ): Promise<boolean> {
-  for (let seed of seeds) {
-    let operations = program(seed, length);
+  for (const seed of seeds) {
+    const operations = program(seed, length);
     // A backend can also reject a posting outright with a thrown DB error, not just return a
     // failing invariant. Treat that as a per-adapter failure. Report it and exit non-zero
     // instead of crashing the process and masking the remaining adapters.
@@ -377,7 +377,7 @@ async function proveAdapter(
       return false;
     }
     if (result) {
-      let minimal = await shrink(adapter, seed, operations, result.at);
+      const minimal = await shrink(adapter, seed, operations, result.at);
       console.error(
         `prove [${adapter.name}]: ${result.failure.invariant} violated at op ` +
           `#${result.at + 1} (minimal failing prefix: ${minimal + 1} ops), ` +
@@ -404,10 +404,10 @@ async function proveAdapter(
  */
 async function main(): Promise<void> {
   // Use 8 seeds, each a 60-operation program. Every adapter runs this same workload.
-  let seeds = Array.from({ length: 8 }, (_, i) => 0x1000 + i);
-  let length = 60;
+  const seeds = Array.from({ length: 8 }, (_, i) => 0x1000 + i);
+  const length = 60;
 
-  for (let adapter of adapterMatrix()) {
+  for (const adapter of adapterMatrix()) {
     // memory always runs. Every other adapter is gated on its backend being reachable, and it
     // is skipped, not failed, when the backend is unreachable.
     if (adapter.name !== 'memory' && !(await reachable(adapter))) {

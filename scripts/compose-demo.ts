@@ -39,6 +39,7 @@ import {
   fakeProcessor,
   fixedRates,
 } from '#test/support/capabilities.ts';
+import { maskUrl } from '#scripts/support/harness.ts';
 
 import type { Amount } from '#src/money.ts';
 
@@ -72,12 +73,12 @@ function selection(env: Record<string, string | undefined>): {
     db === ''
       ? 'memory (no DATABASE_URL)'
       : isPostgres(db)
-        ? `postgres (${db})`
+        ? `postgres (${maskUrl(db)})`
         : isMysql(db)
-          ? `mysql (${db})`
+          ? `mysql (${maskUrl(db)})`
           : `?? unsupported scheme: ${db.split(':')[0]}`;
   const cache = env.REDIS_URL
-    ? `redis (${env.REDIS_URL})`
+    ? `redis (${maskUrl(env.REDIS_URL)})`
     : 'none (reads hit the store)';
   const dispatcher = env.SQS_QUEUE_URL
     ? `sqs (${env.SQS_QUEUE_URL})`

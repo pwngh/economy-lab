@@ -22,9 +22,12 @@ import { spendable, promo, earned, SYSTEM } from '#src/accounts.ts';
 import type { Economy, Operation, Outcome } from '#src/contract.ts';
 import type { AccountRef } from '#src/accounts.ts';
 
-let SCENARIO = 'phase1';
-let HERE = dirname(fileURLToPath(import.meta.url));
-let GOLDEN = join(HERE, '..', 'test', 'golden', `${SCENARIO}.trace`);
+// Golden-trace runner: replays the fixed phase-1 scenario and renders it to a stable text form.
+// NOTE: with no flag this WRITES test/golden/phase1.trace; `--check` (what CI runs, via
+// `npm run trace:check`) compares against the golden without writing. `--update` also overwrites.
+const SCENARIO = 'phase1';
+const HERE = dirname(fileURLToPath(import.meta.url));
+const GOLDEN = join(HERE, '..', 'test', 'golden', `${SCENARIO}.trace`);
 
 // --- Stable output shape --------------------------------
 
@@ -40,9 +43,9 @@ function canonical(value: unknown): unknown {
     return value.map(canonical);
   }
   if (value !== null && typeof value === 'object') {
-    let source = value as Record<string, unknown>;
-    let out: Record<string, unknown> = {};
-    for (let key of Object.keys(source).sort()) {
+    const source = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(source).sort()) {
       out[key] = canonical(source[key]);
     }
     return out;
@@ -92,7 +95,7 @@ async function step(
   steps: Record<string, unknown>[],
   operation: Operation,
 ): Promise<Outcome> {
-  let outcome = await economy.submit(operation);
+  const outcome = await economy.submit(operation);
   steps.push(recordStep(operation.kind, outcome));
   return outcome;
 }
@@ -105,8 +108,8 @@ async function step(
 // purchase split between two sellers. It then submits that same purchase again, which must not
 // charge twice. It ends with an over-priced purchase that is declined for insufficient funds.
 async function buildTrace(): Promise<Record<string, unknown>> {
-  let economy = makeEconomy();
-  let steps: Record<string, unknown>[] = [];
+  const economy = makeEconomy();
+  const steps: Record<string, unknown>[] = [];
 
   await step(
     economy,
@@ -118,7 +121,7 @@ async function buildTrace(): Promise<Record<string, unknown>> {
     steps,
     grantPromo({ userId: 'usr_buyer', amount: credit('5.00') }),
   );
-  let purchase = spend({
+  const purchase = spend({
     buyerId: 'usr_buyer',
     sku: 'wrld_bundle',
     price: credit('12.00'),
@@ -146,7 +149,7 @@ async function buildTrace(): Promise<Record<string, unknown>> {
 // Reads the balances of a hand-picked set of accounts under stable labels. The set covers the
 // buyer's spendable and promo accounts, each seller's earnings, and the platform accounts.
 async function keyBalances(economy: Economy): Promise<Record<string, unknown>> {
-  let accounts: ReadonlyArray<readonly [string, AccountRef]> = [
+  const accounts: ReadonlyArray<readonly [string, AccountRef]> = [
     ['buyer.spendable', spendable('usr_buyer')],
     ['buyer.promo', promo('usr_buyer')],
     ['seller.a.earned', earned('usr_a')],
@@ -156,8 +159,8 @@ async function keyBalances(economy: Economy): Promise<Record<string, unknown>> {
     ['trust_cash', SYSTEM.TRUST_CASH],
     ['usd_clearing', SYSTEM.USD_CLEARING],
   ];
-  let out: Record<string, unknown> = {};
-  for (let [label, account] of accounts) {
+  const out: Record<string, unknown> = {};
+  for (const [label, account] of accounts) {
     out[label] = await economy.read.balance(account);
   }
   return out;
@@ -187,21 +190,21 @@ async function writeGolden(content: string): Promise<void> {
 // and exits non-zero on any difference, which is what CI runs. `--update` overwrites the golden.
 // No flag just writes the file.
 async function main(): Promise<void> {
-  let mode = process.argv.includes('--check')
+  const mode = process.argv.includes('--check')
     ? 'check'
     : process.argv.includes('--update')
       ? 'update'
       : 'emit';
-  let content = render(await buildTrace());
+  const content = render(await buildTrace());
 
   if (mode === 'update' || mode === 'emit') {
-    let existed = (await readGolden()) !== null;
+    const existed = (await readGolden()) !== null;
     await writeGolden(content);
     console.warn(`trace: ${existed ? 'rewrote' : 'wrote'} ${GOLDEN}`);
     return;
   }
 
-  let golden = await readGolden();
+  const golden = await readGolden();
   if (golden === null) {
     console.error(
       `trace: no golden at ${GOLDEN}; run "npm run trace -- --update" first.`,
@@ -221,8 +224,8 @@ async function main(): Promise<void> {
 // Finds the first line where the golden and the fresh output differ. It reports just that one line
 // from each side instead of the whole document.
 function firstDiff(expected: string, actual: string): string {
-  let a = expected.split('\n');
-  let b = actual.split('\n');
+  const a = expected.split('\n');
+  const b = actual.split('\n');
   for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
     if (a[i] !== b[i]) {
       return `line ${i + 1}:\n  golden: ${a[i] ?? '<none>'}\n  actual: ${b[i] ?? '<none>'}`;

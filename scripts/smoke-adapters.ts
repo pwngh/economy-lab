@@ -21,7 +21,8 @@
  *
  * Services (docker compose up -d): Redis :6379, LocalStack/SQS :4566.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage & messaging} for the adapter wiring this exercises.
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage-and-messaging/ Storage &
+ *   messaging} for the adapter wiring this exercises.
  */
 
 import { createServer } from 'node:http';
@@ -67,8 +68,8 @@ function reachable(
   timeoutMs = 600,
 ): Promise<boolean> {
   return new Promise((resolve) => {
-    let socket = connect({ host, port });
-    let settle = (ok: boolean): void => {
+    const socket = connect({ host, port });
+    const settle = (ok: boolean): void => {
       socket.destroy();
       resolve(ok);
     };
@@ -97,12 +98,12 @@ async function smokeRedis(): Promise<void> {
     return;
   }
   try {
-    let caps = await capabilitiesFromEnv(
+    const caps = await capabilitiesFromEnv(
       { REDIS_URL: 'redis://localhost:6379' },
       ports,
     );
-    let cache = caps.cache!;
-    let key = 'smoke:bal:usr_1';
+    const cache = caps.cache!;
+    const key = 'smoke:bal:usr_1';
     await cache.set(key, 'CREDIT:9.99');
     assert.equal(await cache.get(key), 'CREDIT:9.99');
     await cache.invalidate(key);
@@ -116,11 +117,11 @@ async function smokeRedis(): Promise<void> {
 
 // --- HTTP dispatcher: capabilitiesFromEnv -> selectDispatcher (real fetch) ---------
 async function smokeHttp(): Promise<void> {
-  let captured: {
+  const captured: {
     request?: { headers: Record<string, unknown>; body: string };
   } = {};
-  let server = createServer((req, res) => {
-    let chunks: Buffer[] = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
     req.on('data', (c) => chunks.push(c as Buffer));
     req.on('end', () => {
       captured.request = {
@@ -133,8 +134,8 @@ async function smokeHttp(): Promise<void> {
   });
   try {
     await new Promise<void>((r) => server.listen(0, () => r()));
-    let port = (server.address() as { port: number }).port;
-    let caps = await capabilitiesFromEnv(
+    const port = (server.address() as { port: number }).port;
+    const caps = await capabilitiesFromEnv(
       { DISPATCHER_URL: `http://localhost:${port}/events` },
       ports,
     );
@@ -172,25 +173,25 @@ async function smokeSqs(): Promise<void> {
   process.env.AWS_REGION ??= 'us-east-1';
   process.env.AWS_ACCESS_KEY_ID ??= 'test';
   process.env.AWS_SECRET_ACCESS_KEY ??= 'test';
-  let {
+  const {
     SQSClient,
     CreateQueueCommand,
     ReceiveMessageCommand,
     DeleteQueueCommand,
   } = sqsMod;
-  let admin = new SQSClient({
+  const admin = new SQSClient({
     endpoint: 'http://localhost:4566',
     region: 'us-east-1',
     credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
   });
   try {
-    let created = await admin.send(
+    const created = await admin.send(
       new CreateQueueCommand({ QueueName: 'economy-smoke' }),
     );
-    let queueUrl = created.QueueUrl!;
-    let caps = await capabilitiesFromEnv({ SQS_QUEUE_URL: queueUrl }, ports);
+    const queueUrl = created.QueueUrl!;
+    const caps = await capabilitiesFromEnv({ SQS_QUEUE_URL: queueUrl }, ports);
     await caps.dispatcher!(sampleEvent());
-    let recv = await admin.send(
+    const recv = await admin.send(
       new ReceiveMessageCommand({
         QueueUrl: queueUrl,
         MaxNumberOfMessages: 1,
@@ -215,7 +216,7 @@ await smokeHttp();
 await smokeSqs();
 
 console.warn('=== live adapter smoke (real services) ===');
-for (let line of lines) {
+for (const line of lines) {
   console.warn(line);
 }
 
