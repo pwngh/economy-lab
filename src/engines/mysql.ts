@@ -113,8 +113,8 @@ interface ExecDeps {
   exec: MysqlExecutor;
   digest: Digest;
   clock: Clock;
-  // The store's pool, for statements that must commit outside `exec`'s transaction (plantAndLock
-  // creates first-use rows there). In the non-transactional unit, `exec` is the pool itself.
+  // The store's pool, for statements that must commit outside `exec`'s transaction; in the
+  // non-transactional unit, `exec` is the pool itself.
   pool: MysqlPool;
 }
 
@@ -173,9 +173,8 @@ async function isKnownAccount(
       return true;
     }
   }
-  // A schema-seeded system account, or a shard of one, is confirmed without a round trip — the
-  // bare row always exists and a shard row is created on first use (post_entry's INSERT IGNORE);
-  // only a genuinely unknown id falls through to the existence query.
+  // A schema-seeded system account, or a shard of one, is confirmed without a round trip; only a
+  // genuinely unknown id falls through to the existence query.
   if (isSeededSystemAccount(account)) {
     return true;
   }
@@ -264,10 +263,9 @@ async function insertPosting(
   const postedAt = deps.clock.now();
   const links = await advanceChain(deps, posting);
 
-  // One CALL persists the whole posting. The application has already decided everything: the chain
-  // hashes, the per-account net balance deltas, and which user accounts are new. `post_entry` then
-  // writes the posting, legs, chain links, and balance changes as one set-based unit in this
-  // transaction. The JSON arrays carry the bigint amounts as strings to keep values past 2^53.
+  // One CALL persists the whole posting — legs, chain links, and balance changes — as one set-based
+  // unit in this transaction. The JSON arrays carry the bigint amounts as strings to keep values
+  // past 2^53.
   const args = postEntryArgs(posting, links);
   // postEntryArgs collects only first-use user accounts. A platform shard (`platform:revenue#3`)
   // is also created on first use — the schema seeds just the bare ids — so add each one with kind
@@ -437,9 +435,9 @@ function createLedgerStore(deps: ExecDeps): Ledger {
     headSums: () => headSumsOf(deps.exec),
 
     balanceAccounts: async function* () {
-      // The seeded house-account placeholder (genesis head, zero balance, planted so the first lock has a
-      // row to grab) is excluded -- it reads like no row -- except `OR balance <> 0` catches the very
-      // drift this scan hunts: a placeholder that gained a balance.
+      // The seeded placeholder (genesis head, zero balance) reads like no row and is excluded --
+      // except `OR balance <> 0` catches the drift this scan hunts: a placeholder that gained a
+      // balance.
       const result = await rows(
         deps.exec,
         `SELECT account_id FROM account_balances WHERE head_hash <> REPEAT('0', 64) OR balance <> 0`,
@@ -735,9 +733,8 @@ async function* listPostingsOf(exec: MysqlExecutor): AsyncIterable<Posting> {
     exec,
     'SELECT id, meta FROM postings ORDER BY seq DESC',
   );
-  // One batched legs read instead of a legsOf round trip per posting (the same N+1 fold as lineageOf).
-  // ledger.list() consumers buffer the whole stream, so reading the legs up front changes nothing they
-  // observe.
+  // One batched legs read instead of a per-posting round trip, the same N+1 fold as lineageOf;
+  // list() consumers buffer the whole stream, so the early read changes nothing.
   const legsByTxn = await legsByPosting(
     exec,
     postings.map((row) => row.id as string),
@@ -783,10 +780,9 @@ function naturalDelta(account: AccountRef, row: Row): Amount {
 function createIdempotencyStore(exec: MysqlExecutor): IdempotencyStore {
   return {
     claim: async (key) => {
-      // affectedRows: 1 means we inserted the placeholder and won the claim. 0 means the key
-      // exists and its holder has committed: a still-uncommitted holder would have blocked this
-      // INSERT IGNORE on its row lock, and a rolled-back one would have freed the key so the
-      // insert succeeded. So on 0, replay the recorded result.
+      // affectedRows 1 means we inserted the placeholder and won the claim. 0 means the key's
+      // holder committed -- an in-flight holder would have blocked this INSERT IGNORE, and a
+      // rolled-back one would have freed the key -- so replay the recorded result.
       const inserted = await execWrite(
         exec,
         'INSERT IGNORE INTO idempotency (`key`, transaction) VALUES (?, NULL)',
@@ -807,9 +803,8 @@ function createIdempotencyStore(exec: MysqlExecutor): IdempotencyStore {
           transaction: parseTransaction(recorded),
         };
       }
-      // The row exists with no recorded result yet (a placeholder this same caller is re-claiming, or
-      // the rare committed-but-unrecorded placeholder). Either way it is ours to proceed on, matching
-      // the in-memory reference, which treats any non-committed key as claimable.
+      // The row exists with no recorded result: a placeholder this caller is re-claiming. Treat it
+      // as ours, matching the in-memory reference.
       return { claimed: true };
     },
 
@@ -901,9 +896,8 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
       if (ids.length === 0) {
         return;
       }
-      // The `AND status = 'pending'` guard stops a stale resend from flipping a row that has since
-      // been dead-lettered (or already relayed) back to 'relayed'. It is the same terminal-state guard
-      // recordFailure uses and the in-memory reference applies (which skips any non-'pending' row).
+      // The `AND status = 'pending'` clause stops a stale resend from flipping a dead-lettered or
+      // already-relayed row back to 'relayed'.
       const placeholders = ids.map(() => '?').join(', ');
       await rows(
         exec,
@@ -913,7 +907,7 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
       );
     },
     // Record a failed delivery: bump `attempts` and leave the row pending so the next sweep
-    // retries it. Same terminal-state guard as markSent above.
+    // retries it.
     recordFailure: async (id) => {
       await rows(
         exec,
@@ -922,7 +916,7 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
       );
     },
     // Give up on a poison message: flip to 'dead' so claimBatch never hands it back, keep the
-    // reason for operators. Same terminal-state guard as markSent above.
+    // reason for operators.
     deadLetter: async (id, reason) => {
       await rows(
         exec,
@@ -1208,8 +1202,7 @@ function createEntitlementStore(deps: ExecDeps): EntitlementStore {
       );
     },
     owns: async (userId, sku) => {
-      // `expires_at IS NULL` is a perpetual grant; otherwise owned up to and including
-      // `expiresAt` (>= now), expiring only once the clock passes it.
+      // A null expires_at is a perpetual grant; otherwise owned while now <= expiresAt, inclusive.
       const found = await rows(
         exec,
         `SELECT 1 FROM entitlements
@@ -1246,8 +1239,8 @@ function createEntitlementStore(deps: ExecDeps): EntitlementStore {
 function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
   return {
     open: async (sub) => {
-      // The ON DUPLICATE KEY branch must overwrite `attempts` -- a re-open with attempts:n+1 that kept the
-      // old count would never advance the retry cap.
+      // ON DUPLICATE KEY must overwrite `attempts`: keeping the old count would never advance the
+      // retry cap.
       await rows(
         exec,
         `INSERT INTO subscriptions
@@ -1279,8 +1272,8 @@ function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
       );
       return found.length ? rowToSubscription(found[0]!) : null;
     },
-    // The one ACTIVE subscription for this (user, sku, seller) triple, or null. The subscribe
-    // handler reads this to refuse a duplicate active subscription that would double-bill.
+    // The one ACTIVE subscription per (user, sku, seller), or null; subscribe reads this to refuse
+    // a duplicate that would double-bill.
     activeFor: async (userId, sku, sellerId) => {
       const found = await rows(
         exec,
@@ -1298,8 +1291,7 @@ function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
         [id],
       );
     },
-    // FOR UPDATE SKIP LOCKED, like the saga/promo claimDue, lets overlapping sweepers grab
-    // disjoint batches instead of contending over the same due rows.
+    // FOR UPDATE SKIP LOCKED lets overlapping sweepers grab disjoint batches.
     claimDue: async (now, limit) => {
       const result = await rows(
         exec,
@@ -1310,8 +1302,8 @@ function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
       return result.map(rowToSubscription);
     },
     markBilled: async (id, nextDueAt, expectedDueAt) => {
-      // Compare-and-set on next_due_at = `expectedDueAt`: a worker that already billed this period moved the
-      // date on, so the loser matches no row and never double-charges. attempts resets to 0 on success.
+      // Compare-and-set on next_due_at: a worker that already billed this period moved the date, so
+      // the loser matches no row and never double-charges. attempts resets to 0 on success.
       const affected = await execWrite(
         exec,
         `UPDATE subscriptions SET next_due_at = ?, period = period + 1, attempts = 0
@@ -1320,9 +1312,9 @@ function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
       );
       return affected > 0;
     },
-    // End a subscription because a renewal charge couldn't be funded (distinct from the user
-    // canceling). The UPDATE only applies while still active, so it moves active -> lapsed exactly
-    // once; once lapsed it no longer matches the renewal job (active-only), so billing stops.
+    // End a subscription whose renewal charge couldn't be funded (distinct from the user
+    // canceling). The UPDATE only applies while active, so lapsing happens once; a lapsed row no
+    // longer matches the active-only renewal query, so billing stops.
     markLapsed: async (id) => {
       await rows(
         exec,
@@ -1341,10 +1333,9 @@ function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
 // then marks each one reversed so it is not reversed twice.
 function createPromoStore(exec: MysqlExecutor): PromoStore {
   return {
-    // Idempotent on `id`: `ON DUPLICATE KEY UPDATE id = id` is the MySQL idempotent-insert idiom, a
-    // no-op assignment that swallows the duplicate-key conflict without touching any column, so a
-    // second open() leaves the original row untouched. Unlike the saga/subscription `open` upserts
-    // above (which overwrite on conflict), a promo grant must not be clobbered.
+    // Idempotent insert: `ON DUPLICATE KEY UPDATE id = id` swallows the conflict without touching a
+    // column, so a second open() leaves the original row intact -- unlike the saga and subscription
+    // upserts, a promo grant must not be clobbered.
     open: async (grant) => {
       await rows(
         exec,
@@ -1361,10 +1352,8 @@ function createPromoStore(exec: MysqlExecutor): PromoStore {
         ],
       );
     },
-    // The grants the sweep should act on: expired (`expires_at <= now`) and not yet reversed,
-    // oldest `expires_at` first so the most overdue are reversed first, capped at `limit`.
-    // FOR UPDATE SKIP LOCKED matches the saga/outbox claim queries so two sweeps grab
-    // different grants.
+    // Expired, unreversed grants oldest-first, capped at `limit`; FOR UPDATE SKIP LOCKED keeps two
+    // sweeps off the same rows.
     claimDue: async (now, limit) => {
       const result = await rows(
         exec,
@@ -1375,8 +1364,7 @@ function createPromoStore(exec: MysqlExecutor): PromoStore {
       );
       return result.map(rowToPromoGrant);
     },
-    // Mark a grant reversed so `claimDue` never hands it back again. The `AND reversed = false`
-    // guard is the outbox markSent terminal-state guard in boolean form.
+    // Mark a grant reversed so `claimDue` never hands it back again.
     markReversed: async (id) => {
       await rows(
         exec,

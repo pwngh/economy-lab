@@ -331,8 +331,8 @@ function createLedgerStore(q: Queryable, digest: Digest, clock: Clock): Ledger {
       return result.rows.length > 0;
     },
 
-    // No-op here. Locking only makes sense inside a transaction; lockingLedger below is the
-    // real implementation, on a transaction client.
+    // No-op here; locking only makes sense inside a transaction, so lockingLedger below is the
+    // real implementation.
     lock: async () => {},
 
     append: async (posting) => {
@@ -388,13 +388,10 @@ function lockingLedger(q: Queryable, digest: Digest, clock: Clock): Ledger {
       );
     },
     lockMany: async (accounts) => {
-      // Batched twin of `lock`: ensure the first-use rows exist, then lock every account's balance
-      // row in one statement. `order by account_id` makes Postgres take the locks in one global order
-      // (the LockRows node pulls already-sorted rows from the Sort beneath it), so operations sharing
-      // accounts serialize instead of deadlocking — same guarantee as locking per-account in sorted
-      // order, now in a single round trip. A first-use account has no account_balances row yet
-      // (post_entry creates it), so it locks nothing here, exactly like `lock`; the chain-fork unique
-      // index plus withTransientRetry still cover that cold-start race.
+      // Batched twin of `lock`: `order by account_id` takes the locks in one global order, so
+      // operations sharing accounts serialize instead of deadlocking, in a single round trip. A
+      // first-use account has no balance row yet and locks nothing, exactly like `lock`; the
+      // chain-fork index plus withTransientRetry cover that cold-start race.
       await ensureAccounts(q, accounts);
       await q.query(
         `select 1 from account_balances
@@ -477,8 +474,8 @@ async function* timelineOf(
   const lotOffset = options?.offset ?? 0;
   const lotLimit = options?.limit ?? Infinity;
 
-  // Rows scanned per DB round-trip. Most balances are covered by the first page, so the second
-  // query is rarely issued; a finite caller limit caps the page so we never over-fetch.
+  // Rows scanned per round trip: most balances fit the first page, and a finite caller limit
+  // caps it.
   const pageSize = Number.isFinite(lotLimit)
     ? Math.max(lotOffset + lotLimit, 1)
     : 256;
@@ -500,8 +497,7 @@ async function* timelineOf(
     }
     for (const row of result.rows) {
       const lot = rowToLot(account, row);
-      // A balance-lowering leg (a spend) is not a lot; skip it without consuming an offset/limit
-      // slot, so the lot-granularity `offset`/`limit` count only real lots.
+      // A balance-lowering leg is not a lot; skip it without consuming an offset or limit slot.
       if (lot === null) {
         continue;
       }
@@ -625,9 +621,8 @@ async function* lineageOf(
   q: Queryable,
   account: AccountRef,
 ): AsyncIterable<StoredLink> {
-  // One chain_links row per posting that touched this account (a posting advances the chain
-  // once however many legs it has to the account), so this yields one StoredLink per such
-  // posting, matching the in-memory adapter.
+  // One chain_links row per posting that touched this account, so this yields one StoredLink per
+  // such posting, matching the in-memory adapter.
   const result = await q.query(
     `select c.posting_id, c.prev_hash, c.hash, p.meta
        from chain_links c
@@ -636,10 +631,8 @@ async function* lineageOf(
       order by p.seq asc`,
     [account],
   );
-  // Batch every posting's legs in one query instead of a legsOf round trip per row (an N+1 on the
-  // audit path, which walks the whole chain anyway). The whole posting's legs, not just this
-  // account's: chainPreimage filters to the account's own legs, so the recompute matches the
-  // in-memory reference.
+  // Batch every posting's legs in one query instead of a per-row round trip (an N+1 on the audit
+  // path). The whole posting's legs load, not just this account's: chainPreimage filters itself.
   const legsByTxn = await legsByPosting(
     q,
     result.rows.map((row) => row.posting_id as string),
@@ -681,9 +674,8 @@ async function* listPostingsOf(q: Queryable): AsyncIterable<Posting> {
   const result = await q.query(
     `select id, meta from postings order by seq desc`,
   );
-  // One batched legs read instead of a legsOf round trip per posting (the same N+1 fold as lineageOf).
-  // ledger.list() consumers buffer the whole stream, so reading the legs up front changes nothing they
-  // observe.
+  // One batched legs read instead of a per-posting round trip, the same N+1 fold as lineageOf.
+  // list() consumers buffer the whole stream, so the early read changes nothing.
   const legsByTxn = await legsByPosting(
     q,
     result.rows.map((row) => row.id as string),
@@ -978,17 +970,16 @@ function createOutboxStore(q: Queryable): OutboxStore {
       if (ids.length === 0) {
         return;
       }
-      // The `and status = 'pending'` clause stops a stale resend from flipping a row back to
-      // 'relayed' once it has been dead-lettered or already relayed. This is the same terminal-state
-      // guard recordFailure uses and the in-memory reference applies (it skips any non-'pending' row).
+      // The `and status = 'pending'` clause stops a stale resend from flipping a dead-lettered or
+      // already-relayed row back to 'relayed'.
       await q.query(
         `update outbox set status = 'relayed'
           where id = any($1::text[]) and status = 'pending'`,
         [[...ids]],
       );
     },
-    // Record a failed delivery: bump attempts by one but keep the row 'pending' so the
-    // next sweep retries it. Same terminal-state guard as markRelayed above.
+    // Record a failed delivery: bump attempts and keep the row 'pending' so the next sweep
+    // retries it.
     recordFailure: async (id) => {
       await q.query(
         `update outbox set attempts = attempts + 1
@@ -996,8 +987,8 @@ function createOutboxStore(q: Queryable): OutboxStore {
         [id],
       );
     },
-    // Give up on a poison message: flip it to 'dead' (so claimBatch never returns it again)
-    // and persist the reason. Same terminal-state guard as markRelayed above.
+    // Give up on a poison message: flip it to 'dead' so claimBatch never returns it, and
+    // persist the reason.
     deadLetter: async (id, reason) => {
       await q.query(
         `update outbox set status = 'dead', dead_letter_reason = $2
@@ -1029,9 +1020,8 @@ function rowToOutbox(row: Record<string, unknown>): OutboxMessage {
 // (record-in-the-ingress-transaction, apply-later, dedupe-by-id).
 function createInboxStore(q: Queryable): InboxStore {
   return {
-    // A redelivery (no row from `on conflict do nothing ... returning`) falls through to re-reading
-    // the canonical row by key. Operation amounts are decimal strings (encodeOperation): jsonb has
-    // no BigInt.
+    // A redelivery (no row returned from `on conflict do nothing`) falls through to re-reading the
+    // canonical row by key. Amounts are decimal strings: jsonb has no BigInt.
     enqueueInbound: async (entry) => {
       const inserted = await q.query(
         `insert into inbox (id, key, operation, status, attempts, received_at)
@@ -1058,10 +1048,9 @@ function createInboxStore(q: Queryable): InboxStore {
       );
       return rowToInbox(existing.rows[0]!);
     },
-    // Pending rows oldest `received_at` first, capped at `input.limit`, each row-locked for this
-    // worker. Only 'pending' rows are returned; an 'applied' or 'dead' row is terminal and never
-    // re-claimed, so a poison event can't wedge the queue. `input.now` is accepted for parity with
-    // the saga/relay claim; the inbox has no due-time gate.
+    // Oldest pending rows first, capped at `input.limit`, each row-locked for this worker;
+    // terminal rows are never re-claimed. `input.now` is accepted for parity with the saga and
+    // relay claims — the inbox has no due-time gate.
     claimInbound: async (input) => {
       const result = await q.query(
         `select id, key, operation, status, attempts, received_at, dead_letter_reason from inbox
@@ -1073,16 +1062,16 @@ function createInboxStore(q: Queryable): InboxStore {
       );
       return result.rows.map(rowToInbox);
     },
-    // Mark a row applied once its operation has committed: flip 'pending' to 'applied' so
-    // `claimInbound` never returns it again. Same terminal-state guard as the outbox's markRelayed.
+    // Flip 'pending' to 'applied' once the operation commits, so claimInbound never returns the
+    // row again.
     markApplied: async (id) => {
       await q.query(
         `update inbox set status = 'applied' where id = $1 and status = 'pending'`,
         [id],
       );
     },
-    // Record a failed apply: bump attempts by one but keep the row 'pending' so the next sweep
-    // retries it. Same terminal-state guard as markApplied.
+    // Record a failed apply: bump attempts and keep the row 'pending' so the next sweep retries
+    // it.
     bumpAttempt: async (id) => {
       await q.query(
         `update inbox set attempts = attempts + 1
@@ -1090,8 +1079,7 @@ function createInboxStore(q: Queryable): InboxStore {
         [id],
       );
     },
-    // Give up on a poison event: flip it to 'dead' (so claimInbound never returns it again) and
-    // persist the reason. Same terminal-state guard as markApplied.
+    // Give up on a poison event: flip it to 'dead' and persist the reason.
     deadLetter: async (id, reason) => {
       await q.query(
         `update inbox set status = 'dead', dead_letter_reason = $2
@@ -1248,11 +1236,9 @@ function createSagaStore(q: Queryable): SagaStore {
     },
     findByProviderRef: (providerRef) => findSagaByRef(q, providerRef),
     list: () => listSagasOf(q),
-    // Find payouts that are due and still in progress. A payout reaches RESERVED in the same
-    // step that first creates it, so a row left in the earlier REQUESTED state means that step
-    // crashed partway. Such a stuck row is skipped on purpose: this query picks up only RESERVED
-    // and SUBMITTED rows. (The matching index in db/postgresql-schema.sql excludes REQUESTED the
-    // same way, so this query can use it.) Matches the in-memory reference and the MySQL engine.
+    // Due payouts still in progress: only RESERVED and SUBMITTED rows. A row stuck in REQUESTED
+    // means its opening step crashed partway, and it is skipped on purpose — the schema's partial
+    // index excludes it the same way.
     claimDue: async (now, limit) => {
       const result = await q.query(
         `select * from payout_sagas
@@ -1265,10 +1251,8 @@ function createSagaStore(q: Queryable): SagaStore {
       return result.rows.map(rowToSaga);
     },
     advance: async (id, from, to, patch) => {
-      // `payout_usd` is the terminal settle outcome (patch carries the USD Amount when settlePayout
-      // marks the saga SETTLED); `reason` is the terminal failure outcome (carried when the worker
-      // CAS-fails a stuck/abandoned payout to FAILED). Both left as-is on every other advance via
-      // coalesce, so a non-terminal advance never disturbs them.
+      // `payout_usd` and `reason` are the terminal settle and fail outcomes; coalesce leaves both
+      // untouched on every non-terminal advance.
       const result = await q.query(
         `update payout_sagas
             set state = $3,
@@ -1356,9 +1340,8 @@ function createEntitlementStore(q: Queryable, clock: Clock): EntitlementStore {
       );
     },
     owns: async (userId, sku) => {
-      // Owned only if not revoked and not expired. Boundary is inclusive (owned while now <=
-      // expiresAt, lapsed once now > expiresAt), so `expires_at >= now`. A null expires_at never
-      // lapses. Read is side-effect-free (no auto-purge).
+      // Owned only if not revoked and not expired; the boundary is inclusive (`expires_at >=
+      // now`), a null expiry never lapses, and the read has no side effects.
       const result = await q.query(
         `select 1 from entitlements
           where user_id = $1 and sku = $2 and revoked = false
@@ -1488,15 +1471,10 @@ function createSubscriptionStore(q: Queryable): SubscriptionStore {
 
 // --- Promo store ------------------------------------------------------------------
 
-// Tracks each marketing promo grant so the promo-expiry sweep can reverse whatever the user
-// hasn't spent once the grant expires. `grantPromo` records the grant here in the same
-// transaction as the credit posting, sharing that posting's id, so the grant only persists if
-// the posting commits. `open` is idempotent on the id (`on conflict do nothing`, like
-// SagaStore.open) and must not overwrite an existing grant. `claimDue` hands the sweep up to
-// `limit` grants that have expired and aren't yet reversed, oldest first, with a `for update
-// skip locked` lock so concurrent sweeps don't grab the same row. `markReversed`'s `and
-// reversed = false` guard makes it a no-op on a missing or already-reversed row, so re-running
-// the sweep over the same grant is harmless.
+// Tracks each promo grant for the expiry sweep, recorded in the same transaction as the credit
+// posting. `open` is idempotent on the id and never overwrites; `claimDue` hands the sweep
+// expired, unreversed grants oldest-first under `for update skip locked`; `markReversed` is a
+// no-op on a missing or already-reversed row, so re-running the sweep is harmless.
 function createPromoStore(q: Queryable): PromoStore {
   return {
     open: async (grant) => {
