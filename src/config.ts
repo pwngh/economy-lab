@@ -176,8 +176,9 @@ export function loadConfig(env: EnvMap): Config {
     maxOutboxAttempts: toInt(env.MAX_OUTBOX_ATTEMPTS, 10),
     maxInboxAttempts: toInt(env.MAX_INBOX_ATTEMPTS, 10),
     maxSubscriptionAttempts: toInt(env.MAX_SUBSCRIPTION_ATTEMPTS, 10),
-    // One day: a payout stuck in SUBMITTED longer than this is force-failed as timed out.
-    maxPayoutAgeMs: toInt(env.MAX_PAYOUT_AGE_MS, 24 * 60 * 60_000),
+    // Three days: real payout rails settle in one to two business days, so the force-fail
+    // backstop must outlast a weekend-adjacent settlement, not race it.
+    maxPayoutAgeMs: toInt(env.MAX_PAYOUT_AGE_MS, 72 * 60 * 60_000),
 
     platformFeeBps: toInt(env.PLATFORM_FEE_BPS, 1530),
     payoutFeeBps: toInt(env.PAYOUT_FEE_BPS, 150),

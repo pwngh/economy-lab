@@ -63,6 +63,16 @@ export async function requestPayout(
     });
   }
 
+  if (ctx.payees !== undefined) {
+    const verification = await ctx.payees.status(operation.userId);
+    if (verification.state !== 'CLEARED') {
+      return rejected('PAYEE_UNVERIFIED', {
+        account: earned(operation.userId),
+        state: verification.state,
+      });
+    }
+  }
+
   const available = await unit.ledger.balance(earned(operation.userId));
   if (compare(available, amount) < 0) {
     return rejected('INSUFFICIENT_FUNDS', {

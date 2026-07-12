@@ -11,7 +11,7 @@
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { credit, debit, lockAll, postEntry } from '#src/ledger.ts';
-import { convertFloor, encodeAmount, toAmount } from '#src/money.ts';
+import { convertFloor, encodeAmount, mulDiv, toAmount } from '#src/money.ts';
 import { assertKind } from '#src/operations/guards.ts';
 import { platformShard, SYSTEM } from '#src/accounts.ts';
 
@@ -185,7 +185,7 @@ async function postSettlementEntries(
 // `feeBps` is in basis points, so 150 means 1.5%. The fee is the rail's cut, such as a payment
 // processor's, and it is deducted so the seller gets the net.
 function payoutFee(gross: Amount, feeBps: number): Amount {
-  return toAmount('USD', (gross.minor * BigInt(feeBps)) / 10_000n);
+  return toAmount('USD', mulDiv(gross.minor, BigInt(feeBps), 10_000n, 'floor'));
 }
 
 // Throws when the CAS did not take (another worker or settle got there first), rolling back the

@@ -261,6 +261,10 @@ create index payout_sagas_due_idx on payout_sagas (due_at)
 -- without this it scans every saga that user has ever had, so the check's cost grows with their
 -- payout history on each new request.
 create index payout_sagas_user_updated_idx on payout_sagas (user_id, updated_at);
+-- A provider callback names a payout by provider_ref, so the inbound-webhook lookup reads by it.
+-- Partial: provider_ref stays null until submit, and callbacks only reference submitted payouts.
+create index payout_sagas_provider_ref_idx on payout_sagas (provider_ref)
+  where provider_ref is not null;
 
 -- ============================================================================
 -- Promo grants: one row per promotional credit handed out. Shares the id of the posting that

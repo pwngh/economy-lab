@@ -16,6 +16,8 @@ import assert from 'node:assert/strict';
 import { httpProcessor } from '#src/adapters/processor.ts';
 import { decodeAmount } from '#src/money.ts';
 import { EconomyError } from '#src/errors.ts';
+import { runProcessorConformance } from '#test/conformance/processor.ts';
+import { fakeProcessor } from '#test/support/capabilities.ts';
 
 import type { FetchLike } from '#src/adapters/processor.ts';
 
@@ -199,4 +201,31 @@ describe('Processor Conformance: http', () => {
     submitFaultsRetryablyPreservingCause());
   test('throws a non-retryable fault when a 2xx body omits providerRef', () =>
     submitFaultsTerminallyOnMissingProviderRef());
+});
+
+function respondingProcessor(response: {
+  ok: boolean;
+  status: number;
+  body: string;
+}): ReturnType<typeof httpProcessor> {
+  return httpProcessor({
+    endpoint: 'https://provider/payouts',
+    fetch: stubFetch(response, []),
+  });
+}
+
+runProcessorConformance('httpProcessor', {
+  accepted: () =>
+    respondingProcessor({
+      ok: true,
+      status: 200,
+      body: JSON.stringify({ providerRef: 'po_contract' }),
+    }),
+  indeterminate: () =>
+    respondingProcessor({ ok: false, status: 503, body: 'upstream down' }),
+  rejected: () => respondingProcessor({ ok: true, status: 200, body: '{}' }),
+});
+
+runProcessorConformance('fakeProcessor (the lab test double)', {
+  accepted: () => fakeProcessor(),
 });

@@ -15,11 +15,13 @@ import { convertFloor, encodeAmount } from '#src/money.ts';
 import { earned, platformShard, SYSTEM } from '#src/accounts.ts';
 
 import type { WorkerCtx } from '#src/contract.ts';
-import type { Saga, Store } from '#src/ports.ts';
+import type { PayoutProviderStatus, Saga, Store } from '#src/ports.ts';
 
 /**
  * Reports which payouts moved this run, bucketed by outcome. The worker submits RESERVED payouts to
- * the provider and force-fails SUBMITTED payouts that have timed out. Settlement arrives later,
+ * the provider and watches SUBMITTED payouts: when the processor offers the optional
+ * `payoutStatus` probe it is consulted first, and a provider-reported failure releases the reserve
+ * promptly; otherwise a payout that has timed out is force-failed. Settlement arrives later,
  * through the provider's webhook (see src/operations/settlePayout.ts).
  * A failed payout goes to `deadLettered` if it can never succeed, including a timed-out submit. It
  * goes to `retrying` if it hit a temporary problem, such as a flaky network or database, and gets
@@ -195,12 +197,16 @@ async function deadLetter(
 // `maxPayoutAgeMs`.
 const PAYOUT_TIMEOUT_REASON = 'payout.timeout';
 
+// Reasons recorded when the provider itself reported the disbursement failed or was returned,
+// surfaced by the optional `payoutStatus` probe. Stable strings like the timeout reason, so
+// dashboards can tell a provider rejection from a return from a silent timeout.
+const PAYOUT_PROVIDER_FAILED_REASON = 'payout.provider_failed';
+const PAYOUT_PROVIDER_RETURNED_REASON = 'payout.provider_returned';
+
 // Does the one step the payout is up to, chosen by its current state. A 'RESERVED' payout gets
-// submitted to the provider, moving to 'SUBMITTED'. A 'SUBMITTED' payout is left for the provider's
-// settlement webhook to settle (see src/operations/settlePayout.ts), with one exception: if it has
-// waited past `maxPayoutAgeMs` for a settlement that never arrived, it is force-failed here (see
-// below). Any other state a due batch hands back, such as a leftover 'REQUESTED' or one already
-// finished, is left untouched this run.
+// submitted to the provider, moving to 'SUBMITTED'. A 'SUBMITTED' payout is watched (see
+// checkSubmitted). Any other state a due batch hands back, such as a leftover 'REQUESTED' or one
+// already finished, is left untouched this run.
 async function driveTransition(
   store: Store,
   ctx: WorkerCtx,
@@ -213,18 +219,108 @@ async function driveTransition(
     return;
   }
   if (saga.state === 'SUBMITTED') {
-    // The webhook settles SUBMITTED payouts (src/operations/settlePayout.ts). The sweep only steps
-    // in when it never comes, so the reserve is not stranded in SUBMITTED forever. Force-fail once
-    // the payout has waited past `maxPayoutAgeMs`, measured from `updatedAt`, which submitToProvider
-    // sets on entry to SUBMITTED. deadLetter flips to FAILED and posts the compensating reversal in
-    // one transaction, so a timed-out payout is never paid. Within the window, leave it for the
-    // webhook.
-    if (ctx.clock.now() - saga.updatedAt > ctx.config.maxPayoutAgeMs) {
-      if (await deadLetter(store, ctx, saga, PAYOUT_TIMEOUT_REASON)) {
-        tally.deadLettered.push({ id: saga.id, reason: PAYOUT_TIMEOUT_REASON });
-      }
-    }
+    await checkSubmitted(store, ctx, saga, tally);
   }
+}
+
+// Watches one SUBMITTED payout. The webhook settles it (src/operations/settlePayout.ts); the sweep
+// steps in on the strength of what it can learn. When the processor offers the `payoutStatus`
+// probe, its answer is acted on first:
+// - FAILED / RETURNED: the rail gave up on the disbursement, so the reserve is released now rather
+//   than after the timeout — the prompt failure path.
+// - SETTLED: the money moved but the settlement webhook has not landed. Force-failing here would
+//   return the reserve on top of the disbursed USD (a double-pay), so the sweep only reschedules
+//   and raises an error log for the operator; the webhook (or an operator settle) completes it.
+// - PENDING past the timeout: the rail says it is still working, so the timeout is deferred by
+//   refreshing `updatedAt` — force-failing a live disbursement risks the same double-pay. The
+//   deferral is logged each time so a payout pinned in PENDING stays visible.
+// - UNKNOWN, no probe, or a probe error: the timeout protocol stands unchanged — past
+//   `maxPayoutAgeMs` (measured from `updatedAt`, set on entry to SUBMITTED) the payout is
+//   force-failed, and deadLetter posts the compensating reversal in the same transaction.
+async function checkSubmitted(
+  store: Store,
+  ctx: WorkerCtx,
+  saga: Saga,
+  tally: PayoutSweepTally,
+): Promise<void> {
+  const verdict = await providerVerdict(ctx, saga);
+  if (verdict === 'FAILED' || verdict === 'RETURNED') {
+    const reason =
+      verdict === 'FAILED'
+        ? PAYOUT_PROVIDER_FAILED_REASON
+        : PAYOUT_PROVIDER_RETURNED_REASON;
+    if (await deadLetter(store, ctx, saga, reason)) {
+      tally.deadLettered.push({ id: saga.id, reason });
+    }
+    return;
+  }
+  if (verdict === 'SETTLED') {
+    ctx.logger.log('error', 'worker.payouts.settlement_unreported', {
+      sagaId: saga.id,
+      providerRef: saga.providerRef,
+    });
+    await recheckLater(store, ctx, saga, {});
+    return;
+  }
+  const aged = ctx.clock.now() - saga.updatedAt > ctx.config.maxPayoutAgeMs;
+  if (verdict === 'PENDING') {
+    if (aged) {
+      ctx.logger.log('warn', 'worker.payouts.pending_past_timeout', {
+        sagaId: saga.id,
+        providerRef: saga.providerRef,
+        ageMs: ctx.clock.now() - saga.updatedAt,
+      });
+      await recheckLater(store, ctx, saga, { updatedAt: ctx.clock.now() });
+      return;
+    }
+    await recheckLater(store, ctx, saga, {});
+    return;
+  }
+  if (aged && (await deadLetter(store, ctx, saga, PAYOUT_TIMEOUT_REASON))) {
+    tally.deadLettered.push({ id: saga.id, reason: PAYOUT_TIMEOUT_REASON });
+  }
+}
+
+// Asks the processor where a submitted payout stands, when it can be asked at all. Returns null
+// when the processor offers no probe, the saga has no provider reference to look up, or the probe
+// itself failed — every case where the sweep has no evidence and must fall back to the timeout
+// protocol. A probe fault is logged and swallowed here on purpose: it must not bump the saga's
+// attempt count or dead-letter it via the sweep's error boundary, because the payout itself did
+// nothing wrong.
+async function providerVerdict(
+  ctx: WorkerCtx,
+  saga: Saga,
+): Promise<PayoutProviderStatus['state'] | null> {
+  if (ctx.processor.payoutStatus === undefined || saga.providerRef === null) {
+    return null;
+  }
+  try {
+    const status = await ctx.processor.payoutStatus({
+      providerRef: saga.providerRef,
+    });
+    return status.state === 'UNKNOWN' ? null : status.state;
+  } catch (error) {
+    ctx.logger.log('warn', 'worker.payouts.status_probe_failed', {
+      sagaId: saga.id,
+      code: normalizeError(error).code,
+    });
+    return null;
+  }
+}
+
+// Reschedules the next look at a SUBMITTED payout without changing its state, via the same
+// compare-and-set every other transition uses, so a concurrent settle or reverse wins cleanly.
+// `patch` lets the PENDING deferral also refresh `updatedAt`, the timeout's measuring point.
+async function recheckLater(
+  store: Store,
+  ctx: WorkerCtx,
+  saga: Saga,
+  patch: Partial<Saga>,
+): Promise<void> {
+  await store.sagas.advance(saga.id, 'SUBMITTED', 'SUBMITTED', {
+    dueAt: ctx.clock.now() + submittedSlaMs(ctx),
+    ...patch,
+  });
 }
 
 // Steps 'RESERVED' -> 'SUBMITTED' by handing the disbursement to the external payment provider. The

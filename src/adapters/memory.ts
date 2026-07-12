@@ -865,6 +865,24 @@ async function* listSagasOf(rows: Map<string, Saga>): AsyncIterable<Saga> {
   }
 }
 
+// The inbound-webhook lookup (see SagaStore.findByProviderRef). On a duplicated ref the newest
+// `updatedAt` wins, matching the SQL engines' `order by updated_at desc limit 1`.
+async function findSagaByRef(
+  rows: Map<string, Saga>,
+  providerRef: string,
+): Promise<Saga | null> {
+  let best: Saga | null = null;
+  for (const saga of rows.values()) {
+    if (saga.providerRef !== providerRef) {
+      continue;
+    }
+    if (best === null || saga.updatedAt > best.updatedAt) {
+      best = saga;
+    }
+  }
+  return best === null ? null : { ...best };
+}
+
 // Tracks each multi-step payout through its states. `advance` changes a saga only if it is still in
 // the expected state (`from`). Otherwise it returns false and changes nothing. This guards against
 // two background runs advancing the same saga twice.
@@ -906,6 +924,8 @@ function createSagaStore(): SagaStore & Participant {
       const saga = rows.get(id);
       return saga ? { ...saga } : null;
     },
+    findByProviderRef: (providerRef, _options?: Options) =>
+      findSagaByRef(rows, providerRef),
     list: () => listSagasOf(rows),
     claimDue: async (now, limit, _options?: Options) => {
       const due: Saga[] = [];

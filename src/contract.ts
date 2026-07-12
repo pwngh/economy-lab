@@ -27,6 +27,7 @@ import type {
   Logger,
   Meter,
   Options,
+  PayeeDirectory,
   Posting,
   Processor,
   Range,
@@ -185,7 +186,8 @@ export type Operation =
       txnId: string;
       reason: string;
     }
-  // Operator-only correction to undo a not-yet-paid payout. Marks the saga FAILED and returns the
+  // Privileged correction to undo a not-yet-paid payout: an operator's manual undo, or the
+  // verified payout-failed webhook's prompt reversal. Marks the saga FAILED and returns the
   // set-aside credits to the seller's earned account, but only if it is still pre-paid, so two
   // attempts can't both undo it; a payout that already disbursed real USD is refused. `userId`
   // names the seller (which account to lock); the operation is otherwise identified only by sagaId.
@@ -196,6 +198,14 @@ export type Operation =
       userId: string;
       sagaId: string;
       reason: string;
+      /**
+       * True when the payout rail itself reported the disbursement failed (a verified payoutFailed
+       * webhook). It waives the still-live SUBMITTED refusal: the provider has said it will not
+       * settle this payout, so returning the reserve promptly cannot double-pay. An operator's
+       * manual reverse leaves this unset and stays gated until the payout ages past
+       * `maxPayoutAgeMs`.
+       */
+      providerReported?: boolean;
     }
   // System- or operator-only (RESTRICTED_TO_PRIVILEGED in economy.ts): the SUBMITTED -> SETTLED
   // step that empties the seller's reserve into REVENUE and moves gross USD out of trust. An end
@@ -216,9 +226,10 @@ export type Operation =
        * The USD amount the provider reported settling. Recorded for audit/reconciliation only: the
        * figures actually posted are the rate-derived ones settlePayout computes (gross USD from
        * the reserve at the payout rate, less the rail fee), so the provider's report never sets
-       * the posted amount.
+       * the posted amount. Absent when the rail's callback carries no figure (Tilia's does not);
+       * the reconcile feed still checks amounts against the rail's settlement report.
        */
-      providerAmount: Amount;
+      providerAmount?: Amount;
     };
 
 /**
@@ -270,6 +281,7 @@ export type Ctx = {
    * when absent, every balance read goes straight to the ledger.
    */
   cache?: Cache;
+  payees?: PayeeDirectory;
 };
 
 /**

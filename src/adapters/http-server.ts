@@ -301,6 +301,10 @@ const SUBSTORE_ROUTES: Record<string, SubHandler> = {
     const saga = await unit.sagas.load(body.id as string);
     return saga === null ? null : encodeWire.saga(saga);
   },
+  'sagas/findByProviderRef': async (unit, body) => {
+    const saga = await unit.sagas.findByProviderRef(body.providerRef as string);
+    return saga === null ? null : encodeWire.saga(saga);
+  },
   'sagas/list': (unit) => collect(unit.sagas.list(), encodeWire.saga),
   'sagas/claimDue': async (unit, body) => {
     const due = await unit.sagas.claimDue(

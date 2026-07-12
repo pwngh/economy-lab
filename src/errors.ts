@@ -50,6 +50,7 @@ export type RejectionCode =
   // A payout was requested before enough time had passed since the user's previous request
   // (minimum gap is config payoutMinIntervalMs). The decline carries when the user may retry.
   | 'PAYOUT_TOO_SOON'
+  | 'PAYEE_UNVERIFIED'
   // A scheduled maintenance window is in effect, so an end user's discretionary write is declined.
   // Settlement (actor 'system') and operator fixes are never paused; the decline carries `resumesAt`
   // (the window's end) so the caller can tell the user when to retry.

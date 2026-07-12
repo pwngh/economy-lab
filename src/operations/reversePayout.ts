@@ -18,15 +18,17 @@ import type { Ctx, Operation, Outcome, Transaction } from '#src/contract.ts';
 import type { Saga, Unit } from '#src/ports.ts';
 
 /**
- * Undoes an in-flight payout by hand: the manual version of the worker's give-up undo. The move to
- * FAILED (so the worker never pays it) and the undo posting (reserve back to the seller's earned
- * account) commit together: the credits return only if the saga also stops. This is why it does not
- * use the generic `reverse`, which leaves saga state alone, so a reversed-but-still-RESERVED saga
- * would be paid out anyway.
+ * Undoes an in-flight payout: the manual version of the worker's give-up undo, and the operation a
+ * verified payout-failed webhook applies. The move to FAILED (so the worker never pays it) and the
+ * undo posting (reserve back to the seller's earned account) commit together: the credits return
+ * only if the saga also stops. This is why it does not use the generic `reverse`, which leaves
+ * saga state alone, so a reversed-but-still-RESERVED saga would be paid out anyway.
  *
  * RESERVED, or SUBMITTED aged past `config.maxPayoutAgeMs`, moves to FAILED and posts the undo.
  * SETTLED and still-live SUBMITTED both throw `INVALID_TRANSITION`: returning a reserve already
- * disbursed, or one the provider may still settle, risks a double-pay.
+ * disbursed, or one the provider may still settle, risks a double-pay. One exception: an operation
+ * carrying `providerReported` (set only by the payout-failed webhook mapper) may reverse a
+ * still-live SUBMITTED payout, because the rail itself has said it will not settle it.
  *
  * @example
  *   const outcome = await reversePayout(
@@ -51,7 +53,7 @@ export async function reversePayout(
   const saga = await loadSaga(unit, operation.sagaId);
   assertUserMatchesSaga(operation.userId, saga);
   refuseSettled(saga);
-  refuseLiveSubmitted(saga, ctx);
+  refuseLiveSubmitted(operation, saga, ctx);
 
   // Only RESERVED or SUBMITTED has credits in PAYOUT_RESERVE to return. FAILED was already undone
   // by the worker or an earlier call. Any other state, such as REQUESTED before credits hit the
@@ -89,6 +91,11 @@ export async function reversePayout(
       kind: 'reversePayout',
       sagaId: saga.id,
       reason: operation.reason,
+      // Recorded when the rail itself reported the failure, so the audit trail shows which undo
+      // path posted this: a provider callback rather than an operator's judgment.
+      ...(operation.providerReported === true
+        ? { providerReported: true }
+        : {}),
     },
   });
 
@@ -139,10 +146,20 @@ function refuseSettled(saga: Saga): void {
 // A SUBMITTED payout is still live until it ages past `maxPayoutAgeMs`, measured from `updatedAt`
 // (set on entering SUBMITTED in submitToProvider). This mirrors the worker's force-fail cutoff with
 // the same `now - updatedAt` comparison, so a manual reverse is rejected until then. RESERVED is not
-// gated here because it was never handed to the provider.
+// gated here because it was never handed to the provider. A provider-reported failure (the
+// payout-failed webhook) waives the gate: the rail has said it will not settle this payout, so
+// there is no settlement left to race, and the saga-state compare-and-set still guards against a
+// late settle callback arriving anyway.
 // See https://economy-lab-docs.pages.dev/economy/reference/operations/reverse-payout/ for why
 // reversing a still-settling payout risks a double-pay and how the timeout cutoff opens the window.
-function refuseLiveSubmitted(saga: Saga, ctx: Ctx): void {
+function refuseLiveSubmitted(
+  operation: Extract<Operation, { kind: 'reversePayout' }>,
+  saga: Saga,
+  ctx: Ctx,
+): void {
+  if (operation.providerReported === true) {
+    return;
+  }
   if (
     saga.state === 'SUBMITTED' &&
     ctx.clock.now() - saga.updatedAt <= ctx.config.maxPayoutAgeMs

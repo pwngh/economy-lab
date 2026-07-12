@@ -1068,6 +1068,15 @@ function createSagaStore(exec: MysqlExecutor): SagaStore {
       );
       return found.length ? rowToSaga(found[0]!) : null;
     },
+    findByProviderRef: async (providerRef) => {
+      const found = await rows(
+        exec,
+        `SELECT * FROM payout_sagas WHERE provider_ref = ?
+          ORDER BY updated_at DESC LIMIT 1`,
+        [providerRef],
+      );
+      return found.length ? rowToSaga(found[0]!) : null;
+    },
     list: () => listSagasOf(exec),
     claimDue: async (now, limit) => {
       const result = await rows(

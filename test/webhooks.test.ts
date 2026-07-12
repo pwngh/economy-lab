@@ -48,7 +48,11 @@ import {
 } from '#test/support/capabilities.ts';
 
 import type { Economy } from '#src/economy.ts';
-import type { PayoutSettledEvent, WebhookEvent } from '#src/webhooks.ts';
+import type {
+  PayoutFailedEvent,
+  PayoutSettledEvent,
+  WebhookEvent,
+} from '#src/webhooks.ts';
 import type { WebhookHandler } from '#src/server.ts';
 import type { WorkerCtx } from '#src/contract.ts';
 import type { Clock, Ids, Saga, Store } from '#src/ports.ts';
@@ -486,53 +490,53 @@ async function submitPayout(store: Store, userId: string): Promise<Saga> {
   return submitted;
 }
 
+// Drives a real, backed book up to a SUBMITTED payout. A buyer tops up and spends on a listing, so
+// the seller accrues real earned credit. The buyer's custodial credit drops, which lowers the
+// backing requirement. The seller then requests a payout of their whole earned balance, and the
+// worker sweep submits it. Returns the SUBMITTED saga and the reserved amount so the caller can
+// settle or fail it. Shared by the settled and failed webhook suites below.
+async function bookToSubmitted(
+  store: Store,
+  economy: Economy,
+  seller: string,
+): Promise<{ saga: Saga; reserve: ReturnType<typeof credit> }> {
+  await economy.submit(
+    buildTopUp({
+      userId: 'usr_buyer',
+      amount: credit('50.00'),
+      source: 'card',
+    }),
+  );
+  // Buyer buys a listing; the whole net (after the platform fee) goes to the seller's earned.
+  await economy.submit(
+    buildSpend({
+      buyerId: 'usr_buyer',
+      sku: 'sku_item',
+      price: credit('20.00'),
+      recipients: [{ sellerId: seller, shareBps: 10_000 }],
+    }),
+  );
+  // Pay out the seller's whole earned balance (no minimum in the test config).
+  const reserve = (await economy.read.balance(earned(seller))) as ReturnType<
+    typeof credit
+  >;
+  const reserved = await economy.submit(
+    buildRequestPayout({ userId: seller, amount: reserve }),
+  );
+  assert.equal(reserved.status, 'committed');
+
+  // The worker sweep submits the reserved payout to the provider (RESERVED -> SUBMITTED). It does
+  // not settle.
+  const saga = await submitPayout(store, seller);
+  return { saga, reserve };
+}
+
 // Covers the full webhook-driven settlement path, which replaces the old "worker submits then the
 // next sweep settles" flow. The worker sweep now only submits a RESERVED payout. The provider's
 // "payout settled" callback drives the SUBMITTED -> SETTLED step: the verified event is mapped to a
 // settlePayout operation and persisted to the inbox, and drainInbox submits it through the economy.
 // The settle outcomes asserted here are the ones the old worker-settle test asserted, unweakened.
 describe('Webhooks payout settled (worker submits, the settlement webhook settles)', () => {
-  // Drives a real, backed book up to a SUBMITTED payout. A buyer tops up and spends on a listing, so
-  // the seller accrues real earned credit. The buyer's custodial credit drops, which lowers the
-  // backing requirement. The seller then requests a payout of their whole earned balance, and the
-  // worker sweep submits it. Returns the SUBMITTED saga and the reserved amount so the caller can
-  // settle it.
-  async function bookToSubmitted(
-    store: Store,
-    economy: Economy,
-    seller: string,
-  ): Promise<{ saga: Saga; reserve: ReturnType<typeof credit> }> {
-    await economy.submit(
-      buildTopUp({
-        userId: 'usr_buyer',
-        amount: credit('50.00'),
-        source: 'card',
-      }),
-    );
-    // Buyer buys a listing; the whole net (after the platform fee) goes to the seller's earned.
-    await economy.submit(
-      buildSpend({
-        buyerId: 'usr_buyer',
-        sku: 'sku_item',
-        price: credit('20.00'),
-        recipients: [{ sellerId: seller, shareBps: 10_000 }],
-      }),
-    );
-    // Pay out the seller's whole earned balance (no minimum in the test config).
-    const reserve = (await economy.read.balance(earned(seller))) as ReturnType<
-      typeof credit
-    >;
-    const reserved = await economy.submit(
-      buildRequestPayout({ userId: seller, amount: reserve }),
-    );
-    assert.equal(reserved.status, 'committed');
-
-    // The worker sweep submits the reserved payout to the provider (RESERVED -> SUBMITTED). It does
-    // not settle.
-    const saga = await submitPayout(store, seller);
-    return { saga, reserve };
-  }
-
   test('a verified payout-settled webhook settles the matching submitted saga', async () => {
     const store = memoryStore({
       digest: seededDigest(1),
@@ -655,5 +659,123 @@ describe('Webhooks payout settled (worker submits, the settlement webhook settle
     const report = await economy.read.prove();
     assert.equal(report.conserved, true);
     assert.equal(report.backed, true);
+  });
+});
+
+// Builds a verified payout-failed provider callback for `sagaId`: the rail reports it will not
+// disburse this payout. This is the shape the server edge hands to handleWebhook after checking
+// the signature and freshness.
+function payoutFailedEvent(o: {
+  eventId: string;
+  sagaId: string;
+  reason?: string;
+}): PayoutFailedEvent {
+  return {
+    kind: 'payoutFailed',
+    provider: 'payouts',
+    eventId: o.eventId,
+    sagaId: o.sagaId,
+    userId: 'usr_seller',
+    providerRef: `rail_${o.sagaId}`,
+    ...(o.reason === undefined ? {} : { reason: o.reason }),
+  };
+}
+
+// Covers the prompt failure path: the rail's "payout failed" callback maps to a reversePayout
+// carrying providerReported, so the seller's reserve returns as soon as the rail gives up — while
+// the saga is still live inside maxPayoutAgeMs, where a manual reverse would be refused.
+describe('Webhooks payout failed (the failure webhook promptly returns the reserve)', () => {
+  test('a verified payout-failed webhook reverses a live submitted saga', async () => {
+    const store = memoryStore({
+      digest: seededDigest(1),
+      clock: fixedClock(0),
+    });
+    const economy = makeEconomy(1, store);
+    const seller = 'usr_seller';
+
+    const { saga, reserve } = await bookToSubmitted(store, economy, seller);
+    const earnedBefore = await store.ledger.balance(earned(seller));
+    const trustBefore = await store.ledger.balance(SYSTEM.TRUST_CASH);
+
+    // The rail reports the disbursement failed. The verified callback maps to a reversePayout and
+    // is persisted to the inbox; nothing has reversed yet.
+    const ack = await handleWebhook(
+      store,
+      webhookCtx(),
+      payoutFailedEvent({
+        eventId: 'evt_fail_1',
+        sagaId: saga.id,
+        reason: 'beneficiary rejected',
+      }),
+    );
+    assert.equal(ack.status, 'accepted');
+    assert.equal(
+      await onlySagaFor(store, seller).then((s) => s.state),
+      'SUBMITTED',
+    );
+
+    // drainInbox submits the stored reversePayout through the economy. The saga is still live
+    // (well inside maxPayoutAgeMs), which providerReported waives on the rail's own evidence.
+    const drain = await drainOnce(store, economy);
+    assert.deepEqual(drain.applied, [ack.entry.id]);
+    assert.deepEqual(drain.failed, []);
+
+    // The saga is FAILED and the whole reserve is back in the seller's earned account. No USD
+    // moved, because the provider never disbursed.
+    assert.equal(
+      await onlySagaFor(store, seller).then((s) => s.state),
+      'FAILED',
+    );
+    assert.deepEqual(
+      await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
+      credit('0.00'),
+    );
+    assert.deepEqual(
+      await store.ledger.balance(earned(seller)),
+      toAmount('CREDIT', earnedBefore.minor + reserve.minor),
+    );
+    assert.deepEqual(
+      await store.ledger.balance(SYSTEM.TRUST_CASH),
+      trustBefore,
+    );
+
+    // The books still hold every rule after the prompt reversal.
+    const report = await economy.read.prove();
+    assert.equal(report.conserved, true);
+    assert.equal(report.backed, true);
+  });
+
+  test('a duplicate payout-failed webhook returns the reserve exactly once', async () => {
+    const store = memoryStore({
+      digest: seededDigest(1),
+      clock: fixedClock(0),
+    });
+    const economy = makeEconomy(1, store);
+    const seller = 'usr_seller';
+    const webhook = webhookCtx();
+
+    const { saga } = await bookToSubmitted(store, economy, seller);
+    const event = payoutFailedEvent({
+      eventId: 'evt_fail_dup',
+      sagaId: saga.id,
+    });
+
+    const first = await handleWebhook(store, webhook, event);
+    assert.equal(first.status, 'accepted');
+    await drainOnce(store, economy);
+    const earnedOnce = await store.ledger.balance(earned(seller));
+
+    // Same eventId again: the inbox dedupes on it, so no second row is inserted and draining
+    // claims nothing new. The reserve was returned exactly once.
+    const second = await handleWebhook(store, webhook, event);
+    assert.equal(second.status, 'duplicate');
+    assert.equal(second.entry.id, first.entry.id);
+    const secondDrain = await drainOnce(store, economy);
+    assert.deepEqual(secondDrain.applied, []);
+    assert.deepEqual(await store.ledger.balance(earned(seller)), earnedOnce);
+    assert.deepEqual(
+      await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
+      credit('0.00'),
+    );
   });
 });

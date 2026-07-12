@@ -441,6 +441,85 @@ async function firstPayoutPassesWhenAnIntervalIsConfigured(): Promise<void> {
   assert.equal(outcome.status, 'committed');
 }
 
+async function allowsAPayoutForAClearedPayee(): Promise<void> {
+  const store = newStore();
+  await fundEarned(store, 'usr_seller', credit('30.00'));
+  const asked: string[] = [];
+  const ctx: Ctx = {
+    ...newCtx(),
+    payees: {
+      status: async (userId) => {
+        asked.push(userId);
+        return { state: 'CLEARED' };
+      },
+    },
+  };
+
+  const outcome = await run(
+    store,
+    ctx,
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('12.00') }),
+  );
+
+  assert.equal(outcome.status, 'committed');
+  assert.deepEqual(asked, ['usr_seller']);
+  assert.deepEqual(
+    await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
+    credit('12.00'),
+  );
+}
+
+async function rejectsAPayoutForAnUnverifiedPayee(): Promise<void> {
+  for (const state of ['PENDING', 'BLOCKED', 'NONE'] as const) {
+    const store = newStore();
+    await fundEarned(store, 'usr_seller', credit('30.00'));
+    const ctx: Ctx = {
+      ...newCtx(),
+      payees: { status: async () => ({ state }) },
+    };
+
+    const outcome = await run(
+      store,
+      ctx,
+      buildRequestPayout({ userId: 'usr_seller', amount: credit('12.00') }),
+    );
+
+    assert.equal(outcome.status, 'rejected', state);
+    assert.equal(
+      outcome.status === 'rejected' ? outcome.reason : undefined,
+      'PAYEE_UNVERIFIED',
+      state,
+    );
+    assert.equal(
+      outcome.status === 'rejected' ? outcome.detail?.state : undefined,
+      state,
+    );
+    assert.deepEqual(
+      await store.ledger.balance(earned('usr_seller')),
+      credit('30.00'),
+      state,
+    );
+    assert.deepEqual(
+      await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
+      credit('0.00'),
+      state,
+    );
+  }
+}
+
+async function skipsThePayeeGateWhenNoDirectoryIsWired(): Promise<void> {
+  const store = newStore();
+  await fundEarned(store, 'usr_seller', credit('30.00'));
+
+  const outcome = await run(
+    store,
+    newCtx(),
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('12.00') }),
+  );
+
+  assert.equal(outcome.status, 'committed');
+}
+
 describe('requestPayout', () => {
   test('reserves earned credit into PAYOUT_RESERVE', () =>
     reservesEarnedCreditIntoPayoutReserve());
@@ -464,6 +543,12 @@ describe('requestPayout', () => {
     allowsPayoutOnceEarnedCreditHasMatured());
   test('allows a payout up to the matured portion of a partly-matured balance', () =>
     allowsPayoutUpToTheMaturedPortion());
+  test('allows a payout for a cleared payee when a directory is wired', () =>
+    allowsAPayoutForAClearedPayee());
+  test('rejects PAYEE_UNVERIFIED when the directory answers anything but cleared', () =>
+    rejectsAPayoutForAnUnverifiedPayee());
+  test('skips the payee gate entirely when no directory is wired', () =>
+    skipsThePayeeGateWhenNoDirectoryIsWired());
   for (const { name, amount, code } of faultCases) {
     test(`faults on ${name}`, () => faultsOn(amount, code));
   }

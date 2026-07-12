@@ -139,9 +139,37 @@ export interface Processor {
     options?: Options,
   ): Promise<{ providerRef: string }>;
 
-  // There is no "did it settle?" call. The provider reports settlement and disputes through inbound
-  // webhooks, which the worker reconciles.
+  /**
+   * Optional: where a submitted payout stands right now, looked up by the `providerRef` that
+   * `submitPayout` returned. Settlement still arrives through inbound webhooks; the payout sweep
+   * consults this probe as evidence before acting on a silent payout. A reported FAILED or
+   * RETURNED releases the reserve promptly instead of waiting out `maxPayoutAgeMs`; a reported
+   * SETTLED blocks the force-fail, so a lost settlement webhook cannot end in a double-pay; a
+   * reported PENDING defers the timeout while the provider is still working. When absent, the
+   * webhook plus the timeout are the whole protocol, exactly as before this probe existed.
+   */
+  payoutStatus?(
+    input: { providerRef: string },
+    options?: Options,
+  ): Promise<PayoutProviderStatus>;
 }
+
+/**
+ * The provider's answer to {@link Processor.payoutStatus}. UNKNOWN means the provider could not
+ * name the payout, or the adapter could not map its answer; the sweep treats it exactly like
+ * having no probe at all, so an unsure answer never overrides the timeout protocol.
+ */
+export type PayoutProviderStatus = {
+  state: 'SETTLED' | 'RETURNED' | 'FAILED' | 'PENDING' | 'UNKNOWN';
+};
+
+export interface PayeeDirectory {
+  status(userId: string, options?: Options): Promise<PayeeVerification>;
+}
+
+export type PayeeVerification = {
+  state: 'CLEARED' | 'PENDING' | 'BLOCKED' | 'NONE';
+};
 
 /**
  * Dual-Rate Credit Economy.
@@ -370,6 +398,7 @@ export type Capabilities = {
   cache?: Cache;
   scheduler?: Scheduler;
   dispatcher?: Dispatcher;
+  payees?: PayeeDirectory;
   pricing: FeePolicy;
   config: Config;
 };
@@ -598,6 +627,16 @@ export interface SagaStore {
   open(saga: Saga, options?: Options): Promise<void>;
 
   load(id: string, options?: Options): Promise<Saga | null>;
+
+  /**
+   * Returns the saga carrying this provider reference, or null. A provider callback names a payout
+   * by the rail's reference, not the saga id, so this is the inbound-webhook lookup. If more than
+   * one saga ever carried the same reference, the newest `updatedAt` wins, matching `list` order.
+   */
+  findByProviderRef(
+    providerRef: string,
+    options?: Options,
+  ): Promise<Saga | null>;
 
   /**
    * Streams every saga regardless of state, newest `updatedAt` first, one at a time like

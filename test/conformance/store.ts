@@ -673,6 +673,50 @@ async function listsSagasNewestFirst(store: Store): Promise<void> {
   assert.deepEqual(mine, [newest.id, middle.id, oldest.id]);
 }
 
+// SagaStore.findByProviderRef is the inbound-webhook lookup: a provider callback names a payout by
+// the rail's reference, never the saga id. This test opens two sagas with distinct refs plus one
+// with none, and asserts the lookup returns exactly the matching saga, null for an unknown ref, and
+// the newest `updatedAt` when two sagas carry the same ref (matching list order).
+async function findsSagaByProviderRef(store: Store): Promise<void> {
+  const userId = freshUser();
+  const mk = (
+    suffix: string,
+    providerRef: string | null,
+    updatedAt: number,
+  ): Saga => ({
+    id: `pay_conf_ref_${userId}_${suffix}`,
+    userId,
+    reserve: toAmount('CREDIT', 100n),
+    rateId: 'rate_conf_ref',
+    state: 'SUBMITTED',
+    providerRef,
+    reason: null,
+    attempts: 0,
+    dueAt: updatedAt,
+    updatedAt,
+    payoutUsd: null,
+  });
+  const target = mk('a', `prov_${userId}_a`, 1_000);
+  const other = mk('b', `prov_${userId}_b`, 2_000);
+  const unsubmitted = mk('c', null, 3_000);
+  await store.transaction((unit) => unit.sagas.open(target));
+  await store.transaction((unit) => unit.sagas.open(other));
+  await store.transaction((unit) => unit.sagas.open(unsubmitted));
+
+  const found = await store.sagas.findByProviderRef(target.providerRef!);
+  assert.equal(found?.id, target.id);
+  assert.equal(
+    await store.sagas.findByProviderRef(`prov_${userId}_none`),
+    null,
+  );
+
+  // A duplicated ref resolves to the newest updatedAt, deterministically on every backend.
+  const duplicate = mk('d', target.providerRef, 5_000);
+  await store.transaction((unit) => unit.sagas.open(duplicate));
+  const newest = await store.sagas.findByProviderRef(target.providerRef!);
+  assert.equal(newest?.id, duplicate.id);
+}
+
 // Pins the same terminal-outcome persistence across adapters. A payout's SETTLED or FAILED outcome
 // is stored on the saga record itself, not in a side-channel, so a later load reads it back.
 // `advance` to SETTLED carries the gross USD disbursed in its patch (payoutUsd, a USD Amount), and
@@ -968,6 +1012,8 @@ export function runStoreConformance(
       withStore(t, listsSagasNewestFirst));
     test('persists a payout terminal outcome (settled USD / failed reason) on the saga', (t) =>
       withStore(t, persistsTerminalOutcomeOnTheSaga));
+    test('finds a saga by provider ref, newest first on a duplicated ref', (t) =>
+      withStore(t, findsSagaByProviderRef));
     test('lists every posting newest-first with its full legs', (t) =>
       withStore(t, listsPostingsNewestFirst));
   });

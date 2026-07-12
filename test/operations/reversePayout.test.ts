@@ -114,6 +114,7 @@ function buildReversePayout(o: {
   userId?: string;
   reason?: string;
   actor?: Operation['actor'];
+  providerReported?: boolean;
 }): Operation {
   return {
     kind: 'reversePayout',
@@ -122,6 +123,9 @@ function buildReversePayout(o: {
     userId: o.userId ?? 'usr_seller',
     sagaId: o.sagaId,
     reason: o.reason ?? 'fraud hold',
+    ...(o.providerReported === undefined
+      ? {}
+      : { providerReported: o.providerReported }),
   };
 }
 
@@ -222,6 +226,41 @@ describe('reversePayout', () => {
     );
     assert.deepEqual(
       await balanceOf(store, earned('usr_seller')),
+      credit('0.00'),
+    );
+  });
+
+  test('a provider-reported failure reverses a still-live SUBMITTED payout', async () => {
+    const store = newStore();
+    const ctx = newCtx();
+    // Same freshly-SUBMITTED saga the previous test refuses to touch. Here the payout-failed
+    // webhook speaks: the rail itself reported it will not settle this payout, so providerReported
+    // waives the still-live gate and the reserve returns now instead of after maxPayoutAgeMs.
+    await openReservedSaga(store, {
+      id: 'pay_rail',
+      state: 'SUBMITTED',
+      updatedAt: ctx.clock.now(),
+    });
+
+    const outcome = await run(
+      store,
+      ctx,
+      buildReversePayout({
+        sagaId: 'pay_rail',
+        reason: 'payout.provider_failed',
+        actor: { kind: 'system', service: 'webhook:payouts' },
+        providerReported: true,
+      }),
+    );
+
+    assert.equal(outcome.status, 'committed');
+    assert.equal(await stateOf(store, 'pay_rail'), 'FAILED');
+    assert.deepEqual(
+      await balanceOf(store, earned('usr_seller')),
+      credit('4.00'),
+    );
+    assert.deepEqual(
+      await balanceOf(store, SYSTEM.PAYOUT_RESERVE),
       credit('0.00'),
     );
   });

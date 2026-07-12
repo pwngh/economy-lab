@@ -137,6 +137,7 @@ function contextOf(capabilities: Capabilities): Ctx {
     logger: capabilities.logger,
     meter: capabilities.meter,
     cache: capabilities.cache,
+    payees: capabilities.payees,
   };
 }
 

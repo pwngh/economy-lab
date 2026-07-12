@@ -268,7 +268,10 @@ CREATE TABLE payout_sagas (
      -- requestPayout's min-interval gate reads MAX(updated_at) for one user across all their sagas;
      -- without this it scans every saga that user has ever had, so the check's cost grows with their
      -- payout history on each new request.
-     KEY payout_sagas_user_updated_idx (user_id, updated_at)
+     KEY payout_sagas_user_updated_idx (user_id, updated_at),
+     -- A provider callback names a payout by provider_ref, so the inbound-webhook lookup reads by
+     -- it. Without this every callback scans the whole payout board.
+     KEY payout_sagas_provider_ref_idx (provider_ref)
    ) COMMENT='Payout state machine: one row per seller cash-out.';
 
 -- promo_grants: one row per promotional credit handed out; swept for expired, not-yet-reversed

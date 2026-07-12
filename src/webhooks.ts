@@ -78,9 +78,35 @@ export type PayoutSettledEvent = WebhookBase & {
   // The rail's own reference for this disbursement, recorded for the audit trail.
   providerRef: string;
 
-  // The USD the provider reported settling. Recorded for reconciliation only. The posted figures are
-  // the rate-derived ones `settlePayout` computes from the reserve.
-  providerAmount: Amount;
+  // The USD the provider reported settling, when the callback carries one. Recorded for
+  // reconciliation only. The posted figures are the rate-derived ones `settlePayout` computes
+  // from the reserve.
+  providerAmount?: Amount;
+};
+
+/**
+ * A verified payout-failed callback: the payout rail reports it will not disburse one of our
+ * submitted payouts (a rejected beneficiary, an unsupported destination, a returned transfer). It
+ * drives the prompt reversal of the named saga via `reversePayout` with `providerReported` set, so
+ * the seller's reserve returns as soon as the rail gives up rather than after the `maxPayoutAgeMs`
+ * timeout. The common real-world failure is asynchronous — a payout is ACCEPTED and only rejected
+ * during processing — which is exactly the window this callback covers.
+ */
+export type PayoutFailedEvent = WebhookBase & {
+  kind: 'payoutFailed';
+
+  // The payout saga (id of the form pay_<uuid>) whose disbursement the provider gave up on.
+  sagaId: string;
+
+  // The seller the payout belongs to. The submit pipeline locks accounts by this id, and
+  // `reversePayout` refuses the operation if it does not match the saga's own user.
+  userId: string;
+
+  // The rail's own reference for the failed disbursement, recorded for the audit trail.
+  providerRef?: string;
+
+  // The rail's failure reason (e.g. its status code or a human string), recorded on the reversal.
+  reason?: string;
 };
 
 /**
@@ -112,7 +138,11 @@ export type DisputeEvent = WebhookBase & {
  * into one of these and {@link handleWebhook} dispatches it by kind to the operation it applies. A
  * purchase may omit its `kind` (see {@link PurchaseEvent}).
  */
-export type WebhookEvent = PurchaseEvent | PayoutSettledEvent | DisputeEvent;
+export type WebhookEvent =
+  | PurchaseEvent
+  | PayoutSettledEvent
+  | PayoutFailedEvent
+  | DisputeEvent;
 
 /**
  * Builds the dedup key for a webhook-driven topUp. Derived purely from the provider `eventId`,
@@ -171,7 +201,31 @@ export function toSettlePayout(event: PayoutSettledEvent): Operation {
     actor: { kind: 'system', service: `webhook:${event.provider}` },
     sagaId: event.sagaId,
     providerRef: event.providerRef,
-    providerAmount: event.providerAmount,
+    ...(event.providerAmount === undefined
+      ? {}
+      : { providerAmount: event.providerAmount }),
+  };
+}
+
+/**
+ * Builds the `reversePayout` that promptly returns a failed payout's reserve from a verified
+ * {@link PayoutFailedEvent}. The dedup key comes from `eventId`, so a redelivered failure reverses
+ * at most once. `providerReported` is set here and only here: it waives the operation's still-live
+ * SUBMITTED refusal on the strength of the rail's own report, and the saga-state compare-and-set
+ * inside `reversePayout` still stands down if a settle callback won the race. The reason defaults
+ * to the stable `payout.provider_failed` marker when the rail gave none, so dashboards can
+ * distinguish a provider rejection from a timeout. The actor is `system`, which `reversePayout`'s
+ * privileged-only gate requires.
+ */
+export function toReversePayout(event: PayoutFailedEvent): Operation {
+  return {
+    kind: 'reversePayout',
+    idempotencyKey: webhookIdempotencyKey(event.eventId),
+    actor: { kind: 'system', service: `webhook:${event.provider}` },
+    userId: event.userId,
+    sagaId: event.sagaId,
+    reason: event.reason ?? 'payout.provider_failed',
+    providerReported: true,
   };
 }
 
@@ -196,9 +250,10 @@ export function toClawback(event: DisputeEvent): Operation {
 
 /**
  * Dispatches a verified {@link WebhookEvent} to the {@link Operation} it should apply, by its kind:
- * a cleared purchase to a `topUp`, a settled payout to a `settlePayout`, a dispute/chargeback to a
- * `clawback`. This is the single place provider-event kind maps to economy operation; every branch
- * derives the same `eventId`-based dedup key, so whichever kind arrives is applied at most once.
+ * a cleared purchase to a `topUp`, a settled payout to a `settlePayout`, a failed payout to a
+ * `reversePayout`, a dispute/chargeback to a `clawback`. This is the single place provider-event
+ * kind maps to economy operation; every branch derives the same `eventId`-based dedup key, so
+ * whichever kind arrives is applied at most once.
  */
 export function toOperation(event: WebhookEvent): Operation {
   // A purchase event may omit `kind`, so check it first via a guard. Pulling
@@ -211,6 +266,8 @@ export function toOperation(event: WebhookEvent): Operation {
   switch (event.kind) {
     case 'payoutSettled':
       return toSettlePayout(event);
+    case 'payoutFailed':
+      return toReversePayout(event);
     case 'dispute':
       return toClawback(event);
     default:

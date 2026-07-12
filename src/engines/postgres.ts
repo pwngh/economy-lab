@@ -1185,6 +1185,23 @@ async function* listSagasOf(q: Queryable): AsyncIterable<Saga> {
   }
 }
 
+// The inbound-webhook lookup (see SagaStore.findByProviderRef). On a duplicated ref the newest
+// `updatedAt` wins, matching the in-memory reference and the MySQL engine.
+async function findSagaByRef(
+  q: Queryable,
+  providerRef: string,
+): Promise<Saga | null> {
+  const result = await q.query(
+    `select * from payout_sagas
+      where provider_ref = $1
+      order by updated_at desc
+      limit 1`,
+    [providerRef],
+  );
+  const row = result.rows[0];
+  return row ? rowToSaga(row) : null;
+}
+
 // Tracks the multi-step payout process for paying a user out in real money. Each payout moves
 // through states (requested, reserved, submitted, settled, failed). `advance` moves a payout to
 // the next state only if it is still in the state the caller expected (the `where ... and state
@@ -1218,6 +1235,7 @@ function createSagaStore(q: Queryable): SagaStore {
       const row = result.rows[0];
       return row ? rowToSaga(row) : null;
     },
+    findByProviderRef: (providerRef) => findSagaByRef(q, providerRef),
     list: () => listSagasOf(q),
     // Find payouts that are due and still in progress. A payout reaches RESERVED in the same
     // step that first creates it, so a row left in the earlier REQUESTED state means that step
