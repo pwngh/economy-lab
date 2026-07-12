@@ -1,20 +1,13 @@
-# economy-lab — multi-stage image.
+# economy-lab — multi-stage image. The default build is zero-dependency; bake in optional
+# drivers with: docker build --build-arg ADAPTERS="pg @aws-sdk/client-sqs" -t economy-lab .
 #
-# Default build is zero-dependency (Node built-ins only); in-memory adapters need
-# nothing installed. Bake in the optional Postgres / SQS adapters with:
-#
-#   docker build --build-arg ADAPTERS="pg @aws-sdk/client-sqs" -t economy-lab .
-#
-# Base images are pinned by tag, not digest. For a real deploy, pin each tag to its
-# multi-arch index digest: `docker manifest inspect <tag>` (or `crane digest <tag>`)
-# and replace the tag with tag@sha256:<index-digest>, so an upstream re-push of the
-# tag cannot change what is pulled.
+# Base images are pinned by tag only. For a real deploy, replace each tag with
+# tag@sha256:<multi-arch index digest> (`docker manifest inspect <tag>`) so an upstream
+# re-push cannot change what is pulled.
 
-# ---- builder: full Node image (has npm + a shell) -------------------------
-# Installs the optional adapters when ADAPTERS is non-empty; otherwise materializes
-# an empty node_modules so the runtime COPY below is uniform.
-# Node 22 is required. The engines field requires >=22.18.0, the version where
-# TypeScript type-stripping is on by default.
+# ---- builder ---------------------------------------------------------------
+# With ADAPTERS empty, materialize an empty node_modules so the runtime COPY below is uniform.
+# Node >=22.18 required: the version where TypeScript type-stripping is on by default.
 FROM node:22-slim AS builder
 
 WORKDIR /app
@@ -49,15 +42,12 @@ COPY --chown=nonroot:nonroot db ./db
 
 EXPOSE 3000
 
-# Liveness probe. The distroless image has no shell and no curl, so Node's http
-# client hits /healthz on the configured PORT and exits 0 only on HTTP 200. The
-# check runs inline (`node -e`, CommonJS) to avoid an extra file or app dependency.
+# Liveness probe. Distroless has no shell or curl, so an inline `node -e` (CommonJS) hits
+# /healthz and exits 0 only on HTTP 200.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD ["/nodejs/bin/node", "-e", "const http=require('http');http.get({host:'127.0.0.1',port:process.env.PORT||3000,path:'/healthz',timeout:2500},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
 
-# The entry point is scripts/main.ts. The distroless ENTRYPOINT supplies `node`, so the args are just
-# the script path and the mode, and Node 22 strips the types at startup. The image does not run
-# migrations, so apply the schema in db/ out of band (for example, `make db-migrate`) before
-# pointing this at a real DATABASE_URL. To run the worker instead, override the args:
+# The image never runs migrations: apply the schema in db/ out of band (e.g. `make db-migrate`)
+# before pointing this at a real DATABASE_URL. To run the worker instead, override the args:
 # ["scripts/main.ts","worker"].
 CMD ["scripts/main.ts", "serve"]

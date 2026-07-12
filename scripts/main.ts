@@ -9,26 +9,32 @@
  * @license MIT
  */
 
-// App entry: reads env, picks concrete external deps (store, cache, dispatcher), and hands them to
-// `compose`/`composeWorker` (src/index.ts). Env access happens only here. Three modes, selected by
-// argv[2]:
+// App entry: the one place env is read. argv[2] picks the mode:
 //
-//   scripts/main.ts serve   # HTTP API on $PORT (default 3000); store/cache/dispatcher come from env
-//   scripts/main.ts dev     # same API, forced in-memory with dev secrets, no infra; `make dev`
-//   scripts/main.ts worker  # background loop running the maintenance sweep every $WORKER_INTERVAL_MS
+//   scripts/main.ts serve   # HTTP API on $PORT (default 3000); adapters come from env
+//   scripts/main.ts dev     # same API, forced in-memory with dev secrets; `make dev`
+//   scripts/main.ts worker  # maintenance sweep every $WORKER_INTERVAL_MS
 //
-// serve and dev run the src/server.ts handler, which speaks web Request/Response. On Node we
-// translate node:http to web Requests (see `bridge`, below). That translation is why this entry
-// lives in scripts/, so the rest of src/ can stay runtime-agnostic.
-//
-// Three externals have no safe default: the request signer, the CREDIT-to-USD rates, and the payout
-// provider. In production (NODE_ENV=production) they must be real and configured; `wiring` refuses to
-// start if any is missing. Otherwise they fall back to dev stand-ins (fixed dev rates, approve-all
-// payout) so a local run needs no setup.
+// In production (NODE_ENV=production) the signer, the CREDIT-to-USD rates, and the payout provider
+// must be real; otherwise dev stand-ins apply, so a local run needs no setup. This entry lives in
+// scripts/ so the rest of src/ can stay runtime-agnostic.
 
 import { createServer as nodeHttpServer } from 'node:http';
 
-import { capabilitiesFromEnv, composeWorker, loadConfig } from '#src/index.ts';
+import {
+  capabilitiesFromEnv,
+  composeWorker,
+  describeSelection,
+} from '#src/index.ts';
+import {
+  REQUIRED_SECRETS,
+  isProduction,
+  missingSecrets,
+  readBigIntOrNull,
+  readIntOrNull,
+  serviceUrls,
+} from '#src/env.ts';
+import { serverRuntime } from '#scripts/support/server-env.ts';
 import { createEconomy } from '#src/economy.ts';
 import { createServer } from '#src/server.ts';
 import { jsonlLogger, systemCapabilities, toHex } from '#src/runtime.ts';
@@ -37,10 +43,12 @@ import { ERROR_CODES, EconomyError } from '#src/errors.ts';
 import { httpProcessor } from '#src/adapters/processor.ts';
 import { configuredRates } from '#src/adapters/rates.ts';
 import { decodeWebhookEvent, handlePurchaseWebhook } from '#src/webhooks.ts';
-import { maybeTaskqHost } from '#scripts/support/taskq-host.ts';
+import { describeTaskq, maybeTaskqHost } from '#scripts/support/taskq-host.ts';
 import { maybeEdgeTilia } from '#scripts/support/edge-host.ts';
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { EnvMap } from '#src/env.ts';
+import type { ServerRuntime } from '#scripts/support/server-env.ts';
 import type { ExternalPorts, RuntimeDefaults } from '#src/index.ts';
 import type {
   Clock,
@@ -50,37 +58,21 @@ import type {
   Rates,
   Store,
 } from '#src/ports.ts';
-import type { Currency } from '#src/money.ts';
 import type { WebhookHandler } from '#src/server.ts';
 import type { ReconcileFeed } from '#src/worker/reconcile.ts';
 
-type Env = Record<string, string | undefined>;
 type FetchHandler = (request: Request) => Promise<Response>;
 
-// The closer returned by serve(). It stops accepting new connections and resolves once the listener
-// is closed, so the shutdown handler can drain before tearing the store down.
 type CloseServer = () => Promise<void>;
 
 const ENCODER = new TextEncoder();
 
-// Host-wide structured logger. Background diagnostics (sweeps, shutdown) go here as one JSON line each.
 const log: Logger = jsonlLogger();
 
-// Returns how long shutdown waits for in-flight work to drain before forcing exit. A rolling deploy
-// sends SIGTERM, then SIGKILLs after its own grace period. This bound keeps us under that.
-function shutdownTimeoutMs(env: Env): number {
-  return Number(env.SHUTDOWN_TIMEOUT_MS ?? 5000);
-}
-
-// Checks at startup that a deployed process supplied every required secret. Fails fast naming every
-// missing or blank one, so an unset SIGNING_SECRET surfaces here rather than as a zero-length-key
-// error deep in signer setup, and an unset WEBHOOK_SECRET can't leave inbound callbacks unverified.
-// `.env.example` ships both blank. Set any non-empty value for local dev. Production passes real
-// high-entropy values.
-function requireSecrets(env: Env): void {
-  const missing = (['SIGNING_SECRET', 'WEBHOOK_SECRET'] as const).filter(
-    (key) => (env[key] ?? '') === '',
-  );
+// Fails fast at startup naming every missing or blank secret, rather than deep in signer setup or
+// as an unverified inbound callback.
+function requireSecrets(env: EnvMap): void {
+  const missing = missingSecrets(env);
   if (missing.length > 0) {
     throw new Error(
       `Missing required secret${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}. ` +
@@ -90,74 +82,51 @@ function requireSecrets(env: Env): void {
   }
 }
 
-// Encodes the signing key as the hex bytes web crypto wants. `requireSecrets` already rejected an
-// unset or empty value, so this hex-encodes a non-empty secret. Production passes a real
-// high-entropy hex key.
-function signingKeyHex(env: Env): string {
+// Hex is the byte form the web-crypto signer takes; requireSecrets already rejected an empty value.
+function signingKeyHex(env: EnvMap): string {
   return toHex(ENCODER.encode(env.SIGNING_SECRET ?? ''));
 }
 
-// Provides a fixed CREDIT-to-USD rate source for local runs, modeling a dual-rate credit economy.
-// Real deployments wire rates from config (see productionExternals). The buy rate is the
-// acquisition rate a user pays per credit, about $0.00833 (120 credits = $1). The par rate (the
-// credit's redemption value) and the payout rate (the settlement rate) are both $0.005 (200 credits
-// = $1). The roughly 40% gap between buy and par is the platform spread. Any other currency pair
-// stays 1:1.
+// The fixed dev rates through the production implementation (configuredRates), so dev and
+// production run the same rate code and differ only in where the numbers come from.
 function fixedRates(): Rates {
-  return {
-    payout: async (from, to) =>
-      from === 'CREDIT' && to === 'USD'
-        ? { rate: 5n, scale: 3, rateId: 'payout:CREDIT->USD:5/3' }
-        : { rate: 1n, scale: 0, rateId: `payout:${from}->${to}:1` },
-    par: (currency: Currency) =>
-      currency === 'CREDIT'
-        ? { rate: 5n, scale: 3, rateId: 'par:CREDIT->USD:5/3' }
-        : { rate: 1n, scale: 0, rateId: `par:${currency}->USD:1` },
-    buy: (currency: Currency) =>
-      currency === 'CREDIT'
-        ? { rate: 8333n, scale: 6, rateId: 'buy:CREDIT->USD:8333/6' }
-        : { rate: 1n, scale: 0, rateId: `buy:${currency}->USD:1` },
-  };
+  return configuredRates({
+    buyRate: 8333n,
+    buyScale: 6,
+    parRate: 5n,
+    parScale: 3,
+    payoutRate: 5n,
+    payoutScale: 3,
+  });
 }
 
-// Builds the dev payout provider. It approves every payout and returns a made-up reference id, so a
-// local worker can run the full payout flow (reserve, submit, settle) with no external service.
-// Production never uses this (see `isProduction` below).
+// Approve-all stand-in so a local worker can run the full payout saga with no external service.
 function devProcessor(): Processor {
   return {
     submitPayout: async (input) => ({ providerRef: `dev_${input.key}` }),
   };
 }
 
-// Reports whether this process is a production deploy. In production the externals with no honest
-// default (the CREDIT-to-USD rates and the payout provider) must be real and configured. The
-// process refuses to start on dev stubs, the same fail-fast stance `requireSecrets` takes for the
-// keys.
-function isProduction(env: Env): boolean {
-  return env.NODE_ENV === 'production';
-}
-
-// Builds the real externals a production deploy requires from env. Fails fast with one message
-// listing everything missing or malformed, so a prod process never runs on the fixed dev rates or an
-// auto-approve payout stub. The rates are the configured fixed-point CREDIT-to-USD par and payout.
-// The payout provider is the real HTTP provider at PROCESSOR_URL.
-function productionExternals(env: Env): { rates: Rates; processor: Processor } {
+// Fails fast with one message listing everything missing or malformed, so a prod process never
+// runs on the fixed dev rates or an auto-approve payout stub.
+function productionExternals(env: EnvMap): {
+  rates: Rates;
+  processor: Processor;
+} {
   const bad: string[] = [];
   const bigintOf = (key: string): bigint => {
-    const raw = env[key];
-    if (raw === undefined || !/^-?\d+$/.test(raw)) {
+    const value = readBigIntOrNull(env[key]);
+    if (value === null) {
       bad.push(key);
-      return 0n;
     }
-    return BigInt(raw);
+    return value ?? 0n;
   };
   const scaleOf = (key: string): number => {
-    const raw = env[key];
-    if (raw === undefined || !/^\d+$/.test(raw)) {
+    const value = readIntOrNull(env[key]);
+    if (value === null) {
       bad.push(key);
-      return 0;
     }
-    return Number(raw);
+    return value ?? 0;
   };
 
   const buyRate = bigintOf('CREDIT_BUY_RATE');
@@ -166,8 +135,8 @@ function productionExternals(env: Env): { rates: Rates; processor: Processor } {
   const parScale = scaleOf('CREDIT_PAR_SCALE');
   const payoutRate = bigintOf('PAYOUT_RATE');
   const payoutScale = scaleOf('PAYOUT_SCALE');
-  const processorUrl = env.PROCESSOR_URL ?? '';
-  if (processorUrl === '') {
+  const processorUrl = serviceUrls(env).processor;
+  if (processorUrl === null) {
     bad.push('PROCESSOR_URL');
   }
 
@@ -190,32 +159,24 @@ function productionExternals(env: Env): { rates: Rates; processor: Processor } {
       payoutScale,
     }),
     processor: httpProcessor({
-      endpoint: processorUrl,
+      endpoint: processorUrl ?? '',
       apiKey: env.PROCESSOR_API_KEY,
     }),
   };
 }
 
-// Builds the dev externals. The rates are the fixed dev rates (`fixedRates`) and the payout
-// provider approves everything, or it is the real HTTP provider if PROCESSOR_URL is set. This way a
-// local run and the tests need no setup.
-function devExternals(env: Env): { rates: Rates; processor: Processor } {
-  const endpoint = env.PROCESSOR_URL;
+function devExternals(env: EnvMap): { rates: Rates; processor: Processor } {
+  const endpoint = serviceUrls(env).processor;
   return {
     rates: fixedRates(),
     processor:
-      endpoint !== undefined && endpoint !== ''
+      endpoint !== null
         ? httpProcessor({ endpoint, apiKey: env.PROCESSOR_API_KEY })
         : devProcessor(),
   };
 }
 
-// Builds the external-service implementations (the "ports") and the runtime defaults the builders
-// need. The server and the worker share one set of runtime capabilities (clock, id generator,
-// hash/digest, request signer) so they behave identically. The signer is required in every mode
-// (via `requireSecrets`). The rates and the payout provider are real and required in production, and
-// dev stand-ins otherwise.
-function wiring(env: Env): {
+function wiring(env: EnvMap): {
   ports: ExternalPorts;
   defaults: RuntimeDefaults;
 } {
@@ -237,11 +198,9 @@ function wiring(env: Env): {
 
 // --- webhook ingestion ------------------------------------------------------------
 
-// Handles inbound "purchase" webhooks. createServer runs the verification gate first, so the body
-// here is already trusted and first-seen. This decodes it and persists the resulting "topUp" to the
-// inbox rather than posting inline, so we ack fast and the apply worker (`drainInbox`) settles off
-// the request path. The inbox dedupes on the provider event id, so a redelivery credits the user
-// once. On any thrown error the response carries only the message, never internal details.
+// createServer runs the verification gate first, so the body here is already trusted. The decoded
+// "topUp" is persisted to the inbox (deduped on the provider event id) rather than posted inline:
+// ack fast, and the apply worker (`drainInbox`) settles off the request path.
 function purchaseWebhook(store: Store, ids: Ids, clock: Clock): WebhookHandler {
   return async (provider, request) => {
     try {
@@ -271,9 +230,8 @@ function purchaseWebhook(store: Store, ids: Ids, clock: Clock): WebhookHandler {
 
 // --- serve ------------------------------------------------------------------------
 
-// Runs the Fetch handler on the current runtime. Bun and Deno serve it directly, and Node goes
-// through `bridge`. Returns a closer that stops accepting connections and resolves once the listener
-// is down, so a SIGTERM can drain in-flight work before the store is closed.
+// The returned closer stops accepting connections and resolves once the listener is down, so a
+// SIGTERM can drain in-flight work before the store is closed.
 function serve(handler: FetchHandler, port: number): CloseServer {
   const runtime = globalThis as unknown as {
     Bun?: {
@@ -312,7 +270,6 @@ function serve(handler: FetchHandler, port: number): CloseServer {
     });
 }
 
-// Passes one node:http request/response pair through the Fetch handler.
 async function bridge(
   handler: FetchHandler,
   req: IncomingMessage,
@@ -346,27 +303,24 @@ async function bridge(
 
 // --- worker -----------------------------------------------------------------------
 
-// The reconcile feed is an external integration with no local default. The local worker passes no
-// windows, so this is never pulled; it exists only to satisfy the sweep input's shape.
+// Never pulled — the local worker passes no windows; this only satisfies the sweep input's shape.
 const noReconcileFeed: ReconcileFeed = {
   pull: async () => {
     throw new Error('no reconcile feed configured');
   },
 };
 
-// A running worker. It holds the interval handle, the store to close on shutdown, and a promise to
-// await before tearing the store down (resolved when the current tick, if any, finishes).
 type RunningWorker = {
   timer: NodeJS.Timeout;
   store: Store;
   drain: () => Promise<void>;
 };
 
-async function runWorker(env: Env): Promise<RunningWorker> {
+async function runWorker(
+  env: EnvMap,
+  runtime: ServerRuntime,
+): Promise<RunningWorker> {
   const { ports, defaults } = wiring(env);
-  // Optional edge bridge (see scripts/support/edge-host.ts): when enabled its shimmed
-  // Tilia processor replaces the env-selected one and its wallet balance feeds the
-  // floatCoverage sweep. Off, the worker runs exactly as before.
   const edge = await maybeEdgeTilia(env, log);
   if (edge !== undefined) {
     ports.processor = edge.processor;
@@ -376,17 +330,12 @@ async function runWorker(env: Env): Promise<RunningWorker> {
     ports,
     defaults,
   );
-  // Optional taskq bridge (see scripts/support/taskq-host.ts): when enabled it
-  // becomes the relay's dispatcher, so outbox events land as durable tasks and
-  // run in this process. Off, the env-selected dispatcher is used unchanged.
   const bridge = await maybeTaskqHost(env, log);
   const relayDispatcher = bridge?.dispatcher ?? dispatcher;
-  const intervalMs = Number(env.WORKER_INTERVAL_MS ?? 60_000);
-  const limit = Number(env.WORKER_BATCH ?? 100);
+  const { workerIntervalMs: intervalMs, workerBatch: limit } = runtime;
 
-  // Non-overlap guard. A single in-flight promise keeps a slow sweep from overlapping the next
-  // scheduled tick, which would run two sweeps at once in one process. While a tick runs, later
-  // interval fires are skipped. The shutdown handler awaits this same promise.
+  // Non-overlap guard: while a tick runs, later interval fires are skipped. The shutdown handler
+  // awaits this same promise.
   let inFlight: Promise<void> | null = null;
 
   const tick = (): Promise<void> => {
@@ -403,10 +352,6 @@ async function runWorker(env: Env): Promise<RunningWorker> {
           windows: [],
           float: edge?.float,
         });
-        // Surface each failed sweep's error code and retry flag, not just its name. The SweepResult
-        // carries why it failed (STORE.FAILURE, COMMINGLING, and so on) and whether the next tick
-        // retries it, which is what an operator needs to act. flatMap narrows `result` to the failure
-        // variant, so no cast.
         const failed = Object.entries(batch).flatMap(([sweep, result]) =>
           result.ok
             ? []
@@ -418,8 +363,6 @@ async function runWorker(env: Env): Promise<RunningWorker> {
           log.log('warn', 'worker.sweep', { ok: false, failed });
         }
       } catch (error) {
-        // Same event as the per-tick lines above: the outcome lives in the fields (`ok`, `error`)
-        // and the level, not in a differently named event.
         log.log('error', 'worker.sweep', {
           ok: false,
           error: error instanceof Error ? error.message : String(error),
@@ -452,10 +395,9 @@ async function runWorker(env: Env): Promise<RunningWorker> {
 
 // --- shutdown ---------------------------------------------------------------------
 
-// Registers SIGTERM and SIGINT handlers. They run `drain` once (stop accepting work, then await
-// in-flight work) and exit 0. A bounded, unref'd timer forces exit 1 if a drain hangs, so a rolling
+// `drain` runs once and exits 0; a bounded, unref'd timer forces exit 1 if it hangs, so a rolling
 // deploy isn't blocked on a stuck connection or sweep.
-function onShutdown(env: Env, drain: () => Promise<void>): void {
+function onShutdown(timeoutMs: number, drain: () => Promise<void>): void {
   let started = false;
   const shutdown = (signal: string): void => {
     if (started) {
@@ -467,7 +409,7 @@ function onShutdown(env: Env, drain: () => Promise<void>): void {
       log.log('error', 'process.shutdown_timeout', {});
       // eslint-disable-next-line n/no-process-exit
       process.exit(1);
-    }, shutdownTimeoutMs(env));
+    }, timeoutMs);
     forced.unref();
     drain().then(
       () => {
@@ -492,32 +434,25 @@ function onShutdown(env: Env, drain: () => Promise<void>): void {
 // --- serve (shared by `serve` and `dev`) ------------------------------------------
 
 /**
- * Build the economy from `env`, mount the HTTP handler with the active webhook gate, start the
- * listener, register graceful shutdown. `serve` and `dev` both use this, differing only in the env
- * they pass: `dev` forces in-memory adapters and dev secrets (see `devEnv`).
+ * Shared by `serve` and `dev`, which differ only in the env they pass (see `devEnv`).
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for
  * the routes, wire format, and webhook gate this entry point mounts.
  */
-async function runServe(env: Env): Promise<void> {
+async function runServe(env: EnvMap, runtime: ServerRuntime): Promise<void> {
   const { ports, defaults } = wiring(env);
-  // Optional edge bridge, mirroring runWorker: the shimmed processor replaces the
-  // env-selected one, the hosted-KYC directory feeds the PAYEE_UNVERIFIED gate, and
-  // POST /webhooks/tilia routes to the edge-backed handler.
   const edge = await maybeEdgeTilia(env, log);
   if (edge !== undefined) {
     ports.processor = edge.processor;
   }
-  // Build the capability bundle once so the economy and the webhook handler share one store, id
-  // generator, and clock. The handler persists each verified callback into the very store the apply
-  // worker (`drainInbox`) later drains. `compose` would return only the economy, not its store, but
-  // the webhook now writes to the inbox, so we need the store handle.
+  // capabilitiesFromEnv rather than compose: the webhook handler writes the inbox, so it needs the
+  // same store handle the economy runs on, and compose would return only the economy.
   const caps = await capabilitiesFromEnv(env, ports, defaults);
   if (edge !== undefined) {
     caps.payees = edge.payees;
   }
   const economy = createEconomy(caps);
-  const config = loadConfig(env);
+  const config = caps.config;
   const purchases = purchaseWebhook(caps.store, caps.ids, caps.clock);
   const tiliaPayouts = edge?.webhookFor(caps.store, caps.ids, caps.clock);
   // config and clock are what activate the webhook gate. Without them createServer can't verify a
@@ -530,19 +465,17 @@ async function runServe(env: Env): Promise<void> {
     config,
     clock: defaults.clock,
   });
-  const closeServer = serve(handler, Number(env.PORT ?? 3000));
-  onShutdown(env, async () => {
+  const closeServer = serve(handler, runtime.port);
+  onShutdown(runtime.shutdownTimeoutMs, async () => {
     await closeServer();
     await economy.close();
     await edge?.stop();
   });
 }
 
-// Builds the env for `dev` mode. It forces in-memory adapters by clearing any DATABASE_URL,
-// REDIS_URL, or queue URL from .env or the shell, and it supplies dev secrets when none are set. So
-// `make dev` boots with no database and no configured secrets, and under `node --watch` it reloads
-// on edit. Not for production.
-function devEnv(env: Env): Env {
+// Forces in-memory adapters by clearing any store, cache, or queue URL from .env or the shell, and
+// supplies dev secrets when none are set. Not for production.
+function devEnv(env: EnvMap): EnvMap {
   return {
     ...env,
     DATABASE_URL: undefined,
@@ -554,25 +487,60 @@ function devEnv(env: Env): Env {
   };
 }
 
+// One startup line naming the resolved selection and knobs; each secret logs set/MISSING, never
+// its value. It reads describeSelection — the same reading the wiring consumes — so the line
+// cannot drift from what actually runs.
+function logResolved(mode: string, env: EnvMap, runtime: ServerRuntime): void {
+  const selection = describeSelection(env);
+  // describeTaskq throws on a misconfigured opt-in; startup, right here, is where that surfaces.
+  const queue = mode === 'worker' ? describeTaskq(env) : null;
+  log.log('info', 'config.resolved', {
+    mode,
+    production: isProduction(env),
+    store: selection.store.kind,
+    cache: selection.cache.kind,
+    dispatcher: selection.dispatcher.kind,
+    ...(mode === 'worker' && queue !== null
+      ? {
+          workerIntervalMs: runtime.workerIntervalMs,
+          workerBatch: runtime.workerBatch,
+          queue: queue.kind === 'off' ? 'off' : `taskq(${queue.engine})`,
+        }
+      : { port: runtime.port }),
+    shutdownTimeoutMs: runtime.shutdownTimeoutMs,
+    secrets: Object.fromEntries(
+      REQUIRED_SECRETS.map((key) => [
+        key,
+        (env[key] ?? '') === '' ? 'MISSING' : 'set',
+      ]),
+    ),
+  });
+}
+
 // --- entry ------------------------------------------------------------------------
 
 const mode = process.argv[2] ?? 'serve';
+if (mode !== 'serve' && mode !== 'dev' && mode !== 'worker') {
+  console.error(`unknown mode "${mode}"; use "serve", "dev", or "worker"`);
+  // eslint-disable-next-line n/no-process-exit
+  process.exit(1);
+}
+if (mode === 'dev') {
+  log.log('info', 'dev.mode', {
+    note: 'in-memory store, dev secrets, hot reload — not for production',
+  });
+}
+const env: EnvMap = mode === 'dev' ? devEnv(process.env) : process.env;
+const runtime = serverRuntime(env);
+logResolved(mode, env, runtime);
+
 if (mode === 'worker') {
-  const running = await runWorker(process.env);
-  onShutdown(process.env, async () => {
+  const running = await runWorker(env, runtime);
+  onShutdown(runtime.shutdownTimeoutMs, async () => {
     clearInterval(running.timer);
     await running.drain();
     await running.store.close();
   });
-} else if (mode === 'serve') {
-  await runServe(process.env);
-} else if (mode === 'dev') {
-  log.log('info', 'dev.mode', {
-    note: 'in-memory store, dev secrets, hot reload — not for production',
-  });
-  await runServe(devEnv(process.env));
 } else {
-  console.error(`unknown mode "${mode}"; use "serve", "dev", or "worker"`);
-  // eslint-disable-next-line n/no-process-exit
-  process.exit(1);
+  await runServe(env, runtime);
 }

@@ -13,9 +13,8 @@ import eslint from '@eslint/js';
 import n from 'eslint-plugin-n';
 import tseslint from 'typescript-eslint';
 
-// Node-only globals banned from the core. The core targets the cross-runtime surface (Node, Bun,
-// Deno, CF Workers), so each banned global has an injected replacement: time comes from Clock,
-// randomness and hashing from crypto.subtle, raw bytes from Uint8Array.
+// Node-only globals banned from the core, which targets the cross-runtime surface (Node, Bun,
+// Deno, CF Workers). Each entry's message names the injected replacement.
 const BANNED_GLOBALS = [
   {
     name: 'Buffer',
@@ -44,8 +43,7 @@ const BANNED_GLOBALS = [
   },
 ];
 
-// Node-only module imports banned from the core. Only the Node-using layers (src/adapters/,
-// src/engines/) import these directly, wrapping each behind a portable interface.
+// Node-only module imports banned from the core; the adapter/engine layers wrap them instead.
 const BANNED_IMPORTS = {
   paths: [
     {
@@ -65,11 +63,9 @@ const BANNED_IMPORTS = {
   ],
 };
 
-// Layering invariant 1: src/ must not import test or dev-script code. Such an import would drag test
-// helpers and CLI wiring into the production bundle. The rule matches only static import and export
-// statements. It uses `regex` rather than `group` because group patterns are gitignore-style, where
-// a leading `#` is a comment that matches nothing, so `#test/**` would never fire. The `regex` form
-// matches the `#test/` alias literally.
+// Layering invariant 1: src/ must not import test or dev-script code. `regex` rather than
+// `group` because group patterns are gitignore-style, where a leading `#` is a comment that
+// matches nothing — `#test/**` would never fire.
 const NON_SHIPPED_IMPORTS = [
   {
     regex: '^#test/',
@@ -83,11 +79,9 @@ const NON_SHIPPED_IMPORTS = [
   },
 ];
 
-// Layering invariant 2: the optional db, cache, and queue drivers (pg, mysql2, ioredis,
-// @aws-sdk/client-sqs) are declared optional in peerDependenciesMeta. The composition root
-// (src/index.ts) loads them via dynamic import(), so an unused driver is never required or bundled.
-// Forbidding static imports across the library keeps that guarantee. no-restricted-imports does not
-// flag dynamic import(), so legitimate `await import(...)` sites stay valid.
+// Layering invariant 2: the optional drivers load via dynamic import() from the composition
+// root, so an unused peer dependency never loads. no-restricted-imports ignores dynamic
+// import(), so those legitimate sites stay valid while static imports are refused.
 const OPTIONAL_DRIVER_IMPORTS = [
   '#src/engines/postgres.ts',
   '#src/engines/mysql.ts',
@@ -100,13 +94,11 @@ const OPTIONAL_DRIVER_IMPORTS = [
 }));
 
 export default tseslint.config(
-  // `apps/` holds standalone front-end apps (the React Router console) with their own build/lint tooling,
-  // so they stay outside this gate alongside the other non-core UI/asset dirs. The vendored
-  // @pwngh/money amalgamation is kept byte-identical to upstream; its embedded selfTest is the
-  // drift guard, not this config's rules.
+  // apps/ has its own build/lint tooling, so it stays outside this gate. The vendored @pwngh/money
+  // amalgamation is kept byte-identical to upstream; its embedded selfTest is the drift guard, not
+  // this config's rules.
   {
     ignores: [
-      'legacy/**',
       'node_modules/**',
       'apps/**',
       'src/money.vendored.ts',
@@ -118,12 +110,14 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   n.configs['flat/recommended-module'],
 
-  // Shared rules for every .ts file: style conventions plus function-size limits.
   {
     files: ['**/*.ts'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
+    },
+    linterOptions: {
+      reportUnusedDisableDirectives: 'error',
     },
     rules: {
       'no-console': ['error', { allow: ['warn', 'error'] }],
@@ -138,12 +132,10 @@ export default tseslint.config(
       'n/no-missing-import': 'off',
       'n/no-unpublished-import': 'off',
       'n/no-extraneous-import': 'off',
-      // This rule treats the cross-runtime `crypto` global, which the core uses on purpose, as Node's
-      // experimental node:crypto and warns that it may be unsupported. The global is available: the TS
-      // types and a runtime smoke test confirm it, and the ban below already blocks Node-only globals.
-      // The rule is off to silence the false positive.
+      // False positive: the rule treats the cross-runtime `crypto` global, used on purpose, as
+      // Node's experimental node:crypto and warns it may be unsupported.
       'n/no-unsupported-features/node-builtins': 'off',
-      // Keep functions small enough to read top to bottom on one screen. The complexity cap limits branches.
+      // Keep functions small enough to read top to bottom on one screen.
       complexity: ['error', 15],
       'max-depth': ['error', 4],
       'max-lines-per-function': [
@@ -155,12 +147,8 @@ export default tseslint.config(
     },
   },
 
-  // Core library under src/, excluding the Node-using layers src/adapters/ and src/engines/. The core
-  // targets the WinterCG surface, so Node-only globals and node:* imports are banned here. Tests,
-  // adapters, and the database engines are not matched and may use Node APIs. Both layering invariants
-  // apply: no test or dev-script code, and no static imports of the optional drivers. The drivers and
-  // the wire codec that index.ts and server.ts reach for are not on these lists, so those seams stay
-  // valid.
+  // The core targets the WinterCG surface, so Node-only globals and node:* imports are banned
+  // here. Both layering invariants apply.
   {
     files: ['src/**/*.ts'],
     ignores: ['src/adapters/**', 'src/engines/**'],
@@ -176,10 +164,8 @@ export default tseslint.config(
     },
   },
 
-  // The Node-using layers wrap Node-only APIs: the adapters cover cache, queue, and transport, and
-  // the engines cover Postgres and MySQL. Because they wrap those APIs, the node:* and Node-global
-  // bans do not apply here. They are still shipped code, so both layering invariants do apply: no
-  // test or dev-script imports, and the optional drivers stay behind dynamic import().
+  // The adapter/engine layers wrap Node APIs, so the node:* and Node-global bans lift here.
+  // They are still shipped code, so both layering invariants remain.
   {
     files: ['src/adapters/**/*.ts', 'src/engines/**/*.ts'],
     rules: {
@@ -190,9 +176,8 @@ export default tseslint.config(
     },
   },
 
-  // Tests run long and nest a few callbacks deep. The AAA narratives make them long, and the
-  // conformance suites add nesting by iterating the adapter matrix. So relax only the function-size
-  // and nesting limits here. Every other rule still applies to tests.
+  // Tests run long (AAA narratives) and nest deep (adapter-matrix suites), so relax only the
+  // function-size and nesting limits. Every other rule still applies.
   {
     files: ['test/**/*.ts'],
     rules: {

@@ -1,5 +1,4 @@
 services:
-  # Postgres for the Postgres engine (src/engines/postgres.ts).
   postgres:
     # Pinned by multi-arch index digest; refresh with
     # `docker manifest inspect postgres:16-alpine`.
@@ -18,8 +17,7 @@ services:
 
   # SQS for the outbox worker's dispatcher (see src/adapters/sqs.ts).
   localstack:
-    # Pinned by multi-arch index digest; refresh with
-    # `docker manifest inspect localstack/localstack:3`.
+    # Pinned by index digest; refresh: `docker manifest inspect localstack/localstack:3`.
     image: localstack/localstack:3@sha256:b279c01f4cfb8f985a482e4014cabc1e2697b9d7a6c8c8db2e40f4d9f93687c7
     environment:
       SERVICES: sqs
@@ -31,14 +29,12 @@ services:
       timeout: 5s
       retries: 5
 
-  # MySQL for the MySQL engine (src/engines/mysql.ts). The fixtures and tests
-  # connect via MYSQL_TEST_URL and create a throwaway database per run, so they use root.
+  # Tests create a throwaway database per run, so they connect as root.
   mysql:
     image: mysql:8.4
-    # Drop the binary log: on a single node it is a redundant second fsync per commit, where
-    # Postgres pays one. `--skip-log-bin` keeps full redo-log durability
-    # (innodb_flush_log_at_trx_commit stays 1) and just removes the binlog fsync, with no
-    # durability traded away (the lossy flush=2 knob is left unset).
+    # Drop the binary log: on a single node it is a redundant second fsync per commit. Full
+    # redo-log durability stays (innodb_flush_log_at_trx_commit remains 1); only the binlog
+    # fsync goes.
     command: ['--skip-log-bin']
     environment:
       MYSQL_ROOT_PASSWORD: economy
@@ -63,11 +59,10 @@ services:
       timeout: 5s
       retries: 10
 
-  # Production-parity benchmark runner: runs scripts/bench.ts INSIDE a Linux container against the
-  # compose Postgres/MySQL, so the commit pays a real Linux fsync (unlike Homebrew Postgres on macOS,
-  # where fsync skips F_FULLFSYNC). Reaches the DBs by service name, so it ignores whatever owns the
-  # host's 5432/3306; the repo is mounted in (pg/mysql2 are pure JS). Under the "tools" profile, so a
-  # plain `docker compose up` skips it. Run: `make bench-prod`, or `docker compose run --rm bench [...]`.
+  # Production-parity bench: runs scripts/bench.ts inside a Linux container so a commit pays a
+  # real fsync (macOS fsync skips the full flush). Reaches the DBs by service name, ignoring
+  # whatever owns the host's ports. Under the "tools" profile, so a plain `docker compose up`
+  # skips it; run with `make bench-prod`.
   bench:
     image: node:22-slim
     profiles: ['tools']
@@ -77,6 +72,9 @@ services:
     environment:
       DATABASE_URL: postgres://economy:economy@postgres:5432/economy_lab
       MYSQL_TEST_URL: mysql://root:economy@mysql:3306/economy_lab
+      # Both DBs are compose-guaranteed here, so a skip means a dead container (e.g. OOM-killed
+      # mid-run) — fail the run rather than reporting partial coverage as a pass.
+      BENCH_REQUIRE: postgres,mysql
     depends_on:
       postgres:
         condition: service_healthy

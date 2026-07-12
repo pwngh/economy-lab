@@ -9,16 +9,13 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same ref cancels the in-flight run for it, so a rapid series of pushes doesn't
-# pile up — and the Postgres/MySQL service containers stop spinning for commits already superseded.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # Fast feedback with no database: `npm run check` is type-check + lint + format + the suite. The
-  # pg/mysql conformance tests skip themselves when no backend is reachable, so this stays green
-  # without services. The ceiling turns a hang into a clean failure rather than the default 6h.
+  # `npm run check` gates identically to local `make check`. The pg/mysql conformance tests skip
+  # themselves when no backend is reachable, so this job stays green without services.
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -31,9 +28,27 @@ jobs:
       - run: npm ci
       - run: npm run check
 
-  # The full differential matrix: stand up Postgres and MySQL, then migrate + run the suite + prove
-  # + fuzz so memory, postgres, mysql, and http are all proven byte-identical in CI. The ceiling
-  # bounds a deadlock or stuck connection to a clean failure instead of the default six-hour timeout.
+  # The two Remix apps live outside the root lint/typecheck gate (their own toolchains), so this
+  # job is what catches a src/ rename breaking their deep imports. Type-level only — the docs
+  # app's anchor tests stay in its deploy pipeline, where anchor rot is handled deliberately.
+  apps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18'
+          cache: npm
+      - run: npm ci
+      - run: npm ci --prefix apps/console
+      - run: npm run typecheck --prefix apps/console
+      - run: npm ci --prefix apps/docs
+      - run: npm run typecheck --prefix apps/docs
+
+  # The differential matrix: memory, postgres, mysql, and http proven byte-identical in CI.
+  # timeout-minutes bounds a deadlock or stuck connection to a clean failure instead of the
+  # default six-hour ceiling.
   matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -79,3 +94,6 @@ jobs:
       - run: npm test
       - run: npm run prove
       - run: npm run fuzz
+      # Sweeps the throwaway namespaces the runs above created and orphaned (if any), so the
+      # sweeper's live-database path is exercised on both engines every CI run.
+      - run: npm run db:clean
