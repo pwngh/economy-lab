@@ -15,7 +15,7 @@
 // re-point the docs at a newer snapshot of economy-lab, then re-anchor the chips; app/anchors.test.ts
 // fails whenever the anchors and the library tree disagree.
 export const REPO_URL = 'https://github.com/pwngh/economy-lab';
-export const REPO_REF = '2b8f1b8084b5f0f188d7b9a0ac4955e84409b336';
+export const REPO_REF = 'dfe37cbf216bbf091ba72efb8a0a5059657b3602';
 
 /**
  * Turn a `sourceRefs` chip (`path · symbol`, the symbol descriptive only) into a GitHub blob URL at
