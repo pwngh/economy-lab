@@ -1032,6 +1032,21 @@ function createEntitlementStore(deps: {
       const expiresAt = row.attrs.expiresAt;
       return expiresAt == null || deps.clock.now() <= expiresAt;
     },
+    list: async function* (userId, _options?: Options) {
+      const prefix = `${userId}::`;
+      const grants: Array<{ sku: string; expiresAt: number | null }> = [];
+      for (const [key, row] of rows) {
+        if (!key.startsWith(prefix) || row.revoked) {
+          continue;
+        }
+        grants.push({
+          sku: key.slice(prefix.length),
+          expiresAt: row.attrs.expiresAt ?? null,
+        });
+      }
+      grants.sort((a, b) => byCodeUnit(a.sku, b.sku));
+      yield* grants;
+    },
   };
 }
 

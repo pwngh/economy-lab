@@ -1367,6 +1367,20 @@ function createEntitlementStore(q: Queryable, clock: Clock): EntitlementStore {
       );
       return result.rows.length > 0;
     },
+    list: async function* (userId) {
+      // Non-revoked grants, expired included, sorted by sku so every engine lists identically.
+      const result = await q.query(
+        `select sku, expires_at from entitlements
+          where user_id = $1 and revoked = false order by sku`,
+        [userId],
+      );
+      for (const row of result.rows) {
+        yield {
+          sku: row.sku as string,
+          expiresAt: row.expires_at === null ? null : Number(row.expires_at),
+        };
+      }
+    },
   };
 }
 

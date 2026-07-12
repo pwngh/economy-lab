@@ -481,6 +481,15 @@ function sessionEntitlements(
     },
     owns: (userId, sku, options) =>
       call(transport, at('owns'), { userId, sku }, options) as Promise<boolean>,
+    list: async function* (userId, options) {
+      const grants = (await call(
+        transport,
+        at('list'),
+        { userId },
+        options,
+      )) as Array<{ sku: string; expiresAt: number | null }>;
+      yield* grants;
+    },
   };
 }
 

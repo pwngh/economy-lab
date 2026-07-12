@@ -340,6 +340,8 @@ const SUBSTORE_ROUTES: Record<string, SubHandler> = {
   },
   'entitlements/owns': (unit, body) =>
     unit.entitlements.owns(body.userId as string, body.sku as string),
+  'entitlements/list': (unit, body) =>
+    collect(unit.entitlements.list(body.userId as string), (g) => g as unknown),
   'subscriptions/open': async (unit, body) => {
     await unit.subscriptions.open(decodeWire.subscription(body.sub));
     return null;

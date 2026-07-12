@@ -212,6 +212,71 @@ async function roundTripsCheckpointRows(store: Store): Promise<void> {
   assert.deepEqual(await store.checkpoints.latest(), v2);
 }
 
+async function grantsOwnsRevokesEntitlements(store: Store): Promise<void> {
+  const userId = freshUser();
+
+  await store.transaction((unit) =>
+    unit.entitlements.grant(userId, 'sku_conf_a', {}),
+  );
+  assert.equal(await store.entitlements.owns(userId, 'sku_conf_a'), true);
+  assert.equal(await store.entitlements.owns(userId, 'sku_conf_b'), false);
+
+  await store.transaction((unit) =>
+    unit.entitlements.revoke(userId, 'sku_conf_a'),
+  );
+  assert.equal(await store.entitlements.owns(userId, 'sku_conf_a'), false);
+
+  // Re-buying after a refund: a regrant clears the revoke.
+  await store.transaction((unit) =>
+    unit.entitlements.grant(userId, 'sku_conf_a', {}),
+  );
+  assert.equal(await store.entitlements.owns(userId, 'sku_conf_a'), true);
+}
+
+async function appliesExpiryAtReadTime(store: Store): Promise<void> {
+  const userId = freshUser();
+
+  // Clock-agnostic on purpose: the SQL conformance drivers run on the real clock while memory
+  // runs at 0, so the rows use a far future (owned either way), a negative past (lapsed either
+  // way), and null (never lapses). The INCLUSIVE boundary (owned while now <= expiresAt) is
+  // pinned separately under a controlled clock in test/adapters/entitlement-bitset.test.ts.
+  await store.transaction(async (unit) => {
+    await unit.entitlements.grant(userId, 'sku_conf_future', {
+      expiresAt: 8.64e15,
+    });
+    await unit.entitlements.grant(userId, 'sku_conf_past', { expiresAt: -1 });
+    await unit.entitlements.grant(userId, 'sku_conf_forever', {
+      expiresAt: null,
+    });
+  });
+
+  assert.equal(await store.entitlements.owns(userId, 'sku_conf_future'), true);
+  assert.equal(await store.entitlements.owns(userId, 'sku_conf_past'), false);
+  assert.equal(await store.entitlements.owns(userId, 'sku_conf_forever'), true);
+}
+
+async function listsNonRevokedGrantsSorted(store: Store): Promise<void> {
+  const userId = freshUser();
+
+  await store.transaction(async (unit) => {
+    await unit.entitlements.grant(userId, 'sku_conf_z', {});
+    await unit.entitlements.grant(userId, 'sku_conf_a', { expiresAt: -5 });
+    await unit.entitlements.grant(userId, 'sku_conf_m', {});
+    await unit.entitlements.revoke(userId, 'sku_conf_m');
+  });
+
+  const grants = [];
+  for await (const grant of store.entitlements.list(userId)) {
+    grants.push(grant);
+  }
+  // Revoked rows are excluded; expired rows are included with the expiry owns() would apply;
+  // sku order is identical on every engine.
+  assert.deepEqual(grants, [
+    { sku: 'sku_conf_a', expiresAt: -5 },
+    { sku: 'sku_conf_z', expiresAt: null },
+  ]);
+}
+
 // Builds one journal movement: a balanced viewer-tips-creator pair with exact bigint amounts.
 function movementRow(
   sessionId: string,
@@ -1034,6 +1099,12 @@ export function runStoreConformance(
       withStore(t, pairsHeadsWithRawSums));
     test('round-trips v1 and v2 checkpoint rows through the store', (t) =>
       withStore(t, roundTripsCheckpointRows));
+    test('grants, checks, revokes, and regrants entitlements', (t) =>
+      withStore(t, grantsOwnsRevokesEntitlements));
+    test('applies entitlement expiry at read time', (t) =>
+      withStore(t, appliesExpiryAtReadTime));
+    test('lists non-revoked entitlement grants sorted by sku', (t) =>
+      withStore(t, listsNonRevokedGrantsSorted));
     test('appends movement batches and streams them back by session', (t) =>
       withStore(t, journalAppendsAndStreamsBySession));
     test('rejects a movement batch on a duplicate key or position', (t) =>

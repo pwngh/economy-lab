@@ -78,6 +78,8 @@ export type {
   SessionOptions,
   SettleReport,
 } from '#src/netting.ts';
+export { cachedEntitlements } from '#src/adapters/entitlement-bitset.ts';
+export type { BitsetOptions } from '#src/adapters/entitlement-bitset.ts';
 
 // The error surface. submit() throws EconomyError for genuine faults; a caller needs the class for
 // instanceof, the ERROR_CODES catalog to match on, and the code/reason unions to type its handling.

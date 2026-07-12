@@ -1220,6 +1220,21 @@ function createEntitlementStore(deps: ExecDeps): EntitlementStore {
       );
       return found.length > 0;
     },
+    list: async function* (userId) {
+      // Non-revoked grants, expired included, sorted by sku so every engine lists identically.
+      const result = await rows(
+        deps.exec,
+        `SELECT sku, expires_at FROM entitlements
+          WHERE user_id = ? AND revoked = false ORDER BY sku`,
+        [userId],
+      );
+      for (const row of result) {
+        yield {
+          sku: row.sku as string,
+          expiresAt: row.expires_at === null ? null : Number(row.expires_at),
+        };
+      }
+    },
   };
 }
 

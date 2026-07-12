@@ -704,6 +704,22 @@ export interface EntitlementStore {
   revoke(userId: string, sku: string, options?: Options): Promise<void>;
 
   owns(userId: string, sku: string, options?: Options): Promise<boolean>;
+
+  /**
+   * Streams every non-revoked grant for the user, expired ones included, sorted by sku so every
+   * engine lists identically. Each row carries the expiry `owns` applies at read time (null never
+   * lapses), so a caller can reproduce the ownership decision — the entitlement read model
+   * rebuilds itself from exactly this.
+   */
+  list(userId: string, options?: Options): AsyncIterable<EntitlementGrant>;
+}
+
+/** One non-revoked grant as `EntitlementStore.list` streams it. */
+export interface EntitlementGrant {
+  sku: string;
+
+  /** Epoch ms the grant lapses (owned while now <= expiresAt), or null for a perpetual grant. */
+  expiresAt: number | null;
 }
 
 /** Tracks recurring subscriptions and when each is next due to bill. */
