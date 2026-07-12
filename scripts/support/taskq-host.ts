@@ -9,15 +9,12 @@
  * @license MIT
  */
 
-// Optional host-layer bridge to the sibling @pwngh/taskq checkout: outbox events are
-// enqueued as durable tasks (keyed by event id, so the relay's at-least-once
-// collapses to exactly one pending task) and a @pwngh/taskq worker runs them in this
+// Optional host-layer bridge to @pwngh/taskq: outbox events are enqueued as
+// durable tasks (keyed by event id, so the relay's at-least-once collapses to
+// exactly one pending task) and a @pwngh/taskq worker runs them in this
 // process. Off unless TASKQ_DATABASE_URL is set; the core never sees any of
 // this — @pwngh/taskq stays a host concern, behind the same Dispatcher seam SQS and
 // HTTP delivery use.
-
-import { existsSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import type { Dispatcher, Logger } from '#src/ports.ts';
 
@@ -83,13 +80,17 @@ interface PgModule {
   };
 }
 
-// The sibling checkout, overridable for deployments that vendor @pwngh/taskq
-// elsewhere. Loading by path keeps @pwngh/taskq out of package.json entirely.
-function taskqEntry(env: Env): string {
-  return (
-    env.TASKQ_PATH ??
-    fileURLToPath(new URL('../../../../taskq/src/index.ts', import.meta.url))
-  );
+// Imported only when the bridge is opted in, so the package stays an optional
+// peer, the same way the engines load their drivers.
+async function loadTaskq(): Promise<Taskq> {
+  try {
+    return (await import('@pwngh/taskq')) as Taskq;
+  } catch (cause) {
+    throw new Error(
+      'TASKQ_DATABASE_URL is set but @pwngh/taskq is not installed; npm install @pwngh/taskq',
+      { cause },
+    );
+  }
 }
 
 async function makePool(url: string): Promise<PgPoolLike> {
@@ -104,7 +105,7 @@ async function makePool(url: string): Promise<PgPoolLike> {
 /**
  * Builds the bridge when TASKQ_DATABASE_URL opts in; resolves undefined when
  * it does not, and the worker runs exactly as before. An explicit opt-in with
- * a missing checkout fails loudly — a configured bridge that silently no-ops
+ * the package missing fails loudly — a configured bridge that silently no-ops
  * would strand every relayed event.
  */
 export async function maybeTaskqHost(
@@ -115,13 +116,7 @@ export async function maybeTaskqHost(
   if (url === undefined || url === '') {
     return undefined;
   }
-  const entry = taskqEntry(env);
-  if (!existsSync(entry)) {
-    throw new Error(
-      `TASKQ_DATABASE_URL is set but no @pwngh/taskq checkout exists at ${entry}; set TASKQ_PATH`,
-    );
-  }
-  const taskq = (await import(pathToFileURL(entry).href)) as Taskq;
+  const taskq = await loadTaskq();
   const pool = await makePool(url);
   await taskq.createSchema(pool);
   await taskq.verifySchema(pool);

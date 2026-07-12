@@ -11,8 +11,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 import { makeEconomy, economyWithStore } from '#test/support/economy.ts';
 import { topUp, credit } from '#test/support/builders.ts';
@@ -33,19 +32,20 @@ import {
 import type { WorkerCtx } from '#src/contract.ts';
 import type { Dispatcher, EconomyEvent } from '#src/ports.ts';
 
-// Optional integration with the sibling @pwngh/taskq repo (a Postgres task queue whose enqueue can share
-// a caller transaction). Nothing in the lab depends on it: this suite loads @pwngh/taskq by path from the
-// sibling checkout and skips loudly when that checkout or a Postgres DATABASE_URL is absent. The
+// Optional integration with @pwngh/taskq (a Postgres task queue whose enqueue can share
+// a caller transaction). Nothing in the lab depends on it: this suite drives the installed
+// package end to end and skips loudly when it or a Postgres DATABASE_URL is absent. The
 // pairing under test is guarantee composition — @pwngh/taskq delivers a task at least once, `submit`
 // absorbs replays through the caller-owned idempotency key, so the ledger effect lands exactly
 // once. @pwngh/taskq stays host-layer only; the Store port and the internal outbox are untouched.
 
-const TASKQ_INDEX = new URL('../../../taskq/src/index.ts', import.meta.url);
 const DB_URL = process.env.DATABASE_URL ?? '';
 
 function skipReason(): string | false {
-  if (!existsSync(fileURLToPath(TASKQ_INDEX))) {
-    return 'sibling @pwngh/taskq checkout not found at ../../taskq';
+  try {
+    createRequire(import.meta.url).resolve('@pwngh/taskq/package.json');
+  } catch {
+    return '@pwngh/taskq is not installed (optional peer)';
   }
   if (!DB_URL.startsWith('postgres')) {
     return '@pwngh/taskq needs a postgres DATABASE_URL';
@@ -115,7 +115,7 @@ interface PgModule {
 }
 
 async function loadTaskq(): Promise<Taskq> {
-  return (await import(TASKQ_INDEX.href)) as Taskq;
+  return (await import('@pwngh/taskq')) as Taskq;
 }
 
 // Each run gets its own database because @pwngh/taskq's schema name is fixed. The admin connection is the
@@ -183,7 +183,7 @@ async function drainTasks(pool: PgPoolLike): Promise<void> {
   }
 }
 
-describe('taskq integration (optional sibling)', { skip: skipReason() }, () => {
+describe('taskq integration (optional peer)', { skip: skipReason() }, () => {
   test('at-least-once delivery composes with submit idempotency into an exactly-once effect', async () => {
     const economy = makeEconomy();
     const taskq = await loadTaskq();

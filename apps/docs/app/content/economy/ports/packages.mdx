@@ -70,7 +70,8 @@ const dispatcher: Dispatcher = async (event) => {
 
 The `key` makes the enqueue idempotent, so the relay's at-least-once delivery collapses to exactly
 one pending task per event, and consumers inherit @pwngh/taskq's retries instead of writing their own. The
-bridge is opt-in: it runs only when `TASKQ_DATABASE_URL` is set, and the core never sees it.
+bridge is opt-in: it runs only when `TASKQ_DATABASE_URL` is set and the optional `@pwngh/taskq`
+peer dependency is installed; the core never sees it.
 
 ## @pwngh/economy-edge — the front door
 

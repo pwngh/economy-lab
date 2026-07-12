@@ -211,6 +211,6 @@ they wire are owned by [the packages](/economy/ports/packages/).
 
 | Variable             | Meaning                                                                                                                                                                    | Default            |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
-| `TASKQ_DATABASE_URL` | Enables the @pwngh/taskq bridge: outbox events are enqueued as durable tasks on this Postgres database. `TASKQ_PATH` points at the checkout; `TASKQ_POLL_MS` tunes the poll (default `250`). | unset (bridge off) |
+| `TASKQ_DATABASE_URL` | Enables the @pwngh/taskq bridge: outbox events are enqueued as durable tasks on this Postgres database. The optional `@pwngh/taskq` package must be installed; `TASKQ_POLL_MS` tunes the poll (default `250`). | unset (bridge off) |
 | `TILIA_CLIENT_ID`    | Enables the economy-edge Tilia bridge: the shimmed processor, the payee directory, the float feed, and the webhook handler. `TILIA_ENVIRONMENT` picks `staging` or `production`; production also requires `TILIA_PAYEE_DATABASE_URL` and `TILIA_WEBHOOK_SECRET`. | unset (bridge off) |
 
