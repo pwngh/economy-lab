@@ -115,10 +115,8 @@ async function submitPayout(
 
 // --- Turning the request and response into and out of JSON ------------------------
 
-// JSON request body: idempotency key, opaque user token (only a `usr_`-style token reaches
-// a provider, never personal data), and USD amount. The amount goes through `encodeAmount`
-// to a decimal string like `"USD:12.34"`, since it's a `bigint` and `JSON.stringify` can't
-// serialize a `bigint`.
+// The request body carries the idempotency key, an opaque `usr_` token (never personal
+// data), and the USD amount as a decimal string, since JSON cannot serialize a bigint.
 function encodeRequest(input: {
   key: string;
   userId: string;
@@ -131,10 +129,8 @@ function encodeRequest(input: {
   });
 }
 
-// Pulls the provider's reference id out of a 2xx body. The body must be JSON with a
-// non-empty `providerRef` string. Invalid JSON or a missing or blank field is non-retryable,
-// because the payout may already have gone through. Retrying could pay twice, so
-// reconciliation resolves the ambiguity instead.
+// Pulls `providerRef` out of a 2xx body. Invalid JSON or a missing field is non-retryable:
+// the payout may already have gone through, and retrying could pay twice.
 function parseProviderRef(body: string): string {
   let parsed: unknown;
   try {

@@ -69,8 +69,7 @@ export function httpDispatcher(config: HttpDispatcherConfig): Dispatcher {
   };
 }
 
-// Wraps a failed dispatch as a retryable `PROVIDER.FAILURE` and keeps the original error as
-// `cause`. Mirrors the SQS dispatcher's transportFault.
+// Wraps a failed dispatch as a retryable `PROVIDER.FAILURE`, keeping the original error as `cause`.
 function transportFault(message: string, error: unknown): Error {
   return fault(ERROR_CODES.PROVIDER_FAILURE, message, {
     cause: normalizeError(error),

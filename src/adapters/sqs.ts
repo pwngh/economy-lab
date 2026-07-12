@@ -65,8 +65,7 @@ export interface SqsDispatcherConfig {
 export function sqsDispatcher(config: SqsDispatcherConfig): Dispatcher {
   const client = config.client;
   // The FIFO-only params (MessageGroupId, MessageDeduplicationId) draw InvalidParameterValue on a
-  // standard queue. So decide once from the URL suffix and attach them only for FIFO queues. The
-  // documented deployment (.env.example) uses a standard queue.
+  // standard queue, so attach them only when the URL suffix says FIFO.
   const fifo = config.queueUrl.endsWith('.fifo');
 
   return async (event: EconomyEvent, options?: Options): Promise<void> => {
@@ -93,8 +92,7 @@ export function sqsDispatcher(config: SqsDispatcherConfig): Dispatcher {
 
 // --- Local helpers ----------------------------------------------------------------
 
-// Wraps a failed SQS call as a retryable `PROVIDER.FAILURE`. `normalizeError` keeps the
-// original error as `cause`.
+// Wraps a failed SQS call as a retryable `PROVIDER.FAILURE`, keeping the original error as `cause`.
 function transportFault(message: string, error: unknown): Error {
   const normalized = normalizeError(error);
   return fault(ERROR_CODES.PROVIDER_FAILURE, message, {
