@@ -81,7 +81,7 @@ export interface Config {
 
   /**
    * How long (ms) topped-up funds must wait before they can be spent or paid out, keyed by
-   * funding source ("card", "crypto"). Sources not listed use the "default" entry.
+   * funding source ("card", "crypto", "steam", "meta"); unlisted sources use "default".
    */
   maturityHorizonMs: Record<string, number>;
 
@@ -187,6 +187,10 @@ export function loadConfig(env: EnvMap): Config {
     maturityHorizonMs: {
       card: cardHorizonMs,
       crypto: toInt(env.MATURITY_HORIZON_CRYPTO_MS, 24 * 60 * 60_000),
+      // Store rails for VRChat Credits. Each defaults to the card horizon, the most
+      // conservative shipped value, until the rail's real refund window is decided.
+      steam: toInt(env.MATURITY_HORIZON_STEAM_MS, cardHorizonMs),
+      meta: toInt(env.MATURITY_HORIZON_META_MS, cardHorizonMs),
       // Fallback for unlisted funding sources. It defaults to the card horizon, the longest of the
       // shipped defaults, and can be overridden via MATURITY_HORIZON_DEFAULT_MS.
       default: toInt(env.MATURITY_HORIZON_DEFAULT_MS, cardHorizonMs),

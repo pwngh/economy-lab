@@ -238,7 +238,7 @@ export function defaultPricing(): FeePolicy {
 // --- Config -----------------------------------------------------------------------
 
 /**
- * Builds a test config with throwaway secrets. The config tests already cover `loadConfig`'s
+ * Builds a test config with throwaway secrets. `test/config.test.ts` covers `loadConfig`'s
  * startup check for missing secrets, so placeholder values are fine here.
  */
 export function testConfig(): Config {
