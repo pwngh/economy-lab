@@ -37,6 +37,7 @@ import { ERROR_CODES, EconomyError } from '#src/errors.ts';
 import { httpProcessor } from '#src/adapters/processor.ts';
 import { configuredRates } from '#src/adapters/rates.ts';
 import { decodeWebhookEvent, handlePurchaseWebhook } from '#src/webhooks.ts';
+import { maybeTaskqHost } from '#scripts/support/taskq-host.ts';
 import { maybeEdgeTilia } from '#scripts/support/edge-host.ts';
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -375,6 +376,11 @@ async function runWorker(env: Env): Promise<RunningWorker> {
     ports,
     defaults,
   );
+  // Optional taskq bridge (see scripts/support/taskq-host.ts): when enabled it
+  // becomes the relay's dispatcher, so outbox events land as durable tasks and
+  // run in this process. Off, the env-selected dispatcher is used unchanged.
+  const bridge = await maybeTaskqHost(env, log);
+  const relayDispatcher = bridge?.dispatcher ?? dispatcher;
   const intervalMs = Number(env.WORKER_INTERVAL_MS ?? 60_000);
   const limit = Number(env.WORKER_BATCH ?? 100);
 
@@ -392,7 +398,7 @@ async function runWorker(env: Env): Promise<RunningWorker> {
         const { batch } = await worker.runOnce({
           now: Date.now(),
           limit,
-          dispatcher,
+          dispatcher: relayDispatcher,
           feed: noReconcileFeed,
           windows: [],
           float: edge?.float,
@@ -435,6 +441,9 @@ async function runWorker(env: Env): Promise<RunningWorker> {
     drain: async () => {
       if (inFlight) {
         await inFlight;
+      }
+      if (bridge !== undefined) {
+        await bridge.stop();
       }
       await edge?.stop();
     },
