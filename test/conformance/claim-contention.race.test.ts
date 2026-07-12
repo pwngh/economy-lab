@@ -108,23 +108,19 @@ import type { Economy, Operation } from '#src/contract.ts';
 import type { InboxEntry, OutboxMessage, Saga, Store } from '#src/ports.ts';
 
 // M seeded rows, N concurrent sweeps, per-claim batch limit, and how many independent drains to run
-// per claim method. M is well above N*LIMIT so the drain takes many overlapping rounds (real
-// contention, not one batch each). LIMIT is small so sweeps keep colliding round after round.
-// ITERATIONS is at least 20 so a rare interleaving that produces a double-effect has many chances to
-// show. N is kept modest so the in-flight sweeps stay well under the connection pool, since each mark
-// holds one transaction connection. This is the same pool-sizing discipline concurrency.adversarial
-// documents.
+// per claim method. M is far larger than N*LIMIT so the drain takes many overlapping rounds and the
+// contention is real; ITERATIONS of at least 20 gives a rare double-effect interleaving many chances
+// to surface; N stays modest so the in-flight sweeps keep their transaction connections inside the
+// pool, the same pool-sizing discipline concurrency.adversarial documents.
 const M = 80;
 const N = 6;
 const LIMIT = 4;
 const ITERATIONS = 20;
 
-// `now` for the due-time gate. Sagas are seeded due in the past, so any non-negative sweep time
-// claims them. The inbox and outbox have no due gate. A constant keeps the seeded set deterministic.
+// `now` for the due-time gate. Sagas are seeded due in the past so claimDue picks them, and a
+// constant keeps the seeded set deterministic.
 const NOW = 1;
 
-// The CREDIT amount each seeded inbox topUp mints. The exactly-once-effect assertion is that the
-// user's spendable balance ends at exactly this one top-up's worth, never two.
 const TOPUP_MINOR = 1_000n;
 
 // One unique tag per drain so seeded ids never collide across iterations on a shared store. A base-36

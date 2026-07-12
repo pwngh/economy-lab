@@ -110,16 +110,13 @@ function settlePayoutOp(sagaId: string): Operation {
 }
 
 // The reserve every race saga holds, plus the figures a winning settle moves. The 4.00 CREDIT
-// reserve converts at the payout rate of $0.005 to $0.02 USD. These are the same two coupled
-// postings settlePayout.test.ts pins. Assertions check deltas against these figures, so a shared
-// store that accumulates across iterations is fine.
+// reserve converts at the payout rate to $0.02 USD, the same figures settlePayout.test.ts uses.
+// Assertions check deltas against these figures, so a shared store that accumulates across
+// iterations is fine.
 const RESERVE = credit('4.00');
 const SETTLE_USD = usd('0.02');
 const INVALID = 'SAGA.INVALID_TRANSITION';
 const ITERATIONS = 50;
-// The worker-vs-settle race uses fewer iterations. Each iteration adds to the same growing ledger
-// that prove() re-walks, and this many genuinely concurrent attempts already catch the narrow
-// timeout-vs-late-settle window.
 const WORKER_ITERATIONS = 15;
 
 // How a refused loser must surface on every backend: the clean domain fault. Whoever takes the
@@ -196,9 +193,6 @@ function delta(before: Amount, after: Amount): bigint {
   return after.minor - before.minor;
 }
 
-// What a submit resolved or rejected to, flattened so both firing orders read the same. It is
-// 'committed' when the submit committed, the fault code when it threw, or a tag for anything else.
-// The anything-else tag fails the test.
 type Settled =
   | { kind: 'committed' }
   | { kind: 'rejected'; code: string | undefined }
@@ -217,9 +211,7 @@ async function settleOf(submit: Promise<Outcome>): Promise<Settled> {
   }
 }
 
-// Asserts the books after a race that settle won. The saga is SETTLED, the reserve emptied into
-// REVENUE, gross USD left trust, and the seller's fresh earned account is untouched. The reserve
-// moved once, in the settle direction, and was not also returned.
+// Asserts settle won: the reserve moved once, in the settle direction, and was never also returned.
 function assertSettleWonBooks(
   tag: string,
   state: string | undefined,
@@ -254,9 +246,8 @@ function assertSettleWonBooks(
   );
 }
 
-// Asserts the books after a race that reverse won. The saga is FAILED, the reserve returned to the
-// seller's earned account, and REVENUE and trust are untouched. The reserve moved once, in the
-// reverse direction, and the seller was not also paid.
+// Asserts reverse won: the reserve moved once, in the reverse direction, and the seller was never
+// also paid.
 function assertReverseWonBooks(
   tag: string,
   state: string | undefined,
@@ -291,8 +282,6 @@ function assertReverseWonBooks(
   );
 }
 
-// Runs prove() after every race. It checks that no money was created or lost, no account overdrew,
-// the hash chain is intact, and cached balances are consistent with the legs.
 async function assertInvariants(engine: Economy, tag: string): Promise<void> {
   const report = await engine.read.prove();
   assert.ok(report.conserved, `${tag}: conservation broken after the race`);
@@ -303,10 +292,6 @@ async function assertInvariants(engine: Economy, tag: string): Promise<void> {
 
 // --- SQL engines: the genuine concurrent race --------------------------------------------------
 
-// Runs one settle-vs-reverse race on a fresh SUBMITTED saga, fired truly concurrently. `settleFirst`
-// controls which submit is handed to Promise.all first, so both firing orders are exercised. Asserts
-// exactly one winner, the loser refused with INVALID_TRANSITION, money moved once in the winner's
-// direction, and prove() holds.
 async function oneConcurrentRace(
   engine: Economy,
   store: Store,
@@ -354,12 +339,6 @@ async function oneConcurrentRace(
   await assertInvariants(engine, tag);
 }
 
-// Asserts the loser of a race is a rejection carrying one of the allowed refusal codes. It must
-// never be a `committed`, `duplicate`, or `rejected` outcome, which would mean it silently took or
-// no-op'd, and never an unrelated throw. `allowed` is the clean domain refusal
-// (SAGA.INVALID_TRANSITION) on every path. The deterministic memory interleaving and the genuine SQL
-// concurrency both end there, because the SQL engines retry any transient deadlock or serialization
-// abort into that same domain outcome.
 function assertLoserRefused(
   tag: string,
   loser: Settled,
@@ -489,10 +468,8 @@ function raceWorkerCtx(): WorkerCtx {
 }
 
 // Runs one worker-timeout-vs-settle race on a fresh aged SUBMITTED saga, fired truly concurrently.
-// `settleFirst` controls which is handed to Promise.all first. The sweep returns a summary and does
-// not throw on a lost CAS. The settle is an economy.submit that rejects with INVALID_TRANSITION if
-// it loses. Asserts exactly one outcome, money moved once in the winner's direction, and prove()
-// holds.
+// The sweep returns a summary and does not throw on a lost compare-and-set; a losing settle rejects
+// with INVALID_TRANSITION.
 async function oneWorkerVsSettleRace(
   fixtures: { engine: Economy; store: Store; worker: WorkerCtx },
   tag: string,

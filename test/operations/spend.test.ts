@@ -61,12 +61,10 @@ async function giftsToRecipientWhileChargingBuyer(): Promise<void> {
   );
 
   assert.equal(outcome.status, 'committed');
-  // Buyer pays: spendable drops from 10.00 to 6.00.
   assert.deepEqual(
     await economy.read.balance(spendable('usr_buyer')),
     credit('6.00'),
   );
-  // Recipient owns the purchased item; the buyer does not.
   assert.equal(await store.entitlements.owns('usr_friend', 'wrld_pass'), true);
   assert.equal(await store.entitlements.owns('usr_buyer', 'wrld_pass'), false);
   // Velocity counts against the buyer's window, not the recipient's, because the risk limit tracks
@@ -215,7 +213,6 @@ async function rejectsSpendDrawingOnImmatureCredit(): Promise<void> {
     }),
   );
 
-  // Clock still at 0, so none of the spendable credit has matured yet.
   const outcome = await runOp(
     store,
     ctx,
@@ -230,7 +227,6 @@ async function rejectsSpendDrawingOnImmatureCredit(): Promise<void> {
   const rejection = outcome as Extract<Outcome, { status: 'rejected' }>;
   assert.equal(rejection.reason, 'FUNDS_IMMATURE');
   assert.equal(rejection.detail?.account, spendable('usr_buyer'));
-  // Declined spend posted nothing: spendable is untouched.
   assert.deepEqual(
     await store.ledger.balance(spendable('usr_buyer')),
     credit('10.00'),
@@ -299,7 +295,6 @@ async function doesNotGateThePromoFundedPart(): Promise<void> {
   );
 
   assert.equal(outcome.status, 'committed');
-  // The whole price came from promo; spendable was never touched.
   assert.deepEqual(
     await store.ledger.balance(promo('usr_buyer')),
     credit('1.00'),
@@ -364,7 +359,6 @@ async function grantsEntitlementOnSpend(): Promise<void> {
   );
 
   assert.equal(outcome.status, 'committed');
-  // Buyer owns the SKU after a committed spend; the grant rode in the same transaction.
   const owned = await store.transaction((unit) =>
     unit.entitlements.owns('usr_buyer', 'wrld_pass'),
   );
@@ -408,7 +402,6 @@ async function rejectsDuplicateOrderId(): Promise<void> {
   assert.equal(rejection.reason, 'DUPLICATE_ORDER');
   assert.equal(rejection.detail?.orderId, 'ord_dup');
 
-  // The buyer was debited exactly once: 10.00 funded minus the single 4.00 charge.
   assert.deepEqual(
     await store.ledger.balance(spendable('usr_buyer')),
     credit('6.00'),
@@ -490,7 +483,7 @@ async function recordsFeeIncludingResidualOnUnevenSplit(): Promise<void> {
   assert.notEqual(sale, null);
   const committed = outcome as Extract<Outcome, { status: 'committed' }>;
   // Whole price from spendable (no promo), so REVENUE is touched in one credit line: the fee plus
-  // the rounding residual. Credit lines store negative, so negate to compare against the positive fee.
+  // the rounding residual.
   const revenueLeg = committed.transaction.legs.find(
     (leg) => leg.account === SYSTEM.REVENUE,
   );

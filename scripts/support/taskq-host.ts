@@ -14,7 +14,7 @@
 // collapses to exactly one pending task) and a taskq worker runs them in this
 // process. Off unless TASKQ_DATABASE_URL is set; the core never sees any of
 // this — taskq stays a host concern, behind the same Dispatcher seam SQS and
-// HTTP delivery use. See docs/taskq-host.md for the deployment story.
+// HTTP delivery use.
 
 import { existsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';

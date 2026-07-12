@@ -75,8 +75,8 @@ async function signHex(body: string, secret: string): Promise<string> {
   return toHex(new Uint8Array(signature));
 }
 
-// Builds a POST to a webhook endpoint with an optional signature and timestamp. Lets a test send a
-// correctly-signed, forged, or stale callback.
+// Builds a POST to a webhook endpoint, letting a test send a correctly-signed, forged, or stale
+// callback.
 function webhookRequest(
   provider: string,
   body: string,
@@ -117,16 +117,14 @@ const SAMPLE: WebhookEvent = {
 };
 
 // Builds the id generator and clock the webhook handler uses to mint each inbox row. Fresh per test
-// so row ids and `receivedAt` are deterministic. These are independent of the economy's own
-// generators because the row only needs some unique id and a timestamp.
+// so row ids and `receivedAt` are deterministic.
 function webhookCtx(): { ids: Ids; clock: Clock } {
   return { ids: sequentialIds(), clock: fixedClock(0) };
 }
 
 // Builds a worker context from deterministic fakes, with the clock reading `now`. One helper covers
-// two callers. drainInbox only reads logger, meter, and config, so it drains at `now: 0`. The submit
-// sweep needs the clock past the request-time PENDING SLA to find a RESERVED payout due. The
-// generators are independent of the economy's, as a separate worker process would have.
+// two callers: drainInbox reads only logger, meter, and config, so it drains at `now: 0`; the submit
+// sweep needs the clock past the request-time PENDING SLA to find a RESERVED payout due.
 function workerCtxAt(now: number): WorkerCtx {
   return {
     clock: fixedClock(now),
@@ -141,9 +139,8 @@ function workerCtxAt(now: number): WorkerCtx {
   };
 }
 
-// Runs one inbox-apply sweep. Claims every pending row and submits its stored Operation through the
-// economy, the same path the background worker drives. Mirrors how a real deploy settles a persisted
-// webhook off the request path.
+// Runs one inbox-apply sweep, the same path the background worker drives: claim every pending row
+// and submit its stored Operation through the economy.
 function drainOnce(
   store: Store,
   economy: Economy,
@@ -157,18 +154,15 @@ describe('Webhooks toTopUp / Idempotency', () => {
 
     assert.equal(op.kind, 'topUp');
     assert.equal(op.idempotencyKey, webhookIdempotencyKey('evt_provider_1'));
-    // The idempotency key makes a retry run at most once, because a repeat with the same key is
-    // skipped. The `whk:` prefix keeps webhook keys from colliding with keys an ordinary API caller
-    // chose.
+    // The `whk:` prefix keeps webhook keys from colliding with keys an ordinary API caller chose.
     assert.equal(op.idempotencyKey, 'whk:evt_provider_1');
   });
 
   test('copies eventId / sku / provider as origin info onto the posting metadata', () => {
     const op = toTopUp(SAMPLE) as unknown as { meta?: Record<string, unknown> };
 
-    // Origin details (provider, event, item) ride on the operation so the topUp handler can stamp
-    // them onto the meta of the ledger posting, giving each created-credits entry a back-pointer to
-    // the provider callback that caused it.
+    // Origin details ride on the operation so the topUp handler stamps them onto the posting's meta,
+    // giving each created-credits entry a back-pointer to the provider callback that caused it.
     assert.deepEqual(op.meta, {
       eventId: 'evt_provider_1',
       provider: 'billing',
@@ -219,8 +213,6 @@ describe('Webhooks handlePurchaseWebhook (Persist To Inbox, Apply Later)', () =>
     const store = memoryStore();
     const economy = makeEconomy(1, store);
 
-    // The handler enqueues and returns immediately: the balance has not moved yet, decoupling the
-    // provider's acknowledgment from the ledger.
     const ack = await handlePurchaseWebhook(store, webhookCtx(), SAMPLE);
     assert.equal(ack.status, 'accepted');
     assert.equal(ack.entry.status, 'pending');
@@ -230,7 +222,6 @@ describe('Webhooks handlePurchaseWebhook (Persist To Inbox, Apply Later)', () =>
       'CREDIT:0.00',
     );
 
-    // The apply worker submits the stored Operation; the credit posts here, not at handler return.
     const summary = await drainOnce(store, economy);
     assert.deepEqual(summary.applied, [ack.entry.id]);
     assert.deepEqual(summary.failed, []);
@@ -252,8 +243,7 @@ describe('Webhooks handlePurchaseWebhook (Persist To Inbox, Apply Later)', () =>
     assert.equal(first.status, 'accepted');
 
     // Same eventId again. The inbox dedupes on it (the row `key`), so no second row is inserted and
-    // the existing one is returned as a duplicate. The credit is queued exactly once, however many
-    // times the provider redelivers.
+    // the existing one is returned as a duplicate.
     const second = await handlePurchaseWebhook(store, ctx, SAMPLE);
     assert.equal(second.status, 'duplicate');
     assert.equal(second.entry.id, first.entry.id);
@@ -274,8 +264,7 @@ describe('Webhooks handlePurchaseWebhook (Persist To Inbox, Apply Later)', () =>
     await drainOnce(store, economy);
 
     // The row is 'applied' and no longer claimed, so a second sweep applies nothing and the balance
-    // stays put. Even if a row were re-submitted, the topUp's idempotency key (the provider event id)
-    // would dedupe it to the same money move.
+    // stays put.
     const second = await drainOnce(store, economy);
     assert.deepEqual(second.applied, []);
     assert.deepEqual(second.failed, []);
@@ -290,8 +279,7 @@ describe('Webhooks handlePurchaseWebhook (Persist To Inbox, Apply Later)', () =>
 // Builds a real HTTP server over one shared store. Four collaborators then read and write the same
 // ledger: the replay store, which records each eventId on first sight so a redelivery is skipped;
 // the inbox the handler persists into; the economy the apply sweep posts through; and the balance
-// the assertions check. The store's digest and clock are deterministic (fixed-seed digest, clock
-// frozen at 0) for a stable result every run.
+// the assertions check.
 function gatedServer(secret: string): {
   server: (request: Request) => Promise<Response>;
   store: Store;

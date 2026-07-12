@@ -43,9 +43,7 @@ function freshUser(): string {
   return `usr_conf_${userSeq}`;
 }
 
-// Funds a user's spendable balance with one balanced posting. It credits the user and debits a
-// platform account so the lines cancel to zero. Both accounts exist, so postEntry's
-// known-account check passes.
+// Both accounts exist, so postEntry's known-account check passes.
 async function fundSpendable(
   unit: Unit,
   userId: string,
@@ -60,8 +58,7 @@ async function fundSpendable(
   });
 }
 
-// Builds one outbox message. The caller passes a distinct message id so a test can assert which
-// message it enqueued.
+// The caller passes a distinct message id so a test can assert which message it enqueued.
 function outboxRow(
   userId: string,
   messageId: string,
@@ -97,10 +94,7 @@ function outboxRow(
   };
 }
 
-// Builds one inbox row, a verified inbound event already mapped to the topUp it applies. This is
-// the inbound mirror of `outboxRow`. `key` is the provider event id. That id is the dedupe key on
-// enqueue and also doubles as the operation's idempotencyKey. The caller passes a distinct row id
-// so a test can assert which row it enqueued.
+// `key` is both the dedupe key on enqueue and the operation's idempotencyKey.
 function inboxRow(userId: string, rowId: string, key: string): InboxEntry {
   return {
     id: rowId,
@@ -141,7 +135,6 @@ async function derivesBalancesFromLegs(store: Store): Promise<void> {
     await fundSpendable(unit, userId, '2.50', `txn_conf_derived_b_${userId}`);
   });
 
-  // The legs fold must reproduce the maintained running total exactly.
   assert.deepEqual(await store.ledger.derivedBalances(spendable(userId)), [
     toAmount('CREDIT', 750n),
   ]);
@@ -170,12 +163,9 @@ async function pairsHeadsWithRawSums(store: Store): Promise<void> {
   }
   let found = 0;
   for await (const [account, head, sum] of store.ledger.headSums()) {
-    // Every headSums row must carry the same head heads() reports for that account.
     assert.equal(head, heads.get(account));
     if (account === spendable(userId)) {
       found += 1;
-      // Raw means the leg sign convention (debit positive): two credit legs of 500 and 250
-      // sum to -750, not the +750 the natural balance reads.
       assert.equal(sum, -750n);
     }
   }
@@ -183,9 +173,7 @@ async function pairsHeadsWithRawSums(store: Store): Promise<void> {
 }
 
 async function roundTripsCheckpointRows(store: Store): Promise<void> {
-  // A v1-shaped row (pre-versioning: no sum) and a v2 row, in order. `latest` must return the
-  // most recently put row, decoded field-for-field — including `v` and `sum`, which the SQL
-  // engines carry in real columns.
+  // A v1 row (no sum) and a v2 row cover the schema evolution.
   const v1: Checkpoint = {
     id: 'chk_conf_v1',
     root: 'a'.repeat(64),
@@ -226,7 +214,6 @@ async function grantsOwnsRevokesEntitlements(store: Store): Promise<void> {
   );
   assert.equal(await store.entitlements.owns(userId, 'sku_conf_a'), false);
 
-  // Re-buying after a refund: a regrant clears the revoke.
   await store.transaction((unit) =>
     unit.entitlements.grant(userId, 'sku_conf_a', {}),
   );
@@ -269,7 +256,6 @@ async function listsNonRevokedGrantsSorted(store: Store): Promise<void> {
   for await (const grant of store.entitlements.list(userId)) {
     grants.push(grant);
   }
-  // Revoked rows are excluded; expired rows are included with the expiry owns() would apply;
   // sku order is identical on every engine.
   assert.deepEqual(grants, [
     { sku: 'sku_conf_a', expiresAt: -5 },
@@ -277,7 +263,6 @@ async function listsNonRevokedGrantsSorted(store: Store): Promise<void> {
   ]);
 }
 
-// Builds one journal movement: a balanced viewer-tips-creator pair with exact bigint amounts.
 function movementRow(
   sessionId: string,
   seq: number,
@@ -310,7 +295,6 @@ async function journalAppendsAndStreamsBySession(store: Store): Promise<void> {
   for await (const movement of store.movements.bySession(sessionId)) {
     rows.push(movement);
   }
-  // Three rows, in seq order, with legs round-tripped exactly (bigint minor units intact).
   assert.deepEqual(
     rows,
     [0, 1, 2].map((seq) => movementRow(sessionId, seq, `${sessionId}_m${seq}`)),
@@ -321,14 +305,12 @@ async function journalRejectsDuplicateBatches(store: Store): Promise<void> {
   const sessionId = `sess_conf_b_${freshUser()}`;
   await store.movements.append([movementRow(sessionId, 0, `${sessionId}_m0`)]);
 
-  // A reused idempotency key rejects the WHOLE batch: the fresh row must not land either.
   await assert.rejects(
     store.movements.append([
       movementRow(sessionId, 1, `${sessionId}_m1`),
       movementRow(sessionId, 2, `${sessionId}_m0`),
     ]),
   );
-  // A reused (session, seq) position rejects too: a forked chain position cannot be stored.
   await assert.rejects(
     store.movements.append([movementRow(sessionId, 0, `${sessionId}_m3`)]),
   );
@@ -473,8 +455,7 @@ async function recordsFailureThenDeadLettersOutbox(
     unit.outbox.enqueue(outboxRow(userId, messageId)),
   );
 
-  // One failed delivery bumps attempts from 0 to 1. The row stays pending and is re-claimable. A
-  // still-pending row carries no dead-letter reason yet.
+  // A still-pending row carries no dead-letter reason yet.
   await store.outbox.recordFailure(messageId);
   const afterFail = await store.outbox.claimBatch(10);
   const failed = afterFail.find((message) => message.id === messageId);
@@ -483,10 +464,8 @@ async function recordsFailureThenDeadLettersOutbox(
   assert.equal(failed!.status, 'pending');
   assert.equal(failed!.reason, null);
 
-  // Give up on the poison message by dead-lettering it, after which it is never claimed again. The
-  // reason is persisted on the 'dead' record itself, not in a side-channel, mirroring the saga
-  // terminal-outcome test. claimBatch never returns a terminal row, so this test cannot reload it
-  // that way, but the SQL decoders carry dead_letter_reason through to reason off the row.
+  // The reason is persisted on the 'dead' record itself, not a side-channel; claimBatch never
+  // returns a terminal row, but the SQL decoders still carry it.
   await store.outbox.deadLetter(messageId, 'poison');
   const afterDead = await store.outbox.claimBatch(10);
   assert.equal(
@@ -494,8 +473,6 @@ async function recordsFailureThenDeadLettersOutbox(
     false,
   );
 
-  // recordFailure, markRelayed, and deadLetter on the now-terminal row are all no-ops that do not
-  // throw.
   await store.outbox.recordFailure(messageId);
   await store.outbox.markRelayed([messageId]);
   await store.outbox.deadLetter(messageId, 'again');
@@ -506,10 +483,7 @@ async function recordsFailureThenDeadLettersOutbox(
   );
 }
 
-// Inbound mirror of relaysOutboxOnce. A verified event enqueued in the webhook's transaction is
-// claimed once, marked applied, then never re-claimed. `claimInbound` hands back only 'pending'
-// rows. `markApplied` flips the row to the terminal 'applied' state, so the second claim is empty.
-// The inbox applies each event at most once, just as the outbox relays each at most once.
+// claimInbound returns only 'pending' rows; 'applied' is terminal.
 async function appliesInboxOnce(store: Store): Promise<void> {
   const userId = freshUser();
   const rowId = `ibx_conf_${userId}`;
@@ -529,9 +503,6 @@ async function appliesInboxOnce(store: Store): Promise<void> {
   assert.deepEqual(afterApply, []);
 }
 
-// Inbound mirror of dropsOutboxOnRollback. An enqueue inside a transaction that throws leaves no
-// inbox row, so a rolled-back webhook ingress never queues an apply. This is the same
-// all-or-nothing contract the outbox holds for a rolled-back money move.
 async function dropsInboxOnRollback(store: Store): Promise<void> {
   const userId = freshUser();
   const rowId = `ibx_conf_rollback_${userId}`;
@@ -551,10 +522,6 @@ async function dropsInboxOnRollback(store: Store): Promise<void> {
   );
 }
 
-// Pins the same dedupe-by-key behavior across adapters. Enqueuing the same provider event id
-// twice inserts one row, and the duplicate enqueue returns that existing row, so a redelivered
-// provider event is applied at most once. The two enqueues use different row ids but share one
-// `key`. Only the first row id is ever stored or claimed.
 async function dedupesInboxByKey(store: Store): Promise<void> {
   const userId = freshUser();
   const key = `evt_conf_dedupe_${userId}`;
@@ -564,8 +531,6 @@ async function dedupesInboxByKey(store: Store): Promise<void> {
   const first = await store.transaction((unit) =>
     unit.inbox.enqueueInbound(inboxRow(userId, firstId, key)),
   );
-  // Redelivery uses the same provider event id with a fresh row id. It is a no-op that returns the
-  // already-stored row.
   const duplicate = await store.transaction((unit) =>
     unit.inbox.enqueueInbound(inboxRow(userId, secondId, key)),
   );
@@ -574,7 +539,6 @@ async function dedupesInboxByKey(store: Store): Promise<void> {
   assert.equal(duplicate.id, firstId); // the existing row, not the second id
   assert.equal(duplicate.key, key);
 
-  // Only the first row exists, so a claim returns exactly one entry, under the first id.
   const batch = await store.inbox.claimInbound({ now: 0, limit: 10 });
   const mine = batch.filter((entry) => entry.key === key);
   assert.deepEqual(
@@ -583,12 +547,6 @@ async function dedupesInboxByKey(store: Store): Promise<void> {
   );
 }
 
-// Pins the same retry-and-dead-letter behavior across adapters. `bumpAttempt` counts one failed
-// apply: it increments `attempts` but leaves the row 'pending', so the next sweep re-claims it. It
-// never flips the status, since only `deadLetter` does that. `deadLetter` then gives up on the
-// poison event and flips it to 'dead' so `claimInbound` never hands it back again. This is the
-// inbound mirror of the outbox's recordFailure and deadLetter pair.
-//
 // bumpAttempt and deadLetter run on the top-level store, not inside store.transaction(...),
 // matching how the apply worker calls them.
 async function bumpsInboxAttemptThenDeadLetters(store: Store): Promise<void> {
@@ -598,8 +556,7 @@ async function bumpsInboxAttemptThenDeadLetters(store: Store): Promise<void> {
     unit.inbox.enqueueInbound(inboxRow(userId, rowId, `evt_${rowId}`)),
   );
 
-  // One failed apply bumps attempts from 0 to 1. The row stays pending and is re-claimable. A
-  // still-pending row carries no dead-letter reason yet.
+  // A still-pending row carries no dead-letter reason yet.
   await store.inbox.bumpAttempt(rowId);
   const afterBump = await store.inbox.claimInbound({ now: 0, limit: 10 });
   const bumped = afterBump.find((entry) => entry.id === rowId);
@@ -608,7 +565,6 @@ async function bumpsInboxAttemptThenDeadLetters(store: Store): Promise<void> {
   assert.equal(bumped!.status, 'pending');
   assert.equal(bumped!.reason, null);
 
-  // Give up on the poison event: dead-letter it, and it's never claimed again.
   await store.inbox.deadLetter(rowId, 'poison');
   const afterDead = await store.inbox.claimInbound({ now: 0, limit: 10 });
   assert.equal(
@@ -616,18 +572,15 @@ async function bumpsInboxAttemptThenDeadLetters(store: Store): Promise<void> {
     false,
   );
 
-  // The failure reason is persisted on the dead row itself, not in a side-channel, so re-resolving
-  // the row by its key reads it back on every backend, mirroring the saga terminal-outcome test. A
-  // duplicate enqueue on the same key returns the stored row, terminal status and all.
+  // The failure reason persists on the dead row itself, not a side-channel; a duplicate enqueue on
+  // the same key returns the stored row, terminal status and all.
   const resolved = await store.transaction((unit) =>
     unit.inbox.enqueueInbound(inboxRow(userId, rowId, `evt_${rowId}`)),
   );
   assert.equal(resolved.status, 'dead');
   assert.equal(resolved.reason, 'poison');
 
-  // markApplied, bumpAttempt, and deadLetter on the now-terminal row are all no-ops that do not
-  // throw, so the first dead-letter reason stands. A second deadLetter('again') does not overwrite
-  // it.
+  // Terminal-row operations are no-ops; a second deadLetter does not overwrite the first reason.
   await store.inbox.markApplied(rowId);
   await store.inbox.bumpAttempt(rowId);
   await store.inbox.deadLetter(rowId, 'again');

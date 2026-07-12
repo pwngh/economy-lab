@@ -259,7 +259,6 @@ async function rejectsPayoutAgainstImmatureEarnedCredit(): Promise<void> {
   await fundEarnedFromSource(store, 'usr_seller', credit('30.00'), 'card');
   const ctx = maturityCtx(clock, 60_000);
 
-  // The clock is still at 0 and the credit matures at t=60_000, so none of it has cleared yet.
   const outcome = await run(
     store,
     ctx,
@@ -288,8 +287,7 @@ async function allowsPayoutOnceEarnedCreditHasMatured(): Promise<void> {
   await fundEarnedFromSource(store, 'usr_seller', credit('30.00'), 'card');
   const ctx = maturityCtx(clock, 60_000);
 
-  // Advance to the exact moment the wait ends. The payable-balance check counts the credit as
-  // settled the instant its wait elapses, not one tick later, so it is now payable.
+  // Advance to the exact moment the wait ends.
   clock.advance(60_000);
   const outcome = await run(
     store,

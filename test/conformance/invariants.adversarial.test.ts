@@ -80,8 +80,6 @@ const seq = (() => {
   return () => (n += 1);
 })();
 
-// Funds a user's spendable account through the app (post_entry). This is the clean setup path
-// that every adversarial case starts from before it reaches around the app to write the violation.
 async function fundSpendable(
   store: Store,
   userId: string,
@@ -98,9 +96,6 @@ async function fundSpendable(
   );
 }
 
-// Asserts that the engine rejects a raw write around the app, meaning the query throws. The
-// thrown error is the engine declining the violation, which is exactly what native enforcement
-// looks like.
 async function assertRawRejected(
   engine: AdversarialEngine,
   description: string,
@@ -114,9 +109,8 @@ async function assertRawRejected(
   );
 }
 
-// Builds SQL that inserts a posting row directly. The posting is the parent that every leg and
-// chain_link references. The column list and literal are identical on both engines, since the
-// JSON literal '{}' parses on each.
+// Inserts a posting row directly — the parent row that every leg and chain_link references. The
+// column list and literal are identical on both engines.
 function rawInsertPosting(id: string): string {
   return `insert into postings (id, meta, posted_at) values ('${id}', '{}', 0)`;
 }
@@ -128,8 +122,8 @@ function rawInsertIdempotency(engineName: string, key: string): string {
   return `insert into idempotency (${column}, transaction) values ('${key}', '{}')`;
 }
 
-// Reads the head hash an account currently chains from, straight off the store. A continuous next
-// link must carry this value as its prev_hash. Returns genesis when the account has no link yet.
+// Reads the head hash an account currently chains from. A continuous next link must carry this
+// value as its prev_hash; returns genesis when the account has no link yet.
 async function currentHead(store: Store, account: AccountRef): Promise<string> {
   for await (const [acct, head] of store.ledger.heads()) {
     if (acct === account) {
@@ -177,7 +171,6 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
 
       const txn = `txn_adv_i1_${userId}`;
       await live.raw(rawInsertPosting(txn));
-      // One lone credit leg, so the CREDIT sum is not zero. A balanced posting must pair it with a debit.
       await assertRawRejected(
         live,
         'an unbalanced leg set (sum != 0 per currency)',
@@ -205,8 +198,6 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
 
       const txn = `txn_adv_legcur_${userId}`;
       await live.raw(rawInsertPosting(txn));
-      // USD legs on CREDIT accounts (a user's spendable and REVENUE) that sum to zero in USD.
-      // Per-currency conservation would pass, so only the composite FK rejects the currency mismatch.
       await assertRawRejected(
         live,
         'a balanced cross-currency leg pair (USD legs on CREDIT accounts)',

@@ -111,8 +111,8 @@ describe('maturityHorizonMs', () => {
   test('treats the in-memory default source marker as unknown', () => {
     const config = horizonConfig();
 
-    // A top-up with no source gets the literal 'unknown' from the in-memory ledger. The
-    // config has no 'unknown' entry, so the lookup falls back to the default.
+    // The in-memory ledger stores a missing source as the literal 'unknown', which has no
+    // config entry, so the lookup falls back to the default.
     const horizonMs = maturityHorizonMs('unknown', config);
 
     assert.equal(horizonMs, config.maturityHorizonMs.default);
@@ -249,7 +249,7 @@ describe('maturedBalance FIFO Consumption', () => {
     await topUpLot(store.ledger, 'usr_a', credit('4.00'), 'crypto'); // topped up at day 0, crypto waits 1 day -> matures day 1
     clock.advance(2 * DAY);
     await topUpLot(store.ledger, 'usr_a', credit('6.00'), 'card'); // topped up at day 2, card waits 7 days -> matures day 9
-    // Spend 4.00 exactly drains the crypto lot, leaving only the card lot.
+    // Spend 4.00 exactly drains the crypto lot.
     await spendSpendable(store.ledger, 'usr_a', credit('4.00'));
     const options: MaturityOptions = { config: horizonConfig() };
 
@@ -269,7 +269,7 @@ describe('maturedBalance FIFO Consumption', () => {
     const clock = fixedClock(0);
     const store = memoryStore({ clock });
     await topUpLot(store.ledger, 'usr_a', credit('10.00'), 'crypto'); // matures at 1 day
-    // Partial spend drains part of the single lot; the 7.00 remainder stays matured.
+    // The 7.00 remainder stays matured after the partial spend.
     await spendSpendable(store.ledger, 'usr_a', credit('3.00'));
     const options: MaturityOptions = { config: horizonConfig() };
 

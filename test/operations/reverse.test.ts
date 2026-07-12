@@ -134,8 +134,6 @@ describe('Reverse', () => {
       0n,
     );
     assert.equal(signed, 0n);
-    // Reversal touches the same two accounts as the top-up (user spendable, platform stored-value),
-    // just with each line's sign flipped, so the account set is unchanged.
     assert.deepEqual(
       [...outcome.transaction.legs.map((leg) => leg.account)].sort(),
       [SYSTEM.STORED_VALUE, spendable('usr_buyer')].sort(),
@@ -150,7 +148,6 @@ describe('Reverse', () => {
       reverseOp({ txnId, reason: 'duplicate posting' }),
     );
     assert.equal(first.status, 'committed');
-    // After one reversal the top-up is fully unwound: both accounts are back to zero.
     assert.deepEqual(
       await fx.balanceOf(spendable('usr_buyer')),
       creditOf('0.00'),
@@ -159,14 +156,12 @@ describe('Reverse', () => {
     const second = await fx.rev(
       reverseOp({ txnId, reason: 'duplicate posting' }),
     );
-    // The second reverse of the same transaction is a no-op duplicate, not another money movement. It
-    // replays the first reversal's transaction.
+    // The duplicate replays the first reversal's transaction.
     assert.equal(second.status, 'duplicate');
     if (second.status === 'duplicate' && first.status === 'committed') {
       assert.equal(second.transaction.id, first.transaction.id);
     }
-    // The duplicate leaves balances unchanged. A second money movement would push spendable negative
-    // and throw stored-value off zero.
+    // A second money movement would push spendable negative and throw stored-value off zero.
     assert.deepEqual(
       await fx.balanceOf(spendable('usr_buyer')),
       creditOf('0.00'),
@@ -184,8 +179,7 @@ describe('Reverse', () => {
     assert.equal(first.status, 'committed');
     if (first.status !== 'committed') return;
 
-    // Naming a reversal as the thing to reverse is refused with a malformed fault, rather than
-    // looping the same money back out and in.
+    // Refusing it keeps the same money from looping back out and in.
     await assert.rejects(
       fx.rev(
         reverseOp({
