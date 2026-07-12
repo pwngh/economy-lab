@@ -16,7 +16,7 @@
 // Off unless TILIA_CLIENT_ID is set; the core never sees any of this — the
 // edge stays a host concern behind the same seams every processor uses. An
 // explicit opt-in with missing pieces fails loudly, mirroring
-// productionExternals and the taskq bridge.
+// productionExternals and the @pwngh/taskq bridge.
 
 import {
   edgePayoutWebhookEvent,

@@ -33,22 +33,22 @@ import {
 import type { WorkerCtx } from '#src/contract.ts';
 import type { Dispatcher, EconomyEvent } from '#src/ports.ts';
 
-// Optional integration with the sibling taskq repo (a Postgres task queue whose enqueue can share
-// a caller transaction). Nothing in the lab depends on it: this suite loads taskq by path from the
+// Optional integration with the sibling @pwngh/taskq repo (a Postgres task queue whose enqueue can share
+// a caller transaction). Nothing in the lab depends on it: this suite loads @pwngh/taskq by path from the
 // sibling checkout and skips loudly when that checkout or a Postgres DATABASE_URL is absent. The
-// pairing under test is guarantee composition — taskq delivers a task at least once, `submit`
+// pairing under test is guarantee composition — @pwngh/taskq delivers a task at least once, `submit`
 // absorbs replays through the caller-owned idempotency key, so the ledger effect lands exactly
-// once. taskq stays host-layer only; the Store port and the internal outbox are untouched.
+// once. @pwngh/taskq stays host-layer only; the Store port and the internal outbox are untouched.
 
 const TASKQ_INDEX = new URL('../../../taskq/src/index.ts', import.meta.url);
 const DB_URL = process.env.DATABASE_URL ?? '';
 
 function skipReason(): string | false {
   if (!existsSync(fileURLToPath(TASKQ_INDEX))) {
-    return 'sibling taskq checkout not found at ../../taskq';
+    return 'sibling @pwngh/taskq checkout not found at ../../taskq';
   }
   if (!DB_URL.startsWith('postgres')) {
-    return 'taskq needs a postgres DATABASE_URL';
+    return '@pwngh/taskq needs a postgres DATABASE_URL';
   }
   return false;
 }
@@ -118,7 +118,7 @@ async function loadTaskq(): Promise<Taskq> {
   return (await import(TASKQ_INDEX.href)) as Taskq;
 }
 
-// Each run gets its own database because taskq's schema name is fixed. The admin connection is the
+// Each run gets its own database because @pwngh/taskq's schema name is fixed. The admin connection is the
 // lab's own DATABASE_URL, which has create-database rights in every dev and CI environment the lab
 // tests run in.
 async function taskqDatabase(): Promise<{
@@ -175,7 +175,7 @@ async function drainTasks(pool: PgPoolLike): Promise<void> {
     if (Number(left.rows[0]['n']) === 0) {
       return;
     }
-    assert.ok(Date.now() < deadline, 'taskq drain timed out');
+    assert.ok(Date.now() < deadline, '@pwngh/taskq drain timed out');
     await pool.query(
       `update taskq.task set run_at = now() where state = 'ready'`,
     );

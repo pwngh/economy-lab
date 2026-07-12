@@ -9,11 +9,11 @@
  * @license MIT
  */
 
-// Optional host-layer bridge to the sibling taskq checkout: outbox events are
+// Optional host-layer bridge to the sibling @pwngh/taskq checkout: outbox events are
 // enqueued as durable tasks (keyed by event id, so the relay's at-least-once
-// collapses to exactly one pending task) and a taskq worker runs them in this
+// collapses to exactly one pending task) and a @pwngh/taskq worker runs them in this
 // process. Off unless TASKQ_DATABASE_URL is set; the core never sees any of
-// this — taskq stays a host concern, behind the same Dispatcher seam SQS and
+// this — @pwngh/taskq stays a host concern, behind the same Dispatcher seam SQS and
 // HTTP delivery use.
 
 import { existsSync } from 'node:fs';
@@ -83,8 +83,8 @@ interface PgModule {
   };
 }
 
-// The sibling checkout, overridable for deployments that vendor taskq
-// elsewhere. Loading by path keeps taskq out of package.json entirely.
+// The sibling checkout, overridable for deployments that vendor @pwngh/taskq
+// elsewhere. Loading by path keeps @pwngh/taskq out of package.json entirely.
 function taskqEntry(env: Env): string {
   return (
     env.TASKQ_PATH ??
@@ -118,7 +118,7 @@ export async function maybeTaskqHost(
   const entry = taskqEntry(env);
   if (!existsSync(entry)) {
     throw new Error(
-      `TASKQ_DATABASE_URL is set but no taskq checkout exists at ${entry}; set TASKQ_PATH`,
+      `TASKQ_DATABASE_URL is set but no @pwngh/taskq checkout exists at ${entry}; set TASKQ_PATH`,
     );
   }
   const taskq = (await import(pathToFileURL(entry).href)) as Taskq;
