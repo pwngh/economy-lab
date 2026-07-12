@@ -14,15 +14,12 @@ import type { ReactNode } from 'react';
 import { sourceUrl } from '~/repo.ts';
 
 /**
- * An inline link from prose to a source symbol on GitHub at the pinned commit. Used in MDX as
- * `<SourceLink to="src/ports.ts#L599-L605 · SagaStore.advance" />`, which renders the symbol as a
- * monospace external link (the ↗ mark comes from the global `a[target="_blank"]` rule). Pass
- * `children` to override the visible label when the symbol is already named in the surrounding
- * sentence: `<SourceLink to="src/chain.ts#L100">advanceHeads</SourceLink>`.
+ * An inline prose link to a source symbol on GitHub at the pinned commit, used in MDX as
+ * `<SourceLink to="src/ports.ts#L599-L605 · SagaStore.advance" />`. Pass `children` to override the
+ * visible label when the symbol is already named in the sentence.
  *
- * The href runs through {@link sourceUrl}, so the pinned SHA lives in one place ({@link REPO_REF}):
- * re-pinning the docs at a newer snapshot updates every inline link and every `sourceRefs` chip at
- * once. When the chip has no resolvable path, the label still renders, just unlinked.
+ * The href runs through {@link sourceUrl}, so re-pinning {@link REPO_REF} updates every inline link
+ * and every `sourceRefs` chip at once. An unresolvable chip renders unlinked.
  */
 export function SourceLink({
   to,

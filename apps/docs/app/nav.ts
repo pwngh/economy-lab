@@ -9,10 +9,9 @@
  * @license MIT
  */
 
-// The site's information architecture, derived from the content collection. The sidebar tree, the
-// breadcrumb trail, and the prev/next sequence all read from here, so there is one ordering to keep
-// in step with the pages themselves. Everything is section-rooted under economy/, so slugs and
-// hrefs all begin /economy/.
+// The site's information architecture: the sidebar tree, the breadcrumb trail, and the prev/next
+// sequence all read from here, so there is one ordering to keep in step with the pages. Everything
+// is section-rooted under economy/, so slugs and hrefs all begin /economy/.
 import { docs, docsInSection } from '~/content.ts';
 
 export type NavLeaf = { slug: string; title: string };
@@ -43,9 +42,6 @@ export const SECTION_LABEL: Record<string, string> = {
  * (top-up → spend → refund → clawback → the payout saga → subscriptions → entitlements → promo →
  * operator corrections), which is just their frontmatter `order`; reorder there and both the
  * sidebar and prev/next follow.
- *
- * Concepts, then Reference (its standalone pages plus an Operations subgroup), then Ports & edges
- * (the ports plus the root-level scope-and-non-goals page).
  */
 export function buildNav(): NavGroup[] {
   const operations = docs.filter((d) => isOperation(d.slug)).map(leaf);
@@ -91,7 +87,7 @@ export function flatSequence(): NavLeaf[] {
   return out;
 }
 
-/** The previous and next page around `slug` in reading order, either possibly undefined at the ends. */
+/** The previous and next page around `slug` in reading order, each undefined at the ends. */
 export function prevNext(slug: string): { prev?: NavLeaf; next?: NavLeaf } {
   const seq = flatSequence();
   const i = seq.findIndex((l) => l.slug === slug);
@@ -102,9 +98,8 @@ export function prevNext(slug: string): { prev?: NavLeaf; next?: NavLeaf } {
 export type Crumb = { label: string; href: string };
 
 /**
- * The breadcrumb trail of ancestors for a page, e.g. economy/reference/operations/spend ->
- * [Economy, Reference, Operations]. The current page is deliberately not included — the H1 directly
- * below already names it, so every crumb here is an ancestor link.
+ * The breadcrumb trail of ancestors for a page (economy/reference/operations/spend ->
+ * [Economy, Reference, Operations]); the current page is omitted — the H1 below names it.
  */
 export function crumbsFor(slug: string): Crumb[] {
   const crumbs: Crumb[] = [{ label: 'Economy', href: '/economy/' }];

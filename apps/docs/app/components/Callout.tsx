@@ -22,9 +22,8 @@ type CalloutType = keyof typeof LABELS;
 
 /**
  * A semantic callout for page content, used in MDX as `<Callout type="warning">…</Callout>`. Static
- * markup, no JavaScript. The four types match the meanings every reference docs site converges on:
- * note (context), tip (recommendation), warning (an easy mistake / non-obvious constraint), danger
- * (irreversible or money-moving footgun). The CSS variants live in app.css under `.callout-<type>`.
+ * markup, no JavaScript. The four types are `note`, `tip`, `warning`, and `danger`, whose CSS
+ * variants live in app.css under `.callout-<type>`.
  */
 export function Callout({
   type = 'note',

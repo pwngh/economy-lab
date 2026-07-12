@@ -11,7 +11,7 @@
 
 import { docBySlug } from '~/content.ts';
 
-/** A grid of page cards (title + summary) for the section landing pages. Skips any slug that does not resolve, so a stale reference never renders an empty card. */
+/** A grid of page cards for the section landings; skips any slug that does not resolve. */
 export function CardGrid({ slugs }: { slugs: string[] }) {
   return (
     <ul className="card-grid">

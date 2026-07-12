@@ -9,49 +9,41 @@
  * @license MIT
  */
 
-// The documentation content index, built once at compile time. import.meta.glob({ eager: true })
-// walks app/content/ and imports every .mdx up front, so this module resolves to a fully-loaded,
-// validated collection with no runtime fetch. Each entry carries its compiled MDX `Component` — a
-// function, which cannot survive a loader's JSON serialization — so route components import this
-// module directly rather than receiving it from a loader.
+// The content index, built once at compile time. import.meta.glob eagerly imports every .mdx, so
+// this module resolves fully loaded. Each entry carries its compiled MDX `Component` — a function,
+// which cannot survive a loader's JSON serialization — so route components import this module
+// directly.
 import { z } from 'zod';
 
 import type { ComponentType } from 'react';
 
 /**
- * The frontmatter every documentation page declares. Parsing doubles as validation: a missing or
- * malformed field throws here and fails the build, rather than shipping a page with a blank title.
- * `status` is a display badge ('draft'/'planned' render a marker); `draft` is the publish gate
- * (drafts are dropped outside dev). They are deliberately distinct — a page can be visibly
- * in-progress yet still published so its slug keeps resolving for inbound @see links.
+ * The frontmatter every page declares. Parsing doubles as validation, so a malformed field fails
+ * the build. `status` is the display badge, `draft` the publish gate — distinct so an in-progress
+ * page can stay published and its slug keeps resolving for inbound @see links.
  */
 export const docSchema = z.object({
   title: z.string(),
   summary: z.string(),
   order: z.number().default(0),
   status: z.enum(['stable', 'draft', 'planned']).default('stable'),
-  // Source files/symbols in economy-lab this page documents; rendered as a "Source" block so every
-  // claim is one click from the code that backs it.
+  // Source files/symbols this page documents, rendered as the "Source" chips.
   sourceRefs: z.array(z.string()).default([]),
   // Slugs of related pages, rendered as "See also".
   related: z.array(z.string()).default([]),
-  // An optional plain-language "what this is", written for a complete newcomer (the ten-year-old
-  // test). Rendered as a normal paragraph below the summary and above the on-page Contents. Most
-  // pages omit it; it earns its place only where a newcomer is likely to land first.
+  // An optional plain-language "what this is" for a complete newcomer (the ten-year-old test),
+  // rendered below the summary.
   plain: z.string().optional(),
-  // Page citations: an ordered list of notes, rendered in a small "Notes" section at the foot of the
-  // page and numbered by position. A mark links down to one — `<Cite n={1}/>` anywhere in body prose,
-  // or `plainCite` for the plain paragraph. Used wherever a claim rests on outside authority (a
-  // general principle, a cited source) rather than on something economy-lab itself proves.
+  // Page citations, rendered numbered in a "Notes" section at the foot. `<Cite n={1}/>` in body
+  // prose or `plainCite` for the plain paragraph links down to one.
   notes: z.array(z.object({ text: z.string(), href: z.string().optional() })).default([]),
-  // The 1-based index into `notes` of the citation that applies to the plain paragraph, rendered as a
-  // small "[n]" after it. Omitted when the plain paragraph needs no citation.
+  // The 1-based index into `notes` of the plain paragraph's citation.
   plainCite: z.number().int().positive().optional(),
   draft: z.boolean().default(false),
 });
 
-// The compiled MDX default export accepts an optional `components` map (how custom components like
-// <Callout> are injected at render — see DocPage). Typed loosely because MDX merges whatever it's given.
+// The compiled MDX export takes an optional `components` map (see DocPage); typed loosely because
+// MDX merges whatever it's given.
 type MdxComponent = ComponentType<{ components?: Record<string, unknown> }>;
 /**
  * One heading in a page's table of contents, as exported by rehype-extract-toc
@@ -76,14 +68,10 @@ const modules = import.meta.glob<MdxModule>('./content/**/*.mdx', {
 
 const DEV = import.meta.env.DEV;
 
-// The slug is the path under app/content/ minus the .mdx extension, so the URL is pinned to the file
-// on disk and the two can never drift. The whole site is section-rooted under economy/:
-// e.g. './content/economy/reference/operations/spend.mdx' -> the slug
-// 'economy/reference/operations/spend', served at /economy/reference/operations/spend/.
+// The slug is the path under app/content/ minus .mdx, so the URL is pinned to the file on disk.
 const slugOf = (path: string) => path.replace(/^\.\/content\//, '').replace(/\.mdx$/, '');
 
-// The sub-section a page belongs to, below the economy/ root: 'concepts' | 'reference' | 'ports',
-// or '' for a page that sits directly under economy/ (scope-and-non-goals).
+// The sub-section below economy/ ('concepts' | 'reference' | 'ports'), or '' for a root-level page.
 const sectionOf = (slug: string) => {
   const rel = slug.startsWith('economy/') ? slug.slice('economy/'.length) : slug;
   return rel.includes('/') ? (rel.split('/')[0] ?? '') : '';
@@ -103,9 +91,8 @@ export type DocPage = z.infer<typeof docSchema> & {
 };
 
 /**
- * Every page, validated, drafts dropped outside dev, ordered by the author-supplied `order` with the
- * title breaking ties so the sidebar and prev/next sequence are stable across builds. Computed once
- * at module load, so route components read a ready-made list.
+ * Every page, validated, drafts dropped outside dev, ordered by `order` with the title as tiebreaker.
+ * Computed once at module load.
  */
 export const docs: DocPage[] = Object.entries(modules)
   .map(([path, mod]) => {
@@ -121,10 +108,7 @@ export const docs: DocPage[] = Object.entries(modules)
   .filter((d) => DEV || !d.draft)
   .sort((a, b) => a.order - b.order || a.title.localeCompare(b.title));
 
-/**
- * Find the one page whose slug matches, or `undefined` when nothing does — the caller decides
- * whether a miss means a not-found view.
- */
+/** Find the page whose slug matches, or `undefined`. */
 export const docBySlug = (slug: string) => docs.find((d) => d.slug === slug);
 /** Every page in a top-level section ('concepts' | 'reference' | 'ports'), in sidebar order. */
 export const docsInSection = (section: string) => docs.filter((d) => d.section === section);

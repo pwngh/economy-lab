@@ -13,9 +13,9 @@ import { docs } from '~/content.ts';
 import { SITE } from '~/seo.ts';
 
 /**
- * Resource-route loader emitting sitemap.xml. The URL list is built from the same content collection
- * the pages render from, so the sitemap cannot list a route that does not exist nor omit one that
- * does. Hand-assembled as a string (small, fixed shape) for byte-predictable output.
+ * Emits sitemap.xml from the same content collection the pages render from, so it can neither list a
+ * missing route nor omit a real one. Hand-assembled as a string (small, fixed shape) for
+ * byte-predictable output.
  */
 export function loader() {
   const staticPaths = [

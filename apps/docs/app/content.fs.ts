@@ -9,16 +9,14 @@
  * @license MIT
  */
 
-// The config-time content reader: bare Node (node:fs + gray-matter) only, no Vite/import.meta.glob,
-// because react-router.config.ts runs in plain Node before the bundler exists. Its one job is to
-// enumerate the slugs to prerender; the runtime index that loads MDX components is app/content.ts.
+// The config-time content reader: bare Node only, because react-router.config.ts runs before the
+// bundler exists. It enumerates slugs to prerender; the runtime index is app/content.ts.
 
 import { type Dirent, readFileSync, readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import matter from 'gray-matter';
 
 const CONTENT_DIR = join(process.cwd(), 'app/content');
-// Drafts are previewable in dev and hidden in a production build; NODE_ENV is the signal.
 const includeDrafts = process.env.NODE_ENV !== 'production';
 
 // Recursively collect every .mdx under app/content/. A missing directory yields [] rather than
@@ -40,9 +38,8 @@ function walk(dir: string): string[] {
 }
 
 /**
- * Every page slug — the prerender list for the section routes. Reads frontmatter only (gray-matter),
- * derives the slug from the path under app/content/, and drops drafts outside dev. Slugs use forward
- * slashes regardless of platform path separator, since they become URL segments.
+ * Every page slug — the prerender list. Drops drafts outside dev; slugs use forward slashes
+ * regardless of platform, since they become URL segments.
  */
 export function getAllDocSlugs(): string[] {
   return walk(CONTENT_DIR)
@@ -56,9 +53,9 @@ export function getAllDocSlugs(): string[] {
 }
 
 /**
- * Reduces one page's MDX body to lowercase plain text for the search index: tags, JSX expressions,
- * link targets, and markdown punctuation go; prose and code text stay, so a search can hit a
- * function name that only appears in a code block. Matched against, never rendered.
+ * Reduces one page's MDX body to lowercase plain text for the search index: tags, JSX, link targets,
+ * and markdown punctuation go; prose and code text stay, so a search can hit a name that only appears
+ * in a code block.
  */
 function plainText(body: string): string {
   return body
@@ -72,9 +69,8 @@ function plainText(body: string): string {
 }
 
 /**
- * Every page's body as searchable plain text, keyed by slug. Read off disk with the same walk the
- * slug list uses; the search-index resource route joins this onto the content collection at
- * prerender, so none of it reaches a client bundle.
+ * Every page's body as searchable plain text, keyed by slug; joined onto the collection at prerender,
+ * so none of it reaches a client bundle.
  */
 export function getDocBodies(): Map<string, string> {
   return new Map(

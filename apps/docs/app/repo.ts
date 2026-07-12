@@ -18,10 +18,9 @@ export const REPO_URL = 'https://github.com/pwngh/economy-lab';
 export const REPO_REF = '2b8f1b8084b5f0f188d7b9a0ac4955e84409b336';
 
 /**
- * Turn a `sourceRefs` chip into a GitHub blob URL at the pinned ref. A chip is `path · symbol` (the
- * symbol is descriptive only). An optional `#Lnn` line anchor may be appended to the path
- * (`src/foo.ts#L42 · bar`) and is carried straight through to the URL. Returns null when the chip has
- * no file path, so the renderer can fall back to a plain (unlinked) label.
+ * Turn a `sourceRefs` chip (`path · symbol`, the symbol descriptive only) into a GitHub blob URL at
+ * the pinned ref. An optional `#Lnn` line anchor on the path carries straight through to the URL.
+ * Returns null when the chip has no path, so the renderer can fall back to a plain (unlinked) label.
  */
 export function sourceUrl(ref: string): string | null {
   const path = ref.split('·')[0]?.trim();

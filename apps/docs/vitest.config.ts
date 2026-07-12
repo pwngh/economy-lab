@@ -16,9 +16,8 @@ import remarkMdxFrontmatter from 'remark-mdx-frontmatter';
 import { defineConfig } from 'vitest/config';
 
 /**
- * Test config, kept separate from vite.config.ts so the React Router plugin's full app context is not
- * loaded. A minimal MDX transform (frontmatter only — no Shiki/gfm) lets app modules import .mdx the
- * same way they do at runtime.
+ * Test config, kept separate from vite.config.ts so the React Router plugin is not loaded; a minimal
+ * frontmatter-only MDX transform lets modules import .mdx the same way they do at runtime.
  */
 export default defineConfig({
   resolve: {

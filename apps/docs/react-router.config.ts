@@ -16,20 +16,16 @@ import type { Config } from '@react-router/dev/config';
 /**
  * React Router framework configuration.
  *
- * Loaded as plain Node before the app bundle, so imports here must be relative with an explicit
- * extension and must not touch Vite's import.meta.glob — hence content.fs.ts, the bare-Node reader
- * that walks app/content/ off disk to enumerate every page's slug.
+ * Loaded as plain Node before the app bundle, so imports must be relative with explicit extensions
+ * and cannot touch import.meta.glob — content.fs.ts is the bare-Node reader that enumerates slugs.
  */
 export default {
-  // Static site: ssr:true + prerender writes flat HTML to build/client/, which is the whole
-  // deployable. ssr:true (not ssr:false/SPA) is what lets content pages omit <Scripts/> and ship
-  // zero client JavaScript.
+  // ssr:true plus prerender writes flat HTML to build/client/ — the whole deployable — and lets
+  // content pages omit <Scripts/>.
   ssr: true,
-  // Enumerate every URL up front; a path not listed here is never rendered. getStaticPaths covers
-  // the param-free routes (indexes, scope, sitemap, robots); the doc slugs expand the dynamic
-  // section routes (concepts/:slug, reference/operations/:slug, …). Deduped because the root-level
-  // scope-and-non-goals page is both a static route and a content file.
-  // '/404' renders the splat not-found route; copy-404.mjs publishes it as the platform 404.html.
+  // Enumerate every URL up front; a path not listed is never rendered. Deduped because
+  // scope-and-non-goals is both a static route and a content file.
+  // '/404' renders the splat route; copy-404.mjs publishes it as the platform 404.html.
   async prerender({ getStaticPaths }) {
     const paths = [...getStaticPaths(), ...getAllDocSlugs().map((s) => `/${s}`), '/404'];
     return [...new Set(paths)];

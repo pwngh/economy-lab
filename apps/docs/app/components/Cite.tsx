@@ -10,11 +10,8 @@
  */
 
 /**
- * A very small "[n]" citation mark, trailing a claim that rests on outside authority rather than on
- * what economy-lab proves. `n` is the 1-based position of the matching entry in the page's `notes`
- * frontmatter; the mark links down to that note, which {@link DocPage} renders in the "Notes" section
- * at the foot of the page. Used in body MDX as `<Cite n={1} />`; the plain paragraph cites via the
- * `plainCite` frontmatter field, which renders this same mark. Static markup, no JavaScript.
+ * A small "[n]" citation mark linking down to the page's `notes` entry `n` (1-based); the plain
+ * paragraph cites via `plainCite`. Static markup.
  */
 export function Cite({ n }: { n: number }) {
   return (

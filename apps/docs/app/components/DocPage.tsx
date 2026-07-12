@@ -48,8 +48,8 @@ const MDX_COMPONENTS = {
 };
 
 /**
- * One source-reference chip: the file path plus a muted symbol. The stored ref is `path#Lnn · symbol`;
- * the `·` is the parser's separator ({@link sourceUrl}), not for display, so it's split out here.
+ * One source-reference chip: the file path plus a muted symbol. The stored ref is `path#Lnn · symbol`,
+ * where `·` is {@link sourceUrl}'s separator rather than display text, so it's split out here.
  */
 function SourceChip({ refStr }: { refStr: string }) {
   const href = sourceUrl(refStr);
@@ -71,7 +71,7 @@ function SourceChip({ refStr }: { refStr: string }) {
   );
 }
 
-/** A begriffs-style on-page table of contents: a static list of anchor links, shown only when the page has enough sections to earn it. Zero JS. */
+/** A begriffs-style on-page table of contents: a static list of anchor links, shown only once the page has enough sections to earn it. Zero JS. */
 function PageToc({ toc }: { toc: TocEntry[] }) {
   if (toc.length < 3) return null;
   return (
@@ -103,8 +103,8 @@ function PageToc({ toc }: { toc: TocEntry[] }) {
  * links, the compiled MDX body, "see also", and prev/next — lives in one place. A slug that resolves
  * to nothing renders an inline notice rather than throwing: a bad URL is routine.
  *
- * The status badge and the draft callout are both driven by the single `status` frontmatter field, so
- * they can never fall out of step — author a page (set `status: stable`) and both disappear together.
+ * The status badge and the draft callout both read the single `status` frontmatter field, so they can
+ * never fall out of step — set `status: stable` and both disappear together.
  */
 export function DocPage({ slug }: { slug: string }) {
   const doc = docBySlug(slug);

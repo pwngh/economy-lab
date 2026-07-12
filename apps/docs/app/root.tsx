@@ -27,35 +27,29 @@ import { Sidebar } from '~/components/Sidebar.tsx';
 import '~/app.css';
 
 /**
- * No-flash theme bootstrap, inlined in <head> and run before first paint. A plain string, not a
- * React handler, so `data-theme` is set before the body paints. The try/catch guards localStorage
- * throwing under blocked cookies or private mode. (Kept byte-identical to the toggle's counterpart
- * in preston-neal.com so the CSP hash is shared and verifiable.)
+ * No-flash theme bootstrap, inlined in <head> as a plain string, not a React handler, so
+ * `data-theme` is set before the body paints. The try/catch guards localStorage throwing under
+ * blocked cookies or private mode. (Kept byte-identical to the toggle's counterpart in
+ * preston-neal.com so the CSP hash is shared and verifiable.)
  */
 const THEME_INIT = `(function(){try{var t=localStorage.getItem('theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.dataset.theme=t;}catch(e){}})();`;
 
 /**
- * Theme toggle: one delegated click listener, as a vanilla string so it keeps working on pages that
- * ship no JavaScript bundle. The preference is written back to localStorage so it survives a reload.
+ * Theme toggle: one delegated click listener as a vanilla string, so it works on pages that ship no
+ * bundle; the preference persists in localStorage.
  */
 const THEME_TOGGLE = `document.addEventListener('click',function(e){var b=e.target.closest('[data-theme-toggle]');if(!b)return;var d=document.documentElement,n=d.dataset.theme==='dark'?'light':'dark';d.dataset.theme=n;try{localStorage.setItem('theme',n);}catch(e){}});`;
 
 /**
- * Keep the sidebar's active item in view. Each page is its own document (no client router), so the
- * sidebar reloads at scroll 0 every navigation. The scroll depends only on which page you are on:
- * if the current page's link (the [aria-current] item) is already visible, nothing moves;
- * otherwise the sidebar scrolls to place it a third from the top. It runs before paint (this
- * <script> sits right after the sidebar), so there is no visible movement.
+ * Keeps the sidebar's active item in view. Each page is its own document, so the sidebar reloads at
+ * scroll 0 every navigation. Runs before paint, so nothing visibly moves.
  */
 const SIDEBAR_REVEAL = `(function(){var sb=document.querySelector('.site-sidebar');if(!sb)return;var c=sb.querySelector('[aria-current="page"]');if(!c)return;var sr=sb.getBoundingClientRect(),cr=c.getBoundingClientRect();if(cr.top<sr.top||cr.bottom>sr.bottom){sb.scrollTop+=cr.top-sr.top-sb.clientHeight/3;}})();`;
 
 /**
- * Speculation Rules document rule that prerenders (not just prefetches) any same-origin /economy/*
- * link on hover/focus ("moderate" eagerness): the browser renders the next page fully in the
- * background, so a click activates it instantly. `not selector_matches "[aria-current]"` excludes
- * the link to the page you're already on. It is declarative JSON, so the page still ships zero
- * executable JS. Chromium-only and ignored elsewhere, so it degrades to plain navigation. Allowed
- * by the CSP `'inline-speculation-rules'` source.
+ * Prerenders any same-origin /economy/* link on hover/focus ("moderate" eagerness), excluding the
+ * current page. Declarative JSON, so the page still ships zero executable JS; Chromium-only and
+ * ignored elsewhere; allowed by the CSP `'inline-speculation-rules'` source.
  */
 const SPECULATION_RULES = `{"prerender":[{"source":"document","where":{"and":[{"href_matches":"/economy/*"},{"not":{"selector_matches":"[aria-current]"}}]},"eagerness":"moderate"}]}`;
 
@@ -84,7 +78,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#15171c" />
         <Meta />
         <Links />
-        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: fixed author-controlled string, not user input; its SHA-256 is pinned in the CSP */}
+        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: author-controlled string; SHA-256 pinned in the CSP */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT }} />
       </head>
       <body>
@@ -152,7 +146,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <aside className="site-sidebar">
             <Sidebar />
           </aside>
-          {/* biome-ignore lint/security/noDangerouslySetInnerHtml: fixed author-controlled string, not user input; its SHA-256 is pinned in the CSP. Sits right after the sidebar so the active item is revealed before paint. */}
+          {/* biome-ignore lint/security/noDangerouslySetInnerHtml: author-controlled string; SHA-256 pinned in the CSP. Sits right after the sidebar so the active item is revealed before paint. */}
           <script dangerouslySetInnerHTML={{ __html: SIDEBAR_REVEAL }} />
           {/* tabIndex={-1} lets the skip link move keyboard focus into the content region. */}
           <main id="main" className="site-main" tabIndex={-1}>
@@ -177,18 +171,18 @@ export function Layout({ children }: { children: ReactNode }) {
 
         {hydrate ? <ScrollRestoration /> : null}
         {hydrate ? <Scripts /> : null}
-        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: fixed author-controlled string, not user input; its SHA-256 is pinned in the CSP */}
+        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: author-controlled string; SHA-256 pinned in the CSP */}
         <script dangerouslySetInnerHTML={{ __html: THEME_TOGGLE }} />
-        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: declarative Speculation Rules JSON (not executable JS); allowed by the CSP 'inline-speculation-rules' source */}
+        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: declarative JSON; allowed by the CSP 'inline-speculation-rules' source */}
         <script type="speculationrules" dangerouslySetInnerHTML={{ __html: SPECULATION_RULES }} />
-        {/* Client search: a small deferred vanilla script (no framework) — the one interactive feature, loaded on every page but non-blocking. Allowed by script-src 'self'. */}
+        {/* Client search: a small deferred vanilla script, non-blocking; allowed by script-src 'self'. */}
         <script src="/search.js" defer />
       </body>
     </html>
   );
 }
 
-/** Root route: a pass-through to the matched child via <Outlet/>; all document chrome lives in Layout. */
+/** Root route: a pass-through <Outlet/>; all document chrome lives in Layout. */
 export default function App() {
   return <Outlet />;
 }

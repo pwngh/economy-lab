@@ -14,9 +14,8 @@ import { useLocation } from 'react-router';
 import { buildNav } from '~/nav.ts';
 
 /**
- * The documentation sidebar: the full page tree grouped by section. Pure static markup (no hooks
- * beyond reading the location), so it prerenders to HTML and ships no client JS. Active state is
- * derived from the current path, which bakes correctly into each prerendered page.
+ * The full page tree grouped by section, static markup; active state derives from the current path
+ * and bakes into each prerendered page.
  */
 export function Sidebar() {
   const { pathname } = useLocation();

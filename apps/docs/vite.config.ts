@@ -24,8 +24,8 @@ import remarkMdxFrontmatter from 'remark-mdx-frontmatter';
 import remarkSmartypants from 'remark-smartypants';
 import { defineConfig } from 'vite';
 
-// The slice of the HTML AST (hast) this file walks. Declared locally so no @types/hast dependency is
-// needed for the one small transform below.
+// The slice of the HTML AST (hast) this file walks. Declared locally so the one transform below needs
+// no @types/hast dependency.
 interface HastNode {
   type: string;
   tagName?: string;
@@ -37,11 +37,9 @@ interface HastNode {
 const BRAND = 'economy-lab';
 
 /**
- * A rehype transform that wraps every standalone "economy-lab" in body text with
- * `<span class="brand">`, so the project name is subtly set off wherever it's referenced — no
- * per-page markup. Text inside `code`/`pre` is left untouched, and it runs before Shiki so highlighted
- * blocks are never rewritten. Frontmatter-rendered text (summary, plain, notes) is branded separately
- * by DocPage's `brandize`.
+ * Wraps every standalone "economy-lab" in body prose with `<span class="brand">`, skipping text inside
+ * `code`/`pre` and running before Shiki so highlighted blocks are never rewritten. Frontmatter text
+ * (summary, plain, notes) is branded separately by DocPage's `brandize`.
  */
 function rehypeBrand() {
   const span = (): HastNode => ({
@@ -73,8 +71,8 @@ function rehypeBrand() {
 }
 
 /**
- * Vite build config. Turns .mdx into React Router routes and highlights every code block at build
- * time (Shiki, dual theme) so the shipped HTML carries colorized code and no client JS runs to do it.
+ * Turns .mdx into React Router routes and highlights every code block at build time (Shiki, dual
+ * theme) so the pages ship no client JS to do it.
  */
 export default defineConfig({
   resolve: {
@@ -83,33 +81,31 @@ export default defineConfig({
   },
   plugins: [
     {
-      // enforce:'pre' runs MDX->JSX before the React Router transform, which only understands JSX.
+      // enforce:'pre' runs MDX before the React Router transform.
       enforce: 'pre',
       ...mdx({
         remarkPlugins: [
           remarkFrontmatter,
           remarkMdxFrontmatter,
           remarkGfm,
-          // Typography at build time: straight quotes and '...' in MDX body text render as curly
-          // quotes and ellipses, so source stays ASCII-greppable and the page ships real
-          // typography. Code spans and fences are untouched.
+          // Straight quotes and '...' in body text become curly quotes and ellipses at build time;
+          // code spans and fences are untouched.
           remarkSmartypants,
         ],
         rehypePlugins: [
           // slug must run before autolink (the link needs an id to point at).
           rehypeSlug,
-          // Extract the heading tree and export it as `tableOfContents` from each MDX module, for the
-          // build-time on-page table of contents (begriffs-style). Runs after slug (needs ids) and
-          // before autolink (reads plain heading text).
+          // Extracts the heading tree as each module's `tableOfContents` export. Runs after slug
+          // (needs ids), before autolink (reads plain heading text).
           rehypeExtractToc,
           rehypeExtractTocExport,
           [rehypeAutolinkHeadings, { behavior: 'wrap' }],
           // Authored external links open in a new tab and are marked so the CSS adds the ↗ icon.
           [rehypeExternalLinks, { target: '_blank', rel: ['noopener', 'noreferrer'] }],
-          // Brand the project name in body prose. After toc/slug/autolink so headings stay clean, and
-          // before Shiki so code blocks are skipped (their text is still inside code/pre here).
+          // Brands the project name in body prose; after toc/slug/autolink so headings stay clean,
+          // before Shiki so code blocks are skipped.
           rehypeBrand,
-          // Two themes baked in; CSS keyed on [data-theme] reveals the right one at zero runtime cost.
+          // Two themes baked in; CSS keyed on [data-theme] reveals the right one.
           [rehypeShiki, { themes: { light: 'github-light', dark: 'github-dark' } }],
         ],
       }),

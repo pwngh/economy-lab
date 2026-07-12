@@ -12,13 +12,12 @@
 import type { MetaDescriptor } from 'react-router';
 
 /**
- * The canonical origin — scheme and host, no trailing slash. This is the DOCS_BASE_URL the
- * economy-lab source links to via `@see {DOCS_BASE_URL}/<slug>`; every absolute URL the site
- * advertises is built by prefixing it. Provisional until the real domain is wired; change it here
- * and the canonical links, sitemap, and robots all follow.
+ * The canonical origin — scheme and host, no trailing slash — the DOCS_BASE_URL economy-lab's
+ * `@see {DOCS_BASE_URL}/<slug>` links point at. Provisional until the real domain is wired; change
+ * it here and the canonical links, sitemap, and robots all follow.
  */
 export const SITE = 'https://economy-lab-docs.pages.dev';
-/** Human-readable brand name, emitted as og:site_name. Routes type their own title suffixes. */
+/** Human-readable brand name, emitted as og:site_name. */
 const SITE_NAME = 'economy-lab docs';
 
 /**
@@ -34,18 +33,17 @@ export interface PageMetaOptions {
 }
 
 /**
- * The one social-share card, served from /og.png (1200x630, referenced from every page's meta).
- * A single static card rather than per-page rendering: the pages differ by title and description,
- * which crawlers read from their own tags.
+ * The one social-share card, served from /og.png (1200x630). A single static card: the pages
+ * differ by title and description, which crawlers read from their own tags.
  */
 const OG_IMAGE = `${SITE}/og.png`;
 const OG_IMAGE_ALT =
   'economy-lab / docs — a double-entry credits ledger; a per-account hash chain ending in a signed head.';
 
 /**
- * Build the `<head>` descriptors for one route in one place — title, canonical link, and Open
- * Graph/Twitter tags — so every page describes itself the same way. React Router writes these into
- * the prerendered HTML, so a crawler that runs no JavaScript still sees them.
+ * Builds one route's `<head>` descriptors — title, canonical link, and Open Graph/Twitter tags —
+ * in one place so every page describes itself the same way. React Router writes them into the
+ * prerendered HTML, so a crawler that runs no JavaScript still sees them.
  */
 export function pageMeta({
   title,

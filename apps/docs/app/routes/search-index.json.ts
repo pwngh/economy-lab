@@ -14,12 +14,10 @@ import { docs } from '~/content.ts';
 import { SECTION_LABEL } from '~/nav.ts';
 
 /**
- * Resource-route loader emitting the client search index as JSON, prerendered to a static file. Built
- * from the same content collection the pages render from, so it can never list a page that does not
- * exist. The client `search.js` fetches this once on first use. Each entry carries the page's full
- * body as pre-stripped plain text (read off disk by content.fs.ts, since the compiled MDX modules
- * hold components, not source): matched against, never displayed, so a query can hit terms that
- * appear only in the body.
+ * Emits the client search index as JSON, prerendered to a static file. It is built from the same
+ * content collection the pages render from, so it can never list a page that does not exist. Each
+ * entry carries the page's body as pre-stripped plain text — read off disk by content.fs.ts, since
+ * the compiled MDX modules hold components, not source — matched against, never displayed.
  */
 export function loader() {
   const bodies = getDocBodies();

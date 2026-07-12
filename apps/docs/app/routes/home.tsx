@@ -21,7 +21,7 @@ export function meta() {
   });
 }
 
-/** Site landing: a one-line orientation and a single door into the economy section. */
+/** Site landing: one door into /economy/. */
 export default function Home() {
   return (
     <div className="prose">

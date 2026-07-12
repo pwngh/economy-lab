@@ -12,15 +12,10 @@
 import type { ReactNode } from 'react';
 
 /**
- * In-document SVG diagrams for the concept pages — the chart of accounts, the payout saga state
- * machine, and the hash chain. Authored as components (not <img> via {@link Figure}) so the SVG is
- * part of the page DOM and themes from the same CSS variables as everything else: a manual
- * `data-theme` toggle recolors a diagram exactly as it recolors a Shiki code block, which an
- * <img>-loaded SVG can't do. Static markup, zero client JS — rendered once at prerender. Colors and
- * type live in app.css under `.diagram`; this file is geometry and labels only.
- *
- * Each export is used in MDX with no import (registered in `MDX_COMPONENTS`, see DocPage). The figure
- * caption is the visible explanation; `aria-label` is the accessible summary for non-visual readers.
+ * In-document SVG diagrams for the concept pages, authored as components so each one is part of the
+ * page DOM and themes from the same CSS variables as everything else — a `data-theme` toggle recolors
+ * a diagram exactly as it recolors a Shiki code block. Each export is used in MDX with no import
+ * (registered in `MDX_COMPONENTS`, see DocPage).
  */
 
 function Diagram({
@@ -63,7 +58,6 @@ function ArrowDefs() {
   );
 }
 
-/** A labelled account box: a name (line 1) over a currency/role note (line 2). */
 function Acct({
   x,
   y,
@@ -100,10 +94,7 @@ function Acct({
   );
 }
 
-/**
- * The fixed chart of accounts: a user's three CREDIT accounts and the nine platform ("house")
- * accounts, with `spendable` backed one-for-one by `TRUST_CASH`. Mirrors `src/accounts.ts`.
- */
+/** The fixed chart of accounts, with `spendable` backed one-for-one by `TRUST_CASH`; mirrors `src/accounts.ts`. */
 export function ChartOfAccounts() {
   return (
     <Diagram
@@ -151,7 +142,6 @@ export function ChartOfAccounts() {
   );
 }
 
-/** A saga state box. */
 function State({
   x,
   y,
@@ -189,10 +179,7 @@ function State({
   );
 }
 
-/**
- * The payout saga state machine: `RESERVED → SUBMITTED → SETTLED`, with a force-fail branch to
- * `FAILED` that returns the reserve to the seller. Mirrors `payout-saga` and `src/worker/payouts.ts`.
- */
+/** The payout saga state machine; mirrors the payout-saga page and `src/worker/payouts.ts`. */
 export function PayoutSaga() {
   return (
     <Diagram
@@ -247,10 +234,7 @@ export function PayoutSaga() {
   );
 }
 
-/**
- * The subscription state machine: `ACTIVE` renews in place until a cap of failed charges lapses it
- * or a cancel ends it. Mirrors `subscriptions` and `src/worker/subscriptions.ts`.
- */
+/** The subscription state machine; mirrors the subscriptions page and `src/worker/subscriptions.ts`. */
 export function SubscriptionStates() {
   return (
     <Diagram
@@ -300,7 +284,6 @@ export function SubscriptionStates() {
   );
 }
 
-/** A small hash-link box in an account's chain. */
 function Link({
   x,
   y,
@@ -330,11 +313,7 @@ function Link({
   );
 }
 
-/**
- * The integrity construction: each account's postings form a hash chain (every link commits to the
- * prior head); the current heads fold into one Merkle root that the worker signs as a checkpoint.
- * Mirrors `integrity` and `src/chain.ts`.
- */
+/** The integrity construction, per-account hash chains folding into one signed Merkle checkpoint; mirrors the integrity page and `src/chain.ts`. */
 export function HashChain() {
   // chain link x positions, shared by both rows
   const xs = [40, 150, 260, 370];
@@ -408,7 +387,6 @@ export function HashChain() {
   );
 }
 
-/** A general labelled box: a name over an optional one-line note. Used by the flow diagrams below. */
 function Pill({
   x,
   y,
@@ -456,11 +434,7 @@ function Pill({
   );
 }
 
-/**
- * The dual-rate ladder: `buy` sits above `par`, and the gap between them is the platform spread.
- * `payout` equals `par`. Vertical position encodes USD per credit, so the shaded band literally is the
- * margin. Mirrors `money-model` and the `Rates` port.
- */
+/** The dual-rate ladder, `buy` above `par` with the gap as the platform spread; mirrors the money-model page and the `Rates` port. */
 export function RateLadder() {
   return (
     <Diagram
@@ -503,11 +477,7 @@ export function RateLadder() {
   );
 }
 
-/**
- * The submit pipeline: an operation is validated and authorized, then the idempotency claim gates a
- * repeat, the handler runs by kind, and its ledger writes commit with the recorded outcome. Mirrors
- * `the-economy` and `src/economy.ts`.
- */
+/** The submit pipeline from validation through the committed outcome; mirrors the-economy page and `src/economy.ts`. */
 export function SubmitPipeline() {
   const w = 106;
   const xs = [8, 128, 248, 368, 488, 608];
@@ -545,11 +515,7 @@ export function SubmitPipeline() {
   );
 }
 
-/**
- * The background worker: one `Scheduler` drives the ten sweeps named in `SWEEP_NAMES`, each one safe
- * to re-run. The array order is both the run order and the order results return in. Mirrors
- * `background-worker` and `src/worker`.
- */
+/** The background worker, one `Scheduler` driving the ten sweeps of `SWEEP_NAMES`; mirrors the background-worker page and `src/worker`. */
 export function WorkerSweeps() {
   const lw = 148;
   const left = 30;
@@ -617,11 +583,7 @@ export function WorkerSweeps() {
   );
 }
 
-/**
- * Credit maturity: an account's funds are dated lots. Spends drain oldest-first, so the live balance
- * is the newest run of lots (the tail); the matured part of that tail is what a cash-out may draw.
- * Mirrors `src/maturity.ts`.
- */
+/** Credit maturity, dated lots draining oldest-first with the matured tail a cash-out may draw; mirrors `src/maturity.ts`. */
 export function CreditMaturity() {
   const xs = [30, 124, 218, 312, 406, 500, 594];
   const w = 84;
@@ -692,11 +654,7 @@ export function CreditMaturity() {
   );
 }
 
-/**
- * The idempotency model: the first call with a key claims it, runs, and records its outcome under
- * the key; a retry with the same key finds it claimed and replays the recorded outcome without
- * re-running. Mirrors `idempotency` and `src/economy.ts` (runOnion).
- */
+/** The idempotency model, a first call claiming the key and a retry replaying the recorded outcome; mirrors the idempotency page and `src/economy.ts` (runOnion). */
 export function IdempotentRetry() {
   const col = { claim: 150, run: 290, record: 430, end: 570 };
   const w = 126;
