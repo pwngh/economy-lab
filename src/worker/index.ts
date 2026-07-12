@@ -12,7 +12,11 @@
 import { normalizeError } from '#src/errors.ts';
 import { advanceDuePayouts } from '#src/worker/payouts.ts';
 import { sweepDueSubscriptions } from '#src/worker/subscriptions.ts';
-import { realizeFees, sweepTreasury } from '#src/worker/treasury.ts';
+import {
+  realizeFees,
+  sweepFloatCoverage,
+  sweepTreasury,
+} from '#src/worker/treasury.ts';
 import { reverifyCheckpoint, sealCheckpoint } from '#src/worker/checkpoint.ts';
 import { sweepExpiredPromos } from '#src/worker/promos.ts';
 import { relayOutbox } from '#src/worker/relay.ts';
@@ -32,6 +36,8 @@ import type { PayoutSweepSummary } from '#src/worker/payouts.ts';
 import type { SweepSummary } from '#src/worker/subscriptions.ts';
 import type {
   FeeRealizationSummary,
+  FloatFeed,
+  FloatSummary,
   TreasurySummary,
 } from '#src/worker/treasury.ts';
 import type {
@@ -59,6 +65,7 @@ export const SWEEP_NAMES = [
   'subscriptions',
   'treasury',
   'feeSweep',
+  'floatCoverage',
   'checkpointVerify',
   'checkpoint',
   'relay',
@@ -84,6 +91,9 @@ export type SweepInput = {
   economy?: Economy;
   feed: ReconcileFeed;
   windows: ReadonlyArray<Range>;
+  // External float source for the treasury tie-out's coverage half. Optional like `dispatcher`:
+  // absent, `floatCoverage` is skipped — the internal backing check in `treasury` runs regardless.
+  float?: FloatFeed;
   options?: Options;
 };
 
@@ -101,6 +111,7 @@ export type SweepBatch = {
   subscriptions: SweepResult<SweepSummary>;
   treasury: SweepResult<TreasurySummary>;
   feeSweep: SweepResult<FeeRealizationSummary>;
+  floatCoverage: SweepResult<FloatSummary>;
   checkpoint: SweepResult<CheckpointSummary>;
   checkpointVerify: SweepResult<CheckpointVerifySummary>;
   relay: SweepResult<RelaySummary>;
@@ -146,6 +157,18 @@ export async function runSweeps(
     // Moves the surplus the treasury sweep just measured into platform funds. Wrapped like every
     // job, so when realizeFees rejects (money owed to users must not move) that surfaces as a failed result.
     feeSweep: await isolate(() => realizeFees(store, ctx, { now })),
+    // The external half of the treasury tie-out: rail float versus reserved and submitted payout
+    // obligations. Optional capability like relay and drainInbox — with no float feed there is no
+    // rail to ask, so it short-circuits and the internal backing check above stands alone.
+    floatCoverage:
+      input.float === undefined
+        ? {
+            ok: true,
+            summary: { position: null, breaches: [], retrying: [], failed: [] },
+          }
+        : await isolate(() =>
+            sweepFloatCoverage(store, ctx, input.float!, { now }),
+          ),
     // Re-checks the previous sealed snapshot before `checkpoint` below overwrites it: that old
     // snapshot predates any tampering since it was sealed, so it catches it. A mismatch is recorded
     // on the summary (not thrown), so only a corrupt row or storage failure becomes a failed result.

@@ -1,0 +1,132 @@
+/**
+ * @pwngh/economy-lab
+ *
+ * Copyright (c) Preston Neal
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE.md file in the root directory of this source tree.
+ *
+ * @license MIT
+ */
+
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { sweepFloatCoverage } from '#src/worker/treasury.ts';
+import { memoryStore } from '#src/adapters/memory.ts';
+import { ERROR_CODES, fault } from '#src/errors.ts';
+import { credit, usd } from '#test/support/builders.ts';
+import {
+  fakeProcessor,
+  fixedClock,
+  fixedRates,
+  noopMeter,
+  seededDigest,
+  seededSigner,
+  sequentialIds,
+  testConfig,
+  testLogger,
+} from '#test/support/capabilities.ts';
+
+import type { WorkerCtx } from '#src/contract.ts';
+import type { Amount } from '#src/money.ts';
+import type { Saga, SagaState, Store } from '#src/ports.ts';
+
+function workerCtx(): WorkerCtx {
+  return {
+    clock: fixedClock(0),
+    ids: sequentialIds(),
+    digest: seededDigest(1),
+    signer: seededSigner(1),
+    processor: fakeProcessor(),
+    rates: fixedRates(),
+    logger: testLogger(),
+    meter: noopMeter(),
+    config: testConfig(),
+  };
+}
+
+async function openSaga(
+  store: Store,
+  id: string,
+  state: SagaState,
+): Promise<void> {
+  const row: Saga = {
+    id,
+    userId: 'usr_seller',
+    reserve: credit('4.00'),
+    rateId: 'payout:CREDIT->USD:1',
+    state,
+    providerRef: null,
+    reason: null,
+    attempts: 0,
+    dueAt: 0,
+    updatedAt: 0,
+    payoutUsd: null,
+  };
+  await store.transaction(async (unit) => {
+    await unit.sagas.open(row);
+  });
+}
+
+function feedOf(balance: Amount): { balance(): Promise<Amount> } {
+  return { balance: async () => balance };
+}
+
+describe('sweepFloatCoverage', () => {
+  test('reports covered when the float meets reserved and submitted obligations', async () => {
+    const store = memoryStore();
+    await openSaga(store, 'pay_1', 'RESERVED');
+    await openSaga(store, 'pay_2', 'SUBMITTED');
+    await openSaga(store, 'pay_3', 'SETTLED');
+
+    const summary = await sweepFloatCoverage(
+      store,
+      workerCtx(),
+      feedOf(usd('0.04')),
+      { now: 0 },
+    );
+
+    assert.deepEqual(summary.breaches, []);
+    assert.equal(summary.position!.covered, true);
+    assert.deepEqual(summary.position!.obligations, usd('0.04'));
+    assert.deepEqual(summary.position!.shortfall, usd('0.00'));
+  });
+
+  test('raises an alert-level breach when the float falls short of obligations', async () => {
+    const store = memoryStore();
+    await openSaga(store, 'pay_1', 'SUBMITTED');
+
+    const summary = await sweepFloatCoverage(
+      store,
+      workerCtx(),
+      feedOf(usd('0.01')),
+      { now: 0 },
+    );
+
+    assert.equal(summary.position!.covered, false);
+    assert.deepEqual(summary.breaches, [
+      { shortfall: 'USD:0.01', obligations: 'USD:0.02', float: 'USD:0.01' },
+    ]);
+  });
+
+  test('classifies a feed failure for retry instead of throwing', async () => {
+    const store = memoryStore();
+    await openSaga(store, 'pay_1', 'SUBMITTED');
+    const failing = {
+      balance: async (): Promise<Amount> => {
+        throw fault(ERROR_CODES.PROVIDER_FAILURE, 'wallet endpoint down', {
+          retryable: true,
+        });
+      },
+    };
+
+    const summary = await sweepFloatCoverage(store, workerCtx(), failing, {
+      now: 0,
+    });
+
+    assert.equal(summary.position, null);
+    assert.deepEqual(summary.retrying, [{ code: 'PROVIDER.FAILURE' }]);
+    assert.deepEqual(summary.breaches, []);
+  });
+});

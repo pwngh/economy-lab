@@ -18,7 +18,7 @@ import { SYSTEM, baseOf, classify, currency, shardsOf } from '#src/accounts.ts';
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Transaction, WorkerCtx } from '#src/contract.ts';
-import type { Leg, Rate, Store, Unit } from '#src/ports.ts';
+import type { Leg, Options, Rate, Store, Unit } from '#src/ports.ts';
 
 /**
  * Holds the result of one backing check. The fields report the USD required against users'
@@ -232,6 +232,102 @@ function raiseBreach(
 // metric, but the result must never flow back into a ledger entry, hash, or trace.
 function toNumber(minor: bigint): number {
   return Number(minor);
+}
+
+// --- Float coverage: the external half of the treasury tie-out --------------------
+
+export type FloatFeed = {
+  balance(options?: Options): Promise<Amount>;
+};
+
+export type FloatPosition = {
+  float: Amount;
+  obligations: Amount;
+  shortfall: Amount;
+  covered: boolean;
+};
+
+export type FloatSummary = {
+  position: FloatPosition | null;
+  breaches: ReadonlyArray<{
+    shortfall: string;
+    obligations: string;
+    float: string;
+  }>;
+  retrying: ReadonlyArray<{ code: string }>;
+  failed: ReadonlyArray<{ code: string }>;
+};
+
+export async function sweepFloatCoverage(
+  store: Store,
+  ctx: WorkerCtx,
+  feed: FloatFeed,
+  input: { now: number },
+): Promise<FloatSummary> {
+  const tally: {
+    position: FloatPosition | null;
+    breaches: Array<{ shortfall: string; obligations: string; float: string }>;
+    retrying: Array<{ code: string }>;
+    failed: Array<{ code: string }>;
+  } = { position: null, breaches: [], retrying: [], failed: [] };
+  try {
+    const position = await measureFloat(store, ctx, feed, input.now);
+    tally.position = position;
+    ctx.meter.observe('worker.treasury.float', toNumber(position.float.minor));
+    ctx.meter.observe(
+      'worker.treasury.float_obligations',
+      toNumber(position.obligations.minor),
+    );
+    ctx.logger.log('debug', 'worker.treasury.float_swept', {
+      covered: position.covered,
+      at: input.now,
+    });
+    if (!position.covered) {
+      const breach = {
+        shortfall: encodeAmount(position.shortfall),
+        obligations: encodeAmount(position.obligations),
+        float: encodeAmount(position.float),
+      };
+      tally.breaches.push(breach);
+      ctx.meter.count('worker.treasury.float_breach', 1);
+      ctx.logger.log('error', 'worker.treasury.float_uncovered', {
+        ...breach,
+        at: input.now,
+      });
+    }
+  } catch (error) {
+    const normalized = normalizeError(error);
+    if (normalized.retryable) {
+      tally.retrying.push({ code: normalized.code });
+    } else {
+      tally.failed.push({ code: normalized.code });
+    }
+  }
+  return tally;
+}
+
+async function measureFloat(
+  store: Store,
+  ctx: WorkerCtx,
+  feed: FloatFeed,
+  now: number,
+): Promise<FloatPosition> {
+  const rate = await ctx.rates.payout('CREDIT', 'USD', now);
+  let obligationsMinor = 0n;
+  for await (const saga of store.sagas.list()) {
+    if (saga.state === 'RESERVED' || saga.state === 'SUBMITTED') {
+      obligationsMinor += convertFloor(saga.reserve, rate, 'USD').minor;
+    }
+  }
+  const float = await feed.balance();
+  const shortfallMinor =
+    float.minor < obligationsMinor ? obligationsMinor - float.minor : 0n;
+  return {
+    float,
+    obligations: toAmount('USD', obligationsMinor),
+    shortfall: toAmount('USD', shortfallMinor),
+    covered: shortfallMinor === 0n,
+  };
 }
 
 // --- Fee sweep: realizing earned platform fees as cash ----------------------------
