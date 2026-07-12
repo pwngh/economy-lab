@@ -43,6 +43,8 @@ DROP TABLE IF EXISTS seen_webhooks;
 
 DROP TABLE IF EXISTS checkpoints;
 
+DROP TABLE IF EXISTS instance_movements;
+
 DROP TABLE IF EXISTS trust_attempts;
 
 DROP TABLE IF EXISTS promo_grants;
@@ -93,7 +95,8 @@ INSERT INTO accounts (id, kind, currency) VALUES
      ('platform:promo_float',    'system', 'CREDIT'),
      ('platform:usd_clearing',   'system', 'USD'),
      ('platform:revenue_usd',    'system', 'USD'),
-     ('platform:opening_equity', 'system', 'CREDIT');
+     ('platform:opening_equity', 'system', 'CREDIT'),
+     ('platform:netting_clearing','system', 'CREDIT');
 
 -- postings: one committed transaction per row; its legs and chain links reference it.
 -- Rationale documented in db/postgresql-schema.sql (postings banner).
@@ -339,6 +342,23 @@ CREATE TABLE trust_attempts (
      KEY trust_attempts_subject_at_idx (subject, at)
    ) COMMENT='Per-key spend attempts feeding the velocity and risk check.';
 
+-- instance_movements: the append-only per-instance journal behind netting (src/netting.ts).
+-- Rationale/invariants documented in db/postgresql-schema.sql (instance_movements banner).
+CREATE TABLE instance_movements (
+     id          BIGINT       AUTO_INCREMENT PRIMARY KEY COMMENT 'Auto-increment row id in commit order.',
+     session_id  VARCHAR(64)  NOT NULL COMMENT 'Instance session this movement belongs to.',
+     seq         INT          NOT NULL COMMENT 'Position in the session chain, from 0.',
+     idem_key    VARCHAR(128) NOT NULL COMMENT 'Movement idempotency key; unique across all sessions.',
+     legs        JSON         NOT NULL COMMENT 'The balanced legs, amounts as encoded strings.',
+     prev_hash   CHAR(64)     NOT NULL COMMENT 'Session chain hash before this movement; genesis is zeros.',
+     hash        CHAR(64)     NOT NULL COMMENT 'Session chain hash after this movement.',
+     recorded_at BIGINT       NOT NULL COMMENT 'Epoch ms the movement was accepted.',
+     UNIQUE KEY instance_movements_idem_uq (idem_key),
+     -- One row per (session, position): settle replays the chain in seq order, and this unique key
+     -- makes a forked or double-appended position impossible to store.
+     UNIQUE KEY instance_movements_session_seq_uq (session_id, seq)
+   ) COMMENT='Append-only instance-netting journal; the settlement posting anchors its chain head.';
+
 -- checkpoints: signed Merkle-root snapshots of ledger state. Rationale/invariants documented in
 -- db/postgresql-schema.sql (checkpoints banner).
 CREATE TABLE checkpoints (
@@ -561,4 +581,4 @@ INSERT INTO account_balances (account_id, currency, balance, head_hash)
 CREATE TABLE schema_meta (
      version VARCHAR(32) NOT NULL COMMENT 'Schema version stamp; must match SCHEMA_VERSION at startup.'
    ) COMMENT='Single-row schema version stamp, checked at startup.';
-INSERT INTO schema_meta (version) VALUES ('9');
+INSERT INTO schema_meta (version) VALUES ('12');

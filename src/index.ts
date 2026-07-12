@@ -53,7 +53,31 @@ export { createWorker } from '#src/worker/index.ts';
 // (a user account id looks like `usr_...:<kind>`).
 export { spendable, earned, promo, currency, SYSTEM } from '#src/accounts.ts';
 
+// Money and leg construction. Amount is branded, so these are the only doors: decodeAmount parses
+// a decimal string exactly (a third decimal digit throws — money is never silently truncated) and
+// encodeAmount is its inverse for display and wire use. credit/debit build correctly-signed legs
+// for netting movements without the caller hand-writing the sign convention.
+export { decodeAmount, encodeAmount } from '#src/money.ts';
+export { credit, debit } from '#src/ledger.ts';
+export type { Leg } from '#src/ports.ts';
+
 export { loadConfig } from '#src/config.ts';
+
+// Opt-in, host-level extensions. Neither runs unless explicitly composed: netting is a session a
+// host opens over the store (src/netting.ts), and the bitset is a decorator a host wraps around
+// the store (src/adapters/entitlement-bitset.ts). The core submit pipeline never touches either.
+export {
+  createReservations,
+  instanceSession,
+  recoverSession,
+} from '#src/netting.ts';
+export type {
+  MovementOutcome,
+  MovementRequest,
+  Reservations,
+  SessionOptions,
+  SettleReport,
+} from '#src/netting.ts';
 
 // The error surface. submit() throws EconomyError for genuine faults; a caller needs the class for
 // instanceof, the ERROR_CODES catalog to match on, and the code/reason unions to type its handling.

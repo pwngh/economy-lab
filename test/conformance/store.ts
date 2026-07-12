@@ -28,6 +28,7 @@ import { byCodeUnit } from '#src/bytes.ts';
 import type {
   Checkpoint,
   InboxEntry,
+  Movement,
   Saga,
   SagaState,
   Store,
@@ -209,6 +210,69 @@ async function roundTripsCheckpointRows(store: Store): Promise<void> {
 
   await store.checkpoints.put(v2);
   assert.deepEqual(await store.checkpoints.latest(), v2);
+}
+
+// Builds one journal movement: a balanced viewer-tips-creator pair with exact bigint amounts.
+function movementRow(
+  sessionId: string,
+  seq: number,
+  idempotencyKey: string,
+): Movement {
+  const amount = toAmount('CREDIT', 250n);
+  return {
+    sessionId,
+    seq,
+    idempotencyKey,
+    legs: [
+      debit(spendable('usr_conf_viewer'), amount),
+      credit(spendable('usr_conf_creator'), amount),
+    ],
+    prevHash: '0'.repeat(64),
+    hash: `${seq}`.padStart(64, 'f'),
+    recordedAt: seq,
+  };
+}
+
+async function journalAppendsAndStreamsBySession(store: Store): Promise<void> {
+  const sessionId = `sess_conf_a_${freshUser()}`;
+  await store.movements.append([
+    movementRow(sessionId, 0, `${sessionId}_m0`),
+    movementRow(sessionId, 1, `${sessionId}_m1`),
+  ]);
+  await store.movements.append([movementRow(sessionId, 2, `${sessionId}_m2`)]);
+
+  const rows: Movement[] = [];
+  for await (const movement of store.movements.bySession(sessionId)) {
+    rows.push(movement);
+  }
+  // Three rows, in seq order, with legs round-tripped exactly (bigint minor units intact).
+  assert.deepEqual(
+    rows,
+    [0, 1, 2].map((seq) => movementRow(sessionId, seq, `${sessionId}_m${seq}`)),
+  );
+}
+
+async function journalRejectsDuplicateBatches(store: Store): Promise<void> {
+  const sessionId = `sess_conf_b_${freshUser()}`;
+  await store.movements.append([movementRow(sessionId, 0, `${sessionId}_m0`)]);
+
+  // A reused idempotency key rejects the WHOLE batch: the fresh row must not land either.
+  await assert.rejects(
+    store.movements.append([
+      movementRow(sessionId, 1, `${sessionId}_m1`),
+      movementRow(sessionId, 2, `${sessionId}_m0`),
+    ]),
+  );
+  // A reused (session, seq) position rejects too: a forked chain position cannot be stored.
+  await assert.rejects(
+    store.movements.append([movementRow(sessionId, 0, `${sessionId}_m3`)]),
+  );
+
+  const rows: Movement[] = [];
+  for await (const movement of store.movements.bySession(sessionId)) {
+    rows.push(movement);
+  }
+  assert.equal(rows.length, 1);
 }
 
 async function commitsDurablyAndRollsBack(store: Store): Promise<void> {
@@ -970,6 +1034,10 @@ export function runStoreConformance(
       withStore(t, pairsHeadsWithRawSums));
     test('round-trips v1 and v2 checkpoint rows through the store', (t) =>
       withStore(t, roundTripsCheckpointRows));
+    test('appends movement batches and streams them back by session', (t) =>
+      withStore(t, journalAppendsAndStreamsBySession));
+    test('rejects a movement batch on a duplicate key or position', (t) =>
+      withStore(t, journalRejectsDuplicateBatches));
     test('commits a transaction durably and leaves no trace when one throws', (t) =>
       withStore(t, commitsDurablyAndRollsBack));
     test('claims an idempotency key once and replays the recorded transaction', (t) =>

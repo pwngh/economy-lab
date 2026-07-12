@@ -444,6 +444,28 @@ async function trustRoute(
   return null;
 }
 
+// The instance-netting journal, outside held transactions like checkpoints: each append is its
+// own transaction on the backing store. Leg amounts travel as encoded strings.
+async function movementRoute(
+  backing: Store,
+  method: string,
+  body: Record<string, unknown>,
+): Promise<unknown> {
+  if (method === 'append') {
+    await backing.movements.append(
+      (body.movements as unknown[]).map((row) => decodeWire.movement(row)),
+    );
+    return null;
+  }
+  if (method === 'bySession') {
+    return collect(
+      backing.movements.bySession(body.sessionId as string),
+      (movement) => encodeWire.movement(movement),
+    );
+  }
+  throw new Error(`unknown movements method: ${method}`);
+}
+
 async function checkpointRoute(
   backing: Store,
   method: string,
@@ -490,6 +512,9 @@ async function dispatch(
   }
   if (segments[0] === 'checkpoints') {
     return checkpointRoute(backing, segments[1]!, body);
+  }
+  if (segments[0] === 'movements') {
+    return movementRoute(backing, segments[1]!, body);
   }
   if (segments[0] === 'replay') {
     return replayRoute(backing, segments[1]!, body);

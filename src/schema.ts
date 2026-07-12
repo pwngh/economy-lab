@@ -24,7 +24,7 @@
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/configuration/ Configuration}
  *   for schema versioning and drift guard.
  */
-export const SCHEMA_VERSION = '9';
+export const SCHEMA_VERSION = '12';
 
 /**
  * Throws unless the database's stamped schema version matches this build's {@link SCHEMA_VERSION}.

@@ -25,6 +25,7 @@ import type { AccountRef } from '#src/accounts.ts';
 import type {
   Checkpoint,
   Lot,
+  MovementJournal,
   Options,
   OutboxMessage,
   Posting,
@@ -609,6 +610,36 @@ function rootTrust(transport: {
 // Builds the checkpoint store, which holds signed snapshots of the ledger. Only the
 // background worker uses it. Like trust, it is never part of a transaction, so it too has
 // session-less endpoints.
+// The instance-netting journal, session-less like checkpoints: appends are their own
+// transactions, never part of a held domain transaction. Leg amounts travel as encoded strings.
+function rootMovements(transport: {
+  fetch: FetchLike;
+  baseUrl: string;
+}): MovementJournal {
+  const at = (method: string): string => `/movements/${method}`;
+  return {
+    append: async (movements, options) => {
+      await call(
+        transport,
+        at('append'),
+        { movements: movements.map(encodeWire.movement) },
+        options,
+      );
+    },
+    bySession: async function* (sessionId, options) {
+      const rows = (await call(
+        transport,
+        at('bySession'),
+        { sessionId },
+        options,
+      )) as unknown[];
+      for (const row of rows) {
+        yield decodeWire.movement(row);
+      }
+    },
+  };
+}
+
 function rootCheckpoints(transport: {
   fetch: FetchLike;
   baseUrl: string;
@@ -717,6 +748,7 @@ export function httpStore(options?: HttpStoreOptions): Store {
     promos: sessionPromos(transport, 'root'),
     trust: rootTrust(transport),
     checkpoints: rootCheckpoints(transport),
+    movements: rootMovements(transport),
     replay: rootReplay(transport),
     transaction: (work, txOptions) =>
       runTransaction(transport, work, txOptions),

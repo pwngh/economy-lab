@@ -81,6 +81,7 @@ import type {
   InboxEntry,
   InboxStore,
   Leg,
+  MovementJournal,
   Ledger,
   Lot,
   OutboxMessage,
@@ -905,6 +906,16 @@ function encodeLegs(
   }));
 }
 
+// Reverse of encodeLegs: the exact integer comes back from its string form.
+function decodeLegs(
+  legs: ReadonlyArray<{ account: string; currency: string; minor: string }>,
+): ReadonlyArray<Leg> {
+  return legs.map((leg) => ({
+    account: leg.account as AccountRef,
+    amount: toAmount(leg.currency as Amount['currency'], BigInt(leg.minor)),
+  }));
+}
+
 function rowToSale(row: Record<string, unknown>): Sale {
   const raw = row.legs as Array<{
     account: string;
@@ -1669,6 +1680,64 @@ async function recordVelocity(
 // returns the most recent. Rows are only ever added, never changed or removed, and writes go
 // through the pool rather than a transaction, so a money transaction rolling back can't erase a
 // snapshot already taken.
+// --- Movement journal ---------------------------------------------------------------
+
+// Append-only and never part of a money transaction (see MovementJournal in ports.ts). The whole
+// batch lands as ONE multi-row INSERT — a single statement, so it commits or rejects atomically
+// with one fsync for N movements; a duplicate idem_key or (session_id, seq) rejects it all.
+function createMovementJournal(pool: PgPool): MovementJournal {
+  return {
+    append: async (movements) => {
+      if (movements.length === 0) {
+        return;
+      }
+      const marks = movements
+        .map(
+          (_, i) =>
+            `($${i * 7 + 1}, $${i * 7 + 2}, $${i * 7 + 3}, $${i * 7 + 4}, $${i * 7 + 5}, $${i * 7 + 6}, $${i * 7 + 7})`,
+        )
+        .join(', ');
+      await pool.query(
+        `insert into instance_movements
+           (session_id, seq, idem_key, legs, prev_hash, hash, recorded_at)
+         values ${marks}`,
+        movements.flatMap((movement) => [
+          movement.sessionId,
+          movement.seq,
+          movement.idempotencyKey,
+          JSON.stringify(encodeLegs(movement.legs)),
+          movement.prevHash,
+          movement.hash,
+          movement.recordedAt,
+        ]),
+      );
+    },
+    bySession: async function* (sessionId) {
+      const result = await pool.query(
+        `select * from instance_movements where session_id = $1 order by seq`,
+        [sessionId],
+      );
+      for (const row of result.rows) {
+        yield {
+          sessionId: row.session_id as string,
+          seq: Number(row.seq),
+          idempotencyKey: row.idem_key as string,
+          legs: decodeLegs(
+            row.legs as ReadonlyArray<{
+              account: string;
+              currency: string;
+              minor: string;
+            }>,
+          ),
+          prevHash: row.prev_hash as string,
+          hash: row.hash as string,
+          recordedAt: Number(row.recorded_at),
+        };
+      }
+    },
+  };
+}
+
 function createCheckpointStore(pool: PgPool): CheckpointStore {
   return {
     put: async (checkpoint) => {
@@ -1827,6 +1896,7 @@ export async function postgresStore(
     promos: createPromoStore(pool),
     trust: createTrustStore(pool, clock, velocityWindowMs),
     checkpoints: createCheckpointStore(pool),
+    movements: createMovementJournal(pool),
     replay: createReplayStore(pool),
     transaction: async (work) =>
       runInTransaction(pool, { digest, clock, velocityWindowMs }, work),

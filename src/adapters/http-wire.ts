@@ -23,6 +23,7 @@ import type {
   InboxEntry,
   Leg,
   Lot,
+  Movement,
   Posting,
   PromoGrant,
   Saga,
@@ -121,6 +122,11 @@ function decodeAmounts(value: unknown): unknown {
 export const encodeWire = {
   amount: encodeAmount,
 
+  movement: (movement: Movement): unknown => ({
+    ...movement,
+    legs: movement.legs.map(encodeLeg),
+  }),
+
   posting: (
     posting: Posting,
   ): { txnId: string; legs: WireLeg[]; meta: Record<string, unknown> } => ({
@@ -194,6 +200,11 @@ export const encodeWire = {
  */
 export const decodeWire = {
   amount: (wire: unknown): Amount => amountFrom(wire as string),
+
+  movement: (wire: unknown): Movement => {
+    const row = wire as Omit<Movement, 'legs'> & { legs: unknown[] };
+    return { ...row, legs: row.legs.map(decodeLeg) };
+  },
 
   posting: (wire: unknown): Posting => {
     const row = wire as {

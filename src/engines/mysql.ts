@@ -58,6 +58,7 @@ import type {
   InboxEntry,
   InboxStore,
   Leg,
+  MovementJournal,
   Ledger,
   Lot,
   OutboxMessage,
@@ -1489,6 +1490,60 @@ function subjectLockName(subject: string): string {
 
 // Written on the pool, not in a money transaction, so a recorded checkpoint survives even if a later
 // money transaction rolls back.
+// --- Movement journal ---------------------------------------------------------------
+
+// Append-only and never part of a money transaction (see MovementJournal in ports.ts). The whole
+// batch lands as ONE multi-row INSERT — a single statement, so it commits or rejects atomically
+// with one fsync for N movements; a duplicate idem_key or (session_id, seq) rejects it all.
+function createMovementJournal(pool: MysqlPool): MovementJournal {
+  return {
+    append: async (movements) => {
+      if (movements.length === 0) {
+        return;
+      }
+      const marks = movements.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
+      await rows(
+        pool,
+        `INSERT INTO instance_movements
+           (session_id, seq, idem_key, legs, prev_hash, hash, recorded_at)
+         VALUES ${marks}`,
+        movements.flatMap((movement) => [
+          movement.sessionId,
+          movement.seq,
+          movement.idempotencyKey,
+          JSON.stringify(encodeLegs(movement.legs)),
+          movement.prevHash,
+          movement.hash,
+          movement.recordedAt,
+        ]),
+      );
+    },
+    bySession: async function* (sessionId) {
+      const result = await rows(
+        pool,
+        `SELECT * FROM instance_movements WHERE session_id = ? ORDER BY seq`,
+        [sessionId],
+      );
+      for (const row of result) {
+        yield {
+          sessionId: row.session_id as string,
+          seq: Number(row.seq),
+          idempotencyKey: row.idem_key as string,
+          legs: decodeLegs(
+            parseJson(row.legs) as ReadonlyArray<{
+              account: string;
+              amount: string;
+            }>,
+          ),
+          prevHash: row.prev_hash as string,
+          hash: row.hash as string,
+          recordedAt: Number(row.recorded_at),
+        };
+      }
+    },
+  };
+}
+
 function createCheckpointStore(pool: MysqlPool): CheckpointStore {
   return {
     put: async (checkpoint) => {
@@ -1787,6 +1842,7 @@ export function mysqlStore(deps: {
     promos: auto.promos,
     trust,
     checkpoints: createCheckpointStore(pool),
+    movements: createMovementJournal(pool),
     replay: createReplayStore(pool),
 
     // The whole unit of work lives in this one transaction, so a transient InnoDB abort (deadlock or

@@ -45,7 +45,8 @@ insert into accounts (id, kind, currency) values
   ('platform:promo_float',    'system', 'CREDIT'),
   ('platform:usd_clearing',   'system', 'USD'),
   ('platform:revenue_usd',    'system', 'USD'),
-  ('platform:opening_equity', 'system', 'CREDIT');
+  ('platform:opening_equity', 'system', 'CREDIT'),
+  ('platform:netting_clearing', 'system', 'CREDIT');
 
 -- ============================================================================
 -- Postings: the append-only record of everything that happened. Each posting splits into
@@ -345,6 +346,25 @@ create table trust_attempts (
 create index trust_attempts_subject_at_idx on trust_attempts (subject, at);
 
 -- ============================================================================
+-- The append-only per-instance journal behind netting (src/netting.ts). A movement is ACCEPTED
+-- iff its row committed; the in-memory net map is a cache of this table. Rows are hash-chained
+-- per session (prev_hash/hash) and the settlement posting's meta anchors the final head, so
+-- tamper-evidence extends transitively from the proved ledger to every movement. idem_key is the
+-- per-movement idempotency layer; (session_id, seq) makes a forked position impossible to store.
+-- ============================================================================
+create table instance_movements (
+  id          bigserial   primary key,
+  session_id  text        not null,
+  seq         integer     not null,
+  idem_key    text        not null unique,
+  legs        jsonb       not null,                          -- balanced legs, amounts as encoded strings
+  prev_hash   text        not null,                          -- session chain hash before; genesis is zeros
+  hash        text        not null,                          -- session chain hash after
+  recorded_at bigint      not null,
+  unique (session_id, seq)
+);
+
+-- ============================================================================
 -- Checkpoints: a signed snapshot of ledger state. Each row holds a Merkle root over every account's
 -- latest hash, signed with a key the ledger writer can't reach, so an insider who rewrites a history
 -- and recomputes its hashes is caught: the new root no longer matches the old signature. In production
@@ -538,7 +558,7 @@ create or replace trigger account_balances_integrity
 -- src/schema.ts together, whenever this file changes.
 -- ============================================================================
 create table schema_meta (version text not null);
-insert into schema_meta (version) values ('9');
+insert into schema_meta (version) values ('12');
 
 -- ============================================================================
 -- Column comments: short, deployed-schema documentation for every column. The

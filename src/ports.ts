@@ -373,6 +373,13 @@ export interface Store {
   replay: ReplayStore;
 
   /**
+   * The instance-netting journal (src/netting.ts). Like `checkpoints` and `replay` it sits
+   * outside money transactions: each append is its own transaction, so an accepted movement is
+   * durable regardless of any ledger posting's fate.
+   */
+  movements: MovementJournal;
+
+  /**
    * Runs `work` inside one database transaction, passing it the subset of stores that participate
    * in that transaction. Everything `work` writes commits together or not at all.
    */
@@ -817,6 +824,47 @@ export interface CheckpointStore {
 
   /** The most recent checkpoint, or null if none exists yet. */
   latest(options?: Options): Promise<Checkpoint | null>;
+}
+
+/**
+ * One accepted in-instance movement, as the netting journal stores it. A movement is a balanced
+ * set of legs that has NOT posted to the ledger yet: it becomes ledger-final at settle
+ * (src/netting.ts). `prevHash`/`hash` chain the session's movements, and the settlement posting
+ * anchors the final head, so tamper-evidence extends from the proved ledger to every movement.
+ */
+export interface Movement {
+  sessionId: string;
+
+  /** Position in the session chain, from 0. */
+  seq: number;
+
+  /** The movement's idempotency key, unique across all sessions. */
+  idempotencyKey: string;
+
+  legs: ReadonlyArray<Leg>;
+
+  /** Session chain hash before this movement; the genesis value (64 zeros) for the first. */
+  prevHash: string;
+
+  /** Session chain hash after this movement. */
+  hash: string;
+
+  /** Epoch ms the movement was accepted. */
+  recordedAt: number;
+}
+
+/**
+ * The append-only instance-netting journal. Appends are batched on purpose — the whole batch
+ * commits in one transaction (one fsync for N movements), and journal rows carry no locks, no
+ * chain links, and no balance updates, which is what makes acceptance cheap. A duplicate
+ * idempotency key or (sessionId, seq) rejects the batch; the session splits and retries around
+ * the poison row.
+ */
+export interface MovementJournal {
+  append(movements: ReadonlyArray<Movement>, options?: Options): Promise<void>;
+
+  /** Streams a session's movements in seq order — the source of truth settle derives from. */
+  bySession(sessionId: string, options?: Options): AsyncIterable<Movement>;
 }
 
 // --- Record types -----------------------------------------------------------------

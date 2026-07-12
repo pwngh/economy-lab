@@ -34,6 +34,8 @@ import type {
   Ledger,
   Lot,
   Options,
+  Movement,
+  MovementJournal,
   OutboxMessage,
   OutboxStore,
   Posting,
@@ -1279,6 +1281,46 @@ function createTrustStore(
   };
 }
 
+// --- Movement journal ---------------------------------------------------------------
+
+// Append-only and never part of a money transaction (see MovementJournal in ports.ts). The batch
+// is validated in full before any row lands, so a conflict rejects all of it — the in-process
+// mirror of the SQL engines' single-statement multi-row INSERT.
+function createMovementJournal(): MovementJournal {
+  const log: Movement[] = [];
+  const idemKeys = new Set<string>();
+  const positions = new Set<string>();
+  return {
+    append: async (movements) => {
+      for (const movement of movements) {
+        if (idemKeys.has(movement.idempotencyKey)) {
+          throw new Error(
+            `duplicate movement idempotency key: ${movement.idempotencyKey}`,
+          );
+        }
+        if (positions.has(`${movement.sessionId}::${movement.seq}`)) {
+          throw new Error(
+            `duplicate movement position: ${movement.sessionId}::${movement.seq}`,
+          );
+        }
+      }
+      for (const movement of movements) {
+        idemKeys.add(movement.idempotencyKey);
+        positions.add(`${movement.sessionId}::${movement.seq}`);
+        log.push({
+          ...movement,
+          legs: movement.legs.map((leg) => ({ ...leg })),
+        });
+      }
+    },
+    bySession: async function* (sessionId) {
+      const own = log.filter((row) => row.sessionId === sessionId);
+      own.sort((a, b) => a.seq - b.seq);
+      yield* own;
+    },
+  };
+}
+
 // --- Checkpoint store -------------------------------------------------------------
 
 // Append-only and never part of a money transaction, so a rollback can't delete a recorded checkpoint.
@@ -1350,6 +1392,7 @@ export function memoryStore(deps?: {
   const promos = createPromoStore();
   const trust = createTrustStore(clock, velocityWindowMs);
   const checkpoints = createCheckpointStore();
+  const movements = createMovementJournal();
   // The webhook duplicate check runs outside any money transaction (the final check when a
   // webhook arrives), so it takes no part in rollback and isn't handed to operation handlers; it
   // lives only on the top-level store.
@@ -1394,6 +1437,7 @@ export function memoryStore(deps?: {
     promos,
     trust,
     checkpoints,
+    movements,
     replay,
     transaction: async (work) => {
       let begun = 0;
