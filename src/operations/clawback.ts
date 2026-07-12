@@ -10,14 +10,9 @@
  */
 
 import { fault, ERROR_CODES } from '#src/errors.ts';
-import {
-  credit,
-  debit,
-  postEntry,
-  balance as ledgerBalance,
-} from '#src/ledger.ts';
+import { credit, debit, postEntry } from '#src/ledger.ts';
 import { encodeAmount, requirePositiveCredit, toAmount } from '#src/money.ts';
-import { assertKind } from '#src/operations/guards.ts';
+import { assertKind, reversalKey } from '#src/operations/guards.ts';
 import { SYSTEM, spendable } from '#src/accounts.ts';
 
 import type { Amount } from '#src/money.ts';
@@ -47,9 +42,6 @@ export async function clawback(
   assertKind(operation, 'clawback');
   const amount = requirePositiveCredit(operation.amount, 'clawback.amount');
 
-  // Claim the shared `reversed:${orderId}` key so clawback and refund stay mutually exclusive. A
-  // lost claim means the order was already reversed. Return that reversal's transaction as a
-  // duplicate instead of double-reversing.
   if (operation.orderId !== undefined) {
     const orderId = presentOrderId(operation.orderId);
     const claim = await unit.idempotency.claim(reversalKey(orderId));
@@ -58,7 +50,7 @@ export async function clawback(
     }
   }
 
-  const held = await ledgerBalance(unit.ledger, spendable(operation.userId));
+  const held = await unit.ledger.balance(spendable(operation.userId));
   const split = splitClawback(amount, held);
   const legs = buildClawbackLegs(operation.userId, amount, split);
 
@@ -68,9 +60,8 @@ export async function clawback(
     meta: clawbackMeta(operation, split),
   });
 
-  // Record the reversal under the shared order key so a later refund finds it claimed and returns
-  // this transaction as its duplicate. This runs inside the posting's transaction, so a rollback
-  // leaves the order un-reversed and retryable.
+  // Runs inside the posting's transaction, so a rollback leaves the order un-reversed and
+  // retryable.
   if (operation.orderId !== undefined) {
     await unit.idempotency.record(reversalKey(operation.orderId), transaction);
   }
@@ -78,16 +69,8 @@ export async function clawback(
   return { status: 'committed', transaction };
 }
 
-// Builds the order-scoped idempotency key that both clawback and refund stake, so reversing an
-// order once blocks the other. Must stay identical to refund's key.
-function reversalKey(orderId: string): string {
-  return `reversed:${orderId}`;
-}
-
-// Requires a non-blank `orderId` and returns it unchanged. The id is optional, since an untied
-// chargeback omits it, but a present-but-blank value is malformed. Every blank id collapses to the
-// same `reversed:` key, which would falsely tie unrelated chargebacks to one marker. Throws a fault
-// so the bad key never reaches `claim`.
+// A blank id would collapse to the same `reversed:` key and falsely tie unrelated chargebacks to
+// one marker, so a present-but-blank orderId is a fault.
 function presentOrderId(orderId: string): string {
   if (orderId.trim() === '') {
     throw fault(
@@ -98,10 +81,8 @@ function presentOrderId(orderId: string): string {
   return orderId;
 }
 
-// Splits the clawback into the part still recoverable from the spendable balance and the part
-// already spent. `recovered` is capped at what the user holds, treating a negative balance as zero,
-// so the later debit cannot drive the balance below zero. `shortfall` is the leftover the platform
-// is owed.
+// `recovered` is capped at what the user holds, treating a negative balance as zero, so the debit
+// cannot drive the balance below zero. `shortfall` is the leftover the platform is owed.
 function splitClawback(
   amount: Amount,
   held: Amount,
@@ -114,11 +95,7 @@ function splitClawback(
   };
 }
 
-// Builds the ledger lines. Debits `recovered` from spendable, debits `shortfall` as a debt in
-// RECEIVABLE, and credits the full amount to STORED_VALUE so the reclaimed credits are un-issued
-// rather than booked as earnings. The two debits sum to the STORED_VALUE credit, so the posting
-// nets to zero, all in CREDIT with no currency mixing. A zero piece, meaning nothing to reclaim or
-// no shortfall, is omitted rather than posted as a zero line.
+// A zero piece is omitted rather than posted as a zero line.
 function buildClawbackLegs(
   userId: string,
   amount: Amount,
@@ -135,9 +112,7 @@ function buildClawbackLegs(
   return legs;
 }
 
-// Builds the metadata stored with the posting. It holds the two split amounts (via `encodeAmount`,
-// which keeps the hashed bytes stable) plus any chargeback references the caller passed: order id,
-// idempotency key, and reason.
+// Split amounts go through `encodeAmount` so the hashed bytes stay stable.
 function clawbackMeta(
   operation: Extract<Operation, { kind: 'clawback' }>,
   split: { recovered: Amount; shortfall: Amount },

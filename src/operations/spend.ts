@@ -40,9 +40,11 @@ import type {
 } from '#src/contract.ts';
 import type { Leg, Sale, Unit } from '#src/ports.ts';
 
-// How a payment splits across the buyer's two balances: promo (marketing-grant) first,
-// remainder from spendable.
-type SpendPlan = { promoPart: Amount; spendablePart: Amount };
+/**
+ * How a payment splits across the buyer's two balances: promo (marketing-grant) first, remainder
+ * from spendable.
+ */
+export type SpendPlan = { promoPart: Amount; spendablePart: Amount };
 
 /**
  * Run a marketplace purchase: charge the buyer and pay the sellers as one balanced
@@ -56,18 +58,25 @@ type SpendPlan = { promoPart: Amount; spendablePart: Amount };
  * accounts; this only validates its own inputs and posts. Malformed input (bad price, shares that
  * don't sum) throws a fault, not a refusal.
  *
- * @example
- *   const outcome = await spend(
- *     { kind: 'spend', idempotencyKey: 'idem_0', actor: { kind: 'user', userId: 'usr_buyer' },
- *       orderId: 'ord_1', buyerId: 'usr_buyer', sku: 'wrld_pass', price: toAmount('CREDIT', 400n),
- *       recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }] },
- *     unit, ctx,
- *   );
- *   // outcome.status === 'committed'; the buyer's promo balance was drawn first, then spendable.
- *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/spend/ Spend} for the
  * purchase flow, balance draw order, and split accounting this handler posts.
  */
+/**
+ * The pipeline's pre-claim probe, run before any lock or screen: a committed sale row is final
+ * (sales are never deleted), so a replayed orderId rejects here without paying for the locks it
+ * will never need. A miss falls through to the authoritative under-lock check in the handler.
+ */
+export async function spendPreClaim(
+  operation: Operation,
+  unit: Unit,
+): Promise<Outcome | null> {
+  assertKind(operation, 'spend');
+  const existing = await unit.sales.get(operation.orderId);
+  return existing === null
+    ? null
+    : rejected('DUPLICATE_ORDER', { orderId: operation.orderId });
+}
+
 export async function spend(
   operation: Operation,
   unit: Unit,
@@ -80,12 +89,11 @@ export async function spend(
   assertNoSelfDealing(operation);
   const recipientId = entitlementRecipient(operation);
 
-  // Refuse a second purchase that reuses an orderId already on file, so the buyer is never
-  // double-charged for one order. spend runs with the affected accounts locked, so reading the
-  // stored sale here can't race another writer. Return a business rejection (not a fault, same
-  // shape as FUNDS_IMMATURE below) so no second debit posts.
+  // The authoritative duplicate-order check: the accounts are locked, so reading the stored sale
+  // can't race another writer. A duplicate is a business rejection, not a fault, so no second
+  // debit posts.
   // See https://economy-lab-docs.pages.dev/economy/reference/operations/spend/ for why orderId is
-  // distinct from the idempotency key and how DUPLICATE_ORDER protects against the double charge.
+  // distinct from the idempotency key.
   const existing = await unit.sales.get(operation.orderId);
   if (existing !== null) {
     return rejected('DUPLICATE_ORDER', { orderId: operation.orderId });
@@ -130,9 +138,8 @@ export async function spend(
     ctx.config.platformShards,
   );
 
-  // Flag age-restricted items on the posting metadata. This ledger doesn't block on age; the
-  // external payments/identity provider checks identity and age. Recording the flag on the
-  // immutable posting leaves an audit trail without a new interface or store. Only added when true.
+  // The ledger doesn't block on age; the external payments/identity provider does. The flag on
+  // the immutable posting is only an audit trail.
   const meta: Record<string, unknown> = {
     kind: 'spend',
     orderId: operation.orderId,
@@ -140,8 +147,6 @@ export async function spend(
   if (operation.ageRestricted) {
     meta.ageRestricted = true;
   }
-  // Flag a gift on the immutable posting metadata (the `isGift` flag) so an audit can see
-  // the buyer paid for someone else. Only added when the recipient differs from the buyer.
   if (recipientId !== operation.buyerId) {
     meta.isGift = true;
     meta.giftTo = recipientId;
@@ -156,12 +161,8 @@ export async function spend(
     saleOf(operation, plan, transaction, ctx.config.platformFeeBps),
   );
 
-  // Grant the recipient ownership in the same transaction as the charge, so paying always confers
-  // ownership and a rolled-back charge grants nothing. Recipient is the buyer for an ordinary
-  // purchase, `giftTo` for a gift. Tagged with this order so an audit or refund can trace the
-  // ownership record back to its sale. grant writes (or overwrites) the ownership row and clears
-  // any prior revoked mark, so re-buying after a refund (which marks the old ownership revoked)
-  // makes ownership active again instead of leaving a stale revoked row.
+  // Same transaction as the charge, so a rolled-back charge grants nothing. grant also clears any
+  // prior revoked mark, so re-buying after a refund reactivates ownership.
   await unit.entitlements.grant(recipientId, operation.sku, {
     source: 'sale:' + operation.orderId,
   });
@@ -169,10 +170,13 @@ export async function spend(
   return { status: 'committed', transaction };
 }
 
-// Split the price across balances: take as much as possible from promo first (capped at the
-// price), charge the remainder to spendable. economy.ts screenFunds keeps a deliberate copy of
-// this rule — keep the two in sync so the up-front check and the posting agree on the split.
-function planSpend(price: Amount, promoBalance: Amount): SpendPlan {
+/**
+ * Split the price across balances: take as much as possible from promo first (capped at the
+ * price), charge the remainder to spendable. The one implementation of the rule — the submit
+ * pipeline's funds screen (economy.ts) and the subscribe handler import it, so the up-front check
+ * and every posting agree on the split.
+ */
+export function planSpend(price: Amount, promoBalance: Amount): SpendPlan {
   const available = promoBalance.minor > 0n ? promoBalance.minor : 0n;
   const promoMinor = available < price.minor ? available : price.minor;
   return {
@@ -192,15 +196,10 @@ function buildSpendLegs(
   return legs;
 }
 
-// Lines for the promo-funded part, two balanced pairs:
-//   1. Spend down the buyer's promo grant: debit the buyer's promo account, credit the house
-//      PROMO_FLOAT account that offsets it.
-//   2. Pay the sellers out of platform revenue: debit house REVENUE, credit each seller's earned
-//      balance.
-// Sellers are funded from REVENUE, not the buyer, because a promo grant isn't money the buyer paid;
-// see https://economy-lab-docs.pages.dev/economy/reference/operations/spend/ for the promo-funded
-// split. When seller shares don't divide evenly, the leftover (promoPart minus what was paid out)
-// is not debited from REVENUE, so the house keeps it.
+// Sellers on the promo-funded part are paid from REVENUE, not the buyer, because a promo grant
+// isn't money the buyer paid; see
+// https://economy-lab-docs.pages.dev/economy/reference/operations/spend/ for the promo-funded
+// split. Shares round down, and the leftover is not debited from REVENUE, so the house keeps it.
 function appendPromoLegs(
   legs: Leg[],
   operation: Extract<Operation, { kind: 'spend' }>,
@@ -220,10 +219,8 @@ function appendPromoLegs(
   legs.push(debit(SYSTEM.REVENUE, distributed));
 }
 
-// Lines for the spendable-funded part: debit the buyer's spendable balance for that part, then add
-// the credit lines from the injected fee policy. The policy splits the part across the sellers'
-// earned balances and house REVENUE (which keeps the platform fee plus any rounding leftover), so
-// the part is fully accounted for to the last minor unit.
+// The injected fee policy's credit lines (sellers' earned plus REVENUE's fee and rounding
+// leftover) account for the spendable part to the last minor unit.
 function appendSpendableLegs(
   legs: Leg[],
   operation: Extract<Operation, { kind: 'spend' }>,
@@ -272,13 +269,9 @@ function distributeEarned(
   return toAmount(amount.currency, distributed);
 }
 
-// Build the sale summary, keyed by `orderId` (distinct from the idempotency key) so a later refund
-// can look it up and reverse exactly these lines. The recorded fee is REVENUE's cut of the
-// spendable-funded part only (the promo-funded part is charged no fee).
-//
-// Use `revenueForSplit` (the same computation splitLegs uses for the REVENUE credit: fee plus the
-// rounding residual), so the recorded fee always equals what REVENUE actually kept even on an uneven
-// multi-seller split. Recording the bare `feeForPrice` would understate it on those splits.
+// The recorded fee is REVENUE's cut of the spendable-funded part only (the promo part is charged
+// no fee), computed with `revenueForSplit` so it equals what REVENUE actually kept; the bare
+// `feeForPrice` would understate it on an uneven multi-seller split.
 function saleOf(
   operation: Extract<Operation, { kind: 'spend' }>,
   plan: SpendPlan,
@@ -304,9 +297,7 @@ function saleOf(
   };
 }
 
-// Who receives the purchased SKU: `giftTo` if this is a gift, otherwise the buyer. A `giftTo` that
-// is present but blank would grant ownership to an empty user id, so it's a malformed request
-// thrown as a fault, like a bad price.
+// A present-but-blank `giftTo` would grant ownership to an empty user id, so it's a fault.
 function entitlementRecipient(
   operation: Extract<Operation, { kind: 'spend' }>,
 ): string {
@@ -323,14 +314,9 @@ function entitlementRecipient(
   return operation.giftTo;
 }
 
-// Validate the spend shape the central guard can't know about. Each is a client error thrown as a
-// fault, not a refusal:
-//   - `sku` must name an item; a blank one would grant ownership of nothing.
-//   - `orderId` must be non-blank; it's the unique key for DUPLICATE_ORDER protection, and a blank
-//     one would make two different purchases look like one order.
-//   - No two recipients may name the same `sellerId`: a duplicate double-counts in the share math.
-//   - No recipient may be a house/system account: earnings are credited to a payable EARNED
-//     balance, which only a real user wallet may receive. (Self-dealing/share-bounds checked separately.)
+// Shape checks the central guard can't know about; each throws a fault, not a refusal. The stakes:
+// a blank orderId makes two purchases look like one order, a duplicate sellerId double-counts in
+// the share math, and a house account must not receive a payable EARNED credit.
 function assertSpendShape(
   operation: Extract<Operation, { kind: 'spend' }>,
 ): void {
@@ -369,9 +355,6 @@ function assertSpendShape(
     }
     seen.add(recipient.sellerId);
 
-    // A recipient is paid into its EARNED (payable) balance, so its sellerId must resolve to a
-    // real user wallet. A house/system account (e.g. `platform:revenue`) isn't a wallet owner; routing
-    // earnings there would credit a platform account as if it were a seller.
     const account = earned(recipient.sellerId);
     if (!isWalletAccount(account) || ownerOf(account).trim() === '') {
       throw fault(
@@ -429,12 +412,8 @@ function assertShares(operation: Extract<Operation, { kind: 'spend' }>): void {
   }
 }
 
-// Refuse a spend where the buyer names themselves as a recipient. A spend pays each recipient's
-// earned (payable) balance out of platform REVENUE for the promo-funded part and out of the
-// buyer's payment for the spendable part. If the buyer is also a recipient, they convert their own
-// non-payable spendable/promo credit into payable EARNED credit, laundering grant/top-up
-// balance into payable money funded by the house. Buyer and seller must be different parties,
-// so this is a malformed request thrown as a fault.
+// A buyer who is also a recipient would convert their own non-payable spendable/promo credit into
+// payable EARNED credit funded by the house — laundering — so it's a fault, not a business "no".
 function assertNoSelfDealing(
   operation: Extract<Operation, { kind: 'spend' }>,
 ): void {

@@ -17,9 +17,7 @@ import { fileURLToPath } from 'node:url';
 // @ts-expect-error -- untyped default import; typed at the binding via PgModule.
 import pgUntyped from 'pg';
 
-// The slice of `pg` this engine uses: a Pool constructor and types.setTypeParser (overrides
-// how a Postgres column type converts to a JS value). Declaring only what we call avoids
-// depending on the full vendor types.
+// Only the slice of `pg` this engine calls, so nothing depends on the full vendor types.
 interface PgModule {
   Pool: new (config: {
     connectionString: string;
@@ -33,19 +31,17 @@ interface PgModule {
 }
 const pg = pgUntyped as PgModule;
 
-import { chainHash, balanceDelta, GENESIS } from '#src/ledger.ts';
 import {
   toAmount,
   encodeAmount,
+  encodeAmounts,
   decodeAmountWire,
-  isAmount,
 } from '#src/money.ts';
-import { currency, baseOf } from '#src/accounts.ts';
+import { currency, baseOf, walletKindOf } from '#src/accounts.ts';
 import { assertMoneyConformant, assertSchemaCurrent } from '#src/schema.ts';
 import { installPostgres, provePostgres } from '#src/db.vendored.ts';
 import { vectors as moneyVectors } from '#src/money.vendored.ts';
 import { systemClock } from '#src/runtime.ts';
-import { byCodeUnit, fromHex } from '#src/bytes.ts';
 import {
   callProcedure,
   callFunction,
@@ -53,14 +49,19 @@ import {
 } from '#src/engines/sql-routines.ts';
 import {
   defaultDigest,
-  GENESIS_HEX,
   CHAIN_FORK_INDEX,
   CHAIN_CONTINUITY_MARKER,
   readMinor,
   distinctAccounts,
+  chainLinksFor,
+  naturalDelta,
   rowToSaga,
   rowToSubscription,
   rowToCheckpoint,
+  rowToOutbox,
+  rowToInbox,
+  rowToPromoGrant,
+  sortByAccountId,
   withTransientRetry,
   isSeededSystemAccount,
 } from '#src/engines/sql-shared.ts';
@@ -78,16 +79,13 @@ import type {
   Digest,
   EntitlementStore,
   IdempotencyStore,
-  InboxEntry,
   InboxStore,
   Leg,
   MovementJournal,
   Ledger,
   Lot,
-  OutboxMessage,
   OutboxStore,
   Posting,
-  PromoGrant,
   PromoStore,
   Range,
   ReplayStore,
@@ -105,8 +103,6 @@ import type {
   Velocity,
 } from '#src/ports.ts';
 
-// Sub-stores query against one of two runtime shapes. A checked-out client is one connection you
-// must release. A pool hands clients out.
 interface PgClient {
   query(text: string, values?: ReadonlyArray<unknown>): Promise<PgResult>;
   release(): void;
@@ -135,8 +131,6 @@ function configureBigIntParsers(): void {
 
 // --- Schema isolation -------------------------------------------------------------
 
-// Read db/postgresql-schema.sql, the single SQL file defining all tables. Path resolved
-// relative to this module so it works regardless of the process's start directory.
 async function loadSchemaSql(): Promise<string> {
   const path = fileURLToPath(
     new URL('../../db/postgresql-schema.sql', import.meta.url),
@@ -144,9 +138,8 @@ async function loadSchemaSql(): Promise<string> {
   return readFile(path, 'utf8');
 }
 
-// Reads the database's stamped schema version from schema_meta. Returns null when that table is
-// absent, which means an un-migrated or pre-versioning database. This lets the store fail fast (see
-// assertSchemaCurrent) rather than silently query a schema that doesn't match this code.
+// Null when schema_meta is absent (an un-migrated or pre-versioning database); assertSchemaCurrent
+// then fails fast rather than silently query a schema that doesn't match this code.
 async function readSchemaVersion(pool: PgPool): Promise<string | null> {
   try {
     const result = await pool.query('select version from schema_meta limit 1');
@@ -169,24 +162,13 @@ function safeSchemaName(name: string): string {
 
 // --- The ledger store -------------------------------------------------------------
 
-// True if the account id ends in a user-account kind (spendable, earned, or promo). An id
-// looks like `usr_123:spendable`; the part after the last colon is the kind. Distinguishes a
-// user account from a platform account.
 function isKnownSuffix(account: AccountRef): boolean {
-  const colon = account.lastIndexOf(':');
-  if (colon < 0) {
-    return false;
-  }
-  const suffix = account.slice(colon + 1);
-  return suffix === 'spendable' || suffix === 'earned' || suffix === 'promo';
+  return walletKindOf(account) !== null;
 }
 
-// Reads the tip hash of each given account's chain in one query. `account_balances.head_hash` is
-// the maintained head pointer: post_entry advances it to the account's new link hash in the same
-// transaction it writes chain_links, so this is an O(1) primary-key read per account. Accounts with
-// no balance row are absent, and the caller treats a missing account as the genesis hash (a new
-// account's head). The chain_links table stays the source of truth (prove() still re-walks it), so
-// a head pointer drifting from the chain surfaces there.
+// Reads each account's chain head from `account_balances.head_hash`, the pointer post_entry
+// advances in the same transaction it writes chain_links. A missing row means genesis; chain_links
+// stays the source of truth (prove() re-walks it), so a drifted pointer surfaces there.
 async function headsForAccounts(
   q: Queryable,
   accounts: ReadonlyArray<AccountRef>,
@@ -207,33 +189,13 @@ async function headsForAccounts(
   return heads;
 }
 
-// New chain hash for each account this posting touches. Read every tip hash in one query,
-// decode the hex to bytes (or genesis bytes for a new account), and pass it plus the posting
-// to chainHash (ledger.ts). Pairs each account with its old and new hash so writePosting can
-// store them. Hashes are independent across accounts, so batching the head reads matches the
-// per-account result.
 async function advanceChain(
   q: Queryable,
   digest: Digest,
   posting: Posting,
 ): Promise<ReadonlyArray<Link>> {
-  const accounts = distinctAccounts(posting.legs);
-  const heads = await headsForAccounts(q, accounts);
-  const links: Link[] = [];
-  for (const account of accounts) {
-    const prevHex = heads.get(account) ?? GENESIS_HEX;
-    const accountPrevHash =
-      prevHex === GENESIS_HEX ? GENESIS : fromHex(prevHex);
-    const hash = await chainHash(digest, {
-      accountPrevHash,
-      txnId: posting.txnId,
-      account,
-      legs: posting.legs,
-      meta: posting.meta,
-    });
-    links.push({ account, prevHash: prevHex, hash });
-  }
-  return links;
+  const heads = await headsForAccounts(q, distinctAccounts(posting.legs));
+  return chainLinksFor(digest, posting, heads);
 }
 
 // A shard of a schema-seeded platform account (`platform:revenue#3`). Bare ids are seeded; a
@@ -243,16 +205,12 @@ function isPlatformShard(account: AccountRef): boolean {
   return base !== account && isSeededSystemAccount(base);
 }
 
-// The row a first-use id gets: kind is the `:kind` suffix for users, 'system' for shards.
 function accountRow(account: AccountRef) {
-  const kind = isKnownSuffix(account)
-    ? account.slice(account.lastIndexOf(':') + 1)
-    : 'system';
+  const kind = walletKindOf(account) ?? 'system';
   return { id: account, kind, currency: currency(account) };
 }
 
-// Create the account row if absent (user accounts and platform shards; bare platform ids are
-// schema-seeded, so skipped). `on conflict do nothing` keeps repeat calls safe.
+// Only user accounts and platform shards are created here; bare platform ids are schema-seeded.
 async function ensureAccount(q: Queryable, account: AccountRef): Promise<void> {
   if (!isKnownSuffix(account) && !isPlatformShard(account)) {
     return;
@@ -265,7 +223,6 @@ async function ensureAccount(q: Queryable, account: AccountRef): Promise<void> {
   );
 }
 
-// Batched twin of ensureAccount: one round trip for every first-use account; see ensureAccount.
 async function ensureAccounts(
   q: Queryable,
   accounts: ReadonlyArray<AccountRef>,
@@ -286,11 +243,9 @@ async function ensureAccounts(
   );
 }
 
-// NOTE: the per-leg balance fold (UPDATE the existing row first so the non-negative CHECK runs
-// against the new total, then INSERT a first-time row) lives in the `post_entry` stored
-// procedure (db/postgresql-schema.sql), which applies every account's net delta in one
-// set-based step. The application still decides each delta via `balanceDelta` (postEntryArgs
-// in sql-routines.ts); the procedure only persists it.
+// NOTE: the per-account balance fold (UPDATE before INSERT, so the non-negative CHECK runs against
+// the new total) lives in the `post_entry` procedure; the application decides each delta via
+// `balanceDelta` (postEntryArgs), the procedure only persists it.
 
 // Legs and the chain are stored at different granularities: a posting may have several legs to
 // one account (e.g. a promo-funded spend) but advances that account's hash chain once. chain_links
@@ -421,23 +376,15 @@ async function buildStatement(
   );
   const entries = result.rows.map((row) => ({
     txnId: row.posting_id as string,
-    amount: balanceDelta({
-      account,
-      amount: toAmount(
-        row.currency as Amount['currency'],
-        readMinor(row.amount),
-      ),
-    }),
+    amount: naturalDelta(account, row),
     postedAt: Number(row.posted_at),
   }));
   return { account, entries, cursor: null };
 }
 
-// Re-derives an account's balance from its legs, one amount per currency, folded by the server so
-// no legs travel over the wire: `legs_account_idx` carries currency and amount in its INCLUDE
-// list, so this is one index-only scan. sum(int8) returns numeric, which the driver hands over as
-// a string; readMinor turns it back into a bigint. `balanceDelta` applies the account's sign rule
-// to the summed figure — the sum of signed deltas equals the delta of the sum.
+// Server-side fold, one amount per currency. sum(int8) returns numeric as a string; readMinor
+// turns it back into a bigint. `naturalDelta` applies the account's sign rule to the summed
+// figure — the sum of signed deltas equals the delta of the sum.
 async function derivedBalancesOf(
   q: Queryable,
   account: AccountRef,
@@ -448,22 +395,13 @@ async function derivedBalancesOf(
     [account],
   );
   return result.rows.map((row) =>
-    balanceDelta({
-      account,
-      amount: toAmount(
-        row.currency as Amount['currency'],
-        readMinor(row.minor),
-      ),
-    }),
+    naturalDelta(account, { currency: row.currency, amount: row.minor }),
   );
 }
 
-// Stream an account's incoming funds as lots (one per entry that increased it) so maturity.ts can
-// decide how much has matured. Ordered by `l.id` (legs.id, a bigserial) so the composite index
-// `legs(account_id, id)` serves the bounded `order by id desc limit n` the maturity tail asks for;
-// legs.id and postings.seq share commit order, so for one account this is the same FIFO order.
-// Balance-lowering legs (spends) aren't lots and are filtered in code (the credit/debit sign is a
-// domain rule, not a column predicate), so the lot-granularity offset/limit apply after that filter.
+// Streams an account's incoming funds as lots for maturity.ts. Ordered by `l.id`, not `p.seq`:
+// `legs(account_id, id)` serves the bounded scan directly, and the two share commit order for one
+// account. Spends are filtered in code, so the lot offset/limit apply after that filter.
 // @see https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/
 async function* timelineOf(
   q: Queryable,
@@ -474,8 +412,6 @@ async function* timelineOf(
   const lotOffset = options?.offset ?? 0;
   const lotLimit = options?.limit ?? Infinity;
 
-  // Rows scanned per round trip: most balances fit the first page, and a finite caller limit
-  // caps it.
   const pageSize = Number.isFinite(lotLimit)
     ? Math.max(lotOffset + lotLimit, 1)
     : 256;
@@ -511,25 +447,19 @@ async function* timelineOf(
       yielded += 1;
       yield lot;
     }
-    // A short page means the table is exhausted; no later page can exist.
     if (result.rows.length < pageSize) {
       return;
     }
   }
 }
 
-// Turn one raw legs+postings row into a Lot, or null when the leg lowered the account's balance (a
-// spend), which is not a lot. The credit/debit sign is the account's domain rule, so this filter
-// lives in code, not SQL. Maturity/source come from the posting meta, defaulting to an immediately
-// available 'unknown' source when absent (see the timeline doc-comment).
+// Null when the leg lowered the balance (a spend): the credit/debit sign is a domain rule, so the
+// filter lives in code, not SQL. Absent meta defaults to a mature-now 'unknown' source.
 function rowToLot(
   account: AccountRef,
   row: Record<string, unknown>,
 ): Lot | null {
-  const delta = balanceDelta({
-    account,
-    amount: toAmount(row.currency as Amount['currency'], readMinor(row.amount)),
-  });
+  const delta = naturalDelta(account, row);
   if (delta.minor <= 0n) {
     return null;
   }
@@ -544,19 +474,18 @@ function rowToLot(
   };
 }
 
+// The tip of every account's chain — its latest link by posting seq. Shared by heads() (as the
+// whole query) and headSums() (as the subselect its join wraps).
+const CHAIN_TIPS_SQL = `select distinct on (c.account_id) c.account_id, c.hash
+       from chain_links c
+       join postings p on p.id = c.posting_id
+      order by c.account_id, p.seq desc`;
+
 async function* headsOf(
   q: Queryable,
 ): AsyncIterable<readonly [AccountRef, string]> {
-  const result = await q.query(
-    `select distinct on (c.account_id) c.account_id, c.hash
-       from chain_links c
-       join postings p on p.id = c.posting_id
-      order by c.account_id, p.seq desc`,
-  );
-  // Code-unit order in the app (not the DB's collation) so every engine lists accounts identically.
-  result.rows.sort((a, b) =>
-    byCodeUnit(a.account_id as string, b.account_id as string),
-  );
+  const result = await q.query(CHAIN_TIPS_SQL);
+  sortByAccountId(result.rows);
   for (const row of result.rows) {
     yield [row.account_id as AccountRef, row.hash as string] as const;
   }
@@ -572,16 +501,11 @@ async function* headSumsOf(
 ): AsyncIterable<readonly [AccountRef, string, bigint]> {
   const result = await q.query(
     `select h.account_id, h.hash, s.raw
-       from (select distinct on (c.account_id) c.account_id, c.hash
-               from chain_links c
-               join postings p on p.id = c.posting_id
-              order by c.account_id, p.seq desc) h
+       from (${CHAIN_TIPS_SQL}) h
        join (select account_id, sum(amount) as raw from legs group by account_id) s
          on s.account_id = h.account_id`,
   );
-  result.rows.sort((a, b) =>
-    byCodeUnit(a.account_id as string, b.account_id as string),
-  );
+  sortByAccountId(result.rows);
   for (const row of result.rows) {
     yield [
       row.account_id as AccountRef,
@@ -591,25 +515,17 @@ async function* headSumsOf(
   }
 }
 
-// Stream every account whose account_balances row reflects real activity. The cached running total
-// can drift from the sum of the account's entry lines (the source of truth); this scan is how the
-// integrity checker reaches a cached balance with no entries behind it, since heads() (built from
-// the hash chain) never lists such an account.
-//
-// Skip the seeded house-account placeholders. We plant an empty row for each house account (genesis
-// head, zero balance) only so lockAccounts' `for update` has something to grab on the first write; it
-// carries no history and reads exactly like no row, so leaving it out keeps this listing matching the
-// pre-seed behavior and the in-memory adapter. The `or balance <> 0` is the exception: a genesis-head
-// row with a non-zero balance is no longer a placeholder, it is the drift this scan looks for.
+// Streams every account whose balance row reflects real activity: this is how the integrity
+// checker reaches a cached balance with no entries behind it, which heads() (built from the hash
+// chain) never lists. The seeded placeholder (genesis head, zero balance) reads like no row and is
+// excluded -- except `or balance <> 0`, a placeholder that gained a balance, exactly the drift
+// this scan hunts.
 async function* balanceAccountsOf(q: Queryable): AsyncIterable<AccountRef> {
   const result = await q.query(
     `select account_id from account_balances
        where head_hash <> repeat('0', 64) or balance <> 0`,
   );
-  // Code-unit order in the app (not the DB's collation) so every engine lists accounts identically.
-  result.rows.sort((a, b) =>
-    byCodeUnit(a.account_id as string, b.account_id as string),
-  );
+  sortByAccountId(result.rows);
   for (const row of result.rows) {
     yield row.account_id as AccountRef;
   }
@@ -621,8 +537,6 @@ async function* lineageOf(
   q: Queryable,
   account: AccountRef,
 ): AsyncIterable<StoredLink> {
-  // One chain_links row per posting that touched this account, so this yields one StoredLink per
-  // such posting, matching the in-memory adapter.
   const result = await q.query(
     `select c.posting_id, c.prev_hash, c.hash, p.meta
        from chain_links c
@@ -631,8 +545,7 @@ async function* lineageOf(
       order by p.seq asc`,
     [account],
   );
-  // Batch every posting's legs in one query instead of a per-row round trip (an N+1 on the audit
-  // path). The whole posting's legs load, not just this account's: chainPreimage filters itself.
+  // The whole posting's legs load, not just this account's: chainPreimage filters itself.
   const legsByTxn = await legsByPosting(
     q,
     result.rows.map((row) => row.posting_id as string),
@@ -649,9 +562,8 @@ async function* lineageOf(
   }
 }
 
-// Load a whole posting by transaction id: its metadata and all entry lines (not just one
-// account's, the way lineageOf works). Undoing a transaction needs every line to post the
-// opposite. Returns null when no posting has that id.
+// A whole posting with all entry lines -- undoing a transaction needs every line to post the
+// opposite. Null when no posting has that id.
 async function postingOf(q: Queryable, txnId: string): Promise<Posting | null> {
   const result = await q.query(`select meta from postings where id = $1`, [
     txnId,
@@ -668,14 +580,12 @@ async function postingOf(q: Queryable, txnId: string): Promise<Posting | null> {
   };
 }
 
-// Newest commit first via `order by seq desc` (bigserial unique: a total order, no tie to break).
-// Each posting carries its full legs so a reader can expand a row without a second round trip.
+// Newest commit first: `seq` is bigserial unique, a total order with no tie to break.
 async function* listPostingsOf(q: Queryable): AsyncIterable<Posting> {
   const result = await q.query(
     `select id, meta from postings order by seq desc`,
   );
-  // One batched legs read instead of a per-posting round trip, the same N+1 fold as lineageOf.
-  // list() consumers buffer the whole stream, so the early read changes nothing.
+  // list() consumers buffer the whole stream, so the eager batched legs read changes nothing.
   const legsByTxn = await legsByPosting(
     q,
     result.rows.map((row) => row.id as string),
@@ -690,9 +600,7 @@ async function* listPostingsOf(q: Queryable): AsyncIterable<Posting> {
   }
 }
 
-// Load all entry lines of one posting in stored order, each rebuilt as a signed Leg (account
-// plus signed amount). postingOf and lineageOf both use this; the hash is computed from the
-// whole posting, so every line is needed.
+// The hash is computed from the whole posting, so every line is needed.
 async function legsOf(q: Queryable, txnId: string): Promise<Leg[]> {
   const result = await q.query(
     `select account_id, amount, currency from legs
@@ -740,11 +648,10 @@ async function legsByPosting(
 
 // --- Idempotency store ------------------------------------------------------------
 
-// Makes a request sent twice run only once, keyed per request. `claim` replays the stored result
-// if a row exists; otherwise it takes a request-keyed lock (pg_advisory_xact_lock) and rechecks, so
-// a second same-key caller waits for the first's transaction and then either replays it (committed)
-// or does the work (rolled back). `record` inserts the result row in the same transaction as the
-// posting, so a rollback leaves no row and the key stays usable for a real retry.
+// `claim` replays the stored result if a row exists; otherwise it takes a key-scoped
+// pg_advisory_xact_lock and rechecks, so a second same-key caller waits out the first's
+// transaction, then replays (committed) or does the work (rolled back). `record` writes in the
+// same transaction as the posting, so a rollback frees the key for a real retry.
 // @see https://economy-lab-docs.pages.dev/economy/concepts/idempotency/
 function createIdempotencyStore(q: Queryable): IdempotencyStore {
   return {
@@ -828,13 +735,10 @@ function decodeTransaction(encoded: EncodedTransaction): Transaction {
 
 // --- Replay store -----------------------------------------------------------------
 
-// Dedups raw inbound provider webhooks by the provider's event id, separate from the domain
-// idempotency key space. `claim` is an atomic insert-if-absent over seen_webhooks: `on conflict
-// do nothing` plus `returning event_id` inserts the id and reports whether it was new in one
-// statement. A returned row means first sighting (claimed); no row means a redelivery. Run as
-// the last webhook gate, after the signature check (payload came from the provider) and the
-// freshness check (rejects stale ones), so a rejected delivery never burns the id and a later
-// genuine redelivery still processes.
+// Dedupes inbound provider webhooks by the provider's event id, a separate id space from the
+// domain idempotency keys. `on conflict do nothing ... returning` inserts and reports newness in
+// one statement. Run as the last webhook gate, after the signature and freshness checks, so a
+// rejected delivery never burns the id.
 function createReplayStore(q: Queryable): ReplayStore {
   return {
     claim: async (eventId) => {
@@ -886,8 +790,6 @@ function createSaleStore(q: Queryable): SaleStore {
   };
 }
 
-// Convert entry lines into a JSON-safe array, each BigInt amount as a string. rowToSale
-// reverses this.
 function encodeLegs(
   legs: ReadonlyArray<Leg>,
 ): Array<{ account: string; currency: string; minor: string }> {
@@ -898,7 +800,6 @@ function encodeLegs(
   }));
 }
 
-// Reverse of encodeLegs: the exact integer comes back from its string form.
 function decodeLegs(
   legs: ReadonlyArray<{ account: string; currency: string; minor: string }>,
 ): ReadonlyArray<Leg> {
@@ -909,15 +810,9 @@ function decodeLegs(
 }
 
 function rowToSale(row: Record<string, unknown>): Sale {
-  const raw = row.legs as Array<{
-    account: string;
-    currency: string;
-    minor: string;
-  }>;
-  const legs: Leg[] = raw.map((leg) => ({
-    account: leg.account as AccountRef,
-    amount: toAmount(leg.currency as Amount['currency'], BigInt(leg.minor)),
-  }));
+  const legs = decodeLegs(
+    row.legs as Array<{ account: string; currency: string; minor: string }>,
+  );
   const priceCurrency = (legs[0]?.amount.currency ??
     'CREDIT') as Amount['currency'];
   return {
@@ -935,12 +830,9 @@ function rowToSale(row: Record<string, unknown>): Sale {
 
 // --- Outbox store -----------------------------------------------------------------
 
-// The transactional-outbox sub-store: `enqueue` writes the event in the same transaction as the
-// money move, a relay later reads a batch (`claimBatch`), sends each, and calls `markRelayed`.
-// `claimBatch` uses `for update skip locked` so several relay workers run at once without two
-// grabbing the same row.
-// See https://economy-lab-docs.pages.dev/economy/ports/messaging/ for the outbox
-// pattern (write-with-the-transaction, relay-later, dedupe-by-id).
+// `enqueue` writes the event in the same transaction as the money move; `for update skip locked`
+// lets overlapping relay workers claim disjoint batches.
+// See https://economy-lab-docs.pages.dev/economy/ports/messaging/ for the outbox pattern.
 function createOutboxStore(q: Queryable): OutboxStore {
   return {
     enqueue: async (message) => {
@@ -978,8 +870,6 @@ function createOutboxStore(q: Queryable): OutboxStore {
         [[...ids]],
       );
     },
-    // Record a failed delivery: bump attempts and keep the row 'pending' so the next sweep
-    // retries it.
     recordFailure: async (id) => {
       await q.query(
         `update outbox set attempts = attempts + 1
@@ -987,8 +877,6 @@ function createOutboxStore(q: Queryable): OutboxStore {
         [id],
       );
     },
-    // Give up on a poison message: flip it to 'dead' so claimBatch never returns it, and
-    // persist the reason.
     deadLetter: async (id, reason) => {
       await q.query(
         `update outbox set status = 'dead', dead_letter_reason = $2
@@ -999,25 +887,12 @@ function createOutboxStore(q: Queryable): OutboxStore {
   };
 }
 
-function rowToOutbox(row: Record<string, unknown>): OutboxMessage {
-  return {
-    id: row.id as string,
-    event: row.event as OutboxMessage['event'],
-    status: row.status as OutboxMessage['status'],
-    attempts: Number(row.attempts),
-    reason: (row.dead_letter_reason as string | null) ?? null,
-  };
-}
-
 // --- Inbox store ------------------------------------------------------------------
 
-// The inbound mirror of the outbox. `enqueueInbound` writes the row in the same transaction as
-// the webhook ingress that claimed it, and dedupes on `key` (the provider event id, UNIQUE in
-// SQL) so a redelivered event is a no-op that returns the existing row. A separate apply worker
-// reads a batch (`claimInbound`) and calls `markApplied`. `claimInbound` uses `for update skip
-// locked` so several apply workers run at once without two grabbing the same row.
-// See https://economy-lab-docs.pages.dev/economy/ports/messaging/ for the inbox pattern
-// (record-in-the-ingress-transaction, apply-later, dedupe-by-id).
+// The inbound mirror of the outbox: `enqueueInbound` writes the row in the webhook ingress
+// transaction and dedupes on `key` (the provider event id, UNIQUE in SQL); `for update skip
+// locked` lets overlapping apply workers claim disjoint batches.
+// See https://economy-lab-docs.pages.dev/economy/ports/messaging/ for the inbox pattern.
 function createInboxStore(q: Queryable): InboxStore {
   return {
     // A redelivery (no row returned from `on conflict do nothing`) falls through to re-reading the
@@ -1048,9 +923,7 @@ function createInboxStore(q: Queryable): InboxStore {
       );
       return rowToInbox(existing.rows[0]!);
     },
-    // Oldest pending rows first, capped at `input.limit`, each row-locked for this worker;
-    // terminal rows are never re-claimed. `input.now` is accepted for parity with the saga and
-    // relay claims — the inbox has no due-time gate.
+    // `input.now` is accepted for parity with the saga and relay claims — the inbox has no due-time gate.
     claimInbound: async (input) => {
       const result = await q.query(
         `select id, key, operation, status, attempts, received_at, dead_letter_reason from inbox
@@ -1062,16 +935,12 @@ function createInboxStore(q: Queryable): InboxStore {
       );
       return result.rows.map(rowToInbox);
     },
-    // Flip 'pending' to 'applied' once the operation commits, so claimInbound never returns the
-    // row again.
     markApplied: async (id) => {
       await q.query(
         `update inbox set status = 'applied' where id = $1 and status = 'pending'`,
         [id],
       );
     },
-    // Record a failed apply: bump attempts and keep the row 'pending' so the next sweep retries
-    // it.
     bumpAttempt: async (id) => {
       await q.query(
         `update inbox set attempts = attempts + 1
@@ -1079,7 +948,6 @@ function createInboxStore(q: Queryable): InboxStore {
         [id],
       );
     },
-    // Give up on a poison event: flip it to 'dead' and persist the reason.
     deadLetter: async (id, reason) => {
       await q.query(
         `update inbox set status = 'dead', dead_letter_reason = $2
@@ -1090,86 +958,13 @@ function createInboxStore(q: Queryable): InboxStore {
   };
 }
 
-function rowToInbox(row: Record<string, unknown>): InboxEntry {
-  return {
-    id: row.id as string,
-    key: row.key as string,
-    operation: decodeOperation(row.operation as EncodedOperation),
-    status: row.status as InboxEntry['status'],
-    attempts: Number(row.attempts),
-    receivedAt: Number(row.received_at),
-    reason: (row.dead_letter_reason as string | null) ?? null,
-  };
-}
-
-// JSON-safe form of the Operation stored in the inbox row's jsonb column. JSON.stringify throws on
-// the BigInt inside each Amount, so encodeOperation walks the operation and swaps every branded
-// Amount for its `CREDIT:12.34` string (encodeAmount); decodeOperation reverses it, rebuilding an
-// Operation with real Amounts equal to the original so the apply worker submits the same money
-// move. Same approach as encodeTransaction/decodeTransaction above, generalized over the Operation
-// union: walking by the Amount brand keeps the codec working whichever variant (and whichever
-// amount-bearing fields) the operation has, with no per-kind branch to drift.
+// JSON-safe form of the Operation stored in the inbox row's jsonb column: the shared Amount-brand
+// walk (money.ts encodeAmounts) swaps every branded Amount for its `CREDIT:12.34` string, whichever
+// variant the operation is; the shared rowToInbox reverses it on read.
 type EncodedOperation = Record<string, unknown>;
 
 function encodeOperation(operation: Operation): EncodedOperation {
   return encodeAmounts(operation) as EncodedOperation;
-}
-
-function decodeOperation(encoded: EncodedOperation): Operation {
-  return decodeAmounts(encoded) as Operation;
-}
-
-// The isAmount test comes first so an Amount (itself an object) is encoded, not walked field-by-field.
-function encodeAmounts(value: unknown): unknown {
-  if (isAmount(value)) {
-    return encodeAmount(value);
-  }
-  if (Array.isArray(value)) {
-    return value.map(encodeAmounts);
-  }
-  if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [key, inner] of Object.entries(value)) {
-      out[key] = encodeAmounts(inner);
-    }
-    return out;
-  }
-  return value;
-}
-
-// Reverse of encodeAmounts. A string is an encoded amount only if it parses as `CURRENCY:decimal`
-// (tryDecodeAmountString); any other string (idempotencyKey, sku, reason, ...) passes through.
-function decodeAmounts(value: unknown): unknown {
-  if (typeof value === 'string') {
-    const amount = tryDecodeAmountString(value);
-    return amount ?? value;
-  }
-  if (Array.isArray(value)) {
-    return value.map(decodeAmounts);
-  }
-  if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [key, inner] of Object.entries(value)) {
-      out[key] = decodeAmounts(inner);
-    }
-    return out;
-  }
-  return value;
-}
-
-// Decodes an encoded-amount string (`CREDIT:12.34`) back into an Amount, or returns null if it
-// isn't one. An encoded amount is exactly `CURRENCY:decimal`, so a colon alone isn't enough and the
-// decimal part must parse (decodeAmount throws on a non-numeric tail). This function catches that
-// throw so an ordinary string that merely contains a colon falls through to "not an amount".
-function tryDecodeAmountString(encoded: string): Amount | null {
-  if (encoded.indexOf(':') < 0) {
-    return null;
-  }
-  try {
-    return decodeAmountWire(encoded);
-  } catch {
-    return null;
-  }
 }
 
 // --- Saga store -------------------------------------------------------------------
@@ -1201,11 +996,8 @@ async function findSagaByRef(
   return row ? rowToSaga(row) : null;
 }
 
-// Tracks the multi-step payout process for paying a user out in real money. Each payout moves
-// through states (requested, reserved, submitted, settled, failed). `advance` moves a payout to
-// the next state only if it is still in the state the caller expected (the `where ... and state
-// = $2` clause), and returns whether the update happened. So if two background sweeps try to
-// move the same payout at once, only one succeeds and the step never runs twice.
+// `advance` is a compare-and-set: the update applies only while the saga is still in the state
+// the caller expected, so two racing sweeps can't advance the same payout twice.
 function createSagaStore(q: Queryable): SagaStore {
   return {
     open: async (saga) => {
@@ -1308,11 +1100,9 @@ async function advanceToFailed(
 
 // --- Entitlement store ------------------------------------------------------------
 
-// Tracks which users own which products (an "entitlement" is a record of ownership, e.g. a
-// purchased item or subscription perk). Plain ownership data, not a money entry. revoke is a
-// soft delete (revoked=true, keeps the row for audit), so a later owns() check returns false but
-// refund/clawback ownership history survives. The clock is injected so owns() can tell whether
-// an entitlement has expired without a clock argument of its own (owns()'s signature is fixed).
+// Ownership state, not a money entry. `revoke` is a soft delete (the row keeps the refund/clawback
+// audit history); a re-grant clears `revoked`, so re-buying re-activates. The clock is injected so
+// owns() can test expiry (its signature is fixed).
 function createEntitlementStore(q: Queryable, clock: Clock): EntitlementStore {
   return {
     grant: async (userId, sku, attrs) => {
@@ -1369,18 +1159,11 @@ function createEntitlementStore(q: Queryable, clock: Clock): EntitlementStore {
 
 // --- Subscription store -----------------------------------------------------------
 
-// Tracks recurring subscriptions. A subscription is opened, then a background sweep finds the
-// ones whose next charge is due (claimDue), bills them (markBilled, which moves the due date
-// forward), and ends them when needed (cancel by the user, or markLapsed when a renewal can't
-// be paid).
 function createSubscriptionStore(q: Queryable): SubscriptionStore {
   return {
-    // The worker re-opens a subscription to persist a bumped retry attempt
-    // (`open({ ...sub, attempts: next })`), so this must upsert rather than `do nothing`:
-    // insert-on-conflict-do-nothing would keep the old attempts count and the retry cap would
-    // never advance, diverging from the in-memory reference's full-row overwrite. The identity
-    // columns (user_id/seller_id/sku/price/period_ms) never change for a given id, so the update
-    // set covers only the mutable lifecycle fields.
+    // Must upsert, not `do nothing`: the worker re-opens to persist a bumped retry attempt, and
+    // keeping the old count would never advance the retry cap. The identity columns never change for
+    // a given id, so the update set covers only the mutable lifecycle fields.
     open: async (sub) => {
       await q.query(
         `insert into subscriptions
@@ -1430,8 +1213,7 @@ function createSubscriptionStore(q: Queryable): SubscriptionStore {
         [id],
       );
     },
-    // `for update skip locked` (like the saga claimDue) lets overlapping sweepers each grab a
-    // disjoint batch instead of two fighting over (and double-billing) the same due row.
+    // `for update skip locked` lets overlapping sweepers grab disjoint batches.
     claimDue: async (now, limit) => {
       const result = await q.query(
         `select * from subscriptions
@@ -1443,11 +1225,8 @@ function createSubscriptionStore(q: Queryable): SubscriptionStore {
       );
       return result.rows.map(rowToSubscription);
     },
-    // A successful renewal clears the retry counter (attempts = 0), advances the period, and sets
-    // the next due date, but only as a compare-and-set against the period the sweeper claimed
-    // (next_due_at = expectedDueAt). If another overlapping sweeper already billed this period and
-    // moved next_due_at on, no row matches and this returns false, so the loser treats it as a
-    // no-op and never double-charges. SagaStore.advance guards its state change the same way.
+    // Compare-and-set on next_due_at: a sweeper that already billed this period moved the date, so
+    // the loser matches no row and never double-charges. attempts resets to 0 on success.
     markBilled: async (id, nextDueAt, expectedDueAt) => {
       const result = await q.query(
         `update subscriptions
@@ -1458,9 +1237,8 @@ function createSubscriptionStore(q: Queryable): SubscriptionStore {
       );
       return result.rows.length > 0;
     },
-    // End a subscription because a renewal charge couldn't be paid (vs. the user canceling).
-    // State LAPSED takes it out of the "active and due" set the billing sweep picks up, so it
-    // won't be charged again.
+    // LAPSED (a renewal couldn't be paid) is distinct from the user canceling; either way the row
+    // leaves the active-and-due set the billing sweep picks up.
     markLapsed: async (id) => {
       await q.query(`update subscriptions set state = 'LAPSED' where id = $1`, [
         id,
@@ -1511,24 +1289,12 @@ function createPromoStore(q: Queryable): PromoStore {
   };
 }
 
-function rowToPromoGrant(row: Record<string, unknown>): PromoGrant {
-  return {
-    id: row.id as string,
-    userId: row.user_id as string,
-    amount: toAmount(row.currency as Amount['currency'], readMinor(row.amount)),
-    expiresAt: Number(row.expires_at),
-    reversed: row.reversed as boolean,
-  };
-}
-
 // --- Trust store -------------------------------------------------------------------
 
-// Records each spend attempt by a user so a fraud check can see recent spend and cap it. Two
-// views: this pool-backed store commits on its own, and the Unit view (createUnitTrustStore
-// below) writes inside the money transaction. `submit` combines them so a committed attempt
-// shares the money commit and a rolled-back one still counts. `bump` inserts keyed on the
-// attempt's idempotency key (the primary key), so resending the same attempt doesn't count it
-// twice. `read` sums a user's recorded attempts.
+// Two views: this pool-backed store commits on its own, the Unit view (createUnitTrustStore)
+// writes inside the money transaction — so a committed attempt shares the money commit and a
+// rolled-back one still counts. `bump` keys on the attempt's idempotency key, so a resend never
+// double-counts.
 function createTrustStore(
   pool: PgPool,
   clock: Clock,
@@ -1541,10 +1307,8 @@ function createTrustStore(
     read: async (subject) =>
       readVelocity(pool, subject, clock.now() - windowMs),
     bump: async (subject, attempt) => bumpVelocity(pool, subject, attempt),
-    // Record-and-measure atomically. The insert and the windowed SUM run in one transaction
-    // guarded by a per-subject advisory lock, so two concurrent same-subject calls serialize: the
-    // second waits, then sums a total that already includes the first's insert — the atomicity
-    // `TrustStore.record` requires (ports.ts).
+    // Record-and-measure atomically under a per-subject advisory lock — the atomicity
+    // `TrustStore.record` requires (ports.ts); see recordVelocity.
     record: async (subject, attempt) =>
       recordVelocity(pool, subject, attempt, clock.now() - windowMs),
   };
@@ -1590,10 +1354,9 @@ async function bumpVelocity(
   );
 }
 
-// The transaction-scoped trust view a Unit carries. `record` runs on the money transaction's own
-// connection, so the inserted attempt commits with the money. The advisory lock holds until that
-// transaction commits or rolls back, and a concurrent same-subject `record` waits it out. That is
-// the same per-subject serialization `recordVelocity` below gets from its own short transaction.
+// The transaction-scoped trust view a Unit carries: `record` runs on the money transaction's own
+// connection, so the inserted attempt commits with the money, and the advisory lock holds until
+// that transaction commits or rolls back.
 function createUnitTrustStore(
   q: Queryable,
   clock: Clock,
@@ -1612,12 +1375,9 @@ function createUnitTrustStore(
   };
 }
 
-// The atomic record-then-measure behind `record`. It checks out one client, runs BEGIN, and takes a
-// transaction-scoped advisory lock keyed on the subject so same-subject calls run one at a time (the
-// lock auto-releases at COMMIT or ROLLBACK). It then inserts the attempt deduped on its idempotency
-// key (same column list and `on conflict do nothing` as `bumpVelocity`), runs the same windowed SUM
-// `readVelocity` uses (now seeing this attempt), and COMMITs. The returned Velocity matches what
-// `read` would return for the same rows, so every adapter agrees.
+// The atomic record-then-measure behind `record`: a transaction-scoped advisory lock keyed on the
+// subject serializes same-subject calls (auto-released at COMMIT or ROLLBACK), and the SUM runs
+// after the insert, so the returned Velocity already includes this attempt.
 async function recordVelocity(
   pool: PgPool,
   subject: string,
@@ -1631,33 +1391,10 @@ async function recordVelocity(
       `select pg_advisory_xact_lock(hashtextextended($1, 0))`,
       [subject],
     );
-    await client.query(
-      `insert into trust_attempts (idempotency_key, subject, amount, outcome, at)
-         values ($1, $2, $3, $4, $5)
-         on conflict (idempotency_key) do nothing`,
-      [
-        attempt.idempotencyKey,
-        subject,
-        attempt.amount.minor,
-        attempt.outcome,
-        attempt.at,
-      ],
-    );
-    const result = await client.query(
-      `select coalesce(min(at), 0) as window_start,
-              coalesce(sum(amount), 0) as spent,
-              count(*)::int as attempts
-         from trust_attempts where subject = $1 and at > $2`,
-      [subject, cutoff],
-    );
+    await bumpVelocity(client, subject, attempt);
+    const velocity = await readVelocity(client, subject, cutoff);
     await client.query('commit');
-    const row = result.rows[0]!;
-    return {
-      subject,
-      windowStart: Number(row.window_start),
-      spent: toAmount('CREDIT', readMinor(row.spent)),
-      attempts: Number(row.attempts),
-    };
+    return velocity;
   } catch (error) {
     await client.query('rollback').catch(() => {});
     throw error;
@@ -1668,10 +1405,8 @@ async function recordVelocity(
 
 // --- Checkpoint store -------------------------------------------------------------
 
-// Stores periodic signed snapshots of the ledger's state (to detect later tampering); `latest`
-// returns the most recent. Rows are only ever added, never changed or removed, and writes go
-// through the pool rather than a transaction, so a money transaction rolling back can't erase a
-// snapshot already taken.
+// Append-only, written through the pool rather than a transaction, so a money transaction rolling
+// back can't erase a snapshot already taken.
 // --- Movement journal ---------------------------------------------------------------
 
 // Append-only and never part of a money transaction (see MovementJournal in ports.ts). The whole
@@ -1783,7 +1518,6 @@ function buildUnit(
 
 // --- The assembled store ----------------------------------------------------------
 
-/** Options for {@link postgresStore}: the connection string and optional overrides. */
 export interface PostgresStoreOptions {
   url: string;
 
@@ -1806,9 +1540,7 @@ export interface PostgresStoreOptions {
   poolMax?: number;
 
   // Max time (ms) to wait for a connection before failing. `pg`'s default is no timeout, so a
-  // routable-but-stalled host (firewall drop, mid-startup) would hang indefinitely; a caller that
-  // wants to fail fast and move on (e.g. the bench skipping an unreachable backend) sets this. Left
-  // unset, the historical no-timeout behavior applies.
+  // routable-but-stalled host would otherwise hang indefinitely.
   connectionTimeoutMillis?: number;
 }
 
@@ -1832,10 +1564,8 @@ export async function postgresStore(
   const velocityWindowMs = options.velocityWindowMs ?? 60 * 60_000;
   const schema = options.schema ? safeSchemaName(options.schema) : null;
 
-  // Point every connection the pool opens at the dedicated schema by setting its search_path
-  // (where Postgres looks up unqualified table names) through the connection options. Unqualified
-  // table names then resolve to our schema on every connection the pool hands out, read or
-  // transaction.
+  // Setting search_path through the connection options points every connection the pool opens at
+  // the dedicated schema, so unqualified table names resolve there on reads and transactions alike.
   const pool = new pg.Pool({
     connectionString: options.url,
     ...(schema ? { options: `-c search_path=${schema}` } : {}),
@@ -1903,10 +1633,8 @@ export async function postgresStore(
   };
 }
 
-// Create the dedicated schema from scratch and load db/postgresql-schema.sql into it. Drop any
-// leftover schema of the same name first, recreate it, point this connection at it, then run the
-// table-creation SQL. The pool's connections are already aimed at this schema, so the unqualified
-// `create table` statements in db/postgresql-schema.sql resolve into it.
+// Drop any leftover schema of the same name, recreate it, and load db/postgresql-schema.sql into
+// it; the unqualified `create table` statements resolve there via search_path.
 async function applyIsolatedSchema(
   pool: PgPool,
   schema: string,
@@ -1957,11 +1685,8 @@ async function runInTransaction<T>(
   }, isTransientConflict);
 }
 
-// Reports whether the error is a transient lock conflict Postgres raised to break a tie. Such a
-// conflict is safe to retry because the aborted transaction committed nothing. The two cases are
-// `40P01` deadlock_detected and `40001` serialization_failure, the SQLSTATEs the `pg` driver
-// surfaces on `error.code`. Anything else (a domain fault, a CHECK or constraint violation, a
-// connection error) is not retried.
+// A transient Postgres abort committed nothing, so it is safe to retry; anything else (a domain
+// fault, a CHECK or constraint violation, a connection error) is not retried.
 function isTransientConflict(error: unknown): boolean {
   const e = error as {
     code?: unknown;
@@ -1969,17 +1694,13 @@ function isTransientConflict(error: unknown): boolean {
     message?: unknown;
   } | null;
   const code = e?.code;
-  // 40P01 (deadlock) and 40001 (serialization failure) are the classic "try again" aborts. The third
-  // case is subtler. Each account's history is a hash chain, and a new link names the current last
-  // link (the head) as its parent. chain_links_account_prev_uq lets only one link claim a given
-  // parent. So when two writers read the same head and both try to attach, one succeeds and the other
-  // gets a 23505. That 23505 is not a real duplicate: the head has moved, so a retry re-reads it
-  // and attaches cleanly. This case is scoped to that one index, so a real duplicate (a colliding id
-  // or idempotency key) still fails fast.
+  // 40P01 (deadlock) and 40001 (serialization failure) are the classic "try again" aborts. A 23505
+  // on chain_links_account_prev_uq is a stale-head chain fork, not a real duplicate: the head moved,
+  // and a retry re-reads it and attaches cleanly. Scoping to that one constraint keeps a real
+  // duplicate (a colliding id or idempotency key) failing fast.
   //
-  // P0001 (the default SQLSTATE of `raise exception`) carrying the chain-continuity message is the
-  // same race from the trigger side rather than the unique index -- equally fixed by re-reading the
-  // head. It is matched only on that message, since P0001 is also raised for the genuine
+  // P0001 carrying the chain-continuity message is the same race from the trigger side, equally
+  // fixed by retrying. It is matched only on that message, since P0001 also carries the genuine
   // `conservation` and `balance integrity` faults, which must fail fast and are never retried.
   return (
     code === '40P01' ||

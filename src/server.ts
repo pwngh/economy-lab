@@ -42,29 +42,22 @@ export type WebhookHandler = (
 export interface ServerOptions {
   webhook?: WebhookHandler;
 
-  // When present, the server verifies inbound webhooks before the handler runs. HMAC-SHA256 of the
-  // raw body, keyed with `config.webhookSecret`, must match `x-signature`. The `x-timestamp` must
-  // fall within `config.replayWindowMs` of the clock. When absent, the webhook path is a bare
-  // pass-through and the host verifies.
+  // When present, the server verifies inbound webhooks (signature and freshness) before the
+  // handler runs. When absent, the webhook path is a bare pass-through and the host verifies.
   config?: Config;
 
   // Clock for webhook freshness. Time is read only through this, never `Date.now()`, so tests can
   // freeze it. Defaults to wall-clock when verification is enabled and no clock is given.
   clock?: Clock;
 
-  // Records which provider events have been processed. The server claims an `eventId` last, after
-  // the signature and freshness checks pass, so a rejected or forged delivery never burns a provider
-  // `eventId` and blocks a later genuine one. When present, the server decodes the body into a typed
-  // WebhookEvent, claims its `eventId`, and on a repeat returns 200 without invoking the handler.
-  // When absent, the path is the bare signature-plus-freshness pass-through and the host dedups.
+  // Dedup store for provider `eventId`s: a repeat delivery returns 200 without invoking the
+  // handler. When absent, the host dedups. The claim-last ordering lives at webhookRoute.
   replay?: ReplayStore;
 }
 
-// Names the signature header. It holds the hex-encoded HMAC-SHA256 of the raw body (see verifyHmac).
 const SIGNATURE_HEADER = 'x-signature';
 
-// Names the timestamp header. It holds the provider's send time in milliseconds since 1 Jan 1970
-// UTC, used to reject stale deliveries (replay of a captured request).
+// The provider's send time in epoch milliseconds, used to reject stale deliveries.
 const TIMESTAMP_HEADER = 'x-timestamp';
 
 /**
@@ -125,18 +118,15 @@ export function createServer(
 
 // --- /healthz and /readyz ---------------------------------------------------------
 
-// Reports liveness: the process is up and can serve a response. It does no I/O, so it answers even
-// when a downstream dependency is down (/readyz covers that case). The Dockerfile HEALTHCHECK
-// targets this path.
+// No I/O, so it answers even when a dependency is down (/readyz covers that case). The Dockerfile
+// HEALTHCHECK targets this path.
 function livenessRoute(): Response {
   return jsonResponse(200, { status: 'ok' });
 }
 
-// Reports readiness by confirming a dependency is reachable before the orchestrator routes traffic
-// here. It makes one cheap store-touching read through the economy, the balance of a known system
-// account. Any throw means the store is unreachable, reported as 503 with no detail so the error
-// stays server-side. createServer only receives an Economy, so the probe goes through the public
-// read surface, not the ledger.
+// One cheap store-touching read; any throw reports 503 with no detail so the error stays
+// server-side. The probe goes through the public read surface because createServer only
+// receives an Economy.
 async function readinessRoute(economy: Economy): Promise<Response> {
   try {
     await economy.read.balance(SYSTEM.REVENUE);
@@ -148,22 +138,14 @@ async function readinessRoute(economy: Economy): Promise<Response> {
 
 // --- /submit ----------------------------------------------------------------------
 
-// Reads the operation from the body, runs it, and sends the result back. A bad body or a thrown
-// EconomyError becomes a problem+json response with the mapped status and stable code. A
-// `rejected` outcome is not an error. It happens when the economy declines a valid request for a
-// business reason, such as insufficient funds, and returns 200 holding the decline.
+// A `rejected` outcome is not an error: the economy declined a valid request for a business
+// reason, and the response is a 200 holding the decline.
 async function submitRoute(
   economy: Economy,
   request: Request,
 ): Promise<Response> {
-  let operation: Operation;
   try {
-    operation = decodeOperation(await readJson(request));
-  } catch (error) {
-    return faultResponse(error);
-  }
-
-  try {
+    const operation = decodeOperation(await readJson(request));
     return jsonResponse(200, encodeOutcome(await economy.submit(operation)));
   } catch (error) {
     return faultResponse(error);
@@ -172,15 +154,14 @@ async function submitRoute(
 
 // --- /webhooks/:provider ----------------------------------------------------------
 
-// Gates an inbound webhook, then passes it to the injected handler. Returns 404 when no handler is
-// wired. With a webhook secret configured, the body is verified before the handler runs, so a forged
-// request never reaches code that changes balances. The checks run in this order: signature, then
-// freshness, then (only with a replay store) claiming the provider `eventId` last so a rejected
-// delivery does not record an id and block a later genuine redelivery. This order is required; keep
-// it as written. See https://economy-lab-docs.pages.dev/economy/reference/http-service/ for the gate.
+// The body is verified before the handler runs, so a forged request never reaches code that
+// changes balances. The checks run in this order: signature, then freshness, then claiming the
+// provider `eventId` last, so a rejected delivery does not burn an id and block a later genuine
+// redelivery. This order is required; keep it as written.
+// See https://economy-lab-docs.pages.dev/economy/reference/http-service/ for the gate.
 //
-// The raw bytes are read once. Verification, replay decode, and handler all work over that buffer.
-// The handler gets a fresh Request rebuilt from the bytes, so the body is never consumed twice.
+// The raw bytes are read once; verification, replay decode, and handler all work over that
+// buffer, and the handler gets a fresh Request rebuilt from the bytes.
 async function webhookRoute(
   options: ServerOptions,
   provider: string,
@@ -194,21 +175,12 @@ async function webhookRoute(
   const config = options.config;
   if (config === undefined || config.webhookSecret === '') {
     // No secret configured: keep the bare pass-through (the host owns verification).
-    try {
-      return await handler(provider, request);
-    } catch (error) {
-      return faultResponse(error);
-    }
+    return runHandler(handler, provider, request);
   }
 
   let rawBytes: Uint8Array;
   try {
     rawBytes = new Uint8Array(await request.arrayBuffer());
-  } catch (error) {
-    return faultResponse(error);
-  }
-
-  try {
     if (
       !(await verifyHmac(rawBytes, signatureOf(request), config.webhookSecret))
     ) {
@@ -235,28 +207,29 @@ async function webhookRoute(
     return jsonResponse(200, { status: 'duplicate' });
   }
 
-  // Last check: stop an already-processed event from running twice. Returns a Response to send
-  // immediately (200 "duplicate" or an error), or null when the event is new and the handler runs.
   const dedup = await replayGate(options, provider, rawBytes);
   if (dedup !== null) {
     return dedup;
   }
 
-  // Verified and not a repeat. Hand it to the handler over a fresh Request so it can read the body
-  // again. The host's handler decodes the event and applies it once through its economy, such as
-  // crediting the user on a payment callback.
-  const verified = rebuildRequest(request, rawBytes);
+  return runHandler(handler, provider, rebuildRequest(request, rawBytes));
+}
+
+async function runHandler(
+  handler: WebhookHandler,
+  provider: string,
+  request: Request,
+): Promise<Response> {
   try {
-    return await handler(provider, verified);
+    return await handler(provider, request);
   } catch (error) {
     return faultResponse(error);
   }
 }
 
-// Claims the provider `eventId` so an already-processed event can't run twice (see webhookRoute
-// step 3). A no-op when no replay store is wired. Decodes the body into a typed WebhookEvent only to
-// read its `eventId`; the handler still gets the raw verified bytes. Returns a Response to send
-// immediately (200 "duplicate" or an error), or null when the event is new and the caller runs.
+// A no-op when no replay store is wired. Decodes the body only to read its `eventId`; the handler
+// still gets the raw verified bytes. Returns a Response to send immediately, or null when the
+// event is new and the caller runs.
 async function replayGate(
   options: ServerOptions,
   provider: string,
@@ -315,7 +288,6 @@ function signatureOf(request: Request): string {
   return request.headers.get(SIGNATURE_HEADER) ?? '';
 }
 
-// Lets the verified handler re-read the body the server already consumed for verification.
 function rebuildRequest(request: Request, rawBytes: Uint8Array): Request {
   return new Request(request.url, {
     method: request.method,
@@ -330,10 +302,7 @@ const systemClock: Clock = { now: () => Date.now() };
 
 // --- Operation codec (money travels as a decimal string) --------------------------
 
-// Converts a parsed JSON body into a typed Operation. Money amounts arrive as decimal strings
-// because a JSON number can't safely hold them. For the body's `kind`, the shared decoder converts
-// its money fields back into Amount values. A non-object body, or one whose `kind` isn't a known
-// operation, throws a malformed-operation fault.
+// Money amounts arrive as decimal strings because a JSON number can't safely hold them.
 function decodeOperation(body: unknown): Operation {
   if (body === null || typeof body !== 'object') {
     throw malformed('Operation body must be a JSON object.');
@@ -379,9 +348,6 @@ const AMOUNT_FIELDS: Record<string, ReadonlyArray<string>> = {
   reversePayout: [],
 };
 
-// Converts an Outcome into the JSON shape for the response. A committed or duplicate outcome carries
-// a transaction whose debit and credit line amounts are written back as decimal strings. A rejected
-// outcome carries only its reason code and optional detail, no money, so it goes out unchanged.
 function encodeOutcome(outcome: Outcome): unknown {
   if (outcome.status === 'rejected') {
     return outcome;
@@ -394,9 +360,6 @@ function encodeOutcome(outcome: Outcome): unknown {
 
 // --- HTTP status mapping ----------------------------------------------------------
 
-// Maps a thrown EconomyError to an HTTP status by its stable code. A missing permission or a bad
-// signature becomes 401. A malformed request or a bad amount becomes 400. A retryable fault becomes
-// 503. Anything else becomes 500.
 function statusFor(error: EconomyError): number {
   if (error.code === ERROR_CODES.UNAUTHORIZED) {
     return 401;
@@ -410,9 +373,7 @@ function statusFor(error: EconomyError): number {
   return error.retryable ? 503 : 500;
 }
 
-// Fault codes meaning the request itself was wrong and the caller can fix it: malformed operation,
-// invalid amount, or mixed currencies. These map to 400. A broken internal rule or storage failure
-// isn't the caller's fault and maps to 500.
+// Codes where the request itself was wrong and the caller can fix it; these map to 400.
 const BAD_REQUEST_CODES = new Set<string>([
   ERROR_CODES.MALFORMED_OPERATION,
   ERROR_CODES.INVALID_AMOUNT,
@@ -422,19 +383,16 @@ const BAD_REQUEST_CODES = new Set<string>([
 
 // --- Local helpers ----------------------------------------------------------------
 
-// normalizeError wraps a non-EconomyError as a retryable storage failure -> 503 with a generic
-// message; its stack trace and cause never reach the client.
+// An unknown error goes out as a generic retryable 503; its stack trace and cause never reach
+// the client.
 function faultResponse(error: unknown): Response {
-  const normalized: EconomyError =
-    error instanceof EconomyError ? error : normalizeError(error);
+  const normalized = normalizeError(error);
   return problemResponse(statusFor(normalized), normalized.message, {
     code: normalized.code,
     retryable: normalized.retryable,
   });
 }
 
-// Empty or invalid-JSON body -> malformed fault, so the raw parser error never escapes and the
-// bad-request verdict stays here.
 async function readJson(request: Request): Promise<unknown> {
   const text = await request.text();
   if (text.length === 0) {
@@ -458,10 +416,8 @@ function jsonResponse(status: number, payload: unknown): Response {
   });
 }
 
-// RFC 9457 problem details (application/problem+json). `title` is the caller-safe message; a
-// catalog fault adds the stable `code` and `retryable` extensions, and `type` points at the code
-// taxonomy page. `detail`/`cause`/stack stay server-side.
-// See https://www.rfc-editor.org/rfc/rfc9457 for the format.
+// RFC 9457 problem details: `title` is the caller-safe message; `detail`/`cause`/stack stay
+// server-side. See https://www.rfc-editor.org/rfc/rfc9457 for the format.
 function problemResponse(
   status: number,
   title: string,

@@ -11,6 +11,7 @@
 
 import { rejected, fault, ERROR_CODES } from '#src/errors.ts';
 import { assertKind } from '#src/operations/guards.ts';
+import { planSpend } from '#src/operations/spend.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { compare, encodeAmount, toAmount } from '#src/money.ts';
 import { promo, spendable, earned, SYSTEM } from '#src/accounts.ts';
@@ -18,6 +19,7 @@ import { feeForPrice } from '#src/pricing.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { Ctx, Operation, Outcome, Transaction } from '#src/contract.ts';
+import type { SpendPlan } from '#src/operations/spend.ts';
 import type { Leg, Subscription, Unit } from '#src/ports.ts';
 
 // A subscription price must be 100 to 10,000 credits per month, inclusive, expressed in minor
@@ -31,26 +33,11 @@ const MAX_PRICE_MINOR = 1_000_000n; // 10,000.00 credits
 // `postedAt + periodMs` cannot lose precision.
 const MAX_PERIOD_MS = 10 * 365 * 24 * 60 * 60_000; // 315,360,000,000 ms
 
-// Splits the first-month price across the buyer's two balances. `promoPart` is funded from their
-// promo grant, and `spendablePart` is funded from topped-up real money. Promo is drawn first, and
-// spendable covers the rest.
-type ChargePlan = { promoPart: Amount; spendablePart: Amount };
-
 /**
  * Charge the first month of a subscription and create its record: validate the price, post the
  * charge (seller earns, platform takes its fee), then save the `Subscription` the background
  * worker renews each later month. Returns `committed`, or a `rejected` outcome for a duplicate
  * active subscription (`ALREADY_SUBSCRIBED`) or a short spendable balance (`INSUFFICIENT_FUNDS`).
- *
- * @example
- *   // Inside an open transaction (`unit`), bill month one and open the record:
- *   const outcome = await subscribe(
- *     { kind: 'subscribe', idempotencyKey: 'idem_1', actor: { kind: 'user', userId: 'usr_a' },
- *       userId: 'usr_a', sellerId: 'usr_s', sku: 'club_pass',
- *       price: toAmount('CREDIT', 50_000n), periodMs: 2_592_000_000 },
- *     unit, ctx,
- *   );
- *   // outcome.status === 'committed'; the seller earned the net, the platform took the fee.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/subscribe/ Subscribe}
  *   for the first-month charge and renewal handoff.
@@ -84,8 +71,9 @@ export async function subscribe(
     });
   }
 
+  // Promo draws first; planSpend (spend.ts) is the one implementation of the split rule.
   const promoBalance = await unit.ledger.balance(promo(operation.userId));
-  const plan = planCharge(price, promoBalance);
+  const plan = planSpend(price, promoBalance);
 
   const shortfall = await screenSpendable(unit, operation.userId, plan);
   if (shortfall) {
@@ -100,10 +88,8 @@ export async function subscribe(
     ctx,
   );
 
-  // Grant SKU ownership in the same transaction (`unit`) that posted the charge, so the two stay
-  // in lockstep. `source` records which subscription this ownership came from. If this buyer had a
-  // lapsed subscription to the same SKU, the old grant row was marked revoked rather than deleted;
-  // this grant clears that mark and reactivates ownership instead of leaving the stale row.
+  // Same transaction (`unit`) as the charge. A lapsed subscription's old grant row was marked
+  // revoked rather than deleted; this grant clears that mark and reactivates ownership.
   // See https://economy-lab-docs.pages.dev/economy/reference/operations/subscribe/ for the
   // same-transaction grant and renewal handoff.
   await unit.entitlements.grant(operation.userId, operation.sku, {
@@ -116,11 +102,8 @@ export async function subscribe(
 
 // --- Validation -------------------------------------------------------------------
 
-// Rejects a buyer who tries to subscribe to themselves. When `userId` equals `sellerId`, the
-// charge draws the buyer's non-payable balances (promo and spendable) and credits
-// them back as EARNED, which is payable and funded by platform REVENUE. That would turn
-// gift and promo grants into payable money and drain the treasury, so this is malformed
-// rather than a business "no". Throw a fault.
+// A self-subscription would credit the buyer's own non-payable promo/spendable back as payable
+// EARNED funded by platform REVENUE — laundering — so it's malformed, not a business "no".
 function rejectSelfSubscription(
   operation: Extract<Operation, { kind: 'subscribe' }>,
 ): void {
@@ -133,12 +116,9 @@ function rejectSelfSubscription(
   }
 }
 
-// Guards the two op-specific fields the central validateOperation cannot reason about: the period
-// and the SKU. `periodMs` arrives as a plain number, so it may be NaN, Infinity, fractional, zero,
-// negative, or absurdly large. Any of those corrupts the billing math (for example, a NaN period
-// end), so require a finite positive integer within the ceiling. `sku` must be non-blank, because
-// a blank one would key an entitlement grant and ledger metadata to nothing. Both are wiring
-// errors, so throw a fault.
+// Op-specific guards the central validateOperation can't cover. A NaN, fractional, non-positive,
+// or over-ceiling `periodMs` corrupts the billing math, and a blank `sku` would key an entitlement
+// grant to nothing; both are wiring errors, so throw a fault.
 function validateFields(
   operation: Extract<Operation, { kind: 'subscribe' }>,
 ): void {
@@ -163,9 +143,7 @@ function validateFields(
   }
 }
 
-// Validates the price and returns it unchanged for inline use. A wrong currency or an
-// out-of-range amount is a wiring error, not a business "no", so it throws a fault rather than
-// returning a decline.
+// A wrong currency or out-of-band price is a wiring error, so throw a fault rather than decline.
 function validatedPrice(price: Amount): Amount {
   if (price.currency !== 'CREDIT') {
     throw fault(
@@ -192,29 +170,12 @@ function validatedPrice(price: Amount): Amount {
 
 // --- The funds plan ---------------------------------------------------------------
 
-// Splits the price between promo and spendable. It uses as much promo as is available, capped at
-// the price, and charges the rest to spendable. This is the same promo-first rule the marketplace
-// `spend` op uses.
-function planCharge(price: Amount, promoBalance: Amount): ChargePlan {
-  const available = promoBalance.minor > 0n ? promoBalance.minor : 0n;
-  const promoMinor = available < price.minor ? available : price.minor;
-  return {
-    promoPart: toAmount('CREDIT', promoMinor),
-    spendablePart: toAmount('CREDIT', price.minor - promoMinor),
-  };
-}
-
-// Confirms the buyer has enough spendable money for the spendable share; the submit pipeline's
-// up-front funds check (screenFunds) only runs for `spend`, so subscribe checks here. Short
-// balance returns an INSUFFICIENT_FUNDS rejection (a business "no" as data), sufficient returns
-// null.
-//
-// This is a pre-check, not the enforcer of overdrafts: the database's per-user non-negative CHECK
-// is what blocks them. This just returns a rejection before the engine would reject the entry.
+// The submit pipeline's funds check (screenFunds) only runs for `spend`, so subscribe checks here.
+// A pre-check only: the database's per-user non-negative CHECK is what blocks overdrafts.
 async function screenSpendable(
   unit: Unit,
   userId: string,
-  plan: ChargePlan,
+  plan: SpendPlan,
 ): Promise<Extract<Outcome, { status: 'rejected' }> | null> {
   const have = await unit.ledger.balance(spendable(userId));
   if (compare(have, plan.spendablePart) < 0) {
@@ -229,11 +190,9 @@ async function screenSpendable(
 
 // --- Posting ----------------------------------------------------------------------
 
-// Posts the first-month charge as one balanced ledger entry whose debit and credit legs sum to
-// zero. The promo-funded part and the spendable-funded part each contribute their own legs.
 async function postCharge(
   operation: Extract<Operation, { kind: 'subscribe' }>,
-  plan: ChargePlan,
+  plan: SpendPlan,
   unit: Unit,
   ctx: Ctx,
 ): Promise<Transaction> {
@@ -252,11 +211,8 @@ async function postCharge(
   });
 }
 
-// Appends the ledger legs for the promo-funded part. Promo credits are not real money, so this
-// takes two steps: draw down the grant (debit promo, credit PROMO_FLOAT, which offsets outstanding
-// grants), then pay the seller real earnings from platform revenue (debit REVENUE, credit earned).
-// The whole promo amount goes to the seller, because the fee applies only to the spendable part, as
-// in `spend`.
+// Promo credits are not the buyer's money, so the seller is paid real earnings from REVENUE while
+// PROMO_FLOAT offsets the drawn-down grant. No fee on the promo part, as in `spend`.
 function appendPromoLegs(
   legs: Leg[],
   operation: Extract<Operation, { kind: 'subscribe' }>,
@@ -271,9 +227,6 @@ function appendPromoLegs(
   legs.push(credit(earned(operation.sellerId), promoPart));
 }
 
-// Appends the ledger legs for the spendable (real-money) part. It debits the buyer's spendable for
-// the full part, credits the seller the amount after the fee, and credits REVENUE the fee. The net
-// and the fee add up to the spendable part exactly.
 function appendSpendableLegs(
   legs: Leg[],
   operation: Extract<Operation, { kind: 'subscribe' }>,
@@ -294,8 +247,6 @@ function appendSpendableLegs(
 
 // --- The subscription record ------------------------------------------------------
 
-// Saves the subscription record for the background worker to renew. This handler only charges the
-// first month, which was just billed. The worker bills every period after that.
 async function openSubscription(
   operation: Extract<Operation, { kind: 'subscribe' }>,
   transaction: Transaction,
@@ -317,7 +268,5 @@ async function openSubscription(
     updatedAt: now,
   };
   await unit.subscriptions.open(subscription);
-  // Return the id so the caller can record it on the grant's `source`, linking SKU ownership
-  // to the subscription that created it.
   return subscription.id;
 }

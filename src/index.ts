@@ -11,6 +11,9 @@
 
 import { createEconomy } from '#src/economy.ts';
 import { loadConfig } from '#src/config.ts';
+import { isMysqlUrl, isPostgresUrl, readUrl, serviceUrls } from '#src/env.ts';
+
+import type { EnvMap } from '#src/env.ts';
 import { assertMoneyConformant, assertSchemaCurrent } from '#src/schema.ts';
 import { installMysql, proveMysql } from '#src/db.vendored.ts';
 import { vectors as moneyVectors } from '#src/money.vendored.ts';
@@ -41,29 +44,20 @@ import type {
 // --- Public surface (re-exports only) ---------------------------------------------
 
 export { createEconomy } from '#src/economy.ts';
-// memoryStore: the in-memory backend, with no database.
 export { memoryStore } from '#src/adapters/memory.ts';
-// memoryCache: in-process read-through cache, the zero-infra counterpart to the Redis adapter.
 export { memoryCache } from '#src/adapters/memory-cache.ts';
 
 export { createWorker } from '#src/worker/index.ts';
 
-// Account-naming helpers: spendable/earned/promo/currency build account ids, and SYSTEM holds the
-// platform's own (a user account id looks like `usr_...:<kind>`).
 export { spendable, earned, promo, currency, SYSTEM } from '#src/accounts.ts';
 
-// Money and leg construction. Amount is branded, so these are the only doors: decodeAmount parses a
-// decimal string exactly (a third decimal digit throws), encodeAmount is its inverse for display and
-// wire use, and credit/debit build correctly-signed legs.
 export { decodeAmount, encodeAmount } from '#src/money.ts';
 export { credit, debit } from '#src/ledger.ts';
 export type { Leg } from '#src/ports.ts';
 
 export { loadConfig } from '#src/config.ts';
 
-// Opt-in, host-level extensions: a netting session a host opens over the store (src/netting.ts) and
-// the entitlement-bitset decorator a host wraps around it (src/adapters/entitlement-bitset.ts). The
-// core submit pipeline never touches either.
+// Opt-in, host-level extensions; the core submit pipeline never touches either.
 export {
   createReservations,
   instanceSession,
@@ -79,8 +73,6 @@ export type {
 export { cachedEntitlements } from '#src/adapters/entitlement-bitset.ts';
 export type { BitsetOptions } from '#src/adapters/entitlement-bitset.ts';
 
-// The error surface: EconomyError for instanceof, the ERROR_CODES catalog to match on, and the
-// code/reason unions to type its handling.
 export { EconomyError, ERROR_CODES } from '#src/errors.ts';
 export type { ErrorCode, RejectionCode } from '#src/errors.ts';
 
@@ -88,6 +80,8 @@ export type { Economy } from '#src/economy.ts';
 export type { Worker } from '#src/worker/index.ts';
 export type { WorkerCtx } from '#src/contract.ts';
 export type { Config } from '#src/config.ts';
+// The env-map shape every composition entry point takes; parsing rules live in src/env.ts.
+export type { EnvMap } from '#src/env.ts';
 export type {
   Operation,
   Outcome,
@@ -116,11 +110,8 @@ export type { Capabilities, Options, Range, Statement } from '#src/ports.ts';
  */
 export type ExternalPorts = {
   signer: Signer;
-
   processor: Processor;
-
   rates: Rates;
-
   pricing: FeePolicy;
 };
 
@@ -130,15 +121,61 @@ export type ExternalPorts = {
  */
 export type RuntimeDefaults = {
   clock?: Clock;
-
   ids?: Ids;
-
   digest?: Digest;
-
   logger?: Logger;
-
   meter?: Meter;
 };
+
+/**
+ * Which concrete adapter each env knob picks, before any driver loads. This is the ONE reading of
+ * the selection: the selectors below consume it to do the wiring, and hosts print it (the startup
+ * `config.resolved` line, the compose demo's labels), so a displayed selection can never diverge
+ * from the wired one. `url` is the raw connection string — mask it before printing.
+ */
+export interface Selection {
+  store:
+    | { kind: 'memory'; url: null }
+    | { kind: 'postgres' | 'mysql' | 'unsupported'; url: string };
+  cache: { kind: 'none'; url: null } | { kind: 'redis'; url: string };
+  dispatcher:
+    | { kind: 'in-process'; url: null }
+    | { kind: 'sqs' | 'http'; url: string };
+}
+
+/**
+ * Reads the selection from env: `DATABASE_URL` picks the store by scheme (unset = in-memory,
+ * `postgres://`/`mysql://` = that engine, anything else = 'unsupported', which selectStore
+ * rejects); `REDIS_URL` adds the cache; `SQS_QUEUE_URL` beats `DISPATCHER_URL` for delivery,
+ * neither = in-process. All through the shared resolver rules (src/env.ts).
+ */
+export function describeSelection(env: EnvMap): Selection {
+  const db = readUrl(env.DATABASE_URL);
+  const services = serviceUrls(env);
+  return {
+    store:
+      db === null
+        ? { kind: 'memory', url: null }
+        : {
+            kind: isPostgresUrl(db)
+              ? 'postgres'
+              : isMysqlUrl(db)
+                ? 'mysql'
+                : 'unsupported',
+            url: db,
+          },
+    cache:
+      services.redis === null
+        ? { kind: 'none', url: null }
+        : { kind: 'redis', url: services.redis },
+    dispatcher:
+      services.sqs !== null
+        ? { kind: 'sqs', url: services.sqs }
+        : services.dispatcher !== null
+          ? { kind: 'http', url: services.dispatcher }
+          : { kind: 'in-process', url: null },
+  };
+}
 
 /**
  * Assembles the full {@link Capabilities} bundle from `env`: the Store (chosen by `DATABASE_URL`),
@@ -150,33 +187,29 @@ export type RuntimeDefaults = {
  * both over one store calls it once.
  */
 export async function capabilitiesFromEnv(
-  env: Record<string, string | undefined>,
+  env: EnvMap,
   ports: ExternalPorts,
   defaults: RuntimeDefaults = {},
 ): Promise<Capabilities> {
   const config = loadConfig(env);
-  const clock = defaults.clock ?? wallClock();
-  const digest = defaults.digest ?? sha256Digest();
-  const cache = await selectCache(env);
-  const dispatcher = await selectDispatcher(env);
-  return {
-    store: await selectStore(env, {
-      digest,
-      clock,
+  const runtime = runtimeFrom(defaults);
+  const selection = describeSelection(env);
+  const [store, cache, dispatcher] = await Promise.all([
+    selectStore(selection.store, {
+      digest: runtime.digest,
+      clock: runtime.clock,
       velocityWindowMs: config.velocityWindowMs,
     }),
-    clock,
-    ids: defaults.ids ?? uuidIds(),
-    digest,
-    signer: ports.signer,
-    processor: ports.processor,
-    rates: ports.rates,
-    logger: defaults.logger ?? jsonlLogger(),
-    meter: defaults.meter ?? noopMeter(),
-    pricing: ports.pricing,
+    selectCache(selection.cache),
+    selectDispatcher(selection.dispatcher),
+  ]);
+  return {
+    ...runtime,
+    ...ports,
     config,
-    ...(cache === undefined ? {} : { cache }),
-    ...(dispatcher === undefined ? {} : { dispatcher }),
+    store,
+    ...(cache && { cache }),
+    ...(dispatcher && { dispatcher }),
   };
 }
 
@@ -206,7 +239,7 @@ export function workerCtxFrom(caps: Capabilities): WorkerCtx {
  *   composing an economy from env.
  */
 export async function compose(
-  env: Record<string, string | undefined>,
+  env: EnvMap,
   ports: ExternalPorts,
   defaults: RuntimeDefaults = {},
 ): Promise<Economy> {
@@ -220,14 +253,10 @@ export async function compose(
  * for the in-memory backend, where two stores are two separate maps.
  */
 export async function composeWorker(
-  env: Record<string, string | undefined>,
+  env: EnvMap,
   ports: ExternalPorts,
   defaults: RuntimeDefaults = {},
-): Promise<{
-  worker: Worker;
-  store: Store;
-  dispatcher: Dispatcher | undefined;
-}> {
+): Promise<ComposedWorker> {
   const caps = await capabilitiesFromEnv(env, ports, defaults);
   return {
     worker: createWorker(caps.store, workerCtxFrom(caps)),
@@ -236,83 +265,75 @@ export async function composeWorker(
   };
 }
 
-// --- Default runtime services -----------------------------------------------------
+/** What {@link composeWorker} returns: the worker plus the handles its host must manage — the
+ * store to close on shutdown and the env-selected dispatcher the relay delivers through. */
+export type ComposedWorker = {
+  worker: Worker;
+  store: Store;
+  dispatcher: Dispatcher | undefined;
+};
 
-// Wall-clock time in epoch milliseconds; pass your own clock for reproducible timing.
-function wallClock(): Clock {
-  return { now: () => Date.now() };
-}
+// --- The wiring (drivers import here, only when selected) ---------------------------
 
-// Ids of the form `${prefix}_${uuid}` via crypto.randomUUID.
-function uuidIds(): Ids {
-  return { next: (prefix) => `${prefix}_${crypto.randomUUID()}` };
-}
-
-// Discards every metric, so code can always record with no host-supplied meter.
-function noopMeter(): Meter {
-  return { count: () => {}, observe: () => {} };
-}
-
-// `DATABASE_URL` picks the backend: a `postgres://` or `mysql://` connection string selects that
-// engine and only then loads its driver; unset uses the in-memory store, and any other scheme throws.
 async function selectStore(
-  env: Record<string, string | undefined>,
+  selection: Selection['store'],
   deps: { digest: Digest; clock: Clock; velocityWindowMs: number },
 ): Promise<Store> {
-  const url = env.DATABASE_URL;
-  if (url === undefined || url === '') {
+  if (selection.kind === 'memory') {
     return memoryStore(deps);
   }
-  if (url.startsWith('postgres://') || url.startsWith('postgresql://')) {
+  if (selection.kind === 'postgres') {
     const { postgresStore } = await import('#src/engines/postgres.ts');
     return postgresStore({
-      url,
+      url: selection.url,
       digest: deps.digest,
       clock: deps.clock,
       velocityWindowMs: deps.velocityWindowMs,
     });
   }
-  if (url.startsWith('mysql://')) {
-    const { createMysqlPool, mysqlStore, readSchemaVersion } =
-      await import('#src/engines/mysql.ts');
-    // Build the pool via the engine's helper, which sets supportBigNumbers and bigNumberStrings — raw
-    // `mysql2` leaves those off and would silently round any amount above 2^53.
-    const pool = await createMysqlPool(url);
-    // Fail fast if the schema has drifted from this code (postgresStore does the same in its branch).
-    assertSchemaCurrent(await readSchemaVersion(pool), 'MySQL');
-    // Install the vendored money functions (idempotent) and prove this engine computes the pinned
-    // arithmetic before any posting trusts it.
-    const runner = {
-      run: (sql: string, params?: readonly unknown[]) =>
-        pool
-          .query(sql, params ? [...params] : undefined)
-          .then(([rows]) => rows as Record<string, unknown>[]),
-    };
-    await installMysql(runner);
-    assertMoneyConformant(await proveMysql(runner, moneyVectors), 'MySQL');
-    return mysqlStore({
-      pool,
-      digest: deps.digest,
-      clock: deps.clock,
-      velocityWindowMs: deps.velocityWindowMs,
-    });
+  if (selection.kind === 'mysql') {
+    return provenMysqlStore(selection.url, deps);
   }
   throw fault(
     ERROR_CODES.CONFIG_INVALID,
     'DATABASE_URL must be a postgres:// or mysql:// DSN.',
-    { detail: { scheme: url.split(':')[0] } },
+    { detail: { scheme: selection.url.split(':')[0] } },
   );
 }
 
-// `REDIS_URL` adds a Redis-backed cache (ioredis) the store consults before the database, filling
-// on a miss. Unset means no cache: every cache read does nothing.
+// MySQL startup: pool, schema-version gate, then install-and-prove the vendored money functions
+// before any posting trusts the engine's arithmetic.
+async function provenMysqlStore(
+  url: string,
+  deps: { digest: Digest; clock: Clock; velocityWindowMs: number },
+): Promise<Store> {
+  const { createMysqlPool, mysqlStore, readSchemaVersion } =
+    await import('#src/engines/mysql.ts');
+  const pool = await createMysqlPool(url);
+  assertSchemaCurrent(await readSchemaVersion(pool), 'MySQL');
+  const runner = {
+    run: (sql: string, params?: readonly unknown[]) =>
+      pool
+        .query(sql, params ? [...params] : undefined)
+        .then(([rows]) => rows as Record<string, unknown>[]),
+  };
+  await installMysql(runner);
+  assertMoneyConformant(await proveMysql(runner, moneyVectors), 'MySQL');
+  return mysqlStore({
+    pool,
+    digest: deps.digest,
+    clock: deps.clock,
+    velocityWindowMs: deps.velocityWindowMs,
+  });
+}
+
 async function selectCache(
-  env: Record<string, string | undefined>,
+  selection: Selection['cache'],
 ): Promise<Cache | undefined> {
-  const url = env.REDIS_URL;
-  if (url === undefined || url === '') {
+  if (selection.kind === 'none') {
     return undefined;
   }
+  const url = selection.url;
   const { redisCacheFrom } = await import('#src/adapters/redis.ts');
   // ioredis' default export is the client constructor at runtime; the cast pins it to the
   // adapter's minimal RedisClient surface (its module types don't expose the construct signature).
@@ -322,15 +343,14 @@ async function selectCache(
   return redisCacheFrom(new Redis(url));
 }
 
-// Picks how outgoing events get delivered, from env. Events are first written to the database
-// alongside the money move; the returned dispatcher ships them out. `SQS_QUEUE_URL` sends via an
-// Amazon SQS queue; otherwise `DISPATCHER_URL` posts over HTTP; with neither set, returns nothing
-// and events are delivered in-process. SQS wins if both are set. Each driver loads on demand.
 async function selectDispatcher(
-  env: Record<string, string | undefined>,
+  selection: Selection['dispatcher'],
 ): Promise<Dispatcher | undefined> {
-  const queueUrl = env.SQS_QUEUE_URL;
-  if (queueUrl !== undefined && queueUrl !== '') {
+  if (selection.kind === 'in-process') {
+    return undefined;
+  }
+  if (selection.kind === 'sqs') {
+    const queueUrl = selection.url;
     const { SQSClient, SendMessageCommand } =
       await import('@aws-sdk/client-sqs');
     const { sqsDispatcher } = await import('#src/adapters/sqs.ts');
@@ -355,10 +375,32 @@ async function selectDispatcher(
       },
     });
   }
-  const dispatcherUrl = env.DISPATCHER_URL;
-  if (dispatcherUrl !== undefined && dispatcherUrl !== '') {
-    const { httpDispatcher } = await import('#src/adapters/http-dispatcher.ts');
-    return httpDispatcher({ url: dispatcherUrl });
-  }
-  return undefined;
+  const { httpDispatcher } = await import('#src/adapters/http-dispatcher.ts');
+  return httpDispatcher({ url: selection.url });
+}
+
+// --- Default runtime services -----------------------------------------------------
+
+function runtimeFrom(
+  defaults: RuntimeDefaults,
+): Pick<Capabilities, 'clock' | 'ids' | 'digest' | 'logger' | 'meter'> {
+  return {
+    clock: defaults.clock ?? wallClock(),
+    ids: defaults.ids ?? uuidIds(),
+    digest: defaults.digest ?? sha256Digest(),
+    logger: defaults.logger ?? jsonlLogger(),
+    meter: defaults.meter ?? noopMeter(),
+  };
+}
+
+function wallClock(): Clock {
+  return { now: () => Date.now() };
+}
+
+function uuidIds(): Ids {
+  return { next: (prefix) => `${prefix}_${crypto.randomUUID()}` };
+}
+
+function noopMeter(): Meter {
+  return { count: () => {}, observe: () => {} };
 }

@@ -12,7 +12,7 @@
 import { fault, rejected, ERROR_CODES } from '#src/errors.ts';
 import { balanceDelta, lockAll, postEntry } from '#src/ledger.ts';
 import { toAmount } from '#src/money.ts';
-import { assertKind } from '#src/operations/guards.ts';
+import { assertKind, reversalKey } from '#src/operations/guards.ts';
 import { SYSTEM, isDebitNormal } from '#src/accounts.ts';
 
 import type { Amount } from '#src/money.ts';
@@ -33,15 +33,6 @@ import type { Leg, Sale, Unit } from '#src/ports.ts';
  * entitlement is revoked in the same database transaction. Returns `committed`, `duplicate`, or
  * `rejected` with `UNKNOWN_ORDER`.
  *
- * @example
- *   const outcome = await refund(
- *     { kind: 'refund', idempotencyKey: 'idem_1',
- *       actor: { kind: 'system', service: 'support' }, orderId: 'ord_1', reason: 'changed mind' },
- *     unit, ctx,
- *   );
- *   // outcome.status === 'committed'; buyer gets the full price back, seller debited only
- *   // up to the balance they still hold.
- *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/refund/ Refund} for
  *   the make-the-buyer-whole coverage plan.
  */
@@ -60,10 +51,7 @@ export async function refund(
 
   await extendLocks(unit, sale);
 
-  // The inner, order-scoped claim. Refund and order-tied clawback both reverse this order, so
-  // claiming `reversed:<orderId>` makes the two paths mutually exclusive. Whoever claims first
-  // reverses, and the loser gets the recorded transaction back as a duplicate.
-  const claimKey = `reversed:${operation.orderId}`;
+  const claimKey = reversalKey(operation.orderId);
   const claim = await unit.idempotency.claim(claimKey);
   if (!claim.claimed) {
     return { status: 'duplicate', transaction: claim.transaction };
@@ -77,28 +65,22 @@ export async function refund(
     meta: refundMeta(operation, sale),
   });
 
-  // Record the order-scoped claim against this reversal, so a later refund or clawback of the
-  // same order resolves to this transaction. Part of the same database transaction as the
-  // reversal: if the refund rolls back the claim does too, and the order can be reversed later.
+  // Same database transaction as the reversal: if the refund rolls back, the claim does too and
+  // the order can still be reversed later.
   await unit.idempotency.record(claimKey, transaction);
 
-  // Take back ownership from whoever received the item: the buyer for an ordinary purchase, or
-  // the gift recipient (`recipientId`) for a gift. Sales recorded before gifting existed have no
-  // `recipientId`, so fall back to the buyer. No-op if that user was never granted the SKU (e.g.
-  // a sale predating ownership-at-purchase). Same database transaction as the reversal, so the
-  // two commit or roll back together.
+  // Sales recorded before gifting existed have no `recipientId`, so fall back to the buyer; revoke
+  // is a no-op for a sale predating ownership-at-purchase. Same database transaction as the
+  // reversal, so the two commit or roll back together.
   await unit.entitlements.revoke(sale.recipientId ?? sale.buyerId, sale.sku);
 
   return { status: 'committed', transaction };
 }
 
-// Locks every account the reversing posting will touch, so no other writer changes those balances
-// between reading them (to decide how much to claw back) and posting. The request only names an
-// order id, so the framework can lock only the fixed system accounts. This fills the gap by locking
-// each account named in the recorded sale's lines: the buyer's accounts and each seller's
-// earned-balance account. The locks go through `lockAll` so they take the same deadlock-free global
-// order as every other lock-set, not the leg order they happen to appear in. RECEIVABLE is already
-// framework-locked here.
+// The request names only an order id, so the framework locked just the fixed system accounts
+// (RECEIVABLE included). This locks every account in the recorded sale's lines too, so no other
+// writer moves a balance between the clawback read and the posting. `lockAll` applies the same
+// deadlock-free global lock order as every other lock-set.
 async function extendLocks(unit: Unit, sale: Sale): Promise<void> {
   await lockAll(
     unit.ledger,
@@ -117,9 +99,7 @@ type AccountDelta = {
 // The plan for reversing the sale. It records how much of each clawback is collectable now and
 // splits the uncollectable rest out as a debt owed to the platform (RECEIVABLE).
 type Coverage = {
-  // Accounts the reversal only raises, applied in full with no cap because raising never pushes a
-  // balance below zero. These are the buyer's refund and the platform accounts the sale drew down
-  // and now unwinds. Each entry carries the amount to add back.
+  // Accounts the reversal only raises, applied in full: raising never pushes a balance below zero.
   uncapped: AccountDelta[];
 
   // Clawbacks that pull money out of an account, each limited to what that account can cover.
@@ -133,9 +113,6 @@ type Coverage = {
   shortfall: bigint;
 };
 
-// Plans the refund: folds the sale's legs into per-account deltas, caps each user account's
-// restoration at what the account still holds, and books the uncollectable remainder as
-// `shortfall`.
 async function coverageOf(unit: Unit, sale: Sale): Promise<Coverage> {
   const deltas = foldDeltas(sale.legs);
 
@@ -147,11 +124,6 @@ async function coverageOf(unit: Unit, sale: Sale): Promise<Coverage> {
     if (d.delta === 0n) {
       continue;
     }
-    // The reversal applies the opposite of the sale's change. Where the sale lowered an account
-    // (the buyer's accounts it debited, or REVENUE and other platform accounts it drew down), the
-    // reversal raises it. Raising never pushes a balance below zero, so it applies in full. Where
-    // the sale raised an account (a seller's earned balance, or REVENUE that took a fee), the
-    // reversal lowers it. That clawback is capped at the amount actually on hand.
     if (d.delta < 0n) {
       uncapped.push({
         account: d.account,
@@ -172,9 +144,6 @@ async function coverageOf(unit: Unit, sale: Sale): Promise<Coverage> {
   return { uncapped, capped, shortfall };
 }
 
-// Turns the plan into debit and credit lines. It raises each uncapped account, pulls each capped
-// clawback, and credits RECEIVABLE for the uncollectable total. RECEIVABLE stands in for exactly
-// the missing amounts, so the lines balance to zero as the original sale's did.
 function reversalLegs(coverage: Coverage): Leg[] {
   const legs: Leg[] = [];
   for (const u of coverage.uncapped) {
@@ -200,17 +169,14 @@ function raiseLeg(account: AccountRef, amount: Amount): Leg {
   return { account, amount: toAmount(amount.currency, amount.minor * sign) };
 }
 
-// The mirror of `raiseLeg`: a leg that lowers `account` by `amount`.
 function lowerLeg(account: AccountRef, amount: Amount): Leg {
   const sign = isDebitNormal(account) ? -1n : 1n;
   return { account, amount: toAmount(amount.currency, amount.minor * sign) };
 }
 
-// Sums the sale's lines into one balance change per account, where positive means the balance went
-// up. A sale can post several lines to the same account, since REVENUE gets both a fee credit and a
-// promo-funding debit, so the lines are summed per account. Lines are stored as raw amounts where a
-// debit is positive. Before summing, `balanceDelta` converts each line into its effect on that
-// account's balance, which depends on whether the account grows on a debit or a credit.
+// A sale can post several lines to the same account (REVENUE takes both a fee credit and a
+// promo-funding debit), so lines are summed per account. `balanceDelta` first converts each raw
+// debit-positive line into its effect on that account's balance.
 function foldDeltas(legs: ReadonlyArray<Leg>): AccountDelta[] {
   const byAccount = new Map<AccountRef, AccountDelta>();
   for (const leg of legs) {
@@ -229,18 +195,13 @@ function foldDeltas(legs: ReadonlyArray<Leg>): AccountDelta[] {
   return [...byAccount.values()];
 }
 
-// Reads the account's current balance in up-is-positive terms, which is how its stored balance
-// already reads. The caller uses this to judge how much of a clawback is collectable. A user
-// account never holds a negative balance, but reading up-is-positive keeps the cap correct for a
-// house account that may.
+// Balance in up-is-positive terms. A user account never holds a negative balance, but a house
+// account may, and up-is-positive keeps the clawback cap correct there.
 async function balanceUp(unit: Unit, account: AccountRef): Promise<bigint> {
   const current = await unit.ledger.balance(account);
   return current.minor;
 }
 
-// Builds the metadata stored with the reversing transaction. It records which order is refunded,
-// the id of the original transaction it reverses, and the caller's reason when one is given. No
-// money amounts go here; the lines carry those.
 function refundMeta(
   operation: Extract<Operation, { kind: 'refund' }>,
   sale: Sale,
@@ -256,12 +217,8 @@ function refundMeta(
   return meta;
 }
 
-// Requires a non-blank `orderId`. A blank or whitespace-only value is malformed input the central
-// guard cannot catch, because it carries no order to look up. Left unchecked it would return a
-// UNKNOWN_ORDER rejection that does not distinguish the malformed request from a genuine lookup
-// miss, so this throws a fault instead to report the client error. A genuinely unknown but
-// non-blank orderId still flows through to the
-// UNKNOWN_ORDER rejection.
+// A blank orderId carries no order to look up; letting it fall through would return UNKNOWN_ORDER,
+// indistinguishable from a genuine lookup miss, so throw a fault instead.
 function requireOrderId(orderId: string): void {
   if (orderId.trim() === '') {
     throw fault(

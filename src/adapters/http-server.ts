@@ -18,11 +18,8 @@ import type { Store, Unit } from '#src/ports.ts';
 // Holds a db transaction open across several requests. The transaction body pauses on a promise
 // called the gate, so later requests run inside it before it commits or rolls back.
 type Session = {
-  // The transaction-scoped stores, such as the ledger and sagas. All their writes commit or roll
-  // back together.
   unit: Unit;
 
-  // Ends the transaction by resolving or rejecting the gate. True commits and false rolls back.
   settle: (commit: boolean) => void;
 
   // Resolves once the db transaction has committed or rolled back. Awaiting surfaces any
@@ -32,9 +29,8 @@ type Session = {
 
 // --- Session lifecycle ------------------------------------------------------------
 
-// Opens a db transaction and pauses its body on the gate promise so later requests can use it.
-// The commit and rollback routes resolve or reject the gate to finish it. Returns the session id
-// that callers pass on every follow-up request.
+// Opens a db transaction paused on the gate; the commit and rollback routes settle it. Returns
+// the session id callers pass on every follow-up request.
 function beginSession(backing: Store, sessions: Map<string, Session>): string {
   const id = `sess_${sessions.size}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   let settle!: (commit: boolean) => void;
@@ -75,16 +71,6 @@ async function rollbackSession(session: Session): Promise<void> {
 
 // --- Ledger routes ----------------------------------------------------------------
 
-function ledgerFor(
-  backing: Store,
-  sessions: Map<string, Session>,
-  session: string,
-) {
-  return session === 'root'
-    ? backing.ledger
-    : sessions.get(session)!.unit.ledger;
-}
-
 async function ledgerRoute(
   ledger: Store['ledger'],
   method: string,
@@ -112,9 +98,6 @@ async function ledgerRoute(
   return ledgerReadRoute(ledger, method, body);
 }
 
-// Handles the remaining ledger reads, split out to keep each function short. `statement` and
-// `derivedBalances` each return one page. `heads`, `timeline`, `lineage`, and `list` stream rows
-// one at a time, so each one collects into an array here.
 async function ledgerReadRoute(
   ledger: Store['ledger'],
   method: string,
@@ -143,8 +126,6 @@ async function ledgerReadRoute(
     return collect(ledger.balanceAccounts(), (account) => account as unknown);
   }
   if (method === 'timeline') {
-    // Pass the order and limit straight through to the backing ledger. The engine then bounds its
-    // own DB work, instead of fetching every row and trimming the result here.
     const timelineOptions = {
       order: body.order as 'asc' | 'desc' | undefined,
       limit: body.limit as number | undefined,
@@ -221,9 +202,6 @@ type SubHandler = (
   body: Record<string, unknown>,
 ) => Promise<unknown>;
 
-// Holds every non-ledger sub-store call, with one entry per method. Each handler decodes the
-// body's wire form to domain values, calls the store method, and encodes the result back. The
-// client has a matching call for every entry.
 const SUBSTORE_ROUTES: Record<string, SubHandler> = {
   'idempotency/claim': async (unit, body) => {
     const result = await unit.idempotency.claim(body.key as string);
@@ -396,9 +374,6 @@ const SUBSTORE_ROUTES: Record<string, SubHandler> = {
   },
 };
 
-// Decodes a saga patch. A saga is a long-running multi-step payout tracked across states. The
-// patch updates only some fields, so its money field `reserve` may be absent. Decode `reserve`
-// from its wire string only when present, and pass the rest of the patch through unchanged.
 function decodeSagaPatch(
   patch: unknown,
 ): Parameters<Unit['sagas']['advance']>[3] {
@@ -416,9 +391,8 @@ function decodeSagaPatch(
 }
 
 // --- Routes that bypass transactions (trust, checkpoints) -------------------------
-// The trust store keeps a running per-subject tally of recent spend for risk checks. It and the
-// checkpoints write directly on the backing store, not inside a held transaction. So these routes
-// take the store rather than a session's unit.
+// These write directly on the backing store, never inside a held transaction, so they take the
+// store rather than a session's unit.
 
 async function trustRoute(
   backing: Store,
@@ -446,8 +420,6 @@ async function trustRoute(
   return null;
 }
 
-// The instance-netting journal, outside held transactions like checkpoints: each append is its
-// own transaction on the backing store. Leg amounts travel as encoded strings.
 async function movementRoute(
   backing: Store,
   method: string,
@@ -482,10 +454,6 @@ async function checkpointRoute(
   return backing.checkpoints.latest();
 }
 
-// The webhook replay store deduplicates incoming events. Claiming an event id succeeds the first
-// time and fails on repeats. The claim runs directly on the backing store, never inside a held
-// transaction, because webhook ingress checks it before doing any work, so this route takes the
-// store. Only `claim` exists, and its `{ claimed }` result is plain JSON that needs no codec.
 async function replayRoute(
   backing: Store,
   method: string,
@@ -550,7 +518,11 @@ async function txDispatch(
     return null;
   }
   if (tail[0] === 'ledger') {
-    return ledgerRoute(ledgerFor(backing, sessions, session), tail[1]!, body);
+    return ledgerRoute(
+      unitFor(backing, sessions, session).ledger,
+      tail[1]!,
+      body,
+    );
   }
   return subStoreRoute(
     unitFor(backing, sessions, session),
@@ -584,9 +556,8 @@ export function createStoreServer(
       const result = await dispatch(backing, sessions, segments, body);
       return jsonResponse({ ok: true, body: result ?? null });
     } catch (error) {
-      // Carry the fault's stable code and retryable flag over the wire, so the client can
-      // reconstruct an equivalent EconomyError: a non-retryable OVERDRAFT must not arrive looking
-      // like a retryable storage blip. `detail` is for server logs only and stays here.
+      // The stable code and retryable flag cross the wire so the client rebuilds an equivalent
+      // EconomyError; `detail` is for server logs only and deliberately stays off the wire.
       const normalized =
         error instanceof EconomyError ? error : normalizeError(error);
       return jsonResponse({

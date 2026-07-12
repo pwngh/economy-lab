@@ -11,45 +11,27 @@
 
 /**
  * Per-instance netting: accept thousands of small balanced movements (tips, unlocks) into a
- * durable journal and settle the NET against the ledger when the instance closes, so the ledger's
- * expensive machinery — ordered locks, chain links, balance updates — runs once per settle chunk
- * instead of once per movement.
- *
- * The journal is the source of truth, not the in-memory net map: a movement is ACCEPTED iff its
- * journal row committed, rows are hash-chained per session, and the settlement posting's meta
- * anchors the final head — so tamper-evidence extends transitively from the proved ledger to
- * every movement, and a crashed session settles from the journal alone (see `recoverSession`).
- *
- * Settlement clears through `SYSTEM.NETTING_CLEARING` in chunks of bounded width (the
- * interbank-novation move): each chunk is one balanced posting between at most `chunkWidth`
- * participant accounts and the clearing account, and the final chunk returns clearing to zero, so
- * conservation holds at every instant mid-settle. If any chunk is refused (the cross-instance
- * overdraft race), the already-posted chunks are compensated and every movement replays as its
- * own posting — so every accepted movement ends in exactly ONE ledger-final outcome, committed or
- * rejected with a reason. Cross-session `Reservations` make that replay path a crash-recovery
- * backstop rather than a normal path: shared across sessions in one process, they catch an
- * over-commit at accept time.
- *
- * What this trades, on purpose: per-movement enforcement moves from the database to the session
- * (DB-final at settle), and movements bypass the submit pipeline's maturity gate — the host
- * decides which flows cluster enough to earn that. Opt-in, host-level, the core Economy contract
- * untouched.
+ * durable journal and settle the NET against the ledger when the instance closes. The journal is
+ * the source of truth, never session memory — rows are hash-chained per session and the
+ * settlement posting anchors the final head, so tamper-evidence extends from the proved ledger
+ * to every movement. Opt-in and host-level, on purpose: per-movement enforcement moves to the
+ * session (DB-final at settle) and movements bypass the submit pipeline's maturity gate.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for the
  *   chain-and-anchor construction the journal reuses.
  */
 
-import { postEntry, balanceDelta } from '#src/ledger.ts';
+import { GENESIS_HEX, postEntry, balanceDelta } from '#src/ledger.ts';
 import { isWalletAccount, SYSTEM } from '#src/accounts.ts';
 import { toAmount } from '#src/money.ts';
 import { toHex } from '#src/bytes.ts';
-import { ERROR_CODES, fault } from '#src/errors.ts';
+import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
+import type { ErrorCode, RejectionCode } from '#src/errors.ts';
 import type { Amount, Currency } from '#src/money.ts';
 import type { Clock, Digest, Leg, Movement, Store } from '#src/ports.ts';
 
-const GENESIS_HEX = '0'.repeat(64);
 const ENCODER = new TextEncoder();
 
 /** One movement offered to the session: an idempotency key and a balanced set of CREDIT legs. */
@@ -61,7 +43,7 @@ export interface MovementRequest {
 /** What became of one offered movement. Accepted movements turn ledger-final at settle. */
 export type MovementOutcome =
   | { status: 'accepted'; seq: number }
-  | { status: 'rejected'; code: string };
+  | { status: 'rejected'; reason: RejectionCode | ErrorCode };
 
 /** How the session reached the ledger: one net posting per chunk, or movement-by-movement. */
 export interface SettleReport {
@@ -71,7 +53,10 @@ export interface SettleReport {
   postings: number;
 
   /** Movements the replay path refused, by idempotency key (empty in 'netted' mode). */
-  rejected: ReadonlyArray<{ idempotencyKey: string; code: string }>;
+  rejected: ReadonlyArray<{
+    idempotencyKey: string;
+    reason: RejectionCode | ErrorCode;
+  }>;
 
   /** The session chain head the settlement anchored. */
   journalHead: string;
@@ -173,7 +158,6 @@ export class InstanceSession {
   private readonly outcomes = new Map<string, MovementOutcome>();
   private readonly accepted: Movement[] = []; // every accepted movement, in seq order
   private pending: Movement[] = []; //           accepted but not yet journaled
-  private readonly net = new Map<AccountRef, bigint>(); // raw signed sums per account
   private readonly opening = new Map<AccountRef, bigint>(); // first-touch balance reads
   private head = GENESIS_HEX;
   private seq = 0;
@@ -187,9 +171,10 @@ export class InstanceSession {
   }
 
   /**
-   * Accepts or rejects one movement. Acceptance means: balanced CREDIT legs, affordable against
-   * (first-touch balance + everything pending across sessions sharing the registry), and queued
-   * for the next journal batch. A repeat of a seen key replays its recorded outcome.
+   * Accepts or rejects one movement. Acceptance means: affordable against (first-touch balance +
+   * everything pending across sessions sharing the registry) and queued for the next journal
+   * batch. Unbalanced or non-CREDIT legs throw. A repeat of a seen key replays its recorded
+   * outcome.
    */
   async record(request: MovementRequest): Promise<MovementOutcome> {
     const replay = this.outcomes.get(request.idempotencyKey);
@@ -201,7 +186,7 @@ export class InstanceSession {
     if (rejection) {
       return this.remember(request.idempotencyKey, {
         status: 'rejected',
-        code: rejection,
+        reason: rejection,
       });
     }
 
@@ -284,8 +269,8 @@ export class InstanceSession {
       }
     } catch {
       // A chunk was refused (the cross-instance race, or funds spent since accept). Undo what
-      // posted — the compensations return clearing to zero — then give every movement its own
-      // individual, auditable outcome. This path IS micro-batching; the ledger already knows it.
+      // posted — the compensations return clearing to zero — then replay each movement
+      // individually.
       for (const i of posted.reverse()) {
         await this.postChunk(chunks[i]!, { index: i, ...shape }, true);
       }
@@ -304,18 +289,27 @@ export class InstanceSession {
 
   // --- Internals --------------------------------------------------------------------
 
-  // Rejections that never reach the journal: an unbalanced or non-CREDIT movement is malformed,
-  // an unaffordable one is INSUFFICIENT_FUNDS against first-touch balance + all pending.
-  private async screen(legs: ReadonlyArray<Leg>): Promise<string | null> {
+  // Structural wrongness throws (the host builds these legs, so a bad set is a bug); the only
+  // expected "no" is INSUFFICIENT_FUNDS against first-touch balance + all pending.
+  private async screen(
+    legs: ReadonlyArray<Leg>,
+  ): Promise<RejectionCode | null> {
     let sum = 0n;
     for (const leg of legs) {
       if (leg.amount.currency !== 'CREDIT' || leg.amount.minor === 0n) {
-        return ERROR_CODES.MALFORMED_OPERATION;
+        throw fault(
+          ERROR_CODES.MALFORMED_OPERATION,
+          'A movement leg must carry a nonzero CREDIT amount.',
+          { detail: { account: leg.account } },
+        );
       }
       sum += leg.amount.minor;
     }
     if (sum !== 0n || legs.length === 0) {
-      return ERROR_CODES.LEDGER_UNBALANCED;
+      throw fault(
+        ERROR_CODES.LEDGER_UNBALANCED,
+        'A movement must carry legs that sum to zero.',
+      );
     }
     for (const leg of legs) {
       if (!isWalletAccount(leg.account)) {
@@ -350,10 +344,6 @@ export class InstanceSession {
       if (isWalletAccount(leg.account)) {
         this.reservations.add(leg.account, balanceDelta(leg).minor * sign);
       }
-      this.net.set(
-        leg.account,
-        (this.net.get(leg.account) ?? 0n) + leg.amount.minor * sign,
-      );
     }
   }
 
@@ -448,8 +438,6 @@ export class InstanceSession {
       });
     }
     await this.deps.store.transaction(async (unit) => {
-      // The posting itself is the idempotency record: a re-settled session (recovery, a retry)
-      // finds the chunk already committed and moves on instead of double-posting.
       if ((await unit.ledger.posting(txnId)) !== null) {
         return;
       }
@@ -476,7 +464,10 @@ export class InstanceSession {
     movements: ReadonlyArray<Movement>,
     journalHead: string,
   ): Promise<SettleReport> {
-    const rejected: Array<{ idempotencyKey: string; code: string }> = [];
+    const rejected: Array<{
+      idempotencyKey: string;
+      reason: RejectionCode | ErrorCode;
+    }> = [];
     let postings = 0;
     for (const movement of movements) {
       const txnId = `mv_${this.sessionId}_${movement.seq}`;
@@ -498,12 +489,9 @@ export class InstanceSession {
         });
         postings += 1;
       } catch (error) {
-        const code =
-          error instanceof Error && 'code' in error
-            ? String((error as { code: unknown }).code)
-            : 'STORE.FAILURE';
-        rejected.push({ idempotencyKey: movement.idempotencyKey, code });
-        this.remember(movement.idempotencyKey, { status: 'rejected', code });
+        const reason = normalizeError(error).code;
+        rejected.push({ idempotencyKey: movement.idempotencyKey, reason });
+        this.remember(movement.idempotencyKey, { status: 'rejected', reason });
       }
     }
     this.releaseReservations();

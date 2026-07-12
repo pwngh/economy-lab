@@ -17,19 +17,13 @@ import type { AccountRef } from '#src/accounts.ts';
 import type { Config } from '#src/config.ts';
 import type { Ledger, Lot } from '#src/ports.ts';
 
-/**
- * Bundles the maturity config and an optional signal into one parameter. Bundling keeps the
- * functions under the param-count limit while still passing the caller's AbortSignal through to the
- * ledger's balance read.
- */
+/** The maturity config plus an optional AbortSignal passed through to the ledger's balance read. */
 export type MaturityOptions = { config: Config; signal?: AbortSignal };
 
 /**
- * Carries {@link maturedAtLeast}'s options. It extends {@link MaturityOptions} with the `amount` the
- * matured balance must reach. The `amount` rides in the options object rather than as its own
- * argument so the call stays parallel to {@link maturedBalance}'s `(ledger, account, now, options)`
- * and under the param-count limit. A caller that already has the balance can pass it as `live` to avoid
- * re-reading it; the spend handler does, with the balance read under the lock.
+ * {@link MaturityOptions} plus the `amount` the matured balance must reach. A caller that already
+ * has the balance can pass it as `live` to avoid re-reading it; the spend handler does, with the
+ * balance read under the lock.
  */
 export type MaturedAtLeastOptions = MaturityOptions & {
   amount: Amount;
@@ -57,12 +51,11 @@ export function maturityHorizonMs(source: string, config: Config): number {
 }
 
 /**
- * Returns the moment in epoch milliseconds a lot matures, which is the top-up time plus the
- * source's required wait. A lot is one batch of credits from a single top-up, tagged with when it
- * was added and its funding source. The wait is computed here from `source` rather than read from
- * the lot's own `maturesAt`, because a top-up may record the source without a maturity time.
- * This depends on a caller rule: any handler issuing spendable credits records the funding source
- * on the posting (a missing source falls back to the 'default' horizon, just less precisely).
+ * Returns the moment in epoch milliseconds a lot matures: the top-up time plus the source's
+ * required wait. The wait is computed from `source` rather than read from the lot's own
+ * `maturesAt`, because a top-up may record the source without a maturity time. This depends on a
+ * caller rule: any handler issuing spendable credits records the funding source on the posting (a
+ * missing source falls back to the 'default' horizon, just less precisely).
  */
 export function lotMaturesAt(lot: Lot, config: Config): number {
   return lot.toppedUpAt + maturityHorizonMs(lot.source, config);
@@ -76,11 +69,48 @@ export function isMatured(lot: Lot, now: number, config: Config): boolean {
   return lotMaturesAt(lot, config) <= now;
 }
 
-// How many lots to read from the ledger per bounded page. Most balances are covered by the newest
-// lot or two, so the first page almost always suffices. A wider tail, such as many small unspent
-// top-ups, just pulls the next page. The size keeps the common case to one round-trip while
-// bounding memory.
+// Lots per bounded page. The newest lot or two usually cover the balance, so the common case is
+// one round-trip; a wider tail just pulls the next page.
 const TAIL_PAGE = 64;
+
+// One slice of the FIFO tail: how much of the live balance a lot covers, and whether that slice
+// has matured by `now`.
+type TailSlice = { take: bigint; matured: boolean };
+
+// Walks the newest lots first, a bounded page at a time, yielding each lot's slice of the FIFO
+// tail until the live balance is covered. The boundary lot contributes only what is left to
+// cover; a fully-included lot contributes its whole amount. The ledger pushes the `order desc
+// limit/offset` down to the engine, so each page is bounded DB work. An empty page means the
+// history ran out before the balance was covered, only possible if a balance row outran its
+// lots, so the walk stops rather than loop forever. Both matured-balance reads consume this one
+// walker; each applies its own stop rule.
+async function* tailSlices(
+  ledger: Ledger,
+  account: AccountRef,
+  liveMinor: bigint,
+  options: { now: number; config: Config },
+): AsyncGenerator<TailSlice> {
+  let remaining = liveMinor;
+  for (let offset = 0; remaining > 0n; offset += TAIL_PAGE) {
+    let drained = 0;
+    for await (const lot of ledger.timeline(account, {
+      order: 'desc',
+      limit: TAIL_PAGE,
+      offset,
+    })) {
+      drained += 1;
+      const take = lot.amount.minor < remaining ? lot.amount.minor : remaining;
+      yield { take, matured: lotMaturesAt(lot, options.config) <= options.now };
+      remaining -= take;
+      if (remaining === 0n) {
+        return;
+      }
+    }
+    if (drained === 0) {
+      return;
+    }
+  }
+}
 
 /**
  * Returns the matured part of an account's balance as of `now`: how much a cash-out may draw
@@ -106,34 +136,13 @@ export async function maturedBalance(
     return zero(unit);
   }
 
-  let remaining = live.minor;
   let matured = 0n;
-  // Walk the newest lots first, a bounded page at a time. The ledger pushes the `order desc
-  // limit/offset` down to the engine, so each page is bounded DB work. Paging stops the moment
-  // `remaining` hits zero.
-  for (let offset = 0; remaining > 0n; offset += TAIL_PAGE) {
-    let drained = 0;
-    for await (const lot of ledger.timeline(account, {
-      order: 'desc',
-      limit: TAIL_PAGE,
-      offset,
-    })) {
-      drained += 1;
-      // The boundary lot contributes only what is left to cover. A fully-included lot contributes
-      // its whole amount.
-      const take = lot.amount.minor < remaining ? lot.amount.minor : remaining;
-      if (lotMaturesAt(lot, options.config) <= now) {
-        matured += take;
-      }
-      remaining -= take;
-      if (remaining === 0n) {
-        break;
-      }
-    }
-    // The page returned no lots, so the history is exhausted before the balance was covered. This is
-    // only possible if a balance row outran its lots. Stop here rather than loop forever.
-    if (drained === 0) {
-      break;
+  for await (const slice of tailSlices(ledger, account, live.minor, {
+    now,
+    config: options.config,
+  })) {
+    if (slice.matured) {
+      matured += slice.take;
     }
   }
   return toAmount(unit, matured);
@@ -164,44 +173,27 @@ export async function maturedAtLeast(
     return false;
   }
 
-  let remaining = live.minor;
+  // The same walk as maturedBalance, but the running sum stops the walk the moment it covers
+  // `need` — returning ends the generator, so no further page is read.
   let matured = 0n;
-  for (let offset = 0; remaining > 0n; offset += TAIL_PAGE) {
-    let drained = 0;
-    for await (const lot of ledger.timeline(account, {
-      order: 'desc',
-      limit: TAIL_PAGE,
-      offset,
-    })) {
-      drained += 1;
-      // This is the same FIFO-tail split as maturedBalance. The boundary lot contributes only what
-      // is left to cover the live balance, and a fully-included lot contributes its whole amount.
-      // Only matured lots count.
-      const take = lot.amount.minor < remaining ? lot.amount.minor : remaining;
-      if (lotMaturesAt(lot, options.config) <= now) {
-        matured += take;
-        if (matured >= need) {
-          return true;
-        }
+  for await (const slice of tailSlices(ledger, account, live.minor, {
+    now,
+    config: options.config,
+  })) {
+    if (slice.matured) {
+      matured += slice.take;
+      if (matured >= need) {
+        return true;
       }
-      remaining -= take;
-      if (remaining === 0n) {
-        break;
-      }
-    }
-    if (drained === 0) {
-      break;
     }
   }
   return false;
 }
 
 /**
- * Computes the matured balance by scanning the full history. This is the original implementation,
- * kept verbatim as the oracle the differential test checks the bounded {@link maturedBalance}
- * against. It reads every lot oldest-first, derives the spent amount from the total, keeps the FIFO
- * tail, then sums the matured ones. It is correct but O(account history), which is the very cost the
- * bounded path removes, so it lives here only for tests and never on the production read path.
+ * Computes the matured balance by scanning the full history: kept verbatim as the oracle the
+ * differential test checks the bounded {@link maturedBalance} against. Correct but O(account
+ * history), so it lives here only for tests and never on the production read path.
  */
 export async function maturedBalanceFullScan(
   ledger: Ledger,
@@ -239,9 +231,8 @@ export async function immatureBalance(
 
 type Settled = { minor: bigint; maturesAt: number };
 
-// Reads every lot for the account, oldest first, reduced to Settled. The ledger only turns
-// balance-increasing entries into lots, so each amount is positive. Maturity is computed from the
-// funding source, not taken from the lot's own maturesAt.
+// Reads every lot for the account, oldest first. The ledger only turns balance-increasing entries
+// into lots, so each amount is positive.
 async function collectLots(
   ledger: Ledger,
   account: AccountRef,
@@ -285,7 +276,6 @@ function fifoTail(
   return tail;
 }
 
-// Adds up the remaining lots whose wait has elapsed by `now` to get the matured balance.
 function sumMatured(
   tail: ReadonlyArray<Settled>,
   now: number,

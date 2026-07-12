@@ -12,7 +12,8 @@
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { credit, debit, lockAll, postEntry } from '#src/ledger.ts';
 import { convertFloor, encodeAmount, mulDiv, toAmount } from '#src/money.ts';
-import { assertKind } from '#src/operations/guards.ts';
+import { assertKind, loadSaga } from '#src/operations/guards.ts';
+import { pendingOutbox } from '#src/outbox.ts';
 import { platformShard, SYSTEM } from '#src/accounts.ts';
 
 import type { Amount } from '#src/money.ts';
@@ -40,7 +41,7 @@ export async function settlePayout(
 ): Promise<Outcome> {
   assertKind(operation, 'settlePayout');
 
-  const saga = await loadSaga(unit, operation.sagaId);
+  const saga = await loadSaga(unit, operation);
   refuseNotSubmitted(saga);
 
   const rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
@@ -52,9 +53,6 @@ export async function settlePayout(
   const fee = payoutFee(usd, ctx.config.payoutFeeBps);
   const net = toAmount('USD', usd.minor - fee.minor);
 
-  // The credit-side posting empties the reserve into REVENUE and is the primary settle entry. Its
-  // transaction is the one returned as the committed Outcome. The USD-side posting commits in the
-  // same transaction alongside it.
   const transaction = await postSettlementEntries(unit, ctx, {
     saga,
     usd,
@@ -62,10 +60,8 @@ export async function settlePayout(
     net,
     rateId: rate.rateId,
   });
-  // Record the gross USD disbursed on the saga as it settles, in the same transaction as the
-  // postings and the state change. This lets the saga's terminal outcome be read straight off the
-  // record instead of re-derived from posting meta. `usd` is the same rate-derived figure the
-  // USD-side posting moves out of trust.
+  // Record the gross USD on the saga in the same transaction as the postings and state change, so
+  // the terminal outcome reads straight off the record instead of being re-derived from posting meta.
   const advanced = await unit.sagas.advance(saga.id, 'SUBMITTED', 'SETTLED', {
     updatedAt: ctx.clock.now(),
     payoutUsd: usd,
@@ -75,9 +71,8 @@ export async function settlePayout(
   // lost CAS (assertAdvanced throws) rolls it back with the entries and no event emits for a settle
   // that did not take. settlePayout is not in economy.ts's EVENTS map, so it is enqueued here rather
   // than by the submit pipeline, keeping it identical to the worker's.
-  await unit.outbox.enqueue({
-    id: ctx.ids.next('obx'),
-    event: {
+  await unit.outbox.enqueue(
+    pendingOutbox(ctx.ids, {
       id: ctx.ids.next('evt'),
       type: 'economy.payout.settled',
       version: 1,
@@ -93,36 +88,15 @@ export async function settlePayout(
         rateId: rate.rateId,
       },
       audience: 'internal',
-    },
-    status: 'pending',
-    attempts: 0,
-    reason: null,
-  });
+    }),
+  );
 
   return { status: 'committed', transaction };
 }
 
-// Loads the saga by id. The webhook mapping or operator supplied the id, so a missing saga is a
-// caller or mapping error. It throws a fault rather than treating the miss as a quiet "nothing to
-// do", matching reversePayout's loadSaga and reverse's unknown-txnId handling.
-async function loadSaga(unit: Unit, sagaId: string): Promise<Saga> {
-  const saga = await unit.sagas.load(sagaId);
-  if (saga === null) {
-    throw fault(
-      ERROR_CODES.MALFORMED_OPERATION,
-      'settlePayout names a payout that does not exist.',
-      { detail: { kind: 'settlePayout', sagaId } },
-    );
-  }
-  return saga;
-}
-
-// Refuses a settle unless the saga is SUBMITTED. A settle only applies to a payout the provider was
-// actually handed, which is the one state with a disbursement to report settled. Every other state
-// has no such disbursement: REQUESTED or RESERVED is not yet submitted, SETTLED is already done, and
-// FAILED is terminal. Refusing here avoids posting a second settle's worth of entries. This mirrors
-// the worker's `driveTransition`, which only ever called `settle` on a SUBMITTED saga. It throws
-// INVALID_TRANSITION so a redelivered or early webhook gets a clear refusal.
+// Only SUBMITTED has a disbursement to report settled; refusing every other state avoids posting a
+// second settle's worth of entries. Throws INVALID_TRANSITION so a redelivered or early webhook
+// gets a clear refusal.
 function refuseNotSubmitted(saga: Saga): void {
   if (saga.state !== 'SUBMITTED') {
     throw fault(
@@ -164,9 +138,6 @@ async function postSettlementEntries(
     ],
     meta: { kind: 'settlePayout', sagaId: saga.id, rateId },
   });
-  // The gross `usd` leaves the trust account. The rail keeps `payoutFee` and the seller receives
-  // `netUsd`. That split happens downstream at the external rail, so it is recorded here on the
-  // posting for the audit trail rather than posted as ledger legs.
   await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs: [debit(SYSTEM.USD_CLEARING, usd), credit(SYSTEM.TRUST_CASH, usd)],
@@ -181,17 +152,13 @@ async function postSettlementEntries(
   return transaction;
 }
 
-// Computes the payout-rail fee on a gross USD disbursement, rounded down to whole minor units.
-// `feeBps` is in basis points, so 150 means 1.5%. The fee is the rail's cut, such as a payment
-// processor's, and it is deducted so the seller gets the net.
+// Rail fee on the gross USD disbursement, rounded down. `feeBps` is basis points (150 = 1.5%).
 function payoutFee(gross: Amount, feeBps: number): Amount {
   return toAmount('USD', mulDiv(gross.minor, BigInt(feeBps), 10_000n, 'floor'));
 }
 
-// Throws when the CAS did not take (another worker or settle got there first), rolling back the
-// two entries and the queued event so the seller is not paid twice. Safe to retry: a redelivered
-// settle reloads the saga, finds it no longer SUBMITTED, and is turned away at `refuseNotSubmitted`
-// before posting anything.
+// A lost CAS throws, rolling back the two entries and the queued event. Safe to retry: a
+// redelivered settle finds the saga no longer SUBMITTED and is refused before posting anything.
 // See https://economy-lab-docs.pages.dev/economy/concepts/payout-saga/ for how a compare-and-set
 // posts its money in the same transaction, so a re-driven step takes effect at most once.
 function assertAdvanced(advanced: boolean, saga: Saga, to: SagaState): void {

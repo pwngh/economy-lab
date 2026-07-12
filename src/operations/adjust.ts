@@ -10,7 +10,11 @@
  */
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
-import { assertKind, assertOperator } from '#src/operations/guards.ts';
+import {
+  assertKind,
+  assertOperator,
+  assertReason,
+} from '#src/operations/guards.ts';
 import { postEntry } from '#src/ledger.ts';
 import { encodeAmount, isZero, toAmount } from '#src/money.ts';
 import { SYSTEM, isDebitNormal } from '#src/accounts.ts';
@@ -49,7 +53,7 @@ export async function adjust(
 ): Promise<Outcome> {
   assertKind(operation, 'adjust');
   assertOperator(operation);
-  assertReason(operation.reason);
+  assertReason(operation);
   const amount = creditDelta(operation.amount, 'adjust.amount');
 
   const transaction = await postEntry(unit.ledger, {
@@ -61,30 +65,22 @@ export async function adjust(
   return { status: 'committed', transaction };
 }
 
-// Builds the two legs of an adjustment. One leg moves `account` by the signed amount. The
-// other posts the opposite amount to opening-equity so the two cancel. This bypasses the
-// `credit`/`debit` helpers because the move must read correctly whether `account` grows on
-// a debit or on a credit.
+// Bypasses the `credit`/`debit` helpers because the move must read correctly whether `account`
+// grows on a debit or on a credit.
 function buildAdjustLegs(account: AccountRef, amount: Amount): Leg[] {
-  // Leg amounts are stored debit-positive: a debit is positive and a credit is negative.
-  // For a debit-normal account the stored amount equals the balance change. For a
-  // credit-normal account the stored amount has the opposite sign from the balance change.
-  // So to raise `account` by `amount.minor`, store +amount.minor when the account is
-  // debit-normal and -amount.minor when it is credit-normal.
+  // Legs are stored debit-positive, so the stored sign equals the balance change only for a
+  // debit-normal account; a credit-normal account needs the sign flipped.
   const accountMinor = isDebitNormal(account) ? amount.minor : -amount.minor;
   return [
     { account, amount: toAmount(amount.currency, accountMinor) },
     {
-      // Negated amount, so the two legs sum to zero.
       account: SYSTEM.OPENING_EQUITY,
       amount: toAmount(amount.currency, -accountMinor),
     },
   ];
 }
 
-// Builds the metadata stored with the posting: the signed amount (via `encodeAmount`, which
-// keeps the hashed bytes stable) and the operator reason, giving the audit trail a record of
-// what changed and why.
+// The amount goes through `encodeAmount` so the hashed bytes stay stable.
 function adjustMeta(
   operation: Extract<Operation, { kind: 'adjust' }>,
 ): Record<string, unknown> {
@@ -95,22 +91,8 @@ function adjustMeta(
   };
 }
 
-// Requires a non-blank reason, because a correction must record why for auditability. A
-// missing or blank reason is malformed and is rejected before anything posts.
-function assertReason(reason: string): void {
-  if (reason.trim() === '') {
-    throw fault(
-      ERROR_CODES.MALFORMED_OPERATION,
-      'adjust requires a non-empty reason.',
-      { detail: { kind: 'adjust' } },
-    );
-  }
-}
-
-// Validates the amount and returns it unchanged. The amount must be CREDIT, because the
-// opening-equity account it balances against is CREDIT. The amount must also be non-zero,
-// because an adjustment that moves nothing is malformed. The amount is signed: a negative
-// value is a valid downward correction. Positivity is not required, only that money moves.
+// Must be CREDIT because the opening-equity account it balances against is CREDIT, and non-zero.
+// The amount is signed: a negative value is a valid downward correction.
 function creditDelta(amount: Amount, label: string): Amount {
   if (amount.currency !== 'CREDIT') {
     throw fault(ERROR_CODES.MALFORMED_OPERATION, `${label} must be CREDIT.`, {

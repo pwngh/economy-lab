@@ -13,7 +13,12 @@
 // `bigint` an amount is stored as, so amounts travel as decimal strings (e.g. `'CREDIT:12.34'`)
 // and parse back on arrival. Client and server both import this file, so the format stays in sync.
 
-import { decodeAmountWire, encodeAmount, isAmount } from '#src/money.ts';
+import {
+  decodeAmountWire,
+  decodeAmounts,
+  encodeAmount,
+  encodeAmounts,
+} from '#src/money.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
@@ -36,9 +41,7 @@ import type {
 
 type WireLeg = { account: string; amount: string };
 
-// Each account keeps a tamper-evident hash chain over its postings. Each entry's hash covers the
-// previous hash plus the new contents, so a later edit breaks the chain. This is the wire form of
-// one account's link for a single transaction: the account, its chain hash before, and after.
+// Wire form of one account's tamper-evident hash-chain link for a single transaction.
 type WireLink = { account: string; prevHash: string; hash: string };
 
 function encodeLeg(leg: Leg): WireLeg {
@@ -50,72 +53,15 @@ function decodeLeg(wire: unknown): Leg {
   return { account: row.account as AccountRef, amount: amountFrom(row.amount) };
 }
 
-// Local alias for `decodeAmountWire` (money.ts owns the `'CREDIT:12.34'` format).
 function amountFrom(wire: string): Amount {
   return decodeAmountWire(wire);
 }
 
-// Behaves like `amountFrom` but returns null instead of throwing when the string is not an encoded
-// amount. This lets the generic walk below tell a `CREDIT:12.34` from an ordinary string that
-// merely contains a colon. The decimal tail must parse, since `decodeAmountWire` throws otherwise,
-// and that throw is caught here.
-function tryAmountFrom(wire: string): Amount | null {
-  if (wire.indexOf(':') < 0) {
-    return null;
-  }
-  try {
-    return decodeAmountWire(wire);
-  } catch {
-    return null;
-  }
-}
-
-// The inbox row carries a whole {@link Operation}, whose money fields differ by `kind` (topUp.amount,
-// spend.price, clawback.amount, and so on) and hold a `bigint` that JSON.stringify cannot serialize.
-// A per-kind branch would drift as the union grows. Instead, these two functions walk the operation
-// generically. The encoder swaps every branded Amount for its `CREDIT:12.34` string, and the decoder
-// reverses that swap. This is the same Amount-brand walk the SQL engines use to store an Operation in
-// a jsonb column.
-function encodeAmounts(value: unknown): unknown {
-  if (isAmount(value)) {
-    return encodeAmount(value);
-  }
-  if (Array.isArray(value)) {
-    return value.map(encodeAmounts);
-  }
-  if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [key, inner] of Object.entries(value)) {
-      out[key] = encodeAmounts(inner);
-    }
-    return out;
-  }
-  return value;
-}
-
-// Reverse of `encodeAmounts`: turn every encoded-amount string back into an Amount. A string is an
-// encoded amount only when it parses as `CURRENCY:decimal`; any other string (idempotencyKey, sku,
-// source, ...) passes through unchanged.
-function decodeAmounts(value: unknown): unknown {
-  if (typeof value === 'string') {
-    return tryAmountFrom(value) ?? value;
-  }
-  if (Array.isArray(value)) {
-    return value.map(decodeAmounts);
-  }
-  if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [key, inner] of Object.entries(value)) {
-      out[key] = decodeAmounts(inner);
-    }
-    return out;
-  }
-  return value;
-}
+// An inbox row carries a whole Operation whose money fields differ by `kind`; the generic
+// Amount-brand walk (encodeAmounts/decodeAmounts) codes them all with no per-kind branch to drift.
 
 /**
- * Encode each domain record into a JSON-friendly wire shape. Amounts become decimal strings;
- * everything else copies through unchanged. One function per record type the adapter sends.
+ * Encoders to the JSON wire shape, one per record type the adapter sends.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage} for how the store adapter ports move records over the wire.
  */
@@ -152,13 +98,9 @@ export const encodeWire = {
   saga: (saga: Saga): unknown => ({
     ...saga,
     reserve: encodeAmount(saga.reserve),
-    // The terminal settle outcome is sent as an encoded amount (or null before settlement),
-    // decoded back to an Amount in decodeWire.saga below.
     payoutUsd: saga.payoutUsd === null ? null : encodeAmount(saga.payoutUsd),
   }),
 
-  // Only re-encode the amount-typed fields actually present on the patch (reserve, payoutUsd); the
-  // rest pass through untouched.
   sagaPatch: (patch: Partial<Saga>): unknown => {
     const out: Record<string, unknown> = { ...patch };
     if (patch.reserve !== undefined) {
@@ -193,10 +135,8 @@ export const encodeWire = {
 };
 
 /**
- * Decode each received JSON shape back into its typed domain record (reverse of `encodeWire`).
- * Decimal-string amounts parse back into `Amount`. Fields that are plain strings on the wire but
- * distinct id types in the domain (e.g. an account reference) are cast back on arrival. One
- * function per record type the adapter receives.
+ * Decoders back to typed domain records, one per record type the adapter receives (reverse of
+ * `encodeWire`). Plain wire strings that are branded id types in the domain are cast back here.
  */
 export const decodeWire = {
   amount: (wire: unknown): Amount => amountFrom(wire as string),
@@ -233,10 +173,8 @@ export const decodeWire = {
     };
   },
 
-  // Result of trying to claim an idempotency key (so a retry runs at most once). Either this
-  // caller got the key first (`claimed: true`, do the work), or the key was already used and the
-  // reply carries the transaction the earlier request recorded (`claimed: false`), which decodes
-  // like any other transaction.
+  // Wire result of an idempotency-key claim: `claimed: true` means do the work; `claimed: false`
+  // carries the transaction the earlier request recorded.
   claim: (
     wire: unknown,
   ): { claimed: true } | { claimed: false; transaction: Transaction } => {

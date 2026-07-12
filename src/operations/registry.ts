@@ -10,7 +10,7 @@
  */
 
 import { topUp } from '#src/operations/topUp.ts';
-import { spend } from '#src/operations/spend.ts';
+import { spend, spendPreClaim } from '#src/operations/spend.ts';
 import { refund } from '#src/operations/refund.ts';
 import { clawback } from '#src/operations/clawback.ts';
 import { requestPayout } from '#src/operations/requestPayout.ts';
@@ -26,7 +26,8 @@ import { reverse } from '#src/operations/reverse.ts';
 import { reversePayout } from '#src/operations/reversePayout.ts';
 import { settlePayout } from '#src/operations/settlePayout.ts';
 
-import type { Handler, Operation } from '#src/contract.ts';
+import type { Handler, Operation, Outcome } from '#src/contract.ts';
+import type { Unit } from '#src/ports.ts';
 
 /**
  * Maps each operation's `kind` to its handler. The `economy.ts` submit path looks up handlers here.
@@ -38,6 +39,21 @@ import type { Handler, Operation } from '#src/contract.ts';
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy} for the
  * submit entry point that dispatches through this registry.
  */
+/** A kind's early duplicate probe: a non-null outcome ends the request before locks or screens. */
+export type PreClaim = (
+  operation: Operation,
+  unit: Unit,
+) => Promise<Outcome | null>;
+
+/**
+ * Kinds whose domain-level duplicate is decidable before any lock (the deciding row is final once
+ * written). The submit path runs the probe right after the idempotency claim, so a replay costs
+ * two reads instead of the full lock-and-screen prologue.
+ */
+export const PRE_CLAIMS: Partial<Record<Operation['kind'], PreClaim>> = {
+  spend: spendPreClaim,
+};
+
 export const REGISTRY = {
   topUp,
   spend,

@@ -28,11 +28,7 @@ import type { Rate } from '#src/ports.ts';
 export { mulDiv } from '#src/money.vendored.ts';
 export type { Rounding } from '#src/money.vendored.ts';
 
-/**
- * The currencies the system handles: in-app CREDIT and real-world USD. This is a string
- * union rather than an enum so a new currency can be added here without touching call
- * sites.
- */
+/** The currencies the system handles: in-app CREDIT and real-world USD. */
 export type Currency = 'CREDIT' | 'USD';
 
 /**
@@ -52,13 +48,11 @@ export type Amount = {
   readonly __brand: 'Amount';
 };
 
-// How many decimal places a whole unit has (2, like dollars and cents).
 const FRACTION_DIGITS = 2;
 
 /**
- * The number of minor units per whole unit (100 cents = $1). It is exported so other code
- * shares this one factor, such as fee rounding that rounds up to a whole credit. Both
- * `encodeAmount` and `decodeAmount` read it, so they cannot disagree on the scale.
+ * Minor units per whole unit (100 cents = $1), exported so other code — fee rounding that
+ * rounds up to a whole credit — shares this one factor.
  */
 export const SCALE = 100n; // 10 ** FRACTION_DIGITS
 
@@ -84,7 +78,6 @@ export function toAmount(currency: Currency, minor: bigint): Amount {
   return { currency, minor, __brand: 'Amount' };
 }
 
-/** Reports whether `value` is a real `Amount`, meaning it has the brand and a bigint minor. */
 export function isAmount(value: unknown): value is Amount {
   return (
     typeof value === 'object' &&
@@ -111,15 +104,11 @@ export function add(a: Amount, b: Amount): Amount {
   return toAmount(a.currency, a.minor + b.minor);
 }
 
-/** Flips the sign of an amount. */
 export function neg(amount: Amount): Amount {
   return toAmount(amount.currency, -amount.minor);
 }
 
-/**
- * Compares two amounts of the same currency and returns -1, 0, or 1. Throws
- * CURRENCY_MISMATCH across currencies.
- */
+/** Throws CURRENCY_MISMATCH across currencies. */
 export function compare(a: Amount, b: Amount): -1 | 0 | 1 {
   assertSameCurrency(a, b);
   if (a.minor < b.minor) {
@@ -131,7 +120,6 @@ export function compare(a: Amount, b: Amount): -1 | 0 | 1 {
   return 0;
 }
 
-/** Returns a zero amount in the given currency. */
 export function zero(currency: Currency): Amount {
   return toAmount(currency, 0n);
 }
@@ -247,8 +235,7 @@ function isCurrency(value: string): value is Currency {
   return value === 'CREDIT' || value === 'USD';
 }
 
-// Throws CURRENCY_MISMATCH if the amounts are in different currencies. Combining two
-// currencies is always a bug.
+// Combining two currencies is always a bug, never a recoverable decline.
 function assertSameCurrency(a: Amount, b: Amount): void {
   if (a.currency !== b.currency) {
     throw fault(
@@ -256,5 +243,61 @@ function assertSameCurrency(a: Amount, b: Amount): void {
       `Cannot combine ${a.currency} with ${b.currency}.`,
       { detail: { left: a.currency, right: b.currency } },
     );
+  }
+}
+
+/**
+ * Walks any JSON-shaped value and swaps every branded {@link Amount} for its `CREDIT:12.34` wire
+ * string. The one Amount-brand walk: the SQL engines use it to store an Operation in a JSON
+ * column, and the HTTP store adapter uses it for the same Operation on the wire. A per-kind
+ * branch would drift as the Operation union grows; the walk cannot.
+ */
+export function encodeAmounts(value: unknown): unknown {
+  if (isAmount(value)) {
+    return encodeAmount(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(encodeAmounts);
+  }
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, inner] of Object.entries(value)) {
+      out[key] = encodeAmounts(inner);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Reverse of {@link encodeAmounts}: every string that parses as `CURRENCY:decimal` becomes an
+ * Amount again; any other string (an idempotencyKey, a sku, a source, ...) passes through
+ * unchanged. A string is an encoded amount only when the whole `decodeAmountWire` parse succeeds.
+ */
+export function decodeAmounts(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return tryDecodeAmountString(value) ?? value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(decodeAmounts);
+  }
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, inner] of Object.entries(value)) {
+      out[key] = decodeAmounts(inner);
+    }
+    return out;
+  }
+  return value;
+}
+
+function tryDecodeAmountString(wire: string): Amount | null {
+  if (wire.indexOf(':') < 0) {
+    return null;
+  }
+  try {
+    return decodeAmountWire(wire);
+  } catch {
+    return null;
   }
 }

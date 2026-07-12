@@ -12,10 +12,10 @@
 import { ERROR_CODES, fault } from '#src/errors.ts';
 
 import type { Ctx, Operation, Transaction } from '#src/contract.ts';
+import type { Saga, Unit } from '#src/ports.ts';
 
 /**
- * Asserts that `operation` has the expected `kind`, narrowing its type for the rest of the handler.
- * Operations route to handlers by `kind`, so a mismatch means the dispatch is miswired. The handler
+ * Narrows `operation` to the expected `kind`. A mismatch means the dispatch is miswired, so it
  * throws a fault rather than process an operation it cannot handle.
  */
 export function assertKind<K extends Operation['kind']>(
@@ -47,9 +47,53 @@ export function assertOperator(operation: Operation): void {
 }
 
 /**
- * Builds the transaction for an operation that changes state but moves no money. A committed result
- * must carry a Transaction, so this returns a receipt with a fresh id and a commit time but empty leg
- * and link lists, because nothing was posted to the ledger.
+ * Requires a non-blank reason on a manual correction, because a correction must record why for
+ * auditability. A missing or blank reason is malformed and throws before anything posts.
+ */
+export function assertReason(
+  operation: Extract<Operation, { reason: string }>,
+): void {
+  if (operation.reason.trim() === '') {
+    throw fault(
+      ERROR_CODES.MALFORMED_OPERATION,
+      `${operation.kind} requires a non-empty reason.`,
+      { detail: { kind: operation.kind } },
+    );
+  }
+}
+
+/**
+ * Loads the saga a payout operation names by `sagaId`. An operator or webhook mapping supplied the
+ * id, so a missing saga is a caller error: it throws a fault rather than treating the miss as a
+ * quiet "nothing to do", matching reverse's unknown-txnId handling.
+ */
+export async function loadSaga(
+  unit: Unit,
+  operation: Extract<Operation, { sagaId: string }>,
+): Promise<Saga> {
+  const saga = await unit.sagas.load(operation.sagaId);
+  if (saga === null) {
+    throw fault(
+      ERROR_CODES.MALFORMED_OPERATION,
+      `${operation.kind} names a payout that does not exist.`,
+      { detail: { kind: operation.kind, sagaId: operation.sagaId } },
+    );
+  }
+  return saga;
+}
+
+/**
+ * Builds the `reversed:<id>` idempotency key that marks an order or transaction as undone. Refund
+ * and clawback stake it per orderId, which keeps the two reversal paths mutually exclusive, and
+ * reverse stakes it per txnId; one builder keeps the key family identical across all three.
+ */
+export function reversalKey(id: string): string {
+  return `reversed:${id}`;
+}
+
+/**
+ * Receipt for an operation that changes state but moves no money: a committed result must carry a
+ * Transaction, so this returns one with empty legs and links.
  */
 export function lifecycleMarker(ctx: Ctx): Transaction {
   return {

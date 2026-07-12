@@ -9,26 +9,30 @@
  * @license MIT
  */
 
-import { toAmount } from '#src/money.ts';
-import { toHex } from '#src/bytes.ts';
-import { GENESIS } from '#src/ledger.ts';
+import { decodeAmounts, toAmount } from '#src/money.ts';
+import { byCodeUnit, fromHex } from '#src/bytes.ts';
+import { GENESIS, GENESIS_HEX, balanceDelta, chainHash } from '#src/ledger.ts';
 import { sha256Digest } from '#src/digest.ts';
 import { SYSTEM, baseOf } from '#src/accounts.ts';
 
+import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
+import type { Operation } from '#src/contract.ts';
 import type {
   Checkpoint,
   Digest,
+  InboxEntry,
   Leg,
+  OutboxMessage,
+  Posting,
+  PromoGrant,
   Saga,
   SagaState,
   Subscription,
 } from '#src/ports.ts';
 
-// Helpers shared by the Postgres and MySQL engines. This module holds the default services, the
-// genesis-hash hex, distinct-account ordering, and row-to-domain decoders. It contains no SQL
-// strings and no driver specifics. The generic posting-meta readers now live in src/meta.ts, so a
-// non-SQL store can read meta without importing engine code.
+// Helpers shared by the Postgres and MySQL engines: default services, distinct-account ordering,
+// chain-link derivation, and row-to-domain decoders. No SQL strings, no driver specifics.
 
 // --- Default services -------------------------------------------------------------
 
@@ -43,8 +47,6 @@ export function defaultDigest(): Digest {
   return sha256Digest();
 }
 
-export const GENESIS_HEX = toHex(GENESIS);
-
 // The unique index guarding each account's hash-chain head, chain_links (account_id, prev_hash).
 // A 23505 (Postgres) or 1062 (MySQL) violation that names this index is a chain-head fork: two
 // writers used the same prev_hash and one of the inserts was rejected. withTransientRetry treats
@@ -53,16 +55,12 @@ export const GENESIS_HEX = toHex(GENESIS);
 // here and the retry stops firing, so the cold-start fork race resurfaces as an unretried error.
 export const CHAIN_FORK_INDEX = 'chain_links_account_prev_uq';
 
-// The leading text of the chain-continuity trigger's error message in both schemas (Postgres
-// `raise exception 'chain continuity: ...'`, MySQL `SIGNAL ... MESSAGE_TEXT = 'chain continuity: ...'`).
-// That trigger is the other face of the same cold-start / stale-head race the fork index above catches:
-// depending on timing, a concurrent writer to a not-yet-extended account trips the continuity trigger
-// (a genesis link on a now-non-empty chain, or a prev_hash that is no longer the head) before the
-// unique index does. withTransientRetry treats it as transient and re-reads the head. The match is on
-// this message prefix, not the bare SQLSTATE (Postgres P0001 / MySQL 1644), because that same state is
-// also raised for genuine `conservation` and `balance integrity` faults, which must never be retried --
-// their messages start differently, so the prefix match excludes them. Keep this string in lockstep
-// with the trigger MESSAGE_TEXT in db/postgresql-schema.sql and db/mysql-schema.sql.
+// The leading text of the chain-continuity trigger's error message in both schemas. The trigger
+// catches the same cold-start / stale-head race as the fork index above, so withTransientRetry
+// treats it as transient and re-reads the head. The match is on this message prefix, not the bare
+// SQLSTATE (Postgres P0001 / MySQL 1644), because that state is also raised for genuine
+// `conservation` and `balance integrity` faults, which must never be retried. Keep this string in
+// lockstep with the trigger MESSAGE_TEXT in db/postgresql-schema.sql and db/mysql-schema.sql.
 export const CHAIN_CONTINUITY_MARKER = 'chain continuity';
 
 export function readMinor(value: unknown): bigint {
@@ -85,8 +83,43 @@ export function distinctAccounts(legs: ReadonlyArray<Leg>): AccountRef[] {
   return order;
 }
 
-// One step in an account's hash chain: the account, the hash before this entry, and the hash after.
+// Sorts rows on account_id in code-unit order — the app's order, not the DB collation's — so every
+// engine lists accounts identically.
+export function sortByAccountId(rows: Array<Record<string, unknown>>): void {
+  rows.sort((a, b) =>
+    byCodeUnit(a.account_id as string, b.account_id as string),
+  );
+}
+
+// --- Chain-link derivation ---------------------------------------------------------
+
 export type Link = { account: AccountRef; prevHash: string; hash: string };
+
+// Derives the new link for every account a posting touches, given the current heads (a missing
+// entry is a new account at genesis). The previous hash arrives as hex and is decoded back to
+// bytes before chainHash (ledger.ts) folds in the posting details. Hashes are independent across
+// accounts, so the one batched head read each engine does first cannot change the result.
+export async function chainLinksFor(
+  digest: Digest,
+  posting: Posting,
+  heads: Map<string, string>,
+): Promise<ReadonlyArray<Link>> {
+  const links: Link[] = [];
+  for (const account of distinctAccounts(posting.legs)) {
+    const prevHex = heads.get(account) ?? GENESIS_HEX;
+    const accountPrevHash =
+      prevHex === GENESIS_HEX ? GENESIS : fromHex(prevHex);
+    const hash = await chainHash(digest, {
+      accountPrevHash,
+      txnId: posting.txnId,
+      account,
+      legs: posting.legs,
+      meta: posting.meta,
+    });
+    links.push({ account, prevHash: prevHex, hash });
+  }
+  return links;
+}
 
 // --- Account recognition ----------------------------------------------------------
 
@@ -122,11 +155,10 @@ export type IsTransientConflict = (error: unknown) => boolean;
 
 // --- Retry observability (off by default) -----------------------------------------
 //
-// A retry that then commits leaves no trace in the app's outcome — the caller just sees success — so
-// the contention the engine absorbs under the hood is invisible. That is fine for production but hides
-// a performance bench's most important signal. This optional observer lets the bench count that hidden
-// retry pressure. It is null by default and costs nothing on the production path (each
-// `retryObserver?.(...)` is a property read and short-circuit); production never sets it.
+// A retry that then commits is invisible in the app's outcome, which hides the contention the
+// engine absorbs. This optional observer lets a bench count that hidden retry pressure. It is null
+// by default and costs nothing on the production path (each `retryObserver?.(...)` is a property
+// read and short-circuit); production never sets it.
 export type RetryEvent =
   // A transient conflict was caught; a fresh attempt is about to run. `attempt` is the try that failed.
   | { type: 'retry'; attempt: number; error: unknown }
@@ -139,8 +171,7 @@ export type RetryObserver = (event: RetryEvent) => void;
 
 let retryObserver: RetryObserver | null = null;
 
-// Install (or clear, with null) the retry observer; returns the previous so a caller can restore it. The
-// bench sets it around a sample and restores it in a `finally`, so retries don't leak across samples.
+// Install (or clear, with null) the retry observer; returns the previous so a caller can restore it.
 export function setRetryObserver(
   observer: RetryObserver | null,
 ): RetryObserver | null {
@@ -149,18 +180,14 @@ export function setRetryObserver(
   return previous;
 }
 
-// Runs `attempt`, one full transaction, under a bounded transient-conflict retry. On a transient
-// conflict it waits a short jittered backoff and runs a fresh attempt. After `maxAttempts` tries it
-// rethrows the last error unchanged, so a persistent conflict surfaces rather than looping forever.
-// A non-transient error is rethrown immediately on the first occurrence and is never retried.
+// Runs `attempt`, one full transaction, under a bounded transient-conflict retry: a transient
+// conflict waits a short jittered backoff and gets a fresh attempt; after `maxAttempts` tries the
+// last error is rethrown unchanged. A non-transient error is never retried.
 //
-// The budget is 10 (not 2-3): under deep concurrency many writers contend on one shared
-// account's chain head, so a single posting can lose the fork/continuity race several
-// times before it succeeds -- with too small a budget those attempts surface as errors even though a retry
-// would have committed cleanly. The backoff also widens with each try (jitter window grows with
-// `tries`, capped) so a thundering herd that just collided spreads out instead of re-colliding in
-// lock-step. A genuinely stuck conflict still bounds out at maxAttempts and rethrows. The observer
-// hooks only report what the loop already decided; they do not change when an attempt is retried.
+// The budget is 10 (not 2-3): under deep concurrency many writers contend on one shared account's
+// chain head, so a single posting can lose the fork/continuity race several times before it
+// commits. The jitter window widens with each try (capped) so a herd that just collided spreads
+// out instead of re-colliding in lock-step.
 export async function withTransientRetry<T>(
   attempt: Attempt<T>,
   isTransientConflict: IsTransientConflict,
@@ -181,8 +208,6 @@ export async function withTransientRetry<T>(
         throw error;
       }
       retryObserver?.({ type: 'retry', attempt: tries, error });
-      // Jitter so two transactions that just collided don't re-collide in lock-step, with the window
-      // widening on each retry (capped) to thin out a herd contending on the same hot chain head.
       await sleep((2 + Math.random() * 8) * Math.min(tries, 5));
     }
   }
@@ -202,9 +227,6 @@ export function rowToSaga(row: Record<string, unknown>): Saga {
     rateId: row.rate_id as string,
     state: row.state as SagaState,
     providerRef: (row.provider_ref as string | null) ?? null,
-    // Terminal-outcome fields. Both are null until the saga reaches its terminal state. `reason`
-    // holds the worker's failure reason on FAILED. `payoutUsd` holds the gross USD disbursed on
-    // SETTLED, decoded as a USD Amount the way `reserve` decodes a CREDIT one.
     reason: (row.reason as string | null) ?? null,
     payoutUsd:
       row.payout_usd === null || row.payout_usd === undefined
@@ -244,4 +266,57 @@ export function rowToCheckpoint(row: Record<string, unknown>): Checkpoint {
     v: Number(row.v ?? 1) === 2 ? 2 : 1,
     sum: (row.sum as string | null) ?? null,
   };
+}
+
+// pg and mysql2 both normally hand JSON columns over already parsed; parse only if a driver
+// config returned the raw string.
+export function parseJson(value: unknown): unknown {
+  return typeof value === 'string' ? JSON.parse(value) : value;
+}
+
+export function rowToOutbox(row: Record<string, unknown>): OutboxMessage {
+  return {
+    id: row.id as string,
+    event: parseJson(row.event) as OutboxMessage['event'],
+    status: row.status as OutboxMessage['status'],
+    attempts: Number(row.attempts),
+    reason: (row.dead_letter_reason as string | null) ?? null,
+  };
+}
+
+// decodeAmounts re-brands every stored `CREDIT:12.34` string back into an Amount (money.ts).
+export function rowToInbox(row: Record<string, unknown>): InboxEntry {
+  return {
+    id: row.id as string,
+    key: row.key as string,
+    operation: decodeAmounts(parseJson(row.operation)) as Operation,
+    status: row.status as InboxEntry['status'],
+    attempts: Number(row.attempts),
+    receivedAt: Number(row.received_at),
+    reason: (row.dead_letter_reason as string | null) ?? null,
+  };
+}
+
+export function rowToPromoGrant(row: Record<string, unknown>): PromoGrant {
+  return {
+    id: row.id as string,
+    userId: row.user_id as string,
+    amount: toAmount(row.currency as Amount['currency'], readMinor(row.amount)),
+    expiresAt: Number(row.expires_at),
+    // Boolean() reads both drivers' spellings: pg's bool and mysql's tinyint.
+    reversed: Boolean(row.reversed),
+  };
+}
+
+// How much a stored leg changed its account's balance: rebuild the leg and apply the account's
+// sign rule (leg amounts are debit-positive; some accounts grow on a debit, others on a credit).
+export function naturalDelta(
+  account: AccountRef,
+  row: Record<string, unknown>,
+): Amount {
+  const leg: Leg = {
+    account,
+    amount: toAmount(row.currency as Amount['currency'], readMinor(row.amount)),
+  };
+  return balanceDelta(leg);
 }

@@ -59,9 +59,8 @@ export function promo(userId: string): AccountRef {
 }
 
 /**
- * The platform's own ("house") accounts. Each id starts with `platform:` to distinguish it from a
- * user account. Each account's comment notes its currency and its normal side. A debit-normal
- * account goes up when debited. A credit-normal account goes up when credited.
+ * The platform's own ("house") accounts; every id starts with `platform:`. A debit-normal account
+ * goes up when debited, a credit-normal one when credited.
  */
 export const SYSTEM = {
   // The real USD the platform holds in trust on behalf of users. Debit-normal, in USD.
@@ -193,15 +192,10 @@ function fnv1a(key: string): number {
 }
 
 /**
- * Whether `ref` is a user wallet account rather than a platform ("house") account. A user id is
- * `usr_...:<kind>` (has a `:kind` suffix, no `platform:` prefix); every house account starts with
- * `platform:`.
- *
- * Guards against money laundering: escrow for a pending purchase must come back out only by
- * releasing or expiring the hold. Moving it straight into a user's balance would mint fresh,
- * immediately-spendable money that skips settlement and the payout waiting period, so the escrow
- * code uses this check to refuse such moves. This is the single user-vs-house test; `economy.ts`
- * and `integrity.ts` import it.
+ * Whether `ref` is a user wallet account rather than a platform ("house") account — the single
+ * user-vs-house test. Escrow code relies on it to refuse moving held money straight into a user's
+ * balance, which would mint immediately-spendable money that skips settlement and the payout
+ * waiting period.
  */
 export function isWalletAccount(ref: AccountRef): boolean {
   return ref.includes(':') && !ref.startsWith('platform:');
@@ -218,20 +212,61 @@ export function ownerOf(ref: AccountRef): string {
   return colon < 0 ? ref : ref.slice(0, colon);
 }
 
-/**
- * The currency an account is denominated in. Everything is in CREDIT except the two USD
- * accounts, TRUST_CASH and USD_CLEARING.
- */
-export function currency(ref: AccountRef): Currency {
-  const base = baseOf(ref); // a shard is denominated like its parent
-  if (
-    base === SYSTEM.TRUST_CASH ||
-    base === SYSTEM.USD_CLEARING ||
-    base === SYSTEM.REVENUE_USD
-  ) {
-    return 'USD';
+// Every SYSTEM account's identity in one row — its denomination, its normal side, and its class
+// in the backing check. The three predicates below read this table, so reclassifying an account
+// is a one-row edit that can never leave them disagreeing. PAYOUT_RESERVE is `excluded`, not
+// `house-liability`, so it never raises the USD the platform must hold. An account absent here
+// (every user wallet) is CREDIT, credit-normal, and classed by its wallet kind.
+const SYSTEM_TRAITS = new Map<
+  AccountRef,
+  {
+    currency: Currency;
+    debitNormal: boolean;
+    class: 'excluded' | 'house-asset' | 'house-liability';
   }
-  return 'CREDIT';
+>([
+  [
+    SYSTEM.TRUST_CASH,
+    { currency: 'USD', debitNormal: true, class: 'house-asset' },
+  ],
+  [
+    SYSTEM.USD_CLEARING,
+    { currency: 'USD', debitNormal: true, class: 'house-asset' },
+  ],
+  [
+    SYSTEM.REVENUE_USD,
+    { currency: 'USD', debitNormal: true, class: 'house-asset' },
+  ],
+  [
+    SYSTEM.STORED_VALUE,
+    { currency: 'CREDIT', debitNormal: true, class: 'house-asset' },
+  ],
+  [
+    SYSTEM.RECEIVABLE,
+    { currency: 'CREDIT', debitNormal: true, class: 'house-asset' },
+  ],
+  [
+    SYSTEM.OPENING_EQUITY,
+    { currency: 'CREDIT', debitNormal: true, class: 'house-asset' },
+  ],
+  [
+    SYSTEM.PROMO_FLOAT,
+    { currency: 'CREDIT', debitNormal: true, class: 'house-liability' },
+  ],
+  [
+    SYSTEM.REVENUE,
+    { currency: 'CREDIT', debitNormal: false, class: 'house-liability' },
+  ],
+  [
+    SYSTEM.PAYOUT_RESERVE,
+    { currency: 'CREDIT', debitNormal: false, class: 'excluded' },
+  ],
+]);
+
+/** Everything is denominated in CREDIT except the USD accounts (see SYSTEM_TRAITS). */
+export function currency(ref: AccountRef): Currency {
+  // a shard is denominated like its parent
+  return SYSTEM_TRAITS.get(baseOf(ref))?.currency ?? 'CREDIT';
 }
 
 /**
@@ -245,30 +280,11 @@ export function currency(ref: AccountRef): Currency {
 export function classify(
   ref: AccountRef,
 ): 'custodial' | 'excluded' | 'house-asset' | 'house-liability' {
-  const base = baseOf(ref); // a shard is classed like its parent
-  if (
-    base === SYSTEM.TRUST_CASH ||
-    base === SYSTEM.USD_CLEARING ||
-    base === SYSTEM.REVENUE_USD ||
-    base === SYSTEM.STORED_VALUE ||
-    base === SYSTEM.RECEIVABLE ||
-    base === SYSTEM.OPENING_EQUITY
-  ) {
-    return 'house-asset';
+  const traits = SYSTEM_TRAITS.get(baseOf(ref)); // a shard is classed like its parent
+  if (traits) {
+    return traits.class;
   }
-  if (
-    base === SYSTEM.REVENUE ||
-    base === SYSTEM.PROMO_FLOAT ||
-    base === SYSTEM.PAYOUT_RESERVE
-  ) {
-    // PAYOUT_RESERVE is `excluded`, not `house-liability`, so it never raises the USD the platform
-    // must hold.
-    return base === SYSTEM.PAYOUT_RESERVE ? 'excluded' : 'house-liability';
-  }
-  if (kindOf(ref) === 'spendable') {
-    return 'custodial';
-  }
-  return 'excluded';
+  return walletKindOf(ref) === 'spendable' ? 'custodial' : 'excluded';
 }
 
 /**
@@ -276,16 +292,8 @@ export function classify(
  * to sign a posted line; the no-negative-balance check uses it to read each balance right-way-up.
  */
 export function isDebitNormal(ref: AccountRef): boolean {
-  const base = baseOf(ref); // a shard keeps its parent's normal side
-  return (
-    base === SYSTEM.TRUST_CASH ||
-    base === SYSTEM.USD_CLEARING ||
-    base === SYSTEM.REVENUE_USD ||
-    base === SYSTEM.STORED_VALUE ||
-    base === SYSTEM.RECEIVABLE ||
-    base === SYSTEM.PROMO_FLOAT ||
-    base === SYSTEM.OPENING_EQUITY
-  );
+  // a shard keeps its parent's normal side
+  return SYSTEM_TRAITS.get(baseOf(ref))?.debitNormal ?? false;
 }
 
 /**
@@ -307,8 +315,6 @@ export function accountsOf(operation: Operation, shards = 1): AccountRef[] {
   return touched(operation, shards);
 }
 
-// The system accounts that a refund or reversal always touches, regardless of the original
-// transaction. The handler adds the original transaction's own accounts on top of these.
 const REVERSAL_CONTRAS: AccountRef[] = [
   SYSTEM.REVENUE,
   SYSTEM.PROMO_FLOAT,
@@ -325,10 +331,10 @@ const LOCK_SETS: {
 } = {
   topUp: (o, s) => [
     spendable(o.userId),
-    platformShard(SYSTEM.STORED_VALUE, o.idempotencyKey, s), // offset for the newly issued credits
+    platformShard(SYSTEM.STORED_VALUE, o.idempotencyKey, s),
     platformShard(SYSTEM.TRUST_CASH, o.idempotencyKey, s),
     platformShard(SYSTEM.USD_CLEARING, o.idempotencyKey, s),
-    // spread margin; locking also plants its first-use shard row
+    // locking also plants its first-use shard row
     platformShard(SYSTEM.REVENUE_USD, o.idempotencyKey, s),
   ],
   spend: (o, s) => [
@@ -363,22 +369,18 @@ const LOCK_SETS: {
   grantEntitlement: () => [],
   revokeEntitlement: () => [],
   grantPromo: (o) => [promo(o.userId), SYSTEM.PROMO_FLOAT],
-  // Lock the adjusted account plus OPENING_EQUITY, which holds the offsetting entry so the books
-  // balance.
+  // OPENING_EQUITY holds the offsetting entry.
   adjust: (o) => [o.account, SYSTEM.OPENING_EQUITY],
   reverse: () => [...REVERSAL_CONTRAS],
-  // Undoing a payout by hand reverses the original: debit PAYOUT_RESERVE, credit the seller's
-  // earned account, the same two the background payout worker touches when it gives up. Those two
-  // are the only locks. The request names the seller by `userId`, so these cover it exactly (not an
-  // over-estimate). The reserve routes by that user id, the same shard the request credited.
+  // The same two accounts the payout worker touches when it gives up. The request names the seller
+  // by `userId`, so this set is exact, and the reserve routes by that user id — the shard the
+  // request credited.
   reversePayout: (o, s) => [
     platformShard(SYSTEM.PAYOUT_RESERVE, o.userId, s),
     earned(o.userId),
   ],
-  // Settling a payout posts two platform-only entries (the worker's settle): the credit side empties
-  // PAYOUT_RESERVE into REVENUE, the USD side debits USD_CLEARING / credits TRUST_CASH. No user
-  // wallet account is touched, so these four platform accounts are the full lock set. Named only by
-  // `sagaId`; the reserve amount and seller come off the loaded saga inside the handler.
+  // Settle touches no user wallet, so these four platform accounts are the full lock set. The
+  // operation names only the `sagaId`; the reserve amount and seller come off the loaded saga.
   settlePayout: () => [
     SYSTEM.PAYOUT_RESERVE,
     SYSTEM.REVENUE,
@@ -387,10 +389,12 @@ const LOCK_SETS: {
   ],
 };
 
-// Pull the account kind out of an id like `usr_123:spendable`. Returns null if there's no `:kind`
-// suffix or it isn't a known kind. The store adapters parse the same shape in their
-// isKnownAccount checks.
-function kindOf(ref: AccountRef): AccountKind | null {
+/**
+ * Pulls the wallet kind out of an id like `usr_123:spendable`. Returns null if there's no `:kind`
+ * suffix or it isn't a known kind — the one parser for the shape, shared with the store adapters'
+ * isKnownAccount checks.
+ */
+export function walletKindOf(ref: AccountRef): AccountKind | null {
   const colon = ref.lastIndexOf(':');
   if (colon < 0) {
     return null;

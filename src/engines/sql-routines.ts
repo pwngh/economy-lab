@@ -10,15 +10,10 @@
  */
 
 import { balanceDelta } from '#src/ledger.ts';
-import { currency } from '#src/accounts.ts';
+import { currency, walletKindOf } from '#src/accounts.ts';
 
-import type { AccountRef } from '#src/accounts.ts';
 import type { Posting } from '#src/ports.ts';
-
-// One account's step in its hash chain for a posting: the head hash before this entry (`prevHash`)
-// and after (`hash`). The engine computes the SHA-256 hash in application code and passes the link
-// in. This module only writes the link to the database.
-type Link = { account: AccountRef; prevHash: string; hash: string };
+import type { Link } from '#src/engines/sql-shared.ts';
 
 /**
  * Selects which placeholder style the routines emit. Postgres uses `$1,$2,...` and MySQL uses
@@ -56,10 +51,6 @@ function placeholders(dialect: SqlDialect, count: number): string {
   ).join(', ');
 }
 
-// Invokes a stored procedure for its side effects, reading no value back. Builds the `CALL` in the
-// backend's placeholder style and runs it. This is call mechanics shared by the Postgres and MySQL
-// engines, with no business logic. The application prepares the values (see {@link postEntryArgs})
-// and the routine only persists them.
 export async function callProcedure(
   query: SqlQuery,
   dialect: SqlDialect,
@@ -70,8 +61,6 @@ export async function callProcedure(
   await query(sql, args);
 }
 
-// Invokes a stored function and returns its single scalar result, selected as `result`. Same
-// mechanics as {@link callProcedure}, in a `SELECT` shape.
 export async function callFunction(
   query: SqlQuery,
   dialect: SqlDialect,
@@ -106,8 +95,7 @@ export interface PostEntryArgs {
 
 /**
  * Turns a posting and its pre-computed chain links into the {@link PostEntryArgs} the `post_entry`
- * procedure persists. This is the one place the per-account math lives: the balance deltas and
- * first-use accounts are decided here, and the procedure only writes them.
+ * procedure persists — the one place the per-account math lives.
  */
 export function postEntryArgs(
   posting: Posting,
@@ -125,9 +113,9 @@ export function postEntryArgs(
     hash: link.hash,
   }));
 
-  // Compute the net balance delta per account. A posting can touch one account in several legs (for
-  // example, a promo-funded spend credits a seller twice), so sum each account's `balanceDelta` into
-  // one figure. This is the same total the per-leg `foldBalance` would reach.
+  // A posting can touch one account in several legs (a promo-funded spend credits a seller twice),
+  // so sum each account's `balanceDelta` into one figure — the same total the per-leg `foldBalance`
+  // would reach.
   const deltaByAccount = new Map<string, bigint>();
   const currencyByAccount = new Map<string, string>();
   for (const leg of posting.legs) {
@@ -141,7 +129,8 @@ export function postEntryArgs(
     delta: delta.toString(),
   }));
 
-  // Collect the user accounts to create on first use, distinct and in first-seen order.
+  // Collect the user accounts to create on first use, distinct and in first-seen order. A platform
+  // account reads as null (no `:kind` suffix): the schema seeds it, so this code never creates it.
   const newAccounts: PostEntryArgs['newAccounts'] = [];
   const seen = new Set<string>();
   for (const leg of posting.legs) {
@@ -149,7 +138,7 @@ export function postEntryArgs(
       continue;
     }
     seen.add(leg.account);
-    const kind = userAccountKind(leg.account);
+    const kind = walletKindOf(leg.account);
     if (kind !== null) {
       newAccounts.push({
         id: leg.account,
@@ -160,21 +149,4 @@ export function postEntryArgs(
   }
 
   return { legs, links: linkRows, balances, newAccounts };
-}
-
-// Returns the kind of a user account (`usr_...:spendable|earned|promo`), or null for a platform
-// account, which the schema seeds and this code never creates. Uses the same suffix rule as the
-// engines' account-ensure.
-function userAccountKind(
-  account: string,
-): 'spendable' | 'earned' | 'promo' | null {
-  const colon = account.lastIndexOf(':');
-  if (colon < 0) {
-    return null;
-  }
-  const suffix = account.slice(colon + 1);
-  if (suffix === 'spendable' || suffix === 'earned' || suffix === 'promo') {
-    return suffix;
-  }
-  return null;
 }

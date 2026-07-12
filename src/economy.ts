@@ -19,16 +19,12 @@ import { fault, rejected, ERROR_CODES } from '#src/errors.ts';
 import { lockAll } from '#src/ledger.ts';
 import {
   compare,
-  convertFloor,
   decodeAmountWire,
   encodeAmount,
   isNegative,
   toAmount,
 } from '#src/money.ts';
 import {
-  SYSTEM,
-  baseOf,
-  classify,
   currency,
   earned,
   isDebitNormal,
@@ -36,18 +32,28 @@ import {
   ownerOf,
   promo,
   spendable,
+  walletKindOf,
   accountsOf,
 } from '#src/accounts.ts';
-import { REGISTRY } from '#src/operations/registry.ts';
+import {
+  backingRequiredMinor,
+  backingShortfallMinor,
+  foldBackingAccount,
+} from '#src/integrity.ts';
+import { pendingOutbox } from '#src/outbox.ts';
+import { PRE_CLAIMS, REGISTRY } from '#src/operations/registry.ts';
+import { planSpend } from '#src/operations/spend.ts';
 import { attemptMinor, riskSubject, VELOCITY_CURRENCY } from '#src/trust.ts';
 import { economyPaused } from '#src/config.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
+import type { BackingTotals } from '#src/integrity.ts';
 import type { Amount, Currency } from '#src/money.ts';
 import type {
   Ctx,
   Economy,
   EconomyStatus,
+  Handler,
   Operation,
   Outcome,
   ProveReport,
@@ -58,27 +64,15 @@ import type {
   EconomyEvent,
   Ledger,
   Options,
-  Rate,
   Store,
   Unit,
 } from '#src/ports.ts';
 
-/**
- * Re-exports the public `Economy` type, which is declared in contract.ts, so callers and test
- * support can import it from this factory.
- */
 export type { Economy } from '#src/contract.ts';
 
-type Handler = (operation: Operation, unit: Unit, ctx: Ctx) => Promise<Outcome>;
 type Registry = Partial<Record<Operation['kind'], Handler>>;
 
 /**
- * Build an {@link Economy} from the injected capabilities (store, clock, ids, etc.).
- *
- * @example
- * const economy = createEconomy(capabilities);
- * const outcome = await economy.submit(operation);
- *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy} for the
  * construction, the submit/read surface, and the request path.
  */
@@ -121,9 +115,8 @@ type Step = {
   staged?: (subject: string, attempt: Attempt) => void;
 };
 
-// Builds the runtime context a handler may read: every capability except the store (handlers get a
-// per-transaction view) and the scheduler and dispatcher (this factory keeps them). `cache` is
-// undefined when none was injected.
+// Every capability except the store (handlers get a per-transaction view) and the scheduler and
+// dispatcher, which this factory keeps.
 function contextOf(capabilities: Capabilities): Ctx {
   return {
     clock: capabilities.clock,
@@ -141,9 +134,8 @@ function contextOf(capabilities: Capabilities): Ctx {
   };
 }
 
-// Derives the pause state from the maintenance window and the clock, never stored, so this read and
-// the ECONOMY_PAUSED gate in `submit` agree. `resumesAt` is the window's end while paused, otherwise
-// null.
+// The pause state is derived from the window and the clock, never stored, so this read and the
+// ECONOMY_PAUSED gate in `submit` agree.
 function economyStatus(ctx: Ctx): EconomyStatus {
   const { pauseStartMs, pauseEndMs } = ctx.config;
   const paused = economyPaused(ctx.clock.now(), ctx.config);
@@ -162,8 +154,7 @@ function cacheKey(account: AccountRef): string {
   return `bal:${account}`;
 }
 
-// Runs a cache operation, logging and falling back on any error; the cache is best-effort, so a
-// failure can never fail the read.
+// The cache is best-effort: any error logs and falls back, so a cache failure can never fail a read.
 // See https://economy-lab-docs.pages.dev/economy/ports/storage/ for why the cache is
 // best-effort and every miss is safe.
 async function bestEffortCache<T>(
@@ -183,12 +174,9 @@ async function bestEffortCache<T>(
   }
 }
 
-// Reads an account's balance through `ctx.cache` when one is present, otherwise straight from
-// `ledger.balance`. On a miss it reads the ledger, stores the result, and returns it. The value is
-// stored as the `encodeAmount` string, which carries the currency, so the exact bigint minor-unit
-// value survives a string-only cache. Only the public `read.balance` routes through here. Reads
-// inside a write transaction, which hold a lock, stay direct, so a transaction never sees a stale
-// cached value.
+// The value is cached as its `encodeAmount` string, so the exact bigint minor-unit value survives a
+// string-only cache. Only the public `read.balance` routes through here; reads inside a write
+// transaction stay direct, so a transaction never sees a stale cached value.
 async function cachedBalance(
   ctx: Ctx,
   ledger: Ledger,
@@ -233,8 +221,8 @@ async function submit(
   authorize(operation);
 
   // Maintenance window. Refuse only an end user's discretionary write, never a 'system' settlement
-  // webhook or operator fix. This gate sits before the transaction opens, so a paused user op records
-  // no velocity attempt and touches no ledger. Reads never reach this path.
+  // webhook or operator fix. The gate sits before the transaction opens, so a paused user op records
+  // no velocity attempt and touches no ledger.
   // See https://economy-lab-docs.pages.dev/economy/concepts/actors-and-authorization/ for why the
   // pause tells actors apart by kind.
   const ctx = pipeline.ctx;
@@ -257,7 +245,7 @@ async function submit(
   const outcome = await pipeline.store
     .transaction(
       (unit) =>
-        runRollingBackRejections({
+        rejectionsRollBack({
           pipeline,
           unit,
           operation,
@@ -291,9 +279,8 @@ async function submit(
   return outcome;
 }
 
-// Thrown to roll back a transaction whose outcome is `rejected` while still surfacing that outcome,
-// since a rejection is not an error to the caller. It is a distinct class so submit can tell it apart
-// from a genuine fault, which must keep propagating and rolling back as it always has.
+// Thrown to roll back a transaction whose outcome is `rejected` while still surfacing that outcome;
+// a rejection is not an error to the caller.
 class RejectedRollback extends Error {
   outcome: Outcome;
   constructor(outcome: Outcome) {
@@ -302,23 +289,20 @@ class RejectedRollback extends Error {
   }
 }
 
-// Runs the onion, then forces a rollback on a `rejected` outcome by throwing the sentinel. A
-// committed or duplicate outcome returns normally, so the transaction commits.
-async function runRollingBackRejections(step: Step): Promise<Outcome> {
-  const outcome = await runOnion(step);
+async function rejectionsRollBack(step: Step): Promise<Outcome> {
+  const outcome = await runClaimed(step);
   if (outcome.status === 'rejected') {
     throw new RejectedRollback(outcome);
   }
   return outcome;
 }
 
-// The largest amount, in minor units, any single operation may move. The limit is high enough for
-// legitimate operations but blocks overflow-scale values from a typo or a hostile caller.
+// High enough for any legitimate operation; blocks overflow-scale values from a typo or a hostile
+// caller.
 const MAX_OP_AMOUNT_MINOR = 1_000_000_000_000_000n;
 
-// Rejects a malformed operation before any work, checked once here rather than per handler: a
-// non-empty idempotency key, no blank wallet owner, and an in-range amount. The shard count is
-// passed so every accountsOf caller agrees.
+// Checked once here rather than per handler. The shard count is passed so every accountsOf caller
+// agrees.
 function validateOperation(operation: Operation, shards: number): void {
   if (
     typeof operation.idempotencyKey !== 'string' ||
@@ -344,8 +328,6 @@ function validateOperation(operation: Operation, shards: number): void {
   assertAmountInRange(operation);
 }
 
-// Returns the money amount an operation moves, or null for kinds that reference an existing record
-// instead.
 function operationAmount(operation: Operation): Amount | null {
   switch (operation.kind) {
     case 'topUp':
@@ -362,8 +344,7 @@ function operationAmount(operation: Operation): Amount | null {
   }
 }
 
-// Rejects a non-positive or over-ceiling amount. A manual `adjust` may debit or credit, so it only
-// has to be non-zero.
+// A manual `adjust` may debit or credit, so it only has to be non-zero.
 function assertAmountInRange(operation: Operation): void {
   const amount = operationAmount(operation);
   if (amount === null) {
@@ -390,8 +371,7 @@ function assertAmountInRange(operation: Operation): void {
   }
 }
 
-// Drops the cached balance of every account a committed transaction touched; a no-op with no cache
-// or a non-commit outcome. The set matches what `lockAccounts` locked, de-duplicated.
+// On commit, drops the cached balance of the same account set `lockAccounts` locked.
 async function invalidateCache(
   pipeline: Pipeline,
   operation: Operation,
@@ -416,11 +396,21 @@ async function invalidateCache(
 // commit; a repeat replays the recorded result, a rejection or fault rolls back and leaves the key
 // unused.
 // See https://economy-lab-docs.pages.dev/economy/concepts/idempotency/ for the claim/record model.
-async function runOnion(step: Step): Promise<Outcome> {
+async function runClaimed(step: Step): Promise<Outcome> {
   const { unit, operation, options } = step;
   const claim = await unit.idempotency.claim(operation.idempotencyKey, options);
   if (!claim.claimed) {
     return { status: 'duplicate', transaction: claim.transaction };
+  }
+
+  // A domain-level duplicate (a replayed orderId) is final before any lock, so it exits here —
+  // like a key replay, it records no velocity attempt.
+  const preClaim = PRE_CLAIMS[operation.kind];
+  if (preClaim) {
+    const duplicate = await preClaim(operation, unit);
+    if (duplicate) {
+      return duplicate;
+    }
   }
 
   // Risk runs before funds so a burst of unaffordable spends still counts toward the limit, and a
@@ -452,17 +442,16 @@ async function runOnion(step: Step): Promise<Outcome> {
   return outcome;
 }
 
-// Decides whether the caller may run this operation, before the operation is claimed.
 // See https://economy-lab-docs.pages.dev/economy/concepts/actors-and-authorization/ for the actor
 // kinds, the user-may-only-debit-own-accounts rule, and the privileged-only set.
 function authorize(operation: Operation): void {
   const actor = operation.actor;
   if (actor.kind === 'operator') {
-    // Human operator running manual corrections; postings are fully audited and record the reason.
     return;
   }
   if (actor.kind === 'system') {
-    // Trusted internal service. Full access for now; per-service permission lists come later.
+    // The lab models one trust domain; a deployment running several services scopes them here, at
+    // the one authorization seam.
     return;
   }
   if (RESTRICTED_TO_PRIVILEGED.has(operation.kind)) {
@@ -493,9 +482,8 @@ function debitedUserAccounts(operation: Operation): AccountRef[] {
   return [];
 }
 
-// Checks up front that every account can cover what the operation takes, returning a `rejected`
-// outcome instead of throwing. The database's no-overdraft CHECK is the enforcer; this exists so an
-// overspend returns a clean rejection rather than a constraint violation.
+// The database's no-overdraft CHECK is the enforcer; this up-front screen exists so an overspend
+// returns a clean rejection rather than a constraint violation.
 async function screenFunds(step: Step): Promise<Outcome | null> {
   const { unit, operation, options } = step;
   for (const need of await fundsNeeded(unit, operation, options)) {
@@ -511,8 +499,9 @@ async function screenFunds(step: Step): Promise<Outcome | null> {
   return null;
 }
 
-// How much each user account must hold for the operation to pass. Only `spend` can run a user short:
-// promo draws first and only to zero, so spendable is the one account to check.
+// Only `spend` can run a user short: promo draws first and only to zero, so spendable is the one
+// account to check. The split comes from `planSpend`, shared with the spend handler, so this check
+// and the posting always agree.
 async function fundsNeeded(
   unit: Unit,
   operation: Operation,
@@ -548,21 +537,18 @@ async function readCachedBalance(
   return balance;
 }
 
-// Records this attempt and reads back the windowed total in one atomic per-subject step, then denies
-// if the total is over the limit. Recording at check time, not after commit, closes the
-// velocity-limit TOCTOU: two concurrent same-subject submits cannot both read a stale total and
-// pass. The attempt is staged with `submit`, which re-records it if the transaction rolls back.
+// Recording at check time, not after commit, closes the velocity-limit TOCTOU: two concurrent
+// same-subject submits cannot both read a stale total and pass. The attempt is staged with `submit`,
+// which re-records it if the transaction rolls back.
 async function screenRisk(step: Step): Promise<Outcome | null> {
   const { pipeline, unit, operation, options } = step;
   const subject = riskSubject(operation);
   if (subject === null) {
     return null;
   }
-  // Record this attempt with a fixed `committed` tag and the amount it would move. The outcome tag is
-  // write-only, because the limit logic sums every attempt's amount regardless of tag, so a fixed tag
-  // at check time is faithful. The returned velocity already includes this attempt, so compare the
-  // raw windowed total against the limit without re-adding this attempt's amount, which would
-  // double-count.
+  // The outcome tag is write-only — the limit sums every attempt regardless of tag — so a fixed
+  // `committed` tag at check time is faithful. The returned velocity already includes this attempt;
+  // re-adding its amount would double-count.
   const attempt: Attempt = {
     idempotencyKey: operation.idempotencyKey,
     amount: toAmount(VELOCITY_CURRENCY, attemptMinor(operation)),
@@ -587,8 +573,7 @@ async function lockAccounts(step: Step): Promise<void> {
   await lockAll(unit.ledger, accountsOf(operation, shards), options);
 }
 
-// Queues the matching notification event in the outbox in the posting's own transaction, so the
-// event ships only if the posting committed.
+// The event enqueues in the posting's own transaction, so it ships only if the posting committed.
 // See https://economy-lab-docs.pages.dev/economy/ports/messaging/ for how the legs and
 // the event commit in one transaction, so they all land or none do.
 async function emitEvents(
@@ -607,47 +592,17 @@ async function emitEvents(
     version: 1,
     occurredAt: outcome.transaction.postedAt,
     subject: descriptor.subject(operation, outcome),
-    // Each event kind builds its own payload. A client-bound event carries only an allow-listed,
-    // PII-free summary; the default is deny, and a builder must opt each field in.
     data: descriptor.data(operation, outcome),
     audience: descriptor.audience,
   };
-  await unit.outbox.enqueue(
-    {
-      id: ctx.ids.next('obx'),
-      event,
-      status: 'pending',
-      attempts: 0,
-      reason: null,
-    },
-    options,
-  );
-}
-
-// --- Funds plan (shared by screenFunds and the spend handler) ----------------------
-
-type SpendPlan = { promoPart: Amount; spendablePart: Amount };
-
-// Plans how a purchase is paid for: promo balance first, then spendable. The promo part is min(price,
-// available promo), and the spendable part is the rest. Deliberate private copy of the rule in
-// operations/spend.ts planSpend — keep the two in sync so the up-front check and the posting agree.
-function planSpend(price: Amount, promoBalance: Amount): SpendPlan {
-  const available = promoBalance.minor > 0n ? promoBalance.minor : 0n;
-  const promoMinor = available < price.minor ? available : price.minor;
-  return {
-    promoPart: toAmount(price.currency, promoMinor),
-    spendablePart: toAmount(price.currency, price.minor - promoMinor),
-  };
+  await unit.outbox.enqueue(pendingOutbox(ctx.ids, event), options);
 }
 
 // --- Integrity check ---------------------------------------------------------------
 
 /**
- * Walks every account once and reports whether the ledger still holds its core guarantees. See the
- * {@link ProveReport} fields for what each flag means.
- *
- * This is the lighter in-process prover: its `chainIntact` is only a shape check on each account's
- * latest hash, while the full replay that re-verifies every posting lives in integrity.ts.
+ * The lighter in-process prover: its `chainIntact` is only a shape check on each account's latest
+ * hash, while the full replay that re-verifies every posting lives in integrity.ts.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/the-proof/ The proof} for why this
  * is an independent audit rather than the primary guard, how `backed` converts custodial credits to
@@ -659,12 +614,11 @@ async function proveEconomy(
   options?: Options,
 ): Promise<ProveReport> {
   const fold = await foldLedger(store, options);
-  const required = backingRequired(
+  const required = backingRequiredMinor(
     fold.custodialCreditMinor,
     ctx.rates.par('CREDIT'),
   );
-  const shortfallMinor =
-    fold.trustCashMinor < required ? required - fold.trustCashMinor : 0n;
+  const shortfallMinor = backingShortfallMinor(required, fold.trustCashMinor);
 
   return {
     conserved: [...fold.signedByCurrency.values()].every((sum) => sum === 0n),
@@ -701,8 +655,10 @@ async function foldLedger(
   options?: Options,
 ): Promise<LedgerFold> {
   const signedByCurrency = new Map<Currency, bigint>();
-  let custodialCreditMinor = 0n;
-  let trustCashMinor = 0n;
+  const backing: BackingTotals = {
+    custodialCreditMinor: 0n,
+    trustCashMinor: 0n,
+  };
   let anyUserNegative = false;
   let chainIntact = true;
   const drift: LedgerDrift[] = [];
@@ -710,9 +666,6 @@ async function foldLedger(
   for await (const [account, head] of store.ledger.heads()) {
     const bal = await store.ledger.balance(account, options);
     const cur = currency(account);
-    // Recompute from the recorded entries, the source of truth, not the cached running balance. The
-    // two are compared just below to flag an account whose cached balance has drifted from its
-    // entries.
     const derivedMinor = await deriveBalanceMinor(store, account, options);
     const sign = isDebitNormal(account) ? 1n : -1n;
     signedByCurrency.set(
@@ -726,14 +679,8 @@ async function foldLedger(
         derived: toAmount(cur, derivedMinor),
       });
     }
-    if (classify(account) === 'custodial' && cur === 'CREDIT') {
-      custodialCreditMinor += bal.minor;
-    }
-    // Trust cash is one logical account split across shard rows, so the backing check compares
-    // `required` against the sum over every TRUST_CASH shard this pass visits, not one bare row.
-    if (baseOf(account) === SYSTEM.TRUST_CASH) {
-      trustCashMinor += bal.minor;
-    }
+    // Backing sums read the stored balance; `foldBackingAccount` (integrity.ts) owns what counts.
+    foldBackingAccount(backing, account, bal.minor);
     if (isWalletAccount(account) && isNegative(bal)) {
       anyUserNegative = true;
     }
@@ -741,22 +688,14 @@ async function foldLedger(
       chainIntact = false;
     }
   }
-  // This lighter prover only visits accounts that have been posted to, which is what heads() returns,
-  // so a stored balance row with no backing posting would slip past it. The thorough prover closes
-  // that gap via ledger.balanceAccounts() (integrity.ts foldLedger, R33). read.prove() intentionally
-  // trades that guarantee for speed, so it is not ported here unless this prover ever needs it.
-  return {
-    signedByCurrency,
-    custodialCreditMinor,
-    trustCashMinor,
-    anyUserNegative,
-    chainIntact,
-    drift,
-  };
+  // heads() only visits posted-to accounts, so a balance row with no backing posting slips past this
+  // prover. The thorough prover closes that gap (integrity.ts foldLedger, R33); read.prove() trades
+  // it for speed on purpose.
+  return { signedByCurrency, ...backing, anyUserNegative, chainIntact, drift };
 }
 
-// Recomputes an account's balance by summing every statement entry, each already signed the way it
-// changed this account; comparing against `ledger.balance` detects a stale cache.
+// Statement entries are already signed the way they changed this account, so their plain sum is the
+// derived balance.
 async function deriveBalanceMinor(
   store: Store,
   account: AccountRef,
@@ -770,19 +709,11 @@ async function deriveBalanceMinor(
   return derivedMinor;
 }
 
-// A range wide enough to cover every entry ever recorded; the lower bound is inclusive, the upper
-// exclusive.
+// Covers every entry ever recorded; `from` is inclusive, `to` exclusive.
 const FULL_RANGE = {
   from: Number.MIN_SAFE_INTEGER,
   to: Number.MAX_SAFE_INTEGER,
 };
-
-// Converts a credit total into the USD that must back it at the fixed CREDIT-to-USD par rate,
-// rounding down via `convertFloor`.
-function backingRequired(custodialCreditMinor: bigint, par: Rate): bigint {
-  return convertFloor(toAmount('CREDIT', custodialCreditMinor), par, 'USD')
-    .minor;
-}
 
 // --- Small helpers ----------------------------------------------------------------
 
@@ -833,13 +764,10 @@ const RESTRICTED_TO_PRIVILEGED = new Set<Operation['kind']>([
 
 // --- Event descriptors --------------------------------------------------------------
 
-// The committed outcome an event builder is handed. Events emit only after the posting committed, so
-// the transaction is always present.
 type Committed = Extract<Outcome, { status: 'committed' }>;
 
-// For each announcing kind: the event name, audience, subject builder, and payload builder. Client
-// events carry an allow-listed, PII-free summary; internal events may carry richer detail; both
-// builders get the committed result.
+// Client events carry only an allow-listed, PII-free summary — the default is deny, each field
+// opted in; internal events may carry richer detail.
 const EVENTS: Partial<
   Record<
     Operation['kind'],
@@ -857,23 +785,21 @@ const EVENTS: Partial<
   topUp: {
     type: 'economy.credits.topped_up',
     audience: 'client',
-    subject: (operation) => userSubject(operation),
-    data: (operation, outcome) => txnData(operation, outcome),
+    subject: userSubject,
+    data: txnData,
   },
   grantPromo: {
     type: 'economy.promo.granted',
     audience: 'client',
-    subject: (operation) => userSubject(operation),
-    data: (operation, outcome) => txnData(operation, outcome),
+    subject: userSubject,
+    data: txnData,
   },
   spend: {
     type: 'economy.sale.completed',
     audience: 'client',
-    subject: (operation) => userSubject(operation),
-    data: (operation, outcome) => spendData(operation, outcome),
+    subject: userSubject,
+    data: spendData,
   },
-  // A refund's operation carries only the orderId, so the buyer is recovered from the reversing
-  // entry — the single user-owned spendable-or-promo entry in it.
   refund: {
     type: 'economy.sale.refunded',
     audience: 'client',
@@ -884,8 +810,6 @@ const EVENTS: Partial<
       buyerId: refundBuyer(outcome),
     }),
   },
-  // Internal-only, so the payload may carry the reclaimed amount and the disputed order alongside the
-  // transaction id.
   clawback: {
     type: 'economy.credits.clawed_back',
     audience: 'internal',
@@ -933,7 +857,6 @@ const EVENTS: Partial<
       };
     },
   },
-  // A cancellation commits without moving money, and `emitEvents` fires for any committed outcome.
   // The subscriptionId is the only identifier the operation carries.
   cancelSubscription: {
     type: 'economy.subscription.canceled',
@@ -965,8 +888,6 @@ function txnData(
   return { txnId: outcome.transaction.id };
 }
 
-// The gift fields are added only when the recipient differs from the buyer, so a self-purchase keeps
-// the minimal payload.
 function spendData(
   operation: Operation,
   outcome: Committed,
@@ -997,10 +918,9 @@ function refundBuyer(outcome: Committed): string {
     if (!isWalletAccount(leg.account)) {
       continue;
     }
-    const colon = leg.account.lastIndexOf(':');
-    const kind = leg.account.slice(colon + 1);
+    const kind = walletKindOf(leg.account);
     if (kind === 'spendable' || kind === 'promo') {
-      return leg.account.slice(0, colon);
+      return ownerOf(leg.account);
     }
   }
   return 'unknown';

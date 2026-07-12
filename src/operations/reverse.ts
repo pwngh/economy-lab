@@ -10,11 +10,15 @@
  */
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
-import { postEntry } from '#src/ledger.ts';
+import { lockAll, postEntry } from '#src/ledger.ts';
 import { neg } from '#src/money.ts';
-import { assertKind, assertOperator } from '#src/operations/guards.ts';
+import {
+  assertKind,
+  assertOperator,
+  assertReason,
+  reversalKey,
+} from '#src/operations/guards.ts';
 
-import type { AccountRef } from '#src/accounts.ts';
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Leg, Posting, Unit } from '#src/ports.ts';
 
@@ -44,17 +48,14 @@ export async function reverse(
 ): Promise<Outcome> {
   assertKind(operation, 'reverse');
   assertOperator(operation);
-  assertReason(operation.reason);
+  assertReason(operation);
 
   const original = await loadPosting(unit, operation.txnId);
   assertNotReversal(operation, original);
   await extendLocks(unit, original.legs);
 
-  // Stake the per-transaction key before posting so a txnId is reversed at most once. The first
-  // reverse claims it and posts the inverse. A second finds the key already claimed and returns the
-  // first reversal's transaction as a duplicate. This mirrors how refund and clawback stake
-  // `reversed:${orderId}`. The claim lives inside this posting's db transaction, so a rollback
-  // releases it and a retry succeeds.
+  // The claim lives inside this posting's db transaction, so a rollback releases it and a retry
+  // succeeds.
   const claimKey = reversalKey(operation.txnId);
   const claim = await unit.idempotency.claim(claimKey);
   if (!claim.claimed) {
@@ -72,13 +73,6 @@ export async function reverse(
   return { status: 'committed', transaction };
 }
 
-// Builds the per-transaction idempotency key a reverse stakes so a transaction is reversed at most
-// once. This is the same `reversed:${id}` family refund and clawback use, here scoped to the
-// transaction being undone.
-function reversalKey(txnId: string): string {
-  return `reversed:${txnId}`;
-}
-
 // Loads the transaction to undo. The operator typed this id, so an unknown one is operator error
 // and throws a fault. Compare `refund`, where an unknown order id is an everyday caller decline.
 async function loadPosting(unit: Unit, txnId: string): Promise<Posting> {
@@ -93,11 +87,8 @@ async function loadPosting(unit: Unit, txnId: string): Promise<Posting> {
   return posting;
 }
 
-// Rejects a txnId that names a reversal. A reversal must never be reversed. It would loop the same
-// money out and in with no net effect, and it would let an operator chain reversals to adjust a
-// balance by an arbitrary amount. A reversal records `kind: 'reverse'` in its metadata (see
-// `reverseMeta`), so this rejects any posting carrying that marker. This is an operator mistake,
-// so it throws a fault, the same as an unknown txnId.
+// A reversal must never be reversed: chaining reversals would let an operator adjust a balance
+// by an arbitrary amount. A reversal is any posting whose metadata records `kind: 'reverse'`.
 function assertNotReversal(
   operation: Extract<Operation, { kind: 'reverse' }>,
   original: Posting,
@@ -111,33 +102,25 @@ function assertNotReversal(
   }
 }
 
-// Locks every account the original touched so no other operation changes those balances while this
-// reversal posts. The framework only locks accounts named in the request, but a reverse request
-// carries just a txnId, so the handler discovers and locks them from the loaded transaction. The
-// Set skips an account that appears on more than one leg.
+// The framework only locks accounts named in the request, and a reverse request carries just a
+// txnId, so the handler locks the accounts discovered from the loaded transaction. `lockAll`
+// applies the deadlock-free global lock order, not leg order.
 async function extendLocks(
   unit: Unit,
   legs: ReadonlyArray<Leg>,
 ): Promise<void> {
-  const seen = new Set<AccountRef>();
-  for (const leg of legs) {
-    if (!seen.has(leg.account)) {
-      seen.add(leg.account);
-      await unit.ledger.lock(leg.account);
-    }
-  }
+  await lockAll(
+    unit.ledger,
+    legs.map((leg) => leg.account),
+  );
 }
 
-// Builds the opposite of each leg: same account, sign flipped (`neg` from money.ts). The original's
-// legs already sum to zero per currency, so flipping every sign keeps that sum at zero. The
-// reversal balances without recomputing anything.
+// Same account, sign flipped. The original's legs sum to zero per currency, so the flipped set
+// does too.
 function reverseLegs(legs: ReadonlyArray<Leg>): Leg[] {
   return legs.map((leg) => ({ account: leg.account, amount: neg(leg.amount) }));
 }
 
-// Builds the metadata stored with the reversing transaction: which transaction it undoes and the
-// operator's reason. An audit uses this to see who undid what and why. No amounts live here;
-// those are on the legs.
 function reverseMeta(
   operation: Extract<Operation, { kind: 'reverse' }>,
 ): Record<string, unknown> {
@@ -146,16 +129,4 @@ function reverseMeta(
     txnId: operation.txnId,
     reason: operation.reason,
   };
-}
-
-// Requires a non-blank reason. A reversal must record why it happened. This rejects a missing or
-// whitespace-only reason so none is posted without a justification for the audit trail.
-function assertReason(reason: string): void {
-  if (reason.trim() === '') {
-    throw fault(
-      ERROR_CODES.MALFORMED_OPERATION,
-      'reverse requires a non-empty reason.',
-      { detail: { kind: 'reverse' } },
-    );
-  }
 }

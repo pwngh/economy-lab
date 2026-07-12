@@ -12,6 +12,7 @@
 import { normalizeError } from '#src/errors.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { compare, toAmount } from '#src/money.ts';
+import { pendingOutbox } from '#src/outbox.ts';
 import { spendable, earned, SYSTEM } from '#src/accounts.ts';
 import { feeForPrice } from '#src/pricing.ts';
 
@@ -32,8 +33,6 @@ import type {
  * - `deadLettered`: billing threw a non-retryable error, so the row was given up on and the reason recorded.
  * - `retrying`: billing threw a temporary error, so the row was left for the next sweep and the
  * code recorded.
- *
- * worker/payouts.ts reports its own sweep with the same `deadLettered` and `retrying` buckets.
  */
 export type SweepSummary = {
   charged: ReadonlyArray<string>;
@@ -42,8 +41,6 @@ export type SweepSummary = {
   retrying: ReadonlyArray<{ id: string; code: string }>;
 };
 
-// Mutable version of SweepSummary that the sweep fills in. Each helper pushes the id it handled
-// onto the matching list, and the finished tally is returned as the summary.
 type SweepTally = {
   charged: string[];
   lapsed: string[];
@@ -86,9 +83,6 @@ export async function sweepDueSubscriptions(
 // than re-billing forever; any other error dead-letters the row right away.
 // See https://economy-lab-docs.pages.dev/economy/concepts/subscriptions/ for the subscription states
 // and the retry-cap-to-lapse rule.
-//
-// The cap test is `next >= cap`, where `next` is `attempts + 1`. With the default cap of 10, the
-// 10th consecutive failure lapses the row.
 async function billOne(
   store: Store,
   ctx: WorkerCtx,
@@ -107,11 +101,8 @@ async function billOne(
   }
 }
 
-// Handles a retryable failure by raising `attempts` to `next`. If that reaches the cap, the sweep
-// gives up: it flips the row from ACTIVE to LAPSED and records it under `lapsed`. Otherwise it
-// persists the raised count, where `open` upserts the row by id and stores the new `attempts`, and
-// records the row under `retrying`. A successful renewal resets `attempts` to 0 via `markBilled`,
-// so the cap only counts consecutive failures.
+// Raises `attempts` to `next`; at the cap the sweep gives up and lapses the row. A successful
+// renewal resets `attempts` to 0 via `markBilled`, so the cap only counts consecutive failures.
 async function recordRetry(args: {
   store: Store;
   ctx: WorkerCtx;
@@ -140,12 +131,8 @@ async function deadLetter(args: {
   tally: SweepTally;
 }): Promise<void> {
   const { store, ctx, sub, reason, tally } = args;
-  // Revoke the perk and emit the lapse in the same transaction as the flip to LAPSED, so a
-  // given-up subscription doesn't leave the buyer holding an unbilled perk. Recorded under
-  // `deadLettered`, not `lapsed`.
   await lapseAtomically(store, ctx, sub);
-  // A permanently parked renewal is a lost revenue stream. Log at error like the other workers'
-  // dead-letters, so it is visible without unpacking the sweep summary.
+  // Error-level like the other workers' dead-letters: visible without unpacking the sweep summary.
   ctx.logger.log('error', 'worker.subscriptions.dead_lettered', {
     subscriptionId: sub.id,
     userId: sub.userId,
@@ -154,9 +141,8 @@ async function deadLetter(args: {
   tally.deadLettered.push({ id: sub.id, reason });
 }
 
-// Lapses a subscription and records it under `lapsed`. This is the shared exit for both the
-// unaffordable charge and the retry-cap cases. The revoke and the lapsed event share the
-// transaction with the flip to LAPSED.
+// Lapses a subscription and records it under `lapsed`: the shared exit for the unaffordable-charge
+// and retry-cap cases.
 async function lapse(
   store: Store,
   ctx: WorkerCtx,
@@ -185,21 +171,13 @@ async function lapseAtomically(
   await store.transaction(async (unit) => {
     await unit.subscriptions.markLapsed(sub.id);
     await unit.entitlements.revoke(sub.userId, sub.sku);
-    await unit.outbox.enqueue({
-      id: ctx.ids.next('obx'),
-      event: lapsedEvent(ctx, sub),
-      status: 'pending',
-      attempts: 0,
-      reason: null,
-    });
+    await unit.outbox.enqueue(pendingOutbox(ctx.ids, lapsedEvent(ctx, sub)));
   });
 }
 
 // Renew one due subscription in a single transaction. Read the buyer's spendable balance (real
 // topped-up money). If it can't cover the price, lapse and charge nothing. Otherwise post the
 // charge and advance the due date together, so a billed period records both or neither.
-// `markBilled` also resets the `attempts` counter to 0, so a successful renewal clears earlier
-// strikes and the cap only counts consecutive failures.
 async function renew(
   store: Store,
   ctx: WorkerCtx,
@@ -257,26 +235,15 @@ async function renew(
       expiresAt: newDueAt,
       source: sub.id,
     });
-    await unit.outbox.enqueue({
-      id: ctx.ids.next('obx'),
-      event: renewedEvent(ctx, sub),
-      status: 'pending',
-      attempts: 0,
-      reason: null,
-    });
+    await unit.outbox.enqueue(pendingOutbox(ctx.ids, renewedEvent(ctx, sub)));
     tally.charged.push(sub.id);
   });
 
-  // Buyer couldn't afford the renewal: lapse it (revoke perk, emit lapsed event) in its own
-  // transaction, now that the renewal transaction above closed without posting.
   if (lapsed) {
     await lapse(store, ctx, sub, tally);
   }
 }
 
-// Builds the economy.subscription.renewed event, which signals that a subscription was billed for a
-// new period. The subject is the buyer and the audience is 'client'. The data carries the ids the
-// receiver needs, and the new period entered is sub.period + 1.
 function renewedEvent(ctx: WorkerCtx, sub: Subscription): EconomyEvent {
   return {
     id: ctx.ids.next('evt'),
@@ -294,9 +261,6 @@ function renewedEvent(ctx: WorkerCtx, sub: Subscription): EconomyEvent {
   };
 }
 
-// Builds the economy.subscription.lapsed event, which signals that a subscription stopped because
-// the buyer could not afford it, the retry cap was hit, or a renewal failed permanently. The
-// subject is the buyer and the audience is 'client'.
 function lapsedEvent(ctx: WorkerCtx, sub: Subscription): EconomyEvent {
   return {
     id: ctx.ids.next('evt'),
@@ -314,11 +278,9 @@ function lapsedEvent(ctx: WorkerCtx, sub: Subscription): EconomyEvent {
   };
 }
 
-// Posts the renewal charge as one balanced ledger entry of three legs that sum to zero. It debits
-// the full price from the buyer's spendable account, credits the seller the post-fee net, and
-// credits the platform revenue account the fee. Net plus fee equals the price exactly. Renewals
-// draw only from spendable (real) money. Unlike the first month, none comes from the buyer's promo
-// grant.
+// Posts the renewal charge: the buyer pays the full price, the seller gets the post-fee net, and
+// platform revenue gets the fee. Renewals draw only from spendable (real) money — unlike the first
+// month, none comes from the buyer's promo grant.
 async function postRenewal(
   unit: Unit,
   ctx: WorkerCtx,

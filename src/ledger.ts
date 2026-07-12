@@ -32,6 +32,9 @@ import type { Transaction } from '#src/contract.ts';
  */
 export const GENESIS: Uint8Array = new Uint8Array(32);
 
+/** {@link GENESIS} in lowercase hex — the one spelling every stored head compares against. */
+export const GENESIS_HEX = '0'.repeat(64);
+
 /**
  * Builds a debit leg for one account. The amount is stored positive. A debit lowers
  * credit-normal accounts, such as a user's spendable balance, and raises debit-normal ones.
@@ -59,12 +62,10 @@ export function balanceDelta(leg: Leg): Amount {
 }
 
 /**
- * Takes the per-transaction lock on each of `accounts` in one global order. The order is
- * `.sort()` by id, which sorts by raw character code. That order is the same on every machine,
- * unlike a locale-aware comparison. The list is then de-duplicated. Two operations that share an
- * account acquire its lock in the same order, so neither can deadlock waiting on a lock the other
- * holds. Every lock-set goes through here, so the fixed-order discipline lives in one place rather
- * than being re-implemented, and possibly mis-ordered, at each call site.
+ * Locks each account in one global order: `.sort()` by raw character code, identical on every
+ * machine unlike a locale-aware comparison. Two operations that share an account acquire its lock
+ * in the same order, so neither can deadlock waiting on a lock the other holds. Every lock-set goes
+ * through here, so the fixed-order discipline lives in one place.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/concurrency/ Concurrency} for the
  *   deadlock-free lock ordering and the no-fork constraint that backs it.
@@ -75,9 +76,8 @@ export async function lockAll(
   options?: Options,
 ): Promise<void> {
   const ordered = [...new Set(accounts)].sort();
-  // An engine with `lockMany` grabs the whole set in one round trip (Postgres' ordered `for update`),
-  // whose own ordering is what keeps it deadlock-free. Without it, lock one at a time in this same
-  // global `.sort()` order — same discipline that keeps the loop deadlock-free.
+  // `lockMany` grabs the whole set in one round trip (Postgres' ordered `for update`); either path
+  // acquires in the same global order.
   if (ledger.lockMany) {
     await ledger.lockMany(ordered, options);
     return;
@@ -100,11 +100,9 @@ export async function postEntry(
   posting: Posting,
   options?: Options,
 ): Promise<Transaction> {
-  // Drop zero-amount legs first. They're no-ops (don't change a balance, don't affect a
-  // currency total, so removing them can't unbalance the posting), but the schema forbids the
-  // row (`legs.amount <> 0`). They arise when a split rounds a share down to zero (e.g. a tiny
-  // cut of a promo-funded sale). The in-memory store would keep one while SQL rejects it;
-  // dropping it here, the one path every posting takes, keeps backends consistent.
+  // The schema forbids zero-amount legs (`legs.amount <> 0`); they arise when a split rounds a
+  // share down to zero. Dropping them here, the one path every posting takes, keeps the in-memory
+  // store and the SQL backends consistent.
   const cleaned = dropZeroLegs(posting);
   assertSingleCurrencyPerLeg(cleaned);
   assertBalanced(cleaned);
@@ -113,26 +111,14 @@ export async function postEntry(
   return ledger.append(cleaned, options);
 }
 
-// Returns the posting with zero-amount legs removed, or unchanged if it has none. This is safe
-// because a zero leg adds nothing to any currency total and moves no money.
+// Safe to drop: a zero leg adds nothing to any currency total, so removing it can't unbalance the
+// posting.
 function dropZeroLegs(posting: Posting): Posting {
   const legs = posting.legs.filter((leg) => leg.amount.minor !== 0n);
   if (legs.length === posting.legs.length) {
     return posting;
   }
   return { ...posting, legs };
-}
-
-/**
- * Returns the account's current balance, in its own currency. Reads a stored running total,
- * so the call is O(1) rather than re-summing history.
- */
-export function balance(
-  ledger: Ledger,
-  account: AccountRef,
-  options?: Options,
-): Promise<Amount> {
-  return ledger.balance(account, options);
 }
 
 /**
@@ -166,11 +152,7 @@ export function chainPreimage(input: {
   return lengthPrefixed(frames);
 }
 
-/**
- * Computes one account's new link hash as lowercase hex by running the bytes from
- * `chainPreimage` through the supplied hash. The result is the account's chain head, which
- * `chain.ts` later combines with every other head into one tamper-evident checkpoint.
- */
+/** The account's new chain head: the `chainPreimage` bytes through the digest, as lowercase hex. */
 export async function chainHash(
   digest: Digest,
   input: {
@@ -209,10 +191,6 @@ function assertSingleCurrencyPerLeg(posting: Posting): void {
   }
 }
 
-// A posting balances when leg amounts sum to zero per currency; any nonzero total is rejected.
-//
-// This is a redundant pre-check, not the enforcer: conservation is enforced by the database
-// (see db/*-schema.sql). It exists to fail fast with a clear fault instead of a raw engine error.
 function assertBalanced(posting: Posting): void {
   const sums = new Map<Currency, bigint>();
   for (const leg of posting.legs) {
@@ -238,13 +216,9 @@ function assertBalanced(posting: Posting): void {
   }
 }
 
-// Every account named in the posting must already exist, so a typo can't create a new
-// account and strand a balance on it.
-//
-// App-side input validation: the legs->accounts foreign key would also reject a leg on a
-// truly-unknown account, but the app checks first to return a clear UNKNOWN_ACCOUNT fault rather
-// than a raw FK error. `post_entry` legitimately creates first-use accounts from `p_new_accounts`;
-// this guards a typo'd account that was neither pre-existing nor being created.
+// A typo must not create a new account and strand a balance on it. `post_entry` legitimately
+// creates first-use accounts from `p_new_accounts`; this guards an account that was neither
+// pre-existing nor being created.
 async function assertKnownAccounts(
   ledger: Ledger,
   posting: Posting,
@@ -263,13 +237,9 @@ async function assertKnownAccounts(
   }
 }
 
-// Last-resort guard against a negative user balance. The database's per-user non-negative CHECK
-// is the real enforcer; this app guard is a last-resort backstop that converts what would be a
-// raw engine rejection into a distinct OVERDRAFT fault. An up-front funds check (`screenFunds`)
-// should already have rejected anyone short with INSUFFICIENT_FUNDS, so this normally never
-// trips. If it does, something earlier went wrong (typically a missing lock let two ops race);
-// throw a distinct OVERDRAFT fault rather than a quiet rejection. Only user accounts are
-// checked; platform accounts may hold either sign and are skipped (see `isUserGuarded`).
+// `screenFunds` should already have rejected anyone short, so this backstop normally never trips;
+// if it does, something earlier went wrong — typically a missing lock let two ops race — so it
+// throws a distinct OVERDRAFT fault rather than quietly rejecting.
 async function assertNoOverdraft(
   ledger: Ledger,
   posting: Posting,
@@ -302,10 +272,8 @@ async function assertNoOverdraft(
   }
 }
 
-// Whether the overdraft check protects this account. True for user accounts (spendable,
-// earned, promo) and the payout-reserve escrow (PAYOUT_RESERVE), none of which may go
-// negative. False for platform asset/liability accounts, which may swing either way.
-// `classify` (accounts.ts) groups every account.
+// The accounts that may not go negative: user wallets and the payout-reserve escrow. Platform
+// asset/liability accounts may swing either way, so they are skipped.
 function isUserGuarded(account: AccountRef): boolean {
   const kind = classify(account);
   return (kind === 'custodial' || kind === 'excluded') && account.includes(':');

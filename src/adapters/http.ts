@@ -10,9 +10,9 @@
  */
 
 /**
- * Client half of the HTTP storage backend. It builds a Store whose every call becomes an
- * HTTP request answered by a server handler. This is the only file that uses the fetch API
- * (Request and Response). The rest of the system stays unaware that HTTP is involved.
+ * Client half of the HTTP storage backend: a Store whose every call becomes an HTTP request
+ * answered by a server handler (http-server.ts). Amounts cross the wire as decimal strings
+ * because JSON cannot carry a bigint.
  */
 
 import { ERROR_CODES, EconomyError } from '#src/errors.ts';
@@ -47,33 +47,26 @@ import type {
   TrustStore,
 } from '#src/ports.ts';
 
-/**
- * Carries a request from the client to the server and returns the response. The shape
- * matches standard `fetch`: it takes a Request and returns a Response. The default points
- * at an in-process server, so it makes no network call.
- */
 export type FetchLike = (request: Request) => Promise<Response>;
 
-/** Options for {@link httpStore}. */
 export type HttpStoreOptions = {
   fetch?: FetchLike;
 
   baseUrl?: string;
 };
 
-// Shape of every response body: a successful result, or a failure carrying the fault's stable
-// code, caller-safe message, and retryable flag. The client rebuilds an equivalent EconomyError,
-// so a server-side failure looks exactly like an in-process one — same code to match on, same
-// retryable verdict — and the transaction rolls back the same way.
+type Transport = { fetch: FetchLike; baseUrl: string };
+
+// Every response body: a result, or a failure the client rebuilds into an equivalent
+// EconomyError — same stable code, same retryable verdict — so it fails like an in-process call.
 type WireResult =
   | { ok: true; body: unknown }
   | { ok: false; error: { code: string; message: string; retryable: boolean } };
 
-// Every catalog code, for validating what the wire claims. An unknown code (a newer or older
-// server) degrades to a retryable STORE.FAILURE rather than being trusted verbatim.
+// An unknown code (a newer or older server) degrades to a retryable STORE.FAILURE rather than
+// being trusted verbatim.
 const KNOWN_CODES = new Set<string>(Object.values(ERROR_CODES));
 
-// Rebuilds the thrown fault from its wire form; see WireResult.
 function rebuildError(wire: {
   code: string;
   message: string;
@@ -91,11 +84,8 @@ function rebuildError(wire: {
 
 // --- The transport call -----------------------------------------------------------
 
-// Makes one request and returns one result. It POSTs the JSON args to `path`, reads the
-// response, and re-throws any server failure as an Error. The caller then sees the same
-// failure it would in-process, which makes a failed transaction roll back.
 async function call(
-  transport: { fetch: FetchLike; baseUrl: string },
+  transport: Transport,
   path: string,
   payload: unknown,
   options?: Options,
@@ -116,14 +106,9 @@ async function call(
 
 // --- The ledger, scoped to one transaction ----------------------------------------
 
-// Builds the Ledger interface for one open transaction. A transaction lives on the server
-// as a "session" identified by `session`. Every method puts that id in the request path, so
-// the calls run inside the transaction the server holds open. The id 'root' means "not in a
-// transaction", and each such call runs on its own.
-function sessionLedger(
-  transport: { fetch: FetchLike; baseUrl: string },
-  session: string,
-): Ledger {
+// A transaction lives on the server as a "session"; every request path carries its id. The id
+// 'root' means "not in a transaction": each such call runs on its own.
+function sessionLedger(transport: Transport, session: string): Ledger {
   const at = (method: string): string => `/tx/${session}/ledger/${method}`;
   return {
     hasAccount: (account, options) =>
@@ -180,10 +165,8 @@ function sessionLedger(
 
 // --- Streamed reads ---------------------------------------------------------------
 
-// Streams each account paired with the hash of its most recent entry. Each account has a
-// hash-chain of entries, and that latest hash is its "head".
 async function* streamHeads(
-  transport: { fetch: FetchLike; baseUrl: string },
+  transport: Transport,
   session: string,
 ): AsyncIterable<readonly [AccountRef, string]> {
   const rows = (await call(
@@ -196,10 +179,8 @@ async function* streamHeads(
   }
 }
 
-// Streams each account with its head hash and raw signed leg sum, for the v2 checkpoint's sum
-// leaves. The sum travels as a decimal string (JSON can't carry a bigint) and is re-widened here.
 async function* streamHeadSums(
-  transport: { fetch: FetchLike; baseUrl: string },
+  transport: Transport,
   session: string,
 ): AsyncIterable<readonly [AccountRef, string, bigint]> {
   const rows = (await call(
@@ -212,12 +193,8 @@ async function* streamHeadSums(
   }
 }
 
-// Streams every account that has a cached running balance, one at a time. The per-account
-// balance is a cache, while the entries are the source of truth, so the cached figure can
-// fall out of sync. Account ids are plain strings re-branded as AccountRef on arrival. No
-// amount crosses the wire here, so no amount codec is needed.
 async function* streamBalanceAccounts(
-  transport: { fetch: FetchLike; baseUrl: string },
+  transport: Transport,
   session: string,
   options?: Options,
 ): AsyncIterable<AccountRef> {
@@ -233,14 +210,11 @@ async function* streamBalanceAccounts(
 }
 
 async function* streamLots(
-  transport: { fetch: FetchLike; baseUrl: string },
+  transport: Transport,
   account: AccountRef,
   session: string,
   options?: TimelineOptions,
 ): AsyncIterable<Lot> {
-  // Forward the bounded read (order, limit, and offset) to the server. The server passes it
-  // through to the backing ledger, so the bound is honoured at the real engine rather than
-  // after fetching all rows over the wire.
   const rows = (await call(transport, `/tx/${session}/ledger/timeline`, {
     account,
     order: options?.order,
@@ -253,7 +227,7 @@ async function* streamLots(
 }
 
 async function* streamLineage(
-  transport: { fetch: FetchLike; baseUrl: string },
+  transport: Transport,
   account: AccountRef,
   session: string,
   options?: Options,
@@ -269,11 +243,8 @@ async function* streamLineage(
   }
 }
 
-// Streams every committed posting, newest first, one at a time. Each row carries its legs'
-// amounts, so it runs back through the wire codec (decodeWire.posting). The amount-free
-// `heads` and `balanceAccounts` streams do not need that codec.
 async function* streamPostings(
-  transport: { fetch: FetchLike; baseUrl: string },
+  transport: Transport,
   session: string,
   options?: Options,
 ): AsyncIterable<Posting> {
@@ -289,13 +260,9 @@ async function* streamPostings(
 }
 
 // --- The sub-stores, scoped to one transaction ------------------------------------
-// Each builder returns one sub-store's interface for a session id. It turns every method
-// into a request to that session, or to 'root' for calls outside a transaction. Args and
-// results that contain money amounts run through the wire codec. That codec carries each
-// amount as a decimal string because plain JSON cannot serialize the underlying bigint.
 
 function sessionIdempotency(
-  transport: { fetch: FetchLike; baseUrl: string },
+  transport: Transport,
   session: string,
 ): IdempotencyStore {
   const at = (method: string): string => `/tx/${session}/idempotency/${method}`;
@@ -313,10 +280,7 @@ function sessionIdempotency(
   };
 }
 
-function sessionSales(
-  transport: { fetch: FetchLike; baseUrl: string },
-  session: string,
-): SaleStore {
+function sessionSales(transport: Transport, session: string): SaleStore {
   const at = (method: string): string => `/tx/${session}/sales/${method}`;
   return {
     put: async (sale, options) => {
@@ -334,10 +298,7 @@ function sessionSales(
   };
 }
 
-function sessionOutbox(
-  transport: { fetch: FetchLike; baseUrl: string },
-  session: string,
-): OutboxStore {
+function sessionOutbox(transport: Transport, session: string): OutboxStore {
   const at = (method: string): string => `/tx/${session}/outbox/${method}`;
   return {
     enqueue: async (message, options) => {
@@ -359,17 +320,9 @@ function sessionOutbox(
   };
 }
 
-function sessionInbox(
-  transport: { fetch: FetchLike; baseUrl: string },
-  session: string,
-): InboxStore {
+function sessionInbox(transport: Transport, session: string): InboxStore {
   const at = (method: string): string => `/tx/${session}/inbox/${method}`;
   return {
-    // Dedupes on `key`. The server returns the existing row for a duplicate provider event,
-    // so the resolved entry must survive the round trip. Unlike the outbox message, an
-    // InboxEntry carries a whole Operation whose money fields hold a bigint that JSON cannot
-    // serialize. It therefore rides through the `inboxEntry` codec both ways, with amounts as
-    // decimal strings.
     enqueueInbound: async (entry, options) =>
       decodeWire.inboxEntry(
         await call(
@@ -395,10 +348,7 @@ function sessionInbox(
   };
 }
 
-function sessionSagas(
-  transport: { fetch: FetchLike; baseUrl: string },
-  session: string,
-): SagaStore {
+function sessionSagas(transport: Transport, session: string): SagaStore {
   const at = (method: string): string => `/tx/${session}/sagas/${method}`;
   return {
     open: async (saga, options) => {
@@ -422,9 +372,6 @@ function sessionSagas(
       );
       return row === null ? null : decodeWire.saga(row);
     },
-    // Streams the whole payout board (see SagaStore.list). Like the ledger stream reads, the
-    // in-process server returns every row in one response, so yield them one at a time to
-    // honor the AsyncIterable.
     list: async function* (options) {
       const rows = (await call(
         transport,
@@ -445,10 +392,7 @@ function sessionSagas(
       )) as unknown[];
       return rows.map(decodeWire.saga);
     },
-    // SagaStore.advance has the signature advance(id, from, to, patch, options?). This arrow
-    // takes only the first four and omits the optional `options`, which carries a
-    // cancellation signal. Fewer args is still a valid implementation, and the only caller,
-    // the background saga-retry sweep, never passes a signal.
+    // Omits the optional `options`: a caller's cancellation signal is silently dropped here.
     advance: (id, from, to, patch) =>
       call(transport, at('advance'), {
         id,
@@ -467,7 +411,7 @@ function sessionSagas(
 }
 
 function sessionEntitlements(
-  transport: { fetch: FetchLike; baseUrl: string },
+  transport: Transport,
   session: string,
 ): EntitlementStore {
   const at = (method: string): string =>
@@ -494,7 +438,7 @@ function sessionEntitlements(
 }
 
 function sessionSubscriptions(
-  transport: { fetch: FetchLike; baseUrl: string },
+  transport: Transport,
   session: string,
 ): SubscriptionStore {
   const at = (method: string): string =>
@@ -533,9 +477,6 @@ function sessionSubscriptions(
       )) as unknown[];
       return rows.map(decodeWire.subscription);
     },
-    // markBilled is a compare-and-set. The server returns whether the row still matched
-    // `expectedDueAt`. That boolean must survive the round trip, so an overlapping sweeper
-    // that lost the race sees `false` and treats its renewal as a no-op.
     markBilled: (id, nextDueAt, expectedDueAt, options) =>
       call(
         transport,
@@ -549,10 +490,7 @@ function sessionSubscriptions(
   };
 }
 
-function sessionPromos(
-  transport: { fetch: FetchLike; baseUrl: string },
-  session: string,
-): PromoStore {
+function sessionPromos(transport: Transport, session: string): PromoStore {
   const at = (method: string): string => `/tx/${session}/promos/${method}`;
   return {
     open: async (grant, options) => {
@@ -578,14 +516,7 @@ function sessionPromos(
   };
 }
 
-// Builds the trust store, which tracks how much each subject has spent recently. That
-// figure is the input the risk check reads. The trust store is never part of a transaction,
-// so its writes happen on their own and even a denied attempt counts toward the spending
-// limit. That is why it has its own endpoints with no session id.
-function rootTrust(transport: {
-  fetch: FetchLike;
-  baseUrl: string;
-}): TrustStore {
+function rootTrust(transport: Transport): TrustStore {
   const at = (method: string): string => `/trust/${method}`;
   return {
     read: async (subject, options) =>
@@ -600,10 +531,6 @@ function rootTrust(transport: {
         options,
       );
     },
-    // Proxies the atomic record-and-measure. It sends the same {subject, attempt} payload as
-    // `bump` and decodes the Velocity the server returns. The server runs the backing store's
-    // `record`, so atomicity lives there, not on the wire. It uses the same amount codecs as
-    // read and bump.
     record: async (subject, attempt, options) =>
       decodeWire.velocity(
         await call(
@@ -616,15 +543,7 @@ function rootTrust(transport: {
   };
 }
 
-// Builds the checkpoint store, which holds signed snapshots of the ledger. Only the
-// background worker uses it. Like trust, it is never part of a transaction, so it too has
-// session-less endpoints.
-// The instance-netting journal, session-less like checkpoints: appends are their own
-// transactions, never part of a held domain transaction. Leg amounts travel as encoded strings.
-function rootMovements(transport: {
-  fetch: FetchLike;
-  baseUrl: string;
-}): MovementJournal {
+function rootMovements(transport: Transport): MovementJournal {
   const at = (method: string): string => `/movements/${method}`;
   return {
     append: async (movements, options) => {
@@ -649,10 +568,7 @@ function rootMovements(transport: {
   };
 }
 
-function rootCheckpoints(transport: {
-  fetch: FetchLike;
-  baseUrl: string;
-}): CheckpointStore {
+function rootCheckpoints(transport: Transport): CheckpointStore {
   const at = (method: string): string => `/checkpoints/${method}`;
   return {
     put: async (checkpoint, options) => {
@@ -665,14 +581,7 @@ function rootCheckpoints(transport: {
   };
 }
 
-// Builds the webhook replay store, which records each inbound provider event by the
-// provider's event id, so the same webhook delivered twice is processed once. It is never
-// part of a domain transaction. The webhook entry point claims the event id on its own as a
-// final duplicate check before processing. That is why it has its own session-less endpoint.
-function rootReplay(transport: {
-  fetch: FetchLike;
-  baseUrl: string;
-}): ReplayStore {
+function rootReplay(transport: Transport): ReplayStore {
   const at = (method: string): string => `/replay/${method}`;
   return {
     claim: (eventId, options) =>
@@ -684,12 +593,8 @@ function rootReplay(transport: {
 
 // --- The transaction --------------------------------------------------------------
 
-// Runs `work` inside a transaction. It asks the server to begin one, which replies with a
-// session id, runs `work` against a Unit bound to that session, then commits if `work`
-// succeeded or rolls back if it threw. The actual begin, commit, and rollback happen in the
-// server's backing store, so this client adds no transaction logic of its own.
 async function runTransaction<T>(
-  transport: { fetch: FetchLike; baseUrl: string },
+  transport: Transport,
   work: (unit: Unit) => Promise<T>,
   options?: Options,
 ): Promise<T> {
@@ -707,10 +612,7 @@ async function runTransaction<T>(
   }
 }
 
-function sessionUnit(
-  transport: { fetch: FetchLike; baseUrl: string },
-  session: string,
-): Unit {
+function sessionUnit(transport: Transport, session: string): Unit {
   return {
     ledger: sessionLedger(transport, session),
     idempotency: sessionIdempotency(transport, session),
@@ -722,9 +624,7 @@ function sessionUnit(
     subscriptions: sessionSubscriptions(transport, session),
     promos: sessionPromos(transport, session),
     // The root endpoints, not session-scoped ones: a trust write commits on the server by
-    // itself, so it survives a session rollback on its own and `submit`'s re-record dedupes into
-    // a no-op. Folding it into the money transaction is an engine-level optimization this
-    // adapter doesn't attempt.
+    // itself, so it survives a session rollback.
     trust: rootTrust(transport),
   };
 }
@@ -746,16 +646,7 @@ export function httpStore(options?: HttpStoreOptions): Store {
   const transport = { fetch, baseUrl };
 
   return {
-    ledger: sessionLedger(transport, 'root'),
-    idempotency: sessionIdempotency(transport, 'root'),
-    sales: sessionSales(transport, 'root'),
-    outbox: sessionOutbox(transport, 'root'),
-    inbox: sessionInbox(transport, 'root'),
-    sagas: sessionSagas(transport, 'root'),
-    entitlements: sessionEntitlements(transport, 'root'),
-    subscriptions: sessionSubscriptions(transport, 'root'),
-    promos: sessionPromos(transport, 'root'),
-    trust: rootTrust(transport),
+    ...sessionUnit(transport, 'root'),
     checkpoints: rootCheckpoints(transport),
     movements: rootMovements(transport),
     replay: rootReplay(transport),
@@ -767,6 +658,5 @@ export function httpStore(options?: HttpStoreOptions): Store {
   };
 }
 
-// Re-exported so a host can attach the server side to a real HTTP listener. The in-process
-// server is only the default. Exporting it here makes both halves available from this module.
+// Re-exported so a host can attach the server side to a real HTTP listener.
 export { createStoreServer } from '#src/adapters/http-server.ts';

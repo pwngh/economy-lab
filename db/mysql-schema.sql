@@ -8,20 +8,15 @@
 -- @license MIT
 
 -- MySQL counterpart to db/postgresql-schema.sql. Applied by `applyMysqlSchema`
--- (src/engines/mysql.ts) via a DELIMITER-aware splitter that runs one statement
--- at a time (mysql2 sends one per query). Drops everything up front, so re-running
--- resets. Stored routines use `DELIMITER $$` as the mysql CLI does; the loader
--- handles that directive.
+-- (src/engines/mysql.ts) via a DELIMITER-aware splitter that runs one statement at a time.
+-- Drops everything up front, so re-running resets.
 --
--- MySQL has no partial index, so each Postgres partial-index predicate folds into the leading column
--- of the composite key here. The *_pending_idx and *_due_idx indexes lead with the status, state, or
--- reversed column the Postgres `WHERE` filtered on. That keeps the sweep and relay scans narrow.
+-- MySQL has no partial index, so each Postgres partial-index predicate folds into the leading
+-- column of the composite key (the *_pending_idx and *_due_idx lead with the filtered column).
 
--- Pin the database default collation FIRST, so every table below inherits it (none declare their
--- own). The strings JSON_TABLE produces inside post_entry are utf8mb4_0900_ai_ci. Matching the tables
--- to that collation avoids an "Illegal mix of collations" error on the `ab.account_id = d.account`
--- joins. Both `applyMysqlSchema` and `mysql < db/mysql-schema.sql` (scripts/migrate.sh) apply it this
--- way.
+-- Pin the database default collation FIRST so every table inherits it: JSON_TABLE inside
+-- post_entry produces utf8mb4_0900_ai_ci strings, and matching table collations avoid an
+-- "Illegal mix of collations" error on its joins.
 ALTER DATABASE CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
 
 -- Drop stored routines first: unlike DROP TABLE they have no IF-EXISTS-on-CREATE form, so re-apply
@@ -73,8 +68,7 @@ DROP TABLE IF EXISTS postings;
 
 DROP TABLE IF EXISTS accounts;
 
--- accounts: every account money can post to; `currency` pins each to CREDIT or USD.
--- Rationale documented in db/postgresql-schema.sql (accounts banner).
+-- Rationale in db/postgresql-schema.sql (accounts banner).
 CREATE TABLE accounts (
      id         VARCHAR(96)  PRIMARY KEY COMMENT 'Account id; platform:<name> or usr_<uuid>:<kind>.',
      kind       VARCHAR(16)  NOT NULL COMMENT 'One of spendable, earned, promo, system.',
@@ -98,8 +92,7 @@ INSERT INTO accounts (id, kind, currency) VALUES
      ('platform:opening_equity', 'system', 'CREDIT'),
      ('platform:netting_clearing','system', 'CREDIT');
 
--- postings: one committed transaction per row; its legs and chain links reference it.
--- Rationale documented in db/postgresql-schema.sql (postings banner).
+-- Rationale in db/postgresql-schema.sql (postings banner).
 CREATE TABLE postings (
      id         VARCHAR(64) PRIMARY KEY COMMENT 'Transaction id, like txn_<uuid>.',
      meta       JSON        NOT NULL COMMENT 'JSON metadata bag for the posting.',
@@ -108,8 +101,7 @@ CREATE TABLE postings (
      created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
    ) COMMENT='Append-only record of every posting; one balanced set of legs each.';
 
--- legs: the signed debit/credit lines of each posting; `post_entry` is the sole writer.
--- Rationale documented in db/postgresql-schema.sql (postings banner).
+-- post_entry is the sole writer of this table. Rationale in db/postgresql-schema.sql (legs comment).
 CREATE TABLE legs (
      id         BIGINT       AUTO_INCREMENT PRIMARY KEY COMMENT 'Auto-increment leg id in commit order.',
      posting_id VARCHAR(64)  NOT NULL COMMENT 'Parent posting id; FK to postings.',
@@ -121,33 +113,25 @@ CREATE TABLE legs (
      CONSTRAINT legs_posting_fk FOREIGN KEY (posting_id) REFERENCES postings (id),
      -- Composite FK: a leg's currency must match its account's, enforced natively (not just app-side).
      CONSTRAINT legs_account_fk FOREIGN KEY (account_id, currency) REFERENCES accounts (id, currency),
-     -- Serves the maturity tail's `WHERE account_id = ? ORDER BY id DESC LIMIT n` as a bounded keyed
-     -- scan, no filesort (legs.id is AUTO_INCREMENT in commit order = FIFO). Leading account_id also
-     -- covers plain account_id lookups, replacing a bare legs(account_id) index. The trailing
-     -- currency and amount make the prover's per-account fold (SUM(amount) GROUP BY currency) an
-     -- index-only scan; MySQL has no INCLUDE, so they ride as key parts after the (account_id, id)
-     -- prefix the tail depends on. Mirrors Postgres legs_account_idx (see db/postgresql-schema.sql),
-     -- which carries the same two columns via INCLUDE.
+     -- Serves the maturity tail's keyed newest-first read (legs.id is AUTO_INCREMENT in commit
+     -- order) and replaces a bare account_id index. MySQL has no INCLUDE, so currency and amount
+     -- ride as trailing key parts to keep the prover's per-account fold index-only.
      KEY legs_account_idx (account_id, id, currency, amount),
      KEY legs_posting_idx (posting_id)
    ) COMMENT='The signed debit/credit lines that make up each posting.';
 
--- chain_links: one hash-chain link per (posting, account); the hash is computed in application
--- code, never in SQL. Rationale/invariants documented in db/postgresql-schema.sql (chain_links banner).
+-- Rationale in db/postgresql-schema.sql (chain_links banner).
 CREATE TABLE chain_links (
      posting_id VARCHAR(64) NOT NULL COMMENT 'Posting that advanced this account chain; FK to postings.',
      account_id VARCHAR(96) NOT NULL COMMENT 'Account whose hash chain this link extends; FK to accounts.',
      prev_hash  CHAR(64)    NOT NULL COMMENT 'Previous chain hash, 64 lowercase hex; genesis is zeros.',
      hash       CHAR(64)    NOT NULL COMMENT 'This link''s new chain hash, 64 lowercase hex.',
-     -- The account's signed running balance after this link, the same figure post_entry writes into
-     -- account_balances.balance, letting balance integrity compare a cached balance to its chain head in
-     -- O(1). A maintained projection, not the source of truth (prove() re-sums). Rationale in
-     -- db/postgresql-schema.sql (chain_links.balance_after).
+     -- Rationale in db/postgresql-schema.sql (chain_links.balance_after).
      balance_after BIGINT   NOT NULL DEFAULT 0 COMMENT 'Signed running balance right after this link; cached projection.',
      -- Key of the no-fork unique index below. A digest rather than the raw pair because the raw
-     -- pair sorts every new account's first link next to its neighbors, and concurrent inserts
-     -- deadlocked on the unique check's gap locks. Hashing scatters the entries; a duplicate pair
-     -- still produces a duplicate digest, so the guard is unchanged.
+     -- pair clusters every new account's first link, and concurrent inserts deadlocked on the
+     -- unique check's gap locks. A duplicate pair still produces a duplicate digest, so the guard
+     -- is unchanged.
      account_prev_digest BINARY(32)
        GENERATED ALWAYS AS (UNHEX(SHA2(CONCAT(account_id, ':', prev_hash), 256))) STORED
        COMMENT 'SHA-256 of (account_id, prev_hash); key of the no-fork unique index.',
@@ -159,21 +143,17 @@ CREATE TABLE chain_links (
      -- the 1062 error text (CHAIN_FORK_INDEX, src/engines/sql-shared.ts), so the name is load-bearing.
      UNIQUE KEY chain_links_account_prev_uq (account_prev_digest),
      KEY chain_links_account_idx (account_id),
-     -- The continuity trigger's non-genesis branch looks up an account's current head by
-     -- (account_id, hash); without this it scans every link for the account, so the trigger's
-     -- cost grows with that account's chain length on each new posting.
+     -- The continuity trigger reads an account's current head by (account_id, hash).
      KEY chain_links_account_hash_idx (account_id, hash)
    ) COMMENT='Per-account hash-chain links that make the ledger tamper-evident.';
 
--- account_balances: cached per-account balance read model. Rationale/invariants (non-negative
--- overdraft guard, always re-derivable from legs) documented in db/postgresql-schema.sql.
+-- Rationale in db/postgresql-schema.sql (account_balances banner).
 CREATE TABLE account_balances (
      account_id VARCHAR(96) PRIMARY KEY COMMENT 'Account this cached balance is for; PK and FK to accounts.',
      currency   VARCHAR(8)  NOT NULL COMMENT 'Currency of the balance: CREDIT or USD.',
      balance    BIGINT      NOT NULL DEFAULT 0 COMMENT 'Cached signed balance in minor units; user accounts stay non-negative.',
-     -- Chain-head pointer (hash of the latest chain_links row), written with the balance by post_entry
-     -- so headsForAccounts reads each head by primary key instead of scanning and sorting. A projection
-     -- under the same trust model; defaults to the genesis hash (64 zeros). See db/postgresql-schema.sql.
+     -- Chain-head pointer, written with the balance by post_entry. Rationale in
+     -- db/postgresql-schema.sql (account_balances.head_hash).
      head_hash  CHAR(64)    NOT NULL
        DEFAULT '0000000000000000000000000000000000000000000000000000000000000000'
        COMMENT 'Hash of this account''s latest chain_links row; defaults to genesis zeros.',
@@ -182,8 +162,7 @@ CREATE TABLE account_balances (
      CONSTRAINT account_balances_account_fk FOREIGN KEY (account_id) REFERENCES accounts (id)
    ) COMMENT='Cached per-account balance read model; re-derivable from the legs.';
 
--- idempotency: exactly-once retry guard. Rationale/invariants documented in
--- db/postgresql-schema.sql (idempotency banner).
+-- Rationale in db/postgresql-schema.sql (idempotency banner).
 CREATE TABLE idempotency (
      `key`     VARCHAR(255) PRIMARY KEY COMMENT 'Idempotency key; PK that blocks duplicate request execution.',
      -- NULL while a row is claimed but not yet recorded: claim inserts a NULL placeholder to hold
@@ -192,17 +171,13 @@ CREATE TABLE idempotency (
      created_at  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
    ) COMMENT='Exactly-once guard recording each operation outcome by key.';
 
--- seen_webhooks: exactly-once replay dedup for inbound provider callbacks, claimed as the last
--- gate (after HMAC and freshness). Only PK presence is used, so a duplicate delivery finds the row
--- and does no work. Rationale/invariants documented in db/postgresql-schema.sql (seen_webhooks
--- banner).
+-- Rationale in db/postgresql-schema.sql (seen_webhooks banner).
 CREATE TABLE seen_webhooks (
      event_id   VARCHAR(255) PRIMARY KEY COMMENT 'Provider stable event id; primary key for replay dedup.',
      seen_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time this event id was first claimed.'
    ) COMMENT='Replay-dedup guard for inbound provider webhooks, by event id.';
 
--- sales: one recorded sale per orderId, read back by refund to reverse exactly what posted.
--- Rationale documented in db/postgresql-schema.sql (sales banner).
+-- Rationale in db/postgresql-schema.sql (sales banner).
 CREATE TABLE sales (
      order_id     VARCHAR(64) PRIMARY KEY COMMENT 'Order id; primary key, distinct from idempotency key.',
      buyer_id     VARCHAR(64) NOT NULL COMMENT 'Account that paid for the purchase.',
@@ -218,8 +193,7 @@ CREATE TABLE sales (
      CONSTRAINT sales_txn_fk FOREIGN KEY (txn_id) REFERENCES postings (id)
    ) COMMENT='Summary of each purchase, keyed by its order id.';
 
--- outbox: events awaiting publish via the transactional outbox relay. Rationale/invariants
--- documented in db/postgresql-schema.sql (outbox banner).
+-- Rationale in db/postgresql-schema.sql (outbox banner).
 CREATE TABLE outbox (
      id                 VARCHAR(64) PRIMARY KEY COMMENT 'Outbox row id; primary key, obx_<uuid>.',
      event              JSON        NOT NULL COMMENT 'JSON event payload to publish.',
@@ -231,10 +205,7 @@ CREATE TABLE outbox (
      KEY outbox_pending_idx (status, created_at)
    ) COMMENT='Pending outbound events awaiting relay to the dispatcher.';
 
--- inbox: the inbound mirror of `outbox`; verified provider events awaiting apply via the
--- transactional inbox worker. `key` is the provider event id (UNIQUE -> redelivery is a no-op
--- insert, applied at most once). Rationale/invariants documented in db/postgresql-schema.sql
--- (inbox banner).
+-- Rationale in db/postgresql-schema.sql (inbox banner).
 CREATE TABLE inbox (
      id                 VARCHAR(64) PRIMARY KEY COMMENT 'Inbox row id; primary key, ibx_<uuid>.',
      `key`              VARCHAR(255) NOT NULL UNIQUE COMMENT 'Provider event id; unique, dedupes redelivery.',
@@ -248,8 +219,7 @@ CREATE TABLE inbox (
      KEY inbox_pending_idx (status, received_at)
    ) COMMENT='Verified inbound provider events awaiting apply by the worker.';
 
--- payout_sagas: multi-step payout saga state. Rationale/invariants documented in
--- db/postgresql-schema.sql (payout_sagas banner).
+-- Rationale in db/postgresql-schema.sql (payout_sagas banner).
 CREATE TABLE payout_sagas (
      id                 VARCHAR(64) PRIMARY KEY COMMENT 'Saga primary key, pay_ prefixed uuid.',
      user_id            VARCHAR(64) NOT NULL COMMENT 'Seller the payout belongs to.',
@@ -258,9 +228,7 @@ CREATE TABLE payout_sagas (
      state              VARCHAR(16) NOT NULL COMMENT 'One of REQUESTED, RESERVED, SUBMITTED, SETTLED, FAILED.',
      provider_ref       VARCHAR(128) COMMENT 'Payout provider reference; null until submitted.',
      attempts           INT         NOT NULL DEFAULT 0 COMMENT 'Consecutive worker attempt count.',
-     -- The payout's terminal outcome, stored on the saga (see db/postgresql-schema.sql). `reason` is
-     -- the worker's failure reason (FAILED); `payout_usd` is the gross USD disbursed (SETTLED). Both
-     -- null until the saga reaches its terminal state.
+     -- Terminal outcome, stored on the saga. Rationale in db/postgresql-schema.sql (payout_sagas).
      reason             VARCHAR(255) COMMENT 'Failure reason set when dead-lettered; null otherwise.',
      payout_usd         BIGINT COMMENT 'Gross USD disbursed; null until SETTLED.',
      due_at             BIGINT      NOT NULL COMMENT 'Epoch ms when the worker may next advance it.',
@@ -268,17 +236,13 @@ CREATE TABLE payout_sagas (
      CHECK (reserve > 0),
      CHECK (state IN ('REQUESTED', 'RESERVED', 'SUBMITTED', 'SETTLED', 'FAILED')),
      KEY payout_sagas_due_idx (state, due_at),
-     -- requestPayout's min-interval gate reads MAX(updated_at) for one user across all their sagas;
-     -- without this it scans every saga that user has ever had, so the check's cost grows with their
-     -- payout history on each new request.
+     -- Serves requestPayout's min-interval gate: MAX(updated_at) for one user across all their sagas.
      KEY payout_sagas_user_updated_idx (user_id, updated_at),
-     -- A provider callback names a payout by provider_ref, so the inbound-webhook lookup reads by
-     -- it. Without this every callback scans the whole payout board.
+     -- Inbound provider callbacks look up the saga by provider_ref.
      KEY payout_sagas_provider_ref_idx (provider_ref)
    ) COMMENT='Payout state machine: one row per seller cash-out.';
 
--- promo_grants: one row per promotional credit handed out; swept for expired, not-yet-reversed
--- grants. Rationale/invariants documented in db/postgresql-schema.sql (promo_grants banner).
+-- Rationale in db/postgresql-schema.sql (promo_grants banner).
 CREATE TABLE promo_grants (
      id         VARCHAR(64) PRIMARY KEY COMMENT 'Primary key, txn_ uuid shared with the posting.',
      user_id    VARCHAR(64) NOT NULL COMMENT 'User the promotional credit was granted to.',
@@ -291,8 +255,7 @@ CREATE TABLE promo_grants (
      KEY promo_grants_due_idx (reversed, expires_at)
    ) COMMENT='Promotional credit grants with their expiry and reversal state.';
 
--- entitlements: ownership records by (user, sku); no money moves through this table.
--- Rationale documented in db/postgresql-schema.sql (entitlements banner).
+-- Rationale in db/postgresql-schema.sql (entitlements banner).
 CREATE TABLE entitlements (
      user_id    VARCHAR(64) NOT NULL COMMENT 'Owner of the entitlement; part of primary key.',
      sku        VARCHAR(64) NOT NULL COMMENT 'SKU the user owns; part of primary key.',
@@ -306,8 +269,7 @@ CREATE TABLE entitlements (
      CHECK (quantity >= 0)
    ) COMMENT='What each user owns (SKU ownership), with version and expiry.';
 
--- subscriptions: recurring-charge state read by the renewal sweep. Rationale/invariants
--- documented in db/postgresql-schema.sql (subscriptions banner).
+-- Rationale in db/postgresql-schema.sql (subscriptions banner).
 CREATE TABLE subscriptions (
      id          VARCHAR(64) PRIMARY KEY COMMENT 'Subscription id, sub_<uuid>; primary key.',
      user_id     VARCHAR(64) NOT NULL COMMENT 'Buyer charged each billing period.',
@@ -324,14 +286,11 @@ CREATE TABLE subscriptions (
      CHECK (period_ms > 0),
      CHECK (state IN ('ACTIVE', 'LAPSED', 'CANCELED')),
      KEY subscriptions_due_idx (state, next_due_at),
-     -- subscribe's activeFor lookup filters by (user_id, sku, seller_id) to find the one ACTIVE row;
-     -- without this it scans every subscription a user holds, so the duplicate-guard's cost grows with
-     -- their subscription count on each new subscribe.
+     -- Serves subscribe's duplicate guard: the activeFor lookup by (user_id, sku, seller_id).
      KEY subscriptions_user_sku_seller_idx (user_id, sku, seller_id)
    ) COMMENT='Recurring charges: one row per subscription and its billing state.';
 
--- trust_attempts: one row per velocity attempt, summed over a rolling per-subject window.
--- Rationale documented in db/postgresql-schema.sql (trust_attempts banner).
+-- Rationale in db/postgresql-schema.sql (trust_attempts banner).
 CREATE TABLE trust_attempts (
      idempotency_key VARCHAR(255) PRIMARY KEY COMMENT 'Attempt idempotency key; primary key, dedupes retries.',
      subject         VARCHAR(64)  NOT NULL COMMENT 'Identity whose spend velocity is summed.',
@@ -342,8 +301,7 @@ CREATE TABLE trust_attempts (
      KEY trust_attempts_subject_at_idx (subject, at)
    ) COMMENT='Per-key spend attempts feeding the velocity and risk check.';
 
--- instance_movements: the append-only per-instance journal behind netting (src/netting.ts).
--- Rationale/invariants documented in db/postgresql-schema.sql (instance_movements banner).
+-- Rationale in db/postgresql-schema.sql (instance_movements banner).
 CREATE TABLE instance_movements (
      id          BIGINT       AUTO_INCREMENT PRIMARY KEY COMMENT 'Auto-increment row id in commit order.',
      session_id  VARCHAR(64)  NOT NULL COMMENT 'Instance session this movement belongs to.',
@@ -359,8 +317,7 @@ CREATE TABLE instance_movements (
      UNIQUE KEY instance_movements_session_seq_uq (session_id, seq)
    ) COMMENT='Append-only instance-netting journal; the settlement posting anchors its chain head.';
 
--- checkpoints: signed Merkle-root snapshots of ledger state. Rationale/invariants documented in
--- db/postgresql-schema.sql (checkpoints banner).
+-- Rationale in db/postgresql-schema.sql (checkpoints banner).
 CREATE TABLE checkpoints (
      id         VARCHAR(64) PRIMARY KEY COMMENT 'Checkpoint id, chk_<uuid>; primary key.',
      root       CHAR(64)    NOT NULL COMMENT 'Merkle root over account hashes (v2: hashes and sums); lowercase hex.',
@@ -373,13 +330,12 @@ CREATE TABLE checkpoints (
      created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
    ) COMMENT='Signed Merkle checkpoints over the per-account hash chains.';
 
-
 -- ============================================================================
 -- Stored routines (MySQL), counterpart to the Postgres routines in db/postgresql-schema.sql. The
 -- database, not the app, is the primary enforcer: post_entry asserts conservation and is the SOLE
--- writer of `legs` (direct DML revoked from the app role; see adversarial-engines.ts), the triggers
--- below enforce chain continuity and balance integrity, CHECKs cover no-overdraft, primary keys cover
--- exactly-once. Wrapped in `DELIMITER $$` so the loader doesn't read the bodies' semicolons as ends.
+-- writer of `legs` (direct DML revoked from the app role), the triggers below enforce chain
+-- continuity and balance integrity, CHECKs cover no-overdraft, primary keys cover exactly-once.
+-- Wrapped in `DELIMITER $$` so the loader doesn't read the bodies' semicolons as ends.
 --
 -- NOTE: with binary logging enabled, creating a stored FUNCTION can require a one-time
 -- `SET GLOBAL log_bin_trust_function_creators = 1` (or SUPER / SYSTEM_VARIABLES_ADMIN). The
@@ -387,32 +343,27 @@ CREATE TABLE checkpoints (
 -- ============================================================================
 
 -- ============================================================================
--- Least-privilege app role (a deploy requirement; this file does not run it).
--- post_entry's claim to be the SOLE writer of `legs` is, on MySQL, a privilege fact, not a constraint:
--- MySQL has no deferred constraint trigger, so the conservation check inside post_entry only binds if
--- nothing else can INSERT into `legs`. The app must therefore connect as a role that can CALL the
--- procedure but not write `legs` directly:
+-- Least-privilege app role (a deploy requirement — this file does not run it). MySQL has no
+-- deferred constraint trigger, so post_entry's conservation check only binds if nothing else can
+-- INSERT into `legs`: the app must connect as a role that can CALL the procedure but not write
+-- `legs` directly.
 --
---   CREATE ROLE economy_app;
---   GRANT SELECT, EXECUTE        ON `economy_lab`.*       TO economy_app;  -- read all + CALL post_entry
---   GRANT INSERT, UPDATE, DELETE ON `economy_lab`.<table> TO economy_app;  -- every ledger table EXCEPT `legs`
---   GRANT economy_app TO '<app_login>'@'<host>';                          -- then have the app connect as <app_login>
+--   CREATE ROLE economy_app
+--   GRANT SELECT, EXECUTE        ON `economy_lab`.*       TO economy_app   -- read all + CALL post_entry
+--   GRANT INSERT, UPDATE, DELETE ON `economy_lab`.<table> TO economy_app   -- every ledger table EXCEPT `legs`
+--   GRANT economy_app TO '<app_login>'@'<host>'
 --
--- DML stays granted elsewhere on purpose: continuity, balance integrity, overdraft, and exactly-once
--- must each be reachable by a raw write so their triggers/CHECKs/keys do the rejecting. Only `legs` is
--- sealed. post_entry runs as DEFINER, so invoked by economy_app it still writes `legs` with the owner's
--- rights, balanced by construction. That assumes the DEFINER keeps `legs` DML and is a different
--- identity from economy_app. Not executed here (the lab stubs the second-login rail);
--- test/conformance/adversarial-engines.ts builds this role and proves a raw unbalanced-leg INSERT is
--- refused while balanced legs still post through post_entry.
+-- DML stays granted elsewhere on purpose: continuity, balance integrity, overdraft, and
+-- exactly-once must each be reachable by a raw write so their triggers, CHECKs, and keys do the
+-- rejecting. Only `legs` is sealed. post_entry runs as DEFINER, so invoked by economy_app it
+-- still writes `legs` with the owner's rights — the DEFINER must keep `legs` DML and be a
+-- different identity from economy_app. test/conformance/adversarial-engines.ts builds this role
+-- and proves a raw unbalanced-leg INSERT is refused while balanced legs still post.
 -- ============================================================================
 DELIMITER $$
 
--- Persists one posting and everything derived from it in a single CALL: first-time user accounts, the
--- posting row, its legs, one chain link per account, and each account's net balance delta. bigint
--- amounts arrive as JSON strings (no precision lost past 2^53) and are cast here. The balance step
--- UPDATEs existing rows first so the non-negative CHECK tests the new total, not the delta alone, then
--- INSERTs first-time accounts (whose first movement is always a positive credit).
+-- Persists one posting and everything derived from it in a single CALL. Counterpart to the
+-- Postgres post_entry (db/postgresql-schema.sql), which carries the rationale.
 CREATE PROCEDURE post_entry(
   IN p_txn          VARCHAR(64),
   IN p_posted_at    BIGINT,
@@ -470,10 +421,9 @@ BEGIN
       )) AS d ON d.account = c.account
       LEFT JOIN account_balances ab ON ab.account_id = c.account;
 
-  -- Apply each account's net balance delta and advance its maintained head_hash to that account's
-  -- new link hash in the same step. p_links carries one row per distinct account (the same set as
-  -- p_balances), so the join pairs each balance row with its new head. UPDATE existing rows first so
-  -- the non-negative CHECK tests the new total, not the delta alone.
+  -- p_links carries one row per distinct account (the same set as p_balances), so the join pairs
+  -- each balance row with its new head. UPDATE existing rows first so the non-negative CHECK
+  -- tests the new total, not the delta alone.
   UPDATE account_balances ab
     JOIN JSON_TABLE(p_balances, '$[*]' COLUMNS (
       account VARCHAR(96) PATH '$.account',
@@ -504,9 +454,7 @@ BEGIN
                             head_hash = VALUES(head_hash);
 END$$
 
--- Returns one account's cached balance (0 when it has no row yet). This is the MySQL counterpart to
--- the Postgres `account_balance` function. It is the fast read model the statement and prove paths
--- build on, behind one named, tunable access path.
+-- Returns one account's cached balance, 0 when it has no row yet.
 CREATE FUNCTION account_balance(p_account VARCHAR(96))
 RETURNS BIGINT
 READS SQL DATA
@@ -516,10 +464,9 @@ BEGIN
   RETURN COALESCE(v_balance, 0);
 END$$
 
--- Enforces chain continuity. A new link's prev_hash must be the account's current head. For the first
--- link that head is GENESIS; otherwise it is an existing link's hash for that account. This blocks a
--- discontinuous link written around post_entry. The unique index already blocks a fork. (The DROP at
--- the top of the file handles re-runs.)
+-- Chain continuity: a new link's prev_hash must be the account's current head (GENESIS for the
+-- first link). Blocks a discontinuous link written around post_entry. The unique index already
+-- blocks a fork.
 CREATE TRIGGER chain_links_continuity BEFORE INSERT ON chain_links
 FOR EACH ROW
 BEGIN
@@ -532,9 +479,8 @@ BEGIN
   END IF;
 END$$
 
--- Enforces balance integrity: cached balance must equal balance_after at the account's head -- an O(1)
--- keyed read instead of re-summing legs. Still rejects a hand-edited balance, since a raw UPDATE leaves
--- balance_after untouched so the two disagree. Rationale documented in db/postgresql-schema.sql.
+-- Balance integrity: cached balance must equal balance_after at the account's head. Rationale in
+-- db/postgresql-schema.sql (balance integrity banner).
 CREATE TRIGGER account_balances_integrity_ins BEFORE INSERT ON account_balances
 FOR EACH ROW
 BEGIN
@@ -565,14 +511,9 @@ END$$
 
 DELIMITER ;
 
--- Pre-plant an empty balance row (balance 0, genesis head_hash) for each system account. This sits
--- after the routines (unlike the Postgres seed beside its table) so the integrity triggers exist and
--- fire on — and pass — these genesis rows. It reads
--- identically to no row (headsForAccounts treats a missing row as genesis); its only job is to exist
--- so lockAccounts can take `FOR UPDATE` on it. Without it, the first concurrent writers to a hot shared
--- account (STORED_VALUE, touched by every top-up) find no row to lock, so none wait and they race to
--- extend the chain head and collide. A user account creates its row on first posting; the chain-fork
--- retry covers that rarer race.
+-- Pre-plant an empty balance row for each system account so lockAccounts can take `FOR UPDATE`
+-- on it (full rationale in db/postgresql-schema.sql, at its seed). Placed after the routines,
+-- unlike the Postgres seed, so the integrity triggers exist and pass on these genesis rows.
 INSERT INTO account_balances (account_id, currency, balance, head_hash)
   SELECT id, currency, 0, REPEAT('0', 64) FROM accounts WHERE kind = 'system';
 

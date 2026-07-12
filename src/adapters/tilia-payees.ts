@@ -24,14 +24,10 @@
 //         updated_at = now();
 
 import type { TiliaPayee } from '@pwngh/economy-edge/providers/outbound/tilia';
+import type { PgPoolLike } from '#src/engines/pg-driver.ts';
 
-/** The one query method the store needs; a pg pool or client satisfies it. */
-export interface PayeeDb {
-  query(
-    text: string,
-    values?: readonly unknown[],
-  ): Promise<{ rows: Record<string, unknown>[] }>;
-}
+/** The one query method the store needs; a pg pool or client (pg-driver.ts) satisfies it. */
+export type PayeeDb = Pick<PgPoolLike, 'query'>;
 
 export interface TiliaPayeeStore {
   ensureSchema(): Promise<void>;

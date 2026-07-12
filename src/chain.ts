@@ -16,7 +16,7 @@
  * is detectable.
  */
 
-import { chainHash } from '#src/ledger.ts';
+import { GENESIS, GENESIS_HEX, chainHash } from '#src/ledger.ts';
 import { toHex, fromHex, byCodeUnit, toInt64BE } from '#src/bytes.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
 
@@ -54,10 +54,6 @@ export type ChainLink = {
   hash: string;
 };
 
-// The "no previous posting" hash in lowercase hex: 32 zero bytes written as 64 zero chars. This
-// matches GENESIS in ledger.ts.
-const GENESIS_HEX = '0'.repeat(64);
-
 /**
  * The first broken link the prover finds in an account's chain. Returned instead of a bare
  * boolean so a caller can see which posting failed and how.
@@ -85,12 +81,9 @@ export type ChainBreak = {
   actual: string;
 };
 
-/** The result of checking every account's chain. */
 export type ChainReport = {
-  /** True when no break was found. */
   intact: boolean;
 
-  /** The first break found, or null when the chains are intact. */
   firstBreak: ChainBreak | null;
 
   /** How many account chains were checked. */
@@ -113,7 +106,7 @@ export async function advanceHeads(
   for (const account of distinctAccounts(posting)) {
     const prevHex = prevHeadOf(account) ?? GENESIS_HEX;
     const accountPrevHash =
-      prevHex === GENESIS_HEX ? new Uint8Array(32) : fromHex(prevHex);
+      prevHex === GENESIS_HEX ? GENESIS : fromHex(prevHex);
     const hash = await chainHash(digest, {
       accountPrevHash,
       txnId: posting.txnId,
@@ -139,8 +132,6 @@ export async function proveChain(
   deps: { ledger: Ledger; digest: Digest },
   options?: Options,
 ): Promise<ChainReport> {
-  // Read every account's head, sorted by account id char by char, so proveChain checks accounts in
-  // the same sequence everywhere.
   const heads = [...(await collectHeadPairs(deps.ledger))].sort((a, b) =>
     byCodeUnit(a[0], b[0]),
   );
@@ -154,11 +145,7 @@ export async function proveChain(
   return { intact: true, firstBreak: null, count };
 }
 
-// Walks one account's postings in order and checks each link. `prev` is the head reached so far,
-// which is the genesis value before the first posting. A link fails if its stored "previous head"
-// does not match `prev`, meaning the chain is not continuous, or if re-hashing its contents does not
-// reproduce its stored hash, meaning the contents changed. Returns the first failure, or null if the
-// account checks out.
+// `prev` is the head reached so far — the genesis value before the first posting.
 async function recomputeAccount(
   deps: { ledger: Ledger; digest: Digest },
   account: AccountRef,
@@ -190,9 +177,6 @@ async function recomputeAccount(
   return null;
 }
 
-// Re-hashes one stored posting the way the write path did. It feeds the stored previous head, hex
-// decoded back to bytes, plus the entries and metadata through the same hash function. The result
-// should equal the recorded head hash. If any entry was altered, it will not.
 function recomputeLink(
   digest: Digest,
   account: AccountRef,
@@ -399,9 +383,6 @@ export async function verifyCheckpoint(
 
 // --- Internals --------------------------------------------------------------------
 
-// Returns the accounts a posting touches, each once, in the order they first appear in the legs.
-// Several legs can name the same account, so collapsing them advances each account's chain one step
-// rather than one step per leg.
 function distinctAccounts(posting: Posting): AccountRef[] {
   const seen = new Set<AccountRef>();
   const order: AccountRef[] = [];
@@ -414,17 +395,14 @@ function distinctAccounts(posting: Posting): AccountRef[] {
   return order;
 }
 
-// RFC 6962 domain tags (https://datatracker.ietf.org/doc/rfc6962/). Each tag is a one-byte prefix
-// that keeps a leaf's preimage out of the internal-node domain, so no leaf can ever be reinterpreted
-// as an interior left-then-right pair. This is the second-preimage defense. The two values only have
-// to differ. Using 0x00 for leaves and 0x01 for nodes is the convention.
+// RFC 6962 domain tags (https://datatracker.ietf.org/doc/rfc6962/): a one-byte prefix keeps a leaf's
+// preimage out of the internal-node domain, so no leaf can be reinterpreted as an interior pair —
+// the second-preimage defense.
 const MERKLE_LEAF = 0x00;
 const MERKLE_NODE = 0x01;
 
-// Builds the bytes hashed into one Merkle leaf: a 0x00 leaf tag, then "account:head" as UTF-8. The
-// tag pairs with the node tag (0x01) so the leaf and node domains never overlap. The ":" splits the
-// parts unambiguously even though an account id may itself contain ":". A head hash is pure hex, so
-// the final ":" is always the one that separates account from head.
+// A leaf hashes the 0x00 tag then "account:head" as UTF-8. An account id may itself contain ":",
+// but a head hash is pure hex, so the final ":" always separates account from head.
 function leafPreimage(account: AccountRef, head: string): Uint8Array {
   const body = ENCODER.encode(`${account}:${head}`);
   const out = new Uint8Array(1 + body.length);
@@ -433,9 +411,7 @@ function leafPreimage(account: AccountRef, head: string): Uint8Array {
   return out;
 }
 
-// Reduces one row of Merkle hashes to the row above it by hashing each adjacent pair into one hash.
-// On an odd count the last unpaired hash carries up unchanged. Each pair is hashed left bytes then
-// right bytes, so order matters and a swapped pair changes the root.
+// On an odd count the last unpaired hash carries up unchanged.
 async function combineLevel(
   digest: Digest,
   level: ReadonlyArray<Uint8Array>,
@@ -449,11 +425,8 @@ async function combineLevel(
   return next;
 }
 
-// Builds an internal-node preimage: a 0x01 node tag, then the two child hashes end to end, left then
-// right. The tag pairs with the leaf's 0x00 (RFC 6962) so the two domains never overlap. Both
-// children are the same fixed length, so the left and right split stays unambiguous and order
-// matters: a swapped pair changes the hash. Odd levels carry the last child up untagged; see
-// combineLevel.
+// The 0x01 tag, then the child hashes left then right. Both children are the same fixed length, so
+// the split needs no separator.
 function nodePreimage(left: Uint8Array, right: Uint8Array): Uint8Array {
   const out = new Uint8Array(1 + left.length + right.length);
   out[0] = MERKLE_NODE;
@@ -468,10 +441,8 @@ function nodePreimage(left: Uint8Array, right: Uint8Array): Uint8Array {
 const MERKLE_SUM_LEAF = 0x02;
 const MERKLE_SUM_NODE = 0x03;
 
-// Builds a v2 leaf preimage: the 0x02 tag, "account:head:" as UTF-8, then the account's raw leg
-// sum as 8 fixed big-endian bytes. Fixed-width binary rather than decimal text, so the same sum
-// is the same bytes on every runtime with no formatting to disagree on. The trailing ":" before
-// the sum keeps the text part parseable the same way leafPreimage's separator does.
+// The 0x02 tag, "account:head:" as UTF-8, then the sum as 8 big-endian bytes — fixed-width binary,
+// not decimal text, so the same sum is the same bytes on every runtime.
 function sumLeafPreimage(
   account: AccountRef,
   head: string,
@@ -485,9 +456,6 @@ function sumLeafPreimage(
   return out;
 }
 
-// Builds a v2 node preimage: the 0x03 tag, both child hashes left then right, then the combined
-// sum as 8 big-endian bytes. Committing the sum in the hash is the point: a tampered subtree sum
-// breaks every hash above it, so the root's sum is as tamper-evident as the root's hash.
 function sumNodePreimage(
   left: { hash: Uint8Array; sum: bigint },
   right: { hash: Uint8Array; sum: bigint },
@@ -503,8 +471,6 @@ function sumNodePreimage(
   return out;
 }
 
-// The bytes a v2 signature covers: the root hash then the root sum. Signing the pair keeps the
-// stored `sum` column inside the signature; a hash-only signature would leave it editable.
 function sumRootPayload(root: { hash: Uint8Array; sum: bigint }): Uint8Array {
   const out = new Uint8Array(root.hash.length + 8);
   out.set(root.hash, 0);

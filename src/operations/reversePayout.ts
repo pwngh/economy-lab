@@ -12,7 +12,7 @@
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { earned, routePlatformLegs, SYSTEM } from '#src/accounts.ts';
-import { assertKind } from '#src/operations/guards.ts';
+import { assertKind, assertReason, loadSaga } from '#src/operations/guards.ts';
 
 import type { Ctx, Operation, Outcome, Transaction } from '#src/contract.ts';
 import type { Saga, Unit } from '#src/ports.ts';
@@ -30,15 +30,6 @@ import type { Saga, Unit } from '#src/ports.ts';
  * carrying `providerReported` (set only by the payout-failed webhook mapper) may reverse a
  * still-live SUBMITTED payout, because the rail itself has said it will not settle it.
  *
- * @example
- *   const outcome = await reversePayout(
- *     { kind: 'reversePayout', idempotencyKey: 'idem_0',
- *       actor: { kind: 'operator', operatorId: 'op_1' },
- *       userId: 'usr_seller', sagaId: 'pay_1', reason: 'fraud hold' },
- *     unit, ctx,
- *   );
- *   // outcome.status === 'committed'; the reserve returned to usr_seller's earned, saga FAILED.
- *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/reverse-payout/
  *   Reverse payout} for manually unwinding an in-flight payout saga.
  */
@@ -48,9 +39,9 @@ export async function reversePayout(
   ctx: Ctx,
 ): Promise<Outcome> {
   assertKind(operation, 'reversePayout');
-  assertReason(operation.reason);
+  assertReason(operation);
 
-  const saga = await loadSaga(unit, operation.sagaId);
+  const saga = await loadSaga(unit, operation);
   assertUserMatchesSaga(operation.userId, saga);
   refuseSettled(saga);
   refuseLiveSubmitted(operation, saga, ctx);
@@ -72,11 +63,9 @@ export async function reversePayout(
     return { status: 'duplicate', transaction: noopTransaction() };
   }
 
-  // This is the same undo the worker posts. It moves the reserved amount out of PAYOUT_RESERVE
-  // back into the seller's earned account. The debit and credit balance in CREDIT. It commits in
-  // the same transaction as the state change above, so the two cannot come apart. The reserve
-  // debit routes by the user id, the same key the request credited by, so it lands on (and the
-  // lock set covered) the shard holding this payout's reserve.
+  // The same undo the worker posts, committed in the same transaction as the state change above so
+  // the two cannot come apart. The reserve debit routes by the user id — the same key the request
+  // credited by — so it lands on the shard the lock set covered.
   const transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs: routePlatformLegs(
@@ -91,8 +80,7 @@ export async function reversePayout(
       kind: 'reversePayout',
       sagaId: saga.id,
       reason: operation.reason,
-      // Recorded when the rail itself reported the failure, so the audit trail shows which undo
-      // path posted this: a provider callback rather than an operator's judgment.
+      // Which undo path posted this: a provider callback rather than an operator's judgment.
       ...(operation.providerReported === true
         ? { providerReported: true }
         : {}),
@@ -100,21 +88,6 @@ export async function reversePayout(
   });
 
   return { status: 'committed', transaction };
-}
-
-// Loads the saga by id. The operator supplied the id, so a missing saga is a caller error. It
-// throws a fault rather than treating the miss as a quiet "nothing to do", matching
-// settlePayout's loadSaga and reverse's unknown-txnId handling.
-async function loadSaga(unit: Unit, sagaId: string): Promise<Saga> {
-  const saga = await unit.sagas.load(sagaId);
-  if (saga === null) {
-    throw fault(
-      ERROR_CODES.MALFORMED_OPERATION,
-      'reversePayout names a payout that does not exist.',
-      { detail: { kind: 'reversePayout', sagaId } },
-    );
-  }
-  return saga;
 }
 
 // The framework locks the accounts named by operation.userId, but the undo posting credits
@@ -143,13 +116,10 @@ function refuseSettled(saga: Saga): void {
   }
 }
 
-// A SUBMITTED payout is still live until it ages past `maxPayoutAgeMs`, measured from `updatedAt`
-// (set on entering SUBMITTED in submitToProvider). This mirrors the worker's force-fail cutoff with
-// the same `now - updatedAt` comparison, so a manual reverse is rejected until then. RESERVED is not
-// gated here because it was never handed to the provider. A provider-reported failure (the
-// payout-failed webhook) waives the gate: the rail has said it will not settle this payout, so
-// there is no settlement left to race, and the saga-state compare-and-set still guards against a
-// late settle callback arriving anyway.
+// Mirrors the worker's force-fail cutoff: the same `now - updatedAt` vs `maxPayoutAgeMs` check,
+// measured from entering SUBMITTED, so a manual reverse is rejected until then. RESERVED is not
+// gated; it was never handed to the provider. `providerReported` waives the gate — the rail said
+// it will not settle — and the saga-state compare-and-set still guards a late settle callback.
 // See https://economy-lab-docs.pages.dev/economy/reference/operations/reverse-payout/ for why
 // reversing a still-settling payout risks a double-pay and how the timeout cutoff opens the window.
 function refuseLiveSubmitted(
@@ -175,18 +145,6 @@ function refuseLiveSubmitted(
           maxPayoutAgeMs: ctx.config.maxPayoutAgeMs,
         },
       },
-    );
-  }
-}
-
-// Requires a non-blank reason, because a correction must record why for auditability. A missing
-// or blank reason is malformed and is rejected before anything posts.
-function assertReason(reason: string): void {
-  if (reason.trim() === '') {
-    throw fault(
-      ERROR_CODES.MALFORMED_OPERATION,
-      'reversePayout requires a non-empty reason.',
-      { detail: { kind: 'reversePayout' } },
     );
   }
 }
