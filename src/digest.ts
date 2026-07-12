@@ -11,9 +11,8 @@
 
 import type { Digest } from '#src/ports.ts';
 
-// The system SHA-256, used by every default {@link Digest} factory (the in-memory adapter, the SQL
-// engines, the composition root, and the production runtime services). Pulled into one place so all
-// four share one implementation instead of four copies of the same hash.
+// The system SHA-256 shared by every default {@link Digest} factory, so all four share one
+// implementation.
 
 // A synchronous SHA-256, resolved once from node:crypto when the runtime offers it. It is null until
 // the first hash probes for it, and stays null on a runtime without node:crypto (e.g. Cloudflare

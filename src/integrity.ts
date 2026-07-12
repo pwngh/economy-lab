@@ -44,8 +44,8 @@ type Drift = { account: AccountRef; materialized: Amount; derived: Amount };
  */
 export type ProveCtx = { rates: Rates; digest: Digest };
 
-// Collects what one pass over the ledger gathers. The hash chain is not checked here. `chain.ts`
-// `proveChain` does that, so the chain is verified in one place.
+// Collects what one pass over the ledger gathers. The hash chain is not checked here — `chain.ts`
+// `proveChain` does that.
 type LedgerFold = {
   // Running total per currency. Debits are added and credits are subtracted, so it should
   // reach zero.

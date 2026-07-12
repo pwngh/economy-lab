@@ -41,31 +41,29 @@ import type {
 // --- Public surface (re-exports only) ---------------------------------------------
 
 export { createEconomy } from '#src/economy.ts';
-// memoryStore: the in-memory backend, which runs with no database.
+// memoryStore: the in-memory backend, with no database.
 export { memoryStore } from '#src/adapters/memory.ts';
 // memoryCache: in-process read-through cache, the zero-infra counterpart to the Redis adapter.
 export { memoryCache } from '#src/adapters/memory-cache.ts';
 
 export { createWorker } from '#src/worker/index.ts';
 
-// Account-naming helpers. spendable/earned/promo/currency build account ids; SYSTEM holds the
-// platform's own accounts. Lets a host refer to an account without hand-writing the id string
-// (a user account id looks like `usr_...:<kind>`).
+// Account-naming helpers: spendable/earned/promo/currency build account ids, and SYSTEM holds the
+// platform's own (a user account id looks like `usr_...:<kind>`).
 export { spendable, earned, promo, currency, SYSTEM } from '#src/accounts.ts';
 
-// Money and leg construction. Amount is branded, so these are the only doors: decodeAmount parses
-// a decimal string exactly (a third decimal digit throws — money is never silently truncated) and
-// encodeAmount is its inverse for display and wire use. credit/debit build correctly-signed legs
-// for netting movements without the caller hand-writing the sign convention.
+// Money and leg construction. Amount is branded, so these are the only doors: decodeAmount parses a
+// decimal string exactly (a third decimal digit throws), encodeAmount is its inverse for display and
+// wire use, and credit/debit build correctly-signed legs.
 export { decodeAmount, encodeAmount } from '#src/money.ts';
 export { credit, debit } from '#src/ledger.ts';
 export type { Leg } from '#src/ports.ts';
 
 export { loadConfig } from '#src/config.ts';
 
-// Opt-in, host-level extensions. Neither runs unless explicitly composed: netting is a session a
-// host opens over the store (src/netting.ts), and the bitset is a decorator a host wraps around
-// the store (src/adapters/entitlement-bitset.ts). The core submit pipeline never touches either.
+// Opt-in, host-level extensions: a netting session a host opens over the store (src/netting.ts) and
+// the entitlement-bitset decorator a host wraps around it (src/adapters/entitlement-bitset.ts). The
+// core submit pipeline never touches either.
 export {
   createReservations,
   instanceSession,
@@ -81,8 +79,8 @@ export type {
 export { cachedEntitlements } from '#src/adapters/entitlement-bitset.ts';
 export type { BitsetOptions } from '#src/adapters/entitlement-bitset.ts';
 
-// The error surface. submit() throws EconomyError for genuine faults; a caller needs the class for
-// instanceof, the ERROR_CODES catalog to match on, and the code/reason unions to type its handling.
+// The error surface: EconomyError for instanceof, the ERROR_CODES catalog to match on, and the
+// code/reason unions to type its handling.
 export { EconomyError, ERROR_CODES } from '#src/errors.ts';
 export type { ErrorCode, RejectionCode } from '#src/errors.ts';
 
@@ -106,17 +104,15 @@ export type { Capabilities, Options, Range, Statement } from '#src/ports.ts';
 
 // --- Composition from env ---------------------------------------------------------
 //
-// Two source layers the directory names only half-express: src/engines/ are the systems of record
-// that enforce ledger invariants natively (Postgres, MySQL), and src/adapters/ are everything
-// pluggable that does not (in-memory and HTTP stores, Redis cache, SQS and HTTP dispatcher, payout
-// processor, FX rates). See https://economy-lab-docs.pages.dev/economy/ports/storage/
+// src/engines/ are the systems of record that enforce ledger invariants natively (Postgres, MySQL),
+// and src/adapters/ are everything pluggable that does not. See
+// https://economy-lab-docs.pages.dev/economy/ports/storage/
 // for how every adapter meets one contract and the SQL engines also enforce it in the database.
 
 /**
- * External services with no built-in stand-in; the caller supplies a real one. `pricing` splits
- * a sale's money (platform fee vs. seller share). The rest are outside integrations: `processor`
- * is the payout provider (e.g. a payment processor), `signer` holds the signing key, `rates`
- * supplies currency-exchange rates.
+ * External services with no built-in stand-in: `pricing` splits a sale's money (platform fee vs.
+ * seller share), `processor` is the payout provider, `signer` holds the signing key, and `rates`
+ * supplies CREDIT-to-USD rates.
  */
 export type ExternalPorts = {
   signer: Signer;
@@ -129,8 +125,8 @@ export type ExternalPorts = {
 };
 
 /**
- * Runtime services {@link capabilitiesFromEnv} fills in from web-standard primitives. Pass any to
- * override the default, e.g. a fixed clock and counting id generator for reproducible test output.
+ * Runtime services {@link capabilitiesFromEnv} fills in; pass any to override, e.g. a fixed clock
+ * for reproducible tests.
  */
 export type RuntimeDefaults = {
   clock?: Clock;
@@ -145,16 +141,13 @@ export type RuntimeDefaults = {
 };
 
 /**
- * Assemble the full {@link Capabilities} bundle from `env`: the Store (Postgres/MySQL/in-memory,
- * chosen by `DATABASE_URL`), an optional Redis cache and SQS/HTTP dispatcher, the external `ports`,
- * and default runtime services (wall clock, uuid ids, SHA-256, jsonl logger, no-op metrics) unless
- * overridden in `defaults`. Each driver is imported dynamically (only if selected), so a deployment
- * installs only what it uses. Config is read once and fails fast on a bad env with one combined
- * `CONFIG.INVALID`.
+ * Assembles the full {@link Capabilities} bundle from `env`: the Store (chosen by `DATABASE_URL`),
+ * an optional cache and dispatcher, the external `ports`, and default runtime services unless
+ * overridden. Drivers import only when selected; config is read once and fails fast with one
+ * combined `CONFIG.INVALID`.
  *
- * This is the one place env becomes capabilities. {@link compose} builds an economy from it;
- * {@link composeWorker} builds a worker. A single-process host that wants both over one store calls
- * it once and passes the result to `createEconomy` and `createWorker(caps.store, workerCtxFrom(caps))`.
+ * {@link compose} and {@link composeWorker} both build from it. A single-process host that wants
+ * both over one store calls it once.
  */
 export async function capabilitiesFromEnv(
   env: Record<string, string | undefined>,
@@ -188,10 +181,8 @@ export async function capabilitiesFromEnv(
 }
 
 /**
- * Derive a worker context from a capability bundle: the runtime services a background pass needs,
- * minus the request-path-only pieces. There is no pricing rule, because each sweep writes its own
- * balanced legs. There is no cache or dispatcher, because the worker takes those separately. This
- * lets one process build an economy and a worker over the exact same store and clock.
+ * Derives a worker context from a capability bundle: the runtime services a background pass needs,
+ * minus the request-path-only pieces (pricing, cache, dispatcher).
  */
 export function workerCtxFrom(caps: Capabilities): WorkerCtx {
   return {
@@ -208,9 +199,8 @@ export function workerCtxFrom(caps: Capabilities): WorkerCtx {
 }
 
 /**
- * Wire an {@link Economy} whose Store (and optional Redis cache / SQS dispatcher) are chosen from
- * `env`, falling back to the in-memory store when `DATABASE_URL` is unset. Thin over
- * {@link capabilitiesFromEnv}.
+ * Wires an {@link Economy} whose store, cache, and dispatcher come from `env`, falling back to the
+ * in-memory store when `DATABASE_URL` is unset. Thin over {@link capabilitiesFromEnv}.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy} for
  *   composing an economy from env.
@@ -224,16 +214,10 @@ export async function compose(
 }
 
 /**
- * Wire a background {@link Worker}: the loop that periodically does deferred, time-driven work
- * (releasing payouts, renewing subscriptions, expiring promo grants, delivering queued events,
- * writing integrity checkpoints, etc.) over the same env-selected store and dispatcher as
- * {@link compose}. Returns the worker plus store and dispatcher, so a host can call
- * `worker.runOnce(input)` on a timer and pass the dispatcher into each run's input.
- *
- * Two processes on the same database each call this (and {@link compose}) with their own store
- * handle. For a single process that shares one store, call {@link capabilitiesFromEnv} once instead
- * (see its note). Sharing one store is required for the in-memory backend, where two stores are two
- * separate maps.
+ * Wires a background {@link Worker} for the deferred, time-driven work over the same env-selected
+ * store and dispatcher as {@link compose}. Two processes each call this with their own store handle;
+ * a single process that shares one store calls {@link capabilitiesFromEnv} once instead — required
+ * for the in-memory backend, where two stores are two separate maps.
  */
 export async function composeWorker(
   env: Record<string, string | undefined>,
@@ -254,23 +238,23 @@ export async function composeWorker(
 
 // --- Default runtime services -----------------------------------------------------
 
-// Wall-clock time in epoch milliseconds. Pass your own clock for reproducible timing (e.g. tests).
+// Wall-clock time in epoch milliseconds; pass your own clock for reproducible timing.
 function wallClock(): Clock {
   return { now: () => Date.now() };
 }
 
-// Ids of the form `${prefix}_${uuid}` via crypto.randomUUID, no Node-specific module.
+// Ids of the form `${prefix}_${uuid}` via crypto.randomUUID.
 function uuidIds(): Ids {
   return { next: (prefix) => `${prefix}_${crypto.randomUUID()}` };
 }
 
-// Metrics sink that discards everything, so code can always record metrics with no host-supplied one.
+// Discards every metric, so code can always record with no host-supplied meter.
 function noopMeter(): Meter {
   return { count: () => {}, observe: () => {} };
 }
 
-// `DATABASE_URL` picks the storage backend: a `postgres://` or `mysql://` DSN selects that engine
-// (and only then loads its driver); unset uses the in-memory store. Any other scheme throws here.
+// `DATABASE_URL` picks the backend: a `postgres://` or `mysql://` connection string selects that
+// engine and only then loads its driver; unset uses the in-memory store, and any other scheme throws.
 async function selectStore(
   env: Record<string, string | undefined>,
   deps: { digest: Digest; clock: Clock; velocityWindowMs: number },
@@ -291,18 +275,13 @@ async function selectStore(
   if (url.startsWith('mysql://')) {
     const { createMysqlPool, mysqlStore, readSchemaVersion } =
       await import('#src/engines/mysql.ts');
-    // Build the pool via the engine's helper, which sets supportBigNumbers and bigNumberStrings so a
-    // BIGINT money column comes back as a string (then a bigint), not a lossy JS number. Raw `mysql2`
-    // `createPool` leaves those off, so wiring it directly would silently round any amount above
-    // 2^53 (~9 quadrillion). This is the same createMysqlPool the engine's conformance and adversarial
-    // tests use.
+    // Build the pool via the engine's helper, which sets supportBigNumbers and bigNumberStrings — raw
+    // `mysql2` leaves those off and would silently round any amount above 2^53.
     const pool = await createMysqlPool(url);
-    // Fail fast if the database schema has drifted from this code (postgresStore does the same for
-    // its branch). Postgres makes its own pool inside the store; MySQL's pool is created here.
+    // Fail fast if the schema has drifted from this code (postgresStore does the same in its branch).
     assertSchemaCurrent(await readSchemaVersion(pool), 'MySQL');
-    // Install the vendored money functions (idempotent) and make this engine prove it computes
-    // the pinned arithmetic before any posting trusts it — semantics fail-fast beside the schema
-    // one. postgresStore runs the same pair inside its own boot.
+    // Install the vendored money functions (idempotent) and prove this engine computes the pinned
+    // arithmetic before any posting trusts it.
     const runner = {
       run: (sql: string, params?: readonly unknown[]) =>
         pool
@@ -356,10 +335,9 @@ async function selectDispatcher(
       await import('@aws-sdk/client-sqs');
     const { sqsDispatcher } = await import('#src/adapters/sqs.ts');
     const raw = new SQSClient({});
-    // The adapter speaks an SDK-free `{ input }` command so it stays importable and unit-testable
-    // without @aws-sdk/client-sqs. Translate it into a real `SendMessageCommand` here, the one place
-    // that imports the SDK. A raw `SQSClient.send` rejects a plain `{ input }`: it needs a Command
-    // instance, so the adapter's structural client is wrapped, not passed through raw.
+    // The adapter speaks an SDK-free `{ input }` command so it stays testable without
+    // @aws-sdk/client-sqs; translate it into a real `SendMessageCommand` here, the one place that
+    // imports the SDK.
     return sqsDispatcher({
       queueUrl,
       client: {

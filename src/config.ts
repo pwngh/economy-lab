@@ -67,9 +67,8 @@ export interface Config {
   /** Platform's cut in basis points (hundredths of a percent); 10000 = 100%, 1530 = 15.3%. */
   platformFeeBps: number;
 
-  /** Payout-rail fee in basis points, charged on the USD a seller cashes out (~1.5%, varies by
-   *  destination). This is the payout processor's own cut (e.g. PayPal's), deducted from the
-   *  disbursement so the seller receives the net; it is not platform revenue. */
+  /** Payout-rail fee in basis points: the processor's own cut, deducted from the disbursement so
+   *  the seller receives the net. Not platform revenue. */
   payoutFeeBps: number;
 
   /** Most a user may spend within one window before the risk check steps in, in CREDIT minor units. */
@@ -127,7 +126,6 @@ function isProduction(env: EnvMap): boolean {
   return env.NODE_ENV === 'production';
 }
 
-// Raw environment: variable names to string values (or undefined if unset).
 type EnvMap = Record<string, string | undefined>;
 
 /**
@@ -227,9 +225,8 @@ export function economyPaused(
   return pauseStartMs <= now && now < pauseEndMs;
 }
 
-// Check one required value. Reports absence via a `missing` flag instead of throwing, so
-// loadConfig can collect and report all missing keys together. Empty values are tolerated
-// outside production but count as missing in production.
+// Reports absence via a `missing` flag instead of throwing, so loadConfig can report all
+// missing keys together. Empty values count as missing only in production.
 function required(
   value: string | undefined,
   key: string,
@@ -241,23 +238,22 @@ function required(
   return { key, value, missing: false };
 }
 
-// Parse an integer, returning the fallback when unset or not a valid whole number, so a
-// bad override can never leave the config partly applied.
+// Parses an integer, falling back when unset or invalid, so a bad override never leaves
+// the config partly applied.
 function toInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(String(value), 10);
   return Number.isSafeInteger(parsed) ? parsed : fallback;
 }
 
-// Parse an optional integer tunable, returning null (not a numeric fallback) when unset or not a
-// valid whole number. Used for the pause-window bounds, where "absent" must stay distinct from any
-// real epoch value so a missing bound leaves the window inactive rather than defaulting to one.
+// Parses an optional integer to null when unset or invalid. Absent must stay distinct from any
+// real value, so a missing pause-window bound leaves the window inactive.
 function toIntOrNull(value: string | undefined): number | null {
   const parsed = Number.parseInt(String(value), 10);
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
-// Parse a bigint (for minor-unit amounts that can exceed 2^53, the largest exact JS number).
-// Returns the fallback unless the value is a string of digits.
+// Parses a bigint for minor-unit amounts that can exceed 2^53; returns the fallback unless
+// the value is a string of digits.
 function toBigInt(value: string | undefined, fallback: bigint): bigint {
   if (value === undefined || !/^\d+$/.test(value)) {
     return fallback;

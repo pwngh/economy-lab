@@ -16,8 +16,8 @@
  */
 
 import type { Currency } from '#src/money.ts';
-// Type-only import. This file and contract.ts reference each other, but type-only imports are
-// erased at compile time, so there's no runtime circular import.
+// Type-only, so the mutual reference with contract.ts is erased at compile time — no runtime
+// circular import.
 import type { Operation } from '#src/contract.ts';
 
 /**
@@ -106,9 +106,9 @@ export const SYSTEM = {
 
 // --- Platform-account sharding ------------------------------------------------------
 //
-// Every sale credits the one REVENUE row, so concurrent sales queue on its lock. Splitting each hot
-// account into `platformShards` rows (bare id + `id#1`...`id#S-1`) lets them run in parallel; readers
-// sum the shards. Shard 0 keeps the bare id, so shards=1 (the default) changes nothing.
+// Splitting each hot account into `platformShards` rows (bare id + `id#1`...`id#S-1`) lets
+// concurrent postings run in parallel; readers sum the shards. Shard 0 keeps the bare id, so
+// shards=1 (the default) changes nothing.
 
 // The accounts worth sharding. RECEIVABLE and OPENING_EQUITY move too rarely to matter.
 const SHARDED: ReadonlySet<AccountRef> = new Set([
@@ -235,8 +235,7 @@ export function currency(ref: AccountRef): Currency {
 }
 
 /**
- * Sorts every account into one of four classes: `custodial`, `excluded`, `house-asset`, or
- * `house-liability`. The DB schema and the USD-backing solvency check both rely on these, and only
+ * Sorts every account into `custodial`, `excluded`, `house-asset`, or `house-liability`. Only
  * `custodial` (users' spendable) counts toward the trust total.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/
@@ -262,8 +261,8 @@ export function classify(
     base === SYSTEM.PROMO_FLOAT ||
     base === SYSTEM.PAYOUT_RESERVE
   ) {
-    // PAYOUT_RESERVE is `excluded`, not `house-liability`, so neither it nor promo ever enters the
-    // backing total or raises the USD the platform must hold.
+    // PAYOUT_RESERVE is `excluded`, not `house-liability`, so it never raises the USD the platform
+    // must hold.
     return base === SYSTEM.PAYOUT_RESERVE ? 'excluded' : 'house-liability';
   }
   if (kindOf(ref) === 'spendable') {
@@ -290,16 +289,11 @@ export function isDebitNormal(ref: AccountRef): boolean {
 }
 
 /**
- * The accounts an operation might touch, which the submit pipeline locks (lockAccounts in
- * economy.ts) before posting so concurrent operations can't race on the same balances.
+ * The accounts an operation might touch, locked before posting. A superset on purpose: extra locks
+ * are harmless, too few would let operations interleave.
  *
- * Returns a superset on purpose: a few extra locks are harmless, too few would let operations
- * interleave. Locking the full set up front gives the funds pre-check a consistent view and makes
- * the overdraft guard in `postEntry` a safety net that shouldn't fire.
- *
- * `refund` and `reverse`: the original transaction's accounts aren't in the request, so this
- * returns only the system accounts those operations always touch. The handler loads the original
- * transaction and adds its accounts before posting, covering everything the posting reads.
+ * `refund` and `reverse` return only the system accounts they always touch; the handler loads the
+ * original transaction and adds its accounts before posting.
  */
 export function accountsOf(operation: Operation, shards = 1): AccountRef[] {
   // TypeScript can't see that each LOCK_SETS builder reads only the fields valid for its own kind,
@@ -321,9 +315,8 @@ const REVERSAL_CONTRAS: AccountRef[] = [
   SYSTEM.RECEIVABLE,
 ];
 
-// For each operation kind, the accounts that operation may touch. `accountsOf` looks up the
-// matching builder here and calls it. Hot kinds route shards with the same key their handler
-// routes the legs with, so the lock covers the shard the posting will hit.
+// Per-kind lock sets. Hot kinds route shards with the same key their handler routes the legs with,
+// so the lock covers the shard the posting will hit.
 const LOCK_SETS: {
   [K in Operation['kind']]: (
     operation: Extract<Operation, { kind: K }>,
@@ -332,10 +325,10 @@ const LOCK_SETS: {
 } = {
   topUp: (o, s) => [
     spendable(o.userId),
-    platformShard(SYSTEM.STORED_VALUE, o.idempotencyKey, s), // offsetting entry for the newly issued credits
+    platformShard(SYSTEM.STORED_VALUE, o.idempotencyKey, s), // offset for the newly issued credits
     platformShard(SYSTEM.TRUST_CASH, o.idempotencyKey, s),
     platformShard(SYSTEM.USD_CLEARING, o.idempotencyKey, s),
-    // The spread margin's account; locking it also plants a first-use shard row before posting.
+    // spread margin; locking also plants its first-use shard row
     platformShard(SYSTEM.REVENUE_USD, o.idempotencyKey, s),
   ],
   spend: (o, s) => [

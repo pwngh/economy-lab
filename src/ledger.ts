@@ -186,13 +186,10 @@ export async function chainHash(
 
 // --- Validation ------------------------------------------------------------------
 
-// Each leg's amount must match its account's currency. Two currencies exist, USD and the
-// in-app CREDIT; a USD amount on a CREDIT account (or vice versa) mixes currencies in one
-// posting and is rejected with CURRENCY_MISMATCH.
-//
-// The SQL engines also enforce this natively: each leg carries a composite FK to
-// (accounts.id, currency). This app-side check exists for the early, coded CURRENCY_MISMATCH
-// fault and for the in-memory store, which has no FK.
+// Each leg's amount must match its account's currency; a mixed posting is rejected with
+// CURRENCY_MISMATCH. The SQL engines enforce this natively via a composite FK to
+// (accounts.id, currency); this app-side check gives the coded fault early and covers the
+// in-memory store, which has no FK.
 function assertSingleCurrencyPerLeg(posting: Posting): void {
   for (const leg of posting.legs) {
     if (leg.amount.currency !== currency(leg.account)) {
@@ -214,10 +211,8 @@ function assertSingleCurrencyPerLeg(posting: Posting): void {
 
 // A posting balances when leg amounts sum to zero per currency; any nonzero total is rejected.
 //
-// Redundant pre-check; not the enforcer. Conservation is enforced by the database (PG: a deferred
-// constraint trigger on legs; MySQL: the assert inside post_entry plus revoked direct DML; see
-// db/*-schema.sql). The app never constructs an unbalanced posting, so this exists only to fail fast
-// with a clear fault rather than a raw engine error. It cannot let through anything the engine would.
+// This is a redundant pre-check, not the enforcer: conservation is enforced by the database
+// (see db/*-schema.sql). It exists to fail fast with a clear fault instead of a raw engine error.
 function assertBalanced(posting: Posting): void {
   const sums = new Map<Currency, bigint>();
   for (const leg of posting.legs) {

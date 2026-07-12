@@ -30,9 +30,8 @@ export type RiskDecision =
   | { allow: false; reason: RejectionCode };
 
 /**
- * Sums a subject's spending in the sliding window that ends at `now`. It counts every attempt
- * with `at > now - windowMs` and drops the rest. The window slides with the clock, so an attempt
- * counts for `windowMs` after it happens and then ages out. There is no fixed reset boundary.
+ * Sums a subject's spending in the sliding window ending at `now` (`at > now - windowMs`);
+ * attempts age out as the window slides, with no fixed reset boundary.
  *
  * This is the in-memory twin of the SQL stores' windowed `SUM(amount) WHERE at > cutoff`, so
  * every backend enforces the same rolling limit. The store deduplicates attempts before they

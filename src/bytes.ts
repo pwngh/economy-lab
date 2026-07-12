@@ -11,8 +11,7 @@
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 
-// Maps each byte (0-255) to its two lowercase hex chars, e.g. 0 -> "00", 255 -> "ff".
-// Built once at module load so encoding is a table lookup per byte rather than a format call.
+// Maps each byte (0-255) to its two lowercase hex chars, built once at module load so encoding is a table lookup.
 const HEX = (() => {
   const table = new Array<string>(256);
   for (let byte = 0; byte < 256; byte += 1) {
