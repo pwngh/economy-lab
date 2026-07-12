@@ -9,55 +9,43 @@
  * @license MIT
  */
 
-// Scale probe: does per-op cost stay flat as one subject's history grows? It hammers one buyer
-// (spend) and one seller (payout) and measures throughput in segments, so O(history) cost shows up
-// as ops/sec falling segment over segment — a flat row is O(1) in that subject's history.
-//
-// Built on the shared harness (scripts/support/harness.ts), so it runs over the same backends the
-// bench does, each in its own reseeded throwaway schema/database. Running it against Postgres/MySQL —
-// not just in-memory — is how an O(history) effect on a real engine shows up directly (for example
-// index depth, or a chain that lengthens on one hot account), which is the kind of cost a
-// bloated shared database incurs.
+// Scale probe: does per-op cost stay flat as one subject's history grows? One buyer (spend) and one
+// seller (payout) are hammered in SEG-sized segments — a flat ops/sec row is O(1) in that subject's
+// history, a falling row is O(history). Runs over the shared harness backends (scripts/support/harness.ts).
 //
 //   node scripts/scale-probe.ts                                  # in-memory + any reachable DB
 //   SEG=1000 SEGMENTS=12 node scripts/scale-probe.ts             # bigger curve
-//   BENCH_BACKENDS=postgres SEG=500 node scripts/scale-probe.ts  # one backend
-//
-// Knobs: SEG (segment size), SEGMENTS (count), plus the harness knobs (BENCH_BACKENDS, the URLs, etc.).
 
 import { topUp, spend, requestPayout, credit } from '#test/support/builders.ts';
 import {
   isCommitted,
-  maskUrl,
-  proveEconomyOrReport,
+  proveGate,
   resolveConfig,
   tryProvision,
+  urlFor,
 } from '#scripts/support/harness.ts';
 
 import type { Economy } from '#src/index.ts';
 
-const cfg = resolveConfig();
+// The one capture of process.env, and the one parse: everything below reads cfg, never env.
+const cfg = resolveConfig(process.env);
 const SEG = cfg.segmentSize;
 const SEGMENTS = cfg.segments;
 const tag = `s${process.pid.toString(36)}`;
 
 const nowMs = (): number => performance.now();
 
-// Runs `op(k)` SEG*SEGMENTS times, printing ops/sec per SEG-sized segment. Flat column = O(1) per op
-// in this subject's history; falling column = per-op cost grows with accumulated history.
 async function curve(
   name: string,
   op: (k: number) => Promise<unknown>,
 ): Promise<number[]> {
   const rates: number[] = [];
   let k = 0;
-  // Discard one full segment first so JIT warmup doesn't inflate the first timed segment — without
-  // this, a flat curve reads as "improving", the opposite of the O(history) effect this probe
-  // measures (most visible on the always-warm in-memory backend).
+  // Discard one full segment first, or JIT warmup makes a flat curve read as "improving".
   for (let w = 0; w < SEG; w++) await op(k++);
   for (let s = 0; s < SEGMENTS; s++) {
     const t0 = nowMs();
-    let committed = 0; // count committed ops only; a rejection is not real throughput
+    let committed = 0;
     for (let i = 0; i < SEG; i++) {
       if (isCommitted(await op(k++))) committed += 1;
     }
@@ -128,17 +116,13 @@ console.warn(
   `=== scale probe: ${SEGMENTS} segments * ${SEG} ops, Node ${process.version} ===`,
 );
 
-// Set if any backend's prove gate fails, so the probe exits non-zero rather than reporting a
-// scaling curve over a ledger that no longer passes its invariants — the same correctness gate the
-// bench enforces.
+// A failed prove gate exits non-zero: never report a scaling curve over a ledger that fails its invariants.
 let anyProveFailed = false;
 
 for (const backend of cfg.backends) {
   console.warn(`\n${backend}:`);
   if (backend !== 'in-memory') {
-    console.warn(
-      `  connecting to ${maskUrl(backend === 'postgres' ? cfg.urls.postgres : cfg.urls.mysql)}`,
-    );
+    console.warn(`  connecting to ${urlFor(cfg, backend)}`);
   }
   const p = await tryProvision(backend, cfg);
   if (!p) continue;
@@ -146,17 +130,13 @@ for (const backend of cfg.backends) {
     console.warn(`  ${p.durability}`);
     await spendCurve(p.economy);
     await payoutCurve(p.economy);
-    const { ok, report } = await proveEconomyOrReport(p.economy);
-    if (ok) {
-      console.warn('  prove: PASS — every invariant holds');
-    } else {
+    const ok = await proveGate(p, '  prove: ');
+    if (!ok) {
       anyProveFailed = true;
-      console.warn(`  prove: FAIL — ${JSON.stringify(report)}`);
     }
   } catch (e) {
-    // Contain a mid-run failure to this backend so the remaining backends still run, but a backend that
-    // provisioned and then THREW is a failure, not a provisioning skip: fail the run loudly so it can
-    // never be mistaken for a clean pass.
+    // Contain the failure so the remaining backends still run, but a backend that provisioned and
+    // then threw fails the run — not a provisioning skip.
     anyProveFailed = true;
     console.warn(
       `  FAILED ${backend}: ${e instanceof Error ? e.message : String(e)}`,

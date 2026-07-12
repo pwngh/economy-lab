@@ -27,6 +27,8 @@ import { makeEconomy } from '#test/support/economy.ts';
 import {
   makeIsolatedMysqlStore,
   makeIsolatedPostgresStore,
+  testMysqlUrl,
+  testPostgresUrl,
 } from '#test/support/adapters.ts';
 import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
 import { credit, spend, topUp } from '#test/support/builders.ts';
@@ -40,23 +42,19 @@ const VELOCITY_LIMIT_MINOR = 5_000n;
 const backends = [
   {
     name: 'postgres',
-    build: async (): Promise<Store> => {
-      const url =
-        process.env.DATABASE_URL ??
-        'postgres://economy:economy@localhost:5432/economy_lab';
-      return makeIsolatedPostgresStore({
-        url,
+    build: async (): Promise<Store> =>
+      makeIsolatedPostgresStore({
+        url: testPostgresUrl(process.env),
         digest: seededDigest(1),
         clock: fixedClock(0),
-      });
-    },
+      }),
   },
   {
     name: 'mysql',
     build: async (): Promise<Store> => {
-      const url = process.env.MYSQL_TEST_URL;
-      if (!url) {
-        throw new Error('MYSQL_TEST_URL not set');
+      const url = testMysqlUrl(process.env);
+      if (url === null) {
+        throw new Error('no MySQL URL configured');
       }
       return makeIsolatedMysqlStore({
         url,

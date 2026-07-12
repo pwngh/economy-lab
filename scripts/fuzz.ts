@@ -44,8 +44,9 @@ import {
   credit as creditAmount,
 } from '#test/support/builders.ts';
 import { adapterMatrix } from '#test/support/adapters.ts';
+import { seededProgram } from '#test/support/seeded-program.ts';
 import { spendable, promo } from '#src/accounts.ts';
-import { encodeAmount, decodeAmount } from '#src/money.ts';
+import { encodeAmount } from '#src/money.ts';
 
 import type { Economy, Operation, ProveReport } from '#src/contract.ts';
 import type { AccountRef } from '#src/accounts.ts';
@@ -56,6 +57,9 @@ import type { Store } from '#src/ports.ts';
 // and the store must share a seed for the economy's reported hashes to match the store's recorded
 // ones. With the seed fixed, a seed value produces the same operation sequence on every adapter.
 const ECONOMY_SEED = 1;
+
+// The one capture of process.env: the adapter matrix resolves its database URLs from this.
+const env = process.env;
 
 // Throws with the given message when the condition is false. The runner catches it and reports the
 // message as the reason a case diverged.
@@ -198,6 +202,9 @@ function diverge(reference: Snapshot, candidate: Snapshot): string | null {
 // plus every reachable backend, and which were skipped because their backend was down.
 type CaseResult = { compared: string[]; skipped: string[] };
 
+// Adapters whose skip reason has already been printed, so a 16-case run says it once each.
+const announcedSkips = new Set<string>();
+
 /**
  * Runs one sequence against a set of matrix adapters and asserts they all agree.
  *
@@ -215,7 +222,7 @@ async function runDifferential(
   operations: ReadonlyArray<Operation>,
   include: ReadonlySet<string>,
 ): Promise<CaseResult> {
-  const matrix = adapterMatrix().filter(
+  const matrix = adapterMatrix(env).filter(
     (adapter) => adapter.name === 'memory' || include.has(adapter.name),
   );
   let reference: Snapshot | null = null;
@@ -226,10 +233,18 @@ async function runDifferential(
     let store: Store;
     try {
       store = await adapter.makeStore();
-    } catch {
+    } catch (error) {
       // memory must never be unreachable; if it is, that is a real failure, not a skip.
       if (adapter.name === 'memory') {
         throw new Error(`memory store failed to build for "${label}"`);
+      }
+      // Say WHY, once per adapter: "database down" and "reachable but wrong schema version" both
+      // land here, and the second is a coverage loss a silent skip would disguise as the first.
+      if (!announcedSkips.has(adapter.name)) {
+        announcedSkips.add(adapter.name);
+        console.warn(
+          `fuzz: SKIP ${adapter.name} — ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
       skipped.push(adapter.name);
       continue;
@@ -257,152 +272,6 @@ async function runDifferential(
   return { compared, skipped };
 }
 
-// --- Seeded operation generator (bounded for SQL, deep for memory) ----------------------
-
-// mulberry32 PRNG, identical to the one in scripts/prove.ts. Returns a function that yields the next
-// number in [0, 1) on each call. The math is fixed, so a seed produces the same sequence on every JS
-// runtime. That is what makes a seed produce the same operation sequence on every adapter.
-function rng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-// Running tally of one user's two spendable sources, in minor units (cents). The generator reads it
-// to produce only affordable spends, exercising the path where money moves rather than a declined
-// spend.
-type Wallet = { spendable: bigint; promo: bigint };
-
-// Format a count of minor units (cents) as a two-decimal string like "12.34", the text form
-// `decodeAmount` expects.
-function dollars(minor: bigint): string {
-  const whole = minor / 100n;
-  const frac = (minor % 100n).toString().padStart(2, '0');
-  return `${whole}.${frac}`;
-}
-
-function creditMinor(minor: bigint) {
-  return decodeAmount(dollars(minor), 'CREDIT');
-}
-
-function walletOf(wallets: Map<string, Wallet>, userId: string): Wallet {
-  let wallet = wallets.get(userId);
-  if (!wallet) {
-    wallet = { spendable: 0n, promo: 0n };
-    wallets.set(userId, wallet);
-  }
-  return wallet;
-}
-
-// Builds an affordable spend and subtracts it from the local tally, promo first. This matches the
-// real spend handler, which charges promo credit before spendable. The order matters: if the tally
-// fell out of step with the handler, the generator would start producing spends the user cannot
-// afford.
-function spendOperation(
-  next: () => number,
-  step: number,
-  userId: string,
-  wallet: Wallet,
-): Operation {
-  const available = wallet.spendable + wallet.promo;
-  let priceMinor =
-    BigInt(1 + Math.floor(next() * Number(available / 100n))) * 100n;
-  if (priceMinor > available) {
-    priceMinor = available;
-  }
-  const fromPromo = wallet.promo < priceMinor ? wallet.promo : priceMinor;
-  wallet.promo -= fromPromo;
-  wallet.spendable -= priceMinor - fromPromo;
-  return op('spend', step, {
-    // Deterministic per-step order id. The SQL adapters record every sale in a `sales` table whose
-    // `order_id` is non-null, so a generated spend must carry one. Memory has no such table and
-    // would mask the omission. The id is derived from the step so it stays byte-identical per
-    // adapter.
-    orderId: `ord_f_${step}`,
-    buyerId: userId,
-    sku: 'wrld_pass',
-    price: creditMinor(priceMinor),
-    recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
-  });
-}
-
-// What a generated sequence may contain. `promo` stays a toggle because a promo-credit spend posts
-// more than one debit/credit line to a single account — the hardest shape for an adapter to store,
-// since it repeats an (account, previous-hash) pair. Every adapter handles it, so both the deep
-// memory/http loop and the bounded SQL seeds run with `promo: true`, exercising every operation
-// kind on every backend.
-type ProgramOptions = { promo: boolean };
-
-// Picks one valid operation for the next step and updates the local tally so the next step stays
-// valid too. The idempotency key and all ids come only from the step number, so the sequence is
-// byte-identical on every replay, and therefore on every adapter.
-function nextOperation(
-  next: () => number,
-  step: number,
-  wallets: Map<string, Wallet>,
-  options: ProgramOptions,
-): Operation {
-  const userId = `usr_f${1 + Math.floor(next() * 3)}`;
-  const wallet = walletOf(wallets, userId);
-  const roll = next();
-
-  if (roll < 0.45 || wallet.spendable + wallet.promo < 100n) {
-    const minor = BigInt(1 + Math.floor(next() * 50)) * 100n;
-    wallet.spendable += minor;
-    return op('topUp', step, {
-      userId,
-      amount: creditMinor(minor),
-      source: 'card',
-    });
-  }
-  if (options.promo && roll < 0.6) {
-    const minor = BigInt(1 + Math.floor(next() * 20)) * 100n;
-    wallet.promo += minor;
-    return op('grantPromo', step, {
-      userId,
-      amount: creditMinor(minor),
-      expiresAt: 86_400_000,
-    });
-  }
-  return spendOperation(next, step, userId, wallet);
-}
-
-// Assembles an Operation, stamping in the per-step idempotency key and a fixed system actor. This
-// check is about whether accounting comes out the same on every backend, not about authorization,
-// so it runs as the system and skips permission checks.
-function op(
-  kind: Operation['kind'],
-  step: number,
-  fields: Record<string, unknown>,
-): Operation {
-  return {
-    kind,
-    idempotencyKey: `idem_f_${step}`,
-    actor: { kind: 'system', service: 'fuzz' },
-    ...fields,
-  } as Operation;
-}
-
-// Build the full fixed operation sequence for one seed.
-function program(
-  seed: number,
-  length: number,
-  options: ProgramOptions,
-): Operation[] {
-  const next = rng(seed);
-  const wallets = new Map<string, Wallet>();
-  const operations: Operation[] = [];
-  for (let step = 0; step < length; step += 1) {
-    operations.push(nextOperation(next, step, wallets, options));
-  }
-  return operations;
-}
-
 // --- Adversarial fixtures (preserved, run through the differential) ---------------------
 
 // The four adversarial cases. Each is a fixed operation sequence rather than an assertion against a
@@ -413,10 +282,6 @@ function program(
 function adversarialFixtures(): Array<{
   name: string;
   operations: Operation[];
-  // Optionally restricts a fixture to the no-database adapters (memory and http) instead of the full
-  // matrix. No fixture needs this today; it is kept for a future fixture that cannot reach a real
-  // database.
-  inProcessOnly?: boolean;
 }> {
   const duplicatePurchase = spend({
     buyerId: 'usr_d',
@@ -550,19 +415,18 @@ async function main(): Promise<void> {
   // http, both always available, carries the long deep loop, which keeps the real-database operation
   // count small. (runDifferential always forces memory in, so naming only http here still compares
   // memory against http.)
-  const fullMatrix = new Set(adapterMatrix().map((adapter) => adapter.name));
+  const fullMatrix = new Set(adapterMatrix(env).map((adapter) => adapter.name));
   const inProcess = new Set(['http']);
 
   try {
-    // Adversarial cases are small and hand-built. Each runs across the whole matrix unless it sets
-    // inProcessOnly, which restricts it to the no-database adapters. No case sets that flag today.
+    // Adversarial cases are small and hand-built; each runs across the whole matrix.
     const fixtures = adversarialFixtures();
     for (const fixture of fixtures) {
       note(
         await runDifferential(
           `fixture: ${fixture.name}`,
           fixture.operations,
-          fixture.inProcessOnly ? inProcess : fullMatrix,
+          fullMatrix,
         ),
       );
     }
@@ -585,7 +449,11 @@ async function main(): Promise<void> {
         note(
           await runDifferential(
             `seed 0x${seed.toString(16)} (sql-bounded)`,
-            program(seed, sqlLength, { promo: true }),
+            seededProgram(seed, sqlLength, {
+              prefix: 'f',
+              service: 'fuzz',
+              promo: true,
+            }),
             fullMatrix,
           ),
         );
@@ -595,7 +463,11 @@ async function main(): Promise<void> {
         note(
           await runDifferential(
             `seed 0x${seed.toString(16)} (deep)`,
-            program(seed, deepLength, { promo: true }),
+            seededProgram(seed, deepLength, {
+              prefix: 'f',
+              service: 'fuzz',
+              promo: true,
+            }),
             inProcess,
           ),
         );

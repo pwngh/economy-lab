@@ -30,7 +30,9 @@
 
 import { readFile } from 'node:fs/promises';
 
-import { compose } from '#src/index.ts';
+import { compose, describeSelection } from '#src/index.ts';
+import { loadPg } from '#src/engines/pg-driver.ts';
+import { isMysqlUrl, isPostgresUrl, readFlag, readUrl } from '#src/env.ts';
 import { topUp, spend, requestPayout, credit } from '#test/support/builders.ts';
 import { spendable, earned, SYSTEM } from '#src/accounts.ts';
 import {
@@ -41,65 +43,43 @@ import {
 } from '#test/support/capabilities.ts';
 import { maskUrl } from '#scripts/support/harness.ts';
 
+import type { EnvMap } from '#src/env.ts';
 import type { Amount } from '#src/money.ts';
 
-// The `pg` (PostgreSQL driver) methods the schema reset calls. The driver ships no types, so this
-// declares just the parts used here.
-interface PgDemoClient {
-  connect(): Promise<void>;
-  query(sql: string): Promise<unknown>;
-  end(): Promise<void>;
-}
-interface PgDemoModule {
-  Client: new (config: { connectionString: string }) => PgDemoClient;
-}
-
-// Postgres is reached by either scheme, because the `pg` driver aliases `postgres://` and
-// `postgresql://`. MySQL uses `mysql://`. These tests mirror the scheme test in src/index.ts so the
-// demo's labels and schema reset agree with what compose() actually selects.
-const isPostgres = (u: string): boolean =>
-  u.startsWith('postgres://') || u.startsWith('postgresql://');
-const isMysql = (u: string): boolean => u.startsWith('mysql://');
-
-// Builds a human-readable label for the backend each env var picks. It mirrors compose()'s internal
-// choices so the demo can print them. compose() itself returns the wired-up economy, not these labels.
-function selection(env: Record<string, string | undefined>): {
+// Builds human-readable labels for the backends the env picks, from describeSelection — the very
+// reading compose() wires from — so a printed label can never diverge from the actual selection.
+function selection(env: EnvMap): {
   store: string;
   cache: string;
   dispatcher: string;
 } {
-  const db = env.DATABASE_URL ?? '';
+  const picked = describeSelection(env);
   const store =
-    db === ''
+    picked.store.kind === 'memory'
       ? 'memory (no DATABASE_URL)'
-      : isPostgres(db)
-        ? `postgres (${maskUrl(db)})`
-        : isMysql(db)
-          ? `mysql (${maskUrl(db)})`
-          : `?? unsupported scheme: ${db.split(':')[0]}`;
-  const cache = env.REDIS_URL
-    ? `redis (${maskUrl(env.REDIS_URL)})`
-    : 'none (reads hit the store)';
-  const dispatcher = env.SQS_QUEUE_URL
-    ? `sqs (${env.SQS_QUEUE_URL})`
-    : env.DISPATCHER_URL
-      ? `http (${env.DISPATCHER_URL})`
-      : 'in-process (default)';
+      : picked.store.kind === 'unsupported'
+        ? `?? unsupported scheme: ${picked.store.url.split(':')[0]}`
+        : `${picked.store.kind} (${maskUrl(picked.store.url)})`;
+  const cache =
+    picked.cache.kind === 'none'
+      ? 'none (reads hit the store)'
+      : `redis (${maskUrl(picked.cache.url)})`;
+  const dispatcher =
+    picked.dispatcher.kind === 'in-process'
+      ? 'in-process (default)'
+      : `${picked.dispatcher.kind} (${picked.dispatcher.url})`;
   return { store, cache, dispatcher };
 }
 
 // Optionally resets a SQL database to a clean schema. The reset is a destructive drop-and-recreate
 // that runs only when DEMO_RESET=1. Without that flag it uses the existing schema, so run
 // `make db-migrate` first. This is a no-op for the in-memory backend.
-async function ensureSchema(
-  env: Record<string, string | undefined>,
-): Promise<void> {
-  const url = env.DATABASE_URL ?? '';
-  const isSql = isPostgres(url) || isMysql(url);
-  if (!isSql) {
+async function ensureSchema(env: EnvMap): Promise<void> {
+  const url = readUrl(env.DATABASE_URL);
+  if (url === null || !(isPostgresUrl(url) || isMysqlUrl(url))) {
     return;
   }
-  if (env.DEMO_RESET !== '1') {
+  if (!readFlag(env.DEMO_RESET)) {
     console.warn(
       'demo: DATABASE_URL is set but DEMO_RESET!=1 — using the EXISTING schema ' +
         '(run `make db-migrate` first). Set DEMO_RESET=1 to drop & recreate it, which DESTROYS all data.',
@@ -109,10 +89,8 @@ async function ensureSchema(
   console.warn(
     'demo: DEMO_RESET=1 — dropping and recreating the schema (DESTROYS all data).',
   );
-  if (isPostgres(url)) {
-    // pg ships no type declarations; the binding is typed via PgDemoModule.
-    // @ts-expect-error -- untyped dynamic import, typed at the binding.
-    const pg: PgDemoModule = (await import('pg')).default;
+  if (isPostgresUrl(url)) {
+    const pg = await loadPg();
     const client = new pg.Client({ connectionString: url });
     await client.connect();
     await client.query('drop schema public cascade; create schema public;');
@@ -122,7 +100,7 @@ async function ensureSchema(
     );
     await client.query(sql);
     await client.end();
-  } else if (isMysql(url)) {
+  } else if (isMysqlUrl(url)) {
     const { createMysqlPool, applyMysqlSchema } =
       await import('#src/engines/mysql.ts');
     const pool = await createMysqlPool(url);

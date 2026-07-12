@@ -455,8 +455,8 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
   });
 }
 
-runSqlAdversarial('postgres', adversarialPostgres);
-runSqlAdversarial('mysql', adversarialMysql);
+runSqlAdversarial('postgres', () => adversarialPostgres(process.env));
+runSqlAdversarial('mysql', () => adversarialMysql(process.env));
 
 // ============================================================================
 // The memory oracle. See the file header for why memory stays unenforced. These cases reach

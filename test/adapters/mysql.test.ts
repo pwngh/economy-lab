@@ -20,16 +20,14 @@ import {
   mysqlStore,
 } from '#src/engines/mysql.ts';
 import { spendable } from '#src/accounts.ts';
+import { testMysqlUrl } from '#test/support/adapters.ts';
 
 import type { MysqlPool } from '#src/engines/mysql.ts';
 
-const url = process.env.MYSQL_TEST_URL;
+const url = testMysqlUrl(process.env);
 
-// Runs the shared Store conformance suite against this SQL engine. The suite needs a real database,
-// so it only runs when MYSQL_TEST_URL points at a live MySQL. With no URL, it registers no tests.
-// An empty run is not a false pass.
-//
-// The factory builds a fresh store per run. It opens a pool, creates the tables, then wraps the pool.
+// The conformance suite runs only when a mysql DATABASE_URL or MYSQL_TEST_URL points at a live
+// MySQL; with no URL it registers no tests.
 if (url) {
   runStoreConformance('mysql', async () => {
     const pool = await createMysqlPool(url);
@@ -46,14 +44,9 @@ if (url) {
   });
 }
 
-// Checks how ledger.lock handles each GET_LOCK return value. This is a correctness property, not a
-// conformance one, so it needs no live MySQL. A stub pool returns the GET_LOCK row we choose, and
-// ledger.lock runs straight on that pool.
-//
-// GET_LOCK returns 0 when the wait elapsed and NULL on error or kill. Both mean the lock is NOT held.
-// In that case lock must surface a transient lock-wait conflict (errno 1205) so that withTransientRetry
-// re-runs the attempt. It must never proceed as if it held the lock. Proceeding would let two writers
-// touch one account at the same time.
+// GET_LOCK returns 0 when the wait elapsed and NULL on error or kill — both mean the lock is NOT
+// held, so lock must surface a transient conflict (errno 1205) for withTransientRetry rather than
+// proceed as if it held the lock. A stub pool supplies the GET_LOCK row; no live MySQL needed.
 function poolReturningGetLock(acquired: number | null): MysqlPool {
   return {
     query: async (sql: string) =>

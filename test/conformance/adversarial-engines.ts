@@ -44,7 +44,15 @@ import {
   mysqlStore,
 } from '#src/engines/mysql.ts';
 import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
+import {
+  freshName,
+  safeDatabaseName,
+  testMysqlUrl,
+  testPostgresUrl,
+  withDatabase,
+} from '#test/support/adapters.ts';
 
+import type { EnvMap } from '#src/env.ts';
 import type { Store } from '#src/ports.ts';
 import type { MemoryLedger } from '#src/adapters/memory.ts';
 import type { MysqlPool } from '#src/engines/mysql.ts';
@@ -88,25 +96,9 @@ export interface AdversarialMemory {
   close(): Promise<void>;
 }
 
-// Returns where to reach the test Postgres. Uses the same precedence as test/support/adapters.ts
-// and test/adapters/postgres.test.ts.
-function postgresUrl(): string {
-  return (
-    process.env.DATABASE_URL ??
-    process.env.PG_URL ??
-    'postgres://economy:economy@localhost:5432/economy_lab'
-  );
-}
-
-// Builds a namespace name no concurrent run reuses, combining the pid, a base-36 timestamp, and a
-// counter. This matches the isolation scheme the existing suites use for throwaway schemas and
-// databases.
-let run = 0;
-function freshName(prefix: string): string {
-  run += 1;
-  const stamp = Date.now().toString(36);
-  return `${prefix}_${process.pid}_${stamp}_${run}`;
-}
+// URLs, throwaway names, and the MySQL URL/name helpers come from the shared test-suite policy
+// (test/support/adapters.ts); the provisioners take env explicitly, and each test file passes
+// process.env once at its own edge.
 
 /**
  * Builds the memory oracle for adversarial setup. Memory is always available. The returned `ledger`
@@ -123,13 +115,29 @@ export function adversarialMemory(): AdversarialMemory {
   };
 }
 
+// Says WHY provisioning failed, once per engine: "server unreachable" and "reachable but the
+// restricted-role setup was refused" both land in the same null, and the second is a coverage
+// loss a silent skip would disguise as the first.
+const announcedSkips = new Set<string>();
+function announceSkip(engine: string, error: unknown): null {
+  if (!announcedSkips.has(engine)) {
+    announcedSkips.add(engine);
+    console.warn(
+      `adversarial ${engine}: SKIP — ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  return null;
+}
+
 /**
  * Provisions Postgres for adversarial testing, or returns `null` if unreachable. Creates a
  * throwaway schema and points both the store's pool and our raw pool at it via search_path, so a
  * raw INSERT lands in the very table `post_entry` writes. Mirrors postgresStore's own isolation.
  */
-export async function adversarialPostgres(): Promise<AdversarialEngine | null> {
-  const url = postgresUrl();
+export async function adversarialPostgres(
+  env: EnvMap,
+): Promise<AdversarialEngine | null> {
+  const url = testPostgresUrl(env);
   const schema = freshName('el_adv_pg');
   let store: Store;
   try {
@@ -139,8 +147,8 @@ export async function adversarialPostgres(): Promise<AdversarialEngine | null> {
       digest: seededDigest(1),
       clock: fixedClock(0),
     });
-  } catch {
-    return null;
+  } catch (error) {
+    return announceSkip('postgres', error);
   }
   // A second pool, aimed at the same schema, carries the raw writes around the app.
   const rawPool = new pg.Pool({
@@ -159,24 +167,6 @@ export async function adversarialPostgres(): Promise<AdversarialEngine | null> {
       await store.close();
     },
   };
-}
-
-// Returns the name unchanged if it is safe to paste into SQL, else throws. A MySQL database name
-// cannot be a placeholder in CREATE DATABASE or DROP DATABASE, so it is pasted into the statement.
-// This guards against injection the same way Postgres guards a schema name: letters, digits, and
-// underscores only.
-function safeDatabaseName(name: string): string {
-  if (!/^[a-z_][a-z0-9_]*$/.test(name)) {
-    throw new Error(`Unsafe MySQL database name: ${name}.`);
-  }
-  return name;
-}
-
-// Points a MySQL URL at a different database, preserving host and credentials.
-function withDatabase(url: string, database: string): string {
-  const parsed = new URL(url);
-  parsed.pathname = `/${database}`;
-  return parsed.toString();
 }
 
 // Overrides the user, password, and database on a MySQL URL, preserving host and port.
@@ -231,9 +221,11 @@ const APP_DML_TABLES = [
  * point at it, so a raw INSERT lands in the very table post_entry writes, except `legs`, which the
  * restricted role may not write directly.
  */
-export async function adversarialMysql(): Promise<AdversarialEngine | null> {
-  const url = process.env.MYSQL_TEST_URL;
-  if (!url) {
+export async function adversarialMysql(
+  env: EnvMap,
+): Promise<AdversarialEngine | null> {
+  const url = testMysqlUrl(env);
+  if (url === null) {
     return null;
   }
   const database = safeDatabaseName(freshName('el_adv_my'));
@@ -285,11 +277,11 @@ export async function adversarialMysql(): Promise<AdversarialEngine | null> {
     });
     rawPool = await createMysqlPool(appUrl);
     opened.push(rawPool);
-  } catch {
+  } catch (error) {
     for (const pool of opened.reverse()) {
       await pool.end().catch(() => {});
     }
-    return null;
+    return announceSkip('mysql', error);
   }
   return {
     name: 'mysql',
@@ -315,8 +307,8 @@ export async function adversarialMysql(): Promise<AdversarialEngine | null> {
  * its engine is unreachable. Callers skip those rather than fail, so the suite is green with zero,
  * one, or both engines live.
  */
-export async function adversarialSqlEngines(): Promise<
-  Array<AdversarialEngine | null>
-> {
-  return Promise.all([adversarialPostgres(), adversarialMysql()]);
+export async function adversarialSqlEngines(
+  env: EnvMap,
+): Promise<Array<AdversarialEngine | null>> {
+  return Promise.all([adversarialPostgres(env), adversarialMysql(env)]);
 }

@@ -23,9 +23,13 @@ import {
   payoutEventIdOf,
   sagaByProviderRef,
 } from '#src/adapters/edge-webhooks.ts';
+import { describeSelection } from '#src/index.ts';
+import { openPgPool } from '#src/engines/pg-driver.ts';
+import { serviceUrls } from '#src/env.ts';
 import { handleWebhook } from '#src/webhooks.ts';
 
 import type { SignatureScheme } from '@pwngh/economy-edge';
+import type { PgPoolLike } from '#src/engines/pg-driver.ts';
 import type { EdgeTiliaCapabilities } from '#src/adapters/edge-tilia.ts';
 import type { WebhookHandler } from '#src/server.ts';
 import type {
@@ -36,9 +40,22 @@ import type {
   Processor,
   Store,
 } from '#src/ports.ts';
+import type { EnvMap } from '#src/env.ts';
 import type { FloatFeed } from '#src/worker/treasury.ts';
 
-type Env = Record<string, string | undefined>;
+/**
+ * Every Tilia name this host reads; .env.example is held to this list
+ * (TILIA_PAYEE_DATABASE_URL is a service URL, declared in src/env.ts).
+ */
+export const TILIA_KEYS = [
+  'TILIA_CLIENT_ID',
+  'TILIA_CLIENT_SECRET',
+  'TILIA_ACCOUNT_ID',
+  'TILIA_ENVIRONMENT',
+  'TILIA_PAYEE_MAP',
+  'TILIA_WEBHOOK_SECRET',
+  'TILIA_WEBHOOK_SIGNATURE_HEADER',
+] as const;
 
 export interface EdgeHost {
   processor: Processor;
@@ -46,24 +63,6 @@ export interface EdgeHost {
   float: FloatFeed;
   webhookFor(store: Store, ids: Ids, clock: Clock): WebhookHandler;
   stop(): Promise<void>;
-}
-
-interface PgPoolLike {
-  query(
-    text: string,
-    values?: readonly unknown[],
-  ): Promise<{ rows: Record<string, unknown>[] }>;
-  on(event: 'error', listener: (error: unknown) => void): unknown;
-  end(): Promise<void>;
-}
-
-interface PgModule {
-  default: {
-    Pool: new (config: {
-      connectionString: string;
-      max?: number;
-    }) => PgPoolLike;
-  };
 }
 
 interface TiliaPayeeRow {
@@ -114,7 +113,7 @@ interface TiliaSettings {
 // fallback. Production callbacks must also be cryptographically verified.
 // Both are hard requirements on the production rail — the same fail-fast
 // stance productionExternals takes.
-function tiliaSettings(env: Env, clientId: string): TiliaSettings {
+function tiliaSettings(env: EnvMap, clientId: string): TiliaSettings {
   const bad: string[] = [];
   const requireOf = (key: string): string => {
     const value = env[key];
@@ -130,7 +129,13 @@ function tiliaSettings(env: Env, clientId: string): TiliaSettings {
   if (environment !== 'staging' && environment !== 'production') {
     bad.push('TILIA_ENVIRONMENT');
   }
-  const payeeDbUrl = env.TILIA_PAYEE_DATABASE_URL ?? '';
+  // The payee table follows the ledger: with a postgres store the durable payee store lands in
+  // the ledger's own database, and TILIA_PAYEE_DATABASE_URL overrides for a split deployment.
+  // With no postgres ledger and no override, the env-JSON map is the dev-shaped fallback below.
+  const store = describeSelection(env).store;
+  const payeeDbUrl =
+    serviceUrls(env).tiliaPayees ??
+    (store.kind === 'postgres' ? store.url : '');
   const payeeMapRaw = payeeDbUrl === '' ? requireOf('TILIA_PAYEE_MAP') : '';
   const webhookSecret = env.TILIA_WEBHOOK_SECRET ?? '';
   if (environment === 'production') {
@@ -179,14 +184,10 @@ async function payeeSource(settings: TiliaSettings): Promise<{
       },
     };
   }
-  // @ts-expect-error -- `pg` ships no types; typed at the binding via PgModule, the same pattern
-  // src/engines/postgres.ts uses for its static import.
-  const { default: pg } = (await import('pg')) as unknown as PgModule;
-  const pool: PgPoolLike = new pg.Pool({
+  const pool = await openPgPool({
     connectionString: settings.payeeDbUrl,
     max: 3,
   });
-  pool.on('error', () => undefined);
   const { tiliaPayeeStore } = await import('#src/adapters/tilia-payees.ts');
   const store = tiliaPayeeStore(pool);
   await store.ensureSchema();
@@ -197,7 +198,7 @@ async function payeeSource(settings: TiliaSettings): Promise<{
 // transport otherwise — loudly, because unsigned callbacks are a staging-only
 // posture.
 function verificationScheme(
-  env: Env,
+  env: EnvMap,
   settings: TiliaSettings,
   logger: Logger,
 ): SignatureScheme {
@@ -223,7 +224,7 @@ function verificationScheme(
  * pays its import.
  */
 export async function maybeEdgeTilia(
-  env: Env,
+  env: EnvMap,
   logger: Logger,
 ): Promise<EdgeHost | undefined> {
   const clientId = env.TILIA_CLIENT_ID;

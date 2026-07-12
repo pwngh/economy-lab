@@ -11,11 +11,9 @@
  */
 
 /**
- * Instance netting (src/netting.ts) against the in-memory store: acceptance and idempotency,
- * journal-derived settlement through the clearing account, the compensate-then-replay fallback,
- * cross-session reservations, chunk-width bounds, crash recovery from the journal, and — the load
- * bearing invariant — that every path leaves the chains intact, the clearing account at zero, and
- * every accepted movement with exactly one ledger-final outcome.
+ * Instance netting (src/netting.ts) against the in-memory store. The load-bearing invariant:
+ * every path leaves the chains intact, clearing at zero, and every accepted movement with
+ * exactly one ledger-final outcome.
  */
 
 import { describe, test } from 'node:test';
@@ -82,7 +80,6 @@ describe('Instance netting', () => {
       legs: tip('usr_v1', 'usr_c1', 100n),
     });
     assert.deepEqual(first, { status: 'accepted', seq: 0 });
-    // Same key again: the recorded outcome replays; no second journal row, no double count.
     assert.deepEqual(
       await session.record({
         idempotencyKey: 'tip_1',
@@ -113,7 +110,6 @@ describe('Instance netting', () => {
         [2, 'tip_3'],
       ],
     );
-    // The chain threads: each row's prevHash is its predecessor's hash.
     assert.equal(rows[1]!.prevHash, rows[0]!.hash);
     assert.equal(rows[2]!.prevHash, rows[1]!.hash);
   });
@@ -137,7 +133,6 @@ describe('Instance netting', () => {
     assert.equal(await balanceOf(store, spendable('usr_v1')), 900n);
     assert.equal(await balanceOf(store, earned('usr_c1')), 100n);
     assert.equal(await balanceOf(store, SYSTEM.NETTING_CLEARING), 0n);
-    // The settlement anchors the journal head, and the whole ledger still re-derives.
     const posting = await store.ledger.posting('net_sess_b_c0');
     assert.equal(posting !== null, true);
     assert.equal(
@@ -187,7 +182,34 @@ describe('Instance netting', () => {
       legs: tip('usr_v2', 'usr_c1', 30n), // 80 pending + 30 > 100
     });
 
-    assert.deepEqual(over, { status: 'rejected', code: 'INSUFFICIENT_FUNDS' });
+    assert.deepEqual(over, {
+      status: 'rejected',
+      reason: 'INSUFFICIENT_FUNDS',
+    });
+  });
+
+  test('throws on unbalanced or non-CREDIT legs instead of rejecting', async () => {
+    const { deps } = harness();
+    const session = instanceSession(deps, 'sess_m');
+    const amount = toAmount('CREDIT', 10n);
+
+    await assert.rejects(
+      session.record({
+        idempotencyKey: 'm_1',
+        legs: [debit(spendable('usr_v1'), amount)],
+      }),
+      (error: Error & { code?: string }) => error.code === 'LEDGER.UNBALANCED',
+    );
+    await assert.rejects(
+      session.record({
+        idempotencyKey: 'm_2',
+        legs: [
+          debit(spendable('usr_v1'), toAmount('USD', 10n)),
+          credit(earned('usr_c1'), toAmount('USD', 10n)),
+        ],
+      }),
+      (error: Error & { code?: string }) => error.code === 'OP.MALFORMED',
+    );
   });
 
   test('a shared registry closes the cross-session overdraft race', async () => {
@@ -206,16 +228,14 @@ describe('Instance netting', () => {
       ).status,
       'accepted',
     );
-    // The second instance sees the first's pending 400 through the shared registry.
     assert.deepEqual(
       await two.record({
         idempotencyKey: 'e_2',
         legs: tip('usr_v3', 'usr_c2', 400n),
       }),
-      { status: 'rejected', code: 'INSUFFICIENT_FUNDS' },
+      { status: 'rejected', reason: 'INSUFFICIENT_FUNDS' },
     );
 
-    // After settle the reservation is released and real balance takes over.
     await one.settle();
     assert.equal(
       (
@@ -259,14 +279,12 @@ describe('Instance netting', () => {
     const report = await session.settle();
 
     assert.equal(report.mode, 'replayed');
-    // The affordable movement committed individually; the drained one is rejected with a reason.
     assert.equal(report.rejected.length, 1);
     assert.equal(report.rejected[0]!.idempotencyKey, 'f_2');
     assert.equal(await balanceOf(store, spendable('usr_v4')), 200n);
     assert.equal(await balanceOf(store, earned('usr_c1')), 300n);
     assert.equal(await balanceOf(store, earned('usr_c2')), 0n);
     assert.equal(await balanceOf(store, spendable('usr_v5')), 100n);
-    // Compensation returned clearing to zero, and the chains survived the whole detour.
     assert.equal(await balanceOf(store, SYSTEM.NETTING_CLEARING), 0n);
     assert.equal(
       (await proveChain({ ledger: store.ledger, digest })).intact,
@@ -290,7 +308,6 @@ describe('Instance netting', () => {
     // The process dies here; a new one rebuilds the session from the journal alone.
 
     const recovered = await recoverSession(deps, 'sess_g');
-    // The rebuilt outcomes replay: a retried key answers without re-journaling.
     assert.deepEqual(
       await recovered.record({
         idempotencyKey: 'g_1',
@@ -316,8 +333,7 @@ describe('Instance netting', () => {
     });
     await session.flush();
 
-    // Tamper the stored journal (edit the amount, leave the hash), then try to settle a fresh
-    // session over it: the chain no longer re-derives and the settle must refuse.
+    // The memory store yields live rows, so editing the leg here tampers the stored journal in place.
     const rows = [];
     for await (const movement of store.movements.bySession('sess_h')) {
       rows.push(movement);

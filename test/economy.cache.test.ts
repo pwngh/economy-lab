@@ -32,9 +32,6 @@ import { spendable } from '#src/accounts.ts';
 import type { Economy } from '#src/economy.ts';
 import type { Cache } from '#src/ports.ts';
 
-// In-memory string store (get/set/invalidate) with a per-method call log, so tests can assert
-// when a balance read hit, populated, or dropped a cache entry. The production Redis adapter is
-// exercised elsewhere.
 function recordingCache(): Cache & {
   readonly gets: ReadonlyArray<string>;
   readonly sets: ReadonlyArray<string>;
@@ -63,9 +60,6 @@ function recordingCache(): Cache & {
   };
 }
 
-// A cache whose every operation throws, standing in for an unreachable Redis. The read path must
-// degrade to the ledger and a committed posting must still succeed. This is the Cache port's
-// best-effort contract: a cache only speeds reads, it never breaks them.
 function throwingCache(): Cache {
   const boom = (): never => {
     throw new Error('redis unavailable');
@@ -77,9 +71,7 @@ function throwingCache(): Cache {
   };
 }
 
-// Economy wired with the standard deterministic test doubles plus the given cache, on a fresh
-// in-memory store. Mirrors `makeEconomy` but injects a `cache` capability, which `makeEconomy`
-// leaves unset.
+// Mirrors `makeEconomy` but injects a `cache` capability, which `makeEconomy` leaves unset.
 function makeCachedEconomy(cache: Cache, seed = 1): Economy {
   const digest = seededDigest(seed);
   const clock = fixedClock(0);
@@ -105,24 +97,19 @@ describe('Read-Through Balance Cache', () => {
     const economy = makeCachedEconomy(cache);
     const account = spendable('usr_buyer');
 
-    // Fund the account so it has a non-zero balance to cache.
     await economy.submit(
       topUp({ userId: 'usr_buyer', amount: credit('10.00') }),
     );
 
-    // First read misses: get finds nothing, then set populates.
     const first = await economy.read.balance(account);
     assert.deepEqual(first, credit('10.00'));
     assert.deepEqual(cache.gets, [`bal:${account}`]);
     assert.deepEqual(cache.sets, [`bal:${account}`]);
 
-    // The second read hits the cache and returns the stored value without populating again. The
-    // cache holds strings, so the balance is serialized in and parsed back out. Assert the round
-    // trip returns the same amount.
     const second = await economy.read.balance(account);
     assert.deepEqual(second, credit('10.00'));
     assert.deepEqual(cache.gets, [`bal:${account}`, `bal:${account}`]);
-    assert.deepEqual(cache.sets, [`bal:${account}`]); // still just the one populate
+    assert.deepEqual(cache.sets, [`bal:${account}`]);
   });
 
   test('a committed posting invalidates every account it touched', async () => {
@@ -130,22 +117,18 @@ describe('Read-Through Balance Cache', () => {
     const economy = makeCachedEconomy(cache);
     const account = spendable('usr_buyer');
 
-    // Fund and warm the cache so the account's balance is cached at 10.00.
     await economy.submit(
       topUp({ userId: 'usr_buyer', amount: credit('10.00') }),
     );
-    await economy.read.balance(account); // miss -> populate
-    await economy.read.balance(account); // hit
+    await economy.read.balance(account);
+    await economy.read.balance(account);
     assert.deepEqual(cache.gets.length, 2);
 
-    // Second committed top-up touches `spendable(usr_buyer)`, so its cache key is invalidated.
     await economy.submit(
       topUp({ userId: 'usr_buyer', amount: credit('5.00') }),
     );
     assert.equal(cache.invalidations.includes(`bal:${account}`), true);
 
-    // The next read is a fresh miss. It re-derives the balance by summing the recorded entries, so
-    // it returns the new balance rather than the stale cached 10.00.
     const after = await economy.read.balance(account);
     assert.deepEqual(after, credit('15.00'));
   });
@@ -158,14 +141,12 @@ describe('Read-Through Balance Cache', () => {
     await economy.submit(
       topUp({ userId: 'usr_buyer', amount: credit('10.00') }),
     );
-    await economy.read.balance(account); // warm the cache
+    await economy.read.balance(account);
 
     // The committed top-up already invalidated its touched accounts; snapshot that count to assert
     // the rejected op below adds nothing.
     const invalidationsBefore = cache.invalidations.length;
 
-    // A spend the buyer can't afford is rejected and records no ledger entry, so it changes no
-    // balance and drops no cache entry.
     const outcome = await economy.submit({
       kind: 'spend',
       idempotencyKey: 'idem_overspend',
@@ -187,9 +168,6 @@ describe('Read-Through Balance Cache', () => {
       topUp({ userId: 'usr_buyer', amount: credit('10.00') }),
     );
 
-    // The get throws and is absorbed as a miss, so the read falls back to the ledger. The set then
-    // throws and is also absorbed. The read returns the right balance instead of propagating the
-    // cache failure.
     const balance = await economy.read.balance(account);
     assert.deepEqual(balance, credit('10.00'));
   });
@@ -197,8 +175,6 @@ describe('Read-Through Balance Cache', () => {
   test('a cache outage during invalidation still commits the posting', async () => {
     const economy = makeCachedEconomy(throwingCache());
 
-    // The top-up commits; invalidateCache hits the throwing cache after commit, but the failure is
-    // absorbed so the operation reports committed rather than failing post-commit.
     const outcome = await economy.submit(
       topUp({ userId: 'usr_buyer', amount: credit('10.00') }),
     );

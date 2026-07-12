@@ -11,17 +11,11 @@
  */
 
 /**
- * Deterministic, database-less coverage for the MySQL inbox Operation codec. The Store conformance
- * suite (test/conformance/store.ts) enqueues an amount-bearing inbox row, but it skips when no live
- * MySQL is reachable. The encode, JSON.stringify, parse, then decode round-trip could therefore
- * regress silently in a no-services run. This test drives the real `mysqlStore` inbox store through a
- * tiny in-memory fake `MysqlPool` with no driver and no database, so the codec runs exactly as the
- * engine wires it. `enqueueInbound` JSON.stringifies the encoded operation into the `operation` JSON
- * column, and the follow-up read runs it back through `rowToInbox` and `decodeOperation`.
- *
- * Regression guard: calling `JSON.stringify(entry.operation)` directly throws "Do not know how to
- * serialize a BigInt" on any amount-bearing operation. Before the codec fix, `enqueueInbound` could
- * not store a single real inbound settlement on MySQL.
+ * Database-less coverage for the MySQL inbox Operation codec: the conformance leg skips without a
+ * live MySQL, so the encode, stringify, parse, decode round-trip could regress silently in a
+ * no-services run. A tiny fake `MysqlPool` drives the real `mysqlStore` inbox path exactly as the
+ * engine wires it. The pinned regression: `JSON.stringify` on a raw branded Amount throws on its
+ * bigint minor, so no amount-bearing inbound settlement could be stored.
  */
 
 import { describe, test } from 'node:test';
@@ -34,9 +28,7 @@ import type { MysqlPool } from '#src/engines/mysql.ts';
 import type { Operation } from '#src/contract.ts';
 import type { InboxEntry } from '#src/ports.ts';
 
-// Builds a topUp inbox entry carrying a branded Amount whose minor field is a bigint. This is the
-// inbound event the apply worker submits. It mirrors the conformance suite's inboxRow so this test
-// covers the same amount-bearing shape.
+// Mirrors the conformance suite's inboxRow, so the same amount-bearing shape is covered.
 function topUpEntry(): InboxEntry {
   return {
     id: 'ibx_codec_1',
@@ -56,11 +48,9 @@ function topUpEntry(): InboxEntry {
   };
 }
 
-// Builds the smallest fake of the mysql2 pool the inbox store touches. It holds one in-memory table
-// keyed by the row's `key`, plus the bookkeeping statements that `mysqlStore`'s `transaction` runs
-// (START TRANSACTION, COMMIT, and lock release). It deliberately stores the `operation` column as the
-// JSON string the engine hands it. That way `parseJson` on read goes through the real JSON.parse path
-// a JSON column would take, which is the same round-trip a live MySQL exercises but without a driver.
+// The smallest fake of the mysql2 pool the inbox store touches. It stores the `operation` column
+// as the JSON string the engine hands it, so read-back goes through the same JSON.parse path a
+// live JSON column would take, with no driver.
 function fakePool(): MysqlPool {
   const inbox = new Map<string, Record<string, unknown>>();
 
@@ -76,7 +66,7 @@ function fakePool(): MysqlPool {
         inbox.set(key as string, {
           id,
           key,
-          operation, // Stores the JSON string the engine passed in, as a JSON column would hold it.
+          operation,
           status,
           attempts,
           received_at: receivedAt,
@@ -109,22 +99,16 @@ describe('mysql inbox Operation codec', () => {
     const store = mysqlStore({ pool: fakePool() });
     const entry = topUpEntry();
 
-    // enqueueInbound encodes the operation's Amounts before JSON.stringify, then reads the row back
-    // and decodes it through rowToInbox. The bug was stringifying the branded Amount directly, which
-    // throws on its bigint minor.
     const stored = await store.transaction((unit) =>
       unit.inbox.enqueueInbound(entry),
     );
 
-    // The non-amount fields survive untouched (the codec leaves plain strings alone).
     assert.equal(stored.id, entry.id);
     assert.equal(stored.key, entry.key);
     assert.equal(stored.operation.kind, 'topUp');
     assert.equal(stored.operation.idempotencyKey, 'evt_codec_1');
     assert.equal(stored.operation.source, 'card');
 
-    // The Amount is a real branded Amount again, with its bigint minor intact across the JSON
-    // round-trip. That proves the codec carried it, not a raw JSON.stringify.
     const amount = (stored.operation as Extract<Operation, { kind: 'topUp' }>)
       .amount;
     assert.equal(isAmount(amount), true);

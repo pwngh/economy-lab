@@ -13,6 +13,7 @@ import { credit as creditLeg } from '#src/ledger.ts';
 import { toAmount } from '#src/money.ts';
 import { SYSTEM, earned } from '#src/accounts.ts';
 import { feeForPrice } from '#src/pricing.ts';
+import { configuredRates } from '#src/adapters/rates.ts';
 
 import type {
   Clock,
@@ -20,22 +21,17 @@ import type {
   Logger,
   Meter,
   Processor,
-  Rate,
   Rates,
   Signer,
 } from '#src/ports.ts';
-import type { Currency, Amount } from '#src/money.ts';
+import type { Amount } from '#src/money.ts';
 import type { Ctx, FeePolicy, Recipient } from '#src/contract.ts';
 import type { Leg } from '#src/ports.ts';
 import type { Config } from '#src/config.ts';
 
 // --- Clock & ids ------------------------------------------------------------------
 
-/**
- * Builds a test clock whose time only moves when a test calls `advance(ms)`. The clock reports
- * `start` until then. Calling `advance(ms)` jumps the time forward by `ms` and returns the new
- * time. A manual clock keeps test runs reproducible.
- */
+/** A manual clock: reports `start` until `advance(ms)` jumps it forward and returns the new time. */
 export function fixedClock(
   start = 0,
 ): Clock & { advance: (ms: number) => number } {
@@ -49,10 +45,7 @@ export function fixedClock(
   };
 }
 
-/**
- * Builds a deterministic id generator. It counts up from `seed` and returns `<prefix>_<n>`, for
- * example `txn_1` then `txn_2`. The ids are the same on every run.
- */
+/** Deterministic ids: `<prefix>_<n>`, counting up from `seed`. */
 export function sequentialIds(seed = 0): { next: (prefix: string) => string } {
   let n = seed;
   return {
@@ -65,9 +58,8 @@ export function sequentialIds(seed = 0): { next: (prefix: string) => string } {
 
 // --- Digest & signer (seeded, deterministic) --------------------------------------
 
-// Prefixes the bytes with `seed:<seed>:` before hashing. Different seeds produce different hashes
-// for the same input, and a given seed is stable across runs. The caller hashes the framed bytes
-// with the platform's SHA-256, so results match across runtimes.
+// Frames the bytes with `seed:<seed>:` so different seeds hash differently and a seed is stable
+// across runs.
 const ENCODER = new TextEncoder();
 function withSeed(seed: number, bytes: Uint8Array): Uint8Array {
   const prefix = ENCODER.encode(`seed:${seed}:`);
@@ -77,11 +69,7 @@ function withSeed(seed: number, bytes: Uint8Array): Uint8Array {
   return framed;
 }
 
-/**
- * Builds a test hasher that returns the SHA-256 of the input. The seed is mixed in first, see
- * `withSeed`. It uses `crypto.subtle` rather than Node's `crypto` so the hash matches on Node, Bun,
- * and Deno.
- */
+/** Seeded SHA-256 (see `withSeed`), via `crypto.subtle` so the hash matches on Node, Bun, and Deno. */
 export function seededDigest(seed = 1): Digest {
   return {
     hash: async (bytes) =>
@@ -91,11 +79,7 @@ export function seededDigest(seed = 1): Digest {
   };
 }
 
-/**
- * Builds a test signer that uses `seed` as a stand-in secret key. `sign` returns a SHA-256 hash
- * with the seed mixed in. `verify` re-signs the bytes and compares the result. This is not real
- * crypto. It only does enough to exercise the sign and verify path.
- */
+/** Not real crypto: sign is a seeded hash, verify re-signs and compares — enough to exercise the path. */
 export function seededSigner(seed = 1): Signer {
   const sign = async (bytes: Uint8Array): Promise<Uint8Array> =>
     new Uint8Array(
@@ -124,65 +108,32 @@ function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
 
 // --- Rates (fixed-point) -------------------------------------------------------------
 
-// Three fixed CREDIT-to-USD rates, one per read site. These use round values rather than the exact
-// $0.00833 acquisition rate, which is not a clean cent, so the topUp split lands on whole cents.
-// `buy` is the acquisition rate a user pays per credit, $0.01, so 100 credits cost $1. `par` is the
-// redemption and settlement rate the backing check uses, $0.005, so 200 credits are worth $1.
-// `payout` equals `par`, the settlement rate. The gap between `buy` and `par` is 50%, which is the
-// platform spread. A separate test pins a realistic ~40% spread and a creator-nets-50% outcome with
-// the exact 120/200 rates. Each rate is exact integers, where the value is `rate / 10^scale`, plus
-// a `rateId`. The trailing "r/s" in a `rateId` is rate over scale, not a fraction: 1/2 means
-// 1·10^-2 = $0.01, and 5/3 means 5·10^-3 = $0.005.
-const BUY_CREDIT: Rate = { rate: 1n, scale: 2, rateId: 'buy:CREDIT->USD:1/2' };
-const PAR_CREDIT: Rate = { rate: 5n, scale: 3, rateId: 'par:CREDIT->USD:5/3' };
-const PAYOUT_CREDIT: Rate = {
-  rate: 5n,
-  scale: 3,
-  rateId: 'payout:CREDIT->USD:5/3',
-};
-
 /**
- * Builds a test rate source with buy $0.01, par $0.005, and payout $0.005. `payout` gives the
- * conversion rate for a payout. It returns the pinned CREDIT-to-USD payout rate when converting
- * CREDIT to USD, and one-for-one for any other pair. `par` gives the backing peg. `buy` gives the rate a
- * user pays at top-up.
+ * The production {@link configuredRates} pinned to round values so splits land on whole cents:
+ * `buy` $0.01, `par` (the backing peg) and `payout` both $0.005 — a 50% platform spread.
  */
 export function fixedRates(): Rates {
-  return {
-    payout: async (from, to) => {
-      if (from === 'CREDIT' && to === 'USD') {
-        return PAYOUT_CREDIT;
-      }
-      return { rate: 1n, scale: 0, rateId: `payout:${from}->${to}:1` };
-    },
-    par: (currency: Currency) =>
-      currency === 'CREDIT'
-        ? PAR_CREDIT
-        : { rate: 1n, scale: 0, rateId: `par:${currency}->USD:1` },
-    buy: (currency: Currency) =>
-      currency === 'CREDIT'
-        ? BUY_CREDIT
-        : { rate: 1n, scale: 0, rateId: `buy:${currency}->USD:1` },
-  };
+  return configuredRates({
+    buyRate: 1n,
+    buyScale: 2,
+    parRate: 5n,
+    parScale: 3,
+    payoutRate: 5n,
+    payoutScale: 3,
+  });
 }
 
 // --- logger, meter, processor -----------------------------------------------------
 
-// Builds a logger that discards every line, so tests produce no log noise.
 export function testLogger(): Logger {
   return { log: () => {} };
 }
 
-// Builds a metrics sink that records nothing. It exists so code that emits metrics has something to
-// call.
 export function noopMeter(): Meter {
   return { count: () => {}, observe: () => {} };
 }
 
-/**
- * Builds a fake payment provider. It approves every payout and returns a predictable reference,
- * `prov_<key>`, instead of calling a real provider.
- */
+/** Approves every payout with the predictable reference `prov_<key>`. */
 export function fakeProcessor(): Processor {
   return {
     submitPayout: async (input) => ({ providerRef: `prov_${input.key}` }),
@@ -191,19 +142,14 @@ export function fakeProcessor(): Processor {
 
 // --- Pricing (a flat-percentage split, expressed in basis points) -----------------
 
-// Returns `bps` basis points (hundredths of a percent) of `minor`, rounded down, as `minor * bps /
-// 10000`. The math stays in bigint so large totals stay exact. A JS number would lose precision at
-// that size.
+// Basis points of `minor`, rounded down; bigint so large totals stay exact.
 function applyBps(minor: bigint, bps: number): bigint {
   return (minor * BigInt(bps)) / 10_000n;
 }
 
-// Splits a sale's `price` into the credit legs that pay each party. It takes the platform fee off
-// the top via the same `feeForPrice` that production uses, which rounds the fee up to a whole credit
-// and posts it to REVENUE, so this fixture agrees with the fee that `saleOf` records. Each recipient
-// gets a rounded-down share of the rest, posted to that seller's `earned` account. The rounding
-// leftover goes to REVENUE along with the fee, so the legs sum to exactly `price`. This covers the
-// payout legs only. The operation handler adds the matching line that debits the buyer.
+// Fee off the top via the production `feeForPrice`, rounded-down shares to each seller, and the
+// rounding leftover to REVENUE so the legs sum to exactly `price`. Payout legs only — the
+// operation handler adds the buyer's debit.
 function splitLegs(
   price: Amount,
   recipients: ReadonlyArray<Recipient>,
@@ -227,20 +173,14 @@ function splitLegs(
   return legs;
 }
 
-/**
- * Builds a test fee policy that applies a flat-percentage split, see `splitLegs`. The policy is
- * stateless, so the legs depend only on the inputs.
- */
+/** A flat-percentage split (see `splitLegs`); stateless, so legs depend only on inputs. */
 export function defaultPricing(): FeePolicy {
   return (input) => splitLegs(input.price, input.recipients, input.feeBps);
 }
 
 // --- Config -----------------------------------------------------------------------
 
-/**
- * Builds a test config with throwaway secrets. `test/config.test.ts` covers `loadConfig`'s
- * startup check for missing secrets, so placeholder values are fine here.
- */
+/** Throwaway secrets are fine here; test/config.test.ts covers loadConfig's missing-secret check. */
 export function testConfig(): Config {
   return {
     webhookSecret: 'test-webhook-secret',
@@ -270,11 +210,8 @@ export function testConfig(): Config {
 // --- Ctx --------------------------------------------------------------------------
 
 /**
- * Builds the Ctx a handler reads, wired entirely from the deterministic doubles above so handler
- * runs are reproducible. Production routes operations to handlers by kind through `submit`; a test
- * builds the Ctx here and calls the handler directly. Pass `overrides` to swap individual
- * capabilities (a frozen clock at a different instant, a small `config.velocityLimitMinor`)
- * without re-spelling the other nine.
+ * The Ctx a handler reads, wired from the deterministic doubles above; a test calls the handler
+ * directly instead of routing through `submit`.
  */
 export function makeCtx(overrides: Partial<Ctx> = {}): Ctx {
   return {
@@ -292,11 +229,7 @@ export function makeCtx(overrides: Partial<Ctx> = {}): Ctx {
   };
 }
 
-/**
- * Predicate for `assert.throws` / `assert.rejects`: the thrown value is an `EconomyError` carrying
- * exactly this stable code (e.g. `'OP.MALFORMED'`). The one shared implementation, so every suite
- * matches thrown faults the same way.
- */
+/** Predicate for assert.throws/rejects: the thrown Error carries exactly this stable code. */
 export function hasCode(code: string): (error: unknown) => boolean {
   return (error) =>
     error instanceof Error && (error as { code?: string }).code === code;

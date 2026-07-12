@@ -283,5 +283,5 @@ function runConcurrency(
   });
 }
 
-runConcurrency('postgres', adversarialPostgres);
-runConcurrency('mysql', adversarialMysql);
+runConcurrency('postgres', () => adversarialPostgres(process.env));
+runConcurrency('mysql', () => adversarialMysql(process.env));

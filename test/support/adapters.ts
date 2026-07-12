@@ -18,30 +18,38 @@ import {
   mysqlStore,
 } from '#src/engines/mysql.ts';
 import { httpStore, createStoreServer } from '#src/adapters/http.ts';
+import { loadPg } from '#src/engines/pg-driver.ts';
+import { LOCAL_POSTGRES_URL, storeUrls } from '#src/env.ts';
 import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
 
+import type { EnvMap } from '#src/env.ts';
 import type { Clock, Digest, Store } from '#src/ports.ts';
 
-/** Describes one adapter in the matrix. It holds a name for the test title and a fresh-store factory. */
+/** One matrix adapter: a test-title name and a factory returning a fresh, isolated store. */
 export type AdapterCase = {
   name: string;
   makeStore: () => Promise<Store>;
 };
 
-// Returns the Postgres URL for tests. Prefers DATABASE_URL, then PG_URL, then a local default.
-// Mirrors test/adapters/postgres.test.ts.
-function postgresUrl(): string {
-  return (
-    process.env.DATABASE_URL ??
-    process.env.PG_URL ??
-    'postgres://economy:economy@localhost:5432/economy_lab'
-  );
+// --- Test-suite URL policy ----------------------------------------------------------
+
+/**
+ * The suite URL policy over src/env.ts: Postgres falls back to the compose-local default (each
+ * suite's reachability probe turns absence into a skip); MySQL runs only when something names it.
+ */
+export function testPostgresUrl(env: EnvMap): string {
+  return storeUrls(env).postgres ?? LOCAL_POSTGRES_URL;
 }
 
-// Builds a unique name so concurrent suites and reruns get isolated tables. The name combines the
-// process id, a base-36 timestamp (milliseconds since the epoch, in base 36 to keep it short), and
-// a per-call counter. It names the Postgres throwaway schema and the MySQL throwaway database, each
-// of which is dropped when the store closes.
+/** As {@link testPostgresUrl}; null (nothing names MySQL) means the suite skips or registers nothing. */
+export function testMysqlUrl(env: EnvMap): string | null {
+  return storeUrls(env).mysql;
+}
+
+// --- Throwaway names ------------------------------------------------------------------
+
+// `<prefix>_<pid>_<base36 ms stamp>_<counter>`: unique per call, and the stale-namespace sweep
+// below parses the pid and stamp back out to spot orphans.
 let run = 0;
 export function freshName(prefix: string): string {
   run += 1;
@@ -49,32 +57,184 @@ export function freshName(prefix: string): string {
   return `${prefix}_${process.pid}_${stamp}_${run}`;
 }
 
-// Rejects any database name that is not plain identifier characters, then returns it. A MySQL
-// database name cannot be a bound parameter in CREATE or DROP DATABASE, so it gets pasted into the
-// SQL text directly. Rejecting non-identifier names keeps that paste injection-safe. freshName only
-// ever produces such names, so this just guards that assumption.
-function safeDatabaseName(name: string): string {
+// A database name cannot be a bound parameter in CREATE/DROP DATABASE, so it is pasted into the
+// SQL text; rejecting non-identifier names keeps that paste injection-safe.
+export function safeDatabaseName(name: string): string {
   if (!/^[a-z_][a-z0-9_]*$/.test(name)) {
     throw new Error(`Unsafe MySQL database name: ${JSON.stringify(name)}`);
   }
   return name;
 }
 
-// Swaps the database in a MySQL connection URL for the given database, keeping host, port, and
-// credentials intact. A null database strips it so the connection has no default database, which is
-// what the admin pool needs to run CREATE DATABASE and DROP DATABASE.
-function withDatabase(url: string, database: string | null): string {
+// null strips the database entirely — the admin pool needs a connection with no default database.
+export function withDatabase(url: string, database: string | null): string {
   const parsed = new URL(url);
   parsed.pathname = database ? `/${database}` : '/';
   return parsed.toString();
 }
 
+// --- Stale-namespace sweep ---------------------------------------------------------
+
+// A killed run never drops its throwaway namespace, so el_* leftovers accumulate. The sweep
+// drops a namespace whose creating pid is gone and whose stamp is old; scripts/db-clean.ts runs
+// it on demand (--all drops every match), the store factories below run it once per process.
+const THROWAWAY = /^el_[a-z_]+?_(\d+)_([0-9a-z]+)_\d+$/;
+
+// Whole databases two integration suites create, named by pid alone (no stamp): stale exactly
+// when their pid is gone.
+const PID_DATABASE = /^(?:tilia_payees_it|taskq_lab_it)_(\d+)$/;
+
+const pidAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+// A compose-run bench creates namespaces under a container pid this host cannot see, so age
+// gates the pid check; a day old is abandoned regardless of pid.
+const SWEEP_GRACE_MS = 30 * 60_000;
+const SWEEP_ABANDONED_MS = 24 * 60 * 60_000;
+
+// Applies the orphan rule to one namespace name; non-matching names are never touched.
+export function isStaleThrowaway(name: string, all = false): boolean {
+  const throwaway = THROWAWAY.exec(name);
+  if (throwaway) {
+    if (all) {
+      return true;
+    }
+    const age = Date.now() - Number.parseInt(throwaway[2]!, 36);
+    if (!Number.isFinite(age) || age < 0) {
+      return false;
+    }
+    if (age > SWEEP_ABANDONED_MS) {
+      return true;
+    }
+    return age > SWEEP_GRACE_MS && !pidAlive(Number(throwaway[1]));
+  }
+  const pidDb = PID_DATABASE.exec(name);
+  if (pidDb) {
+    return all || !pidAlive(Number(pidDb[1]));
+  }
+  return false;
+}
+
 /**
- * Builds a Postgres store on its own throwaway schema, loaded with db/postgresql-schema.sql and
- * dropped when the store closes (postgresStore's `schema` option does all of that). The shared
- * isolated-Postgres provisioning: the conformance matrix passes a seeded digest/clock so backends
- * hash identically, while the bench harness passes the production digest and a `poolMax` sized to its
- * concurrency. Parameterizing the hash/clock/pool keeps this one function instead of a copy per caller.
+ * Drops every stale throwaway namespace reachable through a Postgres URL: el_* schemas in the
+ * connected database, plus the pid-named integration databases. Returns the names it dropped.
+ */
+export async function sweepStalePostgres(
+  url: string,
+  all = false,
+): Promise<string[]> {
+  const pg = await loadPg();
+  const client = new pg.Client({ connectionString: url });
+  await client.connect();
+  const dropped: string[] = [];
+  try {
+    const schemata = await client.query(
+      "select schema_name from information_schema.schemata where schema_name like 'el\\_%'",
+    );
+    // Each drop stands alone: one locked or permission-guarded namespace must not stop the rest
+    // of the sweep.
+    for (const row of schemata.rows) {
+      const name = String(row.schema_name);
+      if (isStaleThrowaway(name, all)) {
+        try {
+          await client.query(
+            `drop schema if exists "${safeDatabaseName(name)}" cascade`,
+          );
+          dropped.push(name);
+        } catch {
+          continue;
+        }
+      }
+    }
+    const databases = await client.query(
+      "select datname from pg_database where datname like 'tilia_payees_it\\_%' or datname like 'taskq_lab_it\\_%'",
+    );
+    for (const row of databases.rows) {
+      const name = String(row.datname);
+      if (isStaleThrowaway(name, all)) {
+        try {
+          await client.query(
+            `drop database if exists "${safeDatabaseName(name)}" with (force)`,
+          );
+          dropped.push(name);
+        } catch {
+          continue;
+        }
+      }
+    }
+  } finally {
+    await client.end();
+  }
+  return dropped;
+}
+
+/** As {@link sweepStalePostgres}, for the el_* throwaway databases on a MySQL server. */
+export async function sweepStaleMysql(
+  url: string,
+  all = false,
+): Promise<string[]> {
+  const admin = await createMysqlPool(withDatabase(url, null));
+  const dropped: string[] = [];
+  try {
+    const [result] = await admin.query(
+      "select schema_name as name from information_schema.schemata where schema_name like 'el\\_%'",
+    );
+    for (const row of result as Array<{ name: string }>) {
+      const name = String(row.name);
+      if (isStaleThrowaway(name, all)) {
+        try {
+          await admin.query(
+            `DROP DATABASE IF EXISTS \`${safeDatabaseName(name)}\``,
+          );
+          dropped.push(name);
+        } catch {
+          continue;
+        }
+      }
+    }
+  } finally {
+    await admin.end();
+  }
+  return dropped;
+}
+
+// Once per process per engine, best-effort: a sweep failure never blocks the store being built.
+const sweptEngines = new Set<'postgres' | 'mysql'>();
+async function maybeSweep(
+  engine: 'postgres' | 'mysql',
+  url: string,
+): Promise<void> {
+  if (sweptEngines.has(engine)) {
+    return;
+  }
+  sweptEngines.add(engine);
+  try {
+    const dropped =
+      engine === 'postgres'
+        ? await sweepStalePostgres(url)
+        : await sweepStaleMysql(url);
+    if (dropped.length > 0) {
+      console.warn(
+        `db-clean: dropped ${dropped.length} stale throwaway namespace(s) on ${engine}`,
+      );
+    }
+  } catch {
+    // Unreachable server or insufficient privilege: the caller's own connect will say so.
+  }
+}
+
+// --- Isolated stores and the matrix ---------------------------------------------------
+
+/**
+ * A Postgres store on its own throwaway schema, dropped on close (postgresStore's `schema`
+ * option does all of that). Shared by the conformance matrix and the bench harness, which
+ * differ only in digest/clock and pool sizing.
  */
 export async function makeIsolatedPostgresStore(opts: {
   url: string;
@@ -83,6 +243,7 @@ export async function makeIsolatedPostgresStore(opts: {
   poolMax?: number;
   connectionTimeoutMillis?: number;
 }): Promise<Store> {
+  await maybeSweep('postgres', opts.url);
   return postgresStore({
     url: opts.url,
     schema: freshName('el_iso'),
@@ -96,21 +257,11 @@ export async function makeIsolatedPostgresStore(opts: {
 }
 
 /**
- * Builds a MySQL store on its own throwaway database. Like the Postgres case, it gives each store a unique namespace that is dropped on close, and is the shared isolated-MySQL
- * provisioning for both the conformance matrix and the bench harness (which differ only in the
- * digest/clock and an optional `connectionLimit`).
- *
- * prove.ts and fuzz.ts build a fresh store for every probe, seed, and replay. Pointing them all at
- * the one shared database named in MYSQL_TEST_URL re-ran the whole drop-everything and
- * create-everything schema against it repeatedly. Overlapping DDL could leave that database
- * half-applied, for example a trigger created before its table was visible, so a later statement
- * saw a missing table. Giving each store its own freshly created database removes the sharing
- * entirely.
- *
- * An admin pool with no default database runs `CREATE DATABASE <unique>`. The store's own pool is
- * pointed at `<unique>` so that applyMysqlSchema's unqualified CREATEs land there. `close()` closes
- * the store pool, drops the database through the admin pool, then ends the admin pool. If setup
- * throws partway, the same teardown runs, so no pool or database leaks.
+ * A MySQL store on its own freshly created database, dropped on close — the isolated-MySQL
+ * provisioning shared by the conformance matrix and the bench harness. Each store gets a whole
+ * database of its own because concurrent stores re-running the schema against one shared
+ * database could leave it half-applied. If setup throws partway, the same teardown runs, so no
+ * pool or database leaks.
  */
 export async function makeIsolatedMysqlStore(opts: {
   url: string;
@@ -118,6 +269,7 @@ export async function makeIsolatedMysqlStore(opts: {
   clock: Clock;
   connectionLimit?: number;
 }): Promise<Store> {
+  await maybeSweep('mysql', opts.url);
   const database = safeDatabaseName(freshName('el_iso'));
   const admin = await createMysqlPool(withDatabase(opts.url, null));
   // CREATE DATABASE is the admin pool's first statement, so a throw here (DDL contention under a
@@ -130,8 +282,8 @@ export async function makeIsolatedMysqlStore(opts: {
     throw error;
   }
 
-  // Drops the throwaway database and tears down the admin pool. It tolerates a missing database and
-  // a failed drop so that cleanup on a half-built store still ends every pool.
+  // Tolerates a missing database and a failed drop so cleanup on a half-built store still ends
+  // every pool.
   const dropDatabase = async () => {
     try {
       await admin.query(`DROP DATABASE IF EXISTS \`${database}\``);
@@ -166,21 +318,11 @@ export async function makeIsolatedMysqlStore(opts: {
 }
 
 /**
- * Returns the store adapters (memory, postgres, mysql, http), each a factory for a fresh, isolated
- * store. A test runs the same operations against every adapter and expects identical results. Each
- * factory therefore wires the same seeded digest ({@link seededDigest}) and fixed clock, so
- * identical inputs hash identically on every backend.
- *
- * - memory: `memoryStore({ digest, clock })`, always available.
- * - postgres: `postgresStore({ url, schema, digest, clock })` with a unique throwaway schema that
- *   loads db/postgresql-schema.sql and is dropped on close (mirrors postgres.test.ts).
- * - mysql: a throwaway database on a fresh pool, with the schema applied, dropped on close (mirrors
- *   mysql.test.ts).
- * - http: an in-process server over a memory backing store with the same digest and clock.
- *
- * This function does not probe reachability. prove.ts and fuzz.ts probe each backend themselves.
+ * The conformance matrix: a fresh-store factory per adapter, each wired with the same seeded
+ * digest and fixed clock so identical inputs hash identically on every backend. Reachability is
+ * not probed here; prove.ts and fuzz.ts probe each backend themselves.
  */
-export function adapterMatrix(): AdapterCase[] {
+export function adapterMatrix(env: EnvMap): AdapterCase[] {
   return [
     {
       name: 'memory',
@@ -191,7 +333,7 @@ export function adapterMatrix(): AdapterCase[] {
       name: 'postgres',
       makeStore: async () =>
         makeIsolatedPostgresStore({
-          url: postgresUrl(),
+          url: testPostgresUrl(env),
           digest: seededDigest(1),
           clock: fixedClock(0),
         }),
@@ -199,9 +341,11 @@ export function adapterMatrix(): AdapterCase[] {
     {
       name: 'mysql',
       makeStore: async () => {
-        const url = process.env.MYSQL_TEST_URL;
-        if (!url) {
-          throw new Error('MYSQL_TEST_URL not set');
+        const url = testMysqlUrl(env);
+        if (url === null) {
+          throw new Error(
+            'no MySQL URL configured (set DATABASE_URL or MYSQL_TEST_URL)',
+          );
         }
         return makeIsolatedMysqlStore({
           url,
@@ -213,8 +357,6 @@ export function adapterMatrix(): AdapterCase[] {
     {
       name: 'http',
       makeStore: async () => {
-        // Runs in-process. The memory backing store carries the seeded digest and fixed clock, and
-        // the HTTP client talks to a server over it. The HTTP path therefore hashes like the others.
         const backing = memoryStore({
           digest: seededDigest(1),
           clock: fixedClock(0),

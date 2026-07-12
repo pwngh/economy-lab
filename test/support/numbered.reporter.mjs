@@ -10,20 +10,10 @@
  */
 
 /**
- * Custom `node:test` reporter that prints a spec-style tree with hierarchical
- * numbers: top-level suites get whole numbers (1, 2, 3, ...), tests under them get
- * dotted sub-numbers (1.1, 1.2, ...; deeper nesting extends the dots). Numbers are
- * assigned at print time, so you can say "1.3 failed" and find it.
- *
- * Buffers the whole run before printing because `node --test` runs files in parallel
- * workers, so events arrive interleaved and in a different order each run. To keep
- * numbers stable, collect every event, group by file, sort files by path, then walk
- * the tree numbering. Trade-off: output appears once at the end rather than streaming,
- * fine for a suite that finishes in a second or two.
- *
- * Wire it up in package.json:
- *   node --test --test-reporter=./test/support/numbered.reporter.mjs \
- *        --test-reporter-destination=stdout "test/**\/*.test.ts"
+ * `node:test` reporter printing a spec-style tree with hierarchical numbers (1, 1.2, ...) so
+ * "1.3 failed" is findable. Buffers the whole run before printing: parallel workers interleave
+ * events differently each run, so events are grouped by file and files sorted by path to keep
+ * the numbers stable. Wired up via --test-reporter in package.json.
  */
 
 // ANSI colors only on a TTY; piped or captured output stays plain text.
@@ -37,8 +27,7 @@ const red = paint(31, 39);
 const yellow = paint(33, 39);
 const cyan = paint(36, 39);
 
-// One node in a file's test tree: a suite (has `children`) or a single test.
-// `status` is filled in when the matching test:pass / test:fail event arrives.
+// A suite (has `children`) or a single test; `status` arrives with the pass/fail event.
 function makeNode(name) {
   return { name, children: [], status: null, duration: null, error: null };
 }
@@ -88,7 +77,6 @@ export default async function* numberedReporter(source) {
     rootsByFile.set(file, roots);
   }
 
-  // Walk the trees in a stable file order, numbering as we go.
   const lines = [];
   const failures = [];
   let counts = { suites: 0, tests: 0, pass: 0, fail: 0, skip: 0 };
@@ -127,7 +115,7 @@ export default async function* numberedReporter(source) {
   for (const file of [...rootsByFile.keys()].sort()) {
     for (const root of rootsByFile.get(file)) {
       topLevel += 1;
-      if (lines.length > 0) lines.push(''); // blank line between top-level suites
+      if (lines.length > 0) lines.push('');
       render(root, String(topLevel), 0);
     }
   }

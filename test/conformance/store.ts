@@ -10,11 +10,7 @@
  * @license MIT
  */
 
-/**
- * Amount is an object, not a number, so two equal amounts are not the same reference. Money
- * checks therefore use `assert.deepEqual`, which compares by value, never `assert.equal`, which
- * compares by identity.
- */
+/** Amount is an object: money checks use `assert.deepEqual` (by value), never `assert.equal` (by identity). */
 
 import { describe, test, before, after } from 'node:test';
 import type { TestContext } from 'node:test';
@@ -29,6 +25,7 @@ import type {
   Checkpoint,
   InboxEntry,
   Movement,
+  OutboxMessage,
   Saga,
   SagaState,
   Store,
@@ -43,7 +40,14 @@ function freshUser(): string {
   return `usr_conf_${userSeq}`;
 }
 
-// Both accounts exist, so postEntry's known-account check passes.
+async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
+  const out: T[] = [];
+  for await (const item of iterable) {
+    out.push(item);
+  }
+  return out;
+}
+
 async function fundSpendable(
   unit: Unit,
   userId: string,
@@ -58,25 +62,7 @@ async function fundSpendable(
   });
 }
 
-// The caller passes a distinct message id so a test can assert which message it enqueued.
-function outboxRow(
-  userId: string,
-  messageId: string,
-): {
-  id: string;
-  event: {
-    id: string;
-    type: string;
-    version: number;
-    occurredAt: number;
-    subject: string;
-    data: Record<string, unknown>;
-    audience: 'internal' | 'client';
-  };
-  status: 'pending';
-  attempts: number;
-  reason: string | null;
-} {
+function outboxRow(userId: string, messageId: string): OutboxMessage {
   return {
     id: messageId,
     event: {
@@ -157,10 +143,7 @@ async function pairsHeadsWithRawSums(store: Store): Promise<void> {
     await fundSpendable(unit, userId, '2.50', `txn_conf_headsum_b_${userId}`);
   });
 
-  const heads = new Map<string, string>();
-  for await (const [account, head] of store.ledger.heads()) {
-    heads.set(account, head);
-  }
+  const heads = new Map(await collect(store.ledger.heads()));
   let found = 0;
   for await (const [account, head, sum] of store.ledger.headSums()) {
     assert.equal(head, heads.get(account));
@@ -252,10 +235,7 @@ async function listsNonRevokedGrantsSorted(store: Store): Promise<void> {
     await unit.entitlements.revoke(userId, 'sku_conf_m');
   });
 
-  const grants = [];
-  for await (const grant of store.entitlements.list(userId)) {
-    grants.push(grant);
-  }
+  const grants = await collect(store.entitlements.list(userId));
   // sku order is identical on every engine.
   assert.deepEqual(grants, [
     { sku: 'sku_conf_a', expiresAt: -5 },
@@ -291,10 +271,7 @@ async function journalAppendsAndStreamsBySession(store: Store): Promise<void> {
   ]);
   await store.movements.append([movementRow(sessionId, 2, `${sessionId}_m2`)]);
 
-  const rows: Movement[] = [];
-  for await (const movement of store.movements.bySession(sessionId)) {
-    rows.push(movement);
-  }
+  const rows = await collect(store.movements.bySession(sessionId));
   assert.deepEqual(
     rows,
     [0, 1, 2].map((seq) => movementRow(sessionId, seq, `${sessionId}_m${seq}`)),
@@ -315,10 +292,7 @@ async function journalRejectsDuplicateBatches(store: Store): Promise<void> {
     store.movements.append([movementRow(sessionId, 0, `${sessionId}_m3`)]),
   );
 
-  const rows: Movement[] = [];
-  for await (const movement of store.movements.bySession(sessionId)) {
-    rows.push(movement);
-  }
+  const rows = await collect(store.movements.bySession(sessionId));
   assert.equal(rows.length, 1);
 }
 
@@ -440,12 +414,8 @@ async function dropsOutboxOnRollback(store: Store): Promise<void> {
   );
 }
 
-// Pins the same retry-and-dead-letter behavior across adapters. This is the outbound twin of
-// bumpsInboxAttemptThenDeadLetters. `recordFailure` counts one failed delivery: it bumps
-// `attempts`, leaves the row 'pending', and records no reason yet. `deadLetter` then gives up on
-// the poison message, flips it to 'dead', and persists the reason on the record so `claimBatch`
-// never hands it back. Like the relay worker, recordFailure and deadLetter run on the top-level
-// store, not inside store.transaction(...).
+// Outbound twin of bumpsInboxAttemptThenDeadLetters. Like the relay worker, recordFailure and
+// deadLetter run on the top-level store, not inside store.transaction(...).
 async function recordsFailureThenDeadLettersOutbox(
   store: Store,
 ): Promise<void> {
@@ -455,7 +425,6 @@ async function recordsFailureThenDeadLettersOutbox(
     unit.outbox.enqueue(outboxRow(userId, messageId)),
   );
 
-  // A still-pending row carries no dead-letter reason yet.
   await store.outbox.recordFailure(messageId);
   const afterFail = await store.outbox.claimBatch(10);
   const failed = afterFail.find((message) => message.id === messageId);
@@ -536,7 +505,7 @@ async function dedupesInboxByKey(store: Store): Promise<void> {
   );
 
   assert.equal(first.id, firstId);
-  assert.equal(duplicate.id, firstId); // the existing row, not the second id
+  assert.equal(duplicate.id, firstId);
   assert.equal(duplicate.key, key);
 
   const batch = await store.inbox.claimInbound({ now: 0, limit: 10 });
@@ -556,7 +525,6 @@ async function bumpsInboxAttemptThenDeadLetters(store: Store): Promise<void> {
     unit.inbox.enqueueInbound(inboxRow(userId, rowId, `evt_${rowId}`)),
   );
 
-  // A still-pending row carries no dead-letter reason yet.
   await store.inbox.bumpAttempt(rowId);
   const afterBump = await store.inbox.claimInbound({ now: 0, limit: 10 });
   const bumped = afterBump.find((entry) => entry.id === rowId);
@@ -572,8 +540,7 @@ async function bumpsInboxAttemptThenDeadLetters(store: Store): Promise<void> {
     false,
   );
 
-  // The failure reason persists on the dead row itself, not a side-channel; a duplicate enqueue on
-  // the same key returns the stored row, terminal status and all.
+  // A duplicate enqueue on the same key returns the stored row, terminal status and all.
   const resolved = await store.transaction((unit) =>
     unit.inbox.enqueueInbound(inboxRow(userId, rowId, `evt_${rowId}`)),
   );
@@ -601,10 +568,7 @@ async function recomputesChainHead(store: Store): Promise<void> {
     fundSpendable(unit, userId, '4.00', 'txn_conf_chain'),
   );
 
-  const heads = new Map<string, string>();
-  for await (const [account, head] of store.ledger.heads()) {
-    heads.set(account, head);
-  }
+  const heads = new Map(await collect(store.ledger.heads()));
   const link = transaction.links.find(
     (candidate) => candidate.account === spendable(userId),
   );
@@ -614,12 +578,9 @@ async function recomputesChainHead(store: Store): Promise<void> {
   assert.equal(link!.prevHash, '0'.repeat(64));
 }
 
-// Regression for a posting that touches the same account with two lines at once. SQL adapters
-// insert one row per line keyed on (account, previous-hash). The second line for that account
-// repeated the pair, and the insert rejected it. This test posts two credits into one user's
-// spendable account, each matched by a debit so the posting still cancels to zero. Every store
-// must accept it, sum both lines into one balance, and extend the account's hash chain by exactly
-// one step. Pinned for all stores, not just whatever the `prove` fuzzer happens to generate.
+// Regression: a posting with two lines to one account once collided on the SQL adapters'
+// (account, prev_hash) key. Every store must accept it, sum both lines into one balance, and
+// extend the chain by exactly one step.
 async function storesMultipleLegsToOneAccount(store: Store): Promise<void> {
   const userId = freshUser();
   const first = decodeAmount('3.00', 'CREDIT');
@@ -638,18 +599,12 @@ async function storesMultipleLegsToOneAccount(store: Store): Promise<void> {
     }),
   );
 
-  // Stored balance must equal both lines summed (3.00 + 5.00 = 8.00), proving neither was dropped.
   assert.deepEqual(
     await store.ledger.balance(spendable(userId)),
     toAmount('CREDIT', 800n),
   );
 
-  // The account's chain head must match the hash the posting reports: it grew by one step from the
-  // all-zeros start, and the stored head equals that step's hash (same check as recomputesChainHead).
-  const heads = new Map<string, string>();
-  for await (const [account, head] of store.ledger.heads()) {
-    heads.set(account, head);
-  }
+  const heads = new Map(await collect(store.ledger.heads()));
   const link = transaction.links.find(
     (candidate) => candidate.account === spendable(userId),
   );
@@ -659,12 +614,6 @@ async function storesMultipleLegsToOneAccount(store: Store): Promise<void> {
   assert.equal(link!.prevHash, '0'.repeat(64));
 }
 
-// Pins the same promo-grant behavior across adapters, covering three rules. First, opening the
-// same grant twice leaves one row, because a repeat open by id is a no-op that does not overwrite.
-// Second, claimDue returns a grant once its expiry is at or before `now`, oldest expiry first.
-// Third, markReversed removes a grant from the due set and is a no-op if rerun on an
-// already-reversed grant.
-//
 // claimDue and markReversed run on the top-level store, not inside store.transaction(...),
 // matching how the background worker calls them.
 async function reversesPromoGrantExactlyOnce(store: Store): Promise<void> {
@@ -688,10 +637,8 @@ async function reversesPromoGrantExactlyOnce(store: Store): Promise<void> {
   await store.promos.markReversed(id); // no-op on already-reversed
 }
 
-// Pins claimDue's ordering and cap. "Oldest expiresAt first" holds across the whole table, since
-// the rows are sorted before the limit is applied rather than returned in insertion order, and the
-// cap is the literal `limit`. This test opens three grants newest first, then claimDue with limit 2
-// returns the two oldest in ascending expiresAt.
+// claimDue sorts by expiresAt before applying the limit, so "oldest first" holds across the whole
+// table, not per insertion order.
 async function claimsDuePromosOldestFirstUpToLimit(
   store: Store,
 ): Promise<void> {
@@ -718,26 +665,34 @@ async function claimsDuePromosOldestFirstUpToLimit(
   );
 }
 
-// SagaStore.list returns the whole payout board, meaning every saga regardless of state, newest
-// `updatedAt` first. It is not limited to the due, in-progress sagas that claimDue hands the
-// worker. This test opens three sagas out of updatedAt order (one settled, one failed, one in
-// flight) and asserts list re-sorts them newest first. The result is filtered to this test's user
-// so a future saga test sharing the store cannot perturb it.
-async function listsSagasNewestFirst(store: Store): Promise<void> {
-  const userId = freshUser();
-  const mk = (suffix: string, updatedAt: number, state: SagaState): Saga => ({
-    id: `pay_conf_list_${userId}_${suffix}`,
+// Each test's local `mk` overrides only the fields whose behavior it pins.
+function sagaRow(id: string, userId: string, overrides: Partial<Saga>): Saga {
+  return {
+    id,
     userId,
     reserve: toAmount('CREDIT', 100n),
-    rateId: 'rate_conf_list',
-    state,
+    rateId: 'rate_conf',
+    state: 'SUBMITTED',
     providerRef: null,
     reason: null,
     attempts: 0,
-    dueAt: updatedAt,
-    updatedAt,
+    dueAt: 0,
+    updatedAt: 0,
     payoutUsd: null,
-  });
+    ...overrides,
+  };
+}
+
+// SagaStore.list returns the whole payout board (every state, newest updatedAt first), not the
+// due set claimDue hands the worker. Filtered to this test's user because the store is shared.
+async function listsSagasNewestFirst(store: Store): Promise<void> {
+  const userId = freshUser();
+  const mk = (suffix: string, updatedAt: number, state: SagaState): Saga =>
+    sagaRow(`pay_conf_list_${userId}_${suffix}`, userId, {
+      state,
+      dueAt: updatedAt,
+      updatedAt,
+    });
   const oldest = mk('a', 1_000, 'SETTLED');
   const middle = mk('b', 2_000, 'FAILED');
   const newest = mk('c', 3_000, 'RESERVED');
@@ -746,38 +701,26 @@ async function listsSagasNewestFirst(store: Store): Promise<void> {
   await store.transaction((unit) => unit.sagas.open(oldest));
   await store.transaction((unit) => unit.sagas.open(newest));
 
-  const mine: string[] = [];
-  for await (const saga of store.sagas.list()) {
-    if (saga.userId === userId) {
-      mine.push(saga.id);
-    }
-  }
+  const mine = (await collect(store.sagas.list()))
+    .filter((saga) => saga.userId === userId)
+    .map((saga) => saga.id);
   assert.deepEqual(mine, [newest.id, middle.id, oldest.id]);
 }
 
-// SagaStore.findByProviderRef is the inbound-webhook lookup: a provider callback names a payout by
-// the rail's reference, never the saga id. This test opens two sagas with distinct refs plus one
-// with none, and asserts the lookup returns exactly the matching saga, null for an unknown ref, and
-// the newest `updatedAt` when two sagas carry the same ref (matching list order).
+// findByProviderRef is the inbound-webhook lookup: a provider callback names a payout by the
+// rail's reference, never the saga id.
 async function findsSagaByProviderRef(store: Store): Promise<void> {
   const userId = freshUser();
   const mk = (
     suffix: string,
     providerRef: string | null,
     updatedAt: number,
-  ): Saga => ({
-    id: `pay_conf_ref_${userId}_${suffix}`,
-    userId,
-    reserve: toAmount('CREDIT', 100n),
-    rateId: 'rate_conf_ref',
-    state: 'SUBMITTED',
-    providerRef,
-    reason: null,
-    attempts: 0,
-    dueAt: updatedAt,
-    updatedAt,
-    payoutUsd: null,
-  });
+  ): Saga =>
+    sagaRow(`pay_conf_ref_${userId}_${suffix}`, userId, {
+      providerRef,
+      dueAt: updatedAt,
+      updatedAt,
+    });
   const target = mk('a', `prov_${userId}_a`, 1_000);
   const other = mk('b', `prov_${userId}_b`, 2_000);
   const unsubmitted = mk('c', null, 3_000);
@@ -799,38 +742,24 @@ async function findsSagaByProviderRef(store: Store): Promise<void> {
   assert.equal(newest?.id, duplicate.id);
 }
 
-// Pins the same terminal-outcome persistence across adapters. A payout's SETTLED or FAILED outcome
-// is stored on the saga record itself, not in a side-channel, so a later load reads it back.
-// `advance` to SETTLED carries the gross USD disbursed in its patch (payoutUsd, a USD Amount), and
-// `deadLetter` records the failure reason. This test opens two sagas, drives one to each terminal
-// state, and asserts load round-trips the stored outcome. It also asserts that a still-in-flight
-// saga carries neither outcome field.
+// A payout's terminal outcome lives on the saga record itself, not a side-channel: advance to
+// SETTLED carries payoutUsd in its patch, deadLetter records the failure reason.
 async function persistsTerminalOutcomeOnTheSaga(store: Store): Promise<void> {
   const userId = freshUser();
-  const mk = (suffix: string, state: SagaState): Saga => ({
-    id: `pay_conf_term_${userId}_${suffix}`,
-    userId,
-    reserve: toAmount('CREDIT', 400n),
-    rateId: 'rate_conf_term',
-    state,
-    providerRef: 'prov_conf_term',
-    reason: null,
-    attempts: 1,
-    dueAt: 0,
-    updatedAt: 0,
-    payoutUsd: null,
-  });
+  const mk = (suffix: string, state: SagaState): Saga =>
+    sagaRow(`pay_conf_term_${userId}_${suffix}`, userId, {
+      state,
+      attempts: 1,
+    });
   const settling = mk('settle', 'SUBMITTED');
   const failing = mk('fail', 'SUBMITTED');
   await store.transaction((unit) => unit.sagas.open(settling));
   await store.transaction((unit) => unit.sagas.open(failing));
 
-  // Before any terminal step, neither outcome field is set.
   const inflight = await store.sagas.load(settling.id);
   assert.equal(inflight!.reason, null);
   assert.equal(inflight!.payoutUsd, null);
 
-  // SETTLED: the USD disbursed is persisted on the record, failure reason stays null.
   const paid = toAmount('USD', 2n);
   const advanced = await store.transaction((unit) =>
     unit.sagas.advance(settling.id, 'SUBMITTED', 'SETTLED', {
@@ -844,7 +773,6 @@ async function persistsTerminalOutcomeOnTheSaga(store: Store): Promise<void> {
   assert.deepEqual(settled!.payoutUsd, paid);
   assert.equal(settled!.reason, null);
 
-  // FAILED: the failure reason is persisted on the record, payoutUsd stays null.
   await store.transaction((unit) =>
     unit.sagas.deadLetter(failing.id, 'PROVIDER.FAILURE'),
   );
@@ -854,12 +782,8 @@ async function persistsTerminalOutcomeOnTheSaga(store: Store): Promise<void> {
   assert.equal(failed!.payoutUsd, null);
 }
 
-// Ledger.list returns the whole journal, meaning every committed posting, newest commit first. It
-// is not limited to the postings a given reader minted, the same way SagaStore.list returns the
-// whole payout board. This test funds three users with separate postings, then asserts list streams
-// them back newest first. That order is the commit sequence, the reverse of the order they were
-// appended, and each posting arrives with its full legs intact. The result is filtered to this
-// test's txn ids so other postings already in the store cannot perturb it.
+// Ledger.list returns the whole journal, newest commit first, with each posting's full legs.
+// Filtered to this test's txn ids because the store is shared.
 async function listsPostingsNewestFirst(store: Store): Promise<void> {
   const userId = freshUser();
   const ids = [
@@ -872,27 +796,19 @@ async function listsPostingsNewestFirst(store: Store): Promise<void> {
     await store.transaction((unit) => fundSpendable(unit, userId, '1.00', id));
   }
 
-  const mine: string[] = [];
-  const legsById = new Map<string, number>();
-  for await (const posting of store.ledger.list()) {
-    if (ids.includes(posting.txnId)) {
-      mine.push(posting.txnId);
-      legsById.set(posting.txnId, posting.legs.length);
-    }
-  }
-  // Newest commit first: the reverse of the append order.
-  assert.deepEqual(mine, [ids[2], ids[1], ids[0]]);
+  const mine = (await collect(store.ledger.list())).filter((posting) =>
+    ids.includes(posting.txnId),
+  );
+  assert.deepEqual(
+    mine.map((posting) => posting.txnId),
+    [ids[2], ids[1], ids[0]],
+  );
   // Each posting carries its full legs (the funding posting has two), not just an id and meta.
-  for (const id of ids) {
-    assert.equal(legsById.get(id), 2);
+  for (const posting of mine) {
+    assert.equal(posting.legs.length, 2);
   }
 }
 
-// Pins the same webhook-dedup behavior across adapters. An inbound provider webhook is processed
-// at most once, even on redelivery. The replay store uses an atomic insert-if-absent on the event
-// id. The first claim returns `{ claimed: true }`, which means process it, and later claims of the
-// same id return `{ claimed: false }`, which means skip it. A different id is unaffected.
-//
 // claim runs on the top-level store, not inside store.transaction(...), since the webhook entry
 // point checks it as a standalone final gate, not as part of a domain transaction.
 async function claimsWebhookEventIdOnce(store: Store): Promise<void> {
@@ -903,17 +819,13 @@ async function claimsWebhookEventIdOnce(store: Store): Promise<void> {
   const second = await store.replay.claim(eventId);
   const different = await store.replay.claim(other);
 
-  assert.equal(first.claimed, true); // first sighting wins
-  assert.equal(second.claimed, false); // redelivery of the same id is a no-op
-  assert.equal(different.claimed, true); // an unrelated id is unaffected
+  assert.equal(first.claimed, true);
+  assert.equal(second.claimed, false);
+  assert.equal(different.claimed, true);
 }
 
-// Pins the same behavior across adapters for `balanceAccounts`, which lists every account that has
-// a cached running-balance row. The cache lets reads skip re-summing entries. Entries remain the
-// source of truth, so a cached row can be wrong or even orphaned with no entries behind it. Every
-// account with a cached row must appear, which lets the integrity checker inspect rows that walking
-// `heads()` (accounts with entries) would miss, such as a stale row with no posting behind it.
-// Funding a fresh user creates its cached row, so that user must appear.
+// balanceAccounts lists every account with a cached balance row, including orphans with no legs
+// behind them — rows the integrity checker must see but heads() (accounts with entries) would miss.
 async function balanceAccountsEnumeratesBalanceRow(
   store: Store,
 ): Promise<void> {
@@ -922,18 +834,13 @@ async function balanceAccountsEnumeratesBalanceRow(
     fundSpendable(unit, userId, '6.00', 'txn_conf_balacct'),
   );
 
-  const seen = new Set<string>();
-  for await (const account of store.ledger.balanceAccounts()) {
-    seen.add(account);
-  }
+  const seen = await collect(store.ledger.balanceAccounts());
 
-  assert.equal(seen.has(spendable(userId)), true);
+  assert.equal(seen.includes(spendable(userId)), true);
 }
 
-// Pins the same order across adapters for `balanceAccounts`. Every engine lists accounts in one
-// locale-independent code-unit order, not the database's collation or a Map's insertion order, so a
-// caller and the integrity drift report see identical ordering everywhere. This test funds users
-// whose ids are created out of order, then asserts the whole listing comes back in code-unit order.
+// Every engine lists accounts in locale-independent code-unit order, not the database's collation
+// or a Map's insertion order, so the integrity drift report sees identical ordering everywhere.
 async function balanceAccountsListsInCodeUnitOrder(
   store: Store,
 ): Promise<void> {
@@ -945,24 +852,16 @@ async function balanceAccountsListsInCodeUnitOrder(
     );
   }
 
-  const seen: string[] = [];
-  for await (const account of store.ledger.balanceAccounts()) {
-    seen.push(account);
-  }
+  const seen = await collect(store.ledger.balanceAccounts());
 
   for (const id of ids) {
     assert.equal(seen.includes(spendable(id)), true);
   }
-  // Already sorted on every engine: equal to its own code-unit-sorted copy.
   assert.deepEqual(seen, [...seen].sort(byCodeUnit));
 }
 
-// Pins the same markBilled behavior across adapters, which stops two concurrent renewal sweeps
-// from charging a subscription twice in one period. markBilled updates the row only if the caller's
-// expected due date still matches next_due_at. The first sweeper passes the current due date, so
-// its update applies: it returns true and advances the due date. A second sweeper starting from the
-// now-stale due date matches no row and does nothing, returning false. The net result is that the
-// subscription is billed at most once per period.
+// markBilled is a compare-and-set on next_due_at, so two concurrent renewal sweeps cannot bill
+// one period twice.
 async function markBilledIsCompareAndSet(store: Store): Promise<void> {
   const userId = freshUser();
   const id = `sub_conf_cas_${userId}`;
@@ -986,38 +885,24 @@ async function markBilledIsCompareAndSet(store: Store): Promise<void> {
     }),
   );
 
-  // Winning sweeper claimed next_due_at=firstDue and bills with that expected value.
   const won = await store.subscriptions.markBilled(id, secondDue, firstDue);
   assert.equal(won, true);
 
-  // Second sweeper also claimed firstDue, but the row has advanced to secondDue, so its
-  // conditional update matches no row and bills nothing.
   const lost = await store.subscriptions.markBilled(id, thirdDue, firstDue);
   assert.equal(lost, false);
 
-  // The losing call changed nothing: next_due_at is still secondDue, not thirdDue.
   const reloaded = await store.subscriptions.load(id);
   assert.equal(reloaded!.nextDueAt, secondDue);
 }
 
-/**
- * Registers the shared tests every Store implementation (in-memory and each db-backed adapter)
- * must pass. Each adapter calls this once with its name and a factory, holding all adapters to
- * the same behavior.
- *
- * @param name - Label for this adapter, used in the test group title.
- * @param makeStore - Builds a fresh Store to run the tests against.
- */
+/** Registers the shared conformance tests every Store implementation must pass; each adapter calls this once with a factory. */
 export function runStoreConformance(
   name: string,
   makeStore: () => Promise<Store> | Store,
 ): void {
   describe(`Store Conformance: ${name}`, () => {
-    // The backend may be unreachable, for example in CI's no-services `check` job or with a missing
-    // local database. Probe it once here. If makeStore throws, every test below skips, rather than
-    // this before hook throwing and canceling the whole suite. That is the graceful contract the
-    // standalone describes use, and the one ci.yml's `check` job relies on ("conformance tests skip
-    // when no backend reachable").
+    // Probe once: if makeStore throws, every test below skips rather than the before hook failing
+    // the suite — the connect-or-skip contract ci.yml's no-services `check` job relies on.
     let store: Store | null = null;
     let unreachable = 'backend unreachable';
 
@@ -1026,8 +911,7 @@ export function runStoreConformance(
         store = await makeStore();
       } catch (error) {
         store = null;
-        // Keep the probe's graceful-skip contract, but name the reason: a silent skip reads as
-        // "no backend configured" even when the real cause is a provisioning failure.
+        // Name the reason: a silent skip disguises a provisioning failure as "no backend configured".
         unreachable = `backend unreachable: ${error instanceof Error ? error.message : String(error)}`;
       }
     });
@@ -1037,7 +921,6 @@ export function runStoreConformance(
       }
     });
 
-    // Run one conformance body against the live store, or skip when the backend was unreachable.
     const withStore = (
       t: TestContext,
       body: (s: Store) => Promise<void> | void,

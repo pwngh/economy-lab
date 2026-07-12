@@ -10,11 +10,8 @@
  * @license MIT
  */
 
-// Unit tests for the performance harness (scripts/support/harness.ts) — the bench is only trustworthy
-// if its own logic is. Pins the parts a wrong answer would quietly corrupt: config layering, the
-// pool-sizing assertion, the outcome/fault taxonomy, the counter delta math, the latency percentiles,
-// and the retry-pressure instrumentation. DB-touching paths are exercised only for in-memory (always
-// available) and skipped otherwise, matching the house pattern.
+// Unit tests for scripts/support/harness.ts — the bench is only trustworthy if its own logic is.
+// DB-touching paths run in-memory only.
 
 import { describe, test, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -75,7 +72,7 @@ describe('Bench harness: resolveConfig', () => {
   test('an explicit env var overrides the profile it belongs to', () => {
     const cfg = resolveConfig({ BENCH_PROFILE: 'thorough', BENCH_OPS: '300' });
     assert.equal(cfg.profile, 'thorough');
-    assert.equal(cfg.ops, 300); // explicit wins over the profile's 2000
+    assert.equal(cfg.ops, 300);
   });
 
   test('an unknown profile name falls back to default', () => {
@@ -411,7 +408,7 @@ describe('Bench harness: retry-pressure instrumentation (withTransientRetry)', (
     } finally {
       setRetryObserver(prev);
     }
-    assert.equal(calls, 1); // thrown once, never retried
+    assert.equal(calls, 1);
     assert.equal(events.length, 0);
   });
 
@@ -485,6 +482,6 @@ describe('Bench harness: in-memory provisioning + determinism root', () => {
     const first = await run();
     const second = await run();
     assert.equal(first, second);
-    assert.match(first, /^[0-9a-f]{64}$/); // a 32-byte hex digest
+    assert.match(first, /^[0-9a-f]{64}$/);
   });
 });

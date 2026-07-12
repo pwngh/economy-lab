@@ -14,30 +14,16 @@ import assert from 'node:assert/strict';
 
 import { tiliaPayeeStore } from '#src/adapters/tilia-payees.ts';
 import { maybeEdgeTilia } from '#scripts/support/edge-host.ts';
+import { openPgPool } from '#src/engines/pg-driver.ts';
+import { isPostgresUrl } from '#src/env.ts';
 import { testLogger } from '#test/support/capabilities.ts';
 
+import type { PgPoolLike } from '#src/engines/pg-driver.ts';
+
 const DB_URL = process.env.DATABASE_URL ?? '';
-const SKIP = DB_URL.startsWith('postgres')
+const SKIP = isPostgresUrl(DB_URL)
   ? false
   : 'the durable payee store needs a postgres DATABASE_URL';
-
-interface PgPoolLike {
-  query(
-    text: string,
-    values?: readonly unknown[],
-  ): Promise<{ rows: Record<string, unknown>[] }>;
-  on(event: 'error', listener: (error: unknown) => void): unknown;
-  end(): Promise<void>;
-}
-
-interface PgModule {
-  default: {
-    Pool: new (config: {
-      connectionString: string;
-      max?: number;
-    }) => PgPoolLike;
-  };
-}
 
 // One scratch database per test file, mirroring the taskq integration
 // helper: the table name is fixed, so isolation comes from the database.
@@ -46,18 +32,16 @@ async function payeeDatabase(): Promise<{
   pool: PgPoolLike;
   drop(): Promise<void>;
 }> {
-  // @ts-expect-error -- `pg` ships no types; typed at the binding via PgModule, the same pattern
-  // src/engines/postgres.ts uses for its static import.
-  const { default: pg } = (await import('pg')) as unknown as PgModule;
-  const admin = new pg.Pool({ connectionString: DB_URL, max: 1 });
-  admin.on('error', () => undefined);
+  const admin = await openPgPool({ connectionString: DB_URL, max: 1 });
   const name = `tilia_payees_it_${process.pid}`;
   await admin.query(`drop database if exists ${name} with (force)`);
   await admin.query(`create database ${name}`);
   const url = new URL(DB_URL);
   url.pathname = `/${name}`;
-  const pool = new pg.Pool({ connectionString: url.toString(), max: 3 });
-  pool.on('error', () => undefined);
+  const pool = await openPgPool({
+    connectionString: url.toString(),
+    max: 3,
+  });
   return {
     url: url.toString(),
     pool,

@@ -595,8 +595,8 @@ function runClaimContention(
   });
 }
 
-runClaimContention('postgres', adversarialPostgres);
-runClaimContention('mysql', adversarialMysql);
+runClaimContention('postgres', () => adversarialPostgres(process.env));
+runClaimContention('mysql', () => adversarialMysql(process.env));
 
 // --- memory: single-threaded reference (no genuine contention) ---------------------------------
 

@@ -9,53 +9,41 @@
  * @license MIT
  */
 
-// Benchmarks for the economy, built on the shared harness (scripts/support/harness.ts), so a run is
-// standardized, reseeded, provable, portable, and tunable:
+// Benchmarks over the shared harness (scripts/support/harness.ts): submit throughput per backend
+// (sequential and concurrent), integrity cost vs ledger size, and the opt-in fast paths (instance
+// netting, entitlement bitset). Knobs are the BENCH_* env vars — see BENCH_KEYS in harness.ts.
 //
-//   1. Submit throughput per backend, both ways: sequential (one op at a time — latency-bound, each
-//      op pays a full round trip + commit) and concurrent (up to BENCH_CONCURRENCY in flight — on a
-//      durable SQL backend this lets the engine overlap round trips and group-commit many fsyncs into
-//      one, so it is the throughput the engine sustains). The sequential number is not the engine's ceiling.
-//   2. Integrity cost vs ledger size (in-memory). prove() and a checkpoint seal re-walk every posting
-//      from genesis — O(postings) — so both climb with history; checkpoint verify reads only account
-//      heads — O(accounts) — so it stays ~flat. That contrast is why a signed checkpoint, not a full
-//      re-prove, anchors ongoing integrity as history grows.
-//
-// Each SQL backend runs in its own throwaway schema/database, created fresh and
-// dropped on teardown, so a run never inherits another run's rows (a bloated database is measurably
-// slower). Each backend is also proven after its workload — a reported number always comes from a
-// ledger that just passed every invariant — and annotated with its live durability settings, so the
-// reader can see whether the measured commit is as durable as production.
-//
-//   node scripts/bench.ts                          # in-memory + any reachable DB
-//   BENCH_PROFILE=fast node scripts/bench.ts        # quick sample
-//   BENCH_PROFILE=thorough node scripts/bench.ts    # heavy sample
-//   BENCH_BACKENDS=postgres BENCH_OPS=1000 node scripts/bench.ts
+//   node scripts/bench.ts                       # in-memory + any reachable DB
+//   BENCH_PROFILE=fast node scripts/bench.ts    # quick sample
 //   BENCH_OUTPUT=json BENCH_JSON_PATH=bench.json node scripts/bench.ts
-//   make bench-prod                                 # run inside a Linux container vs the compose DBs
-//
-// Knobs (all optional): BENCH_PROFILE, BENCH_MODE, BENCH_GATES, BENCH_OPS, BENCH_REPS,
-// BENCH_WARMUP, BENCH_CONCURRENCY, BENCH_BUDGET_MS, BENCH_BACKENDS, BENCH_OUTPUT, BENCH_JSON_PATH,
-// BENCH_SEED, BENCH_SHARDS, the pool sizing (BENCH_POOL_MAX, BENCH_POOL_HEADROOM,
-// BENCH_CONNS_PER_OP), and the connection URLs BENCH_POSTGRES_URL / BENCH_MYSQL_URL (else
-// DATABASE_URL / MYSQL_TEST_URL). See harness.ts.
+//   make bench-prod                             # Linux container vs the compose DBs
 
 import { sealCheckpoint, reverifyCheckpoint } from '#src/worker/checkpoint.ts';
+import {
+  cachedEntitlements,
+  createReservations,
+  credit as creditLeg,
+  debit as debitLeg,
+  decodeAmount,
+  earned,
+  instanceSession,
+  spendable,
+} from '#src/index.ts';
 import { topUp, spend, requestPayout, credit } from '#test/support/builders.ts';
 import {
   bestMs,
   determinismRoot,
   emitJson,
-  maskUrl,
   measureConcurrent,
   measureSequential,
   ms,
   num,
   printTable,
-  proveEconomyOrReport,
+  proveGate,
   rate,
   resolveConfig,
   tryProvision,
+  urlFor,
 } from '#scripts/support/harness.ts';
 
 import type {
@@ -67,7 +55,8 @@ import type {
 } from '#scripts/support/harness.ts';
 import type { Amount, Economy, Operation } from '#src/index.ts';
 
-const cfg = resolveConfig();
+// The one capture of process.env, and the one parse: everything below reads cfg, never env.
+const cfg = resolveConfig(process.env);
 
 // Per-process tag so ids are unique within a run; with the reseeded throwaway schema/database, that
 // is all the uniqueness a run needs.
@@ -110,13 +99,9 @@ const warmupOpsFor = (poolSize: number): number =>
 
 const poolIdx = (k: number, size: number): number => ((k % size) + size) % size;
 
-// Why pools: real traffic is many independent users transacting at once. Hammering one buyer/one
-// seller measures single-row lock contention, not throughput — at depth every op fights over the
-// same rows, so the rate collapses and MySQL deadlocks. Spreading each kind across a pool of subjects
-// (>= the concurrency) leaves concurrent ops touching disjoint user rows, contending only on the
-// genuinely-shared platform account every posting touches (the funding float for topUp, REVENUE for a
-// sale, the payout reserve for a payout) — the honest concurrency ceiling for this ledger's
-// lock-the-whole-set discipline.
+// Why pools: hammering one buyer/seller measures single-row lock contention, not throughput. A pool
+// of subjects >= the concurrency leaves concurrent ops touching disjoint user rows, contending only
+// on the genuinely-shared platform account every posting touches.
 
 function topUpKind(): Kind {
   return {
@@ -130,9 +115,6 @@ function topUpKind(): Kind {
   };
 }
 
-// spend: a pool of buyers and sellers, round-robin per op. With the pool, concurrent sales contend
-// only on REVENUE (every sale credits the platform fee there), not on one buyer's spendable and one
-// seller's earned.
 function spendKind(poolSize: number): Kind {
   const buyers = Array.from(
     { length: poolSize },
@@ -142,9 +124,7 @@ function spendKind(poolSize: number): Kind {
     { length: poolSize },
     (_, i) => `usr_spc_${tag}_${i}`,
   );
-  // Each buyer covers its share of every timed sale plus the warmup (round-robin), with margin. In
-  // contention mode poolSize is small, so this figure is large and every buyer is hammered — fully
-  // funded on purpose, so the signal is contention (retries/throws), not fund rejections.
+  // Fully funded even in contention mode, so the signal is contention (retries/throws), not fund rejections.
   const perBuyer =
     Math.ceil((timedOps + warmupOpsFor(poolSize)) / poolSize) + 50;
   return {
@@ -168,9 +148,8 @@ function spendKind(poolSize: number): Kind {
   };
 }
 
-// requestPayout: the synchronous reserve step (not the worker settlement) against a pool of sellers'
-// earned balances. Each seller is pre-funded with large sales from one bank buyer; the funding is
-// generous because the exact fee split belongs to the injected pricing policy and is not assumed here.
+// The synchronous reserve step, not the worker settlement. Funding is generous because the exact
+// fee split belongs to the injected pricing policy and is not assumed here.
 function payoutKind(poolSize: number): Kind {
   const bank = `usr_pob_${tag}`;
   const sellers = Array.from(
@@ -209,31 +188,22 @@ function payoutKind(poolSize: number): Kind {
   };
 }
 
-// A `key=count` rendering of a histogram, used for the rejection-reason and throw-class breakdowns.
 const hist = (h: Record<string, number>): string =>
   Object.entries(h)
     .map(([k, v]) => `${k}=${v}`)
     .join(', ');
 
-// Throughput mode spreads ops across >= concurrency subjects so concurrent ops touch disjoint rows
-// (the ledger's ceiling, not single-row contention). Contention mode shrinks the pool so many ops
-// dogpile a few subjects' chains, surfacing the retry/deadlock pressure throughput mode avoids.
+// Contention mode shrinks the pool so many ops dogpile a few subjects' chains; throughput mode
+// spreads them >= the concurrency (see the pool note above).
 function poolSizeForMode(concurrency: number, mode: BenchMode): number {
   if (mode === 'contention') return Math.max(2, Math.floor(concurrency / 4));
   return Math.max(concurrency, 8);
 }
 
-// A small fixed op sequence run on a fresh ledger to fingerprint the engine for the cross-engine
-// determinism check (see determinismRoot). Fixed ids/amounts/keys (no pid tag, no clock dependence) so
-// every engine posts byte-identical entries; a representative cross-section (top-ups, fee-splitting
-// sales, a payout reserve) so a divergence in any path changes the root. Every op commits under both
-// gate modes.
-//
-// The idempotency keys are pinned, overriding the builders' run-random, process-counted ones: at
-// shards > 1 the platform legs route by hashing this key, so every backend must submit identical keys
-// or the same sequence lands on different shard rows and the roots diverge. Constants are safe here
-// where the builders' comment warns they are not — each backend runs in a throwaway schema/database,
-// so a pinned key can never replay a previous run's row as a duplicate.
+// A fixed op sequence to fingerprint the engine for the cross-engine determinism check; every op
+// commits under both gate modes. Idempotency keys are pinned because at shards > 1 the platform
+// legs route by hashing the key — different keys would land on different shard rows and diverge
+// the roots. Pinned keys are safe only because each backend runs in a throwaway schema/database.
 const withKey = (op: Operation, idempotencyKey: string): Operation => ({
   ...op,
   idempotencyKey,
@@ -274,9 +244,6 @@ async function runDeterminismSequence(economy: Economy): Promise<void> {
   );
 }
 
-// One kind's measurement: `seq` is the latency-bound rate (one op at a time); `con` is the full
-// concurrent ConcurrentResult (rate plus the breakdown needed to trust it). measureKind runs setup,
-// warmup, then the two samples.
 type KindRates = {
   name: string;
   seq: number;
@@ -292,8 +259,7 @@ async function measureKind(
   await kind.setup(economy);
   const warm = warmupOpsFor(kind.poolSize);
   for (let i = 0; i < warm; i++) {
-    // Negative-offset indices so warmup ids never collide with the timed ones. (A cold-start stress
-    // mode would skip this on purpose.)
+    // Negative-offset indices so warmup ids never collide with the timed ones.
     await kind.perOp(economy, -1 - i);
   }
   const seq = await measureSequential(cfg, (k) => kind.perOp(economy, k));
@@ -306,9 +272,6 @@ async function measureKind(
   return { name: kind.name, seq, con };
 }
 
-// Print one kind's result as a self-contained block: throughput (seq + con), latency distribution, the
-// committed/rejected/threw taxonomy, retry pressure, and the engine's own deadlock count. In throughput
-// mode a rejection or duplicate is a bug (the workload is fully funded), so it is called out loudly.
 function reportKind(p: Provisioned, r: KindRates): void {
   const c = r.con;
   const lat = c.latency;
@@ -344,6 +307,137 @@ function reportKind(p: Provisioned, r: KindRates): void {
   }
 }
 
+type NettingResult = {
+  movements: number;
+  accepted: number;
+  acceptMs: number;
+  settleMs: number;
+  settleMode: string;
+  settlePostings: number;
+};
+
+// Instance netting (src/netting.ts): N movements into the hash-chained journal, then one settle
+// through clearing. Accepted/sec vs the spend seq rate is the gap the session buys.
+async function measureNetting(p: Provisioned): Promise<NettingResult> {
+  const n = cfg.reps * cfg.ops;
+  const width = 4;
+  const viewers = Array.from({ length: width }, (_, i) => `usr_nv_${tag}_${i}`);
+  const creators = Array.from(
+    { length: width },
+    (_, i) => `usr_nc_${tag}_${i}`,
+  );
+  const perViewer = Math.ceil(n / width) + 50; // movements are 0.50 each; funded with margin
+  for (const viewer of viewers) {
+    await p.economy.submit(
+      topUp({ userId: viewer, amount: credit(`${perViewer}.00`) }),
+    );
+  }
+  const session = instanceSession(
+    { store: p.store, digest: p.workerCtx.digest, clock: p.workerCtx.clock },
+    `sess_${tag}`,
+    { reservations: createReservations() },
+  );
+  const amount = decodeAmount('0.50', 'CREDIT');
+  let accepted = 0;
+  const t0 = performance.now();
+  for (let k = 0; k < n; k++) {
+    const outcome = await session.record({
+      idempotencyKey: `bmv_${tag}_${k}`,
+      legs: [
+        debitLeg(spendable(viewers[k % width]!), amount),
+        creditLeg(earned(creators[k % width]!), amount),
+      ],
+    });
+    if (outcome.status === 'accepted') accepted += 1;
+  }
+  await session.flush(); // acceptance includes the final journal batch commit
+  const acceptMs = performance.now() - t0;
+  const t1 = performance.now();
+  const report = await session.settle();
+  return {
+    movements: n,
+    accepted,
+    acceptMs,
+    settleMs: performance.now() - t1,
+    settleMode: report.mode,
+    settlePostings: report.postings,
+  };
+}
+
+function reportNetting(
+  p: Provisioned,
+  r: NettingResult,
+  spendSeq: number | null,
+): void {
+  const perMv = r.acceptMs / Math.max(1, r.accepted);
+  const perSec = 1000 / perMv;
+  console.warn(
+    `      netting        ${num(r.accepted)} movements accepted in ${ms(r.acceptMs)} ms (${rate(perSec)} /sec, ${ms(perMv)} ms/movement)`,
+  );
+  console.warn(
+    `                     settle → ${r.settlePostings} posting(s) [${r.settleMode}] in ${ms(r.settleMs)} ms` +
+      (spendSeq
+        ? `  · ${(perSec / spendSeq).toFixed(1)}× the spend seq rate`
+        : ''),
+  );
+  if (
+    p.mode === 'throughput' &&
+    (r.accepted !== r.movements || r.settleMode !== 'netted')
+  ) {
+    console.warn(
+      `      ⚠ netting: ${r.movements - r.accepted} rejected / settle mode "${r.settleMode}" under throughput mode — a funding BUG, not contention; investigate`,
+    );
+  }
+}
+
+type BitsetResult = {
+  storeChecks: number;
+  storeMs: number;
+  cachedChecks: number;
+  cachedMs: number;
+};
+
+// Entitlement bitset (src/adapters/entitlement-bitset.ts): the same owns() answered by the raw
+// store vs the warm bitmap through the identical async Store surface, so the warm figure includes
+// the promise machinery a caller pays; the sync core underneath is faster still.
+async function measureBitset(p: Provisioned): Promise<BitsetResult> {
+  const user = `usr_bs_${tag}`;
+  const sku = `sku_bs_${tag}`;
+  await p.store.transaction((unit) => unit.entitlements.grant(user, sku, {}));
+  const storeChecks = 200;
+  const t0 = performance.now();
+  for (let i = 0; i < storeChecks; i++) {
+    await p.store.entitlements.owns(user, sku);
+  }
+  const storeMs = performance.now() - t0;
+  const cached = cachedEntitlements(p.store, { clock: p.workerCtx.clock });
+  await cached.entitlements.owns(user, sku); // the cold read fills the bitmap
+  const cachedChecks = 200_000;
+  const t1 = performance.now();
+  for (let i = 0; i < cachedChecks; i++) {
+    await cached.entitlements.owns(user, sku);
+  }
+  return {
+    storeChecks,
+    storeMs,
+    cachedChecks,
+    cachedMs: performance.now() - t1,
+  };
+}
+
+const bitsetStoreUs = (r: BitsetResult): number =>
+  (r.storeMs * 1000) / r.storeChecks;
+const bitsetCachedNs = (r: BitsetResult): number =>
+  (r.cachedMs * 1e6) / r.cachedChecks;
+
+function reportBitset(r: BitsetResult): void {
+  const storeUs = bitsetStoreUs(r);
+  const cachedNs = bitsetCachedNs(r);
+  console.warn(
+    `      bitset         store owns ${storeUs.toFixed(1)} µs/check · warm bitmap ${cachedNs.toFixed(0)} ns/check (${num(Math.round((storeUs * 1000) / cachedNs))}×)`,
+  );
+}
+
 type BackendResult = {
   backend: string;
   durability: string;
@@ -355,12 +449,13 @@ type BackendResult = {
   connsPerOp: number;
   determinismRoot: string;
   kinds: KindRates[];
+  netting: NettingResult;
+  bitset: BitsetResult;
 };
 
-// Exit non-zero when any backend's prove gate fails, a backend throws mid-run, or the roots disagree — a
-// number over a broken ledger (or a run that completed no backend) must never exit 0. `determinismOk`
-// (did the compared roots agree) and `determinismChecked` (were at least two compared) are separate so
-// the JSON can report agreement honestly: agreed, disagreed, or never checked.
+// Exit non-zero when any prove gate fails, a backend throws mid-run, or the roots disagree.
+// `determinismOk` and `determinismChecked` are separate so the JSON can report agreement honestly:
+// agreed, disagreed, or never checked.
 let anyProveFailed = false;
 let determinismOk = true;
 let determinismChecked = false;
@@ -370,8 +465,7 @@ async function throughputFor(p: Provisioned): Promise<BackendResult> {
   console.warn(
     `    pool ${p.poolMax} conns (${p.connsPerOp}*${p.concurrency} concurrency + headroom) · mode ${p.mode} · gates ${p.gates}`,
   );
-  // Cross-engine determinism fingerprint: run a fixed sequence on the fresh ledger and snapshot its
-  // Merkle root before the workload perturbs it, so every backend's root covers the identical postings.
+  // Snapshot the root before the workload perturbs it, so every backend's root covers identical postings.
   await runDeterminismSequence(p.economy);
   const root = await determinismRoot(p);
 
@@ -382,14 +476,14 @@ async function throughputFor(p: Provisioned): Promise<BackendResult> {
     reportKind(p, r);
     kinds.push(r);
   }
-  // Provability gate: the numbers above came from a ledger that must still pass every invariant. A
-  // failure is loud and flips the process exit code; it never silently passes.
-  const { ok, report } = await proveEconomyOrReport(p.economy);
-  if (ok) {
-    console.warn('      prove          PASS — every invariant holds');
-  } else {
+  const netting = await measureNetting(p);
+  reportNetting(p, netting, kinds.find((k) => k.name === 'spend')?.seq ?? null);
+  const bitset = await measureBitset(p);
+  reportBitset(bitset);
+  // The prove gate also covers the netting settlement just posted; a failure flips the exit code.
+  const ok = await proveGate(p, '      prove          ');
+  if (!ok) {
     anyProveFailed = true;
-    console.warn(`      prove          FAIL — ${JSON.stringify(report)}`);
   }
   return {
     backend: p.label,
@@ -402,6 +496,8 @@ async function throughputFor(p: Provisioned): Promise<BackendResult> {
     connsPerOp: p.connsPerOp,
     determinismRoot: root,
     kinds,
+    netting,
+    bitset,
   };
 }
 
@@ -475,20 +571,15 @@ const results: BackendResult[] = [];
 for (const backend of cfg.backends) {
   console.warn(`  ${backend}: measuring...`);
   if (backend !== 'in-memory') {
-    console.warn(
-      `    connecting to ${maskUrl(backend === 'postgres' ? cfg.urls.postgres : cfg.urls.mysql)}`,
-    );
+    console.warn(`    connecting to ${urlFor(cfg, backend)}`);
   }
   const p = await tryProvision(backend, cfg);
   if (!p) continue;
   try {
     results.push(await throughputFor(p));
   } catch (e) {
-    // Contain a mid-run failure to this backend (e.g. a dropped connection, or a prove-walk that hit
-    // a connection error) so the others' results and the integrity curve below still print. But a
-    // backend that provisioned and then THREW is a failure, not a provisioning skip: fail the run
-    // loudly (exit non-zero) so it can never be mistaken for a clean pass — distinct from tryProvision
-    // returning null for an unreachable backend, which is the intended skip.
+    // Contain the failure so the other backends still run, but a backend that provisioned and then
+    // threw fails the run — distinct from tryProvision's null for an unreachable backend, the intended skip.
     anyProveFailed = true;
     console.warn(
       `    FAILED ${backend}: ${e instanceof Error ? e.message : String(e)}`,
@@ -525,9 +616,6 @@ printTable(
   ]),
 );
 
-// Latency distribution under concurrency, over committed ops only (ms; p99 reads "spend's worst 1% of
-// committed ops"). A fat p99/max beside a healthy p50 is the contention a best-of-N mean would smooth
-// away — the stalls a stress bench exists to expose.
 printTable(
   `Concurrent latency over committed ops — ms (p50 / p99 / max per kind; lower is better)`,
   ['backend', ...kindNames.map((n) => `${n} p50·p99·max`)],
@@ -540,10 +628,35 @@ printTable(
   ]),
 );
 
-// Surface what did NOT commit under concurrency, split by cause — never a blanket "deadlock". Each line
-// names the rejections (data, no money moved), the throws past the retry budget (with the REAL class +
-// driver code), the retries withTransientRetry absorbed, and — authoritatively — the deadlocks the
-// ENGINE itself detected (counter delta). App-side throws are what surfaced; the DB counter is ground truth.
+printTable(
+  'Opt-in fast paths — instance netting and entitlement bitset (lower is better)',
+  [
+    'backend',
+    'accept ms/mv',
+    'accepted/sec',
+    'settle ms · postings',
+    'store owns µs',
+    'bitmap ns',
+    'speedup',
+  ],
+  results.map((r) => {
+    const perMv = r.netting.acceptMs / Math.max(1, r.netting.accepted);
+    const storeUs = bitsetStoreUs(r.bitset);
+    const cachedNs = bitsetCachedNs(r.bitset);
+    return [
+      r.backend,
+      ms(perMv),
+      rate(1000 / perMv),
+      `${ms(r.netting.settleMs)} · ${r.netting.settlePostings}`,
+      storeUs.toFixed(1),
+      cachedNs.toFixed(0),
+      `${num(Math.round((storeUs * 1000) / cachedNs))}×`,
+    ];
+  }),
+);
+
+// Surface what did not commit under concurrency, split by real cause; the engine's own counter
+// delta is ground truth.
 for (const r of results) {
   for (const k of r.kinds) {
     const c = k.con;
@@ -572,10 +685,8 @@ for (const r of results) {
   }
 }
 
-// Cross-engine determinism: the same fixed sequence must reach the same Merkle root on every backend
-// that ran; a mismatch is a real correctness bug, so it is loud and flips the exit code. The reference
-// is in-memory when present, else any backend that ran (so two SQL engines are still compared when
-// in-memory is excluded). Fewer than two backends -> nothing to compare, reported as "not run".
+// A root mismatch is a real correctness bug: loud, and it flips the exit code. The reference is
+// in-memory when present, else any backend that ran, so two SQL engines still compare.
 if (results.length >= 2) {
   determinismChecked = true;
   const reference =
@@ -600,6 +711,18 @@ if (results.length >= 2) {
 } else {
   console.warn(
     `\ncross-engine determinism: not run — fewer than two backends produced a root to compare.`,
+  );
+}
+
+// A backend named in BENCH_REQUIRE that skipped or failed flips the exit code, so partial coverage
+// never reads as a clean pass.
+const missingRequired = cfg.required.filter(
+  (b) => !results.some((r) => r.backend === b),
+);
+if (missingRequired.length > 0) {
+  anyProveFailed = true;
+  console.warn(
+    `\nFAIL: required backend(s) did not complete: ${missingRequired.join(', ')} (BENCH_REQUIRE=${cfg.required.join(',')})`,
   );
 }
 
@@ -642,8 +765,6 @@ await emitJson(cfg, {
     poolHeadroom: cfg.poolHeadroom,
     backends: cfg.backends,
   },
-  // Each backend's `kinds[].con` carries the full taxonomy, latency, retry pressure, and deadlock delta, so
-  // the JSON is as complete as the table.
   throughput: results,
   // Run-level verdicts a CI job can assert on. `provable` requires at least one backend to have completed;
   // `crossEngineDeterministic` is agreed/disagreed, or null when fewer than two backends were compared.
@@ -652,9 +773,7 @@ await emitJson(cfg, {
   integrityCurve: curve,
 });
 
-// Fail loudly: exit non-zero when a prove gate failed, a backend errored mid-run, or the roots
-// disagreed, so a broken (or empty) run can never read as a pass. Exit explicitly since open SQL pools
-// would otherwise keep the event loop alive.
+// Exit explicitly: open SQL pools would otherwise keep the event loop alive.
 if (anyProveFailed) {
   console.warn(
     '\nFAIL: a prove gate, a mid-run backend error, or the cross-engine determinism check did not pass — see above. Exiting non-zero.',

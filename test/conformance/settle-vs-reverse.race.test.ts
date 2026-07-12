@@ -595,5 +595,5 @@ function runSqlRace(
   });
 }
 
-runSqlRace('postgres', adversarialPostgres);
-runSqlRace('mysql', adversarialMysql);
+runSqlRace('postgres', () => adversarialPostgres(process.env));
+runSqlRace('mysql', () => adversarialMysql(process.env));

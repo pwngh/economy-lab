@@ -29,34 +29,18 @@ import {
 } from '#src/db.vendored.ts';
 import { vectors } from '#src/money.vendored.ts';
 import { createMysqlPool } from '#src/engines/mysql.ts';
+import { openPgPool } from '#src/engines/pg-driver.ts';
+import { storeUrls } from '#src/env.ts';
 
 import type { SqlRunner } from '#src/db.vendored.ts';
 
-// Minimal slice of `pg`, which ships no types; typed at the binding below, the same
-// pattern src/engines/postgres.ts and the taskq integration test use.
-interface PgModule {
-  Pool: new (config: { connectionString: string; max: number }) => {
-    query(
-      sql: string,
-      params?: unknown[],
-    ): Promise<{ rows: Record<string, unknown>[] }>;
-    end(): Promise<void>;
-  };
-}
+const { postgres: postgresUrl, mysql: mysqlUrl } = storeUrls(process.env);
 
-const postgresUrl = process.env.DATABASE_URL;
-const mysqlUrl = process.env.MYSQL_TEST_URL;
-
-if (postgresUrl?.startsWith('postgres')) {
+if (postgresUrl) {
   test('postgres implements the money semantics (install + prove)', async () => {
-    // @ts-expect-error -- untyped default import; typed at the binding via PgModule.
-    const { default: pg } = (await import('pg')) as unknown as {
-      default: PgModule;
-    };
-    const pool = new pg.Pool({ connectionString: postgresUrl, max: 2 });
+    const pool = await openPgPool({ connectionString: postgresUrl, max: 2 });
     const runner: SqlRunner = {
-      run: (sql, params) =>
-        pool.query(sql, params ? [...params] : undefined).then((r) => r.rows),
+      run: (sql, params) => pool.query(sql, params).then((r) => r.rows),
     };
     try {
       await installPostgres(runner);

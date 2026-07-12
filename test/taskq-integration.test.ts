@@ -16,6 +16,7 @@ import { createRequire } from 'node:module';
 import { makeEconomy, economyWithStore } from '#test/support/economy.ts';
 import { topUp, credit } from '#test/support/builders.ts';
 import { spendable } from '#src/accounts.ts';
+import { isPostgresUrl } from '#src/env.ts';
 import { relayOutbox } from '#src/worker/relay.ts';
 import {
   fixedClock,
@@ -32,12 +33,9 @@ import {
 import type { WorkerCtx } from '#src/contract.ts';
 import type { Dispatcher, EconomyEvent } from '#src/ports.ts';
 
-// Optional integration with @pwngh/taskq (a Postgres task queue whose enqueue can share
-// a caller transaction). Nothing in the lab depends on it: this suite drives the installed
-// package end to end and skips loudly when it or a Postgres DATABASE_URL is absent. The
-// pairing under test is guarantee composition — @pwngh/taskq delivers a task at least once, `submit`
-// absorbs replays through the caller-owned idempotency key, so the ledger effect lands exactly
-// once. @pwngh/taskq stays host-layer only; the Store port and the internal outbox are untouched.
+// Optional @pwngh/taskq integration; skips loudly when the peer or a Postgres DATABASE_URL is
+// absent. Under test is guarantee composition: taskq delivers a task at least once and `submit`
+// absorbs replays through the idempotency key, so the ledger effect lands exactly once.
 
 const DB_URL = process.env.DATABASE_URL ?? '';
 
@@ -47,7 +45,7 @@ function skipReason(): string | false {
   } catch {
     return '@pwngh/taskq is not installed (optional peer)';
   }
-  if (!DB_URL.startsWith('postgres')) {
+  if (!isPostgresUrl(DB_URL)) {
     return '@pwngh/taskq needs a postgres DATABASE_URL';
   }
   return false;
@@ -205,8 +203,8 @@ describe('taskq integration (optional peer)', { skip: skipReason() }, () => {
               idempotencyKey: task.key ?? task.id,
             };
             await economy.submit(operation);
-            // Crash after the ledger effect landed but before taskq records completion — failure
-            // matrix row 4. The retry replays the same idempotency key and must be absorbed.
+            // Crash after the ledger effect landed but before taskq records completion; the
+            // retry replays the same idempotency key and must be absorbed.
             if (task.attempt === 1) {
               throw new Error('crashed after the effect landed');
             }
@@ -236,9 +234,8 @@ describe('taskq integration (optional peer)', { skip: skipReason() }, () => {
   });
 
   test('the outbox bridges into taskq: relay redelivery collapses to one task, handled once', async () => {
-    // Atomic capture on any engine: the event is written inside the operation's transaction by
-    // the store itself, the relay delivers it at least once, and taskq's pending-scoped dedup on
-    // the event id turns that into exactly one pending task. The dispatcher is the whole bridge.
+    // taskq's pending-scoped dedup on the event id turns at-least-once relay delivery into
+    // exactly one pending task; the dispatcher is the whole bridge.
     const { economy, store } = economyWithStore();
     const taskq = await loadTaskq();
     const { pool, drop } = await taskqDatabase();
@@ -266,8 +263,7 @@ describe('taskq integration (optional peer)', { skip: skipReason() }, () => {
       assert.equal(delivered.length, 1);
       assert.equal(delivered[0].type, 'economy.credits.topped_up');
 
-      // A crashed relay redelivers; the bridge must absorb it. Replay the same event through the
-      // dispatcher and the partial unique index answers with null instead of a second task.
+      // Redelivery: the partial unique index answers null instead of a second task.
       await dispatcher(delivered[0]);
       assert.notEqual(enqueued[0], null);
       assert.deepEqual(enqueued.slice(1), [null]);
@@ -293,9 +289,6 @@ describe('taskq integration (optional peer)', { skip: skipReason() }, () => {
   });
 
   test('direct transactional enqueue: a host write and its task commit or vanish together', async () => {
-    // The composable other half: when the host's own business write lives in the same Postgres
-    // database taskq does, the enqueue is just another insert in that transaction — the outbox
-    // pattern with no relay at all. Rollback erases both; commit lands both.
     const taskq = await loadTaskq();
     const { pool, drop } = await taskqDatabase();
     try {
