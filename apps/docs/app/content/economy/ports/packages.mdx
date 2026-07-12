@@ -1,0 +1,102 @@
+---
+title: 'The packages'
+summary: 'The three sibling packages composed into the lab — @pwngh/money, @pwngh/taskq, and @pwngh/economy-edge — and the seam where each one enters.'
+plain: 'economy-lab is built from three smaller libraries. This page shows the exact line where each one plugs in, and what that line guarantees.'
+order: 5
+status: stable
+sourceRefs:
+  [
+    'src/money.vendored.ts',
+    'src/db.vendored.ts',
+    'scripts/support/edge-host.ts',
+    'scripts/support/taskq-host.ts',
+  ]
+related: ['economy/ports/processor', 'economy/ports/messaging']
+---
+
+The ledger is the product; three sibling packages compose around it.
+[@pwngh/money](https://github.com/pwngh/money) is its arithmetic,
+[@pwngh/taskq](https://github.com/pwngh/taskq) is its follow-through, and
+[@pwngh/economy-edge](https://github.com/pwngh/economy-edge) is its front door. Each enters through
+one seam. This page quotes each seam from the tree, and says what it guarantees.
+
+## @pwngh/money — the arithmetic
+
+The money package is not a dependency; it is vendored. Two single files —
+`src/money.vendored.ts` (bigint minor-unit arithmetic with its conformance vectors embedded) and
+`src/db.vendored.ts` (the same semantics as installable SQL functions) — are copied in verbatim, so
+the lab keeps zero runtime dependencies.
+
+A copy can drift, so the copy is never trusted; it is proven. The SQL engines re-run the package's
+conformance vectors against the live database every boot, beside the schema check:
+
+```ts
+// src/engines/postgres.ts — inside postgresStore's boot, beside assertSchemaCurrent
+await installPostgres(runner);
+assertMoneyConformant(await provePostgres(runner, moneyVectors), 'Postgres');
+```
+
+If the database computes even one vector differently — a rounding mode, a split remainder — boot
+fails before any posting trusts it. The MySQL twin runs in `selectStore` (`src/index.ts`). The
+vendored files themselves are pinned by `test/money.vendored.test.ts`, and
+`test/conformance/money-db.test.ts` proves both engines against the vectors in CI.
+
+## @pwngh/taskq — the follow-through
+
+Committed postings emit events through [the outbox](/economy/ports/messaging/), and the relay
+delivers them at least once. @pwngh/taskq turns those deliveries into durable work: the bridge's
+dispatcher enqueues every event as a task, keyed by the event id:
+
+```ts
+// scripts/support/taskq-host.ts — the bridge's Dispatcher
+const dispatcher: Dispatcher = async (event) => {
+  await taskq.enqueue(
+    pool,
+    'economy.events',
+    {
+      id: event.id,
+      type: event.type,
+      version: event.version,
+      occurredAt: event.occurredAt,
+      subject: event.subject,
+      data: event.data,
+      audience: event.audience,
+    },
+    { key: event.id },
+  );
+  worker.poke();
+};
+```
+
+The `key` makes the enqueue idempotent, so the relay's at-least-once delivery collapses to exactly
+one pending task per event, and consumers inherit @pwngh/taskq's retries instead of writing their own. The
+bridge is opt-in: it runs only when `TASKQ_DATABASE_URL` is set, and the core never sees it.
+
+## @pwngh/economy-edge — the front door
+
+Every payout rail satisfies the same [`Processor` port](/economy/ports/processor/). The edge
+package owns one real rail's dialect — Tilia — and the host swaps it in at composition time:
+
+```ts
+// scripts/main.ts — in both runWorker and runServe, before composing
+const edge = await maybeEdgeTilia(env, log);
+if (edge !== undefined) {
+  ports.processor = edge.processor;
+}
+```
+
+The bridge is off unless `TILIA_CLIENT_ID` is set, and the package is an optional peer dependency:
+without it installed, the lab composes exactly as before. When it is on, the shimmed processor
+replaces the env-selected one, the edge's hosted-KYC directory feeds the
+[`PAYEE_UNVERIFIED` gate](/economy/reference/operations/request-payout/), its wallet balance feeds
+the float-coverage sweep, and `POST /webhooks/tilia` routes the rail's callbacks into the inbox.
+How the shim maps the rail onto the port is owned by
+[the processor page](/economy/ports/processor/).
+
+## Where their own docs live
+
+Each package documents itself; this page only owns how they compose here.
+
+- [@pwngh/money](https://github.com/pwngh/money) — the arithmetic, vendoring, and the vector suite.
+- [@pwngh/taskq](https://github.com/pwngh/taskq) — the queue's engine, operations, and testing story.
+- [@pwngh/economy-edge](https://github.com/pwngh/economy-edge) — the provider boundary and the Tilia rail.
