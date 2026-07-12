@@ -189,15 +189,16 @@ async function foldLedger(
   };
 }
 
-// Folds one account's entries into the per-currency conservation totals and returns that
-// account's balance re-derived from its legs. That returned value is the figure `ledger.balance`
-// should match.
+// Folds one account's legs into the per-currency conservation totals and returns that account's
+// balance re-derived from those legs. That returned value is the figure `ledger.balance` should
+// match.
 //
-// Each entry's amount is already signed the way it changed this account's balance, so summing
-// the amounts reproduces the materialized balance, which is the returned derived total. The
-// conservation total needs the original debit instead, recovered by sign. A debit-normal account
-// (`isDebitNormal`) keeps its sign, and a credit-normal account flips it. Summed across all
-// accounts, these must reach zero per currency.
+// `derivedBalances` hands back per-currency sums already signed the way they changed this
+// account's balance, folded by the store itself, so no legs travel here. Summing them reproduces
+// the materialized balance, which is the returned derived total. The conservation total needs the
+// original debit instead, recovered by sign. A debit-normal account (`isDebitNormal`) keeps its
+// sign, and a credit-normal account flips it. Summed across all accounts, these must reach zero
+// per currency.
 async function accumulateLegs(
   ledger: Ledger,
   account: AccountRef,
@@ -206,11 +207,10 @@ async function accumulateLegs(
 ): Promise<bigint> {
   const sign = isDebitNormal(account) ? 1n : -1n;
   let derivedMinor = 0n;
-  const page = await ledger.statement(account, FULL_RANGE, options);
-  for (const entry of page.entries) {
-    derivedMinor += entry.amount.minor;
-    const rawMinor = entry.amount.minor * sign;
-    const cur = entry.amount.currency;
+  for (const derived of await ledger.derivedBalances(account, options)) {
+    derivedMinor += derived.minor;
+    const rawMinor = derived.minor * sign;
+    const cur = derived.currency;
     signedByCurrency.set(cur, (signedByCurrency.get(cur) ?? 0n) + rawMinor);
   }
   return derivedMinor;
@@ -276,8 +276,3 @@ export function allInvariantsHold(report: ProveReport): boolean {
     report.consistent
   );
 }
-
-const FULL_RANGE = {
-  from: Number.MIN_SAFE_INTEGER,
-  to: Number.MAX_SAFE_INTEGER,
-};

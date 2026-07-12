@@ -17,7 +17,7 @@
  */
 
 import { chainHash } from '#src/ledger.ts';
-import { toHex, fromHex, byCodeUnit } from '#src/bytes.ts';
+import { toHex, fromHex, byCodeUnit, toInt64BE } from '#src/bytes.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
@@ -237,12 +237,66 @@ export async function merkleRoot(
 }
 
 /**
+ * Reduces every account's (head, sum) pair into one sum-carrying Merkle root: each node holds its
+ * subtree's balance sum, and each node's hash commits to (both child hashes + that sum), so the
+ * root hash fixes every head AND every sum at once, and the root sum is as tamper-evident as the
+ * root hash. `sum` per leaf is the account's raw signed leg total (debit positive), which is why
+ * a consistent ledger's root sums to zero: legs net to zero per currency, so they net to zero in
+ * total. Reproducible across machines the same way `merkleRoot` is: leaves sorted by account id,
+ * versioned domain tags, left-then-right hashing, and the sum encoded as fixed-width big-endian
+ * bytes (`toInt64BE`), never as formatted text. With no accounts the root is the genesis value of
+ * 32 zero bytes and a zero sum.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for how the
+ *   root anchors the whole ledger under one signature.
+ */
+export async function merkleSumRoot(
+  digest: Digest,
+  leaves: ReadonlyArray<readonly [AccountRef, string, bigint]>,
+): Promise<{ hash: Uint8Array; sum: bigint }> {
+  const sorted = [...leaves].sort((a, b) => byCodeUnit(a[0], b[0]));
+  let level: Array<{ hash: Uint8Array; sum: bigint }> = [];
+  for (const [account, head, sum] of sorted) {
+    level.push({
+      hash: await digest.hash(sumLeafPreimage(account, head, sum)),
+      sum,
+    });
+  }
+  if (level.length === 0) {
+    return { hash: new Uint8Array(32), sum: 0n };
+  }
+  while (level.length > 1) {
+    const next: Array<{ hash: Uint8Array; sum: bigint }> = [];
+    for (let i = 0; i < level.length; i += 2) {
+      const left = level[i]!;
+      const right = level[i + 1];
+      // On an odd count the last unpaired node carries up unchanged, sum included.
+      next.push(
+        right
+          ? {
+              hash: await digest.hash(sumNodePreimage(left, right)),
+              sum: left.sum + right.sum,
+            }
+          : left,
+      );
+    }
+    level = next;
+  }
+  return level[0]!;
+}
+
+/**
  * Takes a tamper-evident snapshot, called a "checkpoint". It first proves the chain re-derives, then
- * signs the Merkle root over every head and saves it. On a break this throws a non-retryable
- * CHAIN_BROKEN fault and persists nothing, so a signed root never attests to a tampered ledger, and
- * the caller sets the job aside for an operator rather than retrying. The save goes through the
- * checkpoint store, outside the money transaction, so a rolled-back operation cannot undo an
- * already-recorded checkpoint.
+ * signs the sum-carrying Merkle root (v2) over every head and saves it. On a break this throws a
+ * non-retryable CHAIN_BROKEN fault and persists nothing, so a signed root never attests to a
+ * tampered ledger, and the caller sets the job aside for an operator rather than retrying. It also
+ * refuses to sign when the collected sums do not net to zero (a non-retryable LEDGER_UNBALANCED
+ * fault): the chain hashes cover every leg, so an edit breaks CHAIN_BROKEN first — a nonzero total
+ * with intact chains means the write path itself recorded unbalanced money, which is exactly the
+ * enforcement bug this last-resort check exists to catch. The signature covers the root hash and
+ * the root sum together, so neither stored field can be edited under a valid signature. The save
+ * goes through the checkpoint store, outside the money transaction, so a rolled-back operation
+ * cannot undo an already-recorded checkpoint.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for the
  *   checkpoint's role in the tamper-evidence story.
@@ -269,27 +323,39 @@ export async function recordCheckpoint(
       { retryable: false, detail: { firstBreak: report.firstBreak } },
     );
   }
-  const heads = await collectHeadPairs(deps.ledger);
-  const root = await merkleRoot(deps.digest, heads);
-  const signature = await deps.signer.sign(root);
+  const leaves = await collectHeadSums(deps.ledger, options);
+  const root = await merkleSumRoot(deps.digest, leaves);
+  if (root.sum !== 0n) {
+    throw fault(
+      ERROR_CODES.LEDGER_UNBALANCED,
+      'The ledger sums to a nonzero total; refusing to sign a checkpoint over unbalanced books.',
+      { retryable: false, detail: { sum: root.sum.toString() } },
+    );
+  }
+  const signature = await deps.signer.sign(sumRootPayload(root));
   const checkpoint: Checkpoint = {
     id: deps.ids.next('chk'),
-    root: toHex(root),
+    root: toHex(root.hash),
     signature: toHex(signature),
-    count: heads.length,
+    count: leaves.length,
     at: deps.clock.now(),
+    v: 2,
+    sum: root.sum.toString(),
   };
   await deps.checkpoints.put(checkpoint, options);
   return checkpoint;
 }
 
 /**
- * Checks a saved checkpoint against the current ledger: recomputes the Merkle root over current
- * heads, compares it to the stored root, then verifies the signature (accepting still-valid
- * rotated-out keys, so a checkpoint signed before a rotation keeps verifying). Returns false on a
- * normal mismatch; a live head count below the recorded one is one such mismatch, since deleting
- * accounts to shrink the root's coverage is itself tampering. Throws only on malformed stored hex,
- * which is a corrupt row, not a failed verification.
+ * Checks a saved checkpoint against the current ledger: recomputes the root the same way the
+ * checkpoint's version sealed it (v1: hash-only over heads; v2: sum-carrying over heads and
+ * sums), compares it to the stored root, then verifies the signature (accepting still-valid
+ * rotated-out keys, so a checkpoint signed before a rotation keeps verifying). Rows from before
+ * versioning verify forever down the v1 path, byte for byte. Returns false on a normal mismatch;
+ * a live head count below the recorded one is one such mismatch, since deleting accounts to
+ * shrink the root's coverage is itself tampering, and on v2 an edited stored sum is another,
+ * since the signature covers the sum. Throws only on malformed stored hex, which is a corrupt
+ * row, not a failed verification.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for why fewer
  * heads than recorded is itself a tamper signal.
@@ -298,6 +364,24 @@ export async function verifyCheckpoint(
   deps: { ledger: Ledger; digest: Digest; signer: Signer },
   checkpoint: Checkpoint,
 ): Promise<boolean> {
+  if (checkpoint.v === 2) {
+    const leaves = await collectHeadSums(deps.ledger);
+    if (leaves.length < checkpoint.count) {
+      return false;
+    }
+    const root = await merkleSumRoot(deps.digest, leaves);
+    if (toHex(root.hash) !== checkpoint.root) {
+      return false;
+    }
+    if (checkpoint.sum === null || BigInt(checkpoint.sum) !== root.sum) {
+      return false;
+    }
+    return deps.signer.verify(
+      sumRootPayload(root),
+      fromHex(checkpoint.signature),
+    );
+  }
+
   const heads = await collectHeadPairs(deps.ledger);
   if (heads.length < checkpoint.count) {
     return false;
@@ -378,6 +462,56 @@ function nodePreimage(left: Uint8Array, right: Uint8Array): Uint8Array {
   return out;
 }
 
+// The v2 domain tags. New values rather than reusing 0x00/0x01, so a v2 preimage can never
+// collide with a v1 preimage of the same account and head: the two constructions hash into
+// disjoint domains, and old checkpoints keep verifying under the old tags forever.
+const MERKLE_SUM_LEAF = 0x02;
+const MERKLE_SUM_NODE = 0x03;
+
+// Builds a v2 leaf preimage: the 0x02 tag, "account:head:" as UTF-8, then the account's raw leg
+// sum as 8 fixed big-endian bytes. Fixed-width binary rather than decimal text, so the same sum
+// is the same bytes on every runtime with no formatting to disagree on. The trailing ":" before
+// the sum keeps the text part parseable the same way leafPreimage's separator does.
+function sumLeafPreimage(
+  account: AccountRef,
+  head: string,
+  sum: bigint,
+): Uint8Array {
+  const body = ENCODER.encode(`${account}:${head}:`);
+  const out = new Uint8Array(1 + body.length + 8);
+  out[0] = MERKLE_SUM_LEAF;
+  out.set(body, 1);
+  out.set(toInt64BE(sum), 1 + body.length);
+  return out;
+}
+
+// Builds a v2 node preimage: the 0x03 tag, both child hashes left then right, then the combined
+// sum as 8 big-endian bytes. Committing the sum in the hash is the point: a tampered subtree sum
+// breaks every hash above it, so the root's sum is as tamper-evident as the root's hash.
+function sumNodePreimage(
+  left: { hash: Uint8Array; sum: bigint },
+  right: { hash: Uint8Array; sum: bigint },
+): Uint8Array {
+  const out = new Uint8Array(1 + left.hash.length + right.hash.length + 8);
+  out[0] = MERKLE_SUM_NODE;
+  out.set(left.hash, 1);
+  out.set(right.hash, 1 + left.hash.length);
+  out.set(
+    toInt64BE(left.sum + right.sum),
+    1 + left.hash.length + right.hash.length,
+  );
+  return out;
+}
+
+// The bytes a v2 signature covers: the root hash then the root sum. Signing the pair keeps the
+// stored `sum` column inside the signature; a hash-only signature would leave it editable.
+function sumRootPayload(root: { hash: Uint8Array; sum: bigint }): Uint8Array {
+  const out = new Uint8Array(root.hash.length + 8);
+  out.set(root.hash, 0);
+  out.set(toInt64BE(root.sum), root.hash.length);
+  return out;
+}
+
 // Loading all at once is fine: one pair per account, and a checkpoint covers all of them anyway.
 async function collectHeadPairs(
   ledger: Ledger,
@@ -387,6 +521,19 @@ async function collectHeadPairs(
     pairs.push(pair);
   }
   return pairs;
+}
+
+// Loading all at once is fine for the same reason. The store reads each (head, sum) pair in one
+// statement (see Ledger.headSums), so no concurrent posting can tear a head from its sum.
+async function collectHeadSums(
+  ledger: Ledger,
+  options?: Options,
+): Promise<ReadonlyArray<readonly [AccountRef, string, bigint]>> {
+  const leaves: Array<readonly [AccountRef, string, bigint]> = [];
+  for await (const leaf of ledger.headSums(options)) {
+    leaves.push(leaf);
+  }
+  return leaves;
 }
 
 const ENCODER: TextEncoder = new TextEncoder();

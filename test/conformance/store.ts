@@ -25,7 +25,14 @@ import { decodeAmount, toAmount } from '#src/money.ts';
 import { spendable, SYSTEM } from '#src/accounts.ts';
 import { byCodeUnit } from '#src/bytes.ts';
 
-import type { InboxEntry, Saga, SagaState, Store, Unit } from '#src/ports.ts';
+import type {
+  Checkpoint,
+  InboxEntry,
+  Saga,
+  SagaState,
+  Store,
+  Unit,
+} from '#src/ports.ts';
 import type { Operation, Transaction } from '#src/contract.ts';
 
 // Fresh user id per call, so tests don't share balances or hash-chain history.
@@ -123,6 +130,85 @@ async function appendRoundTripsBalance(store: Store): Promise<void> {
     await store.ledger.balance(spendable(userId)),
     toAmount('CREDIT', 500n),
   );
+}
+
+async function derivesBalancesFromLegs(store: Store): Promise<void> {
+  const userId = freshUser();
+
+  await store.transaction(async (unit) => {
+    await fundSpendable(unit, userId, '5.00', `txn_conf_derived_a_${userId}`);
+    await fundSpendable(unit, userId, '2.50', `txn_conf_derived_b_${userId}`);
+  });
+
+  // The legs fold must reproduce the maintained running total exactly.
+  assert.deepEqual(await store.ledger.derivedBalances(spendable(userId)), [
+    toAmount('CREDIT', 750n),
+  ]);
+  assert.deepEqual(await store.ledger.derivedBalances(spendable(userId)), [
+    await store.ledger.balance(spendable(userId)),
+  ]);
+
+  // An account with no legs derives to nothing, not a zero row.
+  assert.deepEqual(
+    await store.ledger.derivedBalances(spendable(freshUser())),
+    [],
+  );
+}
+
+async function pairsHeadsWithRawSums(store: Store): Promise<void> {
+  const userId = freshUser();
+
+  await store.transaction(async (unit) => {
+    await fundSpendable(unit, userId, '5.00', `txn_conf_headsum_a_${userId}`);
+    await fundSpendable(unit, userId, '2.50', `txn_conf_headsum_b_${userId}`);
+  });
+
+  const heads = new Map<string, string>();
+  for await (const [account, head] of store.ledger.heads()) {
+    heads.set(account, head);
+  }
+  let found = 0;
+  for await (const [account, head, sum] of store.ledger.headSums()) {
+    // Every headSums row must carry the same head heads() reports for that account.
+    assert.equal(head, heads.get(account));
+    if (account === spendable(userId)) {
+      found += 1;
+      // Raw means the leg sign convention (debit positive): two credit legs of 500 and 250
+      // sum to -750, not the +750 the natural balance reads.
+      assert.equal(sum, -750n);
+    }
+  }
+  assert.equal(found, 1);
+}
+
+async function roundTripsCheckpointRows(store: Store): Promise<void> {
+  // A v1-shaped row (pre-versioning: no sum) and a v2 row, in order. `latest` must return the
+  // most recently put row, decoded field-for-field — including `v` and `sum`, which the SQL
+  // engines carry in real columns.
+  const v1: Checkpoint = {
+    id: 'chk_conf_v1',
+    root: 'a'.repeat(64),
+    signature: 'bb'.repeat(32),
+    count: 2,
+    at: 1_000,
+    v: 1,
+    sum: null,
+  };
+  const v2: Checkpoint = {
+    id: 'chk_conf_v2',
+    root: 'c'.repeat(64),
+    signature: 'dd'.repeat(32),
+    count: 3,
+    at: 2_000,
+    v: 2,
+    sum: '0',
+  };
+
+  await store.checkpoints.put(v1);
+  assert.deepEqual(await store.checkpoints.latest(), v1);
+
+  await store.checkpoints.put(v2);
+  assert.deepEqual(await store.checkpoints.latest(), v2);
 }
 
 async function commitsDurablyAndRollsBack(store: Store): Promise<void> {
@@ -834,6 +920,12 @@ export function runStoreConformance(
 
     test('appends a posting and round-trips the balance as a bigint Amount', (t) =>
       withStore(t, appendRoundTripsBalance));
+    test('re-derives per-currency balances from the legs alone', (t) =>
+      withStore(t, derivesBalancesFromLegs));
+    test('pairs every chain head with its raw leg sum', (t) =>
+      withStore(t, pairsHeadsWithRawSums));
+    test('round-trips v1 and v2 checkpoint rows through the store', (t) =>
+      withStore(t, roundTripsCheckpointRows));
     test('commits a transaction durably and leaves no trace when one throws', (t) =>
       withStore(t, commitsDurablyAndRollsBack));
     test('claims an idempotency key once and replays the recorded transaction', (t) =>

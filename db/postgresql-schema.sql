@@ -80,7 +80,10 @@ create table legs (
 -- Serves the maturity tail's `where account_id = ? order by id desc limit n` (timelineOf): legs.id is a
 -- bigserial in commit order, so ordering by it gives FIFO without a sort. Leading account_id also covers
 -- plain account_id lookups, so this replaces a bare legs(account_id) index rather than adding to it.
-create index legs_account_idx on legs (account_id, id);
+-- INCLUDE carries currency and amount as non-key payload, so the prover's per-account fold
+-- (sum(amount) group by currency, derivedBalancesOf) is an index-only scan; the key itself stays
+-- (account_id, id). MySQL has no INCLUDE, so its mirror appends the two as trailing key parts.
+create index legs_account_idx on legs (account_id, id) include (currency, amount);
 -- Serves loads of a posting's legs by id: the chain recompute re-reads each stored posting's legs
 -- to re-derive its hash.
 create index legs_posting_idx on legs (posting_id);
@@ -345,10 +348,12 @@ create index trust_attempts_subject_at_idx on trust_attempts (subject, at);
 -- ============================================================================
 create table checkpoints (
   id         text        primary key,                       -- chk_<uuid>
-  root       text        not null,                          -- lowercase hex Merkle root
-  signature  text        not null,                          -- lowercase hex
+  root       text        not null,                          -- lowercase hex Merkle root (v2: over hashes and sums)
+  signature  text        not null,                          -- lowercase hex (v1: over the root; v2: over root and sum)
   count      bigint      not null,                          -- how many account hashes this root covers
   at         bigint      not null,
+  v          smallint    not null default 1,                -- preimage construction; pre-versioning rows are 1
+  sum        text,                                          -- signed decimal minor-unit sum under a v2 root; null on v1 rows
   seq        bigserial   unique,
   created_at timestamptz not null default now()
 );

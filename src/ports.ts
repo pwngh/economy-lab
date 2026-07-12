@@ -251,6 +251,17 @@ export interface Ledger {
   ): Promise<Statement>;
 
   /**
+   * Returns the account's balance re-derived from its legs, one Amount per currency present,
+   * empty when the account has no legs. Unlike `balance` (the maintained running total, one
+   * read), this folds the legs themselves — server-side on SQL, so the integrity prover can
+   * compare the derived figure against the cached one without shipping every leg over the wire.
+   */
+  derivedBalances(
+    account: AccountRef,
+    options?: Options,
+  ): Promise<ReadonlyArray<Amount>>;
+
+  /**
    * Streams the account's settlement lots. Each lot is a chunk of funds from a single top-up,
    * tagged with the date it becomes eligible to be paid out (see {@link Lot}). Lots stream one at a
    * time so a long history doesn't have to fit in memory. `options` bounds the read so a caller
@@ -264,6 +275,18 @@ export interface Ledger {
    * account's tamper-evident chain.
    */
   heads(): AsyncIterable<readonly [AccountRef, string]>;
+
+  /**
+   * Streams every account with its current chain-head hash and its raw signed leg sum in minor
+   * units (debit positive — the leg sign convention, not the account's natural side). The sum
+   * feeds the v2 checkpoint's sum-carrying Merkle leaves, where conservation makes the whole
+   * ledger's total zero. SQL engines read heads and sums in ONE statement, so the pair can never
+   * be torn by a concurrent posting: a posting writes its chain links and legs in one
+   * transaction, and a single statement sees both or neither.
+   */
+  headSums(
+    options?: Options,
+  ): AsyncIterable<readonly [AccountRef, string, bigint]>;
 
   /**
    * Streams every account that has a cached running-balance row, one at a time (SQL:
@@ -1056,6 +1079,12 @@ export interface Attempt {
  * the snapshot covers every account at once. Meant to be anchored outside this system for
  * independent proof.
  *
+ * Version 2 roots carry balance sums up the tree alongside the hashes (each node's hash commits
+ * to its children's hashes AND their summed balances), so the one signature also attests that
+ * every account's raw leg sums net to zero — conservation at seal time. The signature covers the
+ * root hash and the root sum together. Version 1 rows predate the sums and verify forever under
+ * the original hash-only construction.
+ *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for the
  * hash chain and signed-checkpoint construction.
  */
@@ -1063,10 +1092,10 @@ export interface Checkpoint {
   /** Unique checkpoint id, of the form chk_<uuid>. */
   id: string;
 
-  /** The Merkle root over all account heads, as lowercase hex. */
+  /** The Merkle root over all account heads (v2: heads and sums), as lowercase hex. */
   root: string;
 
-  /** The signature over `root`, as lowercase hex. */
+  /** The signature (v1: over `root`; v2: over `root` and the 8-byte root sum), as lowercase hex. */
   signature: string;
 
   /** How many account heads the root covers. */
@@ -1074,6 +1103,16 @@ export interface Checkpoint {
 
   /** When the snapshot was taken, in epoch milliseconds. */
   at: number;
+
+  /** Preimage construction this row was sealed under. Rows from before versioning decode as 1. */
+  v: 1 | 2;
+
+  /**
+   * The root's balance sum in minor units as a signed decimal string (JSON and the row can't
+   * carry a bigint), or null on v1 rows. Zero on every honestly sealed v2 row: the seal refuses
+   * to sign a ledger whose raw leg sums do not net to zero.
+   */
+  sum: string | null;
 }
 
 /**

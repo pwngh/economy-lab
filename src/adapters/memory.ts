@@ -385,6 +385,8 @@ function createLedgerStore(deps: {
     statement: async (account, range) =>
       buildStatement(state.log, account, range),
 
+    derivedBalances: async (account) => derivedBalancesOf(state.log, account),
+
     timeline: (account, options) => timelineOf(state, account, options),
 
     heads: async function* () {
@@ -394,6 +396,24 @@ function createLedgerStore(deps: {
         byCodeUnit(a[0], b[0]),
       )) {
         yield [account, head] as const;
+      }
+    },
+
+    // Heads paired with each account's raw signed leg sum, for the v2 checkpoint's sum leaves.
+    // Raw means as posted (debit positive), not the account's natural side, so all accounts
+    // together net to zero. The store is single-threaded, so one pass over the log is the same
+    // consistent snapshot the SQL engines get from their one-statement read.
+    headSums: async function* () {
+      const raw = new Map<AccountRef, bigint>();
+      for (const row of state.log) {
+        for (const leg of row.legs) {
+          raw.set(leg.account, (raw.get(leg.account) ?? 0n) + leg.amount.minor);
+        }
+      }
+      for (const [account, head] of [...state.heads].sort((a, b) =>
+        byCodeUnit(a[0], b[0]),
+      )) {
+        yield [account, head, raw.get(account) ?? 0n] as const;
       }
     },
 
@@ -446,6 +466,31 @@ function buildStatement(
     }
   }
   return { account, entries, cursor: null };
+}
+
+// Re-derives an account's balance from its legs, one amount per currency present. This is the fold
+// `balance` maintains incrementally, recomputed from scratch, so the integrity prover can compare
+// the two. Sorted by currency so every engine returns the same order.
+function derivedBalancesOf(
+  log: ReadonlyArray<StoredPosting>,
+  account: AccountRef,
+): Amount[] {
+  const byCurrency = new Map<Amount['currency'], bigint>();
+  for (const row of log) {
+    for (const leg of row.legs) {
+      if (leg.account !== account) {
+        continue;
+      }
+      const delta = balanceDelta(leg);
+      byCurrency.set(
+        delta.currency,
+        (byCurrency.get(delta.currency) ?? 0n) + delta.minor,
+      );
+    }
+  }
+  return [...byCurrency]
+    .sort((a, b) => byCodeUnit(a[0], b[0]))
+    .map(([cur, minor]) => toAmount(cur, minor));
 }
 
 // Streams this account's incoming funds as lots for FIFO settlement, one lot per posting entry that

@@ -66,6 +66,27 @@ export function fromHex(hex: string): Uint8Array {
 }
 
 /**
+ * Encodes a signed bigint as 8 bytes, big-endian two's complement.
+ *
+ * The sum-carrying checkpoint preimages (see chain.ts) hash balance sums, and a hash needs the
+ * same bytes on every runtime: fixed width, fixed byte order, no decimal formatting. Throws when
+ * the value falls outside the signed 64-bit range, the same bound the schema's BIGINT columns
+ * declare — `DataView.setBigInt64` would silently wrap, and a wrapped sum must never reach a hash.
+ */
+export function toInt64BE(value: bigint): Uint8Array {
+  if (value < -(2n ** 63n) || value >= 2n ** 63n) {
+    throw fault(
+      ERROR_CODES.AMOUNT_OVERFLOW,
+      'Value does not fit in a signed 64-bit integer.',
+      { detail: { value: value.toString() } },
+    );
+  }
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setBigInt64(0, value);
+  return bytes;
+}
+
+/**
  * Orders two strings by raw UTF-16 character codes, returning -1, 0, or 1 like a sort comparator.
  *
  * Character-code order through `<` and `>` is identical across runtimes and locales, unlike

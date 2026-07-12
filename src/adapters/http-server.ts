@@ -112,9 +112,9 @@ async function ledgerRoute(
   return ledgerReadRoute(ledger, method, body);
 }
 
-// Handles the remaining ledger reads, split out to keep each function short. `statement` returns
-// one page. `heads`, `timeline`, `lineage`, and `list` stream rows one at a time, so each one
-// collects into an array here.
+// Handles the remaining ledger reads, split out to keep each function short. `statement` and
+// `derivedBalances` each return one page. `heads`, `timeline`, `lineage`, and `list` stream rows
+// one at a time, so each one collects into an array here.
 async function ledgerReadRoute(
   ledger: Store['ledger'],
   method: string,
@@ -125,8 +125,19 @@ async function ledgerReadRoute(
     const statement = await ledger.statement(body.account as AccountRef, range);
     return { ...statement, entries: statement.entries.map(encodeEntry) };
   }
+  if (method === 'derivedBalances') {
+    const derived = await ledger.derivedBalances(body.account as AccountRef);
+    return derived.map((amount) => encodeWire.amount(amount));
+  }
   if (method === 'heads') {
     return collect(ledger.heads(), (head) => head as unknown);
+  }
+  if (method === 'headSums') {
+    // The bigint sum travels as a decimal string; the client re-widens it.
+    return collect(
+      ledger.headSums(),
+      ([account, head, sum]) => [account, head, sum.toString()] as unknown,
+    );
   }
   if (method === 'balanceAccounts') {
     return collect(ledger.balanceAccounts(), (account) => account as unknown);

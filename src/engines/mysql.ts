@@ -407,6 +407,8 @@ function createLedgerStore(deps: ExecDeps): Ledger {
     statement: async (account, range) =>
       buildStatement(deps.exec, account, range),
 
+    derivedBalances: async (account) => derivedBalancesOf(deps.exec, account),
+
     timeline: (account, options) => timelineOf(deps.exec, account, options),
 
     heads: async function* () {
@@ -430,6 +432,8 @@ function createLedgerStore(deps: ExecDeps): Ledger {
         yield [row.account_id as AccountRef, row.hash as string] as const;
       }
     },
+
+    headSums: () => headSumsOf(deps.exec),
 
     balanceAccounts: async function* () {
       // The seeded house-account placeholder (genesis head, zero balance, planted so the first lock has a
@@ -488,6 +492,66 @@ async function buildStatement(
     postedAt: Number(row.posted_at),
   }));
   return { account, entries, cursor: null };
+}
+
+// The heads query joined with per-account raw leg sums, in ONE statement on purpose: a posting
+// writes its chain link and its legs in one transaction, and a single statement reads one
+// consistent snapshot, so a head can never be paired with a sum it didn't commit with. Raw means
+// as posted (debit positive); SUM over BIGINT returns DECIMAL as a string, readMinor turns it
+// back into a bigint.
+async function* headSumsOf(
+  exec: MysqlExecutor,
+): AsyncIterable<readonly [AccountRef, string, bigint]> {
+  const result = await rows(
+    exec,
+    `SELECT c.account_id, c.hash, s.raw FROM chain_links c
+       JOIN postings p ON p.id = c.posting_id
+       JOIN (
+         SELECT c2.account_id AS account_id, MAX(p2.seq) AS max_seq
+           FROM chain_links c2
+           JOIN postings p2 ON p2.id = c2.posting_id
+          GROUP BY c2.account_id
+       ) tip ON tip.account_id = c.account_id AND tip.max_seq = p.seq
+       JOIN (
+         SELECT account_id, SUM(amount) AS raw FROM legs GROUP BY account_id
+       ) s ON s.account_id = c.account_id`,
+  );
+  result.sort((a, b) =>
+    byCodeUnit(a.account_id as string, b.account_id as string),
+  );
+  for (const row of result) {
+    yield [
+      row.account_id as AccountRef,
+      row.hash as string,
+      readMinor(row.raw),
+    ] as const;
+  }
+}
+
+// Re-derives an account's balance from its legs, one amount per currency, folded by the server so
+// no legs travel over the wire: `legs_account_idx` carries currency and amount, so this is one
+// index-only scan. SUM over a BIGINT column returns DECIMAL, which the driver hands over as a
+// string; readMinor turns it back into a bigint. `balanceDelta` applies the account's sign rule to
+// the summed figure — the sum of signed deltas equals the delta of the sum.
+async function derivedBalancesOf(
+  exec: MysqlExecutor,
+  account: AccountRef,
+): Promise<Amount[]> {
+  const result = await rows(
+    exec,
+    `SELECT currency, SUM(amount) AS minor FROM legs
+      WHERE account_id = ? GROUP BY currency ORDER BY currency`,
+    [account],
+  );
+  return result.map((row) =>
+    balanceDelta({
+      account,
+      amount: toAmount(
+        row.currency as Amount['currency'],
+        readMinor(row.minor),
+      ),
+    }),
+  );
 }
 
 // Streams an account's incoming funds as dated lots (one per posting that increased the balance,
@@ -1421,14 +1485,16 @@ function createCheckpointStore(pool: MysqlPool): CheckpointStore {
     put: async (checkpoint) => {
       await rows(
         pool,
-        `INSERT INTO checkpoints (id, root, signature, count, at)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO checkpoints (id, root, signature, count, at, v, sum)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
           checkpoint.id,
           checkpoint.root,
           checkpoint.signature,
           checkpoint.count,
           checkpoint.at,
+          checkpoint.v,
+          checkpoint.sum,
         ],
       );
     },

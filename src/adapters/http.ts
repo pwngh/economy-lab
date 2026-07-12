@@ -156,9 +156,19 @@ function sessionLedger(
       decodeWire.statement(
         await call(transport, at('statement'), { account, range }, options),
       ),
+    derivedBalances: async (account, options) =>
+      (
+        (await call(
+          transport,
+          at('derivedBalances'),
+          { account },
+          options,
+        )) as unknown[]
+      ).map((row) => decodeWire.amount(row)),
     timeline: (account, options) =>
       streamLots(transport, account, session, options),
     heads: () => streamHeads(transport, session),
+    headSums: () => streamHeadSums(transport, session),
     balanceAccounts: (options) =>
       streamBalanceAccounts(transport, session, options),
     lineage: (account, options) =>
@@ -182,6 +192,22 @@ async function* streamHeads(
   )) as Array<[string, string]>;
   for (const [account, head] of rows) {
     yield [account as AccountRef, head] as const;
+  }
+}
+
+// Streams each account with its head hash and raw signed leg sum, for the v2 checkpoint's sum
+// leaves. The sum travels as a decimal string (JSON can't carry a bigint) and is re-widened here.
+async function* streamHeadSums(
+  transport: { fetch: FetchLike; baseUrl: string },
+  session: string,
+): AsyncIterable<readonly [AccountRef, string, bigint]> {
+  const rows = (await call(
+    transport,
+    `/tx/${session}/ledger/headSums`,
+    {},
+  )) as Array<[string, string, string]>;
+  for (const [account, head, sum] of rows) {
+    yield [account as AccountRef, head, BigInt(sum)] as const;
   }
 }
 

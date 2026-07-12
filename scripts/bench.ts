@@ -620,12 +620,15 @@ console.warn(
   'prove() and seal re-walk every posting from genesis — O(postings) — so both climb',
 );
 console.warn(
-  'with history. verify reads only account heads — O(accounts) — so it stays ~flat.',
+  'with history. verify recomputes the v2 sum root from the legs — O(legs), one index-only',
 );
 console.warn(
-  'A signed checkpoint verifies in O(accounts), so it anchors ongoing integrity where a',
+  'aggregate — so it grows linearly too, by design: the sum check attests the legs, not the',
 );
-console.warn('full re-prove — O(postings) — cannot keep up as history grows.');
+console.warn(
+  'balance cache. It still beats a full re-prove (no re-hashing of every link), which is what',
+);
+console.warn('cannot keep up as history grows.');
 
 await emitJson(cfg, {
   config: {

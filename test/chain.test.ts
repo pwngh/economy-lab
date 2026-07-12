@@ -17,6 +17,7 @@ import {
   advanceHeads,
   proveChain,
   merkleRoot,
+  merkleSumRoot,
   recordCheckpoint,
   verifyCheckpoint,
 } from '#src/chain.ts';
@@ -307,12 +308,18 @@ async function recordedRootEqualsTheDirectMerkleRoot(): Promise<void> {
     clock: fixedClock(0),
     ids: sequentialIds(),
   });
-  const heads: Array<readonly [AccountRef, string]> = [];
-  for await (const pair of store.ledger.heads()) {
-    heads.push(pair);
+  const leaves: Array<readonly [AccountRef, string, bigint]> = [];
+  for await (const leaf of store.ledger.headSums()) {
+    leaves.push(leaf);
   }
+  const direct = await merkleSumRoot(digest, leaves);
 
-  assert.equal(checkpoint.root, toHex(await merkleRoot(digest, heads)));
+  assert.equal(checkpoint.root, toHex(direct.hash));
+  assert.equal(checkpoint.v, 2);
+  // The two seeded legs are +500/-500 raw, so the whole ledger's sum nets to zero — the figure
+  // the seal signed alongside the root.
+  assert.equal(direct.sum, 0n);
+  assert.equal(checkpoint.sum, '0');
 }
 
 async function verifiesAFreshlyRecordedCheckpoint(): Promise<void> {
@@ -450,6 +457,165 @@ async function separatesLeafAndNodeHashDomains(): Promise<void> {
   assert.deepEqual(await merkleRoot(digest, two), await digest.hash(node));
 }
 
+// --- The sum-carrying v2 checkpoint -------------------------------------------------
+
+async function separatesTheSumDomainsFromTheV1Domains(): Promise<void> {
+  // The v2 leaves hash under their own tags (0x02/0x03), so the same accounts and heads produce
+  // a v2 root unrelated to the v1 root — a v1 preimage can never be replayed as a v2 one.
+  const { store, digest } = await populatedStore();
+  const heads: Array<readonly [AccountRef, string]> = [];
+  for await (const pair of store.ledger.heads()) {
+    heads.push(pair);
+  }
+  const leaves: Array<readonly [AccountRef, string, bigint]> = [];
+  for await (const leaf of store.ledger.headSums()) {
+    leaves.push(leaf);
+  }
+
+  const v1 = await merkleRoot(digest, heads);
+  const v2 = await merkleSumRoot(digest, leaves);
+
+  assert.notEqual(toHex(v2.hash), toHex(v1));
+}
+
+async function changesTheV2RootWhenAnyLeafSumChanges(): Promise<void> {
+  // The node hashes commit to the child sums, so editing one leaf's sum — heads untouched —
+  // must change the root hash, not just the root sum. That is what makes the sum tamper-evident.
+  const { store, digest } = await populatedStore();
+  const leaves: Array<readonly [AccountRef, string, bigint]> = [];
+  for await (const leaf of store.ledger.headSums()) {
+    leaves.push(leaf);
+  }
+  const honest = await merkleSumRoot(digest, leaves);
+
+  const edited = leaves.map((leaf, i) =>
+    i === 0 ? ([leaf[0], leaf[1], leaf[2] + 1n] as const) : leaf,
+  );
+  const tampered = await merkleSumRoot(digest, edited);
+
+  assert.notEqual(toHex(tampered.hash), toHex(honest.hash));
+  assert.equal(tampered.sum, honest.sum + 1n);
+}
+
+async function refusesToSignANonzeroSumAndWritesNothing(): Promise<void> {
+  // The chains are healthy (proveChain passes), but the reported sums do not net to zero — the
+  // shape of a write path that recorded unbalanced money. The seal must refuse to attest it and
+  // must persist nothing.
+  const { store } = await populatedStore();
+  const digest = seededDigest(1);
+  const checkpoints = captureCheckpoints();
+  const lying = {
+    ...store.ledger,
+    headSums: async function* () {
+      for await (const [account, head] of store.ledger.heads()) {
+        yield [account, head, 5n] as const; // every account claims +5 — total is nonzero
+      }
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      recordCheckpoint({
+        ledger: lying,
+        checkpoints,
+        digest,
+        signer: seededSigner(1),
+        clock: fixedClock(0),
+        ids: sequentialIds(),
+      }),
+    (error: unknown) =>
+      error instanceof EconomyError && error.code === 'LEDGER.UNBALANCED',
+  );
+  assert.equal(checkpoints.rows(), 0);
+}
+
+async function stillVerifiesAStoredV1Checkpoint(): Promise<void> {
+  // Rows sealed before the sum-carrying construction verify forever down the v1 path. Build one
+  // the way the old seal did — hash-only root, signature over the root alone — and check the
+  // dispatch still accepts it, then still rejects it once the ledger moves.
+  const { store, digest } = await populatedStore();
+  const signer = seededSigner(1);
+  const heads: Array<readonly [AccountRef, string]> = [];
+  for await (const pair of store.ledger.heads()) {
+    heads.push(pair);
+  }
+  const root = await merkleRoot(digest, heads);
+  const checkpoint = {
+    id: 'chk_v1_row',
+    root: toHex(root),
+    signature: toHex(await signer.sign(root)),
+    count: heads.length,
+    at: 0,
+    v: 1 as const,
+    sum: null,
+  };
+
+  assert.equal(
+    await verifyCheckpoint(
+      { ledger: store.ledger, digest, signer },
+      checkpoint,
+    ),
+    true,
+  );
+
+  await store.transaction((unit) =>
+    postEntry(unit.ledger, balancedPosting('txn_after_v1', 'usr_a')),
+  );
+  assert.equal(
+    await verifyCheckpoint(
+      { ledger: store.ledger, digest, signer },
+      checkpoint,
+    ),
+    false,
+  );
+}
+
+async function rejectsAV2CheckpointWithAnEditedSum(): Promise<void> {
+  // The signature covers root and sum together, and verify recomputes the sum from the ledger.
+  // Editing the stored sum column alone must fail verification even with root and signature
+  // left intact.
+  const { store } = await populatedStore();
+  const digest = seededDigest(1);
+  const signer = seededSigner(1);
+  const checkpoint = await recordCheckpoint({
+    ledger: store.ledger,
+    checkpoints: captureCheckpoints(),
+    digest,
+    signer,
+    clock: fixedClock(0),
+    ids: sequentialIds(),
+  });
+
+  const edited = { ...checkpoint, sum: '1' };
+
+  assert.equal(
+    await verifyCheckpoint({ ledger: store.ledger, digest, signer }, edited),
+    false,
+  );
+}
+
+async function producesTheSameV2RootAcrossIndependentStores(): Promise<void> {
+  // Two stores built from the same seed must seal byte-identical v2 checkpoints — the
+  // cross-runtime determinism the fixed-width sum encoding exists for.
+  const sealed: string[] = [];
+  for (let i = 0; i < 2; i++) {
+    const { store, digest } = await populatedStore();
+    const checkpoint = await recordCheckpoint({
+      ledger: store.ledger,
+      checkpoints: captureCheckpoints(),
+      digest,
+      signer: seededSigner(1),
+      clock: fixedClock(0),
+      ids: sequentialIds(),
+    });
+    assert.equal(checkpoint.v, 2);
+    assert.equal(checkpoint.sum, '0');
+    sealed.push(checkpoint.root);
+  }
+
+  assert.equal(sealed[0], sealed[1]);
+}
+
 describe('Chain', () => {
   test('advances one head per distinct account in a posting', () =>
     advancesOneHeadPerDistinctAccount());
@@ -489,4 +655,17 @@ describe('Chain', () => {
   test('rejects a forged signature', () => rejectsAForgedSignature());
   test('verifies a checkpoint signed under a rotated-out key', () =>
     verifiesAcrossAKeyRotation());
+
+  test('separates the v2 sum domains from the v1 domains', () =>
+    separatesTheSumDomainsFromTheV1Domains());
+  test('changes the v2 root when any leaf sum changes', () =>
+    changesTheV2RootWhenAnyLeafSumChanges());
+  test('refuses to sign a nonzero ledger sum and writes nothing', () =>
+    refusesToSignANonzeroSumAndWritesNothing());
+  test('still verifies a stored v1 checkpoint', () =>
+    stillVerifiesAStoredV1Checkpoint());
+  test('rejects a v2 checkpoint whose stored sum was edited', () =>
+    rejectsAV2CheckpointWithAnEditedSum());
+  test('produces the same v2 root across independent stores', () =>
+    producesTheSameV2RootAcrossIndependentStores());
 });

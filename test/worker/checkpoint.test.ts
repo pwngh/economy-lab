@@ -241,25 +241,28 @@ async function mutateLedger(store: Store, user: string): Promise<void> {
 }
 
 // Wraps a store so its ledger reports only the first `keep` account heads, as if the rest were
-// deleted. Re-verification recomputes the root over whatever heads it sees, so a root over this
-// shorter list still matches a checkpoint sealed over the same shorter list. The separate count
-// check is what catches missing accounts: it requires the live head count to be at least the count
-// the checkpoint recorded.
+// deleted — from both head reads, since a deleted account would vanish from `heads` and
+// `headSums` alike. Re-verification recomputes the root over whatever leaves it sees, so a root
+// over this shorter list still matches a checkpoint sealed over the same shorter list. The
+// separate count check is what catches missing accounts: it requires the live head count to be
+// at least the count the checkpoint recorded.
 function withTruncatedHeads(store: Store, keep: number): Store {
+  async function* firstN<T>(source: AsyncIterable<T>): AsyncIterable<T> {
+    let seen = 0;
+    for await (const row of source) {
+      if (seen >= keep) {
+        return;
+      }
+      seen += 1;
+      yield row;
+    }
+  }
   return {
     ...store,
     ledger: {
       ...store.ledger,
-      heads: async function* () {
-        let seen = 0;
-        for await (const pair of store.ledger.heads()) {
-          if (seen >= keep) {
-            return;
-          }
-          seen += 1;
-          yield pair;
-        }
-      },
+      heads: () => firstN(store.ledger.heads()),
+      headSums: () => firstN(store.ledger.headSums()),
     },
   };
 }
@@ -333,6 +336,19 @@ async function verifiesThePriorCheckpointBeforeSealingAFreshOne(): Promise<void>
 async function flagsAMismatchWhenHeadsAreTruncated(): Promise<void> {
   const { store, digest } = await populatedStore();
   const ctx = workerCtx(digest);
+  // Post the seed's exact opposite so every account's raw leg sum nets to zero on its own. The
+  // seal refuses a nonzero total, so a one-account subset must itself be balanced for the
+  // truncated seal below to go through.
+  await store.transaction((unit) =>
+    postEntry(unit.ledger, {
+      txnId: 'txn_unseed',
+      legs: [
+        debit(spendable('usr_a'), toAmount('CREDIT', 500n)),
+        credit(SYSTEM.REVENUE, toAmount('CREDIT', 500n)),
+      ],
+      meta: { kind: 'test', source: 'card' },
+    }),
+  );
   // Seal while the store reports one account head, then drop to zero to simulate a deleted account.
   // A root-only check never notices the deletion, because the root matches its own shrunken input.
   // The count check is what catches it. The count check runs first and fails because the live head

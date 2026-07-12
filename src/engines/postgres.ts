@@ -353,11 +353,15 @@ function createLedgerStore(q: Queryable, digest: Digest, clock: Clock): Ledger {
 
     statement: async (account, range) => buildStatement(q, account, range),
 
+    derivedBalances: async (account) => derivedBalancesOf(q, account),
+
     balanceAccounts: () => balanceAccountsOf(q),
 
     timeline: (account, options) => timelineOf(q, account, options),
 
     heads: () => headsOf(q),
+
+    headSums: () => headSumsOf(q),
 
     lineage: (account) => lineageOf(q, account),
 
@@ -429,6 +433,31 @@ async function buildStatement(
     postedAt: Number(row.posted_at),
   }));
   return { account, entries, cursor: null };
+}
+
+// Re-derives an account's balance from its legs, one amount per currency, folded by the server so
+// no legs travel over the wire: `legs_account_idx` carries currency and amount in its INCLUDE
+// list, so this is one index-only scan. sum(int8) returns numeric, which the driver hands over as
+// a string; readMinor turns it back into a bigint. `balanceDelta` applies the account's sign rule
+// to the summed figure — the sum of signed deltas equals the delta of the sum.
+async function derivedBalancesOf(
+  q: Queryable,
+  account: AccountRef,
+): Promise<Amount[]> {
+  const result = await q.query(
+    `select currency, sum(amount) as minor from legs
+      where account_id = $1 group by currency order by currency`,
+    [account],
+  );
+  return result.rows.map((row) =>
+    balanceDelta({
+      account,
+      amount: toAmount(
+        row.currency as Amount['currency'],
+        readMinor(row.minor),
+      ),
+    }),
+  );
 }
 
 // Stream an account's incoming funds as lots (one per entry that increased it) so maturity.ts can
@@ -533,6 +562,35 @@ async function* headsOf(
   );
   for (const row of result.rows) {
     yield [row.account_id as AccountRef, row.hash as string] as const;
+  }
+}
+
+// The heads query joined with per-account raw leg sums, in ONE statement on purpose: a posting
+// writes its chain link and its legs in one transaction, and a single statement reads one
+// consistent snapshot, so a head can never be paired with a sum it didn't commit with. Raw means
+// as posted (debit positive); sum(int8) returns numeric as a string, readMinor turns it back into
+// a bigint.
+async function* headSumsOf(
+  q: Queryable,
+): AsyncIterable<readonly [AccountRef, string, bigint]> {
+  const result = await q.query(
+    `select h.account_id, h.hash, s.raw
+       from (select distinct on (c.account_id) c.account_id, c.hash
+               from chain_links c
+               join postings p on p.id = c.posting_id
+              order by c.account_id, p.seq desc) h
+       join (select account_id, sum(amount) as raw from legs group by account_id) s
+         on s.account_id = h.account_id`,
+  );
+  result.rows.sort((a, b) =>
+    byCodeUnit(a.account_id as string, b.account_id as string),
+  );
+  for (const row of result.rows) {
+    yield [
+      row.account_id as AccountRef,
+      row.hash as string,
+      readMinor(row.raw),
+    ] as const;
   }
 }
 
@@ -1597,14 +1655,16 @@ function createCheckpointStore(pool: PgPool): CheckpointStore {
   return {
     put: async (checkpoint) => {
       await pool.query(
-        `insert into checkpoints (id, root, signature, count, at)
-           values ($1, $2, $3, $4, $5)`,
+        `insert into checkpoints (id, root, signature, count, at, v, sum)
+           values ($1, $2, $3, $4, $5, $6, $7)`,
         [
           checkpoint.id,
           checkpoint.root,
           checkpoint.signature,
           checkpoint.count,
           checkpoint.at,
+          checkpoint.v,
+          checkpoint.sum,
         ],
       );
     },

@@ -120,9 +120,12 @@ CREATE TABLE legs (
      CONSTRAINT legs_account_fk FOREIGN KEY (account_id, currency) REFERENCES accounts (id, currency),
      -- Serves the maturity tail's `WHERE account_id = ? ORDER BY id DESC LIMIT n` as a bounded keyed
      -- scan, no filesort (legs.id is AUTO_INCREMENT in commit order = FIFO). Leading account_id also
-     -- covers plain account_id lookups, replacing a bare legs(account_id) index. Mirrors Postgres
-     -- legs_account_idx (see db/postgresql-schema.sql).
-     KEY legs_account_idx (account_id, id),
+     -- covers plain account_id lookups, replacing a bare legs(account_id) index. The trailing
+     -- currency and amount make the prover's per-account fold (SUM(amount) GROUP BY currency) an
+     -- index-only scan; MySQL has no INCLUDE, so they ride as key parts after the (account_id, id)
+     -- prefix the tail depends on. Mirrors Postgres legs_account_idx (see db/postgresql-schema.sql),
+     -- which carries the same two columns via INCLUDE.
+     KEY legs_account_idx (account_id, id, currency, amount),
      KEY legs_posting_idx (posting_id)
    ) COMMENT='The signed debit/credit lines that make up each posting.';
 
@@ -337,10 +340,12 @@ CREATE TABLE trust_attempts (
 -- db/postgresql-schema.sql (checkpoints banner).
 CREATE TABLE checkpoints (
      id         VARCHAR(64) PRIMARY KEY COMMENT 'Checkpoint id, chk_<uuid>; primary key.',
-     root       CHAR(64)    NOT NULL COMMENT 'Merkle root over account hashes; lowercase hex.',
-     signature  TEXT        NOT NULL COMMENT 'Signature over the root; lowercase hex.',
+     root       CHAR(64)    NOT NULL COMMENT 'Merkle root over account hashes (v2: hashes and sums); lowercase hex.',
+     signature  TEXT        NOT NULL COMMENT 'Signature (v1: over the root; v2: over root and sum); lowercase hex.',
      count      BIGINT      NOT NULL COMMENT 'How many account hashes this root covers.',
      at         BIGINT      NOT NULL COMMENT 'Epoch ms the checkpoint was taken.',
+     v          TINYINT     NOT NULL DEFAULT 1 COMMENT 'Preimage construction the row was sealed under; pre-versioning rows are 1.',
+     sum        VARCHAR(32) NULL COMMENT 'Signed decimal minor-unit sum under a v2 root (zero when honestly sealed); null on v1 rows.',
      seq        BIGINT      AUTO_INCREMENT UNIQUE COMMENT 'Monotonic sequence number; unique, auto-assigned.',
      created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
    ) COMMENT='Signed Merkle checkpoints over the per-account hash chains.';
