@@ -37,6 +37,7 @@ import { ERROR_CODES, EconomyError } from '#src/errors.ts';
 import { httpProcessor } from '#src/adapters/processor.ts';
 import { configuredRates } from '#src/adapters/rates.ts';
 import { decodeWebhookEvent, handlePurchaseWebhook } from '#src/webhooks.ts';
+import { maybeEdgeTilia } from '#scripts/support/edge-host.ts';
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ExternalPorts, RuntimeDefaults } from '#src/index.ts';
@@ -362,6 +363,13 @@ type RunningWorker = {
 
 async function runWorker(env: Env): Promise<RunningWorker> {
   const { ports, defaults } = wiring(env);
+  // Optional edge bridge (see scripts/support/edge-host.ts): when enabled its shimmed
+  // Tilia processor replaces the env-selected one and its wallet balance feeds the
+  // floatCoverage sweep. Off, the worker runs exactly as before.
+  const edge = await maybeEdgeTilia(env, log);
+  if (edge !== undefined) {
+    ports.processor = edge.processor;
+  }
   const { worker, store, dispatcher } = await composeWorker(
     env,
     ports,
@@ -387,6 +395,7 @@ async function runWorker(env: Env): Promise<RunningWorker> {
           dispatcher,
           feed: noReconcileFeed,
           windows: [],
+          float: edge?.float,
         });
         // Surface each failed sweep's error code and retry flag, not just its name. The SweepResult
         // carries why it failed (STORE.FAILURE, COMMINGLING, and so on) and whether the next tick
@@ -427,6 +436,7 @@ async function runWorker(env: Env): Promise<RunningWorker> {
       if (inFlight) {
         await inFlight;
       }
+      await edge?.stop();
     },
   };
 }
@@ -482,17 +492,32 @@ function onShutdown(env: Env, drain: () => Promise<void>): void {
  */
 async function runServe(env: Env): Promise<void> {
   const { ports, defaults } = wiring(env);
+  // Optional edge bridge, mirroring runWorker: the shimmed processor replaces the
+  // env-selected one, the hosted-KYC directory feeds the PAYEE_UNVERIFIED gate, and
+  // POST /webhooks/tilia routes to the edge-backed handler.
+  const edge = await maybeEdgeTilia(env, log);
+  if (edge !== undefined) {
+    ports.processor = edge.processor;
+  }
   // Build the capability bundle once so the economy and the webhook handler share one store, id
   // generator, and clock. The handler persists each verified callback into the very store the apply
   // worker (`drainInbox`) later drains. `compose` would return only the economy, not its store, but
   // the webhook now writes to the inbox, so we need the store handle.
   const caps = await capabilitiesFromEnv(env, ports, defaults);
+  if (edge !== undefined) {
+    caps.payees = edge.payees;
+  }
   const economy = createEconomy(caps);
   const config = loadConfig(env);
+  const purchases = purchaseWebhook(caps.store, caps.ids, caps.clock);
+  const tiliaPayouts = edge?.webhookFor(caps.store, caps.ids, caps.clock);
   // config and clock are what activate the webhook gate. Without them createServer can't verify a
   // callback's signature and timestamp, so a forged or stale one would reach the handler unchecked.
   const handler = createServer(economy, {
-    webhook: purchaseWebhook(caps.store, caps.ids, caps.clock),
+    webhook: async (provider, request) =>
+      provider === 'tilia' && tiliaPayouts !== undefined
+        ? tiliaPayouts(provider, request)
+        : purchases(provider, request),
     config,
     clock: defaults.clock,
   });
@@ -500,6 +525,7 @@ async function runServe(env: Env): Promise<void> {
   onShutdown(env, async () => {
     await closeServer();
     await economy.close();
+    await edge?.stop();
   });
 }
 
