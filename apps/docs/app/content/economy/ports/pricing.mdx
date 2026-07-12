@@ -7,7 +7,7 @@ sourceRefs:
   [
     'src/pricing.ts#L41 · flatFee',
     'src/pricing.ts#L52 · splitLegs',
-    'src/contract.ts#L306 · FeePolicy',
+    'src/contract.ts#L313 · FeePolicy',
   ]
 related: ['economy/reference/configuration', 'economy/ports/rates']
 ---
@@ -78,13 +78,12 @@ const legs = policy({
 //   Both are credits (stored negative), so the legs sum to -1000.
 ```
 
-The work happens in three steps, in order. The fee comes off the top first. Each recipient then
-takes its `shareBps` of what's left. Whatever the rounding leaves behind joins the fee in the
-platform's `REVENUE` account.
+The fee comes off the top first. Each recipient then takes its `shareBps` of what's left. Whatever
+the rounding leaves behind joins the fee in the platform's `REVENUE` account.
 
-Each seller's share rounds _down_, so the
-distributed shares can fall a minor unit or two short of the net. `revenueForSplit` hands it to `REVENUE` along with the fee, so the credits always
-sum to the exact price.
+Each seller's share rounds _down_, so the shares can fall a minor unit or two short of the net;
+`revenueForSplit` hands the remainder to `REVENUE` with the fee, so the credits sum to the exact
+price.
 
 The fee itself rounds in the other direction. `feeForPrice` rounds the basis-point fee _up_ to a
 whole credit, then caps it at the price so the fee can never exceed what the buyer paid. The cap only
@@ -110,7 +109,7 @@ wiring the backstop never fires; it exists so a wiring mistake fails loudly here
 silently under-crediting sellers and dumping the difference into revenue.
 
 An empty recipient list is allowed, not an error. With no seller to pay, the whole net becomes
-leftover and lands in `REVENUE`. The platform keeps the entire sale.
+leftover and lands in `REVENUE`.
 
 <Callout type="warning">
   The recipient `shareBps` must sum to exactly `10000`. A non-empty list that

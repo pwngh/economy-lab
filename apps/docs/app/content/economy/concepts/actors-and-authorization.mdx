@@ -6,8 +6,8 @@ order: 50
 status: stable
 sourceRefs:
   [
-    'src/contract.ts#L54-L60 · Principal',
-    'src/economy.ts#L475-L479 · authorize',
+    'src/contract.ts#L51-L57 · Principal',
+    'src/economy.ts#L458-L462 · authorize',
   ]
 related:
   [
@@ -19,7 +19,7 @@ related:
 
 ## The idea
 
-Before any operation touches money, the economy has to answer one question: who is asking, and may they do this? Every [`Operation`](/economy/reference/the-economy/) carries an `actor`, the principal making the request. A single gate, `authorize`, runs before any other work.
+Before any operation touches money, the economy has to answer one question: who is asking, and may they do this? Every [`Operation`](/economy/reference/the-economy/) carries an `actor`. A single gate, `authorize`, runs before any other work.
 
 The actor is one of three kinds: a `user` acting for themself, a trusted `system` service, or a human `operator`. The gate decides whether that kind of caller may run that kind of operation. For a `user`, it also checks whether they own the accounts the operation drains.
 
@@ -45,11 +45,11 @@ await economy.submit({
 
 ## Why it exists
 
-Money operations differ sharply in who should be allowed to run them. Minting credits with a [`topUp`](/economy/reference/operations/top-up/), clawing back a chargeback, or hand-posting a correction has to come from the platform, never from an end user requesting it on themself.
+Minting credits with a [`topUp`](/economy/reference/operations/top-up/), clawing back a chargeback, or hand-posting a correction has to come from the platform, never from an end user.
 
 Without a gate, that line disappears. An end user could call `topUp` to credit their own wallet, issuing credits with no backing dollar behind them and opening a [solvency](/economy/concepts/solvency/) gap. They could call [`refund`](/economy/reference/operations/refund/) to debit a seller's [`earned`](/economy/concepts/accounts-and-double-entry/) balance into their own, a self-serve fraud vector.
 
-Authorization closes those paths up front: the gate runs right after the request's shape is validated and refuses the caller before anything posts to the ledger. Keeping the decision in one function also keeps it auditable: one place says who may do what, instead of a scattered check per handler that can drift.
+Authorization closes those paths up front, refusing the caller before anything posts. One function decides who may do what, so the rule stays auditable.
 
 ## The three actors
 
@@ -65,7 +65,7 @@ Each kind of principal carries its own identifier and its own reach.
   `system` has full access for now; the source notes per-service permission
   lists as future work, so a `payments` service and a `risk` service aren't yet
   distinguished. The model already carries the field needed to split them later
-  (see <SourceLink to="src/economy.ts#L486">source</SourceLink>).
+  (see <SourceLink to="src/economy.ts#L465">source</SourceLink>).
 </Callout>
 
 ## The invariant it maintains
@@ -73,9 +73,9 @@ Each kind of principal carries its own identifier and its own reach.
 A `user` actor can only move money out of accounts it owns, and can never run a privileged operation. The gate holds two rules to make that true:
 
 1. **Privileged operations are closed to `user` actors.** The set `RESTRICTED_TO_PRIVILEGED` lists every kind a `user` may never run.
-2. **A `user` may only debit accounts it owns.** The gate pulls out the accounts the operation will _drain_ and checks that each one belongs to the caller. Paying _into_ a stranger's account is fine; draining one is not.
+2. **A `user` may only debit accounts it owns.** The gate checks that every account the operation _drains_ belongs to the caller. Paying _into_ a stranger's account is fine.
 
-The privileged set is, per <SourceLink to="src/economy.ts#L875-L886">source</SourceLink>:
+The privileged set is, per <SourceLink to="src/economy.ts#L821-L832">source</SourceLink>:
 
 | Restricted operation                     | Why a `user` is barred                                                                                     |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
@@ -90,17 +90,17 @@ The privileged set is, per <SourceLink to="src/economy.ts#L875-L886">source</Sou
 
 ## How it's enforced
 
-`authorize(operation)` runs near the top of `submit`, right after the request's shape is validated and before the money transaction opens, so a refused request never opens a transaction (see <SourceLink to="src/economy.ts#L236-L237">source</SourceLink>).
+`authorize(operation)` runs near the top of `submit`, right after the request's shape is validated and before the money transaction opens, so a refused request never opens a transaction (see <SourceLink to="src/economy.ts#L232-L233">source</SourceLink>).
 
 The gate's logic:
 
 - An `operator` returns immediately, full access, postings fully audited.
 - A `system` actor returns immediately, full access.
-- A `user` is checked against `RESTRICTED_TO_PRIVILEGED`; a match throws `UNAUTHORIZED`. Otherwise, for each account in `debitedUserAccounts(operation)`, the gate verifies `ownedBy(account, userId)`. An account belongs to a user when its id is prefixed `userId:` (see <SourceLink to="src/economy.ts#L853-L855">source</SourceLink>).
+- A `user` is checked against `RESTRICTED_TO_PRIVILEGED`; a match throws `UNAUTHORIZED`. Otherwise, for each account in `debitedUserAccounts(operation)`, the gate verifies `ownedBy(account, userId)`. An account belongs to a user when its id is prefixed `userId:` (see <SourceLink to="src/economy.ts#L801-L803">source</SourceLink>).
 
 `debitedUserAccounts` is deliberately narrow: it returns only the _drained_ user accounts an operation touches, not every account it locks. For a `spend` those are the buyer's [`promo`](/economy/concepts/accounts-and-double-entry/) and `spendable`; for a `subscribe`, the same; for a `requestPayout`, the user's `earned`.
 
-Accounts being paid _into_, and platform accounts, are left out. Only a drained account has to belong to the caller (see <SourceLink to="src/economy.ts#L500-L511">source</SourceLink>).
+Accounts being paid _into_, and platform accounts, are left out. Only a drained account has to belong to the caller (see <SourceLink to="src/economy.ts#L483-L494">source</SourceLink>).
 
 <Callout type="warning">
   A failed authorization is a thrown `UNAUTHORIZED` fault, not a `rejected`
@@ -123,4 +123,4 @@ Authorization sits in front of the whole `submit` pipeline, so every operation p
 
 **Privileged operations** trust the gate to keep `user` callers out, so their handlers assume a `system` or `operator` principal. See [`settlePayout`](/economy/reference/operations/settle-payout/) and the operator-only [`adjust`](/economy/reference/operations/adjust/).
 
-**The maintenance pause** tells actors apart by kind. A `user`'s discretionary write is declined with `ECONOMY_PAUSED` while the economy is paused. A `system` settlement webhook and an `operator` fix keep flowing, so external money can still settle (see <SourceLink to="src/economy.ts#L239-L250">source</SourceLink>).
+**The maintenance pause** tells actors apart by kind. A `user`'s discretionary write is declined with `ECONOMY_PAUSED` while the economy is paused. A `system` settlement webhook and an `operator` fix keep flowing, so external money can still settle (see <SourceLink to="src/economy.ts#L240-L246">source</SourceLink>).

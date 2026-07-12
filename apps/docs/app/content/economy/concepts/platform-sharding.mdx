@@ -4,13 +4,13 @@ summary: "An account can only commit as fast as its one lock turns over, and eve
 plain: "One cash register can only serve one customer at a time, no matter how short the line. Opening four registers lets four lines move at once — and as long as every return goes back to the register that made the sale, the day's books still add up."
 order: 95
 status: stable
-sourceRefs: ['src/accounts.ts#L151 · platformShard', 'test/sharding.test.ts']
+sourceRefs: ['src/accounts.ts#L156 · platformShard', 'test/sharding.test.ts']
 related: ['economy/concepts/concurrency', 'economy/reference/configuration']
 ---
 
 Per-account [locking](/economy/concepts/concurrency/) has a built-in ceiling: an account can only commit as fast as its one lock turns over. Users never feel it, because their wallets are all different accounts and the load spreads out.
 
-The platform's accounts sit on the other side of every one of those operations. Every top-up debits `STORED_VALUE` and every sale credits `REVENUE`, so a thousand concurrent buyers spread across a thousand wallets still meet at the same revenue row, and they wait there in line.
+Every top-up debits `STORED_VALUE` and every sale credits `REVENUE`, so a thousand concurrent buyers across a thousand wallets still meet at the same revenue row — and wait in line.
 
 ## Splitting the line
 
@@ -24,7 +24,7 @@ A shard row behaves like any other account under the machinery on the concurrenc
 
 The routing can't be random, because a retry has to land on the same row the first attempt locked. So a posting picks its shard by hashing the operation's [idempotency key](/economy/concepts/idempotency/), which is stable across retries and already known both when locks are taken and when legs are built.
 
-`PAYOUT_RESERVE` is the exception, and the reason is time. Credits enter the reserve when a payout is requested and leave when it settles or reverses, and that second step is a different operation, days later, carrying a different idempotency key. Hash that key and the debit would land on some other shard, quite possibly one holding nothing, and the reserve is overdraft-guarded: no shard may go negative. The user id is the one routing key both ends of a payout know, so the reserve routes by user.
+`PAYOUT_RESERVE` is the exception, and the reason is time. Credits enter the reserve when a payout is requested and leave when it settles or reverses, and that second step is a different operation, days later, carrying a different idempotency key. Hash that key and the debit would land on some other shard holding nothing — and the reserve is overdraft-guarded. The user id is the one routing key both ends of a payout know, so the reserve routes by user.
 
 ## Readers sum the rows
 

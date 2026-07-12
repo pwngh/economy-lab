@@ -10,7 +10,7 @@ order: 10
 status: stable
 sourceRefs:
   [
-    'src/economy.ts#L78 · createEconomy',
+    'src/economy.ts#L79 · createEconomy',
     'src/index.ts#L41',
     'test/conformance/invariants.adversarial.test.ts',
     'README.md',
@@ -37,7 +37,7 @@ A [prover](/economy/concepts/the-proof/) re-checks all of them after every opera
 
 A `submit` is synchronous. It validates and authorizes the request first. Then it posts one balanced transaction to the [ledger](/economy/concepts/accounts-and-double-entry/), writing a matching event to an outbox in the same transaction. The [Economy API](/economy/reference/the-economy/) walks that request path step by step.
 
-Anything that outlives a request happens off that path. A [background worker](/economy/reference/background-worker/) drains the outbox and runs the recurring sweeps: advancing payouts, billing subscriptions, expiring promos, realizing fees, and sealing checkpoints.
+Anything that outlives a request happens off that path: a [background worker](/economy/reference/background-worker/) drains the outbox and runs the recurring sweeps — payouts, subscriptions, promos, fees, and checkpoints.
 
 ## A lab, not a product
 
@@ -49,7 +49,7 @@ By default it runs entirely in memory with zero runtime dependencies; swappable 
 
 economy-lab invents no cryptography and no accounting. It composes four well-established ideas into one ledger:
 
-- **Double-entry bookkeeping.** The rule that every posting balances (so value can be neither minted nor lost) is the method Luca Pacioli first set down in print in 1494. It's the foundation of [accounts & double-entry](/economy/concepts/accounts-and-double-entry/).
+- **Double-entry bookkeeping.** The rule that every posting balances is the method Luca Pacioli first set down in print in 1494. It's the foundation of [accounts & double-entry](/economy/concepts/accounts-and-double-entry/).
 - **Hash-linked tamper-evidence.** Hashing each record onto the one before it, so any later edit is detectable, comes from Haber and Stornetta's [_How to Time-Stamp a Digital Document_](https://link.springer.com/content/pdf/10.1007/BF00196791.pdf) (1991), the construction Bitcoin would later cite. economy-lab applies it one [hash chain](/economy/concepts/integrity/) per account.
 - **Merkle trees, Certificate Transparency, and Ed25519.** The signed [checkpoint](/economy/concepts/integrity/) folds every account's head into a single Merkle root and signs it. The hash tree is Ralph Merkle's, from his [1979 thesis](https://www.ralphmerkle.com/papers/Thesis1979.pdf) and [later patent](https://patents.google.com/patent/US4881264A/); the leaf/node domain separation follows [RFC 6962](https://datatracker.ietf.org/doc/rfc6962/) (Certificate Transparency); and the signature is [Ed25519](https://ed25519.cr.yp.to/) (Bernstein and colleagues).
 - **Sagas.** A payout that reaches an outside rail is modeled as a long-lived transaction advanced one compensatable step at a time, the [saga](/economy/concepts/payout-saga/) pattern from Garcia-Molina and Salem's [_Sagas_](https://sigmodrecord.org/1987/12/09/sagas/) (SIGMOD 1987).
@@ -61,3 +61,4 @@ economy-lab binds them together (accounting conservation, cryptographic tamper-e
 - New to the model? Start with [the money model](/economy/concepts/money-model/) and [accounts & double-entry](/economy/concepts/accounts-and-double-entry/).
 - Ready to call it? [The Economy](/economy/reference/the-economy/) covers construction and the `submit`/`read` loop; [operations](/economy/reference/operations/) lists everything you can submit, and [reads](/economy/reference/reads/) everything you can query.
 - Care about correctness? [Solvency](/economy/concepts/solvency/), [integrity](/economy/concepts/integrity/), and [the proof](/economy/concepts/the-proof/).
+- Curious how the sibling packages (money, @pwngh/taskq, economy-edge) plug in? [The packages](/economy/ports/packages/).

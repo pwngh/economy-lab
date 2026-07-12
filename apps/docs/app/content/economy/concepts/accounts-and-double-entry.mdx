@@ -16,19 +16,19 @@ related:
   ]
 ---
 
-Every balance lives in a named account. Every operation is a balanced double-entry `Posting`: value moves _between_ accounts as paired debit and credit lines (each line is a `Leg`), and those lines always net to zero per currency.
+Every balance lives in a named account. Every operation is a balanced double-entry `Posting`: value moves _between_ accounts as paired debit and credit lines, and those lines always net to zero per currency.
 
-You never add to one account without an equal, opposite line somewhere else. A user's accounts hold credits. The platform's own "house" accounts hold its cash, its revenue, and the obligations between them.
+You never add to one account without an equal, opposite line somewhere else. A user's accounts hold credits. The platform's own "house" accounts hold its cash, its revenue, and obligations.
 
 ## Why it exists
 
-Balances aren't stored and mutated in place. They're _derived_. The ledger is an append-only book of postings, and an account's balance is the running sum of its lines.
+Balances aren't stored and mutated in place — they're _derived_: the ledger is an append-only book of postings, and an account's balance is the running sum of its lines.
 
-No posting can create or destroy value: like a balanced scale, its lines cancel within each currency, so the books as a whole always sum to zero. Folding the postings back re-derives the same balance every time.
+No posting can create or destroy value: its lines cancel within each currency, so the books as a whole always sum to zero. Folding the postings back re-derives the same balance every time.
 
 Without the balanced-posting rule, a single edited or dropped line would mint or burn credits silently. A `topUp` could issue credits no dollars stand behind. A `spend` could pay a seller more than the buyer paid.
 
-The [solvency](/economy/concepts/solvency/) guarantee (every spendable credit backed by trust cash) rests on this. The cash set aside on a purchase and the credits issued are two legs of _one_ balanced posting, so they can't drift apart.
+The [solvency](/economy/concepts/solvency/) guarantee rests on this: the cash set aside on a purchase and the credits issued are two legs of _one_ balanced posting, so they can't drift apart.
 
 ## The chart of accounts
 
@@ -93,7 +93,7 @@ Two rules guard every write. A posting is rejected unless its leg amounts sum to
 3. Every named account already exists.
 4. No guarded account goes negative (`assertNoOverdraft`).
 
-It drops zero-amount legs first, since a share that rounds down to zero is a no-op the row-level schema would otherwise reject.
+It drops zero-amount legs first — a share that rounds to zero is a no-op the row-level schema would reject.
 
 These app-side checks aren't the real enforcer. They're a courtesy that hands you a clear fault first: `LEDGER_UNBALANCED`, `OVERDRAFT`. The balance and no-overdraft invariants live in the database itself: Postgres constraint triggers and MySQL stored procedures. So a row written around the app is still refused.
 

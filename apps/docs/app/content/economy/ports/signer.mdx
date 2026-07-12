@@ -32,7 +32,7 @@ interface Signer {
 }
 ```
 
-`sign` always signs with the current key. `verify` returns `true` when the signature is authentic, and it accepts the current key _plus_ any still-valid older keys. Because older keys still verify, a signature made before a rotation keeps verifying afterward.
+`sign` always signs with the current key. `verify` returns `true` when the signature matches the current key or any still-valid older one. Because older keys still verify, a signature made before a rotation keeps verifying afterward.
 
 <Callout type="note">
   There's no `keyId` on the port, and no key material crosses it. Which key
@@ -43,7 +43,7 @@ interface Signer {
 
 ## The default signer
 
-The reference adapter is <SourceLink to="src/runtime.ts#L133-L165">systemSigner</SourceLink>. It signs with [Ed25519](https://ed25519.cr.yp.to/): the configured secret derives a private key that produces 64-byte signatures, and the matching public key verifies them.
+The reference adapter, <SourceLink to="src/runtime.ts#L133-L165">systemSigner</SourceLink>, signs with [Ed25519](https://ed25519.cr.yp.to/): the configured secret derives a private key that produces 64-byte signatures.
 
 You construct it with a current signing key and an optional list of prior keys:
 
@@ -78,17 +78,17 @@ const signer = systemSigner({
 
 From that point, every new checkpoint is signed with the new key. Old checkpoints stay verifiable because the old key is still in `priorKeys`. `verify` walks its trusted public keys in order and returns `true` on the first that matches, so a signature from any retained key still passes.
 
-Drop a key from `priorKeys` only once no checkpoint you still want to verify was signed under it. After that, signatures made with it stop verifying.
+Drop a key from `priorKeys` only once no checkpoint you still want to verify was signed under it; its signatures then stop verifying.
 
 ## What the checkpoint relies on it for
 
 The signer has exactly one caller in the core: the checkpoint. The per-account hash chain doesn't use it. Chain links are _hashed_, not signed, so the signer never touches a [posting](/economy/concepts/accounts-and-double-entry/) or an account head directly.
 
-Instead, [the background worker](/economy/reference/background-worker/) periodically seals a checkpoint. <SourceLink to="src/chain.ts#L243-L264">recordCheckpoint</SourceLink> collects every account's head hash and reduces them to a single Merkle root. It then signs _that one root_, so one signature covers every account at once.
+Instead, [the background worker](/economy/reference/background-worker/) periodically seals a checkpoint. <SourceLink to="src/chain.ts#L304-L347">recordCheckpoint</SourceLink> collects every account's head hash and reduces them to a single Merkle root. It then signs _that one root_, so one signature covers every account at once.
 
 The proof comes before the signature: `recordCheckpoint` first runs [the chain prover](/economy/concepts/the-proof/) over every account. If a chain fails to re-derive, it throws `CHAIN_BROKEN` and persists nothing.
 
-Verification runs the same machinery in reverse. <SourceLink to="src/chain.ts#L290-L297">verifyCheckpoint</SourceLink> recomputes the Merkle root over the current heads and compares it to the checkpoint's stored root. When those match, it calls `signer.verify` over that root. A mismatch (a changed root, a dropped account, or an inauthentic signature) returns `false`.
+Verification runs the same machinery in reverse. <SourceLink to="src/chain.ts#L363-L398">verifyCheckpoint</SourceLink> recomputes the Merkle root over the current heads and compares it to the checkpoint's stored root. When those match, it calls `signer.verify` over that root. A mismatch (a changed root, a dropped account, or an inauthentic signature) returns `false`.
 
 ## Out of scope
 

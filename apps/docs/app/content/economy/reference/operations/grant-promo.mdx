@@ -81,7 +81,7 @@ An end-user principal is refused. The operation mints credit into an arbitrary u
 
 `grantPromo` returns no reason codes: it has no `rejected` path. It fails only by throwing.
 
-It declines no well-formed request. There is no affordability check to fail. The maintenance-window pause gate applies only to `user` principals, which can never call this privileged operation. So every failure path is a thrown fault, not a `rejected` outcome.
+It declines no well-formed request — there is no affordability check, and the pause gate never applies to privileged actors — so every failure is a thrown fault, not a `rejected` outcome.
 
 The faults it can throw, all from malformed input, are:
 

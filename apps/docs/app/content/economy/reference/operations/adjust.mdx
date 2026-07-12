@@ -8,7 +8,7 @@ sourceRefs:
     'src/operations/adjust.ts#L45 · adjust',
     "src/contract.ts#L161 · kind 'adjust'",
     'src/operations/registry.ts#L52 · REGISTRY',
-    'src/economy.ts#L875 · RESTRICTED_TO_PRIVILEGED',
+    'src/economy.ts#L821 · RESTRICTED_TO_PRIVILEGED',
   ]
 related:
   ['economy/reference/operations/reverse', 'economy/reference/configuration']
@@ -46,8 +46,6 @@ The payload fields, beyond the `kind` tag, are:
 | `amount`         | [`Amount`](/economy/concepts/money-model/)                   | (required) | The signed change. Must be `CREDIT` and non-zero; negative corrects downward.                                                             |
 | `reason`         | `string`                                                     | (required) | Why the correction was made, recorded on the posting. Must be non-empty after trimming whitespace.                                        |
 
-The `amount` is signed on purpose. A positive value raises the account, a negative value lowers it, and only zero is disallowed.
-
 ## Returns
 
 `adjust` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
@@ -68,7 +66,7 @@ For the example above (raising `spendable(usr_alice)` by `250` credits) the legs
 | `spendable(usr_alice)`  | credit | `250` (CREDIT) |
 | `SYSTEM.OPENING_EQUITY` | debit  | `250` (CREDIT) |
 
-The handler works in the account's natural direction rather than a fixed debit or credit. So the move reads as "raise the account by `amount`" whether the target grows on a debit or on a credit. The offset to `OPENING_EQUITY` is always the negation, so the two legs sum to zero.
+The handler works in the account's natural direction, so the move reads as "raise the account by `amount`" regardless of its normal side. The offset to `OPENING_EQUITY` negates this, keeping the posting balanced.
 
 <Callout type="note">
   The offset lands in `OPENING_EQUITY`, the platform's opening-balance account.
@@ -80,9 +78,7 @@ The handler works in the account's natural direction rather than a fixed debit o
 
 `adjust` is operator-only. It writes a privileged correction to an account the caller need not own, a case the ownership rule that governs ordinary user operations doesn't cover. So a `user` actor may never call it; see [actors and authorization](/economy/concepts/actors-and-authorization/).
 
-The handler re-checks the actor even after the pipeline has run its own gate. A non-`operator` actor throws an `OP.MALFORMED` fault. This guards against a wrong-actor call slipping through when the handler is invoked directly rather than through the pipeline.
-
-A `system` actor clears the pipeline's privileged gate but is still refused by that handler check. So in practice only an `operator` can adjust.
+The handler re-checks the actor; a `system` caller clears the pipeline's gate but is refused by the handler, so only an `operator` can adjust.
 
 ## Reason codes
 

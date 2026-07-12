@@ -7,7 +7,7 @@ sourceRefs:
   [
     'src/operations/settlePayout.ts#L36-L106 · settlePayout',
     'src/operations/settlePayout.ts#L142-L158 · postSettlementEntries',
-    'src/webhooks.ts#L167-L176 · toSettlePayout',
+    'src/webhooks.ts#L197-L208 · toSettlePayout',
     'src/worker/payouts.ts',
   ]
 related:
@@ -27,15 +27,15 @@ A verified "payout settled" webhook from the rail drives it. The webhook maps to
 const outcome = await economy.submit({
   kind: 'settlePayout',
   idempotencyKey: '550e8400-e29b-41d4-a716-446655440002',
-  actor: { kind: 'system', service: 'webhook:thunes' },
+  actor: { kind: 'system', service: 'webhook:tilia' },
   sagaId: 'pay_9f2c1b',
-  providerRef: 'thunes_txn_8821',
+  providerRef: 'acct_77/ps_8821',
   providerAmount: toAmount('USD', 4_850n),
 });
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
-The mapping from webhook to operation lives in <SourceLink to="src/webhooks.ts#L167-L176">toSettlePayout</SourceLink>; the [background worker](/economy/reference/background-worker/)'s inbox drain applies the result off the request path.
+The mapping from webhook to operation lives in <SourceLink to="src/webhooks.ts#L197-L208">toSettlePayout</SourceLink>; the [background worker](/economy/reference/background-worker/)'s inbox drain applies the result off the request path.
 
 ## Parameters
 
@@ -54,9 +54,7 @@ The payload fields, beyond the `kind` tag, are:
 `settlePayout` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
 - `committed`: the success result. Its `transaction` is the credit-side posting: the primary settle entry that empties the reserve into revenue.
-- `duplicate`: a redelivered settle carrying the same idempotency key; the settlement applies at most once, so nothing posts a second time.
-
-A redelivered settle of an already-settled payout does not return `committed` a second time: it is turned away at the state guard before any money posts.
+- `duplicate`: a redelivered settle carrying the same idempotency key. The settlement applies at most once, and an already-settled payout is turned away at the state guard before any money posts.
 
 `settlePayout` returns no `rejected` outcome. A malformed request throws instead; see [reason codes](#reason-codes).
 
@@ -80,13 +78,13 @@ The USD-side entry records the cash leaving trust. `USD_CLEARING` mirrors money 
 | [`SYSTEM.USD_CLEARING`](/economy/concepts/accounts-and-double-entry/) | debit  | `usd`  |
 | [`SYSTEM.TRUST_CASH`](/economy/concepts/accounts-and-double-entry/)   | credit | `usd`  |
 
-The gross `usd` is the reserve converted at the [`payout` rate](/economy/concepts/money-model/). The rail's fee (`config.payoutFeeBps`) and the seller's net are split downstream at the external rail. Both are recorded on the USD posting's metadata for the audit trail; the ledger posts neither as a leg.
+The gross `usd` is the reserve converted at the [`payout` rate](/economy/concepts/money-model/). The rail's fee and the seller's net split downstream at the rail; both are recorded as metadata, never as legs.
 
 The same operation also queues an internal `economy.payout.settled` event in this transaction, so the event is saved if and only if the payout actually settled.
 
 ## Authorization
 
-Only a `system` or `operator` [actor](/economy/concepts/actors-and-authorization/) may call `settlePayout`. The kind is listed in <SourceLink to="src/economy.ts#L875-L886">RESTRICTED_TO_PRIVILEGED</SourceLink>, so a `user` actor is rejected at the authorization gate before any work runs.
+Only a `system` or `operator` [actor](/economy/concepts/actors-and-authorization/) may call `settlePayout`. The kind is listed in <SourceLink to="src/economy.ts#L821-L832">RESTRICTED_TO_PRIVILEGED</SourceLink>, so a `user` actor is rejected at the authorization gate before any work runs.
 
 <Callout type="danger">
   Settling disburses real USD out of trust and turns the seller's reserve into

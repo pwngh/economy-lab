@@ -6,7 +6,7 @@ status: stable
 sourceRefs:
   [
     'src/worker/index.ts#L57-L68 · SWEEP_NAMES',
-    'src/worker/payouts.ts#L50 · advanceDuePayouts',
+    'src/worker/payouts.ts#L52 · advanceDuePayouts',
     'src/worker/relay.ts#L56 · relayOutbox',
   ]
 related:
@@ -22,7 +22,7 @@ The synchronous core posts to the ledger and returns an `Outcome` on the request
 
 A payout waits on an external rail. A subscription bills over time. A promo grant expires. A platform fee only becomes the platform's once its refund window closes. The outbox holds events that still need to drain to the dispatcher.
 
-The worker advances each of these one safe step at a time, off the request path. It does not own new behavior. It pushes work that is already recorded toward its next state, and reports what moved.
+The worker advances each of these one safe step at a time, off the request path. It owns no new behavior: it pushes recorded work toward its next state and reports what moved.
 
 ## The sweeps
 
@@ -38,6 +38,7 @@ Here is what each sweep does:
 | `subscriptions`    | Renew a due subscription, or lapse it when the buyer can't cover the price.                      |
 | `treasury`         | Re-check that held USD still [backs](/economy/concepts/solvency/) every spendable credit.        |
 | `feeSweep`         | Realize the platform's matured fee surplus into cash.                                            |
+| `floatCoverage`    | Check the payout rail's float against reserved and submitted payout obligations.                 |
 | `checkpointVerify` | Re-check the previous signed [checkpoint](/economy/concepts/integrity/) against the live ledger. |
 | `checkpoint`       | Seal a fresh signed checkpoint of the ledger.                                                    |
 | `relay`            | Drain the [outbox](/economy/ports/messaging/) to the dispatcher.                     |
@@ -58,7 +59,7 @@ const summary = await advanceDuePayouts(store, ctx, { now, limit });
 // → { submitted: [...], deadLettered: [...], retrying: [...] }
 ```
 
-A `RESERVED` payout is submitted to the provider and moves to `SUBMITTED`. Settlement does not happen here; it arrives through the provider's settlement webhook. The sweep only forces a `SUBMITTED` payout to fail when it has waited past `maxPayoutAgeMs` for a webhook that never came.
+A `RESERVED` payout is submitted to the provider and moves to `SUBMITTED`. Settlement does not happen here; it arrives through the provider's settlement webhook. A `SUBMITTED` payout is watched: when the processor adapter offers the optional `payoutStatus` probe, the sweep acts on its answer first — a provider-reported `FAILED` or `RETURNED` releases the reserve promptly, a reported `SETTLED` blocks the force-fail so a lost settlement webhook cannot end in a double-pay, and a reported `PENDING` defers the timeout while the rail is still working. Otherwise the sweep only forces a `SUBMITTED` payout to fail when it has waited past `maxPayoutAgeMs` for a webhook that never came.
 
 When a payout is dead-lettered, the worker posts the exact reverse of the request-time reservation in the same transaction, so the seller's reserved credits are returned rather than stranded.
 
@@ -70,9 +71,11 @@ A failure that looks temporary (a flaky network or database) bumps an attempt co
 
 The whole sweep is isolated too. `runSweeps` wraps each job, so a job that throws is recorded as a failed result against just that job, and the other sweeps still run. The run never throws.
 
-## Two sweeps can be skipped
+## Three sweeps can be skipped
 
-Most sweeps always run. Two carry an optional capability and short-circuit when it's absent.
+Most sweeps always run. Three carry an optional capability and short-circuit when it's absent.
+
+`floatCoverage` needs a float feed (the payout rail's wallet balance) — the economy-edge bridge supplies one when enabled ([the packages](/economy/ports/packages/)). With none configured, it returns an empty successful summary and the internal `treasury` backing check stands alone. The check is alert-level either way: a shortfall is logged and counted, never posted against.
 
 `relay` needs a dispatcher to deliver through. With none configured, it returns an empty successful summary and pending rows stay in the outbox for a later run.
 
@@ -89,11 +92,9 @@ const summary = await relayOutbox(store, ctx, { dispatcher, limit });
   inbox keeps draining even when discretionary user writes are refused.
 </Callout>
 
-## Delivery is at-least-once
+## The relay and the inbox
 
-The relay drains the [outbox](/economy/ports/messaging/), where each event was written in the same transaction as the money move it describes. It claims up to `limit` events, sends each through the dispatcher, and marks the delivered ones done.
-
-Delivery can happen more than once. For example, the send succeeded but marking the row done did not. The receiver must drop duplicates by event id.
+The relay drains the [outbox](/economy/ports/messaging/) — that page owns the pattern: why every event commits with its posting, and why delivery is at-least-once. The sweep's own contract is the batch: it claims up to `limit` pending events, sends each through the dispatcher, and marks the delivered ones done. The receiver must drop duplicates by event id; the bundled @pwngh/taskq bridge does exactly that, enqueuing each delivery keyed by the event id ([the packages](/economy/ports/packages/)).
 
 A delivery that keeps failing bumps the row's attempt count and retries, up to `config.maxOutboxAttempts` (default `10`). At the cap the event is dead-lettered, so one poison event can't block the events behind it.
 
@@ -121,7 +122,7 @@ Using the scheduler rather than a built-in timer keeps start and stop on the sam
 
 ## Treasury and checkpoints
 
-The treasury sweep is measure-only. It walks the custodial credit accounts, converts the total to required USD at par, and compares it against `TRUST_CASH`. A shortfall is logged and counted; nothing is posted to fix it.
+The treasury sweep is measure-only: it sums the custodial credits, converts to required USD at par, and compares against `TRUST_CASH`. A shortfall is logged and counted, never posted against.
 
 See [solvency](/economy/concepts/solvency/) for what backing means and how the same check runs inside the prover.
 

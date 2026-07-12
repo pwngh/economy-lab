@@ -49,9 +49,8 @@ The payload fields, beyond the `kind` tag, are:
 
 `cancelSubscription` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
-- `committed`: the cancel succeeded. The outcome carries a placeholder
-  [`Transaction`](/economy/concepts/accounts-and-double-entry/) with empty legs, because the
-  cancel only flips the subscription's state and records no money moving.
+- `committed`: the subscription is `CANCELED`. The placeholder
+  [`Transaction`](/economy/concepts/accounts-and-double-entry/) carries empty legs — no money moves.
 - `duplicate`: a repeat of the same `idempotencyKey`.
 - `rejected`: the subscription is missing or already `CANCELED`, with
   `UNKNOWN_SUBSCRIPTION`. See [Reason codes](#reason-codes).

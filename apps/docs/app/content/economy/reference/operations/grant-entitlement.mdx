@@ -8,8 +8,8 @@ sourceRefs:
     'src/operations/entitlements.ts#L42 · grantEntitlement',
     'src/operations/registry.ts#L49 · REGISTRY',
     "src/contract.ts#L137 · kind 'grantEntitlement'",
-    'src/contract.ts#L46 · EntitlementAttrs',
-    'src/economy.ts#L875 · RESTRICTED_TO_PRIVILEGED',
+    'src/contract.ts#L43 · EntitlementAttrs',
+    'src/economy.ts#L821 · RESTRICTED_TO_PRIVILEGED',
   ]
 related: ['economy/reference/operations/revoke-entitlement']
 ---
@@ -35,8 +35,7 @@ const outcome = await economy.submit({
 
 `read.entitled("usr_owner", "wrld_pass")` now returns true.
 
-The grant always succeeds. It overwrites any previous record for the same user and SKU, and has no
-prerequisite: the user need not already own anything, and no balance is checked.
+The grant always succeeds: it overwrites any prior record for the user and SKU, and checks no balance.
 
 ## Parameters
 
@@ -89,8 +88,8 @@ touches. You read it back with [`read.entitled`](/economy/reference/reads/).
 `operator`.
 
 An end `user` can never grant ownership. A `user` principal is refused with a thrown `AUTH.UNAUTHORIZED`
-before the handler runs. Granting names an arbitrary `userId` the caller need not own, and it posts no debit. The
-gate therefore stands in for the ownership check the posting path would otherwise apply.
+before the handler runs. Granting names a `userId` the caller need not own and posts no debit, so the
+gate stands in for the ownership check the posting path would otherwise apply.
 
 ## Reason codes
 

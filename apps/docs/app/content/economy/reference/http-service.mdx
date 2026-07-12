@@ -6,7 +6,7 @@ status: stable
 sourceRefs:
   [
     'src/server.ts#L87 · createServer',
-    'scripts/main.ts#L483 · runServe',
+    'scripts/main.ts#L502 · runServe',
     'test/server.test.ts',
   ]
 related: ['economy/scope-and-non-goals', 'economy/ports/signer']
@@ -16,7 +16,7 @@ related: ['economy/scope-and-non-goals', 'economy/ports/signer']
 
 Most of these docs talk about the [`Economy`](/economy/reference/the-economy/) as an in-process object: you hold a reference and call `submit` against it directly. But a deployed service has to take requests off a socket. That's what the HTTP service is: a thin wrapper that turns a Fetch `Request` into one `submit` call and a `Response`.
 
-The wrapper is <SourceLink to="src/server.ts#L87">createServer</SourceLink>. It takes an `Economy` and returns a handler with the signature `(request: Request) => Promise<Response>`:
+<SourceLink to="src/server.ts#L87">createServer</SourceLink> takes an `Economy` and returns a handler with the signature `(request: Request) => Promise<Response>`:
 
 ```ts
 import { createServer } from '#src/server.ts';
@@ -25,7 +25,7 @@ const handler = createServer(economy);
 const response = await handler(request); // Request → Response
 ```
 
-It uses only Fetch globals (`Request`, `Response`, `URL`, `crypto.subtle`) and no Node APIs. So the same handler runs on Node, Bun, Deno, and Cloudflare Workers. The wiring in `scripts/main.ts` (covered below) is what bridges it onto a concrete runtime.
+It uses only Fetch globals (`Request`, `Response`, `URL`, `crypto.subtle`) and no Node APIs, so the same handler runs on Node, Bun, Deno, and Cloudflare Workers. The wiring in `scripts/main.ts` (covered below) is what bridges it onto a concrete runtime.
 
 <Callout type="note">
   This page documents the HTTP edge: the routes, the wire format, and the
@@ -81,7 +81,7 @@ In the status mapping below, a decline is a normal answer and a fault is an HTTP
 
 ### How thrown faults map to status codes
 
-When `submit` throws an `EconomyError`, <SourceLink to="src/server.ts#L397">statusFor</SourceLink> maps it to a status code, and the response carries only the error's `message`, never its `detail`, `cause`, or stack. Those stay server-side.
+When `submit` throws an `EconomyError`, <SourceLink to="src/server.ts#L400">statusFor</SourceLink> maps it to a status code, and the response carries only the error's `message`, never its `detail`, `cause`, or stack. Those stay server-side.
 
 The mapping is by the error's stable code:
 
@@ -95,14 +95,14 @@ The mapping is by the error's stable code:
 An unexpected throw that isn't an `EconomyError` is normalized into a retryable storage fault, so it goes out as a `503` with a generic message. The internals never reach the client.
 
 <Callout type="warning">
-The error body is exactly `{ "error": "<message>" }` and nothing more. A test pins this: a fault carrying SQL text and a connection string in its `detail`/`cause` still leaks only the one human-readable message (`test/server.test.ts`). Don't expect machine-readable error codes on the wire. The reason code lives in a `rejected` outcome, not a thrown fault.
+The error body is exactly `{ "error": "<message>" }` and nothing more. A test pins this: a fault carrying SQL text and a connection string in its `detail`/`cause` still leaks only the one human-readable message (`test/server.test.ts`). Machine-readable reason codes never ride the error wire: they live in a `rejected` outcome, not a thrown fault.
 </Callout>
 
 ## Receiving provider webhooks
 
-The other money-moving path is inbound. A payment provider calls `POST /webhooks/:provider` to report a real-world event: a user's purchase cleared, a payout settled, a charge was disputed. The `:provider` segment names who's calling (`steam`, `billing`, and so on); it comes from the route, not the body, so a caller can't spoof it.
+The other money-moving path is inbound. A payment provider calls `POST /webhooks/:provider` to report a real-world event: a user's purchase cleared, a payout settled or failed, a charge was disputed. The `:provider` segment names who's calling (`steam`, `billing`); it comes from the route, not the body, so it can't be spoofed.
 
-The server doesn't apply these itself. It verifies the callback, then hands the trusted bytes to a `WebhookHandler` you inject through <SourceLink to="src/server.ts#L42">ServerOptions</SourceLink>. With no handler wired, the path answers `404`. The handler is where the callback becomes a ledger operation: a cleared purchase maps to a `topUp`, a settled payout to a `settlePayout`, a dispute to a `clawback`. Those mappers (`toTopUp`, `toSettlePayout`, `toClawback`) and the event shapes they consume belong to the [processor port](/economy/ports/processor/), so see that page for the dispatch.
+The server doesn't apply these itself. It verifies the callback, then hands the trusted bytes to a `WebhookHandler` you inject through <SourceLink to="src/server.ts#L42">ServerOptions</SourceLink>. With no handler wired, the path answers `404`. The handler is where the callback becomes a ledger operation: a cleared purchase maps to a `topUp`, a settled payout to a `settlePayout`, a failed payout to a `reversePayout`, a dispute to a `clawback`. Those mappers (`toTopUp`, `toSettlePayout`, `toReversePayout`, `toClawback`) and the event shapes they consume belong to the [processor port](/economy/ports/processor/), so see that page for the dispatch. The economy-edge bridge injects exactly such a handler for the Tilia rail's callbacks ([the packages](/economy/ports/packages/)).
 
 ### The verification gate
 
@@ -154,7 +154,7 @@ It runs in three modes, selected by `argv[2]`:
 | `dev`    | The same API, forced to in-memory adapters with dev secrets, no infrastructure, for `make dev`.   |
 | `worker` | The [background worker](/economy/reference/background-worker/) loop, not the HTTP service.        |
 
-In `serve` and `dev`, <SourceLink to="scripts/main.ts#L483">runServe</SourceLink> builds the economy from the environment and mounts the handler. It passes three things into `createServer`: the purchase-webhook handler, the `Config`, and the clock. Those last two are what _activate_ the verification gate, so a genuine callback is persisted and a forged or stale one is rejected before it changes anything.
+In `serve` and `dev`, <SourceLink to="scripts/main.ts#L502">runServe</SourceLink> builds the economy from the environment and mounts the handler. It passes three things into `createServer`: the purchase-webhook handler, the `Config`, and the clock. Those last two are what _activate_ the verification gate, so a genuine callback is persisted and a forged or stale one is rejected before it changes anything.
 
 ```ts
 const handler = createServer(economy, {
@@ -176,6 +176,6 @@ On Bun and Deno, the Fetch handler is served directly. On Node, the entry bridge
 
 ## What's stubbed versus production-grade
 
-The HTTP edge itself (the routing, the wire codec, the webhook gate, the status mapping) is the real thing the tests exercise (`test/server.test.ts` covers `/submit`, the HMAC and freshness checks, the leak-proof error body, and both probes).
+The HTTP edge (the routing, the wire codec, the webhook gate, the status mapping) is what the tests exercise: `test/server.test.ts` covers `/submit`, the HMAC and freshness checks, the leak-proof error body, and both probes.
 
-The runtime bridge in `scripts/main.ts` is honest dev plumbing, not a hardened gateway. It reads the whole request body into memory before handing it over, applies no rate limiting or request-size cap, and the Node path is a minimal `node:http` translation. In a real deployment you'd typically sit this behind a reverse proxy that owns TLS, limits, and timeouts.
+The bridge in `scripts/main.ts` is dev plumbing, not a hardened gateway. It reads the whole request body into memory before handing it over, applies no rate limiting or request-size cap, and the Node path is a minimal `node:http` translation. In a real deployment you'd typically sit this behind a reverse proxy that owns TLS, limits, and timeouts.

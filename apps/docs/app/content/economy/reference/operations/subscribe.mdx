@@ -102,8 +102,8 @@ never reaches the seller as promo. The fee applies only to the spendable part, m
 | `earned(sellerId)`   | credit | `promo part` |
 
 The fee comes from [`feeForPrice`](/economy/ports/pricing/) at `platformFeeBps`, rounded up
-to a whole credit and capped at the charge. The first period, every renewal, and `spend` all
-call it, so they round the fee identically.
+to a whole credit and capped at the charge — the same call `spend` and every renewal make, so
+the rounding is identical.
 
 The handler grants the buyer the SKU in the same transaction, through the end of the period
 just billed. A rolled-back charge rolls back the grant too.
@@ -126,7 +126,7 @@ values as a `rejected` outcome:
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ALREADY_SUBSCRIBED` | An `ACTIVE` subscription already exists for the same `userId`, `sku`, and `sellerId`. A second one would double-bill.                                                            |
 | `INSUFFICIENT_FUNDS` | The buyer's `spendable` balance can't cover its share of the first period.                                                                                                       |
-| `RISK_DENIED`        | The charge would push the buyer past their recent-spending [velocity limit](/economy/concepts/actors-and-authorization/). `subscribe` counts against the same window as `spend`. |
+| `RISK_DENIED`        | The charge would push the buyer past their recent-spending [velocity limit](/economy/concepts/spend-velocity/). `subscribe` counts against the same window as `spend`. |
 | `ECONOMY_PAUSED`     | A maintenance window is in effect, so a `user` actor's subscribe is declined. The decline carries `resumesAt`; a `system` or `operator` actor is never paused.                   |
 
 A malformed request throws instead:

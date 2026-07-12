@@ -6,7 +6,7 @@ status: stable
 sourceRefs:
   [
     'src/operations/clawback.ts#L42 · clawback',
-    'src/webhooks.ts#L185 · toClawback',
+    'src/webhooks.ts#L236 · toClawback',
   ]
 related:
   [
@@ -48,7 +48,7 @@ The payload fields, beyond the `kind` tag, are:
 | `key`            | `string`                                                      | —          | A free-form reference recorded on the posting (e.g. the network's case id).                                                                                                                                            |
 | `reason`         | `string`                                                      | —          | A free-form reason recorded on the posting (e.g. the chargeback reason code).                                                                                                                                          |
 
-A present-but-blank `orderId` is malformed. Every blank id collapses to the same reversal key, which would falsely tie unrelated chargebacks together. The handler rejects it as a fault rather than claiming that key.
+A blank `orderId` would collapse unrelated chargebacks onto one reversal key, so the handler rejects it as a fault.
 
 ## Returns
 
@@ -105,9 +105,8 @@ An end-user `actor` is refused with an `AUTH.UNAUTHORIZED` fault before any work
 `clawback` holds these regardless of how much of the disputed amount is still in the user's balance:
 
 - The `spendable` debit is capped at the current balance, so a clawback never drives a user account below zero.
-- The posting nets to zero in `CREDIT`: the `spendable` and `RECEIVABLE` debits together equal the `STORED_VALUE` credit.
 - The loss un-issues circulating credits against `STORED_VALUE`; `REVENUE` is untouched.
-- For an order-tied dispute, reversing the order once (by `clawback` or [`refund`](/economy/reference/operations/refund/)) blocks the other through the shared `reversed:${orderId}` key.
+- For an order-tied dispute, reversing the order once — by `clawback` or [`refund`](/economy/reference/operations/refund/) — blocks the other through the shared `reversed:${orderId}` key.
 
 <Callout type="warning">
   The dollar movement happens at the payment processor, not here. `clawback`

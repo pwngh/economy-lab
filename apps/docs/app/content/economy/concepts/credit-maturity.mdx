@@ -40,7 +40,7 @@ Spends draw **oldest-first**: first in, first out. So once past spends have drai
 
 Maturity then splits the tail. A maturity horizon (now minus the settlement wait) falls somewhere along it. Lots older than the horizon have matured; the newest lots are still waiting. The matured balance is that cleared part of the tail.
 
-The horizon depends on how the funds arrived. `maturityHorizonMs` returns the wait per funding source, so a card top-up and a crypto top-up can clear on different schedules, and an unrecognized source falls back to a conservative `default`. A lot matures at its arrival time plus that wait.
+The horizon depends on how the funds arrived: `maturityHorizonMs` returns the wait per funding source, and an unrecognized source falls back to a conservative `default`. A lot matures at its arrival time plus that wait.
 
 ## How it's measured
 

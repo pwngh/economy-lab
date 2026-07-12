@@ -6,15 +6,13 @@ order: 85
 status: stable
 sourceRefs:
   [
-    'src/trust.ts#L132 · riskSubject',
-    'src/trust.ts#L154 · attemptMinor',
-    'src/economy.ts#L591 · screenRisk',
-    'src/engines/postgres.ts#L1540 · recordVelocity',
+    'src/trust.ts#L131 · riskSubject',
+    'src/trust.ts#L153 · attemptMinor',
+    'src/economy.ts#L555 · screenRisk',
+    'src/engines/postgres.ts#L1621 · recordVelocity',
   ]
 related: ['economy/concepts/concurrency', 'economy/concepts/solvency']
 ---
-
-Spend velocity is the gate that caps how much value one subject can move within a rolling window, checked before any money moves.
 
 ## The idea
 
@@ -43,7 +41,7 @@ A compromised or misbehaving account can try to move money faster than anyone re
 
 ## How it's enforced
 
-A naive limit reads the recent total, compares it, then records the new attempt — three steps another operation can interleave. Two concurrent spends read the same stale total, both pass, and together they blow the limit; it's the same interleaving hazard [concurrency](/economy/concepts/concurrency/) handles for balances. To close that read-then-write race, the gate records _and_ measures in one indivisible step per subject.
+A naive limit reads the total, compares, then records — three steps another operation can interleave, so two concurrent spends both pass and together blow the limit. It's the same interleaving hazard [concurrency](/economy/concepts/concurrency/) handles for balances, and the gate closes it by recording _and_ measuring in one indivisible step per subject.
 
 `screenRisk` runs inside the submit pipeline, before the money transaction opens. It hands the attempt to `recordVelocity`, which does the whole record-and-measure as one unit: it takes a per-subject lock, dedup-inserts the attempt keyed on the [`idempotencyKey`](/economy/concepts/idempotency/) so a retry never double-counts, sums the subject's amounts where the timestamp falls inside the window, and returns that total. `screenRisk` compares it to `velocityLimitMinor` and rejects when it's over.
 

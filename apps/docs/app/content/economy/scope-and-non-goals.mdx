@@ -7,7 +7,7 @@ sourceRefs:
   [
     'src/ports.ts#L132-L144 · Processor',
     'src/ports.ts#L120-L123 · Dispatcher',
-    'src/ports.ts#L158-L182 · Rates',
+    'src/ports.ts#L186-L210 · Rates',
     'test/conformance/invariants.adversarial.test.ts',
   ]
 related: ['economy/concepts/overview', 'economy/reference/configuration']
@@ -15,7 +15,7 @@ related: ['economy/concepts/overview', 'economy/reference/configuration']
 
 ## Where the lab draws the line
 
-economy-lab is a study of one thing: the application layer of a credits economy, and the invariants that hold it together. It is not a deployable money system, and it does not try to be one.
+economy-lab is a study of one thing: the application layer of a credits economy, and the invariants that hold it together.
 
 The ledger invariants (conservation, no-overdraft, [backing](/economy/concepts/solvency/), [chain continuity](/economy/concepts/integrity/)) are enforced to a production standard, pushed into the database and attacked by an adversarial suite that writes violating rows directly rather than trusting the app. The operational edges around that ledger are deliberately stubbed or simplified.
 
@@ -28,7 +28,7 @@ This page is the map of that second half: the things economy-lab leaves to a hos
 
 ## No real payment provider
 
-economy-lab never moves real money. When a seller cashes out, the credits retire on the ledger and an equal sum of dollars is meant to leave a trust account, but the actual disbursement to a bank or card happens somewhere the lab doesn't reach.
+economy-lab never moves real money. When a seller cashes out, the credits retire on the ledger, but the actual disbursement to a bank or card happens somewhere the lab doesn't reach.
 
 That somewhere is a port. The [`Processor`](/economy/ports/processor/) interface is the single seam through which all money leaves the platform, and it has exactly one method: `submitPayout`. The core asks the provider to send money and reads back a `providerRef`; it never learns "did it settle?" by polling. Settlement arrives later, as a webhook the provider sends back.
 
@@ -88,4 +88,4 @@ Credits convert to dollars at fixed, platform-set rates, never a live market. Th
 
 The reference adapter (`src/adapters/rates.ts`) reads three integers from config and returns them; the only currencies are `CREDIT` and `USD`, and any other pair is treated as a wiring bug that throws. There is no foreign-exchange source, no rate that changes between two reads, no market risk to hedge. A credit is worth what the platform says it's worth, and the [spread](/economy/concepts/money-model/) between buying and cashing out is the platform's margin, set once.
 
-This keeps the money model deterministic, which is what makes the invariants checkable after _every_ operation. A live FX feed would trade that determinism for realism the lab doesn't need.
+Fixed rates keep the money model deterministic — what makes the invariants checkable after _every_ operation; a live feed would trade that for realism the lab doesn't need.

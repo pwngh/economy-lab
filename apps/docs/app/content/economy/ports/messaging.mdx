@@ -12,7 +12,7 @@ sourceRefs: ['src/worker/relay.ts#L56 · relayOutbox', 'src/adapters/sqs.ts']
 related: ['economy/ports/storage', 'economy/ports/processor']
 ---
 
-Money moves and messages about money are different things, and they fail differently. A posting either commits or it doesn't; a message can be sent and lost, sent twice, or sent about a move that never committed.
+A posting either commits or it doesn't; a message can be sent and lost, sent twice, or sent about a move that never committed.
 
 This page covers the ports that keep the two honest with each other: the `Dispatcher` (events out), and the transactional outbox and inbox rows those events flow through. The rows themselves live on the [`Store`](/economy/ports/storage/); the patterns that use them live here.
 
@@ -32,9 +32,9 @@ Delivery is at-least-once. SQS may deliver a message twice, so every event carri
 
 There's a problem the `Dispatcher` alone doesn't solve: if the money commits but the event send fails, the event is lost; if you send first and the commit rolls back, you've announced a move that never happened. The fix is to make the event part of the transaction.
 
-That's the transactional outbox.<Cite n={1} /> When a money move commits, its outgoing event is written to the `outbox` sub-store _in the same database transaction_. A separate relay ([the background worker](/economy/reference/background-worker/)) picks up pending rows afterward and ships them through the `Dispatcher`. An event is never sent for a rolled-back move, nor lost for a committed one.
+That's the transactional outbox.<Cite n={1} /> When a money move commits, its outgoing event is written to the `outbox` sub-store _in the same database transaction_. A separate relay ([the background worker](/economy/reference/background-worker/)) ships pending rows through the `Dispatcher`; an event is never sent for a rolled-back move, nor lost for a committed one.
 
-The relay is `relayOutbox` in `src/worker/relay.ts`. It claims a batch of pending rows, sends each in its own try/catch so one failure can't stop the batch, and marks the delivered ones done. A send that throws is left pending with its attempt count bumped, retried next run; once it hits the configured cap it's dead-lettered<Cite n={2} /> to a terminal `dead` state, so one poison event can't wedge the queue behind it.
+The relay is `relayOutbox` in `src/worker/relay.ts`. It claims a batch of pending rows, sends each in its own try/catch so one failure can't stop the batch, and marks the delivered ones done. A send that throws is left pending with its attempt count bumped, retried next run; once it hits the configured cap it's dead-lettered<Cite n={2} /> to a terminal `dead` state, so one poison event can't wedge the queue behind it. The bundled @pwngh/taskq bridge is one consumer on the far side: it enqueues each delivery as a durable task keyed by the event id ([the packages](/economy/ports/packages/)).
 
 ## The inbox
 

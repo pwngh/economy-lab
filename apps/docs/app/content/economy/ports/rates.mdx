@@ -5,8 +5,8 @@ order: 30
 status: stable
 sourceRefs:
   [
-    'src/ports.ts#L158-L182 · Rates',
-    'src/ports.ts#L192 · Rate',
+    'src/ports.ts#L186-L210 · Rates',
+    'src/ports.ts#L220 · Rate',
     'src/adapters/rates.ts#L58-L91 · configuredRates',
   ]
 related: ['economy/ports/pricing']
@@ -16,7 +16,7 @@ related: ['economy/ports/pricing']
 
 Somewhere, the economy has to answer a single question: how many real dollars is a credit worth? Buying credits, backing them, and paying sellers out all turn on that number. The `Rates` port is the seam where that answer comes in, so the core never hard-codes a price and never trusts a caller to supply one.
 
-It hands the rest of the system three rates, each tagged with the exact `rateId` it used, and nothing else. A top-up reads one rate, the backing check reads another, and a payout saga reads a third, and because each call returns the rate's id, a transaction can record which number it priced against.
+It hands the rest of the system three rates, each tagged with the exact `rateId` it used. A top-up reads one rate, the backing check reads another, and a payout saga reads a third, and because each call returns the rate's id, a transaction can record which number it priced against.
 
 The `Rates` interface lives in `src/ports.ts`. It exposes exactly three methods, one per rate.
 
@@ -71,7 +71,7 @@ Only `CREDIT` and `USD` exist in the lab. A same-currency conversion returns a 1
 
 ## Fixed in the lab: no live feed
 
-This port does not track a market. Credits are priced by the platform, so the rates are business constants a deployment sets. There is no exchange quote, no FX feed, no refresh, and no clock-driven movement. `configuredRates` returns the same numbers every time it's asked.
+This port does not track a market: credits are priced by the platform, so the rates are business constants a deployment sets — no FX feed, no refresh. `configuredRates` returns the same numbers every time it's asked.
 
 That `at` timestamp on `payout` is the one place the contract leaves room for a live source. A real settlement feed would price `CREDIT`-to-`USD` as of a moment in time; the reference adapter accepts the timestamp and ignores it. Wiring a live feed would mean writing a new adapter that honors `at`, with the rest of the core unchanged, because everything downstream already reads through this seam.
 

@@ -5,7 +5,7 @@ order: 70
 status: stable
 sourceRefs:
   [
-    'src/operations/reversePayout.ts#L43 · reversePayout',
+    'src/operations/reversePayout.ts#L45 · reversePayout',
     "src/contract.ts#L179 · kind 'reversePayout'",
     'src/operations/registry.ts#L54 · REGISTRY',
   ]
@@ -122,6 +122,9 @@ the saga's [state](/economy/concepts/payout-saga/):
   `updatedAt`, set when the payout entered `SUBMITTED`.
 - `SUBMITTED`, still within the window: refused with `SAGA.INVALID_TRANSITION`. The disbursement is in the
   provider's hands and may still settle externally; returning the reserve now risks a double-pay.
+  One exception: an operation carrying `providerReported` — set only by the payout-failed webhook
+  mapper, never by hand — waives this refusal, because the rail itself has reported it will not
+  settle the payout.
 - `SETTLED`: refused with `SAGA.INVALID_TRANSITION`. Real USD already left trust; there is no reserve to
   return.
 - Any other state (`REQUESTED`, or an already-`FAILED` saga): returned as `duplicate` with no
@@ -133,4 +136,4 @@ if the saga is still in the state the handler read.
 If a concurrent worker advanced it first, the guard fails. The operation then returns `duplicate` and
 posts nothing, so two attempts can never both undo the same payout.
 
-The default for `maxPayoutAgeMs` is 24 hours, set from the `MAX_PAYOUT_AGE_MS` environment variable.
+The default for `maxPayoutAgeMs` is 72 hours, set from the `MAX_PAYOUT_AGE_MS` environment variable.

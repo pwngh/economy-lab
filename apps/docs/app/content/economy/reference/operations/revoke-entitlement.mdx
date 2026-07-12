@@ -82,7 +82,7 @@ A malformed request throws instead:
 | -------------- | --------------------------------------------- |
 | `OP.MALFORMED` | A blank or whitespace-only `userId` or `sku`. |
 
-A blank user would revoke ownership against a phantom user, and a blank SKU against nothing. So a malformed request surfaces as a client error rather than a silent `NOT_ENTITLED`.
+A blank field would revoke against a phantom user or SKU, so a malformed request surfaces as a client error rather than a silent `NOT_ENTITLED`.
 
 ## Preconditions and invariants
 

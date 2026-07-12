@@ -41,7 +41,7 @@ The payload fields, beyond the `kind` tag, are:
 | `txnId`          | `string`                                                   | (required) | The id of the transaction to undo.                                                                  |
 | `reason`         | `string`                                                   | (required) | Why the reversal happened, recorded on the reversing transaction. Must be non-empty.                |
 
-There is no `amount` field. The amounts come from the original transaction's legs. The handler flips each one's sign.
+There is no `amount` field: the handler flips the sign of each of the original transaction's legs.
 
 ## Returns
 

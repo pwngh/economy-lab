@@ -50,13 +50,7 @@ The payload is one `refund` variant of [`Operation`](/economy/reference/the-econ
 
 ## Postings
 
-The reversal rebuilds the sale's [double-entry posting](/economy/concepts/accounts-and-double-entry/) in mirror image. To do that, it splits the original sale's legs into three groups:
-
-- **Raise in full**: the buyer's `spendable` and `promo` accounts the sale debited, plus any platform account the sale drew down. Raising an account never pushes a balance below zero, so these apply with no cap.
-- **Claw back, capped**: each seller's `earned` balance the sale credited, and `REVENUE` if it took a fee. The clawback is limited to what that account still holds. If a seller already spent or paid out their cut, only the part still there comes back.
-- **Receivable**: the total that couldn't be clawed back is credited to `SYSTEM.RECEIVABLE`, the platform's IOU, so debits and credits still cancel.
-
-The shortfall is always denominated in `CREDIT`, since a sale only moves `CREDIT`.
+The reversal mirrors the sale's [double-entry posting](/economy/concepts/accounts-and-double-entry/) leg for leg, in three groups: the buyer's accounts raised in full, each seller's `earned` and `REVENUE` clawed back but capped at what that account still holds, and whatever couldn't be clawed back credited to `SYSTEM.RECEIVABLE` so debits and credits still cancel. If a seller already spent or paid out their cut, only the part still there comes back. The shortfall is always denominated in `CREDIT`, since a sale only moves `CREDIT`.
 
 <Callout type="note">
   A refund never drives a user account negative. The ledger forbids that, which

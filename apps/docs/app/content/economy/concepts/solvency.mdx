@@ -16,7 +16,7 @@ related:
 
 ## The idea
 
-Solvency is the promise that a user can always cash out the credits they hold. The platform keeps enough real dollars in trust to redeem every spendable credit at the [`par` rate](/economy/concepts/money-model/), and it never issues a credit without first setting aside the dollar that backs it.
+Solvency is the promise that a user can always cash out. The platform keeps enough real dollars in trust to redeem every spendable credit at the [`par` rate](/economy/concepts/money-model/), set aside before the credit is issued.
 
 You don't have to take that promise on faith. You can check it. After every operation, a backing check re-derives the answer straight from the ledger: it sums the credits users can spend, converts them to the USD they're owed, and weighs that against the cash actually on hand. What you get back is a single `backed` flag, and a `shortfall` when the cash falls short.
 
@@ -28,7 +28,7 @@ report.shortfall; // an Amount in USD; zero when backed is true
 
 ## Why it exists
 
-A credits economy holds users' money on their behalf. Issue more spendable credits than there is cash set aside to redeem them, and the books still balance. [Conservation](/economy/concepts/integrity/) only says debits equal credits, not that real dollars stand behind the obligation.
+Issue more spendable credits than there is cash set aside, and the books still balance: [conservation](/economy/concepts/integrity/) only says debits equal credits, not that real dollars stand behind them.
 
 The gap stays invisible until users try to cash out and the trust account runs dry. Solvency turns the gap into a measured number that the [worker](/economy/reference/background-worker/) re-checks every cycle, so it never becomes a surprise at redemption time.
 
@@ -46,13 +46,13 @@ The excluded credits are obligations owed in credits, not dollars, so they don't
 
 The trust money stays segregated. The platform's margin from the buy-vs-par [spread](/economy/concepts/money-model/) lands in `revenue_usd`, not `trust_cash`, so it never enters the backing total.
 
-The platform gets paid only from the **surplus**: cash sitting beyond what's owed to users. The fee sweep refuses any draw that would pull `trust_cash` below the requirement.
+The platform gets paid only from the **surplus** — cash beyond what's owed to users; the fee sweep refuses any draw that would pull `trust_cash` below the requirement.
 
 <Callout type="danger">
   The fee sweep enforces the backing floor at write time, not only in the audit.
   Before moving accrued fees into platform cash, `sweepFees` caps the draw at
   the smaller of the cash surplus and the matured revenue. A draw that would
-  push `trust_cash` below what users are owed throws `COMMINGLING` and posts
+  push `trust_cash` below what users are owed throws [`COMMINGLING`](/economy/reference/outcomes-and-reason-codes/) and posts
   nothing.
 </Callout>
 

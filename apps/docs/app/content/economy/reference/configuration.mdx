@@ -5,7 +5,7 @@ order: 40
 status: stable
 sourceRefs:
   [
-    'src/config.ts#L140-L169 · loadConfig',
+    'src/config.ts#L138-L167 · loadConfig',
     'src/index.ts#L126-L231 · capabilitiesFromEnv',
     'scripts/main.ts#L141-L150 · productionExternals',
     '.env.example',
@@ -21,10 +21,10 @@ related:
 
 ## How configuration is read
 
-economy-lab reads the environment in exactly one place, at startup. The library modules
-never touch `process.env` themselves. Instead the edge calls `loadConfig` once, gets back a
+economy-lab reads the environment once, at startup: the edge calls `loadConfig`, gets a
 plain [`Config`](https://github.com/pwngh/economy-lab/blob/main/src/config.ts) object, and
-passes it in. A misconfigured deploy therefore fails at startup, not deep inside a request.
+passes it in — the library modules never touch `process.env`. A misconfigured deploy fails
+at startup, not deep inside a request.
 
 That single read also means defaults live in one file. Every tunable below is parsed by
 `loadConfig` with a fallback, so an unset or malformed value lands on the documented default
@@ -46,7 +46,7 @@ the end, because they pick adapters rather than tune policy.
 
 Two secrets have no honest default. In production (`NODE_ENV=production`) a blank value for
 either makes `loadConfig` throw a single `CONFIG.INVALID` fault listing every missing key at
-once. Outside production a blank secret is tolerated so a local run needs no setup.
+once.
 
 | Variable         | Meaning                                                                                                                  | Default                       |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------- |
@@ -70,7 +70,7 @@ a minor unit is.
 | `PAYOUT_MIN_EARNED_MINOR` | Smallest payout a user may request, counted only against _earned_ CREDIT, not bought or promo-granted. The floor keeps a disbursement from costing more in rail fees than it pays out. | `2000000` (≈ $100) |
 | `PAYOUT_MIN_INTERVAL_MS`  | Minimum time between a user's payout requests. The 24h default matches the public payout docs of the platform the example models; that platform's payout terms require 14 days, so a production deploy sets `1209600000`. | `86400000` (24h)   |
 | `MAX_PAYOUT_ATTEMPTS`     | Provider attempts for one payout before the system gives up and reverses it.                                                                                                           | `5`                |
-| `MAX_PAYOUT_AGE_MS`       | Longest a payout may sit in `SUBMITTED` before the worker force-fails it as timed out, because the provider never reported back.                                                       | `86400000` (24h)   |
+| `MAX_PAYOUT_AGE_MS`       | Longest a payout may sit in `SUBMITTED` before the worker force-fails it as timed out, because the provider never reported back. The default outlasts a rail's one-to-two business-day settlement. | `259200000` (3d)   |
 | `PAYOUT_FEE_BPS`          | Payout-rail fee in basis points, charged on the USD a seller cashes out. This is the rail's own cut, deducted from the disbursement, not platform revenue.                            | `150` (≈ 1.5%)     |
 
 The `payout` rate and the per-state payout SLAs also feed the saga; the SLAs live under the
@@ -107,6 +107,8 @@ maturity](/economy/concepts/credit-maturity/) for why the holding period exists.
 | ----------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------ |
 | `MATURITY_HORIZON_CARD_MS`    | Hold for a card top-up: its chargeback window.                                                            | `604800000` (7d)         |
 | `MATURITY_HORIZON_CRYPTO_MS`  | Hold for a crypto top-up.                                                                                 | `86400000` (1d)          |
+| `MATURITY_HORIZON_STEAM_MS`   | Hold for a Steam-store top-up. Defaults to the card horizon until the rail's refund window is decided.    | `604800000` (7d, = card) |
+| `MATURITY_HORIZON_META_MS`    | Hold for a Meta-store top-up. Same conservative default as Steam.                                         | `604800000` (7d, = card) |
 | `MATURITY_HORIZON_DEFAULT_MS` | Hold for an unlisted funding source. Falls back to the card horizon, the most conservative shipped value. | `604800000` (7d, = card) |
 
 ## Fees and the risk gate
@@ -183,7 +185,7 @@ to [storage](/economy/ports/storage/), read by
 
 | Variable         | Meaning                                                                                 | Default                     |
 | ---------------- | --------------------------------------------------------------------------------------- | --------------------------- |
-| `DATABASE_URL`   | A `postgres://` or `mysql://` DSN selects that engine; any other scheme throws.         | unset (in-memory store)     |
+| `DATABASE_URL`   | A `postgres://` or `mysql://` connection string selects that engine; any other scheme throws.         | unset (in-memory store)     |
 | `REDIS_URL`      | Adds a Redis read-through cache the store consults before the database.                 | unset (no cache)            |
 | `SQS_QUEUE_URL`  | Delivers outgoing events via an Amazon SQS queue. Wins if `DISPATCHER_URL` is also set. | unset                       |
 | `DISPATCHER_URL` | Posts outgoing events over HTTP to your event bus.                                      | unset (in-process delivery) |
@@ -200,3 +202,15 @@ cadence and batch size.
 | `SHUTDOWN_TIMEOUT_MS` | How long a graceful shutdown waits for in-flight work before forcing exit. | `5000`  |
 | `WORKER_INTERVAL_MS`  | Gap between worker sweep ticks.                                            | `60000` |
 | `WORKER_BATCH`        | Rows a worker sweep processes per tick.                                    | `100`   |
+
+## The package bridges
+
+Two optional bridges in the host entry point (`scripts/main.ts`) compose the sibling packages in.
+Each is off until its gate variable is set, and neither is read by the library itself; the seams
+they wire are owned by [the packages](/economy/ports/packages/).
+
+| Variable             | Meaning                                                                                                                                                                    | Default            |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| `TASKQ_DATABASE_URL` | Enables the @pwngh/taskq bridge: outbox events are enqueued as durable tasks on this Postgres database. `TASKQ_PATH` points at the checkout; `TASKQ_POLL_MS` tunes the poll (default `250`). | unset (bridge off) |
+| `TILIA_CLIENT_ID`    | Enables the economy-edge Tilia bridge: the shimmed processor, the payee directory, the float feed, and the webhook handler. `TILIA_ENVIRONMENT` picks `staging` or `production`; production also requires `TILIA_PAYEE_DATABASE_URL` and `TILIA_WEBHOOK_SECRET`. | unset (bridge off) |
+

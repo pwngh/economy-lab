@@ -8,7 +8,7 @@ sourceRefs:
     'src/operations/topUp.ts#L38 · topUp',
     'src/operations/registry.ts#L42 · REGISTRY',
     "src/contract.ts#L68 · kind 'topUp'",
-    'src/webhooks.ts#L136 · toTopUp',
+    'src/webhooks.ts#L166 · toTopUp',
   ]
 related:
   [
@@ -93,9 +93,8 @@ The second posting accounts for the cash the buyer paid. The USD splits two ways
 The `REVENUE_USD` leg posts only when the margin is positive. An exact-par purchase (no spread) stays
 a two-leg cash move.
 
-Both conversions round up. Rounding the backing up keeps `TRUST_CASH` covering the whole spendable
-balance valued at par, so the books never read unbacked. Rounding the gross up to match keeps the
-margin at or above zero. The cost is at most one minor unit over the exact price.
+Both conversions round up — the backing so `TRUST_CASH` always covers the spendable balance at par,
+the gross so the margin never goes negative. The cost is at most one minor unit.
 
 <Callout type="note">
   The CREDIT `REVENUE` account is untouched by a top-up, so it keeps meaning

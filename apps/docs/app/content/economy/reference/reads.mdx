@@ -6,13 +6,13 @@ status: stable
 sourceRefs:
   [
     'src/contract.ts#L329-L381 · Economy.read',
-    'src/economy.ts#L86-L100 · read',
+    'src/economy.ts#L87-L101 · read',
     'test/economy.read.test.ts',
   ]
 related: ['economy/reference/outcomes-and-reason-codes']
 ---
 
-`read` is the query half of [the `Economy`](/economy/reference/the-economy/): the place you go to answer "what's this balance?", "did this go through?", "does this user own that item?". Nothing under `read` writes a ledger entry, claims an idempotency key, or records a velocity attempt.
+`read` is the query half of [the `Economy`](/economy/reference/the-economy/): "what's this balance?", "did this go through?", "does this user own that item?". Nothing under `read` writes a ledger entry, claims an idempotency key, or records a velocity attempt.
 
 Every method lives on the `economy.read` group, and the whole group is read-only. You call them the same way you'd call `submit`:
 
@@ -98,7 +98,7 @@ This lets a UI render a maintenance banner directly, instead of inferring the pa
 
 ## Streaming the whole board
 
-The readers above resolve a single answer. These three stream every record of a kind, newest first, one at a time, because a real ledger or a busy economy can hold far more than you'd want to collect into one array. Each returns an `AsyncIterable`, so you iterate with `for await` and stop whenever you've seen enough.
+These three stream every record of a kind, newest first, because a real ledger holds far more than you'd want in one array. Each returns an `AsyncIterable`, so you iterate with `for await` and stop whenever you've seen enough.
 
 `read.accounts()` streams every account that has a balance row. It's the prover's own enumeration, exposed so a reader can list accounts (and derive the users behind them) without tracking minted ids itself:
 

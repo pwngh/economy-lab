@@ -42,7 +42,7 @@ These are **lab numbers**, and the bench says so in its own header. It runs in a
 Submit cost is per operation:
 
 - **In memory** — the cost of building and hashing one balanced posting.
-- **On a SQL backend** — each `submit` is its own transaction, so it also pays a commit and an `fsync`, which dominates the per-operation time and puts the SQL backends well below the in-memory rate.
+- **On a SQL backend** — each `submit` is its own transaction, so it also pays a commit and an `fsync`, which dominates the per-operation time.
 
 Integrity cost splits by what each check has to read:
 

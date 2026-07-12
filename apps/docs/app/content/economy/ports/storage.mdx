@@ -5,17 +5,17 @@ order: 50
 status: stable
 sourceRefs:
   [
-    'src/ports.ts#L310 · Store',
-    'src/ports.ts#L217 · Ledger',
-    'src/adapters/memory.ts#L1262 · memoryStore',
-    'src/engines/postgres.ts#L1685 · postgresStore',
+    'src/ports.ts#L360 · Store',
+    'src/ports.ts#L245 · Ledger',
+    'src/adapters/memory.ts#L1389 · memoryStore',
+    'src/engines/postgres.ts#L1826 · postgresStore',
   ]
 related: ['economy/ports/messaging', 'economy/concepts/accounts-and-double-entry']
 ---
 
 ## The seam between the core and the world
 
-Everything the economy persists passes through one of a few narrow interfaces. The core never opens a connection and never knows whether it's talking to memory or Postgres. It calls a method on a port, and an adapter does the rest.
+Everything the economy persists passes through one of a few narrow interfaces. The core never opens a connection or knows whether it's talking to memory or Postgres: it calls a method on a port, and an adapter does the rest.
 
 These ports all live in `src/ports.ts`. This page covers the ones that hold state: the `Store` (the ledger and its sub-stores) and the read-through `Cache`. The ports that move messages — the outbox, the inbox, and the `Dispatcher` — write through the same `Store` and have [their own page](/economy/ports/messaging/).
 
@@ -76,15 +76,15 @@ The same posting, the same overdraft rejection, and the same hash chain come bac
 
 ### The in-memory default
 
-With no `DATABASE_URL` set, the system runs on `memoryStore()`: plain JavaScript `Map`s, no database, no setup. It's the zero-infrastructure default for tests and local development.
+With no `DATABASE_URL` set, the system runs on `memoryStore()` — plain JavaScript `Map`s, the zero-infrastructure default for tests and local development.
 
 It's also the reference implementation. Its hash function and clock default to deterministic versions, so a bare `memoryStore()` is reproducible run to run, and the conformance suite treats it as the oracle the other adapters must match.
 
 ### Postgres and MySQL
 
-Point `DATABASE_URL` at a `postgres://` or `mysql://` DSN and the system loads that engine instead, and only then loads its driver. The SQL engines live in `src/engines/postgres.ts` and `src/engines/mysql.ts`; both pass the same conformance suite as memory.
+Point `DATABASE_URL` at a `postgres://` or `mysql://` connection string (a DSN, in driver terms) and the system loads that engine instead, and only then loads its driver. The SQL engines live in `src/engines/postgres.ts` and `src/engines/mysql.ts`; both pass the same conformance suite as memory.
 
-The SQL engines do something the in-memory one can't: they enforce the invariants a second time, in the database. Every `CHECK` constraint in the schema is also a rule in the TypeScript code, so a user account can't go negative and a posting's legs can't fail to sum to zero, even if a raw `INSERT` tried to write around the application. The conservation half is a deferred constraint trigger that re-sums a posting's legs at commit (see <SourceLink to="db/postgresql-schema.sql#L490-L494 · legs_conserve" />):
+The SQL engines do something the in-memory one can't: they enforce the invariants a second time, in the database. Every `CHECK` constraint in the schema is also a rule in the TypeScript code, so a user account can't go negative and a posting's legs can't fail to sum to zero, even if a raw `INSERT` tried to write around the application. The conservation half is a deferred constraint trigger that re-sums a posting's legs at commit (see <SourceLink to="db/postgresql-schema.sql#L507-L524 · legs_conserve" />):
 
 ```sql
 create or replace function check_conservation() returns trigger as $$
@@ -116,7 +116,7 @@ That belongs to [integrity](/economy/concepts/integrity/), which owns the conser
 
 ## The `Cache`
 
-The `Cache` is a read-through key/value port for hot reads, mainly balances. It's strictly an accelerator: the core works without one, and it can only ever speed reads, never break them.
+The `Cache` is a read-through key/value port for hot reads, mainly balances — strictly an accelerator: the core works without one, and a cache failure can never break a read.
 
 That guarantee is built into the contract. When no cache is injected, the read path skips it and goes straight to the ledger. When a cache _is_ present but errors, the read degrades to a direct ledger read rather than failing the request.
 

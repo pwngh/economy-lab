@@ -7,9 +7,9 @@ status: stable
 sourceRefs:
   [
     'src/ledger.ts#L72 · lockAll',
-    'src/economy.ts#L625 · lockAccounts',
-    'src/engines/postgres.ts#L212 · advanceChain',
-    'db/postgresql-schema.sql#L110 · chain_links_account_prev_uq',
+    'src/economy.ts#L584 · lockAccounts',
+    'src/engines/postgres.ts#L215 · advanceChain',
+    'db/postgresql-schema.sql#L114 · chain_links_account_prev_uq',
   ]
 related: ['economy/concepts/idempotency', 'economy/concepts/platform-sharding']
 ---
@@ -18,7 +18,7 @@ When two operations touch the same account at the same time, they can interleave
 
 ## The idea
 
-Before it posts, every operation acquires a lock on each account it will touch, and it does so in one global order. That order is a plain sort of the account ids. Two operations that share an account therefore acquire its lock in the same sequence, and one waits for the other.
+Before it posts, every operation acquires a lock on each account it will touch, in one global order: a plain sort of the account ids. Two operations that share an account acquire its lock in the same sequence, so one waits for the other.
 
 `lockAll` de-duplicates the account set and sorts it, then takes each lock in turn:
 
@@ -30,7 +30,7 @@ for (const account of [...new Set(accounts)].sort()) {
 
 ## Why the order has to be deterministic
 
-Acquire locks in an arbitrary order and you get deadlocks. One operation locks account `A` and waits for `B`; another locks `B` and waits for `A`; neither can proceed. A shared total order removes the circular wait: both operations acquire `A` before `B`, so one takes its turn while the other waits.
+Acquire locks in an arbitrary order and you get deadlocks: one operation locks `A` and waits for `B`, another locks `B` and waits for `A`. A shared total order removes the circular wait — both acquire `A` before `B`.
 
 The sort has to be identical everywhere it runs. `.sort()` compares by code unit, which is stable across machines and runtimes. A locale-aware comparison is not: it can order the same two ids differently in two places, which reintroduces the cycle. `lockAccounts` routes every operation through `lockAll` before its handler runs, so no handler can reimplement the ordering incorrectly.
 

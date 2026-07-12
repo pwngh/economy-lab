@@ -23,7 +23,7 @@ const price = toAmount('CREDIT', 1000n); // 10.00 CREDIT
 encodeAmount(price); // → 'CREDIT:10.00'
 ```
 
-A whole unit is `SCALE` (`100n`) minor units, two decimal places, fixed. `toAmount` is the only constructor, and the `__brand` field makes a plain `{ currency, minor }` object unassignable to `Amount`. So every value has to pass through `toAmount` or `decodeAmount`.
+A whole unit is `SCALE` (`100n`) minor units, two decimal places, fixed. The `__brand` field makes a plain `{ currency, minor }` object unassignable to `Amount`, so every value has to pass through `toAmount` or `decodeAmount`.
 
 Two guards keep currencies from mixing by accident. `add` and `compare` call `assertSameCurrency`, which throws `CURRENCY_MISMATCH` if you hand them two different currencies. Combining a `CREDIT` amount with a `USD` amount is always a bug. And `decodeAmount` rejects a string with more than two decimal places (`INVALID_AMOUNT`) rather than silently dropping the extra digits.
 
@@ -43,7 +43,7 @@ If a credit cashed out for exactly what you paid, the platform would earn nothin
 | `par`    | The redemption/backing rate: a credit's cash-out floor, and the value the backing check holds real USD against. | ~200 credits / USD ($0.005)   |
 | `payout` | The seller settlement rate: what an earned credit converts to USD at. Equals `par`.                            | ~200 credits / USD ($0.005)   |
 
-The `buy`-to-`par` gap is the platform spread, about 40% on the example rates above. It's the platform's margin, and it funds fees, payment processing, reserves, and operating costs. The spread is taken **once, at purchase**, and never mixed into the cash held to back users.
+The `buy`-to-`par` gap is the platform spread, about 40% on the example rates above — the platform's margin, funding fees, payment processing, reserves, and operating costs. It is taken **once, at purchase**, and never mixed into the cash held to back users.
 
 <RateLadder />
 

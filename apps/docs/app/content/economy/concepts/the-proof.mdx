@@ -7,7 +7,7 @@ status: stable
 sourceRefs:
   [
     'src/integrity.ts#L83 · proveEconomy',
-    'src/contract.ts#L392 · ProveReport',
+    'src/contract.ts#L399 · ProveReport',
     'scripts/prove.ts',
   ]
 related:
@@ -19,7 +19,7 @@ related:
 
 ## The idea
 
-You don't have to take "the books balance" on faith. You can re-derive it. The prover does exactly that: it rebuilds every money invariant from scratch, straight from the ledger's [posted legs](/economy/concepts/accounts-and-double-entry/), and hands you one report, a `ProveReport`, telling you whether the books still hold.
+You don't have to take "the books balance" on faith: the prover rebuilds every money invariant from scratch, straight from the ledger's [posted legs](/economy/concepts/accounts-and-double-entry/), and hands you one `ProveReport` telling you whether the books still hold.
 
 It only reads, it never writes. It sums the debit and credit lines itself instead of trusting any cached balance. It recomputes each account's hash chain from genesis. Then it compares the result against what the [ledger](/economy/concepts/integrity/) actually stored.
 
@@ -38,7 +38,7 @@ report.conserved &&
 
 ## Why it exists
 
-If the database already rejects a bad row, why re-check the books at all? Because the write path can only vouch for the writes it performs. The invariants are enforced at write time, pushed down into Postgres triggers and MySQL stored procedures so a violating row can't be committed (see [Integrity](/economy/concepts/integrity/)). The prover is the second line of defense: an independent audit that runs on top of that enforcement.
+The write path can only vouch for the writes it performs. The invariants are enforced at write time in the database (see [Integrity](/economy/concepts/integrity/)); the prover is the second line of defense, an independent audit on top.
 
 Its job is to catch the failures a write-path guard structurally can't see. A bug in the enforcement. A half-applied write. A row edited directly in the database. That is `proveEconomy`'s stated contract: an independent audit, not the enforcer — it never guards the write path (see <SourceLink to="src/integrity.ts#L72">source</SourceLink>).
 
@@ -58,7 +58,7 @@ The prover checks five properties and reports each as a boolean flag on `ProveRe
 
 Two more fields carry the detail behind a failing flag. `shortfall` is the missing USD when `backed` is false, and zero otherwise. `drift` lists each account whose cached balance disagrees with its legs. Each drift entry names both the `materialized` and the `derived` figure, so an operator can see the size and direction of the gap.
 
-`allInvariantsHold(report)` is the convenience roll-up. It is `true` only when all five flags are `true` (see <SourceLink to="src/integrity.ts#L267">source</SourceLink>). If you only care about one property, read its field directly.
+`allInvariantsHold(report)` is the convenience roll-up. It is `true` only when all five flags are `true` (see <SourceLink to="src/integrity.ts#L268">source</SourceLink>). If you only care about one property, read its field directly.
 
 ## How it's enforced
 

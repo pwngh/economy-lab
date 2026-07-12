@@ -4,7 +4,7 @@ summary: "A marketplace sale: the buyer spends, the seller earns, and the platfo
 order: 20
 status: stable
 sourceRefs:
-  ['src/operations/spend.ts#L66 · spend', 'src/pricing.ts#L52 · splitLegs']
+  ['src/operations/spend.ts#L71 · spend', 'src/pricing.ts#L52 · splitLegs']
 related: ['economy/reference/configuration']
 ---
 
@@ -67,7 +67,7 @@ Each `Recipient` is `{ sellerId: string; shareBps: number }`. A `shareBps` must 
 
 ## Postings
 
-`spend` posts one balanced [`Transaction`](/economy/concepts/accounts-and-double-entry/). The price is split across the buyer's two balances, so the legs come in two parts that each balance on their own.
+`spend` posts one balanced [`Transaction`](/economy/concepts/accounts-and-double-entry/), split into a promo-funded part and a spendable-funded part that each balance on their own.
 
 The `spendable`-funded part debits the buyer and lets the [pricing policy](/economy/ports/pricing/) split the credit across sellers and the house:
 
@@ -104,7 +104,7 @@ For the `spendable`-funded part, the injected [fee policy](/economy/ports/pricin
 // The spend handler adds the buyer's matching debit, zeroing the posting.
 ```
 
-The `promo`-funded part carries no fee, so it skips `splitLegs`: sellers are paid from `REVENUE` and the buyer's `promo` is spent down against `PROMO_FLOAT`, as the second table above shows. Either way the lines net to zero, and trust cash still covers every spendable credit afterward.
+The `promo`-funded part carries no fee, so it skips `splitLegs`: sellers are paid from `REVENUE` and the buyer's `promo` is spent down against `PROMO_FLOAT`.
 
 ## Authorization
 
