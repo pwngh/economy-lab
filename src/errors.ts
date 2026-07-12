@@ -12,14 +12,9 @@
 import type { Outcome } from '#src/contract.ts';
 
 /**
- * Reasons a well-formed request is declined on a healthy system. A rejection is normal,
- * expected data: returned as a `rejected` Outcome the caller handles (e.g. "not enough
- * funds"), not thrown.
- *
- * Kept separate from the thrown faults in `ERROR_CODES`. Affordability is checked up front
- * and returned as INSUFFICIENT_FUNDS; it never reaches the deeper OVERDRAFT fault, which
- * only fires if a balance went negative anyway. Keeping ordinary "no" answers off the
- * thrown-error path keeps them out of error dashboards and alerts.
+ * Reasons a well-formed request is declined on a healthy system, returned as a `rejected`
+ * Outcome rather than thrown. Keeping ordinary "no" answers off the thrown-error path keeps
+ * them out of error dashboards and alerts.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/outcomes-and-reason-codes/
  *   Outcomes & reason codes} for the full taxonomy.
@@ -57,10 +52,9 @@ export type RejectionCode =
   | 'ECONOMY_PAUSED';
 
 /**
- * Codes for thrown faults (genuine failures), as opposed to the expected "no" answers in
- * {@link RejectionCode}. Each value is a stable, namespaced string (e.g. `LEDGER.OVERDRAFT`)
- * so callers and dashboards match on a fixed code, not free-text. Always reference these
- * constants; never write the bare strings inline.
+ * Codes for thrown faults, as opposed to the expected "no" answers in {@link RejectionCode}.
+ * Each value is a stable, namespaced string (e.g. `LEDGER.OVERDRAFT`); always reference these
+ * constants, never the bare strings.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/outcomes-and-reason-codes/
  *   Outcomes & reason codes} for how each code maps to an HTTP status and retry decision.
@@ -145,12 +139,10 @@ export const ERROR_CODES = {
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
 
 /**
- * Thrown-error type for every fault in this system. Carries one of the stable
- * {@link ERROR_CODES} codes, which outer layers use to pick an HTTP status, decide whether
- * to retry, and what to log.
+ * The thrown-error type for every fault, carrying one stable {@link ERROR_CODES} code that
+ * outer layers use to pick an HTTP status and a retry decision.
  *
- * Only `message` is safe to show a caller. `detail` and `cause` may hold internal info, so
- * they are for logging only; don't surface them in a response.
+ * Only `message` is safe to show a caller; `detail` and `cause` are for logging only.
  */
 export class EconomyError extends Error {
   readonly code: ErrorCode;

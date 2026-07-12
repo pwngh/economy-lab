@@ -156,8 +156,8 @@ export interface Processor {
 
 /**
  * The provider's answer to {@link Processor.payoutStatus}. UNKNOWN means the provider could not
- * name the payout, or the adapter could not map its answer; the sweep treats it exactly like
- * having no probe at all, so an unsure answer never overrides the timeout protocol.
+ * name the payout or the adapter could not map its answer; the sweep treats it like having no
+ * probe at all.
  */
 export type PayoutProviderStatus = {
   state: 'SETTLED' | 'RETURNED' | 'FAILED' | 'PENDING' | 'UNKNOWN';
@@ -317,10 +317,9 @@ export interface Ledger {
   ): AsyncIterable<readonly [AccountRef, string, bigint]>;
 
   /**
-   * Streams every account that has a cached running-balance row, one at a time (SQL:
-   * `account_balances`; memory: keys of `state.balances`). Entries are the source of truth, so a
-   * cached row can exist with no posting behind it. `heads` never visits such an account, so the
-   * prover relies on this list to surface it as a mismatch.
+   * Streams every account that has a cached running-balance row. Entries are the source of truth,
+   * so a cached row can exist with no posting behind it. `heads` never visits such an account, so
+   * the prover relies on this list to surface it as a mismatch.
    */
   balanceAccounts(options?: Options): AsyncIterable<AccountRef>;
 
@@ -449,18 +448,15 @@ export type StoredLink = {
   prevHash: string;
 
   /**
-   * The account's head hash after this posting, recorded when it was appended; what the prover's
-   * recompute must reproduce.
+   * The account's head hash after this posting; the prover's recompute must reproduce it.
    */
   hash: string;
 };
 
 /**
- * The stores a single operation's handler may write to, all inside one database transaction so its
- * writes commit together. `promos` and `inbox` are included so their writes share the money
- * posting's transaction; a rolled-back grant or apply then leaves no orphan row. `trust` rides the
- * transaction too, so a committed attempt shares the money commit; after a rollback, `submit`
- * re-records the attempt so it still counts. `checkpoints` is absent (only the worker writes it).
+ * The stores one operation's handler may write to, all inside one database transaction. `promos`,
+ * `inbox`, and `trust` ride the money posting's transaction so a rollback leaves no orphan row;
+ * `checkpoints` is absent because only the worker writes it.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage}
  * for atomicity and the outbox/inbox.
@@ -477,8 +473,8 @@ export interface Unit {
   promos: PromoStore;
   trust: TrustStore;
   /**
-   * Balances cached for one operation so the funds screen and handler share one read each; the pipeline
-   * fills it after locking. Unset outside the pipeline (e.g. a test), where readers use `ledger.balance`.
+   * Balances cached for one operation so the funds screen and handler share one read. Unset
+   * outside the pipeline, where readers use `ledger.balance`.
    */
   balances?: Map<string, Amount>;
 }
@@ -542,9 +538,8 @@ export interface OutboxStore {
   enqueue(message: OutboxMessage, options?: Options): Promise<void>;
 
   /**
-   * Grabs up to `limit` unsent messages for the relay. Each is locked so a concurrent relay skips it
-   * and picks different ones. Only 'pending' rows are returned. A 'relayed' or dead-lettered
-   * ('dead') row is terminal and never re-claimed, so a poison message can't wedge the queue.
+   * Grabs up to `limit` pending messages, each locked so a concurrent relay picks different ones.
+   * A 'relayed' or 'dead' row is terminal and never re-claimed.
    */
   claimBatch(
     limit: number,
@@ -558,10 +553,8 @@ export interface OutboxStore {
   markRelayed(ids: ReadonlyArray<string>, options?: Options): Promise<void>;
 
   /**
-   * Records that delivering `id` failed. Bumps `attempts` by one and leaves the row 'pending' so the
-   * next sweep retries it. A non-existent row (already relayed, dead-lettered, or never enqueued) is
-   * left untouched. Mirrors the saga store's read-modify pattern. This must not flip the status;
-   * only `deadLetter` does that.
+   * Records a failed delivery: bumps `attempts` and leaves the row 'pending' so the next sweep
+   * retries it. This must not flip the status; only `deadLetter` does that.
    */
   recordFailure(id: string, options?: Options): Promise<void>;
 
@@ -584,18 +577,14 @@ export interface OutboxStore {
  */
 export interface InboxStore {
   /**
-   * Saves a verified inbound event to apply later. Called inside the webhook handler's transaction.
-   * Dedupes on `entry.key` (the provider's event id): a duplicate is a no-op that returns the
-   * existing row rather than inserting a second, so a redelivered provider event is applied at most
-   * once.
+   * Saves a verified inbound event to apply later, deduping on `entry.key` (the provider's event
+   * id), so a redelivered event is applied at most once.
    */
   enqueueInbound(entry: InboxEntry, options?: Options): Promise<InboxEntry>;
 
   /**
-   * Grabs up to `limit` pending rows for the apply worker, oldest `receivedAt` first. Each is locked
-   * so a concurrent worker skips it and picks different ones. Only 'pending' rows are returned. An
-   * 'applied' or dead-lettered ('dead') row is terminal and never re-claimed, so a poison event
-   * can't wedge the queue. Mirrors OutboxStore.claimBatch and the saga and relay claims.
+   * Grabs up to `limit` pending rows oldest-first, each locked so a concurrent worker picks
+   * different ones. An 'applied' or 'dead' row is terminal and never re-claimed.
    */
   claimInbound(
     input: { now: number; limit: number },
@@ -636,9 +625,8 @@ export interface SagaStore {
   load(id: string, options?: Options): Promise<Saga | null>;
 
   /**
-   * Returns the saga carrying this provider reference, or null. A provider callback names a payout
-   * by the rail's reference, not the saga id, so this is the inbound-webhook lookup. If more than
-   * one saga ever carried the same reference, the newest `updatedAt` wins, matching `list` order.
+   * The inbound-webhook lookup: returns the saga carrying this provider reference, or null. If more
+   * than one saga ever carried the same reference, the newest `updatedAt` wins.
    */
   findByProviderRef(
     providerRef: string,
@@ -706,10 +694,9 @@ export interface EntitlementStore {
   owns(userId: string, sku: string, options?: Options): Promise<boolean>;
 
   /**
-   * Streams every non-revoked grant for the user, expired ones included, sorted by sku so every
-   * engine lists identically. Each row carries the expiry `owns` applies at read time (null never
-   * lapses), so a caller can reproduce the ownership decision — the entitlement read model
-   * rebuilds itself from exactly this.
+   * Streams every non-revoked grant for the user, expired ones included, sorted by sku. Each row
+   * carries the expiry `owns` applies at read time (null never lapses), so a caller can reproduce
+   * the ownership decision.
    */
   list(userId: string, options?: Options): AsyncIterable<EntitlementGrant>;
 }

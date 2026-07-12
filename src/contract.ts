@@ -39,11 +39,7 @@ import type {
 } from '#src/ports.ts';
 import type { Config } from '#src/config.ts';
 
-/**
- * Optional details on an entitlement grant (a user owning an item or feature). Lives here rather
- * than in the entitlements module because callers pass it in with an operation; entitlements
- * imports it back.
- */
+/** Optional details on an entitlement grant (a user owning an item or feature). */
 export type EntitlementAttrs = {
   quantity?: number;
   version?: number;
@@ -90,10 +86,9 @@ export type Operation =
       recipients?: Recipient[];
       ageRestricted?: boolean;
       /**
-       * A gift. The buyer still pays and is screened for funds and velocity, but the SKU is granted
-       * to this recipient user id instead of the buyer. A gift is modeled as an ordinary purchase
-       * that carries a recipient, not a separate transaction type, with no wallet-to-wallet credit
-       * or ownership transfer. Omitted (or equal to `buyerId`) for a self-purchase.
+       * A gift: the buyer pays and is screened as usual, but the SKU is granted to this user id,
+       * with no wallet-to-wallet credit or ownership transfer. Omitted (or equal to `buyerId`) for
+       * a self-purchase.
        */
       giftTo?: string;
     }
