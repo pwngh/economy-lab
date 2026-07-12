@@ -22,9 +22,7 @@ import type { Amount } from '#src/money.ts';
 import type { Recipient } from '#src/contract.ts';
 import type { Leg } from '#src/ports.ts';
 
-// Sums the signed amounts of every ledger line. The split returns only credit lines, which
-// are stored as negative amounts, so a balanced split sums to -price. Every amount uses one
-// currency, so a plain integer sum is correct.
+// The split returns only credit lines, stored negative, so a fully accounted split sums to -price.
 function signedSum(legs: ReadonlyArray<Leg>): bigint {
   let total = 0n;
   for (const leg of legs) {
@@ -33,8 +31,7 @@ function signedSum(legs: ReadonlyArray<Leg>): bigint {
   return total;
 }
 
-// Returns the amount crediting the given account as a positive value (credits are stored
-// negative, so the sign is flipped). Fails if the account was never credited.
+// Returns the credit to the account as a positive value (credits are stored negative).
 function creditedTo(legs: ReadonlyArray<Leg>, account: string): Amount {
   const leg = legs.find((l) => l.account === account);
   assert.ok(leg, `expected a leg crediting ${account}`);
@@ -46,14 +43,8 @@ function codeIs(code: string) {
     (error as { code?: string }).code === code;
 }
 
-// One seller taking the whole net after fee. shareBps is basis points (10000 = 100%).
 const soloSeller: Recipient[] = [{ sellerId: 'usr_seller', shareBps: 10_000 }];
 
-// --- The conservation property ----------------------------------------------------
-
-// Cases that check the price is fully accounted for. Some prices divide evenly. Others leave
-// a rounding remainder that the split must park somewhere. Each case asserts the credit lines
-// sum to -price.
 const CONSERVATION_CASES: ReadonlyArray<{
   name: string;
   price: Amount;
@@ -120,98 +111,81 @@ const CONSERVATION_CASES: ReadonlyArray<{
   },
 ];
 
-// --- The cases --------------------------------------------------------------------
+describe('Pricing', () => {
+  test('conserves price to the last minor unit across prices and splits', () => {
+    const policy = flatFee();
 
-function conservesPriceAcrossPricesAndSplits(): void {
-  const policy = flatFee();
+    for (const testCase of CONSERVATION_CASES) {
+      const legs = policy({
+        price: testCase.price,
+        recipients: testCase.recipients,
+        feeBps: testCase.feeBps,
+      });
 
-  for (const testCase of CONSERVATION_CASES) {
-    const legs = policy({
-      price: testCase.price,
-      recipients: testCase.recipients,
-      feeBps: testCase.feeBps,
+      assert.equal(
+        signedSum(legs),
+        -testCase.price.minor,
+        `${testCase.name}: legs must sum to −price`,
+      );
+    }
+  });
+
+  test('splits the fee off the gross and the share off the net', () => {
+    const legs = flatFee()({
+      price: credit('10.00'),
+      recipients: soloSeller,
+      feeBps: 3000,
     });
 
+    assert.deepEqual(creditedTo(legs, earned('usr_seller')), credit('7.00'));
+    assert.deepEqual(creditedTo(legs, SYSTEM.REVENUE), credit('3.00'));
+  });
+
+  test('posts the rounding residual to REVENUE so nothing is lost', () => {
+    const price = credit('10.01');
+    const recipients: Recipient[] = [
+      { sellerId: 'usr_a', shareBps: 3_334 },
+      { sellerId: 'usr_b', shareBps: 3_333 },
+      { sellerId: 'usr_c', shareBps: 3_333 },
+    ];
+
+    const legs = flatFee()({ price, recipients, feeBps: 0 });
+
+    const toSellers =
+      creditedTo(legs, earned('usr_a')).minor +
+      creditedTo(legs, earned('usr_b')).minor +
+      creditedTo(legs, earned('usr_c')).minor;
+    assert.ok(creditedTo(legs, SYSTEM.REVENUE).minor > 0n);
     assert.equal(
-      signedSum(legs),
-      -testCase.price.minor,
-      `${testCase.name}: legs must sum to −price`,
+      toSellers + creditedTo(legs, SYSTEM.REVENUE).minor,
+      price.minor,
     );
-  }
-}
-
-function splitsFeeOffGrossAndShareOffNet(): void {
-  // A 10.00 sale at a 30% fee. The 3.00 fee comes off the gross and goes to revenue. The 7.00
-  // net goes to the seller. The amounts divide evenly, so there is no leftover.
-  const legs = flatFee()({
-    price: credit('10.00'),
-    recipients: soloSeller,
-    feeBps: 3000,
   });
 
-  assert.deepEqual(creditedTo(legs, earned('usr_seller')), credit('7.00'));
-  assert.deepEqual(creditedTo(legs, SYSTEM.REVENUE), credit('3.00'));
-}
+  test('sends the whole price to REVENUE when there are no recipients', () => {
+    const legs = flatFee()({
+      price: credit('4.00'),
+      recipients: [],
+      feeBps: 3000,
+    });
 
-function postsRoundingResidualToRevenue(): void {
-  // 10.01 split three ways does not divide evenly, so each share rounds down. The dropped
-  // cents go to REVENUE rather than vanishing, which keeps the whole price accounted for.
-  const price = credit('10.01');
-  const recipients: Recipient[] = [
-    { sellerId: 'usr_a', shareBps: 3_334 },
-    { sellerId: 'usr_b', shareBps: 3_333 },
-    { sellerId: 'usr_c', shareBps: 3_333 },
-  ];
-
-  const legs = flatFee()({ price, recipients, feeBps: 0 });
-
-  const toSellers =
-    creditedTo(legs, earned('usr_a')).minor +
-    creditedTo(legs, earned('usr_b')).minor +
-    creditedTo(legs, earned('usr_c')).minor;
-  assert.ok(creditedTo(legs, SYSTEM.REVENUE).minor > 0n);
-  assert.equal(toSellers + creditedTo(legs, SYSTEM.REVENUE).minor, price.minor);
-}
-
-function sendsWholePriceToRevenueWhenNoRecipients(): void {
-  // There are no sellers, so the fee plus the leftover net make up the whole price. That whole
-  // price goes to REVENUE as a single credit line, which still sums to -price.
-  const legs = flatFee()({
-    price: credit('4.00'),
-    recipients: [],
-    feeBps: 3000,
+    assert.equal(legs.length, 1);
+    assert.deepEqual(creditedTo(legs, SYSTEM.REVENUE), credit('4.00'));
   });
 
-  assert.equal(legs.length, 1);
-  assert.deepEqual(creditedTo(legs, SYSTEM.REVENUE), credit('4.00'));
-}
-
-function rejectsSharesThatDoNotSumToTotal(): void {
-  // Shares sum to 9000 bps (90%), not the required 10000. Split rejects with OP.MALFORMED.
-  // The spend handler checks this before calling; this is a backstop for wiring mistakes.
-  assert.throws(
-    () =>
-      flatFee()({
-        price: credit('10.00'),
-        recipients: [
-          { sellerId: 'usr_a', shareBps: 5_000 },
-          { sellerId: 'usr_b', shareBps: 4_000 },
-        ],
-        feeBps: 3000,
-      }),
-    codeIs('OP.MALFORMED'),
-  );
-}
-
-describe('Pricing', () => {
-  test('conserves price to the last minor unit across prices and splits', () =>
-    conservesPriceAcrossPricesAndSplits());
-  test('splits the fee off the gross and the share off the net', () =>
-    splitsFeeOffGrossAndShareOffNet());
-  test('posts the rounding residual to REVENUE so nothing is lost', () =>
-    postsRoundingResidualToRevenue());
-  test('sends the whole price to REVENUE when there are no recipients', () =>
-    sendsWholePriceToRevenueWhenNoRecipients());
-  test('rejects a split whose shareBps do not sum to 10000', () =>
-    rejectsSharesThatDoNotSumToTotal());
+  test('rejects a split whose shareBps do not sum to 10000', () => {
+    // The spend handler checks shares before calling; this throw is a backstop for wiring mistakes.
+    assert.throws(
+      () =>
+        flatFee()({
+          price: credit('10.00'),
+          recipients: [
+            { sellerId: 'usr_a', shareBps: 5_000 },
+            { sellerId: 'usr_b', shareBps: 4_000 },
+          ],
+          feeBps: 3000,
+        }),
+      codeIs('OP.MALFORMED'),
+    );
+  });
 });

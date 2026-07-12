@@ -21,8 +21,6 @@ import { fakeProcessor } from '#test/support/capabilities.ts';
 
 import type { FetchLike } from '#src/adapters/processor.ts';
 
-// Records one captured `fetch` call, both its URL and its options. A test reads this to assert
-// what the adapter sent: the method, the headers, the body, and the abort signal.
 interface Recorded {
   input: string;
   init?: {
@@ -33,8 +31,6 @@ interface Recorded {
   };
 }
 
-// Returns a fake `fetch` that yields the given response and appends each call to `calls`.
-// The adapter takes `fetch` as an argument, so this never hits the global fetch or a live provider.
 function stubFetch(
   response: { ok: boolean; status: number; body: string },
   calls: Recorded[],
@@ -49,17 +45,12 @@ function stubFetch(
   };
 }
 
-// Returns a fake `fetch` that always throws, standing in for a transport failure such as a
-// failed DNS lookup, a dropped connection, or a cancelled request.
 function throwingFetch(error: unknown): FetchLike {
   return async () => {
     throw error;
   };
 }
 
-// Builds a default USD payout request. `key` is an idempotency key. The provider recognizes a
-// repeated key and will not pay out twice, so a retry pays at most once. Tests reuse this shape
-// and override the key or the amount only when that field is what's under test.
 function payout(over?: { key?: string; amount?: string }): {
   key: string;
   userId: string;
@@ -72,135 +63,124 @@ function payout(over?: { key?: string; amount?: string }): {
   };
 }
 
-async function submitReturnsProviderRef(): Promise<void> {
-  const calls: Recorded[] = [];
-  const fetch = stubFetch(
-    { ok: true, status: 200, body: JSON.stringify({ providerRef: 'po_1' }) },
-    calls,
-  );
-  const processor = httpProcessor({
-    endpoint: 'https://provider/payouts',
-    fetch,
-  });
-
-  const result = await processor.submitPayout(payout({ key: 'idem_payout_1' }));
-
-  assert.deepEqual(result, { providerRef: 'po_1' });
-}
-
-async function submitEncodesAmountAndKey(): Promise<void> {
-  const calls: Recorded[] = [];
-  const fetch = stubFetch(
-    { ok: true, status: 200, body: JSON.stringify({ providerRef: 'po_2' }) },
-    calls,
-  );
-  const processor = httpProcessor({
-    endpoint: 'https://provider/payouts',
-    fetch,
-  });
-
-  await processor.submitPayout(
-    payout({ key: 'idem_payout_2', amount: '3.00' }),
-  );
-
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]!.init?.method, 'POST');
-  assert.deepEqual(JSON.parse(calls[0]!.init!.body!), {
-    key: 'idem_payout_2',
-    userId: 'usr_seller',
-    amount: 'USD:3.00',
-  });
-}
-
-async function submitForwardsAbortSignal(): Promise<void> {
-  const calls: Recorded[] = [];
-  const fetch = stubFetch(
-    { ok: true, status: 200, body: JSON.stringify({ providerRef: 'po_3' }) },
-    calls,
-  );
-  const processor = httpProcessor({
-    endpoint: 'https://provider/payouts',
-    fetch,
-  });
-  const controller = new AbortController();
-
-  await processor.submitPayout(payout({ key: 'idem_payout_3' }), {
-    signal: controller.signal,
-  });
-
-  assert.equal(calls[0]!.init?.signal, controller.signal);
-}
-
-async function submitFaultsRetryablyOnNon2xx(): Promise<void> {
-  const calls: Recorded[] = [];
-  const fetch = stubFetch(
-    { ok: false, status: 503, body: 'upstream down' },
-    calls,
-  );
-  const processor = httpProcessor({
-    endpoint: 'https://provider/payouts',
-    fetch,
-  });
-
-  const error = await processor
-    .submitPayout(payout({ key: 'idem_payout_4' }))
-    .catch((caught: unknown) => caught);
-
-  assert.ok(error instanceof EconomyError);
-  assert.equal(error.code, 'PROVIDER.FAILURE');
-  assert.equal(error.retryable, true);
-}
-
-async function submitFaultsRetryablyPreservingCause(): Promise<void> {
-  const underlying = new Error('connection reset');
-  const processor = httpProcessor({
-    endpoint: 'https://provider/payouts',
-    fetch: throwingFetch(underlying),
-  });
-
-  const error = await processor
-    .submitPayout(payout({ key: 'idem_payout_5' }))
-    .catch((caught: unknown) => caught);
-
-  assert.ok(error instanceof EconomyError);
-  assert.equal(error.code, 'PROVIDER.FAILURE');
-  assert.equal(error.retryable, true);
-  assert.equal((error.cause as EconomyError).cause, underlying);
-}
-
-async function submitFaultsTerminallyOnMissingProviderRef(): Promise<void> {
-  const calls: Recorded[] = [];
-  const fetch = stubFetch(
-    { ok: true, status: 200, body: JSON.stringify({ status: 'accepted' }) },
-    calls,
-  );
-  const processor = httpProcessor({
-    endpoint: 'https://provider/payouts',
-    fetch,
-  });
-
-  const error = await processor
-    .submitPayout(payout({ key: 'idem_payout_6' }))
-    .catch((caught: unknown) => caught);
-
-  assert.ok(error instanceof EconomyError);
-  assert.equal(error.code, 'PROVIDER.FAILURE');
-  assert.equal(error.retryable, false);
-}
-
 describe('Processor Conformance: http', () => {
-  test('submits a payout and returns the provider reference', () =>
-    submitReturnsProviderRef());
-  test('encodes the amount as a decimal string and posts the idempotency key', () =>
-    submitEncodesAmountAndKey());
-  test('forwards the abort signal on the request', () =>
-    submitForwardsAbortSignal());
-  test('throws a retryable provider fault on a non-2xx response', () =>
-    submitFaultsRetryablyOnNon2xx());
-  test('throws a retryable provider fault preserving cause on a transport error', () =>
-    submitFaultsRetryablyPreservingCause());
-  test('throws a non-retryable fault when a 2xx body omits providerRef', () =>
-    submitFaultsTerminallyOnMissingProviderRef());
+  test('submits a payout and returns the provider reference', async () => {
+    const calls: Recorded[] = [];
+    const fetch = stubFetch(
+      { ok: true, status: 200, body: JSON.stringify({ providerRef: 'po_1' }) },
+      calls,
+    );
+    const processor = httpProcessor({
+      endpoint: 'https://provider/payouts',
+      fetch,
+    });
+
+    const result = await processor.submitPayout(
+      payout({ key: 'idem_payout_1' }),
+    );
+
+    assert.deepEqual(result, { providerRef: 'po_1' });
+  });
+
+  test('encodes the amount as a decimal string and posts the idempotency key', async () => {
+    const calls: Recorded[] = [];
+    const fetch = stubFetch(
+      { ok: true, status: 200, body: JSON.stringify({ providerRef: 'po_2' }) },
+      calls,
+    );
+    const processor = httpProcessor({
+      endpoint: 'https://provider/payouts',
+      fetch,
+    });
+
+    await processor.submitPayout(
+      payout({ key: 'idem_payout_2', amount: '3.00' }),
+    );
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.init?.method, 'POST');
+    assert.deepEqual(JSON.parse(calls[0]!.init!.body!), {
+      key: 'idem_payout_2',
+      userId: 'usr_seller',
+      amount: 'USD:3.00',
+    });
+  });
+
+  test('forwards the abort signal on the request', async () => {
+    const calls: Recorded[] = [];
+    const fetch = stubFetch(
+      { ok: true, status: 200, body: JSON.stringify({ providerRef: 'po_3' }) },
+      calls,
+    );
+    const processor = httpProcessor({
+      endpoint: 'https://provider/payouts',
+      fetch,
+    });
+    const controller = new AbortController();
+
+    await processor.submitPayout(payout({ key: 'idem_payout_3' }), {
+      signal: controller.signal,
+    });
+
+    assert.equal(calls[0]!.init?.signal, controller.signal);
+  });
+
+  test('throws a retryable provider fault on a non-2xx response', async () => {
+    const calls: Recorded[] = [];
+    const fetch = stubFetch(
+      { ok: false, status: 503, body: 'upstream down' },
+      calls,
+    );
+    const processor = httpProcessor({
+      endpoint: 'https://provider/payouts',
+      fetch,
+    });
+
+    const error = await processor
+      .submitPayout(payout({ key: 'idem_payout_4' }))
+      .catch((caught: unknown) => caught);
+
+    assert.ok(error instanceof EconomyError);
+    assert.equal(error.code, 'PROVIDER.FAILURE');
+    assert.equal(error.retryable, true);
+  });
+
+  test('throws a retryable provider fault preserving cause on a transport error', async () => {
+    const underlying = new Error('connection reset');
+    const processor = httpProcessor({
+      endpoint: 'https://provider/payouts',
+      fetch: throwingFetch(underlying),
+    });
+
+    const error = await processor
+      .submitPayout(payout({ key: 'idem_payout_5' }))
+      .catch((caught: unknown) => caught);
+
+    assert.ok(error instanceof EconomyError);
+    assert.equal(error.code, 'PROVIDER.FAILURE');
+    assert.equal(error.retryable, true);
+    assert.equal((error.cause as EconomyError).cause, underlying);
+  });
+
+  test('throws a non-retryable fault when a 2xx body omits providerRef', async () => {
+    const calls: Recorded[] = [];
+    const fetch = stubFetch(
+      { ok: true, status: 200, body: JSON.stringify({ status: 'accepted' }) },
+      calls,
+    );
+    const processor = httpProcessor({
+      endpoint: 'https://provider/payouts',
+      fetch,
+    });
+
+    const error = await processor
+      .submitPayout(payout({ key: 'idem_payout_6' }))
+      .catch((caught: unknown) => caught);
+
+    assert.ok(error instanceof EconomyError);
+    assert.equal(error.code, 'PROVIDER.FAILURE');
+    assert.equal(error.retryable, false);
+  });
 });
 
 function respondingProcessor(response: {
