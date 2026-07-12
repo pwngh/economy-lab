@@ -264,8 +264,13 @@ function commitPosting(state: LedgerState, stored: StoredPosting): void {
     state.heads.set(link.account, link.hash);
   }
   for (const leg of stored.legs) {
-    const next =
-      (state.balances.get(leg.account) ?? 0n) + balanceDelta(leg).minor;
+    // Checked into i64 via toAmount, so this backend refuses a balance the SQL engines' BIGINT
+    // columns would refuse — the backends stay in parity at the range edge instead of the memory
+    // ledger silently carrying totals no production column could store.
+    const next = toAmount(
+      leg.amount.currency,
+      (state.balances.get(leg.account) ?? 0n) + balanceDelta(leg).minor,
+    ).minor;
     state.balances.set(leg.account, next);
   }
 

@@ -11,7 +11,7 @@
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { credit } from '#src/ledger.ts';
-import { toAmount, SCALE } from '#src/money.ts';
+import { mulDiv, toAmount, SCALE } from '#src/money.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
 
 import type { Amount } from '#src/money.ts';
@@ -103,10 +103,10 @@ export function revenueForSplit(
 }
 
 // Returns the basis-point fraction of an amount, rounded down: amount * bps / 10000. The math
-// stays all-bigint so large running totals remain exact rather than losing precision past 2^53
-// the way a JS number would.
+// stays all-bigint so large running totals remain exact, and the rounding mode is named at the
+// division so no carrier of this split can disagree on direction.
 function applyBps(minor: bigint, bps: number): bigint {
-  return (minor * BigInt(bps)) / BPS_TOTAL_BIG;
+  return mulDiv(minor, BigInt(bps), BPS_TOTAL_BIG, 'floor');
 }
 
 /**
@@ -119,15 +119,9 @@ function applyBps(minor: bigint, bps: number): bigint {
  * raw fee is not a whole credit.
  */
 export function feeForPrice(minor: bigint, bps: number): bigint {
-  const units = ceilDiv(minor * BigInt(bps), BPS_TOTAL_BIG * SCALE);
+  const units = mulDiv(minor, BigInt(bps), BPS_TOTAL_BIG * SCALE, 'ceil');
   const fee = units * SCALE;
   return fee > minor ? minor : fee;
-}
-
-// Divides two non-negative bigints and rounds the result up to the next whole number.
-// Both operands must be non-negative; the rounding trick assumes it.
-function ceilDiv(numerator: bigint, denominator: bigint): bigint {
-  return (numerator + denominator - 1n) / denominator;
 }
 
 // Throws unless the recipient shares sum to 100% (10000 bps). The spend handler already checks

@@ -71,6 +71,13 @@ export const ERROR_CODES = {
   /** A money amount was invalid (for example, negative or not a whole minor unit). */
   INVALID_AMOUNT: 'MONEY.INVALID_AMOUNT',
 
+  /**
+   * A money amount fell outside the signed 64-bit range the ledger stores (the `BIGINT`
+   * columns in db/mysql-schema.sql). The schema always declared this bound; this fault
+   * enforces it at construction instead of at the database.
+   */
+  AMOUNT_OVERFLOW: 'MONEY.OVERFLOW',
+
   /** A posting's debits and credits didn't add up to zero, so the books wouldn't balance. */
   LEDGER_UNBALANCED: 'LEDGER.UNBALANCED',
 

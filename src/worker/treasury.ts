@@ -10,7 +10,7 @@
  */
 
 import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
-import { convertFloor, encodeAmount, toAmount } from '#src/money.ts';
+import { convertFloor, encodeAmount, mulDiv, toAmount } from '#src/money.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { maturedBalance } from '#src/maturity.ts';
 import { SYSTEM, baseOf, classify, currency, shardsOf } from '#src/accounts.ts';
@@ -177,7 +177,8 @@ async function measureBacking(
 
 // Same conversion as the integrity check and the top-up and payout paths.
 function requiredBackingMinor(custodialCreditMinor: bigint, par: Rate): bigint {
-  return (custodialCreditMinor * par.rate) / 10n ** BigInt(par.scale);
+  return convertFloor(toAmount('CREDIT', custodialCreditMinor), par, 'USD')
+    .minor;
 }
 
 // Emits the position as metrics plus a debug log on every run, so the credit total, the cash
@@ -526,5 +527,5 @@ function usdToCredit(usdMinor: bigint, par: Rate): bigint {
   if (factor === 0n) {
     return 0n;
   }
-  return (usdMinor * 10n ** BigInt(par.scale)) / factor;
+  return mulDiv(usdMinor, 10n ** BigInt(par.scale), factor, 'floor');
 }

@@ -11,7 +11,9 @@
 
 import { createEconomy } from '#src/economy.ts';
 import { loadConfig } from '#src/config.ts';
-import { assertSchemaCurrent } from '#src/schema.ts';
+import { assertMoneyConformant, assertSchemaCurrent } from '#src/schema.ts';
+import { installMysql, proveMysql } from '#src/db.vendored.ts';
+import { vectors as moneyVectors } from '#src/money.vendored.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { createWorker } from '#src/worker/index.ts';
 import { jsonlLogger } from '#src/runtime.ts';
@@ -272,6 +274,17 @@ async function selectStore(
     // Fail fast if the database schema has drifted from this code (postgresStore does the same for
     // its branch). Postgres makes its own pool inside the store; MySQL's pool is created here.
     assertSchemaCurrent(await readSchemaVersion(pool), 'MySQL');
+    // Install the vendored money functions (idempotent) and make this engine prove it computes
+    // the pinned arithmetic before any posting trusts it — semantics fail-fast beside the schema
+    // one. postgresStore runs the same pair inside its own boot.
+    const runner = {
+      run: (sql: string, params?: readonly unknown[]) =>
+        pool
+          .query(sql, params ? [...params] : undefined)
+          .then(([rows]) => rows as Record<string, unknown>[]),
+    };
+    await installMysql(runner);
+    assertMoneyConformant(await proveMysql(runner, moneyVectors), 'MySQL');
     return mysqlStore({
       pool,
       digest: deps.digest,

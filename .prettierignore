@@ -10,3 +10,7 @@ Dockerfile
 
 # Standalone front-end apps own their formatting (apps/docs uses biome). Mirrors the eslint ignore.
 apps
+
+# vendored @pwngh/money: byte-identical to upstream; selfTest is the drift guard
+src/money.vendored.ts
+src/db.vendored.ts

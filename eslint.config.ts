@@ -101,9 +101,17 @@ const OPTIONAL_DRIVER_IMPORTS = [
 
 export default tseslint.config(
   // `apps/` holds standalone front-end apps (the React Router console) with their own build/lint tooling,
-  // so they stay outside this gate alongside the other non-core UI/asset dirs.
+  // so they stay outside this gate alongside the other non-core UI/asset dirs. The vendored
+  // @pwngh/money amalgamation is kept byte-identical to upstream; its embedded selfTest is the
+  // drift guard, not this config's rules.
   {
-    ignores: ['legacy/**', 'node_modules/**', 'apps/**'],
+    ignores: [
+      'legacy/**',
+      'node_modules/**',
+      'apps/**',
+      'src/money.vendored.ts',
+      'src/db.vendored.ts',
+    ],
   },
 
   eslint.configs.recommended,

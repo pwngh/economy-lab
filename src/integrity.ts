@@ -10,7 +10,7 @@
  */
 
 import { proveChain } from '#src/chain.ts';
-import { toAmount } from '#src/money.ts';
+import { convertFloor, toAmount } from '#src/money.ts';
 import {
   baseOf,
   classify,
@@ -240,10 +240,11 @@ function pushIfDrifted(
 // rate (the fixed CREDIT-to-USD rate), rounded down.
 //
 // The rate is stored as an integer `par.rate` plus a `par.scale`, where the true rate equals
-// par.rate / 10^scale. For example, rate 50 and scale 2 mean 0.50 USD per credit. So dividing the
-// product by 10^scale gives the real result.
+// par.rate / 10^scale. `convertFloor` applies exactly that multiply-and-divide with the rounding
+// mode named, so this prover and the money module can never disagree on the conversion.
 function backingRequiredMinor(custodialCreditMinor: bigint, par: Rate): bigint {
-  return (custodialCreditMinor * par.rate) / 10n ** BigInt(par.scale);
+  return convertFloor(toAmount('CREDIT', custodialCreditMinor), par, 'USD')
+    .minor;
 }
 
 function everyCurrencyBalances(

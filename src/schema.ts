@@ -48,3 +48,21 @@ export function assertSchemaCurrent(
       'this code.',
   );
 }
+
+/**
+ * Throws unless the live database passed the money conformance vectors at boot. `failures` is
+ * the output of the vendored db carrier's provePostgres/proveMysql, run right after its
+ * idempotent install — so a non-empty list means the engine's own arithmetic disagrees with
+ * src/money.vendored.ts, and no posting should be trusted to it.
+ */
+export function assertMoneyConformant(
+  failures: readonly string[],
+  backend: string,
+): void {
+  if (failures.length === 0) return;
+  throw new Error(
+    `economy-lab: the ${backend} database failed ${failures.length} money conformance ` +
+      `vector(s); first: ${failures[0]}. The money functions were just installed, so the ` +
+      'engine computes different arithmetic than this build. Refusing to run against it.',
+  );
+}

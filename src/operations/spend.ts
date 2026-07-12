@@ -12,7 +12,12 @@
 import { ERROR_CODES, fault, rejected } from '#src/errors.ts';
 import { assertKind } from '#src/operations/guards.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
-import { encodeAmount, requirePositiveCredit, toAmount } from '#src/money.ts';
+import {
+  encodeAmount,
+  mulDiv,
+  requirePositiveCredit,
+  toAmount,
+} from '#src/money.ts';
 import {
   SYSTEM,
   earned,
@@ -250,7 +255,12 @@ function distributeEarned(
 ): Amount {
   let distributed = 0n;
   for (const recipient of recipients) {
-    const share = (amount.minor * BigInt(recipient.shareBps)) / 10_000n;
+    const share = mulDiv(
+      amount.minor,
+      BigInt(recipient.shareBps),
+      10_000n,
+      'floor',
+    );
     distributed += share;
 
     if (share > 0n) {

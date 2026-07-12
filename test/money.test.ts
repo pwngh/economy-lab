@@ -15,7 +15,10 @@ import assert from 'node:assert/strict';
 import {
   add,
   compare,
+  convertCeil,
+  convertFloor,
   decodeAmount,
+  decodeAmountWire,
   encodeAmount,
   isNegative,
   isZero,
@@ -91,5 +94,56 @@ describe('Money', () => {
     assert.equal(isZero(zero('CREDIT')), true);
     assert.equal(isNegative(decodeAmount('-0.01', 'USD')), true);
     assert.equal(isNegative(zero('USD')), false);
+  });
+
+  test('holds every amount inside the 64-bit range the schema stores', () => {
+    assert.equal(
+      decodeAmount('92233720368547758.07', 'CREDIT').minor,
+      9223372036854775807n,
+    );
+    assert.throws(
+      () => toAmount('CREDIT', 9223372036854775808n),
+      (error: unknown) =>
+        (error as { code?: string }).code === 'MONEY.OVERFLOW',
+    );
+    assert.throws(
+      () =>
+        add(toAmount('CREDIT', 9223372036854775807n), toAmount('CREDIT', 1n)),
+      (error: unknown) =>
+        (error as { code?: string }).code === 'MONEY.OVERFLOW',
+    );
+    assert.throws(
+      () => decodeAmount('92233720368547758.08', 'CREDIT'),
+      (error: unknown) =>
+        (error as { code?: string }).code === 'MONEY.INVALID_AMOUNT',
+    );
+  });
+
+  test('keeps the canonical wire byte-strict', () => {
+    assert.throws(
+      () => decodeAmount('1,234.56', 'CREDIT'),
+      (error: unknown) =>
+        (error as { code?: string }).code === 'MONEY.INVALID_AMOUNT',
+    );
+    assert.throws(
+      () => decodeAmountWire('12.34'),
+      (error: unknown) =>
+        (error as { code?: string }).code === 'MONEY.INVALID_AMOUNT',
+    );
+    assert.throws(
+      () => decodeAmountWire('EUR:1.00'),
+      (error: unknown) =>
+        (error as { code?: string }).code === 'MONEY.INVALID_AMOUNT',
+    );
+    assert.deepEqual(decodeAmountWire('USD:12.34'), toAmount('USD', 1234n));
+  });
+
+  test('converts with a true floor and ceiling for either sign', () => {
+    const rate = { rate: 1n, scale: 1, rateId: 'rate_test' };
+
+    assert.equal(convertFloor(toAmount('CREDIT', 5n), rate, 'USD').minor, 0n);
+    assert.equal(convertCeil(toAmount('CREDIT', 5n), rate, 'USD').minor, 1n);
+    assert.equal(convertFloor(toAmount('CREDIT', -5n), rate, 'USD').minor, -1n);
+    assert.equal(convertCeil(toAmount('CREDIT', -5n), rate, 'USD').minor, 0n);
   });
 });

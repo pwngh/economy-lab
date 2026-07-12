@@ -41,7 +41,9 @@ import {
   isAmount,
 } from '#src/money.ts';
 import { currency, baseOf } from '#src/accounts.ts';
-import { assertSchemaCurrent } from '#src/schema.ts';
+import { assertMoneyConformant, assertSchemaCurrent } from '#src/schema.ts';
+import { installPostgres, provePostgres } from '#src/db.vendored.ts';
+import { vectors as moneyVectors } from '#src/money.vendored.ts';
 import { systemClock } from '#src/runtime.ts';
 import { byCodeUnit, fromHex } from '#src/bytes.ts';
 import {
@@ -1713,6 +1715,21 @@ export async function postgresStore(
     // Refuse to run against a database whose schema has drifted from this code. For an
     // isolated test schema we just applied the current SQL, so this passes by construction.
     assertSchemaCurrent(await readSchemaVersion(pool), 'Postgres');
+
+    // Install the vendored money functions (idempotent) and make this engine prove it computes
+    // the pinned arithmetic before any posting trusts it — the same fail-fast as the schema
+    // check, for semantics instead of shape.
+    const runner = {
+      run: (sql: string, params?: readonly unknown[]) =>
+        pool
+          .query(sql, params ? [...params] : undefined)
+          .then((result) => result.rows as Record<string, unknown>[]),
+    };
+    await installPostgres(runner);
+    assertMoneyConformant(
+      await provePostgres(runner, moneyVectors),
+      'Postgres',
+    );
   } catch (error) {
     await pool.end().catch(() => {});
     throw error;

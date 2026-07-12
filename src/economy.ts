@@ -19,6 +19,7 @@ import { fault, rejected, ERROR_CODES } from '#src/errors.ts';
 import { lockAll } from '#src/ledger.ts';
 import {
   compare,
+  convertFloor,
   decodeAmountWire,
   encodeAmount,
   isNegative,
@@ -828,11 +829,12 @@ const FULL_RANGE = {
 };
 
 // Converts a credit total into the USD that must back it, in cents, at the fixed CREDIT-to-USD rate.
-// The rate is a pair of exact integers, with a true value of `rate` / 10^`scale`, so this multiplies
-// by `rate` and divides by that power of ten. Bigint division drops the remainder and rounds down, so
-// the platform never reports needing less cash than it actually does.
+// The rate is a pair of exact integers, with a true value of `rate` / 10^`scale`. `convertFloor`
+// applies that conversion with the rounding mode named, rounding down, so the read path and the
+// money module can never disagree on how much cash the platform holds against credits.
 function backingRequired(custodialCreditMinor: bigint, par: Rate): bigint {
-  return (custodialCreditMinor * par.rate) / 10n ** BigInt(par.scale);
+  return convertFloor(toAmount('CREDIT', custodialCreditMinor), par, 'USD')
+    .minor;
 }
 
 // --- Small helpers ----------------------------------------------------------------

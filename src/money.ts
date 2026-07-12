@@ -9,9 +9,24 @@
  * @license MIT
  */
 
+/**
+ * Money for the ledger, implemented on the vendored @pwngh/money amalgamation
+ * (money.vendored.ts). This file owns what is the lab's to own — the `Currency`
+ * union, the `Amount` brand, the fault codes, and the strict canonical wire — and
+ * delegates the semantics underneath: i64 range checks, strict decimal parsing,
+ * locale-free formatting, and mode-named rounded division. The vendored copy is
+ * pinned against drift by its embedded selfTest in test/money.vendored.test.ts.
+ */
+
 import { ERROR_CODES, fault } from '#src/errors.ts';
+import { format, mulDiv, parse } from '#src/money.vendored.ts';
 
 import type { Rate } from '#src/ports.ts';
+
+// Re-exported so call sites that divide raw minor units (fee bps, rate math) name their
+// rounding mode from the one pinned implementation instead of hand-rolling `/`.
+export { mulDiv } from '#src/money.vendored.ts';
+export type { Rounding } from '#src/money.vendored.ts';
 
 /**
  * The currencies the system handles: in-app CREDIT and real-world USD. This is a string
@@ -47,8 +62,25 @@ const FRACTION_DIGITS = 2;
  */
 export const SCALE = 100n; // 10 ** FRACTION_DIGITS
 
-/** Builds an `Amount` from a currency and a minor-unit count. */
+// The i64 bounds every stored amount must fit (db/mysql-schema.sql declares the legs
+// column BIGINT). The bounds come with the vendored arithmetic; this pair exists only
+// for the fault below.
+const I64_MIN = -(2n ** 63n);
+const I64_MAX = 2n ** 63n - 1n;
+
+/**
+ * Builds an `Amount` from a currency and a minor-unit count. Throws AMOUNT_OVERFLOW when
+ * the count falls outside the signed 64-bit range the ledger's BIGINT columns store, so
+ * an unstorable amount fails at construction rather than at the database.
+ */
 export function toAmount(currency: Currency, minor: bigint): Amount {
+  if (minor < I64_MIN || minor > I64_MAX) {
+    throw fault(
+      ERROR_CODES.AMOUNT_OVERFLOW,
+      `Amount is outside the 64-bit range the ledger stores.`,
+      { detail: { currency } },
+    );
+  }
   return { currency, minor, __brand: 'Amount' };
 }
 
@@ -70,7 +102,10 @@ export function isNegative(amount: Amount): boolean {
   return amount.minor < 0n;
 }
 
-/** Adds two amounts of the same currency. Throws CURRENCY_MISMATCH across currencies. */
+/**
+ * Adds two amounts of the same currency. Throws CURRENCY_MISMATCH across currencies and
+ * AMOUNT_OVERFLOW when the sum leaves the 64-bit range.
+ */
 export function add(a: Amount, b: Amount): Amount {
   assertSameCurrency(a, b);
   return toAmount(a.currency, a.minor + b.minor);
@@ -109,32 +144,24 @@ export function zero(currency: Currency): Amount {
  * chain stay stable across replays.
  */
 export function encodeAmount(amount: Amount): string {
-  const negative = amount.minor < 0n;
-  const abs = negative ? -amount.minor : amount.minor;
-  const whole = abs / SCALE;
-  const frac = abs % SCALE;
-  const decimal = `${whole}.${frac.toString().padStart(FRACTION_DIGITS, '0')}`;
-  return `${amount.currency}:${negative ? '-' : ''}${decimal}`;
+  return `${amount.currency}:${format(amount.minor, FRACTION_DIGITS, { group: '' })}`;
 }
 
 /**
  * Parses a decimal string such as `'12.34'` or `'-0.05'` into an `Amount`. A bad format,
- * or more than two decimal places, throws INVALID_AMOUNT rather than silently dropping the
- * extra digits.
+ * more than two decimal places, digit grouping (the canonical wire is ungrouped), or a
+ * value past the 64-bit range throws INVALID_AMOUNT rather than silently accepting it.
  */
 export function decodeAmount(decimal: string, currency: Currency): Amount {
-  const match = /^(-?)(\d+)(?:\.(\d{1,2}))?$/.exec(decimal);
-  if (!match) {
+  const minor = decimal.includes(',') ? null : parse(decimal, FRACTION_DIGITS);
+  if (minor === null) {
     throw fault(
       ERROR_CODES.INVALID_AMOUNT,
       `Not a ${FRACTION_DIGITS}-decimal money string: ${decimal}.`,
       { detail: { decimal, currency } },
     );
   }
-  const sign = match[1] === '-' ? -1n : 1n;
-  const whole = BigInt(match[2]!);
-  const frac = BigInt((match[3] ?? '').padEnd(FRACTION_DIGITS, '0'));
-  return toAmount(currency, sign * (whole * SCALE + frac));
+  return toAmount(currency, minor);
 }
 
 /**
@@ -158,36 +185,66 @@ export function requirePositiveCredit(amount: Amount, label: string): Amount {
 
 /**
  * Parses a wire amount such as `'CREDIT:12.34'` back into an `Amount`. The currency is the part
- * before the colon, and the decimal value the part after. This is the inverse of `encodeAmount`,
- * shared by every layer that stores or receives an amount as text: the cache, the HTTP wire, and the
- * SQL engines.
+ * before the colon and must be one this system handles; anything else throws INVALID_AMOUNT, so a
+ * string that merely contains a colon can never build an amount with a nonsense currency. This is
+ * the inverse of `encodeAmount`, shared by every layer that stores or receives an amount as text:
+ * the cache, the HTTP wire, and the SQL engines.
  */
 export function decodeAmountWire(encoded: string): Amount {
   const colon = encoded.indexOf(':');
-  const currency = encoded.slice(0, colon) as Currency;
+  const currency = colon > 0 ? encoded.slice(0, colon) : '';
+  if (!isCurrency(currency)) {
+    throw fault(
+      ERROR_CODES.INVALID_AMOUNT,
+      `Not an encoded amount: ${encoded}.`,
+      {
+        detail: { encoded },
+      },
+    );
+  }
   return decodeAmount(encoded.slice(colon + 1), currency);
 }
 
 /**
  * Converts an amount to another currency at `rate`, rounding down. A rate is an integer scaled by
- * `10^scale`, so the result is `floor(minor * rate / 10^scale)`. Use it where truncation is the safe
- * direction, such as paying a seller out.
+ * `10^scale`, so the result is `floor(minor * rate / 10^scale)` — a true floor for either sign,
+ * named as the mode at the division. Use it where rounding down is the safe direction, such as
+ * paying a seller out.
  */
 export function convertFloor(amount: Amount, rate: Rate, to: Currency): Amount {
-  return toAmount(to, (amount.minor * rate.rate) / 10n ** BigInt(rate.scale));
+  return toAmount(to, convertMinor(amount.minor, rate, 'floor'));
 }
 
 /**
- * Converts an amount to another currency at `rate`, rounding up. It computes `ceil(minor * rate /
- * 10^scale)` by adding `denominator - 1` before the integer divide. Use it where rounding down would
- * under-cover, such as the USD a top-up must hold in trust.
+ * Converts an amount to another currency at `rate`, rounding up: `ceil(minor * rate / 10^scale)`,
+ * a true ceiling for either sign. Use it where rounding down would under-cover, such as the USD a
+ * top-up must hold in trust.
  */
 export function convertCeil(amount: Amount, rate: Rate, to: Currency): Amount {
-  const denominator = 10n ** BigInt(rate.scale);
-  return toAmount(
-    to,
-    (amount.minor * rate.rate + denominator - 1n) / denominator,
-  );
+  return toAmount(to, convertMinor(amount.minor, rate, 'ceil'));
+}
+
+// The one place conversion touches the vendored divider: minor * rate through an unbounded
+// intermediate, one rounding of the named mode, result checked into i64 (re-thrown as the
+// lab's overflow fault).
+function convertMinor(
+  minor: bigint,
+  rate: Rate,
+  mode: 'floor' | 'ceil',
+): bigint {
+  try {
+    return mulDiv(minor, rate.rate, 10n ** BigInt(rate.scale), mode);
+  } catch {
+    throw fault(
+      ERROR_CODES.AMOUNT_OVERFLOW,
+      `Conversion result is outside the 64-bit range the ledger stores.`,
+      { detail: { rateId: rate.rateId } },
+    );
+  }
+}
+
+function isCurrency(value: string): value is Currency {
+  return value === 'CREDIT' || value === 'USD';
 }
 
 // Throws CURRENCY_MISMATCH if the amounts are in different currencies. Combining two
