@@ -20,27 +20,20 @@ import type { Outcome } from '#src/contract.ts';
  *   Outcomes & reason codes} for the full taxonomy.
  */
 export type RejectionCode =
-  // The account doesn't have enough money to cover the request.
   | 'INSUFFICIENT_FUNDS'
   // The fraud/abuse risk check declined this request.
   | 'RISK_DENIED'
   // The funds exist but aren't usable yet (they're still in a holding period).
   | 'FUNDS_IMMATURE'
-  // The user doesn't own the item or feature the request needs.
   | 'NOT_ENTITLED'
-  // No sale was found for the order the request refers to.
   | 'UNKNOWN_ORDER'
   // A spend reused an orderId that already has a completed sale but carried a different
-  // idempotencyKey. The orderId identifies a unique purchase, so a second charge for the same
-  // order is declined rather than thrown. This is an expected client mistake, such as a retry
-  // that lost its idempotency key, not a bug.
+  // idempotencyKey; an orderId identifies a unique purchase, so the second charge is declined.
   | 'DUPLICATE_ORDER'
-  // No subscription was found matching the request.
   | 'UNKNOWN_SUBSCRIPTION'
   // The user already has an ACTIVE subscription to this sku/seller; a second one would double-bill.
   | 'ALREADY_SUBSCRIBED'
-  // A payout was requested for less than the smallest amount that's allowed to be
-  // paid out (the minimum is set in config).
+  // The payout is below the configured minimum (payoutMinimumEarnedMinor).
   | 'BELOW_MINIMUM'
   // A payout was requested before enough time had passed since the user's previous request
   // (minimum gap is config payoutMinIntervalMs). The decline carries when the user may retry.
@@ -67,25 +60,23 @@ export const ERROR_CODES = {
   INVALID_AMOUNT: 'MONEY.INVALID_AMOUNT',
 
   /**
-   * A money amount fell outside the signed 64-bit range the ledger stores (the `BIGINT`
-   * columns in db/mysql-schema.sql). The schema always declared this bound; this fault
-   * enforces it at construction instead of at the database.
+   * A money amount fell outside the signed 64-bit range the ledger's `BIGINT` columns store,
+   * enforced at construction instead of at the database.
    */
   AMOUNT_OVERFLOW: 'MONEY.OVERFLOW',
 
   /** A posting's debits and credits didn't add up to zero, so the books wouldn't balance. */
   LEDGER_UNBALANCED: 'LEDGER.UNBALANCED',
 
-  /** A posting referenced an account that doesn't exist. */
   UNKNOWN_ACCOUNT: 'LEDGER.UNKNOWN_ACCOUNT',
 
-  /** A single posting tried to combine two different currencies, which isn't allowed. */
+  /** A single posting tried to combine two different currencies. */
   CURRENCY_MISMATCH: 'LEDGER.CURRENCY_MISMATCH',
 
   /**
-   * A balance that's never supposed to go negative did. Last-resort backstop deep in the posting
-   * code; the type doc above explains how the up-front INSUFFICIENT_FUNDS check keeps ordinary
-   * shortfalls away from it, so reaching this fault means a bug let a balance slip below zero.
+   * A balance that's never supposed to go negative did. Ordinary shortfalls are declined up
+   * front as INSUFFICIENT_FUNDS, so reaching this fault means a bug let a balance slip below
+   * zero.
    */
   OVERDRAFT: 'LEDGER.OVERDRAFT',
 
@@ -96,13 +87,8 @@ export const ERROR_CODES = {
    */
   COMMINGLING: 'LEDGER.COMMINGLING',
 
-  /**
-   * A multi-step saga was told to move to a state it can't reach from its
-   * current one.
-   */
   INVALID_TRANSITION: 'SAGA.INVALID_TRANSITION',
 
-  /** The caller isn't permitted to perform this action. */
   UNAUTHORIZED: 'AUTH.UNAUTHORIZED',
 
   /**
@@ -111,10 +97,8 @@ export const ERROR_CODES = {
    */
   INVALID_SIGNATURE: 'AUTH.INVALID_SIGNATURE',
 
-  /** The underlying storage layer (database, etc.) failed. */
   STORE_FAILURE: 'STORE.FAILURE',
 
-  /** An external service we depend on (such as a payment processor) failed. */
   PROVIDER_FAILURE: 'PROVIDER.FAILURE',
 
   /**

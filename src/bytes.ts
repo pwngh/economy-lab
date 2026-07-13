@@ -11,7 +11,7 @@
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 
-// Maps each byte (0-255) to its two lowercase hex chars, built once at module load so encoding is a table lookup.
+// Per-byte hex table built once at module load, so encoding is a lookup.
 const HEX = (() => {
   const table = new Array<string>(256);
   for (let byte = 0; byte < 256; byte += 1) {
@@ -21,12 +21,8 @@ const HEX = (() => {
 })();
 
 /**
- * Encodes a byte array as a lowercase hex string, two chars per byte.
- *
- * This is hand-written over `Uint8Array` rather than using `Buffer` or
- * `Uint8Array.prototype.toHex`, neither of which exists on every runtime we target.
- * Hand-writing it guarantees identical output on Node, Bun, Deno, and Workers. That
- * matters because the result feeds cross-runtime hashes.
+ * Lowercase hex, hand-written because neither `Buffer` nor `Uint8Array.prototype.toHex` exists on
+ * every target runtime, and the result feeds cross-runtime hashes.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for the
  * hash chain these hex helpers feed.

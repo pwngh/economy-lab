@@ -26,18 +26,15 @@ import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
 import type { Economy } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
 
-// Drives the full `economy.submit` path, where the `authorize` check lives. The sibling
-// topUp.test.ts calls the handler directly and never reaches that check. topUp is privileged because
-// it mints spendable credits against real cash held in trust. A `kind:'user'` actor must be rejected
-// before any money moves, while a trusted system actor (the buy-credits service) must still go
-// through.
+// Drives the full `economy.submit` path, where the `authorize` check runs; the sibling
+// topUp.test.ts calls the handler directly and never reaches it. topUp is system/operator-only:
+// it mints spendable credits against real cash held in trust.
 
 function isUnauthorized(error: unknown): boolean {
   return (error as { code?: string }).code === 'AUTH.UNAUTHORIZED';
 }
 
-// Builds a store and an economy over it that share the same seeded digest and fixed clock. Returns
-// both so a test can submit operations through the economy and read balances back from the store.
+// The economy and the store share one seeded digest and fixed clock so their hashes agree.
 function economyWithStore(): { economy: Economy; store: Store } {
   const store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
   return { economy: makeEconomy(1, store), store };
@@ -58,7 +55,6 @@ describe('topUp authorization through economy.submit', () => {
       isUnauthorized,
     );
 
-    // The reject stopped the operation before it ran, so no credits were issued.
     assert.deepEqual(
       await store.ledger.balance(spendable('usr_buyer')),
       credit('0.00'),
@@ -68,8 +64,7 @@ describe('topUp authorization through economy.submit', () => {
   test('still commits a topUp run by a trusted system actor', async () => {
     const { economy, store } = economyWithStore();
 
-    // The topUp builder defaults to a system actor, so the buy-credits path must go through. It moves
-    // credits to the buyer and brings the matching cash into trust.
+    // The topUp builder defaults to a system actor.
     const outcome = await economy.submit(
       buildTopUp({ userId: 'usr_buyer', amount: credit('10.00') }),
     );
@@ -81,8 +76,7 @@ describe('topUp authorization through economy.submit', () => {
     );
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.TRUST_CASH),
-      // The par rate is $0.005 per credit, so 10.00 credits are backed by $0.05 of real cash held in
-      // trust. The rest of the buyer's $0.10 gross is the platform's purchase-fee revenue.
+      // 10.00 credits at the $0.005 par rate = $0.05 held in trust.
       usd('0.05'),
     );
   });

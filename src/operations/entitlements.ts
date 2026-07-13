@@ -88,10 +88,8 @@ export async function revokeEntitlement(
   return { status: 'committed', transaction: lifecycleMarker(ctx) };
 }
 
-// Validates that the userId and sku are non-blank. Entitlements post to no accounts, so the
-// central blank-owner guard (which only inspects wallet accounts) never sees these fields; they
-// are checked here. A blank userId records ownership against a phantom user, a blank sku records
-// ownership of nothing. Both are malformed, not a normal "no", so each throws a fault.
+// Entitlements post to no accounts, so the central blank-owner guard (which only inspects wallet
+// accounts) never sees these fields; they are checked here.
 function assertIdentified(userId: string, sku: string): void {
   if (userId.trim() === '') {
     throw fault(
@@ -109,11 +107,8 @@ function assertIdentified(userId: string, sku: string): void {
   }
 }
 
-// Validates the grant attributes. These come off the wire, so a number field can arrive as
-// NaN, Infinity, or a fraction. Only the two fields whose meaning breaks under those values
-// are checked. `expiresAt` is an instant and must be finite when present, where null means
-// "never expires". `quantity` is a count and must be a positive integer when present. A
-// malformed value is a client or programming error, so it throws a fault rather than rejecting.
+// Wire input: a number field can arrive as NaN, Infinity, or a fraction. `expiresAt` must be
+// finite when present (null means "never expires"); `quantity` a positive integer when present.
 function assertAttrs(attrs: EntitlementAttrs | undefined): void {
   if (attrs === undefined) {
     return;
@@ -141,6 +136,4 @@ function assertAttrs(attrs: EntitlementAttrs | undefined): void {
   }
 }
 
-// Holds the attributes for a grant with no details, such as no quantity or version. It
-// records the ownership fact without inventing defaults the caller never gave.
 const EMPTY_ATTRS: EntitlementAttrs = {};

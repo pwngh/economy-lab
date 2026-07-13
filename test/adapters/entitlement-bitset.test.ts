@@ -11,12 +11,9 @@
  */
 
 /**
- * The entitlement bitset read model (src/adapters/entitlement-bitset.ts), proven two ways. First,
- * the whole Store conformance suite runs against a decorated memory store: decoration must be
- * observationally invisible, entitlement semantics included. Second, the behaviors the decorator
- * adds are pinned directly — read-time deadline expiry, TTL-bounded cross-process staleness,
- * invalidation when a transaction ends (commit AND rollback), LRU eviction, and the
- * zero-allocation warm path.
+ * The entitlement bitset read model, proven two ways: the whole Store conformance suite runs
+ * against a decorated memory store (decoration must be observationally invisible), and the
+ * behaviors the decorator adds are pinned directly.
  */
 
 import { describe, test } from 'node:test';
@@ -27,15 +24,13 @@ import { cachedEntitlements } from '#src/adapters/entitlement-bitset.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { fixedClock } from '#test/support/capabilities.ts';
 
-// The full conformance suite against the decorated store. The same fixed clock is shared with the
-// backing store, so expiry decisions in the bitmap and in the store agree.
+// The same fixed clock is shared with the backing store, so expiry decisions agree.
 runStoreConformance('memory+bitset', () => {
   const clock = fixedClock(0);
   return cachedEntitlements(memoryStore({ clock }), { clock });
 });
 
-// Builds a decorated store over an advancing fake clock, returning both handles: writes through
-// `base` simulate another process (no invalidation event reaches the decorator).
+// Writes through `base` simulate another process: no invalidation event reaches the decorator.
 function build(opts?: { ttlMs?: number; maxUsers?: number }) {
   const clock = fixedClock(0);
   const base = memoryStore({ clock });
@@ -70,7 +65,6 @@ describe('Entitlement bitset read model', () => {
     );
     assert.equal(await store.entitlements.owns('usr_bs_2', 'sub_month'), true);
 
-    // Exactly at the deadline: still owned (inclusive), straight from the warm bitmap.
     clock.advance(1_000);
     assert.equal(
       store.__bitset.check('usr_bs_2', 'sub_month', clock.now()),
@@ -78,7 +72,6 @@ describe('Entitlement bitset read model', () => {
     );
     assert.equal(await store.entitlements.owns('usr_bs_2', 'sub_month'), true);
 
-    // One ms past: lapsed, with no write and no invalidation event ever occurring.
     clock.advance(1);
     assert.equal(
       store.__bitset.check('usr_bs_2', 'sub_month', clock.now()),
@@ -98,7 +91,6 @@ describe('Entitlement bitset read model', () => {
     await base.entitlements.revoke('usr_bs_3', 'avatar_x');
     assert.equal(await store.entitlements.owns('usr_bs_3', 'avatar_x'), true);
 
-    // Past the TTL the bitmap refills from the store and heals.
     clock.advance(5_001);
     assert.equal(await store.entitlements.owns('usr_bs_3', 'avatar_x'), false);
   });

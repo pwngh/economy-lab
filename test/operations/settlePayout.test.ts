@@ -10,25 +10,10 @@
  */
 
 /**
- * Tests for settlePayout, the SUBMITTED -> SETTLED step of a payout saga. This step used to live in
- * the background worker (src/worker/payouts.ts). It now lives in a system-actor operation that an
- * inbound provider settlement webhook can trigger (see src/webhooks.ts toSettlePayout). The worker
- * now only SUBMITS a payout. The provider's "payout settled" callback drives this operation to settle
- * it.
- *
- * These are the worker-settle outcome assertions that used to live in test/worker/payouts.test.ts.
- * They are carried over unweakened now that the settle lives here. Settling a SUBMITTED saga empties
- * the reserve into REVENUE, moves an equal sum of USD out of TRUST_CASH through USD_CLEARING, advances
- * the saga to SETTLED, and emits exactly one economy.payout.settled event. A settle that loses the
- * SUBMITTED -> SETTLED compare-and-set (because another settle got there first) rolls back its
- * postings and its event rather than paying the seller twice. A non-SUBMITTED state is refused with
- * INVALID_TRANSITION. An unknown saga is a mapping fault. An end user may not settle their own payout.
- *
- * There are two drive paths, mirroring reversePayout.test.ts. The ledger postings, the saga state, the
- * rollback, and the rolled-back event call the handler directly inside one `store.transaction`,
- * because the submit pipeline runs it as its final step and settlePayout enqueues its own event in
- * that transaction. The emitted event on a clean settle and the privileged-actor gate go through the
- * full `economy.submit` entry point.
+ * settlePayout: the SUBMITTED -> SETTLED step of a payout saga, driven by the provider's
+ * settlement webhook. Ledger, state, and rollback tests call the handler directly inside one
+ * `store.transaction` — settlePayout enqueues its own event in that transaction; the clean-settle
+ * event and the privileged-actor gate go through the full `economy.submit` entry point.
  */
 
 import { describe, test } from 'node:test';
@@ -80,10 +65,8 @@ function newCtx(): Ctx {
   };
 }
 
-// Opens a payout in the given state with credits already in escrow, matching how a payout that the
-// worker SUBMITTED is left: the seller's earned credits sit in PAYOUT_RESERVE. Seeding the reserve,
-// balanced against STORED_VALUE (a platform account exempt from the overdraft rule), gives the
-// settle's credit-side debit a balance to draw from instead of pushing the reserve negative.
+// Opens a saga with its reserve already in escrow, as the worker leaves a SUBMITTED payout. The
+// seed balances against STORED_VALUE, a platform account exempt from the overdraft rule.
 async function openSubmittedSaga(
   store: Store,
   overrides: Partial<Saga> & Pick<Saga, 'id' | 'state'>,
@@ -129,11 +112,8 @@ async function stateOf(
   return (await store.sagas.load(id))?.state;
 }
 
-// Wraps a store so the first transaction the settle opens simulates another settle clearing this saga
-// out from under it. By the time this settle's guarded SUBMITTED -> SETTLED move runs, the saga has
-// already left SUBMITTED, so the move matches no row and returns false. This is the race the settle
-// path must roll back from instead of paying the seller twice. The pre-empting flip only changes the
-// state and posts nothing, so the reserve it left behind is what this run's rollback must restore.
+// Before the settle's first transaction, another settle flips the saga out of SUBMITTED, so the
+// guarded advance matches no row. The flip changes only the state and posts nothing.
 function raceSettleOnce(store: Store, id: string): Store {
   let raced = false;
   return {
@@ -160,8 +140,6 @@ describe('settlePayout', () => {
     );
 
     assert.equal(outcome.status, 'committed');
-    // The credit-side entry empties the reserve into REVENUE. The seller's set-aside credits become
-    // platform earnings, because the platform now owes the seller real money instead.
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
       credit('0.00'),
@@ -170,10 +148,8 @@ describe('settlePayout', () => {
       await store.ledger.balance(SYSTEM.REVENUE),
       credit('4.00'),
     );
-    // The USD-side entry records cash leaving custody through USD_CLEARING. TRUST_CASH (real cash
-    // held for users) grows on a debit, so crediting it lowers it. That drop is the cash the buyer
-    // already gave up when they spent these credits. The reserved 4.00 CREDIT converts at the payout
-    // rate ($0.005) to $0.02, an equal sum of USD leaving trust against the reserve cleared.
+    // TRUST_CASH is debit-normal, so cash leaving custody reads negative; the reserved 4.00 CREDIT
+    // converts at the payout rate to $0.02.
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.TRUST_CASH),
       usd('-0.02'),
@@ -182,9 +158,6 @@ describe('settlePayout', () => {
       await store.ledger.balance(SYSTEM.USD_CLEARING),
       usd('0.02'),
     );
-    // The saga is now SETTLED, with the gross USD disbursed persisted on the record itself and no
-    // failure reason. The console reads this terminal settle outcome straight from the saga, with no
-    // posting-meta harvest.
     const settled = await store.sagas.load('pay_1');
     assert.equal(settled!.state, 'SETTLED');
     assert.deepEqual(settled!.payoutUsd, usd('0.02'));
@@ -192,8 +165,6 @@ describe('settlePayout', () => {
   });
 
   test('emits exactly one economy.payout.settled event carrying the money detail', async () => {
-    // Drive through the full economy.submit entry point so the submit pipeline commits the event the
-    // settle enqueued in the same transaction as the postings.
     const store = newStore();
     const economy: Economy = makeEconomy(1, store);
     await openSubmittedSaga(store, { id: 'pay_1', state: 'SUBMITTED' });
@@ -203,8 +174,6 @@ describe('settlePayout', () => {
     );
     assert.equal(outcome.status, 'committed');
 
-    // The settled event is enqueued in the same transaction as the ledger postings and the guarded
-    // state advance, so a settled payout leaves exactly one such event on the outbox.
     const messages = await store.outbox.claimBatch(10);
     const settled = messages.filter(
       (m) => m.event.type === 'economy.payout.settled',
@@ -218,9 +187,6 @@ describe('settlePayout', () => {
   });
 
   test('rolls back the settlement on a lost CAS rather than double-paying', async () => {
-    // Another settle clears this saga first (see raceSettleOnce), so this run's guarded SUBMITTED ->
-    // SETTLED move finds nothing to advance and throws, rolling back its two postings rather than
-    // emptying the reserve into REVENUE and moving USD a second time.
     const store = newStore();
     await openSubmittedSaga(store, { id: 'pay_1', state: 'SUBMITTED' });
 
@@ -234,9 +200,6 @@ describe('settlePayout', () => {
       (error) => codeOf(error) === 'SAGA.INVALID_TRANSITION',
     );
 
-    // The winning settle left the reserve in place, because raceSettleOnce only flips the state and
-    // posts nothing. The losing settle rolled its postings back. So the reserve is untouched, REVENUE
-    // is empty, and no USD left custody: the seller is paid once, not twice.
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
       credit('4.00'),
@@ -256,9 +219,6 @@ describe('settlePayout', () => {
   });
 
   test('a rolled-back settle emits no settled event', async () => {
-    // settlePayout enqueues its event in the same transaction as the postings, so the lost-CAS throw
-    // rolls the enqueued event back with them: no settled event is left behind for a settle that never
-    // took.
     const store = newStore();
     await openSubmittedSaga(store, { id: 'pay_1', state: 'SUBMITTED' });
 
@@ -279,8 +239,6 @@ describe('settlePayout', () => {
   });
 
   test('refuses a non-SUBMITTED saga with INVALID_TRANSITION and posts nothing', async () => {
-    // Only a SUBMITTED payout has a disbursement the provider can report settled. A RESERVED saga (not
-    // yet handed to the provider) has nothing to settle, so the settle is refused and posts nothing.
     const store = newStore();
     await openSubmittedSaga(store, { id: 'pay_resv', state: 'RESERVED' });
 
@@ -310,8 +268,6 @@ describe('settlePayout', () => {
   });
 
   test('an end user may not settle their own payout (UNAUTHORIZED)', async () => {
-    // settlePayout is system/operator-only (RESTRICTED_TO_PRIVILEGED): a seller must never settle
-    // their own payout. The privileged gate lives at the economy.submit entry point, so drive it there.
     const store = newStore();
     const economy: Economy = makeEconomy(1, store);
     await openSubmittedSaga(store, { id: 'pay_1', state: 'SUBMITTED' });
@@ -327,7 +283,6 @@ describe('settlePayout', () => {
       (error) => codeOf(error) === 'AUTH.UNAUTHORIZED',
     );
 
-    // Nothing settled: the saga stays SUBMITTED and the reserve is untouched.
     assert.equal(await stateOf(store, 'pay_1'), 'SUBMITTED');
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),

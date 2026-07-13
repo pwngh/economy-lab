@@ -42,9 +42,6 @@ function makeStore(): Store {
   return memoryStore({ digest, clock });
 }
 
-// Runs one handler inside a store transaction, exactly as production does, so its writes
-// commit or roll back together. Returns the Outcome, which is committed, rejected, or a
-// thrown error bubbled out.
 function apply(
   store: Store,
   ctx: Ctx,

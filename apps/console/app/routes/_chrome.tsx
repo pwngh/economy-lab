@@ -19,8 +19,6 @@ import type { Route } from './+types/_chrome';
 import { getEconomy } from '~/economy.server';
 import { StatusPill, dayLabel, fmtAmount } from '~/ui';
 
-// What the frame needs on every page: the sim settings (for the panel's controls) and the headline
-// solvency figure. Both reads.
 export async function loader(_: Route.LoaderArgs) {
   const eco = await getEconomy();
   return { settings: eco.settings(), solvency: await eco.solvency() };
@@ -67,9 +65,8 @@ export default function Chrome({ loaderData }: Route.ComponentProps) {
   );
 }
 
-// The control panel that drives the shared state. Each control posts to /actions/simulate via a
-// fetcher; on return, React Router revalidates the active page's loader. The one-line result comes
-// back in fx.data as a notice.
+// Each control posts to /actions/simulate via a fetcher; on return, React Router revalidates the
+// active page's loader. The one-line result comes back in fx.data as a notice.
 function SimulationPanel({
   settings,
   solvency,

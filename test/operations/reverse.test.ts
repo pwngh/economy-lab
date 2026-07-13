@@ -38,19 +38,13 @@ import type { AccountRef } from '#src/accounts.ts';
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Leg, Store, Unit } from '#src/ports.ts';
 
-// `reverse` is not registered with the engine, so these tests call it directly. Each call runs
-// inside `store.transaction(...)`, which hands the handler a `unit` (one open db transaction). That
-// `unit` is the same thing the engine would pass. The fixture wires a fresh in-memory ledger plus
-// per-test helpers.
+// `reverse` is not registered with the engine, so these tests call it directly, each inside
+// `store.transaction`.
 type Fixture = {
-  // Posts a top-up entry that credits the user. A test reverses that transaction by passing the
-  // returned id back in.
   issue(userId: string, amount: Amount): Promise<string>;
 
-  // Runs the `reverse` handler for one operation and returns its outcome.
   rev(operation: Operation): Promise<Outcome>;
 
-  // Reads the current balance of one account.
   balanceOf(account: AccountRef): Promise<Amount>;
 };
 
@@ -78,9 +72,6 @@ function setup(): Fixture {
       postEntry(unit.ledger, { txnId: ctx.ids.next('txn'), legs, meta }),
     );
   return {
-    // Posts the two-line top-up entry. It debits platform stored-value and credits user spendable by
-    // the same amount, so the two lines sum to zero. A later `reverse` undoes this entry. Returns the
-    // transaction id.
     issue: async (userId, amount) => {
       const transaction = await post(
         [debit(SYSTEM.STORED_VALUE, amount), credit(spendable(userId), amount)],
@@ -94,9 +85,6 @@ function setup(): Fixture {
   };
 }
 
-// Builds a matcher for `assert.rejects`. The matcher returns true only when the thrown value is an
-// Error whose `code` equals the given string. This confirms a rejection failed for the expected
-// reason, not merely that it failed.
 function isCode(code: string): (error: unknown) => boolean {
   return (error) =>
     error instanceof Error && 'code' in error && error.code === code;
@@ -156,12 +144,10 @@ describe('Reverse', () => {
     const second = await fx.rev(
       reverseOp({ txnId, reason: 'duplicate posting' }),
     );
-    // The duplicate replays the first reversal's transaction.
     assert.equal(second.status, 'duplicate');
     if (second.status === 'duplicate' && first.status === 'committed') {
       assert.equal(second.transaction.id, first.transaction.id);
     }
-    // A second money movement would push spendable negative and throw stored-value off zero.
     assert.deepEqual(
       await fx.balanceOf(spendable('usr_buyer')),
       creditOf('0.00'),
@@ -179,7 +165,6 @@ describe('Reverse', () => {
     assert.equal(first.status, 'committed');
     if (first.status !== 'committed') return;
 
-    // Refusing it keeps the same money from looping back out and in.
     await assert.rejects(
       fx.rev(
         reverseOp({

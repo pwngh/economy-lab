@@ -38,10 +38,8 @@ export const SECTION_LABEL: Record<string, string> = {
 
 /**
  * The single ordered nav definition: the sidebar renders it directly and prev/next falls out of
- * its flattened reading order (see flatSequence). Operations are listed in lifecycle order
- * (top-up → spend → refund → clawback → the payout saga → subscriptions → entitlements → promo →
- * operator corrections), which is just their frontmatter `order`; reorder there and both the
- * sidebar and prev/next follow.
+ * its flattened reading order (see flatSequence). Operations follow their frontmatter `order`
+ * (lifecycle order); reorder there and both the sidebar and prev/next follow.
  */
 export function buildNav(): NavGroup[] {
   const operations = docs.filter((d) => isOperation(d.slug)).map(leaf);

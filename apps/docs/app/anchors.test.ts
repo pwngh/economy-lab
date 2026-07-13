@@ -9,11 +9,9 @@
  * @license MIT
  */
 
-// Guards the docs↔source link layer against rot. Every `sourceRefs` chip and inline <SourceLink>
-// anchor resolves against the library working tree: the file exists, any `#Lnn` range falls inside
-// it, and a labeled chip's symbol appears within that range. The chips render at REPO_REF, so this
-// passes only while the tree matches the pin — edit the library source and this fails until the
-// anchors are re-pointed and REPO_REF re-pinned (see app/repo.ts).
+// Every `sourceRefs` chip and inline <SourceLink> anchor must resolve against the library working
+// tree: file exists, `#Lnn` range in bounds, labeled symbol within the range. After a source edit
+// this fails until the anchors are re-pointed and REPO_REF re-pinned (see app/repo.ts).
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, test } from 'vitest';

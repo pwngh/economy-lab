@@ -24,8 +24,7 @@ import { fixedClock, testConfig } from '#test/support/capabilities.ts';
 import type { Economy } from '#src/contract.ts';
 import type { WebhookHandler } from '#src/server.ts';
 
-// Signs the body with HMAC-SHA256 under `secret` and returns a lowercase hex digest, the form the
-// `x-signature` header carries. Uses Web Crypto so the test runs on every target runtime.
+// Lowercase hex HMAC-SHA256 over the body — the form the `x-signature` header carries.
 async function signHex(body: string, secret: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',
@@ -42,8 +41,6 @@ async function signHex(body: string, secret: string): Promise<string> {
   return toHex(new Uint8Array(signature));
 }
 
-// Builds a POST to a webhook endpoint with optional signature and timestamp headers. Callers pass
-// signed, forged, or stale headers to drive each verification path.
 function webhookRequest(
   provider: string,
   body: string,
@@ -56,8 +53,7 @@ function webhookRequest(
   });
 }
 
-// Builds a POST to /submit from an operation body. The money fields must already be decimal strings,
-// the form the server decodes, just as a real client would send.
+// Money fields must already be decimal strings — the wire form the server decodes.
 function submitRequest(body: Record<string, unknown>): Request {
   return new Request('https://economy.test/submit', {
     method: 'POST',
@@ -66,8 +62,6 @@ function submitRequest(body: Record<string, unknown>): Request {
   });
 }
 
-// Builds a topUp request body. Only `amount` is a decimal string, the one money field the server
-// decodes. The rest is plain JSON.
 function topUpBody(userId: string, dollars: string): Record<string, unknown> {
   return {
     kind: 'topUp',
@@ -79,8 +73,7 @@ function topUpBody(userId: string, dollars: string): Record<string, unknown> {
   };
 }
 
-// Builds a spend request body for a buyer with no balance. The server checks the balance up front and
-// returns a rejected outcome with reason INSUFFICIENT_FUNDS, not a server error.
+// For a buyer with no balance, so the spend is a clean decline.
 function spendBody(buyerId: string, dollars: string): Record<string, unknown> {
   return {
     kind: 'spend',
@@ -107,8 +100,7 @@ describe('createServer /submit', () => {
 
     assert.equal(response.status, 200);
     assert.equal(payload.status, 'committed');
-    // Each leg reports its amount as a decimal string like 'CREDIT:10.00' (currency, then dollars);
-    // no raw integer on the wire.
+    // No raw integer on the wire: legs report decimal strings like 'CREDIT:10.00'.
     assert.equal(
       payload.transaction.legs.some((leg) => leg.amount === 'CREDIT:10.00'),
       true,
@@ -126,8 +118,6 @@ describe('createServer /submit', () => {
       reason: string;
     };
 
-    // Declining a valid request (here, not enough money) is a normal result, not a server error: 200
-    // with the rejection reason in the body.
     assert.equal(response.status, 200);
     assert.equal(payload.status, 'rejected');
     assert.equal(payload.reason, 'INSUFFICIENT_FUNDS');
@@ -147,14 +137,11 @@ describe('createServer /submit', () => {
     assert.equal(typeof payload.title, 'string');
     assert.equal(payload.status, 400);
     assert.equal(payload.code, 'OP.MALFORMED');
-    // The problem carries only the caller-safe fields; `detail` and `cause` stay server-side.
     assert.equal('detail' in payload, false);
     assert.equal('cause' in payload, false);
   });
 
   test('a thrown EconomyError carrying detail/cause leaks only the problem fields', async () => {
-    // Submit faults with a fully-populated EconomyError (detail, cause, implicit stack). The boundary
-    // must surface none of them.
     const economy = {
       submit: async () => {
         throw fault(ERROR_CODES.STORE_FAILURE, 'A storage layer failed.', {
@@ -182,8 +169,7 @@ describe('createServer /submit', () => {
     const response = await server(submitRequest(topUpBody('usr_x', '1.00')));
     const payload = (await response.json()) as Record<string, unknown>;
 
-    // A retryable fault maps to 503; the problem body carries the message as `title` plus the
-    // stable code and retryable flag, and nothing else.
+    // A retryable fault maps to 503.
     assert.equal(response.status, 503);
     assert.equal(payload.title, 'A storage layer failed.');
     assert.deepEqual(Object.keys(payload).sort(), [
@@ -274,9 +260,7 @@ describe('createServer /webhooks HMAC Verification', () => {
     const payload = (await response.json()) as { title: string };
 
     assert.equal(response.status, 401);
-    // The handler (the only thing that would mutate the ledger) was never reached.
     assert.equal(invoked, false);
-    // Only the caller-safe title escapes; internal detail stays server-side.
     assert.equal(typeof payload.title, 'string');
     assert.equal('detail' in payload, false);
   });
@@ -335,8 +319,6 @@ describe('createServer /webhooks Freshness', () => {
     );
     const payload = (await response.json()) as { status: string };
 
-    // A request too late to be fresh is treated as an already-handled repeat: 200, status
-    // 'duplicate', nothing changed.
     assert.equal(response.status, 200);
     assert.equal(payload.status, 'duplicate');
     assert.equal(invoked, false);
@@ -426,8 +408,7 @@ describe('createServer Health And Readiness', () => {
   });
 
   test('GET /readyz returns 503 when the store read throws', async () => {
-    // Builds a minimal economy whose readiness probe, read.balance, throws to stand in for an
-    // unreachable store. Only the parts that /readyz touches need to be real.
+    // read.balance is the readiness probe, so only it needs to be real.
     const economy = {
       submit: async () => {
         throw new Error('not used');

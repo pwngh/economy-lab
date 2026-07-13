@@ -35,14 +35,10 @@ describe('Accounts', () => {
   });
 
   test('classifies a spendable balance as user credits that need USD backing', () => {
-    // A "custodial" balance is spendable credits that the platform must back with real USD held for the user.
     assert.equal(classify(spendable('usr_a')), 'custodial');
   });
 
   test('excludes earned, promo, and the payout reserve from the USD-backed total', () => {
-    // An "excluded" balance is something the platform owes but need not hold USD against, so it stays
-    // out of the cash-backing total. An earned balance is owed to a seller. A promo balance is a
-    // marketing grant. PAYOUT_RESERVE is set aside for a pending payout.
     const cases = [earned('usr_a'), promo('usr_a'), SYSTEM.PAYOUT_RESERVE];
 
     for (const account of cases) {
@@ -51,9 +47,6 @@ describe('Accounts', () => {
   });
 
   test('marks the house accounts that grow on debits', () => {
-    // A "debit-normal" account grows on a debit. isDebitNormal tells the ledger each line's sign.
-    // These house accounts grow on debits. REVENUE and a spendable balance grow on credits, so they
-    // return false.
     const debitNormal = [
       SYSTEM.TRUST_CASH,
       SYSTEM.USD_CLEARING,
@@ -79,10 +72,8 @@ describe('Accounts: Lock Sets & Wallet Classification', () => {
       recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
     });
 
-    // accountsOf returns every account the operation might touch, including each movement's contra
-    // (offsetting entry). The whole set is locked before posting so two operations cannot change one
-    // balance concurrently. A spend can draw the buyer's promo grant and spendable balance, and it
-    // pays the seller, so all of those are locked.
+    // accountsOf is the pre-posting lock set: every account the operation might touch, contras
+    // included, so two operations cannot change one balance concurrently.
     const locked = new Set(accountsOf(operation));
 
     assert.equal(locked.has(promo('usr_buyer')), true);
@@ -103,7 +94,6 @@ describe('Accounts: Lock Sets & Wallet Classification', () => {
   });
 
   test('locks the promo account and its offset account for a grant', () => {
-    // A promo grant credits the user's promo account; PROMO_FLOAT is its contra. Only those two.
     const locked = new Set(
       accountsOf(grantPromo({ userId: 'usr_buyer', amount: credit('5.00') })),
     );
@@ -115,8 +105,6 @@ describe('Accounts: Lock Sets & Wallet Classification', () => {
   });
 
   test('treats every user account as a wallet and house accounts as not', () => {
-    // isWalletAccount flags an instantly-spendable destination, which matters for money-laundering
-    // checks. A user's own account (`usr_…:<kind>`) is a wallet. Every `platform:` house account is not.
     assert.equal(isWalletAccount(spendable('usr_a')), true);
     assert.equal(isWalletAccount(earned('usr_a')), true);
     assert.equal(isWalletAccount(promo('usr_a')), true);

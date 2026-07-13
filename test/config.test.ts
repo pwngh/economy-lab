@@ -15,7 +15,6 @@ import assert from 'node:assert/strict';
 import { loadConfig } from '#src/config.ts';
 import { ERROR_CODES } from '#src/errors.ts';
 
-// The shipped card horizon (7 days), which steam, meta, and default all inherit.
 const CARD_HORIZON_MS = 7 * 24 * 60 * 60_000;
 
 describe('loadConfig maturity horizons', () => {

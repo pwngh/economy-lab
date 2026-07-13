@@ -9,11 +9,9 @@
  * @license MIT
  */
 
-// Where the source chips point. Pinned to a commit SHA, not a branch, so a chip's file contents and
-// any #Lnn line anchor can't drift out from under the link when the source changes later — the same
-// "pin the version so the reference can't rot" instinct as the docs base URL. Bump REPO_REF when you
-// re-point the docs at a newer snapshot of economy-lab, then re-anchor the chips; app/anchors.test.ts
-// fails whenever the anchors and the library tree disagree.
+// Where the source chips point. Pinned to a commit SHA, not a branch, so file contents and #Lnn
+// anchors can't drift out from under the links. Bump REPO_REF when re-pointing the docs at a newer
+// snapshot, then re-anchor the chips; app/anchors.test.ts fails while they disagree.
 export const REPO_URL = 'https://github.com/pwngh/economy-lab';
 export const REPO_REF = 'dfe37cbf216bbf091ba72efb8a0a5059657b3602';
 

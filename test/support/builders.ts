@@ -22,34 +22,21 @@ import type {
 import type { AccountRef } from '#src/accounts.ts';
 import type { Velocity } from '#src/ports.ts';
 
-// Fresh idempotency key per call (the economy uses it to dedupe retried requests). Each
-// call gets a new key, so a test only acts like a retry when it deliberately reuses one.
-//
-// The key carries a per-process random prefix, not just a bare counter: the SQL backends persist
-// idempotency rows across runs, so a fixed `idem_<n>` from one run collides with a row a previous
-// run left behind, and the second run's request replays as a duplicate instead of executing. The
-// bench hit exactly this: its requestPayout probe came back `status: 'duplicate'` and the cell
-// read n/a. A run-unique prefix makes every key hermetic to the run that minted it, so a probe
-// never matches a persisted row. The counter still increments so keys are unique within a run too.
+// Fresh idempotency key per call; a test acts like a retry only by deliberate reuse. The prefix
+// is run-unique because the SQL backends persist idempotency rows across runs — a bare counter
+// key collides with a prior run's row and replays as a duplicate.
 let n = 0;
 const RUN_PREFIX = randomUUID();
 const claim = (): string => `idem_${RUN_PREFIX}_${n++}`;
 
-// Default actors for when a test doesn't care about the caller: a trusted internal
-// service, and a human operator running a manual action.
 const system: Principal = { kind: 'system', service: 'test' };
 const operator: Principal = { kind: 'operator', operatorId: 'op_test' };
 
-/**
- * Builds a CREDIT amount from a dollars-and-cents string like `'12.34'`. An `Amount` is
- * only created by parsing such a string (see `decodeAmount` in money.ts).
- */
+/** A CREDIT amount from a dollars-and-cents string like '12.34'. */
 export const credit = (dollars: string): Amount =>
   decodeAmount(dollars, 'CREDIT');
 
-// Builds a blank velocity accumulator for a subject with no spending in the current window.
-// This is the same shape `windowedVelocity` returns for an empty attempt list. Use it to assert
-// that a fresh or fully-aged-out subject reads as zero spent.
+// The same shape `windowedVelocity` returns for an empty attempt list.
 export const emptyVelocity = (subject: string): Velocity => ({
   subject,
   windowStart: 0,
@@ -60,18 +47,13 @@ export const emptyVelocity = (subject: string): Velocity => ({
 /** Builds a USD amount from a dollars-and-cents string like `'12.34'`. */
 export const usd = (dollars: string): Amount => decodeAmount(dollars, 'USD');
 
-/**
- * Builds the actor value for an end user. A user may only act on their own accounts, so use
- * this when a test exercises a user's own request.
- */
+/** A user actor; users may only act on their own accounts. */
 export const principal = (userId: string): Principal => ({
   kind: 'user',
   userId,
 });
 
-// Each function below builds one kind of `Operation`, filling in the boilerplate fields
-// (fresh idempotency key, default actor, other defaults) so a test passes only what it
-// cares about. The `...o` spread lets a test override any default.
+// One builder per Operation kind: boilerplate defaulted, the `...o` spread overrides anything.
 export const topUp = (o: {
   userId: string;
   amount: Amount;

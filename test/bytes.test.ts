@@ -10,10 +10,8 @@
  */
 
 /**
- * The `toInt64BE` encoder feeds the v2 checkpoint preimages (chain.ts), where the same sum must
- * become the same bytes on every runtime. These pin the two's-complement layout at the edges and
- * the refusal to wrap: `DataView.setBigInt64` would silently reduce an out-of-range value modulo
- * 2^64, and a wrapped sum must never reach a hash.
+ * `toInt64BE` feeds the v2 checkpoint preimages (chain.ts). `DataView.setBigInt64` would silently
+ * reduce an out-of-range value modulo 2^64, and a wrapped sum must never reach a hash.
  */
 
 import { describe, test } from 'node:test';

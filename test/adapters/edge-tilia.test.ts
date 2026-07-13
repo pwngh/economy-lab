@@ -128,11 +128,8 @@ describe('edge-tilia shim (the compiled @pwngh/economy-edge package behind the l
     const scenario = tiliaScenario();
     const edge = edgeFrom(scenario);
 
-    // The shim slices the providerRef on '/' and the saga lookup matches webhook
-    // events by the same ref, so both rest on an implicit edge contract:
-    // `accountId/payoutStatusId`, and submit and webhook agree on it. Pin all of
-    // that here so an edge format change fails this suite instead of silently
-    // orphaning payouts at reconcile time.
+    // The implicit edge contract is an `accountId/payoutStatusId` ref that submit and the webhook
+    // agree on; pinning it makes an edge format change fail here instead of orphaning payouts.
     const { providerRef } = await edgeTiliaProcessor(
       edge.outbound,
     ).submitPayout({

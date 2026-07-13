@@ -46,9 +46,8 @@ export default function Payouts({ loaderData }: Route.ComponentProps) {
   const { page, counts, settings } = loaderData;
   const { rows: payouts, offset, limit, total } = page;
 
-  // The cards on this page, bucketed by column. The board is paged newest-first across all states,
-  // so a given page may not fill every column — the *true* per-column total comes from `counts`
-  // (a single streaming tally), shown in the header, while only this page's cards are rendered.
+  // The board is paged across all states, so a page may not fill every column; the true per-column
+  // total comes from `counts`, not from this page's cards.
   const byState = (s: PayoutView['state']) =>
     payouts.filter((p) =>
       s === 'RESERVED'

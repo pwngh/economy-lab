@@ -41,21 +41,13 @@ import type { AccountRef } from '#src/accounts.ts';
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Leg, Store, Unit } from '#src/ports.ts';
 
-// Refund handler harness. The economy doesn't route refunds yet, so each test calls the handler
-// directly inside a db transaction with the same transactional handle (`unit`) the real system uses.
-//
-// A refund reverses a sale, so each test first runs a real purchase through `spend`; that records
-// money lines in the sale store under an order id, which the refund looks up and posts the opposites of.
-//
-// The fixture bundles helpers (issue funds, run a sale, run a refund, read a balance) so each test
-// only spells out the thing it's testing.
+// The economy does not route refunds yet, so each test calls the handler directly inside a real
+// `store.transaction`.
 type Fixture = {
   issue(userId: string, amount: Amount): Promise<void>;
   sell(operation: Operation): Promise<Outcome>;
   refund(operation: Operation): Promise<Outcome>;
   balanceOf(account: AccountRef): Promise<Amount>;
-  // Move a seller's whole earned balance out, the way a settled payout would, so a later
-  // refund has nothing left to claw back from that seller.
   drainEarned(userId: string, amount: Amount): Promise<void>;
   grant(userId: string, sku: string, attrs?: EntitlementAttrs): Promise<void>;
   owns(userId: string, sku: string): Promise<boolean>;
@@ -82,8 +74,6 @@ function setup(): Fixture {
       postEntry(unit.ledger, { txnId: ctx.ids.next('txn'), legs, meta }),
     );
   return {
-    // Give a user spendable funds like a top-up would: post the two ledger lines a top-up posts,
-    // leaving the amount in the user's spendable balance for a later sale to draw on.
     issue: async (userId, amount) => {
       await post(
         [debit(SYSTEM.STORED_VALUE, amount), credit(spendable(userId), amount)],
@@ -95,9 +85,8 @@ function setup(): Fixture {
     refund: (operation) =>
       store.transaction((unit: Unit) => refund(operation, unit, ctx)),
     balanceOf: (account) => store.ledger.balance(account),
-    // Move the seller's earned balance into PAYOUT_RESERVE. Debiting earned and crediting the reserve
-    // by the same amount keeps the posting balanced and leaves earned at zero. This is the state of a
-    // seller who has already been paid out when a refund of their sale arrives.
+    // Stands in for a settled payout: drains earned into PAYOUT_RESERVE, the state a refund meets
+    // when the seller has already cashed out.
     drainEarned: async (userId, amount) => {
       await post(
         [debit(earned(userId), amount), credit(SYSTEM.PAYOUT_RESERVE, amount)],
@@ -116,8 +105,6 @@ function isCode(code: string): (error: unknown) => boolean {
   return (error) =>
     error instanceof Error && 'code' in error && error.code === code;
 }
-
-// --- The cases --------------------------------------------------------------------
 
 async function returnsBuyerFullPriceReversingSale(): Promise<void> {
   const fx = setup();
@@ -156,9 +143,6 @@ async function unwindsSellerEarnedAndPlatformFee(): Promise<void> {
 
   await fx.refund(refundOf({ orderId: 'ord_refund_2' }));
 
-  // After the refund every account the sale paid into is back to zero: seller earned and platform
-  // revenue. Revenue returning to zero means the platform's fee was given back, not kept; the refund
-  // undoes every line the sale posted.
   assert.deepEqual(await fx.balanceOf(earned('usr_seller')), creditOf('0.00'));
   assert.deepEqual(await fx.balanceOf(SYSTEM.REVENUE), creditOf('0.00'));
 }
@@ -200,9 +184,6 @@ async function rejectsUnknownOrderWhenNoSaleRecorded(): Promise<void> {
   assert.equal(outcome.reason, 'UNKNOWN_ORDER');
 }
 
-// A refund must make the buyer whole even when the seller already paid out the cut the sale
-// credited them. The seller is debited only by what's still in earned (here nothing); the
-// uncollectable remainder goes to RECEIVABLE so the posting balances.
 async function refundsBuyerEvenAfterSellerPaidOut(): Promise<void> {
   const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
@@ -216,28 +197,20 @@ async function refundsBuyerEvenAfterSellerPaidOut(): Promise<void> {
     }),
   );
 
-  // Seller cashes out their whole earned cut before the refund, so a naive sign-flip reversal would
-  // overdraw earned and roll the whole refund back.
   const sellerCut = await fx.balanceOf(earned('usr_seller'));
   await fx.drainEarned('usr_seller', sellerCut);
 
   const outcome = await fx.refund(refundOf({ orderId: 'ord_paidout' }));
 
-  // The refund still commits and the buyer is made whole for the full 4.00 price.
   assert.equal(outcome.status, 'committed');
   assert.deepEqual(
     await fx.balanceOf(spendable('usr_buyer')),
     creditOf('10.00'),
   );
-  // Nothing was clawed back from the now-empty seller earned (it stays at zero, not negative).
   assert.deepEqual(await fx.balanceOf(earned('usr_seller')), creditOf('0.00'));
-  // The slice the platform could not reclaim from the seller lands in RECEIVABLE as a debt owed.
   assert.deepEqual(await fx.balanceOf(SYSTEM.RECEIVABLE), sellerCut);
 }
 
-// An order can be reversed at most once. A refund takes a one-time lock keyed by order id
-// (`reversed:<orderId>`) before posting. The first refund takes the lock and posts the reversal; a
-// second finds it held and gets the first reversal handed back as a duplicate, never crediting twice.
 async function secondRefundOfSameOrderIsDuplicate(): Promise<void> {
   const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
@@ -254,23 +227,18 @@ async function secondRefundOfSameOrderIsDuplicate(): Promise<void> {
   const first = await fx.refund(refundOf({ orderId: 'ord_twice' }));
   assert.equal(first.status, 'committed');
 
-  // Even with a brand-new idempotency key (so the framework's retry dedup would let it through), the
-  // second refund is blocked: the first already took the per-order claim, and only one refund per
-  // order can win it.
+  // The builder mints a fresh idempotency key per call, so retry dedup is not what blocks the
+  // second refund — the per-order claim is.
   const second = await fx.refund(refundOf({ orderId: 'ord_twice' }));
   assert.equal(second.status, 'duplicate');
   if (first.status !== 'committed' || second.status !== 'duplicate') return;
-  // The duplicate returns the very transaction the first refund posted, not a fresh reversal.
   assert.equal(second.transaction.id, first.transaction.id);
-  // The buyer was credited exactly once: balance is the full 10.00, not 14.00.
   assert.deepEqual(
     await fx.balanceOf(spendable('usr_buyer')),
     creditOf('10.00'),
   );
 }
 
-// A refund revokes the buyer's entitlement to the SKU in the same transaction, so a
-// refunded buyer no longer owns the item.
 async function refundRevokesBuyerEntitlement(): Promise<void> {
   const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
@@ -283,7 +251,6 @@ async function refundRevokesBuyerEntitlement(): Promise<void> {
       orderId: 'ord_revoke',
     }),
   );
-  // Grant the buyer the SKU like a real sale does, so the refund's revoke has a record to reclaim.
   await fx.grant('usr_buyer', 'wrld_pass', { source: 'sale:ord_revoke' });
   assert.equal(await fx.owns('usr_buyer', 'wrld_pass'), true);
 
@@ -292,9 +259,6 @@ async function refundRevokesBuyerEntitlement(): Promise<void> {
   assert.equal(await fx.owns('usr_buyer', 'wrld_pass'), false);
 }
 
-// A gift refunds like any sale, but ownership is reclaimed from the recipient who received it (the
-// sale's recorded `recipientId`), not the buyer who paid: the gift granted to the recipient, so the
-// refund revokes from the recipient.
 async function refundingAGiftTakesItBackFromTheRecipient(): Promise<void> {
   const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
@@ -308,13 +272,11 @@ async function refundingAGiftTakesItBackFromTheRecipient(): Promise<void> {
       orderId: 'ord_gift_refund',
     }),
   );
-  // The gift granted ownership to the recipient, not the buyer who paid.
   assert.equal(await fx.owns('usr_friend', 'wrld_pass'), true);
   assert.equal(await fx.owns('usr_buyer', 'wrld_pass'), false);
 
   await fx.refund(refundOf({ orderId: 'ord_gift_refund' }));
 
-  // The buyer (who paid) is made whole, and ownership is revoked from the recipient (who held it).
   assert.deepEqual(
     await fx.balanceOf(spendable('usr_buyer')),
     creditOf('10.00'),
@@ -322,8 +284,6 @@ async function refundingAGiftTakesItBackFromTheRecipient(): Promise<void> {
   assert.equal(await fx.owns('usr_friend', 'wrld_pass'), false);
 }
 
-// Revoke is idempotent. Refunding a sale whose buyer was never granted the SKU still
-// commits and leaves ownership false, rather than throwing on the absent row.
 async function refundRevokeIsIdempotentWhenNeverGranted(): Promise<void> {
   const fx = setup();
   await fx.issue('usr_buyer', creditOf('10.00'));
@@ -343,9 +303,6 @@ async function refundRevokeIsIdempotentWhenNeverGranted(): Promise<void> {
   assert.equal(await fx.owns('usr_buyer', 'wrld_pass'), false);
 }
 
-// A blank or whitespace-only orderId names no order to reverse. Throw MALFORMED up front rather than
-// degrade to an UNKNOWN_ORDER rejected outcome, which would hide the malformed request behind an
-// ordinary "no".
 async function throwsMalformedForBlankOrderId(): Promise<void> {
   const fx = setup();
 

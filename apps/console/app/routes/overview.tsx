@@ -15,9 +15,7 @@ import type { Route } from './+types/overview';
 import { getEconomy } from '~/economy.server';
 import { Credits, DataTable, Usd } from '~/ui';
 
-// A short, bounded preview of wallets for the Overview — the full, paged list lives on the Accounts
-// page. The "what the platform owes" footer comes from the (cached) solvency aggregate, not from
-// summing the page, so it stays correct and the figures don't shift as you'd page.
+// A short, bounded preview of wallets — the full, paged list lives on the Accounts page.
 const PREVIEW = 8;
 
 export function meta(_: Route.MetaArgs) {

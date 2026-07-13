@@ -18,9 +18,8 @@ import type { Dispatcher, EconomyEvent, Options } from '#src/ports.ts';
 
 export interface HttpDispatcherConfig {
   /**
-   * The consumer endpoint each event is POSTed to. This is your event bus or webhook receiver. The
-   * lab is the producer, and the receiver is out of scope. `https://bus.internal/economy` is a
-   * placeholder.
+   * The consumer endpoint each event is POSTed to — your event bus or webhook receiver. The lab
+   * is the producer; the receiver is out of scope.
    */
   url: string;
 
@@ -32,9 +31,8 @@ export interface HttpDispatcherConfig {
 }
 
 /**
- * Builds the {@link Dispatcher} that POSTs one economy event to a remote endpoint over HTTP. HTTP is
- * one of two delivery paths (the alternative is SQS); both POST the identical body through the shared
- * `encodeEvent` (event-wire.ts).
+ * Builds the {@link Dispatcher} that POSTs one economy event to a remote endpoint over HTTP, the
+ * body encoded by the shared `encodeEvent` (event-wire.ts).
  *
  * A network error or a non-2xx response throws a retryable `PROVIDER.FAILURE`, so the relay
  * redelivers later with backoff. Because a retry can duplicate an event, the event id goes in an
@@ -69,7 +67,6 @@ export function httpDispatcher(config: HttpDispatcherConfig): Dispatcher {
   };
 }
 
-// Wraps a failed dispatch as a retryable `PROVIDER.FAILURE`, keeping the original error as `cause`.
 function transportFault(message: string, error: unknown): Error {
   return fault(ERROR_CODES.PROVIDER_FAILURE, message, {
     cause: normalizeError(error),

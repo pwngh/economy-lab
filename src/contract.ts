@@ -129,8 +129,7 @@ export type Operation =
       sku: string;
       price: Amount;
       periodMs: number;
-      // No `ageRestricted` field: age-gating is spend-only (see the spend variant). There is no
-      // in-core age gate, only the spend-side audit tag.
+      // No `ageRestricted` field: age-gating is spend-only (see the spend variant).
     }
   | {
       kind: 'cancelSubscription';
@@ -365,10 +364,8 @@ export interface Economy {
      */
     entitled(userId: string, sku: string, options?: Options): Promise<boolean>;
     /**
-     * The economy's current pause state (see EconomyStatus): whether a maintenance window is in
-     * effect right now, its configured bounds, and when writes resume. Derived from config + the
-     * clock, not stored, so it always reflects the live window. Lets a UI render a maintenance banner
-     * without inferring the state from an ECONOMY_PAUSED decline.
+     * The economy's current pause state (see {@link EconomyStatus}). Derived from config + the
+     * clock, not stored, so it always reflects the live window.
      */
     status(): EconomyStatus;
     /**

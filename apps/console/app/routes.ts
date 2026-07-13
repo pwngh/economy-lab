@@ -17,7 +17,7 @@ import {
 } from '@react-router/dev/routes';
 
 // Every page lives under one chrome layout (sidebar nav + Simulation panel), which owns the shared
-// loader and hosts the <Outlet/>. The simulate/record actions are resource routes the forms post to.
+// loader and hosts the <Outlet/>.
 export default [
   layout('routes/_chrome.tsx', [
     index('routes/overview.tsx'),

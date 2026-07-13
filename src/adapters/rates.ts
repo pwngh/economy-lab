@@ -30,7 +30,6 @@ export interface RatesConfig {
   payoutScale: number;
 }
 
-// Builds a `Rate` for converting a currency to itself. It multiplies by one and leaves the amount unchanged.
 function identityRate(from: Currency, to: Currency): Rate {
   return { rate: 1n, scale: 0, rateId: `${from}->${to}:1` };
 }
@@ -46,7 +45,7 @@ function identityRate(from: Currency, to: Currency): Rate {
  * @example
  * // Example rates: buy at ~120 credits/USD ($0.00833), backed and cashed out at ~200/USD ($0.005),
  * a ~40% spread:
- *   let rates = configuredRates({
+ *   const rates = configuredRates({
  *     buyRate: 8333n, buyScale: 6,
  *     parRate: 5n, parScale: 3,
  *     payoutRate: 5n, payoutScale: 3,
@@ -73,11 +72,9 @@ export function configuredRates(config: RatesConfig): Rates {
   };
   return {
     buy(currency: Currency): Rate {
-      // Only the CREDIT buy rate is configured; USD is the base unit, so its buy is 1:1.
       return currency === 'CREDIT' ? buy : identityRate('USD', 'USD');
     },
     par(currency: Currency): Rate {
-      // Only the CREDIT peg is configured; USD is the base unit, so its par is 1:1.
       return currency === 'CREDIT' ? par : identityRate('USD', 'USD');
     },
     async payout(
@@ -92,8 +89,6 @@ export function configuredRates(config: RatesConfig): Rates {
       if (from === 'CREDIT' && to === 'USD') {
         return payout;
       }
-      // `async`, so this rejects the promise (port returns `Promise<Rate>`) rather than throwing
-      // synchronously, which a caller's `await` would miss.
       throw new Error(
         `configuredRates has no ${from}->${to} rate (only CREDIT->USD and same-currency are configured).`,
       );

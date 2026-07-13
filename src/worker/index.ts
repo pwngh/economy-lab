@@ -75,10 +75,8 @@ export const SWEEP_NAMES = [
 ] as const;
 export type SweepName = (typeof SWEEP_NAMES)[number];
 
-// Bundles the arguments for every background job into one object, so the runner takes a single
-// value. Not every job uses every field. `now` and `limit` drive the due-item scans: `now` is the
-// current time and `limit` is the per-pass cap. `dispatcher` handles event delivery. `feed` and
-// `windows` drive reconciliation. `options` may carry an AbortSignal that cancels a running job.
+// Arguments for every background job in one object; not every job uses every field. `limit` caps
+// each due-item pass, and `options` may carry an AbortSignal that cancels a running job.
 export type SweepInput = {
   now: number;
   limit: number;
@@ -97,15 +95,13 @@ export type SweepInput = {
   options?: Options;
 };
 
-// Holds the outcome of one job. Either the job ran and produced a summary (`ok: true`), or it threw
-// and the caught error became a result (`ok: false`) that carries the error code and retry flag.
-// Errors are always reported this way, so one job's exception never escapes to the caller.
+// One job's outcome: its summary, or its caught error as data (code and retry flag). A job's
+// exception never escapes to the caller.
 export type SweepResult<TSummary> =
   | { ok: true; summary: TSummary }
   | { ok: false; code: string; retryable: boolean };
 
-// Combines the results from `runSweeps` into one entry per job, keyed by name. Each entry is the
-// job's summary if it ran or its caught error if it failed. One job failing never hides the others.
+// One entry per job, keyed by name. A failing job never hides the others.
 export type SweepBatch = {
   payouts: SweepResult<PayoutSweepSummary>;
   subscriptions: SweepResult<SweepSummary>;
@@ -120,11 +116,9 @@ export type SweepBatch = {
   promos: SweepResult<PromoExpirySummary>;
 };
 
-// Holds runOnce's result: the per-job batch plus the txn id of every ledger posting the run
-// committed, so a host can fold settlements, reversals, and sweeps into a feed without intercepting
-// the id generator. A rolled-back job can mint an id that never commits, so resolve each id via
-// read.posting and skip a null. `postings` sits beside `batch`, not merged in, so iterating the
-// batch's job results never trips over the postings list.
+// runOnce's result: the batch plus the txn id of every posting the run minted, so a host can build
+// a feed without intercepting the id generator. A rolled-back job can mint an id that never
+// commits, so resolve each id via read.posting and skip a null.
 export type SweepRun = { batch: SweepBatch; postings: ReadonlyArray<string> };
 
 /**
@@ -154,12 +148,7 @@ export async function runSweeps(
       sweepDueSubscriptions(store, ctx, { now, limit }),
     ),
     treasury: await isolate(() => sweepTreasury(store, ctx, { now })),
-    // Moves the surplus the treasury sweep just measured into platform funds. Wrapped like every
-    // job, so when realizeFees rejects (money owed to users must not move) that surfaces as a failed result.
     feeSweep: await isolate(() => realizeFees(store, ctx, { now })),
-    // The external half of the treasury tie-out: rail float versus reserved and submitted payout
-    // obligations. Optional capability like relay and drainInbox — with no float feed there is no
-    // rail to ask, so it short-circuits and the internal backing check above stands alone.
     floatCoverage:
       input.float === undefined
         ? {
@@ -169,15 +158,11 @@ export async function runSweeps(
         : await isolate(() =>
             sweepFloatCoverage(store, ctx, input.float!, { now }),
           ),
-    // Re-checks the previous sealed snapshot before `checkpoint` below overwrites it: that old
-    // snapshot predates any tampering since it was sealed, so it catches it. A mismatch is recorded
-    // on the summary (not thrown), so only a corrupt row or storage failure becomes a failed result.
+    // A verify mismatch is recorded on the summary, not thrown; only a corrupt row or storage
+    // failure becomes a failed result.
     checkpointVerify: await isolate(() => reverifyCheckpoint(store, ctx)),
     checkpoint: await isolate(() => sealCheckpoint(store, ctx)),
-    // Relay is one of two sweeps with an optional capability. With no dispatcher there is nothing to
-    // deliver through, so it short-circuits to an empty successful summary and pending rows stay in
-    // the outbox for a later run. This is the only place that handles the optional dispatcher;
-    // relayOutbox itself always requires one.
+    // The optional dispatcher is handled only here; relayOutbox itself always requires one.
     relay:
       input.dispatcher === undefined
         ? { ok: true, summary: { relayed: [], failed: [], deadLettered: [] } }
@@ -189,10 +174,6 @@ export async function runSweeps(
               options,
             ),
           ),
-    // The inbound mirror of relay, and the other sweep with an optional capability. With no economy
-    // handle there is nothing to submit through, so it short-circuits to an empty summary and pending
-    // inbox rows stay put. Never gated on the economy pause: settlements must keep flowing through a
-    // maintenance window (see drainInbox's note).
     drainInbox:
       input.economy === undefined
         ? { ok: true, summary: { applied: [], failed: [], deadLettered: [] } }
@@ -213,9 +194,6 @@ export async function runSweeps(
   };
 }
 
-// Runs one job and turns its outcome into a SweepResult: a return becomes `ok: true` with the
-// summary, a throw is normalized (errors.ts) into the `ok: false` code and retry flag. Catching
-// here keeps one failing job from stopping the others.
 async function isolate<TSummary>(
   run: () => Promise<TSummary>,
 ): Promise<SweepResult<TSummary>> {
@@ -246,9 +224,8 @@ export function createWorker(
   scheduler?: Scheduler,
 ): Worker {
   const runOnce = async (input: SweepInput): Promise<SweepRun> => {
-    // Records every txn id minted this run through a wrapped id generator, so the host gets the run's
-    // ledger postings without intercepting `ctx.ids` itself. `start` below does not need this, so it
-    // stays on the bare runSweeps.
+    // A wrapped id generator records the run's txn ids (see SweepRun). `start` below does not need
+    // this, so it stays on the bare runSweeps.
     const postings: string[] = [];
     const recordingCtx: WorkerCtx = {
       ...ctx,

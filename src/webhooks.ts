@@ -10,7 +10,7 @@
  */
 
 // Inbound webhook event types and the dispatch that turns a verified provider callback into an
-// inbox Operation. The by-kind mapping and the at-most-once dedup live on `handleWebhook` below.
+// inbox Operation.
 // See https://economy-lab-docs.pages.dev/economy/ports/processor/ for the
 // verified-callback-to-operation flow.
 
@@ -28,21 +28,16 @@ import type { Clock, Ids, InboxEntry, Options, Store } from '#src/ports.ts';
  * store, and the mapped operation's dedup key is derived from it.
  */
 type WebhookBase = {
-  // Which provider sent the callback (the `:provider` path segment, e.g. 'steam', 'billing').
   provider: string;
 
-  // Provider's globally-unique id for this delivery. It is the basis for applying at most once, as
-  // the type doc above explains.
   eventId: string;
 };
 
 /**
  * A verified inbound purchase event from a billing provider (Steam / Meta / Apple / Google, or
- * any payment processor): the user paid real money and their spendable balance should be credited.
- * `amount` is an {@link Amount}, not a number, so it carries its currency and stays an exact
- * integer (money is never a float or JSON number). `sku` is optional: a credit-pack purchase has
- * none, a product purchase carries the product id. `kind` is optional and defaults to `'purchase'`
- * so a bare purchase object is a valid `WebhookEvent`.
+ * any payment processor): the user paid real money and their spendable balance should be
+ * credited. `kind` is optional and defaults to `'purchase'` so a bare purchase object is a valid
+ * `WebhookEvent`.
  */
 export type PurchaseEvent = WebhookBase & {
   kind?: 'purchase';
@@ -50,8 +45,7 @@ export type PurchaseEvent = WebhookBase & {
   // The end user whose spendable balance the purchase credits.
   userId: string;
 
-  // How much to grant, in the platform's CREDIT currency. Decoded from the request body's
-  // decimal string at the server edge before it reaches this module.
+  // How much to grant, in the platform's CREDIT currency.
   amount: Amount;
 
   // Where the money came from, recorded on the topUp (e.g. 'card', 'steam'). Free-form.
@@ -63,34 +57,28 @@ export type PurchaseEvent = WebhookBase & {
 
 /**
  * A verified payout-settled callback: the payout rail reports it disbursed the USD for one of our
- * submitted payouts. It drives the SUBMITTED -> SETTLED step of the named saga via `settlePayout`,
- * which empties the seller's reserve into REVENUE and moves the gross USD out of trust. The figures
- * actually posted are the rate-derived ones `settlePayout` computes; `providerRef`/`providerAmount`
- * are carried on the operation for the audit trail only.
+ * submitted payouts. It drives the SUBMITTED -> SETTLED saga step via `settlePayout`;
+ * `providerRef`/`providerAmount` are audit-trail only — the posted figures are the rate-derived
+ * ones `settlePayout` computes.
  */
 export type PayoutSettledEvent = WebhookBase & {
   kind: 'payoutSettled';
 
-  // The payout saga (id of the form pay_<uuid>) this settlement clears: the SUBMITTED disbursement
-  // the provider just reported paid out.
+  // The payout saga (pay_<uuid>) this settlement clears.
   sagaId: string;
 
   // The rail's own reference for this disbursement, recorded for the audit trail.
   providerRef: string;
 
   // The USD the provider reported settling, when the callback carries one. Recorded for
-  // reconciliation only. The posted figures are the rate-derived ones `settlePayout` computes
-  // from the reserve.
+  // reconciliation only.
   providerAmount?: Amount;
 };
 
 /**
  * A verified payout-failed callback: the payout rail reports it will not disburse one of our
- * submitted payouts (a rejected beneficiary, an unsupported destination, a returned transfer). It
- * drives the prompt reversal of the named saga via `reversePayout` with `providerReported` set, so
- * the seller's reserve returns as soon as the rail gives up rather than after the `maxPayoutAgeMs`
- * timeout. The common real-world failure is asynchronous — a payout is ACCEPTED and only rejected
- * during processing — which is exactly the window this callback covers.
+ * submitted payouts. It drives `reversePayout` with `providerReported` set, so the seller's
+ * reserve returns as soon as the rail gives up rather than after the `maxPayoutAgeMs` timeout.
  */
 export type PayoutFailedEvent = WebhookBase & {
   kind: 'payoutFailed';
@@ -110,11 +98,9 @@ export type PayoutFailedEvent = WebhookBase & {
 };
 
 /**
- * A verified dispute / chargeback callback: the user's bank reversed a charge, so the credits that
- * purchase issued must be reclaimed. It maps to `clawback`, which pulls the disputed credits from
- * the user's spendable balance (capping at what's left and booking the rest as a debt) and un-issues
- * them against the stored-value pool. Carries the disputed order when the provider names one, so the
- * clawback and a refund of the same order stay mutually exclusive.
+ * A verified dispute / chargeback callback: the user's bank reversed a charge, so the credits
+ * that purchase issued must be reclaimed via `clawback`. Carries the disputed order when the
+ * provider names one, so the clawback and a refund of the same order stay mutually exclusive.
  */
 export type DisputeEvent = WebhookBase & {
   kind: 'dispute';
@@ -125,8 +111,7 @@ export type DisputeEvent = WebhookBase & {
   // How much to reclaim, in the platform's CREDIT currency.
   amount: Amount;
 
-  // The order the chargeback disputes, when the provider ties the dispute to one. Threaded onto the
-  // clawback so reversing the order once (by refund or chargeback) blocks the other.
+  // The order the chargeback disputes, when the provider ties the dispute to one.
   orderId?: string;
 
   // Free-form reason recorded on the clawback (e.g. the network's chargeback reason code).
@@ -145,27 +130,21 @@ export type WebhookEvent =
   | DisputeEvent;
 
 /**
- * Builds the dedup key for a webhook-driven topUp. Derived purely from the provider `eventId`,
- * so the credit applies once even if the caller forgets its own key. The `whk:` prefix
- * namespaces it so it can't collide with a caller-supplied key for another operation.
- *
- * Second guard behind the server's replay store. The store usually drops a redelivery first,
- * but it can lag (a claim may not be visible yet to a concurrent request), so two deliveries
- * can slip through at once; this key catches the duplicate at the ledger.
+ * Dedup key for a webhook-driven operation, derived from the provider `eventId` and namespaced
+ * with `whk:` so it can't collide with a caller-supplied key. Second guard behind the replay
+ * store: a claim may not be visible yet to a concurrent redelivery, and this key catches that
+ * duplicate at the ledger.
  */
 export function webhookIdempotencyKey(eventId: string): string {
   return `whk:${eventId}`;
 }
 
 /**
- * Builds the `topUp` that credits the buyer from a verified {@link PurchaseEvent}. The dedup key
- * comes from `eventId`, so the credit applies at most once. `eventId` / `sku` / `provider` ride
- * along as provenance so the ledger entry can be traced back to the callback. Amount and user
- * pass straight through. The credit hits the stored-value pool, not fee revenue.
+ * Builds the `topUp` that credits the buyer from a verified {@link PurchaseEvent}.
+ * `eventId` / `sku` / `provider` ride along as provenance so the ledger entry can be traced back
+ * to the callback.
  */
 export function toTopUp(event: PurchaseEvent): Operation {
-  // Provenance carried on the operation so the topUp handler can attach eventId/sku/provider to
-  // the ledger entry, pointing each entry back to its provider callback for reconciliation.
   const provenance: Record<string, unknown> = {
     eventId: event.eventId,
     provider: event.provider,
@@ -178,20 +157,15 @@ export function toTopUp(event: PurchaseEvent): Operation {
     userId: event.userId,
     amount: event.amount,
     source: event.source,
-    // Provenance for the ledger entry. The `topUp` type has no `meta` field yet, so attach it
-    // here and loosen the type with the cast below; the topUp handler reads it back and writes
-    // it onto the entry. See the matching note in contract.ts / operations/topUp.ts.
+    // The `topUp` type has no `meta` field yet, so attach it here and loosen the type with the
+    // cast below; the topUp handler reads it back and writes it onto the entry.
     meta: provenance,
   } as unknown as Operation;
 }
 
 /**
- * Builds the `settlePayout` that clears a submitted payout from a verified {@link PayoutSettledEvent}.
- * The dedup key comes from `eventId`, so the settle applies at most once however many times the rail
- * redelivers. `sagaId` names the payout to settle. `providerRef` and `providerAmount` are carried for
- * the audit trail only. The figures actually posted are the rate-derived ones `settlePayout` computes
- * from the saga's reserve, so the provider's reported amount is recorded but is not used as the
- * posted figure. The actor is `system`, which `settlePayout`'s privileged-only gate
+ * Builds the `settlePayout` that clears a submitted payout from a verified
+ * {@link PayoutSettledEvent}. The actor is `system`, which `settlePayout`'s privileged-only gate
  * (RESTRICTED_TO_PRIVILEGED) requires.
  */
 export function toSettlePayout(event: PayoutSettledEvent): Operation {
@@ -209,12 +183,10 @@ export function toSettlePayout(event: PayoutSettledEvent): Operation {
 
 /**
  * Builds the `reversePayout` that promptly returns a failed payout's reserve from a verified
- * {@link PayoutFailedEvent}. The dedup key comes from `eventId`, so a redelivered failure reverses
- * at most once. `providerReported` is set here and only here: it waives the operation's still-live
- * SUBMITTED refusal on the strength of the rail's own report, and the saga-state compare-and-set
- * inside `reversePayout` still stands down if a settle callback won the race. The reason defaults
- * to the stable `payout.provider_failed` marker when the rail gave none, so dashboards can
- * distinguish a provider rejection from a timeout. The actor is `system`, which `reversePayout`'s
+ * {@link PayoutFailedEvent}. `providerReported` is set here and only here: it waives the
+ * still-live SUBMITTED refusal on the rail's own report, and the saga-state compare-and-set still
+ * stands down if a settle callback won the race. The reason defaults to the stable
+ * `payout.provider_failed` marker when the rail gave none. The actor is `system`, which the
  * privileged-only gate requires.
  */
 export function toReversePayout(event: PayoutFailedEvent): Operation {
@@ -230,11 +202,9 @@ export function toReversePayout(event: PayoutFailedEvent): Operation {
 }
 
 /**
- * Builds the `clawback` that reclaims disputed credits from a verified {@link DisputeEvent}. The dedup
- * key comes from `eventId`, so a redelivered chargeback reclaims at most once. `userId` / `amount`
- * pass straight through; `orderId` is threaded on when the provider ties the dispute to an order, so
- * the clawback shares the `reversed:${orderId}` key with a refund of the same order and the two stay
- * mutually exclusive. The actor is `system`, which `clawback` already allows (system-or-operator).
+ * Builds the `clawback` that reclaims disputed credits from a verified {@link DisputeEvent}.
+ * `orderId` threads through so the clawback shares the `reversed:${orderId}` key with a refund of
+ * the same order. The actor is `system`, which `clawback` already allows (system-or-operator).
  */
 export function toClawback(event: DisputeEvent): Operation {
   return {
@@ -249,17 +219,13 @@ export function toClawback(event: DisputeEvent): Operation {
 }
 
 /**
- * Dispatches a verified {@link WebhookEvent} to the {@link Operation} it should apply, by its kind:
- * a cleared purchase to a `topUp`, a settled payout to a `settlePayout`, a failed payout to a
- * `reversePayout`, a dispute/chargeback to a `clawback`. This is the single place provider-event
- * kind maps to economy operation; every branch derives the same `eventId`-based dedup key, so
- * whichever kind arrives is applied at most once.
+ * Dispatches a verified {@link WebhookEvent} to the {@link Operation} it applies — the single
+ * place provider-event kind maps to economy operation. Every branch derives the same
+ * `eventId`-based dedup key, so whichever kind arrives is applied at most once.
  */
 export function toOperation(event: WebhookEvent): Operation {
-  // A purchase event may omit `kind`, so check it first via a guard. Pulling
-  // the purchase out this way narrows the rest of the union to the kinds with a required `kind`
-  // literal, so the switch below exhausts cleanly (the optional purchase discriminant would
-  // otherwise defeat the `never` exhaustiveness check).
+  // Split the purchase off first: its optional `kind` would otherwise defeat the `never`
+  // exhaustiveness check on the switch below.
   if (isPurchase(event)) {
     return toTopUp(event);
   }
@@ -271,30 +237,20 @@ export function toOperation(event: WebhookEvent): Operation {
     case 'dispute':
       return toClawback(event);
     default:
-      // Exhaustiveness guard: a new WebhookEvent variant added without a mapper reaches this branch
-      // (its kind is `never`), surfacing the gap as a fault at the edge rather than silently
-      // dropping the callback.
       return unreachableEvent(event);
   }
 }
 
-// A purchase event may omit `kind` or carry the explicit `'purchase'`. Splitting it off with a
-// guard lets `toOperation` narrow the remaining union to the kinds whose `kind` is a required
-// literal.
 function isPurchase(event: WebhookEvent): event is PurchaseEvent {
   return event.kind === undefined || event.kind === 'purchase';
 }
 
 /**
- * The result of accepting a verified webhook. The callback is persisted, not posted: the mapped
- * Operation is enqueued in the transactional inbox for the apply worker (`drainInbox`) to submit
- * later, so the provider gets a fast acknowledgment and the money move settles off the request path.
- * - `accepted`: a fresh provider event; its row was enqueued and will be applied by the next sweep.
- * - `duplicate`: a redelivery of an already-seen `eventId`; the existing row stood and no second was
- *   inserted, so the operation still applies at most once.
+ * The result of accepting a verified webhook.
+ * - `accepted`: a fresh provider event, enqueued for the next sweep.
+ * - `duplicate`: a redelivery of an already-seen `eventId`; the existing row stood.
  *
- * `entry` is the stored row (freshly enqueued, or the pre-existing one on a duplicate), so the
- * caller can surface the row id without a second read.
+ * `entry` is the stored row, so the caller can surface its id without a second read.
  */
 export type WebhookAck = {
   status: 'accepted' | 'duplicate';
@@ -302,11 +258,10 @@ export type WebhookAck = {
 };
 
 /**
- * Inbound provider-callback dispatch: maps a verified callback by kind to the operation it applies
- * (via {@link toOperation}), persists that to the inbox in one transaction, and returns. It does NOT
- * post to the ledger inline; the apply worker (`drainInbox`) submits the stored Operation later, so
- * invariants and idempotency apply there. A redelivery is still enqueued at most once: `enqueueInbound`
- * dedupes on the provider `eventId`, and an id mismatch on the returned row is exactly that case.
+ * Maps a verified callback to the operation it applies (via {@link toOperation}), persists that
+ * to the inbox in one transaction, and returns. It does NOT post to the ledger inline; the apply
+ * worker (`drainInbox`) submits the stored Operation later, so invariants and idempotency apply
+ * there.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for
  *   the verification gate the edge runs first.
@@ -319,10 +274,8 @@ export async function handleWebhook(
   event: WebhookEvent,
   options?: Options,
 ): Promise<WebhookAck> {
-  // Mint the row inside the same transaction the webhook ingress runs in, mirroring how the outbox
-  // enqueues its event in the money move's transaction. `key` is the provider `eventId`, both the
-  // dedupe key here and the submitted operation's idempotencyKey (see `toOperation`), so the two
-  // layers agree on what "the same event" means whatever the operation kind.
+  // `key` is the provider `eventId` — the inbox dedupe key and the basis of the operation's
+  // idempotencyKey (see `toOperation`) — so the two layers agree on what "the same event" means.
   const row: InboxEntry = {
     id: ctx.ids.next('ibx'),
     key: event.eventId,
@@ -345,10 +298,8 @@ export async function handleWebhook(
 }
 
 /**
- * Handles a verified purchase webhook: the purchase case of {@link handleWebhook}, kept as a named
- * entry point for callers that only deal in purchases. It forwards a {@link PurchaseEvent} to the
- * general handler, which maps it to a `topUp` and persists it to the inbox. Other
- * provider-callback kinds (payout settled, dispute) go through `handleWebhook` directly.
+ * The purchase case of {@link handleWebhook}, kept as a named entry point for callers that only
+ * deal in purchases.
  */
 export async function handlePurchaseWebhook(
   store: Store,
@@ -360,14 +311,11 @@ export async function handlePurchaseWebhook(
 }
 
 /**
- * Decodes an already-parsed purchase webhook body into a typed {@link PurchaseEvent}. Decodes the
- * money field with the same decimal-string codec the rest of the API uses, so the amount survives
- * exactly and never passes through a JSON number. `provider` comes from the URL route, not the
- * body, so the caller can't spoof it. A wrong-shape body or missing/invalid amount throws,
- * letting the server reply 400 before anything reaches the ledger.
- *
- * This decodes the purchase shape specifically, the only kind with a wired-up body decoder. The
- * settle/dispute kinds map straight from a {@link WebhookEvent} via {@link toOperation}.
+ * Decodes an already-parsed purchase webhook body into a typed {@link PurchaseEvent}. The money
+ * field uses the same decimal-string codec as the rest of the API, so the amount never passes
+ * through a JSON number; a wrong-shape body or bad amount throws, letting the server reply 400
+ * before anything reaches the ledger. Purchase is the only kind with a body decoder — the other
+ * kinds map straight from a {@link WebhookEvent} via {@link toOperation}.
  */
 export function decodeWebhookEvent(
   provider: string,
@@ -392,8 +340,6 @@ export function decodeWebhookEvent(
   };
 }
 
-// Returns a required string field, or throws a malformed-event error naming the field. This rejects
-// wrong shapes at the edge rather than coercing them into a bad event.
 function requireString(value: unknown, field: string): string {
   if (typeof value !== 'string') {
     throw malformedEvent(`Webhook field '${field}' must be a string.`);
@@ -401,10 +347,8 @@ function requireString(value: unknown, field: string): string {
   return value;
 }
 
-// Decodes the `amount` field from its wire string (e.g. 'CREDIT:10.00') into an Amount. The currency
-// comes before the colon and the decimal after, the same format the rest of the API uses. A
-// non-string value throws here, keeping "wrong shape" and "wrong amount" distinct (the money decoder
-// raises the latter on an unparseable value).
+// A non-string or colon-less value throws here, keeping "wrong shape" distinct from the money
+// decoder's "wrong amount".
 function decodeAmountField(value: unknown): Amount {
   if (typeof value !== 'string') {
     throw malformedEvent(
@@ -417,17 +361,13 @@ function decodeAmountField(value: unknown): Amount {
   return decodeAmountWire(value);
 }
 
-// Builds the fault for a wrong-shape webhook body, treated as a bad client request like a malformed
-// /submit body. It carries the MALFORMED_OPERATION code so the server maps it to 400, not 500.
+// MALFORMED_OPERATION so the server maps a wrong-shape body to 400, not 500.
 function malformedEvent(message: string): ReturnType<typeof fault> {
   return fault(ERROR_CODES.MALFORMED_OPERATION, message);
 }
 
-// Throws for a WebhookEvent variant `toOperation` has no mapper for. The unmapped kind is `never`
-// here, so the call fails to compile until a mapper is added. It is reachable only if a new event
-// kind is added to the union without a branch, where it stands in for "decoded a callback kind we
-// cannot dispatch". That is a bad request at the edge, so it carries MALFORMED_OPERATION and the
-// server answers 400.
+// The unmapped kind is `never` here, so this fails to compile until a mapper is added; if reached
+// at runtime it is a bad request (MALFORMED_OPERATION -> 400).
 function unreachableEvent(event: never): never {
   const kind = (event as { kind?: unknown }).kind;
   throw fault(

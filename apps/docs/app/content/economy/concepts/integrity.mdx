@@ -52,15 +52,15 @@ The signed checkpoint catches a wholesale re-seal: rewriting history _and_ recom
 
 ### The per-account hash chain
 
-Each account carries its own chain. When a posting is appended, <SourceLink to="src/chain.ts#L100">advanceHeads</SourceLink> computes one new head per _distinct_ account the posting touches, hashing that account's legs and metadata onto its prior head (a posting that moves three accounts advances three chains by one link each). The result is a <SourceLink to="src/chain.ts#L37">ChainLink</SourceLink> that records the head before and after. An account's first posting starts from a genesis value of 64 zero hex characters.
+Each account carries its own chain. When a posting is appended, <SourceLink to="src/chain.ts#L93">advanceHeads</SourceLink> computes one new head per _distinct_ account the posting touches, hashing that account's legs and metadata onto its prior head (a posting that moves three accounts advances three chains by one link each). The result is a <SourceLink to="src/chain.ts#L37">ChainLink</SourceLink> that records the head before and after. An account's first posting starts from a genesis value of 64 zero hex characters.
 
-<SourceLink to="src/chain.ts#L131">proveChain</SourceLink> re-checks every
+<SourceLink to="src/chain.ts#L124">proveChain</SourceLink> re-checks every
 chain. It sorts accounts by id char by char, so the same tampering is reported
 identically across runtimes and databases. Then it walks each account's postings
 from genesis, recomputes the head at each step with the same hash function the
 write path used, and stops at the first mismatch.
 
-The failure it returns is a <SourceLink to="src/chain.ts#L61">ChainBreak</SourceLink> that names the offending account and transaction, with a `reason` of one of two kinds:
+The failure it returns is a <SourceLink to="src/chain.ts#L57">ChainBreak</SourceLink> that names the offending account and transaction, with a `reason` of one of two kinds:
 
 | `reason`        | What it means                                                                                                            |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -69,15 +69,15 @@ The failure it returns is a <SourceLink to="src/chain.ts#L61">ChainBreak</Source
 
 ### The signed checkpoint
 
-On its own, the per-account chain can be defeated by an attacker who recomputes it, so the second layer anchors the whole ledger to a moment in time. The worker's `checkpoint` job calls <SourceLink to="src/worker/checkpoint.ts#L59">sealCheckpoint</SourceLink>, which folds every account's head into one <SourceLink to="src/chain.ts#L214">merkleRoot</SourceLink> and signs it.
+On its own, the per-account chain can be defeated by an attacker who recomputes it, so the second layer anchors the whole ledger to a moment in time. The worker's `checkpoint` job calls <SourceLink to="src/worker/checkpoint.ts#L49">sealCheckpoint</SourceLink>, which folds every account's head into one <SourceLink to="src/chain.ts#L198">merkleRoot</SourceLink> and signs it.
 
 The Merkle construction is reproducible on any machine and changes if any head changes. It uses [RFC 6962](https://datatracker.ietf.org/doc/rfc6962/) domain tags (a `0x00` byte for leaves, `0x01` for internal nodes) so a leaf can never be reinterpreted as an interior node. It sorts leaves by account id, and hashes each pair left-then-right.
 
-Sealing proves before it signs. <SourceLink to="src/chain.ts#L243">recordCheckpoint</SourceLink> runs `proveChain` first; if the chain no longer re-derives, it throws a non-retryable `CHAIN_BROKEN` fault and persists no checkpoint. So a signed root never attests to a tampered ledger.
+Sealing proves before it signs. <SourceLink to="src/chain.ts#L288">recordCheckpoint</SourceLink> runs `proveChain` first; if the chain no longer re-derives, it throws a non-retryable `CHAIN_BROKEN` fault and persists no checkpoint. So a signed root never attests to a tampered ledger.
 
 The signature is [Ed25519](https://ed25519.cr.yp.to/), produced by the injected [`Signer`](/economy/ports/signer/). The key's public half is published, so an auditor holding only a saved checkpoint and that public key can recompute the root and verify the signature independently.
 
-A second worker job, `checkpointVerify`, runs <SourceLink to="src/worker/checkpoint.ts#L171">reverifyCheckpoint</SourceLink> _before_ `checkpoint` each cycle. It re-derives the root over current heads via <SourceLink to="src/chain.ts#L363">verifyCheckpoint</SourceLink> and compares it to the latest signed checkpoint. A plain mismatch is recorded and logged at error level for an operator. Only a corrupt stored row or a storage outage throws and routes through the retry/dead-letter split.
+A second worker job, `checkpointVerify`, runs <SourceLink to="src/worker/checkpoint.ts#L137">reverifyCheckpoint</SourceLink> _before_ `checkpoint` each cycle. It re-derives the root over current heads via <SourceLink to="src/chain.ts#L347">verifyCheckpoint</SourceLink> and compares it to the latest signed checkpoint. A plain mismatch is recorded and logged at error level for an operator. Only a corrupt stored row or a storage outage throws and routes through the retry/dead-letter split.
 
 <Callout type="warning">
   `verifyCheckpoint` also fails when the live head count drops below the count
@@ -89,4 +89,4 @@ A second worker job, `checkpointVerify`, runs <SourceLink to="src/worker/checkpo
 
 ## Two provers
 
-Two provers re-check the chain, and [the proof](/economy/concepts/the-proof/) covers how the light `read.prove()` and the thorough `make prove` replay divide the work. Of the proof's five flags, integrity supplies `chainIntact`; <SourceLink to="src/integrity.ts#L270">allInvariantsHold</SourceLink> rolls all five into a single boolean.
+Two provers re-check the chain, and [the proof](/economy/concepts/the-proof/) covers how the light `read.prove()` and the thorough `make prove` replay divide the work. Of the proof's five flags, integrity supplies `chainIntact`; <SourceLink to="src/integrity.ts#L280">allInvariantsHold</SourceLink> rolls all five into a single boolean.

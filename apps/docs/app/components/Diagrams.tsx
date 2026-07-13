@@ -124,7 +124,7 @@ export function ChartOfAccounts() {
       <Acct x={462} y={152} w={130} name="PAYOUT_RESERVE" note="CREDIT" />
       <Acct x={604} y={152} w={130} name="OPENING_EQUITY" note="CREDIT" />
 
-      {/* spendable is backed one-for-one by trust_cash. This draws the solvency invariant. */}
+      {/* the backing edge — the solvency invariant */}
       <line className="d-edge" x1={230} y1={62} x2={316} y2={62} markerEnd="url(#dgm-arrow)" />
       <text className="d-elabel" x={273} y={55} textAnchor="middle">
         backed one-for-one

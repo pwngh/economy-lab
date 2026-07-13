@@ -11,20 +11,17 @@
 
 import type { Digest } from '#src/ports.ts';
 
-// The system SHA-256 shared by every default {@link Digest} factory, so all four share one
-// implementation.
+// The system SHA-256 shared by every default {@link Digest} factory.
 
-// A synchronous SHA-256, resolved once from node:crypto when the runtime offers it. It is null until
-// the first hash probes for it, and stays null on a runtime without node:crypto (e.g. Cloudflare
-// Workers), where the Web Crypto fallback below is used instead.
+// A synchronous SHA-256, resolved once from node:crypto on the first hash. Stays null on a
+// runtime without node:crypto (e.g. Cloudflare Workers), where the Web Crypto fallback is used.
 type SyncHash = (bytes: Uint8Array) => Uint8Array;
 
 let syncHash: SyncHash | null = null;
 let probe: Promise<void> | null = null;
 
-// Tries to load node:crypto's synchronous `createHash`. The import is dynamic and guarded, so a
-// runtime that lacks node:crypto falls back to Web Crypto rather than failing to load this module,
-// and a runtime that has it pulls it in lazily on the first hash, not at module load.
+// The import is dynamic and guarded so a runtime without node:crypto falls back to Web Crypto
+// instead of failing to load this module.
 async function probeSyncHash(): Promise<void> {
   try {
     const { createHash } = await import('node:crypto');
@@ -35,25 +32,21 @@ async function probeSyncHash(): Promise<void> {
   }
 }
 
-// Web Crypto SHA-256, available on every JS runtime. This is the fallback when node:crypto is absent
-// and the reference the digests historically used; node:crypto returns byte-identical output.
+// Web Crypto SHA-256, available on every JS runtime; the fallback when node:crypto is absent.
 async function subtleHash(bytes: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
 }
 
 /**
- * Returns the system SHA-256 {@link Digest}. It prefers a synchronous node:crypto hash, which is
- * faster than Web Crypto for the few-hundred-byte chain preimages this hashes per posting, and
- * falls back to Web Crypto on a runtime without node:crypto. Both compute the same SHA-256
- * bytes, so an account's chain head and a checkpoint's Merkle root are identical whichever path
- * runs, and a hash written on one runtime still re-derives on another.
+ * The system SHA-256 {@link Digest}: prefers node:crypto's synchronous hash (faster for the small
+ * per-posting preimages) and falls back to Web Crypto. Both compute the same bytes, so a hash
+ * written on one runtime still re-derives on another.
  */
 export function sha256Digest(): Digest {
   return {
     hash: async (bytes) => {
-      // Read the resolved hasher into a local. On the first call it is still null, so probe once
-      // (every later caller awaits that same probe), then read again. Reading into a local keeps the
-      // node:crypto path callable without control-flow narrowing it away after the null check.
+      // Probe once on the first call; every later caller awaits that same probe. Reading into a
+      // local keeps the hasher callable after the null check, since the probe mutates module state.
       let hasher = syncHash;
       if (hasher === null) {
         if (probe === null) {

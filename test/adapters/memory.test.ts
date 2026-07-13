@@ -10,9 +10,6 @@
  * @license MIT
  */
 
-// Passes a fresh-store factory to the shared Store conformance suite. This backend adds no
-// behavior beyond what that suite checks, so a single call covers it.
-
 import { runStoreConformance } from '#test/conformance/store.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 

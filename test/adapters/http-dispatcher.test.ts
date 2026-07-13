@@ -18,7 +18,6 @@ import { runDispatcherConformance } from '#test/conformance/dispatcher.ts';
 import type { EconomyEvent } from '#src/ports.ts';
 import type { DispatcherHarness } from '#test/conformance/dispatcher.ts';
 
-// Sample event to dispatch.
 const event: EconomyEvent = {
   id: 'evt_1',
   type: 'economy.sale.completed',
@@ -29,7 +28,6 @@ const event: EconomyEvent = {
   audience: 'internal',
 };
 
-// Returns a fetch stub that records every call and then returns a canned response or throws to simulate a network failure. It opens no real socket.
 function stubFetch(outcome: { ok: boolean; status: number } | Error): {
   fetch: typeof fetch;
   calls: Array<{ url: string; init: RequestInit }>;
@@ -93,7 +91,6 @@ describe('httpDispatcher', () => {
   });
 });
 
-// Builds a harness that runs the shared Dispatcher contract against the HTTP adapter over a fake fetch.
 function httpHarness(): DispatcherHarness {
   const bodies: string[] = [];
   const signals: Array<AbortSignal | undefined> = [];

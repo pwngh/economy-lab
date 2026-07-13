@@ -10,16 +10,12 @@
  */
 
 /**
- * Stamps the schema version. This is the one guard against a database that has silently drifted from
- * this code.
- *
- * Both SQL schema files seed a `schema_meta` row with this value. Startup reads it back and fails fast
- * on a mismatch (see {@link assertSchemaCurrent}), so a drift is reported as an error instead of
- * going undetected.
+ * The stamped schema version. Both SQL schema files seed a `schema_meta` row with this value;
+ * startup reads it back and fails fast on a mismatch (see {@link assertSchemaCurrent}).
  *
  * Bump this AND the matching `insert into schema_meta` in BOTH schema files
  * (db/postgresql-schema.sql, db/mysql-schema.sql) in the same change, whenever a running database
- * would need re-migrating to pick up the edit: a new column, a renamed account id, an added index.
+ * would need re-migrating to pick up the edit.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/configuration/ Configuration}
  *   for schema versioning and drift guard.
@@ -27,11 +23,9 @@
 export const SCHEMA_VERSION = '12';
 
 /**
- * Throws unless the database's stamped schema version matches this build's {@link SCHEMA_VERSION}.
- *
- * `found` is the value read from the database's `schema_meta` row. It is `null` when that table is
- * absent, which means an un-migrated database or one created before versioning existed. `backend`
- * names the engine ('Postgres' or 'MySQL') for the error message.
+ * Throws unless `found` (the database's `schema_meta` value) matches this build's
+ * {@link SCHEMA_VERSION}. `found` is null when the table is absent: an un-migrated or
+ * pre-versioning database.
  */
 export function assertSchemaCurrent(
   found: string | null,

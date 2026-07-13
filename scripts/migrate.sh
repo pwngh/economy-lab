@@ -1,7 +1,6 @@
 #!/bin/sh
-# Applies the database schema for the engine named by DATABASE_URL, using that engine's native client
-# (psql or mysql). Run it by hand or in CI before the SQL conformance suites. The running server never
-# creates tables on startup.
+# Applies the database schema for the engine named by DATABASE_URL, using that engine's native
+# client (psql or mysql). The running server never creates tables on startup.
 #
 #   DATABASE_URL=postgres://economy:economy@localhost:5432/economy_lab  sh scripts/migrate.sh
 #   DATABASE_URL=mysql://root:economy@localhost:3306/economy_lab        sh scripts/migrate.sh
@@ -9,13 +8,8 @@
 #
 # See: https://economy-lab-docs.pages.dev/economy/reference/configuration/  (Configuration)
 #
-# Both schemas are self-resetting (Postgres resets the `public` schema first, and MySQL drops its
-# tables and routines up front), so re-running is safe. When DATABASE_URL is unset there is nothing to
-# do, because the in-memory store builds its tables in code.
-#
-# This is a lab tool. It resets by dropping the schema, which is right for a throwaway dev or lab
-# database but catastrophic for one holding real money. As a guard it refuses a non-local host unless
-# MIGRATE_FORCE=1. A real deployment wants additive, versioned migrations instead, not this.
+# Both schemas are self-resetting, so re-running is safe — this is a lab reset tool, not a
+# migration system. A real deployment wants additive, versioned migrations instead.
 set -eu
 
 # Run from the repo root so the db/*.sql paths resolve regardless of caller cwd.
@@ -31,9 +25,7 @@ fi
 
 url="${DATABASE_URL:-}"
 
-# Destructive-reset guard. This DROPS the schema, so it refuses a non-local host unless explicitly
-# forced. A throwaway dev or lab database on localhost is always allowed. Anything else, such as a
-# staging or production host reached by a stray DATABASE_URL, needs MIGRATE_FORCE=1.
+# Destructive-reset guard: this DROPS the schema, so any non-local host needs MIGRATE_FORCE=1.
 host="${url#*://}"
 host="${host#*@}"
 host="${host%%/*}"
@@ -53,7 +45,6 @@ case "$url" in
 postgres* | postgresql*)
   command -v psql >/dev/null 2>&1 ||
     { echo "scripts/migrate.sh: psql not found on PATH" >&2; exit 1; }
-  # psql takes the connection URL directly. Reset, then apply; stop on the first error.
   # client_min_messages=warning hushes the routine "drop cascades to ..." NOTICEs from the reset.
   psql "$url" -v ON_ERROR_STOP=1 -q \
     -c 'set client_min_messages=warning; drop schema public cascade; create schema public;'

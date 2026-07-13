@@ -10,30 +10,14 @@
  */
 
 /**
- * An in-process ownership read model in front of the entitlement store: grants are the ledger,
- * `owns()` is the balance, and this bitmap is the checkpoint — rebuildable from `list()`, dropped
- * on any write, never the source of truth. Each SKU is interned to a dense int id and each user
- * gets a bitset with bit i set iff they hold SKU i, so a warm ownership check is a word load and
- * a bit test instead of a SQL round trip.
- *
- * Expiry is encoded, not refused: a parallel per-user deadline array carries each slot's
- * `expiresAt` (0 = perpetual), and the check applies the same inclusive `now <= expiresAt` rule
- * `owns()` applies in SQL — so a time-limited grant self-expires against the clock with no
- * invalidation event, and every grant is cacheable.
- *
- * Coherence, in three layers:
- * - Writes through this store invalidate the touched user's bitmap immediately.
- * - Writes inside a transaction invalidate again when the transaction ENDS — commit or rollback.
- *   Commit-time, because a concurrent miss can refill from committed (pre-write) state before the
- *   commit lands and nothing else would ever correct it. Rollback-time too, because the memory
- *   adapter makes uncommitted writes visible to concurrent readers (one Map plus an undo journal),
- *   so a mid-transaction refill can cache state the rollback then erases.
- * - Writes from OTHER processes (a separate worker revoking on refund, an operator edit) send no
- *   event at all, so every bitmap carries a TTL and refills on expiry: bounded staleness, at most
- *   `ttlMs`, self-healing. The TTL refill doubles as the drift check against the store.
+ * In-process ownership read model: each SKU is interned to a dense int id and each user gets a
+ * bitset, so a warm `owns()` check is a bit test instead of a store round trip. Never the source
+ * of truth — rebuilt from `list()`, invalidated on every write through this store, and expired
+ * after `ttlMs` so writes from other processes surface as bounded staleness. Expiry is encoded
+ * per slot with the same inclusive `now <= expiresAt` rule `owns()` applies in SQL.
  *
  * Pass the same `clock` the store uses, or expiry decisions here and in SQL will disagree.
- * Single-process by design; a multi-node deployment needs a shared tier this deliberately is not.
+ * Single-process by design.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/grant-entitlement/
  *   Grant entitlement} for the ownership records this read model projects.
@@ -78,8 +62,6 @@ interface UserBitmap {
   loadedAt: number;
 }
 
-// The cache mechanics: SKU interning, per-user bitmaps in LRU order, the synchronous warm check,
-// and the list()-driven rebuild. Kept apart from the store wrapping so each half stays readable.
 class BitsetCache {
   private readonly skuIds = new Map<string, number>();
   private readonly users = new Map<string, UserBitmap>();
@@ -100,9 +82,8 @@ class BitsetCache {
     this.maxUsers = maxUsers;
   }
 
-  // The warm path, synchronous and allocation-free (the zero-alloc test pins this): a Map get, a
-  // staleness compare, a word load, a bit test, and at most one deadline compare. Returns null on
-  // a cold or stale bitmap so the caller falls back to the store.
+  // Must stay synchronous and allocation-free — a test pins this. Returns null on a cold or
+  // stale bitmap so the caller falls back to the store.
   check = (userId: string, sku: string, now: number): boolean | null => {
     const entry = this.users.get(userId);
     if (entry === undefined || now - entry.loadedAt > this.ttlMs) {
@@ -183,8 +164,7 @@ class BitsetCache {
   }
 }
 
-// Wraps one EntitlementStore handle: reads try the bitmap, writes delegate then invalidate, and a
-// transaction-scoped handle also records the touched users for end-of-transaction invalidation.
+// `touched`, when present, records written users for end-of-transaction invalidation.
 function wrapEntitlements(
   inner: EntitlementStore,
   cache: BitsetCache,
@@ -219,12 +199,6 @@ function wrapEntitlements(
  * Wraps a store so `entitlements.owns` is served from the bitmap when warm. Everything else on
  * the store passes through untouched; `transaction` is wrapped only to observe entitlement writes
  * so their users can be invalidated when the transaction ends.
- *
- * @example
- *   const caps = await capabilitiesFromEnv(process.env, ports);
- *   const store = cachedEntitlements(caps.store, { clock: caps.clock });
- *   const economy = createEconomy({ ...caps, store });
- *   await economy.read.entitled(userId, sku); // served from the bitmap when warm
  */
 export function cachedEntitlements(
   base: Store,

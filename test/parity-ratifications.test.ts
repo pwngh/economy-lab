@@ -11,23 +11,10 @@
  */
 
 /**
- * Locks in three design decisions so a future edit cannot silently undo one. Each decision was a
- * review objection. The O-numbers are those objection ids, reused as the test group names. Reverse
- * a decision and the matching test fails, which forces the reversal to be deliberate.
- *
- *  - O5: the three event types the request path emits must equal an agreed set of exact strings.
- *    These names are the public contract that other systems read off the event stream. They were
- *    renamed away from older names (`purchase.completed`, `marketplace.sale`) and must not drift
- *    back.
- *
- *  - O11: money-laundering-ring detection is intentionally not built. The worker runs a fixed job
- *    list (`SWEEP_NAMES`). This test guards that no `laundering` job crept in.
- *
- *  - O7: signed asset downloads are out of scope, so the server has no asset or download route. Any
- *    download-style URL returns 404.
- *
- * Related objections are covered elsewhere: risk-denial (O4) by the subscribe velocity test, and
- * O12 and O14 by the shared store conformance suite.
+ * Locks in three review decisions so a future edit cannot silently undo one: the exact
+ * event-type strings other systems read off the event stream, the deliberate absence of a
+ * money-laundering-detection job, and the deliberate absence of an asset-download route.
+ * Reverse a decision and the matching test fails, forcing the reversal to be deliberate.
  */
 
 import { describe, test } from 'node:test';
@@ -43,11 +30,7 @@ import { createServer } from '#src/server.ts';
 import type { Economy } from '#src/contract.ts';
 import type { Store, EconomyEvent } from '#src/ports.ts';
 
-// Builds a fresh store and an economy wired onto it. Both share one fixed-seed hash and one frozen
-// clock, so hashes and timestamps are deterministic. The store is returned as well, so a test can
-// read back the events a request wrote. Events land in the store's outbox, a table written in the
-// same transaction as the money move. An event is therefore never sent for a rolled-back move and
-// never lost for a committed one.
+// The store is returned too, so a test can read back the outbox events a request wrote.
 function makePair(): { economy: Economy; store: Store } {
   const store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
   const economy = makeEconomy(1, store);
@@ -55,8 +38,7 @@ function makePair(): { economy: Economy; store: Store } {
 }
 
 // Drains the pending outbox events and marks each one relayed, so a later call in the same test
-// will not see it again. The limit of 100 is well above what any one request produces, so this
-// drains the whole queue.
+// will not see it again.
 async function eventsOf(store: Store): Promise<EconomyEvent[]> {
   const batch = await store.outbox.claimBatch(100);
   await store.outbox.markRelayed(batch.map((message) => message.id));

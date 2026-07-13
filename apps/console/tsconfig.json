@@ -1,10 +1,8 @@
 {
   "include": ["**/*.ts", "**/*.tsx", ".react-router/types/**/*"],
-  // The frozen engine source (../../src) is deliberately NOT in `include`: it is type-checked at
-  // the repo root under its own tsconfig (lib: esnext, types: []), and re-checking it here under
-  // this app's DOM lib produces false ArrayBuffer/SharedArrayBuffer mismatches against code that is
-  // correct as authored. Vite/esbuild still COMPILES the engine for the build (verified), and
-  // `skipLibCheck` keeps the imported `.d`-equivalent types from re-erroring.
+  // The engine source (../../src) is deliberately NOT in `include`: re-checking it under this
+  // app's DOM lib produces false ArrayBuffer/SharedArrayBuffer mismatches. It is type-checked at
+  // the repo root; Vite still compiles it for the build, and `skipLibCheck` covers the imports.
   "exclude": ["build"],
   "compilerOptions": {
     "lib": ["DOM", "DOM.Iterable", "ES2022"],
@@ -30,10 +28,7 @@
     "rootDirs": [".", "./.react-router/types"],
     "paths": {
       "~/*": ["./app/*"],
-      // The engine core is imported with the repo-wide `#*` alias (root
-      // package.json "imports": { "#*": "./*" }), e.g. `#src/contract.ts`.
-      // That `#`-map is scoped to the repo-root package.json, which TS does not
-      // consult from this app, so mirror it here: `#<path>` -> `<repoRoot>/<path>`.
+      // Mirrors the repo-root `#`-alias map for the type-checker; the why lives in vite.config.ts.
       "#*": ["../../*"]
     }
   }

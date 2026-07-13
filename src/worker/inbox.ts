@@ -16,13 +16,11 @@ import type { InboxEntry, Options, Store } from '#src/ports.ts';
 
 /**
  * Result of one inbox-apply run, the inbound mirror of {@link RelaySummary}.
- * - `applied`: ids that committed (or deduped to an already-applied result); the row is marked
- *   'applied' so it is not re-claimed.
- * - `failed`: ids whose apply threw a retryable fault under the cap; row stays 'pending', `attempts`
- *   bumped, retried next run. Carries error code and `retryable` for metrics.
- * - `deadLettered`: ids that hit the attempt cap (`config.maxInboxAttempts`) or were declined for a
- *   terminal business reason (a `rejected` Outcome). Row set to 'dead' and never re-claimed, so a
- *   poison event cannot block the events behind it. Carries event id and `reason`.
+ * - `applied`: committed or deduped; row marked 'applied' so it is not re-claimed.
+ * - `failed`: apply threw under the cap; row stays 'pending' with `attempts` bumped, retried
+ *   next run.
+ * - `deadLettered`: hit the attempt cap or was declined (a `rejected` Outcome, terminal). Row set
+ *   to 'dead' and never re-claimed, so a poison event cannot block the events behind it.
  */
 export type InboxSummary = {
   applied: ReadonlyArray<string>;
@@ -30,29 +28,24 @@ export type InboxSummary = {
   deadLettered: ReadonlyArray<{ id: string; reason: string }>;
 };
 
-// The mutable version of InboxSummary that the run fills in as it goes.
 type InboxTally = {
   applied: string[];
   failed: Array<{ id: string; code: string; retryable: boolean }>;
   deadLettered: Array<{ id: string; reason: string }>;
 };
 
-// The capability one apply needs to submit a stored Operation. This is the normal economy path, so
-// the money move runs through the same invariants and idempotency a direct caller would hit. It is
-// narrowed to `submit` alone rather than the full Economy because that is all the apply touches. Any
-// Economy satisfies it.
+// Inbox applies go through the normal economy path — the same invariants and idempotency a direct
+// caller hits.
 type Applier = Pick<Economy, 'submit'>;
 
 /**
- * Applies a batch of pending inbox events. Each row holds a verified inbound provider event already
- * mapped to the {@link Operation} it applies (a topUp, a clawback). Claims up to `limit` rows,
- * submits each through the economy, and marks the committed ones so they are not re-claimed.
+ * Applies a batch of pending inbox events — verified inbound provider events already mapped to
+ * the {@link Operation} they apply.
  *
- * Never gated on the economy pause: settlements must keep flowing through a maintenance window, and
- * settlement carries actor 'system', which the pause gate exempts anyway. Each event applies in its
- * own try/catch, so one failure cannot stop the batch and an apply can run more than once (submit
- * committed but `markApplied` did not). Exactly-once rests on the stored Operation's idempotencyKey
- * (the provider event id the row deduped on): a re-apply resolves to a `duplicate` Outcome.
+ * Never gated on the economy pause: settlements must keep flowing through a maintenance window.
+ * An apply can run more than once (submit committed but `markApplied` did not); exactly-once
+ * rests on the stored Operation's idempotencyKey (the provider event id the row deduped on), so
+ * a re-apply resolves to a `duplicate` Outcome.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background
  *   worker} for how inbox draining fits the sweep loop.
@@ -83,10 +76,6 @@ export async function drainInbox(
   return tally;
 }
 
-// Submits one stored Operation and sorts the outcome into {@link InboxSummary}'s buckets: a
-// committed or duplicate Outcome marks the row 'applied', a `rejected` Outcome dead-letters it
-// (terminal; see the type doc), and a thrown fault goes to `recordFailure`, which bumps-and-retries
-// or dead-letters at the cap rather than re-throwing.
 async function applyOne(
   store: Store,
   ctx: WorkerCtx,
@@ -108,9 +97,8 @@ async function applyOne(
   }
 
   if (outcome.status === 'rejected') {
-    // A declined but well-formed request is terminal for this row: the same Operation would be
-    // declined the same way on every retry, so dead-letter it rather than burning attempts. The
-    // reason code stands in for the failure code so operators see why it parked.
+    // A decline is terminal: the same Operation would be declined the same way on every retry, so
+    // dead-letter rather than burn attempts.
     ctx.logger.log('warn', 'worker.inbox.rejected', {
       entryId: entry.id,
       reason: outcome.reason,
@@ -120,21 +108,14 @@ async function applyOne(
     return;
   }
 
-  // committed or duplicate: the money move is in the ledger, either from this run or from a prior run
-  // whose markApplied did not land (the idempotencyKey deduped it). Mark the row applied so it is not
-  // re-claimed. markApplied no-ops on an already-terminal row, so a double apply is harmless.
+  // committed or duplicate: the money move is in the ledger. markApplied no-ops on an
+  // already-terminal row, so a double apply is harmless.
   await store.inbox.markApplied(entry.id, options);
   tally.applied.push(entry.id);
 }
 
-// Persists a thrown, retryable apply failure and bounds retries by the stored attempt count
-// (`entry.attempts + 1`). At the cap the row dead-letters (status 'dead' so `claimInbound` won't
-// hand it back), keeping a poison event from wedging the queue. Below the cap, `bumpAttempt` raises
-// `attempts`, the row stays 'pending', and the next run retries it.
-//
-// The cap is `>=`, so the default `maxInboxAttempts` of 10 dead-letters on the 10th failure (the one
-// that takes `attempts` to 10). Same off-by-one as the outbox's `dispatchOne`; stated at both so
-// every adapter only has to agree on the stored count.
+// The cap is `>=`, so the default `maxInboxAttempts` of 10 dead-letters on the 10th failure (the
+// one that takes `attempts` to 10). Same off-by-one as the outbox's `dispatchOne`.
 async function recordFailure(
   store: Store,
   ctx: WorkerCtx,

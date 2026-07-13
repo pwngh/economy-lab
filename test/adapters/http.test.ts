@@ -22,22 +22,13 @@ import type { AccountRef } from '#src/accounts.ts';
 import type { FetchLike } from '#src/adapters/http.ts';
 import type { PromoGrant, Saga, Subscription } from '#src/ports.ts';
 
-// Run the shared conformance suite against the HTTP backend. A bare `httpStore()` wires its
-// HTTP client to a server in this same process, so it's a complete backend with no live
-// service to start.
+// A bare `httpStore()` wires its client to an in-process server, so no live service is needed.
 runStoreConformance('http', () => httpStore());
 
-// Wraps the in-process server `fetch` so a test can inspect the `signal` the client attached to
-// each request. A request whose path ends in `path` has its signal pushed to `signals`. Every
-// request is still forwarded to the real server. Use this to assert that a cancellation signal
-// passed into a Ledger method actually reaches the transport.
-//
-// Checking the signal is subtle. The `Request` constructor wraps the caller's signal in a fresh
-// `AbortSignal` that follows the original, because it cannot expose the same object. It also
-// manufactures a signal even when the caller supplies none. So neither identity (`===`) nor
-// presence tells a forwarded signal apart from a dropped one. The tell is whether the request's
-// signal tracks the caller's: a forwarded signal aborts when the caller's controller aborts,
-// while a dropped one (the auto-created signal) does not.
+// Captures the `signal` of each request whose path ends in `path`, still forwarding to the server.
+// The Request constructor wraps the caller's signal in a fresh follower and manufactures one even
+// when none is given, so neither identity nor presence proves forwarding — only whether the
+// request's signal tracks the caller's abort does.
 function captureSignals(
   inner: FetchLike,
   path: string,
@@ -51,9 +42,8 @@ function captureSignals(
   };
 }
 
-// `lineage` is a streamed read used by chain verification, which passes a real cancellation
-// signal. Its generator only runs once iterated, so the test drives it with `for await` to force
-// the request to be sent.
+// The lineage generator only runs once iterated, so the test drives it with `for await` to
+// force the request to be sent.
 describe('http Ledger Streamed Reads Forward Options', () => {
   test('lineage forwards the abort signal to the transport', async () => {
     const signals: AbortSignal[] = [];
@@ -64,13 +54,12 @@ describe('http Ledger Streamed Reads Forward Options', () => {
     );
     const store = httpStore({ fetch });
 
-    // Abort up front: if the signal is forwarded, the request inherits an already-aborted
-    // signal; if it is dropped, the request's auto-created signal is not aborted.
+    // Abort up front: a forwarded signal arrives already aborted; a dropped one does not.
     const controller = new AbortController();
     controller.abort();
 
-    // Iterate so the request is sent. An unknown account yields no links; the in-process server
-    // ignores the abort and still answers, so iteration completes either way.
+    // The in-process server ignores the abort and an unknown account yields no links, so
+    // iteration completes either way.
     for await (const _link of store.ledger.lineage(
       'acct_missing' as AccountRef,
       {
@@ -85,13 +74,6 @@ describe('http Ledger Streamed Reads Forward Options', () => {
   });
 });
 
-// The HTTP store must be a complete substitute for the in-process one, so every method has to
-// survive the round trip. These cases drive the outbox, saga, and subscription methods over the
-// wire and assert the same behavior the memory store produces. Server-side, `httpStore()` is
-// backed by a fresh memory store.
-
-// Builds one pending outbox message with no attempts, matching the shape the conformance suite
-// uses. An outbox message is an event saved for later delivery.
 function outboxRow(
   messageId: string,
 ): Parameters<ReturnType<typeof httpStore>['outbox']['enqueue']>[0] {
@@ -112,8 +94,7 @@ function outboxRow(
   };
 }
 
-// Builds one payout saga with the given id, user, and updatedAt. The state and the remaining
-// fields do not matter for the lastPayoutAt check, which spans every state, so they are fixed.
+// Only id, user, and updatedAt matter to the lastPayoutAt check, which spans every state.
 function sagaRow(id: string, userId: string, updatedAt: number): Saga {
   return {
     id,
@@ -155,8 +136,6 @@ describe('http Outbox Failure Handling Forwards Over HTTP', () => {
 
     await store.outbox.recordFailure('msg_http_fail');
 
-    // The message is still pending, so claimBatch hands it back, now with attempts incremented
-    // by one.
     const claimed = await store.outbox.claimBatch(10);
     const row = claimed.find((m) => m.id === 'msg_http_fail');
     assert.ok(
@@ -190,7 +169,6 @@ describe('http Saga lastPayoutAt Forwards Over HTTP', () => {
   test('returns the max updatedAt across the user sagas, null for unknown', async () => {
     const store = httpStore();
 
-    // A user with no sagas yet returns null, so their first payout request is always allowed.
     assert.equal(await store.sagas.lastPayoutAt('usr_http_none'), null);
 
     await store.sagas.open(sagaRow('pay_http_a', 'usr_http_p', 100));
@@ -222,9 +200,8 @@ describe('http Replay Dedup Forwards Over HTTP', () => {
   test('claim returns the boolean dedup result across the transport', async () => {
     const store = httpStore();
 
-    // The first sighting of an event id wins. A redelivery of that id is a no-op. An unrelated id
-    // is unaffected. This is the same contract the conformance suite pins. It is asserted again
-    // here to prove the boolean survives the round trip on the session-less /replay route.
+    // The conformance suite already pins this contract; asserted again here to prove the boolean
+    // survives the round trip on the session-less /replay route.
     assert.deepEqual(await store.replay.claim('evt_http_dedup'), {
       claimed: true,
     });
@@ -243,9 +220,6 @@ describe('http balanceAccounts Streams Over HTTP', () => {
   test('enumerates an account that has a stored balance row', async () => {
     const store = httpStore();
 
-    // Append a balanced posting through the root ledger, where the two lines cancel to zero, so
-    // the store records a cached per-account balance for each touched account. balanceAccounts
-    // lists those accounts. The test checks that a touched account comes back over the wire.
     await store.ledger.append({
       txnId: 'txn_http_balacct',
       legs: [
@@ -276,11 +250,6 @@ describe('http markBilled Compare-And-Set Forwards Over HTTP', () => {
     const store = httpStore();
     await store.subscriptions.open(subscriptionRow('sub_http_cas', 0));
 
-    // markBilled updates the row only if its current due date still matches the caller's expected
-    // one, which guards against two racing writers. The row opened with nextDueAt=1_000 (see
-    // subscriptionRow). The first call expects 1_000, matches, and updates, so it returns true.
-    // The second call still expects 1_000, but the due date already moved, so it is a no-op and
-    // returns false. The boolean must survive the transport.
     assert.equal(
       await store.subscriptions.markBilled('sub_http_cas', 2_000, 1_000),
       true,
@@ -294,8 +263,7 @@ describe('http markBilled Compare-And-Set Forwards Over HTTP', () => {
   });
 });
 
-// Builds one promo grant with the given id, expiry, and reversed flag. It carries a CREDIT
-// amount so a round trip that mishandled the amount codec would be visible.
+// Carries a CREDIT amount so a round trip that mishandled the amount codec would be visible.
 function promoGrantRow(
   id: string,
   expiresAt: number,
@@ -319,7 +287,6 @@ describe('http Promo Grants Round-Trip Over HTTP', () => {
     const due = await store.promos.claimDue(1_000, 10);
     const row = due.find((g) => g.id === 'promo_http_a');
     assert.ok(row, 'the grant must come back from claimDue once due');
-    // The amount survived the decimal-string codec as a real Amount, not a string.
     assert.deepEqual(row.amount, toAmount('CREDIT', 500n));
     assert.equal(row.reversed, false);
 
@@ -329,7 +296,6 @@ describe('http Promo Grants Round-Trip Over HTTP', () => {
   test('open is idempotent on id and never overwrites the first row', async () => {
     const store = httpStore();
     await store.promos.open(promoGrantRow('promo_http_dup', 1_000));
-    // A second open with a different amount must be a no-op: the first row wins.
     await store.promos.open({
       ...promoGrantRow('promo_http_dup', 1_000),
       amount: toAmount('CREDIT', 999n),
@@ -354,7 +320,6 @@ describe('http Promo Grants Round-Trip Over HTTP', () => {
     await store.promos.open(promoGrantRow('promo_http_old', 100));
     await store.promos.open(promoGrantRow('promo_http_new', 300));
 
-    // limit caps the result to the two most overdue grants, oldest expiry first.
     const due = await store.promos.claimDue(1_000, 2);
     assert.deepEqual(
       due.map((g) => g.id),
@@ -375,7 +340,6 @@ describe('http Promo Grants Round-Trip Over HTTP', () => {
       'a reversed grant must never be re-claimed',
     );
 
-    // Re-running over the same (already-reversed) grant and a missing id are both no-ops.
     await store.promos.markReversed('promo_http_rev');
     await store.promos.markReversed('promo_http_missing');
     assert.deepEqual(await store.promos.claimDue(1_000, 10), []);

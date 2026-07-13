@@ -1,23 +1,18 @@
 #!/bin/sh
-# Thin wrapper around Docker Compose for the backing services in docker-compose.yml
-# (Postgres, MySQL, Redis, LocalStack/SQS). Works with both the v2 plugin
-# (`docker compose`) and the v1 standalone binary (`docker-compose`).
+# Thin wrapper around Docker Compose for the backing services in docker-compose.yml. Works with
+# both the v2 plugin (`docker compose`) and the v1 standalone binary (`docker-compose`).
 #
-#   sh scripts/docker.sh            # up -d  (the default: bring the stack up detached)
-#   sh scripts/docker.sh down       # any compose subcommand passes straight through
-#   sh scripts/docker.sh logs -f
-#   sh scripts/docker.sh ps
+#   sh scripts/docker.sh            # up -d (the default)
+#   sh scripts/docker.sh <cmd...>   # any compose subcommand passes straight through
 #   sh scripts/docker.sh bootstrap  # up -d, wait for health, then apply the schema (migrate.sh)
 #
 # Via npm, extra args need the `--` separator: `npm run docker -- down`.
-#
 # See: https://economy-lab-docs.pages.dev/economy/reference/configuration/  (Configuration)
 set -eu
 
 # Run from the repo root so docker-compose.yml is found regardless of caller cwd.
 cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
-# Prefer the v2 plugin; fall back to the v1 standalone binary.
 if docker compose version >/dev/null 2>&1; then
   DC="docker compose"
 elif command -v docker-compose >/dev/null 2>&1; then
@@ -27,8 +22,7 @@ else
   exit 1
 fi
 
-# Poll every running compose container until each reports healthy (or has no healthcheck).
-# Engine-agnostic: gets container ids from compose, asks `docker inspect` for health.
+# Poll every running compose container until each is healthy or declares no healthcheck.
 # Override the ceiling with HEALTH_TIMEOUT (seconds, default 120).
 wait_healthy() {
   timeout=${HEALTH_TIMEOUT:-120}
@@ -57,8 +51,7 @@ wait_healthy() {
   done
 }
 
-# Bring the stack up, wait for it, and apply the schema. This runs the README's setup sequence in one step.
-# Migrates against DATABASE_URL if set, else defaults to the compose Postgres instance.
+# Migrates against DATABASE_URL if set, else the compose Postgres instance.
 bootstrap() {
   : "${DATABASE_URL:=postgres://economy:economy@localhost:5432/economy_lab}"
   export DATABASE_URL
@@ -72,7 +65,6 @@ bootstrap() {
   echo "==> ready — start the app with 'make start' (or 'make worker')"
 }
 
-# Default action: bring the stack up in the background.
 [ "$#" -eq 0 ] && set -- up -d
 
 case "$1" in

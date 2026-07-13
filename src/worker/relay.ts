@@ -15,18 +15,12 @@ import type { WorkerCtx } from '#src/contract.ts';
 import type { Dispatcher, OutboxMessage, Options, Store } from '#src/ports.ts';
 
 /**
- * Holds the outcome of one relay run.
- *
- * `relayed` lists the ids delivered and marked done this run.
- *
- * `failed` lists deliveries that threw but stayed under the attempt cap. Each entry carries the
- * error code and a `retryable` flag for caller metrics. The row stays 'pending' with `attempts`
- * bumped, so the next run retries it.
- *
- * `deadLettered` lists events that hit the attempt cap (`config.maxOutboxAttempts`). Each is set
- * to 'dead' and never re-claimed, so a poison event cannot block the events behind it. Each
- * entry carries the event id and the error code (`reason`). This matches the id and reason shape
- * the other background sweeps use.
+ * Outcome of one relay run.
+ * - `relayed`: delivered and marked done.
+ * - `failed`: threw under the attempt cap; row stays 'pending' with `attempts` bumped, retried
+ *   next run.
+ * - `deadLettered`: hit the attempt cap. Row set to 'dead' and never re-claimed, so a poison
+ *   event cannot block the events behind it.
  */
 export type RelaySummary = {
   relayed: ReadonlyArray<string>;
@@ -34,7 +28,6 @@ export type RelaySummary = {
   deadLettered: ReadonlyArray<{ id: string; reason: string }>;
 };
 
-// The mutable version of RelaySummary that the run fills in as it goes.
 type RelayTally = {
   relayed: string[];
   failed: Array<{ id: string; code: string; retryable: boolean }>;
@@ -42,13 +35,11 @@ type RelayTally = {
 };
 
 /**
- * Delivers a batch of pending outbox events. Events were written in the same DB transaction as
- * the money move they describe. Claims up to `limit`, sends each through `dispatcher`, and marks
- * the ones that went out so they aren't re-claimed.
+ * Delivers a batch of pending outbox events — each written in the same DB transaction as the
+ * money move it describes.
  *
- * Each event is sent in its own try/catch, so one failure can't stop the batch; a failed event
- * is left undelivered and retried next run. Delivery can therefore happen more than once (e.g.
- * delivery succeeded but marking done did not), so the receiver must drop duplicates by event id.
+ * Delivery can happen more than once (delivery succeeded but marking done did not), so the
+ * receiver must drop duplicates by event id.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background
  *   worker} for outbox relay run semantics and retries.
@@ -76,16 +67,8 @@ export async function relayOutbox(
   return tally;
 }
 
-// Sends one event and records the outcome in the tally. On success the id goes to `relayed`. If
-// the dispatcher throws, the failure is logged and persisted rather than re-thrown, so the batch
-// keeps going. The failure buckets and their store effects are specified on {@link RelaySummary};
-// this failure makes the row's attempt count `message.attempts + 1`, dead-lettering at the cap
-// and otherwise bumping `attempts` for the next run to retry.
-//
 // The cap test is `>=`, so the default `maxOutboxAttempts` of 10 dead-letters on the 10th
-// failure, the one that takes `attempts` to 10. This is the single off-by-one for the outbox,
-// stated here so every adapter agrees on the stored count. It mirrors the payout sweep's
-// `attempts + 1 < cap` in payouts.ts.
+// failure, the one that takes `attempts` to 10.
 async function dispatchOne(
   store: Store,
   ctx: WorkerCtx,
@@ -124,9 +107,8 @@ async function dispatchOne(
   }
 }
 
-// Marks this run's delivered events as done in a single write so the next run skips them. If the
-// write fails, the events stay undelivered and are re-delivered next run. That is acceptable
-// because the receiver drops duplicates, so the failure is metered and logged rather than thrown.
+// If the write fails, the events are re-delivered next run; the receiver drops duplicates, so
+// the failure is metered and logged rather than thrown.
 async function markRelayed(
   store: Store,
   ctx: WorkerCtx,

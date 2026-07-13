@@ -37,9 +37,6 @@ import type { WorkerCtx } from '#src/contract.ts';
 import type { Config } from '#src/config.ts';
 import type { Options, Store, Subscription, Unit } from '#src/ports.ts';
 
-// Builds the context the sweep needs: clock, ids, logger, fee config, and so on. Every field is a
-// no-op test stand-in. `overrides` swaps in a different config (for example a different fee rate)
-// without rebuilding the rest.
 function workerCtx(overrides?: { config?: Config }): WorkerCtx {
   return {
     clock: fixedClock(0),
@@ -54,10 +51,8 @@ function workerCtx(overrides?: { config?: Config }): WorkerCtx {
   };
 }
 
-// Puts `amount` into a user's account so a later charge has something to draw on. The matching
-// debit goes to STORED_VALUE, a platform account that is allowed to go negative and tracks credits
-// in circulation. Routing the debit there keeps the seed entry balanced and leaves REVENUE at zero
-// for the later assertions.
+// The matching debit goes to STORED_VALUE, which may go negative, keeping the seed balanced
+// and REVENUE at zero for the assertions.
 async function fund(
   unit: Unit,
   account: AccountRef,
@@ -75,9 +70,7 @@ async function fund(
   );
 }
 
-// Builds a subscription record as it looks right after the first month: ACTIVE, with the next
-// charge due. The defaults fill the fields a case does not care about. Each case overrides only
-// what it tests, such as price, due time, or funding.
+// ACTIVE with the next charge due, as after a first month; defaults fill the rest.
 function subscription(
   overrides: Partial<Subscription> & Pick<Subscription, 'id'>,
 ): Subscription {
@@ -96,8 +89,7 @@ function subscription(
   };
 }
 
-// Saves an ACTIVE subscription and gives the buyer `funded` to spend. The buyer's account cannot
-// go negative, so without this seeding a charge would be rejected as an overdraft.
+// Without funding, a charge would be rejected as an overdraft.
 async function openSub(
   store: Store,
   row: Subscription,
@@ -131,7 +123,6 @@ async function chargesAFundedRenewalAndAdvancesTheDueTime(
   assert.deepEqual(summary.charged, ['sub_1']);
   assert.deepEqual(summary.lapsed, []);
   assert.deepEqual(summary.deadLettered, []);
-  // Full price leaves the buyer at zero.
   assert.deepEqual(
     await store.ledger.balance(spendable('usr_buyer')),
     credit('0.00'),
@@ -151,11 +142,8 @@ async function chargesAFundedRenewalAndAdvancesTheDueTime(
 async function roundsTheFeeUpToAWholeCreditTowardThePlatform(
   store: Store,
 ): Promise<void> {
-  // 30% of 100.01 is 30.003 credits, which falls between whole credits. The fee rounds up to a
-  // whole credit, so the platform takes 31.00 and the seller keeps 69.01. The 100.01 price makes
-  // the fee fractional in minor units (3000.3). A path that floored to minor units before rounding
-  // up would drop the 0.3 and take only 30.00. This pins that the renewal shares the same
-  // `feeForPrice` rounding as the rest of pricing.ts.
+  // 100.01 makes the fee fractional in minor units (3000.3): a path that floored before rounding
+  // up would take 30.00, not 31.00. Pins the renewal to the same feeForPrice rounding as pricing.ts.
   const sub = subscription({ id: 'sub_1', price: credit('100.01') });
   await openSub(store, sub, credit('100.01'));
 
@@ -175,7 +163,6 @@ async function roundsTheFeeUpToAWholeCreditTowardThePlatform(
 async function lapsesAnUnderfundedRenewalWithNoPosting(
   store: Store,
 ): Promise<void> {
-  // Buyer has 99.99, price is 100.00, so the charge can't be paid: LAPSED, no money moves.
   const sub = subscription({ id: 'sub_1', price: credit('100.00') });
   await openSub(store, sub, credit('99.99'));
 
@@ -187,7 +174,6 @@ async function lapsesAnUnderfundedRenewalWithNoPosting(
   assert.deepEqual(summary.lapsed, ['sub_1']);
   assert.deepEqual(summary.charged, []);
   assert.deepEqual(summary.deadLettered, []);
-  // Nothing charged: buyer still has 99.99, seller earned nothing.
   assert.deepEqual(
     await store.ledger.balance(spendable('usr_buyer')),
     credit('99.99'),
@@ -197,13 +183,11 @@ async function lapsesAnUnderfundedRenewalWithNoPosting(
     credit('0.00'),
   );
   assert.deepEqual(await store.ledger.balance(SYSTEM.REVENUE), credit('0.00'));
-  // LAPSED is final, so a future sweep won't bill this record again.
   const lapsed = await store.subscriptions.load('sub_1');
   assert.equal(lapsed!.state, 'LAPSED');
 }
 
 async function leavesANotYetDueSubscriptionAlone(store: Store): Promise<void> {
-  // Next charge isn't due until 5_000, past the sweep's `now` of 1_000, so it's left alone.
   const sub = subscription({ id: 'sub_1', nextDueAt: 5_000 });
   await openSub(store, sub, credit('100.00'));
 
@@ -224,8 +208,6 @@ async function billsAndLapsesAcrossOneBatchIndependently(): Promise<void> {
   await openSub(store, subscription({ id: 'sub_funded' }), credit('100.00'));
   await openSub(store, subscription({ id: 'sub_broke' }), credit('0.00'));
 
-  // One sweep handles both: funded one charged, broke one lapsed. An unpayable record
-  // doesn't stop a payable one in the same batch.
   const summary = await sweepDueSubscriptions(store, workerCtx(), {
     now: 1_000,
     limit: 10,
@@ -239,8 +221,7 @@ async function billsAndLapsesAcrossOneBatchIndependently(): Promise<void> {
 
 async function isolatesAPerItemFaultAndDeadLettersWhileTheBatchContinues(): Promise<void> {
   const store = memoryStore();
-  // Two due subscriptions, different buyers, so a failure on one buyer's account read
-  // affects only that record.
+  // Different buyers, so the fault targets only one record's balance read.
   await openSub(
     store,
     subscription({ id: 'sub_bad', userId: 'usr_bad' }),
@@ -252,9 +233,6 @@ async function isolatesAPerItemFaultAndDeadLettersWhileTheBatchContinues(): Prom
     credit('100.00'),
   );
 
-  // Wrap the store so reading the bad buyer's balance throws an error the sweep won't retry. That
-  // record is dead-lettered (set aside as permanently failed, reason recorded) and marked LAPSED,
-  // while the good record charges normally. One broken record doesn't block the batch.
   const faulting = faultOnBuyerBalance(store, 'usr_bad');
 
   const summary = await sweepDueSubscriptions(faulting, workerCtx(), {
@@ -275,9 +253,8 @@ async function isolatesAPerItemFaultAndDeadLettersWhileTheBatchContinues(): Prom
   await store.close();
 }
 
-// Wraps a store so any read of `badUser`'s spendable balance throws STORE.FAILURE, while every
-// other method passes through. That error is treated as permanent, so the sweep gives up on the
-// record and dead-letters it rather than leaving it for the next run to re-hit.
+// Throws a non-retryable typed fault on the bad buyer's balance read, driving the give-up
+// path; every other method passes through.
 function faultOnBuyerBalance(store: Store, badUser: string): Store {
   return {
     ...store,
@@ -303,11 +280,8 @@ function faultOnBuyerBalance(store: Store, badUser: string): Store {
   };
 }
 
-// Wraps a store so reading `badUser`'s spendable balance throws a plain Error rather than one of
-// the project's typed errors. The sweep treats unrecognized errors as transient infra failures
-// worth retrying, so this drives the retry-and-count path instead of the give-up path the
-// permanent-error wrapper above triggers. Every other method passes through, so the row can still
-// be picked up and re-billed. The row stays ACTIVE until the retry count hits its cap.
+// Throws a plain Error, which the sweep treats as transient: drives the retry-and-count path,
+// not the give-up path of the typed wrapper above.
 function retryableFaultOnBuyerBalance(store: Store, badUser: string): Store {
   return {
     ...store,
@@ -330,9 +304,6 @@ function retryableFaultOnBuyerBalance(store: Store, badUser: string): Store {
   };
 }
 
-// One retryable failure under the cap leaves the subscription ACTIVE, only bumping its attempt
-// count: nothing charged or lapsed, and `attempts` persists as 1 so the next sweep keeps counting
-// toward the cap rather than restarting at zero.
 async function bumpsAttemptsAndKeepsRetryingBelowTheCap(): Promise<void> {
   const store = memoryStore();
   await openSub(store, subscription({ id: 'sub_flaky' }), credit('100.00'));
@@ -343,7 +314,6 @@ async function bumpsAttemptsAndKeepsRetryingBelowTheCap(): Promise<void> {
     limit: 10,
   });
 
-  // Retryable and under the cap, so the row is recorded for retry, not charged/lapsed/dead-lettered.
   assert.deepEqual(
     summary.retrying.map((r) => r.id),
     ['sub_flaky'],
@@ -351,23 +321,18 @@ async function bumpsAttemptsAndKeepsRetryingBelowTheCap(): Promise<void> {
   assert.deepEqual(summary.charged, []);
   assert.deepEqual(summary.lapsed, []);
   assert.deepEqual(summary.deadLettered, []);
-  // Bumped attempt persists to the next sweep; row stays ACTIVE and due so it's picked up again.
   const row = await store.subscriptions.load('sub_flaky');
   assert.equal(row!.state, 'ACTIVE');
   assert.equal(row!.attempts, 1);
   await store.close();
 }
 
-// A subscription hitting a retryable failure repeatedly doesn't retry forever: each sweep bumps
-// `attempts`, and the sweep whose bump reaches the cap lapses the row instead of re-billing.
-// Test config caps at 3, so the third consecutive failure lapses; the first two bump-and-retry.
 async function lapsesAPersistentlyFailingSubscriptionAtTheCap(): Promise<void> {
   const store = memoryStore();
   await openSub(store, subscription({ id: 'sub_flaky' }), credit('100.00'));
   const flaky = retryableFaultOnBuyerBalance(store, 'usr_buyer');
   const ctx = workerCtx(); // testConfig().maxSubscriptionAttempts === 3
 
-  // Sweep 1: attempts 0 -> 1, retrying.
   const first = await sweepDueSubscriptions(flaky, ctx, {
     now: 1_000,
     limit: 10,
@@ -379,7 +344,6 @@ async function lapsesAPersistentlyFailingSubscriptionAtTheCap(): Promise<void> {
   assert.equal((await store.subscriptions.load('sub_flaky'))!.attempts, 1);
   assert.equal((await store.subscriptions.load('sub_flaky'))!.state, 'ACTIVE');
 
-  // Sweep 2: attempts 1 -> 2, still under the cap of 3, still retrying.
   const second = await sweepDueSubscriptions(flaky, ctx, {
     now: 1_000,
     limit: 10,
@@ -391,8 +355,7 @@ async function lapsesAPersistentlyFailingSubscriptionAtTheCap(): Promise<void> {
   assert.equal((await store.subscriptions.load('sub_flaky'))!.attempts, 2);
   assert.equal((await store.subscriptions.load('sub_flaky'))!.state, 'ACTIVE');
 
-  // Sweep 3: the bump would make attempts 3, reaching the cap, so the row LAPSES instead of
-  // retrying.
+  // The third bump reaches the cap of 3: lapse instead of retry.
   const third = await sweepDueSubscriptions(flaky, ctx, {
     now: 1_000,
     limit: 10,
@@ -403,7 +366,6 @@ async function lapsesAPersistentlyFailingSubscriptionAtTheCap(): Promise<void> {
   const lapsed = await store.subscriptions.load('sub_flaky');
   assert.equal(lapsed!.state, 'LAPSED');
 
-  // A LAPSED row isn't ACTIVE, so a fourth sweep won't claim it: retrying has stopped.
   const fourth = await sweepDueSubscriptions(flaky, ctx, {
     now: 1_000,
     limit: 10,
@@ -413,21 +375,17 @@ async function lapsesAPersistentlyFailingSubscriptionAtTheCap(): Promise<void> {
   await store.close();
 }
 
-// A renewal that finally succeeds clears earlier strikes: after retryable failures bump
-// `attempts`, a healthy sweep charges the renewal and `markBilled` resets `attempts` to 0, so the
-// cap counts only consecutive failures and a recovered subscription starts fresh.
+// The cap counts only consecutive failures: `markBilled` resets attempts on success.
 async function resetsAttemptsToZeroOnASuccessfulRenewal(): Promise<void> {
   const store = memoryStore();
   await openSub(store, subscription({ id: 'sub_flaky' }), credit('100.00'));
   const ctx = workerCtx();
 
-  // Two sweeps against a flaky store push attempts up to 2 without lapsing (cap is 3).
   const flaky = retryableFaultOnBuyerBalance(store, 'usr_buyer');
   await sweepDueSubscriptions(flaky, ctx, { now: 1_000, limit: 10 });
   await sweepDueSubscriptions(flaky, ctx, { now: 1_000, limit: 10 });
   assert.equal((await store.subscriptions.load('sub_flaky'))!.attempts, 2);
 
-  // The store recovers; the next sweep charges the renewal normally and resets the counter.
   const healed = await sweepDueSubscriptions(store, ctx, {
     now: 1_000,
     limit: 10,
@@ -440,18 +398,10 @@ async function resetsAttemptsToZeroOnASuccessfulRenewal(): Promise<void> {
   await store.close();
 }
 
-// Wrap a store so `subscriptions.claimDue` always hands back the same stale snapshot of one
-// subscription, regardless of the underlying row. This models two overlapping renewal sweepers
-// that both claimed the row (period 1, due at 0) before either billed. The second sweep still
-// believes the row is due for period 2 even though the first advanced it. Every other method
-// passes through, so the real row's state (nextDueAt, period, balance) updates normally. Only the
-// claim is frozen.
-//
-// This is the harness for the two guards against a double charge. First, the renewal reserves a
-// one-time key naming this exact period before posting, so the second sweep finds the key taken
-// and posts nothing. Second, the due-date advance is a compare-and-set: it moves the date forward
-// only if the stored due date still matches the one this sweep started from, so the second sweep's
-// advance fails. Either way the second sweep does nothing: no charge and no second event.
+// claimDue always returns the same stale snapshot, modeling two overlapping sweepers that both
+// claimed the row before either billed; only the claim is frozen. Two guards stop the double
+// charge: the per-period one-time key, and the compare-and-set due-date advance, which fails
+// once the first sweep moved the date.
 function staleClaimDue(store: Store, snapshot: Subscription): Store {
   return {
     ...store,
@@ -462,9 +412,6 @@ function staleClaimDue(store: Store, snapshot: Subscription): Store {
   };
 }
 
-// Two overlapping sweeps over the same due subscription bill once and emit one renewed event. The
-// second reads the same stale snapshot, so it short-circuits instead of double-charging: it finds
-// the period's one-time key taken, and its due-date advance fails because the first already moved it.
 async function billsExactlyOnceAcrossTwoOverlappingSweeps(): Promise<void> {
   const store = memoryStore();
   const sub = subscription({
@@ -472,11 +419,8 @@ async function billsExactlyOnceAcrossTwoOverlappingSweeps(): Promise<void> {
     price: credit('100.00'),
     nextDueAt: 0,
   });
-  // Fund two periods up front so the balance check can't be what stops the second sweep (if both
-  // charged, the buyer could afford it). The guards under test are the one-time per-period key and
-  // the conditional due-date advance, not the funds check.
+  // Fund two periods so the balance check cannot be what stops the second sweep.
   await openSub(store, sub, credit('200.00'));
-  // Both sweepers claimed this exact snapshot (period 1, due at 0) before either billed.
   const frozen = staleClaimDue(store, sub);
 
   const first = await sweepDueSubscriptions(frozen, workerCtx(), {
@@ -488,16 +432,12 @@ async function billsExactlyOnceAcrossTwoOverlappingSweeps(): Promise<void> {
     limit: 10,
   });
 
-  // Only the first sweep charges; the second finds the one-time key taken and the due date already
-  // advanced, so it does nothing, even though the buyer could afford a second charge.
   assert.deepEqual(first.charged, ['sub_1']);
   assert.deepEqual(second.charged, []);
   assert.deepEqual(second.lapsed, []);
   assert.deepEqual(second.deadLettered, []);
   assert.deepEqual(second.retrying, []);
 
-  // Exactly one renewal posting: the buyer is debited the price once (200.00 -> 100.00) and the
-  // seller/platform are credited a single split, not two.
   assert.deepEqual(
     await store.ledger.balance(spendable('usr_buyer')),
     credit('100.00'),
@@ -508,12 +448,10 @@ async function billsExactlyOnceAcrossTwoOverlappingSweeps(): Promise<void> {
   );
   assert.deepEqual(await store.ledger.balance(SYSTEM.REVENUE), credit('30.00'));
 
-  // The row advanced exactly one period despite two sweeps reading the same snapshot.
   const billed = await store.subscriptions.load('sub_1');
   assert.equal(billed!.period, 2);
   assert.equal(billed!.nextDueAt, sub.nextDueAt + sub.periodMs);
 
-  // Exactly one renewed event was enqueued across both sweeps.
   const renewed = (await store.outbox.claimBatch(10)).filter(
     (m) => m.event.type === 'economy.subscription.renewed',
   );
@@ -522,10 +460,7 @@ async function billsExactlyOnceAcrossTwoOverlappingSweeps(): Promise<void> {
   await store.close();
 }
 
-// A successful renewal re-grants the perk (the subscription's sku, here 'club_pass') out to the
-// new period end: after billing the buyer owns the sku, and the grant's expiry advanced one full
-// period (live up to and including the new period end, gone the instant after). The clock is
-// injected so the test can move time past the new expiry and watch the perk lapse.
+// The clock is injected so the test can step past the new expiry and watch the perk lapse.
 async function reGrantsThePerkWithAdvancedExpiryOnRenewal(): Promise<void> {
   const clock = fixedClock(0);
   const store = memoryStore({ clock });
@@ -545,21 +480,17 @@ async function reGrantsThePerkWithAdvancedExpiryOnRenewal(): Promise<void> {
   });
   assert.deepEqual(summary.charged, ['sub_1']);
 
-  // Renewal re-granted the perk, expiring at the new period end (advanced next-due-at = 0 +
-  // periodMs). owns() is evaluated against the store's clock and is inclusive of expiresAt.
+  // owns() evaluates against the store's clock and is inclusive of expiresAt.
   const newPeriodEnd = sub.nextDueAt + sub.periodMs;
   assert.equal(await store.entitlements.owns('usr_buyer', 'club_pass'), true);
 
-  // At exactly the new period end the perk is still owned (inclusive boundary)...
   clock.advance(newPeriodEnd);
   assert.equal(await store.entitlements.owns('usr_buyer', 'club_pass'), true);
-  // ...and one millisecond past it, the grant has lapsed: the expiry genuinely advanced.
   clock.advance(1);
   assert.equal(await store.entitlements.owns('usr_buyer', 'club_pass'), false);
   await store.close();
 }
 
-// An underfunded renewal lapses the subscription, revokes the perk, and emits one lapsed event.
 async function lapseRevokesThePerkAndEmitsOneLapsedEvent(): Promise<void> {
   const store = memoryStore();
   const sub = subscription({
@@ -587,10 +518,8 @@ async function lapseRevokesThePerkAndEmitsOneLapsedEvent(): Promise<void> {
   const lapsed = await store.subscriptions.load('sub_1');
   assert.equal(lapsed!.state, 'LAPSED');
 
-  // The perk was revoked in the lapse transaction: the buyer no longer owns it.
   assert.equal(await store.entitlements.owns('usr_buyer', 'club_pass'), false);
 
-  // Exactly one lapsed event, addressed to the buyer.
   const events = (await store.outbox.claimBatch(10)).filter(
     (m) => m.event.type === 'economy.subscription.lapsed',
   );

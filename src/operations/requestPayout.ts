@@ -46,11 +46,9 @@ export async function requestPayout(
       requested: encodeAmount(amount),
     });
   }
-  // Enforces a minimum gap (ctx.config.payoutMinIntervalMs) between a user's payout requests.
-  // lastPayoutAt is the max `updatedAt` over this user's sagas; `null` means no prior payout, so a
-  // first request passes. Strict `<`, so a request exactly the interval later is allowed. Runs
-  // before the balance read so the cheap rejection comes first, and returns a rejection (not a
-  // throw) so the caller can surface `retryAfter`.
+  // Minimum gap between a user's payout requests. `lastPayoutAt` is the max `updatedAt` over
+  // their sagas; strict `<`, so a request exactly the interval later passes. Rejection, not
+  // throw, so the caller can surface `retryAfter`.
   const last = await unit.sagas.lastPayoutAt(operation.userId);
   if (
     last !== null &&
@@ -82,11 +80,9 @@ export async function requestPayout(
     });
   }
 
-  // A second, stricter gate after the raw balance: only earned credit past its settlement wait
-  // is payable. maturedAtLeast asks the cheaper "is the cleared part at least `amount`?" and
-  // stops early. Like INSUFFICIENT_FUNDS it returns a rejection rather than throwing.
-  // See https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/ for why fresh
-  // earnings clear on a delay and how the matured tail is measured.
+  // Stricter than the raw balance: only earned credit past its settlement wait is payable.
+  // Rejection, not throw. See
+  // https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/ for the maturity rule.
   const cleared = await maturedAtLeast(
     unit.ledger,
     earned(operation.userId),
@@ -120,11 +116,9 @@ export async function requestPayout(
   return { status: 'committed', transaction };
 }
 
-// Builds the saga record. It opens in RESERVED because the credits were set aside in the same
-// DB transaction as this record. `rateId` locks the CREDIT-to-USD rate so the worker later pays
-// at the rate that applied at request time, and `dueAt` is when the worker first tries to submit.
-// See https://economy-lab-docs.pages.dev/economy/concepts/payout-saga/ for the payout saga's
-// states and how the worker advances RESERVED to SUBMITTED to SETTLED.
+// Opens in RESERVED because the credits were set aside in the same DB transaction. `rateId` locks
+// the CREDIT-to-USD rate at request time; `dueAt` is the worker's first submit attempt. See
+// https://economy-lab-docs.pages.dev/economy/concepts/payout-saga/ for the saga states.
 function sagaOf(
   operation: Extract<Operation, { kind: 'requestPayout' }>,
   reserve: Amount,
@@ -148,17 +142,14 @@ function sagaOf(
   };
 }
 
-// Returns the delay in milliseconds before the worker's first submit attempt. It uses the
-// PENDING SLA if set, otherwise DEFAULT. Falling back to DEFAULT rather than 0 keeps an unset
-// config from making the payout due immediately and flooding the worker's sweep.
+// Falls back to DEFAULT rather than 0 so an unset config doesn't make every payout due
+// immediately and flood the worker's sweep.
 function pendingSlaMs(ctx: Ctx): number {
   const sla = ctx.config.payoutSla;
   return sla.PENDING ?? sla.DEFAULT ?? 0;
 }
 
-// Validates the requested amount and returns it unchanged. The amount must be CREDIT and
-// positive. A USD or zero/negative amount is a malformed request, so it throws a fault rather
-// than declining.
+// A USD or non-positive amount is a malformed request, so it throws a fault rather than declining.
 function payableCredit(amount: Amount): Amount {
   if (amount.currency !== 'CREDIT') {
     throw fault(

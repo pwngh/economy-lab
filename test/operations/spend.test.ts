@@ -43,8 +43,6 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store, Unit } from '#src/ports.ts';
 import type { Config } from '#src/config.ts';
 
-// A gift is an ordinary purchase that carries a `giftTo` recipient, not a wallet-to-wallet move.
-// The buyer pays and is screened. The recipient receives the item.
 async function giftsToRecipientWhileChargingBuyer(): Promise<void> {
   const store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
   const economy = makeEconomy(1, store);
@@ -67,9 +65,8 @@ async function giftsToRecipientWhileChargingBuyer(): Promise<void> {
   );
   assert.equal(await store.entitlements.owns('usr_friend', 'wrld_pass'), true);
   assert.equal(await store.entitlements.owns('usr_buyer', 'wrld_pass'), false);
-  // Velocity counts against the buyer's window, not the recipient's, because the risk limit tracks
-  // the payer. The buyer's window accrued the top-up (1000) plus the gift spend (400), so 1400. The
-  // recipient's window stays empty because they paid nothing.
+  // The buyer's window accrued both the top-up (1000 minor) and the gift spend (400); the recipient
+  // paid nothing.
   assert.equal((await store.trust.read('usr_buyer')).spent.minor, 1400n);
   assert.equal((await store.trust.read('usr_friend')).spent.minor, 0n);
 }
@@ -94,8 +91,6 @@ describe('Spend', () => {
     );
 
     assert.equal(outcome.status, 'committed');
-    // An Amount is an object (currency plus an integer minor-unit count), not a primitive, so two
-    // equal amounts are distinct objects. Compare contents with deepEqual, not == identity.
     assert.deepEqual(
       await economy.read.balance(promo('usr_buyer')),
       credit('1.00'),
@@ -142,23 +137,17 @@ describe('Spend', () => {
     );
 
     const report = await economy.read.prove();
-    // Books balance: per currency, debits sum to credits.
     assert.equal(report.conserved, true);
 
-    // Credits owed to users are backed by cash: trust_cash holds at least the USD to cover every
-    // user's spendable balance, at the CREDIT-to-USD rate.
+    // backed: TRUST_CASH covers every user's spendable balance at the CREDIT-to-USD rate.
     assert.equal(report.backed, true);
   });
 });
 
-// --- The maturity gate, exercised directly on the handler -------------------------
-//
-// The maturity gate is an in-handler check that runs after the pipeline's up-front affordability
-// screen. These tests drive the `spend` handler directly inside one `store.transaction` (how the
-// entry point runs it as its final step), same shape as the requestPayout and grantPromo tests.
+// --- The maturity gate: an in-handler check; these tests drive `spend` directly inside one
+// `store.transaction`.
 
-// Builds a Ctx and matching store that share one fixed clock. The `card` settlement horizon is set
-// so spendable credit topped up at t=0 only clears at t=horizonMs.
+// Store and Ctx share one fixed clock; spendable topped up at t=0 matures at t=horizonMs.
 function maturityFixture(horizonMs: number): {
   store: Store;
   ctx: Ctx;
@@ -189,8 +178,6 @@ function maturityFixture(horizonMs: number): {
   return { store, ctx, clock };
 }
 
-// Runs a topUp or spend handler directly inside one transaction, the way the entry point
-// runs the handler as its final step.
 function runOp(store: Store, ctx: Ctx, operation: Operation): Promise<Outcome> {
   return store.transaction((unit: Unit) => {
     if (operation.kind === 'topUp') {
@@ -202,7 +189,6 @@ function runOp(store: Store, ctx: Ctx, operation: Operation): Promise<Outcome> {
 
 async function rejectsSpendDrawingOnImmatureCredit(): Promise<void> {
   const { store, ctx } = maturityFixture(60_000);
-  // Buy spendable credit from a card at t=0; it clears at t=60_000.
   await runOp(
     store,
     ctx,
@@ -245,8 +231,7 @@ async function allowsSpendOnceCreditHasMatured(): Promise<void> {
     }),
   );
 
-  // Advance to exactly the maturity time. Credit clears at that instant (not only after), so it
-  // is now spendable.
+  // The boundary is inclusive: credit matures at the exact instant its wait ends.
   clock.advance(60_000);
   const outcome = await runOp(
     store,
@@ -267,12 +252,8 @@ async function allowsSpendOnceCreditHasMatured(): Promise<void> {
 
 async function doesNotGateThePromoFundedPart(): Promise<void> {
   const { store, ctx } = maturityFixture(60_000);
-  // Seed a promo balance that covers the whole price by hand, using the same balanced debit/credit
-  // pair grantPromo posts. It moves 5.00 out of the house PROMO_FLOAT account into the buyer's promo
-  // balance. PROMO_FLOAT is allowed to run negative because it funds promos. Promo credit spends
-  // before spendable and never waits to clear, so this purchase needs zero spendable. The maturity
-  // check compares matured spendable available (0) against spendable needed (0) and passes, even
-  // before the clock reaches the instant topped-up spendable credit would clear.
+  // Seeds promo by hand with the same balanced pair grantPromo posts. Promo funds the whole price,
+  // so the spendable part the maturity gate checks is zero.
   await store.transaction(async (unit) => {
     await unit.ledger.append({
       txnId: 'txn_seed_promo',
@@ -310,17 +291,9 @@ describe('Spend Maturity Gate', () => {
     doesNotGateThePromoFundedPart());
 });
 
-// --- A committed spend's four side effects: grant the bought item, refuse a reused order id,
-// --- record the fee, and tag the purchase's age ------------------------------------------
-//
-// These drive the `spend` handler directly inside one `store.transaction`, the same shape as the
-// maturity tests above, so each effect is exercised on its own. Driving the handler directly rather
-// than through the full request pipeline means the pipeline's idempotency key is not in play. That
-// key makes a retried request run at most once. Without it, the handler's own duplicate-order guard
-// must catch the remaining case: two different requests reusing one order id.
+// --- Side effects of a committed spend, driven directly on the handler.
 
-// Builds a Ctx and store that share one fixed clock, with maturity off so a topUp clears at t=0.
-// The platform fee is set to `feeBps` so the spendable-funded fee posted to REVENUE is predictable.
+// Shares one fixed clock, with maturity off so a topUp matures at t=0; the platform fee is `feeBps`.
 function spendFixture(feeBps = 3000): { store: Store; ctx: Ctx } {
   const clock = fixedClock(0);
   const store = memoryStore({ digest: seededDigest(1), clock });
@@ -409,9 +382,8 @@ async function rejectsDuplicateOrderId(): Promise<void> {
 }
 
 async function recordsFeeEqualToRevenuePosted(): Promise<void> {
-  // Platform fee of 1530 bps (15.30%) on the 400.00 price is 61.20. Not a whole credit, so the
-  // fee charged rounds up to 62.00 (an earlier version kept the un-rounded 61.20). The fee in the
-  // Sale record must equal the fee moved into REVENUE, not the un-rounded figure.
+  // 1530 bps of 400.00 is 61.20, not a whole credit, so the fee charged rounds up to 62.00;
+  // Sale.fee must equal what actually moved into REVENUE.
   const { store, ctx } = spendFixture(1530);
   await runOp(
     store,
@@ -427,8 +399,7 @@ async function recordsFeeEqualToRevenuePosted(): Promise<void> {
       sku: 'wrld_pass',
       price: credit('400.00'),
       orderId: 'ord_fee',
-      // Seller takes the whole net so REVENUE keeps only the fee; without a recipient REVENUE
-      // would keep the entire price, leaving nothing to compare the fee against.
+      // The seller takes the whole net, so REVENUE keeps only the fee.
       recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
     }),
   );
@@ -437,9 +408,8 @@ async function recordsFeeEqualToRevenuePosted(): Promise<void> {
   const sale = await store.transaction((unit) => unit.sales.get('ord_fee'));
   assert.notEqual(sale, null);
   const committed = outcome as Extract<Outcome, { status: 'committed' }>;
-  // Whole price came from spendable (no promo), so the posting touches REVENUE in one line: the
-  // credit line recording the fee. Credit lines store as negatives, so negate to compare against
-  // the positive fee.
+  // No promo part, so REVENUE has exactly one leg: the fee. Credit legs store as negatives, so
+  // negate to compare.
   const revenueLeg = committed.transaction.legs.find(
     (leg) => leg.account === SYSTEM.REVENUE,
   );
@@ -448,11 +418,8 @@ async function recordsFeeEqualToRevenuePosted(): Promise<void> {
 }
 
 async function recordsFeeIncludingResidualOnUnevenSplit(): Promise<void> {
-  // 1530 bps on 400.00 gives a fee of 62.00 (6200 minor) and a net of 338.00. The net splits three
-  // uneven ways (33.33 / 33.33 / 33.34 %). Each seller's share floors, leaving a 2-minor residual
-  // that REVENUE keeps on top of the fee. Sale.fee must record the full 62.02 the platform actually
-  // took, not the bare 62.00 fee. The old bug recorded `feeForPrice` and so came up short by the
-  // residual on uneven splits.
+  // Each seller's share floors, so the uneven three-way split of the 338.00 net leaves a 2-minor
+  // residual that REVENUE keeps on top of the 62.00 fee; Sale.fee must record the full 62.02.
   const { store, ctx } = spendFixture(1530);
   await runOp(
     store,
@@ -482,15 +449,11 @@ async function recordsFeeIncludingResidualOnUnevenSplit(): Promise<void> {
   );
   assert.notEqual(sale, null);
   const committed = outcome as Extract<Outcome, { status: 'committed' }>;
-  // Whole price from spendable (no promo), so REVENUE is touched in one credit line: the fee plus
-  // the rounding residual.
   const revenueLeg = committed.transaction.legs.find(
     (leg) => leg.account === SYSTEM.REVENUE,
   );
   assert.notEqual(revenueLeg, undefined);
-  // Sale.fee equals what REVENUE actually kept...
   assert.equal(sale!.fee.minor, -revenueLeg!.amount.minor);
-  // ...which is the 62.00 fee plus the 0.02 residual the uneven split left behind, not the bare fee.
   assert.equal(sale!.fee.minor, 6202n);
 }
 
@@ -505,14 +468,9 @@ describe('Spend Entitlement, Order, Fee, Age', () => {
     recordsFeeIncludingResidualOnUnevenSplit());
 });
 
-// --- Op-specific field-shape guards -------------------------------------------------------
-//
-// These cover malformed structured inputs the central validateOperation() guard cannot know about.
-// The handler throws them as MALFORMED faults, which signal a programming or client error rather
-// than a returned rejection. Each is driven directly on the handler inside one `store.transaction`,
-// the same shape as the tests above.
+// --- Op-specific field-shape guards: malformed shapes the central validateOperation() cannot
+// know about.
 
-// Returns true when the thrown value is an Error carrying the given fault `code`.
 function isCode(code: string): (error: unknown) => boolean {
   return (error) =>
     error instanceof Error && 'code' in error && error.code === code;
@@ -600,8 +558,6 @@ describe('Spend Field Shape', () => {
       buildTopUp({ userId: 'usr_buyer', amount: credit('10.00') }),
     );
 
-    // `platform:revenue` is a house account, not a user wallet owner; routing a sale's earnings
-    // there would credit a platform account as if it were a seller.
     await assert.rejects(
       runOp(
         store,

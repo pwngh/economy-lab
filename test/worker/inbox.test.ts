@@ -33,9 +33,7 @@ import type { WorkerCtx } from '#src/contract.ts';
 import type { Economy, Operation, Outcome } from '#src/contract.ts';
 import type { InboxEntry, Store } from '#src/ports.ts';
 
-// Builds a worker context from deterministic fakes (a fixed clock, counted-up ids, and so on).
-// drainInbox only reads the logger, meter, and config, but we pass the full object to match the other
-// worker tests. A small `maxInboxAttempts` drives a poison row to its dead-letter cap in a few sweeps.
+// A small `maxInboxAttempts` drives a poison row to its dead-letter cap in a few sweeps.
 function workerCtx(maxInboxAttempts?: number): WorkerCtx {
   const config = testConfig();
   return {
@@ -52,9 +50,7 @@ function workerCtx(maxInboxAttempts?: number): WorkerCtx {
   };
 }
 
-// Builds the topUp Operation a stored inbox row carries. It represents a verified provider event that
-// has already been mapped to an Operation. The provider event id keys it, and that same id doubles as
-// the row `key` and the operation's idempotencyKey.
+// The provider event id doubles as the row `key` and the operation's idempotencyKey.
 function topUp(eventId: string): Operation {
   return {
     kind: 'topUp',
@@ -66,8 +62,6 @@ function topUp(eventId: string): Operation {
   } as unknown as Operation;
 }
 
-// Enqueues a pending inbox row the way the webhook handler does, inside a transaction. This leaves the
-// store in the state a real apply sweep would pick up.
 async function enqueue(store: Store, eventId: string): Promise<InboxEntry> {
   return store.transaction((unit) =>
     unit.inbox.enqueueInbound({
@@ -82,7 +76,6 @@ async function enqueue(store: Store, eventId: string): Promise<InboxEntry> {
   );
 }
 
-// Builds a committed Outcome, the success the economy returns when a topUp posts.
 function committed(): Outcome {
   return {
     status: 'committed',
@@ -90,9 +83,6 @@ function committed(): Outcome {
   };
 }
 
-// Builds an Economy stub whose `submit` returns or throws whatever a test scripts. It records every
-// operation it was handed so a test can assert which rows were applied and in what order. drainInbox
-// reads only `submit`, so the rest of the surface is omitted.
 function scriptedEconomy(
   respond: (operation: Operation, call: number) => Outcome,
 ): Pick<Economy, 'submit'> & { submitted: Operation[] } {
@@ -106,8 +96,6 @@ function scriptedEconomy(
   };
 }
 
-// Runs one drain pass. It claims pending rows and submits each through `economy`. `maxInboxAttempts`
-// pins the dead-letter cap for tests that need it; otherwise the fixture default applies.
 function sweep(
   store: Store,
   economy: Pick<Economy, 'submit'>,
@@ -133,7 +121,6 @@ describe('drainInbox', () => {
     assert.deepEqual(summary.applied, ['ibx_e1', 'ibx_e2']);
     assert.deepEqual(summary.failed, []);
     assert.deepEqual(summary.deadLettered, []);
-    // Both stored Operations went through the economy.
     assert.deepEqual(
       economy.submitted.map((o) => o.idempotencyKey),
       ['whk:e1', 'whk:e2'],
@@ -150,7 +137,6 @@ describe('drainInbox', () => {
     const second = await sweep(store, economy);
 
     assert.deepEqual(second.applied, []);
-    // The economy saw the row only once: the applied row isn't re-claimed, so it isn't re-submitted.
     assert.equal(economy.submitted.length, 1);
     await store.close();
   });
@@ -193,7 +179,6 @@ describe('drainInbox — Retryable Failure', () => {
     ]);
     assert.deepEqual(first.deadLettered, []);
 
-    // The row stayed pending with its attempt bumped; the next run claims it again and succeeds.
     const second = await sweep(store, economy);
     assert.deepEqual(second.applied, ['ibx_e1']);
     await store.close();
@@ -225,8 +210,7 @@ describe('drainInbox — Dead-Letter', () => {
   test('dead-letters a poison row once attempts reach the cap and stops re-claiming it', async () => {
     const store = memoryStore();
     await enqueue(store, 'poison');
-    // Always throws a retryable fault, so retries never succeed. The cap is 2, so the row
-    // dead-letters on the second failure, the one that takes attempts to 2.
+    // The cap is 2: the row dead-letters on the failure that takes attempts to 2.
     const economy = scriptedEconomy(() => {
       throw fault('STORE.FAILURE', 'always down', { retryable: true });
     });
@@ -244,7 +228,6 @@ describe('drainInbox — Dead-Letter', () => {
       { id: 'ibx_poison', reason: 'STORE.FAILURE' },
     ]);
 
-    // The dead row is terminal: a later sweep never claims it again, so the economy isn't called.
     const submittedBefore = economy.submitted.length;
     const third = await sweep(store, economy, 10, 2);
     assert.deepEqual(third.applied, []);
@@ -256,8 +239,7 @@ describe('drainInbox — Dead-Letter', () => {
   test('dead-letters a row the economy rejects (a terminal business no, not retried)', async () => {
     const store = memoryStore();
     await enqueue(store, 'e1');
-    // A well-formed request the economy declines as data, not as a thrown fault. Retrying would be
-    // declined the same way forever, so the row is parked rather than burning attempts.
+    // A business decline is data, not a throw; it would repeat forever, so the row parks at once.
     const economy = scriptedEconomy(() => ({
       status: 'rejected',
       reason: 'INSUFFICIENT_FUNDS',
@@ -271,7 +253,6 @@ describe('drainInbox — Dead-Letter', () => {
       { id: 'ibx_e1', reason: 'INSUFFICIENT_FUNDS' },
     ]);
 
-    // Parked immediately: a later sweep doesn't re-submit it.
     const second = await sweep(store, economy);
     assert.deepEqual(second.deadLettered, []);
     assert.equal(economy.submitted.length, 1);

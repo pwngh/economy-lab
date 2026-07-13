@@ -37,14 +37,10 @@ function makeStore(): Store {
   return memoryStore({ digest, clock });
 }
 
-// Builds a fresh store and context for each test. Nothing is shared, so writes cannot leak
-// between tests.
 function fixture(): { store: Store; ctx: Ctx } {
   return { store: makeStore(), ctx: makeCtx() };
 }
 
-// Runs adjust inside a committing transaction. Returns the Outcome, which carries the
-// commit status and the posted entry.
 async function applyAdjust(
   store: Store,
   ctx: Ctx,
@@ -53,8 +49,7 @@ async function applyAdjust(
   return store.transaction((unit) => adjust(operation, unit, ctx));
 }
 
-// Seeds a starting balance with a top-up. A test that lowers a balance must seed one first.
-// Otherwise the downward correction drops below zero and is rejected as an overdraft.
+// A test that lowers a balance must seed one first, or the correction is rejected as an overdraft.
 async function issue(
   store: Store,
   ctx: Ctx,
@@ -66,8 +61,6 @@ async function issue(
   );
 }
 
-// Builds a predicate for assert.rejects that matches an error by its code. The match uses the
-// stable code rather than the message or stack, because those can change without notice.
 function hasCode(code: string): (error: unknown) => boolean {
   return (error) =>
     error instanceof Error && (error as { code?: string }).code === code;
@@ -127,8 +120,8 @@ describe('Adjust Direction', () => {
       }),
     );
 
-    // RECEIVABLE rises when debited, so a positive adjustment raises it. OPENING_EQUITY is the
-    // offset account that adjust balances against. It takes the opposite amount, so the two cancel.
+    // RECEIVABLE is debit-normal, so a positive adjustment raises it; OPENING_EQUITY takes the
+    // opposite amount.
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.RECEIVABLE),
       credit('3.00'),

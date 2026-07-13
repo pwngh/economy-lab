@@ -5,8 +5,8 @@ order: 30
 status: stable
 sourceRefs:
   [
-    'src/server.ts#L87 · createServer',
-    'scripts/main.ts#L502 · runServe',
+    'src/server.ts#L80 · createServer',
+    'scripts/main.ts#L442 · runServe',
     'test/server.test.ts',
   ]
 related: ['economy/scope-and-non-goals', 'economy/ports/signer']
@@ -16,7 +16,7 @@ related: ['economy/scope-and-non-goals', 'economy/ports/signer']
 
 Most of these docs talk about the [`Economy`](/economy/reference/the-economy/) as an in-process object: you hold a reference and call `submit` against it directly. But a deployed service has to take requests off a socket. That's what the HTTP service is: a thin wrapper that turns a Fetch `Request` into one `submit` call and a `Response`.
 
-<SourceLink to="src/server.ts#L87">createServer</SourceLink> takes an `Economy` and returns a handler with the signature `(request: Request) => Promise<Response>`:
+<SourceLink to="src/server.ts#L80">createServer</SourceLink> takes an `Economy` and returns a handler with the signature `(request: Request) => Promise<Response>`:
 
 ```ts
 import { createServer } from '#src/server.ts';
@@ -81,7 +81,7 @@ In the status mapping below, a decline is a normal answer and a fault is an HTTP
 
 ### How thrown faults map to status codes
 
-When `submit` throws an `EconomyError`, <SourceLink to="src/server.ts#L400">statusFor</SourceLink> maps it to a status code, and the response carries only the error's `message`, never its `detail`, `cause`, or stack. Those stay server-side.
+When `submit` throws an `EconomyError`, <SourceLink to="src/server.ts#L363">statusFor</SourceLink> maps it to a status code, and the response carries only the error's `message`, never its `detail`, `cause`, or stack. Those stay server-side.
 
 The mapping is by the error's stable code:
 
@@ -154,7 +154,7 @@ It runs in three modes, selected by `argv[2]`:
 | `dev`    | The same API, forced to in-memory adapters with dev secrets, no infrastructure, for `make dev`.   |
 | `worker` | The [background worker](/economy/reference/background-worker/) loop, not the HTTP service.        |
 
-In `serve` and `dev`, <SourceLink to="scripts/main.ts#L502">runServe</SourceLink> builds the economy from the environment and mounts the handler. It passes three things into `createServer`: the purchase-webhook handler, the `Config`, and the clock. Those last two are what _activate_ the verification gate, so a genuine callback is persisted and a forged or stale one is rejected before it changes anything.
+In `serve` and `dev`, <SourceLink to="scripts/main.ts#L442">runServe</SourceLink> builds the economy from the environment and mounts the handler. It passes three things into `createServer`: the purchase-webhook handler, the `Config`, and the clock. Those last two are what _activate_ the verification gate, so a genuine callback is persisted and a forged or stale one is rejected before it changes anything.
 
 ```ts
 const handler = createServer(economy, {

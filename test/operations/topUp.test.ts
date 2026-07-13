@@ -32,12 +32,10 @@ function makeStore(): Store {
   return memoryStore({ digest, clock });
 }
 
-// Fresh store and Ctx per test so nothing carries over between them.
 function fixture(): { store: Store; ctx: Ctx } {
   return { store: makeStore(), ctx: makeCtx() };
 }
 
-// Run the topUp handler in a transaction (ledger writes commit together), return its result.
 async function applyTopUp(
   store: Store,
   ctx: Ctx,
@@ -46,8 +44,6 @@ async function applyTopUp(
   return store.transaction((unit) => topUp(operation, unit, ctx));
 }
 
-// Predicate for assert.rejects: true when the thrown value is an Error with the given `code`.
-// Failure tests check the code only, not message or stack.
 function hasCode(code: string): (error: unknown) => boolean {
   return (error) =>
     error instanceof Error && (error as { code?: string }).code === code;
@@ -83,11 +79,8 @@ describe('topUp Issuance', () => {
       topUpOp({ userId: 'usr_buyer', amount: credit('10.00') }),
     );
 
-    // The gross cash at the buy rate is $0.01/credit, so $0.10 here. That gross credits USD_CLEARING,
-    // and USD_CLEARING grows on debits, so a credit posting reads -0.10. The debit side splits the
-    // gross two ways. Par-rate backing of $0.005/credit ($0.05) is held in trust as TRUST_CASH. The
-    // buy-vs-par spread, 50% at these test rates, becomes USD revenue ($0.05 in REVENUE_USD). The
-    // three postings sum to zero.
+    // At the test rates: $0.10 gross at the $0.01 buy rate, $0.05 backing at the $0.005 par rate,
+    // $0.05 spread to REVENUE_USD. USD_CLEARING is debit-normal, so the gross credit reads -0.10.
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.TRUST_CASH),
       usd('0.05'),
@@ -167,9 +160,7 @@ describe('topUp Validation', () => {
   test('rounds a sub-cent purchase up so the issued credits are always backed', async () => {
     const { store, ctx } = fixture();
 
-    // Backing rounds up, so a sub-cent backing still holds at least one cent in trust; credits are
-    // never issued unbacked. A 0.50-credit top-up is 50 minor; backing = ceil(50 × $0.005) =
-    // ceil($0.0025) = $0.01.
+    // backing = ceil(50 minor × $0.005) = $0.01.
     const outcome = await applyTopUp(
       store,
       ctx,
@@ -190,8 +181,7 @@ describe('topUp Validation', () => {
   test('commits a normal top-up whose backing is at least one cent', async () => {
     const { store, ctx } = fixture();
 
-    // A 2.00-credit top-up backs at floor(200/200) = $0.01, which sits just above the zero-backing
-    // floor. The top-up still issues credits and holds the matching cash in trust.
+    // 2.00 credits back at exactly $0.01, just above the zero-backing floor.
     const outcome = await applyTopUp(
       store,
       ctx,
@@ -212,8 +202,6 @@ describe('topUp Validation', () => {
   test('throws OP.MALFORMED when the source is blank', async () => {
     const { store, ctx } = fixture();
 
-    // The funding source selects the maturity horizon for the new credits, so a
-    // whitespace-only source is malformed input, not a recoverable refusal.
     await assert.rejects(
       applyTopUp(
         store,
@@ -227,7 +215,6 @@ describe('topUp Validation', () => {
       hasCode('OP.MALFORMED'),
     );
 
-    // Nothing was issued: the rejection happened before any ledger write.
     assert.deepEqual(
       await store.ledger.balance(spendable('usr_buyer')),
       credit('0.00'),

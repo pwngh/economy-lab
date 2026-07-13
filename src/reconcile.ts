@@ -39,10 +39,6 @@ export interface ProcessorRecord {
   settledAt: number;
 }
 
-/**
- * Represents one settled event as recorded in our ledger, the counterpart to a
- * `ProcessorRecord`.
- */
 export interface LedgerRecord {
   kind: ReconcileKind;
 
@@ -154,11 +150,9 @@ function matchSides(
   return { matched, discrepancies };
 }
 
-// Pairs each processor record with one ledger counterpart and consumes it from that key's
-// bucket, oldest-first, so a ledger record matches at most one processor record. A missing
-// bucket, or one already emptied, means a processor record the ledger never recorded: a
-// processor orphan. Whatever stays in the buckets afterward is ledger records with no
-// processor counterpart, which the next pass reports as ledger orphans.
+// Pairs each processor record with a ledger counterpart, consuming it from the key's bucket
+// oldest-first so a ledger record matches at most one processor record. Whatever stays in the
+// buckets afterward becomes ledger orphans in the next pass.
 function matchProcessorSide(
   processor: ReadonlyArray<ProcessorRecord>,
   ledgerByKey: Map<string, LedgerRecord[]>,
@@ -181,11 +175,8 @@ function matchProcessorSide(
   return matched;
 }
 
-// Turns the ledger records left unmatched in the buckets into ledger orphans, meaning every
-// record no processor match consumed. Buckets keep first-seen order within a key and
-// insertion order across keys, both of which ECMAScript guarantees for a Map, so this pass
-// is deterministic. The report's final sort settles cross-key order, and same-key
-// duplicates keep the original order they have here.
+// Ledger records no processor match consumed become ledger orphans. Map iteration order is
+// deterministic, so same-key duplicates keep a stable order through the report's final sort.
 function collectLedgerOrphans(
   remaining: Map<string, LedgerRecord[]>,
   discrepancies: Discrepancy[],
@@ -228,14 +219,9 @@ function report(
   };
 }
 
-// Every record on each side must be accounted for exactly once. A match and an amount drift
-// each consume one record from BOTH sides (a paired processor and ledger record). A
-// processor orphan is an unpaired processor record, and a ledger orphan is an unpaired
-// ledger record. Both sides must therefore reconstruct: matched + drifts + processorOrphans
-// === processorCount, and the same for the ledger. If either check fails, the matcher
-// dropped or double-counted a record and the report cannot be trusted. Throwing here is
-// safer than returning a wrong reconciliation. The equality holds by construction today, and
-// this is the regression guard that keeps it so.
+// A match or drift consumes one record from BOTH sides; an orphan is one unpaired record, so
+// matched + drifts + orphans must reconstruct each side's count. A failure means the matcher
+// dropped or double-counted a record; throwing beats returning a wrong reconciliation.
 function assertAccountedFor(counts: {
   matched: number;
   amountDrifts: number;
@@ -262,10 +248,8 @@ function assertAccountedFor(counts: {
 
 // --- Matching primitives ----------------------------------------------------------
 
-// Keeps only records whose timestamp falls in the window. `at` pulls the timestamp out,
-// which is settledAt for a processor record and postedAt for a ledger record. The window is
-// half-open: `from` is in and `to` is out and belongs to the next window, so adjacent
-// windows never both claim a record.
+// Half-open window: `from` is in, `to` is out and belongs to the next window, so adjacent windows
+// never both claim a record.
 function withinWindow<T>(
   records: ReadonlyArray<T>,
   window: Range,
@@ -277,11 +261,8 @@ function withinWindow<T>(
   });
 }
 
-// Buckets the ledger records by key, keeping EVERY record per key in first-seen order.
-// matchKey is meant to be a unique join reference, so a repeated key should not occur and is
-// the kind of mismatch the reconciler catches. A repeated key keeps all its records, so
-// matchProcessorSide pairs each with a distinct processor record and any surplus still
-// surfaces as a ledger orphan. No record is dropped.
+// A repeated matchKey should not occur, but every record per key is kept (first-seen order), so
+// any surplus surfaces as a ledger orphan instead of being dropped.
 function indexByKey(
   ledger: ReadonlyArray<LedgerRecord>,
 ): Map<string, LedgerRecord[]> {
@@ -302,10 +283,8 @@ function keyOf(kind: ReconcileKind, matchKey: string): string {
   return `${kind}:${matchKey}`;
 }
 
-// Returns true when the amounts are exactly equal: the same currency and the same value to
-// the smallest unit, with no tolerance. Currency is checked first because `compare` throws
-// on mismatched currencies. Checking it here reports a currency mismatch as drift instead of
-// crashing.
+// Exact equality, no tolerance. Currency is checked first because `compare` throws on mismatched
+// currencies; checking here reports a mismatch as drift instead of crashing.
 function sameAmount(a: Amount, b: Amount): boolean {
   if (a.currency !== b.currency) {
     return false;

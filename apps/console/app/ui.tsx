@@ -23,8 +23,7 @@ export function fmtAmount(n: number): string {
   });
 }
 
-// A short label for a simulated-clock time: "day 0", "day 2.5". The console runs on a simulated
-// clock, so times read as elapsed days.
+// A label for a simulated-clock time: the console's times read as elapsed days ("day 0", "day 2.5").
 export const DAY_MS = 86_400_000;
 export function dayLabel(at: number): string {
   return at === 0 ? 'day 0' : `day ${Math.round((at / DAY_MS) * 10) / 10}`;
@@ -135,11 +134,9 @@ export function DataTable({
   );
 }
 
-// A page window over a bounded list: a "M–N of TOTAL" caption and Prev/Next links. Paging is
-// URL-driven (the loader reads `?page=`), so each link is a real GET that re-runs the loader and
-// holds the DOM to one page of rows — no client-side accumulation. `baseSearch` carries any other
-// query params (e.g. the accounts page's `?user=`) so they survive paging. Rendered only when the
-// list spills past one page; a single-page list shows nothing.
+// Prev/Next paging, URL-driven: each link is a real GET that re-runs the loader, so the DOM never
+// accumulates rows. `baseSearch` carries other query params (e.g. `?user=`) across pages. Renders
+// nothing when the list fits one page.
 export function Pager({
   offset,
   limit,

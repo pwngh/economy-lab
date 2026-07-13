@@ -27,7 +27,6 @@ export const links: LinksFunction = () => [
   { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' },
 ];
 
-// The HTML document shell every page renders into.
 export function Layout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
@@ -51,8 +50,7 @@ export default function App() {
   return <Outlet />;
 }
 
-// Catch-all error boundary: render a message instead of a blank page. A thrown HTTP response shows
-// its status; any other error shows its message.
+// Render a message instead of a blank page.
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   let title = 'Something went wrong';
   let detail = 'This page could not be loaded. Please try again.';

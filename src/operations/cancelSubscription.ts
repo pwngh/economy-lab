@@ -50,10 +50,8 @@ export async function cancelSubscription(
   return { status: 'committed', transaction: lifecycleMarker(ctx) };
 }
 
-// Requires a non-blank subscription id. A blank or whitespace-only id is malformed client
-// input, so it throws a client error up front rather than reaching the store. Passing it to
-// the store would turn it into an UNKNOWN_SUBSCRIPTION result. A non-blank id
-// with no matching record still flows through to that UNKNOWN_SUBSCRIPTION outcome below.
+// A blank id is malformed client input, so it throws up front; a non-blank id with no matching
+// record still flows to the UNKNOWN_SUBSCRIPTION rejection below.
 function assertSubscriptionId(subscriptionId: string): void {
   if (subscriptionId.trim() === '') {
     throw fault(
@@ -64,12 +62,11 @@ function assertSubscriptionId(subscriptionId: string): void {
   }
 }
 
-// Requires the caller to own the subscription, or to be privileged. The central authorize() can't
-// catch this because cancel debits no user account, so the ownership check lives here against the
-// loaded record; without it the handler would cancel any named id, an IDOR. System/operator pass;
-// a user passes only when their id matches the owner, else UNAUTHORIZED.
-// See https://economy-lab-docs.pages.dev/economy/reference/operations/cancel-subscription/ for the
-// ownership rules and why the central check can't enforce them.
+// The central authorize() can't catch this because cancel debits no user account, so the
+// ownership check lives here against the loaded record; without it any caller could cancel any
+// named id. See
+// https://economy-lab-docs.pages.dev/economy/reference/operations/cancel-subscription/ for the
+// ownership rules.
 function assertMayCancel(
   operation: Extract<Operation, { kind: 'cancelSubscription' }>,
   subscription: Subscription,

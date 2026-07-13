@@ -43,8 +43,7 @@ describe('sqsDispatcher: FIFO Param Detection', () => {
 
     const input = captured.inputs[0];
     // AWS rejects MessageGroupId/MessageDeduplicationId on a standard queue (InvalidParameterValue),
-    // so the dispatcher omits both when the queue URL has no `.fifo` suffix. Default deployment is
-    // a standard queue.
+    // so the dispatcher omits both when the queue URL has no `.fifo` suffix.
     assert.equal('MessageGroupId' in input, false);
     assert.equal('MessageDeduplicationId' in input, false);
   });
@@ -56,15 +55,11 @@ describe('sqsDispatcher: FIFO Param Detection', () => {
     await dispatch(sampleEvent());
 
     const input = captured.inputs[0];
-    // On a FIFO queue the subject sets MessageGroupId (the key SQS orders within) and the event
-    // id sets MessageDeduplicationId, so resending the same event delivers it once.
     assert.equal(input.MessageGroupId, 'usr_conf_1');
     assert.equal(input.MessageDeduplicationId, 'evt_sqs_1');
   });
 });
 
-// Records the raw SendMessage input of each call, so a test can assert which request
-// parameters the dispatcher attached.
 function captureClient(): SqsClient & { inputs: Record<string, unknown>[] } {
   const inputs: Record<string, unknown>[] = [];
   return {
@@ -76,8 +71,6 @@ function captureClient(): SqsClient & { inputs: Record<string, unknown>[] } {
   };
 }
 
-// Builds a harness that runs the shared Dispatcher contract against the SQS adapter. The fake
-// client records message bodies and abort signals, and it can be told to fail the next send.
 function sqsHarness(): DispatcherHarness {
   const bodies: string[] = [];
   const signals: Array<AbortSignal | undefined> = [];

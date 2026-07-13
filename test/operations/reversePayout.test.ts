@@ -10,19 +10,10 @@
  */
 
 /**
- * Tests for reversePayout: operator-run reversal of a single payout that hasn't sent real money.
- * Each payout is a saga (state RESERVED/SUBMITTED/SETTLED/FAILED) stepped by a background worker.
- * Requesting a payout moved the seller's earned credits into PAYOUT_RESERVE (escrow); reversing
- * returns them and drives the saga to FAILED so the worker never pays it.
- *
- * The tests cover three cases. A RESERVED or SUBMITTED payout returns the reserve to earned and
- * fails the saga. A SETTLED payout (money already sent) is refused with INVALID_TRANSITION and posts
- * nothing. Only operators may run the reversal, so a user actor gets UNAUTHORIZED.
- *
- * The tests drive the handler two ways. The state, ledger posting, and replay-safety tests call the
- * handler directly inside one `store.transaction`, which is how the request pipeline runs it as its
- * final step. The permission check and the `economy.payout.reversed` event go through the full
- * `economy.submit` entry point.
+ * reversePayout: operator-run reversal of a payout that has not sent real money — it returns the
+ * reserve to earned and drives the saga to FAILED. State, posting, and replay tests call the
+ * handler directly inside one `store.transaction`; the permission check and the
+ * `economy.payout.reversed` event go through the full `economy.submit` entry point.
  */
 
 import { describe, test } from 'node:test';
@@ -72,9 +63,7 @@ function newCtx(): Ctx {
   };
 }
 
-// Opens a payout in the given state with credits already in escrow. This matches what a payout
-// request leaves behind: the seller's earned credits sitting in PAYOUT_RESERVE. Seeding the reserve
-// gives the reversal's later debit a balance to draw from, instead of pushing it negative.
+// Opens a saga with its reserve already in escrow, as a payout request leaves it.
 async function openReservedSaga(
   store: Store,
   overrides: Partial<Saga> & Pick<Saga, 'id' | 'state'>,
@@ -94,8 +83,7 @@ async function openReservedSaga(
   await store.transaction(async (unit) => {
     await unit.sagas.open(row);
     if (row.state !== 'FAILED') {
-      // Seed PAYOUT_RESERVE, balanced against STORED_VALUE (a platform account exempt from the
-      // overdraft rule), so the reversal's later debit has a balance to draw down.
+      // Balanced against STORED_VALUE, a platform account exempt from the overdraft rule.
       await unit.ledger.append({
         txnId: `txn_seed_${row.id}`,
         legs: [
@@ -165,10 +153,8 @@ describe('reversePayout', () => {
 
     assert.equal(outcome.status, 'committed');
     assert.equal(await stateOf(store, 'pay_1'), 'FAILED');
-    // The full reserved amount is back in the seller's earned account.
     const earnedBalance = await balanceOf(store, earned(saga.userId));
     assert.deepEqual(earnedBalance, credit('4.00'));
-    // The reserve account was emptied back out.
     const reserveBalance = await balanceOf(store, SYSTEM.PAYOUT_RESERVE);
     assert.deepEqual(reserveBalance, credit('0.00'));
   });
@@ -176,10 +162,8 @@ describe('reversePayout', () => {
   test('a SUBMITTED payout aged past maxPayoutAgeMs is reversible', async () => {
     const store = newStore();
     const ctx = newCtx();
-    // A SUBMITTED payout is gated until it's waited longer than maxPayoutAgeMs (the cutoff the
-    // worker uses to give up on a stuck submission). Set `updatedAt` (when it entered SUBMITTED)
-    // far enough back that `now - updatedAt` is past the cutoff, so the provider is presumed never
-    // to have paid and a manual reverse is allowed.
+    // The age gate reads `updatedAt` as when the payout entered SUBMITTED; set it past
+    // maxPayoutAgeMs so the provider is presumed never to have paid.
     await openReservedSaga(store, {
       id: 'pay_2',
       state: 'SUBMITTED',
@@ -194,7 +178,6 @@ describe('reversePayout', () => {
 
     assert.equal(outcome.status, 'committed');
     assert.equal(await stateOf(store, 'pay_2'), 'FAILED');
-    // The full reserved amount is back in the seller's earned account.
     assert.deepEqual(
       await balanceOf(store, earned('usr_seller')),
       credit('4.00'),
@@ -204,9 +187,6 @@ describe('reversePayout', () => {
   test('a freshly-SUBMITTED payout still within maxPayoutAgeMs is refused and posts nothing', async () => {
     const store = newStore();
     const ctx = newCtx();
-    // A SUBMITTED payout the provider may still settle must not be reversed: handing the reserve
-    // back now would double-pay the seller if the provider later pays out. Enter SUBMITTED "just
-    // now" (updatedAt == now), so `now - updatedAt` is 0, well inside the cutoff.
     await openReservedSaga(store, {
       id: 'pay_live',
       state: 'SUBMITTED',
@@ -218,7 +198,6 @@ describe('reversePayout', () => {
       (error: unknown) => codeOf(error) === 'SAGA.INVALID_TRANSITION',
     );
 
-    // Nothing moved: the saga is still SUBMITTED and the reserve is untouched.
     assert.equal(await stateOf(store, 'pay_live'), 'SUBMITTED');
     assert.deepEqual(
       await balanceOf(store, SYSTEM.PAYOUT_RESERVE),
@@ -233,9 +212,6 @@ describe('reversePayout', () => {
   test('a provider-reported failure reverses a still-live SUBMITTED payout', async () => {
     const store = newStore();
     const ctx = newCtx();
-    // Same freshly-SUBMITTED saga the previous test refuses to touch. Here the payout-failed
-    // webhook speaks: the rail itself reported it will not settle this payout, so providerReported
-    // waives the still-live gate and the reserve returns now instead of after maxPayoutAgeMs.
     await openReservedSaga(store, {
       id: 'pay_rail',
       state: 'SUBMITTED',
@@ -278,9 +254,6 @@ describe('reversePayout', () => {
     assert.equal(first.status, 'committed');
     const afterFirst = await balanceOf(store, earned('usr_seller'));
 
-    // A second reversal finds the saga already FAILED, so the guarded state change refuses to move
-    // it again. The result is `duplicate`, the earned balance is unchanged, and the reserve was
-    // returned only once.
     const second = await run(
       store,
       ctx,
@@ -303,7 +276,6 @@ describe('reversePayout — Refusals & Validation', () => {
       (error: unknown) => codeOf(error) === 'SAGA.INVALID_TRANSITION',
     );
 
-    // Nothing was returned: the seller's earned account stayed at zero and the saga stays SETTLED.
     assert.equal(await stateOf(store, 'pay_4'), 'SETTLED');
     const earnedBalance = await balanceOf(store, earned('usr_seller'));
     assert.deepEqual(earnedBalance, credit('0.00'));
@@ -334,9 +306,8 @@ describe('reversePayout — Refusals & Validation', () => {
     const store = newStore();
     await openReservedSaga(store, { id: 'pay_8', state: 'RESERVED' });
 
-    // The payout's seller is usr_seller. The framework locks the earned account named by the
-    // operation's userId, but the reversal always credits the seller named on the payout. A
-    // mismatched userId would credit an account that was never locked, so it's refused up front.
+    // The framework locks the account named by the operation's userId, but the reversal credits
+    // the seller named on the payout; a mismatch would credit an account that was never locked.
     await assert.rejects(
       run(
         store,
@@ -346,7 +317,6 @@ describe('reversePayout — Refusals & Validation', () => {
       (error: unknown) => codeOf(error) === 'OP.MALFORMED',
     );
 
-    // Nothing moved: the saga is still live and the reserve is untouched.
     assert.equal(await stateOf(store, 'pay_8'), 'RESERVED');
     assert.deepEqual(
       await balanceOf(store, SYSTEM.PAYOUT_RESERVE),
@@ -398,15 +368,12 @@ describe('reversePayout Through Submit', () => {
       (error: unknown) => codeOf(error) === 'AUTH.UNAUTHORIZED',
     );
 
-    // The permission check runs first, so a refused caller never reaches the state change or the
-    // posting; the saga was never advanced.
     assert.equal(await stateOf(store, 'pay_7'), 'RESERVED');
   });
 });
 
-// Pulls the events a committed operation queued for delivery. Events go into an outbox table in the
-// same transaction, then to subscribers later. This claims a batch and marks it delivered, so a
-// second call won't see the same events.
+// claimBatch reads unsent rows without removing them; marking them relayed keeps a second call
+// from seeing the same events.
 async function drainEvents(store: Store): Promise<EconomyEvent[]> {
   const batch = await store.outbox.claimBatch(100);
   await store.outbox.markRelayed(batch.map((message) => message.id));

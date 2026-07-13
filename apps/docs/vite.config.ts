@@ -37,9 +37,9 @@ interface HastNode {
 const BRAND = 'economy-lab';
 
 /**
- * Wraps every standalone "economy-lab" in body prose with `<span class="brand">`, skipping text inside
- * `code`/`pre` and running before Shiki so highlighted blocks are never rewritten. Frontmatter text
- * (summary, plain, notes) is branded separately by DocPage's `brandize`.
+ * Wraps every standalone "economy-lab" in body prose with `<span class="brand">`, skipping text
+ * inside `code`/`pre`. Frontmatter text (summary, plain, notes) is branded separately by DocPage's
+ * `brandize`.
  */
 function rehypeBrand() {
   const span = (): HastNode => ({

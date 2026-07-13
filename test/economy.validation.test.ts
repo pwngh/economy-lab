@@ -15,16 +15,13 @@ import assert from 'node:assert/strict';
 import { makeEconomy } from '#test/support/economy.ts';
 import { topUp, spend, grantPromo, credit } from '#test/support/builders.ts';
 
-// Builds a predicate that matches an Error carrying the given fault `code`.
 function hasCode(code: string): (error: unknown) => boolean {
   return (error) =>
     error instanceof Error && (error as { code?: string }).code === code;
 }
 
-// Submit rejects an op that names a wallet with a blank owner before doing any money work. A
-// blank owner usually means an empty user id from unvalidated input. Rejecting early stops a
-// malformed request from creating an ownerless wallet.
-// See validateOperation in economy.ts.
+// Rejecting a blank owner before any money work stops a malformed request from creating an
+// ownerless wallet. See validateOperation in economy.ts.
 describe('Submit Input Validation', () => {
   test('rejects a topUp whose user id is blank', async () => {
     const eco = makeEconomy();
@@ -81,9 +78,7 @@ describe('Submit Input Validation', () => {
   });
 });
 
-// The guard also requires a non-empty idempotency key and a sane amount. Without the key check, a
-// malformed request could collapse distinct ops into one "duplicate". Without the amount check, it
-// could move a zero, negative, or absurdly large amount.
+// Without the key check, a malformed request could collapse distinct ops into one "duplicate".
 // See validateOperation in economy.ts.
 describe('Submit Idempotency-Key & Amount Guards', () => {
   test('rejects an operation with an empty idempotencyKey', async () => {

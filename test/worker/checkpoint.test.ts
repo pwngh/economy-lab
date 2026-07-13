@@ -44,10 +44,7 @@ import type {
   Store,
 } from '#src/ports.ts';
 
-// Builds a deterministic capability bundle for the worker job. Takes the caller's `digest` so the
-// seal hashes with the same function the ledger used at write time, which keeps recomputed hashes
-// matching. The sealing job only reads digest, signer, clock, and ids. The other capabilities are
-// stand-ins that satisfy the type.
+// Takes the caller's digest so the seal hashes with the same function the ledger used at write time.
 function workerCtx(digest: Digest): WorkerCtx {
   return {
     clock: fixedClock(0),
@@ -62,19 +59,14 @@ function workerCtx(digest: Digest): WorkerCtx {
   };
 }
 
-// Builds a reconciliation source that returns nothing on either side. The reconcile sweep then
-// finds no records to mismatch.
 function emptyFeed(): ReconcileFeed {
   return { pull: async () => ({ processor: [], ledger: [] }) };
 }
 
-// Builds an event dispatcher that discards everything. No event is enqueued, so the dispatcher is
-// never invoked. It exists only to complete the sweep input.
 function nullDispatcher(): Dispatcher {
   return async () => {};
 }
 
-// Builds the full argument bundle the runner passes to every sweep. Callers can override any field.
 function sweepInput(overrides?: Partial<SweepInput>): SweepInput {
   return {
     now: 1_000,
@@ -86,9 +78,7 @@ function sweepInput(overrides?: Partial<SweepInput>): SweepInput {
   };
 }
 
-// Builds one balanced transaction. It credits 500 to the user's spendable balance and debits the
-// matching 500 to platform revenue. The transaction touches two accounts, so the ledger has two
-// accounts to snapshot.
+// Touches two accounts, so the ledger has two heads to snapshot.
 function balancedPosting(txnId: string, user: string): Posting {
   const amount = toAmount('CREDIT', 500n);
   return {
@@ -98,9 +88,7 @@ function balancedPosting(txnId: string, user: string): Posting {
   };
 }
 
-// Builds an in-memory store seeded with one transaction, so the ledger has real accounts to
-// snapshot. Returns the store and its hash function so the test can pass the same hash function to
-// both seal and verify.
+// Returns the store with its digest so seal and verify hash with the same function.
 async function populatedStore(): Promise<{ store: Store; digest: Digest }> {
   const digest = seededDigest(1);
   const store = memoryStore({ digest });
@@ -110,9 +98,6 @@ async function populatedStore(): Promise<{ store: Store; digest: Digest }> {
   return { store, digest };
 }
 
-// Wraps a store so checkpoint put always throws the given error, while everything else keeps
-// working. This lets a test drive the sealing job's error handling, which either retries or sets
-// the fault aside for an operator.
 function withFailingCheckpointPut(store: Store, error: Error): Store {
   return {
     ...store,
@@ -224,11 +209,8 @@ async function deadLettersATerminalFault(): Promise<void> {
   assert.deepEqual(summary.retrying, []);
 }
 
-// Appends a second balanced posting that advances an account head. An account's postings form a
-// hash chain, and its head is the latest hash in that chain. A checkpoint seals a root over the
-// current heads. Advancing a head makes the live heads no longer match the earlier checkpoint, so
-// re-verification reports a mismatch. The debit goes to STORED_VALUE, the holding account for
-// issued credits, which leaves the seed's REVENUE account untouched.
+// Advances an account head so the live heads no longer match the sealed checkpoint. The debit
+// goes to STORED_VALUE to leave the seed's REVENUE account untouched.
 async function mutateLedger(store: Store, user: string): Promise<void> {
   const amount = toAmount('CREDIT', 100n);
   await store.transaction((unit) =>
@@ -240,12 +222,9 @@ async function mutateLedger(store: Store, user: string): Promise<void> {
   );
 }
 
-// Wraps a store so its ledger reports only the first `keep` account heads, as if the rest were
-// deleted — from both head reads, since a deleted account would vanish from `heads` and
-// `headSums` alike. Re-verification recomputes the root over whatever leaves it sees, so a root
-// over this shorter list still matches a checkpoint sealed over the same shorter list. The
-// separate count check is what catches missing accounts: it requires the live head count to be
-// at least the count the checkpoint recorded.
+// Reports only the first `keep` heads — from both `heads` and `headSums`, as a deleted account
+// would vanish from both. The root matches its own shrunken input; only the count check
+// (live >= sealed) catches the deletion.
 function withTruncatedHeads(store: Store, keep: number): Store {
   async function* firstN<T>(source: AsyncIterable<T>): AsyncIterable<T> {
     let seen = 0;
@@ -299,7 +278,6 @@ async function flagsAMismatchAfterTheLedgerChanges(): Promise<void> {
   const { store, digest } = await populatedStore();
   const ctx = workerCtx(digest);
   const sealed = await sealCheckpoint(store, ctx);
-  // Change the ledger after sealing, so the live heads no longer match the signed root.
   await mutateLedger(store, 'usr_a');
 
   const summary = await reverifyCheckpoint(store, ctx);
@@ -312,11 +290,8 @@ async function flagsAMismatchAfterTheLedgerChanges(): Promise<void> {
 }
 
 async function verifiesThePriorCheckpointBeforeSealingAFreshOne(): Promise<void> {
-  // One sweep cycle must verify the prior sealed checkpoint against the live ledger before it
-  // seals a fresh one. The test seals a checkpoint, then changes the ledger so a head no longer
-  // matches the signed root. A single runSweeps call should report checkpointVerify mismatch=true.
-  // That proves the verify ran against the prior checkpoint. A checkpoint sealed this cycle would
-  // match by construction, so it could never surface this mismatch.
+  // A checkpoint sealed this cycle would match by construction, so mismatch=true from a single
+  // runSweeps call proves the verify ran against the prior checkpoint, before the fresh seal.
   const { store, digest } = await populatedStore();
   const ctx = workerCtx(digest);
   await sealCheckpoint(store, ctx);
@@ -349,10 +324,8 @@ async function flagsAMismatchWhenHeadsAreTruncated(): Promise<void> {
       meta: { kind: 'test', source: 'card' },
     }),
   );
-  // Seal while the store reports one account head, then drop to zero to simulate a deleted account.
-  // A root-only check never notices the deletion, because the root matches its own shrunken input.
-  // The count check is what catches it. The count check runs first and fails because the live head
-  // count (0) is below the count the checkpoint recorded (1).
+  // Seal over one head, then drop to zero to simulate a deleted account. The count check
+  // (live 0 < sealed 1) is what fails; the root alone would still match.
   const oneHead = withTruncatedHeads(store, 1);
   const sealed = await sealCheckpoint(oneHead, ctx);
   assert.equal(sealed.sealed!.count, 1);
@@ -370,7 +343,6 @@ async function flagsAMismatchWhenHeadsAreTruncated(): Promise<void> {
 
   assert.equal(summary.verified, sealed.sealed!.id);
   assert.equal(summary.mismatch, true);
-  // Truncation is a normal "doesn't match" tamper signal, not a thrown failure.
   assert.deepEqual(summary.deadLettered, []);
   assert.deepEqual(summary.retrying, []);
 }
@@ -378,9 +350,8 @@ async function flagsAMismatchWhenHeadsAreTruncated(): Promise<void> {
 async function verifiesWhenTheHeadSetGrewSinceSealing(): Promise<void> {
   const { store, digest } = await populatedStore();
   const ctx = workerCtx(digest);
-  // Seal over the full two-head ledger, then re-verify with the sealed count pinned to 1, so the
-  // live head count (2) exceeds the sealed count. The root is unchanged, so it still matches. The
-  // count guard (live 2 >= sealed 1) does not fire. A grown head set is healthy, not a mismatch.
+  // Re-verify with the sealed count pinned to 1 so the live count (2) exceeds it. A grown head
+  // set is healthy: the >= guard does not fire and the unchanged root still matches.
   const sealed = await sealCheckpoint(store, ctx);
   assert.equal(sealed.sealed!.count, 2);
   const grown: Store = {
@@ -404,10 +375,8 @@ async function deadLettersACorruptCheckpointRow(): Promise<void> {
   const ctx = workerCtx(digest);
   await sealCheckpoint(store, ctx);
   const real = await store.checkpoints.latest();
-  // Wrap the store so the latest checkpoint keeps its valid, matching root but carries a malformed
-  // signature. The ledger is unchanged, so the roots match and verifyCheckpoint reaches the
-  // signature check. Decoding the bad hex throws there. That is a terminal failure from a corrupt
-  // stored row, not a normal mismatch.
+  // A valid, matching root with a malformed signature: verification reaches the signature check,
+  // where decoding the bad hex throws — a terminal fault from a corrupt row, not a mismatch.
   const corrupt: Store = {
     ...store,
     checkpoints: {
@@ -418,8 +387,6 @@ async function deadLettersACorruptCheckpointRow(): Promise<void> {
 
   const summary = await reverifyCheckpoint(corrupt, ctx);
 
-  // The thrown error is sorted by retry verdict, like the seal path. A malformed hex decode is a
-  // terminal (non-retryable) fault, so it lands in deadLettered.
   assert.equal(summary.mismatch, false);
   assert.equal(summary.deadLettered.length, 1);
   assert.deepEqual(summary.retrying, []);

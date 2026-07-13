@@ -23,16 +23,6 @@ import type { Unit } from '#src/ports.ts';
  *
  * Promo credits need no USD backing (unlike topped-up money), so a grant can't increase the cash
  * held in trust. They are spendable but never cashed out, because only earned credits pay out.
- * `expiresAt` is stored in the entry metadata so the background worker can later reverse any
- * unspent portion.
- *
- * @example
- *   const outcome = await grantPromo(
- *     { kind: 'grantPromo', idempotencyKey: 'idem_0', actor: { kind: 'system', service: 'marketing' },
- *       userId: 'usr_buyer', amount: toAmount('CREDIT', 500n), expiresAt: 86_400_000 },
- *     unit, ctx,
- *   );
- *   // outcome.status === 'committed'; promo(usr_buyer) rose by 500, offset by PROMO_FLOAT.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/grant-promo/ Grant
  *   promo} for issuing unbacked, expiring marketing credits.
@@ -50,11 +40,10 @@ export async function grantPromo(
     'grantPromo.expiresAt',
   );
 
-  // PROMO_FLOAT is debit-normal: a debit raises its balance and a credit lowers it, so debiting it
-  // here offsets the user's credit.
-  // See https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/ for the
-  // debit-normal rule. expiresAt lives in the entry metadata so the expiry job can find this
-  // grant and reverse the unspent portion.
+  // PROMO_FLOAT is debit-normal, so debiting it offsets the user's credit. See
+  // https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/ for the rule.
+  // expiresAt rides in the entry metadata so the expiry sweep can find and reverse the unspent
+  // portion.
   const transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs: [
@@ -64,9 +53,8 @@ export async function grantPromo(
     meta: { kind: 'grantPromo', expiresAt },
   });
 
-  // Record the grant in the same unit of work so it commits/rolls back with the credit. It
-  // reuses the posting's id so the promo-expiry sweep can find and reverse the unspent portion
-  // once it expires. `open` is idempotent on that id, so a retried grant never duplicates the row.
+  // Same unit of work, so the record commits or rolls back with the credit. It reuses the
+  // posting's id, and `open` is idempotent on that id, so a retried grant never duplicates the row.
   await unit.promos.open({
     id: transaction.id,
     userId: operation.userId,
@@ -78,16 +66,13 @@ export async function grantPromo(
   return { status: 'committed', transaction };
 }
 
-// Caps how far in the future a grant may expire, in milliseconds. Every grant must expire so the
-// sweep can reclaim unspent credit. This ceiling of five years stops a caller from minting an
-// effectively never-expiring grant with a far-future timestamp.
+// Every grant must expire so the sweep can reclaim unspent credit; the ceiling stops a caller
+// from minting an effectively never-expiring grant.
 const MAX_EXPIRY_AHEAD_MS = 5 * 365 * 24 * 60 * 60_000;
 
-// Requires a finite, whole-millisecond timestamp that is strictly after now and no further out than
-// the ceiling above, and returns it unchanged. Values from the wire can be NaN, Infinity, or
-// fractional. A past, zero, or negative expiry would be immediately claimed by the reclaim sweep, which
-// claims any grant whose `expiresAt` has already passed. These are all caller or programming
-// mistakes, so it throws a MALFORMED fault rather than a "rejected" outcome.
+// Wire values can be NaN, Infinity, or fractional, and a past expiry would be claimed by the
+// reclaim sweep at once. Both are caller mistakes, so it throws a fault rather than returning
+// `rejected`.
 function futureExpiresAt(expiresAt: number, ctx: Ctx, label: string): number {
   const now = ctx.clock.now();
   if (!Number.isInteger(expiresAt) || expiresAt <= now) {

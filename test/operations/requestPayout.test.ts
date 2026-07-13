@@ -38,9 +38,8 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store, Unit } from '#src/ports.ts';
 import type { Amount } from '#src/money.ts';
 
-// requestPayout is not wired to the public `economy.submit` entry point yet. Each test calls it
-// directly inside one `store.transaction`, the way the entry point would run it as its final step.
-// Every test gets a fresh store and Ctx, so no state is shared between tests.
+// requestPayout is not wired to `economy.submit` yet, so each test calls the handler directly
+// inside one `store.transaction`.
 function newStore(): Store {
   return memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
 }
@@ -60,10 +59,8 @@ function newCtx(): Ctx {
   };
 }
 
-// Gives a seller a starting earned balance to pay out from. Posts one balanced CREDIT pair that
-// raises the seller's earned account and debits the platform's REVENUE account, like a real sale.
-// REVENUE is a platform account and may go negative. The no-negative-balance guard covers only
-// user accounts, so it does not trip here.
+// Seeds earned against REVENUE. Platform accounts may go negative; the no-negative-balance guard
+// covers only user accounts.
 async function fundEarned(
   store: Store,
   userId: string,
@@ -81,12 +78,8 @@ async function fundEarned(
   });
 }
 
-// Like fundEarned, but tags the posting with a funding `source` (such as 'card') so the credit
-// must wait to settle before it can be paid out. The posting is recorded at the store's
-// fixed-clock time of 0. Config gives each source a settlement wait in milliseconds, so with a
-// `horizonMs` wait the credit becomes payable at t=horizonMs. This lets a test place a request
-// before the credit is payable (rejected FUNDS_IMMATURE) or after (allowed). Each call uses a
-// unique txnId so repeated fundings are not deduplicated into one posting.
+// Like fundEarned, but tags the posting with a funding `source`, so the credit must mature before
+// it is payable. Each call uses a unique txnId so repeated fundings are not deduplicated.
 async function fundEarnedFromSource(
   store: Store,
   userId: string,
@@ -105,9 +98,8 @@ async function fundEarnedFromSource(
   });
 }
 
-// Builds a Ctx with an advanceable clock and a fixed maturity horizon for every source, so a
-// payout can be placed before or after the earned credit settles. The clock is shared with the
-// store so that the maturity calculation and ctx.clock.now() agree.
+// The clock must be the same instance the store uses, so the maturity calculation and
+// ctx.clock.now() agree.
 function maturityCtx(
   clock: ReturnType<typeof fixedClock>,
   horizonMs: number,
@@ -134,8 +126,6 @@ function codeOf(error: unknown): string | undefined {
   return error instanceof Error ? (error as { code?: string }).code : undefined;
 }
 
-// A bad amount, whether the wrong currency or not strictly positive, is a programming error.
-// requestPayout throws instead of returning `rejected`. Both cases share the act-and-assert below.
 const faultCases = [
   { name: 'a non-CREDIT amount', amount: usd('10.00'), code: 'OP.MALFORMED' },
   {
@@ -144,8 +134,6 @@ const faultCases = [
     code: 'MONEY.INVALID_AMOUNT',
   },
 ];
-
-// --- The cases --------------------------------------------------------------------
 
 async function reservesEarnedCreditIntoPayoutReserve(): Promise<void> {
   const store = newStore();
@@ -250,9 +238,6 @@ async function rejectsPayoutBelowConfiguredEarnedMinimum(): Promise<void> {
   );
 }
 
-// The seller has enough earned credit overall, but it was funded from a `card` source whose
-// settlement wait has not elapsed. The total balance is large enough, yet the settled part is
-// not, so the payout is rejected FUNDS_IMMATURE and nothing is reserved.
 async function rejectsPayoutAgainstImmatureEarnedCredit(): Promise<void> {
   const clock = fixedClock(0);
   const store = memoryStore({ digest: seededDigest(1), clock });
@@ -279,15 +264,13 @@ async function rejectsPayoutAgainstImmatureEarnedCredit(): Promise<void> {
   );
 }
 
-// Once the settlement wait elapses the credit is fully matured and the payout goes through. The
-// boundary is inclusive: the credit matures at the exact moment its wait ends.
+// The maturity boundary is inclusive: the credit matures at the exact moment its wait ends.
 async function allowsPayoutOnceEarnedCreditHasMatured(): Promise<void> {
   const clock = fixedClock(0);
   const store = memoryStore({ digest: seededDigest(1), clock });
   await fundEarnedFromSource(store, 'usr_seller', credit('30.00'), 'card');
   const ctx = maturityCtx(clock, 60_000);
 
-  // Advance to the exact moment the wait ends.
   clock.advance(60_000);
   const outcome = await run(
     store,
@@ -302,17 +285,12 @@ async function allowsPayoutOnceEarnedCreditHasMatured(): Promise<void> {
   );
 }
 
-// The payable-balance check restricts only the part still waiting to settle. A request for the
-// cleared portion of a partly-cleared balance is allowed, but a larger one is not. Two fundings
-// from the same source recorded at different times finish waiting at different moments.
 async function allowsPayoutUpToTheMaturedPortion(): Promise<void> {
   const clock = fixedClock(0);
   const store = memoryStore({ digest: seededDigest(1), clock });
-  // First funding is recorded at t=0, finishes its wait at t=60_000.
   await fundEarnedFromSource(store, 'usr_seller', credit('10.00'), 'card');
   const ctx = maturityCtx(clock, 60_000);
 
-  // Second funding is recorded at t=30_000, so it finishes its wait at t=90_000.
   clock.advance(30_000);
   await store.transaction(async (unit) => {
     await unit.ledger.append({
@@ -325,7 +303,7 @@ async function allowsPayoutUpToTheMaturedPortion(): Promise<void> {
     });
   });
 
-  // At t=60_000 only the first lot (10.00) has cleared. A request for exactly that passes...
+  // At t=60_000 only the first lot has matured.
   clock.advance(30_000);
   const ok = await run(
     store,
@@ -345,11 +323,8 @@ async function faultsOn(amount: Amount, code: string): Promise<void> {
   );
 }
 
-// Builds a Ctx with an advanceable clock and a fixed payout interval, so a second request can be
-// placed inside or after the window. A payout opens a saga, the record of one in-progress payout
-// that a background worker later finishes. The clock is shared with the store via the same
-// `fixedClock`. The interval check reads the saga's `updatedAt` as the last-payout time, so that
-// time advances in step with `ctx.clock.now()`.
+// The clock must be the same instance the store uses: the interval check reads the saga's
+// `updatedAt`, which the store stamps with its clock.
 function intervalCtx(
   clock: ReturnType<typeof fixedClock>,
   intervalMs: number,
@@ -374,7 +349,6 @@ async function rejectsSecondPayoutInsideTheMinimumInterval(): Promise<void> {
   );
   assert.equal(first.status, 'committed');
 
-  // Advance less than the interval, so the second request must be turned down.
   clock.advance(59_999);
   const second = await run(
     store,
@@ -387,7 +361,6 @@ async function rejectsSecondPayoutInsideTheMinimumInterval(): Promise<void> {
   assert.equal(rejection.reason, 'PAYOUT_TOO_SOON');
   assert.equal(rejection.detail?.lastRequestedAt, 0);
   assert.equal(rejection.detail?.retryAfter, 60_000);
-  // The declined request set nothing aside: only the first payout's reserve is held.
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
     credit('10.00'),
@@ -428,8 +401,6 @@ async function firstPayoutPassesWhenAnIntervalIsConfigured(): Promise<void> {
   await fundEarned(store, 'usr_seller', credit('10.00'));
   const ctx = intervalCtx(clock, 60_000);
 
-  // lastPayoutAt is null for a user with no sagas, so the first request always passes regardless
-  // of the configured interval.
   const outcome = await run(
     store,
     ctx,

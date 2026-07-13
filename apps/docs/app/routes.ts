@@ -14,12 +14,9 @@ import { index, route } from '@react-router/dev/routes';
 import type { RouteConfig } from '@react-router/dev/routes';
 
 /**
- * The route table — the single source of truth for every URL the docs site answers to. Explicit
- * (not file-convention) so the prerenderer and sitemap read one list. Every page nests under
- * /economy/ (mirroring creators.vrchat.com), with / a thin landing. The more specific
- * reference/operations routes are listed before reference/:slug for readability; React Router ranks
- * by specificity regardless. Resource routes (.ts, loader-only) and the splat fallback stay at the
- * site root.
+ * The route table, explicit (not file-convention) so the prerenderer and sitemap read one list.
+ * Every page nests under /economy/, with / a thin landing. Listing order is readability only —
+ * React Router ranks by specificity regardless.
  */
 export default [
   index('routes/home.tsx'),

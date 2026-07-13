@@ -27,7 +27,6 @@ function rejectionText(code: string): string {
   return REJECTION_TEXT[code] ?? `Declined: ${humanReason(code)}.`;
 }
 
-// Human noun for each record type, for the success notice ("Recorded payout request.").
 const TYPE_LABEL: Record<string, string> = {
   deposit: 'deposit',
   promo: 'promo grant',

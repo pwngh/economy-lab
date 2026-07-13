@@ -18,7 +18,6 @@ import { runCacheConformance } from '#test/conformance/cache.ts';
 
 import type { Clock } from '#src/ports.ts';
 
-// Builds a clock the test advances by hand. Manual control makes TTL expiry deterministic.
 function manualClock(): Clock & { advance(ms: number): void } {
   let now = 0;
   return {

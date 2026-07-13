@@ -135,7 +135,6 @@ describe('edge-host bridge', () => {
         }),
       );
 
-    // Same event, different bytes: a retrying rail that re-serializes must still dedupe.
     await deliver(body);
     await deliver(`  ${body}`);
 

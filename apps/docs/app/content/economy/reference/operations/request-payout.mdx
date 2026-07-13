@@ -7,8 +7,8 @@ sourceRefs:
   [
     'src/operations/requestPayout.ts#L32 · requestPayout',
     "src/contract.ts#L110 · kind 'requestPayout'",
-    'src/operations/registry.ts#L46 · REGISTRY',
-    'src/ports.ts#L1018-L1024 · SAGA_STATES',
+    'src/operations/registry.ts#L62 · REGISTRY',
+    'src/ports.ts#L800-L806 · SAGA_STATES',
   ]
 related:
   [
@@ -67,11 +67,11 @@ The commit posts one balanced [double-entry](/economy/concepts/accounts-and-doub
 
 This moves the credits out of the seller's reach and into `PAYOUT_RESERVE`, which holds credits owed out as a payout. The USD side posts later, when the worker settles the saga. See [the payout saga](/economy/concepts/payout-saga/).
 
-The same transaction opens a `Saga` in state `RESERVED` (see <SourceLink to="src/ports.ts#L1018-L1024 · SAGA_STATES" />). The saga also records the [`payout`](/economy/concepts/money-model/) rate that converts `CREDIT` to USD at request time. The worker later pays at that locked rate.
+The same transaction opens a `Saga` in state `RESERVED` (see <SourceLink to="src/ports.ts#L800-L806 · SAGA_STATES" />). The saga also records the [`payout`](/economy/concepts/money-model/) rate that converts `CREDIT` to USD at request time. The worker later pays at that locked rate.
 
 ## Authorization
 
-`requestPayout` is not a privileged operation, so an end `user` can run it, but only for their own account. The ownership check requires the caller to own the `earned` account being debited; a `user` requesting another seller's payout is refused with `AUTH.UNAUTHORIZED` (see <SourceLink to="src/economy.ts#L483 · debitedUserAccounts" />).
+`requestPayout` is not a privileged operation, so an end `user` can run it, but only for their own account. The ownership check requires the caller to own the `earned` account being debited; a `user` requesting another seller's payout is refused with `AUTH.UNAUTHORIZED` (see <SourceLink to="src/economy.ts#L472 · debitedUserAccounts" />).
 
 A `system` service or a human `operator` may also request a payout on a seller's behalf. See [actors and authorization](/economy/concepts/actors-and-authorization/) for the full rule.
 
@@ -96,7 +96,7 @@ Each check below returns a `rejected` [`Outcome`](/economy/reference/outcomes-an
 
 The payee check only exists when the host composes a payee directory in — the economy-edge bridge supplies one backed by the payout rail's hosted identity verification ([the packages](/economy/ports/packages/)). Without a directory, the gate is absent.
 
-The raw `earned` balance can pass `INSUFFICIENT_FUNDS` while part of it is still inside its chargeback window, so a second, stricter check asks whether the [matured](/economy/concepts/credit-maturity/) part alone covers `amount` (see <SourceLink to="src/operations/requestPayout.ts#L75-L91">source</SourceLink>).
+The raw `earned` balance can pass `INSUFFICIENT_FUNDS` while part of it is still inside its chargeback window, so a second, stricter check asks whether the [matured](/economy/concepts/credit-maturity/) part alone covers `amount` (see <SourceLink to="src/operations/requestPayout.ts#L73-L87">source</SourceLink>).
 
 <Callout type="warning">
   `requestPayout` only counts *matured* earnings. A seller can have plenty of
@@ -109,7 +109,7 @@ A malformed request throws instead:
 | Code                   | When                                                                                                                        |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `OP.MALFORMED`         | The `amount` isn't `CREDIT`.                                                                                                |
-| `MONEY.INVALID_AMOUNT` | The `amount` is zero or negative (see <SourceLink to="src/operations/requestPayout.ts#L162 · payableCredit" />).             |
+| `MONEY.INVALID_AMOUNT` | The `amount` is zero or negative (see <SourceLink to="src/operations/requestPayout.ts#L153 · payableCredit" />).             |
 
 Both are programming errors.
 

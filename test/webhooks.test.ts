@@ -57,8 +57,7 @@ import type { WebhookHandler } from '#src/server.ts';
 import type { WorkerCtx } from '#src/contract.ts';
 import type { Clock, Ids, Saga, Store } from '#src/ports.ts';
 
-// Signs raw bytes with HMAC-SHA256 under `secret`. Returns the lowercase hex digest the server
-// expects in `x-signature`. Uses Web Crypto so the test runs unchanged on every runtime.
+// Lowercase hex HMAC-SHA256 over the body — the digest the server expects in `x-signature`.
 async function signHex(body: string, secret: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',
@@ -75,8 +74,6 @@ async function signHex(body: string, secret: string): Promise<string> {
   return toHex(new Uint8Array(signature));
 }
 
-// Builds a POST to a webhook endpoint, letting a test send a correctly-signed, forged, or stale
-// callback.
 function webhookRequest(
   provider: string,
   body: string,
@@ -89,8 +86,6 @@ function webhookRequest(
   });
 }
 
-// Builds the wire body a provider POSTs. The money field is a decimal string, encoded with the same
-// codec the server decodes.
 function purchaseBody(o: {
   eventId: string;
   userId: string;
@@ -116,15 +111,11 @@ const SAMPLE: WebhookEvent = {
   sku: 'sku_pack',
 };
 
-// Builds the id generator and clock the webhook handler uses to mint each inbox row. Fresh per test
-// so row ids and `receivedAt` are deterministic.
 function webhookCtx(): { ids: Ids; clock: Clock } {
   return { ids: sequentialIds(), clock: fixedClock(0) };
 }
 
-// Builds a worker context from deterministic fakes, with the clock reading `now`. One helper covers
-// two callers: drainInbox reads only logger, meter, and config, so it drains at `now: 0`; the submit
-// sweep needs the clock past the request-time PENDING SLA to find a RESERVED payout due.
+// The submit sweep needs the clock past the request-time PENDING SLA to find a RESERVED payout due.
 function workerCtxAt(now: number): WorkerCtx {
   return {
     clock: fixedClock(now),
@@ -139,8 +130,6 @@ function workerCtxAt(now: number): WorkerCtx {
   };
 }
 
-// Runs one inbox-apply sweep, the same path the background worker drives: claim every pending row
-// and submit its stored Operation through the economy.
 function drainOnce(
   store: Store,
   economy: Economy,
@@ -161,8 +150,6 @@ describe('Webhooks toTopUp / Idempotency', () => {
   test('copies eventId / sku / provider as origin info onto the posting metadata', () => {
     const op = toTopUp(SAMPLE) as unknown as { meta?: Record<string, unknown> };
 
-    // Origin details ride on the operation so the topUp handler stamps them onto the posting's meta,
-    // giving each created-credits entry a back-pointer to the provider callback that caused it.
     assert.deepEqual(op.meta, {
       eventId: 'evt_provider_1',
       provider: 'billing',
@@ -234,16 +221,13 @@ describe('Webhooks handlePurchaseWebhook (Persist To Inbox, Apply Later)', () =>
   test('a redelivery of the same eventId enqueues nothing new and applies at most once', async () => {
     const store = memoryStore();
     const economy = makeEconomy(1, store);
-    // One id generator across both deliveries, as a single serving process has. A real `Ids` mints a
-    // globally-unique id each call, so the second delivery's freshly-minted id differs from the row
-    // already stored under the key. That difference is how the handler tells a duplicate apart.
+    // Share one id generator across both deliveries: the handler spots the duplicate because the
+    // freshly minted id differs from the row already stored under the key.
     const ctx = webhookCtx();
 
     const first = await handlePurchaseWebhook(store, ctx, SAMPLE);
     assert.equal(first.status, 'accepted');
 
-    // Same eventId again. The inbox dedupes on it (the row `key`), so no second row is inserted and
-    // the existing one is returned as a duplicate.
     const second = await handlePurchaseWebhook(store, ctx, SAMPLE);
     assert.equal(second.status, 'duplicate');
     assert.equal(second.entry.id, first.entry.id);
@@ -263,8 +247,6 @@ describe('Webhooks handlePurchaseWebhook (Persist To Inbox, Apply Later)', () =>
     const ack = await handlePurchaseWebhook(store, webhookCtx(), SAMPLE);
     await drainOnce(store, economy);
 
-    // The row is 'applied' and no longer claimed, so a second sweep applies nothing and the balance
-    // stays put.
     const second = await drainOnce(store, economy);
     assert.deepEqual(second.applied, []);
     assert.deepEqual(second.failed, []);
@@ -276,10 +258,7 @@ describe('Webhooks handlePurchaseWebhook (Persist To Inbox, Apply Later)', () =>
   });
 });
 
-// Builds a real HTTP server over one shared store. Four collaborators then read and write the same
-// ledger: the replay store, which records each eventId on first sight so a redelivery is skipped;
-// the inbox the handler persists into; the economy the apply sweep posts through; and the balance
-// the assertions check.
+// One shared store wires the replay dedup, the inbox, and the economy the assertions read.
 function gatedServer(secret: string): {
   server: (request: Request) => Promise<Response>;
   store: Store;
@@ -293,8 +272,6 @@ function gatedServer(secret: string): {
   const ids = sequentialIds();
   const webhook: WebhookHandler = async (provider, request) => {
     const event = decodeWebhookEvent(provider, await request.json());
-    // The handler persists the verified callback to the inbox and returns immediately. The apply
-    // sweep (`drainInbox`) settles it. The status is 'accepted' on first sight, or 'duplicate'.
     const ack = await handlePurchaseWebhook(store, { ids, clock }, event);
     return new Response(JSON.stringify({ status: ack.status }), {
       status: 200,
@@ -330,8 +307,6 @@ describe('createServer /webhooks Replay Dedup', () => {
       'accepted',
     );
 
-    // The replay store has already claimed the eventId. The redelivery gets a 200 duplicate and the
-    // handler never runs, so no second inbox row is enqueued.
     const second = await server(webhookRequest('billing', body, headers));
     assert.equal(second.status, 200);
     assert.equal(
@@ -339,7 +314,6 @@ describe('createServer /webhooks Replay Dedup', () => {
       'duplicate',
     );
 
-    // The apply sweep settles the one enqueued row, crediting the buyer exactly once.
     await drainOnce(store, economy);
     assert.equal(
       encodeAmount(await economy.read.balance(spendable('usr_buyer'))),
@@ -358,9 +332,8 @@ describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin I
       amount: '10.00',
     });
 
-    // Forged delivery, signed with the wrong secret. The signature check runs before the replay
-    // store records the eventId. A rejected forgery therefore never records the id and cannot block a
-    // later genuine delivery of the same id.
+    // The signature check runs before the replay store records the eventId, so a rejected forgery
+    // cannot consume the id.
     const forged = await signHex(body, 'wrong-secret');
     const rejected = await server(
       webhookRequest('billing', body, {
@@ -374,8 +347,6 @@ describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin I
       'CREDIT:0.00',
     );
 
-    // The genuine delivery of that same eventId is recorded for the first time and enqueued. This
-    // proves the earlier forgery did not use up the id. Draining the inbox then credits the buyer.
     const valid = await signHex(body, secret);
     const ok = await server(
       webhookRequest('billing', body, {
@@ -410,7 +381,6 @@ describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin I
       }),
     );
     assert.equal(response.status, 200);
-    // Persisted, not posted: the credit posts only after the apply sweep runs.
     await drainOnce(store, economy);
     assert.equal(
       encodeAmount(await economy.read.balance(spendable('usr_buyer'))),
@@ -434,8 +404,7 @@ describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin I
   });
 });
 
-// Reads back the one open saga for a user. The test can then name it in the settlement webhook
-// without depending on the economy's id sequence.
+// Finds the user's one saga, so a test can name it without depending on the id sequence.
 async function onlySagaFor(store: Store, userId: string): Promise<Saga> {
   for await (const saga of store.sagas.list()) {
     if (saga.userId === userId) {
@@ -445,10 +414,8 @@ async function onlySagaFor(store: Store, userId: string): Promise<Saga> {
   throw new Error(`no saga for ${userId}`);
 }
 
-// Builds a verified payout-settled provider callback for `sagaId`. This is the shape the server edge
-// hands to handleWebhook after it has checked the signature and freshness. `providerAmount` is
-// recorded for the audit trail only. The posted figures are the rate-derived ones settlePayout
-// computes.
+// The shape the server edge hands to handleWebhook after verifying signature and freshness.
+// `providerAmount` is audit-trail only; settlePayout posts its own rate-derived figures.
 function payoutSettledEvent(o: {
   eventId: string;
   sagaId: string;
@@ -463,8 +430,6 @@ function payoutSettledEvent(o: {
   };
 }
 
-// Drives a payout from RESERVED to SUBMITTED through the real submit sweep and returns the now-
-// SUBMITTED saga. The sweep clock is past the request-time PENDING SLA so the saga is due.
 async function submitPayout(store: Store, userId: string): Promise<Saga> {
   const reserved = await onlySagaFor(store, userId);
   assert.equal(reserved.state, 'RESERVED');
@@ -478,11 +443,8 @@ async function submitPayout(store: Store, userId: string): Promise<Saga> {
   return submitted;
 }
 
-// Drives a real, backed book up to a SUBMITTED payout. A buyer tops up and spends on a listing, so
-// the seller accrues real earned credit. The buyer's custodial credit drops, which lowers the
-// backing requirement. The seller then requests a payout of their whole earned balance, and the
-// worker sweep submits it. Returns the SUBMITTED saga and the reserved amount so the caller can
-// settle or fail it. Shared by the settled and failed webhook suites below.
+// Drives a real, backed book up to a SUBMITTED payout; returns the saga and the reserved amount so
+// the caller can settle or fail it.
 async function bookToSubmitted(
   store: Store,
   economy: Economy,
@@ -495,7 +457,6 @@ async function bookToSubmitted(
       source: 'card',
     }),
   );
-  // Buyer buys a listing; the whole net (after the platform fee) goes to the seller's earned.
   await economy.submit(
     buildSpend({
       buyerId: 'usr_buyer',
@@ -513,17 +474,12 @@ async function bookToSubmitted(
   );
   assert.equal(reserved.status, 'committed');
 
-  // The worker sweep submits the reserved payout to the provider (RESERVED -> SUBMITTED). It does
-  // not settle.
   const saga = await submitPayout(store, seller);
   return { saga, reserve };
 }
 
-// Covers the full webhook-driven settlement path, which replaces the old "worker submits then the
-// next sweep settles" flow. The worker sweep now only submits a RESERVED payout. The provider's
-// "payout settled" callback drives the SUBMITTED -> SETTLED step: the verified event is mapped to a
-// settlePayout operation and persisted to the inbox, and drainInbox submits it through the economy.
-// The settle outcomes asserted here are the ones the old worker-settle test asserted, unweakened.
+// The worker sweep only submits; the provider's payout-settled callback drives SUBMITTED -> SETTLED.
+// The settle outcomes asserted here match the old worker-settle test, unweakened.
 describe('Webhooks payout settled (worker submits, the settlement webhook settles)', () => {
   test('a verified payout-settled webhook settles the matching submitted saga', async () => {
     const store = memoryStore({
@@ -534,8 +490,6 @@ describe('Webhooks payout settled (worker submits, the settlement webhook settle
     const seller = 'usr_seller';
 
     const { saga, reserve } = await bookToSubmitted(store, economy, seller);
-    // After submit, the reserve is still escrowed and REVENUE holds only the platform's sale fee. No
-    // settle has run.
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
       reserve,
@@ -544,8 +498,6 @@ describe('Webhooks payout settled (worker submits, the settlement webhook settle
     const trustBefore = await store.ledger.balance(SYSTEM.TRUST_CASH);
     const clearingBefore = await store.ledger.balance(SYSTEM.USD_CLEARING);
 
-    // The provider reports the disbursement settled. The verified callback is mapped to a
-    // settlePayout operation and persisted to the inbox. Nothing has settled yet.
     const ack = await handleWebhook(
       store,
       webhookCtx(),
@@ -557,14 +509,10 @@ describe('Webhooks payout settled (worker submits, the settlement webhook settle
       'SUBMITTED',
     );
 
-    // drainInbox submits the stored settlePayout through the economy: the SUBMITTED -> SETTLED step.
     const drain = await drainOnce(store, economy);
     assert.deepEqual(drain.applied, [ack.entry.id]);
     assert.deepEqual(drain.failed, []);
 
-    // Outcome, carried over from the old worker-settle test and unweakened. The saga is SETTLED. The
-    // reserve cleared to REVENUE, so REVENUE rose by exactly the reserve. An equal sum of USD left
-    // TRUST_CASH through USD_CLEARING, the reserve converted at the $0.005 payout rate.
     assert.equal(
       await onlySagaFor(store, seller).then((s) => s.state),
       'SETTLED',
@@ -588,8 +536,6 @@ describe('Webhooks payout settled (worker submits, the settlement webhook settle
       toAmount('USD', trustBefore.minor - usdMoved.minor),
     );
 
-    // The books still hold every rule after the webhook-driven settle. Each currency is conserved,
-    // and the book is still backed: TRUST_CASH covers the buyer's remaining spendable credits.
     const report = await economy.read.prove();
     assert.equal(report.conserved, true);
     assert.equal(report.backed, true);
@@ -602,8 +548,6 @@ describe('Webhooks payout settled (worker submits, the settlement webhook settle
     });
     const economy = makeEconomy(1, store);
     const seller = 'usr_seller';
-    // One id generator across both deliveries, as a single serving process has. A redelivery then
-    // mints a fresh id that differs from the row already stored under the event key.
     const webhook = webhookCtx();
 
     const { saga } = await bookToSubmitted(store, economy, seller);
@@ -612,7 +556,6 @@ describe('Webhooks payout settled (worker submits, the settlement webhook settle
       sagaId: saga.id,
     });
 
-    // First delivery: enqueued and applied. The saga settles and the reserve clears to REVENUE.
     const first = await handleWebhook(store, webhook, event);
     assert.equal(first.status, 'accepted');
     const firstDrain = await drainOnce(store, economy);
@@ -624,16 +567,12 @@ describe('Webhooks payout settled (worker submits, the settlement webhook settle
     const revenueOnce = await store.ledger.balance(SYSTEM.REVENUE);
     const trustOnce = await store.ledger.balance(SYSTEM.TRUST_CASH);
 
-    // Same eventId again. The inbox dedupes on it (the row key), so no second row is inserted and the
-    // existing, already-applied row is returned as a duplicate. Draining claims nothing new.
     const second = await handleWebhook(store, webhook, event);
     assert.equal(second.status, 'duplicate');
     assert.equal(second.entry.id, first.entry.id);
     const secondDrain = await drainOnce(store, economy);
     assert.deepEqual(secondDrain.applied, []);
 
-    // The settle happened exactly once. REVENUE and TRUST_CASH are unchanged from the single settle.
-    // The reserve is still empty, not driven negative by a second settle, and the saga stays SETTLED.
     assert.deepEqual(await store.ledger.balance(SYSTEM.REVENUE), revenueOnce);
     assert.deepEqual(await store.ledger.balance(SYSTEM.TRUST_CASH), trustOnce);
     assert.deepEqual(
@@ -650,9 +589,6 @@ describe('Webhooks payout settled (worker submits, the settlement webhook settle
   });
 });
 
-// Builds a verified payout-failed provider callback for `sagaId`: the rail reports it will not
-// disburse this payout. This is the shape the server edge hands to handleWebhook after checking
-// the signature and freshness.
 function payoutFailedEvent(o: {
   eventId: string;
   sagaId: string;
@@ -669,9 +605,8 @@ function payoutFailedEvent(o: {
   };
 }
 
-// Covers the prompt failure path: the rail's "payout failed" callback maps to a reversePayout
-// carrying providerReported, so the seller's reserve returns as soon as the rail gives up — while
-// the saga is still live inside maxPayoutAgeMs, where a manual reverse would be refused.
+// The payout-failed callback maps to a reversePayout carrying providerReported, which waives the
+// maxPayoutAgeMs gate a manual reverse would hit.
 describe('Webhooks payout failed (the failure webhook promptly returns the reserve)', () => {
   test('a verified payout-failed webhook reverses a live submitted saga', async () => {
     const store = memoryStore({
@@ -685,8 +620,6 @@ describe('Webhooks payout failed (the failure webhook promptly returns the reser
     const earnedBefore = await store.ledger.balance(earned(seller));
     const trustBefore = await store.ledger.balance(SYSTEM.TRUST_CASH);
 
-    // The rail reports the disbursement failed. The verified callback maps to a reversePayout and
-    // is persisted to the inbox; nothing has reversed yet.
     const ack = await handleWebhook(
       store,
       webhookCtx(),
@@ -702,14 +635,10 @@ describe('Webhooks payout failed (the failure webhook promptly returns the reser
       'SUBMITTED',
     );
 
-    // drainInbox submits the stored reversePayout through the economy. The saga is still live
-    // (well inside maxPayoutAgeMs), which providerReported waives on the rail's own evidence.
     const drain = await drainOnce(store, economy);
     assert.deepEqual(drain.applied, [ack.entry.id]);
     assert.deepEqual(drain.failed, []);
 
-    // The saga is FAILED and the whole reserve is back in the seller's earned account. No USD
-    // moved, because the provider never disbursed.
     assert.equal(
       await onlySagaFor(store, seller).then((s) => s.state),
       'FAILED',
@@ -727,7 +656,6 @@ describe('Webhooks payout failed (the failure webhook promptly returns the reser
       trustBefore,
     );
 
-    // The books still hold every rule after the prompt reversal.
     const report = await economy.read.prove();
     assert.equal(report.conserved, true);
     assert.equal(report.backed, true);
@@ -753,8 +681,6 @@ describe('Webhooks payout failed (the failure webhook promptly returns the reser
     await drainOnce(store, economy);
     const earnedOnce = await store.ledger.balance(earned(seller));
 
-    // Same eventId again: the inbox dedupes on it, so no second row is inserted and draining
-    // claims nothing new. The reserve was returned exactly once.
     const second = await handleWebhook(store, webhook, event);
     assert.equal(second.status, 'duplicate');
     assert.equal(second.entry.id, first.entry.id);

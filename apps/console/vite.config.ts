@@ -14,37 +14,27 @@ import { fileURLToPath } from 'node:url';
 import { reactRouter } from '@react-router/dev/vite';
 import { defineConfig } from 'vite';
 
-// Repo root, two levels up. The engine is imported via the repo-wide `#*` alias (root
-// package.json imports), but `#`-imports are scoped to the nearest package.json — here
-// apps/console's, not the root — so Vite wouldn't see the root mapping. Re-map `#<path>` ->
-// `<repoRoot>/<path>` below so it resolves to the same engine file.
+// Repo root, two levels up. The `#`-scoped aliases (root package.json "imports": `#src/*`,
+// `#test/*`, `#scripts/*`) are scoped to the nearest package.json — apps/console's, not the root —
+// so Vite (below) and this app's tsconfig "paths" must each re-map `#<path>` -> `<repoRoot>/<path>`.
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 // This app's source root. The `~/*` -> `./app/*` alias is in tsconfig "paths" (type-checker only);
 // Vite needs its own resolver entry below, or `~/x` imports fail at build/SSR time.
 const appDir = fileURLToPath(new URL('./app/', import.meta.url));
 
-// The engine at ../../src uses explicit `.ts` specifiers (the no-build convention, so Node's
-// --experimental-strip-types runs it directly). Two things are needed for SSR:
-//  1. ssr.noExternal — run the engine source through Vite's transform instead of an external
-//     require, which Node can't do for a `.ts` file in a bundled context.
-//  2. server.fs.allow — the engine sits outside this app's root, so the dev file-serving
-//     allowlist must include the repo root.
-// The pg/mysql drivers are dynamically imported only when DATABASE_URL is set, so they stay
-// external and aren't bundled unless used.
+// The engine at ../../src is `.ts` source with explicit `.ts` specifiers (the repo's no-build
+// convention), so SSR must transform it rather than treat it as an external Node module.
 export default defineConfig({
   plugins: [reactRouter()],
   resolve: {
-    // `#src/...` -> repo root; `~/...` -> this app's app/ dir. Mirror the root imports map and the
-    // tsconfig paths alias so both resolve at build/SSR time.
     alias: [
       { find: /^#(.*)$/, replacement: `${repoRoot}$1` },
       { find: /^~\/(.*)$/, replacement: `${appDir}$1` },
     ],
   },
   ssr: {
-    // Compile the engine's `.ts` source through Vite rather than treating it as an external
-    // Node module. A regex keeps every file under the repo `src/` tree in the transform path.
+    // A regex keeps every file under the repo `src/` tree in the transform path.
     noExternal: [/economy-lab[\\/]src[\\/]/],
     // The optional DB/cache/queue drivers are dynamically imported by the engine's store selection
     // only when DATABASE_URL is set; keep them external so an unused driver is never bundled or

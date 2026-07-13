@@ -11,10 +11,9 @@
 
 /**
  * Platform-account sharding (`config.platformShards`, src/accounts.ts), proven at 4 shards
- * in-memory — every other suite runs at the default of 1, the unsharded ledger. The describe
- * blocks name what each covers; the two rules worth knowing up front: a shard behaves exactly
- * like its parent account, and PAYOUT_RESERVE routes by user id so a settle or reverse drains
- * the shard its request credited.
+ * in-memory — every other suite runs at the default of 1. Two rules up front: a shard behaves
+ * exactly like its parent account, and PAYOUT_RESERVE routes by user id so a settle or reverse
+ * drains the shard its request credited.
  */
 
 import { describe, test } from 'node:test';
@@ -78,9 +77,7 @@ const SHARDED_SET: AccountRef[] = [
   SYSTEM.PAYOUT_RESERVE,
 ];
 
-// A fresh economy at 4 platform shards, with the store exposed so a test can read shard balances,
-// chain heads, and sagas directly. Same fixtures as makeEconomy builds internally, so the store and
-// economy share one digest and clock.
+// The store is built here so store and economy share one digest and clock.
 function shardedEconomy(seed = 1): { economy: Economy; store: Store } {
   const store = memoryStore({
     digest: seededDigest(seed),
@@ -90,8 +87,7 @@ function shardedEconomy(seed = 1): { economy: Economy; store: Store } {
   return { economy, store };
 }
 
-// The logical balance of a sharded platform account: the sum over its shards, in minor units. A
-// single shard's balance is meaningless on its own; the account is this total.
+// A sharded account's balance is the sum over its shards; a single shard's is meaningless alone.
 async function logicalBalance(store: Store, base: AccountRef): Promise<bigint> {
   let total = 0n;
   for (const shard of shardsOf(base, SHARDS)) {
@@ -100,7 +96,6 @@ async function logicalBalance(store: Store, base: AccountRef): Promise<bigint> {
   return total;
 }
 
-// The committed transaction inside an outcome, with the cast the other suites use.
 function committedTxn(
   outcome: Outcome,
 ): Extract<Outcome, { status: 'committed' }>['transaction'] {
@@ -128,9 +123,7 @@ async function sagaFor(store: Store, userId: string): Promise<Saga> {
   throw new Error(`no saga for ${userId}`);
 }
 
-// Copies an operation with a pinned idempotency key. The builders mint run-unique keys, which is
-// right everywhere except the determinism test: at 4 shards the key routes the hot platform legs,
-// so reproducing a ledger byte for byte needs the same keys.
+// The key routes the hot platform legs, so byte-for-byte reproduction needs pinned keys.
 function withKey(operation: Operation, idempotencyKey: string): Operation {
   return { ...operation, idempotencyKey };
 }
@@ -165,7 +158,6 @@ describe('Sharding: Identity', () => {
         assert.equal(currency(shard), currency(base));
         assert.equal(classify(shard), classify(base));
         assert.equal(isDebitNormal(shard), isDebitNormal(base));
-        // baseOf round-trips: stripping the suffix recovers the parent.
         assert.equal(baseOf(shard), base);
       }
     }
@@ -186,21 +178,17 @@ describe('Sharding: Identity', () => {
     for (let i = 0; i < 300; i++) {
       const key = `key_${i}`;
       const first = platformShard(SYSTEM.REVENUE, key, SHARDS);
-      // Same key, same shard, every time.
       assert.equal(platformShard(SYSTEM.REVENUE, key, SHARDS), first);
       assert.equal(known.includes(first), true);
       routed.add(first);
     }
-    // A few hundred distinct keys must not all pile onto one shard.
     assert.equal(routed.size > 1, true);
   });
 
   test('a shard count of 1 and non-sharded accounts pass through unchanged', () => {
-    // The byte-identical default: at 1 shard the router is the identity function.
     assert.equal(platformShard(SYSTEM.REVENUE, 'any', 1), SYSTEM.REVENUE);
     const legs = [{ account: SYSTEM.REVENUE }];
     assert.equal(routePlatformLegs(legs, 'any', 1), legs);
-    // Accounts outside the sharded set, and user wallets, never route.
     assert.equal(
       platformShard(SYSTEM.RECEIVABLE, 'any', SHARDS),
       SYSTEM.RECEIVABLE,
@@ -216,7 +204,6 @@ describe('Sharding: Leg Routing', () => {
   test('a committed posting lands its hot platform legs on the key-routed shard', async () => {
     const { economy } = shardedEconomy();
 
-    // topUp routes by its idempotency key: the issuance's STORED_VALUE leg is on that shard.
     const up = topUp({ userId: 'usr_route', amount: credit('10.00') });
     const issuance = committedTxn(await economy.submit(up));
     const storedLeg = issuance.legs.find(
@@ -227,7 +214,6 @@ describe('Sharding: Leg Routing', () => {
       platformShard(SYSTEM.STORED_VALUE, up.idempotencyKey, SHARDS),
     );
 
-    // spend routes by its idempotency key too: the fee credit is on that REVENUE shard.
     const sale = spend({
       buyerId: 'usr_route',
       sku: 'wrld_pass',
@@ -293,7 +279,6 @@ describe('Sharding: Lifecycle', () => {
       await logicalBalance(store, SYSTEM.REVENUE),
       credit('8.00').minor,
     );
-    // Credits in circulation are the six 10.00 top-ups, summed over the STORED_VALUE shards.
     assert.equal(
       await logicalBalance(store, SYSTEM.STORED_VALUE),
       credit('60.00').minor,
@@ -304,7 +289,6 @@ describe('Sharding: Lifecycle', () => {
       credit('1.00').minor,
     );
 
-    // User balances are exact: each buyer paid 4.00 from 10.00, each seller earned the 2.00 net.
     for (let i = 0; i < 6; i++) {
       assert.deepEqual(
         await store.ledger.balance(spendable(`usr_b${i}`)),
@@ -360,8 +344,8 @@ describe('Sharding: Payout Round-Trip', () => {
     );
     assert.equal(advanced, true);
 
-    // The settle debits the reserve on the seller's shard. The reserve is overdraft-guarded per
-    // row, so a settle that looked at any other shard would fault instead of committing.
+    // The reserve is overdraft-guarded per row, so a settle on any other shard would fault instead
+    // of committing.
     const settled = await economy.submit(settlePayout({ sagaId: saga.id }));
     assert.equal(settled.status, 'committed');
     assert.equal((await store.sagas.load(saga.id))?.state, 'SETTLED');
@@ -395,7 +379,6 @@ describe('Sharding: Payout Round-Trip', () => {
     assert.equal(reversed.status, 'committed');
     assert.equal((await store.sagas.load(saga.id))?.state, 'FAILED');
 
-    // The full 70.00 the sale earned is back, and no reserve shard holds anything.
     assert.deepEqual(
       await store.ledger.balance(earned('usr_seller')),
       credit('70.00'),
@@ -424,14 +407,12 @@ describe('Sharding: Refund', () => {
       }),
     );
     assert.equal(sale.status, 'committed');
-    // The sale left its 2.00 fee on some REVENUE shard.
     assert.equal(
       await logicalBalance(store, SYSTEM.REVENUE),
       credit('2.00').minor,
     );
 
-    // The refund reverses the recorded sale legs, so the clawback hits the same shard the fee
-    // landed on and the logical total returns to zero.
+    // The refund reverses the recorded legs, so the clawback hits the same shard the fee landed on.
     const refunded = await economy.submit(
       refund({ orderId: 'ord_shard_refund' }),
     );
@@ -527,8 +508,7 @@ describe('Sharding: Fee Sweep', () => {
       credit('4.00').minor,
     );
 
-    // The worker bundle the sweep runs with, sharded like the economy. Ids are seeded far above the
-    // economy's own counter so the sweep's txn ids cannot collide with the workload's.
+    // Ids seeded far above the economy's counter so the sweep's txn ids cannot collide.
     const ctx: WorkerCtx = {
       clock: fixedClock(0),
       ids: sequentialIds(500),
@@ -544,7 +524,6 @@ describe('Sharding: Fee Sweep', () => {
 
     assert.equal(summary.skipped, false);
     assert.equal(summary.duplicate, false);
-    // The full 4.00 of matured revenue is realized, wherever its shards were.
     assert.equal(summary.swept, 'CREDIT:4.00');
     assert.equal(await logicalBalance(store, SYSTEM.REVENUE), 0n);
     // Custody cash dropped by the swept fees at the $0.005 par: $0.10 minus $0.02.

@@ -10,22 +10,18 @@
  */
 
 /**
- * Provides a DOM-interop shim for consumers that type-check under the DOM lib, such as a browser or
- * SSR app. The package ships this shim so each consumer does not hand-roll it.
+ * DOM-interop shim for consumers that type-check under the DOM lib; shipped so each consumer
+ * does not hand-roll it.
  *
- * The engine itself is WinterCG. It type-checks at the repo root with `lib: esnext` and its own
- * `src/wintercg.d.ts`, with no DOM. A consuming app under `lib: dom` hits a TS 5.7 friction.
- * `Uint8Array` became generic over its buffer (`Uint8Array<ArrayBufferLike>`), which DOM's
- * `BufferSource` rejects. As a result, the engine's `crypto.subtle.digest(bytes)`, `sign`, `verify`,
- * and `importKey` calls surface false type errors even though they build and run fine.
- * Declaration-merging these overloads onto the global `SubtleCrypto` clears the errors. It touches
- * neither `src/` nor the app's own types.
+ * TS 5.7 made `Uint8Array` generic over its buffer, which DOM's `BufferSource` rejects, so the
+ * engine's `crypto.subtle` digest/sign/verify/importKey calls surface false type errors under
+ * `lib: dom` even though they build and run fine. Declaration-merging these overloads onto the
+ * global `SubtleCrypto` clears them without touching `src/` or the app's own types.
  *
- * Reference this file from a DOM consumer rather than re-declaring it:
+ * Reference it from a DOM consumer:
  *   /// <reference path=".../dom-interop.d.ts" />
- * Once published, use `/// <reference types="@pwngh/economy-lab/dom-interop" />` instead. This file
- * must not be in the engine's own root tsconfig include. It names DOM-only types such as
- * `AlgorithmIdentifier` and `CryptoKey` that the no-DOM root build does not have.
+ * (once published: `/// <reference types="@pwngh/economy-lab/dom-interop" />`). Keep this file
+ * OUT of the engine's root tsconfig include: it names DOM-only types the no-DOM build lacks.
  */
 
 interface SubtleCrypto {

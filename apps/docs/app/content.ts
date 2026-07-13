@@ -108,7 +108,6 @@ export const docs: DocPage[] = Object.entries(modules)
   .filter((d) => DEV || !d.draft)
   .sort((a, b) => a.order - b.order || a.title.localeCompare(b.title));
 
-/** Find the page whose slug matches, or `undefined`. */
 export const docBySlug = (slug: string) => docs.find((d) => d.slug === slug);
 /** Every page in a top-level section ('concepts' | 'reference' | 'ports'), in sidebar order. */
 export const docsInSection = (section: string) => docs.filter((d) => d.section === section);

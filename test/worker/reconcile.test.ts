@@ -32,8 +32,6 @@ import type { ReconcileFeed } from '#src/worker/reconcile.ts';
 import type { ReconcileInputs } from '#src/reconcile.ts';
 import type { Range } from '#src/ports.ts';
 
-// Worker context from deterministic test fakes. reconcileDueWindows only reads `logger`
-// and `meter`, but we fill every field to match the real WorkerCtx type.
 function workerCtx(): WorkerCtx {
   return {
     clock: fixedClock(0),
@@ -48,9 +46,6 @@ function workerCtx(): WorkerCtx {
   };
 }
 
-// Builds a fake feed that looks up canned inputs by window start (`window.from`) and
-// returns empty processor and ledger lists when a window has none. Real hosts fetch both
-// sides from a vendor. Fixing the data up front lets each test control what one sweep sees.
 function feedOf(byWindow: Map<number, ReconcileInputs>): ReconcileFeed {
   return {
     pull: async (window) => {
@@ -63,8 +58,6 @@ function feedOf(byWindow: Map<number, ReconcileInputs>): ReconcileFeed {
   };
 }
 
-// Builds a fake feed that throws for every window, standing in for an unreachable feed.
-// The sweep should catch the error per window, record it under `failed`, and keep going.
 function throwingFeed(error: unknown): ReconcileFeed {
   return {
     pull: async () => {
@@ -75,8 +68,6 @@ function throwingFeed(error: unknown): ReconcileFeed {
 
 const WINDOW: Range = { from: 0, to: 1_000 };
 
-// One $5.00 payout, same amount on processor and ledger sides. Both agree, so
-// reconciliation finds no problem.
 const MATCHED: ReconcileInputs = {
   processor: [
     {
@@ -98,8 +89,6 @@ const MATCHED: ReconcileInputs = {
   ],
 };
 
-// Same payout on both sides, amounts off by one cent ($5.00 vs $4.99). Reconciliation
-// matches by key, then reports the amount mismatch.
 const DRIFTED: ReconcileInputs = {
   processor: [
     {
@@ -121,9 +110,7 @@ const DRIFTED: ReconcileInputs = {
   ],
 };
 
-// Processor-cleared money with no matching ledger entry, so the ledger side is empty. Real
-// money moved, but nothing on our books accounts for it. Reconciliation reports a
-// "processor orphan".
+// Real money moved with nothing on our books to match: a processor orphan.
 const PROCESSOR_ORPHAN: ReconcileInputs = {
   processor: [
     {

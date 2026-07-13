@@ -22,24 +22,14 @@ import { spendable, earned } from '#src/accounts.ts';
 
 import type { Economy } from '#src/contract.ts';
 
-// Drives the spend handler's two input guards through the full public economy.submit path. This
-// mirrors how entitlements.submit.test.ts exercises the authorization layer, whereas spend.test.ts
+// Drives the spend handler's input guards through the full `economy.submit` path; spend.test.ts
 // calls the handler directly. Both guards protect one invariant: a spend can never mint payable
 // earned credit out of nothing.
-//   1. Self-dealing. A buyer who names themselves as a recipient would turn their non-payable
-//      spendable or promo balance into payable earned credit funded by platform revenue.
-//   2. Per-recipient bounds. Shares like [-5000, 15000] sum to 10000 but assign one recipient a
-//      negative cut and another more than the whole net. Each share must be strictly positive and
-//      at most 10000 bps.
-// A malformed split throws a fault (OP.MALFORMED). The fault surfaces through submit as a rejected
-// promise rather than a returned business rejection.
 
 function isMalformed(error: unknown): boolean {
   return (error as { code?: string }).code === 'OP.MALFORMED';
 }
 
-// Seeds a buyer's spendable balance through the public economy and asserts the top-up committed, so
-// a following spend has real money to draw on.
 async function fund(economy: Economy, userId: string): Promise<void> {
   const outcome = await economy.submit(
     buildTopUp({ userId, amount: credit('10.00') }),
@@ -58,16 +48,12 @@ describe('Spend Input Guards Through economy.submit', () => {
           buyerId: 'usr_buyer',
           sku: 'wrld_pass',
           price: credit('4.00'),
-          // Naming the buyer as sole recipient would mint payable earned credit from their
-          // own non-payable balance.
           recipients: [{ sellerId: 'usr_buyer', shareBps: 10_000 }],
         }),
       ),
       isMalformed,
     );
 
-    // The guard throws before any posting. The spendable balance is untouched and no earned
-    // credit was created.
     assert.deepEqual(
       await economy.read.balance(spendable('usr_buyer')),
       credit('10.00'),
@@ -88,8 +74,6 @@ describe('Spend Input Guards Through economy.submit', () => {
           buyerId: 'usr_buyer',
           sku: 'wrld_pass',
           price: credit('4.00'),
-          // -5000 + 15000 == 10000, so the sum check passes. The per-recipient bounds check must
-          // still reject the negative share and the share above 100%.
           recipients: [
             { sellerId: 'usr_a', shareBps: -5_000 },
             { sellerId: 'usr_b', shareBps: 15_000 },
@@ -99,7 +83,6 @@ describe('Spend Input Guards Through economy.submit', () => {
       isMalformed,
     );
 
-    // Nothing was posted, so the buyer was not charged.
     assert.deepEqual(
       await economy.read.balance(spendable('usr_buyer')),
       credit('10.00'),
@@ -123,12 +106,10 @@ describe('Spend Input Guards Through economy.submit', () => {
     );
 
     assert.equal(outcome.status, 'committed');
-    // The buyer paid full price.
     assert.deepEqual(
       await economy.read.balance(spendable('usr_buyer')),
       credit('6.00'),
     );
-    // Both sellers accrued earned credit, so the valid split paid out.
     assert.equal(
       (await economy.read.balance(earned('usr_a'))).minor > 0n,
       true,

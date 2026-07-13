@@ -36,13 +36,10 @@ function makeStore(): Store {
   return memoryStore({ digest, clock });
 }
 
-// Builds a fresh store and Ctx for each test so state never leaks between tests.
 function fixture(): { store: Store; ctx: Ctx } {
   return { store: makeStore(), ctx: makeCtx() };
 }
 
-// Runs the handler inside a transaction that commits on success. Returns an Outcome, which is
-// either a committed transaction or a declined operation.
 async function applyGrantPromo(
   store: Store,
   ctx: Ctx,
@@ -51,7 +48,6 @@ async function applyGrantPromo(
   return store.transaction((unit) => grantPromo(operation, unit, ctx));
 }
 
-// Builds an assert.rejects matcher that passes only when the thrown error's `code` matches.
 function hasCode(code: string): (error: unknown) => boolean {
   return (error) =>
     error instanceof Error && (error as { code?: string }).code === code;
@@ -83,9 +79,8 @@ describe('grantPromo Issuance', () => {
       grantPromoOp({ userId: 'usr_buyer', amount: credit('5.00') }),
     );
 
-    // PROMO_FLOAT is the offsetting account for grants. It grows when debited, and the grant debits
-    // it 5.00. balance() reports magnitude in the account's own direction, so this reads +5.00,
-    // matching the user's credit.
+    // PROMO_FLOAT is debit-normal and balance() reads in the account's own direction, so the 5.00
+    // debit reads +5.00.
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.PROMO_FLOAT),
       credit('5.00'),
@@ -101,9 +96,6 @@ describe('grantPromo Issuance', () => {
       grantPromoOp({ userId: 'usr_buyer', amount: credit('5.00') }),
     );
 
-    // The grant posts one balanced entry: promo is credited 5.00 and PROMO_FLOAT is debited 5.00.
-    // Both read +5.00 (500 minor), so their difference is zero. That confirms the two halves are
-    // equal and opposite.
     const promoBalance = await store.ledger.balance(promo('usr_buyer'));
     const floatBalance = await store.ledger.balance(SYSTEM.PROMO_FLOAT);
     assert.equal(promoBalance.minor - floatBalance.minor, 0n);
@@ -141,8 +133,6 @@ describe('grantPromo Issuance', () => {
       }),
     );
 
-    // The grant posts exactly one statement entry. The next test verifies that its `expiresAt` is
-    // recorded for the expiry job, via promos.claimDue.
     assert.equal(outcome.status, 'committed');
     const statement = await store.ledger.statement(promo('usr_buyer'), {
       from: 0,
@@ -166,9 +156,6 @@ describe('grantPromo Recording For The Expiry Background Job', () => {
       }),
     );
 
-    // The grant is written to the promo store in the same unit of work as the posting, so a sweep at
-    // or after `expiresAt` can claim it. The stored grant reuses the posting id, carries the full
-    // amount and expiry, and starts unreversed.
     assert.equal(outcome.status, 'committed');
     const txnId =
       outcome.status === 'committed' ? outcome.transaction.id : 'unreachable';
@@ -194,8 +181,7 @@ describe('grantPromo Recording For The Expiry Background Job', () => {
       }),
     );
 
-    // claimDue returns only grants with `expiresAt <= now`. One millisecond before expiry the grant
-    // is not yet claimable.
+    // claimDue is inclusive: only grants with `expiresAt <= now`.
     assert.deepEqual(await store.promos.claimDue(172_799_999, 10), []);
   });
 });
@@ -254,8 +240,7 @@ describe('grantPromo Validation', () => {
   test('throws MALFORMED_OPERATION when expiresAt is in the past', async () => {
     const { store, ctx } = fixture();
 
-    // The clock reads now = 0, so any non-positive timestamp is at or before now. That is a
-    // dead-on-arrival expiry the sweep would reclaim immediately.
+    // The clock reads 0, so -1 is already in the past.
     await assert.rejects(
       applyGrantPromo(
         store,
@@ -327,8 +312,6 @@ describe('grantPromo Validation', () => {
   test('throws MALFORMED_OPERATION when expiresAt is absurdly far in the future', async () => {
     const { store, ctx } = fixture();
 
-    // This timestamp is beyond the sane ceiling, which sits years out. Refusing it stops an
-    // effectively non-expiring grant that the sweep would never reclaim.
     await assert.rejects(
       applyGrantPromo(
         store,

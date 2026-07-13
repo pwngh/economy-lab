@@ -5,9 +5,9 @@ order: 10
 status: stable
 sourceRefs:
   [
-    'src/ports.ts#L78-L86 · Signer',
+    'src/ports.ts#L72-L77 · Signer',
     'src/runtime.ts#L133-L165 · systemSigner',
-    'src/chain.ts#L243-L307 · recordCheckpoint / verifyCheckpoint',
+    'src/chain.ts#L288-L350 · recordCheckpoint / verifyCheckpoint',
   ]
 related:
   ['economy/ports/storage', 'economy/reference/http-service']
@@ -23,7 +23,7 @@ The `Signer` port is that seam. The core never holds a key or picks an algorithm
 
 ## The interface
 
-The port is two methods, both working on raw bytes (see <SourceLink to="src/ports.ts#L79-L85">source</SourceLink>):
+The port is two methods, both working on raw bytes (see <SourceLink to="src/ports.ts#L73-L76">source</SourceLink>):
 
 ```ts
 interface Signer {
@@ -84,11 +84,11 @@ Drop a key from `priorKeys` only once no checkpoint you still want to verify was
 
 The signer has exactly one caller in the core: the checkpoint. The per-account hash chain doesn't use it. Chain links are _hashed_, not signed, so the signer never touches a [posting](/economy/concepts/accounts-and-double-entry/) or an account head directly.
 
-Instead, [the background worker](/economy/reference/background-worker/) periodically seals a checkpoint. <SourceLink to="src/chain.ts#L304-L347">recordCheckpoint</SourceLink> collects every account's head hash and reduces them to a single Merkle root. It then signs _that one root_, so one signature covers every account at once.
+Instead, [the background worker](/economy/reference/background-worker/) periodically seals a checkpoint. <SourceLink to="src/chain.ts#L288-L331">recordCheckpoint</SourceLink> collects every account's head hash and reduces them to a single Merkle root. It then signs _that one root_, so one signature covers every account at once.
 
 The proof comes before the signature: `recordCheckpoint` first runs [the chain prover](/economy/concepts/the-proof/) over every account. If a chain fails to re-derive, it throws `CHAIN_BROKEN` and persists nothing.
 
-Verification runs the same machinery in reverse. <SourceLink to="src/chain.ts#L363-L398">verifyCheckpoint</SourceLink> recomputes the Merkle root over the current heads and compares it to the checkpoint's stored root. When those match, it calls `signer.verify` over that root. A mismatch (a changed root, a dropped account, or an inauthentic signature) returns `false`.
+Verification runs the same machinery in reverse. <SourceLink to="src/chain.ts#L347-L382">verifyCheckpoint</SourceLink> recomputes the Merkle root over the current heads and compares it to the checkpoint's stored root. When those match, it calls `signer.verify` over that root. A mismatch (a changed root, a dropped account, or an inauthentic signature) returns `false`.
 
 ## Out of scope
 

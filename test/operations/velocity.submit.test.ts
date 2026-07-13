@@ -26,31 +26,17 @@ import type { Store } from '#src/ports.ts';
 import type { Outcome } from '#src/contract.ts';
 import type { Amount } from '#src/money.ts';
 
-// Guards the velocity check: a fraud throttle that denies an operation once a user's recent money
-// movement in a rolling window exceeds a ceiling. The check runs inside economy.submit, so tests
-// call that entry point directly.
-//
-// Regression: requestPayout used to slip past the throttle. The old velocity rule in economy.ts
-// only recognized spend/topUp/grantPromo, so a payout was neither counted nor stopped. economy.ts
-// now calls the shared rule in trust.ts, which covers payout too.
-//
-// Setup: the window is one hour and the clock is frozen at 0, so every attempt lands in the same
-// window and the per-user total accumulates. Config overrides the ceiling to 1_000 minor units, which
-// is 10.00 CREDIT (CREDIT has 100 minor units to the whole). Two 6.00 attempts bracket that ceiling:
-// 6.00 fits under 10.00, but 6.00 + 6.00 = 12.00 crosses it, so the second is denied.
+// The velocity check — a rolling-window fraud throttle — runs inside `economy.submit`, so tests
+// drive that entry point. Pins that requestPayout counts toward the shared rule in trust.ts. The
+// clock is frozen at 0, so every attempt lands in the same window.
 
-// Builds a store wired with the same fixed-seed digest and frozen clock the economy uses. Sharing one
-// store lets the test seed balances by hand, then pass it to makeEconomy. Both sides then agree on
-// hashes and time.
+// The store and the economy share one seeded digest and fixed clock so their hashes agree.
 function sharedStore(): Store {
   return memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
 }
 
-// Gives a seller money to pay out from. Each user's "earned" account holds revenue the platform owes
-// them. To raise it, the credit is offset by a debit to the platform's REVENUE account, which is
-// allowed to run negative. Double-entry only accepts writes whose two sides cancel, so the seed moves
-// money between two accounts to mimic a real sale. Funding one payout lets the first attempt commit
-// and leaves the ceiling to stop the second.
+// Seeds earned against REVENUE; platform accounts may run negative, so the overdraft guard does
+// not trip.
 function seedEarned(
   store: Store,
   userId: string,
@@ -75,8 +61,8 @@ function reasonOf(outcome: Outcome): string | undefined {
 describe('Rolling Spend-Limit Throttling Through economy.submit', () => {
   test('requestPayout counts toward the rolling spend limit and is denied once it is exceeded', async () => {
     const store = sharedStore();
-    // Only the first payout needs to commit, so fund earned for one 6.00 payout. The second is
-    // stopped by the risk check before the handler's own funds check runs.
+    // Fund only the first payout: the risk check stops the second before the handler's funds
+    // check runs.
     await seedEarned(store, 'usr_seller', credit('6.00'));
     const economy = makeEconomy(1, store, { velocityLimitMinor: 1_000n });
 
@@ -99,8 +85,7 @@ describe('Rolling Spend-Limit Throttling Through economy.submit', () => {
     await seedEarned(store, 'usr_seller', credit('10.00'));
     const economy = makeEconomy(1, store, { velocityLimitMinor: 1_000n });
 
-    // In minor units: 0 + 1000 = 1000, not over the 1000 limit. The check denies only on strictly
-    // greater, so a total landing exactly on the ceiling still goes through.
+    // 0 + 1000 lands exactly on the ceiling; the check denies only on strictly greater.
     const outcome = await economy.submit(
       buildRequestPayout({ userId: 'usr_seller', amount: credit('10.00') }),
     );

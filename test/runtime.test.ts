@@ -78,10 +78,9 @@ describe('systemSigner (Ed25519)', () => {
     const root = new TextEncoder().encode('merkle-root-of-a-checkpoint');
     const sig = await signer.sign(root);
 
-    // Ed25519 signatures are 64 bytes (HMAC-SHA-256 tags were 32).
+    // Ed25519 signatures are 64 bytes.
     assert.equal(sig.length, 64);
 
-    // An external auditor holds just the published public key, never the signing secret.
     const publicKey = await crypto.subtle.importKey(
       'raw',
       fromHex(await signingPublicKeyHex(secret)),
@@ -93,7 +92,6 @@ describe('systemSigner (Ed25519)', () => {
       await crypto.subtle.verify({ name: 'Ed25519' }, publicKey, sig, root),
       true,
     );
-    // A tampered root no longer verifies under that public key.
     assert.equal(
       await crypto.subtle.verify(
         { name: 'Ed25519' },
@@ -109,12 +107,10 @@ describe('systemSigner (Ed25519)', () => {
     const root = new TextEncoder().encode('x');
     const sigA = await systemSigner({ signingKey: 'aa'.repeat(16) }).sign(root);
 
-    // A signer built from a different secret rejects A's signature.
     assert.equal(
       await systemSigner({ signingKey: 'bb'.repeat(16) }).verify(root, sigA),
       false,
     );
-    // The same secret derives the same key, so it verifies its own signature.
     assert.equal(
       await systemSigner({ signingKey: 'aa'.repeat(16) }).verify(root, sigA),
       true,

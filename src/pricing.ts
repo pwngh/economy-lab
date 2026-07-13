@@ -29,8 +29,8 @@ const BPS_TOTAL_BIG = 10_000n;
  * `config.platformFeeBps`).
  *
  * @example
- *   let policy = flatFee();
- *   let legs = policy({ price: toAmount('CREDIT', 1000n), feeBps: 3000,
+ *   const policy = flatFee();
+ *   const legs = policy({ price: toAmount('CREDIT', 1000n), feeBps: 3000,
  *     recipients: [{ sellerId: 'usr_seller', shareBps: 10000 }] });
  *   // Price 1000 with a 30% fee credits the seller 700 and revenue 300. Both are
  *   // credits, stored negative, so the lines sum to -1000, the full price.
@@ -67,10 +67,8 @@ function splitLegs(
     );
   }
 
-  // Revenue gets the fee plus the leftover from rounding each share down, so the shares and
-  // revenue always sum to the full price. `revenueForSplit` computes exactly that amount, and
-  // Sale.fee records the same call, so the posted REVENUE credit and the recorded fee can
-  // never disagree.
+  // Revenue gets the fee plus the leftover from rounding each share down, so shares and revenue
+  // always sum to the full price; `revenueForSplit` computes exactly that amount.
   legs.push(
     credit(
       SYSTEM.REVENUE,

@@ -126,8 +126,8 @@ export interface PayoutView {
   // provider that stays down climbs to the cap and the payout is abandoned.
   attempts: number;
   dueAt: number;
-  // Set at a terminal state, read back from the worker's ledger postings: failure reason (FAILED)
-  // or USD disbursed (SETTLED). Null while in flight.
+  // Set at a terminal state: failure reason (FAILED) or USD disbursed (SETTLED). Null while in
+  // flight.
   reason: string | null;
   payoutUsd: number | null;
 }
@@ -146,7 +146,6 @@ export interface SimSettings {
 // is 100 minor units, the same way one dollar is 100 cents.
 const SCALE = 100;
 
-// The human label shown for each kind of operation in the ledger feed.
 export const LABELS: Record<TxnKind, string> = {
   topUp: 'Deposit',
   spend: 'Purchase',
@@ -160,8 +159,7 @@ export const LABELS: Record<TxnKind, string> = {
   other: 'Ledger posting',
 };
 
-// Turn a raw failure code into a short human phrase. Unknown codes fall back to a tidied version
-// of the code itself.
+// Unknown codes fall back to a tidied version of the code itself.
 export function humanReason(code: string): string {
   const known: Record<string, string> = {
     [ERROR_CODES.PROVIDER_FAILURE]: 'provider failure',
@@ -198,9 +196,8 @@ const ACCOUNT_LABELS: Record<string, string> = {
   'platform:opening_equity': 'Opening equity (starting balance)',
 };
 
-// The platform's own ledger accounts shown on the Overview, in reading order; read live by
-// platformAccounts() below. (Receivable and opening-equity are omitted: they stay at zero in the
-// demo flow.)
+// The platform's own ledger accounts shown on the Overview, in reading order. Receivable and
+// opening-equity are omitted: they stay at zero in the demo flow.
 export const PLATFORM_ACCOUNTS: {
   key: string;
   account: AccountRef;

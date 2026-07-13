@@ -24,14 +24,6 @@ import type { Unit } from '#src/ports.ts';
  * The second records the USD paid, split into backing (held in TRUST_CASH) and the buy-vs-par spread
  * (recognized as REVENUE_USD).
  *
- * @example
- *   const outcome = await topUp(
- *     { kind: 'topUp', idempotencyKey: 'idem_0', actor: { kind: 'system', service: 'buy' },
- *       userId: 'usr_buyer', amount: toAmount('CREDIT', 1000n), source: 'card' },
- *     unit, ctx,
- *   );
- *   // outcome.status === 'committed'; spendable(usr_buyer) rose by 1000.
- *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/top-up/ Top-up} for
  *   the issuance and cash postings.
  */
@@ -54,10 +46,9 @@ export async function topUp(
   const backingUsd = convertCeil(amount, par, 'USD');
   const marginUsd = toAmount('USD', grossUsd.minor - backingUsd.minor);
 
-  // The issuance posts first, so the returned transaction is the one the buyer cares about: their
-  // credits going up. Its matching debit records against STORED_VALUE, the running count of credits
-  // in circulation. Both postings' platform legs route to a shard by the idempotency key, the same
-  // key the lock set routed by, so the rows locked are the rows posted.
+  // The issuance posts first, so the returned transaction is the buyer's credits going up. Both
+  // postings route platform legs by the idempotency key — the key the lock set routed by — so the
+  // rows locked are the rows posted.
   const issuance = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs: routePlatformLegs(
@@ -70,9 +61,7 @@ export async function topUp(
     ),
     meta: { kind: 'topUp', source: operation.source },
   });
-  // The cash posting credits the gross paid to USD_CLEARING and splits the debit into backing
-  // (TRUST_CASH) and the buy-vs-par spread (REVENUE_USD). The spread leg is added only when it is
-  // positive, so a purchase at exactly par has just two legs.
+  // The spread leg is added only when positive, so a purchase at exactly par has just two legs.
   const cashLegs = [debit(SYSTEM.TRUST_CASH, backingUsd)];
   if (marginUsd.minor > 0n) {
     cashLegs.push(debit(SYSTEM.REVENUE_USD, marginUsd));
@@ -91,8 +80,7 @@ export async function topUp(
   return { status: 'committed', transaction: issuance };
 }
 
-// Requires a non-blank funding source. The source selects the credits' maturity horizon
-// (`maturityHorizonMs`), so a blank or whitespace-only value is malformed input.
+// The source selects the credits' maturity horizon, so a blank value is malformed input.
 function requireSource(source: string): void {
   if (source.trim() === '') {
     throw fault(

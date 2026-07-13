@@ -10,22 +10,11 @@
  */
 
 /**
- * economy.server.ts — bridges the web UI and the economy-lab engine.
- *
- * The `.server` suffix keeps this module (and the db/crypto it imports) off the client: the engine
- * runs on the Node server. Loaders read through the facade below; actions call the mutating ones.
- *
- * Two things to know:
- *  - State lives in one long-lived server-side singleton, so a browser refresh keeps it. Reset
- *    rebuilds and re-seeds; clear rebuilds empty.
- *  - The store comes from DATABASE_URL: in-memory by default, Postgres/MySQL when set (same engine,
- *    real adapters, survives restarts). The db driver is imported only when that var is set.
+ * Bridges the web UI and the economy-lab engine. The `.server` suffix keeps this module (and the
+ * db/crypto it imports) off the client. State lives in one long-lived server-side singleton; the
+ * store comes from DATABASE_URL — in-memory by default, Postgres/MySQL when set.
  */
 
-// The economy and worker share one store: capabilitiesFromEnv() selects it once from env, then
-// createEconomy + createWorker(caps.store, workerCtxFrom(caps)) wire both halves over it. In a
-// single process, two separate compose()/composeWorker() calls would each select their own store,
-// leaving the worker blind to the economy's in-memory state.
 import {
   createEconomy,
   createWorker,
@@ -89,17 +78,14 @@ export type {
   SimSettings,
 } from '~/views.server';
 
-// A page request from a route loader. `offset` and `limit` are clamped inside the facade, so a
-// route can pass a raw `?page=` straight through without sanitizing it — the facade never reads or
-// renders more than `limit` rows regardless of what the URL asks for.
+// A page request from a route loader. The facade clamps `offset` and `limit`, so a route can pass
+// a raw `?page=` straight through without sanitizing it.
 export interface PageReq {
   offset: number;
   limit: number;
 }
 
-// One bounded page of a heavy list. `rows` holds at most `limit` items; `total` is the full count
-// behind the list (for the "N of M" caption and the pager), and `offset` echoes where this page
-// starts. The DOM only ever holds `rows.length` rows, so render cost is independent of `total`.
+// One bounded page of a heavy list: at most `limit` rows, plus the full `total` for the pager.
 export interface Page<T> {
   rows: T[];
   total: number;
@@ -107,13 +93,12 @@ export interface Page<T> {
   limit: number;
 }
 
-// The default and ceiling page sizes. The ceiling caps how much a single loader can ever pull into
-// memory or the DOM, even if a hand-edited `?size=` asks for more.
+// The ceiling bounds what a single loader can pull, even when a hand-edited URL asks for more.
 export const PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
 
-// Clamp a raw page request to a sane, bounded window. Negative or non-finite inputs collapse to the
-// first page at the default size; an oversized limit is capped at MAX_PAGE_SIZE.
+// Negative or non-finite inputs collapse to the first page at the default size; an oversized limit
+// caps at MAX_PAGE_SIZE.
 export function clampPage(req: Partial<PageReq> | undefined): PageReq {
   const limit = Math.min(
     MAX_PAGE_SIZE,
@@ -123,8 +108,7 @@ export function clampPage(req: Partial<PageReq> | undefined): PageReq {
   return { offset, limit };
 }
 
-// Per-state tallies for the payout board, so the kanban can show accurate column counts and a
-// bounded slice of cards without materializing every saga as a view object.
+// Per-state tallies for the board's column headers — the paged card list alone cannot count columns.
 export interface PayoutCounts {
   RESERVED: number;
   SUBMITTED: number;
@@ -145,19 +129,13 @@ export interface ConsoleEngine {
   requestPayout(input: { userId: string; credits: number }): Promise<Outcome>;
   grantPromo(input: { userId: string; credits: number }): Promise<Outcome>;
 
-  // Heavy lists are read one bounded page at a time. Each takes an optional page request and
-  // returns a Page whose `rows` never exceed the (clamped) limit, plus the full `total` for the
-  // pager — so a loader holds a fixed number of rows no matter how many users/postings/payouts
-  // exist.
+  // Heavy lists are read one bounded page at a time.
   wallets(page?: Partial<PageReq>): Promise<Page<WalletView>>;
-  // One user's wallet, read directly (three balance reads). Lets the accounts detail panel show a
-  // user who isn't on the current page, without scanning every wallet to find them. Null when the
-  // user holds no wallet account.
+  // One user's wallet, read directly, so the detail panel can show a user who isn't on the current
+  // page. Null when the user holds no wallet account.
   wallet(userId: string): Promise<WalletView | null>;
   ledger(page?: Partial<PageReq>): Promise<Page<TxnView>>;
   payouts(page?: Partial<PageReq>): Promise<Page<PayoutView>>;
-  // Per-state payout tallies for the board's column headers, counted in one streaming pass without
-  // materializing the sagas.
   payoutCounts(): Promise<PayoutCounts>;
   prove(): Promise<ProveView>;
   solvency(): Promise<SolvencyView>;
@@ -188,18 +166,15 @@ async function build(): Promise<ConsoleEngine> {
   let maxAttempts = 5;
   let idSeq = 0;
 
-  // Memoized solvency snapshot. solvency() sums a balance across every user and runs a full
-  // prove(), so it's the most expensive read — and _chrome.tsx calls it on *every* page
-  // navigation. It is computed at most once per short TTL and cleared whenever the economy
-  // mutates (any submit, worker run, time advance, reset/clear), so the figure stays exact while
-  // costing O(1) on the common navigation path.
+  // Memoized solvency snapshot: the most expensive read (every user's balances plus a full
+  // prove()), and the page frame asks for it on every navigation. Cached for a short TTL and
+  // cleared on every mutation, so the figure is never stale across a change the user made.
   let solvencyCache: { at: number; value: SolvencyView } | null = null;
   const SOLVENCY_TTL_MS = 5_000;
   function invalidateSolvency(): void {
     solvencyCache = null;
   }
 
-  // The engine's default SHA-256 hasher (Web Crypto), reused so the console hashes as the engine does.
   const digest: Digest = systemDigest();
 
   // Deterministic sequential ids (txn_1, pay_2, …) so the demo replays identically; the default
@@ -208,10 +183,8 @@ async function build(): Promise<ConsoleEngine> {
     next: (prefix) => `${prefix}_${++idSeq}`,
   };
 
-  // Stand-in for the payment provider (the demo calls it Tilia), with an outage switch. While
-  // faultMode is on, every submit throws a retryable failure (what the worker retries, then
-  // abandons at the cap, returning the reserve to the seller); off, it returns a fake providerRef.
-  // The switch is read live, so flipping it takes effect on the next worker run.
+  // Stand-in payment provider (Tilia) with an outage switch: while faultMode is on, every submit
+  // throws a retryable failure. The switch is read live, so a flip takes effect on the next run.
   const processor = {
     submitPayout: async (input: { key: string }) => {
       if (faultMode) {
@@ -223,10 +196,9 @@ async function build(): Promise<ConsoleEngine> {
     },
   };
 
-  // A dual-rate credit economy, not a 1:1 placeholder. buy is the acquisition rate a user pays per
-  // credit (~120 credits/USD, $0.00833); par is the ledger-backed redemption/settlement rate
-  // (~200/USD, $0.005); payout settles at par. The buy-vs-par gap is the platform spread that funds
-  // fees, processing, reserves, and margin.
+  // Dual-rate on purpose, not a 1:1 placeholder: buy is what a user pays per credit, par is the
+  // redemption/settlement rate, and payout settles at par. The buy-vs-par gap is the platform
+  // spread.
   const rates = configuredRates({
     buyRate: 8333n,
     buyScale: 6,
@@ -241,19 +213,14 @@ async function build(): Promise<ConsoleEngine> {
     signingKey: '00112233445566778899aabbccddeeff',
   });
 
-  // A logger that discards its output, so the demo's injected faults don't flood the dev terminal.
-  // Still the library's real logger type, not an empty stub.
+  // Discards output so the demo's injected faults don't flood the dev terminal.
   const logger = jsonlLogger({ out: () => {}, err: () => {} });
-  // A metrics sink that discards everything; the demo collects no metrics.
-  // A hand-rolled object satisfying the Meter interface, not a library factory (there is no metrics
-  // counterpart to jsonlLogger).
+  // Discard metrics sink, hand-rolled — there is no Meter counterpart to jsonlLogger.
   const meter = { count: () => {}, observe: () => {} };
 
-  // Build (or rebuild) the engine + worker over one env-selected store, so both read identical
-  // state. capabilitiesFromEnv() selects the store once and assembles the bundle from env plus the
-  // demo's injected clock/ids/digest/signer/processor/rates; createEconomy and createWorker then
-  // wire both halves over caps.store. workerCtxFrom(caps) shares the same config object, so
-  // setMaturityDays/setMaxAttempts can mutate it in place (below) without a rebuild.
+  // Build (or rebuild) the engine + worker over one env-selected store — two separate selections
+  // would leave the worker blind to the economy's in-memory state. workerCtxFrom(caps) shares the
+  // config object, which setMaturityDays/setMaxAttempts rely on (below).
   async function rebuild(): Promise<void> {
     idSeq = 0;
     clock.set(0);
@@ -268,9 +235,8 @@ async function build(): Promise<ConsoleEngine> {
     workerRef = createWorker(caps.store, workerCtx);
   }
 
-  // Distinct user ids that hold an account on the ledger, derived live from read.accounts() rather
-  // than tracked by hand. isWalletAccount/ownerOf are the lab's own definition of a user wallet
-  // (spendable/earned/promo) and its owner, so this never re-encodes the account-id shape.
+  // User ids derived live from read.accounts() via isWalletAccount/ownerOf, so the account-id
+  // shape is never re-encoded here.
   async function userIds(): Promise<string[]> {
     const ids = new Set<string>();
     for await (const account of economy.read.accounts()) {
@@ -281,8 +247,7 @@ async function build(): Promise<ConsoleEngine> {
     return [...ids];
   }
 
-  // Posting legs -> render-ready leg views: labelled, tagged debit/credit (debit is positive minor),
-  // signed for display. Used by viewFromPosting() when it builds a feed row from a stored posting.
+  // Posting legs -> render-ready leg views. Debit is the positive-minor side.
   function toLegViews(legs: ReadonlyArray<Leg>): LegView[] {
     return legs.map((leg: Leg): LegView => {
       const value = toCredits(leg.amount);
@@ -313,9 +278,8 @@ async function build(): Promise<ConsoleEngine> {
     return null;
   }
 
-  // Build a feed row from a stored posting (any kind — user operation or worker posting), read
-  // straight from the engine's posting log so the amounts/legs are the engine's own, plus a
-  // plain-English note for the postings whose legs don't explain themselves.
+  // Build a feed row from a stored posting — user operation or worker posting alike — plus a
+  // plain-English note where the legs don't explain themselves.
   async function viewFromPosting(id: string, p: Posting): Promise<TxnView> {
     const meta = p.meta as { kind?: string; sagaId?: string; reason?: string };
     const metaKind = String(meta.kind ?? '');
@@ -326,7 +290,6 @@ async function build(): Promise<ConsoleEngine> {
     const sagaId = meta.sagaId ? String(meta.sagaId) : undefined;
     const sagaUser = sagaId ? (await economy.read.saga(sagaId))?.userId : null;
     const user = sagaUser ?? userInLegs(p.legs) ?? 'user';
-    // Grouped, two-decimal amount to match how the feed's figures read in the table.
     const money = amount.toLocaleString('en-US', {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
@@ -346,11 +309,9 @@ async function build(): Promise<ConsoleEngine> {
       sagaId,
     };
 
-    // User operations, read back from their own posting (kind in meta) the same way worker postings
-    // are. The engine's posting log is the one source, so these render straight from legs + meta,
-    // like everything else — including a direct-to-DB posting (e.g. the bench's). Display niceties
-    // that aren't on the immutable posting (a listing name, friendly buyer/seller labels) are
-    // derived from what the legs imply: the user the operation concerns, and a generic listing line.
+    // User operations render from legs + meta the same way worker postings do. Display niceties
+    // not on the immutable posting (a listing name, buyer/seller labels) are derived from what the
+    // legs imply.
     if (metaKind === 'topUp') {
       return {
         ...base,
@@ -415,10 +376,9 @@ async function build(): Promise<ConsoleEngine> {
         note: `Payout to ${user} settled — the ${cr} reserve was released to platform revenue.`,
       };
     }
-    // USD companion of a settlement: the cash leg that pays the seller out of trust. Its own row in
-    // the feed (newest first, the engine's posting log isn't re-stitched into one row per event). The
-    // settled payout's "paid" caption on the board now comes from the saga's own payoutUsd field, so
-    // this branch only builds the feed row.
+    // USD companion of a settlement: the cash leg that pays the seller out of trust, rendered as
+    // its own feed row. The board's "paid" caption reads the saga's payoutUsd field, not this
+    // branch.
     if (metaKind === 'settlePayout.cash') {
       return {
         ...base,
@@ -475,8 +435,6 @@ async function build(): Promise<ConsoleEngine> {
     return outcome;
   }
 
-  // Run every background job once and return the per-job batch summary. runJobs() folds it into the
-  // one-line note the panel shows; the payout board instead reads each saga's own attempt count.
   async function runWorkerOnce(): Promise<{
     batch: Record<string, { ok: boolean; summary?: unknown }>;
   }> {
@@ -499,16 +457,12 @@ async function build(): Promise<ConsoleEngine> {
     };
   }
 
-  // Seed a demo economy that has already run a bit, so the first load shows the full lifecycle:
-  // user operations plus the worker's own postings (settlements with their cash legs, a fee sweep,
-  // a provider outage reversing a payout). Ends with settled/failed/in-flight payouts and the clock
-  // a couple of days in. Payout amounts are fractions of each seller's actual earned balance.
+  // Seed an economy that has already run a bit, so the first load shows the full lifecycle: user
+  // operations, worker postings, and settled/failed/in-flight payouts.
   async function seed(): Promise<void> {
-    // Day 0 — everyday operations. At par ($0.005/credit) the two deposits back $40 of real cash in
-    // trust, with the buy-vs-par spread booked as revenue; the purchases leave nova and pixel with
-    // earned credits to cash out.
-    await api.deposit({ userId: 'usr_alice', credits: 5000 }); // ~$41.67 at the buy rate
-    await api.deposit({ userId: 'usr_bjorn', credits: 3000 }); // ~$25.00 at the buy rate
+    // Everyday operations; the purchases leave nova and pixel with earned credits to cash out.
+    await api.deposit({ userId: 'usr_alice', credits: 5000 });
+    await api.deposit({ userId: 'usr_bjorn', credits: 3000 });
     await api.grantPromo({ userId: 'usr_alice', credits: 500 }); // alice spends hers below
     await api.grantPromo({ userId: 'usr_pixel', credits: 600 }); // a seller incentive, left unspent
     await api.purchase({
@@ -536,9 +490,8 @@ async function build(): Promise<ConsoleEngine> {
     const fraction = async (userId: string, f: number) =>
       Math.max(1, Math.floor((await earnedOf(userId)) * f));
 
-    // Two payouts that settle fully. Run the worker twice, a day apart: first run RESERVED →
-    // SUBMITTED, second SUBMITTED → SETTLED, posting the reserve→revenue and trust→bank legs and
-    // triggering the fee sweep.
+    // Two payouts that settle fully: the worker advances RESERVED → SUBMITTED on the first run and
+    // SUBMITTED → SETTLED a day later.
     await api.requestPayout({
       userId: 'usr_nova',
       credits: await fraction('usr_nova', 0.35),
@@ -613,11 +566,8 @@ async function build(): Promise<ConsoleEngine> {
         expiresAt: clock.now() + 30 * 24 * 60 * 60_000,
       } as Operation),
 
-    // One bounded page of user wallets, ordered by user id so paging is stable across requests.
-    // Ordering by id needs no balance reads (a sort by total would read every user's three
-    // balances just to order them): enumerate user ids, sort that list for a deterministic page
-    // window, then read the three balances only for the `limit` users on the page. Per-page DB
-    // work is O(limit), independent of the user count.
+    // Ordered by user id: paging stays stable, and sorting needs no balance reads — only the
+    // page's users get their three balances read.
     wallets: async (req) => {
       const { offset, limit } = clampPage(req);
       const ids = (await userIds()).sort();
@@ -638,9 +588,7 @@ async function build(): Promise<ConsoleEngine> {
       return { rows, total: ids.length, offset, limit };
     },
 
-    // One user's three balances, read directly. Returns null when the user has no wallet account at
-    // all (no balances posted), so the detail panel can fall back to "not found" rather than
-    // showing a phantom all-zero wallet.
+    // Null for an unknown user, so the detail panel never shows a phantom all-zero wallet.
     wallet: async (userId) => {
       const p = toCredits(await economy.read.balance(spendable(userId)));
       const e = toCredits(await economy.read.balance(earned(userId)));
@@ -653,12 +601,9 @@ async function build(): Promise<ConsoleEngine> {
       return { userId, purchased: p, earned: e, promotional: m, total };
     },
 
-    // One bounded page of the ledger feed, newest first, read straight from the engine's streaming
-    // posting log — the same way `payouts` pages the saga list. We build a view object only for the
-    // `limit` postings on the page (between `offset` and `offset+limit`); the rest of the pass just
-    // counts toward `total` for the pager, holding no extra objects. Reading from the posting log
-    // (not a side feed) is also why a direct-to-DB write — e.g. the bench's — shows up here: the
-    // side feed only ever saw writes made through this process.
+    // Newest first, streamed from the engine's posting log: views are built only for the page
+    // window, the rest of the pass just counts toward `total`. Reading the log (not a side feed)
+    // is why a direct-to-DB write — e.g. the bench's — shows up here.
     ledger: async (req) => {
       const { offset, limit } = clampPage(req);
       const rows: TxnView[] = [];
@@ -673,13 +618,9 @@ async function build(): Promise<ConsoleEngine> {
       return { rows, total, offset, limit };
     },
 
-    // One bounded page of the payout board, newest first, read straight from the engine's streaming
-    // saga list. We materialize a view object only for the `limit` sagas on the page (between
-    // `offset` and `offset+limit`); the rest of the pass just counts toward `total` for the pager,
-    // holding no extra objects — so a long board never builds more than one page of views in one
-    // streaming pass. Each terminal caption (failure reason / USD paid) is read straight off the
-    // saga record's own terminal-outcome fields — the engine persists them at the SETTLED/FAILED
-    // transition — so no posting-meta side-channel is needed.
+    // Newest first, streamed from the saga list; views are built only for the page window. The
+    // terminal captions (failure reason / USD paid) come from the saga's own terminal-outcome
+    // fields, not a posting-meta side channel.
     payouts: async (req) => {
       const { offset, limit } = clampPage(req);
       const rows: PayoutView[] = [];
@@ -697,8 +638,7 @@ async function build(): Promise<ConsoleEngine> {
           providerRef: saga.providerRef,
           attempts: saga.attempts,
           dueAt: saga.dueAt,
-          // The failure reason is a raw code on the saga; humanize it the way the feed does. USD is
-          // a USD Amount, rendered to dollars with toCredits (minor-units / scale).
+          // toCredits is minor-units / scale, so it renders the USD Amount to dollars too.
           reason: saga.reason === null ? null : humanReason(saga.reason),
           payoutUsd: saga.payoutUsd === null ? null : toCredits(saga.payoutUsd),
         });
@@ -706,10 +646,8 @@ async function build(): Promise<ConsoleEngine> {
       return { rows, total, offset, limit };
     },
 
-    // Per-state payout tallies, counted in a single streaming pass over the saga list. REQUESTED
-    // folds into RESERVED to match the board's columns (requestPayout opens directly in RESERVED).
-    // This streams every saga but holds only four integers, never an array of sagas, so the board
-    // shows accurate column counts without materializing the whole list.
+    // REQUESTED folds into RESERVED to match the board's columns (requestPayout opens directly in
+    // RESERVED).
     payoutCounts: async () => {
       const counts: PayoutCounts = {
         RESERVED: 0,
@@ -758,10 +696,6 @@ async function build(): Promise<ConsoleEngine> {
     },
 
     solvency: async () => {
-      // Serve a fresh-enough cached snapshot if we have one. This read sums a balance over every
-      // user and runs a full prove(), and the page frame asks for it on every navigation, so the
-      // cache keeps a quiet browse from re-scanning the ledger each click. Any mutation clears the
-      // cache (see invalidateSolvency), so the figure is never stale across a change the user made.
       const now = clock.now();
       if (solvencyCache && now - solvencyCache.at < SOLVENCY_TTL_MS) {
         return solvencyCache.value;
@@ -789,8 +723,8 @@ async function build(): Promise<ConsoleEngine> {
       return value;
     },
 
-    // Platform account balances, read live from the ledger and shown as magnitudes (the Overview
-    // reads as "how much sits in each account", not signed postings).
+    // Shown as magnitudes — the Overview reads "how much sits in each account", not signed
+    // balances.
     platformAccounts: async () => {
       const out: PlatformAccountView[] = [];
       for (const a of PLATFORM_ACCOUNTS) {
@@ -863,8 +797,7 @@ async function build(): Promise<ConsoleEngine> {
 
     runJobs: async () => {
       const { batch } = await runWorkerOnce();
-      // Worker postings (settlements, reversals, sweeps) move money, so the cached figure is stale;
-      // the new postings are read from the engine's log on the next ledger page, not captured here.
+      // Worker postings move money, so the cached solvency figure is stale.
       invalidateSolvency();
       const notes: string[] = [];
       for (const [name, result] of Object.entries(batch)) {

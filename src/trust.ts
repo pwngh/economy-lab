@@ -85,7 +85,6 @@ export function assessRisk(
   if (riskSubject(operation) === null) {
     return { allow: true };
   }
-  // Compute what the running total would become if this operation went through.
   const projected = velocity.spent.minor + attemptMinor(operation);
   if (projected > config.velocityLimitMinor) {
     return { allow: false, reason: 'RISK_DENIED' };
@@ -136,9 +135,7 @@ export function riskSubject(operation: Operation): string | null {
     operation.kind === 'topUp' ||
     operation.kind === 'grantPromo' ||
     operation.kind === 'requestPayout' ||
-    // subscribe moves the user's credit like a spend, so it must count against the same window.
-    // Without it, each subscribe could move up to the max price unchecked, and repeated
-    // subscribes would never add to the total.
+    // subscribe moves the user's credit like a spend, so it counts against the same window.
     operation.kind === 'subscribe'
   ) {
     return operation.userId;
@@ -154,7 +151,6 @@ export function attemptMinor(operation: Operation): bigint {
   if (operation.kind === 'spend') {
     return operation.price.minor;
   }
-  // subscribe charges its `price`, same as the spend case above.
   if (operation.kind === 'subscribe') {
     return operation.price.minor;
   }

@@ -10,13 +10,10 @@
  */
 
 /**
- * The edge dist-freshness guard. This repo consumes @pwngh/economy-edge's
- * compiled `dist/` through a file: link, so an edited edge source with a
- * forgotten `npm run build` would silently serve stale semantics — the same
- * drift class the money package kills with its channels test. This fails the
- * suite whenever any edge source file is newer than its newest build output.
- * It applies only to the sibling-checkout link (a published tarball ships no
- * `src/`); the absence case skips explicitly, never silently.
+ * This repo consumes @pwngh/economy-edge's compiled `dist/` through a file: link, so an edited
+ * edge source with a forgotten `npm run build` would silently serve stale semantics. Fails when
+ * any edge source file is newer than the newest build output; a published tarball ships no
+ * `src/`, so that case skips explicitly.
  */
 
 import { test } from 'node:test';
