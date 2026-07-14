@@ -130,8 +130,9 @@ export function Usd({ value }: { value: number }) {
   return <Amount pre="$" num={fmtAmount(value)} />;
 }
 
-// Name-first entity: "Alice" leads, the raw id trails as a small copyable chip. The name is
-// derived from the id (usr_alice → Alice) until the narrative seed cast lands.
+// Name-first entity: "Alice" leads, the raw id trails as a small copyable chip. The display name
+// is fabricated from the id (usr_alice → Alice) for the demo cast — the ledger holds no names, so
+// this is presentation only, never a fact read from data.
 export function entityName(id: string): string {
   const bare = id.replace(/^usr_/, '');
   return bare.charAt(0).toUpperCase() + bare.slice(1);
