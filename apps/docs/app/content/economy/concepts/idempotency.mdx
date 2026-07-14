@@ -5,7 +5,7 @@ plain: "“Idempotent” is a fancy word for “safe to repeat”: do it once or
 order: 55
 status: stable
 sourceRefs:
-  ['src/ports.ts#L375 · IdempotencyStore', 'src/economy.ts#L399 · runClaimed']
+  ['src/ports.ts#L375 · IdempotencyStore', 'src/economy.ts#L401 · runClaimed']
 related:
   [
     'economy/reference/the-economy',
@@ -13,6 +13,8 @@ related:
     'economy/concepts/payout-saga',
   ]
 ---
+
+import idempotencySrc from '../../../snippets/idempotency.ts?raw';
 
 Networks drop responses and processes crash mid-write. A caller that never hears back can't know whether its operation applied, so it retries; the platform has to make that safe: a retried operation takes effect at most once.
 
@@ -59,3 +61,11 @@ A caller can retry a rejected request under the _same_ key — a decline isn't p
 - Every [`submit`](/economy/reference/the-economy/) runs through this guard, so the property is universal: no operation can be applied twice.
 - The [`duplicate` outcome](/economy/reference/outcomes-and-reason-codes/) is the visible result of a replay: the same transaction, no new work.
 - Inbound [provider webhooks](/economy/ports/processor/) carry their own, separate dedup guard keyed on the webhook's event id, kept apart from this table so the two layers can't collide on a shared key.
+
+## Try it
+
+The guard is live on this page. The snippet below is a real file, type-checked against the engine and run here against the same build the [console](/console/) drives:
+
+<Runnable name="idempotency" code={idempotencySrc} />
+
+The committed posting is then waiting in the [console's ledger](/console/ledger?from=docs) — the console replays this page's operations on entry, so the drill opens on the very transaction the snippet created.

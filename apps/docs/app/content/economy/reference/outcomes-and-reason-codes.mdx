@@ -5,12 +5,14 @@ order: 20
 status: stable
 sourceRefs:
   [
-    'src/contract.ts#L234 · Outcome',
+    'src/contract.ts#L236 · Outcome',
     'src/errors.ts#L22 · RejectionCode',
     'src/errors.ts#L55 · ERROR_CODES',
   ]
 related: ['economy/reference/the-economy', 'economy/reference/configuration']
 ---
+
+import rejectionSrc from '../../../snippets/rejection.ts?raw';
 
 ## The shape of an answer
 
@@ -161,3 +163,9 @@ they never light up error dashboards or page an on-call engineer.
 `LEDGER.OVERDRAFT`, `CHAIN.BROKEN`, `LEDGER.COMMINGLING`, and others. Those are last-resort
 backstops deep in the posting and integrity paths; reaching one means an invariant was about to
 break.
+
+## Try it
+
+A refusal, produced live — the reason code verbatim plus the typed figures it carries:
+
+<Runnable name="rejection" code={rejectionSrc} />

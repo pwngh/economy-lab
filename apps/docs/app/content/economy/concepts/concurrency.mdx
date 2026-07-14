@@ -7,12 +7,14 @@ status: stable
 sourceRefs:
   [
     'src/ledger.ts#L73 · lockAll',
-    'src/economy.ts#L570 · lockAccounts',
+    'src/economy.ts#L572 · lockAccounts',
     'src/engines/postgres.ts#L192 · advanceChain',
     'db/postgresql-schema.sql#L90 · chain_links_account_prev_uq',
   ]
 related: ['economy/concepts/idempotency', 'economy/concepts/platform-sharding']
 ---
+
+import drainSrc from '../../../snippets/drain.ts?raw';
 
 When two operations touch the same account at the same time, they can interleave and corrupt a balance. They can also both extend that account's [hash chain](/economy/concepts/integrity/) from the same point, which forks it. economy-lab keeps concurrent writes correct with an application-side rule and a database constraint.
 
@@ -55,3 +57,11 @@ Per-account locking has a built-in ceiling: an account can only commit as fast a
 - [Integrity](/economy/concepts/integrity/) depends on it: the per-account chain stays linear only because the lock order and the unique index stop two writers from extending the same head.
 
 Writes that survive the lock ordering and the no-fork index are still re-derived after the fact: [the prover](/economy/concepts/the-proof/) walks every account's chain and recomputes each hash. And all of this is contention on a single node — concurrency at scale is [out of scope](/economy/scope-and-non-goals/).
+
+## Try it
+
+Six racing spends against a wallet that only covers two — the funds gate commits what the balance covers and refuses the rest:
+
+<Runnable name="drain" code={drainSrc} />
+
+The same burst, with its tally, runs on the [console's market page](/console/market?from=docs#race).

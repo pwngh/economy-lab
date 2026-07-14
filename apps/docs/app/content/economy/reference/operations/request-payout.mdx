@@ -18,6 +18,8 @@ related:
   ]
 ---
 
+import payoutSrc from '../../../../snippets/payout.ts?raw';
+
 `requestPayout` starts a seller's cash-out. It reserves some of their earned credits and opens a payout [saga](/economy/concepts/payout-saga/) that a [background worker](/economy/reference/background-worker/) later finishes by paying real USD. It does not pay anyone itself.
 
 Here a seller asks to cash out `25,000.00` of their earned credits, clearing the default payout minimum. The amount is their own [`earned`](/economy/concepts/accounts-and-double-entry/) balance, in `CREDIT` minor units:
@@ -71,7 +73,7 @@ The same transaction opens a `Saga` in state `RESERVED` (see <SourceLink to="src
 
 ## Authorization
 
-`requestPayout` is not a privileged operation, so an end `user` can run it, but only for their own account. The ownership check requires the caller to own the `earned` account being debited; a `user` requesting another seller's payout is refused with `AUTH.UNAUTHORIZED` (see <SourceLink to="src/economy.ts#L472 · debitedUserAccounts" />).
+`requestPayout` is not a privileged operation, so an end `user` can run it, but only for their own account. The ownership check requires the caller to own the `earned` account being debited; a `user` requesting another seller's payout is refused with `AUTH.UNAUTHORIZED` (see <SourceLink to="src/economy.ts#L474 · debitedUserAccounts" />).
 
 A `system` service or a human `operator` may also request a payout on a seller's behalf. See [actors and authorization](/economy/concepts/actors-and-authorization/) for the full rule.
 
@@ -120,3 +122,9 @@ The request reserves credit; it never disburses USD. After a `committed` outcome
 - The reserved `amount` has left the seller's `earned` balance and sits in `PAYOUT_RESERVE`. Both legs are `CREDIT` and sum to zero, so the books stay balanced.
 - Exactly one `Saga` exists for the request, opened in `RESERVED`. The reservation and the saga commit in one transaction, so a record can't exist without its credits set aside, or the reverse.
 - No real USD has moved, and the credits are not spendable. They leave `PAYOUT_RESERVE` exactly once afterward: to `REVENUE` on settle, or back to `earned` on a reversal or timeout (see [the payout saga](/economy/concepts/payout-saga/)).
+
+## Try it
+
+Open a real saga — the reserve moves and a card lands in RESERVED on the console's board:
+
+<Runnable name="payout" code={payoutSrc} />

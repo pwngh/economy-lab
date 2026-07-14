@@ -7,7 +7,7 @@ status: stable
 sourceRefs:
   [
     'src/integrity.ts#L72 · proveEconomy',
-    'src/contract.ts#L396 · ProveReport',
+    'src/contract.ts#L411 · ProveReport',
     'scripts/prove.ts',
   ]
 related:
@@ -16,6 +16,8 @@ related:
     'economy/reference/background-worker',
   ]
 ---
+
+import proveSrc from '../../../snippets/prove.ts?raw';
 
 ## The idea
 
@@ -102,3 +104,11 @@ On the first violation, `make prove` shrinks to the shortest failing prefix and 
 </Callout>
 
 Everything on this page holds per operation. The two remaining concept pages cover the write path under hostile load: a runaway caller in [Spend velocity](/economy/concepts/spend-velocity/), and contending writers in [Concurrency](/economy/concepts/concurrency/).
+
+## Try it
+
+The prover runs on this page. The snippet moves real credits through the same engine build the [console](/console/) drives, then re-derives every invariant from the raw ledger:
+
+<Runnable name="prove" code={proveSrc} />
+
+The [console's Integrity page](/console/integrity?from=docs) re-runs the same five checks on every load — after replaying the operations you just ran here.

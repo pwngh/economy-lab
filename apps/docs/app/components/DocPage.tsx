@@ -24,6 +24,7 @@ import {
   SubscriptionStates,
   WorkerSweeps,
 } from '~/components/Diagrams.tsx';
+import { Runnable } from '~/components/Runnable.tsx';
 import { SourceLink } from '~/components/SourceLink.tsx';
 import { type TocEntry, docBySlug } from '~/content.ts';
 import { crumbsFor, prevNext } from '~/nav.ts';
@@ -42,6 +43,7 @@ const MDX_COMPONENTS = {
   CreditMaturity,
   IdempotentRetry,
   SourceLink,
+  Runnable,
   Cite,
   Brand,
   Code,

@@ -954,3 +954,138 @@ html[data-theme="dark"] .shiki span {
     animation: none !important;
   }
 }
+
+/* Runnable snippet blocks: a plain titled code block until /runner/loader.js reveals the Run
+   button; the result panel slides in under the code. States ride data-state on the figure. */
+.runnable {
+  margin: 1.5rem 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.runnable-head {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.5rem 0.9rem;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+}
+.runnable-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  transition: background-color 0.2s ease;
+}
+.runnable[data-state="running"] .runnable-dot {
+  background: var(--accent);
+  animation: runnable-pulse 1s ease-in-out infinite;
+}
+.runnable[data-state="done"] .runnable-dot {
+  background: var(--success);
+}
+.runnable[data-state="error"] .runnable-dot {
+  background: var(--danger);
+}
+@keyframes runnable-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.runnable-title {
+  flex: 1;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.runnable-run {
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: 0;
+  border-radius: 6px;
+  padding: 0.28rem 0.9rem;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+.runnable-run:hover {
+  background: var(--link-hover);
+}
+.runnable-run:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.runnable-run:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.runnable-code,
+.runnable-code pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+.runnable-out {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.75rem 0.95rem;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.55;
+  animation: runnable-in 0.18s ease-out;
+}
+.runnable-out[aria-busy="true"]::before {
+  content: "running\2026";
+  color: var(--text-faint);
+}
+.runnable-line {
+  color: var(--text);
+}
+.runnable-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 0.35rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--border);
+}
+.runnable-metaline {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+.runnable-jump {
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  font-weight: 550;
+  color: var(--link);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.runnable-jump::after {
+  content: " \2192";
+}
+.runnable-jump:hover {
+  color: var(--link-hover);
+  text-decoration: underline;
+}
+@keyframes runnable-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .runnable-dot,
+  .runnable-out {
+    animation: none;
+  }
+}

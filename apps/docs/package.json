@@ -7,15 +7,17 @@
   },
   "scripts": {
     "dev": "react-router dev",
-    "build": "react-router build && node scripts/copy-404.mjs",
+    "build:runner": "vite build --config vite.runner.config.ts",
+    "build": "npm run build:runner && react-router build && node scripts/copy-404.mjs",
     "preview": "vite preview",
     "typecheck": "react-router typegen && tsc",
     "format": "biome format --write .",
     "lint": "biome check .",
     "test": "vitest run",
     "check:csp": "node scripts/check-csp.mjs",
-    "verify": "npm run typecheck && npm run lint && npm run test",
-    "deploy": "npm run verify && npm run build && npm run check:csp && wrangler pages deploy --branch=production --commit-dirty=true"
+    "check:static": "node scripts/check-static.mjs",
+    "check:ref": "node scripts/check-ref.mjs",
+    "verify": "npm run typecheck && npm run lint && npm run test"
   },
   "dependencies": {
     "@react-router/node": "^7.18.0",

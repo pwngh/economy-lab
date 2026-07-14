@@ -8,11 +8,13 @@ sourceRefs:
   [
     'src/trust.ts#L130 · riskSubject',
     'src/trust.ts#L150 · attemptMinor',
-    'src/economy.ts#L543 · screenRisk',
+    'src/economy.ts#L545 · screenRisk',
     'src/engines/postgres.ts#L1381 · recordVelocity',
   ]
 related: ['economy/concepts/concurrency', 'economy/concepts/solvency']
 ---
+
+import velocitySrc from '../../../snippets/velocity.ts?raw';
 
 ## The idea
 
@@ -57,3 +59,11 @@ The insert comes before the decision, so denied attempts still count: a flood of
 
 - The gated operations — [`spend`](/economy/reference/operations/spend/), [`topUp`](/economy/reference/operations/top-up/), [`requestPayout`](/economy/reference/operations/request-payout/), [`grantPromo`](/economy/reference/operations/grant-promo/), and [`subscribe`](/economy/reference/operations/subscribe/) — pass through `screenRisk` before any of them move money.
 - [`RISK_DENIED`](/economy/reference/outcomes-and-reason-codes/) is the `rejected` reason a caller sees when the window is over the limit.
+
+## Try it
+
+Arm the ceiling and cross it — the snippet runs the real engine on this page:
+
+<Runnable name="velocity" code={velocitySrc} />
+
+The same ceiling is a live knob on the [console's Controls page](/console/controls?from=docs), which arrives with your run already replayed.
