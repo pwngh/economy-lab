@@ -94,14 +94,16 @@ const OPTIONAL_DRIVER_IMPORTS = [
 }));
 
 export default tseslint.config(
-  // apps/ has its own build/lint tooling, so it stays outside this gate. The vendored @pwngh/money
-  // amalgamation is kept byte-identical to upstream; its embedded selfTest is the drift guard, not
-  // this config's rules.
+  // apps/ has its own build/lint tooling, so it stays outside this gate; packages/ holds the trivial
+  // browser-build shim stubs the apps alias to (bundled by vite, never imported by name), the same
+  // boundary. The vendored @pwngh/money amalgamation is kept byte-identical to upstream; its embedded
+  // selfTest is the drift guard, not this config's rules.
   {
     ignores: [
       'node_modules/**',
       'dist-site/**',
       'apps/**',
+      'packages/**',
       'src/money.vendored.ts',
       'src/db.vendored.ts',
     ],

@@ -23,6 +23,12 @@ const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 // Vite needs its own resolver entry below, or `~/x` imports fail at build/SSR time.
 const appDir = fileURLToPath(new URL('./app/', import.meta.url));
 
+// The shared browser-shim package (driver stubs + node:crypto rejection), aliased by both this app
+// and the docs runner so neither reaches into the other's private dir.
+const engineBrowser = fileURLToPath(
+  new URL('../../packages/engine-browser/', import.meta.url),
+);
+
 // The engine at ../../src is `.ts` source with explicit `.ts` specifiers (the repo's no-build
 // convention), so SSR must transform it rather than treat it as an external Node module.
 export default defineConfig({
@@ -37,17 +43,20 @@ export default defineConfig({
       // `#` catch-all so these exact specifiers win.
       {
         find: /^#src\/(engines\/postgres|engines\/mysql|adapters\/redis|adapters\/sqs)\.ts$/,
-        replacement: `${appDir}unavailable.ts`,
+        replacement: `${engineBrowser}unavailable.ts`,
       },
       // Bare driver packages src/index.ts dynamic-imports directly; unstubbed, ioredis ships
       // as an unreachable chunk.
       {
         find: /^(ioredis|@aws-sdk\/client-sqs)$/,
-        replacement: `${appDir}unavailable.ts`,
+        replacement: `${engineBrowser}unavailable.ts`,
       },
       // Rejects the digest's guarded probe so it falls back to Web Crypto; Vite's own shim would
       // import cleanly and fail only at the first hash.
-      { find: /^node:crypto$/, replacement: `${appDir}no-node-crypto.ts` },
+      {
+        find: /^node:crypto$/,
+        replacement: `${engineBrowser}no-node-crypto.ts`,
+      },
       { find: /^#(.*)$/, replacement: `${repoRoot}$1` },
       { find: /^~\/(.*)$/, replacement: `${appDir}$1` },
     ],

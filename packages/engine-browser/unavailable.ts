@@ -10,9 +10,10 @@
  */
 
 /**
- * Browser stand-in for the engine's optional DB/cache/queue modules (aliased in vite.config.ts).
- * The tab sandbox never sets the env that selects them, so these can only throw; the alias keeps
- * their node-only drivers out of the bundle entirely.
+ * Browser stand-in for the engine's optional DB/cache/queue modules, in the shared engine-browser
+ * package so both apps' vite configs alias to it (console and docs-runner) rather than into a
+ * sibling app's private dir. The tab sandbox never sets the env that selects these, so they can
+ * only throw; the alias keeps their node-only drivers out of the bundle entirely.
  */
 
 function unavailable(name: string): never {

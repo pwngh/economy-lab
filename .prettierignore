@@ -11,6 +11,10 @@ Dockerfile
 # Standalone front-end apps own their formatting (apps/docs uses biome). Mirrors the eslint ignore.
 apps
 
+# packages/ holds the browser-build shim stubs both apps alias to (never imported by name);
+# hand-maintained trivial modules, exempt from the root format gate like apps/ and the vendored files.
+packages
+
 # vendored @pwngh/money: byte-identical to upstream; selfTest is the drift guard
 src/money.vendored.ts
 src/db.vendored.ts
