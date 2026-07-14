@@ -19,7 +19,7 @@ export function meta() {
 // intended URL — search and hash included, bare /console normalized — and bounce to the console
 // shell, whose entry restores it before the router boots. Hash-pinned in public/_headers like
 // every inline script (see scripts/check-csp.mjs).
-const CONSOLE_BOUNCE = `(function(){var p=location.pathname;if(p==='/console')p='/console/';if(p.indexOf('/console/')===0){try{sessionStorage.setItem('elab_redirect',p+location.search+location.hash)}catch(e){}location.replace('/console/')}})()`;
+export const CONSOLE_BOUNCE = `(function(){var p=location.pathname;if(p==='/console')p='/console/';if(p.indexOf('/console/')===0){try{sessionStorage.setItem('elab_redirect',p+location.search+location.hash)}catch(e){}location.replace('/console/')}})()`;
 
 /** Splat-route fallback, prerendered at /404 and published as the platform 404.html (see scripts/copy-404.mjs). */
 export default function NotFound() {
