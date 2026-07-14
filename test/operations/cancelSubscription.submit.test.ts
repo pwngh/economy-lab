@@ -12,28 +12,15 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { makeEconomy } from '#test/support/economy.ts';
-import { memoryStore } from '#src/adapters/memory.ts';
+import { economyWithStore } from '#test/support/economy.ts';
 import {
   cancelSubscription,
   principal,
   credit,
 } from '#test/support/builders.ts';
-import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
+import { hasCode } from '#test/support/capabilities.ts';
 
-import type { Economy } from '#src/economy.ts';
-import type { Store, Subscription } from '#src/ports.ts';
-
-function hasCode(code: string): (error: unknown) => boolean {
-  return (error) =>
-    error instanceof Error && (error as { code?: string }).code === code;
-}
-
-// The economy and the store share one seeded digest and fixed clock so their hashes agree.
-function makeEconomyWithStore(): { eco: Economy; store: Store } {
-  const store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
-  return { eco: makeEconomy(1, store), store };
-}
+import type { Subscription } from '#src/ports.ts';
 
 function activeSubscription(id: string, userId: string): Subscription {
   return {
@@ -55,7 +42,7 @@ function activeSubscription(id: string, userId: string): Subscription {
 // ownership rule could check. These tests drive the full submit pipeline to prove that guard.
 describe('cancelSubscription ownership (via submit)', () => {
   test("a user cannot cancel another user's subscription (IDOR) and it stays ACTIVE", async () => {
-    const { eco, store } = makeEconomyWithStore();
+    const { economy: eco, store } = economyWithStore(1);
     await store.subscriptions.open(
       activeSubscription('sub_alice', 'usr_alice'),
     );
@@ -75,7 +62,7 @@ describe('cancelSubscription ownership (via submit)', () => {
   });
 
   test('the owner can cancel their own subscription', async () => {
-    const { eco, store } = makeEconomyWithStore();
+    const { economy: eco, store } = economyWithStore(1);
     await store.subscriptions.open(
       activeSubscription('sub_alice', 'usr_alice'),
     );
@@ -93,7 +80,7 @@ describe('cancelSubscription ownership (via submit)', () => {
   });
 
   test('an operator can cancel any subscription', async () => {
-    const { eco, store } = makeEconomyWithStore();
+    const { economy: eco, store } = economyWithStore(1);
     await store.subscriptions.open(
       activeSubscription('sub_alice', 'usr_alice'),
     );

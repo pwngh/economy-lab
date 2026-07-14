@@ -28,15 +28,10 @@ import { credit as creditLeg, debit as debitLeg } from '#src/ledger.ts';
 import { spendable, promo, SYSTEM } from '#src/accounts.ts';
 import {
   fixedClock,
-  sequentialIds,
   seededDigest,
-  seededSigner,
-  fixedRates,
-  testLogger,
-  noopMeter,
-  fakeProcessor,
-  defaultPricing,
   testConfig,
+  makeCtx,
+  hasCode as isCode,
 } from '#test/support/capabilities.ts';
 
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
@@ -163,18 +158,7 @@ function maturityFixture(horizonMs: number): {
       default: horizonMs,
     },
   };
-  const ctx: Ctx = {
-    clock,
-    ids: sequentialIds(),
-    digest: seededDigest(1),
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    config,
-    pricing: defaultPricing(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-  };
+  const ctx = makeCtx({ clock, config });
   return { store, ctx, clock };
 }
 
@@ -298,18 +282,7 @@ function spendFixture(feeBps = 3000): { store: Store; ctx: Ctx } {
   const clock = fixedClock(0);
   const store = memoryStore({ digest: seededDigest(1), clock });
   const config: Config = { ...testConfig(), platformFeeBps: feeBps };
-  const ctx: Ctx = {
-    clock,
-    ids: sequentialIds(),
-    digest: seededDigest(1),
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    config,
-    pricing: defaultPricing(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-  };
+  const ctx = makeCtx({ clock, config });
   return { store, ctx };
 }
 
@@ -470,11 +443,6 @@ describe('Spend Entitlement, Order, Fee, Age', () => {
 
 // --- Op-specific field-shape guards: malformed shapes the central validateOperation() cannot
 // know about.
-
-function isCode(code: string): (error: unknown) => boolean {
-  return (error) =>
-    error instanceof Error && 'code' in error && error.code === code;
-}
 
 describe('Spend Field Shape', () => {
   test('throws MALFORMED for a blank sku', async () => {

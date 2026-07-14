@@ -18,18 +18,7 @@ import {
   cancelSubscription as cancelSubscriptionOp,
   credit,
 } from '#test/support/builders.ts';
-import {
-  fixedClock,
-  sequentialIds,
-  seededDigest,
-  seededSigner,
-  fixedRates,
-  testLogger,
-  noopMeter,
-  fakeProcessor,
-  defaultPricing,
-  testConfig,
-} from '#test/support/capabilities.ts';
+import { makeCtx, hasCode as isCode } from '#test/support/capabilities.ts';
 
 import type { Ctx, Outcome } from '#src/contract.ts';
 import type { Store, Subscription, SubscriptionState } from '#src/ports.ts';
@@ -37,18 +26,7 @@ import type { Store, Subscription, SubscriptionState } from '#src/ports.ts';
 // Tests call the handler directly rather than through the pipeline, so the Ctx is assembled by hand.
 function makeContext(): { store: Store; ctx: Ctx } {
   const store = memoryStore();
-  const ctx: Ctx = {
-    clock: fixedClock(0),
-    ids: sequentialIds(),
-    digest: seededDigest(1),
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    config: testConfig(),
-    pricing: defaultPricing(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-  };
+  const ctx = makeCtx();
   return { store, ctx };
 }
 
@@ -81,11 +59,6 @@ async function cancel(
   );
   const after = await store.subscriptions.load(subscriptionId);
   return { outcome, after };
-}
-
-function isCode(code: string): (error: unknown) => boolean {
-  return (error) =>
-    error instanceof Error && 'code' in error && error.code === code;
 }
 
 describe('cancelSubscription', () => {

@@ -13,24 +13,14 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { topUp } from '#src/operations/topUp.ts';
-import { memoryStore } from '#src/adapters/memory.ts';
-import {
-  fixedClock,
-  seededDigest,
-  makeCtx,
-} from '#test/support/capabilities.ts';
+import { makeCtx, hasCode } from '#test/support/capabilities.ts';
+import { seededStore as makeStore } from '#test/support/economy.ts';
 import { topUp as topUpOp, credit, usd } from '#test/support/builders.ts';
 import { spendable, SYSTEM } from '#src/accounts.ts';
 import { toAmount } from '#src/money.ts';
 
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
-
-function makeStore(): Store {
-  const digest = seededDigest(1);
-  const clock = fixedClock(0);
-  return memoryStore({ digest, clock });
-}
 
 function fixture(): { store: Store; ctx: Ctx } {
   return { store: makeStore(), ctx: makeCtx() };
@@ -42,11 +32,6 @@ async function applyTopUp(
   operation: Operation,
 ): Promise<Outcome> {
   return store.transaction((unit) => topUp(operation, unit, ctx));
-}
-
-function hasCode(code: string): (error: unknown) => boolean {
-  return (error) =>
-    error instanceof Error && (error as { code?: string }).code === code;
 }
 
 describe('topUp Issuance', () => {

@@ -16,12 +16,8 @@ import {
   grantEntitlement,
   revokeEntitlement,
 } from '#src/operations/entitlements.ts';
-import { memoryStore } from '#src/adapters/memory.ts';
-import {
-  fixedClock,
-  seededDigest,
-  makeCtx,
-} from '#test/support/capabilities.ts';
+import { makeCtx } from '#test/support/capabilities.ts';
+import { seededStore as makeStore } from '#test/support/economy.ts';
 import {
   grantEntitlement as grantEntitlementOp,
   revokeEntitlement as revokeEntitlementOp,
@@ -35,12 +31,6 @@ type EntitlementHandler = (
   unit: Unit,
   ctx: Ctx,
 ) => Promise<Outcome>;
-
-function makeStore(): Store {
-  const digest = seededDigest(1);
-  const clock = fixedClock(0);
-  return memoryStore({ digest, clock });
-}
 
 function apply(
   store: Store,

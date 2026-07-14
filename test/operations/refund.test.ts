@@ -20,15 +20,9 @@ import type { EntitlementAttrs } from '#src/contract.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import {
   fixedClock,
-  sequentialIds,
   seededDigest,
-  seededSigner,
-  fixedRates,
-  testLogger,
-  noopMeter,
-  fakeProcessor,
-  defaultPricing,
-  testConfig,
+  makeCtx,
+  hasCode as isCode,
 } from '#test/support/capabilities.ts';
 import {
   refund as refundOf,
@@ -56,18 +50,7 @@ type Fixture = {
 function setup(): Fixture {
   const digest = seededDigest(1);
   const clock = fixedClock(0);
-  const ctx: Ctx = {
-    clock,
-    ids: sequentialIds(),
-    digest,
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    config: testConfig(),
-    pricing: defaultPricing(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-  };
+  const ctx: Ctx = makeCtx({ clock, digest });
   const store: Store = memoryStore({ digest, clock });
   const post = (legs: Leg[], meta: Record<string, unknown>): Promise<unknown> =>
     store.transaction((unit) =>
@@ -99,11 +82,6 @@ function setup(): Fixture {
       ),
     owns: (userId, sku) => store.entitlements.owns(userId, sku),
   };
-}
-
-function isCode(code: string): (error: unknown) => boolean {
-  return (error) =>
-    error instanceof Error && 'code' in error && error.code === code;
 }
 
 async function returnsBuyerFullPriceReversingSale(): Promise<void> {

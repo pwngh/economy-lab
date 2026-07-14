@@ -18,15 +18,9 @@ import { credit as creditLeg, debit as debitLeg } from '#src/ledger.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
 import {
   fixedClock,
-  sequentialIds,
   seededDigest,
-  seededSigner,
-  fixedRates,
-  testLogger,
-  noopMeter,
-  fakeProcessor,
-  defaultPricing,
   testConfig,
+  makeCtx,
 } from '#test/support/capabilities.ts';
 import {
   requestPayout as buildRequestPayout,
@@ -42,21 +36,6 @@ import type { Amount } from '#src/money.ts';
 // inside one `store.transaction`.
 function newStore(): Store {
   return memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
-}
-
-function newCtx(): Ctx {
-  return {
-    clock: fixedClock(0),
-    ids: sequentialIds(),
-    digest: seededDigest(1),
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    config: testConfig(),
-    pricing: defaultPricing(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-  };
 }
 
 // Seeds earned against REVENUE. Platform accounts may go negative; the no-negative-balance guard
@@ -104,8 +83,7 @@ function maturityCtx(
   clock: ReturnType<typeof fixedClock>,
   horizonMs: number,
 ): Ctx {
-  return {
-    ...newCtx(),
+  return makeCtx({
     clock,
     config: {
       ...testConfig(),
@@ -115,7 +93,7 @@ function maturityCtx(
         default: horizonMs,
       },
     },
-  };
+  });
 }
 
 function run(store: Store, ctx: Ctx, operation: Operation): Promise<Outcome> {
@@ -141,7 +119,7 @@ async function reservesEarnedCreditIntoPayoutReserve(): Promise<void> {
 
   const outcome = await run(
     store,
-    newCtx(),
+    makeCtx(),
     buildRequestPayout({ userId: 'usr_seller', amount: credit('12.00') }),
   );
 
@@ -162,7 +140,7 @@ async function reservesFullEarnedBalanceIntoReserve(): Promise<void> {
 
   await run(
     store,
-    newCtx(),
+    makeCtx(),
     buildRequestPayout({ userId: 'usr_seller', amount: credit('20.00') }),
   );
 
@@ -178,7 +156,7 @@ async function opensPayoutSagaInReservedPinningRate(): Promise<void> {
 
   await run(
     store,
-    newCtx(),
+    makeCtx(),
     buildRequestPayout({ userId: 'usr_seller', amount: credit('10.00') }),
   );
 
@@ -194,7 +172,7 @@ async function rejectsAndLeavesEarnedUntouchedWhenInsufficient(): Promise<void> 
 
   const outcome = await run(
     store,
-    newCtx(),
+    makeCtx(),
     buildRequestPayout({ userId: 'usr_seller', amount: credit('8.00') }),
   );
 
@@ -216,10 +194,9 @@ async function rejectsAndLeavesEarnedUntouchedWhenInsufficient(): Promise<void> 
 async function rejectsPayoutBelowConfiguredEarnedMinimum(): Promise<void> {
   const store = newStore();
   await fundEarned(store, 'usr_seller', credit('300.00'));
-  const ctx: Ctx = {
-    ...newCtx(),
+  const ctx = makeCtx({
     config: { ...testConfig(), payoutMinimumEarnedMinor: 2_000_000n },
-  };
+  });
 
   const outcome = await run(
     store,
@@ -318,7 +295,7 @@ async function faultsOn(amount: Amount, code: string): Promise<void> {
   await fundEarned(store, 'usr_seller', credit('10.00'));
 
   await assert.rejects(
-    run(store, newCtx(), buildRequestPayout({ userId: 'usr_seller', amount })),
+    run(store, makeCtx(), buildRequestPayout({ userId: 'usr_seller', amount })),
     (error: unknown) => codeOf(error) === code,
   );
 }
@@ -329,11 +306,10 @@ function intervalCtx(
   clock: ReturnType<typeof fixedClock>,
   intervalMs: number,
 ): Ctx {
-  return {
-    ...newCtx(),
+  return makeCtx({
     clock,
     config: { ...testConfig(), payoutMinIntervalMs: intervalMs },
-  };
+  });
 }
 
 async function rejectsSecondPayoutInsideTheMinimumInterval(): Promise<void> {
@@ -414,15 +390,14 @@ async function allowsAPayoutForAClearedPayee(): Promise<void> {
   const store = newStore();
   await fundEarned(store, 'usr_seller', credit('30.00'));
   const asked: string[] = [];
-  const ctx: Ctx = {
-    ...newCtx(),
+  const ctx = makeCtx({
     payees: {
       status: async (userId) => {
         asked.push(userId);
         return { state: 'CLEARED' };
       },
     },
-  };
+  });
 
   const outcome = await run(
     store,
@@ -442,10 +417,9 @@ async function rejectsAPayoutForAnUnverifiedPayee(): Promise<void> {
   for (const state of ['PENDING', 'BLOCKED', 'NONE'] as const) {
     const store = newStore();
     await fundEarned(store, 'usr_seller', credit('30.00'));
-    const ctx: Ctx = {
-      ...newCtx(),
+    const ctx = makeCtx({
       payees: { status: async () => ({ state }) },
-    };
+    });
 
     const outcome = await run(
       store,
@@ -482,7 +456,7 @@ async function skipsThePayeeGateWhenNoDirectoryIsWired(): Promise<void> {
 
   const outcome = await run(
     store,
-    newCtx(),
+    makeCtx(),
     buildRequestPayout({ userId: 'usr_seller', amount: credit('12.00') }),
   );
 

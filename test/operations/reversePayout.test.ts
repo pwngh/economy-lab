@@ -27,6 +27,7 @@ import { earned, SYSTEM } from '#src/accounts.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
 import { credit } from '#test/support/builders.ts';
+import { reversePayout as makeReversePayout } from '#src/operation.ts';
 import {
   fixedClock,
   sequentialIds,
@@ -104,8 +105,9 @@ function buildReversePayout(o: {
   actor?: Operation['actor'];
   providerReported?: boolean;
 }): Operation {
-  return {
-    kind: 'reversePayout',
+  // Keeps its own deterministic idempotencyKey (idem_<sagaId>) so the duplicate-key idempotency
+  // cases here stay stable; delegates to the public constructor so the Operation shape is single-sourced.
+  return makeReversePayout({
     idempotencyKey: `idem_${o.sagaId}`,
     actor: o.actor ?? { kind: 'operator', operatorId: 'op_test' },
     userId: o.userId ?? 'usr_seller',
@@ -114,7 +116,7 @@ function buildReversePayout(o: {
     ...(o.providerReported === undefined
       ? {}
       : { providerReported: o.providerReported }),
-  };
+  });
 }
 
 function run(store: Store, ctx: Ctx, operation: Operation): Promise<Outcome> {

@@ -20,34 +20,14 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { makeEconomy } from '#test/support/economy.ts';
-import { memoryStore } from '#src/adapters/memory.ts';
-import { seededDigest, fixedClock } from '#test/support/capabilities.ts';
+import { economyWithStore, eventsOf } from '#test/support/economy.ts';
 import { topUp, grantPromo, spend, credit } from '#test/support/builders.ts';
 import { SWEEP_NAMES } from '#src/worker/index.ts';
 import { createServer } from '#src/server.ts';
 
-import type { Economy } from '#src/contract.ts';
-import type { Store, EconomyEvent } from '#src/ports.ts';
-
-// The store is returned too, so a test can read back the outbox events a request wrote.
-function makePair(): { economy: Economy; store: Store } {
-  const store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
-  const economy = makeEconomy(1, store);
-  return { economy, store };
-}
-
-// Drains the pending outbox events and marks each one relayed, so a later call in the same test
-// will not see it again.
-async function eventsOf(store: Store): Promise<EconomyEvent[]> {
-  const batch = await store.outbox.claimBatch(100);
-  await store.outbox.markRelayed(batch.map((message) => message.id));
-  return batch.map((message) => message.event);
-}
-
 describe('Submit Emits The Exact Agreed Event-Type Strings', () => {
   test('topUp emits economy.credits.topped_up', async () => {
-    const { economy, store } = makePair();
+    const { economy, store } = economyWithStore();
 
     const outcome = await economy.submit(
       topUp({ userId: 'usr_buyer', amount: credit('10.00') }),
@@ -60,7 +40,7 @@ describe('Submit Emits The Exact Agreed Event-Type Strings', () => {
   });
 
   test('grantPromo emits economy.promo.granted', async () => {
-    const { economy, store } = makePair();
+    const { economy, store } = economyWithStore();
 
     const outcome = await economy.submit(
       grantPromo({ userId: 'usr_buyer', amount: credit('5.00') }),
@@ -73,7 +53,7 @@ describe('Submit Emits The Exact Agreed Event-Type Strings', () => {
   });
 
   test('spend emits economy.sale.completed', async () => {
-    const { economy, store } = makePair();
+    const { economy, store } = economyWithStore();
     // Fund the buyer's spendable so the sale commits, then drop the top-up's own event.
     const funded = await economy.submit(
       topUp({ userId: 'usr_buyer', amount: credit('10.00') }),
@@ -108,7 +88,7 @@ describe('No Money-Laundering-Detection Background Job Exists', () => {
 
 describe('The Server Has No Asset-Download Route', () => {
   test('a download-style path 404s', async () => {
-    const { economy } = makePair();
+    const { economy } = economyWithStore();
     const handler = createServer(economy);
 
     const res = await handler(

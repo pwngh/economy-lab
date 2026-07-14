@@ -14,11 +14,7 @@ import assert from 'node:assert/strict';
 
 import { makeEconomy } from '#test/support/economy.ts';
 import { topUp, spend, grantPromo, credit } from '#test/support/builders.ts';
-
-function hasCode(code: string): (error: unknown) => boolean {
-  return (error) =>
-    error instanceof Error && (error as { code?: string }).code === code;
-}
+import { hasCode } from '#test/support/capabilities.ts';
 
 // Rejecting a blank owner before any money work stops a malformed request from creating an
 // ownerless wallet. See validateOperation in economy.ts.

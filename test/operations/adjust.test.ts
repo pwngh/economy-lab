@@ -14,12 +14,8 @@ import assert from 'node:assert/strict';
 
 import { adjust } from '#src/operations/adjust.ts';
 import { topUp } from '#src/operations/topUp.ts';
-import { memoryStore } from '#src/adapters/memory.ts';
-import {
-  fixedClock,
-  seededDigest,
-  makeCtx,
-} from '#test/support/capabilities.ts';
+import { hasCode, makeCtx } from '#test/support/capabilities.ts';
+import { seededStore as makeStore } from '#test/support/economy.ts';
 import {
   adjust as adjustOp,
   topUp as topUpOp,
@@ -30,12 +26,6 @@ import { spendable, SYSTEM } from '#src/accounts.ts';
 
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
-
-function makeStore(): Store {
-  const digest = seededDigest(1);
-  const clock = fixedClock(0);
-  return memoryStore({ digest, clock });
-}
 
 function fixture(): { store: Store; ctx: Ctx } {
   return { store: makeStore(), ctx: makeCtx() };
@@ -59,11 +49,6 @@ async function issue(
   await store.transaction((unit) =>
     topUp(topUpOp({ userId, amount }), unit, ctx),
   );
-}
-
-function hasCode(code: string): (error: unknown) => boolean {
-  return (error) =>
-    error instanceof Error && (error as { code?: string }).code === code;
 }
 
 describe('Adjust Direction', () => {

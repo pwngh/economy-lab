@@ -17,11 +17,9 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { makeEconomy } from '#test/support/economy.ts';
-import { memoryStore } from '#src/adapters/memory.ts';
+import { economyWithStore, eventsOf } from '#test/support/economy.ts';
 import { credit as creditLeg, debit as debitLeg } from '#src/ledger.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
-import { seededDigest, fixedClock } from '#test/support/capabilities.ts';
 import {
   topUp as buildTopUp,
   spend as buildSpend,
@@ -36,21 +34,6 @@ import {
 import type { Economy } from '#src/contract.ts';
 import type { Store, EconomyEvent } from '#src/ports.ts';
 import type { Amount } from '#src/money.ts';
-
-// The economy and the store share one seeded digest and fixed clock so their hashes agree.
-function makePair(): { economy: Economy; store: Store } {
-  const store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
-  const economy = makeEconomy(1, store);
-  return { economy, store };
-}
-
-// claimBatch reads unsent rows without removing them; marking them relayed keeps a later call
-// from handing back the same events.
-async function eventsOf(store: Store): Promise<EconomyEvent[]> {
-  const batch = await store.outbox.claimBatch(100);
-  await store.outbox.markRelayed(batch.map((message) => message.id));
-  return batch.map((message) => message.event);
-}
 
 async function fund(
   economy: Economy,
@@ -90,7 +73,7 @@ async function onlyEvent(store: Store): Promise<EconomyEvent> {
 
 describe('Submit-Path Domain Events', () => {
   test('a refund emits economy.sale.refunded whose subject is the buyer derived from the debit/credit lines', async () => {
-    const { economy, store } = makePair();
+    const { economy, store } = economyWithStore(1);
     await fund(economy, 'usr_buyer', '10.00');
 
     const spend = buildSpend({
@@ -118,7 +101,7 @@ describe('Submit-Path Domain Events', () => {
   });
 
   test('a clawback emits an internal economy.credits.clawed_back for the affected user', async () => {
-    const { economy, store } = makePair();
+    const { economy, store } = economyWithStore(1);
     await fund(economy, 'usr_disputer', '10.00');
     await eventsOf(store);
 
@@ -143,7 +126,7 @@ describe('Submit-Path Domain Events', () => {
 
 describe('Submit-Path Domain Events (Payouts & Subscriptions)', () => {
   test('a committed requestPayout emits economy.payout.requested for the seller', async () => {
-    const { economy, store } = makePair();
+    const { economy, store } = economyWithStore(1);
     await fundEarned(store, 'usr_seller', credit('20.00'));
 
     const outcome = await economy.submit(
@@ -160,7 +143,7 @@ describe('Submit-Path Domain Events (Payouts & Subscriptions)', () => {
   });
 
   test('subscribe emits economy.subscription.started with {userId,sku,period}', async () => {
-    const { economy, store } = makePair();
+    const { economy, store } = economyWithStore(1);
     await fund(economy, 'usr_buyer', '100.00');
     await eventsOf(store);
 
@@ -184,7 +167,7 @@ describe('Submit-Path Domain Events (Payouts & Subscriptions)', () => {
   });
 
   test('cancelSubscription emits economy.subscription.canceled even though it records no debit/credit lines', async () => {
-    const { economy, store } = makePair();
+    const { economy, store } = economyWithStore(1);
     await fund(economy, 'usr_buyer', '100.00');
 
     const started = await economy.submit(
