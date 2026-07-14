@@ -18,6 +18,7 @@ import { Form, Link, useLocation, useNavigation } from 'react-router';
 import { getEngine } from '~/engine';
 import type { Flash } from '~/flash';
 import {
+  BackField,
   Credits,
   DataTable,
   Entity,
@@ -90,7 +91,7 @@ export default function Pipeline({ loaderData }: Route.ComponentProps) {
             ) : null}
           </div>
           <Form method="post" action="/actions/pipeline">
-            <input type="hidden" name="back" value={back} />
+            <BackField to={back} />
             <input type="hidden" name="op" value="webhook" />
             <div className="field">
               <label htmlFor="wh-event">Provider event id</label>
@@ -178,7 +179,7 @@ export default function Pipeline({ loaderData }: Route.ComponentProps) {
           <div className="row between">
             <h3>Outbound relay</h3>
             <Form method="post" action="/actions/pipeline">
-              <input type="hidden" name="back" value={back} />
+              <BackField to={back} />
               <input type="hidden" name="op" value="relay" />
               <button type="submit" className="primary" disabled={busy}>
                 Run the relay

@@ -44,6 +44,12 @@ export function pageMeta(
   ];
 }
 
+// The hidden field carrying a mutation's round-trip destination: the action redirects back to it
+// (flash.ts redirectBack). Every mutating form carries one, so this is the single declaration.
+export function BackField({ to }: { to: string }) {
+  return <input type="hidden" name="back" value={to} />;
+}
+
 // The chrome layout's route id, as React Router derives it from the module path in routes.ts.
 // Renaming routes/_chrome.tsx must update this, or useFlash silently reads no loader data.
 export const CHROME_ROUTE_ID = 'routes/_chrome';

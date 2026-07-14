@@ -15,6 +15,7 @@ import { Await, Form, useLocation, useNavigation } from 'react-router';
 
 import { getEngine } from '~/engine';
 import {
+  BackField,
   Credits,
   DataTable,
   FlashBanner,
@@ -206,21 +207,21 @@ export default function Integrity({ loaderData }: Route.ComponentProps) {
         </div>
         <div className="row">
           <Form method="post" action="/actions/tamper">
-            <input type="hidden" name="back" value={back} />
+            <BackField to={back} />
             <input type="hidden" name="op" value="tamper" />
             <button type="submit" disabled={busy}>
               Tamper with a posting
             </button>
           </Form>
           <Form method="post" action="/actions/tamper">
-            <input type="hidden" name="back" value={back} />
+            <BackField to={back} />
             <input type="hidden" name="op" value="drift" />
             <button type="submit" disabled={busy}>
               Plant a drifted balance
             </button>
           </Form>
           <Form method="post" action="/actions/tamper">
-            <input type="hidden" name="back" value={back} />
+            <BackField to={back} />
             <input type="hidden" name="op" value="heal" />
             <button type="submit" className="primary" disabled={busy}>
               Heal the books

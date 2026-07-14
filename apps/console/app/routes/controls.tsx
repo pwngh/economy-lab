@@ -14,7 +14,7 @@
 import { Form, Link, useLocation, useNavigation } from 'react-router';
 
 import { getEngine } from '~/engine';
-import { PageError, StatusPill, pageMeta } from '~/ui';
+import { BackField, PageError, StatusPill, pageMeta } from '~/ui';
 import type { Route } from './+types/controls';
 
 export function meta(args: Route.MetaArgs) {
@@ -59,7 +59,7 @@ export default function Controls({ loaderData }: Route.ComponentProps) {
             </p>
           </div>
           <Form method="post" action="/actions/simulate">
-            <input type="hidden" name="back" value={back} />
+            <BackField to={back} />
             <input
               type="hidden"
               name="op"
@@ -85,7 +85,7 @@ export default function Controls({ loaderData }: Route.ComponentProps) {
             </p>
           </div>
           <Form method="post" action="/actions/simulate" className="row">
-            <input type="hidden" name="back" value={back} />
+            <BackField to={back} />
             <input type="hidden" name="op" value="setMaxAttempts" />
             <input
               type="number"
@@ -111,14 +111,14 @@ export default function Controls({ loaderData }: Route.ComponentProps) {
         </div>
         <div className="row">
           <Form method="post" action="/actions/simulate">
-            <input type="hidden" name="back" value={back} />
+            <BackField to={back} />
             <input type="hidden" name="op" value="reset" />
             <button type="submit" disabled={busy}>
               Reset
             </button>
           </Form>
           <Form method="post" action="/actions/simulate">
-            <input type="hidden" name="back" value={back} />
+            <BackField to={back} />
             <input type="hidden" name="op" value="clear" />
             <button type="submit" disabled={busy}>
               Clear
@@ -195,7 +195,7 @@ function RateDesk({
             ) : null}
           </p>
           <Form method="post" action="/actions/simulate">
-            <input type="hidden" name="back" value={back} />
+            <BackField to={back} />
             <input type="hidden" name="op" value="unlockRates" />
             <button type="submit" disabled={busy || rates.inFlightPayouts > 0}>
               Unlock rates
@@ -213,7 +213,7 @@ function RateDesk({
             action="/actions/simulate"
             className="rates-set-form"
           >
-            <input type="hidden" name="back" value={back} />
+            <BackField to={back} />
             <input type="hidden" name="op" value="setRates" />
             <div className="row">
               <div className="field">
@@ -249,7 +249,7 @@ function RateDesk({
             </div>
           </Form>
           <Form method="post" action="/actions/simulate">
-            <input type="hidden" name="back" value={back} />
+            <BackField to={back} />
             <input type="hidden" name="op" value="lockRates" />
             <button type="submit" disabled={busy}>
               Lock &amp; resume

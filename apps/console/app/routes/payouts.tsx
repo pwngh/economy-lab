@@ -19,6 +19,7 @@ import { getEngine } from '~/engine';
 import type { Flash } from '~/flash';
 import {
   Amount,
+  BackField,
   Credits,
   DataTable,
   Entity,
@@ -133,7 +134,7 @@ export default function Payouts({ loaderData }: Route.ComponentProps) {
             </p>
           </div>
           <Form method="post" action="/actions/simulate">
-            <input type="hidden" name="back" value={back} />
+            <BackField to={back} />
             <input type="hidden" name="op" value="settle" />
             <button type="submit" disabled={busy}>
               Settle submitted
@@ -362,7 +363,7 @@ function SagaDrill({
         <div className="sb-title">Operator reversal</div>
         {reversible ? (
           <Form method="post" action="/actions/reverse" className="row">
-            <input type="hidden" name="back" value={back} />
+            <BackField to={back} />
             <input type="hidden" name="form" value="payout-reverse" />
             <input type="hidden" name="sagaId" value={saga.id} />
             <input type="hidden" name="userId" value={saga.userId} />

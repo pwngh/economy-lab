@@ -30,7 +30,14 @@ import type { ReactNode } from 'react';
 import { DAY_MS } from '~/demo';
 import { getEngine } from '~/engine';
 import { takeFlash } from '~/flash';
-import { FlashBanner, StatusPill, dayLabel, entityName, fmtAmount } from '~/ui';
+import {
+  BackField,
+  FlashBanner,
+  StatusPill,
+  dayLabel,
+  entityName,
+  fmtAmount,
+} from '~/ui';
 import type { Route } from './+types/_chrome';
 
 // The guided tour is URL state (?tour=n): a caption strip with plain links, nothing more, so it
@@ -177,7 +184,7 @@ export default function Chrome({ loaderData }: Route.ComponentProps) {
             </Link>
           </div>
           <Form method="post" action="/actions/theme" className="theme-switch">
-            <input type="hidden" name="back" value={back} />
+            <BackField to={back} />
             <span className="theme-switch-label">Theme</span>
             <button
               type="submit"
@@ -363,7 +370,7 @@ function SimButton({
 }) {
   return (
     <Form method="post" action="/actions/simulate">
-      <input type="hidden" name="back" value={back} />
+      <BackField to={back} />
       <input type="hidden" name="op" value={op} />
       {Object.entries(extra ?? {}).map(([name, value]) => (
         <input key={name} type="hidden" name={name} value={value} />
