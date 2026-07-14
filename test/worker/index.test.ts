@@ -19,21 +19,10 @@ import { credit, debit, postEntry } from '#src/ledger.ts';
 import { toAmount } from '#src/money.ts';
 import { fault } from '#src/errors.ts';
 import { spendable, SYSTEM } from '#src/accounts.ts';
-import {
-  fixedClock,
-  sequentialIds,
-  seededDigest,
-  seededSigner,
-  fixedRates,
-  testLogger,
-  noopMeter,
-  fakeProcessor,
-  testConfig,
-} from '#test/support/capabilities.ts';
+import { makeWorkerCtx, seededDigest } from '#test/support/capabilities.ts';
 
 import type { SweepInput } from '#src/worker/index.ts';
 import type { ReconcileFeed } from '#src/worker/reconcile.ts';
-import type { WorkerCtx } from '#src/contract.ts';
 import type {
   Digest,
   Dispatcher,
@@ -41,21 +30,6 @@ import type {
   Scheduler,
   Store,
 } from '#src/ports.ts';
-
-// Takes the seed posting's digest so the checkpoint job hashes the bytes recorded at seed time.
-function workerCtx(digest: Digest): WorkerCtx {
-  return {
-    clock: fixedClock(0),
-    ids: sequentialIds(),
-    digest,
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-    config: testConfig(),
-  };
-}
 
 function emptyFeed(): ReconcileFeed {
   return { pull: async () => ({ processor: [], ledger: [] }) };
@@ -196,7 +170,7 @@ async function invokesEverySweep(): Promise<void> {
 
   await runSweeps(
     recording,
-    workerCtx(digest),
+    makeWorkerCtx({ digest }),
     sweepInput({ feed: recordingFeed(reconcileTouched) }),
   );
 
@@ -216,7 +190,7 @@ async function invokesEverySweep(): Promise<void> {
 async function reportsEverySweepUnderItsName(): Promise<void> {
   const { store, digest } = await seededStore();
 
-  const batch = await runSweeps(store, workerCtx(digest), sweepInput());
+  const batch = await runSweeps(store, makeWorkerCtx({ digest }), sweepInput());
 
   for (const name of [
     'payouts',
@@ -243,7 +217,11 @@ async function isolatesAThrownSweepFromTheBatch(): Promise<void> {
     payouts: fault('STORE.FAILURE', 'sagas down', { retryable: true }),
   });
 
-  const batch = await runSweeps(recording, workerCtx(digest), sweepInput());
+  const batch = await runSweeps(
+    recording,
+    makeWorkerCtx({ digest }),
+    sweepInput(),
+  );
 
   assert.equal(batch.payouts.ok, false);
   assert.equal(batch.subscriptions.ok, true);
@@ -263,7 +241,11 @@ async function classifiesTheIsolatedFaultOnItsRetryVerdict(): Promise<void> {
     subscriptions: fault('LEDGER.UNBALANCED', 'terminal', { retryable: false }),
   });
 
-  const batch = await runSweeps(recording, workerCtx(digest), sweepInput());
+  const batch = await runSweeps(
+    recording,
+    makeWorkerCtx({ digest }),
+    sweepInput(),
+  );
 
   assert.equal(batch.subscriptions.ok, false);
   assert.equal(
@@ -283,7 +265,11 @@ async function wrapsANonEconomyThrowAsRetryableStoreFailure(): Promise<void> {
     relay: new Error('raw boom'),
   });
 
-  const batch = await runSweeps(recording, workerCtx(digest), sweepInput());
+  const batch = await runSweeps(
+    recording,
+    makeWorkerCtx({ digest }),
+    sweepInput(),
+  );
 
   assert.equal(batch.relay.ok, false);
   assert.equal(batch.relay.ok === false && batch.relay.code, 'STORE.FAILURE');
@@ -295,7 +281,7 @@ async function wrapsANonEconomyThrowAsRetryableStoreFailure(): Promise<void> {
 
 async function runOnceDrivesOneBatch(): Promise<void> {
   const { store, digest } = await seededStore();
-  const worker = createWorker(store, workerCtx(digest));
+  const worker = createWorker(store, makeWorkerCtx({ digest }));
 
   const run = await worker.runOnce(sweepInput());
 
@@ -316,7 +302,7 @@ async function startSchedulesTheBatchOnTheInjectedScheduler(): Promise<void> {
       };
     },
   };
-  const worker = createWorker(store, workerCtx(digest), scheduler);
+  const worker = createWorker(store, makeWorkerCtx({ digest }), scheduler);
 
   assert.notEqual(worker.start, undefined);
   const stop = worker.start!(5_000, sweepInput());
@@ -351,7 +337,7 @@ async function skipsTheRelaySweepWhenNoDispatcherIsConfigured(): Promise<void> {
   // An undefined `dispatcher` is the no-dispatcher deployment (see selectDispatcher in src/index.ts).
   const batch = await runSweeps(
     store,
-    workerCtx(digest),
+    makeWorkerCtx({ digest }),
     sweepInput({ dispatcher: undefined }),
   );
 

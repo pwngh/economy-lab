@@ -20,16 +20,7 @@ import { fault } from '#src/errors.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { SYSTEM, spendable } from '#src/accounts.ts';
 import { credit, usd } from '#test/support/builders.ts';
-import {
-  fixedClock,
-  noopMeter,
-  sequentialIds,
-  seededDigest,
-  seededSigner,
-  fakeProcessor,
-  testConfig,
-  testLogger,
-} from '#test/support/capabilities.ts';
+import { makeWorkerCtx, testConfig } from '#test/support/capabilities.ts';
 
 import type { Amount, Currency } from '#src/money.ts';
 import type { Config } from '#src/config.ts';
@@ -59,22 +50,13 @@ function treasuryRates(): Rates {
   };
 }
 
+// The shared defaults plus the $0.01-peg treasuryRates() this suite depends on.
 function workerCtx(overrides?: {
   logger?: Logger;
   meter?: Meter;
   config?: Config;
 }): WorkerCtx {
-  return {
-    clock: fixedClock(0),
-    ids: sequentialIds(),
-    digest: seededDigest(1),
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    rates: treasuryRates(),
-    logger: overrides?.logger ?? testLogger(),
-    meter: overrides?.meter ?? noopMeter(),
-    config: overrides?.config ?? testConfig(),
-  };
+  return makeWorkerCtx({ rates: treasuryRates(), ...overrides });
 }
 
 // For an exactly backed state at the $0.01 peg, pass `cash` equal to the credits' par value.

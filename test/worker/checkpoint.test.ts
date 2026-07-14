@@ -22,20 +22,13 @@ import { toAmount } from '#src/money.ts';
 import { fault } from '#src/errors.ts';
 import { spendable, earned, SYSTEM } from '#src/accounts.ts';
 import {
-  fixedClock,
-  sequentialIds,
+  makeWorkerCtx,
   seededDigest,
   seededSigner,
-  fixedRates,
-  testLogger,
-  noopMeter,
-  fakeProcessor,
-  testConfig,
 } from '#test/support/capabilities.ts';
 
 import type { SweepInput } from '#src/worker/index.ts';
 import type { ReconcileFeed } from '#src/worker/reconcile.ts';
-import type { WorkerCtx } from '#src/contract.ts';
 import type {
   Checkpoint,
   Digest,
@@ -43,21 +36,6 @@ import type {
   Posting,
   Store,
 } from '#src/ports.ts';
-
-// Takes the caller's digest so the seal hashes with the same function the ledger used at write time.
-function workerCtx(digest: Digest): WorkerCtx {
-  return {
-    clock: fixedClock(0),
-    ids: sequentialIds(),
-    digest,
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-    config: testConfig(),
-  };
-}
 
 function emptyFeed(): ReconcileFeed {
   return { pull: async () => ({ processor: [], ledger: [] }) };
@@ -115,7 +93,7 @@ function withFailingCheckpointPut(store: Store, error: Error): Store {
 async function sealsACheckpointOverTheCurrentHeads(): Promise<void> {
   const { store, digest } = await populatedStore();
 
-  const summary = await sealCheckpoint(store, workerCtx(digest));
+  const summary = await sealCheckpoint(store, makeWorkerCtx({ digest }));
 
   assert.notEqual(summary.sealed, null);
   assert.equal(summary.skipped, false);
@@ -126,7 +104,7 @@ async function sealsACheckpointOverTheCurrentHeads(): Promise<void> {
 async function persistsTheSealedCheckpointThroughTheStore(): Promise<void> {
   const { store, digest } = await populatedStore();
 
-  const summary = await sealCheckpoint(store, workerCtx(digest));
+  const summary = await sealCheckpoint(store, makeWorkerCtx({ digest }));
   const latest = await store.checkpoints.latest();
 
   assert.notEqual(latest, null);
@@ -137,7 +115,7 @@ async function persistsTheSealedCheckpointThroughTheStore(): Promise<void> {
 async function sealsACheckpointThatVerifies(): Promise<void> {
   const { store, digest } = await populatedStore();
   const signer = seededSigner(1);
-  const ctx = workerCtx(digest);
+  const ctx = makeWorkerCtx({ digest });
 
   const summary = await sealCheckpoint(store, { ...ctx, signer });
   const ok = await verifyCheckpoint(
@@ -151,7 +129,7 @@ async function sealsACheckpointThatVerifies(): Promise<void> {
 async function reportsNoFaultOnAHealthySeal(): Promise<void> {
   const { store, digest } = await populatedStore();
 
-  const summary = await sealCheckpoint(store, workerCtx(digest));
+  const summary = await sealCheckpoint(store, makeWorkerCtx({ digest }));
 
   assert.deepEqual(summary.deadLettered, []);
   assert.deepEqual(summary.retrying, []);
@@ -163,7 +141,7 @@ async function skipsAFreshLedgerWithNoHeads(): Promise<void> {
   const digest = seededDigest(1);
   const store = memoryStore({ digest });
 
-  const summary = await sealCheckpoint(store, workerCtx(digest));
+  const summary = await sealCheckpoint(store, makeWorkerCtx({ digest }));
 
   assert.equal(summary.skipped, true);
   assert.equal(summary.sealed, null);
@@ -173,7 +151,7 @@ async function persistsNothingWhenTheLedgerIsEmpty(): Promise<void> {
   const digest = seededDigest(1);
   const store = memoryStore({ digest });
 
-  await sealCheckpoint(store, workerCtx(digest));
+  await sealCheckpoint(store, makeWorkerCtx({ digest }));
   const latest = await store.checkpoints.latest();
 
   assert.equal(latest, null);
@@ -188,7 +166,7 @@ async function retriesATransientStoreFault(): Promise<void> {
     fault('STORE.FAILURE', 'put failed', { retryable: true }),
   );
 
-  const summary = await sealCheckpoint(failing, workerCtx(digest));
+  const summary = await sealCheckpoint(failing, makeWorkerCtx({ digest }));
 
   assert.equal(summary.sealed, null);
   assert.deepEqual(summary.retrying, [{ code: 'STORE.FAILURE' }]);
@@ -202,7 +180,7 @@ async function deadLettersATerminalFault(): Promise<void> {
     fault('LEDGER.UNBALANCED', 'terminal', { retryable: false }),
   );
 
-  const summary = await sealCheckpoint(failing, workerCtx(digest));
+  const summary = await sealCheckpoint(failing, makeWorkerCtx({ digest }));
 
   assert.equal(summary.sealed, null);
   assert.deepEqual(summary.deadLettered, [{ reason: 'LEDGER.UNBALANCED' }]);
@@ -251,7 +229,7 @@ function withTruncatedHeads(store: Store, keep: number): Store {
 async function skipsWhenNoCheckpointHasBeenSealed(): Promise<void> {
   const { store, digest } = await populatedStore();
 
-  const summary = await reverifyCheckpoint(store, workerCtx(digest));
+  const summary = await reverifyCheckpoint(store, makeWorkerCtx({ digest }));
 
   assert.equal(summary.skipped, true);
   assert.equal(summary.verified, null);
@@ -262,7 +240,7 @@ async function skipsWhenNoCheckpointHasBeenSealed(): Promise<void> {
 
 async function reportsAHealthyMatchOnAnUnchangedLedger(): Promise<void> {
   const { store, digest } = await populatedStore();
-  const ctx = workerCtx(digest);
+  const ctx = makeWorkerCtx({ digest });
   const sealed = await sealCheckpoint(store, ctx);
 
   const summary = await reverifyCheckpoint(store, ctx);
@@ -276,7 +254,7 @@ async function reportsAHealthyMatchOnAnUnchangedLedger(): Promise<void> {
 
 async function flagsAMismatchAfterTheLedgerChanges(): Promise<void> {
   const { store, digest } = await populatedStore();
-  const ctx = workerCtx(digest);
+  const ctx = makeWorkerCtx({ digest });
   const sealed = await sealCheckpoint(store, ctx);
   await mutateLedger(store, 'usr_a');
 
@@ -293,7 +271,7 @@ async function verifiesThePriorCheckpointBeforeSealingAFreshOne(): Promise<void>
   // A checkpoint sealed this cycle would match by construction, so mismatch=true from a single
   // runSweeps call proves the verify ran against the prior checkpoint, before the fresh seal.
   const { store, digest } = await populatedStore();
-  const ctx = workerCtx(digest);
+  const ctx = makeWorkerCtx({ digest });
   await sealCheckpoint(store, ctx);
   await mutateLedger(store, 'usr_a');
 
@@ -310,7 +288,7 @@ async function verifiesThePriorCheckpointBeforeSealingAFreshOne(): Promise<void>
 
 async function flagsAMismatchWhenHeadsAreTruncated(): Promise<void> {
   const { store, digest } = await populatedStore();
-  const ctx = workerCtx(digest);
+  const ctx = makeWorkerCtx({ digest });
   // Post the seed's exact opposite so every account's raw leg sum nets to zero on its own. The
   // seal refuses a nonzero total, so a one-account subset must itself be balanced for the
   // truncated seal below to go through.
@@ -349,7 +327,7 @@ async function flagsAMismatchWhenHeadsAreTruncated(): Promise<void> {
 
 async function verifiesWhenTheHeadSetGrewSinceSealing(): Promise<void> {
   const { store, digest } = await populatedStore();
-  const ctx = workerCtx(digest);
+  const ctx = makeWorkerCtx({ digest });
   // Re-verify with the sealed count pinned to 1 so the live count (2) exceeds it. A grown head
   // set is healthy: the >= guard does not fire and the unchanged root still matches.
   const sealed = await sealCheckpoint(store, ctx);
@@ -372,7 +350,7 @@ async function verifiesWhenTheHeadSetGrewSinceSealing(): Promise<void> {
 
 async function deadLettersACorruptCheckpointRow(): Promise<void> {
   const { store, digest } = await populatedStore();
-  const ctx = workerCtx(digest);
+  const ctx = makeWorkerCtx({ digest });
   await sealCheckpoint(store, ctx);
   const real = await store.checkpoints.latest();
   // A valid, matching root with a malformed signature: verification reaches the signature check,

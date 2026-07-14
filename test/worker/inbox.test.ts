@@ -17,38 +17,10 @@ import { drainInbox, type InboxSummary } from '#src/worker/inbox.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { fault } from '#src/errors.ts';
 import { credit } from '#test/support/builders.ts';
-import {
-  fixedClock,
-  sequentialIds,
-  seededDigest,
-  seededSigner,
-  fixedRates,
-  testLogger,
-  noopMeter,
-  fakeProcessor,
-  testConfig,
-} from '#test/support/capabilities.ts';
+import { makeWorkerCtx, testConfig } from '#test/support/capabilities.ts';
 
-import type { WorkerCtx } from '#src/contract.ts';
 import type { Economy, Operation, Outcome } from '#src/contract.ts';
 import type { InboxEntry, Store } from '#src/ports.ts';
-
-// A small `maxInboxAttempts` drives a poison row to its dead-letter cap in a few sweeps.
-function workerCtx(maxInboxAttempts?: number): WorkerCtx {
-  const config = testConfig();
-  return {
-    clock: fixedClock(0),
-    ids: sequentialIds(),
-    digest: seededDigest(1),
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-    config:
-      maxInboxAttempts === undefined ? config : { ...config, maxInboxAttempts },
-  };
-}
 
 // The provider event id doubles as the row `key` and the operation's idempotencyKey.
 function topUp(eventId: string): Operation {
@@ -102,7 +74,11 @@ function sweep(
   limit = 10,
   maxInboxAttempts?: number,
 ): Promise<InboxSummary> {
-  return drainInbox(store, workerCtx(maxInboxAttempts), {
+  const ctx =
+    maxInboxAttempts === undefined
+      ? makeWorkerCtx()
+      : makeWorkerCtx({ config: { ...testConfig(), maxInboxAttempts } });
+  return drainInbox(store, ctx, {
     economy: economy as Economy,
     now: 0,
     limit,

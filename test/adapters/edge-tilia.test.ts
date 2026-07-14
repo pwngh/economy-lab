@@ -37,6 +37,7 @@ import {
   defaultPricing,
   fixedClock,
   fixedRates,
+  makeWorkerCtx,
   noopMeter,
   seededDigest,
   seededSigner,
@@ -50,26 +51,12 @@ import type {
   TiliaScenario,
   TiliaScenarioOptions,
 } from '@pwngh/economy-edge/testing';
-import type { Ctx, WorkerCtx } from '#src/contract.ts';
+import type { Ctx } from '#src/contract.ts';
 import type { Amount } from '#src/money.ts';
 import type { Saga, Store, Unit } from '#src/ports.ts';
 
 function edgeFrom(scenario: TiliaScenario): Edge {
   return compose({ outbound: [tilia(scenario.config)] });
-}
-
-function workerCtx(edge: Edge, clock = fixedClock(1_000)): WorkerCtx {
-  return {
-    clock,
-    ids: sequentialIds(),
-    digest: seededDigest(1),
-    signer: seededSigner(1),
-    processor: edgeTiliaProcessor(edge.outbound),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-    config: testConfig(),
-  };
 }
 
 async function fund(
@@ -176,10 +163,17 @@ describe('edge-tilia shim (the compiled @pwngh/economy-edge package behind the l
     const edge = edgeFrom(scenario);
     await openSaga(store, saga({ id: 'pay_1', state: 'RESERVED' }));
 
-    const summary = await advanceDuePayouts(store, workerCtx(edge), {
-      now: 1_000,
-      limit: 10,
-    });
+    const summary = await advanceDuePayouts(
+      store,
+      makeWorkerCtx({
+        clock: fixedClock(1_000),
+        processor: edgeTiliaProcessor(edge.outbound),
+      }),
+      {
+        now: 1_000,
+        limit: 10,
+      },
+    );
 
     assert.deepEqual(summary.submitted, ['pay_1']);
     const submitted = await store.sagas.load('pay_1');
@@ -201,10 +195,17 @@ describe('edge-tilia shim (the compiled @pwngh/economy-edge package behind the l
       }),
     );
 
-    const summary = await advanceDuePayouts(store, workerCtx(edge), {
-      now: 1_000,
-      limit: 10,
-    });
+    const summary = await advanceDuePayouts(
+      store,
+      makeWorkerCtx({
+        clock: fixedClock(1_000),
+        processor: edgeTiliaProcessor(edge.outbound),
+      }),
+      {
+        now: 1_000,
+        limit: 10,
+      },
+    );
 
     assert.deepEqual(summary.deadLettered, [
       { id: 'pay_1', reason: 'payout.provider_failed' },
@@ -233,7 +234,10 @@ describe('edge-tilia shim (the compiled @pwngh/economy-edge package behind the l
 
     const summary = await advanceDuePayouts(
       store,
-      workerCtx(edge, fixedClock(past)),
+      makeWorkerCtx({
+        clock: fixedClock(past),
+        processor: edgeTiliaProcessor(edge.outbound),
+      }),
       { now: past, limit: 10 },
     );
 

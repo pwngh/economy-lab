@@ -16,35 +16,10 @@ import { sweepFloatCoverage } from '#src/worker/treasury.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { credit, usd } from '#test/support/builders.ts';
-import {
-  fakeProcessor,
-  fixedClock,
-  fixedRates,
-  noopMeter,
-  seededDigest,
-  seededSigner,
-  sequentialIds,
-  testConfig,
-  testLogger,
-} from '#test/support/capabilities.ts';
+import { makeWorkerCtx } from '#test/support/capabilities.ts';
 
-import type { WorkerCtx } from '#src/contract.ts';
 import type { Amount } from '#src/money.ts';
 import type { Saga, SagaState, Store } from '#src/ports.ts';
-
-function workerCtx(): WorkerCtx {
-  return {
-    clock: fixedClock(0),
-    ids: sequentialIds(),
-    digest: seededDigest(1),
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-    config: testConfig(),
-  };
-}
 
 async function openSaga(
   store: Store,
@@ -82,7 +57,7 @@ describe('sweepFloatCoverage', () => {
 
     const summary = await sweepFloatCoverage(
       store,
-      workerCtx(),
+      makeWorkerCtx(),
       feedOf(usd('0.04')),
       { now: 0 },
     );
@@ -99,7 +74,7 @@ describe('sweepFloatCoverage', () => {
 
     const summary = await sweepFloatCoverage(
       store,
-      workerCtx(),
+      makeWorkerCtx(),
       feedOf(usd('0.01')),
       { now: 0 },
     );
@@ -121,7 +96,7 @@ describe('sweepFloatCoverage', () => {
       },
     };
 
-    const summary = await sweepFloatCoverage(store, workerCtx(), failing, {
+    const summary = await sweepFloatCoverage(store, makeWorkerCtx(), failing, {
       now: 0,
     });
 

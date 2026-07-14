@@ -36,15 +36,11 @@ import {
   usd,
 } from '#test/support/builders.ts';
 import {
-  fakeProcessor,
   fixedClock,
-  fixedRates,
-  noopMeter,
+  makeWorkerCtx,
   sequentialIds,
   seededDigest,
-  seededSigner,
   testConfig,
-  testLogger,
 } from '#test/support/capabilities.ts';
 
 import type { Economy } from '#src/economy.ts';
@@ -117,17 +113,7 @@ function webhookCtx(): { ids: Ids; clock: Clock } {
 
 // The submit sweep needs the clock past the request-time PENDING SLA to find a RESERVED payout due.
 function workerCtxAt(now: number): WorkerCtx {
-  return {
-    clock: fixedClock(now),
-    ids: sequentialIds(),
-    digest: seededDigest(1),
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-    config: testConfig(),
-  };
+  return makeWorkerCtx({ clock: fixedClock(now) });
 }
 
 function drainOnce(

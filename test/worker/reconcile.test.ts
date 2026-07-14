@@ -14,37 +14,12 @@ import assert from 'node:assert/strict';
 
 import { reconcileDueWindows } from '#src/worker/reconcile.ts';
 import { fault } from '#src/errors.ts';
-import {
-  fixedClock,
-  sequentialIds,
-  seededDigest,
-  seededSigner,
-  fixedRates,
-  testLogger,
-  noopMeter,
-  fakeProcessor,
-  testConfig,
-} from '#test/support/capabilities.ts';
+import { makeWorkerCtx } from '#test/support/capabilities.ts';
 import { usd } from '#test/support/builders.ts';
 
-import type { WorkerCtx } from '#src/contract.ts';
 import type { ReconcileFeed } from '#src/worker/reconcile.ts';
 import type { ReconcileInputs } from '#src/reconcile.ts';
 import type { Range } from '#src/ports.ts';
-
-function workerCtx(): WorkerCtx {
-  return {
-    clock: fixedClock(0),
-    ids: sequentialIds(),
-    digest: seededDigest(1),
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-    config: testConfig(),
-  };
-}
 
 function feedOf(byWindow: Map<number, ReconcileInputs>): ReconcileFeed {
   return {
@@ -128,7 +103,7 @@ describe('reconcileDueWindows', () => {
   test('tallies a fully matched window as reconciled', async () => {
     const feed = feedOf(new Map([[WINDOW.from, MATCHED]]));
 
-    const summary = await reconcileDueWindows(feed, workerCtx(), {
+    const summary = await reconcileDueWindows(feed, makeWorkerCtx(), {
       windows: [WINDOW],
     });
 
@@ -142,7 +117,7 @@ describe('reconcileDueWindows', () => {
   test('tallies a window with an amount drift as drifted, not failed', async () => {
     const feed = feedOf(new Map([[WINDOW.from, DRIFTED]]));
 
-    const summary = await reconcileDueWindows(feed, workerCtx(), {
+    const summary = await reconcileDueWindows(feed, makeWorkerCtx(), {
       windows: [WINDOW],
     });
 
@@ -156,7 +131,7 @@ describe('reconcileDueWindows', () => {
   test('flags a processor record with no ledger counterpart as a processor orphan', async () => {
     const feed = feedOf(new Map([[WINDOW.from, PROCESSOR_ORPHAN]]));
 
-    const summary = await reconcileDueWindows(feed, workerCtx(), {
+    const summary = await reconcileDueWindows(feed, makeWorkerCtx(), {
       windows: [WINDOW],
     });
 
@@ -170,7 +145,7 @@ describe('reconcileDueWindows', () => {
       fault('STORE.FAILURE', 'feed unreachable', { retryable: true }),
     );
 
-    const summary = await reconcileDueWindows(feed, workerCtx(), {
+    const summary = await reconcileDueWindows(feed, makeWorkerCtx(), {
       windows: [WINDOW],
     });
 
@@ -196,7 +171,7 @@ describe('reconcileDueWindows', () => {
       },
     };
 
-    const summary = await reconcileDueWindows(feed, workerCtx(), {
+    const summary = await reconcileDueWindows(feed, makeWorkerCtx(), {
       windows: [WINDOW, second],
     });
 
@@ -211,10 +186,10 @@ describe('reconcileDueWindows Determinism', () => {
   test('emits a byte-identical report across two runs over the same feed', async () => {
     const feed = feedOf(new Map([[WINDOW.from, MATCHED]]));
 
-    const first = await reconcileDueWindows(feed, workerCtx(), {
+    const first = await reconcileDueWindows(feed, makeWorkerCtx(), {
       windows: [WINDOW],
     });
-    const second = await reconcileDueWindows(feed, workerCtx(), {
+    const second = await reconcileDueWindows(feed, makeWorkerCtx(), {
       windows: [WINDOW],
     });
 

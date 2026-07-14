@@ -19,37 +19,11 @@ import { credit as creditLeg, debit, postEntry } from '#src/ledger.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { spendable, earned, SYSTEM } from '#src/accounts.ts';
 import { credit } from '#test/support/builders.ts';
-import {
-  fixedClock,
-  sequentialIds,
-  seededDigest,
-  seededSigner,
-  fakeProcessor,
-  fixedRates,
-  testLogger,
-  noopMeter,
-  testConfig,
-} from '#test/support/capabilities.ts';
+import { fixedClock, makeWorkerCtx } from '#test/support/capabilities.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
 import type { Amount } from '#src/money.ts';
-import type { WorkerCtx } from '#src/contract.ts';
-import type { Config } from '#src/config.ts';
 import type { Options, Store, Subscription, Unit } from '#src/ports.ts';
-
-function workerCtx(overrides?: { config?: Config }): WorkerCtx {
-  return {
-    clock: fixedClock(0),
-    ids: sequentialIds(),
-    digest: seededDigest(1),
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-    config: overrides?.config ?? testConfig(),
-  };
-}
 
 // The matching debit goes to STORED_VALUE, which may go negative, keeping the seed balanced
 // and REVENUE at zero for the assertions.
@@ -115,7 +89,7 @@ async function chargesAFundedRenewalAndAdvancesTheDueTime(
   });
   await openSub(store, sub, credit('100.00'));
 
-  const summary = await sweepDueSubscriptions(store, workerCtx(), {
+  const summary = await sweepDueSubscriptions(store, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -147,7 +121,7 @@ async function roundsTheFeeUpToAWholeCreditTowardThePlatform(
   const sub = subscription({ id: 'sub_1', price: credit('100.01') });
   await openSub(store, sub, credit('100.01'));
 
-  const summary = await sweepDueSubscriptions(store, workerCtx(), {
+  const summary = await sweepDueSubscriptions(store, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -166,7 +140,7 @@ async function lapsesAnUnderfundedRenewalWithNoPosting(
   const sub = subscription({ id: 'sub_1', price: credit('100.00') });
   await openSub(store, sub, credit('99.99'));
 
-  const summary = await sweepDueSubscriptions(store, workerCtx(), {
+  const summary = await sweepDueSubscriptions(store, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -191,7 +165,7 @@ async function leavesANotYetDueSubscriptionAlone(store: Store): Promise<void> {
   const sub = subscription({ id: 'sub_1', nextDueAt: 5_000 });
   await openSub(store, sub, credit('100.00'));
 
-  const summary = await sweepDueSubscriptions(store, workerCtx(), {
+  const summary = await sweepDueSubscriptions(store, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -208,7 +182,7 @@ async function billsAndLapsesAcrossOneBatchIndependently(): Promise<void> {
   await openSub(store, subscription({ id: 'sub_funded' }), credit('100.00'));
   await openSub(store, subscription({ id: 'sub_broke' }), credit('0.00'));
 
-  const summary = await sweepDueSubscriptions(store, workerCtx(), {
+  const summary = await sweepDueSubscriptions(store, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -235,7 +209,7 @@ async function isolatesAPerItemFaultAndDeadLettersWhileTheBatchContinues(): Prom
 
   const faulting = faultOnBuyerBalance(store, 'usr_bad');
 
-  const summary = await sweepDueSubscriptions(faulting, workerCtx(), {
+  const summary = await sweepDueSubscriptions(faulting, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -309,7 +283,7 @@ async function bumpsAttemptsAndKeepsRetryingBelowTheCap(): Promise<void> {
   await openSub(store, subscription({ id: 'sub_flaky' }), credit('100.00'));
   const flaky = retryableFaultOnBuyerBalance(store, 'usr_buyer');
 
-  const summary = await sweepDueSubscriptions(flaky, workerCtx(), {
+  const summary = await sweepDueSubscriptions(flaky, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -331,7 +305,7 @@ async function lapsesAPersistentlyFailingSubscriptionAtTheCap(): Promise<void> {
   const store = memoryStore();
   await openSub(store, subscription({ id: 'sub_flaky' }), credit('100.00'));
   const flaky = retryableFaultOnBuyerBalance(store, 'usr_buyer');
-  const ctx = workerCtx(); // testConfig().maxSubscriptionAttempts === 3
+  const ctx = makeWorkerCtx(); // testConfig().maxSubscriptionAttempts === 3
 
   const first = await sweepDueSubscriptions(flaky, ctx, {
     now: 1_000,
@@ -379,7 +353,7 @@ async function lapsesAPersistentlyFailingSubscriptionAtTheCap(): Promise<void> {
 async function resetsAttemptsToZeroOnASuccessfulRenewal(): Promise<void> {
   const store = memoryStore();
   await openSub(store, subscription({ id: 'sub_flaky' }), credit('100.00'));
-  const ctx = workerCtx();
+  const ctx = makeWorkerCtx();
 
   const flaky = retryableFaultOnBuyerBalance(store, 'usr_buyer');
   await sweepDueSubscriptions(flaky, ctx, { now: 1_000, limit: 10 });
@@ -423,11 +397,11 @@ async function billsExactlyOnceAcrossTwoOverlappingSweeps(): Promise<void> {
   await openSub(store, sub, credit('200.00'));
   const frozen = staleClaimDue(store, sub);
 
-  const first = await sweepDueSubscriptions(frozen, workerCtx(), {
+  const first = await sweepDueSubscriptions(frozen, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
-  const second = await sweepDueSubscriptions(frozen, workerCtx(), {
+  const second = await sweepDueSubscriptions(frozen, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -474,7 +448,7 @@ async function reGrantsThePerkWithAdvancedExpiryOnRenewal(): Promise<void> {
   // No live grant before the sweep (the worker is what re-grants on renewal).
   assert.equal(await store.entitlements.owns('usr_buyer', 'club_pass'), false);
 
-  const summary = await sweepDueSubscriptions(store, workerCtx(), {
+  const summary = await sweepDueSubscriptions(store, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -508,7 +482,7 @@ async function lapseRevokesThePerkAndEmitsOneLapsedEvent(): Promise<void> {
   });
   assert.equal(await store.entitlements.owns('usr_buyer', 'club_pass'), true);
 
-  const summary = await sweepDueSubscriptions(store, workerCtx(), {
+  const summary = await sweepDueSubscriptions(store, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });

@@ -19,35 +19,10 @@ import { memoryStore } from '#src/adapters/memory.ts';
 import { toAmount } from '#src/money.ts';
 import { fault } from '#src/errors.ts';
 import { promo, spendable, SYSTEM } from '#src/accounts.ts';
-import {
-  fixedClock,
-  sequentialIds,
-  seededDigest,
-  seededSigner,
-  fakeProcessor,
-  fixedRates,
-  testLogger,
-  noopMeter,
-  testConfig,
-} from '#test/support/capabilities.ts';
+import { seededDigest, makeWorkerCtx } from '#test/support/capabilities.ts';
 
 import type { Meter } from '#src/ports.ts';
-import type { WorkerCtx } from '#src/contract.ts';
 import type { PromoGrant, Store, Unit } from '#src/ports.ts';
-
-function workerCtx(overrides?: { meter?: Meter }): WorkerCtx {
-  return {
-    clock: fixedClock(0),
-    ids: sequentialIds(),
-    digest: seededDigest(1),
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: overrides?.meter ?? noopMeter(),
-    config: testConfig(),
-  };
-}
 
 function capturingMeter(): {
   meter: Meter;
@@ -122,7 +97,7 @@ async function reversesAnUnspentExpiredGrantToPromoFloat(): Promise<void> {
   const grant = grantOf('usr_a', 'txn_grant_a', 500n, 1_000);
   await issueGrant(store, grant);
 
-  const summary = await sweepExpiredPromos(store, workerCtx(), {
+  const summary = await sweepExpiredPromos(store, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -138,7 +113,7 @@ async function reversesAnUnspentExpiredGrantToPromoFloat(): Promise<void> {
   const floatAfter = await store.ledger.balance(SYSTEM.PROMO_FLOAT);
   assert.deepEqual(floatAfter, floatBeforeGrant);
 
-  const again = await sweepExpiredPromos(store, workerCtx(), {
+  const again = await sweepExpiredPromos(store, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -152,7 +127,7 @@ async function reversesOnlyThePartTheUserDidNotSpend(): Promise<void> {
   await issueGrant(store, grant);
   await store.transaction((unit) => spendPromo(unit, 'usr_b', 300n));
 
-  const summary = await sweepExpiredPromos(store, workerCtx(), {
+  const summary = await sweepExpiredPromos(store, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -175,7 +150,7 @@ async function reversesNothingWhenTheGrantIsFullySpent(): Promise<void> {
 
   const floatBefore = await store.ledger.balance(SYSTEM.PROMO_FLOAT);
 
-  const summary = await sweepExpiredPromos(store, workerCtx(), {
+  const summary = await sweepExpiredPromos(store, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -189,7 +164,7 @@ async function reversesNothingWhenTheGrantIsFullySpent(): Promise<void> {
   const floatAfter = await store.ledger.balance(SYSTEM.PROMO_FLOAT);
   assert.deepEqual(floatAfter, floatBefore);
 
-  const again = await sweepExpiredPromos(store, workerCtx(), {
+  const again = await sweepExpiredPromos(store, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -205,7 +180,7 @@ async function neverOverReversesWhenOneUserHasTwoGrants(): Promise<void> {
   await issueGrant(store, grantOf('usr_d', 'txn_grant_d2', 500n, 1_000));
   await store.transaction((unit) => spendPromo(unit, 'usr_d', 800n));
 
-  const summary = await sweepExpiredPromos(store, workerCtx(), {
+  const summary = await sweepExpiredPromos(store, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -229,13 +204,13 @@ async function honorsTheClaimLimit(): Promise<void> {
   await issueGrant(store, grantOf('usr_f', 'txn_grant_e2', 100n, 1_000));
   await issueGrant(store, grantOf('usr_g', 'txn_grant_e3', 100n, 1_000));
 
-  const summary = await sweepExpiredPromos(store, workerCtx(), {
+  const summary = await sweepExpiredPromos(store, makeWorkerCtx(), {
     now: 1_000,
     limit: 2,
   });
   assert.equal(summary.reversed.length, 2);
 
-  const next = await sweepExpiredPromos(store, workerCtx(), {
+  const next = await sweepExpiredPromos(store, makeWorkerCtx(), {
     now: 1_000,
     limit: 2,
   });
@@ -247,7 +222,7 @@ async function skipsGrantsThatHaveNotYetExpired(): Promise<void> {
   const store = memoryStore({ digest: seededDigest(1) });
   await issueGrant(store, grantOf('usr_h', 'txn_grant_h', 500n, 2_000));
 
-  const summary = await sweepExpiredPromos(store, workerCtx(), {
+  const summary = await sweepExpiredPromos(store, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -273,7 +248,7 @@ async function recordsAFailedGrantWithoutMarkingItReversed(): Promise<void> {
     },
   };
 
-  const summary = await sweepExpiredPromos(failing, workerCtx(), {
+  const summary = await sweepExpiredPromos(failing, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -296,7 +271,7 @@ async function countsReversedAndFailedOnTheMeter(): Promise<void> {
   await issueGrant(store, grantOf('usr_j', 'txn_grant_j', 500n, 1_000));
   const { meter, counts } = capturingMeter();
 
-  await sweepExpiredPromos(store, workerCtx({ meter }), {
+  await sweepExpiredPromos(store, makeWorkerCtx({ meter }), {
     now: 1_000,
     limit: 10,
   });
@@ -323,7 +298,7 @@ async function leavesSpendableBalancesUntouched(): Promise<void> {
   );
   await issueGrant(store, grantOf('usr_k', 'txn_grant_k', 500n, 1_000));
 
-  await sweepExpiredPromos(store, workerCtx(), { now: 1_000, limit: 10 });
+  await sweepExpiredPromos(store, makeWorkerCtx(), { now: 1_000, limit: 10 });
 
   const spend = await store.ledger.balance(spendable('usr_k'));
   assert.deepEqual(spend, toAmount('CREDIT', 700n));

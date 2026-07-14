@@ -21,19 +21,12 @@ import { earned, SYSTEM } from '#src/accounts.ts';
 import { credit, usd } from '#test/support/builders.ts';
 import {
   fixedClock,
-  sequentialIds,
-  seededDigest,
-  seededSigner,
-  fakeProcessor,
-  fixedRates,
-  testLogger,
-  noopMeter,
+  makeWorkerCtx,
   testConfig,
 } from '#test/support/capabilities.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
 import type { Amount } from '#src/money.ts';
-import type { WorkerCtx } from '#src/contract.ts';
 import type { Config } from '#src/config.ts';
 import type {
   Options,
@@ -43,24 +36,6 @@ import type {
   Store,
   Unit,
 } from '#src/ports.ts';
-
-function workerCtx(overrides?: {
-  processor?: Processor;
-  config?: Config;
-  clock?: WorkerCtx['clock'];
-}): WorkerCtx {
-  return {
-    clock: overrides?.clock ?? fixedClock(0),
-    ids: sequentialIds(),
-    digest: seededDigest(1),
-    signer: seededSigner(1),
-    processor: overrides?.processor ?? fakeProcessor(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-    config: overrides?.config ?? testConfig(),
-  };
-}
 
 // The matching half goes to STORED_VALUE, which may go negative and is never read here, so
 // seeding trips no overdraft check and leaves REVENUE alone.
@@ -151,7 +126,7 @@ async function submitsAReservedSagaToTheProvider(store: Store): Promise<void> {
     saga({ id: 'pay_1', state: 'RESERVED', reserve: credit('4.00') }),
   );
 
-  const summary = await advanceDuePayouts(store, workerCtx({ processor }), {
+  const summary = await advanceDuePayouts(store, makeWorkerCtx({ processor }), {
     now: 1_000,
     limit: 10,
   });
@@ -177,7 +152,7 @@ async function leavesAWithinWindowSubmittedSagaForTheWebhook(
     saga({ id: 'pay_1', state: 'SUBMITTED', reserve: credit('4.00') }),
   );
 
-  const summary = await advanceDuePayouts(store, workerCtx(), {
+  const summary = await advanceDuePayouts(store, makeWorkerCtx(), {
     now: 1_000,
     limit: 10,
   });
@@ -218,7 +193,7 @@ async function forceFailsASubmittedSagaPastTheMaxAgeAndReturnsTheReserve(
 
   const summary = await advanceDuePayouts(
     store,
-    workerCtx({ config, clock: fixedClock(120_000) }),
+    makeWorkerCtx({ config, clock: fixedClock(120_000) }),
     { now: 120_000, limit: 10 },
   );
 
@@ -265,7 +240,7 @@ async function leavesASubmittedSagaAtTheAgeBoundaryForTheWebhook(
 
   const summary = await advanceDuePayouts(
     store,
-    workerCtx({ config, clock: fixedClock(60_000) }),
+    makeWorkerCtx({ config, clock: fixedClock(60_000) }),
     { now: 60_000, limit: 10 },
   );
 
@@ -296,7 +271,7 @@ async function deadLettersAProviderFaultPastTheAttemptCeiling(
 
   const summary = await advanceDuePayouts(
     store,
-    workerCtx({ processor: failingProcessor(), config }),
+    makeWorkerCtx({ processor: failingProcessor(), config }),
     { now: 1_000, limit: 10 },
   );
 
@@ -326,7 +301,7 @@ async function leavesARetryableFaultUnderTheCeilingForTheNextSweep(
 
   const summary = await advanceDuePayouts(
     store,
-    workerCtx({ processor: failingProcessor(), config }),
+    makeWorkerCtx({ processor: failingProcessor(), config }),
     { now: 1_000, limit: 10 },
   );
 
@@ -345,7 +320,7 @@ async function climbsAttemptsEachRunThenDeadLettersAndReturnsTheReserve(
   store: Store,
 ): Promise<void> {
   const config: Config = { ...testConfig(), maxPayoutAttempts: 3 };
-  const ctx = workerCtx({ processor: failingProcessor(), config });
+  const ctx = makeWorkerCtx({ processor: failingProcessor(), config });
   await openSaga(store, saga({ id: 'pay_1', state: 'RESERVED', attempts: 0 }));
 
   // dueAt is unchanged, so every run re-selects the saga.
@@ -393,7 +368,7 @@ async function isolatesAPerItemFaultAndContinuesTheBatch(): Promise<void> {
 
   const summary = await advanceDuePayouts(
     store,
-    workerCtx({ processor, config }),
+    makeWorkerCtx({ processor, config }),
     {
       now: 1_000,
       limit: 10,
@@ -424,7 +399,7 @@ async function deadLetteringEmitsOnePayoutReversedEvent(
 
   await advanceDuePayouts(
     store,
-    workerCtx({ processor: failingProcessor(), config }),
+    makeWorkerCtx({ processor: failingProcessor(), config }),
     { now: 1_000, limit: 10 },
   );
 
@@ -461,7 +436,7 @@ async function reversesPromptlyWhenTheProviderReportsFailure(
 
   const summary = await advanceDuePayouts(
     store,
-    workerCtx({
+    makeWorkerCtx({
       processor: probingProcessor('FAILED', asked),
       clock: fixedClock(1_000),
     }),
@@ -504,7 +479,7 @@ async function reversesPromptlyWhenTheProviderReportsAReturn(
 
   const summary = await advanceDuePayouts(
     store,
-    workerCtx({
+    makeWorkerCtx({
       processor: probingProcessor('RETURNED'),
       clock: fixedClock(1_000),
     }),
@@ -542,7 +517,7 @@ async function neverForceFailsAPayoutTheProviderReportsSettled(
 
   const summary = await advanceDuePayouts(
     store,
-    workerCtx({
+    makeWorkerCtx({
       processor: probingProcessor('SETTLED'),
       config,
       clock: fixedClock(120_000),
@@ -586,7 +561,7 @@ async function defersTheTimeoutWhileTheProviderReportsPending(
 
   const summary = await advanceDuePayouts(
     store,
-    workerCtx({
+    makeWorkerCtx({
       processor: probingProcessor('PENDING'),
       config,
       clock: fixedClock(120_000),
@@ -622,7 +597,7 @@ async function probesOnTheSlaCadenceWhilePendingWithinTheWindow(
 
   const summary = await advanceDuePayouts(
     store,
-    workerCtx({
+    makeWorkerCtx({
       processor: probingProcessor('PENDING'),
       clock: fixedClock(1_000),
     }),
@@ -660,7 +635,7 @@ async function fallsBackToTheTimeoutWhenTheProbeCannotAnswer(): Promise<void> {
 
     const summary = await advanceDuePayouts(
       scoped,
-      workerCtx({
+      makeWorkerCtx({
         processor: probingProcessor(answer),
         config,
         clock: fixedClock(120_000),

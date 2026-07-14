@@ -15,39 +15,9 @@ import assert from 'node:assert/strict';
 
 import { relayOutbox, type RelaySummary } from '#src/worker/relay.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
-import {
-  fixedClock,
-  sequentialIds,
-  seededDigest,
-  seededSigner,
-  fixedRates,
-  testLogger,
-  noopMeter,
-  fakeProcessor,
-  testConfig,
-} from '#test/support/capabilities.ts';
+import { makeWorkerCtx, testConfig } from '#test/support/capabilities.ts';
 
-import type { WorkerCtx } from '#src/contract.ts';
 import type { Dispatcher, EconomyEvent, Store } from '#src/ports.ts';
-
-// A small `maxOutboxAttempts` drives a poison row to its dead-letter cap in a few sweeps.
-function workerCtx(maxOutboxAttempts?: number): WorkerCtx {
-  const config = testConfig();
-  return {
-    clock: fixedClock(0),
-    ids: sequentialIds(),
-    digest: seededDigest(1),
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-    config:
-      maxOutboxAttempts === undefined
-        ? config
-        : { ...config, maxOutboxAttempts },
-  };
-}
 
 function event(id: string): EconomyEvent {
   return {
@@ -88,10 +58,12 @@ function sweep(
   limit = 10,
   maxOutboxAttempts?: number,
 ): Promise<RelaySummary> {
-  return relayOutbox(store, workerCtx(maxOutboxAttempts), {
-    dispatcher,
-    limit,
-  });
+  // A small `maxOutboxAttempts` drives a poison row to its dead-letter cap in a few sweeps.
+  const ctx =
+    maxOutboxAttempts === undefined
+      ? makeWorkerCtx()
+      : makeWorkerCtx({ config: { ...testConfig(), maxOutboxAttempts } });
+  return relayOutbox(store, ctx, { dispatcher, limit });
 }
 
 describe('relayOutbox', () => {

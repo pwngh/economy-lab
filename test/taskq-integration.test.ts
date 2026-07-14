@@ -18,19 +18,8 @@ import { topUp, credit } from '#test/support/builders.ts';
 import { spendable } from '#src/accounts.ts';
 import { isPostgresUrl } from '#src/env.ts';
 import { relayOutbox } from '#src/worker/relay.ts';
-import {
-  fixedClock,
-  sequentialIds,
-  seededDigest,
-  seededSigner,
-  fixedRates,
-  testLogger,
-  noopMeter,
-  fakeProcessor,
-  testConfig,
-} from '#test/support/capabilities.ts';
+import { makeWorkerCtx } from '#test/support/capabilities.ts';
 
-import type { WorkerCtx } from '#src/contract.ts';
 import type { Dispatcher, EconomyEvent } from '#src/ports.ts';
 
 // Optional @pwngh/taskq integration; skips loudly when the peer or a Postgres DATABASE_URL is
@@ -151,21 +140,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// The relay only reads logger, meter, and config; the full object matches the other worker tests.
-function workerCtx(): WorkerCtx {
-  return {
-    clock: fixedClock(0),
-    ids: sequentialIds(),
-    digest: seededDigest(1),
-    signer: seededSigner(1),
-    processor: fakeProcessor(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-    config: testConfig(),
-  };
-}
-
 async function drainTasks(pool: PgPoolLike): Promise<void> {
   const deadline = Date.now() + 15_000;
   for (;;) {
@@ -259,7 +233,7 @@ describe('taskq integration (optional peer)', { skip: skipReason() }, () => {
       await economy.submit(
         topUp({ userId: 'usr_evt', amount: credit('5.00') }),
       );
-      await relayOutbox(store, workerCtx(), { dispatcher, limit: 10 });
+      await relayOutbox(store, makeWorkerCtx(), { dispatcher, limit: 10 });
       assert.equal(delivered.length, 1);
       assert.equal(delivered[0].type, 'economy.credits.topped_up');
 
