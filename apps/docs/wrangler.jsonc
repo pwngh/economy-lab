@@ -1,13 +1,15 @@
 {
   // Cloudflare Pages — direct upload via `wrangler pages deploy` (no Git integration).
   //
-  // This is a fully prerendered static site: only `build/client/` is uploaded.
-  // `build/server/` is a build-time artifact (it renders the HTML) and is never deployed,
-  // so Cloudflare serves pure static files — no Worker, no Functions, no runtime.
+  // The deployable is the composed one-origin site at the repo root: the prerendered docs at /,
+  // the console SPA at /console/, and the snippet runner at /runner/ — assembled by
+  // `npm run site` (scripts/compose-site.mjs) and deployed by `npm run site:deploy`, both at the
+  // repo root. Everything served is pure static files — no Worker, no Functions, no runtime; the
+  // apps' build/server/ output is a build-time artifact (it renders the HTML) and never ships.
   //
   // `pages_build_output_dir` lets `wrangler pages deploy` run with no path argument.
-  // `name` is the Pages project (→ https://economy-lab-docs.pages.dev on first deploy).
+  // `name` is the Pages project (→ https://economy-lab-docs.pages.dev).
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "economy-lab-docs",
-  "pages_build_output_dir": "build/client"
+  "pages_build_output_dir": "../../dist-site"
 }

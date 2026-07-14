@@ -1,0 +1,51 @@
+# Builds the one static site (docs at /, console at /console/) and deploys it to GitHub Pages.
+# Manual trigger only: deploys are a deliberate act, not a side effect of a push.
+name: pages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # Full history: check:ref resolves the docs' pinned REPO_REF commit, which a shallow
+      # checkout would not have.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18'
+          cache: npm
+      - run: npm ci
+      - run: npm ci --prefix apps/docs
+      - run: npm ci --prefix apps/console
+      - run: npm run verify --prefix apps/docs
+      - run: npm run verify --prefix apps/console
+      # The same one-command build a local `npm run site` produces, then the same post-build gates
+      # `npm run site:deploy` runs.
+      - run: npm run check:ref --prefix apps/docs
+      - run: npm run site
+      - run: npm run check:csp --prefix apps/docs -- ../../dist-site
+      - run: npm run check:static --prefix apps/docs
+      - run: node apps/console/scripts/bundle-budget.mjs
+      - run: test -f dist-site/.nojekyll
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist-site
+      - id: deployment
+        uses: actions/deploy-pages@v4

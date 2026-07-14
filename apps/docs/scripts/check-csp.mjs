@@ -11,20 +11,41 @@
 
 // CSP drift guard, run in CI after `build`. Every inline <script> we ship is allow-listed in the CSP
 // by its SHA-256 hash (no 'unsafe-inline' for scripts). This walks the built HTML, re-derives each
-// inline script's hash, and fails if any is missing from public/_headers — so a changed theme script
-// can never silently ship blocked by its own CSP.
+// inline script's hash, and fails if any is missing from the governing _headers rule — so a changed
+// theme script can never silently ship blocked by its own CSP.
+//
+// With no argument it checks this app's build against public/_headers. Given the composed site
+// directory (`node scripts/check-csp.mjs ../../dist-site`) it checks the whole artifact against
+// dist-site/_headers, each page matched to its rule: /console/* against the generated console
+// rule, everything else against `/*`.
 import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 
-const BUILD_DIR = 'build/client';
-const HEADERS_FILE = 'public/_headers';
+const SITE_DIR = process.argv[2];
+const BUILD_DIR = SITE_DIR ?? 'build/client';
+const HEADERS_FILE = SITE_DIR ? join(SITE_DIR, '_headers') : 'public/_headers';
 
-// Pull the sha256-... tokens out of the CSP script-src directive in _headers.
-const headers = readFileSync(HEADERS_FILE, 'utf8');
-const cspLine = headers.split('\n').find((l) => l.includes('Content-Security-Policy:')) ?? '';
-const scriptSrc = (cspLine.split('script-src')[1] ?? '').split(';')[0];
-const allowed = new Set([...scriptSrc.matchAll(/'sha256-[^']+'/g)].map((m) => m[0]));
+// The sha256-... tokens of each rule's script-src, keyed by the rule's path pattern.
+function hashRules(headersText) {
+  const rules = new Map();
+  let pattern = null;
+  for (const line of headersText.split('\n')) {
+    if (/^\S/.test(line) && !line.startsWith('#')) {
+      pattern = line.trim();
+      continue;
+    }
+    if (pattern && line.includes('Content-Security-Policy:')) {
+      const scriptSrc = (line.split('script-src')[1] ?? '').split(';')[0];
+      rules.set(pattern, new Set([...scriptSrc.matchAll(/'sha256-[^']+'/g)].map((m) => m[0])));
+    }
+  }
+  return rules;
+}
+
+const rules = hashRules(readFileSync(HEADERS_FILE, 'utf8'));
+const rootAllowed = rules.get('/*') ?? new Set();
+const consoleAllowed = rules.get('/console/*') ?? rootAllowed;
 
 function walk(dir) {
   let out = [];
@@ -38,6 +59,8 @@ function walk(dir) {
 
 const missing = new Map(); // hash -> first file it appeared in
 for (const file of walk(BUILD_DIR)) {
+  const underConsole = relative(BUILD_DIR, file).split(sep)[0] === 'console';
+  const allowed = underConsole ? consoleAllowed : rootAllowed;
   const html = readFileSync(file, 'utf8');
   // Inline scripts only: a <script> with no src= attribute.
   for (const m of html.matchAll(/<script(?![^>]*\bsrc=)([^>]*)>([\s\S]*?)<\/script>/g)) {
@@ -53,12 +76,14 @@ for (const file of walk(BUILD_DIR)) {
 }
 
 if (missing.size > 0) {
-  console.error('CSP check failed — inline script hashes missing from public/_headers script-src:');
+  console.error(`CSP check failed — inline script hashes missing from ${HEADERS_FILE} script-src:`);
   for (const [hash, file] of missing) console.error(`  ${hash}  (first seen in ${file})`);
-  console.error('\nAdd them to the script-src directive in public/_headers.');
+  console.error(
+    '\nDocs pages: add them to public/_headers. Console pages: re-run scripts/compose-site.mjs.',
+  );
   process.exit(1);
 }
 
 console.log(
-  `CSP check passed — every inline script hash is allow-listed (${allowed.size} hashes).`,
+  `CSP check passed — every inline script hash is allow-listed (${rootAllowed.size} docs, ${consoleAllowed.size} console).`,
 );

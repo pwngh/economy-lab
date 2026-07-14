@@ -2,14 +2,14 @@
 
 Documentation site for [economy-lab](https://github.com/pwngh/economy-lab) — _correctness in systems that move money._
 
-A static, prerendered docs site (React Router 7 + Vite + MDX) that ships **zero client JavaScript** on content pages and deploys to Cloudflare Pages as flat HTML.
+A static, prerendered docs site (React Router 7 + Vite + MDX) that ships **zero client JavaScript** on content pages (hydration is guarded by `check:static`; the runnable-snippet enhancer loads its engine only on the first Run click) and deploys as flat HTML — composed with the console app into one static site.
 
 ## Develop
 
 ```sh
 npm install
-npm run dev        # local dev server
-npm run build      # prerender to build/client/
+npm run dev        # this app alone; `npm run site:dev` at the repo root runs docs + console on one origin
+npm run build      # snippet runner, then prerender to build/client/
 npm test           # vitest, incl. the slug-contract guard
 npm run verify     # typecheck + lint + test
 ```
@@ -35,4 +35,4 @@ It then appears in the sidebar, its section index, the prev/next sequence, and t
 
 ## Deploy
 
-Cloudflare Pages, direct upload: `npm run deploy` builds and `wrangler pages deploy`s `build/client/`. Node is pinned to 22 via `.node-version`.
+The deployable is the composed one-origin site (docs at `/`, console at `/console/`), assembled at the repo root: `npm run site` builds it into `dist-site/`, and `npm run site:deploy` runs both apps' verify suites, the CSP/static/bundle-budget gates, then `wrangler pages deploy`s it (direct upload; `wrangler.jsonc` points at `../../dist-site`). A manual-trigger GitHub Pages workflow (`.github/workflows/pages.yml`) ships the identical artifact. Node is pinned to 22 via `.node-version`.

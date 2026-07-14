@@ -14,3 +14,4 @@ apps
 # vendored @pwngh/money: byte-identical to upstream; selfTest is the drift guard
 src/money.vendored.ts
 src/db.vendored.ts
+dist-site

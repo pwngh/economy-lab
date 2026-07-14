@@ -28,9 +28,10 @@ jobs:
       - run: npm ci
       - run: npm run check
 
-  # The two Remix apps live outside the root lint/typecheck gate (their own toolchains), so this
-  # job is what catches a src/ rename breaking their deep imports. Type-level only — the docs
-  # app's anchor tests stay in its deploy pipeline, where anchor rot is handled deliberately.
+  # The two React Router apps live outside the root lint/typecheck gate (their own toolchains).
+  # The console runs its full verify suite plus the bundle budget; the docs run typecheck only —
+  # their content tests and anchor checks stay in the site deploy pipeline (pages.yml /
+  # site:deploy), where anchor rot is handled deliberately.
   apps:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -42,7 +43,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm ci --prefix apps/console
-      - run: npm run typecheck --prefix apps/console
+      - run: npm run verify --prefix apps/console
+      - run: npm run budget --prefix apps/console
       - run: npm ci --prefix apps/docs
       - run: npm run typecheck --prefix apps/docs
 
