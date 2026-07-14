@@ -291,6 +291,65 @@ input[type="number"] {
   color: var(--pos);
 }
 
+/* The tour strip: one caption per page, carried by ?tour=n — plain links, keyboard-complete. */
+.tour {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  margin-bottom: var(--s4);
+  padding: var(--s3) var(--s4);
+  background: var(--accent-wash);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  font-size: var(--t-sm);
+}
+.tour-count {
+  color: var(--ink-3);
+}
+.tour-caption {
+  flex: 1;
+}
+.tour-actions {
+  display: inline-flex;
+  gap: var(--s4);
+  white-space: nowrap;
+}
+.tour-next {
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.tour-exit {
+  color: var(--ink-3);
+}
+.tour-next:hover,
+.tour-exit:hover {
+  text-decoration: underline;
+}
+
+/* Live mode: the dot breathes while the interval ticks the clock and the worker. */
+.live-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  transition: background-color 0.2s ease;
+}
+.live-toggle.on .live-dot {
+  background: var(--pos);
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+@keyframes live-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
 /* --- Page column. --- */
 .main {
   padding: var(--s8) var(--s10) 72px;
@@ -1350,7 +1409,7 @@ code {
   margin-top: var(--s3);
 }
 
-/* Scenario launchers: one-click staged stories on the Overview. */
+/* --- Overview: scenario launchers, one-click staged stories. --- */
 .scenario-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
@@ -1369,63 +1428,4 @@ code {
 .scenario-sub {
   font-size: var(--t-sm);
   color: var(--ink-2);
-}
-
-/* The tour strip: one caption per page, carried by ?tour=n — plain links, keyboard-complete. */
-.tour {
-  width: 100%;
-  display: flex;
-  align-items: baseline;
-  gap: var(--s3);
-  margin-bottom: var(--s4);
-  padding: var(--s3) var(--s4);
-  background: var(--accent-wash);
-  border: 1px solid var(--rule);
-  border-radius: var(--r-2);
-  font-size: var(--t-sm);
-}
-.tour-count {
-  color: var(--ink-3);
-}
-.tour-caption {
-  flex: 1;
-}
-.tour-actions {
-  display: inline-flex;
-  gap: var(--s4);
-  white-space: nowrap;
-}
-.tour-next {
-  color: var(--accent-ink);
-  font-weight: 600;
-}
-.tour-exit {
-  color: var(--ink-3);
-}
-.tour-next:hover,
-.tour-exit:hover {
-  text-decoration: underline;
-}
-
-/* Live mode: the dot breathes while the interval ticks the clock and the worker. */
-.live-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.live-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--ink-3);
-  transition: background-color 0.2s ease;
-}
-.live-toggle.on .live-dot {
-  background: var(--pos);
-  animation: live-pulse 1.6s ease-in-out infinite;
-}
-@keyframes live-pulse {
-  50% {
-    opacity: 0.35;
-  }
 }
