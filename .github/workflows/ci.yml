@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22.18'
+          node-version-file: .node-version
           cache: npm
       - run: npm ci
       - run: npm run check
@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22.18'
+          node-version-file: .node-version
           cache: npm
       - run: npm ci
       - run: npm ci --prefix apps/console
@@ -87,7 +87,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22.18'
+          node-version-file: .node-version
           cache: npm
       - run: npm ci
       # Applies the Postgres schema via scripts/migrate.sh (psql is preinstalled on the runner) and
