@@ -9,7 +9,7 @@
  * @license MIT
  */
 
-import type { Outcome } from '#src/contract.ts';
+import type { Outcome, RejectionDetail } from '#src/contract.ts';
 
 /**
  * Reasons a well-formed request is declined on a healthy system, returned as a `rejected`
@@ -172,7 +172,7 @@ export function fault(
  */
 export function rejected(
   reason: RejectionCode,
-  detail?: Record<string, unknown>,
+  detail?: RejectionDetail,
 ): Extract<Outcome, { status: 'rejected' }> {
   return detail === undefined
     ? { status: 'rejected', reason }
@@ -198,4 +198,30 @@ export function normalizeError(error: unknown): EconomyError {
       retryable: true,
     },
   );
+}
+
+// Codes where the request itself was wrong and the caller can fix it: these map to 400.
+const BAD_REQUEST_CODES = new Set<string>([
+  ERROR_CODES.MALFORMED_OPERATION,
+  ERROR_CODES.INVALID_AMOUNT,
+  ERROR_CODES.AMOUNT_OVERFLOW,
+  ERROR_CODES.CURRENCY_MISMATCH,
+]);
+
+/**
+ * The HTTP status an {@link EconomyError} maps to: 401 for auth/signature failures, 400 for a
+ * caller-fixable bad request, 503 for a retryable fault, 500 otherwise. The canonical mapping
+ * createServer applies, exposed so a host running its own endpoint answers the same way.
+ */
+export function statusForError(error: EconomyError): number {
+  if (
+    error.code === ERROR_CODES.UNAUTHORIZED ||
+    error.code === ERROR_CODES.INVALID_SIGNATURE
+  ) {
+    return 401;
+  }
+  if (BAD_REQUEST_CODES.has(error.code)) {
+    return 400;
+  }
+  return error.retryable ? 503 : 500;
 }

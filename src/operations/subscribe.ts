@@ -62,12 +62,10 @@ export async function subscribe(
   );
   if (existing !== null) {
     return rejected('ALREADY_SUBSCRIBED', {
-      detail: {
-        userId: operation.userId,
-        sku: operation.sku,
-        sellerId: operation.sellerId,
-        subscriptionId: existing.id,
-      },
+      userId: operation.userId,
+      sku: operation.sku,
+      sellerId: operation.sellerId,
+      subscriptionId: existing.id,
     });
   }
 

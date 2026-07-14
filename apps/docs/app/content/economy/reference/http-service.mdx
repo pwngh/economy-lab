@@ -5,8 +5,8 @@ order: 30
 status: stable
 sourceRefs:
   [
-    'src/server.ts#L80 · createServer',
-    'scripts/main.ts#L442 · runServe',
+    'src/server.ts#L81 · createServer',
+    'scripts/main.ts#L331 · runServe',
     'test/server.test.ts',
   ]
 related: ['economy/scope-and-non-goals', 'economy/ports/signer']
@@ -154,7 +154,7 @@ It runs in three modes, selected by `argv[2]`:
 | `dev`    | The same API, forced to in-memory adapters with dev secrets, no infrastructure, for `make dev`.   |
 | `worker` | The [background worker](/economy/reference/background-worker/) loop, not the HTTP service.        |
 
-In `serve` and `dev`, <SourceLink to="scripts/main.ts#L442">runServe</SourceLink> builds the economy from the environment and mounts the handler. It passes three things into `createServer`: the purchase-webhook handler, the `Config`, and the clock. Those last two are what _activate_ the verification gate, so a genuine callback is persisted and a forged or stale one is rejected before it changes anything.
+In `serve` and `dev`, <SourceLink to="scripts/main.ts#L331">runServe</SourceLink> builds the economy from the environment and mounts the handler. It passes three things into `createServer`: the purchase-webhook handler, the `Config`, and the clock. Those last two are what _activate_ the verification gate, so a genuine callback is persisted and a forged or stale one is rejected before it changes anything.
 
 ```ts
 const handler = createServer(economy, {

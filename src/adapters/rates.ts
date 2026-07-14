@@ -9,6 +9,8 @@
  * @license MIT
  */
 
+import { ERROR_CODES, fault } from '#src/errors.ts';
+
 import type { Currency } from '#src/money.ts';
 import type { Rate, Rates, Options } from '#src/ports.ts';
 
@@ -34,6 +36,31 @@ function identityRate(from: Currency, to: Currency): Rate {
   return { rate: 1n, scale: 0, rateId: `${from}->${to}:1` };
 }
 
+// The economy stays solvent only if a credit never cashes out for more than it was bought or backed
+// at: buy >= par >= payout, each read as USD per credit across its own scale. A misconfigured
+// deployment fails here at construction, not silently at the first payout.
+function assertRateOrder(config: RatesConfig): void {
+  const gte = (ra: bigint, sa: number, rb: bigint, sb: number): boolean =>
+    ra * 10n ** BigInt(sb) >= rb * 10n ** BigInt(sa);
+  const ordered =
+    gte(config.buyRate, config.buyScale, config.parRate, config.parScale) &&
+    gte(config.parRate, config.parScale, config.payoutRate, config.payoutScale);
+  if (!ordered) {
+    throw fault(
+      ERROR_CODES.CONFIG_INVALID,
+      'Rates must hold buy >= par >= payout (USD per credit).',
+      {
+        detail: {
+          buy: `${config.buyRate}/${config.buyScale}`,
+          par: `${config.parRate}/${config.parScale}`,
+          payout: `${config.payoutRate}/${config.payoutScale}`,
+        },
+        retryable: false,
+      },
+    );
+  }
+}
+
 /**
  * Builds the production CREDIT-to-USD rate source from a deployment's configured rates, replacing the
  * 1:1 dev placeholder. Each returned rate carries a `rateId` naming the exact rate so a transaction
@@ -55,6 +82,7 @@ function identityRate(from: Currency, to: Currency): Rate {
  *   credit economy this rate source feeds.
  */
 export function configuredRates(config: RatesConfig): Rates {
+  assertRateOrder(config);
   const buy: Rate = {
     rate: config.buyRate,
     scale: config.buyScale,

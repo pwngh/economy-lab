@@ -13,7 +13,7 @@ import { encodeAmount } from '#src/money.ts';
 import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
 
 import type { Amount } from '#src/money.ts';
-import type { Options, Processor } from '#src/ports.ts';
+import type { Options, PayoutProviderStatus, Processor } from '#src/ports.ts';
 
 /**
  * Structural `fetch` shape rather than the built-in type, so tests can inject a stand-in and the
@@ -62,6 +62,35 @@ export function httpProcessor(config: HttpProcessorConfig): Processor {
     submitPayout: async (input, options) =>
       submitPayout(config, doFetch, input, options),
   };
+}
+
+/**
+ * An in-memory {@link Processor} for demos and tests: it accepts every payout, records it under a
+ * deterministic `providerRef`, and answers a resend of the same idempotency key with the same ref,
+ * so the retry-safety contract holds without a real provider. Pass `status` to make the optional
+ * probe report a fixed state (e.g. `'SETTLED'` so a demo sweep settles without a webhook); omitted,
+ * there is no probe, matching a real provider that reports only by webhook.
+ */
+export function memoryProcessor(
+  options: { status?: PayoutProviderStatus['state'] } = {},
+): Processor {
+  const refByKey = new Map<string, string>();
+  const processor: Processor = {
+    submitPayout: (input) => {
+      const existing = refByKey.get(input.key);
+      if (existing !== undefined) {
+        return Promise.resolve({ providerRef: existing });
+      }
+      const providerRef = `mem_${refByKey.size + 1}`;
+      refByKey.set(input.key, providerRef);
+      return Promise.resolve({ providerRef });
+    },
+  };
+  if (options.status !== undefined) {
+    const state = options.status;
+    processor.payoutStatus = () => Promise.resolve({ state });
+  }
+  return processor;
 }
 
 async function submitPayout(

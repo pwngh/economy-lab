@@ -25,23 +25,19 @@ import {
   capabilitiesFromEnv,
   composeWorker,
   describeSelection,
+  externalsFromEnv,
 } from '#src/index.ts';
-import {
-  REQUIRED_SECRETS,
-  isProduction,
-  missingSecrets,
-  readBigIntOrNull,
-  readIntOrNull,
-  serviceUrls,
-} from '#src/env.ts';
+import { REQUIRED_SECRETS, isProduction, missingSecrets } from '#src/env.ts';
 import { serverRuntime } from '#scripts/support/server-env.ts';
-import { createEconomy } from '#src/economy.ts';
+import { economyFromCapabilities } from '#src/economy.ts';
 import { createServer } from '#src/server.ts';
-import { jsonlLogger, systemCapabilities, toHex } from '#src/runtime.ts';
-import { flatFee } from '#src/pricing.ts';
+import {
+  jsonlLogger,
+  randomIds,
+  systemClock,
+  systemDigest,
+} from '#src/runtime.ts';
 import { ERROR_CODES, EconomyError } from '#src/errors.ts';
-import { httpProcessor } from '#src/adapters/processor.ts';
-import { configuredRates } from '#src/adapters/rates.ts';
 import { decodeWebhookEvent, handlePurchaseWebhook } from '#src/webhooks.ts';
 import { describeTaskq, maybeTaskqHost } from '#scripts/support/taskq-host.ts';
 import { maybeEdgeTilia } from '#scripts/support/edge-host.ts';
@@ -50,22 +46,13 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { EnvMap } from '#src/env.ts';
 import type { ServerRuntime } from '#scripts/support/server-env.ts';
 import type { ExternalPorts, RuntimeDefaults } from '#src/index.ts';
-import type {
-  Clock,
-  Ids,
-  Logger,
-  Processor,
-  Rates,
-  Store,
-} from '#src/ports.ts';
+import type { Clock, Ids, Logger, Store } from '#src/ports.ts';
 import type { WebhookHandler } from '#src/server.ts';
 import type { ReconcileFeed } from '#src/worker/reconcile.ts';
 
 type FetchHandler = (request: Request) => Promise<Response>;
 
 type CloseServer = () => Promise<void>;
-
-const ENCODER = new TextEncoder();
 
 const log: Logger = jsonlLogger();
 
@@ -82,117 +69,20 @@ function requireSecrets(env: EnvMap): void {
   }
 }
 
-// Hex is the byte form the web-crypto signer takes; requireSecrets already rejected an empty value.
-function signingKeyHex(env: EnvMap): string {
-  return toHex(ENCODER.encode(env.SIGNING_SECRET ?? ''));
-}
-
-// The fixed dev rates through the production implementation (configuredRates), so dev and
-// production run the same rate code and differ only in where the numbers come from.
-function fixedRates(): Rates {
-  return configuredRates({
-    buyRate: 8333n,
-    buyScale: 6,
-    parRate: 5n,
-    parScale: 3,
-    payoutRate: 5n,
-    payoutScale: 3,
-  });
-}
-
-// Approve-all stand-in so a local worker can run the full payout saga with no external service.
-function devProcessor(): Processor {
-  return {
-    submitPayout: async (input) => ({ providerRef: `dev_${input.key}` }),
-  };
-}
-
-// Fails fast with one message listing everything missing or malformed, so a prod process never
-// runs on the fixed dev rates or an auto-approve payout stub.
-function productionExternals(env: EnvMap): {
-  rates: Rates;
-  processor: Processor;
-} {
-  const bad: string[] = [];
-  const bigintOf = (key: string): bigint => {
-    const value = readBigIntOrNull(env[key]);
-    if (value === null) {
-      bad.push(key);
-    }
-    return value ?? 0n;
-  };
-  const scaleOf = (key: string): number => {
-    const value = readIntOrNull(env[key]);
-    if (value === null) {
-      bad.push(key);
-    }
-    return value ?? 0;
-  };
-
-  const buyRate = bigintOf('CREDIT_BUY_RATE');
-  const buyScale = scaleOf('CREDIT_BUY_SCALE');
-  const parRate = bigintOf('CREDIT_PAR_RATE');
-  const parScale = scaleOf('CREDIT_PAR_SCALE');
-  const payoutRate = bigintOf('PAYOUT_RATE');
-  const payoutScale = scaleOf('PAYOUT_SCALE');
-  const processorUrl = serviceUrls(env).processor;
-  if (processorUrl === null) {
-    bad.push('PROCESSOR_URL');
-  }
-
-  if (bad.length > 0) {
-    throw new Error(
-      `NODE_ENV=production requires real externals; missing or malformed: ${bad.join(', ')}. ` +
-        `Set the CREDIT-to-USD rates (CREDIT_BUY_RATE + CREDIT_BUY_SCALE, CREDIT_PAR_RATE + ` +
-        `CREDIT_PAR_SCALE, PAYOUT_RATE + PAYOUT_SCALE) and the payout provider (PROCESSOR_URL) — ` +
-        `there is no production default for these.`,
-    );
-  }
-
-  return {
-    rates: configuredRates({
-      buyRate,
-      buyScale,
-      parRate,
-      parScale,
-      payoutRate,
-      payoutScale,
-    }),
-    processor: httpProcessor({
-      endpoint: processorUrl ?? '',
-      apiKey: env.PROCESSOR_API_KEY,
-    }),
-  };
-}
-
-function devExternals(env: EnvMap): { rates: Rates; processor: Processor } {
-  const endpoint = serviceUrls(env).processor;
-  return {
-    rates: fixedRates(),
-    processor:
-      endpoint !== null
-        ? httpProcessor({ endpoint, apiKey: env.PROCESSOR_API_KEY })
-        : devProcessor(),
-  };
-}
-
 function wiring(env: EnvMap): {
   ports: ExternalPorts;
   defaults: RuntimeDefaults;
 } {
   requireSecrets(env);
-  const caps = systemCapabilities({ signingKey: signingKeyHex(env) });
-  const { rates, processor } = isProduction(env)
-    ? productionExternals(env)
-    : devExternals(env);
+  // externalsFromEnv resolves the four external ports from env with the same dev-default and
+  // production-required rules the library applies in createEconomy; no hand-rolled wiring here.
   return {
-    ports: {
-      signer: caps.signer,
-      processor,
-      rates,
-      pricing: flatFee(),
+    ports: externalsFromEnv(env),
+    defaults: {
+      clock: systemClock(),
+      ids: randomIds(),
+      digest: systemDigest(),
     },
-    defaults: { clock: caps.clock, ids: caps.ids, digest: caps.digest },
   };
 }
 
@@ -451,7 +341,7 @@ async function runServe(env: EnvMap, runtime: ServerRuntime): Promise<void> {
   if (edge !== undefined) {
     caps.payees = edge.payees;
   }
-  const economy = createEconomy(caps);
+  const economy = economyFromCapabilities(caps);
   const config = caps.config;
   const purchases = purchaseWebhook(caps.store, caps.ids, caps.clock);
   const tiliaPayouts = edge?.webhookFor(caps.store, caps.ids, caps.clock);

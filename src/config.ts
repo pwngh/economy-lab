@@ -198,6 +198,15 @@ export function loadConfig(env: EnvMap): Config {
 }
 
 /**
+ * The default {@link Config} without an environment: the exact values {@link loadConfig} derives from
+ * an empty env, with any knobs in `overrides` applied on top. For tests and the in-memory quickstart
+ * that want a Config in hand without assembling an {@link EnvMap}.
+ */
+export function defaultConfig(overrides: Partial<Config> = {}): Config {
+  return { ...loadConfig({}), ...overrides };
+}
+
+/**
  * Whether the maintenance window is active at `now`. Pure: derives solely from `now` and the two
  * config bounds, so the gate and the read surface agree.
  */

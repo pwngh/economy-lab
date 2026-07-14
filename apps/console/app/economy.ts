@@ -24,9 +24,9 @@ import { ERROR_CODES, fault } from '#src/errors.ts';
 import {
   SYSTEM,
   capabilitiesFromEnv,
-  createEconomy,
   createWorker,
   earned,
+  economyFromCapabilities,
   promo,
   spendable,
   workerCtxFrom,
@@ -539,7 +539,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
       { signer, processor, rates, pricing: flatFee() },
       { clock, ids, digest, logger, meter },
     );
-    economy = createEconomy(caps);
+    economy = economyFromCapabilities(caps);
     workerCtx = workerCtxFrom(caps);
     workerRef = createWorker(caps.store, workerCtx);
     store = caps.store;

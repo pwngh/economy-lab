@@ -5,9 +5,9 @@ order: 5
 status: stable
 sourceRefs:
   [
-    'src/index.ts#L251 · compose',
-    'src/economy.ts#L79 · createEconomy',
-    'src/contract.ts#L343 · Economy',
+    'src/index.ts#L489 · createEconomy',
+    'src/economy.ts#L79 · economyFromCapabilities',
+    'src/contract.ts#L369 · Economy',
   ]
 related:
   [
@@ -23,29 +23,27 @@ You build it from a set of injected ports (a `Store`, a `Signer`, a `Processor`,
 
 ## Construction
 
-`createEconomy(capabilities)` builds the `Economy` from a single `Capabilities` bundle: the `Store` that holds the ledger, the external ports (`Signer`, `Processor`, `Rates`, `FeePolicy`), and the runtime services (a clock and an id source, plus a digest, logger, and meter). It wires them together and returns the object. It opens no connections of its own:
+`createEconomy(options?)` is the one call. With nothing, it builds a batteries-included in-memory economy: the in-memory `Store`, a dev `Signer`, a dev `Rates` table, a flat `FeePolicy`, and an in-memory `Processor`, all wired. No environment, no infrastructure:
 
 ```ts
-const economy = createEconomy(capabilities);
+import { createEconomy } from './src/index.ts';
+
+const economy = await createEconomy();
 ```
 
-You rarely assemble that bundle by hand. `compose(env, ports)` reads the environment, picks the matching adapters, and calls `createEconomy` for you. `DATABASE_URL` selects the store (a `postgres://` or `mysql://` connection string picks that engine, and an unset value falls back to the in-memory store) while you still supply the four external `ports` — here the bundled test fakes, which run with no infrastructure:
+Pass `env` and it resolves everything from the environment instead: the `Store` from `DATABASE_URL` (a `postgres://` or `mysql://` connection string picks that engine, and an unset value falls back to the in-memory store), and the four external ports and config from their own keys. Outside production it fills sane defaults for anything absent; in production it requires the real values and fails fast with one message naming what is missing. Any field you pass explicitly wins over the env-derived one:
 
 ```ts
-import { compose } from './src/index.ts';
-import {
-  defaultPricing,
-  seededSigner,
-  fakeProcessor,
-  fixedRates,
-} from './test/support/capabilities.ts';
+const economy = await createEconomy({ env: process.env });
 
-const economy = await compose(process.env, {
-  signer: seededSigner(1),
-  processor: fakeProcessor(),
-  rates: fixedRates(),
-  pricing: defaultPricing(),
-});
+// env for everything, but override one port:
+const economy = await createEconomy({ env: process.env, rates: liveRates() });
+```
+
+When a host already holds a full `Capabilities` bundle — for instance to share one `Store` between an economy and a background worker — it calls the low-level assembler directly:
+
+```ts
+const economy = economyFromCapabilities(capabilities);
 ```
 
 Each driver is imported only when its environment variable selects it, so a deployment installs only what it uses. See [configuration](/economy/reference/configuration/) for every variable `compose` reads.
@@ -59,14 +57,15 @@ Each driver is imported only when its environment variable selects it, so a depl
 Here a user tops up their balance; the result tells you whether it `committed`, repeated an earlier request (`duplicate`), or was declined (`rejected`):
 
 ```ts
-const outcome = await economy.submit({
-  kind: 'topUp',
-  idempotencyKey: 'ord_8821',
-  actor: { kind: 'system', service: 'billing' },
-  userId: 'usr_a1',
-  amount: { currency: 'CREDIT', minor: 5000n },
-  source: 'stripe',
-});
+const outcome = await economy.submit(
+  topUp({
+    idempotencyKey: 'ord_8821',
+    actor: { kind: 'system', service: 'billing' },
+    userId: 'usr_a1',
+    amount: toAmount('CREDIT', 5000n),
+    source: 'stripe',
+  }),
+);
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 

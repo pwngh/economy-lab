@@ -13,22 +13,17 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { subscribe } from '#src/operations/subscribe.ts';
-import { createEconomy } from '#src/economy.ts';
+import { economyFromCapabilities } from '#src/economy.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { spendable, promo, earned, SYSTEM } from '#src/accounts.ts';
 import { toAmount } from '#src/money.ts';
 import { assessRisk, riskAttempt, attemptMinor } from '#src/trust.ts';
 import {
   fixedClock,
-  sequentialIds,
   seededDigest,
   seededSigner,
-  fixedRates,
-  testLogger,
-  noopMeter,
-  fakeProcessor,
-  defaultPricing,
   testConfig,
+  makeCtx,
 } from '#test/support/capabilities.ts';
 import {
   topUp,
@@ -38,7 +33,7 @@ import {
   emptyVelocity,
 } from '#test/support/builders.ts';
 
-import type { Economy, Ctx, Operation, Outcome } from '#src/contract.ts';
+import type { Economy, Operation, Outcome } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
 
 // The harness exposes two ways into one store: the public economy seeds the buyer's funds, and
@@ -53,19 +48,8 @@ function makeHarness(seed = 1): Harness {
   const digest = seededDigest(seed);
   const clock = fixedClock(0);
   const store = memoryStore({ digest, clock });
-  const ctx: Ctx = {
-    clock,
-    ids: sequentialIds(),
-    digest,
-    signer: seededSigner(seed),
-    processor: fakeProcessor(),
-    config: testConfig(),
-    pricing: defaultPricing(),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-  };
-  const economy = createEconomy({
+  const ctx = makeCtx({ clock, digest, signer: seededSigner(seed) });
+  const economy = economyFromCapabilities({
     store,
     clock,
     ids: ctx.ids,

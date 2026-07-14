@@ -298,7 +298,7 @@ export interface Store {
   close(): Promise<void>;
 }
 
-/** Every external capability `createEconomy(...)` needs, gathered into one object. */
+/** Every external capability `economyFromCapabilities(...)` needs, gathered into one object. */
 export type Capabilities = {
   store: Store;
   clock: Clock;

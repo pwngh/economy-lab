@@ -15,6 +15,7 @@ import {
   EconomyError,
   fault,
   normalizeError,
+  statusForError,
 } from '#src/errors.ts';
 
 import type { ErrorCode } from '#src/errors.ts';
@@ -70,7 +71,7 @@ const TIMESTAMP_HEADER = 'x-timestamp';
  * - `GET /healthz` reports liveness without touching storage.
  * - `GET /readyz` reports readiness via one cheap store-touching read through the economy.
  *
- * A thrown {@link EconomyError} becomes an RFC 9457 problem+json response: {@link statusFor} maps
+ * A thrown {@link EconomyError} becomes an RFC 9457 problem+json response: {@link statusForError} maps
  * the status, `title` carries the caller-safe message, and the stable `code` and `retryable` ride
  * as extensions. `detail`, `cause`, and stack never leave the server.
  *
@@ -358,36 +359,13 @@ function encodeOutcome(outcome: Outcome): unknown {
   };
 }
 
-// --- HTTP status mapping ----------------------------------------------------------
-
-function statusFor(error: EconomyError): number {
-  if (error.code === ERROR_CODES.UNAUTHORIZED) {
-    return 401;
-  }
-  if (error.code === ERROR_CODES.INVALID_SIGNATURE) {
-    return 401;
-  }
-  if (BAD_REQUEST_CODES.has(error.code)) {
-    return 400;
-  }
-  return error.retryable ? 503 : 500;
-}
-
-// Codes where the request itself was wrong and the caller can fix it; these map to 400.
-const BAD_REQUEST_CODES = new Set<string>([
-  ERROR_CODES.MALFORMED_OPERATION,
-  ERROR_CODES.INVALID_AMOUNT,
-  ERROR_CODES.AMOUNT_OVERFLOW,
-  ERROR_CODES.CURRENCY_MISMATCH,
-]);
-
 // --- Local helpers ----------------------------------------------------------------
 
 // An unknown error goes out as a generic retryable 503; its stack trace and cause never reach
-// the client.
+// the client. statusForError (errors.ts) owns the code-to-status mapping.
 function faultResponse(error: unknown): Response {
   const normalized = normalizeError(error);
-  return problemResponse(statusFor(normalized), normalized.message, {
+  return problemResponse(statusForError(normalized), normalized.message, {
     code: normalized.code,
     retryable: normalized.retryable,
   });

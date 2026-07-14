@@ -6,8 +6,8 @@ status: stable
 sourceRefs:
   [
     'src/config.ts#L138-L153 · loadConfig',
-    'src/index.ts#L117-L260 · capabilitiesFromEnv',
-    'scripts/main.ts#L110-L119 · productionExternals',
+    'src/index.ts#L233-L336 · capabilitiesFromEnv',
+    'src/from-env.ts#L96 · externalsFromEnv',
     '.env.example',
   ]
 related:
@@ -159,7 +159,7 @@ it holds, end-user discretionary writes are declined with `ECONOMY_PAUSED`; sett
 ## Production externals
 
 These choose which adapter fills each port, so the edge reads them at wiring time rather than
-through `loadConfig`. In production, `productionExternals` (`scripts/main.ts`) fails fast with one
+through `loadConfig`. In production, `externalsFromEnv` (`src/from-env.ts`) fails fast with one
 message if any rate or the provider URL is missing or malformed, so a prod process never runs
 on the 1:1 dev rate or an auto-approve payout stub. Outside production these fall back to dev
 stubs, and a local run needs none of them.

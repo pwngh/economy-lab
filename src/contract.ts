@@ -233,13 +233,38 @@ export type Operation =
  * returned unchanged), or `rejected`. A rejection is a normal "no" returned as data; a genuine
  * fault is thrown instead.
  */
+/**
+ * Structured context on a rejection. Which fields are present depends on the `reason`:
+ * INSUFFICIENT_FUNDS / FUNDS_IMMATURE carry `account` + `required` (+ `available`), BELOW_MINIMUM
+ * carries `minimum` + `requested`, PAYOUT_TOO_SOON carries `lastRequestedAt` + `retryAfter`, ECONOMY_PAUSED carries
+ * `resumesAt`, and the id-not-found reasons carry `orderId` / `subscriptionId`. Amounts are the
+ * encoded decimal-string form.
+ */
+export type RejectionDetail = {
+  account?: AccountRef;
+  required?: string;
+  available?: string;
+  minimum?: string;
+  requested?: string;
+  retryAfter?: number;
+  lastRequestedAt?: number;
+  resumesAt?: number | null;
+  state?: string;
+  subject?: string;
+  subscriptionId?: string;
+  orderId?: string;
+  userId?: string;
+  sku?: string;
+  sellerId?: string;
+};
+
 export type Outcome =
   | { status: 'committed'; transaction: Transaction }
   | { status: 'duplicate'; transaction: Transaction }
   | {
       status: 'rejected';
       reason: RejectionCode;
-      detail?: Record<string, unknown>;
+      detail?: RejectionDetail;
     };
 
 /** A committed posting: the record of money that actually moved. */

@@ -83,7 +83,7 @@ import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { memoryStore } from '#src/adapters/memory.ts';
-import { createEconomy } from '#src/economy.ts';
+import { economyFromCapabilities } from '#src/economy.ts';
 import { toAmount } from '#src/money.ts';
 import { spendable } from '#src/accounts.ts';
 import {
@@ -386,7 +386,7 @@ function inboxMethod(): ClaimMethod {
       // re-submit of the same idempotencyKey is deduped by `submit`'s atomic key claim, the
       // production mechanism. It must share the store's seeded digest and fixed clock, or hashes
       // diverge.
-      const economy: Economy = createEconomy({
+      const economy: Economy = economyFromCapabilities({
         store,
         clock: fixedClock(0),
         ids: sequentialIds(),

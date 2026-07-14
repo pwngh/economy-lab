@@ -16,7 +16,11 @@
 
 import { writeFile } from 'node:fs/promises';
 
-import { createEconomy, memoryStore, workerCtxFrom } from '#src/index.ts';
+import {
+  economyFromCapabilities,
+  memoryStore,
+  workerCtxFrom,
+} from '#src/index.ts';
 import { createMysqlPool } from '#src/engines/mysql.ts';
 import { loadConfig } from '#src/config.ts';
 import {
@@ -342,7 +346,10 @@ function assemble(
     pricing: defaultPricing(),
     config: buildBenchConfig(opts.gates, opts.shards),
   };
-  return { economy: createEconomy(caps), workerCtx: workerCtxFrom(caps) };
+  return {
+    economy: economyFromCapabilities(caps),
+    workerCtx: workerCtxFrom(caps),
+  };
 }
 
 // The production digest, not the test seededDigest: the chain hash is on every submit's hot path,

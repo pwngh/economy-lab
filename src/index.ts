@@ -9,17 +9,26 @@
  * @license MIT
  */
 
-import { createEconomy } from '#src/economy.ts';
+import { economyFromCapabilities } from '#src/economy.ts';
 import { loadConfig } from '#src/config.ts';
-import { isMysqlUrl, isPostgresUrl, readUrl, serviceUrls } from '#src/env.ts';
+import {
+  isMysqlUrl,
+  isPostgresUrl,
+  isProduction,
+  missingSecrets,
+  readUrl,
+  serviceUrls,
+} from '#src/env.ts';
 
 import type { EnvMap } from '#src/env.ts';
+import type { Config } from '#src/config.ts';
 import { assertMoneyConformant, assertSchemaCurrent } from '#src/schema.ts';
 import { installMysql, proveMysql } from '#src/db.vendored.ts';
 import { vectors as moneyVectors } from '#src/money.vendored.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
+import { externalsFromEnv, missingExternals } from '#src/from-env.ts';
 import { createWorker } from '#src/worker/index.ts';
-import { jsonlLogger } from '#src/runtime.ts';
+import { jsonlLogger, noopMeter } from '#src/runtime.ts';
 import { sha256Digest } from '#src/digest.ts';
 import { fault, ERROR_CODES } from '#src/errors.ts';
 
@@ -35,27 +44,84 @@ import type {
   Ids,
   Logger,
   Meter,
+  PayeeDirectory,
   Processor,
   Rates,
+  Scheduler,
   Signer,
   Store,
 } from '#src/ports.ts';
 
 // --- Public surface (re-exports only) ---------------------------------------------
 
-export { createEconomy } from '#src/economy.ts';
+// The low-level assembler: an Economy from a fully-built Capabilities bundle. createEconomy (below)
+// is the one a host reaches for; this is the escape hatch for a host that already holds a Capabilities
+// (e.g. to share one store between an economy and a worker).
+export { economyFromCapabilities } from '#src/economy.ts';
+// Resolve the four external ports from env (the same rules createEconomy applies): the piece a host
+// building a Capabilities bundle by hand pairs with capabilitiesFromEnv.
+export { externalsFromEnv } from '#src/from-env.ts';
+export type { Externals } from '#src/from-env.ts';
 export { memoryStore } from '#src/adapters/memory.ts';
 export { memoryCache } from '#src/adapters/memory-cache.ts';
 
 export { createWorker } from '#src/worker/index.ts';
 
-export { spendable, earned, promo, currency, SYSTEM } from '#src/accounts.ts';
+export {
+  spendable,
+  earned,
+  promo,
+  currency,
+  SYSTEM,
+  ownerOf,
+  isWalletAccount,
+} from '#src/accounts.ts';
 
-export { decodeAmount, encodeAmount } from '#src/money.ts';
+// Money: build and inspect the branded Amount. encode/decode are the wire pair; the value vocabulary
+// ships too, since the brand blocks reassembling an Amount from raw minor units, so a reader that
+// sums legs or compares a balance to a price needs these.
+export {
+  toAmount,
+  decodeAmount,
+  encodeAmount,
+  decodeAmountWire,
+  add,
+  neg,
+  zero,
+  compare,
+  isZero,
+  isNegative,
+  isAmount,
+  convertFloor,
+  convertCeil,
+  SCALE,
+} from '#src/money.ts';
 export { credit, debit } from '#src/ledger.ts';
 export type { Leg } from '#src/ports.ts';
 
-export { loadConfig } from '#src/config.ts';
+// Operation constructors: one typed builder per kind, so a caller writes topUp({ ... }) instead of
+// hand-assembling the tagged union. Each returns the exact Operation that submit() takes.
+export {
+  topUp,
+  spend,
+  refund,
+  clawback,
+  requestPayout,
+  subscribe,
+  cancelSubscription,
+  grantEntitlement,
+  revokeEntitlement,
+  grantPromo,
+  adjust,
+  reverse,
+  reversePayout,
+  settlePayout,
+} from '#src/operation.ts';
+
+// Actor constructors: build the `actor` every operation carries, e.g. userActor('usr_1').
+export { userActor, systemActor, operatorActor } from '#src/actor.ts';
+
+export { defaultConfig, loadConfig } from '#src/config.ts';
 
 // Opt-in, host-level extensions; the core submit pipeline never touches either.
 export {
@@ -73,11 +139,24 @@ export type {
 export { cachedEntitlements } from '#src/adapters/entitlement-bitset.ts';
 export type { BitsetOptions } from '#src/adapters/entitlement-bitset.ts';
 
-export { EconomyError, ERROR_CODES } from '#src/errors.ts';
+export {
+  EconomyError,
+  ERROR_CODES,
+  normalizeError,
+  statusForError,
+} from '#src/errors.ts';
 export type { ErrorCode, RejectionCode } from '#src/errors.ts';
 
 export type { Economy } from '#src/economy.ts';
-export type { Worker } from '#src/worker/index.ts';
+// The worker and the input/result types of its one public method, Worker.runOnce.
+export type {
+  Worker,
+  SweepName,
+  SweepInput,
+  SweepBatch,
+  SweepRun,
+  SweepResult,
+} from '#src/worker/index.ts';
 export type { WorkerCtx } from '#src/contract.ts';
 export type { Config } from '#src/config.ts';
 // The env-map shape every composition entry point takes; parsing rules live in src/env.ts.
@@ -85,6 +164,7 @@ export type { EnvMap } from '#src/env.ts';
 export type {
   Operation,
   Outcome,
+  RejectionDetail,
   Transaction,
   Principal,
   Recipient,
@@ -94,7 +174,73 @@ export type {
 } from '#src/contract.ts';
 export type { Amount, Currency } from '#src/money.ts';
 export type { AccountRef } from '#src/accounts.ts';
-export type { Capabilities, Options, Range, Statement } from '#src/ports.ts';
+// Read-side return types: the checkpoint read.checkpoint hands back, the chain link read.lineage
+// streams, and the CREDIT-to-USD rate convertFloor/convertCeil take.
+export type {
+  Capabilities,
+  Options,
+  Range,
+  Statement,
+  Checkpoint,
+  StoredLink,
+  Rate,
+} from '#src/ports.ts';
+
+// --- Advanced: building blocks a host wires by hand -------------------------------
+//
+// The bundled entry points above cover the common path. Below is what a host that runs the economy
+// itself reaches for: the pieces to build past createEconomy, and the types to name every port and
+// record the exported contract already hands back. The full port contract is at the '/ports'
+// subpath and the built-in adapters at '/adapters'; these re-export the common ones.
+
+// Run the economy directly: the thorough prover, the HTTP service, webhook intake, and the two
+// worker steps a background process drives.
+export { proveEconomy } from '#src/integrity.ts';
+export { createServer } from '#src/server.ts';
+export { handleWebhook } from '#src/webhooks.ts';
+export type { PurchaseEvent } from '#src/webhooks.ts';
+export { drainInbox } from '#src/worker/inbox.ts';
+export { relayOutbox } from '#src/worker/relay.ts';
+
+// Runtime capability constructors a host swaps in: a structured logger, the shared hasher, the
+// Ed25519 signer, and the public key to publish for an external auditor.
+export {
+  jsonlLogger,
+  systemDigest,
+  systemSigner,
+  signingPublicKeyHex,
+} from '#src/runtime.ts';
+// The silent defaults a host plugs into RuntimeDefaults to discard log output or metrics.
+export { noopLogger, noopMeter } from '#src/runtime.ts';
+
+// A built-in constructor for every required external port, so ExternalPorts is satisfiable from this
+// entry alone: CREDIT-to-USD rates, the fee split, and an in-memory payout processor (the signer is
+// systemSigner above). httpProcessor, the real payout provider, is at the '/adapters' subpath.
+export { configuredRates } from '#src/adapters/rates.ts';
+export { flatFee } from '#src/pricing.ts';
+export { memoryProcessor } from '#src/adapters/processor.ts';
+
+// Port types: the members of ExternalPorts, RuntimeDefaults, Capabilities, and ComposedWorker, so a
+// host can name every port it supplies or receives. The remaining sub-store contracts are at the
+// '/ports' subpath.
+export type {
+  Signer,
+  Processor,
+  Rates,
+  Clock,
+  Ids,
+  Digest,
+  Store,
+  Dispatcher,
+  Logger,
+  Meter,
+  Cache,
+} from '#src/ports.ts';
+
+// Domain records the read side hands back: a payout saga, a ledger posting, an outbound event, and
+// the economy's health-and-pause status.
+export type { Saga, Posting, EconomyEvent } from '#src/ports.ts';
+export type { EconomyStatus } from '#src/contract.ts';
 
 // --- Composition from env ---------------------------------------------------------
 //
@@ -178,6 +324,34 @@ export function describeSelection(env: EnvMap): Selection {
 }
 
 /**
+ * Validates `env` without constructing anything: returns every problem a deployment would hit at
+ * startup (an unsupported `DATABASE_URL`, missing production secrets, missing or malformed external
+ * knobs), or an empty array when the environment is complete. Run it at deploy time so a bad config
+ * fails on a health check, not on the first request. Outside production only the store scheme is
+ * checked, since the dev defaults fill everything else.
+ */
+export function checkEnv(env: EnvMap): string[] {
+  const problems = new Set<string>();
+  if (describeSelection(env).store.kind === 'unsupported') {
+    problems.add(
+      'DATABASE_URL: not a postgres:// or mysql:// connection string',
+    );
+  }
+  if (isProduction(env)) {
+    for (const secret of missingSecrets(env)) {
+      problems.add(`${secret}: required in production but missing`);
+    }
+  }
+  for (const key of missingExternals(env)) {
+    // SIGNING_SECRET is already reported through missingSecrets above.
+    if (key !== 'SIGNING_SECRET') {
+      problems.add(`${key}: required in production but missing or malformed`);
+    }
+  }
+  return [...problems];
+}
+
+/**
  * Assembles the full {@link Capabilities} bundle from `env`: the Store (chosen by `DATABASE_URL`),
  * an optional cache and dispatcher, the external `ports`, and default runtime services unless
  * overridden. Drivers import only when selected; config is read once and fails fast with one
@@ -243,7 +417,9 @@ export async function compose(
   ports: ExternalPorts,
   defaults: RuntimeDefaults = {},
 ): Promise<Economy> {
-  return createEconomy(await capabilitiesFromEnv(env, ports, defaults));
+  return economyFromCapabilities(
+    await capabilitiesFromEnv(env, ports, defaults),
+  );
 }
 
 /**
@@ -272,6 +448,78 @@ export type ComposedWorker = {
   store: Store;
   dispatcher: Dispatcher | undefined;
 };
+
+// --- createEconomy: the one call --------------------------------------------------
+
+/**
+ * Everything {@link createEconomy} accepts, all optional. With none, it builds a batteries-included
+ * in-memory economy. With `env`, it resolves the store (from `DATABASE_URL`), the four external
+ * ports, and config from the environment. Any field passed explicitly wins over the env-derived one.
+ */
+export type EconomyOptions = {
+  env?: EnvMap;
+  store?: Store;
+  cache?: Cache;
+  dispatcher?: Dispatcher;
+  scheduler?: Scheduler;
+  payees?: PayeeDirectory;
+  signer?: Signer;
+  processor?: Processor;
+  rates?: Rates;
+  pricing?: FeePolicy;
+  clock?: Clock;
+  ids?: Ids;
+  digest?: Digest;
+  logger?: Logger;
+  meter?: Meter;
+  config?: Partial<Config>;
+};
+
+/**
+ * The one call to stand up an {@link Economy}. `createEconomy()` needs nothing: an in-memory store, a
+ * dev signer, a dev rate table, a flat fee, and an in-memory processor, all wired.
+ * `createEconomy({ env })` resolves everything from the environment instead — the store from
+ * `DATABASE_URL`, the external ports and config from their own keys — dev-defaulting outside
+ * production and failing fast in production with one message. Pass any field to override just that
+ * one. When a host already holds a full {@link Capabilities} bundle (e.g. to share one store with a
+ * worker), use {@link economyFromCapabilities} instead.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy}.
+ */
+export async function createEconomy(
+  options: EconomyOptions = {},
+): Promise<Economy> {
+  const env = options.env ?? {};
+  const config = { ...loadConfig(env), ...options.config };
+  const runtime = runtimeFrom(options);
+  const externals = externalsFromEnv(env, {
+    signer: options.signer,
+    processor: options.processor,
+    rates: options.rates,
+    pricing: options.pricing,
+  });
+  const selection = describeSelection(env);
+  const [store, cache, dispatcher] = await Promise.all([
+    options.store ??
+      selectStore(selection.store, {
+        digest: runtime.digest,
+        clock: runtime.clock,
+        velocityWindowMs: config.velocityWindowMs,
+      }),
+    options.cache ?? selectCache(selection.cache),
+    options.dispatcher ?? selectDispatcher(selection.dispatcher),
+  ]);
+  return economyFromCapabilities({
+    ...runtime,
+    ...externals,
+    config,
+    store,
+    ...(cache && { cache }),
+    ...(dispatcher && { dispatcher }),
+    ...(options.scheduler && { scheduler: options.scheduler }),
+    ...(options.payees && { payees: options.payees }),
+  });
+}
 
 // --- The wiring (drivers import here, only when selected) ---------------------------
 
@@ -327,6 +575,20 @@ async function provenMysqlStore(
   });
 }
 
+// Turns a missing optional peer dependency into a clear config error naming the package to install,
+// rather than a raw module-resolution failure surfacing from deep in the wiring.
+async function loadPeer<T>(pkg: string, load: () => Promise<T>): Promise<T> {
+  try {
+    return await load();
+  } catch (cause) {
+    throw fault(
+      ERROR_CODES.CONFIG_INVALID,
+      `Could not load the "${pkg}" driver. Install the optional peer dependency: npm install ${pkg}`,
+      { cause, retryable: false },
+    );
+  }
+}
+
 async function selectCache(
   selection: Selection['cache'],
 ): Promise<Cache | undefined> {
@@ -337,7 +599,8 @@ async function selectCache(
   const { redisCacheFrom } = await import('#src/adapters/redis.ts');
   // ioredis' default export is the client constructor at runtime; the cast pins it to the
   // adapter's minimal RedisClient surface (its module types don't expose the construct signature).
-  const Redis = (await import('ioredis')).default as unknown as {
+  const Redis = (await loadPeer('ioredis', () => import('ioredis')))
+    .default as unknown as {
     new (connection: string): Parameters<typeof redisCacheFrom>[0];
   };
   return redisCacheFrom(new Redis(url));
@@ -351,8 +614,10 @@ async function selectDispatcher(
   }
   if (selection.kind === 'sqs') {
     const queueUrl = selection.url;
-    const { SQSClient, SendMessageCommand } =
-      await import('@aws-sdk/client-sqs');
+    const { SQSClient, SendMessageCommand } = await loadPeer(
+      '@aws-sdk/client-sqs',
+      () => import('@aws-sdk/client-sqs'),
+    );
     const { sqsDispatcher } = await import('#src/adapters/sqs.ts');
     const raw = new SQSClient({});
     // The adapter speaks an SDK-free `{ input }` command so it stays testable without
@@ -399,8 +664,4 @@ function wallClock(): Clock {
 
 function uuidIds(): Ids {
   return { next: (prefix) => `${prefix}_${crypto.randomUUID()}` };
-}
-
-function noopMeter(): Meter {
-  return { count: () => {}, observe: () => {} };
 }

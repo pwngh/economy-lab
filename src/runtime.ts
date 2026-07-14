@@ -18,6 +18,7 @@ import type {
   Ids,
   IdPrefix,
   Logger,
+  Meter,
   Signer,
 } from '#src/ports.ts';
 
@@ -228,6 +229,16 @@ export function jsonlLogger(
       sink(JSON.stringify({ ts: now(), level, service, event, ...fields }));
     },
   };
+}
+
+/** A Logger that discards every line: the silent default for a host that wants no log output. */
+export function noopLogger(): Logger {
+  return { log: () => {} };
+}
+
+/** A Meter that discards every count and observation: the default when a host collects no metrics. */
+export function noopMeter(): Meter {
+  return { count: () => {}, observe: () => {} };
 }
 
 // Re-export toHex so chain/checkpoint writers can store raw signatures as hex

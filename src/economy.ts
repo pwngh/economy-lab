@@ -11,7 +11,7 @@
 
 /**
  * The submit pipeline: validate, authorize, then one all-or-nothing transaction that claims the
- * idempotency key, screens risk and funds, runs the handler, and queues the event. `createEconomy`
+ * idempotency key, screens risk and funds, runs the handler, and queues the event. `economyFromCapabilities`
  * builds the public Economy (submit + read + close); the handlers live in src/operations/.
  */
 
@@ -76,7 +76,7 @@ type Registry = Partial<Record<Operation['kind'], Handler>>;
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy} for the
  * construction, the submit/read surface, and the request path.
  */
-export function createEconomy(capabilities: Capabilities): Economy {
+export function economyFromCapabilities(capabilities: Capabilities): Economy {
   const store = capabilities.store;
   const ctx = contextOf(capabilities);
   const registry = REGISTRY;

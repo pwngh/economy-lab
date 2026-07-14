@@ -11,7 +11,7 @@
 
 import process from 'node:process';
 
-import { createEconomy } from '#src/economy.ts';
+import { economyFromCapabilities } from '#src/economy.ts';
 import { adapterMatrix } from '#test/support/adapters.ts';
 import { seededProgram } from '#test/support/seeded-program.ts';
 import {
@@ -44,7 +44,7 @@ async function makeProvable(
   const digest = seededDigest(1);
   const clock = fixedClock(0);
   const store = await adapter.makeStore();
-  const economy = createEconomy({
+  const economy = economyFromCapabilities({
     store,
     clock,
     ids: sequentialIds(),

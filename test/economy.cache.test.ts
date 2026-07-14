@@ -12,7 +12,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createEconomy } from '#src/economy.ts';
+import { economyFromCapabilities } from '#src/economy.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import {
   fixedClock,
@@ -75,7 +75,7 @@ function throwingCache(): Cache {
 function makeCachedEconomy(cache: Cache, seed = 1): Economy {
   const digest = seededDigest(seed);
   const clock = fixedClock(0);
-  return createEconomy({
+  return economyFromCapabilities({
     store: memoryStore({ digest, clock }),
     clock,
     ids: sequentialIds(),

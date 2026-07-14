@@ -10,12 +10,24 @@
   },
   "exports": {
     ".": "./src/index.ts",
-    "./*": "./src/*",
+    "./ports": "./src/ports.ts",
+    "./adapters": "./src/adapters/index.ts",
+    "./adapters/redis": "./src/adapters/redis.ts",
+    "./adapters/sqs": "./src/adapters/sqs.ts",
+    "./engines/postgres": "./src/engines/postgres.ts",
+    "./engines/mysql": "./src/engines/mysql.ts",
+    "./netting": "./src/netting.ts",
+    "./testing": "./test/conformance/index.ts",
     "./package.json": "./package.json"
   },
   "files": [
     "src",
     "db",
+    "test/conformance/index.ts",
+    "test/conformance/store.ts",
+    "test/conformance/cache.ts",
+    "test/conformance/dispatcher.ts",
+    "test/conformance/processor.ts",
     "README.md",
     "LICENSE.md"
   ],
