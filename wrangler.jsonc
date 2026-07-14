@@ -7,9 +7,11 @@
   // repo root. Everything served is pure static files — no Worker, no Functions, no runtime; the
   // apps' build/server/ output is a build-time artifact (it renders the HTML) and never ships.
   //
+  // This config lives at the repo root beside the artifact it deploys (not in a leaf app); wrangler
+  // itself is a devDependency of apps/docs, so `site:deploy` runs that binary from here.
   // `pages_build_output_dir` lets `wrangler pages deploy` run with no path argument.
   // `name` is the Pages project (→ https://economy-lab-docs.pages.dev).
-  "$schema": "node_modules/wrangler/config-schema.json",
+  "$schema": "apps/docs/node_modules/wrangler/config-schema.json",
   "name": "economy-lab-docs",
-  "pages_build_output_dir": "../../dist-site"
+  "pages_build_output_dir": "dist-site",
 }
