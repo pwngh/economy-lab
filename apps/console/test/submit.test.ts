@@ -14,7 +14,8 @@
 import { expect, it } from 'vitest';
 
 import { getEngine } from '../app/engine';
-import { clientAction } from '../app/routes/submit';
+import { clientAction, clientLoader } from '../app/routes/submit';
+import { callRoute } from './support';
 
 interface Wire {
   status: number;
@@ -27,7 +28,7 @@ async function post(body: unknown): Promise<Wire> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
-  return (await clientAction({ request, params: {} } as never)) as Wire;
+  return (await callRoute(clientAction, request)) as Wire;
 }
 
 const SPEND = {
@@ -69,4 +70,12 @@ it('a malformed operation body comes back as a problem response, not a crash', a
   await (await getEngine()).reset();
   const res = await post({ kind: 'nonsense' });
   expect(res.status).toBeGreaterThanOrEqual(400);
+});
+
+it('a direct GET navigation redirects to the developers page', () => {
+  // /submit is a resource route the runner posts to; typing the URL has no operation and no page
+  // to render, so the loader bounces to where the runner lives.
+  const res = clientLoader();
+  expect(res.status).toBe(302);
+  expect(res.headers.get('location')).toBe('/developers');
 });

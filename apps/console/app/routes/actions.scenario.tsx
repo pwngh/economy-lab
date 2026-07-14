@@ -20,6 +20,7 @@ import {
   redirectWithFlash,
 } from '~/flash';
 import type { Flash } from '~/flash';
+import { setRaceTally } from '~/race';
 import type { Route } from './+types/actions.scenario';
 
 // One-click stories, each composed from the same facade calls the forms make, each landing on the
@@ -67,12 +68,8 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
           credits: 200,
           count: 8,
         });
-        return land('/market#race', {
-          kind: 'race',
-          form: 'market-break',
-          mode: 'order',
-          ...tally,
-        });
+        setRaceTally({ mode: 'order', ...tally });
+        return redirect('/market#race');
       }
       case 'immature': {
         await eco.setMaturityDays(30);

@@ -17,22 +17,10 @@ import { getEngine } from '../app/engine';
 import type { Flash } from '../app/flash';
 import { takeFlash } from '../app/flash';
 import { clientAction as pipeline } from '../app/routes/actions.pipeline';
-
-async function fresh(): Promise<{ eco: ConsoleEngine }> {
-  const eco = await getEngine();
-  await eco.reset();
-  takeFlash();
-  return { eco };
-}
+import { formPost, fresh } from './support';
 
 async function run(body: Record<string, string>): Promise<Flash | null> {
-  await pipeline({
-    request: new Request('http://console.test/actions/pipeline', {
-      method: 'POST',
-      body: new URLSearchParams(body),
-    }),
-    params: {},
-  } as never);
+  await formPost(pipeline, body);
   return takeFlash();
 }
 

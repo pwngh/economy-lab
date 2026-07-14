@@ -16,22 +16,10 @@ import { getEngine } from '../app/engine';
 import type { Flash } from '../app/flash';
 import { takeFlash } from '../app/flash';
 import { clientAction as reverse } from '../app/routes/actions.reverse';
-
-async function fresh(): Promise<{ eco: ConsoleEngine }> {
-  const eco = await getEngine();
-  await eco.reset();
-  takeFlash();
-  return { eco };
-}
+import { formPost, fresh } from './support';
 
 async function runReverse(body: Record<string, string>): Promise<Flash | null> {
-  await reverse({
-    request: new Request('http://console.test/actions/reverse', {
-      method: 'POST',
-      body: new URLSearchParams(body),
-    }),
-    params: {},
-  } as never);
+  await formPost(reverse, body);
   return takeFlash();
 }
 

@@ -28,8 +28,8 @@ export interface FlashFigure {
 /**
  * The message a mutation leaves for the page it redirects to. `notice` is a plain confirmation;
  * `outcome` is an engine verdict, its reason code rendered verbatim beside the plain-English line;
- * `invalid` carries per-field validation errors; `race` is the try-to-break-it tally. `form` names
- * the owning form, so a page can render the message in place rather than only in the chrome.
+ * `invalid` carries per-field validation errors. `form` names the owning form, so a page can render
+ * the message in place rather than only in the chrome.
  */
 export type Flash =
   | { kind: 'notice'; tone: 'ok' | 'warn'; message: string; form?: string }
@@ -45,17 +45,6 @@ export type Flash =
       message: string;
       fields: Record<string, string>;
       form?: string;
-    }
-  | {
-      kind: 'race';
-      form: string;
-      mode: 'order' | 'drain';
-      attempts: number;
-      committed: number;
-      duplicates: number;
-      insufficient: number;
-      other: number;
-      movedCredits: number;
     };
 
 // Plain-English line for each engine verdict, shown beside the code (which renders verbatim). An

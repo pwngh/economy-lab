@@ -14,19 +14,15 @@ import { expect, it } from 'vitest';
 
 import { getEngine } from '../app/engine';
 import { takeFlash } from '../app/flash';
+import { takeRaceTally } from '../app/race';
 import { clientAction as scenario } from '../app/routes/actions.scenario';
+import { formPost } from './support';
 
 async function stage(op: string): Promise<{ location: string | null }> {
   const eco = await getEngine();
   await eco.reset();
   takeFlash();
-  const response = (await scenario({
-    request: new Request('http://console.test/actions/scenario', {
-      method: 'POST',
-      body: new URLSearchParams({ op }),
-    }),
-    params: {},
-  } as never)) as Response;
+  const response = await formPost(scenario, { op });
   return { location: response.headers.get('location') };
 }
 
@@ -49,9 +45,7 @@ it('maintenance: user writes decline as ECONOMY_PAUSED on the market', async () 
 it('race: one order id, eight buyers, the tally lands on the market', async () => {
   const { location } = await stage('race');
   expect(location).toBe('/market#race');
-  const flash = takeFlash();
-  expect(flash).toMatchObject({
-    kind: 'race',
+  expect(takeRaceTally()).toMatchObject({
     attempts: 8,
     committed: 1,
     duplicates: 7,

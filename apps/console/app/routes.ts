@@ -38,7 +38,9 @@ export default [
   // Resource routes (no UI): the topbar, forms, and switchers post here, then the page revalidates.
   route('actions/simulate', 'routes/actions.simulate.tsx'),
   route('actions/subscribe', 'routes/actions.subscribe.tsx'),
-  route('actions/record', 'routes/actions.record.tsx'),
+  route('actions/purchase', 'routes/actions.purchase.tsx'),
+  route('actions/payout', 'routes/actions.payout.tsx'),
+  route('actions/fund', 'routes/actions.fund.tsx'),
   route('actions/market', 'routes/actions.market.tsx'),
   route('actions/reverse', 'routes/actions.reverse.tsx'),
   route('actions/pipeline', 'routes/actions.pipeline.tsx'),

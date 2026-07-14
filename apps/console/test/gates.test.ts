@@ -17,16 +17,12 @@ import type { ConsoleEngine } from '../app/economy';
 import { getEngine } from '../app/engine';
 import type { Flash } from '../app/flash';
 import { takeFlash } from '../app/flash';
+import { takeRaceTally } from '../app/race';
 import { clientAction as market } from '../app/routes/actions.market';
-import { clientAction as record } from '../app/routes/actions.record';
+import { clientAction as payout } from '../app/routes/actions.payout';
+import { clientAction as purchase } from '../app/routes/actions.purchase';
 import { clientAction as simulate } from '../app/routes/actions.simulate';
-
-async function fresh(): Promise<{ eco: ConsoleEngine }> {
-  const eco = await getEngine();
-  await eco.reset();
-  takeFlash();
-  return { eco };
-}
+import { formPost, fresh } from './support';
 
 type Handler = (a: never) => unknown;
 
@@ -34,11 +30,7 @@ async function submit(
   handler: Handler,
   body: Record<string, string>,
 ): Promise<Flash | null> {
-  const request = new Request('http://console.test/actions', {
-    method: 'POST',
-    body: new URLSearchParams(body),
-  });
-  await handler({ request, params: {} } as never);
+  await formPost(handler, body);
   return takeFlash();
 }
 
@@ -49,17 +41,16 @@ function figureLabels(flash: Flash | null): string[] {
 }
 
 const BUY = {
-  type: 'purchase',
   seller: 'usr_nova',
   listing: 'Aurora Avatar',
   form: 'market-purchase',
   back: '/market',
 };
-const PAY = { type: 'payout', form: 'market-payout', back: '/market' };
+const PAY = { form: 'market-payout', back: '/market' };
 
 it('INSUFFICIENT_FUNDS carries required and available', async () => {
   await fresh();
-  const flash = await submit(record, {
+  const flash = await submit(purchase, {
     ...BUY,
     user: 'usr_broke',
     credits: '500',
@@ -75,7 +66,7 @@ it('INSUFFICIENT_FUNDS carries required and available', async () => {
 it('RISK_DENIED fires once the velocity limit is armed', async () => {
   await fresh();
   await submit(simulate, { op: 'setVelocity', credits: '100', back: '/' });
-  const flash = await submit(record, {
+  const flash = await submit(purchase, {
     ...BUY,
     user: 'usr_alice',
     credits: '500',
@@ -85,14 +76,14 @@ it('RISK_DENIED fires once the velocity limit is armed', async () => {
 
 it('DUPLICATE_ORDER rejects a reused order id', async () => {
   await fresh();
-  const first = await submit(record, {
+  const first = await submit(purchase, {
     ...BUY,
     user: 'usr_alice',
     credits: '100',
     orderId: 'ord_demo',
   });
   expect(first?.kind).toBe('notice');
-  const again = await submit(record, {
+  const again = await submit(purchase, {
     ...BUY,
     user: 'usr_alice',
     credits: '100',
@@ -106,7 +97,7 @@ it('ECONOMY_PAUSED refuses a user write during a maintenance window', async () =
   await submit(simulate, { op: 'maintenanceOn', back: '/' });
   // No actor override — the natural buyer is a user, so the default market buy is paused. This is
   // the fix that makes the default experience hit the gate rather than silently bypass it.
-  const flash = await submit(record, {
+  const flash = await submit(purchase, {
     ...BUY,
     user: 'usr_alice',
     credits: '100',
@@ -121,7 +112,7 @@ it('BELOW_MINIMUM carries the minimum and the requested amount', async () => {
     credits: '5000',
     back: '/',
   });
-  const flash = await submit(record, {
+  const flash = await submit(payout, {
     ...PAY,
     user: 'usr_nova',
     credits: '100',
@@ -137,7 +128,7 @@ it('PAYOUT_TOO_SOON fires inside the cash-out interval', async () => {
     days: '7',
     back: '/',
   });
-  const flash = await submit(record, {
+  const flash = await submit(payout, {
     ...PAY,
     user: 'usr_nova',
     credits: '50',
@@ -148,7 +139,7 @@ it('PAYOUT_TOO_SOON fires inside the cash-out interval', async () => {
 it('FUNDS_IMMATURE fires while earned credits are still maturing', async () => {
   await fresh();
   await submit(simulate, { op: 'setMaturity', days: '30', back: '/' });
-  const flash = await submit(record, {
+  const flash = await submit(payout, {
     ...PAY,
     user: 'usr_nova',
     credits: '50',
@@ -158,7 +149,7 @@ it('FUNDS_IMMATURE fires while earned credits are still maturing', async () => {
 
 it('the authorization gate refuses a user acting on another wallet', async () => {
   await fresh();
-  const flash = await submit(record, {
+  const flash = await submit(purchase, {
     ...BUY,
     user: 'usr_bjorn',
     credits: '100',
@@ -174,7 +165,7 @@ it('the authorization gate refuses a user acting on another wallet', async () =>
 it('the gift flow lands the entitlement on the recipient, not the buyer', async () => {
   const { eco } = await fresh();
   const sku = 'Gift Test Pass';
-  const flash = await submit(record, {
+  const flash = await submit(purchase, {
     ...BUY,
     listing: sku,
     user: 'usr_alice',
@@ -188,7 +179,7 @@ it('the gift flow lands the entitlement on the recipient, not the buyer', async 
 
 it('malformed input redirects with per-field errors, no submit', async () => {
   await fresh();
-  const flash = await submit(record, {
+  const flash = await submit(purchase, {
     ...BUY,
     user: '',
     seller: '',
@@ -207,7 +198,7 @@ it('malformed input redirects with per-field errors, no submit', async () => {
 
 it('try-to-break-it: one order id, many buyers, the balance moves once', async () => {
   await fresh();
-  const flash = await submit(market, {
+  await formPost(market, {
     op: 'race',
     buyer: 'usr_alice',
     seller: 'usr_nova',
@@ -216,20 +207,20 @@ it('try-to-break-it: one order id, many buyers, the balance moves once', async (
     count: '6',
     back: '/market',
   });
-  expect(flash?.kind).toBe('race');
-  if (flash?.kind === 'race') {
-    expect(flash.attempts).toBe(6);
-    expect(flash.committed).toBe(1);
-    expect(flash.duplicates).toBe(5);
-    expect(flash.other).toBe(0);
-    expect(flash.movedCredits).toBe(200);
-  }
+  const tally = takeRaceTally();
+  expect(tally).toMatchObject({
+    attempts: 6,
+    committed: 1,
+    duplicates: 5,
+    other: 0,
+    movedCredits: 200,
+  });
 });
 
 it('try-to-break-it: parallel spends cannot drain past the balance', async () => {
   const { eco } = await fresh();
   await eco.deposit({ userId: 'usr_thin', credits: 500 });
-  const flash = await submit(market, {
+  await formPost(market, {
     op: 'drain',
     buyer: 'usr_thin',
     seller: 'usr_nova',
@@ -238,16 +229,18 @@ it('try-to-break-it: parallel spends cannot drain past the balance', async () =>
     count: '6',
     back: '/market',
   });
-  expect(flash?.kind).toBe('race');
-  if (flash?.kind === 'race') {
-    expect(flash.attempts).toBe(6);
-    expect(flash.committed).toBe(2);
-    expect(flash.insufficient).toBe(4);
-    expect(flash.other).toBe(0);
+  const tally = takeRaceTally();
+  expect(tally).toMatchObject({
+    attempts: 6,
+    committed: 2,
+    insufficient: 4,
+    other: 0,
+    movedCredits: 400,
+  });
+  if (tally) {
     // Every attempt is accounted for — the tally never silently drops an outcome.
     expect(
-      flash.committed + flash.duplicates + flash.insufficient + flash.other,
-    ).toBe(flash.attempts);
-    expect(flash.movedCredits).toBe(400);
+      tally.committed + tally.duplicates + tally.insufficient + tally.other,
+    ).toBe(tally.attempts);
   }
 });

@@ -15,15 +15,10 @@ import { expect, it } from 'vitest';
 import { getEngine } from '../app/engine';
 import { takeFlash } from '../app/flash';
 import { clientAction as tamper } from '../app/routes/actions.tamper';
+import { formPost } from './support';
 
 async function op(name: string) {
-  await tamper({
-    request: new Request('http://console.test/actions/tamper', {
-      method: 'POST',
-      body: new URLSearchParams({ op: name, back: '/integrity' }),
-    }),
-    params: {},
-  } as never);
+  await formPost(tamper, { op: name, back: '/integrity' });
   return takeFlash();
 }
 

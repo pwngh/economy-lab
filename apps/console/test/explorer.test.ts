@@ -13,6 +13,7 @@
 import { expect, it } from 'vitest';
 
 import { getEngine } from '../app/engine';
+import { callRoute } from './support';
 
 it('drills a posting into its account statement and hash chain', async () => {
   const eco = await getEngine();
@@ -57,12 +58,13 @@ it('the txn detail loader resolves a posting and its account drill', async () =>
   const account = posting.legs[0].account;
 
   const { clientLoader } = await import('../app/routes/ledger.txn.$id');
-  const data = (await clientLoader({
-    params: { id: txnId },
-    request: new Request(
+  const data = await callRoute(
+    clientLoader,
+    new Request(
       `http://console.test/ledger/txn/${txnId}?account=${encodeURIComponent(account)}`,
     ),
-  } as never)) as Awaited<ReturnType<typeof clientLoader>>;
+    { id: txnId },
+  );
 
   expect(data.posting?.id).toBe(txnId);
   expect(data.statement?.account).toBe(account);

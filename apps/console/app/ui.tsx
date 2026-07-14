@@ -182,9 +182,6 @@ export function FlashBanner({ flash }: { flash: Flash }) {
   if (flash.kind === 'invalid') {
     return <div className="notice err">{flash.message}</div>;
   }
-  if (flash.kind === 'race') {
-    return <RaceBanner flash={flash} />;
-  }
   return (
     <div className="notice err outcome">
       <div className="outcome-head">
@@ -201,36 +198,6 @@ export function FlashBanner({ flash }: { flash: Flash }) {
           ))}
         </dl>
       ) : null}
-    </div>
-  );
-}
-
-function RaceBanner({ flash }: { flash: Extract<Flash, { kind: 'race' }> }) {
-  // Every attempt is accounted for; the burst is "clean" only when no gate the visitor armed
-  // interfered, so the demonstration is pure idempotency (order) or a pure funds gate (drain).
-  const accounted =
-    flash.committed + flash.duplicates + flash.insufficient + flash.other ===
-    flash.attempts;
-  const clean = accounted && flash.other === 0;
-  const refused =
-    flash.mode === 'order'
-      ? `${flash.duplicates} refused DUPLICATE_ORDER`
-      : `${flash.insufficient} refused INSUFFICIENT_FUNDS`;
-  return (
-    <div className={`notice ${clean ? 'ok' : 'warn'} race`}>
-      <div className="race-verdict">
-        {flash.mode === 'order'
-          ? `${flash.attempts} purchases, one order id: `
-          : `${flash.attempts} spends, one wallet: `}
-        {flash.committed} committed, {refused}
-        {flash.other > 0 ? `, ${flash.other} refused by an armed gate` : ''}.
-      </div>
-      <div className="race-moved">
-        Balance moved <b>{fmtAmount(flash.movedCredits)} Cr</b>{' '}
-        {flash.mode === 'order'
-          ? '— the idempotent ledger committed at most once.'
-          : '— the funds gate held; never below zero.'}
-      </div>
     </div>
   );
 }

@@ -10,13 +10,18 @@
  */
 
 import { getEngine } from '~/engine';
-import { faultFlash, invalidFlash, redirectWithFlash } from '~/flash';
-import type { Flash } from '~/flash';
+import {
+  faultFlash,
+  invalidFlash,
+  redirectBack,
+  redirectWithFlash,
+} from '~/flash';
+import { setRaceTally } from '~/race';
 import type { Route } from './+types/actions.market';
 
 // The try-to-break-it bursts: `order` fires one order id many times (idempotency holds, the
 // balance moves once), `drain` fires fresh ids at a thin wallet (the funds gate holds). The tally
-// rides back as a race flash rendered beside the burst form.
+// rides back in its own slot (~/race), rendered beside the burst form by the break-harness card.
 export async function clientAction({ request }: Route.ClientActionArgs) {
   const eco = await getEngine();
   const form = await request.formData();
@@ -45,9 +50,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
         ? await eco.drainWallet(input)
         : await eco.raceOrder(input);
 
-    const flash: Flash = {
-      kind: 'race',
-      form: 'market-break',
+    setRaceTally({
       mode: op === 'drain' ? 'drain' : 'order',
       attempts: result.attempts,
       committed: result.committed,
@@ -55,8 +58,8 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
       insufficient: result.insufficient,
       other: result.other,
       movedCredits: result.movedCredits,
-    };
-    return redirectWithFlash(form, flash);
+    });
+    return redirectBack(form);
   } catch (err) {
     return redirectWithFlash(form, faultFlash(err, 'market-break'));
   }
