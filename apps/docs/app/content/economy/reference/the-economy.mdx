@@ -7,7 +7,7 @@ sourceRefs:
   [
     'src/index.ts#L489 · createEconomy',
     'src/economy.ts#L79 · economyFromCapabilities',
-    'src/contract.ts#L369 · Economy',
+    'src/contract.ts#L368 · Economy',
   ]
 related:
   [
@@ -60,7 +60,7 @@ Here a user tops up their balance; the result tells you whether it `committed`, 
 const outcome = await economy.submit(
   topUp({
     idempotencyKey: 'ord_8821',
-    actor: { kind: 'system', service: 'billing' },
+    actor: systemActor('billing'),
     userId: 'usr_a1',
     amount: toAmount('CREDIT', 5000n),
     source: 'stripe',

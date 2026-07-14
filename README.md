@@ -31,36 +31,29 @@ A provably-solvent credits economy: wallets, payouts, subscriptions, and a marke
 ## Quick start
 
 Build an `Economy`, drive it through a single `submit`, and read derived state through `read`.
-From a clone of this repo the in-memory build needs no infrastructure — `compose` picks adapters
-from the environment, and the four integrations it can't default (`signer`, `processor`, `rates`,
-`pricing`) come from the bundled test fakes:
+`createEconomy()` with no arguments wires a complete in-memory build — the store, a dev signer,
+a dev rate table, a flat fee policy, and an in-memory processor — so from a clone of this repo
+there is nothing to configure:
 
 ```ts
-import { compose } from './src/index.ts';
-import { spendable } from './src/accounts.ts';
-import { topUp, credit } from './test/support/builders.ts';
-import {
-  defaultPricing,
-  seededSigner,
-  fakeProcessor,
-  fixedRates,
-} from './test/support/capabilities.ts';
+import { createEconomy, topUp, toAmount, spendable } from './src/index.ts';
 
-const economy = await compose(process.env, {
-  signer: seededSigner(1), // dev signer — production supplies a KMS-backed one
-  processor: fakeProcessor(), // payout rail — any adapter satisfying the Processor port
-  rates: fixedRates(), // CREDIT-to-USD rate source
-  pricing: defaultPricing(), // fee policy
-});
+const economy = await createEconomy();
 
 // Credit a wallet after a card charge clears. submit returns an Outcome; it never throws for a "no".
 const outcome = await economy.submit(
-  topUp({ userId: 'usr_ada', amount: credit('50.00'), source: 'card' }),
+  topUp({
+    idempotencyKey: 'ord_ada_1',
+    actor: { kind: 'system', service: 'payments' },
+    userId: 'usr_ada',
+    amount: toAmount('CREDIT', 5_000n),
+    source: 'card',
+  }),
 );
 outcome.status; // 'committed'
 
 const balance = await economy.read.balance(spendable('usr_ada'));
-balance.minor; // 5000n — 50.00 CREDIT in minor units
+balance.minor; // 5_000n — 50.00 CREDIT in minor units
 
 const report = await economy.read.prove(); // every solvency & integrity invariant
 report.conserved; // true

@@ -5,7 +5,7 @@ order: 20
 status: stable
 sourceRefs:
   [
-    'src/contract.ts#L262 · Outcome',
+    'src/contract.ts#L261 · Outcome',
     'src/errors.ts#L22 · RejectionCode',
     'src/errors.ts#L55 · ERROR_CODES',
   ]
@@ -27,7 +27,7 @@ type Outcome =
   | {
       status: 'rejected';
       reason: RejectionCode;
-      detail?: Record<string, unknown>;
+      detail?: RejectionDetail;
     };
 ```
 
@@ -41,7 +41,15 @@ that posted: its id, the time it committed, and the balanced debit and credit le
 the movement.
 
 ```ts
-const result = await economy.submit(topUp);
+const result = await economy.submit(
+  topUp({
+    idempotencyKey: 'ord_1',
+    actor: systemActor('payments'),
+    userId: 'usr_buyer',
+    amount: toAmount('CREDIT', 5_000n),
+    source: 'card',
+  }),
+);
 if (result.status === 'committed') {
   console.log(result.transaction.id); // → "txn_…"
 }
@@ -75,7 +83,17 @@ object with the specifics: the account that was short, the order that wasn't fou
 resume.
 
 ```ts
-const result = await economy.submit(spend);
+const result = await economy.submit(
+  spend({
+    idempotencyKey: 'idem_0',
+    actor: userActor('usr_buyer'),
+    orderId: 'ord_1',
+    buyerId: 'usr_buyer',
+    sku: 'wrld_pass',
+    price: toAmount('CREDIT', 400n),
+    recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
+  }),
+);
 if (result.status === 'rejected' && result.reason === 'INSUFFICIENT_FUNDS') {
   // show the buyer a "not enough funds" message
 }

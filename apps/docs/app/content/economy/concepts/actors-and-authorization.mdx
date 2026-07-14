@@ -26,14 +26,15 @@ The actor is one of three kinds: a `user` acting for themself, a trusted `system
 If the gate says no, the caller never reaches the ledger:
 
 ```ts
-await economy.submit({
-  kind: 'topUp',
-  idempotencyKey: '550e8400-e29b-41d4-a716-446655440001',
-  actor: { kind: 'system', service: 'payments' }, // a user actor here is refused
-  userId: buyer,
-  amount: decodeAmount('50.00', 'CREDIT'),
-  source: 'card',
-});
+await economy.submit(
+  topUp({
+    idempotencyKey: '550e8400-e29b-41d4-a716-446655440001',
+    actor: systemActor('payments'), // a user actor here is refused
+    userId: buyer,
+    amount: decodeAmount('50.00', 'CREDIT'),
+    source: 'card',
+  }),
+);
 ```
 
 <Callout type="note">
