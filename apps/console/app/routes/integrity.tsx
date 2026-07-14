@@ -28,8 +28,9 @@ import {
 } from '~/ui';
 import type { Route } from './+types/integrity';
 
-export function meta(_: Route.MetaArgs) {
+export function meta(args: Route.MetaArgs) {
   return pageMeta(
+    args,
     'Integrity',
     'Five invariants re-derived from the raw ledger — then break the books and watch the audit catch it.',
   );

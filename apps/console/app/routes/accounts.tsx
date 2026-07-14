@@ -28,8 +28,9 @@ import type { Route } from './+types/accounts';
 
 // One bounded page of wallets, with an optional ?user= detail showing the per-account breakdown.
 
-export function meta(_: Route.MetaArgs) {
+export function meta(args: Route.MetaArgs) {
   return pageMeta(
+    args,
     'Accounts',
     'Every wallet, live from the ledger: purchased, earned, and promotional balances.',
   );

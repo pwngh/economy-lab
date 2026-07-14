@@ -18,9 +18,19 @@ import { Link, isRouteErrorResponse, useRouteLoaderData } from 'react-router';
 import { DAY_MS } from '~/demo';
 import type { Flash } from '~/flash';
 
-// Route meta: the title plus a matching description and Open Graph pair, so a shared console URL
-// unfurls with its own text.
-export function pageMeta(title: string, description: string) {
+// The origin the console is served under, for absolute OG URLs: an unfurl needs an absolute image
+// and page URL, since a crawler cannot resolve a relative one.
+const SITE = 'https://economy-lab-docs.pages.dev';
+
+// Route meta: title, matching description, and a full Open Graph + Twitter card, so a shared
+// console URL unfurls with its own text over the site card. `args` carries the location for a
+// per-route og:url. On the static host only /console/ is independently crawlable (deep links
+// bounce through it), so that entry is the one that unfurls; the rest stay client-accurate.
+export function pageMeta(
+  args: { location: { pathname: string } },
+  title: string,
+  description: string,
+) {
   const full = `${title} — Economy Console`;
   return [
     { title: full },
@@ -28,6 +38,9 @@ export function pageMeta(title: string, description: string) {
     { property: 'og:title', content: full },
     { property: 'og:description', content: description },
     { property: 'og:type', content: 'website' },
+    { property: 'og:url', content: `${SITE}/console${args.location.pathname}` },
+    { property: 'og:image', content: `${SITE}/og.png` },
+    { name: 'twitter:card', content: 'summary_large_image' },
   ];
 }
 

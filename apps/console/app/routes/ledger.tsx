@@ -33,8 +33,9 @@ import type { Route } from './+types/ledger';
 
 type Txn = Route.ComponentProps['loaderData']['page']['rows'][number];
 
-export function meta(_: Route.MetaArgs) {
+export function meta(args: Route.MetaArgs) {
   return pageMeta(
+    args,
     'Ledger',
     'Every movement is a balanced, hash-chained posting; search any id, account, or hash.',
   );

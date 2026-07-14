@@ -31,8 +31,9 @@ import {
 } from '~/ui';
 import type { Route } from './+types/pipeline';
 
-export function meta(_: Route.MetaArgs) {
+export function meta(args: Route.MetaArgs) {
   return pageMeta(
+    args,
     'Pipeline',
     'Events cross the edge exactly once: outbox relay and webhook dedup, watched live.',
   );

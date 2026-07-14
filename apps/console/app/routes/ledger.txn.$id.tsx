@@ -30,8 +30,9 @@ import {
 } from '~/ui';
 import type { Route } from './+types/ledger.txn.$id';
 
-export function meta(_: Route.MetaArgs) {
+export function meta(args: Route.MetaArgs) {
   return pageMeta(
+    args,
     'Posting',
     'One balanced posting in full: its legs, the accounts they touch, and its place in the hash chain.',
   );

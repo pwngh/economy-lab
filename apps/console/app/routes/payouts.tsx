@@ -37,8 +37,9 @@ import {
 } from '~/ui';
 import type { Route } from './+types/payouts';
 
-export function meta(_: Route.MetaArgs) {
+export function meta(args: Route.MetaArgs) {
   return pageMeta(
+    args,
     'Payouts',
     'Cash-out sagas from reserve to settlement, with retries and operator reversal.',
   );

@@ -35,8 +35,9 @@ import {
 } from '~/ui';
 import type { Route } from './+types/market';
 
-export function meta(_: Route.MetaArgs) {
+export function meta(args: Route.MetaArgs) {
   return pageMeta(
+    args,
     'Market',
     'Drive the economy — fund, buy, subscribe, cash out — then arm the gates and watch the reason codes.',
   );

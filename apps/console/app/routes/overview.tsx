@@ -56,8 +56,9 @@ const SCENARIOS: { op: string; label: string; sub: string }[] = [
 // A short, bounded preview of wallets — the full, paged list lives on the Accounts page.
 const PREVIEW = 8;
 
-export function meta(_: Route.MetaArgs) {
+export function meta(args: Route.MetaArgs) {
   return pageMeta(
+    args,
     'Overview',
     'A double-entry credits ledger proving itself live: every purchased credit backed by real USD in trust.',
   );

@@ -17,8 +17,9 @@ import { getEngine } from '~/engine';
 import { PageError, StatusPill, pageMeta } from '~/ui';
 import type { Route } from './+types/controls';
 
-export function meta(_: Route.MetaArgs) {
+export function meta(args: Route.MetaArgs) {
   return pageMeta(
+    args,
     'Controls',
     'The operator surface: governed rates, the provider outage switch, retry caps, and reset.',
   );

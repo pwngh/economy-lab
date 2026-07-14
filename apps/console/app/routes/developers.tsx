@@ -22,8 +22,9 @@ import { recordCalls } from '~/xray';
 import type { RecordedCall } from '~/xray';
 import type { Route } from './+types/developers';
 
-export function meta(_: Route.MetaArgs) {
+export function meta(args: Route.MetaArgs) {
   return pageMeta(
+    args,
     'Developers',
     'The hood lifted: an X-ray of engine calls and a live wire-operation runner.',
   );
