@@ -44,6 +44,10 @@ jobs:
       - run: npm run check:static --prefix apps/docs
       - run: node apps/console/scripts/bundle-budget.mjs
       - run: test -f dist-site/.nojekyll
+      # _headers / _redirects are Cloudflare Pages rules; GitHub Pages ignores them, so drop them
+      # from this artifact. Their CSP was already validated by check:csp above (it governs the
+      # Cloudflare deploy, where the rules are honored).
+      - run: rm -f dist-site/_headers dist-site/_redirects
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist-site
