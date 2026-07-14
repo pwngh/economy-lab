@@ -12,21 +12,22 @@
  * runner posts here, so a wire operation and the UI drive the one ledger.
  */
 
+import { redirect } from 'react-router';
+
 import { getEngine } from '~/engine';
 import type { Route } from './+types/submit';
 
-// The wire Response is unpacked to plain data: the status and the decoded JSON body, exactly what
-// the runner renders. (There is no server to curl — the service runs in the tab.)
-async function runWire(request: Request) {
+// The runner posts one operation as JSON; the wire Response is unpacked to plain data — the status
+// and the decoded JSON body, exactly what it renders. (There is no server to curl — the service
+// runs in the tab.)
+export async function clientAction({ request }: Route.ClientActionArgs) {
   const eco = await getEngine();
   const response = await eco.httpFetch(request);
   return { status: response.status, body: await response.json() };
 }
 
-export async function clientAction({ request }: Route.ClientActionArgs) {
-  return runWire(request);
-}
-
-export async function clientLoader({ request }: Route.ClientLoaderArgs) {
-  return runWire(request);
+// A direct GET navigation here (someone typing /submit) carries no operation and this resource
+// route renders no page. Send them to the Developers page, which owns the runner that posts here.
+export function clientLoader() {
+  return redirect('/developers');
 }
