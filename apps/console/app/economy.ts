@@ -459,13 +459,16 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     return result;
   }
 
-  // Memoized solvency snapshot: the most expensive read (every user's balances plus a full
-  // prove()), and the page frame asks for it on every navigation. Cached for a short TTL and
-  // cleared on every mutation, so the figure is never stale across a change the user made.
+  // Memoized chrome reads: the page frame asks for solvency() (every user's balances plus a
+  // prove()) and the light prove() on every navigation, and live mode every few seconds. Both are
+  // cached for a short TTL and cleared on every mutation, so a figure is never stale across a
+  // change the user made.
+  const READ_TTL_MS = 5_000;
   let solvencyCache: { at: number; value: SolvencyView } | null = null;
-  const SOLVENCY_TTL_MS = 5_000;
-  function invalidateSolvency(): void {
+  let proveCache: { at: number; value: ProveView } | null = null;
+  function invalidateReadCaches(): void {
     solvencyCache = null;
+    proveCache = null;
   }
 
   const digest: Digest = systemDigest();
@@ -790,7 +793,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
   async function submit(op: Operation): Promise<Outcome> {
     const outcome = await economy.submit(op);
     // Any committed operation changes balances, so the cached solvency figure is now stale.
-    invalidateSolvency();
+    invalidateReadCaches();
     return outcome;
   }
 
@@ -1178,9 +1181,18 @@ export async function buildEngine(): Promise<ConsoleEngine> {
       };
     },
 
-    // The light prover: cheap enough for the chrome ticker on every navigation. Its chainIntact
-    // is only a shape check — proveFull is the one that recomputes hashes.
-    prove: async () => toProveView(await economy.read.prove()),
+    // The light prover: a shape check, cheap enough for the chrome ticker on every navigation
+    // (proveFull is the one that recomputes hashes). Memoized on the same short TTL as solvency so
+    // a burst of navigations or live-mode ticks re-runs neither.
+    prove: async () => {
+      const now = clock.now();
+      if (proveCache && now - proveCache.at < READ_TTL_MS) {
+        return proveCache.value;
+      }
+      const value = toProveView(await economy.read.prove());
+      proveCache = { at: now, value };
+      return value;
+    },
 
     proveFull: () => proveEconomy(store, { rates, digest }).then(toProveView),
 
@@ -1210,7 +1222,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
             };
           }
         });
-        invalidateSolvency();
+        invalidateReadCaches();
         return victim;
       }),
 
@@ -1223,7 +1235,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
           account as AccountRef,
           credits(123),
         );
-        invalidateSolvency();
+        invalidateReadCaches();
         return { account };
       }),
 
@@ -1293,7 +1305,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     solvency: async () => {
       const eco = economy;
       const now = clock.now();
-      if (solvencyCache && now - solvencyCache.at < SOLVENCY_TTL_MS) {
+      if (solvencyCache && now - solvencyCache.at < READ_TTL_MS) {
         return solvencyCache.value;
       }
       let purchased = 0;
@@ -1510,7 +1522,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
           now: clock.now(),
           limit: 100,
         });
-        invalidateSolvency();
+        invalidateReadCaches();
         return { status: ack.status, applied: drained.applied.length > 0 };
       }),
 
@@ -1519,7 +1531,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     httpFetch: (request) =>
       mutate(async () => {
         const response = await createServer(economy)(request);
-        invalidateSolvency();
+        invalidateReadCaches();
         return response;
       }),
 
@@ -1539,7 +1551,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
       clock.advance(ms);
       // Maturity and the backing check are time-sensitive, and the cache is keyed on the clock, so
       // drop it after a jump rather than trust a snapshot taken at an earlier time.
-      invalidateSolvency();
+      invalidateReadCaches();
     },
     now: () => clock.now(),
 
@@ -1641,7 +1653,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
         workerCtx.config.pauseStartMs = clock.now();
         workerCtx.config.pauseEndMs = clock.now() + DAY_MS;
         ratesUnlocked = true;
-        invalidateSolvency();
+        invalidateReadCaches();
         return {
           ok: true,
           message:
@@ -1696,7 +1708,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
         payoutScale: par.scale,
       };
       rebuildRates();
-      invalidateSolvency();
+      invalidateReadCaches();
       return {
         ok: true,
         message: `Rates set — buy $${buyPerThousand.toFixed(2)}, redemption $${parPerThousand.toFixed(2)} per 1,000 credits. Re-lock to resume.`,
@@ -1742,7 +1754,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
         maturityDays = 0;
         maxAttempts = 5;
         opSeq = 0;
-        invalidateSolvency();
+        invalidateReadCaches();
         await rebuild();
         await seed();
       }),
@@ -1753,7 +1765,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
         maturityDays = 0;
         maxAttempts = 5;
         opSeq = 0;
-        invalidateSolvency();
+        invalidateReadCaches();
         await rebuild();
       }),
 
@@ -1761,7 +1773,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
       mutate(async () => {
         const { batch } = await runWorkerOnce();
         // Worker postings move money, so the cached solvency figure is stale.
-        invalidateSolvency();
+        invalidateReadCaches();
         const notes: string[] = [];
         for (const [name, result] of Object.entries(batch)) {
           if (!result.ok) {
