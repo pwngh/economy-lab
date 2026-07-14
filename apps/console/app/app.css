@@ -3,35 +3,43 @@
  *
  * The console is dressed as a financial document, not a dashboard: a light page, hairline rules
  * instead of boxed-and-shadowed panels everywhere, dense tables, figures that line up column to
- * column, and a single restrained ink-blue accent spent sparingly. Color is rationed — most of
+ * column, and a single restrained teal accent spent sparingly. Color is rationed — most of
  * the surface is paper, ink, and rules. One small set of custom properties drives the whole look,
  * so it stays consistent and retunes from one place. Plain CSS, no framework.
  */
 
 :root {
+  /* Every color is a light-dark() pair driven by color-scheme: auto follows the system, and the
+     theme cookie pins a class on <html> (below). The dark halves mirror the docs site's palette,
+     so the two surfaces read as one product. */
+  color-scheme: light dark;
+
   /* Paper and ink. The page is a warm off-white; panels and tables sit on plain white a shade
      brighter; ink is a softened near-black rather than pure #000, which reads heavy on paper. */
-  --paper: #f6f6f3;
-  --surface: #ffffff;
-  --inset: #f1f0ea; /* a recessed fill for inputs, table headers, and nested blocks */
-  --ink: #1b1d22; /* primary text */
-  --ink-2: #565a63; /* secondary text — labels, descriptions */
-  --ink-3: #8a8e98; /* tertiary text — timestamps, units, hints */
+  /* Light neutrals are the docs site's warm greys, so the two surfaces read as one product. */
+  --paper: light-dark(#fbfaf6, #15171c);
+  --surface: light-dark(#ffffff, #1c1f26);
+  --inset: light-dark(#efeee8, #1a1d23); /* a recessed fill for inputs, table headers, and nested blocks */
+  --ink: light-dark(#1c1d1a, #e7e8e3); /* primary text */
+  --ink-2: light-dark(#5b5d57, #a7a99f); /* secondary text — labels, descriptions */
+  --ink-3: light-dark(#696a64, #8b8e82); /* tertiary text — timestamps, units, hints (>=4.5:1 on paper/surface/inset) */
 
-  --rule: #e5e4dd; /* the hairline that does most of the structural work */
-  --rule-2: #d6d5cc; /* a heavier rule for section boundaries */
+  --rule: light-dark(#e2e1d8, #2b2f38); /* the hairline that does most of the structural work */
+  --rule-2: light-dark(#d4d3c8, #3a3f4a); /* a heavier rule for section boundaries */
 
-  /* One accent — a deep, desaturated ink-blue — for the active page, links, and a single point
-     of emphasis. `wash` is the same hue at a whisper, for a selected row or the active nav. */
-  --accent: #2f4a7c;
-  --accent-ink: #25304a; /* the accent darkened, for a primary button's hover */
-  --accent-wash: #eceff5;
+  /* One accent — the docs site's teal — for the active page, links, and a single point of
+     emphasis. `wash` is the same hue at a whisper, for a selected row or the active nav;
+     `ink` is its pressed/hover step; `on-accent` is the text that sits on a filled accent. */
+  --accent: light-dark(#0e7c86, #43c0cd);
+  --accent-ink: light-dark(#0a5d65, #5fd0dd);
+  --accent-wash: light-dark(#dceef0, #1f3a3e);
+  --on-accent: light-dark(#ffffff, #10191c);
 
   /* Status colors, document-grade: deep and legible on paper, never neon. They appear as text
      and thin rules, not as filled blocks, so the page stays calm. */
-  --pos: #11704a; /* healthy / settled / credit */
-  --neg: #a52a1f; /* failure / shortfall / debit */
-  --warn: #8a5a06; /* in progress / caution */
+  --pos: light-dark(#11704a, #5fbe7c); /* healthy / settled / credit */
+  --neg: light-dark(#a52a1f, #e8736e); /* failure / shortfall / debit */
+  --warn: light-dark(#8a5a06, #e3cf86); /* in progress / caution */
 
   /* Spacing scale, 4px base. */
   --s1: 4px;
@@ -56,12 +64,33 @@
   --t-xl: 21px;
   --t-2xl: 28px;
 
-  --sans:
-    ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     Helvetica, Arial, sans-serif;
-  --mono:
-    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono',
-    monospace;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+/* The theme cookie pins the scheme; without it, `light dark` above follows the system. */
+html.theme-light {
+  color-scheme: light;
+}
+html.theme-dark {
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+  /* View transitions animate on the document, not an element, so they need their own kill. */
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
 }
 
 * {
@@ -79,9 +108,7 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  /* This is a light UI: render native chrome (scrollbars, number-input spinners) light, and
-     tint native controls with the accent rather than the browser default blue. */
-  color-scheme: light;
+  /* Tint native controls (checkboxes, spinners) with the accent rather than the browser blue. */
   accent-color: var(--accent);
 }
 
@@ -107,7 +134,7 @@ a {
 .amt,
 .stat-value,
 .kc-amt,
-input[type='number'] {
+input[type="number"] {
   font-variant-numeric: tabular-nums;
 }
 
@@ -181,9 +208,7 @@ input[type='number'] {
   /* A 3px transparent edge in the resting state, so going active swaps in the accent rule without
      nudging the label sideways. */
   border-left: 3px solid transparent;
-  transition:
-    color 0.1s ease,
-    background 0.1s ease;
+  transition: color 0.1s ease, background 0.1s ease;
 }
 .nav-item:hover {
   color: var(--ink);
@@ -207,6 +232,63 @@ input[type='number'] {
 .nav-foot strong {
   color: var(--ink-2);
   font-weight: 600;
+}
+/* The theme switch: three tiny buttons; the active one carries the accent edge. */
+.theme-switch {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  margin-top: var(--s2);
+}
+.theme-switch-label {
+  margin-right: var(--s1);
+}
+.theme-switch button {
+  padding: 2px 7px;
+  font-size: var(--t-xs);
+  font-weight: 500;
+}
+.theme-switch button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* --- Topbar: the simulated clock with its advance controls, and the solvency ticker. --- */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s4);
+  flex-wrap: wrap;
+  margin-bottom: var(--s5);
+  padding-bottom: var(--s4);
+  border-bottom: 1px solid var(--rule);
+}
+.topbar-clock {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.topbar-day {
+  font-size: var(--t-lg);
+  font-weight: 600;
+  margin-right: var(--s2);
+}
+.topbar-status {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+.topbar-ticker:hover .pill {
+  border-color: var(--accent);
+}
+/* The rate-desk reprice checklist: a met precondition reads positive, an unmet one is plain ink. */
+.precheck {
+  margin: var(--s2) 0 var(--s3);
+}
+.precheck.met {
+  color: var(--pos);
 }
 
 /* --- Page column. --- */
@@ -306,16 +388,16 @@ input[type='number'] {
 .card[data-wallet] {
   border-left: 2px solid var(--rule-2);
 }
-.card[data-wallet='purchased'] {
+.card[data-wallet="purchased"] {
   border-left-color: var(--accent);
 }
-.card[data-wallet='earned'] {
+.card[data-wallet="earned"] {
   border-left-color: var(--pos);
 }
-.card[data-wallet='promo'] {
+.card[data-wallet="promo"] {
   border-left-color: var(--warn);
 }
-.card[data-wallet='total'] {
+.card[data-wallet="total"] {
   border-left-color: var(--ink);
 }
 
@@ -365,6 +447,11 @@ input[type='number'] {
   cursor: pointer;
 }
 .table tr.clickable:hover td {
+  background: var(--accent-wash);
+}
+/* A row whose expansion toggle is a real link (the ledger feed): the row lights on hover of the
+   link, and the pill inside stays the visible control. */
+.table tr:has(.row-toggle:hover) td {
   background: var(--accent-wash);
 }
 /* A denser table for long feeds (the ledger): shorter rows so more history is in view at once. */
@@ -469,9 +556,7 @@ button,
   border-radius: var(--r);
   cursor: pointer;
   font-weight: 500;
-  transition:
-    background 0.1s ease,
-    border-color 0.1s ease;
+  transition: background 0.1s ease, border-color 0.1s ease;
 }
 button:hover,
 .btn:hover {
@@ -485,11 +570,11 @@ button:active,
 button.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 button.primary:hover {
-  background: var(--accent-ink, #25304a);
-  border-color: var(--accent-ink, #25304a);
+  background: var(--accent-ink);
+  border-color: var(--accent-ink);
 }
 button:disabled {
   opacity: 0.45;
@@ -554,7 +639,46 @@ select:focus {
   background: color-mix(in srgb, var(--neg) 6%, var(--surface));
 }
 
+/* --- Entities: the name leads, the id is a quiet copyable chip beside it. --- */
+.entity {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s2);
+  min-width: 0;
+}
+.entity-name {
+  font-weight: 500;
+}
+.id-chip {
+  border: none;
+  background: var(--inset);
+  color: var(--ink-3);
+  font-size: var(--t-xs);
+  padding: 1px 6px;
+  border-radius: 3px;
+  cursor: copy;
+  max-width: 11ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.id-chip:hover {
+  color: var(--ink-2);
+}
+
 /* --- Utility text. --- */
+/* Visible to assistive tech only. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 .mono {
   font-family: var(--mono);
   font-size: var(--t-sm);
@@ -658,6 +782,18 @@ select:focus {
   justify-content: space-between;
   gap: var(--s4);
 }
+/* The solvency figures, grouped so the verdict pill sits alone at the end. The arrow reads the
+   credits-owed across to their USD backing, so the Cr and $ figures are visibly one comparison. */
+.backing-figures {
+  display: flex;
+  align-items: center;
+  gap: var(--s6);
+  flex-wrap: wrap;
+}
+.backing-arrow {
+  font-size: var(--t-lg);
+  color: var(--ink-3);
+}
 /* Spacing one-offs, for the rare element that needs to break the default rhythm. */
 .m-0 {
   margin: 0;
@@ -684,16 +820,16 @@ select:focus {
   padding: var(--s3);
   min-height: 132px;
 }
-.kanban-col[data-state='reserved'] {
+.kanban-col[data-state="reserved"] {
   border-top-color: var(--accent);
 }
-.kanban-col[data-state='submitted'] {
+.kanban-col[data-state="submitted"] {
   border-top-color: var(--warn);
 }
-.kanban-col[data-state='settled'] {
+.kanban-col[data-state="settled"] {
   border-top-color: var(--pos);
 }
-.kanban-col[data-state='failed'] {
+.kanban-col[data-state="failed"] {
   border-top-color: var(--neg);
 }
 .kanban-head {
@@ -707,26 +843,29 @@ select:focus {
   letter-spacing: 0.05em;
   color: var(--ink-2);
 }
+/* The column title is a real heading now, so it navigates with the rest; strip the h3 defaults
+   and let it inherit the head's small-caps label styling. */
+.kanban-head h3 {
+  font: inherit;
+  margin: 0;
+}
+/* Cards are list items; the list carries the spacing so a single-card column has no dangling gap. */
+.kanban-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
 .kanban-card {
   background: var(--surface);
   border: 1px solid var(--rule);
   border-radius: var(--r);
   padding: var(--s3);
-  margin-bottom: var(--s2);
-}
-.kanban-card:last-child {
-  margin-bottom: 0;
 }
 .kanban-card .kc-id {
-  font-family: var(--mono);
-  font-size: var(--t-xs);
-  color: var(--ink-3);
-  /* The id is one unbreakable token; keep it to a single line and ellipsize rather than letting
-     it wrap mid-token or push the card wider than its grid column. Full id is on hover (title
-     attribute). Same treatment for the provider ref in .kc-meta below. */
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  margin-bottom: var(--s1);
 }
 .kanban-card .kc-amt {
   font-family: var(--mono);
@@ -797,60 +936,8 @@ select:focus {
   font-size: var(--t-sm);
 }
 
-/* --- Simulation panel: the engine's control surface, sitting at the foot of every page. It is a
-   large panel rather than a thin toolbar, so it flows with the page (no overlap) and is set off
-   from the content above by space and a heavier top rule, in keeping with the rest. --- */
-.sim {
-  margin-top: var(--s8);
-  background: var(--surface);
-  border: 1px solid var(--rule);
-  border-top: 2px solid var(--rule-2);
-  border-radius: var(--r-2);
-}
-/* Collapsed, the panel is just this bar; clicking it reveals or hides the controls below. */
-.sim-toggle {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s4);
-  flex-wrap: wrap;
-  background: transparent;
-  border: none;
-  border-radius: var(--r-2);
-  padding: var(--s4) var(--s5);
-  font-size: var(--t-md);
-  font-weight: 600;
-  cursor: pointer;
-}
-.sim-toggle:hover {
-  background: var(--inset);
-}
-.sim-toggle-label {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s2);
-}
-.sim-chevron {
-  width: 12px;
-  color: var(--ink-3);
-  font-size: var(--t-sm);
-}
-.sim-body {
-  padding: 0 var(--s5) var(--s5);
-}
-.sim-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(208px, 1fr));
-  gap: var(--s3);
-}
-.sim-block {
-  background: var(--paper);
-  border: 1px solid var(--rule);
-  border-radius: var(--r);
-  padding: var(--s3);
-}
-.sim-block .sb-title {
+/* Small-caps section titles inside drill panels (the saga drill, the txn drill). */
+.sb-title {
   font-size: var(--t-xs);
   font-weight: 600;
   text-transform: uppercase;
@@ -878,7 +965,7 @@ select:focus {
   line-height: 1.5;
 }
 /* The sim panel's number inputs are short (a day count, an attempt cap), not full width. */
-.sim-block input[type='number'] {
+.sim-block input[type="number"] {
   width: 84px;
 }
 
@@ -919,6 +1006,50 @@ code {
   background: var(--inset);
   padding: 1px 5px;
   border-radius: 3px;
+}
+.btn.small {
+  padding: 3px 9px;
+  font-size: var(--t-sm);
+}
+.curl {
+  margin: var(--s2) 0 0;
+  padding: var(--s4);
+  background: var(--inset);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  font-size: var(--t-sm);
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre;
+  overflow-x: auto;
+}
+.wire-input {
+  display: block;
+  width: 100%;
+  margin-bottom: var(--s3);
+  resize: vertical;
+}
+
+/* The pre-hydration splash, shown while the engine builds and seeds. */
+.boot {
+  display: grid;
+  place-items: center;
+  min-height: 60vh;
+  color: var(--ink-2);
+}
+
+/* Ledger explorer search: paste a txn id, account, hash, Merkle root, or signature. */
+.ledger-search {
+  display: flex;
+  gap: var(--s2);
+  margin-bottom: var(--s4);
+}
+.ledger-search input {
+  flex: 1;
+  min-width: 0;
+}
+.search-result {
+  margin-bottom: var(--s4);
 }
 
 /* --- Responsive: collapse the multi-column grids, then the sidebar, as width drops. --- */
@@ -986,4 +1117,315 @@ code {
   opacity: 0.4;
   cursor: not-allowed;
   pointer-events: none;
+}
+
+/* --- Market: the one page where the economy is driven — operations, gate arming, stress test. --- */
+
+/* Acting-as: a compact bar, not a full card, so the identity reads as a setting over the page. */
+.acting-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  padding: var(--s3) var(--s4);
+  margin-bottom: var(--s4);
+}
+.acting-bar label {
+  font-weight: 600;
+  font-size: var(--t-sm);
+  color: var(--ink-2);
+}
+.acting-bar select {
+  min-width: 190px;
+}
+.acting-note {
+  color: var(--ink-3);
+  font-size: var(--t-sm);
+  line-height: 1.4;
+  flex: 1 1 260px;
+}
+
+/* The two gate-provoking forms sit side by side, stacking on a narrow viewport. */
+.market-ops {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: var(--s4);
+}
+@media (max-width: 820px) {
+  .market-ops {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Fund a wallet: a slim horizontal row, the prerequisite operation set apart from the gate forms. */
+.fund-card {
+  margin-bottom: var(--s4);
+}
+.fund-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+.fund-row .field {
+  margin-bottom: 0;
+  flex: 1 1 160px;
+}
+
+/* Gate knobs: a responsive grid, each control naming the reason code it arms. */
+.gate-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--s5);
+  padding: 0 var(--s5) var(--s5);
+}
+.gate-knob .field {
+  margin-bottom: 0;
+}
+.gate-knob .row {
+  flex-wrap: nowrap;
+}
+.gate-knob .row input[type="number"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.break-buttons {
+  margin-top: var(--s4);
+}
+
+/* The inline message a market form renders beside itself. */
+/* Always in the DOM so its aria-live announces on submit; margin only when it holds a message. */
+.owned-flash:not(:empty) {
+  margin-bottom: var(--s3);
+}
+
+/* Per-field validation error, directly beneath the input it concerns. */
+.field-error {
+  color: var(--neg);
+  font-size: var(--t-xs);
+  margin-top: 2px;
+}
+
+/* A reason code, always monospace. Neutral where it names a gate to arm; red inside a rejection. */
+.reason-code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  background: var(--inset);
+  color: var(--ink-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.notice.err .reason-code,
+.notice.outcome .reason-code {
+  background: color-mix(in srgb, var(--neg) 14%, transparent);
+  color: var(--neg);
+}
+
+/* Outcome flash: the code and its plain-English line on one row, the detail figures beneath. */
+.outcome-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+.figures {
+  display: flex;
+  gap: var(--s6);
+  margin: var(--s3) 0 0;
+  flex-wrap: wrap;
+}
+.figure dt {
+  font-size: var(--t-xs);
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.figure dd {
+  margin: 2px 0 0;
+  font-weight: 600;
+}
+
+/* The try-to-break-it tally. */
+.race-moved {
+  margin-top: var(--s2);
+}
+
+/* The chrome's "Acting as" reminder, above the theme switch. */
+.acting-as {
+  font-size: var(--t-sm);
+  color: var(--ink-3);
+  margin-bottom: var(--s3);
+}
+
+/* --- Ledger explorer drill: posting -> account statement -> hash chain -> checkpoint. --- */
+
+.head-id {
+  font-size: var(--t-lg);
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+/* A hash or signature: shown truncated, click-to-copy, never wrapping mid-token. */
+.hash {
+  border: none;
+  background: var(--inset);
+  color: var(--ink-2);
+  font-size: var(--t-xs);
+  padding: 1px 6px;
+  border-radius: 3px;
+  cursor: copy;
+  white-space: nowrap;
+}
+.hash:hover {
+  color: var(--ink);
+}
+
+.account-drill .drill-balance {
+  font-size: var(--t-lg);
+}
+.drill-section {
+  padding: var(--s4) var(--s5) 0;
+  border-top: 1px solid var(--rule);
+}
+.drill-section:first-of-type {
+  border-top: none;
+}
+.drill-section .sb-title {
+  margin-bottom: var(--s3);
+}
+
+/* The hash chain as an ordered list: each link is a posting and the head hashes it moved between. */
+.chain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.chain-link {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  padding-bottom: var(--s2);
+  border-bottom: 1px dashed var(--rule);
+}
+.chain-hashes {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s2);
+  color: var(--ink-3);
+}
+
+/* The checkpoint as a small definition grid: root, signature, count, sealed-at. */
+.checkpoint {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--s4);
+  margin: 0 0 var(--s5);
+}
+.checkpoint dt {
+  font-size: var(--t-xs);
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 3px;
+}
+
+/* --- Saga drill: the payout board's per-card drill and its operator reversal. --- */
+.kc-open {
+  display: inline-block;
+  margin-top: var(--s2);
+  font-size: var(--t-xs);
+  font-weight: 500;
+}
+.saga-drill .drill-flash {
+  padding: 0 var(--s5);
+  margin-top: var(--s3);
+}
+
+/* Scenario launchers: one-click staged stories on the Overview. */
+.scenario-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: var(--s3);
+}
+.scenario-btn {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: var(--s3) var(--s4);
+}
+.scenario-label {
+  font-weight: 600;
+}
+.scenario-sub {
+  font-size: var(--t-sm);
+  color: var(--ink-2);
+}
+
+/* The tour strip: one caption per page, carried by ?tour=n — plain links, keyboard-complete. */
+.tour {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  margin-bottom: var(--s4);
+  padding: var(--s3) var(--s4);
+  background: var(--accent-wash);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  font-size: var(--t-sm);
+}
+.tour-count {
+  color: var(--ink-3);
+}
+.tour-caption {
+  flex: 1;
+}
+.tour-actions {
+  display: inline-flex;
+  gap: var(--s4);
+  white-space: nowrap;
+}
+.tour-next {
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.tour-exit {
+  color: var(--ink-3);
+}
+.tour-next:hover,
+.tour-exit:hover {
+  text-decoration: underline;
+}
+
+/* Live mode: the dot breathes while the interval ticks the clock and the worker. */
+.live-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  transition: background-color 0.2s ease;
+}
+.live-toggle.on .live-dot {
+  background: var(--pos);
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+@keyframes live-pulse {
+  50% {
+    opacity: 0.35;
+  }
 }

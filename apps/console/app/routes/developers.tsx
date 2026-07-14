@@ -6,16 +6,53 @@
  * This source code is licensed under the MIT license found in the
  * LICENSE.md file in the root directory of this source tree.
  *
- * @license MIT
+ * The X-ray hub: the reads this page's loader makes, recorded through one generic Proxy, plus a
+ * live wire-operation runner and how a platform's API maps onto the ledger.
  */
 
-import type { Route } from './+types/developers';
-import { DataTable } from '~/ui';
+import { useState } from 'react';
 
-// No loader: static developer copy.
+import { useFetcher } from 'react-router';
+
+import type { SubmitTarget } from 'react-router';
+
+import { getEngine } from '~/engine';
+import { DataTable, PageError, pageMeta } from '~/ui';
+import { recordCalls } from '~/xray';
+import type { RecordedCall } from '~/xray';
+import type { Route } from './+types/developers';
+
 export function meta(_: Route.MetaArgs) {
-  return [{ title: 'Developers — Economy Console' }];
+  return pageMeta(
+    'Developers',
+    'The hood lifted: an X-ray of engine calls and a live wire-operation runner.',
+  );
 }
+
+export async function clientLoader() {
+  const calls: RecordedCall[] = [];
+  const eco = recordCalls(await getEngine(), calls);
+  // The reads a dashboard loader makes, run through the recorder so the page can show its own work.
+  await Promise.all([
+    eco.solvency(),
+    eco.prove(),
+    eco.wallets({ offset: 0, limit: 8 }),
+    eco.status(),
+    eco.checkpoint(),
+  ]);
+  return { calls };
+}
+
+const WIRE_EXAMPLE = `{
+  "kind": "spend",
+  "idempotencyKey": "idem_wire_1",
+  "actor": { "kind": "user", "userId": "usr_alice" },
+  "buyerId": "usr_alice",
+  "sku": "Aurora Avatar",
+  "price": "CREDIT:500.00",
+  "recipients": [{ "sellerId": "usr_nova", "shareBps": 10000 }],
+  "orderId": "ord_wire_1"
+}`;
 
 const ENDPOINTS: [string, string][] = [
   ['Read a wallet balance', 'GET /user/{id}/balance → Balance'],
@@ -31,13 +68,123 @@ const ENDPOINTS: [string, string][] = [
   ['Dispute / chargeback', 'Transaction.status: chargeback → reversal'],
 ];
 
-export default function Developers() {
+// The wire runner: one operation as JSON, posted to the mounted service, the raw wire response
+// beside it. A committed run revalidates every loader, so the tickers and X-ray move with it.
+function WireRunner() {
+  const fetcher = useFetcher<{ status: number; body: unknown }>();
+  const [text, setText] = useState(WIRE_EXAMPLE);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const busy = fetcher.state !== 'idle';
+
+  function run() {
+    try {
+      const op = JSON.parse(text) as SubmitTarget;
+      setParseError(null);
+      void fetcher.submit(op, {
+        method: 'post',
+        action: '/submit',
+        encType: 'application/json',
+      });
+    } catch (err) {
+      setParseError(err instanceof Error ? err.message : 'Invalid JSON.');
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="row between">
+        <h3>Submit an operation over the wire</h3>
+        <CopyButton text={text} />
+      </div>
+      <p className="card-sub">
+        The engine also runs as an HTTP service — the same{' '}
+        <span className="mono">createServer</span> it exposes standalone, here
+        bound to your tab&apos;s economy. Run this operation through it and the
+        wire response comes back verbatim; the tickers, Ledger, and the X-ray
+        above revalidate on commit. Edit the JSON — a reused{' '}
+        <span className="mono">orderId</span> replays as a duplicate.
+      </p>
+      <textarea
+        className="curl mono wire-input"
+        aria-label="Wire operation JSON"
+        rows={10}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        spellCheck={false}
+      />
+      <div className="row between">
+        <button type="button" className="primary" onClick={run} disabled={busy}>
+          {busy ? 'Running…' : 'Run operation'}
+        </button>
+        {parseError ? <span className="field-error">{parseError}</span> : null}
+      </div>
+      {fetcher.data ? (
+        <pre className="curl mono" aria-live="polite">
+          {`HTTP ${fetcher.data.status}\n${JSON.stringify(fetcher.data.body, null, 2)}`}
+        </pre>
+      ) : null}
+    </div>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="btn small"
+      onClick={() => {
+        void navigator.clipboard?.writeText(text);
+        setCopied(true);
+      }}
+      onMouseLeave={() => setCopied(false)}
+      onBlur={() => setCopied(false)}
+    >
+      {copied ? '✓ copied' : 'Copy'}
+    </button>
+  );
+}
+
+export default function Developers({ loaderData }: Route.ComponentProps) {
+  const { calls } = loaderData;
+
   return (
     <div className="page">
       <div className="view-head">
         <h2>Developers</h2>
-        <p>What this is, and how it fits inside a platform.</p>
+        <p>What this is, how it fits inside a platform, and the hood lifted.</p>
       </div>
+
+      <div className="card card-flush">
+        <div className="card-head">
+          <h3>X-ray — the engine calls this page makes</h3>
+          <p className="card-sub">
+            Every call this page&apos;s loader makes to the engine, recorded
+            through one generic Proxy: the call, its arguments, the wall-clock
+            time, and a summary of the result. Adding a facade method never
+            touches the recorder.
+          </p>
+        </div>
+        <DataTable
+          columns={[
+            { key: 'call', label: 'Call' },
+            { key: 'result', label: 'Result' },
+            { key: 'ms', label: 'Time', num: true },
+          ]}
+        >
+          {calls.map((c) => (
+            <tr key={c.id}>
+              <td className="mono">
+                <b>{c.name}</b>({c.args})
+              </td>
+              <td className="dim mono">{c.result}</td>
+              <td className="num mono">{c.ms} ms</td>
+            </tr>
+          ))}
+        </DataTable>
+      </div>
+
+      <WireRunner />
 
       <div className="card prose">
         <h3>What the ledger is</h3>
@@ -52,28 +199,9 @@ export default function Developers() {
         <p>
           Each posting is also hash-chained: it is sealed with a hash built from
           the one before it. Change any old posting and the chain no longer
-          lines up, so tampering is caught — that is what the Integrity page
-          proves on every load.
+          lines up, so tampering is caught — what the Integrity page proves on
+          every load, and what the ledger explorer walks link by link.
         </p>
-      </div>
-
-      <div className="card prose">
-        <h3>How this console works</h3>
-        <p>
-          Every figure on these pages is read live from the ledger. When you
-          record an operation, advance time, or run jobs, the books update and
-          the page reflects the new state.
-        </p>
-        <ul>
-          <li>
-            <b>The ledger is the source of truth.</b> Wallets, balances,
-            payouts, and the integrity report all come from it.
-          </li>
-          <li>
-            <b>Your changes persist.</b> A browser refresh keeps the current
-            state. Reset rebuilds and re-seeds; Clear empties it.
-          </li>
-        </ul>
       </div>
 
       <div className="card prose">
@@ -82,11 +210,9 @@ export default function Developers() {
           The platform you&apos;d build on top has a public economy API. It
           returns simple read models — a <span className="mono">Balance</span>,
           a <span className="mono">ProductPurchase</span>, a{' '}
-          <span className="mono">License</span>.
-        </p>
-        <p>
-          This console is the layer underneath: the proven double-entry ledger
-          that produces those read models and guarantees they&apos;re correct.
+          <span className="mono">License</span>. This console is the layer
+          underneath: the proven double-entry ledger that produces those read
+          models and guarantees they&apos;re correct.
         </p>
         <ul>
           <li>
@@ -108,27 +234,10 @@ export default function Developers() {
         <h3>Where it hands off to external rails</h3>
         <p>
           The ledger records money movement. It does not move real-world money
-          itself — it hands off at its edges:
-        </p>
-        <ul>
-          <li>
-            <b>Payouts to sellers</b> go out through a payment partner (Tilia).
-            The ledger reserves the credits; the partner moves the USD. The
-            Payouts page tracks each one from reserve to settlement.
-          </li>
-          <li>
-            <b>Deposits</b> come in the same way: the partner takes the card
-            payment, the ledger records the resulting Credits.
-          </li>
-          <li>
-            <b>KYC, tax, and AML</b> live in that money-transmitter partner by
-            design, not here.
-          </li>
-        </ul>
-        <p>
-          So the ledger is the system of record in the middle: it knows what is
-          owed and proves the books balance, while the external rails handle the
-          real cash.
+          itself — it hands off at its edges: payouts to sellers and card
+          deposits go through a payment partner (Tilia), and KYC, tax, and AML
+          live in that money-transmitter partner by design, not here. The
+          Pipeline page watches the events cross that edge.
         </p>
       </div>
 
@@ -136,7 +245,10 @@ export default function Developers() {
         <div className="card-head">
           <h3>Endpoint map</h3>
           <p className="card-sub">
-            How a platform&apos;s economy API maps onto this ledger.
+            Illustrative, not served here: the shape of the public economy API a
+            platform would build on top, and the ledger operation each one
+            drives underneath. The one wire route this console mounts is the
+            runner above.
           </p>
         </div>
         <DataTable
@@ -155,4 +267,8 @@ export default function Developers() {
       </div>
     </div>
   );
+}
+
+export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
+  return <PageError error={error} />;
 }

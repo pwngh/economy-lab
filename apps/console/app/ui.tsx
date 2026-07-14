@@ -12,8 +12,61 @@
 // Shared display primitives: money figures, status pills, stat tiles, and the table header, kept
 // here so every page renders them the same way.
 
+import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { Link } from 'react-router';
+import { Link, isRouteErrorResponse, useRouteLoaderData } from 'react-router';
+import { DAY_MS } from '~/demo';
+import type { Flash } from '~/flash';
+
+// Route meta: the title plus a matching description and Open Graph pair, so a shared console URL
+// unfurls with its own text.
+export function pageMeta(title: string, description: string) {
+  const full = `${title} — Economy Console`;
+  return [
+    { title: full },
+    { name: 'description', content: description },
+    { property: 'og:title', content: full },
+    { property: 'og:description', content: description },
+    { property: 'og:type', content: 'website' },
+  ];
+}
+
+// The chrome layout's route id, as React Router derives it from the module path in routes.ts.
+// Renaming routes/_chrome.tsx must update this, or useFlash silently reads no loader data.
+export const CHROME_ROUTE_ID = 'routes/_chrome';
+
+// The chrome loader takes the one-shot flash (exactly once per navigation); pages that render a
+// form-owned message read it from that loader's data rather than taking it again.
+export function useFlash(): Flash | null {
+  const chrome = useRouteLoaderData<{ flash: Flash | null }>(CHROME_ROUTE_ID);
+  return chrome?.flash ?? null;
+}
+
+// Per-route error fallback: a page that throws reports here while the chrome, sidebar, and
+// sibling routes stay alive. The root boundary remains the last resort.
+export function PageError({ error }: { error: unknown }) {
+  let title = 'Something went wrong';
+  let detail = 'This page could not be loaded. Please try again.';
+  if (isRouteErrorResponse(error)) {
+    title = `${error.status} ${error.statusText}`;
+    detail = typeof error.data === 'string' ? error.data : detail;
+  } else if (error instanceof Error) {
+    detail = error.message;
+  }
+  return (
+    <div className="page">
+      <div className="view-head">
+        <h2>{title}</h2>
+      </div>
+      <div className="notice err">{detail}</div>
+      <p>
+        <Link className="link" to="/">
+          Back to overview
+        </Link>
+      </p>
+    </div>
+  );
+}
 
 // Two decimal places with grouping — the house format for every credit and USD figure.
 export function fmtAmount(n: number): string {
@@ -24,7 +77,6 @@ export function fmtAmount(n: number): string {
 }
 
 // A label for a simulated-clock time: the console's times read as elapsed days ("day 0", "day 2.5").
-export const DAY_MS = 86_400_000;
 export function dayLabel(at: number): string {
   return at === 0 ? 'day 0' : `day ${Math.round((at / DAY_MS) * 10) / 10}`;
 }
@@ -57,6 +109,124 @@ export function Credits({ value }: { value: number }) {
 // A USD figure: "$1,000.00".
 export function Usd({ value }: { value: number }) {
   return <Amount pre="$" num={fmtAmount(value)} />;
+}
+
+// Name-first entity: "Alice" leads, the raw id trails as a small copyable chip. The name is
+// derived from the id (usr_alice → Alice) until the narrative seed cast lands.
+export function entityName(id: string): string {
+  const bare = id.replace(/^usr_/, '');
+  return bare.charAt(0).toUpperCase() + bare.slice(1);
+}
+export function Entity({ id }: { id: string }) {
+  return (
+    <span className="entity">
+      <span className="entity-name">{entityName(id)}</span>
+      <IdChip id={id} />
+    </span>
+  );
+}
+
+// The raw id, truncated, click-to-copy. The copy handler is a JS-only enhancement; without it
+// the chip is still the visible (and hover-titled) id. `copied` resets on leave, so no timer.
+export function IdChip({ id }: { id: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="id-chip mono"
+      aria-label={copied ? `Copied ${id}` : `Copy id ${id}`}
+      title={`${id} — click to copy`}
+      onClick={() => {
+        void navigator.clipboard?.writeText(id);
+        setCopied(true);
+      }}
+      onMouseLeave={() => setCopied(false)}
+      onBlur={() => setCopied(false)}
+    >
+      {copied ? '✓ copied' : id}
+    </button>
+  );
+}
+
+// One flash, rendered wherever it is owned: a plain confirmation, an engine verdict (its reason
+// code shown verbatim beside the plain-English line and the typed detail figures), a validation
+// summary, or a try-to-break-it tally. Callers place it inside an aria-live region.
+export function FlashBanner({ flash }: { flash: Flash }) {
+  if (flash.kind === 'notice') {
+    return (
+      <div className={`notice ${flash.tone === 'warn' ? 'warn' : 'ok'}`}>
+        {flash.message}
+      </div>
+    );
+  }
+  if (flash.kind === 'invalid') {
+    return <div className="notice err">{flash.message}</div>;
+  }
+  if (flash.kind === 'race') {
+    return <RaceBanner flash={flash} />;
+  }
+  return (
+    <div className="notice err outcome">
+      <div className="outcome-head">
+        <code className="reason-code">{flash.code}</code>
+        <span>{flash.message}</span>
+      </div>
+      {flash.figures && flash.figures.length > 0 ? (
+        <dl className="figures">
+          {flash.figures.map((f) => (
+            <div key={f.label} className="figure">
+              <dt>{f.label}</dt>
+              <dd className="mono">{f.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+    </div>
+  );
+}
+
+function RaceBanner({ flash }: { flash: Extract<Flash, { kind: 'race' }> }) {
+  // Every attempt is accounted for; the burst is "clean" only when no gate the visitor armed
+  // interfered, so the demonstration is pure idempotency (order) or a pure funds gate (drain).
+  const accounted =
+    flash.committed + flash.duplicates + flash.insufficient + flash.other ===
+    flash.attempts;
+  const clean = accounted && flash.other === 0;
+  const refused =
+    flash.mode === 'order'
+      ? `${flash.duplicates} refused DUPLICATE_ORDER`
+      : `${flash.insufficient} refused INSUFFICIENT_FUNDS`;
+  return (
+    <div className={`notice ${clean ? 'ok' : 'warn'} race`}>
+      <div className="race-verdict">
+        {flash.mode === 'order'
+          ? `${flash.attempts} purchases, one order id: `
+          : `${flash.attempts} spends, one wallet: `}
+        {flash.committed} committed, {refused}
+        {flash.other > 0 ? `, ${flash.other} refused by an armed gate` : ''}.
+      </div>
+      <div className="race-moved">
+        Balance moved <b>{fmtAmount(flash.movedCredits)} Cr</b>{' '}
+        {flash.mode === 'order'
+          ? '— the idempotent ledger committed at most once.'
+          : '— the funds gate held; never below zero.'}
+      </div>
+    </div>
+  );
+}
+
+// Stable, unique React keys for a posting's legs. Two legs can share an account and side — a spend
+// credits a seller's earned account from both promo and purchased — so repeats get a suffix.
+export function withLegKeys<T extends { account: string; side: string }>(
+  legs: readonly T[],
+): { leg: T; key: string }[] {
+  const seen = new Map<string, number>();
+  return legs.map((leg) => {
+    const base = `${leg.account}:${leg.side}`;
+    const n = seen.get(base) ?? 0;
+    seen.set(base, n + 1);
+    return { leg, key: n === 0 ? base : `${base}#${n}` };
+  });
 }
 
 // Status pill. `tone` sets the color (green = ok, amber = pending, red = failed, blue = emphasis,
@@ -123,7 +293,7 @@ export function DataTable({
       <thead>
         <tr>
           {columns.map((c) => (
-            <th key={c.key} className={c.num ? 'num' : c.className}>
+            <th key={c.key} scope="col" className={c.num ? 'num' : c.className}>
               {c.label}
             </th>
           ))}
@@ -174,7 +344,12 @@ export function Pager({
       </span>
       <div className="pager-controls">
         {page > 0 ? (
-          <Link className="btn" to={href(page - 1)} preventScrollReset>
+          <Link
+            className="btn"
+            to={href(page - 1)}
+            preventScrollReset
+            viewTransition
+          >
             ← Prev
           </Link>
         ) : (
@@ -183,7 +358,12 @@ export function Pager({
           </span>
         )}
         {page < lastPage ? (
-          <Link className="btn" to={href(page + 1)} preventScrollReset>
+          <Link
+            className="btn"
+            to={href(page + 1)}
+            preventScrollReset
+            viewTransition
+          >
             Next →
           </Link>
         ) : (

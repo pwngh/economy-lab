@@ -10,13 +10,13 @@
  */
 
 // Demo wiring for the console: the simulation clock and the env the demo feeds the engine. Kept
-// apart from economy.server.ts (the live engine + facade) and views.server.ts (the render shapes).
+// apart from economy.ts (the live engine + facade) and views.ts (the render shapes).
 
 import type { Clock } from '#src/ports.ts';
 
 export const DAY_MS = 86_400_000;
 
-// A clock the simulation controls. Time only advances when the panel advances it; the economy,
+// A clock the simulation controls. Time only advances when the topbar advances it; the economy,
 // store, and worker all share this one clock object.
 export function makeClock(): Clock & {
   advance: (ms: number) => void;
@@ -61,8 +61,5 @@ export function demoEnv(
     MAX_OUTBOX_ATTEMPTS: '10',
     MAX_SUBSCRIPTION_ATTEMPTS: '10',
     MAX_PAYOUT_AGE_MS: String(86_400_000),
-    ...(process.env.DATABASE_URL
-      ? { DATABASE_URL: process.env.DATABASE_URL }
-      : {}),
   };
 }

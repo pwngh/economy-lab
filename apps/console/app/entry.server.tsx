@@ -11,10 +11,10 @@
 
 import { PassThrough } from 'node:stream';
 
-import type { EntryContext } from 'react-router';
 import { createReadableStreamFromReadable } from '@react-router/node';
-import { ServerRouter } from 'react-router';
 import { renderToPipeableStream } from 'react-dom/server';
+import type { EntryContext } from 'react-router';
+import { ServerRouter } from 'react-router';
 
 // Provided explicitly so @react-router/node is detected for typegen/build, and to keep the SSR
 // render dependency-free (the stock entry pulls in `isbot`, which we don't need).
@@ -66,6 +66,7 @@ export default function handleRequest(
           reject(error);
         },
         onError(error: unknown) {
+          // biome-ignore lint/style/noParameterAssign: the stock React Router streaming entry mutates it
           responseStatusCode = 500;
           if (shellRendered) {
             console.error(error);

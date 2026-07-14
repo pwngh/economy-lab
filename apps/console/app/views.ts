@@ -10,15 +10,15 @@
  */
 
 // Presentation layer for the console: the render-ready view shapes the pages receive, plus the pure
-// functions that map raw ledger/engine data into them. No engine state lives here — economy.server.ts
+// functions that map raw ledger/engine data into them. No engine state lives here — economy.ts
 // holds the live economy and calls into these.
 
-import { toAmount } from '#src/money.ts';
 import { SYSTEM } from '#src/accounts.ts';
 import { ERROR_CODES } from '#src/errors.ts';
+import { toAmount } from '#src/money.ts';
 
-import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
+import type { Amount } from '#src/money.ts';
 import type { Saga } from '#src/ports.ts';
 
 // --- Public view types: render-ready shapes the pages receive ---
@@ -88,7 +88,9 @@ export interface ProveView {
   chainIntact: boolean;
   consistent: boolean;
   shortfallUsd: number;
-  driftCount: number;
+  // Every account whose cached balance disagrees with the one re-added from its legs, with both
+  // figures, so the gap's size and direction render beside the flag.
+  drift: { account: string; cachedCredits: number; derivedCredits: number }[];
   allGreen: boolean;
 }
 
@@ -97,6 +99,8 @@ export interface ProveView {
 export interface SolvencyView {
   userCredits: number;
   backed: boolean;
+  // USD that trust cash must cover: the custodial (purchased) credits valued at par.
+  backingUsd: number;
   shortfallUsd: number;
   trustCashUsd: number;
   purchased: number;
@@ -132,12 +136,161 @@ export interface PayoutView {
   payoutUsd: number | null;
 }
 
-// The current state of the simulation controls, for the Simulation panel to render.
+// The current state of the simulation controls, for the topbar clock, Controls page, and the market page's
+// gate controls to render. The gate knobs are read live from the engine config, so they never
+// drift from what the next submit will see.
 export interface SimSettings {
   faultMode: boolean;
   maturityHorizonDays: number;
   maxPayoutAttempts: number;
+  velocityLimitCredits: number;
+  maintenancePaused: boolean;
+  payoutMinimumCredits: number;
+  payoutIntervalDays: number;
   now: number;
+}
+
+// The treasury's rate desk: the live rates (USD per 1,000 credits) plus the state that governs a
+// change. Repricing is a locked operation — you unlock only when the economy is quiesced (no payout
+// in flight), which pauses everyday writes; the new rates are bounded; re-locking resumes.
+export interface RateBoard {
+  buyPerThousand: number;
+  parPerThousand: number;
+  payoutPerThousand: number;
+  spreadPerThousand: number;
+  locked: boolean;
+  // Payouts that would settle at the new rate if repriced now (RESERVED/SUBMITTED); must be 0.
+  inFlightPayouts: number;
+  paused: boolean;
+  // The band a new rate may be set within, in USD per 1,000 credits.
+  parFloor: number;
+  parCeil: number;
+  maxSpreadMultiple: number;
+}
+
+// The economy's live pause state, for the maintenance banner. Times are simulated-clock epochs.
+export interface StatusView {
+  paused: boolean;
+  pauseStart: number | null;
+  pauseEnd: number | null;
+  resumesAt: number | null;
+}
+
+// The tally of a try-to-break-it burst: how many of `attempts` concurrent spends committed, how
+// many the ledger refused as duplicates or short of funds, and how far the balance actually moved.
+export interface RaceResult {
+  attempts: number;
+  committed: number;
+  duplicates: number;
+  insufficient: number;
+  // Any refusal that is neither a duplicate nor a funds shortfall — e.g. a gate the visitor armed
+  // before the burst. Counted so committed + refusals always sums to attempts.
+  other: number;
+  movedCredits: number;
+}
+
+// --- Ledger explorer drill: statement -> posting -> hash chain -> checkpoint ---
+
+// One entry of an account's statement: the posting that touched it and by how much.
+export interface StatementEntry {
+  txnId: string;
+  credits: number;
+  at: number;
+}
+
+// An account, its current balance, its label, and the postings that touched it.
+export interface StatementView {
+  account: string;
+  label: string;
+  balance: number;
+  currency: 'CREDIT' | 'USD';
+  entries: StatementEntry[];
+}
+
+// One link of an account's tamper-evident hash chain: the posting, the head hash before and after,
+// and this account's net movement in it. `prevHash` of the first is the fixed genesis.
+export interface LineageLink {
+  txnId: string;
+  prevHash: string;
+  hash: string;
+  credits: number;
+}
+
+// The latest signed checkpoint: the Merkle root over every account head, its signature, and the
+// count of heads it covers.
+export interface CheckpointView {
+  root: string;
+  signature: string;
+  count: number;
+  at: number;
+  v: number;
+}
+
+// A ledger-search hit: what a query (txn id, account, chain hash, Merkle root, or checkpoint
+// signature) resolved to, and where the explorer should drill.
+export type FindHit =
+  | { kind: 'txn'; txnId: string }
+  | { kind: 'account'; account: string; txnId: string }
+  | { kind: 'link'; txnId: string; account: string; field: 'hash' | 'prevHash' }
+  | {
+      kind: 'checkpoint';
+      field: 'root' | 'signature';
+      checkpoint: CheckpointView;
+    };
+
+// One subscription this tab opened, re-read live from the store, so the renewal sweep shows up
+// as state and next-due changes.
+export interface SubscriptionView {
+  id: string;
+  userId: string;
+  sellerId: string;
+  sku: string;
+  priceCredits: number;
+  periodDays: number;
+  period: number;
+  state: 'ACTIVE' | 'LAPSED' | 'CANCELED';
+  nextDueAt: number;
+}
+
+// One payout saga drilled open: the card and every ledger posting that carries its saga id.
+export interface SagaDetail {
+  saga: PayoutView;
+  postings: TxnView[];
+  // Whether the saga can still be reversed (RESERVED or SUBMITTED; a terminal saga cannot).
+  reversible: boolean;
+  // The posting scan hit its bound, so the list may be partial (a large ledger only).
+  truncated: boolean;
+}
+
+// --- Event pipeline: outbox -> relay -> inbox ---
+
+// One event the relay delivered through the console's capture dispatcher.
+export interface PipelineEvent {
+  id: string;
+  type: string;
+  // A user id (usr_...) or transaction id (txn_...) the event is about.
+  subject: string;
+  at: number;
+  audience: 'internal' | 'client';
+}
+
+// The pipeline page state: the events the relay has delivered so far in this tab.
+export interface PipelineView {
+  delivered: PipelineEvent[];
+}
+
+// The result of a relay run: how many outbox rows it delivered, failed, or dead-lettered.
+export interface RelayResult {
+  relayed: number;
+  failed: number;
+  deadLettered: number;
+}
+
+// The result of an inbound webhook: whether the provider event was newly accepted or a duplicate,
+// and whether draining the inbox applied a posting (a duplicate applies nothing).
+export interface WebhookResult {
+  status: 'accepted' | 'duplicate';
+  applied: boolean;
 }
 
 // --- Mapping helpers ---------------------------------------------------------------

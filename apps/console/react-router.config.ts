@@ -11,8 +11,11 @@
 
 import type { Config } from '@react-router/dev/config';
 
-// SSR on: the engine runs on the server. Loaders read live engine state, actions mutate it, and
-// the HTML reflects the in-memory (or DB-backed) ledger.
+// SPA mode: the engine runs in the visitor's tab. Client loaders read live engine state, client
+// actions mutate it, and the build is static files — deployable on any file host. The app is
+// served under /console beside the docs site (scripts/compose-site.mjs assembles the two).
 export default {
-  ssr: true,
+  ssr: false,
+  // Must begin with Vite's `base` ('/console/') for the dev server to route correctly.
+  basename: '/console/',
 } satisfies Config;

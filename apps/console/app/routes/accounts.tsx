@@ -11,18 +11,32 @@
 
 import { Link } from 'react-router';
 
+import { PAGE_SIZE } from '~/economy';
+import { getEngine } from '~/engine';
+import {
+  Credits,
+  DataTable,
+  IdChip,
+  PageError,
+  Pager,
+  StatCard,
+  entityName,
+  pageMeta,
+  pageOffset,
+} from '~/ui';
 import type { Route } from './+types/accounts';
-import { getEconomy, PAGE_SIZE } from '~/economy.server';
-import { Credits, DataTable, Pager, StatCard, pageOffset } from '~/ui';
 
 // One bounded page of wallets, with an optional ?user= detail showing the per-account breakdown.
 
 export function meta(_: Route.MetaArgs) {
-  return [{ title: 'Accounts — Economy Console' }];
+  return pageMeta(
+    'Accounts',
+    'Every wallet, live from the ledger: purchased, earned, and promotional balances.',
+  );
 }
 
-export async function loader({ request }: Route.LoaderArgs) {
-  const eco = await getEconomy();
+export async function clientLoader({ request }: Route.ClientLoaderArgs) {
+  const eco = await getEngine();
   const offset = pageOffset(request.url, PAGE_SIZE);
   const selected = new URL(request.url).searchParams.get('user');
   const [page, detail] = await Promise.all([
@@ -54,7 +68,9 @@ export default function Accounts({ loaderData }: Route.ComponentProps) {
       {detail ? (
         <div className="card page">
           <div className="row between">
-            <h3 className="mono">{detail.userId}</h3>
+            <h3 className="entity">
+              {entityName(detail.userId)} <IdChip id={detail.userId} />
+            </h3>
             <Link to="/accounts" className="btn">
               Close
             </Link>
@@ -90,7 +106,13 @@ export default function Accounts({ loaderData }: Route.ComponentProps) {
 
       <div className="card card-flush">
         {wallets.length === 0 ? (
-          <div className="empty">No users yet. Record a deposit to begin.</div>
+          <div className="empty">
+            No users yet.{' '}
+            <Link to="/market" className="link">
+              Fund a wallet
+            </Link>{' '}
+            to begin.
+          </div>
         ) : (
           <DataTable
             columns={[
@@ -104,9 +126,16 @@ export default function Accounts({ loaderData }: Route.ComponentProps) {
             {wallets.map((w) => (
               <tr key={w.userId} className="clickable">
                 <td>
-                  <Link to={`/accounts?user=${w.userId}`} className="mono">
-                    {w.userId}
-                  </Link>
+                  <span className="entity">
+                    <Link
+                      to={`/accounts?user=${w.userId}`}
+                      viewTransition
+                      className="entity-name link"
+                    >
+                      {entityName(w.userId)}
+                    </Link>
+                    <IdChip id={w.userId} />
+                  </span>
                 </td>
                 <td className="num">
                   <Credits value={w.purchased} />
@@ -135,4 +164,8 @@ export default function Accounts({ loaderData }: Route.ComponentProps) {
       </div>
     </div>
   );
+}
+
+export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
+  return <PageError error={error} />;
 }
