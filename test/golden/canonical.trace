@@ -18,7 +18,7 @@
     "noOverdraft": true,
     "shortfall": "USD:0.00"
   },
-  "scenario": "phase1",
+  "scenario": "canonical",
   "steps": [
     {
       "kind": "topUp",
