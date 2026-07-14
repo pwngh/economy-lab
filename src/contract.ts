@@ -20,6 +20,7 @@ import type { AccountRef } from '#src/accounts.ts';
 import type { RejectionCode } from '#src/errors.ts';
 import type {
   Cache,
+  Checkpoint,
   Clock,
   Digest,
   Ids,
@@ -35,6 +36,7 @@ import type {
   Saga,
   Signer,
   Statement,
+  StoredLink,
   Unit,
 } from '#src/ports.ts';
 import type { Config } from '#src/config.ts';
@@ -387,6 +389,19 @@ export interface Economy {
      * Delegates to `Ledger.list`.
      */
     postings(options?: Options): AsyncIterable<Posting>;
+    /**
+     * One account's hash chain, oldest first: every posting that touched it, each carrying the
+     * head hash before and after, so a reader can walk the tamper-evident chain a link at a time.
+     * The first link's `prevHash` is the fixed genesis; each later `prevHash` equals the prior
+     * `hash`. Delegates to `Ledger.lineage`.
+     */
+    lineage(account: AccountRef, options?: Options): AsyncIterable<StoredLink>;
+    /**
+     * The latest signed checkpoint (the Merkle root over all account heads, its signature, and the
+     * count it covers), or null before the worker has sealed one. The read side of the periodic
+     * seal a UI verifies against the live heads. Delegates to `CheckpointStore.latest`.
+     */
+    checkpoint(options?: Options): Promise<Checkpoint | null>;
     prove(options?: Options): Promise<ProveReport>;
   };
   close(): Promise<void>;

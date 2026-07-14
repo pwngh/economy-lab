@@ -578,6 +578,27 @@ async function recomputesChainHead(store: Store): Promise<void> {
   assert.equal(link!.prevHash, '0'.repeat(64));
 }
 
+// read.lineage delegates straight to Ledger.lineage, so proving it here covers the read-surface
+// promotion for every store: one link per posting in commit order, genesis first, each
+// link chaining from the one before, the last one being the account's current head.
+async function streamsAccountLineageInOrder(store: Store): Promise<void> {
+  const userId = freshUser();
+  await store.transaction((unit) =>
+    fundSpendable(unit, userId, '5.00', `txn_conf_lineage_a_${userId}`),
+  );
+  await store.transaction((unit) =>
+    fundSpendable(unit, userId, '2.50', `txn_conf_lineage_b_${userId}`),
+  );
+
+  const links = await collect(store.ledger.lineage(spendable(userId)));
+  assert.equal(links.length, 2);
+  assert.equal(links[0]!.prevHash, '0'.repeat(64));
+  assert.equal(links[1]!.prevHash, links[0]!.hash);
+
+  const heads = new Map(await collect(store.ledger.heads()));
+  assert.equal(links[1]!.hash, heads.get(spendable(userId)));
+}
+
 // Regression: a posting with two lines to one account once collided on the SQL adapters'
 // (account, prev_hash) key. Every store must accept it, sum both lines into one balance, and
 // extend the chain by exactly one step.
@@ -991,5 +1012,7 @@ export function runStoreConformance(
       withStore(t, findsSagaByProviderRef));
     test('lists every posting newest-first with its full legs', (t) =>
       withStore(t, listsPostingsNewestFirst));
+    test('streams an account lineage in commit order (read.lineage)', (t) =>
+      withStore(t, streamsAccountLineageInOrder));
   });
 }

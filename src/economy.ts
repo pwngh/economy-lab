@@ -97,6 +97,8 @@ export function createEconomy(capabilities: Capabilities): Economy {
       accounts: (options) => store.ledger.balanceAccounts(options),
       payouts: (options) => store.sagas.list(options),
       postings: (options) => store.ledger.list(options),
+      lineage: (account, options) => store.ledger.lineage(account, options),
+      checkpoint: (options) => store.checkpoints.latest(options),
       prove: (options) => proveEconomy(store, ctx, options),
     },
     close: () => store.close(),
