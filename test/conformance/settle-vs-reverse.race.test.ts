@@ -64,6 +64,7 @@ import {
   settlePayout as buildSettlePayout,
 } from '#test/support/builders.ts';
 import { credit as creditLeg, debit as debitLeg } from '#src/ledger.ts';
+import { reversePayout as makeReversePayout } from '#src/operation.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
 import {
   fixedClock,
@@ -90,17 +91,16 @@ import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Saga, Store } from '#src/ports.ts';
 
-// builders.ts has no reversePayout factory, only settlePayout, so build one here. It matches the
-// operator-actor reverse that reversePayout.test.ts drives.
+// Delegates to the public reversePayout constructor for the Operation shape, keeping the
+// deterministic idem_rev_<sagaId> key this race depends on.
 function reversePayoutOp(sagaId: string, userId: string): Operation {
-  return {
-    kind: 'reversePayout',
+  return makeReversePayout({
     idempotencyKey: `idem_rev_${sagaId}`,
     actor: { kind: 'operator', operatorId: 'op_race' },
     userId,
     sagaId,
     reason: 'race reverse',
-  };
+  });
 }
 function settlePayoutOp(sagaId: string): Operation {
   return buildSettlePayout({

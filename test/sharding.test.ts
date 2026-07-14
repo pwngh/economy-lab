@@ -46,6 +46,7 @@ import {
   topUp,
   usd,
 } from '#test/support/builders.ts';
+import { reversePayout as makeReversePayout } from '#src/operation.ts';
 import {
   fakeProcessor,
   fixedClock,
@@ -367,14 +368,13 @@ describe('Sharding: Payout Round-Trip', () => {
     assert.equal(reserved.status, 'committed');
 
     const saga = await sagaFor(store, 'usr_seller');
-    const reversal: Operation = {
-      kind: 'reversePayout',
+    const reversal = makeReversePayout({
       idempotencyKey: `idem_rev_${saga.id}`,
       actor: { kind: 'operator', operatorId: 'op_test' },
       userId: 'usr_seller',
       sagaId: saga.id,
       reason: 'fraud hold',
-    };
+    });
     const reversed = await economy.submit(reversal);
     assert.equal(reversed.status, 'committed');
     assert.equal((await store.sagas.load(saga.id))?.state, 'FAILED');
