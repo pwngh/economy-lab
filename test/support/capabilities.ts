@@ -25,7 +25,7 @@ import type {
   Signer,
 } from '#src/ports.ts';
 import type { Amount } from '#src/money.ts';
-import type { Ctx, FeePolicy, Recipient } from '#src/contract.ts';
+import type { Ctx, FeePolicy, Recipient, WorkerCtx } from '#src/contract.ts';
 import type { Leg } from '#src/ports.ts';
 import type { Config } from '#src/config.ts';
 
@@ -225,6 +225,22 @@ export function makeCtx(overrides: Partial<Ctx> = {}): Ctx {
     rates: fixedRates(),
     logger: testLogger(),
     meter: noopMeter(),
+    ...overrides,
+  };
+}
+
+/** The background worker's context (no pricing), the WorkerCtx counterpart to {@link makeCtx}. */
+export function makeWorkerCtx(overrides: Partial<WorkerCtx> = {}): WorkerCtx {
+  return {
+    clock: fixedClock(0),
+    ids: sequentialIds(),
+    digest: seededDigest(1),
+    signer: seededSigner(1),
+    processor: fakeProcessor(),
+    rates: fixedRates(),
+    logger: testLogger(),
+    meter: noopMeter(),
+    config: testConfig(),
     ...overrides,
   };
 }
