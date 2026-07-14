@@ -57,7 +57,7 @@ function engine(): Promise<ConsoleEngine> {
 
 // The snippet context: the real facade, with every replayable call recorded before it runs.
 function journaling(eco: ConsoleEngine): SnippetCtx {
-  return new Proxy(eco as unknown as SnippetCtx, {
+  return new Proxy<SnippetCtx>(eco, {
     get(target, prop: string) {
       const fn = (target as unknown as Record<string, unknown>)[prop];
       if (typeof fn !== 'function' || !REPLAYABLE.has(prop)) return fn;
