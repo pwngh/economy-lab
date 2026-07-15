@@ -106,7 +106,7 @@ export type Dispatcher = (
  * External payment provider: all money leaving the platform goes through this.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for the seam,
- * the Thunes adapter, and dispute webhooks.
+ * the Tilia adapter, and dispute webhooks.
  */
 export interface Processor {
   /** `amount` is in real USD; `key` makes the request safe to retry without paying twice. */

@@ -20,7 +20,7 @@ import velocitySrc from '../../../snippets/velocity.ts?raw';
 
 Every money-moving [operation](/economy/reference/the-economy/) names a **subject**: the account whose recent activity is being limited. Before the operation posts, the gate records the attempt's amount and sums that subject's amounts over the recent window. If the total is over the limit, the operation comes back `rejected` with [`RISK_DENIED`](/economy/reference/outcomes-and-reason-codes/); otherwise it proceeds to post.
 
-Amounts are summed in `CREDIT` minor units, and the limit and window come from the `velocityLimitMinor` and `velocityWindowMs` [configuration](/economy/reference/configuration/). A spend that would push the buyer over the window never moves money:
+Amounts are summed in `CREDIT` minor units, and the limit and window come from the `velocityLimitMinor` and `velocityWindowMs` [configuration](/economy/reference/configuration/#fees-and-the-risk-gate). A spend that would push the buyer over the window never moves money:
 
 ```ts
 const outcome = await economy.submit(spendOperation);

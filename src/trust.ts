@@ -73,7 +73,7 @@ export function windowedVelocity(
  * that moves no tracked subject's funds is always allowed, which is the case when `riskSubject`
  * returns null.
  *
- * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/spend-velocity/ Spend velocity}
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/spend-velocity/#the-idea Spend velocity}
  *   for the rolling window, why denied attempts still count, and how the record survives a
  *   rollback.
  */

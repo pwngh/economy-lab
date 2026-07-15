@@ -6,8 +6,8 @@ status: stable
 sourceRefs:
   [
     'src/ports.ts#L72-L77 · Signer',
-    'src/runtime.ts#L133-L165 · systemSigner',
-    'src/chain.ts#L288-L350 · recordCheckpoint / verifyCheckpoint',
+    'src/runtime.ts#L134-L171 · systemSigner',
+    'src/chain.ts#L288-L382 · recordCheckpoint / verifyCheckpoint',
   ]
 related:
   ['economy/ports/storage', 'economy/reference/http-service']
@@ -43,7 +43,7 @@ interface Signer {
 
 ## The default signer
 
-The reference adapter, <SourceLink to="src/runtime.ts#L133-L165">systemSigner</SourceLink>, signs with [Ed25519](https://ed25519.cr.yp.to/): the configured secret derives a private key that produces 64-byte signatures.
+The reference adapter, <SourceLink to="src/runtime.ts#L134-L171">systemSigner</SourceLink>, signs with [Ed25519](https://ed25519.cr.yp.to/): the configured secret derives a private key that produces 64-byte signatures.
 
 You construct it with a current signing key and an optional list of prior keys:
 
@@ -54,7 +54,7 @@ const signer = systemSigner({
 });
 ```
 
-The secret is hex-encoded key bytes the host loads from its own config and passes in. This module never reads it from a global or the environment. A misconfigured deploy fails at startup, not deep inside a request. In a wired economy the secret arrives as `signingSecret`; see the [configuration reference](/economy/reference/configuration/) for where it's loaded.
+The secret is hex-encoded key bytes the host loads from its own config and passes in. This module never reads it from a global or the environment. A misconfigured deploy fails at startup, not deep inside a request. In a wired economy the secret arrives as `signingSecret`; see the [configuration reference](/economy/reference/configuration/#required-secrets) for where it's loaded.
 
 To publish the verification key, `signingPublicKeyHex` derives the hex-encoded Ed25519 public key from the same secret. An external party uses it to verify signed checkpoints without ever seeing the signing secret.
 

@@ -84,7 +84,7 @@ The same operation also queues an internal `economy.payout.settled` event in thi
 
 ## Authorization
 
-Only a `system` or `operator` [actor](/economy/concepts/actors-and-authorization/) may call `settlePayout`. The kind is listed in <SourceLink to="src/economy.ts#L752-L763">RESTRICTED_TO_PRIVILEGED</SourceLink>, so a `user` actor is rejected at the authorization gate before any work runs.
+Only a `system` or `operator` [actor](/economy/concepts/actors-and-authorization/) may call `settlePayout`. The kind is listed in <SourceLink to="src/economy.ts#L754-L765">RESTRICTED_TO_PRIVILEGED</SourceLink>, so a `user` actor is rejected at the authorization gate before any work runs.
 
 <Callout type="danger">
   Settling disburses real USD out of trust and turns the seller's reserve into

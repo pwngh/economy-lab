@@ -53,7 +53,7 @@ The full enum declares `REQUESTED`, `RESERVED`, `SUBMITTED`, `SETTLED`, and `FAI
 
 ## The two triggers
 
-The two forward steps run on different triggers. The worker's `payouts` sweep handles only the first. It claims due `RESERVED` sagas, converts the reserve to USD at the locked rate, calls `processor.submitPayout`, records the `providerRef`, and advances `RESERVED → SUBMITTED` (see <SourceLink to="src/worker/payouts.ts#L194-L215 · submitToProvider" />).
+The two forward steps run on different triggers. The worker's `payouts` sweep handles only the first. It claims due `RESERVED` sagas, converts the reserve to USD at the locked rate, calls `processor.submitPayout`, records the `providerRef`, and advances `RESERVED → SUBMITTED` (see <SourceLink to="src/worker/payouts.ts#L309-L330 · submitToProvider" />).
 
 It does not settle itself. Settlement arrives on the provider's verified "payout settled" webhook. That webhook maps to a [`settlePayout`](/economy/reference/operations/settle-payout/) operation, which the worker's inbox drain applies off the request path. That operation runs the `SUBMITTED → SETTLED` step.
 
@@ -95,7 +95,7 @@ The enforcement lives in three places, and you can verify each one in the source
 
 - **The store's compare-and-set method.** `SagaStore.advance` is a conditional update that returns whether it changed a row, so the handler can detect and stand down on a lost race (see <SourceLink to="src/ports.ts#L482-L524 · SagaStore" />).
 - **One transaction per step.** Each forward step posts its ledger entry and advances its record inside `store.transaction`, so a partial step rolls back whole: a flipped state with no posting, or a posting with no flip, can't persist.
-- **Idempotent external calls and dedupe.** `processor.submitPayout` is keyed by the saga id (see <SourceLink to="src/ports.ts#L111-L118 · Processor" />), and inbound provider events are deduped by event id before they apply, so a redelivered webhook or a retried submit resolves to the same money move at most once.
+- **Idempotent external calls and dedupe.** `processor.submitPayout` is keyed by the saga id (see <SourceLink to="src/ports.ts#L111-L127 · Processor" />), and inbound provider events are deduped by event id before they apply, so a redelivered webhook or a retried submit resolves to the same money move at most once.
 
 ## Operations and ports that rely on it
 

@@ -54,4 +54,4 @@ The computation is currency-agnostic: the same call covers a user's spendable cr
 
 - [`spend`](/economy/reference/operations/spend/) gates on the matured-balance check for the buyer's spendable credits, so a spend can't draw funds still clearing.
 - [`requestPayout`](/economy/reference/operations/request-payout/) gates on the same check for a seller's earned balance, so a payout only ever draws cleared money.
-- The configured [maturity horizons](/economy/reference/configuration/) set each wait, and [solvency](/economy/concepts/solvency/) is the backing those cleared funds draw against.
+- The configured [maturity horizons](/economy/reference/configuration/#maturity-horizons) set each wait, and [solvency](/economy/concepts/solvency/) is the backing those cleared funds draw against.

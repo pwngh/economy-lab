@@ -14,7 +14,7 @@ Every top-up debits `STORED_VALUE` and every sale credits `REVENUE`, so a thousa
 
 ## Splitting the line
 
-[`PLATFORM_SHARDS`](/economy/reference/configuration/) breaks up that line. Set to four, say, each hot platform account becomes four rows (the bare id plus `platform:revenue#1` through `#3`), and concurrent postings spread across them instead of queueing on one.
+[`PLATFORM_SHARDS`](/economy/reference/configuration/#platform-sharding) breaks up that line. Set to four, say, each hot platform account becomes four rows (the bare id plus `platform:revenue#1` through `#3`), and concurrent postings spread across them instead of queueing on one.
 
 The seven accounts that take this traffic shard: `REVENUE`, `STORED_VALUE`, `TRUST_CASH`, `USD_CLEARING`, `REVENUE_USD`, `PROMO_FLOAT`, and `PAYOUT_RESERVE`. `RECEIVABLE` and `OPENING_EQUITY` move rarely and stay single rows.
 
