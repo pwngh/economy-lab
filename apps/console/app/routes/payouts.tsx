@@ -306,7 +306,9 @@ function SagaDrill({
         <p className="card-sub">
           <Entity id={saga.userId} /> · reserve{' '}
           <Credits value={saga.reserveCredits} /> · {saga.attempts} attempts
-          {saga.payoutUsd === null ? '' : ` · paid $${fmtAmount(saga.payoutUsd)}`}
+          {saga.payoutUsd === null
+            ? ''
+            : ` · paid $${fmtAmount(saga.payoutUsd)}`}
         </p>
       </div>
 
