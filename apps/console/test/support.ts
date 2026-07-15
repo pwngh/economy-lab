@@ -9,10 +9,10 @@
  * @license MIT
  */
 
-import { getEngine } from '../app/engine';
-import { takeFlash } from '../app/flash';
+import { getEngine } from '~/engine.ts';
+import { takeFlash } from '~/flash.ts';
 
-import type { ConsoleEngine } from '../app/economy';
+import type { ConsoleEngine } from '~/economy.ts';
 
 // The tab engine returned to its seed with no flash pending: the starting point of every suite.
 export async function fresh(): Promise<{ eco: ConsoleEngine }> {

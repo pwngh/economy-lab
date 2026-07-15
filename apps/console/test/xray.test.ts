@@ -12,10 +12,10 @@
 
 import { expect, it } from 'vitest';
 
-import { buildEngine } from '../app/economy';
-import { recordCalls } from '../app/xray';
+import { buildEngine } from '~/economy.ts';
+import { recordCalls } from '~/xray.ts';
 
-import type { RecordedCall } from '../app/xray';
+import type { RecordedCall } from '~/xray.ts';
 
 it('records each engine call with args, a result summary, and a timing', async () => {
   const engine = await buildEngine();

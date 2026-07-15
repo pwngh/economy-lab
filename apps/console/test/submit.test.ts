@@ -13,8 +13,8 @@
 
 import { expect, it } from 'vitest';
 
-import { getEngine } from '../app/engine';
-import { clientAction, clientLoader } from '../app/routes/submit';
+import { getEngine } from '~/engine.ts';
+import { clientAction, clientLoader } from '~/routes/submit.tsx';
 import { callRoute } from './support';
 
 interface Wire {

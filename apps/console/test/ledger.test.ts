@@ -9,7 +9,7 @@
 
 import { expect, it } from 'vitest';
 
-import { buildEngine } from '../app/economy';
+import { buildEngine } from '~/economy.ts';
 
 it('a sale names the seller, not the buyer on both sides of the arrow', async () => {
   const eco = await buildEngine();

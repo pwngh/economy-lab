@@ -11,16 +11,16 @@
 
 import { beforeEach, expect, it } from 'vitest';
 
-import { buildEngine } from '../app/economy';
+import { buildEngine } from '~/economy.ts';
 import {
   REPLAYABLE,
   clearJournal,
   loadJournal,
   replayJournal,
   saveJournal,
-} from '../app/journal';
+} from '~/journal.ts';
 
-import type { JournalEntry } from '../app/journal';
+import type { JournalEntry } from '~/journal.ts';
 
 // The node test environment has no localStorage; a Map-backed shim stands in.
 const store = new Map<string, string>();

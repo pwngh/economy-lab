@@ -13,11 +13,11 @@
 
 import { expect, it } from 'vitest';
 
-import type { ConsoleEngine } from '../app/economy';
-import { getEngine } from '../app/engine';
-import type { Flash } from '../app/flash';
-import { takeFlash } from '../app/flash';
-import { takeRaceTally } from '../app/race';
+import type { ConsoleEngine } from '~/economy.ts';
+import { getEngine } from '~/engine.ts';
+import type { Flash } from '~/flash.ts';
+import { takeFlash } from '~/flash.ts';
+import { takeRaceTally } from '~/race.ts';
 import { clientAction as market } from '../app/routes/actions.market';
 import { clientAction as payout } from '../app/routes/actions.payout';
 import { clientAction as purchase } from '../app/routes/actions.purchase';

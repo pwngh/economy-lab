@@ -16,7 +16,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { createRoutesStub } from 'react-router';
 import { expect, it } from 'vitest';
 
-import { buildEngine } from '../app/economy';
+import { buildEngine } from '~/economy.ts';
 import Accounts from '../app/routes/accounts';
 import Controls from '../app/routes/controls';
 import Developers from '../app/routes/developers';
@@ -27,7 +27,7 @@ import Market from '../app/routes/market';
 import Overview from '../app/routes/overview';
 import Payouts from '../app/routes/payouts';
 import Pipeline from '../app/routes/pipeline';
-import { recordCalls } from '../app/xray';
+import { recordCalls } from '~/xray.ts';
 
 import type { ComponentType } from 'react';
 

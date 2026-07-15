@@ -12,9 +12,9 @@
 
 import { expect, it } from 'vitest';
 
-import { getEngine } from '../app/engine';
-import { takeFlash } from '../app/flash';
-import { takeRaceTally } from '../app/race';
+import { getEngine } from '~/engine.ts';
+import { takeFlash } from '~/flash.ts';
+import { takeRaceTally } from '~/race.ts';
 import { clientAction as scenario } from '../app/routes/actions.scenario';
 import { formPost } from './support';
 

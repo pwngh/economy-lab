@@ -12,9 +12,9 @@
 
 import { expect, it } from 'vitest';
 
-import { DAY_MS } from '../app/demo';
-import { buildEngine } from '../app/economy';
-import { getEngine } from '../app/engine';
+import { DAY_MS } from '~/demo.ts';
+import { buildEngine } from '~/economy.ts';
+import { getEngine } from '~/engine.ts';
 
 it('two built engines hold two different economies with different clocks', async () => {
   const a = await buildEngine();

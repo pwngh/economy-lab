@@ -12,7 +12,7 @@
 
 import { expect, it } from 'vitest';
 
-import { buildEngine } from '../app/economy';
+import { buildEngine } from '~/economy.ts';
 
 it('reprices only when quiesced, within bounds, and pauses then resumes', async () => {
   const eco = await buildEngine();

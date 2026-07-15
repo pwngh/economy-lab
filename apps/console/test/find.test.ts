@@ -12,7 +12,7 @@
 
 import { expect, it } from 'vitest';
 
-import { buildEngine } from '../app/economy';
+import { buildEngine } from '~/economy.ts';
 
 it('resolves txn id, account, chain hash, truncated hash, and checkpoint', async () => {
   const eco = await buildEngine();

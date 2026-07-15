@@ -13,8 +13,8 @@
 
 import { expect, it } from 'vitest';
 
-import { getEngine } from '../app/engine';
-import { takeFlash } from '../app/flash';
+import { getEngine } from '~/engine.ts';
+import { takeFlash } from '~/flash.ts';
 
 const DAY = 86_400_000;
 

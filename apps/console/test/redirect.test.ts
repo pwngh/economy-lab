@@ -12,8 +12,8 @@
 
 import { expect, it } from 'vitest';
 
-import { getEngine } from '../app/engine';
-import { takeFlash } from '../app/flash';
+import { getEngine } from '~/engine.ts';
+import { takeFlash } from '~/flash.ts';
 import { clientAction as simulate } from '../app/routes/actions.simulate';
 import { formPost } from './support';
 

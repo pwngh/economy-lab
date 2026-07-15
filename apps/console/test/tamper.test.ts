@@ -12,8 +12,8 @@
 
 import { expect, it } from 'vitest';
 
-import { getEngine } from '../app/engine';
-import { takeFlash } from '../app/flash';
+import { getEngine } from '~/engine.ts';
+import { takeFlash } from '~/flash.ts';
 import { clientAction as tamper } from '../app/routes/actions.tamper';
 import { formPost } from './support';
 

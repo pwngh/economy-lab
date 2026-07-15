@@ -12,7 +12,7 @@
 
 import { expect, it } from 'vitest';
 
-import { getEngine } from '../app/engine';
+import { getEngine } from '~/engine.ts';
 import { callRoute } from './support';
 
 it('drills a posting into its account statement and hash chain', async () => {

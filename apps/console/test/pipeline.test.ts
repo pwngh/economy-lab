@@ -12,10 +12,10 @@
 
 import { expect, it } from 'vitest';
 
-import type { ConsoleEngine } from '../app/economy';
-import { getEngine } from '../app/engine';
-import type { Flash } from '../app/flash';
-import { takeFlash } from '../app/flash';
+import type { ConsoleEngine } from '~/economy.ts';
+import { getEngine } from '~/engine.ts';
+import type { Flash } from '~/flash.ts';
+import { takeFlash } from '~/flash.ts';
 import { clientAction as pipeline } from '../app/routes/actions.pipeline';
 import { formPost, fresh } from './support';
 

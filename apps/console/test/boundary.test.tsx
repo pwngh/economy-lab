@@ -21,7 +21,7 @@ import { expect, it } from 'vitest';
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
 import Chrome from '../app/routes/_chrome';
-import { ErrorBoundary } from '../app/routes/ledger';
+import { ErrorBoundary } from '~/routes/ledger.tsx';
 
 const chromeData = {
   settings: {

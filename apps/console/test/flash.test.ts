@@ -12,9 +12,9 @@
 
 import { expect, it } from 'vitest';
 
-import { DAY_MS } from '../app/demo';
-import { getEngine } from '../app/engine';
-import { takeFlash } from '../app/flash';
+import { DAY_MS } from '~/demo.ts';
+import { getEngine } from '~/engine.ts';
+import { takeFlash } from '~/flash.ts';
 import { clientAction as simulate } from '../app/routes/actions.simulate';
 import { formPost } from './support';
 
