@@ -59,7 +59,10 @@
   "description": "A provably-solvent credits economy: wallets, payouts, subscriptions, and a marketplace, on one double-entry ledger.",
   "author": "Preston Neal",
   "license": "MIT",
-  "repository": "git+https://github.com/pwngh/economy-lab.git",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pwngh/economy-lab.git"
+  },
   "homepage": "https://economy-lab-docs.pages.dev/economy/",
   "scripts": {
     "dev": "node --watch --env-file-if-exists=.env scripts/main.ts dev",
