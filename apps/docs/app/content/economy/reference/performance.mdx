@@ -21,10 +21,13 @@ make bench   # in-memory, plus any Postgres/MySQL that's reachable
 
 ## What it measures
 
-The bench prints two tables.
+The bench prints five tables.
 
 - **Submit throughput** — `submit()` rate for `topUp`, `spend`, and `requestPayout`, per backend (in-memory, plus Postgres and MySQL when they're up), measured both sequentially (one op at a time, latency-bound) and concurrently (up to `BENCH_CONCURRENCY` in flight — the throughput the engine sustains). This is the engine cost of the double-entry and hash-chain work per operation.
+- **Instance netting** — the opt-in netting path: accept many small balanced movements into an in-instance journal, then settle the net to the ledger in one posting. Measures the accept rate and the settle cost.
+- **Entitlement bitset** — the same `owns()` ownership check answered by a store round-trip versus a warm in-process bitmap.
 - **Integrity cost versus ledger size** — for a growing number of postings, the time to [prove](/economy/concepts/the-proof/) the ledger, to seal a [checkpoint](/economy/concepts/integrity/), and to verify the latest checkpoint.
+- **Balance re-derivation** — re-deriving one account's balance by folding its leg column, in-memory, at a range of leg counts: the WASM fold against the scalar loop it replaces.
 
 ## How to read the numbers
 
@@ -36,6 +39,39 @@ These are **lab numbers**, and the bench says so in its own header. It runs in a
   throughput; it tells you how the backends compare and how the curves bend as
   the ledger grows.
 </Callout>
+
+## A measured run
+
+One run, gates off, in a single process, with a local Postgres and MySQL. Read the shape, not the absolute figures — your machine and setup will land somewhere else. [The scaling shape](#the-scaling-shape) below is why the backends differ this much.
+
+Submit throughput, sequential (ops/sec, one op at a time):
+
+| Backend   | topUp  | spend  | requestPayout |
+| --------- | ------ | ------ | ------------- |
+| in-memory | 20,910 | 31,745 | 39,621        |
+| Postgres  | 298    | 205    | 231           |
+| MySQL     | 87     | 74     | 78            |
+
+Submit throughput, concurrent (ops/sec, up to 32 in flight):
+
+| Backend   | topUp  | spend  | requestPayout |
+| --------- | ------ | ------ | ------------- |
+| in-memory | 25,063 | 33,299 | 43,468        |
+| Postgres  | 260    | 239    | 268           |
+| MySQL     | 155    | 123    | 121           |
+
+In memory, `submit` is CPU-bound and runs tens of thousands per second. On a SQL backend each `submit` is its own transaction, with a commit and an `fsync` per operation, so the rate drops to hundreds per second — and concurrency, pipelining independent transactions, is what recovers it.
+
+Integrity cost versus ledger size (in-memory, ms):
+
+| Postings | prove | seal  | verify |
+| -------- | ----- | ----- | ------ |
+| 1,000    | 1.01  | 12.4  | 0.49   |
+| 2,000    | 1.19  | 25.6  | 0.30   |
+| 4,000    | 2.28  | 49.5  | 0.38   |
+| 8,000    | 4.60  | 100.0 | 0.84   |
+
+`prove` and `seal` re-walk every posting from genesis, so both climb with history; `verify` stays low and roughly flat.
 
 ## The scaling shape
 
@@ -50,6 +86,73 @@ Integrity cost splits by what each check has to read:
 - **Checkpoint verify reads only account heads.** It recomputes the signed root over current heads, so its cost is O(accounts) and stays roughly flat as postings accumulate.
 
 Verifying a checkpoint in O(accounts) anchors ongoing integrity where a full re-prove — O(postings) — can't keep up once the ledger has years of history. The [background worker](/economy/reference/background-worker/) seals checkpoints on a schedule.
+
+## The optimizations
+
+The numbers above are the general path. Each backend is slow for a different reason — in memory the per-operation fold and hash, on a SQL backend the transaction and the round-trip — so a different optimization pays off on each. Each one removes whichever cost dominates that engine.
+
+| Optimization       | in-memory | Postgres | MySQL  | What it removes                                |
+| ------------------ | --------- | -------- | ------ | ---------------------------------------------- |
+| Instance netting   | ~5×       | ~220×    | ~270×  | a database transaction per movement            |
+| Entitlement bitset | 6×        | 949×     | 4,268× | a store round-trip per `owns()` check          |
+| Fold-pushdown      | —         | 3.4×     | 2.0×   | shipping every leg to Node to derive a balance |
+| Columnar fold      | 3–4×      | —        | —      | boxed-`bigint` summation on the derive path    |
+
+The three SQL wins are largest exactly where a single operation costs the most: netting and the bitset are worth hundreds of times more on MySQL than in memory, because that is where the transaction and the round-trip are dear. In memory there is no transaction to remove, so the fold itself becomes the target.
+
+### Instance netting
+
+Many small balanced movements — tips, unlocks, creator rewards — are accepted into an in-instance journal and settled to the ledger as one net posting, instead of one `submit` each.
+
+| Backend   | movements/sec | ms/movement | settle             |
+| --------- | ------------- | ----------- | ------------------ |
+| in-memory | 156,457       | 0.01        | 1 posting, 10.8 ms |
+| Postgres  | 45,070        | 0.02        | 1 posting, 12.5 ms |
+| MySQL     | 20,038        | 0.05        | 1 posting, 24.3 ms |
+
+Accepting a movement never opens a database transaction, so on MySQL it runs about 270× the rate of an individual `spend`, and the whole batch commits as a single posting.
+
+### Entitlement bitset
+
+An ownership check — `owns(user, sku)` — answered from a warm in-process bitmap instead of a store round-trip.
+
+| Backend   | store `owns()` | warm bitmap | speedup |
+| --------- | -------------- | ----------- | ------- |
+| in-memory | 0.8 µs         | 120 ns      | 6×      |
+| Postgres  | 118.3 µs       | 125 ns      | 949×    |
+| MySQL     | 549.2 µs       | 125 ns      | 4,268×  |
+
+The bitmap cost is constant at about 120 ns; the speedup is the round-trip it replaces, which is why it grows from 6× in memory to thousands of times on a SQL backend.
+
+### Fold-pushdown
+
+Deriving a balance means summing an account's legs. On a SQL backend that sum runs inside the database behind a covering index (`legs_account_idx`) rather than shipping every leg to Node — measured at 3.4× on Postgres and 2.0× on MySQL when the index landed. In memory there is no database to push into, so this one is SQL-only.
+
+### Columnar fold
+
+In memory each account's legs are held as a resident `i64` column, one per currency, so re-deriving a balance folds native `i64` through [`@pwngh/money`](/economy/ports/packages/)'s WASM fold instead of a boxed-`bigint` loop over object legs. The fold changes only how the column is summed: the total is byte-identical to the scalar loop and to the SQL engines' `SUM`, which the cross-engine fuzz confirms.
+
+| Account legs | scalar | fold    | speedup |
+| ------------ | ------ | ------- | ------- |
+| 1,000        | 2.9 µs | 1.0 µs  | 2.8×    |
+| 10,000       | 29 µs  | 7.4 µs  | 3.9×    |
+| 100,000      | 295 µs | 68 µs   | 4.3×    |
+| 1,000,000    | 2.9 ms | 0.71 ms | 4.2×    |
+
+The fold copies the column into WebAssembly before summing, so it only pays off past a few hundred legs. An ordinary wallet holds too few legs to reach it and stays on the scalar loop; the win lands on the hot platform accounts, which take a leg per operation and grow without bound. This is the in-memory lever precisely because there's no transaction cost to remove: the fold is what's left.
+
+### Set reconciliation (planned)
+
+A different axis: confirming two copies of the ledger hold the same set of entries. The lab does this today only across the processor seam — the settlement report is pulled and joined by key (`reconcile()`), which is the right tool when the far side sends a report.
+
+The forward-looking case is a second copy the lab controls — a read replica, a rebuilt shard, a backup. Both sides sketch their entry-id set into a small table, exchange the sketch, and recover exactly which ids differ. The cost tracks the disagreement, not the ledger size. Unlike every other table on this page, these figures are not `make bench` output: they were measured on a standalone prototype of the sketch, an [invertible Bloom lookup table](https://arxiv.org/abs/1101.2245), outside the lab:
+
+| ledger size | drift | reconcile |
+| ----------- | ----- | --------- |
+| 1,000       | 10    | ~150 µs   |
+| 100,000     | 10    | ~130 µs   |
+
+A 100,000-entry ledger reconciles as cheaply as a 1,000-entry one, over a ~1.3 KB sketch instead of the full id list — about 600× less wire. It waits on a second-copy seam to exist; until then the ledger has nothing to reconcile against this way.
 
 ## The production path
 
@@ -80,7 +183,7 @@ In-memory runs with no setup. For the SQL rows, apply the schema first (`make db
 BENCH_OPS=5000 make bench
 ```
 
-`BENCH_SHARDS` sets [`PLATFORM_SHARDS`](/economy/reference/configuration/) for the economy under test, so back-to-back runs can show what [splitting the hot platform accounts](/economy/concepts/platform-sharding/) buys at each shard count:
+`BENCH_SHARDS` sets [`PLATFORM_SHARDS`](/economy/reference/configuration/#platform-sharding) for the economy under test, so back-to-back runs can show what [splitting the hot platform accounts](/economy/concepts/platform-sharding/) buys at each shard count:
 
 ```bash
 BENCH_SHARDS=4 make bench

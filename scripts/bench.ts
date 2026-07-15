@@ -30,6 +30,8 @@ import {
   spendable,
 } from '#src/index.ts';
 import { topUp, spend, requestPayout, credit } from '#test/support/builders.ts';
+import { I64Column, foldColumn } from '#src/fold-column.ts';
+import { seededDeltas } from '#test/support/seeded-deltas.ts';
 import {
   bestMs,
   determinismRoot,
@@ -509,6 +511,56 @@ type CurveRow = {
   verify: number;
 };
 
+type FoldRow = { legs: number; scalarUs: number; foldUs: number };
+
+// One account's signed-delta column, seeded with i64-safe values, so a re-derivation folds a
+// resident column exactly as the in-memory store does.
+function seedColumn(legs: number): I64Column {
+  const column = new I64Column();
+  for (const delta of seededDeltas(legs)) {
+    column.push(delta);
+  }
+  return column;
+}
+
+// Times one summation kernel over many repetitions; the accumulator stays live so the call is not
+// optimized away. Returns microseconds per fold.
+function foldUs(iterations: number, fn: () => bigint): number {
+  for (let i = 0; i < 50; i += 1) fn();
+  const t0 = performance.now();
+  let live = 0n;
+  for (let i = 0; i < iterations; i += 1) live += fn();
+  const us = ((performance.now() - t0) * 1000) / iterations;
+  if (live === 7n) console.warn('');
+  return us;
+}
+
+// The in-memory balance re-derivation kernel: summing one account's leg column, WASM fold vs the
+// scalar loop, at a few account leg counts. The fold is the win on the hot platform accounts, which
+// accumulate a leg per operation; an ordinary wallet holds too few legs to reach the fold path.
+function foldCurve(): FoldRow[] {
+  const rows: FoldRow[] = [];
+  console.warn(
+    '\nbalance re-derivation kernel (in-memory), one row per account leg count:',
+  );
+  for (const legs of [1_000, 10_000, 100_000, 1_000_000]) {
+    const column = seedColumn(legs);
+    const view = column.view();
+    const iterations = legs >= 1_000_000 ? 20 : legs >= 100_000 ? 200 : 5_000;
+    const scalarUs = foldUs(iterations, () => {
+      let sum = 0n;
+      for (let i = 0; i < view.length; i += 1) sum += view[i]!;
+      return sum;
+    });
+    const fold = foldUs(iterations, () => foldColumn(column));
+    rows.push({ legs, scalarUs, foldUs: fold });
+    console.warn(
+      `  ${String(legs).padStart(9)} legs · scalar ${scalarUs.toFixed(2)} µs · fold ${fold.toFixed(2)} µs (${(scalarUs / fold).toFixed(1)}×)`,
+    );
+  }
+  return rows;
+}
+
 async function integrityCurve(): Promise<CurveRow[]> {
   const p = await tryProvision('in-memory', cfg);
   if (!p) return [];
@@ -727,17 +779,6 @@ if (missingRequired.length > 0) {
 }
 
 const curve = await integrityCurve();
-printTable(
-  'Integrity cost vs ledger size — in-memory, ms (lower is better)',
-  ['postings', 'accounts', 'prove()', 'seal', 'verify'],
-  curve.map((c) => [
-    num(c.postings),
-    num(c.accounts),
-    ms(c.prove),
-    ms(c.seal),
-    ms(c.verify),
-  ]),
-);
 console.warn('');
 console.warn(
   'prove() and seal re-walk every posting from genesis — O(postings) — so both climb',
@@ -752,6 +793,16 @@ console.warn(
   'balance cache. It still beats a full re-prove (no re-hashing of every link), which is what',
 );
 console.warn('cannot keep up as history grows.');
+
+const fold = foldCurve();
+console.warn('');
+console.warn(
+  "Re-deriving a balance folds the account's resident i64 leg column. Above a few hundred legs",
+);
+console.warn(
+  'the WASM fold beats the scalar loop; a wallet holds too few legs to reach it, so the win lands',
+);
+console.warn('on the hot platform accounts that take a leg per operation.');
 
 await emitJson(cfg, {
   config: {
@@ -771,6 +822,7 @@ await emitJson(cfg, {
   provable: results.length > 0 && results.every((r) => r.provable),
   crossEngineDeterministic: determinismChecked ? determinismOk : null,
   integrityCurve: curve,
+  foldCurve: fold,
 });
 
 // Exit explicitly: open SQL pools would otherwise keep the event loop alive.
