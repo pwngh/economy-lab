@@ -1,0 +1,419 @@
+---
+title: 'API reference'
+summary: 'Every public export, by entry point: the main package plus the ports, adapters, engines, netting, and testing subpaths.'
+plain: 'A complete list of everything the library exports, grouped by the import path you reach it through.'
+order: 4
+status: stable
+sourceRefs: ['package.json', 'src/index.ts']
+related: ['economy/reference/the-economy', 'economy/ports/packages']
+---
+
+The library ships a curated, faceted [`exports`](https://nodejs.org/api/packages.html#exports) map: the main package re-exports everything, and each subpath is a focused entry point. Install it, then import from whichever one you need.
+
+```bash
+npm install @pwngh/economy-lab
+```
+
+```ts
+import { createEconomy, topUp, toAmount } from '@pwngh/economy-lab';
+import type { Store } from '@pwngh/economy-lab/ports';
+```
+
+## Entry points
+
+| Import                                                          | What it holds                                                                        |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| [`@pwngh/economy-lab`](#pwngheconomy-lab)                        | Everything: construction, operations, money, the ledger, the worker, and every type. |
+| [`@pwngh/economy-lab/ports`](#pwngheconomy-labports)             | The port interfaces you implement to plug in your own infrastructure.                |
+| [`@pwngh/economy-lab/adapters`](#pwngheconomy-labadapters)       | The bundled in-memory and HTTP adapters, plus the runtime services.                  |
+| [`@pwngh/economy-lab/adapters/redis`](#pwngheconomy-labadaptersredis) | The Redis-backed `Cache` (carries the `ioredis` driver).                        |
+| [`@pwngh/economy-lab/adapters/sqs`](#pwngheconomy-labadapterssqs) | The SQS-backed `Dispatcher` (carries the AWS SDK).                                  |
+| [`@pwngh/economy-lab/engines/postgres`](#pwngheconomy-labenginespostgres) | The Postgres `Store` (carries `pg`).                                        |
+| [`@pwngh/economy-lab/engines/mysql`](#pwngheconomy-labenginesmysql) | The MySQL `Store` and schema helpers (carries `mysql2`).                          |
+| [`@pwngh/economy-lab/netting`](#pwngheconomy-labnetting)         | The in-instance netting session.                                                     |
+| [`@pwngh/economy-lab/testing`](#pwngheconomy-labtesting)         | The conformance harness for testing your own adapters.                               |
+
+Every section below links to the source it comes from.
+
+## `@pwngh/economy-lab`
+
+The main entry point. It re-exports the whole surface, so you can import any symbol here — construction, operations, money, the ledger, errors, the worker, and every type. The focused subpaths further down are curated subsets of this one.
+
+### Construction
+
+Stand up an `Economy` in one call, or assemble one from a `Capabilities` bundle you built yourself.
+
+<SourceLink to="src/index.ts">src/index.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `createEconomy` | The one call to stand up an Economy; batteries-included in-memory with env-driven config and overridable ports. |
+| `EconomyOptions` | Everything createEconomy accepts, all optional; wins over env-derived config when passed explicitly. |
+| `economyFromCapabilities` | The low-level assembler: an Economy from a fully-built Capabilities bundle; escape hatch for sharing a store. |
+| `Economy` | The request-processing and read interface: submit operations, query state, prove integrity, and close the store. |
+
+### Composition and environment
+
+Wire an economy or worker from environment variables, or resolve the store, ports, and adapter selection yourself.
+
+<SourceLink to="src/index.ts">src/index.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `compose` | Wires an Economy whose store, cache, and dispatcher come from env; thin over capabilitiesFromEnv. |
+| `composeWorker` | Wires a background Worker for deferred, time-driven work over the same env-selected store and dispatcher. |
+| `ComposedWorker` | What composeWorker returns: the worker plus the handles its host must manage—the store to close and dispatcher. |
+| `capabilitiesFromEnv` | Assembles the full Capabilities bundle from env: store, cache, dispatcher, external ports, and runtime services. |
+| `workerCtxFrom` | Derives a worker context from a capability bundle: runtime services minus request-path-only pieces. |
+| `externalsFromEnv` | Resolves the four external ports from env; dev defaults, production requires real values and fails fast. |
+| `Externals` | The four external services: signer (signing key), processor (payout provider), rates (CREDIT-to-USD), pricing (fee split). |
+| `ExternalPorts` | External services with no built-in stand-in: pricing, processor, signer, and rates. |
+| `RuntimeDefaults` | Runtime services capabilitiesFromEnv fills in; pass any to override, e.g. a fixed clock for reproducible tests. |
+| `describeSelection` | Reads the adapter selection from env: DATABASE_URL picks store, REDIS_URL adds cache, SQS_QUEUE_URL or DISPATCHER_URL picks dispatcher. |
+| `Selection` | Which concrete adapter each env knob picks, before any driver loads; one reading of the selection. |
+| `checkEnv` | Validates env without constructing: returns every deployment startup problem or empty array when complete. |
+| `EnvMap` | A read-only view of the environment variables the library reads. |
+
+### Configuration
+
+Load the tunable `Config` and fill in its defaults.
+
+<SourceLink to="src/config.ts">src/config.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `loadConfig` | Build Config from env vars, defaulting any value that is unset or invalid. |
+| `defaultConfig` | The default Config without an environment: the exact values loadConfig derives from an empty env, with any knobs in overrides applied on top. |
+| `Config` | All tunable settings in one object. |
+
+### Operation constructors
+
+One typed builder per operation kind: each sets `kind` and returns a ready `Operation` to `submit`.
+
+<SourceLink to="src/operation.ts">src/operation.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `topUp` | Add funds to a user's spendable wallet. |
+| `spend` | Debit a buyer's wallet and grant them an SKU or item. |
+| `refund` | Reverse a spend operation, returning money to the buyer. |
+| `clawback` | Remove funds from a user's wallet without a linked order. |
+| `requestPayout` | Move earned credits from a seller's wallet to the payout reserve. |
+| `subscribe` | Create a recurring subscription charging a buyer each period. |
+| `cancelSubscription` | End an active subscription. |
+| `grantEntitlement` | Give a user an item, feature, or entitlement with optional attributes. |
+| `revokeEntitlement` | Remove an entitlement from a user. |
+| `grantPromo` | Give a user expiring promotional credits. |
+| `adjust` | Manual correction an operator posts by hand to balance the books. |
+| `reverse` | Manual undo an operator runs by hand to cancel a prior transaction. |
+| `reversePayout` | Undo a not-yet-paid payout and return reserved credits to seller. |
+| `settlePayout` | Move settled payout funds from reserve to revenue. |
+
+### Operations and actors
+
+The `Operation` union, the `Principal` that authorizes it, and the factories that build each actor kind.
+
+<SourceLink to="src/actor.ts">src/actor.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `Operation` | Union of all request types a caller can submit to the economy. |
+| `Principal` | Who is making a request, and what they are allowed to do. |
+| `Recipient` | One party who gets a cut of a sale; the price splits across all recipients. |
+| `EntitlementAttrs` | Optional details carried on an entitlement grant. |
+| `userActor` | An end user; may act only on their own accounts. |
+| `systemActor` | A trusted internal service acting on the platform's behalf. |
+| `operatorActor` | A human operator running a manual, fully-audited action. |
+
+### Money
+
+The `Amount` value type and the exact-integer arithmetic, conversion, and wire encoding around it.
+
+<SourceLink to="src/money.ts">src/money.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `Amount` | A money value: currency plus amount in minor units (cents for dollars), branded to enforce construction via toAmount or decodeAmount. |
+| `Currency` | The currencies the system handles: in-app CREDIT and real-world USD. |
+| `toAmount` | Builds an Amount from currency and minor-unit count, throwing AMOUNT_OVERFLOW if outside 64-bit range. |
+| `decodeAmount` | Parses a decimal string (e.g. '12.34') into an Amount, throwing INVALID_AMOUNT for bad format or out-of-range values. |
+| `encodeAmount` | Encodes an amount as text (e.g. 'CREDIT:12.34') with fixed two decimals for JSON, events, and tamper-evident hashing. |
+| `decodeAmountWire` | Parses a wire amount string (e.g. 'CREDIT:12.34') back into an Amount, the inverse of encodeAmount. |
+| `isAmount` | Type guard to check if a value is a branded Amount. |
+| `add` | Adds two amounts of the same currency, throwing CURRENCY_MISMATCH or AMOUNT_OVERFLOW. |
+| `neg` | Returns the negation of an amount, checking it stays in 64-bit range. |
+| `compare` | Compares two amounts of the same currency, throwing CURRENCY_MISMATCH. |
+| `zero` | Creates a zero amount for the given currency. |
+| `isZero` | Checks if an amount is zero. |
+| `isNegative` | Checks if an amount is negative. |
+| `convertFloor` | Converts an amount to another currency at a rate, rounding down for safe outward payments. |
+| `convertCeil` | Converts an amount to another currency at a rate, rounding up to under-cover risk like USD trust. |
+| `SCALE` | Minor units per whole unit (100 cents = $1), shared for consistent rounding. |
+
+### Accounts and ledger
+
+Reference an account, name the platform system accounts, and post balanced ledger legs.
+
+<SourceLink to="src/accounts.ts">src/accounts.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `spendable` | A user's spendable account: money they topped up and can spend, backed by real USD held in trust. |
+| `earned` | A user's earned account: revenue owed to them as a seller, which the platform must pay out. |
+| `promo` | A user's promo account: a marketing grant that expires. |
+| `currency` | Returns the denomination of an account (CREDIT except for USD accounts). |
+| `SYSTEM` | The platform's own ('house') accounts; every id starts with 'platform:' and classifies as debit-normal (up on debit) or credit-normal (up on credit). |
+| `ownerOf` | Extracts the user id from a wallet account (part before the ':kind' suffix), returning empty string for malformed ids. |
+| `isWalletAccount` | Checks if a reference is a user wallet account rather than a platform house account. |
+| `AccountRef` | A branded account identifier string, enforcing well-formed ids from constructor functions and SYSTEM accounts. |
+| `credit` | Builds a credit leg for one account; raises credit-normal accounts and lowers debit-normal ones. |
+| `debit` | Builds a debit leg for one account; lowers credit-normal accounts and raises debit-normal ones. |
+| `Leg` | A debit or credit entry for one account in a posting, with debit-positive amount and currency matching the account. |
+
+### Outcomes and errors
+
+What a `submit` resolves to, and the typed error surface a thrown fault carries.
+
+<SourceLink to="src/errors.ts">src/errors.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `Outcome` | The result of submitting an operation: committed, duplicate, or rejected. |
+| `RejectionDetail` | Structured context on a rejection, with fields depending on the reason (account, required, available, minimum, etc.). |
+| `Transaction` | A committed posting: the record of money that actually moved. |
+| `EconomyError` | The thrown-error type for every fault, carrying one stable error code and retry decision. |
+| `ERROR_CODES` | Stable, namespaced error codes for thrown faults (e.g., LEDGER.OVERDRAFT). |
+| `ErrorCode` | The union of every ERROR_CODES value for autocompletion and exhaustiveness checking. |
+| `RejectionCode` | Reasons a well-formed request is declined on a healthy system (expected 'no' answers). |
+| `normalizeError` | Turns anything caught in a catch into an EconomyError, wrapping raw exceptions as retryable STORE.FAILURE. |
+| `statusForError` | Maps an EconomyError to its HTTP status: 401 for auth, 400 for caller-fixable requests, 503 for retryable, 500 otherwise. |
+
+### HTTP server and webhooks
+
+Run the economy as a Fetch HTTP service and apply verified provider callbacks.
+
+<SourceLink to="src/server.ts">src/server.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `createServer` | An HTTP entry point for an Economy: takes a Fetch Request, returns a Response. |
+| `handleWebhook` | Maps a verified provider callback to its operation and persists it to the inbox. |
+| `PurchaseEvent` | A verified inbound purchase event from a billing provider. |
+
+### Background worker
+
+Drive the deferred, time-based work: the per-cycle sweeps, the outbox relay, the inbox, and the full prover.
+
+<SourceLink to="src/worker/index.ts">src/worker/index.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `createWorker` | Build the worker from the store and context; always has runOnce, with scheduler also gets start(intervalMs). |
+| `Worker` | Handle the host program uses to drive background jobs: runOnce runs every job once, start runs them on a timer. |
+| `WorkerCtx` | Capabilities for the background worker (clock, ids, digest, signer, processor, rates, logger, meter, config). |
+| `drainInbox` | Applies a batch of pending inbox events (verified provider callbacks) to the ledger. |
+| `relayOutbox` | Delivers a batch of pending outbox events, each written in the posting transaction. |
+| `proveEconomy` | The thorough read-only prover: recomputes the whole hash chain to catch any altered entry. |
+| `SweepName` | Names of the background jobs run each cycle: payouts, subscriptions, treasury, feeSweep, floatCoverage, etc. |
+| `SweepInput` | Arguments for every background job in one object; limit caps each due-item pass, options may carry AbortSignal. |
+| `SweepResult` | One job's outcome: its summary, or its caught error as data with code and retry flag. |
+| `SweepBatch` | One entry per job, keyed by name; a failing job never hides the others. |
+| `SweepRun` | runOnce's result: the batch plus the txn id of every posting the run minted. |
+
+### In-memory adapters
+
+Zero-infrastructure `Store`, `Cache`, and `Processor` implementations for tests and local runs.
+
+<SourceLink to="src/adapters/memory.ts">src/adapters/memory.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `memoryStore` | Build an in-memory Store with working transaction rollback for tests and development. |
+| `memoryCache` | Builds an in-process Cache backed by a Map; reference implementation and single-process cache when no Redis. |
+| `memoryProcessor` | Build an in-memory Processor for demos and tests that accepts every payout with deterministic providerRef. |
+
+### Rates, pricing, and entitlements
+
+Configure the CREDIT-to-USD rates and the fee split, and cache entitlement lookups.
+
+<SourceLink to="src/adapters/rates.ts">src/adapters/rates.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `configuredRates` | Build the production CREDIT-to-USD rate source from a deployment's configured rates. |
+| `flatFee` | Built-in constructor for the required external port: the fee split policy. |
+| `FeePolicy` | Splits a sale's price across recipients and the platform into debit/credit legs with no rounding loss. |
+| `cachedEntitlements` | Wrap a store so entitlements.owns is served from a bitset when warm, for fast ownership checks. |
+| `BitsetOptions` | Tuning knobs for the entitlement bitset cache (TTL, resident user cap). |
+
+### Runtime services
+
+The concrete clock, ids, digest, signer, logger, and meter a production host wires in.
+
+<SourceLink to="src/runtime.ts">src/runtime.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `jsonlLogger` | Structured logger for production hosts, writing one JSON object per line. |
+| `noopLogger` | A Logger that discards every line: the silent default for a host that wants no log output. |
+| `noopMeter` | A Meter that discards every count and observation: the default when a host collects no metrics. |
+| `systemDigest` | Production hasher returning the shared SHA-256 Digest. |
+| `systemSigner` | Production signer using Ed25519 so an auditor can confirm a checkpoint wasn't rewritten. |
+| `signingPublicKeyHex` | Hex-encoded raw 32-byte Ed25519 public key derived from signingKey for external verification. |
+
+### Read model
+
+The shapes `read` returns: statements, postings, sagas, rates, checkpoints, and the solvency proof.
+
+<SourceLink to="src/contract.ts">src/contract.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `Statement` | One page of an account's entries, walked via a cursor. |
+| `Range` | A statement query's half-open time range, in epoch milliseconds. |
+| `Posting` | A balanced double-entry posting: legs sum to zero in each currency. |
+| `Saga` | The stored state of one in-flight payout, tracking reserve, rate, state, attempts, and settlement. |
+| `Checkpoint` | A signed snapshot of the whole ledger: every account's head hash reduced to one Merkle root and signed. |
+| `StoredLink` | One posting as lineage returns it, carrying the two hashes that tie it into the account's tamper-evident chain. |
+| `Rate` | An exchange rate as exact integers: the multiplier is rate / 10^scale. |
+| `EconomyEvent` | The fixed shape of every event the system emits, with type, version, subject, and audience. |
+| `EconomyStatus` | The economy's pause state at a moment in time, derived from maintenance window and clock. |
+| `ProveReport` | The integrity check result: one flag per property the ledger must hold. |
+
+## Focused entry points
+
+Each subpath re-exports a slice of the surface. The **ports**, **adapters**, and **netting** symbols below are also available from the main package; the **driver-carrying** adapters and the **engines** are not — they load a database or cloud driver, so they live behind their own subpath and are imported only where that driver is installed.
+
+## `@pwngh/economy-lab/ports`
+
+The port interfaces — the contracts you implement to plug your own infrastructure into the economy. Types only; import them to type an adapter you are writing.
+
+<SourceLink to="src/ports.ts">src/ports.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `Store` | The full set of stores the system reads and writes. |
+| `Signer` | Signs bytes and checks signatures, used to vouch for ledger checkpoints. |
+| `Processor` | External payment provider: all money leaving the platform goes through this. |
+| `Rates` | Supplies fixed CREDIT-to-USD rates from an audited source, never from config or caller input. |
+| `Clock` | Provides milliseconds since the Unix epoch. |
+| `Ids` | Mints prefixed unique identifiers, one namespace per entity kind. |
+| `Digest` | The SHA-256 hash of the input. |
+| `Dispatcher` | Hands an outgoing event off for delivery (e.g. SQS or HTTP); the core doesn't know which. |
+| `Logger` | Logs events at specified levels with structured fields. |
+| `Meter` | Records metrics via count and observe methods. |
+| `Cache` | Optional read-through cache for hot reads such as balances; best-effort, so any error degrades to a direct ledger read. |
+| `Scheduler` | Runs a task every N milliseconds; the returned function stops the loop. |
+| `PayeeDirectory` | Verifies payee status; checks if a user is cleared, pending, blocked, or has no verification. |
+| `Capabilities` | Every external capability `economyFromCapabilities(...)` needs, gathered into one object. |
+| `Options` | Per-transaction options for the store, such as an AbortSignal. |
+
+## `@pwngh/economy-lab/adapters`
+
+The bundled adapter factories: in-memory and HTTP implementations of the ports, plus the runtime services (clock, ids, digest, signer). The driver-backed Redis and SQS adapters live in their own subpaths below.
+
+<SourceLink to="src/adapters/index.ts">src/adapters/index.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `memoryStore` | Build an in-memory Store with working transaction rollback for tests and development. |
+| `memoryCache` | Builds an in-process Cache backed by a Map; reference implementation and single-process cache when no Redis. |
+| `httpDispatcher` | Build the Dispatcher that POSTs one economy event to a remote endpoint over HTTP with at-least-once delivery. |
+| `memoryProcessor` | Build an in-memory Processor for demos and tests that accepts every payout with deterministic providerRef. |
+| `httpProcessor` | Build a Processor that pays sellers via an external provider over HTTP. |
+| `configuredRates` | Build the production CREDIT-to-USD rate source from a deployment's configured rates. |
+| `flatFee` | Built-in constructor for the required external port: the fee split policy. |
+| `cachedEntitlements` | Wrap a store so entitlements.owns is served from a bitset when warm, for fast ownership checks. |
+| `systemClock` | Production clock reading wall-clock time. |
+| `fixedClock` | Fake clock for tests, frozen at start (epoch ms); only advance(ms) moves it forward. |
+| `randomIds` | Production id generator using random UUIDs with a prefix (e.g. txn_3f2a...). |
+| `sequentialIds` | Predictable id generator for tests that counts up from seed for repeatable test outcomes. |
+| `systemDigest` | Production hasher returning the shared SHA-256 Digest. |
+| `systemSigner` | Production signer using Ed25519 so an auditor can confirm a checkpoint wasn't rewritten. |
+| `signingPublicKeyHex` | Hex-encoded raw 32-byte Ed25519 public key derived from signingKey for external verification. |
+| `systemCapabilities` | Bundles the four capabilities (clock, id generator, hasher, signer) for a production host. |
+| `jsonlLogger` | Structured logger for production hosts, writing one JSON object per line. |
+| `noopLogger` | A Logger that discards every line: the silent default for a host that wants no log output. |
+| `noopMeter` | A Meter that discards every count and observation: the default when a host collects no metrics. |
+
+## `@pwngh/economy-lab/adapters/redis`
+
+The Redis-backed `Cache`. Carries the `ioredis` driver, so it is imported only when Redis is configured.
+
+<SourceLink to="src/adapters/redis.ts">src/adapters/redis.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `redisCacheFrom` | Adapt an already-connected ioredis client into the Cache the core expects. |
+
+## `@pwngh/economy-lab/adapters/sqs`
+
+The SQS-backed `Dispatcher` for the outbox relay. Carries the AWS SDK, so it is imported only when SQS is configured.
+
+<SourceLink to="src/adapters/sqs.ts">src/adapters/sqs.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `sqsDispatcher` | Build the dispatcher that publishes events to SQS as JSON messages with automatic deduplication. |
+| `SqsDispatcherConfig` | Configuration for the SQS dispatcher including queue URL and client. |
+| `SqsClient` | Structural shape of the SQS client method the adapter calls. |
+| `SqsCommand` | Structural shape of one SQS client method this adapter calls. |
+
+## `@pwngh/economy-lab/engines/postgres`
+
+The Postgres `Store`. Carries the `pg` driver.
+
+<SourceLink to="src/engines/postgres.ts">src/engines/postgres.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `postgresStore` | Build a Store backed by Postgres using real database transactions with proper isolation and chain-based ledger verification. |
+| `PostgresStoreOptions` | Configuration for postgresStore including URL, schema isolation, digest, clock, velocity window, pool sizing, and connection timeouts. |
+
+## `@pwngh/economy-lab/engines/mysql`
+
+The MySQL `Store` and its schema helpers. Carries the `mysql2` driver.
+
+<SourceLink to="src/engines/mysql.ts">src/engines/mysql.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `mysqlStore` | Build a full MySQL-backed store on a mysql2 connection pool, with transactional consistency and named-lock-based synchronization. |
+| `MysqlPool` | The mysql2/promise pool interface, exported for type compatibility with stores built on MySQL. |
+| `createMysqlPool` | Create a mysql2 connection pool from a connection URL, with configurable connection limit and proper bigint/collation handling. |
+| `readSchemaVersion` | Read the database's stamped schema version from schema_meta, or null when absent (un-migrated or pre-versioning database). |
+| `applyMysqlSchema` | Create all tables and stored routines from db/mysql-schema.sql; drops and recreates tables so running this resets to a clean schema. |
+
+## `@pwngh/economy-lab/netting`
+
+The in-instance netting session: reserve, move, and settle many balances in memory, then post one net transaction. Used for high-frequency in-world economies.
+
+<SourceLink to="src/netting.ts">src/netting.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `instanceSession` | Open a netting session that accepts movements (idempotent per key, guarded by reservation registry) and settles the net in clearing chunks. |
+| `recoverSession` | Rebuild a session from its journal (crash-recovery path); outcomes and running net re-derive from journal rows for consistency. |
+| `createReservations` | Create a cross-session reservation registry that tracks pending per-user-account totals to prevent overdraft races across sessions. |
+| `Reservations` | The cross-session registry tracking pending per-account totals to prevent overdraft races across the process. |
+| `MovementRequest` | One movement offered to the session: an idempotency key and a balanced set of CREDIT legs. |
+| `MovementOutcome` | The result of offering one movement: either accepted with sequence number or rejected with a reason code. |
+| `SettleReport` | The outcome of settling a session: mode (netted or replayed), postings committed, rejected movements, journal head, and count of netted movements. |
+| `SessionOptions` | Optional session configuration: max movements per journal batch, max accounts per settlement chunk, and shared reservation registry. |
+| `InstanceSession` | A durable journal session that accepts movements, batches them, and settles the net posting in chunks with idempotency and chain verification. |
+| `SessionDeps` | The store, digest, and clock dependencies a session needs to manage movements and settlement. |
+
+## `@pwngh/economy-lab/testing`
+
+The conformance harness. Run the same suite against any `Store`, `Cache`, `Dispatcher`, or `Processor` implementation to prove it upholds the contract.
+
+<SourceLink to="test/conformance/index.ts">test/conformance/index.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `runStoreConformance` | Run the adapter conformance suite for Store implementations to verify they meet the ledger invariants. |
+| `runCacheConformance` | Run the adapter conformance suite for Cache implementations to verify they match the built-in contract. |
+| `runDispatcherConformance` | Run the adapter conformance suite for Dispatcher implementations with harness support for custom test setups. |
+| `runProcessorConformance` | Run the adapter conformance suite for Processor implementations with harness support for custom test setups. |
+| `DispatcherHarness` | Test harness interface for running dispatcher conformance suites. |
+| `ProcessorHarness` | Test harness interface for running processor conformance suites. |

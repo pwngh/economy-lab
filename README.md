@@ -13,12 +13,14 @@ A provably-solvent credits economy: wallets, payouts, subscriptions, and a marke
 - [Quick start](#quick-start)
 - [Architecture](#architecture)
 - [Guarantees](#guarantees)
+- [Ecosystem](#ecosystem)
 - [Run it](#run-it)
+- [Performance](#performance)
 - [Documentation](#documentation)
 
 ---
 
-> Read the full documentation: [economy-lab-docs.pages.dev](https://economy-lab-docs.pages.dev/economy/).
+> Read the full documentation at [economy-lab-docs.pages.dev](https://economy-lab-docs.pages.dev/economy/), or try the [live console](https://economy-lab-docs.pages.dev/console/).
 
 ## Highlights
 
@@ -32,11 +34,10 @@ A provably-solvent credits economy: wallets, payouts, subscriptions, and a marke
 
 Build an `Economy`, drive it through a single `submit`, and read derived state through `read`.
 `createEconomy()` with no arguments wires a complete in-memory build — the store, a dev signer,
-a dev rate table, a flat fee policy, and an in-memory processor — so from a clone of this repo
-there is nothing to configure:
+a dev rate table, a flat fee policy, and an in-memory processor — so there is nothing to configure:
 
 ```ts
-import { createEconomy, topUp, toAmount, spendable } from './src/index.ts';
+import { createEconomy, topUp, toAmount, spendable } from '@pwngh/economy-lab';
 
 const economy = await createEconomy();
 
@@ -102,23 +103,28 @@ conformance suite holds them to identical behavior.
 
 ## Guarantees
 
-| Capability                   | Where                                                                                                          | What it guarantees                                                                                                                                                                                                                                           |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Double-entry ledger          | [ledger.ts](src/ledger.ts)                                                                                     | A posting is rejected unless its debit and credit lines net to zero per currency; a balance is the sum of its lines.                                                                                                                                         |
-| Tamper-evident history       | [chain.ts](src/chain.ts), [integrity.ts](src/integrity.ts)                                                     | Each posting is hash-chained per account; a signed Merkle checkpoint anchors the whole ledger; `proveChain` locates any altered entry.                                                                                                                       |
-| Idempotent requests + outbox | [economy.ts](src/economy.ts), [worker/relay.ts](src/worker/relay.ts)                                           | A retried request runs once: key, postings, and outbound event all commit in one transaction; duplicates replay.                                                                                                                                             |
-| Marketplace + fee policy     | [operations/spend.ts](src/operations/spend.ts), [pricing.ts](src/pricing.ts)                                   | A sale charges the buyer and pays the sellers in one balanced transaction; shares sum to 100%; the fee is injected policy.                                                                                                                                   |
-| Payout saga + retries        | [operations/requestPayout.ts](src/operations/requestPayout.ts), [worker/payouts.ts](src/worker/payouts.ts)     | The worker submits a payout; the settlement webhook settles it once (deduped); a stuck payout re-drives then reverses.                                                                                                                                       |
-| Recurring subscriptions      | [operations/subscribe.ts](src/operations/subscribe.ts), [worker/subscriptions.ts](src/worker/subscriptions.ts) | Each period bills once; an underfunded renewal lapses instead of overdrawing.                                                                                                                                                                                |
-| Refunds & clawback           | [operations/refund.ts](src/operations/refund.ts), [operations/clawback.ts](src/operations/clawback.ts)         | A reversal restores each account the sale touched, booking any uncollectable remainder to a receivable.                                                                                                                                                      |
-| Settlement maturity gate     | [maturity.ts](src/maturity.ts)                                                                                 | Payouts release only funds settled past the chargeback window; fresh credits are held back until they mature.                                                                                                                                                |
-| Spend-velocity risk gate     | [trust.ts](src/trust.ts)                                                                                       | Recent spend is summed over a sliding window and checked against a limit before any money moves.                                                                                                                                                             |
-| Swappable storage            | [engines/](src/engines), [adapters/](src/adapters)                                                             | The same logic runs in-memory and on Postgres, MySQL, Redis, and SQS; one conformance suite runs against every backend.                                                                                                                                      |
-| Vendored money arithmetic    | [money.vendored.ts](src/money.vendored.ts), [engines/postgres.ts](src/engines/postgres.ts)                     | The ledger's arithmetic is [@pwngh/money](https://github.com/pwngh/money), pinned by embedded conformance vectors; each boot proves the live database computes the same semantics before any posting trusts it.                                              |
-| Outbox → @pwngh/taskq bridge | [taskq-host.ts](scripts/support/taskq-host.ts)                                                                 | `TASKQ=1` puts the task table beside the ledger (same database, same engine); the relay's at-least-once delivery collapses to one pending task per event, keyed by event id, and consumers inherit [@pwngh/taskq](https://github.com/pwngh/taskq)'s retries. |
-| Edge processor shim          | [edge-tilia.ts](src/adapters/edge-tilia.ts)                                                                    | A real payout rail — [@pwngh/economy-edge](https://github.com/pwngh/economy-edge)'s Tilia adapter — enters behind the same `Processor` port as any adapter; the package is an optional peer, and absent it the lab composes unchanged.                       |
+| Capability                   | Where                                                                                                          | What it guarantees                                                                                                                     |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Double-entry ledger          | [ledger.ts](src/ledger.ts)                                                                                     | A posting is rejected unless its debit and credit lines net to zero per currency; a balance is the sum of its lines.                   |
+| Tamper-evident history       | [chain.ts](src/chain.ts), [integrity.ts](src/integrity.ts)                                                     | Each posting is hash-chained per account; a signed Merkle checkpoint anchors the whole ledger; `proveChain` locates any altered entry. |
+| Idempotent requests + outbox | [economy.ts](src/economy.ts), [worker/relay.ts](src/worker/relay.ts)                                           | A retried request runs once: key, postings, and outbound event all commit in one transaction; duplicates replay.                       |
+| Marketplace + fee policy     | [operations/spend.ts](src/operations/spend.ts), [pricing.ts](src/pricing.ts)                                   | A sale charges the buyer and pays the sellers in one balanced transaction; shares sum to 100%; the fee is injected policy.             |
+| Payout saga + retries        | [operations/requestPayout.ts](src/operations/requestPayout.ts), [worker/payouts.ts](src/worker/payouts.ts)     | The worker submits a payout; the settlement webhook settles it once (deduped); a stuck payout re-drives then reverses.                 |
+| Recurring subscriptions      | [operations/subscribe.ts](src/operations/subscribe.ts), [worker/subscriptions.ts](src/worker/subscriptions.ts) | Each period bills once; an underfunded renewal lapses instead of overdrawing.                                                          |
+| Refunds & clawback           | [operations/refund.ts](src/operations/refund.ts), [operations/clawback.ts](src/operations/clawback.ts)         | A reversal restores each account the sale touched, booking any uncollectable remainder to a receivable.                                |
+| Settlement maturity gate     | [maturity.ts](src/maturity.ts)                                                                                 | Payouts release only funds settled past the chargeback window; fresh credits are held back until they mature.                          |
+| Spend-velocity risk gate     | [trust.ts](src/trust.ts)                                                                                       | Recent spend is summed over a sliding window and checked against a limit before any money moves.                                       |
+| Swappable storage            | [engines/](src/engines), [adapters/](src/adapters)                                                             | The same logic runs in-memory and on Postgres, MySQL, Redis, and SQS; one conformance suite runs against every backend.                |
 
 `make prove` and `make fuzz` attack these invariants after every operation and across every backend.
+
+## Ecosystem
+
+Three sibling packages compose around the ledger, each entering behind a stable seam — the lab runs unchanged without any of them. See [the packages](https://economy-lab-docs.pages.dev/economy/ports/packages/) for where each one plugs in.
+
+- **[@pwngh/money](https://github.com/pwngh/money)** — the ledger's arithmetic, vendored and pinned by embedded conformance vectors; each boot proves the live database computes the same semantics before any posting trusts it.
+- **[@pwngh/taskq](https://github.com/pwngh/taskq)** — with `TASKQ=1` the outbox relay rides taskq's task table beside the ledger: one at-least-once task per event, keyed by event id, inheriting its retries.
+- **[@pwngh/economy-edge](https://github.com/pwngh/economy-edge)** — a real payout rail (Tilia) behind the same `Processor` port; an optional peer the lab composes without.
 
 ## Run it
 
@@ -138,11 +144,21 @@ The bundled host process runs as an HTTP service (`POST /submit`, `POST /webhook
 `/healthz` and `/readyz`) and a background worker (ten sweeps on an interval). Every backend is
 selected by an environment variable.
 
+## Performance
+
+`make bench` measures `submit` throughput per backend and integrity cost as the ledger grows. In
+memory it runs tens of thousands of submits per second; on Postgres or MySQL each submit is its own
+transaction, so throughput is commit-bound (hundreds per second). Those are the general-path
+numbers: where a workload allows it, instance netting and the entitlement bitset remove the
+transaction and the round-trip respectively, which is worth orders of magnitude on the SQL
+backends. See [Performance](https://economy-lab-docs.pages.dev/economy/reference/performance/) for
+the measured tables and how to read them.
+
 ## Apps
 
 - [apps/console](apps/console) — a demo admin UI driven by the live engine: accounts, the ledger
   feed, the payout board, and an integrity page, with a simulation panel to advance time and run
-  the background jobs.
+  the background jobs. [Try it live](https://economy-lab-docs.pages.dev/console/).
 - [apps/docs](apps/docs) — the source of the [documentation site](https://economy-lab-docs.pages.dev/economy/).
 
 ## Documentation

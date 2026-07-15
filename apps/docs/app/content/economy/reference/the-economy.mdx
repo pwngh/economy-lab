@@ -26,7 +26,7 @@ You build it from a set of injected ports (a `Store`, a `Signer`, a `Processor`,
 `createEconomy(options?)` is the one call. With nothing, it builds a batteries-included in-memory economy: the in-memory `Store`, a dev `Signer`, a dev `Rates` table, a flat `FeePolicy`, and an in-memory `Processor`, all wired. No environment, no infrastructure:
 
 ```ts
-import { createEconomy } from './src/index.ts';
+import { createEconomy } from '@pwngh/economy-lab';
 
 const economy = await createEconomy();
 ```
@@ -78,7 +78,7 @@ A `rejected` outcome is a normal "no" returned as data, not an error; a genuine 
 Reading one account's balance is a single call that returns an `Amount`:
 
 ```ts
-import { spendable } from './src/accounts.ts';
+import { spendable } from '@pwngh/economy-lab';
 
 const balance = await economy.read.balance(spendable('usr_a1'));
 // → { currency: "CREDIT", minor: 5000n }

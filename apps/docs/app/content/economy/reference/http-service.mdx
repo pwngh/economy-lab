@@ -19,7 +19,7 @@ Most of these docs talk about the [`Economy`](/economy/reference/the-economy/) a
 <SourceLink to="src/server.ts#L80">createServer</SourceLink> takes an `Economy` and returns a handler with the signature `(request: Request) => Promise<Response>`:
 
 ```ts
-import { createServer } from '#src/server.ts';
+import { createServer } from '@pwngh/economy-lab';
 
 const handler = createServer(economy);
 const response = await handler(request); // Request → Response
