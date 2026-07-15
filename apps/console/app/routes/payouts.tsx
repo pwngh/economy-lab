@@ -258,7 +258,7 @@ function Card({
         {failed && p.reason ? (
           <span className="debit">reason · {p.reason}</span>
         ) : null}
-        {!terminal ? <span>due {dayLabel(p.dueAt)}</span> : null}
+        {terminal ? null : <span>due {dayLabel(p.dueAt)}</span>}
         <span className="mono" title={p.providerRef ?? undefined}>
           {p.providerRef ? `ref ${p.providerRef}` : 'no provider ref yet'}
         </span>
@@ -306,9 +306,7 @@ function SagaDrill({
         <p className="card-sub">
           <Entity id={saga.userId} /> · reserve{' '}
           <Credits value={saga.reserveCredits} /> · {saga.attempts} attempts
-          {saga.payoutUsd !== null
-            ? ` · paid $${fmtAmount(saga.payoutUsd)}`
-            : ''}
+          {saga.payoutUsd === null ? '' : ` · paid $${fmtAmount(saga.payoutUsd)}`}
         </p>
       </div>
 

@@ -221,9 +221,9 @@ export default function Chrome({ loaderData }: Route.ComponentProps) {
           solvency={solvency}
           back={back}
         />
-        {tour !== null ? (
+        {tour === null ? null : (
           <TourStrip step={tour} exitTo={location.pathname} />
-        ) : null}
+        )}
         <div aria-live="polite">
           {flash && !flash.form ? <FlashBanner flash={flash} /> : null}
         </div>
