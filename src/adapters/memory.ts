@@ -11,13 +11,14 @@
 
 import { chainHash, balanceDelta, GENESIS, GENESIS_HEX } from '#src/ledger.ts';
 import { toAmount } from '#src/money.ts';
+import { I64Column, foldColumn } from '#src/fold-column.ts';
 import { baseOf, currency, SYSTEM, walletKindOf } from '#src/accounts.ts';
 import { VELOCITY_CURRENCY } from '#src/trust.ts';
 import { byCodeUnit, fromHex } from '#src/bytes.ts';
 import { metaString, metaNumber } from '#src/meta.ts';
 import { sha256Digest } from '#src/digest.ts';
 
-import type { Amount } from '#src/money.ts';
+import type { Amount, Currency } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Transaction } from '#src/contract.ts';
 import type {
@@ -158,6 +159,11 @@ interface LedgerState {
   // Per-account `log` positions that raised the balance (its lots), in commit order, so `timeline`
   // walks one account's index instead of the whole shared log.
   lotIndexByAccount: Map<AccountRef, number[]>;
+
+  // Each account's signed leg deltas as a resident i64 column per currency, in commit order. A
+  // balance re-derivation folds the column instead of scanning the whole log; the fold is the win
+  // on the hot platform accounts. Maintained alongside the log on commit and rollback.
+  deltaColumns: Map<AccountRef, Map<Currency, I64Column>>;
 }
 
 type Link = { account: AccountRef; prevHash: string; hash: string };
@@ -221,6 +227,22 @@ function commitPosting(state: LedgerState, stored: StoredPosting): void {
       )
     : null;
 
+  // Range-check every leg's running balance before touching any state. toAmount refuses any
+  // balance the SQL engines' BIGINT columns would refuse; checking first means a refused posting
+  // throws with nothing applied, so the recorded undo always reverses a complete commit.
+  const nextBalances = new Map<AccountRef, bigint>();
+  const deltas: Amount[] = [];
+  for (const leg of stored.legs) {
+    const delta = balanceDelta(leg);
+    const prior =
+      nextBalances.get(leg.account) ?? state.balances.get(leg.account) ?? 0n;
+    nextBalances.set(
+      leg.account,
+      toAmount(leg.amount.currency, prior + delta.minor).minor,
+    );
+    deltas.push(delta);
+  }
+
   state.log.push(stored);
   const index = state.log.length - 1;
   const lotted = lottedAccounts(stored.legs);
@@ -235,15 +257,10 @@ function commitPosting(state: LedgerState, stored: StoredPosting): void {
   for (const link of stored.links) {
     state.heads.set(link.account, link.hash);
   }
-  for (const leg of stored.legs) {
-    // toAmount range-checks into i64, so this backend refuses any balance the SQL engines'
-    // BIGINT columns would refuse.
-    const next = toAmount(
-      leg.amount.currency,
-      (state.balances.get(leg.account) ?? 0n) + balanceDelta(leg).minor,
-    ).minor;
-    state.balances.set(leg.account, next);
-  }
+  stored.legs.forEach((leg, i) => {
+    state.balances.set(leg.account, nextBalances.get(leg.account)!);
+    appendDelta(state, leg.account, deltas[i]!);
+  });
 
   state.journal.record(() =>
     undoPosting(state, stored, { priorHeads, created, lotted }),
@@ -296,6 +313,63 @@ function undoPosting(
     } else {
       state.balances.set(leg.account, next);
     }
+    popDelta(state, leg.account, leg.amount.currency);
+  }
+}
+
+// Appends one leg's signed balance delta to its account's column for that currency, creating the
+// per-account map and the column on first use. The column mirrors the leg the log just stored.
+function appendDelta(
+  state: LedgerState,
+  account: AccountRef,
+  delta: Amount,
+): void {
+  let columns = state.deltaColumns.get(account);
+  if (columns === undefined) {
+    columns = new Map();
+    state.deltaColumns.set(account, columns);
+  }
+  let column = columns.get(delta.currency);
+  if (column === undefined) {
+    column = new I64Column();
+    columns.set(delta.currency, column);
+  }
+  column.push(delta.minor);
+}
+
+// Removes the last delta a rolled-back posting appended for this account and currency, dropping the
+// column and the account entry once empty so a fully rolled-back account leaves no trace.
+function popDelta(
+  state: LedgerState,
+  account: AccountRef,
+  cur: Currency,
+): void {
+  const columns = state.deltaColumns.get(account);
+  if (columns === undefined) {
+    return;
+  }
+  const column = columns.get(cur);
+  if (column === undefined) {
+    return;
+  }
+  column.pop();
+  if (column.length === 0) {
+    columns.delete(cur);
+    if (columns.size === 0) {
+      state.deltaColumns.delete(account);
+    }
+  }
+}
+
+// Rebuilds every column from the log. Only the test-only `__tamper` needs it: that back door edits
+// stored legs in place, so the columns derived at commit time must be replayed to reflect the edit,
+// the way a SQL SUM re-reads the mutated rows.
+function rebuildColumns(state: LedgerState): void {
+  state.deltaColumns.clear();
+  for (const row of state.log) {
+    for (const leg of row.legs) {
+      appendDelta(state, leg.account, balanceDelta(leg));
+    }
   }
 }
 
@@ -311,6 +385,7 @@ function createLedgerStore(deps: {
     heads: new Map(),
     registered: new Set<string>(Object.values(SYSTEM)),
     lotIndexByAccount: new Map(),
+    deltaColumns: new Map(),
   };
 
   return {
@@ -342,7 +417,8 @@ function createLedgerStore(deps: {
     statement: async (account, range) =>
       buildStatement(state.log, account, range),
 
-    derivedBalances: async (account) => derivedBalancesOf(state.log, account),
+    derivedBalances: async (account) =>
+      derivedBalancesOf(state.deltaColumns.get(account)),
 
     timeline: (account, options) => timelineOf(state, account, options),
 
@@ -381,7 +457,7 @@ function createLedgerStore(deps: {
 
     list: () => listPostingsOf(state.log),
 
-    __tamper: (txnId, mutate) => tamperPosting(state.log, txnId, mutate),
+    __tamper: (txnId, mutate) => tamperPosting(state, txnId, mutate),
 
     __seedBalance: (account, amount) =>
       state.balances.set(account, amount.minor),
@@ -422,28 +498,18 @@ function buildStatement(
   return { account, entries, cursor: null };
 }
 
-// Re-derives the balance from scratch so the integrity prover can compare it against the
-// maintained one. Sorted by currency so every engine returns the same order.
+// Re-derives the balance by folding each currency's resident column, so the integrity prover can
+// compare it against the maintained one without re-scanning the log. Sorted by currency so every
+// engine returns the same order.
 function derivedBalancesOf(
-  log: ReadonlyArray<StoredPosting>,
-  account: AccountRef,
+  columns: Map<Currency, I64Column> | undefined,
 ): Amount[] {
-  const byCurrency = new Map<Amount['currency'], bigint>();
-  for (const row of log) {
-    for (const leg of row.legs) {
-      if (leg.account !== account) {
-        continue;
-      }
-      const delta = balanceDelta(leg);
-      byCurrency.set(
-        delta.currency,
-        (byCurrency.get(delta.currency) ?? 0n) + delta.minor,
-      );
-    }
+  if (columns === undefined) {
+    return [];
   }
-  return [...byCurrency]
-    .sort((a, b) => byCodeUnit(a[0], b[0]))
-    .map(([cur, minor]) => toAmount(cur, minor));
+  return [...columns]
+    .map(([cur, column]) => toAmount(cur, foldColumn(column)))
+    .sort((a, b) => byCodeUnit(a.currency, b.currency));
 }
 
 // Streams this account's balance-raising legs as lots for FIFO settlement. `options` mirrors the
@@ -545,15 +611,17 @@ async function* listPostingsOf(
 }
 
 // Test-only. Implements `__tamper`; see the MemoryLedger type JSDoc for why this is the
-// corruption the chain check detects.
+// corruption the chain check detects. Rebuilds the columns so a re-derivation reflects the edited
+// legs, the way a SQL SUM would re-read the mutated rows.
 function tamperPosting(
-  log: ReadonlyArray<StoredPosting>,
+  state: LedgerState,
   txnId: string,
   mutate: (legs: Leg[]) => void,
 ): void {
-  const row = log.find((entry) => entry.txnId === txnId);
+  const row = state.log.find((entry) => entry.txnId === txnId);
   if (row) {
     mutate(row.legs as Leg[]);
+    rebuildColumns(state);
   }
 }
 
@@ -901,6 +969,7 @@ function createEntitlementStore(deps: {
     },
     list: async function* (userId, _options?: Options) {
       const prefix = `${userId}::`;
+      // noinspection JSMismatchedCollectionQueryUpdate
       const grants: Array<{ sku: string; expiresAt: number | null }> = [];
       for (const [key, row] of rows) {
         if (!key.startsWith(prefix) || row.revoked) {
