@@ -102,6 +102,8 @@ export default tseslint.config(
     ignores: [
       'node_modules/**',
       'dist-site/**',
+      'dist/**',
+      '.build-tmp/**',
       'apps/**',
       'packages/**',
       'src/money.vendored.ts',

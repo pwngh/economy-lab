@@ -41,7 +41,7 @@ import { createEconomy, topUp, toAmount, spendable } from '@pwngh/economy-lab';
 
 const economy = await createEconomy();
 
-// Credit a wallet after a card charge clears. submit returns an Outcome; it never throws for a "no".
+// Credit a wallet after a card charge clears.
 const outcome = await economy.submit(
   topUp({
     idempotencyKey: 'ord_ada_1',

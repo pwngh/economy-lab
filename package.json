@@ -1,7 +1,9 @@
 {
   "name": "@pwngh/economy-lab",
   "version": "0.1.0",
-  "private": true,
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "imports": {
     "#src/*": "./src/*",
@@ -9,25 +11,48 @@
     "#scripts/*": "./scripts/*"
   },
   "exports": {
-    ".": "./src/index.ts",
-    "./ports": "./src/ports.ts",
-    "./adapters": "./src/adapters/index.ts",
-    "./adapters/redis": "./src/adapters/redis.ts",
-    "./adapters/sqs": "./src/adapters/sqs.ts",
-    "./engines/postgres": "./src/engines/postgres.ts",
-    "./engines/mysql": "./src/engines/mysql.ts",
-    "./netting": "./src/netting.ts",
-    "./testing": "./test/conformance/index.ts",
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./ports": {
+      "types": "./dist/src/ports.d.ts",
+      "default": "./dist/src/ports.js"
+    },
+    "./adapters": {
+      "types": "./dist/src/adapters/index.d.ts",
+      "default": "./dist/src/adapters/index.js"
+    },
+    "./adapters/redis": {
+      "types": "./dist/src/adapters/redis.d.ts",
+      "default": "./dist/src/adapters/redis.js"
+    },
+    "./adapters/sqs": {
+      "types": "./dist/src/adapters/sqs.d.ts",
+      "default": "./dist/src/adapters/sqs.js"
+    },
+    "./engines/postgres": {
+      "types": "./dist/src/engines/postgres.d.ts",
+      "default": "./dist/src/engines/postgres.js"
+    },
+    "./engines/mysql": {
+      "types": "./dist/src/engines/mysql.d.ts",
+      "default": "./dist/src/engines/mysql.js"
+    },
+    "./netting": {
+      "types": "./dist/src/netting.d.ts",
+      "default": "./dist/src/netting.js"
+    },
+    "./testing": {
+      "types": "./dist/test/conformance/index.d.ts",
+      "default": "./dist/test/conformance/index.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
+    "dist",
     "src",
     "db",
-    "test/conformance/index.ts",
-    "test/conformance/store.ts",
-    "test/conformance/cache.ts",
-    "test/conformance/dispatcher.ts",
-    "test/conformance/processor.ts",
     "README.md",
     "LICENSE.md"
   ],
@@ -45,6 +70,8 @@
     "worker": "node --env-file-if-exists=.env scripts/main.ts worker",
     "test": "node --env-file-if-exists=.env --test --test-reporter=./test/support/numbered.reporter.mjs --test-reporter-destination=stdout \"test/**/*.test.ts\"",
     "coverage": "node --env-file-if-exists=.env --test --experimental-test-coverage \"test/**/*.test.ts\"",
+    "build": "node scripts/build-dist.mjs",
+    "prepublishOnly": "npm run check && npm run build",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm run test && npm run trace:check",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

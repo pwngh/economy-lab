@@ -4,6 +4,10 @@
 node_modules
 coverage
 
+# Publish artifacts: dist is compiled output, .build-tmp is its throwaway staging copy.
+dist
+.build-tmp
+
 package-lock.json
 Dockerfile
 .dockerignore
