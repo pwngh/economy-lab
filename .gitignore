@@ -13,5 +13,7 @@ apps/*/node_modules
 apps/*/build
 apps/*/.react-router
 
+dist/
+.build-tmp/
 dist-site/
 apps/docs/public/runner/
