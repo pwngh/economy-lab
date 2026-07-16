@@ -108,6 +108,40 @@ An end-user `actor` is refused with an `AUTH.UNAUTHORIZED` fault before any work
 - The loss un-issues circulating credits against `STORED_VALUE`; `REVENUE` is untouched.
 - For an order-tied dispute, reversing the order once — by `clawback` or [`refund`](/economy/reference/operations/refund/) — blocks the other through the shared `reversed:${orderId}` key.
 
+## Disputed sales: refund first, then claw back
+
+Order matters when the disputed money funded a purchase. The runbook is two steps:
+
+1. [`refund`](/economy/reference/operations/refund/) the disputed order. This pulls the seller's earnings back, returns the buyer's credits, and claims the shared `reversed:${orderId}` key.
+2. `clawback` the wallet for the disputed amount, with no `orderId` — the order is already reversed, so an order-tied clawback would return `duplicate` and reclaim nothing.
+
+```ts
+import { refund, clawback, systemActor, toAmount } from '@pwngh/economy-lab';
+
+// step 1 — the refund is the only step that pulls the seller's earnings back
+await economy.submit(
+  refund({
+    idempotencyKey: `refund:${disputed.orderId}`,
+    actor: systemActor('disputes'),
+    orderId: disputed.orderId,
+    reason: 'chargeback',
+  }),
+);
+
+// step 2 — now claw back the returned credits, untied from the order
+await economy.submit(
+  clawback({
+    idempotencyKey: `clawback:${disputed.orderId}`,
+    actor: systemActor('disputes'),
+    userId: disputed.buyerId,
+    amount: toAmount('CREDIT', disputed.minor),
+    reason: 'chargeback',
+  }),
+);
+```
+
+Clawing back first books the worst version of the same loss. A wallet that already paid for the sale is empty, so the whole disputed amount lands in `RECEIVABLE` as a debt; the seller keeps the sale's proceeds; and the shared key now blocks the refund that would have pulled them back.
+
 <Callout type="warning">
   The dollar movement happens at the payment processor, not here. `clawback`
   books only the credit side; reconciling the returned USD with

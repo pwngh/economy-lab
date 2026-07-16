@@ -22,6 +22,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 
 - The performance page is re-measured with the queue; the storage page states the one-writer
   contract.
+- The disputed-sale runbook: refund the order first, then claw back the wallet.
+- Statement paging is range windowing; `Statement.cursor` is reserved.
 
 ## Unreleased (0.1.2)
 

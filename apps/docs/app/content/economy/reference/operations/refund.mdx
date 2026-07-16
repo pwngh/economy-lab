@@ -82,6 +82,8 @@ A malformed request throws instead:
 
 A refund and an order-tied `clawback` both reverse the same sale, so only one may run. Before posting, `refund` claims a second, order-scoped key, `reversed:<orderId>`. Whoever claims first reverses; the other path returns the recorded transaction as `duplicate`.
 
+For a disputed sale, this makes the order of operations a runbook rule: refund first, then claw back the wallet. The refund is the only step that pulls the seller's earnings back — see [refund first, then claw back](/economy/reference/operations/clawback/#disputed-sales-refund-first-then-claw-back).
+
 The order-scoped claim is recorded in the same database transaction as the reversal. If the refund rolls back, the claim rolls back too, so the order can still be reversed later.
 
 After the reversal commits, `refund` revokes the buyer's entitlement to the SKU (for a gift, the recipient's). That revocation runs in the same database transaction. The entitlement it removes is what a UI checks through [`read.entitled`](/economy/reference/reads/). It is a no-op if that user was never granted the SKU; for a sale predating ownership-at-purchase, nothing is revoked.

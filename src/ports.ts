@@ -960,13 +960,13 @@ export interface Range {
   to: number;
 }
 
-/** One page of an account's entries. Pages are walked via the cursor. */
+/** One page of an account's entries. Paging is by narrowing the `Range`, window by window. */
 export interface Statement {
   account: AccountRef;
 
   entries: ReadonlyArray<{ txnId: string; amount: Amount; postedAt: number }>;
 
-  /** The token to fetch the next page, or null when this is the last page. */
+  /** Reserved. No read accepts a cursor and every engine returns null; page by the range. */
   cursor: string | null;
 }
 
