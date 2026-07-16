@@ -106,6 +106,7 @@ describe('velocity attempts survive a real rollback', () => {
             buyerId: buyer,
             sku: 'sku_velo_rb',
             price: credit('10.00'),
+            recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
             orderId: 'ord_velo_rb_1',
           }),
         );
@@ -125,6 +126,7 @@ describe('velocity attempts survive a real rollback', () => {
             buyerId: buyer,
             sku: 'sku_velo_rb',
             price: credit('40.00'),
+            recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
             orderId: 'ord_velo_rb_2',
           }),
         );

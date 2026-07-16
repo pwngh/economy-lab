@@ -54,6 +54,7 @@ test('operation builders set the kind and pass every field through', () => {
     buyerId: 'usr_1',
     sku: 'sku_1',
     price: toAmount('CREDIT', 100n),
+    recipients: [{ sellerId: 'usr_2', shareBps: 10_000 }],
   });
   assert.equal(op.kind, 'spend');
   assert.equal(op.orderId, 'ord_1');

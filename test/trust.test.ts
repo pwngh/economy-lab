@@ -77,6 +77,7 @@ describe('Trust', () => {
       buyerId: 'usr_buyer',
       sku: 'wrld_pass',
       price: credit('3.00'),
+      recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
     });
 
     const decision = assessRisk(velocity, operation, gateConfig(1_000n));
@@ -90,6 +91,7 @@ describe('Trust', () => {
       buyerId: 'usr_buyer',
       sku: 'wrld_pass',
       price: credit('3.00'),
+      recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
     });
 
     const decision = assessRisk(velocity, operation, gateConfig(1_000n));
@@ -103,6 +105,7 @@ describe('Trust', () => {
       buyerId: 'usr_buyer',
       sku: 'wrld_pass',
       price: credit('3.00'),
+      recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
     });
 
     // 7.00 + 3.00 lands exactly on the 10.00 limit.
@@ -224,6 +227,7 @@ describe('Trust', () => {
       buyerId: 'usr_buyer',
       sku: 'wrld_pass',
       price: credit('4.00'),
+      recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
     });
 
     // Many declines in a row is itself a fraud signal, so a denied attempt still counts.
@@ -259,6 +263,7 @@ describe('Trust', () => {
       buyerId: 'usr_buyer',
       sku: 'wrld_pass',
       price: credit('4.00'),
+      recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
     });
 
     const attempt = riskAttempt(operation, withTransaction('duplicate'), 9_000);
@@ -288,7 +293,12 @@ describe('Trust', () => {
       minor: bigint;
     }> = [
       {
-        operation: spend({ buyerId: 'usr_b', sku: 's', price: credit('2.00') }),
+        operation: spend({
+          buyerId: 'usr_b',
+          sku: 's',
+          price: credit('2.00'),
+          recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
+        }),
         subject: 'usr_b',
         minor: 200n,
       },
@@ -347,6 +357,7 @@ describe('Trust', () => {
       buyerId: 'usr_buyer',
       sku: 'wrld_pass',
       price: credit('4.00'),
+      recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
     });
 
     // Distinct idempotency keys so both attempts count (a repeated key reads as a retry).

@@ -106,7 +106,12 @@ describe('Spend', () => {
     );
 
     const outcome = await economy.submit(
-      spend({ buyerId: 'usr_buyer', sku: 'wrld_pass', price: credit('4.00') }),
+      spend({
+        buyerId: 'usr_buyer',
+        sku: 'wrld_pass',
+        price: credit('4.00'),
+        recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
+      }),
     );
 
     assert.equal(outcome.status, 'rejected');
@@ -190,6 +195,7 @@ async function rejectsSpendDrawingOnImmatureCredit(): Promise<void> {
       buyerId: 'usr_buyer',
       sku: 'wrld_pass',
       price: credit('4.00'),
+      recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
     }),
   );
 
@@ -225,6 +231,7 @@ async function allowsSpendOnceCreditHasMatured(): Promise<void> {
       buyerId: 'usr_buyer',
       sku: 'wrld_pass',
       price: credit('4.00'),
+      recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
     }),
   );
 
@@ -257,6 +264,7 @@ async function doesNotGateThePromoFundedPart(): Promise<void> {
       buyerId: 'usr_buyer',
       sku: 'wrld_pass',
       price: credit('4.00'),
+      recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
     }),
   );
 
@@ -302,6 +310,7 @@ async function grantsEntitlementOnSpend(): Promise<void> {
       buyerId: 'usr_buyer',
       sku: 'wrld_pass',
       price: credit('4.00'),
+      recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
     }),
   );
 
@@ -327,6 +336,7 @@ async function rejectsDuplicateOrderId(): Promise<void> {
       buyerId: 'usr_buyer',
       sku: 'wrld_pass',
       price: credit('4.00'),
+      recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
       orderId: 'ord_dup',
     }),
   );
@@ -341,6 +351,7 @@ async function rejectsDuplicateOrderId(): Promise<void> {
       buyerId: 'usr_buyer',
       sku: 'wrld_pass',
       price: credit('4.00'),
+      recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
       orderId: 'ord_dup',
     }),
   );
@@ -446,6 +457,30 @@ describe('Spend Entitlement, Order, Fee, Age', () => {
 // know about.
 
 describe('Spend Field Shape', () => {
+  test('throws MALFORMED for an empty recipients list', async () => {
+    const { store, ctx } = spendFixture();
+    await runOp(
+      store,
+      ctx,
+      buildTopUp({ userId: 'usr_buyer', amount: credit('10.00') }),
+    );
+
+    await assert.rejects(
+      runOp(
+        store,
+        ctx,
+        buildSpend({
+          buyerId: 'usr_buyer',
+          sku: 'wrld_pass',
+          price: credit('4.00'),
+          recipients: [],
+          orderId: 'ord_no_recipients',
+        }),
+      ),
+      isCode('OP.MALFORMED'),
+    );
+  });
+
   test('throws MALFORMED for a blank sku', async () => {
     const { store, ctx } = spendFixture();
     await runOp(
@@ -462,6 +497,7 @@ describe('Spend Field Shape', () => {
           buyerId: 'usr_buyer',
           sku: '   ',
           price: credit('4.00'),
+          recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
           orderId: 'ord_blank_sku',
         }),
       ),
@@ -485,6 +521,7 @@ describe('Spend Field Shape', () => {
           buyerId: 'usr_buyer',
           sku: 'wrld_pass',
           price: credit('4.00'),
+          recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
           orderId: '',
         }),
       ),

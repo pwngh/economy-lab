@@ -86,7 +86,7 @@ export type Operation =
       buyerId: string;
       sku: string;
       price: Amount;
-      recipients?: Recipient[];
+      recipients: Recipient[];
       ageRestricted?: boolean;
       /**
        * A gift: the buyer pays and is screened as usual, but the SKU is granted to this user id,

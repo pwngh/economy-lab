@@ -100,7 +100,7 @@ export const spend = (o: {
   buyerId: string;
   sku: string;
   price: Amount;
-  recipients?: Recipient[];
+  recipients: Recipient[];
   ageRestricted?: boolean;
   giftTo?: string;
   actor?: Principal;

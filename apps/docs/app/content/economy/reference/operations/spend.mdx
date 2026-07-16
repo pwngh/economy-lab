@@ -51,7 +51,7 @@ The payload fields, beyond the `kind` tag, are:
 | `buyerId`        | `string`                                                    | (required) | The user who pays.                                                                                                |
 | `sku`            | `string`                                                    | (required) | The item granted on success.                                                                                      |
 | `price`          | [`Amount`](/economy/concepts/money-model/)                  | (required) | The total charge. Must be positive and in `CREDIT`.                                                               |
-| `recipients`     | [`Recipient[]`](/economy/ports/pricing/)                    | `[]`       | Sellers and their shares in bps. An empty list means the platform keeps the whole net.                            |
+| `recipients`     | [`Recipient[]`](/economy/ports/pricing/)                    | (required) | Sellers and their shares in bps. At least one recipient; an empty list is refused.                                |
 | `ageRestricted`  | `boolean`                                                   | `false`    | Tags the posting for audit. The core does not block on age.                                                       |
 | `giftTo`         | `string`                                                    | `buyerId`  | Grants the `sku` to this user instead of the buyer. The buyer still pays.                                         |
 
@@ -131,6 +131,7 @@ A malformed request throws instead:
 | `MONEY.INVALID_AMOUNT` | The `price` is non-positive.                                 |
 | `OP.MALFORMED`         | The `price` is not in `CREDIT`.                              |
 | `OP.MALFORMED`         | The `sku`, `orderId`, or `giftTo` is blank.                  |
+| `OP.MALFORMED`         | The `recipients` list is empty.                              |
 | `OP.MALFORMED`         | The recipient shares don't sum to `10_000`.                  |
 | `OP.MALFORMED`         | Two recipients name the same `sellerId`.                     |
 | `OP.MALFORMED`         | A recipient names a house account rather than a user wallet. |

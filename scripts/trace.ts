@@ -120,7 +120,12 @@ async function buildTrace(): Promise<Record<string, unknown>> {
   await step(
     economy,
     steps,
-    spend({ buyerId: 'usr_buyer', sku: 'wrld_pass', price: credit('999.00') }),
+    spend({
+      buyerId: 'usr_buyer',
+      sku: 'wrld_pass',
+      price: credit('999.00'),
+      recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
+    }),
   );
 
   return {

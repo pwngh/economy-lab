@@ -13,6 +13,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 
 ### Changed
 
+- Breaking: `spend.recipients` is required and must be non-empty; an empty list is refused
+  with `OP.MALFORMED`.
 - An unknown operation `kind` is refused with a typed `OP.MALFORMED` fault.
 - `SagaStore.list` breaks `updatedAt` ties by `id` descending on every engine.
 - The in-memory store queues overlapping transactions instead of throwing.

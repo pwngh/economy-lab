@@ -227,7 +227,7 @@ function appendPromoLegs(
   const distributed = distributeEarned(
     legs,
     plan.promoPart,
-    operation.recipients ?? [],
+    operation.recipients,
   );
   legs.push(debit(SYSTEM.REVENUE, distributed));
 }
@@ -246,7 +246,7 @@ function appendSpendableLegs(
   legs.push(debit(spendable(operation.buyerId), plan.spendablePart));
   for (const leg of ctx.pricing({
     price: plan.spendablePart,
-    recipients: operation.recipients ?? [],
+    recipients: operation.recipients,
     feeBps: ctx.config.platformFeeBps,
     buyerId: operation.buyerId,
     sku: operation.sku,
@@ -293,7 +293,7 @@ function saleOf(
 ): Sale {
   const feeMinor = revenueForSplit(
     plan.spendablePart,
-    operation.recipients ?? [],
+    operation.recipients,
     feeBps,
   );
   return {
@@ -385,17 +385,23 @@ function assertSpendShape(
   }
 }
 
-// Require recipient shares to sum to exactly 10000 basis points (100%), so a miswired split can't
-// leave part of the price stuck with nobody. An empty list is allowed and means the platform keeps
-// the whole net (REVENUE takes everything).
+// Require at least one recipient, and require recipient shares to sum to exactly 10000 basis
+// points (100%), so a miswired split can't leave part of the price stuck with nobody or quietly
+// route the whole net to the platform.
 //
 // The sum check alone isn't enough: shares like [-5000, 15000] still sum to 10000, but a negative
 // share is a hidden debit and a >100% share pays out more of the part than exists. So each share
 // must also be strictly positive and at most 10000 bps on its own.
 function assertShares(operation: Extract<Operation, { kind: 'spend' }>): void {
+  // The type requires the field, but a hostile caller can still omit it; coalesce so the
+  // omission lands on the typed refusal below, not a TypeError.
   const recipients = operation.recipients ?? [];
   if (recipients.length === 0) {
-    return;
+    throw fault(
+      ERROR_CODES.MALFORMED_OPERATION,
+      'A spend names at least one recipient.',
+      { detail: { orderId: operation.orderId } },
+    );
   }
   for (const recipient of recipients) {
     if (recipient.shareBps <= 0 || recipient.shareBps > 10_000) {
@@ -430,7 +436,7 @@ function assertShares(operation: Extract<Operation, { kind: 'spend' }>): void {
 function assertNoSelfDealing(
   operation: Extract<Operation, { kind: 'spend' }>,
 ): void {
-  for (const recipient of operation.recipients ?? []) {
+  for (const recipient of operation.recipients) {
     if (recipient.sellerId === operation.buyerId) {
       throw fault(
         ERROR_CODES.MALFORMED_OPERATION,

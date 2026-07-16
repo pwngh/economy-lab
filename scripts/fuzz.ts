@@ -312,6 +312,7 @@ function adversarialFixtures(): Array<{
           buyerId: 'usr_o',
           sku: 'wrld_pass',
           price: creditAmount('4.00'),
+          recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
         }),
       ],
     },

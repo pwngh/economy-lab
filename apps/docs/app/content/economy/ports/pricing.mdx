@@ -7,7 +7,7 @@ sourceRefs:
   [
     'src/pricing.ts#L41 · flatFee',
     'src/pricing.ts#L52 · splitLegs',
-    'src/contract.ts#L345 · FeePolicy',
+    'src/contract.ts#L363 · FeePolicy',
   ]
 related: ['economy/reference/configuration', 'economy/ports/rates']
 ---
@@ -108,8 +108,10 @@ the shares sum to `10000` bps. The spend handler already validates this upstream
 wiring the backstop never fires; it exists so a wiring mistake fails loudly here rather than
 silently under-crediting sellers and dumping the difference into revenue.
 
-An empty recipient list is allowed, not an error. With no seller to pay, the whole net becomes
-leftover and lands in `REVENUE`.
+At the port level an empty recipient list is tolerated: with no seller to pay, the whole net
+becomes leftover and lands in `REVENUE`. A [`spend`](/economy/reference/operations/spend/) never
+reaches it that way, though — the handler refuses an empty `recipients` list up front, so an
+omitted field can't quietly route a sale's whole net to the platform.
 
 <Callout type="warning">
   The recipient `shareBps` must sum to exactly `10000`. A non-empty list that
