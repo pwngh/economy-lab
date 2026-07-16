@@ -72,6 +72,7 @@ const PUBLIC_EXPORTS = [
   'SCALE',
   'SYSTEM',
   'Saga',
+  'Scheduler',
   'Selection',
   'SessionOptions',
   'SettleReport',
