@@ -53,7 +53,7 @@ The full enum declares `REQUESTED`, `RESERVED`, `SUBMITTED`, `SETTLED`, and `FAI
 
 ## The two triggers
 
-The two forward steps run on different triggers. The worker's `payouts` sweep handles only the first. It claims due `RESERVED` sagas, converts the reserve to USD at the locked rate, calls `processor.submitPayout`, records the `providerRef`, and advances `RESERVED → SUBMITTED` (see <SourceLink to="src/worker/payouts.ts#L309-L330 · submitToProvider" />).
+The two forward steps run on different triggers. The worker's `payouts` sweep handles only the first. It claims due `RESERVED` sagas, converts the reserve to USD at the locked rate, calls `processor.submitPayout`, records the `providerRef`, and advances `RESERVED → SUBMITTED` (see <SourceLink to="src/worker/payouts.ts#L318-L339 · submitToProvider" />).
 
 It does not settle itself. Settlement arrives on the provider's verified "payout settled" webhook. That webhook maps to a [`settlePayout`](/economy/reference/operations/settle-payout/) operation, which the worker's inbox drain applies off the request path. That operation runs the `SUBMITTED → SETTLED` step.
 
@@ -65,7 +65,7 @@ Three guards let the worker retry a step without paying twice.
 
 - **The call to the rail is idempotent**, keyed by the saga id (`key: saga.id`), so a retried submit still pays once. The settlement webhook is deduped on the provider's event id, so a redelivered settlement settles once.
 - **Each state change is a compare-and-set.**<Cite n={2} /> `sagas.advance(id, from, to, patch)` moves a saga only if it is still in `from`, and returns `false` (changing nothing) otherwise, so two sweeps racing the same saga can't both advance it (see <SourceLink to="src/ports.ts#L507-L513 · SagaStore.advance" />).
-- **A stuck payout is given up on.** Past `maxPayoutAttempts` failed attempts, or after `maxPayoutAgeMs` in `SUBMITTED` with no settlement webhook and no provider evidence to the contrary, the sweep force-fails it. It flips the saga to `FAILED` and, in the same transaction, posts the exact reverse of the reservation (`debit payout_reserve → credit earned`), returning the credits to the seller (see <SourceLink to="src/worker/payouts.ts#L114-L168 · deadLetter" />).
+- **A stuck payout is given up on.** Past `maxPayoutAttempts` failed attempts, or after `maxPayoutAgeMs` in `SUBMITTED` with no settlement webhook and no provider evidence to the contrary, the sweep force-fails it. It flips the saga to `FAILED` and, in the same transaction, posts the exact reverse of the reservation (`debit payout_reserve → credit earned`), returning the credits to the seller (see <SourceLink to="src/worker/payouts.ts#L114-L181 · deadLetter" />).
 
 <Callout type="warning">
   `requestPayout` only pays out
@@ -74,7 +74,7 @@ Three guards let the worker retry a step without paying twice.
   stricter gate rejects with
   [`FUNDS_IMMATURE`](/economy/reference/outcomes-and-reason-codes/) unless the
   *cleared* portion covers the request (see{' '}
-  <SourceLink to="src/operations/requestPayout.ts#L73-L87">source</SourceLink>
+  <SourceLink to="src/operations/requestPayout.ts#L74-L104">source</SourceLink>
   ). It also declines `BELOW_MINIMUM` under `payoutMinimumEarnedMinor` and
   `PAYOUT_TOO_SOON` within `payoutMinIntervalMs` of the user's last request.
 </Callout>

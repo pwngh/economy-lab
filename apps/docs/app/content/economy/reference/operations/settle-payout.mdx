@@ -5,8 +5,8 @@ order: 60
 status: stable
 sourceRefs:
   [
-    'src/operations/settlePayout.ts#L37-L96 · settlePayout',
-    'src/operations/settlePayout.ts#L116-L132 · postSettlementEntries',
+    'src/operations/settlePayout.ts#L41-L105 · settlePayout',
+    'src/operations/settlePayout.ts#L130-L146 · postSettlementEntries',
     'src/webhooks.ts#L171-L182 · toSettlePayout',
     'src/worker/payouts.ts',
   ]
@@ -54,13 +54,13 @@ The payload fields, beyond the `kind` tag, are:
 `settlePayout` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
 - `committed`: the success result. Its `transaction` is the credit-side posting: the primary settle entry that empties the reserve into revenue.
-- `duplicate`: a redelivered settle carrying the same idempotency key. The settlement applies at most once, and an already-settled payout is turned away at the state guard before any money posts.
+- `duplicate`: a redelivered settle. The same idempotency key replays the recorded outcome, and a redelivery under a fresh event id finds the payout already `SETTLED` and answers `duplicate` with an empty transaction — an at-least-once rail re-sending a settlement is normal traffic, not a fault. Either way the settlement applies at most once.
 
 `settlePayout` returns no `rejected` outcome. A malformed request throws instead; see [reason codes](#reason-codes).
 
 ## Postings
 
-A settle posts two balanced entries, one per currency, in a single database transaction (see <SourceLink to="src/operations/settlePayout.ts#L116-L132 · postSettlementEntries" />).
+A settle posts two balanced entries, one per currency, in a single database transaction (see <SourceLink to="src/operations/settlePayout.ts#L130-L146 · postSettlementEntries" />).
 
 Settlement lives on this operation, driven by the provider's webhook. The [background worker](/economy/reference/background-worker/) only re-drives or force-fails a stuck payout (`src/worker/payouts.ts`); it never settles one itself.
 
@@ -84,7 +84,7 @@ The same operation also queues an internal `economy.payout.settled` event in thi
 
 ## Authorization
 
-Only a `system` or `operator` [actor](/economy/concepts/actors-and-authorization/) may call `settlePayout`. The kind is listed in <SourceLink to="src/economy.ts#L754-L765">RESTRICTED_TO_PRIVILEGED</SourceLink>, so a `user` actor is rejected at the authorization gate before any work runs.
+Only a `system` or `operator` [actor](/economy/concepts/actors-and-authorization/) may call `settlePayout`. The kind is listed in <SourceLink to="src/economy.ts#L791-L802">RESTRICTED_TO_PRIVILEGED</SourceLink>, so a `user` actor is rejected at the authorization gate before any work runs.
 
 <Callout type="danger">
   Settling disburses real USD out of trust and turns the seller's reserve into
@@ -101,15 +101,13 @@ A settle is driven by a verified webhook or an operator. So a settle that can't 
 | Code                      | When                                                                                                                                                                                                             |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `OP.MALFORMED`            | `sagaId` names a payout that does not exist. The webhook mapping or operator supplied it, so a missing saga is a caller error.                                                                                   |
-| `SAGA.INVALID_TRANSITION` | The saga is not `SUBMITTED` (it was never submitted, already settled, or failed) so there is no disbursement to settle. Also thrown when the `SUBMITTED → SETTLED` compare-and-set loses to a concurrent settle. |
+| `SAGA.INVALID_TRANSITION` | The saga was never submitted — thrown retryably, since the webhook raced the submit sweep and a retry settles once the sweep submits — or already `FAILED` and returned its reserve, a hard conflict for an operator. Also thrown retryably when the `SUBMITTED → SETTLED` compare-and-set loses to a concurrent settle; the retry finds the payout settled and answers `duplicate`. |
 
 ## Preconditions and invariants
 
-A settle applies only to a payout in the `SUBMITTED` state: the one state with a disbursement the rail has reported settled. Any other state is refused, so a redelivered or early webhook never posts a second settle's worth of entries.
+A settle posts only against a payout in the `SUBMITTED` state: the one state with a disbursement the rail has reported settled. Each other state resolves by what it means: `SETTLED` answers `duplicate` (the work is already done), a pre-submit state refuses retryably (the webhook arrived before the sweep submitted), and `FAILED` — whose reserve was already returned — throws a hard fault for an operator, because a rail claiming a failed payout settled is a real money conflict. No path posts a second settle's worth of entries.
 
-The `SUBMITTED → SETTLED` move is a compare-and-set against the saga's current state. If two settles race the same saga, only the first wins. The loser's compare-and-set fails, which rolls back its two postings and its queued event, so the seller is never paid twice (see <SourceLink to="src/operations/settlePayout.ts#L164-L171 · assertAdvanced" />).
-
-A redelivered settle is safe to retry. It reloads the saga and finds it no longer `SUBMITTED`. The state guard turns it away before anything posts.
+The `SUBMITTED → SETTLED` move is a compare-and-set against the saga's current state. If two settles race the same saga, only the first wins. The loser's compare-and-set fails, which rolls back its two postings and its queued event, so the seller is never paid twice (see <SourceLink to="src/operations/settlePayout.ts#L178-L186 · assertAdvanced" />); its retry finds the payout settled and answers `duplicate`.
 
 <Callout type="warning">
   The posted figures come from the saga's reserve, not from `providerAmount`:

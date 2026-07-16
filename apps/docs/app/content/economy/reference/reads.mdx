@@ -5,7 +5,7 @@ order: 10
 status: stable
 sourceRefs:
   [
-    'src/contract.ts#L370-L430 · Economy.read',
+    'src/contract.ts#L376-L436 · Economy.read',
     'src/economy.ts#L81-L95 · read',
     'test/economy.read.test.ts',
   ]
@@ -60,7 +60,7 @@ const posting = await economy.read.posting('txn_8821');
 
 This lets a reader resolve a posting through `read` without reaching past it into the raw [`Store`](/economy/ports/storage/). Unlike a statement, it isn't scoped to one account. It returns the whole transaction with every leg it touched.
 
-`read.saga(id)` loads one payout [saga](/economy/concepts/payout-saga/) by its id: its current state, the provider reference once submitted, the attempt count, and the reason it failed if it did. It returns `null` for an unknown payout id:
+`read.saga(id)` loads one payout [saga](/economy/concepts/payout-saga/) by its id: its current state, the provider reference once submitted, the attempt count, and the reason it failed if it did. The row's key is `id`; an operation that acts on one, like [`settlePayout`](/economy/reference/operations/settle-payout/), takes that same value as its `sagaId`. It returns `null` for an unknown payout id:
 
 ```ts
 const saga = await economy.read.saga('pay_4410');
