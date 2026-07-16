@@ -10,41 +10,52 @@
  */
 
 /**
- * The docs→console handoff journal. The docs runner records every facade call its snippets
- * make and resumes from the journal on each page; the console replays it whole on a ?from=docs
- * entry. Both replay over the same seeded buildEngine, so every engine-minted id comes out
- * identical and an "open in the console" link stays true across pages.
+ * The docs→console handoff journal. The docs runner records every `Operation` its snippets
+ * submit and resumes from the journal on each page; the console replays them whole on a
+ * ?from=docs entry. Both replay through `economy.submit` over the same seeded buildEngine, so
+ * every engine-minted id comes out identical and an "open in the console" link stays true
+ * across pages.
  */
 
 import type { ConsoleEngine } from '~/economy';
+import type { Operation } from '#src/contract.ts';
 
 const JOURNAL_KEY = 'elab_journal';
 
 // A version mismatch discards the journal rather than half-replaying it. Bump on any change to
-// an entry's shape or a replayed call's meaning.
-const JOURNAL_VERSION = 1;
+// an entry's shape or a replayed call's meaning (v1 carried facade calls, not Operations).
+const JOURNAL_VERSION = 2;
 
-/**
- * The facade calls a journal may carry. This list is load-bearing for id determinism: it must
- * cover every id-consuming call a docs snippet makes, or replay skips an operation and every
- * engine-minted id after the gap diverges from what the docs page showed.
- */
-export const REPLAYABLE = new Set([
-  'deposit',
-  'purchase',
-  'drainWallet',
-  'requestPayout',
-  'setVelocityLimit',
-]);
-
-export interface JournalEntry {
-  m: string;
-  a: unknown[];
-}
+export type JournalEntry = Operation;
 
 interface JournalEnvelope {
   v: number;
   entries: JournalEntry[];
+}
+
+// Amount.minor is a bigint, which JSON has no literal for; it crosses storage as a tagged string.
+function encode(envelope: JournalEnvelope): string {
+  return JSON.stringify(envelope, (_key, value: unknown) =>
+    typeof value === 'bigint' ? { $bigint: value.toString() } : value,
+  );
+}
+
+function decode(raw: string): JournalEnvelope {
+  return JSON.parse(raw, (_key, value: unknown) => {
+    if (value !== null && typeof value === 'object' && '$bigint' in value) {
+      return BigInt((value as { $bigint: string }).$bigint);
+    }
+    return value;
+  }) as JournalEnvelope;
+}
+
+function opShaped(entry: unknown): entry is Operation {
+  return (
+    typeof entry === 'object' &&
+    entry !== null &&
+    typeof (entry as { kind?: unknown }).kind === 'string' &&
+    typeof (entry as { idempotencyKey?: unknown }).idempotencyKey === 'string'
+  );
 }
 
 /** The stored journal, or [] when absent, unreadable, or from another schema version. */
@@ -59,8 +70,12 @@ export function loadJournal(): JournalEntry[] {
     return [];
   }
   try {
-    const envelope = JSON.parse(raw) as JournalEnvelope;
-    if (envelope.v !== JOURNAL_VERSION || !Array.isArray(envelope.entries)) {
+    const envelope = decode(raw);
+    if (
+      envelope.v !== JOURNAL_VERSION ||
+      !Array.isArray(envelope.entries) ||
+      !envelope.entries.every(opShaped)
+    ) {
       clearJournal();
       return [];
     }
@@ -73,10 +88,7 @@ export function loadJournal(): JournalEntry[] {
 
 export function saveJournal(entries: JournalEntry[]): void {
   try {
-    localStorage.setItem(
-      JOURNAL_KEY,
-      JSON.stringify({ v: JOURNAL_VERSION, entries }),
-    );
+    localStorage.setItem(JOURNAL_KEY, encode({ v: JOURNAL_VERSION, entries }));
   } catch {
     // Storage denied: the run still renders, only the console handoff is lost.
   }
@@ -92,18 +104,20 @@ export function clearJournal(): void {
   }
 }
 
-/** Replay journaled calls into a fresh engine, in order, skipping anything not REPLAYABLE. */
+/**
+ * Replay journaled operations into a fresh engine, in order. A submit that faults is skipped:
+ * it posted nothing on the original run either, so skipping keeps the id stream aligned while
+ * one bad entry can't cost the rest of the handoff.
+ */
 export async function replayJournal(
   eco: ConsoleEngine,
   entries: JournalEntry[],
 ): Promise<ConsoleEngine> {
-  const facade = eco as unknown as Record<
-    string,
-    (...args: unknown[]) => Promise<unknown>
-  >;
-  for (const { m, a } of entries) {
-    if (REPLAYABLE.has(m)) {
-      await facade[m](...a);
+  for (const operation of entries) {
+    try {
+      await eco.economy.submit(operation);
+    } catch {
+      // deterministic fault: replaying it would throw identically and post nothing
     }
   }
   return eco;

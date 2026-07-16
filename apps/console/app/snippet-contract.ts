@@ -10,9 +10,10 @@
  */
 
 import type { ConsoleEngine } from '~/economy';
-// The compiler owns the docs snippet contract: the facade must satisfy SnippetCtx, so renaming
-// a facade method breaks the docs snippets at this app's typecheck, not in a reader's browser.
-import type { SnippetCtx } from '../../docs/app/snippets/context';
+import type { Economy } from '#src/economy.ts';
 
-type Satisfies<T extends SnippetCtx> = T;
-export type FacadeSatisfiesSnippetCtx = Satisfies<ConsoleEngine>;
+// The compiler owns the docs handoff contract: the engine must expose the real Economy the docs
+// snippets submit through, so dropping or narrowing the handle breaks at this app's typecheck,
+// not in a reader's browser.
+type Satisfies<T extends Economy> = T;
+export type EngineExposesEconomy = Satisfies<ConsoleEngine['economy']>;

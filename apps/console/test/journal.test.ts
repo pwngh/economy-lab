@@ -10,10 +10,10 @@
  */
 
 import { beforeEach, expect, it } from 'vitest';
+import { toAmount } from '#src/money.ts';
 
 import { buildEngine } from '~/economy.ts';
 import {
-  REPLAYABLE,
   clearJournal,
   loadJournal,
   replayJournal,
@@ -34,19 +34,48 @@ beforeEach(() => {
   store.clear();
 });
 
-it('a saved journal round-trips through the version envelope', () => {
-  const entries: JournalEntry[] = [
-    { m: 'deposit', a: [{ userId: 'usr_alice', credits: 100 }] },
-  ];
+function deposit(key: string, minor: bigint): JournalEntry {
+  return {
+    kind: 'topUp',
+    idempotencyKey: key,
+    actor: { kind: 'system', service: 'console' },
+    userId: 'usr_alice',
+    amount: toAmount('CREDIT', minor),
+    source: 'card',
+  };
+}
+
+function order(key: string, orderId: string, minor: bigint): JournalEntry {
+  return {
+    kind: 'spend',
+    idempotencyKey: key,
+    actor: { kind: 'user', userId: 'usr_alice' },
+    orderId,
+    buyerId: 'usr_alice',
+    sku: 'Docs Demo Pass',
+    price: toAmount('CREDIT', minor),
+    recipients: [{ sellerId: 'usr_nova', shareBps: 10_000 }],
+  };
+}
+
+it('a saved journal round-trips, bigint minor units included', () => {
+  const entries = [deposit('idem_j1', 12_000n)];
   saveJournal(entries);
-  expect(loadJournal()).toEqual(entries);
+  const loaded = loadJournal();
+  expect(loaded).toEqual(entries);
+  expect(
+    (loaded[0] as Extract<JournalEntry, { kind: 'topUp' }>).amount.minor,
+  ).toBe(12_000n);
   clearJournal();
   expect(loadJournal()).toEqual([]);
 });
 
 it('a journal from another schema version is discarded, not half-replayed', () => {
-  // The pre-envelope format: a bare array.
-  store.set('elab_journal', JSON.stringify([{ m: 'deposit', a: [] }]));
+  // The v1 format: facade calls, not Operations.
+  store.set(
+    'elab_journal',
+    JSON.stringify({ v: 1, entries: [{ m: 'deposit', a: [] }] }),
+  );
   expect(loadJournal()).toEqual([]);
   expect(store.has('elab_journal')).toBe(false);
 
@@ -58,38 +87,36 @@ it('a corrupt journal is cleared instead of bricking the handoff', () => {
   store.set('elab_journal', '{not json');
   expect(loadJournal()).toEqual([]);
   expect(store.has('elab_journal')).toBe(false);
+
+  // Right version, wrong shape: entries that are not Operations.
+  store.set(
+    'elab_journal',
+    JSON.stringify({ v: 2, entries: [{ m: 'deposit', a: [] }] }),
+  );
+  expect(loadJournal()).toEqual([]);
 });
 
-it('replay applies only REPLAYABLE calls', async () => {
+it('a replayed entry that faults is skipped, not fatal to the rest', async () => {
   const eco = await buildEngine();
-  const before = eco.now();
-  await replayJournal(eco, [
-    { m: 'advanceTime', a: [86_400_000] }, // not journaled: must be skipped
-    { m: 'deposit', a: [{ userId: 'usr_alice', credits: 100 }] },
-  ]);
-  expect(eco.now()).toBe(before);
-  expect(REPLAYABLE.has('advanceTime')).toBe(false);
+  const bad = {
+    ...order('idem_bad', 'ord_bad', 1n),
+    // A user acting on another user's wallet throws AUTH.UNAUTHORIZED.
+    actor: { kind: 'user' as const, userId: 'usr_nova' },
+  };
+  await replayJournal(eco, [bad, deposit('idem_ok', 1_000n)]);
+  const wallet = await eco.wallet('usr_alice');
+  expect(wallet).not.toBeNull();
 });
 
 it('after replay, both sides mint the same ids — the docs handoff invariant', async () => {
   // What a docs page journals: fund a wallet, place an order.
-  const entries: JournalEntry[] = [
-    { m: 'deposit', a: [{ userId: 'usr_alice', credits: 120 }] },
-    {
-      m: 'purchase',
-      a: [
-        {
-          buyerId: 'usr_alice',
-          sellerId: 'usr_nova',
-          listing: 'Docs Demo Pass',
-          credits: 120,
-          orderId: 'ord_handoff',
-        },
-      ],
-    },
+  const entries = [
+    deposit('idem_h1', 12_000n),
+    order('idem_h2', 'ord_handoff', 12_000n),
   ];
 
-  // The docs side runs the calls live; the console side replays the journal over a fresh seed.
+  // The docs side runs the operations live; the console side replays the journal over a fresh
+  // seed.
   const docs = await buildEngine();
   await replayJournal(docs, entries);
   const console_ = await buildEngine();
@@ -97,16 +124,12 @@ it('after replay, both sides mint the same ids — the docs handoff invariant', 
 
   // The next engine-minted id continues identically on both sides — the property every
   // "open txn_x in the console" link rests on.
-  const next = {
-    buyerId: 'usr_alice',
-    sellerId: 'usr_nova',
-    listing: 'Next Pass',
-    credits: 10,
-    orderId: 'ord_next',
-  };
-  await docs.deposit({ userId: 'usr_alice', credits: 10 });
-  await console_.deposit({ userId: 'usr_alice', credits: 10 });
-  const [a, b] = [await docs.purchase(next), await console_.purchase(next)];
+  await docs.economy.submit(deposit('idem_h3', 1_000n));
+  await console_.economy.submit(deposit('idem_h3', 1_000n));
+  const [a, b] = [
+    await docs.economy.submit(order('idem_h4', 'ord_next', 1_000n)),
+    await console_.economy.submit(order('idem_h4', 'ord_next', 1_000n)),
+  ];
   if (a.status !== 'committed' || b.status !== 'committed') {
     throw new Error(`expected both committed, got ${a.status} / ${b.status}`);
   }
