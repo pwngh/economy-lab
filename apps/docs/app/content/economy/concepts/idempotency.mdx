@@ -5,7 +5,7 @@ plain: "“Idempotent” is a fancy word for “safe to repeat”: do it once or
 order: 55
 status: stable
 sourceRefs:
-  ['src/ports.ts#L377 · IdempotencyStore', 'src/economy.ts#L428 · runClaimed']
+  ['src/ports.ts#L377 · IdempotencyStore', 'src/economy.ts#L468 · runClaimed']
 related:
   [
     'economy/reference/the-economy',
@@ -14,7 +14,9 @@ related:
   ]
 ---
 
-import idempotencySrc from '../../../snippets/idempotency.ts?raw';
+import idempotencyHtml from '../../../snippets/idempotency.ts?shiki';
+import challengeHtml from '../../../snippets/challenge-idempotency.ts?shiki';
+import challengeSolutionHtml from '../../../snippets/challenge-idempotency.solution.ts?shiki';
 
 Networks drop responses and processes crash mid-write. A caller that never hears back can't know whether its operation applied, so it retries; the platform has to make that safe: a retried operation takes effect at most once.
 
@@ -27,6 +29,43 @@ The first time an operation arrives, the system **claims** its key, runs the ope
 <IdempotentRetry />
 
 A retry returns the same transaction the first call produced, marked as a [`duplicate`](/economy/reference/outcomes-and-reason-codes/) rather than a fresh `committed`.
+
+The key must name the *action*, not the attempt. A retry path that mints a fresh key each try defeats the guard — every attempt looks like a new order:
+
+```ts nocopy
+async function chargeWithRetry(economy: Economy, order: Order) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await economy.submit(
+        spend({
+          idempotencyKey: `key_${crypto.randomUUID()}`, // fresh key per attempt
+          actor: userActor(order.buyerId),
+          orderId: order.id,
+          buyerId: order.buyerId,
+          sku: order.sku,
+          price: order.price,
+        }),
+      );
+    } catch {
+      // a dropped response retries — as a brand-new operation, charging twice
+    }
+  }
+}
+```
+
+The correct form mints the key once, from the order itself, and reuses it on every attempt. However many tries the network forces, the spend posts once:
+
+```ts
+const idempotencyKey = `ord_${order.id}`; // one key per order, minted once
+
+const first = await economy.submit(
+  spend({ idempotencyKey, actor: userActor(order.buyerId), ...details }),
+);
+const retried = await economy.submit(
+  spend({ idempotencyKey, actor: userActor(order.buyerId), ...details }),
+);
+// first.status → "committed" · retried.status → "duplicate", same transaction id
+```
 
 ## Why it exists
 
@@ -66,6 +105,29 @@ A caller can retry a rejected request under the _same_ key — a decline isn't p
 
 The guard is live on this page. The snippet below is a real file, type-checked against the engine and run here against the same build the [console](/console/) drives:
 
-<Runnable name="idempotency" code={idempotencySrc} />
+<Runnable name="idempotency" html={idempotencyHtml} />
 
 The committed posting is then waiting in the [console's ledger](/console/ledger?from=docs) — the console replays this page's operations on entry, so the drill opens on the very transaction the snippet created.
+
+## Recap
+
+- Every operation carries an `idempotencyKey`. The first call claims it, runs, and records its outcome.
+- A retry with the same key replays the recorded outcome as `duplicate` — the operation never runs twice.
+- Only a committed outcome consumes the key; a rejected request can retry under the same key.
+- The key must name the _action_, not the attempt.
+
+Now put the claims to work.
+
+## Challenge: make the retry harmless
+
+<Challenge
+  name="challenge-idempotency"
+  html={challengeHtml}
+  solutionHtml={challengeSolutionHtml}
+  hint="What should two attempts at the same order share?"
+  explain="Mint the order's identity once, outside the retry path, and reuse both the order id and the key on every attempt. The first attempt commits; every retry replays that recorded outcome as duplicate, and the buyer is charged exactly once — however many tries the network forces."
+>
+  This checkout retries when a response goes missing — as it must — but every
+  attempt rebuilds the order from the cart, fresh ids and all. Run it and watch
+  the buyer pay twice. Then click into the code and make the retry harmless.
+</Challenge>

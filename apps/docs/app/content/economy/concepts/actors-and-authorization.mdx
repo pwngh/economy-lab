@@ -7,7 +7,7 @@ status: stable
 sourceRefs:
   [
     'src/contract.ts#L52-L59 · Principal',
-    'src/economy.ts#L476-L479 · authorize',
+    'src/economy.ts#L516-L519 · authorize',
   ]
 related:
   [
@@ -16,6 +16,9 @@ related:
     'economy/reference/http-service',
   ]
 ---
+
+import challengeHtml from '../../../snippets/challenge-authorization.ts?shiki';
+import challengeSolutionHtml from '../../../snippets/challenge-authorization.solution.ts?shiki';
 
 ## The idea
 
@@ -66,7 +69,7 @@ Each kind of principal carries its own identifier and its own reach.
   `system` has full access for now; the source notes per-service permission
   lists as future work, so a `payments` service and a `risk` service aren't yet
   distinguished. The model already carries the field needed to split them later
-  (see <SourceLink to="src/economy.ts#L482">source</SourceLink>).
+  (see <SourceLink to="src/economy.ts#L503">source</SourceLink>).
 </Callout>
 
 ## The invariant it maintains
@@ -76,7 +79,7 @@ A `user` actor can only move money out of accounts it owns, and can never run a 
 1. **Privileged operations are closed to `user` actors.** The set `RESTRICTED_TO_PRIVILEGED` lists every kind a `user` may never run.
 2. **A `user` may only debit accounts it owns.** The gate checks that every account the operation _drains_ belongs to the caller. Paying _into_ a stranger's account is fine.
 
-The privileged set is, per <SourceLink to="src/economy.ts#L791-L802">source</SourceLink>:
+The privileged set is, per <SourceLink to="src/economy.ts#L812-L823">source</SourceLink>:
 
 | Restricted operation                     | Why a `user` is barred                                                                                     |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
@@ -91,17 +94,17 @@ The privileged set is, per <SourceLink to="src/economy.ts#L791-L802">source</Sou
 
 ## How it's enforced
 
-`authorize(operation)` runs near the top of `submit`, right after the request's shape is validated and before the money transaction opens, so a refused request never opens a transaction (see <SourceLink to="src/economy.ts#L250-L251">source</SourceLink>).
+`authorize(operation)` runs near the top of `submit`, right after the request's shape is validated and before the money transaction opens, so a refused request never opens a transaction (see <SourceLink to="src/economy.ts#L271-L272">source</SourceLink>).
 
 The gate's logic:
 
 - An `operator` returns immediately, full access, postings fully audited.
 - A `system` actor returns immediately, full access.
-- A `user` is checked against `RESTRICTED_TO_PRIVILEGED`; a match throws `UNAUTHORIZED`. Otherwise, for each account in `debitedUserAccounts(operation)`, the gate verifies `ownedBy(account, userId)`. An account belongs to a user when its id is prefixed `userId:` (see <SourceLink to="src/economy.ts#L771-L773">source</SourceLink>).
+- A `user` is checked against `RESTRICTED_TO_PRIVILEGED`; a match throws `UNAUTHORIZED`. Otherwise, for each account in `debitedUserAccounts(operation)`, the gate verifies `ownedBy(account, userId)`. An account belongs to a user when its id is prefixed `userId:` (see <SourceLink to="src/economy.ts#L792-L794">source</SourceLink>).
 
 `debitedUserAccounts` is deliberately narrow: it returns only the _drained_ user accounts an operation touches, not every account it locks. For a `spend` those are the buyer's [`promo`](/economy/concepts/accounts-and-double-entry/) and `spendable`; for a `subscribe`, the same; for a `requestPayout`, the user's `earned`.
 
-Accounts being paid _into_, and platform accounts, are left out. Only a drained account has to belong to the caller (see <SourceLink to="src/economy.ts#L501-L511">source</SourceLink>).
+Accounts being paid _into_, and platform accounts, are left out. Only a drained account has to belong to the caller (see <SourceLink to="src/economy.ts#L522-L532">source</SourceLink>).
 
 <Callout type="warning">
   A failed authorization is a thrown `UNAUTHORIZED` fault, not a `rejected`
@@ -124,4 +127,26 @@ Authorization sits in front of the whole `submit` pipeline, so every operation p
 
 **Privileged operations** trust the gate to keep `user` callers out, so their handlers assume a `system` or `operator` principal. See [`settlePayout`](/economy/reference/operations/settle-payout/) and the operator-only [`adjust`](/economy/reference/operations/adjust/).
 
-**The maintenance pause** tells actors apart by kind. A `user`'s discretionary write is declined with `ECONOMY_PAUSED` while the economy is paused. A `system` settlement webhook and an `operator` fix keep flowing, so external money can still settle (see <SourceLink to="src/economy.ts#L256-L262">source</SourceLink>).
+**The maintenance pause** tells actors apart by kind. A `user`'s discretionary write is declined with `ECONOMY_PAUSED` while the economy is paused. A `system` settlement webhook and an `operator` fix keep flowing, so external money can still settle (see <SourceLink to="src/economy.ts#L277-L283">source</SourceLink>).
+
+## Recap
+
+- Every request names its principal: a `user`, a `system` service, or a human `operator`.
+- A `user` principal may act only on their own accounts; the gate answers before any money moves.
+- A violation is a thrown `AUTH.UNAUTHORIZED` fault, not a rejection — it is a caller bug, not a business "no".
+
+Now put the claims to work.
+
+## Challenge: find the violation
+
+<Challenge
+  name="challenge-authorization"
+  html={challengeHtml}
+  solutionHtml={challengeSolutionHtml}
+  hint="Read each submit's actor line against the account being drained. Who is allowed to spend from that wallet?"
+  explain="The spend ran as userActor('usr_nova') — the seller — against the buyer's wallet, and a user principal may only act on their own accounts, so the gate threw AUTH.UNAUTHORIZED before any money moved. The buyer submits their own order: actor: userActor(buyerId). One line."
+>
+  A small storefront routine, two submits. One of them runs as the wrong
+  principal. Run it first — the fault names itself — then click into the code and
+  fix the actor so the whole routine commits.
+</Challenge>

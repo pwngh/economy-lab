@@ -11,6 +11,7 @@
 
 import { Brand, brandize } from '~/components/Brand.tsx';
 import { Callout } from '~/components/Callout.tsx';
+import { Challenge } from '~/components/Challenge.tsx';
 import { Cite } from '~/components/Cite.tsx';
 import { Code } from '~/components/Code.tsx';
 import {
@@ -33,6 +34,7 @@ import { sourceUrl } from '~/repo.ts';
 // Custom components available to every page's MDX without a per-file import.
 const MDX_COMPONENTS = {
   Callout,
+  Challenge,
   ChartOfAccounts,
   PayoutSaga,
   SubscriptionStates,

@@ -20,6 +20,8 @@ import { EconomyError } from '@pwngh/economy-lab';
 
 import { buildEngine } from '../../console/app/economy';
 import { loadJournal, replayJournal, saveJournal } from '../../console/app/journal';
+import { run as challengeAuthorization } from '../app/snippets/challenge-authorization';
+import { run as challengeIdempotency } from '../app/snippets/challenge-idempotency';
 import { run as drain } from '../app/snippets/drain';
 import { run as idempotency } from '../app/snippets/idempotency';
 import { run as payout } from '../app/snippets/payout';
@@ -40,6 +42,8 @@ const SNIPPETS: Record<string, (economy: Economy) => Promise<SnippetReport>> = {
   velocity,
   rejection,
   payout,
+  'challenge-idempotency': challengeIdempotency,
+  'challenge-authorization': challengeAuthorization,
 };
 
 let enginePromise: Promise<ConsoleEngine> | null = null;

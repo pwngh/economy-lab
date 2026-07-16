@@ -1208,6 +1208,32 @@ html[data-theme="dark"] .shiki span.line-hl {
     transform: translateY(2px);
   }
 }
+/* ---- challenges ---- */
+.challenge-fold {
+  margin: 0 0 var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-4);
+}
+.challenge-fold summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.challenge-fold summary:hover {
+  color: var(--text);
+}
+.challenge-fold[open] summary {
+  margin-bottom: var(--space-2);
+}
+.challenge-code {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  overflow-x: auto;
+  font-size: 0.85rem;
+}
 @media (prefers-reduced-motion: reduce) {
   .runnable-dot,
   .runnable-out {
