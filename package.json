@@ -58,6 +58,7 @@
     "src",
     "db",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE.md"
   ],
   "description": "A provably-solvent credits economy: wallets, payouts, subscriptions, and a marketplace, on one double-entry ledger.",
