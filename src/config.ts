@@ -216,11 +216,30 @@ export function loadConfig(env: EnvMap): Config {
 
 /**
  * The default {@link Config} without an environment: the exact values {@link loadConfig} derives from
- * an empty env, with any knobs in `overrides` applied on top. For tests and the in-memory quickstart
- * that want a Config in hand without assembling an {@link EnvMap}.
+ * an empty env, with any knobs in `overrides` applied on top ({@link mergeConfig} semantics). For
+ * tests and the in-memory quickstart that want a Config in hand without assembling an {@link EnvMap}.
  */
 export function defaultConfig(overrides: Partial<Config> = {}): Config {
-  return { ...loadConfig({}), ...overrides };
+  return mergeConfig(loadConfig({}), overrides);
+}
+
+/**
+ * `overrides` on top of `base`, last-wins per knob — except the record-valued knobs
+ * (`maturityHorizonMs`, `payoutSla`), which merge one level deep: overriding one funding source
+ * or one SLA step keeps the others instead of replacing the whole record.
+ */
+export function mergeConfig(base: Config, overrides: Partial<Config>): Config {
+  const merged = { ...base, ...overrides };
+  if (overrides.maturityHorizonMs) {
+    merged.maturityHorizonMs = {
+      ...base.maturityHorizonMs,
+      ...overrides.maturityHorizonMs,
+    };
+  }
+  if (overrides.payoutSla) {
+    merged.payoutSla = { ...base.payoutSla, ...overrides.payoutSla };
+  }
+  return merged;
 }
 
 /**

@@ -10,7 +10,7 @@
  */
 
 import { economyFromCapabilities } from '#src/economy.ts';
-import { loadConfig } from '#src/config.ts';
+import { loadConfig, mergeConfig } from '#src/config.ts';
 import {
   isMysqlUrl,
   isPostgresUrl,
@@ -529,7 +529,7 @@ export async function createEconomy(
   options: EconomyOptions = {},
 ): Promise<Economy> {
   const env = options.env ?? {};
-  const config = { ...loadConfig(env), ...options.config };
+  const config = mergeConfig(loadConfig(env), options.config ?? {});
   const runtime = runtimeFrom(options);
   const externals = externalsFromEnv(env, {
     signer: options.signer,

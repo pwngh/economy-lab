@@ -12,7 +12,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { loadConfig } from '#src/config.ts';
+import { defaultConfig, loadConfig } from '#src/config.ts';
 import { ERROR_CODES } from '#src/errors.ts';
 
 const CARD_HORIZON_MS = 7 * 24 * 60 * 60_000;
@@ -73,5 +73,30 @@ describe('loadConfig startup check', () => {
 
     assert.equal(config.webhookSecret, '');
     assert.equal(config.signingSecret, '');
+  });
+});
+
+describe('mergeConfig record-valued knobs', () => {
+  test('overriding one funding source keeps the default fallback', () => {
+    const config = defaultConfig({ maturityHorizonMs: { card: 1_000 } });
+
+    assert.equal(config.maturityHorizonMs.card, 1_000);
+    assert.equal(
+      config.maturityHorizonMs.default,
+      defaultConfig().maturityHorizonMs.default,
+    );
+  });
+
+  test('overriding one payout SLA step keeps the others', () => {
+    const config = defaultConfig({ payoutSla: { PENDING: 5 } });
+
+    assert.equal(config.payoutSla.PENDING, 5);
+    assert.equal(config.payoutSla.DEFAULT, defaultConfig().payoutSla.DEFAULT);
+  });
+
+  test('scalar knobs stay last-wins', () => {
+    const config = defaultConfig({ platformShards: 4 });
+
+    assert.equal(config.platformShards, 4);
   });
 });
