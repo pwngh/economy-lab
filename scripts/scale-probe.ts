@@ -39,6 +39,10 @@ async function curve(
   name: string,
   op: (k: number) => Promise<unknown>,
 ): Promise<number[]> {
+  // A slow backend runs a curve for minutes; the header keeps that from reading as a hang.
+  console.warn(
+    `\n  ${name}: ops/sec per ${SEG}-op segment (history grows left->right)`,
+  );
   const rates: number[] = [];
   let k = 0;
   // Discard one full segment first, or JIT warmup makes a flat curve read as "improving".
@@ -53,9 +57,6 @@ async function curve(
   }
   const first = rates[0]!;
   const last = rates[rates.length - 1]!;
-  console.warn(
-    `\n  ${name}: ops/sec per ${SEG}-op segment (history grows left->right)`,
-  );
   console.warn(
     '    ' + rates.map((r) => String(Math.round(r)).padStart(7)).join(' '),
   );

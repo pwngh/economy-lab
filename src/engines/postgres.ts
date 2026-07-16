@@ -37,7 +37,12 @@ import {
   encodeAmounts,
   decodeAmountWire,
 } from '#src/money.ts';
-import { currency, baseOf, walletKindOf } from '#src/accounts.ts';
+import {
+  currency,
+  baseOf,
+  isDebitNormal,
+  walletKindOf,
+} from '#src/accounts.ts';
 import { assertMoneyConformant, assertSchemaCurrent } from '#src/schema.ts';
 import { installPostgres, provePostgres } from '#src/db.vendored.ts';
 import { vectors as moneyVectors } from '#src/money.vendored.ts';
@@ -407,7 +412,9 @@ async function derivedBalancesOf(
 
 // Streams an account's incoming funds as lots for maturity.ts. Ordered by `l.id`, not `p.seq`:
 // `legs(account_id, id)` serves the bounded scan directly, and the two share commit order for one
-// account. Spends are filtered in code, so the lot offset/limit apply after that filter.
+// account. The lot filter (a balance-raising leg, per the account's sign rule) must stay in the
+// SQL: filtering in code reads every spend leg just to drop it, and the maturity check on a busy
+// account goes O(history).
 // @see https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/
 async function* timelineOf(
   q: Queryable,
@@ -417,46 +424,74 @@ async function* timelineOf(
   const direction = options?.order === 'desc' ? 'desc' : 'asc';
   const lotOffset = options?.offset ?? 0;
   const lotLimit = options?.limit ?? Infinity;
+  const pageSize = Number.isFinite(lotLimit) ? Math.max(lotLimit, 1) : 256;
 
-  const pageSize = Number.isFinite(lotLimit)
-    ? Math.max(lotOffset + lotLimit, 1)
-    : 256;
-
-  let skipped = 0;
+  let cursor: unknown = null;
   let yielded = 0;
-  for (let rowOffset = 0; yielded < lotLimit; rowOffset += pageSize) {
-    const result = await q.query(
-      `select l.posting_id, l.amount, l.currency, p.posted_at, p.meta
-         from legs l
-         join postings p on p.id = l.posting_id
-        where l.account_id = $1
-        order by l.id ${direction}
-        limit $2 offset $3`,
-      [account, pageSize, rowOffset],
-    );
-    if (result.rows.length === 0) {
+  while (yielded < lotLimit) {
+    const rows = await lotPage(q, account, {
+      direction,
+      pageSize,
+      offset: lotOffset,
+      cursor,
+    });
+    if (rows.length === 0) {
       return;
     }
-    for (const row of result.rows) {
+    for (const row of rows) {
+      cursor = row.leg_id;
       const lot = rowToLot(account, row);
-      // A balance-lowering leg is not a lot; skip it without consuming an offset or limit slot.
+      // Unreachable under the SQL sign filter; skip rather than trust a drifted schema.
       if (lot === null) {
         continue;
       }
-      if (skipped < lotOffset) {
-        skipped += 1;
-        continue;
-      }
+      yielded += 1;
+      yield lot;
       if (yielded >= lotLimit) {
         return;
       }
-      yielded += 1;
-      yield lot;
     }
-    if (result.rows.length < pageSize) {
+    if (rows.length < pageSize) {
       return;
     }
   }
+}
+
+// One page of an account's lots. The first page honors the caller's lot offset; later pages
+// continue from the keyset (last l.id) instead, never re-scanning rows via OFFSET.
+async function lotPage(
+  q: Queryable,
+  account: AccountRef,
+  page: {
+    direction: 'asc' | 'desc';
+    pageSize: number;
+    offset: number;
+    cursor: unknown;
+  },
+): Promise<Record<string, unknown>[]> {
+  const lotSign = isDebitNormal(account) ? '>' : '<';
+  const after = page.direction === 'desc' ? '<' : '>';
+  const result =
+    page.cursor === null
+      ? await q.query(
+          `select l.id as leg_id, l.posting_id, l.amount, l.currency, p.posted_at, p.meta
+             from legs l
+             join postings p on p.id = l.posting_id
+            where l.account_id = $1 and l.amount ${lotSign} 0
+            order by l.id ${page.direction}
+            limit $2 offset $3`,
+          [account, page.pageSize, page.offset],
+        )
+      : await q.query(
+          `select l.id as leg_id, l.posting_id, l.amount, l.currency, p.posted_at, p.meta
+             from legs l
+             join postings p on p.id = l.posting_id
+            where l.account_id = $1 and l.amount ${lotSign} 0 and l.id ${after} $3
+            order by l.id ${page.direction}
+            limit $2`,
+          [account, page.pageSize, page.cursor],
+        );
+  return result.rows as Record<string, unknown>[];
 }
 
 // Null when the leg lowered the balance (a spend): the credit/debit sign is a domain rule, so the

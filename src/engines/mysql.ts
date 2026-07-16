@@ -13,7 +13,12 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { toAmount, encodeAmounts } from '#src/money.ts';
-import { currency, baseOf, walletKindOf } from '#src/accounts.ts';
+import {
+  currency,
+  baseOf,
+  isDebitNormal,
+  walletKindOf,
+} from '#src/accounts.ts';
 import { byCodeUnit } from '#src/bytes.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { systemClock } from '#src/runtime.ts';
@@ -483,8 +488,9 @@ async function derivedBalancesOf(
 
 // Streams an account's incoming funds as dated lots for the maturity logic; absent meta falls back
 // to a mature-now "unknown" source. Ordered by `l.id`, not `p.seq`: `legs(account_id, id)` serves
-// the bounded scan directly, and the two share commit order for one account. Spends are filtered
-// in code, so the lot offset/limit apply after that filter.
+// the bounded scan directly, and the two share commit order for one account. The lot filter (a
+// balance-raising leg, per the account's sign rule) must stay in the SQL: filtering in code reads
+// every spend leg just to drop it, and the maturity check on a busy account goes O(history).
 // @see https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/
 async function* timelineOf(
   exec: MysqlExecutor,
@@ -494,38 +500,26 @@ async function* timelineOf(
   const direction = options?.order === 'desc' ? 'DESC' : 'ASC';
   const lotOffset = options?.offset ?? 0;
   const lotLimit = options?.limit ?? Infinity;
+  const pageSize = Number.isFinite(lotLimit) ? Math.max(lotLimit, 1) : 256;
 
-  const pageSize = Number.isFinite(lotLimit)
-    ? Math.max(lotOffset + lotLimit, 1)
-    : 256;
-
-  let skipped = 0;
+  let cursor: unknown = null;
   let yielded = 0;
-  for (let rowOffset = 0; yielded < lotLimit; rowOffset += pageSize) {
-    const result = await rows(
-      exec,
-      `SELECT p.id AS txn_id, p.meta AS meta, l.currency AS currency,
-              l.amount AS amount, p.posted_at AS posted_at
-         FROM legs l JOIN postings p ON l.posting_id = p.id
-        WHERE l.account_id = ?
-        ORDER BY l.id ${direction}
-        LIMIT ? OFFSET ?`,
-      [account, pageSize, rowOffset],
-    );
+  while (yielded < lotLimit) {
+    const result = await lotPage(exec, account, {
+      direction,
+      pageSize,
+      offset: lotOffset,
+      cursor,
+    });
     if (result.length === 0) {
       return;
     }
     for (const row of result) {
+      cursor = row.leg_id;
       const delta = naturalDelta(account, row);
+      // Unreachable under the SQL sign filter; skip rather than trust a drifted schema.
       if (delta.minor <= 0n) {
         continue;
-      }
-      if (skipped < lotOffset) {
-        skipped += 1;
-        continue;
-      }
-      if (yielded >= lotLimit) {
-        return;
       }
       yielded += 1;
       const meta = parseMeta(row.meta);
@@ -536,11 +530,51 @@ async function* timelineOf(
         toppedUpAt: Number(row.posted_at),
         maturesAt: metaNumber(meta, 'maturesAt', Number(row.posted_at)),
       };
+      if (yielded >= lotLimit) {
+        return;
+      }
     }
     if (result.length < pageSize) {
       return;
     }
   }
+}
+
+// One page of an account's lots. The first page honors the caller's lot offset; later pages
+// continue from the keyset (last l.id) instead, never re-scanning rows via OFFSET.
+async function lotPage(
+  exec: MysqlExecutor,
+  account: AccountRef,
+  page: {
+    direction: 'ASC' | 'DESC';
+    pageSize: number;
+    offset: number;
+    cursor: unknown;
+  },
+): Promise<Record<string, unknown>[]> {
+  const lotSign = isDebitNormal(account) ? '>' : '<';
+  const after = page.direction === 'DESC' ? '<' : '>';
+  return page.cursor === null
+    ? rows(
+        exec,
+        `SELECT l.id AS leg_id, p.id AS txn_id, p.meta AS meta, l.currency AS currency,
+                l.amount AS amount, p.posted_at AS posted_at
+           FROM legs l JOIN postings p ON l.posting_id = p.id
+          WHERE l.account_id = ? AND l.amount ${lotSign} 0
+          ORDER BY l.id ${page.direction}
+          LIMIT ? OFFSET ?`,
+        [account, page.pageSize, page.offset],
+      )
+    : rows(
+        exec,
+        `SELECT l.id AS leg_id, p.id AS txn_id, p.meta AS meta, l.currency AS currency,
+                l.amount AS amount, p.posted_at AS posted_at
+           FROM legs l JOIN postings p ON l.posting_id = p.id
+          WHERE l.account_id = ? AND l.amount ${lotSign} 0 AND l.id ${after} ?
+          ORDER BY l.id ${page.direction}
+          LIMIT ?`,
+        [account, page.cursor, page.pageSize],
+      );
 }
 
 // Streams the account's chain links in commit order, legs and metadata as written, for the
