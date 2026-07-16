@@ -40,10 +40,8 @@ export async function requestPayout(
   if (amount.minor < ctx.config.payoutMinimumEarnedMinor) {
     return rejected('BELOW_MINIMUM', {
       account: earned(operation.userId),
-      minimum: encodeAmount(
-        toAmount('CREDIT', ctx.config.payoutMinimumEarnedMinor),
-      ),
-      requested: encodeAmount(amount),
+      minimum: toAmount('CREDIT', ctx.config.payoutMinimumEarnedMinor),
+      requested: amount,
     });
   }
   // Minimum gap between a user's payout requests. `lastPayoutAt` is the max `updatedAt` over
@@ -75,8 +73,8 @@ export async function requestPayout(
   if (compare(available, amount) < 0) {
     return rejected('INSUFFICIENT_FUNDS', {
       account: earned(operation.userId),
-      required: encodeAmount(amount),
-      available: encodeAmount(available),
+      required: amount,
+      available,
     });
   }
 
@@ -98,7 +96,7 @@ export async function requestPayout(
     );
     return rejected('FUNDS_IMMATURE', {
       account: earned(operation.userId),
-      required: encodeAmount(amount),
+      required: amount,
       ...(availableAt === null ? {} : { availableAt }),
     });
   }

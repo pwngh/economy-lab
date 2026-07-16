@@ -116,11 +116,15 @@ describe('createServer /submit', () => {
     const payload = (await response.json()) as {
       status: string;
       reason: string;
+      detail?: { required?: unknown; available?: unknown };
     };
 
     assert.equal(response.status, 200);
     assert.equal(payload.status, 'rejected');
     assert.equal(payload.reason, 'INSUFFICIENT_FUNDS');
+    // Detail Amounts ride the wire as the same decimal strings every other amount uses.
+    assert.equal(payload.detail?.required, 'CREDIT:5.00');
+    assert.equal(payload.detail?.available, 'CREDIT:0.00');
   });
 
   test('maps a malformed body to a 400 problem+json with the stable code', async () => {

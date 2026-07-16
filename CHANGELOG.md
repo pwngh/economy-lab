@@ -13,6 +13,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 
 ### Changed
 
+- Breaking: `RejectionDetail` money fields (`required`, `available`, `minimum`, `requested`,
+  `spent`, `limit`) are branded `Amount`s, not decimal strings. Unchanged on the wire.
 - Breaking: `spend.recipients` is required and must be non-empty; an empty list is refused
   with `OP.MALFORMED`.
 - An unknown operation `kind` is refused with a typed `OP.MALFORMED` fault.

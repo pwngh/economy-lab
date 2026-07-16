@@ -12,12 +12,7 @@
 import { ERROR_CODES, fault, rejected } from '#src/errors.ts';
 import { assertKind } from '#src/operations/guards.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
-import {
-  encodeAmount,
-  mulDiv,
-  requirePositiveCredit,
-  toAmount,
-} from '#src/money.ts';
+import { mulDiv, requirePositiveCredit, toAmount } from '#src/money.ts';
 import {
   SYSTEM,
   earned,
@@ -137,7 +132,7 @@ export async function spend(
     );
     return rejected('FUNDS_IMMATURE', {
       account: spendable(operation.buyerId),
-      required: encodeAmount(plan.spendablePart),
+      required: plan.spendablePart,
       ...(availableAt === null ? {} : { availableAt }),
     });
   }

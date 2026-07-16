@@ -240,18 +240,19 @@ export type Operation =
  * `account` + `required` (+ `availableAt`, when the funds finish maturing), RISK_DENIED carries
  * `subject` + `spent` + `limit` + `windowMs` + `retryAfter`, BELOW_MINIMUM
  * carries `minimum` + `requested`, PAYOUT_TOO_SOON carries `lastRequestedAt` + `retryAfter`, ECONOMY_PAUSED carries
- * `resumesAt`, and the id-not-found reasons carry `orderId` / `subscriptionId`. Amounts are the
- * encoded decimal-string form; times are epoch milliseconds.
+ * `resumesAt`, and the id-not-found reasons carry `orderId` / `subscriptionId`. Money fields are
+ * branded {@link Amount}s a caller can compare directly (the HTTP service encodes them to
+ * decimal strings on the wire); times are epoch milliseconds.
  */
 export type RejectionDetail = {
   account?: AccountRef;
-  required?: string;
-  available?: string;
+  required?: Amount;
+  available?: Amount;
   availableAt?: number;
-  minimum?: string;
-  requested?: string;
-  spent?: string;
-  limit?: string;
+  minimum?: Amount;
+  requested?: Amount;
+  spent?: Amount;
+  limit?: Amount;
   windowMs?: number;
   retryAfter?: number;
   lastRequestedAt?: number;

@@ -549,8 +549,8 @@ async function screenFunds(step: Step): Promise<Outcome | null> {
     if (compare(have, need.amount) < 0) {
       return rejected('INSUFFICIENT_FUNDS', {
         account: need.account,
-        required: encodeAmount(need.amount),
-        available: encodeAmount(have),
+        required: need.amount,
+        available: have,
       });
     }
   }
@@ -619,10 +619,8 @@ async function screenRisk(step: Step): Promise<Outcome | null> {
   if (velocity.spent.minor > config.velocityLimitMinor) {
     return rejected('RISK_DENIED', {
       subject,
-      spent: encodeAmount(velocity.spent),
-      limit: encodeAmount(
-        toAmount(VELOCITY_CURRENCY, config.velocityLimitMinor),
-      ),
+      spent: velocity.spent,
+      limit: toAmount(VELOCITY_CURRENCY, config.velocityLimitMinor),
       windowMs: config.velocityWindowMs,
       // The oldest counted attempt ages out then: the earliest a retry can find room.
       retryAfter: velocity.windowStart + config.velocityWindowMs,

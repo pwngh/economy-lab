@@ -23,6 +23,7 @@ import { SYSTEM } from '#src/accounts.ts';
 import { fromHex } from '#src/bytes.ts';
 import { decodeWebhookEvent } from '#src/webhooks.ts';
 
+import { encodeAmounts } from '#src/money.ts';
 import type { Amount } from '#src/money.ts';
 import type { Clock, ReplayStore } from '#src/ports.ts';
 import type { Config } from '#src/config.ts';
@@ -351,7 +352,10 @@ const AMOUNT_FIELDS: Record<string, ReadonlyArray<string>> = {
 
 function encodeOutcome(outcome: Outcome): unknown {
   if (outcome.status === 'rejected') {
-    return outcome;
+    // The detail's branded Amounts (bigint minors) become decimal strings on the wire.
+    return outcome.detail === undefined
+      ? outcome
+      : { ...outcome, detail: encodeAmounts(outcome.detail) };
   }
   return {
     status: outcome.status,

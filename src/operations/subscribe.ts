@@ -180,8 +180,8 @@ async function screenSpendable(
   if (compare(have, plan.spendablePart) < 0) {
     return rejected('INSUFFICIENT_FUNDS', {
       account: spendable(userId),
-      required: encodeAmount(plan.spendablePart),
-      available: encodeAmount(have),
+      required: plan.spendablePart,
+      available: have,
     });
   }
   // The same maturity gate spend runs: the spendable-funded part must be covered by cleared
@@ -202,7 +202,7 @@ async function screenSpendable(
     );
     return rejected('FUNDS_IMMATURE', {
       account: spendable(userId),
-      required: encodeAmount(plan.spendablePart),
+      required: plan.spendablePart,
       ...(availableAt === null ? {} : { availableAt }),
     });
   }
