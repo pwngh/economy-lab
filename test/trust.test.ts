@@ -114,6 +114,41 @@ describe('Trust', () => {
     assert.deepEqual(decision, { allow: true });
   });
 
+  test('compares each class against its own limit: same total, different verdicts', () => {
+    const config = {
+      ...gateConfig(1_000n),
+      velocityInflowLimitMinor: 2_000n,
+      velocityOutflowLimitMinor: 500n,
+    };
+    // Both windows already hold 4.00; a 3.00 attempt fits under the 20.00 inflow ceiling but
+    // crosses the 5.00 outflow one. The single-knob limit (10.00) governs neither.
+    const velocity = velocityAt(0, 400n);
+    const inflow = topUp({ userId: 'usr_buyer', amount: credit('3.00') });
+    const outflow = spend({
+      buyerId: 'usr_buyer',
+      sku: 'wrld_pass',
+      price: credit('3.00'),
+      recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
+    });
+
+    assert.deepEqual(assessRisk(velocity, inflow, config), { allow: true });
+    assert.deepEqual(assessRisk(velocity, outflow, config), {
+      allow: false,
+      reason: 'RISK_DENIED',
+    });
+  });
+
+  test('each class falls back to the single-knob limit when its own is unset', () => {
+    const velocity = velocityAt(0, 800n);
+    const inflow = topUp({ userId: 'usr_buyer', amount: credit('3.00') });
+
+    // 8.00 + 3.00 crosses the 10.00 single-knob limit; no per-class limit is set.
+    assert.deepEqual(assessRisk(velocity, inflow, gateConfig(1_000n)), {
+      allow: false,
+      reason: 'RISK_DENIED',
+    });
+  });
+
   test('allows an operation that moves no money regardless of the spending total', () => {
     const velocity = velocityAt(0, 1_000_000n); // a spend total far past any limit
     const operation: Operation = {
@@ -286,10 +321,11 @@ describe('Trust', () => {
 
   // --- Picking the subject and size of an attempt: riskSubject + attemptMinor --------
 
-  test('keys funds-moving operations on their subject and sizes the attempt', () => {
+  test('keys funds-moving operations on their class-prefixed subject and sizes the attempt', () => {
     const cases: ReadonlyArray<{
       operation: Operation;
-      subject: string | null;
+      subject: string;
+      class: 'in' | 'out';
       minor: bigint;
     }> = [
       {
@@ -299,29 +335,36 @@ describe('Trust', () => {
           price: credit('2.00'),
           recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
         }),
-        subject: 'usr_b',
+        subject: 'out:usr_b',
+        class: 'out',
         minor: 200n,
       },
       {
         operation: topUp({ userId: 'usr_t', amount: credit('5.00') }),
-        subject: 'usr_t',
+        subject: 'in:usr_t',
+        class: 'in',
         minor: 500n,
       },
       {
         operation: grantPromo({ userId: 'usr_g', amount: credit('1.00') }),
-        subject: 'usr_g',
+        subject: 'in:usr_g',
+        class: 'in',
         minor: 100n,
       },
       {
         operation: requestPayout({ userId: 'usr_p', amount: credit('7.00') }),
-        subject: 'usr_p',
+        subject: 'out:usr_p',
+        class: 'out',
         minor: 700n,
       },
     ];
 
-    for (const { operation, subject, minor } of cases) {
-      assert.equal(riskSubject(operation), subject);
-      assert.equal(attemptMinor(operation), minor);
+    for (const expected of cases) {
+      assert.deepEqual(riskSubject(expected.operation), {
+        subject: expected.subject,
+        class: expected.class,
+      });
+      assert.equal(attemptMinor(expected.operation), expected.minor);
     }
   });
 

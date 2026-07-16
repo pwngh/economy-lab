@@ -174,8 +174,8 @@ describe('Velocity limit under concurrency', () => {
     // The refusal is actionable: it names what was spent, the limit, the window, and when
     // the oldest counted attempt ages out.
     const detail = (second as Extract<Outcome, { status: 'rejected' }>).detail;
-    assert.equal(typeof detail?.spent, 'string');
-    assert.equal(typeof detail?.limit, 'string');
+    assert.equal(typeof detail?.spent?.minor, 'bigint');
+    assert.equal(detail?.limit?.minor, PRICE_MINOR);
     assert.equal(typeof detail?.windowMs, 'number');
     assert.equal(typeof detail?.retryAfter, 'number');
 

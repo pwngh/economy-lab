@@ -5,8 +5,8 @@ order: 40
 status: stable
 sourceRefs:
   [
-    'src/config.ts#L138-L153 · loadConfig',
-    'src/index.ts#L395 · capabilitiesFromEnv',
+    'src/config.ts#L173-L188 · loadConfig',
+    'src/index.ts#L399 · capabilitiesFromEnv',
     'src/from-env.ts#L117 · externalsFromEnv',
     '.env.example',
   ]
@@ -30,6 +30,11 @@ That single read also means defaults live in one file. Every tunable below is pa
 `loadConfig` with a fallback, so an unset or malformed value lands on the documented default
 rather than leaving the config half-applied. These are the same defaults the operation and
 [background-worker](/economy/reference/background-worker/) pages cite.
+
+A `config` override passed to `createEconomy` (or `defaultConfig`) applies last-wins per knob,
+except the record-valued knobs — `maturityHorizonMs` and `payoutSla` — which merge one level
+deep: overriding one funding source or one SLA step keeps the others rather than replacing the
+whole record.
 
 A handful of variables (the signing secrets, the CREDIT-to-USD rates, the payout provider, and
 the infrastructure URLs) are read _outside_ `loadConfig`, when the edge wires up the
@@ -103,13 +108,18 @@ Topped-up funds wait before they can be spent or paid out, keyed by funding sour
 unlisted source falls back to the `default` entry. See [credit
 maturity](/economy/concepts/credit-maturity/) for why the holding period exists.
 
-| Variable                      | Meaning                                                                                                   | Default                  |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------ |
-| `MATURITY_HORIZON_CARD_MS`    | Hold for a card top-up: its chargeback window.                                                            | `604800000` (7d)         |
-| `MATURITY_HORIZON_CRYPTO_MS`  | Hold for a crypto top-up.                                                                                 | `86400000` (1d)          |
-| `MATURITY_HORIZON_STEAM_MS`   | Hold for a Steam-store top-up. Defaults to the card horizon until the rail's refund window is decided.    | `604800000` (7d, = card) |
-| `MATURITY_HORIZON_META_MS`    | Hold for a Meta-store top-up. Same conservative default as Steam.                                         | `604800000` (7d, = card) |
-| `MATURITY_HORIZON_DEFAULT_MS` | Hold for an unlisted funding source. Falls back to the card horizon, the most conservative shipped value. | `604800000` (7d, = card) |
+The horizons split by environment. Outside production every unset horizon is `0` — funds clear
+instantly, so the zero-config quickstart's top-up can be spent in the next line. In production
+`MATURITY_HORIZON_CARD_MS` is required (startup fails fast naming it, like the secrets): a real
+deployment states its chargeback window rather than inheriting a silent policy number.
+
+| Variable                      | Meaning                                                                                                | Default             |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------ | ------------------- |
+| `MATURITY_HORIZON_CARD_MS`    | Hold for a card top-up: its chargeback window. The anchor every other rail defaults to.               | dev `0` / prod req. |
+| `MATURITY_HORIZON_CRYPTO_MS`  | Hold for a crypto top-up.                                                                              | `= card`            |
+| `MATURITY_HORIZON_STEAM_MS`   | Hold for a Steam-store top-up. Defaults to the card horizon until the rail's refund window is decided. | `= card`            |
+| `MATURITY_HORIZON_META_MS`    | Hold for a Meta-store top-up. Same conservative default as Steam.                                      | `= card`            |
+| `MATURITY_HORIZON_DEFAULT_MS` | Hold for an unlisted funding source. Falls back to the card horizon.                                   | `= card`            |
 
 ## Fees and the risk gate
 
@@ -118,11 +128,13 @@ The velocity variables bound how fast one subject may spend before the risk chec
 see [risk and velocity](/economy/concepts/actors-and-authorization/) for the actor side of
 that gate.
 
-| Variable               | Meaning                                                                                                                  | Default        |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------------- |
-| `PLATFORM_FEE_BPS`     | Platform's transaction fee in basis points. The example models a ~15.3% marketplace fee.                                 | `1530`         |
-| `VELOCITY_LIMIT_MINOR` | Most a subject may spend within one window, in CREDIT minor units, before the risk check engages.                        | `100000`       |
-| `VELOCITY_WINDOW_MS`   | Length of the rolling spending window. Only a subject's attempts inside the last window count; each ages out once older. | `3600000` (1h) |
+| Variable                        | Meaning                                                                                                                  | Default        |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| `PLATFORM_FEE_BPS`              | Platform's transaction fee in basis points. The example models a ~15.3% marketplace fee.                                 | `1530`         |
+| `VELOCITY_LIMIT_MINOR`          | The single-knob ceiling per window, in CREDIT minor units; both window classes fall back to it.                          | `100000`       |
+| `VELOCITY_INFLOW_LIMIT_MINOR`   | Ceiling for the inflow window (`topUp`, `grantPromo`) — the card-testing gate.                                           | `= limit`      |
+| `VELOCITY_OUTFLOW_LIMIT_MINOR`  | Ceiling for the outflow window (`spend`, `subscribe`, `requestPayout`) — the drained-wallet gate.                        | `= limit`      |
+| `VELOCITY_WINDOW_MS`            | Length of the rolling window. Only a subject's attempts inside the last window count; each ages out once older.          | `3600000` (1h) |
 
 ## Subscriptions
 

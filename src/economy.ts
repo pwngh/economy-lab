@@ -45,7 +45,12 @@ import {
 import { pendingOutbox } from '#src/outbox.ts';
 import { PRE_CLAIMS, REGISTRY } from '#src/operations/registry.ts';
 import { planSpend } from '#src/operations/spend.ts';
-import { attemptMinor, riskSubject, VELOCITY_CURRENCY } from '#src/trust.ts';
+import {
+  attemptMinor,
+  classLimitMinor,
+  riskSubject,
+  VELOCITY_CURRENCY,
+} from '#src/trust.ts';
 import { economyPaused } from '#src/config.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
@@ -606,8 +611,8 @@ async function readCachedBalance(
 // which re-records it if the transaction rolls back.
 async function screenRisk(step: Step): Promise<Outcome | null> {
   const { pipeline, unit, operation, options } = step;
-  const subject = riskSubject(operation);
-  if (subject === null) {
+  const risk = riskSubject(operation);
+  if (risk === null) {
     return null;
   }
   // The outcome tag is write-only — the limit sums every attempt regardless of tag — so a fixed
@@ -619,14 +624,16 @@ async function screenRisk(step: Step): Promise<Outcome | null> {
     at: pipeline.ctx.clock.now(),
     outcome: 'committed',
   };
-  step.staged?.(subject, attempt);
-  const velocity = await unit.trust.record(subject, attempt, options);
+  step.staged?.(risk.subject, attempt);
+  const velocity = await unit.trust.record(risk.subject, attempt, options);
   const config = pipeline.ctx.config;
-  if (velocity.spent.minor > config.velocityLimitMinor) {
+  const limitMinor = classLimitMinor(config, risk.class);
+  if (velocity.spent.minor > limitMinor) {
     return rejected('RISK_DENIED', {
-      subject,
+      subject: risk.subject,
+      class: risk.class,
       spent: velocity.spent,
-      limit: toAmount(VELOCITY_CURRENCY, config.velocityLimitMinor),
+      limit: toAmount(VELOCITY_CURRENCY, limitMinor),
       windowMs: config.velocityWindowMs,
       // The oldest counted attempt ages out then: the earliest a retry can find room.
       retryAfter: velocity.windowStart + config.velocityWindowMs,

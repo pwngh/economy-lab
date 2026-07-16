@@ -97,7 +97,9 @@ describe('velocity attempts survive a real rollback', () => {
           topUp({ userId: buyer, amount: credit('5.00') }),
         );
         assert.equal(funded.status, 'committed');
-        const afterTopUp = await store.trust.read(buyer);
+        // The spends below fill the buyer's outflow window; the topUp landed in `in:` and
+        // is irrelevant to these deltas.
+        const afterTopUp = await store.trust.read(`out:${buyer}`);
 
         // Risk passes (total stays under the limit) but the buyer holds 5.00, so the money
         // transaction rejects and rolls back. The attempt must still land in the window.
@@ -115,17 +117,18 @@ describe('velocity attempts survive a real rollback', () => {
           (broke as Extract<typeof broke, { status: 'rejected' }>).reason,
           'INSUFFICIENT_FUNDS',
         );
-        const afterBroke = await store.trust.read(buyer);
+        const afterBroke = await store.trust.read(`out:${buyer}`);
         assert.equal(afterBroke.attempts, afterTopUp.attempts + 1);
         assert.equal(afterBroke.spent.minor, afterTopUp.spent.minor + 1_000n);
 
-        // Now the gate itself denies: this attempt pushes the running total past the limit.
-        // Its rollback is the RISK_DENIED path, and it too must still count.
+        // Now the gate itself denies: 10.00 recorded + 45.00 projected crosses the 50.00
+        // outflow limit (the top-up sits in the inflow window and doesn't count here). Its
+        // rollback is the RISK_DENIED path, and it too must still count.
         const denied = await economy.submit(
           spend({
             buyerId: buyer,
             sku: 'sku_velo_rb',
-            price: credit('40.00'),
+            price: credit('45.00'),
             recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
             orderId: 'ord_velo_rb_2',
           }),
@@ -135,9 +138,9 @@ describe('velocity attempts survive a real rollback', () => {
           (denied as Extract<typeof denied, { status: 'rejected' }>).reason,
           'RISK_DENIED',
         );
-        const afterDenied = await store.trust.read(buyer);
+        const afterDenied = await store.trust.read(`out:${buyer}`);
         assert.equal(afterDenied.attempts, afterBroke.attempts + 1);
-        assert.equal(afterDenied.spent.minor, afterBroke.spent.minor + 4_000n);
+        assert.equal(afterDenied.spent.minor, afterBroke.spent.minor + 4_500n);
 
         // The rejections moved no money: the buyer still holds exactly the top-up.
         const balance = await store.ledger.balance(spendable(buyer));

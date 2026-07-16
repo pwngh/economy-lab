@@ -14,6 +14,7 @@ import {
   isProduction,
   missingSecrets,
   readBigInt,
+  readBigIntOrNull,
   readInt,
   readIntOrNull,
 } from '#src/env.ts';
@@ -56,8 +57,20 @@ export interface Config {
    *  the seller receives the net. Not platform revenue. */
   payoutFeeBps: number;
 
+  /** The single-knob velocity ceiling (CREDIT minor units): both window classes fall back to it
+   *  unless their own limit below is set. */
   velocityLimitMinor: bigint;
 
+  /** Ceiling for the inflow window (topUp, grantPromo) — card testing fills this one. Unset
+   *  means `velocityLimitMinor`. */
+  velocityInflowLimitMinor?: bigint;
+
+  /** Ceiling for the outflow window (spend, subscribe, requestPayout) — a drained wallet fills
+   *  this one. Unset means `velocityLimitMinor`. */
+  velocityOutflowLimitMinor?: bigint;
+
+  /** Length (ms) of the velocity window. Captured at store construction; changing it means a
+   *  rebuild over the same store (the config object is frozen for exactly this reason). */
   velocityWindowMs: number;
 
   /** Smallest subscription price, in CREDIT minor units. A price outside the band is refused
@@ -105,6 +118,16 @@ export interface Config {
   platformShards: number;
 }
 
+// The per-class velocity limits stay absent unless their env var parses, so the single-knob
+// fallback keeps working after a later velocityLimitMinor override.
+function bigIntIfSet(
+  key: 'velocityInflowLimitMinor' | 'velocityOutflowLimitMinor',
+  value: string | undefined,
+): Partial<Config> {
+  const parsed = readBigIntOrNull(value);
+  return parsed === null ? {} : { [key]: parsed };
+}
+
 /** Every name {@link loadConfig} reads; .env.example is held to this list. */
 export const CONFIG_KEYS = [
   'NODE_ENV',
@@ -119,6 +142,8 @@ export const CONFIG_KEYS = [
   'PLATFORM_FEE_BPS',
   'PAYOUT_FEE_BPS',
   'VELOCITY_LIMIT_MINOR',
+  'VELOCITY_INFLOW_LIMIT_MINOR',
+  'VELOCITY_OUTFLOW_LIMIT_MINOR',
   'VELOCITY_WINDOW_MS',
   'SUBSCRIPTION_PRICE_MIN_MINOR',
   'SUBSCRIPTION_PRICE_MAX_MINOR',
@@ -181,6 +206,11 @@ export function loadConfig(env: EnvMap): Config {
     platformFeeBps: readInt(env.PLATFORM_FEE_BPS, 1530, { max: 10_000 }),
     payoutFeeBps: readInt(env.PAYOUT_FEE_BPS, 150, { max: 10_000 }),
     velocityLimitMinor: readBigInt(env.VELOCITY_LIMIT_MINOR, 100_000n),
+    ...bigIntIfSet('velocityInflowLimitMinor', env.VELOCITY_INFLOW_LIMIT_MINOR),
+    ...bigIntIfSet(
+      'velocityOutflowLimitMinor',
+      env.VELOCITY_OUTFLOW_LIMIT_MINOR,
+    ),
     subscriptionPriceMinMinor: readBigInt(
       env.SUBSCRIPTION_PRICE_MIN_MINOR,
       10_000n,

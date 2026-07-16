@@ -253,6 +253,9 @@ export type RejectionDetail = {
   requested?: Amount;
   spent?: Amount;
   limit?: Amount;
+  /** Which velocity window a RISK_DENIED tripped: value flowing in (topUp, grantPromo) or out
+   *  (spend, subscribe, requestPayout). */
+  class?: 'in' | 'out';
   windowMs?: number;
   retryAfter?: number;
   lastRequestedAt?: number;

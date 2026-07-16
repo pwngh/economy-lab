@@ -19,6 +19,11 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   `spent`, `limit`) are branded `Amount`s, not decimal strings. Unchanged on the wire.
 - Breaking: `spend.recipients` is required and must be non-empty; an empty list is refused
   with `OP.MALFORMED`.
+- The velocity gate splits into outflow (`spend`, `subscribe`, `requestPayout`) and inflow
+  (`topUp`, `grantPromo`) windows per user. Both default to `velocityLimitMinor`;
+  `VELOCITY_INFLOW_LIMIT_MINOR` and `VELOCITY_OUTFLOW_LIMIT_MINOR` override.
+  `RISK_DENIED.detail.class` names the tripped window; trust-store subjects are now
+  `<class>:<userId>`.
 - An unknown operation `kind` is refused with a typed `OP.MALFORMED` fault.
 - Config overrides merge one level deep into `maturityHorizonMs` and `payoutSla`.
 - The config is frozen at construction; change a knob by rebuilding over the same store.

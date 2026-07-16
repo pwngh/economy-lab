@@ -60,10 +60,11 @@ async function giftsToRecipientWhileChargingBuyer(): Promise<void> {
   );
   assert.equal(await store.entitlements.owns('usr_friend', 'wrld_pass'), true);
   assert.equal(await store.entitlements.owns('usr_buyer', 'wrld_pass'), false);
-  // The buyer's window accrued both the top-up (1000 minor) and the gift spend (400); the recipient
-  // paid nothing.
-  assert.equal((await store.trust.read('usr_buyer')).spent.minor, 1400n);
-  assert.equal((await store.trust.read('usr_friend')).spent.minor, 0n);
+  // The top-up filled the buyer's inflow window and the gift spend their outflow window — the
+  // buyer is screened for the gift, and the recipient paid nothing anywhere.
+  assert.equal((await store.trust.read('in:usr_buyer')).spent.minor, 1000n);
+  assert.equal((await store.trust.read('out:usr_buyer')).spent.minor, 400n);
+  assert.equal((await store.trust.read('out:usr_friend')).spent.minor, 0n);
 }
 
 describe('Spend', () => {

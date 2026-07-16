@@ -67,11 +67,11 @@ export function windowedVelocity(
 }
 
 /**
- * Allows the operation unless the subject's windowed spend plus this operation's amount exceeds
- * `config.velocityLimitMinor`. The caller passes the `velocity` that the store windowed on read,
- * applying `config.velocityWindowMs`, so the comparison runs against the live window. An operation
- * that moves no tracked subject's funds is always allowed, which is the case when `riskSubject`
- * returns null.
+ * Allows the operation unless its class's windowed total plus this operation's amount exceeds
+ * that class's limit ({@link classLimitMinor}). The caller passes the `velocity` that the store
+ * windowed on read, applying `config.velocityWindowMs`, so the comparison runs against the live
+ * window. An operation that moves no tracked subject's funds is always allowed, which is the
+ * case when `riskSubject` returns null.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/spend-velocity/#the-idea Spend velocity}
  *   for the rolling window, why denied attempts still count, and how the record survives a
@@ -82,11 +82,12 @@ export function assessRisk(
   operation: Operation,
   config: Config,
 ): RiskDecision {
-  if (riskSubject(operation) === null) {
+  const risk = riskSubject(operation);
+  if (risk === null) {
     return { allow: true };
   }
   const projected = velocity.spent.minor + attemptMinor(operation);
-  if (projected > config.velocityLimitMinor) {
+  if (projected > classLimitMinor(config, risk.class)) {
     return { allow: false, reason: 'RISK_DENIED' };
   }
   return { allow: true };
@@ -119,28 +120,49 @@ export function riskAttempt(
   };
 }
 
+/** Which velocity window an attempt fills: value flowing into the wallet, or out of it. */
+export type RiskClass = 'in' | 'out';
+
 /**
- * Returns the id (user or account) whose running total this operation counts against, or null
- * when the operation is not subject to the risk check. This is the single source of the subject
- * rule, so the logic is identical wherever it is applied. The live pipeline check (economy.ts
- * screenRisk) calls `riskSubject` and `attemptMinor` directly, while `assessRisk` and
- * `riskAttempt` are the test-facing pure twins. The guarantee is shared logic, not a shared
- * call path.
+ * Returns the trust-store subject and window class this operation counts against, or null when
+ * it is not risk-checked. Inflow and outflow are different threat models (card testing fills one,
+ * a drained wallet the other), so each class keeps its own window: the recorded subject is
+ * `<class>:<userId>`.
+ *
+ * This is the single source of the subject rule. The live pipeline check (economy.ts screenRisk)
+ * calls `riskSubject` and `attemptMinor` directly; `assessRisk` and `riskAttempt` are the
+ * test-facing pure twins. The guarantee is shared logic, not a shared call path.
  */
-export function riskSubject(operation: Operation): string | null {
+export function riskSubject(
+  operation: Operation,
+): { subject: string; class: RiskClass } | null {
   if (operation.kind === 'spend') {
-    return operation.buyerId;
+    return { subject: `out:${operation.buyerId}`, class: 'out' };
   }
   if (
-    operation.kind === 'topUp' ||
-    operation.kind === 'grantPromo' ||
     operation.kind === 'requestPayout' ||
     // subscribe moves the user's credit like a spend, so it counts against the same window.
     operation.kind === 'subscribe'
   ) {
-    return operation.userId;
+    return { subject: `out:${operation.userId}`, class: 'out' };
+  }
+  if (operation.kind === 'topUp' || operation.kind === 'grantPromo') {
+    return { subject: `in:${operation.userId}`, class: 'in' };
   }
   return null;
+}
+
+/**
+ * The limit (CREDIT minor units) governing one window class. Each class falls back to the
+ * single-knob `velocityLimitMinor` unless its own limit is set, so one figure still configures
+ * both windows and a deployment that needs different in/out ceilings sets them apart.
+ */
+export function classLimitMinor(config: Config, cls: RiskClass): bigint {
+  const own =
+    cls === 'in'
+      ? config.velocityInflowLimitMinor
+      : config.velocityOutflowLimitMinor;
+  return own ?? config.velocityLimitMinor;
 }
 
 /**
