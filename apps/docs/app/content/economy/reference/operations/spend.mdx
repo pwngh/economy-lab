@@ -119,7 +119,7 @@ A well-formed `spend` on a healthy system can be declined for these reasons, eac
 | Code                 | When                                                                                                                                  |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `INSUFFICIENT_FUNDS` | The buyer can't cover the price from `promo` plus `spendable`.                                                                        |
-| `FUNDS_IMMATURE`     | The buyer has the credits, but the `spendable` part would dip into funds still in a [settlement hold](/economy/concepts/credit-maturity/). |
+| `FUNDS_IMMATURE`     | The buyer has the credits, but the `spendable` part would dip into funds still in a [settlement hold](/economy/concepts/credit-maturity/). The decline carries `availableAt`. |
 | `DUPLICATE_ORDER`    | A sale already exists for this `orderId` under a different `idempotencyKey`, so a second charge is refused.                           |
 | `RISK_DENIED`        | The purchase would push the buyer past their recent-spending [velocity limit](/economy/concepts/spend-velocity/).                     |
 | `ECONOMY_PAUSED`     | A maintenance window is in effect, so an end user's purchase is declined. The decline carries `resumesAt`.                            |

@@ -73,9 +73,9 @@ export function isMatured(lot: Lot, now: number, config: Config): boolean {
 // one round-trip; a wider tail just pulls the next page.
 const TAIL_PAGE = 64;
 
-// One slice of the FIFO tail: how much of the live balance a lot covers, and whether that slice
-// has matured by `now`.
-type TailSlice = { take: bigint; matured: boolean };
+// One slice of the FIFO tail: how much of the live balance a lot covers, whether that slice
+// has matured by `now`, and when it does.
+type TailSlice = { take: bigint; matured: boolean; maturesAt: number };
 
 // Walks the newest lots first, a bounded page at a time, yielding each lot's slice of the FIFO
 // tail until the live balance is covered. The boundary lot contributes only what is left to
@@ -100,7 +100,8 @@ async function* tailSlices(
     })) {
       drained += 1;
       const take = lot.amount.minor < remaining ? lot.amount.minor : remaining;
-      yield { take, matured: lotMaturesAt(lot, options.config) <= options.now };
+      const maturesAt = lotMaturesAt(lot, options.config);
+      yield { take, matured: maturesAt <= options.now, maturesAt };
       remaining -= take;
       if (remaining === 0n) {
         return;
@@ -110,6 +111,45 @@ async function* tailSlices(
       return;
     }
   }
+}
+
+/**
+ * When `amount` would be fully matured, assuming no further postings: the latest matures-at
+ * among the earliest-maturing slices that cover it. Null when the live balance cannot cover
+ * the amount at all, since maturity is not what blocks it then. Runs only on the
+ * FUNDS_IMMATURE rejection path, so walking the whole tail is acceptable.
+ */
+export async function maturedAvailableAt(
+  ledger: Ledger,
+  account: AccountRef,
+  now: number,
+  options: MaturedAtLeastOptions,
+): Promise<number | null> {
+  const need = options.amount.minor;
+  if (need <= 0n) {
+    return now;
+  }
+  const live =
+    options.live ?? (await ledger.balance(account, { signal: options.signal }));
+  if (live.minor < need) {
+    return null;
+  }
+  const slices: Array<{ take: bigint; maturesAt: number }> = [];
+  for await (const slice of tailSlices(ledger, account, live.minor, {
+    now,
+    config: options.config,
+  })) {
+    slices.push(slice);
+  }
+  slices.sort((a, b) => a.maturesAt - b.maturesAt);
+  let covered = 0n;
+  for (const slice of slices) {
+    covered += slice.take;
+    if (covered >= need) {
+      return slice.maturesAt;
+    }
+  }
+  return null;
 }
 
 /**

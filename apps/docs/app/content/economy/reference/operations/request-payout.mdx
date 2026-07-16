@@ -73,7 +73,7 @@ The same transaction opens a `Saga` in state `RESERVED` (see <SourceLink to="src
 
 ## Authorization
 
-`requestPayout` is not a privileged operation, so an end `user` can run it, but only for their own account. The ownership check requires the caller to own the `earned` account being debited; a `user` requesting another seller's payout is refused with `AUTH.UNAUTHORIZED` (see <SourceLink to="src/economy.ts#L474 · debitedUserAccounts" />).
+`requestPayout` is not a privileged operation, so an end `user` can run it, but only for their own account. The ownership check requires the caller to own the `earned` account being debited; a `user` requesting another seller's payout is refused with `AUTH.UNAUTHORIZED` (see <SourceLink to="src/economy.ts#L501 · debitedUserAccounts" />).
 
 A `system` service or a human `operator` may also request a payout on a seller's behalf. See [actors and authorization](/economy/concepts/actors-and-authorization/) for the full rule.
 
@@ -93,12 +93,12 @@ Each check below returns a `rejected` [`Outcome`](/economy/reference/outcomes-an
 | `PAYOUT_TOO_SOON`    | Less than `payoutMinIntervalMs` (default 24h) since the seller's last request; carries `retryAfter`. |
 | `PAYEE_UNVERIFIED`   | A payee directory is configured and the seller's identity verification isn't `CLEARED`; carries the `state`. |
 | `INSUFFICIENT_FUNDS` | The seller's `earned` balance is below `amount`.                                                     |
-| `FUNDS_IMMATURE`     | The balance covers `amount`, but the cleared (matured) portion does not.                             |
+| `FUNDS_IMMATURE`     | The balance covers `amount`, but the cleared (matured) portion does not. The decline carries `availableAt`. |
 | `ECONOMY_PAUSED`     | A `user`'s request lands inside a maintenance window; carries `resumesAt`.                           |
 
 The payee check only exists when the host composes a payee directory in — the economy-edge bridge supplies one backed by the payout rail's hosted identity verification ([the packages](/economy/ports/packages/)). Without a directory, the gate is absent.
 
-The raw `earned` balance can pass `INSUFFICIENT_FUNDS` while part of it is still inside its chargeback window, so a second, stricter check asks whether the [matured](/economy/concepts/credit-maturity/) part alone covers `amount` (see <SourceLink to="src/operations/requestPayout.ts#L73-L87">source</SourceLink>).
+The raw `earned` balance can pass `INSUFFICIENT_FUNDS` while part of it is still inside its chargeback window, so a second, stricter check asks whether the [matured](/economy/concepts/credit-maturity/) part alone covers `amount` (see <SourceLink to="src/operations/requestPayout.ts#L74-L104">source</SourceLink>).
 
 <Callout type="warning">
   `requestPayout` only counts *matured* earnings. A seller can have plenty of
@@ -111,7 +111,7 @@ A malformed request throws instead:
 | Code                   | When                                                                                                                        |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `OP.MALFORMED`         | The `amount` isn't `CREDIT`.                                                                                                |
-| `MONEY.INVALID_AMOUNT` | The `amount` is zero or negative (see <SourceLink to="src/operations/requestPayout.ts#L153 · payableCredit" />).             |
+| `MONEY.INVALID_AMOUNT` | The `amount` is zero or negative (see <SourceLink to="src/operations/requestPayout.ts#L160 · payableCredit" />).             |
 
 Both are programming errors.
 

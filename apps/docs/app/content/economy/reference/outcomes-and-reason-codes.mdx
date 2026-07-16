@@ -5,7 +5,7 @@ order: 20
 status: stable
 sourceRefs:
   [
-    'src/contract.ts#L261 · Outcome',
+    'src/contract.ts#L267 · Outcome',
     'src/errors.ts#L22 · RejectionCode',
     'src/errors.ts#L55 · ERROR_CODES',
   ]
@@ -112,7 +112,7 @@ map to the pages under [operations](/economy/reference/operations/).
 | Code                   | What it means                                                                                              | Raised by                                                                                |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `INSUFFICIENT_FUNDS`   | The account can't cover the amount the request needs.                                                      | `spend`, `subscribe`, `requestPayout`                                                    |
-| `FUNDS_IMMATURE`       | The funds exist but are still in their holding period, so they aren't usable yet.                          | `spend`, `requestPayout`                                                                 |
+| `FUNDS_IMMATURE`       | The funds exist but are still in their holding period, so they aren't usable yet.                          | `spend`, `subscribe`, `requestPayout` (renewals defer on it)                             |
 | `RISK_DENIED`          | The [velocity / abuse check](/economy/concepts/spend-velocity/) declined this request.                     | `spend`, `subscribe`, `topUp`, `grantPromo`, `requestPayout` (every risk-screened write) |
 | `DUPLICATE_ORDER`      | A `spend` reused an `orderId` that already has a completed sale, but carried a different `idempotencyKey`. | `spend`                                                                                  |
 | `UNKNOWN_ORDER`        | No sale was found for the `orderId` the request refers to.                                                 | `refund`                                                                                 |
@@ -128,7 +128,13 @@ A few of these reward a closer look.
 
 `FUNDS_IMMATURE` is a timing problem: the money is there, but it hasn't cleared its
 maturity window yet, a concept that lives with [credit maturity](/economy/concepts/credit-maturity/).
-The `detail` names the `account` and the `required` amount that hadn't cleared.
+The `detail` names the `account`, the `required` amount that hadn't cleared, and
+`availableAt` — when it will have, assuming no further activity — so a caller can tell the
+user when to try again.
+
+`RISK_DENIED` is actionable the same way: its `detail` carries what was `spent` in the
+window, the `limit`, the `windowMs`, and `retryAfter` — when the oldest counted attempt
+ages out of the [velocity window](/economy/concepts/spend-velocity/).
 
 `DUPLICATE_ORDER` catches a specific client mistake: a retried `spend` that lost its original
 `idempotencyKey`. The `orderId` identifies a unique purchase, so a second charge for the same order

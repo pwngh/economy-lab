@@ -559,8 +559,18 @@ async function screenRisk(step: Step): Promise<Outcome | null> {
   };
   step.staged?.(subject, attempt);
   const velocity = await unit.trust.record(subject, attempt, options);
-  if (velocity.spent.minor > pipeline.ctx.config.velocityLimitMinor) {
-    return rejected('RISK_DENIED', { subject });
+  const config = pipeline.ctx.config;
+  if (velocity.spent.minor > config.velocityLimitMinor) {
+    return rejected('RISK_DENIED', {
+      subject,
+      spent: encodeAmount(velocity.spent),
+      limit: encodeAmount(
+        toAmount(VELOCITY_CURRENCY, config.velocityLimitMinor),
+      ),
+      windowMs: config.velocityWindowMs,
+      // The oldest counted attempt ages out then: the earliest a retry can find room.
+      retryAfter: velocity.windowStart + config.velocityWindowMs,
+    });
   }
   return null;
 }

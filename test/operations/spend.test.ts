@@ -197,6 +197,7 @@ async function rejectsSpendDrawingOnImmatureCredit(): Promise<void> {
   const rejection = outcome as Extract<Outcome, { status: 'rejected' }>;
   assert.equal(rejection.reason, 'FUNDS_IMMATURE');
   assert.equal(rejection.detail?.account, spendable('usr_buyer'));
+  assert.equal(typeof rejection.detail?.availableAt, 'number');
   assert.deepEqual(
     await store.ledger.balance(spendable('usr_buyer')),
     credit('10.00'),

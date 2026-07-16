@@ -8,7 +8,7 @@ sourceRefs:
   [
     'src/trust.ts#L130 · riskSubject',
     'src/trust.ts#L150 · attemptMinor',
-    'src/economy.ts#L545 · screenRisk',
+    'src/economy.ts#L572 · screenRisk',
     'src/engines/postgres.ts#L1381 · recordVelocity',
   ]
 related: ['economy/concepts/concurrency', 'economy/concepts/solvency']
@@ -26,6 +26,8 @@ Amounts are summed in `CREDIT` minor units, and the limit and window come from t
 const outcome = await economy.submit(spendOperation);
 // → { status: "rejected", reason: "RISK_DENIED" }   when the window is over the limit
 ```
+
+The window counts every risk-screened write, not only spending: a top-up's amount accrues to the same per-subject total, so buying in past the limit is refused with the same `RISK_DENIED` as spending past it. The [table below](#what-counts-as-a-subject) lists every screened operation. The rejection's detail carries what was spent, the limit, the window, and `retryAfter` — when the oldest counted attempt ages out — so a caller can tell the user when to try again.
 
 ## Why it exists
 

@@ -235,17 +235,23 @@ export type Operation =
  */
 /**
  * Structured context on a rejection. Which fields are present depends on the `reason`:
- * INSUFFICIENT_FUNDS / FUNDS_IMMATURE carry `account` + `required` (+ `available`), BELOW_MINIMUM
+ * INSUFFICIENT_FUNDS carries `account` + `required` (+ `available`), FUNDS_IMMATURE carries
+ * `account` + `required` (+ `availableAt`, when the funds finish maturing), RISK_DENIED carries
+ * `subject` + `spent` + `limit` + `windowMs` + `retryAfter`, BELOW_MINIMUM
  * carries `minimum` + `requested`, PAYOUT_TOO_SOON carries `lastRequestedAt` + `retryAfter`, ECONOMY_PAUSED carries
  * `resumesAt`, and the id-not-found reasons carry `orderId` / `subscriptionId`. Amounts are the
- * encoded decimal-string form.
+ * encoded decimal-string form; times are epoch milliseconds.
  */
 export type RejectionDetail = {
   account?: AccountRef;
   required?: string;
   available?: string;
+  availableAt?: number;
   minimum?: string;
   requested?: string;
+  spent?: string;
+  limit?: string;
+  windowMs?: number;
   retryAfter?: number;
   lastRequestedAt?: number;
   resumesAt?: number | null;

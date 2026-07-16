@@ -27,7 +27,7 @@ import {
   routePlatformLegs,
   spendable,
 } from '#src/accounts.ts';
-import { maturedAtLeast } from '#src/maturity.ts';
+import { maturedAtLeast, maturedAvailableAt } from '#src/maturity.ts';
 import { revenueForSplit } from '#src/pricing.ts';
 
 import type { Amount } from '#src/money.ts';
@@ -123,9 +123,22 @@ export async function spend(
     },
   );
   if (!cleared) {
+    // The second walk runs only on this rejection path; availableAt lets a caller tell the
+    // buyer when the same purchase will clear.
+    const availableAt = await maturedAvailableAt(
+      unit.ledger,
+      spendableAccount,
+      ctx.clock.now(),
+      {
+        config: ctx.config,
+        amount: plan.spendablePart,
+        live: unit.balances?.get(spendableAccount),
+      },
+    );
     return rejected('FUNDS_IMMATURE', {
       account: spendable(operation.buyerId),
       required: encodeAmount(plan.spendablePart),
+      ...(availableAt === null ? {} : { availableAt }),
     });
   }
 

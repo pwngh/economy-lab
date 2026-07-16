@@ -14,7 +14,7 @@ import { assertKind } from '#src/operations/guards.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { compare, encodeAmount, toAmount } from '#src/money.ts';
 import { earned, routePlatformLegs, SYSTEM } from '#src/accounts.ts';
-import { maturedAtLeast } from '#src/maturity.ts';
+import { maturedAtLeast, maturedAvailableAt } from '#src/maturity.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
@@ -90,9 +90,16 @@ export async function requestPayout(
     { config: ctx.config, amount },
   );
   if (!cleared) {
+    const availableAt = await maturedAvailableAt(
+      unit.ledger,
+      earned(operation.userId),
+      ctx.clock.now(),
+      { config: ctx.config, amount },
+    );
     return rejected('FUNDS_IMMATURE', {
       account: earned(operation.userId),
       required: encodeAmount(amount),
+      ...(availableAt === null ? {} : { availableAt }),
     });
   }
 

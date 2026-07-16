@@ -231,6 +231,8 @@ async function rejectsPayoutAgainstImmatureEarnedCredit(): Promise<void> {
   const rejection = outcome as Extract<Outcome, { status: 'rejected' }>;
   assert.equal(rejection.reason, 'FUNDS_IMMATURE');
   assert.equal(rejection.detail?.account, earned('usr_seller'));
+  // Funded at time 0 with a 60s horizon: the refusal says exactly when a retry clears.
+  assert.equal(rejection.detail?.availableAt, 60_000);
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
     credit('0.00'),
