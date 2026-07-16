@@ -48,7 +48,6 @@ import type { ServerRuntime } from '#scripts/support/server-env.ts';
 import type { ExternalPorts, RuntimeDefaults } from '#src/index.ts';
 import type { Clock, Ids, Logger, Store } from '#src/ports.ts';
 import type { WebhookHandler } from '#src/server.ts';
-import type { ReconcileFeed } from '#src/worker/reconcile.ts';
 
 type FetchHandler = (request: Request) => Promise<Response>;
 
@@ -193,13 +192,6 @@ async function bridge(
 
 // --- worker -----------------------------------------------------------------------
 
-// Never pulled — the local worker passes no windows; this only satisfies the sweep input's shape.
-const noReconcileFeed: ReconcileFeed = {
-  pull: async () => {
-    throw new Error('no reconcile feed configured');
-  },
-};
-
 type RunningWorker = {
   timer: NodeJS.Timeout;
   store: Store;
@@ -238,8 +230,6 @@ async function runWorker(
           now: Date.now(),
           limit,
           dispatcher: relayDispatcher,
-          feed: noReconcileFeed,
-          windows: [],
           float: edge?.float,
         });
         const failed = Object.entries(batch).flatMap(([sweep, result]) =>

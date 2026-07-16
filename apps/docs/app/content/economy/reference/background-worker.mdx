@@ -5,7 +5,7 @@ order: 35
 status: stable
 sourceRefs:
   [
-    'src/worker/index.ts#L57-L68 · SWEEP_NAMES',
+    'src/worker/index.ts#L63-L74 · SWEEP_NAMES',
     'src/worker/payouts.ts#L48 · advanceDuePayouts',
     'src/worker/relay.ts#L47 · relayOutbox',
   ]
@@ -35,7 +35,7 @@ Here is what each sweep does:
 | Sweep              | What it does                                                                                     |
 | ------------------ | ------------------------------------------------------------------------------------------------ |
 | `payouts`          | Advance each due payout [saga](/economy/concepts/payout-saga/) one step.                          |
-| `subscriptions`    | Renew a due subscription, or lapse it when the buyer can't cover the price.                      |
+| `subscriptions`    | Renew a due subscription, or lapse it when the buyer can't cover the price. Uncleared credit defers the renewal instead of lapsing it, attempts capped. |
 | `treasury`         | Re-check that held USD still [backs](/economy/concepts/solvency/) every spendable credit.        |
 | `feeSweep`         | Realize the platform's matured fee surplus into cash.                                            |
 | `floatCoverage`    | Check the payout rail's float against reserved and submitted payout obligations.                 |
@@ -43,7 +43,7 @@ Here is what each sweep does:
 | `checkpoint`       | Seal a fresh signed checkpoint of the ledger.                                                    |
 | `relay`            | Drain the [outbox](/economy/ports/messaging/) to the dispatcher.                     |
 | `drainInbox`       | Apply received provider events, deduping by event id.                                            |
-| `reconcile`        | Compare the provider's settled records against the ledger.                                       |
+| `reconcile`        | Compare the provider's settled records against the ledger. With no feed configured, it reports an empty successful run. |
 | `promos`           | Claw back the unspent part of an expired promo grant.                                            |
 
 Two pairs are deliberately adjacent. `feeSweep` runs right after `treasury`: treasury only measures the surplus, then `feeSweep` moves it. And `checkpointVerify` runs before `checkpoint`, so the old snapshot is checked against the ledger before a fresh one overwrites it.

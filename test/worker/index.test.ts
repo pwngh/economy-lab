@@ -313,6 +313,25 @@ async function startSchedulesTheBatchOnTheInjectedScheduler(): Promise<void> {
   await store.close();
 }
 
+async function skipsTheReconcileSweepWhenNoFeedIsConfigured(): Promise<void> {
+  const { store, digest } = await seededStore();
+  const ctx = makeWorkerCtx({ digest });
+
+  // No feed and no windows: a host with no provider settlement report passes neither, and
+  // the reconcile job reports a clean empty run instead of demanding a throwing stub.
+  const batch = await runSweeps(
+    store,
+    ctx,
+    sweepInput({ feed: undefined, windows: undefined }),
+  );
+
+  assert.deepEqual(batch.reconcile, {
+    ok: true,
+    summary: { reconciled: [], drifted: [], failed: [] },
+  });
+  await store.close();
+}
+
 async function skipsTheRelaySweepWhenNoDispatcherIsConfigured(): Promise<void> {
   const { store, digest } = await seededStore();
   // A relay run that actually happened would mark this event; a skipped run leaves it pending.
@@ -364,6 +383,8 @@ describe('Worker Composition Root', () => {
     reportsEverySweepUnderItsName());
   test('skips the relay sweep cleanly when no dispatcher is configured', () =>
     skipsTheRelaySweepWhenNoDispatcherIsConfigured());
+  test('skips the reconcile sweep cleanly when no feed is configured', () =>
+    skipsTheReconcileSweepWhenNoFeedIsConfigured());
 
   test('isolates a thrown sweep from the batch', () =>
     isolatesAThrownSweepFromTheBatch());

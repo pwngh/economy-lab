@@ -87,8 +87,10 @@ export type SweepInput = {
   // through the same invariants and idempotency a direct caller hits. Optional like `dispatcher`:
   // absent, `drainInbox` is skipped and pending inbox rows wait for a later run.
   economy?: Economy;
-  feed: ReconcileFeed;
-  windows: ReadonlyArray<Range>;
+  // Settlement-report source for the reconcile job. Optional like `dispatcher`: absent (or with
+  // no windows), `reconcile` is skipped — a host with no provider report has nothing to compare.
+  feed?: ReconcileFeed;
+  windows?: ReadonlyArray<Range>;
   // External float source for the treasury tie-out's coverage half. Optional like `dispatcher`:
   // absent, `floatCoverage` is skipped — the internal backing check in `treasury` runs regardless.
   float?: FloatFeed;
@@ -185,9 +187,17 @@ export async function runSweeps(
               options,
             ),
           ),
-    reconcile: await isolate(() =>
-      reconcileDueWindows(input.feed, ctx, { windows: input.windows }, options),
-    ),
+    reconcile:
+      input.feed === undefined
+        ? { ok: true, summary: { reconciled: [], drifted: [], failed: [] } }
+        : await isolate(() =>
+            reconcileDueWindows(
+              input.feed!,
+              ctx,
+              { windows: input.windows ?? [] },
+              options,
+            ),
+          ),
     promos: await isolate(() =>
       sweepExpiredPromos(store, ctx, { now, limit }, options),
     ),
