@@ -81,6 +81,24 @@ if (!window.__elabRunner) {
         }
       });
     }
+    // Copies the editor's current text, or the shipped source before any edit.
+    block.querySelector<HTMLButtonElement>('[data-copy]')?.addEventListener('click', async () => {
+      const editor = block.querySelector<HTMLTextAreaElement>('.runnable-editor');
+      try {
+        await navigator.clipboard.writeText(
+          editor ? editor.value : (code?.textContent ?? '').trim(),
+        );
+      } catch {
+        return; // clipboard denied: leave the note untouched rather than claim success
+      }
+      if (note) {
+        const prior = note.textContent;
+        note.textContent = 'Copied';
+        setTimeout(() => {
+          if (note.textContent === 'Copied') note.textContent = prior;
+        }, 1500);
+      }
+    });
     block
       .querySelector<HTMLButtonElement>('[data-reset-code]')
       ?.addEventListener('click', async () => {

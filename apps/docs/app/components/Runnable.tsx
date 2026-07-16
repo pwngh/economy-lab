@@ -31,6 +31,9 @@ export function Runnable({ name, html }: { name: string; html: string }) {
         <button type="button" className="runnable-reset" data-reset-economy hidden>
           Reset economy
         </button>
+        <button type="button" className="runnable-reset" data-copy>
+          Copy
+        </button>
         <button type="button" className="runnable-run" data-run>
           Run
         </button>
