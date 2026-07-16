@@ -80,6 +80,12 @@ type Registry = Partial<Record<Operation['kind'], Handler>>;
  */
 export function economyFromCapabilities(capabilities: Capabilities): Economy {
   const store = capabilities.store;
+  // A runtime config mutation would half-apply: most knobs are read per submit, but
+  // velocityWindowMs is captured at store construction. Frozen, a mutation throws instead;
+  // change a knob by rebuilding over the same store.
+  Object.freeze(capabilities.config);
+  Object.freeze(capabilities.config.maturityHorizonMs);
+  Object.freeze(capabilities.config.payoutSla);
   const ctx = contextOf(capabilities);
   const registry = REGISTRY;
 

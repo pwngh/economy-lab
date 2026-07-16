@@ -21,6 +21,7 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   with `OP.MALFORMED`.
 - An unknown operation `kind` is refused with a typed `OP.MALFORMED` fault.
 - Config overrides merge one level deep into `maturityHorizonMs` and `payoutSla`.
+- The config is frozen at construction; change a knob by rebuilding over the same store.
 - Maturity horizons default to 0 outside production; production requires
   `MATURITY_HORIZON_CARD_MS`, and other rails default to it.
 - `SagaStore.list` breaks `updatedAt` ties by `id` descending on every engine.
