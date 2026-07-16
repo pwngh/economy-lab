@@ -5,8 +5,8 @@ order: 80
 status: stable
 sourceRefs:
   [
-    'src/operations/subscribe.ts#L45 · subscribe',
-    'src/worker/subscriptions.ts#L61 · sweepDueSubscriptions',
+    'src/operations/subscribe.ts#L42 · subscribe',
+    'src/worker/subscriptions.ts#L62 · sweepDueSubscriptions',
   ]
 related:
   [
@@ -56,8 +56,10 @@ fields, beyond the `kind` tag, are:
 | `price`          | [`Amount`](/economy/concepts/money-model/)                 | (required) | Per-period charge, in `CREDIT`.                                           |
 | `periodMs`       | `number`                                                   | (required) | Period length in milliseconds.                                            |
 
-The `price` must be in `CREDIT` and fall between `100` and `10000` credits per period,
-inclusive. The `periodMs` must be a positive integer no larger than ten 365-day years
+The `price` must be in `CREDIT` and fall inside the configured price band — `100` to
+`10000` credits per period by default, set by `SUBSCRIPTION_PRICE_MIN_MINOR` and
+`SUBSCRIPTION_PRICE_MAX_MINOR` in the [configuration](/economy/reference/configuration/#subscriptions).
+The `periodMs` must be a positive integer no larger than ten 365-day years
 (`315360000000` ms). Anything outside those bounds is a wiring error, not a business
 decline. See [Preconditions](#preconditions-and-invariants) below.
 
@@ -126,6 +128,7 @@ values as a `rejected` outcome:
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ALREADY_SUBSCRIBED` | An `ACTIVE` subscription already exists for the same `userId`, `sku`, and `sellerId`. A second one would double-bill.                                                            |
 | `INSUFFICIENT_FUNDS` | The buyer's `spendable` balance can't cover its share of the first period.                                                                                                       |
+| `FUNDS_IMMATURE`     | The spendable-funded part draws on credits still inside their [maturity](/economy/concepts/credit-maturity/) window — the same gate [`spend`](/economy/reference/operations/spend/) runs. The decline carries `availableAt`. |
 | `RISK_DENIED`        | The charge would push the buyer past their recent-spending [velocity limit](/economy/concepts/spend-velocity/). `subscribe` counts against the same window as `spend`. |
 | `ECONOMY_PAUSED`     | A maintenance window is in effect, so a `user` actor's subscribe is declined. The decline carries `resumesAt`; a `system` or `operator` actor is never paused.                   |
 

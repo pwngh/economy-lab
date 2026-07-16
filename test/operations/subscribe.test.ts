@@ -32,6 +32,7 @@ import {
   credit,
   emptyVelocity,
 } from '#test/support/builders.ts';
+import { makeEconomy } from '#test/support/economy.ts';
 
 import type { Economy, Operation, Outcome } from '#src/contract.ts';
 import type { Store } from '#src/ports.ts';
@@ -202,6 +203,37 @@ async function rejectsAPriceAboveTheBand(harness: Harness): Promise<void> {
   await assert.rejects(harness.run(subscribeOf('10000.01')), isMalformed);
 }
 
+// The same maturity gate spend runs: a first-period charge cannot draw on card credits
+// still inside the chargeback window, and the decline says when they clear.
+async function rejectsAFirstChargeOnImmatureCredit(): Promise<void> {
+  const economy = makeEconomy(1, undefined, {
+    maturityHorizonMs: { card: 60_000, default: 0 },
+  });
+  await economy.submit(
+    topUp({ userId: 'usr_buyer', amount: credit('200.00') }),
+  );
+  const outcome = await economy.submit(subscribeOf('150.00'));
+  assert.equal(outcome.status, 'rejected');
+  const rejection = outcome as Extract<Outcome, { status: 'rejected' }>;
+  assert.equal(rejection.reason, 'FUNDS_IMMATURE');
+  assert.equal(rejection.detail?.availableAt, 60_000);
+  await economy.close();
+}
+
+// The band is config (SUBSCRIPTION_PRICE_MIN/MAX_MINOR), not a constant: a deploy that
+// sells cheaper subscriptions widens it instead of forking the operation.
+async function acceptsAPriceTheConfiguredBandAllows(): Promise<void> {
+  const economy = makeEconomy(1, undefined, {
+    subscriptionPriceMinMinor: 1_000n,
+  });
+  await economy.submit(
+    topUp({ userId: 'usr_buyer', amount: credit('200.00') }),
+  );
+  const outcome = await economy.submit(subscribeOf('50.00'));
+  assert.equal(outcome.status, 'committed');
+  await economy.close();
+}
+
 async function grantsTheSkuEntitlement(harness: Harness): Promise<void> {
   await harness.economy.submit(
     topUp({ userId: 'usr_buyer', amount: credit('200.00') }),
@@ -321,6 +353,10 @@ describe('Subscribe', () => {
     rejectsAPriceBelowTheBand(makeHarness()));
   test('rejects a price above the 10000-credit band as a malformed operation', () =>
     rejectsAPriceAboveTheBand(makeHarness()));
+  test('accepts a below-default price when the configured band allows it', () =>
+    acceptsAPriceTheConfiguredBandAllows());
+  test('rejects a first charge drawing on immature card credit (FUNDS_IMMATURE)', () =>
+    rejectsAFirstChargeOnImmatureCredit());
   test('rejects a zero billing period as a malformed operation', () =>
     rejectsAZeroPeriod(makeHarness()));
   test('rejects a NaN billing period as a malformed operation', () =>

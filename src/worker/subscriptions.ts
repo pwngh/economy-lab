@@ -13,6 +13,7 @@ import { normalizeError } from '#src/errors.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { compare, toAmount } from '#src/money.ts';
 import { pendingOutbox } from '#src/outbox.ts';
+import { maturedAtLeast } from '#src/maturity.ts';
 import { spendable, earned, SYSTEM } from '#src/accounts.ts';
 import { feeForPrice } from '#src/pricing.ts';
 
@@ -188,6 +189,7 @@ async function renew(
   // commits the underfunded outcome (one transaction can't both post a charge and revoke a perk).
   // Remember the underfunded result here and lapse afterward.
   let lapsed = false;
+  let immature = false;
   await store.transaction(async (unit) => {
     // Lock the buyer's account before reading its balance, so concurrent sweeps take turns instead
     // of both reading the same pre-charge balance and both charging.
@@ -195,6 +197,19 @@ async function renew(
     const have = await unit.ledger.balance(spendable(sub.userId));
     if (compare(have, sub.price) < 0) {
       lapsed = true;
+      return;
+    }
+    // Renewals honor the same maturity gate as spend and the first charge. Credits that exist
+    // but have not cleared defer the renewal to a later sweep rather than lapse it: the money
+    // is temporally, not terminally, missing. The attempt cap still bounds the deferrals.
+    const cleared = await maturedAtLeast(
+      unit.ledger,
+      spendable(sub.userId),
+      ctx.clock.now(),
+      { config: ctx.config, amount: sub.price, live: have },
+    );
+    if (!cleared) {
+      immature = true;
       return;
     }
 
@@ -239,6 +254,10 @@ async function renew(
     tally.charged.push(sub.id);
   });
 
+  if (immature) {
+    await recordRetry({ store, ctx, sub, code: 'FUNDS_IMMATURE', tally });
+    return;
+  }
   if (lapsed) {
     await lapse(store, ctx, sub, tally);
   }

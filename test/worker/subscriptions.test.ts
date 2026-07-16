@@ -19,7 +19,11 @@ import { credit as creditLeg, debit, postEntry } from '#src/ledger.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { spendable, earned, SYSTEM } from '#src/accounts.ts';
 import { credit } from '#test/support/builders.ts';
-import { fixedClock, makeWorkerCtx } from '#test/support/capabilities.ts';
+import {
+  fixedClock,
+  makeWorkerCtx,
+  testConfig,
+} from '#test/support/capabilities.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
 import type { Amount } from '#src/money.ts';
@@ -78,6 +82,36 @@ async function openSub(
 }
 
 // --- The cases (one behavior each) -----------------------------------------------
+
+// Renewals honor the maturity gate: a wallet holding enough uncleared credit defers the
+// renewal (retrying, attempts capped) rather than lapsing, and bills once the funds clear.
+async function defersARenewalOnImmatureCreditUntilItClears(): Promise<void> {
+  const store = memoryStore();
+  const sub = subscription({
+    id: 'sub_1',
+    price: credit('100.00'),
+    nextDueAt: 0,
+  });
+  await openSub(store, sub, credit('100.00'));
+  const config = { ...testConfig(), maturityHorizonMs: { default: 60_000 } };
+
+  const early = await sweepDueSubscriptions(
+    store,
+    makeWorkerCtx({ config, clock: fixedClock(0) }),
+    { now: 0, limit: 10 },
+  );
+  assert.deepEqual(early.charged, []);
+  assert.deepEqual(early.lapsed, []);
+  assert.deepEqual(early.retrying, [{ id: 'sub_1', code: 'FUNDS_IMMATURE' }]);
+
+  const later = await sweepDueSubscriptions(
+    store,
+    makeWorkerCtx({ config, clock: fixedClock(60_001) }),
+    { now: 60_001, limit: 10 },
+  );
+  assert.deepEqual(later.charged, ['sub_1']);
+  await store.close();
+}
 
 async function chargesAFundedRenewalAndAdvancesTheDueTime(
   store: Store,
@@ -503,6 +537,8 @@ async function lapseRevokesThePerkAndEmitsOneLapsedEvent(): Promise<void> {
 }
 
 describe('sweepDueSubscriptions', () => {
+  test('defers a renewal on immature credit until it clears', () =>
+    defersARenewalOnImmatureCreditUntilItClears());
   test('charges a funded renewal and advances the due time', () =>
     chargesAFundedRenewalAndAdvancesTheDueTime(memoryStore()));
   test('rounds the renewal fee up to a whole credit toward the platform', () =>

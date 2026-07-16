@@ -70,7 +70,7 @@ export async function subscribe(
   const promoBalance = await unit.ledger.balance(promo(operation.userId));
   const plan = planSpend(price, promoBalance);
 
-  const shortfall = await screenSpendable(unit, operation.userId, plan);
+  const shortfall = await screenSpendable(unit, ctx, operation.userId, plan);
   if (shortfall) {
     return shortfall;
   }
@@ -172,6 +172,7 @@ function validatedPrice(price: Amount, config: Config): Amount {
 // A pre-check only: the database's per-user non-negative CHECK is what blocks overdrafts.
 async function screenSpendable(
   unit: Unit,
+  ctx: Ctx,
   userId: string,
   plan: SpendPlan,
 ): Promise<Extract<Outcome, { status: 'rejected' }> | null> {
@@ -181,6 +182,28 @@ async function screenSpendable(
       account: spendable(userId),
       required: encodeAmount(plan.spendablePart),
       available: encodeAmount(have),
+    });
+  }
+  // The same maturity gate spend runs: the spendable-funded part must be covered by cleared
+  // funds, so a first-period charge cannot draw on card credits still inside the chargeback
+  // window. Promo draws first and is not gated.
+  const cleared = await maturedAtLeast(
+    unit.ledger,
+    spendable(userId),
+    ctx.clock.now(),
+    { config: ctx.config, amount: plan.spendablePart, live: have },
+  );
+  if (!cleared) {
+    const availableAt = await maturedAvailableAt(
+      unit.ledger,
+      spendable(userId),
+      ctx.clock.now(),
+      { config: ctx.config, amount: plan.spendablePart, live: have },
+    );
+    return rejected('FUNDS_IMMATURE', {
+      account: spendable(userId),
+      required: encodeAmount(plan.spendablePart),
+      ...(availableAt === null ? {} : { availableAt }),
     });
   }
   return null;

@@ -34,7 +34,9 @@ A `Subscription` carries its own `SubscriptionState`: `ACTIVE`, `LAPSED`, `CANCE
 
 <SubscriptionStates />
 
-`maxSubscriptionAttempts` separates a transient charge failure from a subscription that will never pay: a success resets the count, and at the cap the sweep flips `ACTIVE → LAPSED`, revokes the entitlement, and emits the lapse event in one transaction (see <SourceLink to="src/worker/subscriptions.ts#L162-L170 · lapseAtomically" />).
+`maxSubscriptionAttempts` separates a transient charge failure from a subscription that will never pay: a success resets the count, and at the cap the sweep flips `ACTIVE → LAPSED`, revokes the entitlement, and emits the lapse event in one transaction (see <SourceLink to="src/worker/subscriptions.ts#L167-L175 · lapseAtomically" />).
+
+A wallet holding enough credit that has not yet [matured](/economy/concepts/credit-maturity/) defers the same way: the renewal records a retrying attempt instead of lapsing — the money is temporally, not terminally, missing — and bills once the credits clear. Only a wallet that cannot cover the price at all lapses on the spot.
 
 [`cancelSubscription`](/economy/reference/operations/cancel-subscription/) is the voluntary exit: the user or an operator flips `ACTIVE → CANCELED`. The current period is not refunded.
 
