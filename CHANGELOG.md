@@ -2,7 +2,7 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
-## Unreleased (0.2.0)
+## 0.2.0 - 2026-07-16
 
 ### Added
 
@@ -42,7 +42,7 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - The disputed-sale runbook: refund the order first, then claw back the wallet.
 - Statement paging is range windowing; `Statement.cursor` is reserved.
 
-## Unreleased (0.1.2)
+## 0.1.2 - 2026-07-16
 
 ### Added
 
