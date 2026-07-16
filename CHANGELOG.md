@@ -13,6 +13,7 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 
 ### Changed
 
+- An unknown operation `kind` is refused with a typed `OP.MALFORMED` fault.
 - `SagaStore.list` breaks `updatedAt` ties by `id` descending on every engine.
 - The in-memory store queues overlapping transactions instead of throwing.
 - The store server registers a transaction session once the queued body starts.

@@ -65,6 +65,18 @@ describe('Submit Input Validation', () => {
     );
   });
 
+  test('rejects an unknown operation kind with a typed fault', async () => {
+    const eco = makeEconomy();
+    await assert.rejects(
+      eco.submit({
+        kind: 'mintGold',
+        idempotencyKey: 'idem_unknown',
+        actor: { kind: 'system', service: 'test' },
+      } as never),
+      hasCode('OP.MALFORMED'),
+    );
+  });
+
   test('accepts a well-formed operation', async () => {
     const eco = makeEconomy();
     const outcome = await eco.submit(

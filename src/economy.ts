@@ -354,6 +354,14 @@ const MAX_OP_AMOUNT_MINOR = 1_000_000_000_000_000n;
 // Checked once here rather than per handler. The shard count is passed so every accountsOf caller
 // agrees.
 function validateOperation(operation: Operation, shards: number): void {
+  if (!(operation.kind in REGISTRY)) {
+    throw fault(
+      ERROR_CODES.MALFORMED_OPERATION,
+      `Unknown operation kind "${operation.kind}".`,
+      { detail: { kind: operation.kind } },
+    );
+  }
+
   if (
     typeof operation.idempotencyKey !== 'string' ||
     operation.idempotencyKey.trim() === ''
