@@ -480,23 +480,33 @@ async function provisionMysql(cfg: HarnessConfig): Promise<Provisioned> {
 }
 
 // Returns null when the backend's database is unreachable — a skip, not a failure; the rest of the
-// run proceeds.
+// run proceeds. A required backend (BENCH_REQUIRE) gets a few connection attempts first, so a
+// momentary compose DNS or just-healthy-container hiccup can't fail a whole run at its very end.
 export async function tryProvision(
   backend: BackendName,
   cfg: HarnessConfig,
 ): Promise<Provisioned | null> {
-  try {
-    if (cfg.shards > 1) {
-      console.warn(`    shards ${cfg.shards}`);
+  const attempts = cfg.required.includes(backend) ? 5 : 1;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      if (cfg.shards > 1) {
+        console.warn(`    shards ${cfg.shards}`);
+      }
+      if (backend === 'in-memory') return await provisionInMemory(cfg);
+      if (backend === 'postgres') return await provisionPostgres(cfg);
+      return await provisionMysql(cfg);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (attempt < attempts) {
+        console.warn(
+          `    ${backend} unreachable (${message}) — required backend, retrying (${attempt}/${attempts - 1})`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 3000 * attempt));
+        continue;
+      }
+      console.warn(`    SKIP ${backend}: ${message}`);
+      return null;
     }
-    if (backend === 'in-memory') return await provisionInMemory(cfg);
-    if (backend === 'postgres') return await provisionPostgres(cfg);
-    return await provisionMysql(cfg);
-  } catch (e) {
-    console.warn(
-      `    SKIP ${backend}: ${e instanceof Error ? e.message : String(e)}`,
-    );
-    return null;
   }
 }
 
