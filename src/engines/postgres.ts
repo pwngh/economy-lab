@@ -68,12 +68,13 @@ import {
   rowToPromoGrant,
   sortByAccountId,
   withTransientRetry,
+  retryTelemetry,
   installMoneyRetrying,
   isSeededSystemAccount,
 } from '#src/engines/sql-shared.ts';
 import { metaString, metaNumber } from '#src/meta.ts';
 
-import type { Link } from '#src/engines/sql-shared.ts';
+import type { Link, RetryObserver } from '#src/engines/sql-shared.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
@@ -87,9 +88,11 @@ import type {
   IdempotencyStore,
   InboxStore,
   Leg,
+  Logger,
   MovementJournal,
   Ledger,
   Lot,
+  Meter,
   OutboxStore,
   Posting,
   PromoStore,
@@ -1588,6 +1591,12 @@ export interface PostgresStoreOptions {
   // Max time (ms) to wait for a connection before failing. `pg`'s default is no timeout, so a
   // routable-but-stalled host would otherwise hang indefinitely.
   connectionTimeoutMillis?: number;
+
+  // Optional runtime ports for the engine's own telemetry (transient-retry pressure, see
+  // retryTelemetry). The composition passes the runtime meter and logger; unset emits nothing.
+  meter?: Meter;
+
+  logger?: Logger;
 }
 
 /**
@@ -1652,6 +1661,10 @@ export async function postgresStore(
   }
 
   const ledger = createLedgerStore(pool, digest, clock);
+  const retryObserver = retryTelemetry(
+    { meter: options.meter, logger: options.logger },
+    'postgres',
+  );
 
   return {
     ledger,
@@ -1668,7 +1681,11 @@ export async function postgresStore(
     movements: createMovementJournal(pool),
     replay: createReplayStore(pool),
     transaction: async (work) =>
-      runInTransaction(pool, { digest, clock, velocityWindowMs }, work),
+      runInTransaction(
+        pool,
+        { digest, clock, velocityWindowMs, retryObserver },
+        work,
+      ),
     close: async () => {
       if (schema) {
         await pool
@@ -1707,29 +1724,38 @@ async function applyIsolatedSchema(
 // @see https://economy-lab-docs.pages.dev/economy/ports/messaging/
 async function runInTransaction<T>(
   pool: PgPool,
-  deps: { digest: Digest; clock: Clock; velocityWindowMs: number },
+  deps: {
+    digest: Digest;
+    clock: Clock;
+    velocityWindowMs: number;
+    retryObserver?: RetryObserver;
+  },
   work: (unit: Unit) => Promise<T>,
 ): Promise<T> {
-  return withTransientRetry(async () => {
-    const client = await pool.connect();
-    try {
-      await client.query('begin');
-      const unit = buildUnit(
-        client,
-        deps.digest,
-        deps.clock,
-        deps.velocityWindowMs,
-      );
-      const result = await work(unit);
-      await client.query('commit');
-      return result;
-    } catch (error) {
-      await client.query('rollback').catch(() => {});
-      throw error;
-    } finally {
-      client.release();
-    }
-  }, isTransientConflict);
+  return withTransientRetry(
+    async () => {
+      const client = await pool.connect();
+      try {
+        await client.query('begin');
+        const unit = buildUnit(
+          client,
+          deps.digest,
+          deps.clock,
+          deps.velocityWindowMs,
+        );
+        const result = await work(unit);
+        await client.query('commit');
+        return result;
+      } catch (error) {
+        await client.query('rollback').catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+    isTransientConflict,
+    { observer: deps.retryObserver },
+  );
 }
 
 // A transient Postgres abort committed nothing, so it is safe to retry; anything else (a domain

@@ -23,6 +23,8 @@ import type {
   Digest,
   InboxEntry,
   Leg,
+  Logger,
+  Meter,
   OutboxMessage,
   Posting,
   PromoGrant,
@@ -153,12 +155,12 @@ type Attempt<T> = () => Promise<T>;
 // driver-specific test: pg checks `error.code`, mysql2 checks `error.errno`.
 export type IsTransientConflict = (error: unknown) => boolean;
 
-// --- Retry observability (off by default) -----------------------------------------
+// --- Retry observability -----------------------------------------------------------
 //
 // A retry that then commits is invisible in the app's outcome, which hides the contention the
-// engine absorbs. This optional observer lets a bench count that hidden retry pressure. It is null
-// by default and costs nothing on the production path (each `retryObserver?.(...)` is a property
-// read and short-circuit); production never sets it.
+// engine absorbs. Two channels see it: the module-level observer a bench installs, and the
+// per-store observer built by `retryTelemetry` from the runtime meter and logger, which is how a
+// production host sees a deadlock storm the retry budget is silently absorbing.
 export type RetryEvent =
   // A transient conflict was caught; a fresh attempt is about to run. `attempt` is the try that failed.
   | { type: 'retry'; attempt: number; error: unknown }
@@ -180,6 +182,37 @@ export function setRetryObserver(
   return previous;
 }
 
+/**
+ * Builds the production retry observer from a store's optional meter and logger, or undefined when
+ * neither is wired. Each transient conflict and each exhausted budget counts as `engine.retry`
+ * (tagged with the outcome), a commit the budget rescued counts as `engine.retry.recovered`, and an
+ * exhausted budget also logs `engine.retry.exhausted` before the error reaches the caller.
+ */
+export function retryTelemetry(
+  runtime: { meter?: Meter; logger?: Logger },
+  engine: 'postgres' | 'mysql',
+): RetryObserver | undefined {
+  const { meter, logger } = runtime;
+  if (meter === undefined && logger === undefined) return undefined;
+  return (event) => {
+    if (event.type === 'retry') {
+      meter?.count('engine.retry', 1, { engine, outcome: 'conflict' });
+      return;
+    }
+    if (event.type === 'recovered') {
+      meter?.count('engine.retry.recovered', 1, { engine });
+      return;
+    }
+    meter?.count('engine.retry', 1, { engine, outcome: 'exhausted' });
+    logger?.log('warn', 'engine.retry.exhausted', {
+      engine,
+      attempts: event.attempts,
+    });
+  };
+}
+
+type RetryOptions = { maxAttempts?: number; observer?: RetryObserver };
+
 // Runs `attempt`, one full transaction, under a bounded transient-conflict retry: a transient
 // conflict waits a short jittered backoff and gets a fresh attempt; after `maxAttempts` tries the
 // last error is rethrown unchanged. A non-transient error is never retried.
@@ -191,23 +224,27 @@ export function setRetryObserver(
 export async function withTransientRetry<T>(
   attempt: Attempt<T>,
   isTransientConflict: IsTransientConflict,
-  maxAttempts = 10,
+  options: RetryOptions = {},
 ): Promise<T> {
+  const maxAttempts = options.maxAttempts ?? 10;
+  const observe = (event: RetryEvent): void => {
+    retryObserver?.(event);
+    options.observer?.(event);
+  };
   for (let tries = 1; ; tries += 1) {
     try {
       const result = await attempt();
-      if (tries > 1) retryObserver?.({ type: 'recovered', attempts: tries });
+      if (tries > 1) observe({ type: 'recovered', attempts: tries });
       return result;
     } catch (error) {
       const transient = isTransientConflict(error);
       if (tries >= maxAttempts || !transient) {
         // Distinguish "gave up on a still-transient conflict" (the budget ran out) from "a
         // non-transient fault on the first throw"; only the former is retry pressure that hit its cap.
-        if (transient)
-          retryObserver?.({ type: 'exhausted', attempts: tries, error });
+        if (transient) observe({ type: 'exhausted', attempts: tries, error });
         throw error;
       }
-      retryObserver?.({ type: 'retry', attempt: tries, error });
+      observe({ type: 'retry', attempt: tries, error });
       await sleep((2 + Math.random() * 8) * Math.min(tries, 5));
     }
   }

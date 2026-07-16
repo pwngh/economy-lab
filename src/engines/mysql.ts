@@ -44,6 +44,7 @@ import {
   rowToPromoGrant,
   sortByAccountId,
   withTransientRetry,
+  retryTelemetry,
   isSeededSystemAccount,
 } from '#src/engines/sql-shared.ts';
 import { metaString, metaNumber } from '#src/meta.ts';
@@ -62,9 +63,11 @@ import type {
   IdempotencyStore,
   InboxStore,
   Leg,
+  Logger,
   MovementJournal,
   Ledger,
   Lot,
+  Meter,
   OutboxStore,
   Posting,
   PromoStore,
@@ -1618,11 +1621,19 @@ export function mysqlStore(deps: {
   digest?: Digest;
   clock?: Clock;
   velocityWindowMs?: number;
+  // Optional runtime ports for the engine's own telemetry (transient-retry pressure, see
+  // retryTelemetry). The composition passes the runtime meter and logger; unset emits nothing.
+  meter?: Meter;
+  logger?: Logger;
 }): Store {
   const pool = deps.pool;
   const digest = deps.digest ?? defaultDigest();
   const clock = deps.clock ?? systemClock();
   const velocityWindowMs = deps.velocityWindowMs ?? 60 * 60_000;
+  const retryObserver = retryTelemetry(
+    { meter: deps.meter, logger: deps.logger },
+    'mysql',
+  );
   const poolDeps: ExecDeps = { exec: pool, digest, clock, pool };
 
   const trust = createTrustStore(pool, clock, velocityWindowMs);
@@ -1650,34 +1661,38 @@ export function mysqlStore(deps: {
     // than escaping as a raw deadlock; any non-transient error propagates unchanged on its first throw.
     // @see https://economy-lab-docs.pages.dev/economy/ports/messaging/
     transaction: async (work) =>
-      withTransientRetry(async () => {
-        const connection = await pool.getConnection();
-        try {
-          // Run the money transaction at READ COMMITTED, like Postgres. Correctness comes from
-          // the explicit FOR UPDATE locks, which behave the same at either level. REPEATABLE
-          // READ only ever hurt here: its pinned snapshot served stale mid-transaction reads,
-          // and its gap locks deadlocked concurrent first-use inserts. The reads the schema's
-          // own triggers make take those gap locks too. The SET covers just the next
-          // transaction, so the connection returns to the pool unchanged.
-          await connection.query(
-            'SET TRANSACTION ISOLATION LEVEL READ COMMITTED',
-          );
-          await connection.query('START TRANSACTION');
-          const unit = buildUnit(
-            { exec: connection, digest, clock, pool },
-            createUnitTrustStore(connection, clock, velocityWindowMs),
-          );
-          const result = await work(unit);
-          await connection.query('COMMIT');
-          return result;
-        } catch (error) {
-          await safeRollback(connection);
-          throw error;
-        } finally {
-          await releaseLocks(connection);
-          connection.release();
-        }
-      }, isTransientConflict),
+      withTransientRetry(
+        async () => {
+          const connection = await pool.getConnection();
+          try {
+            // Run the money transaction at READ COMMITTED, like Postgres. Correctness comes from
+            // the explicit FOR UPDATE locks, which behave the same at either level. REPEATABLE
+            // READ only ever hurt here: its pinned snapshot served stale mid-transaction reads,
+            // and its gap locks deadlocked concurrent first-use inserts. The reads the schema's
+            // own triggers make take those gap locks too. The SET covers just the next
+            // transaction, so the connection returns to the pool unchanged.
+            await connection.query(
+              'SET TRANSACTION ISOLATION LEVEL READ COMMITTED',
+            );
+            await connection.query('START TRANSACTION');
+            const unit = buildUnit(
+              { exec: connection, digest, clock, pool },
+              createUnitTrustStore(connection, clock, velocityWindowMs),
+            );
+            const result = await work(unit);
+            await connection.query('COMMIT');
+            return result;
+          } catch (error) {
+            await safeRollback(connection);
+            throw error;
+          } finally {
+            await releaseLocks(connection);
+            connection.release();
+          }
+        },
+        isTransientConflict,
+        { observer: retryObserver },
+      ),
 
     close: async () => {
       await pool.end();

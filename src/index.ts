@@ -414,6 +414,8 @@ export async function capabilitiesFromEnv(
       digest: runtime.digest,
       clock: runtime.clock,
       velocityWindowMs: config.velocityWindowMs,
+      meter: runtime.meter,
+      logger: runtime.logger,
     }),
     selectCache(selection.cache),
     selectDispatcher(selection.dispatcher),
@@ -546,6 +548,8 @@ export async function createEconomy(
         digest: runtime.digest,
         clock: runtime.clock,
         velocityWindowMs: config.velocityWindowMs,
+        meter: runtime.meter,
+        logger: runtime.logger,
       }),
     options.cache ?? selectCache(selection.cache),
     options.dispatcher ?? selectDispatcher(selection.dispatcher),
@@ -566,7 +570,13 @@ export async function createEconomy(
 
 async function selectStore(
   selection: Selection['store'],
-  deps: { digest: Digest; clock: Clock; velocityWindowMs: number },
+  deps: {
+    digest: Digest;
+    clock: Clock;
+    velocityWindowMs: number;
+    meter?: Meter;
+    logger?: Logger;
+  },
 ): Promise<Store> {
   if (selection.kind === 'memory') {
     return memoryStore(deps);
@@ -578,6 +588,8 @@ async function selectStore(
       digest: deps.digest,
       clock: deps.clock,
       velocityWindowMs: deps.velocityWindowMs,
+      meter: deps.meter,
+      logger: deps.logger,
     });
   }
   if (selection.kind === 'mysql') {
@@ -594,7 +606,13 @@ async function selectStore(
 // before any posting trusts the engine's arithmetic.
 async function provenMysqlStore(
   url: string,
-  deps: { digest: Digest; clock: Clock; velocityWindowMs: number },
+  deps: {
+    digest: Digest;
+    clock: Clock;
+    velocityWindowMs: number;
+    meter?: Meter;
+    logger?: Logger;
+  },
 ): Promise<Store> {
   const { createMysqlPool, mysqlStore, readSchemaVersion } =
     await import('#src/engines/mysql.ts');
@@ -614,6 +632,8 @@ async function provenMysqlStore(
     digest: deps.digest,
     clock: deps.clock,
     velocityWindowMs: deps.velocityWindowMs,
+    meter: deps.meter,
+    logger: deps.logger,
   });
 }
 

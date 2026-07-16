@@ -33,6 +33,7 @@ import {
 import {
   CHAIN_CONTINUITY_MARKER,
   CHAIN_FORK_INDEX,
+  retryTelemetry,
   setRetryObserver,
   withTransientRetry,
 } from '#src/engines/sql-shared.ts';
@@ -379,7 +380,7 @@ describe('Bench harness: retry-pressure instrumentation (withTransientRetry)', (
           return 'committed';
         },
         isTransient,
-        5,
+        { maxAttempts: 5 },
       );
       assert.equal(result, 'committed');
     } finally {
@@ -402,7 +403,7 @@ describe('Bench harness: retry-pressure instrumentation (withTransientRetry)', (
             throw new Error('domain fault'); // not transient
           },
           isTransient,
-          5,
+          { maxAttempts: 5 },
         ),
       );
     } finally {
@@ -422,7 +423,7 @@ describe('Bench harness: retry-pressure instrumentation (withTransientRetry)', (
             throw transientError();
           },
           isTransient,
-          3,
+          { maxAttempts: 3 },
         ),
       );
     } finally {
@@ -439,6 +440,56 @@ describe('Bench harness: retry-pressure instrumentation (withTransientRetry)', (
     const restoredToA = setRetryObserver(a);
     const restoredToPrev = setRetryObserver(restoredToA);
     assert.equal(restoredToPrev, a);
+  });
+
+  test('a per-call observer sees the events without any module observer installed', async () => {
+    const events: RetryEvent[] = [];
+    let calls = 0;
+    const result = await withTransientRetry(
+      async () => {
+        calls += 1;
+        if (calls < 3) throw transientError();
+        return 'committed';
+      },
+      isTransient,
+      { maxAttempts: 5, observer: (e) => events.push(e) },
+    );
+    assert.equal(result, 'committed');
+    assert.equal(events.filter((e) => e.type === 'retry').length, 2);
+    assert.equal(events.filter((e) => e.type === 'recovered').length, 1);
+  });
+
+  test('retryTelemetry maps events onto engine.retry counts and an exhausted warn', () => {
+    const counts: Array<{ name: string; tags?: Record<string, string> }> = [];
+    const logs: Array<{ level: string; event: string }> = [];
+    const observer = retryTelemetry(
+      {
+        meter: {
+          count: (name, _n, tags) => counts.push({ name, tags }),
+          observe: () => {},
+        },
+        logger: { log: (level, event) => logs.push({ level, event }) },
+      },
+      'mysql',
+    );
+    assert.notEqual(observer, undefined);
+
+    observer!({ type: 'retry', attempt: 1, error: transientError() });
+    observer!({ type: 'recovered', attempts: 2 });
+    observer!({ type: 'exhausted', attempts: 10, error: transientError() });
+
+    assert.deepEqual(counts, [
+      { name: 'engine.retry', tags: { engine: 'mysql', outcome: 'conflict' } },
+      { name: 'engine.retry.recovered', tags: { engine: 'mysql' } },
+      { name: 'engine.retry', tags: { engine: 'mysql', outcome: 'exhausted' } },
+    ]);
+    assert.deepEqual(logs, [
+      { level: 'warn', event: 'engine.retry.exhausted' },
+    ]);
+  });
+
+  test('retryTelemetry is undefined when neither runtime port is wired', () => {
+    assert.equal(retryTelemetry({}, 'postgres'), undefined);
   });
 });
 

@@ -2,6 +2,16 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
+## Unreleased (0.2.1)
+
+### Added
+
+- The SQL engines meter their transient-retry pressure through optional `meter`/`logger`
+  store options, wired by the composition: `engine.retry` counts each conflict and each
+  exhausted budget (tagged `engine`, `outcome`), `engine.retry.recovered` counts commits
+  the budget rescued, and an exhausted budget logs `engine.retry.exhausted`.
+  `withTransientRetry` takes `{ maxAttempts, observer }` in place of a positional
+  `maxAttempts`.
 ## 0.2.0 - 2026-07-16
 
 ### Added
