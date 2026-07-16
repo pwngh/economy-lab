@@ -38,6 +38,7 @@ import {
   emitJson,
   measureConcurrent,
   measureSequential,
+  type SequentialResult,
   ms,
   num,
   printTable,
@@ -248,7 +249,7 @@ async function runDeterminismSequence(economy: Economy): Promise<void> {
 
 type KindRates = {
   name: string;
-  seq: number;
+  seq: SequentialResult;
   con: ConcurrentResult;
 };
 
@@ -278,7 +279,7 @@ function reportKind(p: Provisioned, r: KindRates): void {
   const c = r.con;
   const lat = c.latency;
   console.warn(
-    `      ${r.name.padEnd(14)} seq ${rate(r.seq).padStart(9)}  con ${rate(c.rate).padStart(9)} ops/sec` +
+    `      ${r.name.padEnd(14)} seq ${rate(r.seq.rate).padStart(9)}  con ${rate(c.rate).padStart(9)} ops/sec` +
       `  · lat p50 ${ms(lat.p50)} p95 ${ms(lat.p95)} p99 ${ms(lat.p99)} max ${ms(lat.max)} ms`,
   );
   const bits: string[] = [`committed ${num(c.committed)}`];
@@ -290,6 +291,16 @@ function reportKind(p: Provisioned, r: KindRates): void {
   bits.push(
     c.threw > 0 ? `threw ${c.threw} [${hist(c.throwClasses)}]` : 'threw 0',
   );
+  const capped: string[] = [];
+  if (r.seq.fired < r.seq.planned) {
+    capped.push(`seq ${num(r.seq.fired)}/${num(r.seq.planned)}`);
+  }
+  if (c.fired < c.planned) {
+    capped.push(`con ${num(c.fired)}/${num(c.planned)}`);
+  }
+  if (capped.length > 0) {
+    bits.push(`budget-capped: fired ${capped.join(', ')}`);
+  }
   if (c.duplicate > 0) bits.push(`duplicate ${c.duplicate}`);
   const retry =
     c.retries.retries > 0
@@ -302,6 +313,11 @@ function reportKind(p: Provisioned, r: KindRates): void {
         : '')
     : 'db-deadlocks n/a';
   console.warn(`                     ${bits.join('  ')}  · ${retry}  · ${dl}`);
+  if (c.fired < c.planned && c.committed < Math.min(c.planned, 100)) {
+    console.warn(
+      `      ⚠ ${r.name}: BENCH_BUDGET_MS expired after only ${num(c.committed)} committed of ${num(c.fired)} fired — a stalled machine or a budget too low; these rates are not usable`,
+    );
+  }
   if (p.mode === 'throughput' && (c.rejected > 0 || c.duplicate > 0)) {
     console.warn(
       `      ⚠ ${r.name}: ${c.rejected} rejected / ${c.duplicate} duplicate under throughput mode — a funding/gate/id BUG, not contention; investigate`,
@@ -479,7 +495,11 @@ async function throughputFor(p: Provisioned): Promise<BackendResult> {
     kinds.push(r);
   }
   const netting = await measureNetting(p);
-  reportNetting(p, netting, kinds.find((k) => k.name === 'spend')?.seq ?? null);
+  reportNetting(
+    p,
+    netting,
+    kinds.find((k) => k.name === 'spend')?.seq.rate ?? null,
+  );
   const bitset = await measureBitset(p);
   reportBitset(bitset);
   // The prove gate also covers the netting settlement just posted; a failure flips the exit code.
@@ -645,7 +665,7 @@ const kindNames = ['topUp', 'spend', 'requestPayout'];
 const kindOf = (r: BackendResult, name: string): KindRates | undefined =>
   r.kinds.find((k) => k.name === name);
 const seqRate = (r: BackendResult, name: string): string =>
-  rate(kindOf(r, name)?.seq ?? null);
+  rate(kindOf(r, name)?.seq.rate ?? null);
 const conRate = (r: BackendResult, name: string): string =>
   rate(kindOf(r, name)?.con.rate ?? null);
 

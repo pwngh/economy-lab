@@ -835,18 +835,25 @@ export type RetryPressure = {
   exhausted: number;
 };
 
+// The rate plus how much of the planned sample the budget let run. Truncation is routine for a
+// slow backend and the per-op average stays honest, but the report must say what portion ran —
+// an op the budget never fired would otherwise read as covered.
+export type SequentialResult = { rate: number; fired: number; planned: number };
+
 // One op at a time, best of `reps`, each rep capped at `budgetMs` — the latency-bound number.
 // Committed ops only; any non-commit is surfaced loudly.
 export async function measureSequential(
   cfg: HarnessConfig,
   perOp: (k: number) => Promise<unknown>,
-): Promise<number> {
+): Promise<SequentialResult> {
   let bestPerOp = Infinity;
   let rejected = 0;
+  let fired = 0;
   for (let r = 0; r < cfg.reps; r++) {
     const t0 = nowMs();
     let done = 0;
     for (let i = 0; i < cfg.ops; i++) {
+      fired += 1;
       if (isCommitted(await perOp(r * cfg.ops + i))) done += 1;
       else rejected += 1;
       if (nowMs() - t0 > cfg.budgetMs) break;
@@ -858,10 +865,15 @@ export async function measureSequential(
       `      WARNING: ${rejected} ops did not commit — the rate is over committed ops only; check funding/gates`,
     );
   }
-  return bestPerOp === Infinity ? 0 : 1000 / bestPerOp;
+  return {
+    rate: bestPerOp === Infinity ? 0 : 1000 / bestPerOp,
+    fired,
+    planned: cfg.reps * cfg.ops,
+  };
 }
 
-// Throughput over committed ops, plus the breakdown to trust it. `errors` is rejected+threw combined.
+// Throughput over committed ops, plus the breakdown to trust it. `errors` is rejected+threw
+// combined; `fired`/`planned` report budget truncation (see SequentialResult).
 export type ConcurrentResult = {
   rate: number;
   completed: number;
@@ -875,7 +887,47 @@ export type ConcurrentResult = {
   latency: LatencyDist;
   retries: RetryPressure;
   dbCounters: EngineCounters | null;
+  fired: number;
+  planned: number;
 };
+
+type ConcurrentTally = {
+  committed: number;
+  duplicate: number;
+  rejected: number;
+  threw: number;
+  rejectReasons: Record<string, number>;
+  throwClasses: Record<string, number>;
+  latencies: number[];
+};
+
+// Classifies one settled op into the tally; returns whether it committed (the rep's `done` count).
+function tallyOutcome(
+  tally: ConcurrentTally,
+  settled: { out?: unknown; error?: unknown },
+  elapsedMs: number,
+): boolean {
+  if ('error' in settled) {
+    tally.threw += 1;
+    const { label } = classifyThrow(settled.error);
+    tally.throwClasses[label] = (tally.throwClasses[label] ?? 0) + 1;
+    return false;
+  }
+  const klass = classifyOutcome(settled.out);
+  if (klass.status === 'committed') {
+    tally.committed += 1;
+    tally.latencies.push(elapsedMs);
+    return true;
+  }
+  if (klass.status === 'duplicate') {
+    tally.duplicate += 1;
+    return false;
+  }
+  tally.rejected += 1;
+  tally.rejectReasons[klass.reason] =
+    (tally.rejectReasons[klass.reason] ?? 0) + 1;
+  return false;
+}
 
 // Up to `concurrency` submits in flight, refilled as each completes, best of `reps`, capped at
 // `budgetMs`. In-flight ops let a durable SQL engine overlap round trips and group-commit, so con
@@ -889,13 +941,16 @@ export async function measureConcurrent(
   const inFlight = Math.max(1, concurrency);
   let bestPerOp = Infinity;
   let lastCompleted = 0;
-  let committed = 0;
-  let duplicate = 0;
-  let rejected = 0;
-  let threw = 0;
-  const rejectReasons: Record<string, number> = {};
-  const throwClasses: Record<string, number> = {};
-  const latencies: number[] = [];
+  let fired = 0;
+  const tally: ConcurrentTally = {
+    committed: 0,
+    duplicate: 0,
+    rejected: 0,
+    threw: 0,
+    rejectReasons: {},
+    throwClasses: {},
+    latencies: [],
+  };
 
   // Scope the observer and counter delta to this sample; the previous observer is restored in `finally`.
   const retries: RetryPressure = { retries: 0, recovered: 0, exhausted: 0 };
@@ -915,27 +970,14 @@ export async function measureConcurrent(
         for (;;) {
           const i = next++;
           if (i >= cfg.ops || nowMs() - t0 > cfg.budgetMs) return;
+          fired += 1;
           // Latency includes queueing within the in-flight window; recorded for committed ops only.
           const started = nowMs();
-          try {
-            const out = await perOp(r * cfg.ops + i);
-            const klass = classifyOutcome(out);
-            if (klass.status === 'committed') {
-              done += 1;
-              committed += 1;
-              latencies.push(nowMs() - started);
-            } else if (klass.status === 'duplicate') {
-              duplicate += 1;
-            } else {
-              rejected += 1;
-              rejectReasons[klass.reason] =
-                (rejectReasons[klass.reason] ?? 0) + 1;
-            }
-          } catch (error) {
-            threw += 1;
-            const { label } = classifyThrow(error);
-            throwClasses[label] = (throwClasses[label] ?? 0) + 1;
-          }
+          const settled = await perOp(r * cfg.ops + i).then(
+            (out) => ({ out }),
+            (error) => ({ error }),
+          );
+          if (tallyOutcome(tally, settled, nowMs() - started)) done += 1;
         }
       };
       await Promise.all(Array.from({ length: inFlight }, worker));
@@ -950,16 +992,18 @@ export async function measureConcurrent(
   return {
     rate: bestPerOp === Infinity ? 0 : 1000 / bestPerOp,
     completed: lastCompleted,
-    committed,
-    duplicate,
-    rejected,
-    threw,
-    rejectReasons,
-    throwClasses,
-    errors: rejected + threw,
-    latency: latencyDist(latencies),
+    committed: tally.committed,
+    duplicate: tally.duplicate,
+    rejected: tally.rejected,
+    threw: tally.threw,
+    rejectReasons: tally.rejectReasons,
+    throwClasses: tally.throwClasses,
+    errors: tally.rejected + tally.threw,
+    latency: latencyDist(tally.latencies),
     retries,
     dbCounters: counterDelta(before, after),
+    fired,
+    planned: cfg.reps * cfg.ops,
   };
 }
 
