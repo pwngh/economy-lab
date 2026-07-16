@@ -190,10 +190,10 @@ describe('the hand-kept list covers the whole export surface', () => {
   test('every name src/index.ts exports appears in PUBLIC_EXPORTS', () => {
     const barrel = readFileSync(join(import.meta.dirname, '../../../src/index.ts'), 'utf8');
     const names = [...barrel.matchAll(/^export (?:type )?\{([\s\S]*?)\}/gm)]
-      .flatMap((block) => block[1]!.split(','))
+      .flatMap((block) => (block[1] ?? '').split(','))
       .map((name) => name.replace(/^\s*type\s+/, '').trim())
       .filter(Boolean)
-      .map((name) => (name.includes(' as ') ? name.split(' as ')[1]!.trim() : name));
+      .map((name) => name.split(' as ').pop()?.trim() ?? name);
     expect(names.length).toBeGreaterThan(100);
     const listed = new Set(PUBLIC_EXPORTS);
     const missing = names.filter((name) => !listed.has(name));
