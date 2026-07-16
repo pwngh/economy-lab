@@ -127,9 +127,16 @@ export type SweepRun = { batch: SweepBatch; postings: ReadonlyArray<string> };
  * Handle the host program uses to drive the background jobs. `runOnce` runs every job once.
  * `start` runs them on a timer and returns a stop function; present only when a Scheduler was
  * supplied at creation (without one there's nothing to drive the loop).
+ *
+ * `pause` makes the scheduled runs no-ops until `resume`; the timer keeps ticking so stop stays
+ * with whoever holds the stop function. An explicit `runOnce` still runs while paused — a
+ * supervisor or operator acting deliberately is not the loop being paused.
  */
 export type Worker = {
   runOnce(input: SweepInput): Promise<SweepRun>;
+  pause(): void;
+  resume(): void;
+  paused(): boolean;
   start?(intervalMs: number, input: SweepInput): () => void;
 };
 
@@ -233,6 +240,16 @@ export function createWorker(
   ctx: WorkerCtx,
   scheduler?: Scheduler,
 ): Worker {
+  let paused = false;
+  const controls = {
+    pause: () => {
+      paused = true;
+    },
+    resume: () => {
+      paused = false;
+    },
+    paused: () => paused,
+  };
   const runOnce = async (input: SweepInput): Promise<SweepRun> => {
     // A wrapped id generator records the run's txn ids (see SweepRun). `start` below does not need
     // this, so it stays on the bare runSweeps.
@@ -251,14 +268,16 @@ export function createWorker(
     return { batch, postings };
   };
   if (scheduler === undefined) {
-    return { runOnce };
+    return { runOnce, ...controls };
   }
   return {
     runOnce,
+    ...controls,
     start: (intervalMs, input) =>
       scheduler.every(
         intervalMs,
         async () => {
+          if (paused) return;
           await runSweeps(store, ctx, input);
         },
         input.options,

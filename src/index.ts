@@ -271,6 +271,7 @@ export type {
   Logger,
   Meter,
   Cache,
+  Scheduler,
 } from '#src/ports.ts';
 
 // Domain records the read side hands back: a payout saga, a ledger posting, an outbound event, and

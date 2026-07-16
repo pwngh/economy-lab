@@ -15,6 +15,10 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - The payout sweep meters its lifecycle: a `worker.payouts.saga_age_ms` gauge per claimed
   saga (time in the current state) and counters for `dead_lettered`,
   `settlement_unreported`, and `pending_past_timeout`.
+- `Worker.pause()` and `resume()` skip the scheduled sweeps while paused; an explicit
+  `runOnce` still runs. `paused()` reports the flag.
+- The `Scheduler` type is exported from the main entry.
+
 ## 0.2.0 - 2026-07-16
 
 ### Added

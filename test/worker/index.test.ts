@@ -290,6 +290,49 @@ async function runOnceDrivesOneBatch(): Promise<void> {
   await store.close();
 }
 
+async function pauseSkipsScheduledRunsAndResumeRestoresThem(): Promise<void> {
+  const { store, digest } = await seededStore();
+  let scheduled: { task: () => Promise<void> } | null = null;
+  const scheduler: Scheduler = {
+    every: (_ms, task) => {
+      scheduled = { task };
+      return () => {};
+    },
+  };
+  let metered = 0;
+  const meter = {
+    count: () => {
+      metered += 1;
+    },
+    observe: () => {
+      metered += 1;
+    },
+  };
+  const worker = createWorker(
+    store,
+    makeWorkerCtx({ digest, meter }),
+    scheduler,
+  );
+  worker.start!(5_000, sweepInput());
+
+  assert.equal(worker.paused(), false);
+  worker.pause();
+  assert.equal(worker.paused(), true);
+  await scheduled!.task();
+  assert.equal(metered, 0); // the scheduled run was a no-op
+
+  // An explicit runOnce is deliberate and ignores the pause.
+  await worker.runOnce(sweepInput());
+  const afterRunOnce = metered;
+  assert.notEqual(afterRunOnce, 0);
+
+  worker.resume();
+  assert.equal(worker.paused(), false);
+  await scheduled!.task();
+  assert.notEqual(metered, afterRunOnce);
+  await store.close();
+}
+
 async function startSchedulesTheBatchOnTheInjectedScheduler(): Promise<void> {
   const { store, digest } = await seededStore();
   let scheduled: { ms: number; task: () => Promise<void> } | null = null;
@@ -396,4 +439,6 @@ describe('Worker Composition Root', () => {
   test('runOnce drives one batch', () => runOnceDrivesOneBatch());
   test('start schedules the batch on the injected scheduler', () =>
     startSchedulesTheBatchOnTheInjectedScheduler());
+  test('pause skips scheduled runs, runOnce still works, resume restores', () =>
+    pauseSkipsScheduledRunsAndResumeRestoresThem());
 });
