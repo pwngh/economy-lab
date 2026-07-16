@@ -5,7 +5,7 @@ order: 30
 status: stable
 sourceRefs:
   [
-    'src/server.ts#L81 · createServer',
+    'src/server.ts#L82 · createServer',
     'scripts/main.ts#L322 · runServe',
     'test/server.test.ts',
   ]
@@ -22,7 +22,7 @@ Most of these docs talk about the [`Economy`](/economy/reference/the-economy/) a
 import { createServer } from '@pwngh/economy-lab';
 
 const handler = createServer(economy);
-const response = await handler(request); // Request → Response
+const response = await handler(new Request('http://service/healthz'));
 ```
 
 It uses only Fetch globals (`Request`, `Response`, `URL`, `crypto.subtle`) and no Node APIs, so the same handler runs on Node, Bun, Deno, and Cloudflare Workers. The wiring in `scripts/main.ts` (covered below) is what bridges it onto a concrete runtime.
@@ -156,11 +156,23 @@ It runs in three modes, selected by `argv[2]`:
 
 In `serve` and `dev`, <SourceLink to="scripts/main.ts#L322">runServe</SourceLink> builds the economy from the environment and mounts the handler. It passes three things into `createServer`: the purchase-webhook handler, the `Config`, and the clock. Those last two are what _activate_ the verification gate, so a genuine callback is persisted and a forged or stale one is rejected before it changes anything.
 
+The handler itself is yours to write, and its body is two exported calls. `decodeWebhookEvent` turns the parsed JSON body into a typed `PurchaseEvent`; a wrong-shape body or bad amount throws a fault the service maps to a `400` problem response before anything reaches the ledger. `handlePurchaseWebhook` persists the decoded event to the inbox, deduplicated on the provider's event id, for the apply worker to settle off the request path:
+
 ```ts
+import {
+  createServer,
+  decodeWebhookEvent,
+  handlePurchaseWebhook,
+} from '@pwngh/economy-lab';
+
 const handler = createServer(economy, {
-  webhook: purchaseWebhook(caps.store, caps.ids, caps.clock),
+  webhook: async (provider, request) => {
+    const event = decodeWebhookEvent(provider, await request.json());
+    const ack = await handlePurchaseWebhook(store, { ids, clock }, event);
+    return Response.json({ status: ack.status });
+  },
   config,
-  clock: defaults.clock,
+  clock,
 });
 ```
 

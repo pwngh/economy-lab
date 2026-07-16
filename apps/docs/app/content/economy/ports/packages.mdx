@@ -49,9 +49,10 @@ dispatcher enqueues every event as a task, keyed by the event id:
 
 ```ts
 // scripts/support/taskq-host.ts — the bridge's Dispatcher
+const worker = taskq.startWorker(db, { queues });
 const dispatcher: Dispatcher = async (event) => {
   await taskq.enqueue(
-    pool,
+    db,
     'economy.events',
     {
       id: event.id,

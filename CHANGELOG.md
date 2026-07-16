@@ -51,6 +51,7 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 
 ### Documentation
 
+- The HTTP service page's webhook example uses the exported toolkit.
 - `Recipient` documents the share rule: `shareBps` are basis points of the post-fee net,
   summing to 10,000.
 - `Transaction.legs` documents the debit-positive sign convention.
