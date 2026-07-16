@@ -70,10 +70,15 @@ if (!cspLine) {
   );
 }
 const consoleHashes = new Set();
-for (const name of readdirSync(`${OUT}/console`).filter((f) =>
-  f.endsWith('.html'),
-)) {
-  const html = readFileSync(join(OUT, 'console', name), 'utf8');
+// The docs 404 is served for unmatched /console/* deep links too — under this rule, not the
+// docs one — so its inline scripts (the theme snippet and the console deep-link bounce) must be
+// allow-listed here or the bounce dies silently and every "open txn_… in the console" link 404s.
+const consolePages = readdirSync(`${OUT}/console`)
+  .filter((f) => f.endsWith('.html'))
+  .map((f) => join(OUT, 'console', f))
+  .concat(join(OUT, '404.html'));
+for (const page of consolePages) {
+  const html = readFileSync(page, 'utf8');
   for (const m of html.matchAll(
     /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g,
   )) {
