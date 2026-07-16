@@ -58,6 +58,13 @@ export async function advanceDuePayouts(
   };
 
   for (const saga of due) {
+    // Time in the current state, not since the request: `updatedAt` refreshes on every
+    // transition, so this gauge is exactly the "stuck" age a supervisor alerts on.
+    ctx.meter.observe(
+      'worker.payouts.saga_age_ms',
+      input.now - saga.updatedAt,
+      { state: saga.state },
+    );
     await advanceOne(store, ctx, saga, tally);
   }
 
@@ -173,6 +180,7 @@ async function deadLetter(
         userId: saga.userId,
         reason,
       });
+      ctx.meter.count('worker.payouts.dead_lettered', 1, { reason });
     } catch {
       // The reversal committed; a logging failure must not report the item as unfinished.
     }
@@ -245,6 +253,7 @@ async function checkSubmitted(
       sagaId: saga.id,
       providerRef: saga.providerRef,
     });
+    ctx.meter.count('worker.payouts.settlement_unreported', 1);
     await recheckLater(store, ctx, saga, {});
     return;
   }
@@ -256,6 +265,7 @@ async function checkSubmitted(
         providerRef: saga.providerRef,
         ageMs: ctx.clock.now() - saga.updatedAt,
       });
+      ctx.meter.count('worker.payouts.pending_past_timeout', 1);
       await recheckLater(store, ctx, saga, { updatedAt: ctx.clock.now() });
       return;
     }

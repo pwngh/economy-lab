@@ -222,6 +222,47 @@ async function forceFailsASubmittedSagaPastTheMaxAgeAndReturnsTheReserve(
   );
 }
 
+async function metersTheAgeGaugeAndTheDeadLetterCounter(
+  store: Store,
+): Promise<void> {
+  const counts: Array<{ name: string; tags?: Record<string, string> }> = [];
+  const ages: Array<{ value: number; tags?: Record<string, string> }> = [];
+  const meter = {
+    count: (name: string, _n: number, tags?: Record<string, string>) => {
+      counts.push({ name, tags });
+    },
+    observe: (name: string, value: number, tags?: Record<string, string>) => {
+      if (name === 'worker.payouts.saga_age_ms') ages.push({ value, tags });
+    },
+  };
+  const config: Config = { ...testConfig(), maxPayoutAgeMs: 60_000 };
+  await openSaga(
+    store,
+    saga({
+      id: 'pay_1',
+      state: 'SUBMITTED',
+      reserve: credit('4.00'),
+      updatedAt: 0,
+      dueAt: 0,
+    }),
+  );
+
+  await advanceDuePayouts(
+    store,
+    makeWorkerCtx({ config, clock: fixedClock(120_000), meter }),
+    { now: 120_000, limit: 10 },
+  );
+
+  // The gauge reports time in the current state for every claimed saga.
+  assert.deepEqual(ages, [{ value: 120_000, tags: { state: 'SUBMITTED' } }]);
+  assert.deepEqual(counts, [
+    {
+      name: 'worker.payouts.dead_lettered',
+      tags: { reason: 'payout.timeout' },
+    },
+  ]);
+}
+
 async function deadLettersEvenWhenTheLoggerThrows(store: Store): Promise<void> {
   // A logger is observability, not a participant: its failure must neither roll back the
   // reversal (the log call sits after the transaction) nor report the item as unfinished.
@@ -707,6 +748,8 @@ describe('advanceDuePayouts', () => {
     forceFailsASubmittedSagaPastTheMaxAgeAndReturnsTheReserve(memoryStore()));
   test('dead-letters a timed-out payout even when the logger throws', () =>
     deadLettersEvenWhenTheLoggerThrows(memoryStore()));
+  test('meters the saga-age gauge and the dead-letter counter', () =>
+    metersTheAgeGaugeAndTheDeadLetterCounter(memoryStore()));
   test('leaves a submitted saga at the age boundary untouched for the settlement webhook', () =>
     leavesASubmittedSagaAtTheAgeBoundaryForTheWebhook(memoryStore()));
   test('dead-letters a provider fault past the attempt limit', () =>

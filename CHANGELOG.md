@@ -12,6 +12,9 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   the budget rescued, and an exhausted budget logs `engine.retry.exhausted`.
   `withTransientRetry` takes `{ maxAttempts, observer }` in place of a positional
   `maxAttempts`.
+- The payout sweep meters its lifecycle: a `worker.payouts.saga_age_ms` gauge per claimed
+  saga (time in the current state) and counters for `dead_lettered`,
+  `settlement_unreported`, and `pending_past_timeout`.
 ## 0.2.0 - 2026-07-16
 
 ### Added
