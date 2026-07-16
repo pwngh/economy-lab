@@ -18,34 +18,76 @@ import { ERROR_CODES } from '#src/errors.ts';
 const CARD_HORIZON_MS = 7 * 24 * 60 * 60_000;
 
 describe('loadConfig maturity horizons', () => {
-  test('defaults the steam and meta horizons to the card horizon', () => {
+  test('outside production every horizon defaults to 0, so the quickstart clears instantly', () => {
     const config = loadConfig({});
 
-    assert.equal(config.maturityHorizonMs.steam, CARD_HORIZON_MS);
-    assert.equal(config.maturityHorizonMs.meta, CARD_HORIZON_MS);
-    assert.equal(config.maturityHorizonMs.default, CARD_HORIZON_MS);
+    assert.deepEqual(config.maturityHorizonMs, {
+      card: 0,
+      crypto: 0,
+      steam: 0,
+      meta: 0,
+      default: 0,
+    });
   });
 
-  test('follows a raised card horizon so the store rails stay as conservative', () => {
+  test('every rail follows a raised card horizon, the conservative anchor', () => {
     const config = loadConfig({ MATURITY_HORIZON_CARD_MS: '1209600000' });
 
+    assert.equal(config.maturityHorizonMs.crypto, 1_209_600_000);
     assert.equal(config.maturityHorizonMs.steam, 1_209_600_000);
     assert.equal(config.maturityHorizonMs.meta, 1_209_600_000);
     assert.equal(config.maturityHorizonMs.default, 1_209_600_000);
   });
 
   test('reads a per-rail override without touching the other horizons', () => {
-    const config = loadConfig({ MATURITY_HORIZON_STEAM_MS: '3600000' });
+    const config = loadConfig({
+      MATURITY_HORIZON_CARD_MS: String(CARD_HORIZON_MS),
+      MATURITY_HORIZON_STEAM_MS: '3600000',
+    });
 
     assert.equal(config.maturityHorizonMs.steam, 3_600_000);
     assert.equal(config.maturityHorizonMs.meta, CARD_HORIZON_MS);
     assert.equal(config.maturityHorizonMs.card, CARD_HORIZON_MS);
   });
 
-  test('ignores an unparseable override and keeps the shipped default', () => {
-    const config = loadConfig({ MATURITY_HORIZON_META_MS: 'soon' });
+  test('ignores an unparseable override and falls back to the card anchor', () => {
+    const config = loadConfig({
+      MATURITY_HORIZON_CARD_MS: String(CARD_HORIZON_MS),
+      MATURITY_HORIZON_META_MS: 'soon',
+    });
 
     assert.equal(config.maturityHorizonMs.meta, CARD_HORIZON_MS);
+  });
+
+  test('production requires the card horizon, named in the fail-fast', () => {
+    assert.throws(
+      () =>
+        loadConfig({
+          NODE_ENV: 'production',
+          WEBHOOK_SECRET: 's',
+          SIGNING_SECRET: 's',
+        }),
+      (error: unknown) => {
+        const fault = error as {
+          code?: unknown;
+          detail?: { missing?: unknown };
+        };
+        assert.equal(fault.code, ERROR_CODES.CONFIG_INVALID);
+        assert.deepEqual(fault.detail?.missing, ['MATURITY_HORIZON_CARD_MS']);
+        return true;
+      },
+    );
+  });
+
+  test('production with an explicit card horizon loads clean', () => {
+    const config = loadConfig({
+      NODE_ENV: 'production',
+      WEBHOOK_SECRET: 's',
+      SIGNING_SECRET: 's',
+      MATURITY_HORIZON_CARD_MS: String(CARD_HORIZON_MS),
+    });
+
+    assert.equal(config.maturityHorizonMs.card, CARD_HORIZON_MS);
   });
 });
 
@@ -62,6 +104,7 @@ describe('loadConfig startup check', () => {
         assert.deepEqual(fault.detail?.missing, [
           'WEBHOOK_SECRET',
           'SIGNING_SECRET',
+          'MATURITY_HORIZON_CARD_MS',
         ]);
         return true;
       },

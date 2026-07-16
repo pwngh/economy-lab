@@ -140,17 +140,20 @@ export const CONFIG_KEYS = [
 /**
  * Build {@link Config} from env vars, defaulting any value that is unset or invalid.
  *
- * If any required secret is missing in production, throws a single CONFIG.INVALID fault
- * listing all missing keys at once, so the program fails at startup rather than one key
- * at a time during requests.
+ * If any required secret — or the maturity anchor MATURITY_HORIZON_CARD_MS — is missing in
+ * production, throws a single CONFIG.INVALID fault listing all missing keys at once, so the
+ * program fails at startup rather than one key at a time during requests.
  */
 export function loadConfig(env: EnvMap): Config {
-  const cardHorizonMs = readInt(
-    env.MATURITY_HORIZON_CARD_MS,
-    7 * 24 * 60 * 60_000,
-  );
+  const production = isProduction(env);
+  // Outside production unset horizons are 0, so the zero-config quickstart's topUp → spend
+  // works. Production must state the card horizon, the anchor every other rail defaults to.
+  const cardHorizonMs = readInt(env.MATURITY_HORIZON_CARD_MS, 0);
 
-  const missing = isProduction(env) ? missingSecrets(env) : [];
+  const missing = production ? missingSecrets(env) : [];
+  if (production && (env.MATURITY_HORIZON_CARD_MS ?? '') === '') {
+    missing.push('MATURITY_HORIZON_CARD_MS');
+  }
   if (missing.length > 0) {
     throw fault(
       ERROR_CODES.CONFIG_INVALID,
@@ -189,13 +192,12 @@ export function loadConfig(env: EnvMap): Config {
     velocityWindowMs: readInt(env.VELOCITY_WINDOW_MS, 60 * 60_000, { min: 1 }),
     maturityHorizonMs: {
       card: cardHorizonMs,
-      crypto: readInt(env.MATURITY_HORIZON_CRYPTO_MS, 24 * 60 * 60_000),
-      // Store rails for VRChat Credits. Each defaults to the card horizon, the most
-      // conservative shipped value; a deployment that knows a rail's real refund window
-      // overrides it per rail.
+      // Every other rail defaults to the card horizon, the conservative anchor; a deployment
+      // that knows a rail's real refund window overrides it per rail.
+      crypto: readInt(env.MATURITY_HORIZON_CRYPTO_MS, cardHorizonMs),
       steam: readInt(env.MATURITY_HORIZON_STEAM_MS, cardHorizonMs),
       meta: readInt(env.MATURITY_HORIZON_META_MS, cardHorizonMs),
-      // Fallback for unlisted funding sources; defaults to the card horizon, the longest shipped.
+      // Fallback for unlisted funding sources.
       default: readInt(env.MATURITY_HORIZON_DEFAULT_MS, cardHorizonMs),
     },
     payoutSla: {

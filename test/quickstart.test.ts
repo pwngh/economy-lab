@@ -46,6 +46,33 @@ test('createEconomy() runs a topUp end to end with no infrastructure', async () 
   await economy.close();
 });
 
+test('createEconomy() lets a fresh topUp be spent immediately (dev horizon is 0)', async () => {
+  const economy = await createEconomy();
+  await economy.submit(
+    topUp({
+      idempotencyKey: 'k_fund',
+      actor: SYSTEM_ACTOR,
+      userId: 'usr_q',
+      amount: toAmount('CREDIT', 1_000n),
+      source: 'card',
+    }),
+  );
+
+  const outcome = await economy.submit(
+    spend({
+      idempotencyKey: 'k_spend',
+      actor: SYSTEM_ACTOR,
+      orderId: 'ord_q1',
+      buyerId: 'usr_q',
+      sku: 'sku_q',
+      price: toAmount('CREDIT', 400n),
+      recipients: [{ sellerId: 'usr_q2', shareBps: 10_000 }],
+    }),
+  );
+  assert.equal(outcome.status, 'committed');
+  await economy.close();
+});
+
 test('operation builders set the kind and pass every field through', () => {
   const op = spend({
     idempotencyKey: 'k2',

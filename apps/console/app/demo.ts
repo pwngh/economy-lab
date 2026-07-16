@@ -50,8 +50,6 @@ export function demoEnv(
     PLATFORM_FEE_BPS: '1530', // ~15.3%, an example marketplace transaction fee
     VELOCITY_LIMIT_MINOR: String(100_000_000),
     VELOCITY_WINDOW_MS: String(60 * 60_000),
-    MATURITY_HORIZON_CARD_MS: '0',
-    MATURITY_HORIZON_CRYPTO_MS: '0',
     MATURITY_HORIZON_DEFAULT_MS: String(maturityDays * DAY_MS),
     SLA_PENDING_MS: String(30_000),
     SLA_SUBMITTED_MS: String(120_000),

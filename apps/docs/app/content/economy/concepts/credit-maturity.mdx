@@ -34,6 +34,23 @@ The matured balance is the part of the live balance whose lots have cleared thei
 
 The maturity window holds new funds just long enough that, by the time they mature, the risk of a reversal has passed.
 
+The gate is visible at the call site. A seller whose raw `earned` balance covers a cash-out is still refused while that money is inside its window:
+
+```ts
+import { requestPayout, userActor, toAmount } from '@pwngh/economy-lab';
+
+// the earned balance covers 8000, but today's sales are still clearing
+const outcome = await economy.submit(
+  requestPayout({
+    idempotencyKey: 'po_2201',
+    actor: userActor('usr_s1'),
+    userId: 'usr_s1',
+    amount: toAmount('CREDIT', 8000n),
+  }),
+);
+// → { status: "rejected", reason: "FUNDS_IMMATURE" } — same key retries cleanly once the window passes
+```
+
 ## Lots and the FIFO tail
 
 Spends draw **oldest-first**: first in, first out. So once past spends have drained the oldest lots, what's left is the _newest_ run of lots, the ones that together sum to the current balance. That run is the **tail**.
@@ -41,6 +58,8 @@ Spends draw **oldest-first**: first in, first out. So once past spends have drai
 Maturity then splits the tail. A maturity horizon (now minus the settlement wait) falls somewhere along it. Lots older than the horizon have matured; the newest lots are still waiting. The matured balance is that cleared part of the tail.
 
 The horizon depends on how the funds arrived: `maturityHorizonMs` returns the wait per funding source, and an unrecognized source falls back to a conservative `default`. A lot matures at its arrival time plus that wait.
+
+The horizons split by environment: outside production every unset horizon is `0`, so a fresh dev economy clears funds instantly; in production the card horizon must be stated explicitly and every other rail defaults to it (see [the configuration reference](/economy/reference/configuration/#maturity-horizons)).
 
 ## How it's measured
 
