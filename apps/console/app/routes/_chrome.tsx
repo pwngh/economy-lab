@@ -338,7 +338,7 @@ function Topbar({
         <Link to="/" className="topbar-ticker">
           <StatusPill tone={solvency.backed ? 'green' : 'red'} dot>
             Backing {solvency.backed ? 'covered' : 'short'} · trust $
-            {fmtAmount(solvency.trustCashUsd)}
+            {solvency.trustCashUsd}
           </StatusPill>
         </Link>
         <Link to="/integrity" className="topbar-ticker">

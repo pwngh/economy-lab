@@ -16,6 +16,8 @@ import { expect, it } from 'vitest';
 import { getEngine } from '~/engine.ts';
 import { takeFlash } from '~/flash.ts';
 
+import { cr } from './support';
+
 const DAY = 86_400_000;
 
 async function fresh() {
@@ -39,11 +41,11 @@ it('the seeded subscription renews under the sweep, then lapses when the wallet 
   const [renewed] = await eco.subscriptions();
   expect(renewed.period).toBeGreaterThan(sub.period);
   const after = await eco.wallet(sub.userId);
-  expect(after?.total).toBeCloseTo((before?.total ?? 0) - sub.priceCredits, 2);
+  expect(cr(after?.total)).toBeCloseTo(cr(before?.total) - sub.priceCredits, 2);
 
   // Drain the subscriber to under one period, then sweep until the retry cap lapses it.
   const wallet = await eco.wallet(sub.userId);
-  const spendable = wallet?.purchased ?? 0;
+  const spendable = cr(wallet?.purchased);
   if (spendable > sub.priceCredits / 2) {
     await eco.purchase({
       buyerId: sub.userId,
@@ -85,5 +87,5 @@ it('cancel stops renewals: the state is terminal and time no longer charges', as
   eco.advanceTime(sub.periodDays * 2 * DAY);
   await eco.runJobs();
   const after = await eco.wallet(sub.userId);
-  expect(after?.total).toBeCloseTo(before?.total ?? 0, 2);
+  expect(cr(after?.total)).toBeCloseTo(cr(before?.total), 2);
 });

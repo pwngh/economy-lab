@@ -120,14 +120,25 @@ export function Amount({
   );
 }
 
-// A credit figure: "1,000.00 Cr".
-export function Credits({ value }: { value: number }) {
-  return <Amount num={fmtAmount(value)} suf="Cr" />;
+// A credit figure: "1,000.00 Cr". A string is a pre-formatted exact figure (creditsDisplay)
+// and passes through untouched; a number is formatted here.
+export function Credits({ value }: { value: number | string }) {
+  return (
+    <Amount
+      num={typeof value === 'number' ? fmtAmount(value) : value}
+      suf="Cr"
+    />
+  );
 }
 
-// A USD figure: "$1,000.00".
-export function Usd({ value }: { value: number }) {
-  return <Amount pre="$" num={fmtAmount(value)} />;
+// A USD figure: "$1,000.00", with the same exact-string pass-through as Credits.
+export function Usd({ value }: { value: number | string }) {
+  return (
+    <Amount
+      pre="$"
+      num={typeof value === 'number' ? fmtAmount(value) : value}
+    />
+  );
 }
 
 // Name-first entity: "Alice" leads, the raw id trails as a small copyable chip. The display name

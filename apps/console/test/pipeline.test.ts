@@ -17,7 +17,7 @@ import { getEngine } from '~/engine.ts';
 import type { Flash } from '~/flash.ts';
 import { takeFlash } from '~/flash.ts';
 import { clientAction as pipeline } from '../app/routes/actions.pipeline';
-import { formPost, fresh } from './support';
+import { cr, formPost, fresh } from './support';
 
 async function run(body: Record<string, string>): Promise<Flash | null> {
   await formPost(pipeline, body);
@@ -39,7 +39,7 @@ it('a redelivered webhook applies once — the balance rises only the first time
   });
   expect(first).toEqual({ status: 'accepted', applied: true });
   const mid = await eco.wallet('usr_alice');
-  expect(mid?.purchased).toBeCloseTo(before.purchased + 100, 2);
+  expect(cr(mid?.purchased)).toBeCloseTo(cr(before?.purchased) + 100, 2);
 
   const second = await eco.postWebhook({
     eventId: 'evt_x',
@@ -48,7 +48,7 @@ it('a redelivered webhook applies once — the balance rises only the first time
   });
   expect(second).toEqual({ status: 'duplicate', applied: false });
   const after = await eco.wallet('usr_alice');
-  expect(after?.purchased).toBeCloseTo(before.purchased + 100, 2);
+  expect(cr(after?.purchased)).toBeCloseTo(cr(before?.purchased) + 100, 2);
 });
 
 it('the relay delivers pending outbox rows, then nothing on a re-run', async () => {
@@ -119,7 +119,7 @@ it('a webhook accepted but not applied is reported as not posted, not a top-up',
   expect(flash.message).toContain('did not post');
 
   const after = await eco.wallet('usr_alice');
-  expect(after?.purchased).toBeCloseTo(before?.purchased ?? 0, 2);
+  expect(cr(after?.purchased)).toBeCloseTo(cr(before?.purchased), 2);
 });
 
 it('an unknown pipeline op is a fault, not a silent success', async () => {

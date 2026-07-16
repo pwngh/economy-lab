@@ -72,12 +72,14 @@ export interface TxnView {
 
 // One user's three credit balances, plus their total. "Purchased" credits were bought with cash;
 // "earned" credits are a seller's revenue from sales; "promotional" credits are marketing grants.
+// The figures are exact display strings (creditsDisplay): summed in bigint minor units, never
+// through Number.
 export interface WalletView {
   userId: string;
-  purchased: number;
-  earned: number;
-  promotional: number;
-  total: number;
+  purchased: string;
+  earned: string;
+  promotional: string;
+  total: string;
 }
 
 // Result of the engine's integrity check ("prove"): which properties currently hold.
@@ -95,17 +97,18 @@ export interface ProveView {
 }
 
 // Whether real cash on hand covers what the platform owes users. Trust cash is the USD held in
-// reserve to back spendable credits.
+// reserve to back spendable credits. Money figures are exact display strings (creditsDisplay);
+// these ledger-wide sums are the first to outgrow Number.
 export interface SolvencyView {
-  userCredits: number;
+  userCredits: string;
   backed: boolean;
   // USD that trust cash must cover: the custodial (purchased) credits valued at par.
-  backingUsd: number;
-  shortfallUsd: number;
-  trustCashUsd: number;
-  purchased: number;
-  earned: number;
-  promotional: number;
+  backingUsd: string;
+  shortfallUsd: string;
+  trustCashUsd: string;
+  purchased: string;
+  earned: string;
+  promotional: string;
 }
 
 // One of the platform's own "house" ledger accounts, for the Overview's platform balances.
@@ -395,12 +398,20 @@ export const PLATFORM_ACCOUNTS: {
   },
 ];
 
-export function credits(n: number): Amount {
-  return toAmount('CREDIT', BigInt(Math.round(n * SCALE)));
-}
-
+// Lossy past 2^53 minor units — fine for a single amount (one operation is capped well under
+// that), never for sums. Ledger-wide totals stay bigint and render via creditsDisplay.
 export function toCredits(a: Amount): number {
   return Number(a.minor) / SCALE;
+}
+
+// Exact display figure ("1,234.56") straight from the bigint minor, at any size. The unit
+// ($ / Cr) is the component's job.
+export function creditsDisplay(a: Amount): string {
+  const sign = a.minor < 0n ? '-' : '';
+  const abs = a.minor < 0n ? -a.minor : a.minor;
+  const whole = (abs / 100n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const cents = (abs % 100n).toString().padStart(2, '0');
+  return `${sign}${whole}.${cents}`;
 }
 
 // Readable label for an account id. Platform accounts have fixed names (above); a user account

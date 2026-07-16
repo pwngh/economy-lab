@@ -19,20 +19,29 @@ import { currency, isWalletAccount, ownerOf } from '#src/accounts.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { MemoryLedger } from '#src/adapters/memory.ts';
 import { configuredRates } from '#src/adapters/rates.ts';
-import { economyPaused } from '#src/config.ts';
+import { economyPaused, mergeConfig } from '#src/config.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import {
   SYSTEM,
+  cancelSubscription,
   capabilitiesFromEnv,
   createWorker,
+  credits,
   earned,
   economyFromCapabilities,
+  grantPromo,
   promo,
+  requestPayout,
+  reversePayout,
+  settlePayout,
+  spend,
   spendable,
+  subscribe,
+  topUp,
   workerCtxFrom,
 } from '#src/index.ts';
 import { proveEconomy } from '#src/integrity.ts';
-import { convertFloor } from '#src/money.ts';
+import { convertFloor, toAmount } from '#src/money.ts';
 import { flatFee } from '#src/pricing.ts';
 import { jsonlLogger, systemDigest, systemSigner } from '#src/runtime.ts';
 import { createServer } from '#src/server.ts';
@@ -42,6 +51,7 @@ import { relayOutbox } from '#src/worker/relay.ts';
 
 import type {
   Capabilities,
+  Config,
   Economy,
   Operation,
   Outcome,
@@ -69,7 +79,7 @@ import {
   LABELS,
   PLATFORM_ACCOUNTS,
   accountLabel,
-  credits,
+  creditsDisplay,
   humanReason,
   humanizeKind,
   toCredits,
@@ -268,6 +278,9 @@ export interface PayoutCounts {
 // --- the console facade ------------------------------------------------------------
 
 export interface ConsoleEngine {
+  // The live Economy behind the facade (a getter: reset() swaps the instance). The docs runner
+  // submits real Operations through it, under the standing docs→console dependency ruling.
+  readonly economy: Economy;
   deposit(input: { userId: string; credits: number }): Promise<Outcome>;
   // `actor` overrides who submits, so the acting-as switcher can provoke the authorization gate;
   // `orderId` is reusable so a resubmit provokes DUPLICATE_ORDER; `giftTo` names an entitlement
@@ -523,8 +536,8 @@ export async function buildEngine(): Promise<ConsoleEngine> {
   const meter = { count: () => {}, observe: () => {} };
 
   // Build (or rebuild) the engine + worker over one env-selected store — two separate selections
-  // would leave the worker blind to the economy's in-memory state. workerCtxFrom(caps) shares the
-  // config object, which setMaturityDays/setMaxAttempts rely on (below).
+  // would leave the worker blind to the economy's in-memory state.
+  let caps: Capabilities;
   async function rebuild(): Promise<void> {
     idSeq = 0;
     clock.set(0);
@@ -534,17 +547,44 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     rebuildRates();
     ratesUnlocked = false;
 
-    const caps: Capabilities = await capabilitiesFromEnv(
+    caps = await capabilitiesFromEnv(
       demoEnv(maturityDays, maxAttempts),
       { signer, processor, rates, pricing: flatFee() },
       { clock, ids, digest, logger, meter },
     );
+    applyCaps();
+    deliveredEvents = [];
+    subIds = [];
+  }
+
+  function applyCaps(): void {
     economy = economyFromCapabilities(caps);
     workerCtx = workerCtxFrom(caps);
     workerRef = createWorker(caps.store, workerCtx);
     store = caps.store;
-    deliveredEvents = [];
-    subIds = [];
+  }
+
+  // The engine freezes its config, so a knob change rebuilds the economy and worker over the
+  // same store. State lives in the store and the clock and id sequence continue, so nothing
+  // visible resets — reset() minus the store.
+  function reconfigure(patch: Partial<Config>): void {
+    caps = { ...caps, config: mergeConfig(caps.config, patch) };
+    applyCaps();
+  }
+
+  // Summed in bigint minor units and rendered exactly; a wallet total can cross 2^53 minor,
+  // where Number arithmetic rounds.
+  async function walletOf(eco: Economy, userId: string): Promise<WalletView> {
+    const p = await eco.read.balance(spendable(userId));
+    const e = await eco.read.balance(earned(userId));
+    const m = await eco.read.balance(promo(userId));
+    return {
+      userId,
+      purchased: creditsDisplay(p),
+      earned: creditsDisplay(e),
+      promotional: creditsDisplay(m),
+      total: creditsDisplay(toAmount('CREDIT', p.minor + e.minor + m.minor)),
+    };
   }
 
   // User ids derived live from read.accounts() via isWalletAccount/ownerOf, so the account-id
@@ -900,16 +940,20 @@ export async function buildEngine(): Promise<ConsoleEngine> {
   }
 
   const api: ConsoleEngine = {
+    get economy() {
+      return economy;
+    },
     deposit: ({ userId, credits: amount }) =>
       mutate(() =>
-        submit({
-          kind: 'topUp',
-          idempotencyKey: key('idem'),
-          actor: { kind: 'system', service: 'console' },
-          source: 'card',
-          userId,
-          amount: credits(amount),
-        } as Operation),
+        submit(
+          topUp({
+            idempotencyKey: key('idem'),
+            actor: { kind: 'system', service: 'console' },
+            source: 'card',
+            userId,
+            amount: credits(amount),
+          }),
+        ),
       ),
 
     purchase: ({
@@ -922,54 +966,58 @@ export async function buildEngine(): Promise<ConsoleEngine> {
       giftTo,
     }) =>
       mutate(() =>
-        submit({
-          kind: 'spend',
-          idempotencyKey: key('idem'),
-          actor: actor ?? { kind: 'user', userId: buyerId },
-          buyerId,
-          sku: listing,
-          price: credits(price),
-          recipients: [{ sellerId, shareBps: 10_000 }],
-          orderId: orderId ?? key('ord'),
-          ...(giftTo ? { giftTo } : {}),
-        } as Operation),
+        submit(
+          spend({
+            idempotencyKey: key('idem'),
+            actor: actor ?? { kind: 'user', userId: buyerId },
+            buyerId,
+            sku: listing,
+            price: credits(price),
+            recipients: [{ sellerId, shareBps: 10_000 }],
+            orderId: orderId ?? key('ord'),
+            ...(giftTo ? { giftTo } : {}),
+          }),
+        ),
       ),
 
     requestPayout: ({ userId, credits: amount, actor }) =>
       mutate(() =>
-        submit({
-          kind: 'requestPayout',
-          idempotencyKey: key('idem'),
-          actor: actor ?? { kind: 'user', userId },
-          userId,
-          amount: credits(amount),
-        } as Operation),
+        submit(
+          requestPayout({
+            idempotencyKey: key('idem'),
+            actor: actor ?? { kind: 'user', userId },
+            userId,
+            amount: credits(amount),
+          }),
+        ),
       ),
 
     grantPromo: ({ userId, credits: amount }) =>
       mutate(() =>
-        submit({
-          kind: 'grantPromo',
-          idempotencyKey: key('idem'),
-          actor: { kind: 'system', service: 'marketing' },
-          userId,
-          amount: credits(amount),
-          expiresAt: clock.now() + 30 * 24 * 60 * 60_000,
-        } as Operation),
+        submit(
+          grantPromo({
+            idempotencyKey: key('idem'),
+            actor: { kind: 'system', service: 'marketing' },
+            userId,
+            amount: credits(amount),
+            expiresAt: clock.now() + 30 * 24 * 60 * 60_000,
+          }),
+        ),
       ),
 
     // The console acts as the operator: reversePayout is privileged, and the engine gates a settled
     // or still-live-submitted saga on its own.
     reversePayout: ({ sagaId, userId, reason }) =>
       mutate(() =>
-        submit({
-          kind: 'reversePayout',
-          idempotencyKey: key('idem'),
-          actor: { kind: 'operator', operatorId: 'ops_console' },
-          userId,
-          sagaId,
-          reason,
-        } as Operation),
+        submit(
+          reversePayout({
+            idempotencyKey: key('idem'),
+            actor: { kind: 'operator', operatorId: 'ops_console' },
+            userId,
+            sagaId,
+            reason,
+          }),
+        ),
       ),
 
     // Stand in for the provider's settlement report: settle every submitted payout at once. The
@@ -977,20 +1025,27 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     settleSubmitted: () =>
       mutate(async () => {
         const eco = economy;
-        const submittedIds: string[] = [];
+        const submitted: Array<{ sagaId: string; providerRef: string }> = [];
         for await (const saga of eco.read.payouts()) {
           if (saga.state === 'SUBMITTED') {
-            submittedIds.push(saga.id);
+            // A SUBMITTED saga carries the rail's reference from the worker's submit; the
+            // fallback is the demo processor's own shape.
+            submitted.push({
+              sagaId: saga.id,
+              providerRef: saga.providerRef ?? `tilia_${saga.id}`,
+            });
           }
         }
         let settled = 0;
-        for (const sagaId of submittedIds) {
-          const outcome = await submit({
-            kind: 'settlePayout',
-            idempotencyKey: key('idem'),
-            actor: { kind: 'system', service: 'reconcile' },
-            sagaId,
-          } as Operation);
+        for (const { sagaId, providerRef } of submitted) {
+          const outcome = await submit(
+            settlePayout({
+              idempotencyKey: key('idem'),
+              actor: { kind: 'system', service: 'reconcile' },
+              sagaId,
+              providerRef,
+            }),
+          );
           if (outcome.status === 'committed') {
             settled++;
           }
@@ -1007,16 +1062,17 @@ export async function buildEngine(): Promise<ConsoleEngine> {
         const results: Outcome[] = [];
         for (let i = 0; i < clampCount(count); i++) {
           results.push(
-            await submit({
-              kind: 'spend',
-              idempotencyKey: key('idem'),
-              actor: { kind: 'user', userId: buyerId },
-              buyerId,
-              sku: listing,
-              price: credits(price),
-              recipients: [{ sellerId, shareBps: 10_000 }],
-              orderId,
-            } as Operation),
+            await submit(
+              spend({
+                idempotencyKey: key('idem'),
+                actor: { kind: 'user', userId: buyerId },
+                buyerId,
+                sku: listing,
+                price: credits(price),
+                recipients: [{ sellerId, shareBps: 10_000 }],
+                orderId,
+              }),
+            ),
           );
         }
         const after = await spendPower(buyerId);
@@ -1031,16 +1087,17 @@ export async function buildEngine(): Promise<ConsoleEngine> {
         const results: Outcome[] = [];
         for (let i = 0; i < clampCount(count); i++) {
           results.push(
-            await submit({
-              kind: 'spend',
-              idempotencyKey: key('idem'),
-              actor: { kind: 'user', userId: buyerId },
-              buyerId,
-              sku: listing,
-              price: credits(price),
-              recipients: [{ sellerId, shareBps: 10_000 }],
-              orderId: key('ord'),
-            } as Operation),
+            await submit(
+              spend({
+                idempotencyKey: key('idem'),
+                actor: { kind: 'user', userId: buyerId },
+                buyerId,
+                sku: listing,
+                price: credits(price),
+                recipients: [{ sellerId, shareBps: 10_000 }],
+                orderId: key('ord'),
+              }),
+            ),
           );
         }
         const after = await spendPower(buyerId);
@@ -1058,16 +1115,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
       const slice = ids.slice(offset, offset + limit);
       const rows: WalletView[] = [];
       for (const userId of slice) {
-        const p = toCredits(await eco.read.balance(spendable(userId)));
-        const e = toCredits(await eco.read.balance(earned(userId)));
-        const m = toCredits(await eco.read.balance(promo(userId)));
-        rows.push({
-          userId,
-          purchased: p,
-          earned: e,
-          promotional: m,
-          total: p + e + m,
-        });
+        rows.push(await walletOf(eco, userId));
       }
       return { rows, total: ids.length, offset, limit };
     },
@@ -1075,15 +1123,11 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     // Null for an unknown user, so the detail panel never shows a phantom all-zero wallet.
     wallet: async (userId) => {
       const eco = economy;
-      const p = toCredits(await eco.read.balance(spendable(userId)));
-      const e = toCredits(await eco.read.balance(earned(userId)));
-      const m = toCredits(await eco.read.balance(promo(userId)));
-      const total = p + e + m;
       const exists = await userIds(eco).then((ids) => ids.includes(userId));
       if (!exists) {
         return null;
       }
-      return { userId, purchased: p, earned: e, promotional: m, total };
+      return walletOf(eco, userId);
     },
 
     // Newest first, streamed from the engine's posting log: views are built only for the page
@@ -1241,16 +1285,17 @@ export async function buildEngine(): Promise<ConsoleEngine> {
 
     subscribe: ({ userId, sellerId, sku, credits: price, periodDays }) =>
       mutate(async () => {
-        const outcome = await submit({
-          kind: 'subscribe',
-          idempotencyKey: key('idem'),
-          actor: { kind: 'user', userId },
-          userId,
-          sellerId,
-          sku,
-          price: credits(price),
-          periodMs: Math.max(1, Math.round(periodDays)) * DAY_MS,
-        } as Operation);
+        const outcome = await submit(
+          subscribe({
+            idempotencyKey: key('idem'),
+            actor: { kind: 'user', userId },
+            userId,
+            sellerId,
+            sku,
+            price: credits(price),
+            periodMs: Math.max(1, Math.round(periodDays)) * DAY_MS,
+          }),
+        );
         // The outcome carries no subscription id; the store's active-lookup names the one just
         // opened, so the card can track it.
         if (outcome.status === 'committed') {
@@ -1273,12 +1318,13 @@ export async function buildEngine(): Promise<ConsoleEngine> {
         if (sub === null) {
           throw fault(ERROR_CODES.CONFIG_INVALID, 'Unknown subscription.');
         }
-        return submit({
-          kind: 'cancelSubscription',
-          idempotencyKey: key('idem'),
-          actor: { kind: 'user', userId: sub.userId },
-          subscriptionId,
-        } as Operation);
+        return submit(
+          cancelSubscription({
+            idempotencyKey: key('idem'),
+            actor: { kind: 'user', userId: sub.userId },
+            subscriptionId,
+          }),
+        );
       }),
 
     subscriptions: async () => {
@@ -1308,30 +1354,35 @@ export async function buildEngine(): Promise<ConsoleEngine> {
       if (solvencyCache && now - solvencyCache.at < READ_TTL_MS) {
         return solvencyCache.value;
       }
-      let purchased = 0;
-      let earnedTotal = 0;
-      let promotional = 0;
+      // Ledger-wide sums stay in bigint minor units; past 2^53 minor, Number arithmetic rounds.
+      let purchasedMinor = 0n;
+      let earnedMinor = 0n;
+      let promoMinor = 0n;
       for (const userId of await userIds(eco)) {
-        purchased += toCredits(await eco.read.balance(spendable(userId)));
-        earnedTotal += toCredits(await eco.read.balance(earned(userId)));
-        promotional += toCredits(await eco.read.balance(promo(userId)));
+        purchasedMinor += (await eco.read.balance(spendable(userId))).minor;
+        earnedMinor += (await eco.read.balance(earned(userId))).minor;
+        promoMinor += (await eco.read.balance(promo(userId))).minor;
       }
       const r = await eco.read.prove();
       const trustCash = await eco.read.balance(SYSTEM.TRUST_CASH);
       // What trust cash must cover: only the custodial (purchased) credits, valued at par — the
       // same basis the engine's backing check uses. Earned and promo credits are not trust-backed.
-      const backingUsd = toCredits(
-        convertFloor(credits(purchased), rates.par('CREDIT'), 'USD'),
+      const backingUsd = convertFloor(
+        toAmount('CREDIT', purchasedMinor),
+        rates.par('CREDIT'),
+        'USD',
       );
       const value: SolvencyView = {
-        userCredits: purchased + earnedTotal + promotional,
+        userCredits: creditsDisplay(
+          toAmount('CREDIT', purchasedMinor + earnedMinor + promoMinor),
+        ),
         backed: r.backed,
-        backingUsd,
-        shortfallUsd: toCredits(r.shortfall),
-        trustCashUsd: toCredits(trustCash),
-        purchased,
-        earned: earnedTotal,
-        promotional,
+        backingUsd: creditsDisplay(backingUsd),
+        shortfallUsd: creditsDisplay(r.shortfall),
+        trustCashUsd: creditsDisplay(trustCash),
+        purchased: creditsDisplay(toAmount('CREDIT', purchasedMinor)),
+        earned: creditsDisplay(toAmount('CREDIT', earnedMinor)),
+        promotional: creditsDisplay(toAmount('CREDIT', promoMinor)),
       };
       solvencyCache = { at: now, value };
       return value;
@@ -1573,30 +1624,28 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     },
 
     // createEconomy snapshots config at construction, but the engine and worker hold the config
-    // object by reference, so we mutate it in place; the change takes effect on the next submit or
-    // worker run, without a rebuild that would lose saga state.
     setMaturityDays: (days) =>
       mutate(async () => {
         maturityDays = Math.max(0, Math.round(days));
-        workerCtx.config.maturityHorizonMs = {
-          card: 0,
-          crypto: 0,
-          default: maturityDays * DAY_MS,
-        };
+        reconfigure({
+          maturityHorizonMs: { default: maturityDays * DAY_MS },
+        });
       }),
 
     setMaxAttempts: (n) =>
       mutate(async () => {
         maxAttempts = Math.max(1, Math.round(n));
-        workerCtx.config.maxPayoutAttempts = maxAttempts;
+        reconfigure({ maxPayoutAttempts: maxAttempts });
       }),
 
     // Velocity ceiling in credits; the gate compares against minor units.
     setVelocityLimit: (creditsAmount) =>
       mutate(async () => {
-        workerCtx.config.velocityLimitMinor = BigInt(
-          Math.max(0, Math.round(creditsAmount * 100)),
-        );
+        reconfigure({
+          velocityLimitMinor: BigInt(
+            Math.max(0, Math.round(creditsAmount * 100)),
+          ),
+        });
       }),
 
     // The rate desk, read live. `inFlightPayouts` is what must reach zero before a change is safe:
@@ -1650,8 +1699,10 @@ export async function buildEngine(): Promise<ConsoleEngine> {
             message: `Cannot reprice with ${inFlight} payout${inFlight === 1 ? '' : 's'} in flight — settle or reverse them first, so none settles at the new rate.`,
           };
         }
-        workerCtx.config.pauseStartMs = clock.now();
-        workerCtx.config.pauseEndMs = clock.now() + DAY_MS;
+        reconfigure({
+          pauseStartMs: clock.now(),
+          pauseEndMs: clock.now() + DAY_MS,
+        });
         ratesUnlocked = true;
         invalidateReadCaches();
         return {
@@ -1719,8 +1770,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     lockRates: () =>
       mutate(async () => {
         ratesUnlocked = false;
-        workerCtx.config.pauseStartMs = null;
-        workerCtx.config.pauseEndMs = null;
+        reconfigure({ pauseStartMs: null, pauseEndMs: null });
         return {
           ok: true,
           message: 'Rate desk locked and everyday writes resumed.',
@@ -1731,21 +1781,26 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     // same way advancing past the maturity horizon clears FUNDS_IMMATURE.
     setMaintenance: (on) =>
       mutate(async () => {
-        workerCtx.config.pauseStartMs = on ? clock.now() : null;
-        workerCtx.config.pauseEndMs = on ? clock.now() + DAY_MS : null;
+        reconfigure({
+          pauseStartMs: on ? clock.now() : null,
+          pauseEndMs: on ? clock.now() + DAY_MS : null,
+        });
       }),
 
     setPayoutMinimum: (creditsAmount) =>
       mutate(async () => {
-        workerCtx.config.payoutMinimumEarnedMinor = BigInt(
-          Math.max(0, Math.round(creditsAmount * 100)),
-        );
+        reconfigure({
+          payoutMinimumEarnedMinor: BigInt(
+            Math.max(0, Math.round(creditsAmount * 100)),
+          ),
+        });
       }),
 
     setPayoutIntervalDays: (days) =>
       mutate(async () => {
-        workerCtx.config.payoutMinIntervalMs =
-          Math.max(0, Math.round(days)) * DAY_MS;
+        reconfigure({
+          payoutMinIntervalMs: Math.max(0, Math.round(days)) * DAY_MS,
+        });
       }),
 
     reset: () =>

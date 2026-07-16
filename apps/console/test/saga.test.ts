@@ -16,7 +16,7 @@ import { getEngine } from '~/engine.ts';
 import type { Flash } from '~/flash.ts';
 import { takeFlash } from '~/flash.ts';
 import { clientAction as reverse } from '../app/routes/actions.reverse';
-import { formPost, fresh } from './support';
+import { cr, formPost, fresh } from './support';
 
 async function runReverse(body: Record<string, string>): Promise<Flash | null> {
   await formPost(reverse, body);
@@ -82,7 +82,10 @@ it('reversing a reserved payout returns the reserve to the seller', async () => 
   expect(flash?.kind).toBe('notice');
 
   const after = await eco.wallet(reserved.userId);
-  expect(after?.earned).toBeCloseTo(before.earned + reserved.reserveCredits, 2);
+  expect(cr(after?.earned)).toBeCloseTo(
+    cr(before?.earned) + reserved.reserveCredits,
+    2,
+  );
 
   const detail = await eco.sagaDetail(reserved.id);
   expect(detail?.saga.state).toBe('FAILED');
@@ -111,7 +114,7 @@ it('reversing an already-terminal payout reports no change, not a fresh reversal
 
   // Nothing moved this run: the seller's earned balance is unchanged.
   const after = await eco.wallet(failed.userId);
-  expect(after?.earned).toBeCloseTo(before?.earned ?? 0, 2);
+  expect(cr(after?.earned)).toBeCloseTo(cr(before?.earned), 2);
 });
 
 it('a reverse with blank fields is rejected before the engine is touched', async () => {

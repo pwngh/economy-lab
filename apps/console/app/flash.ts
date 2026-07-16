@@ -19,6 +19,8 @@ import { redirect } from 'react-router';
 
 import { DAY_MS } from '~/demo';
 import { EconomyError } from '#src/errors.ts';
+import { encodeAmount } from '#src/money.ts';
+import type { Amount } from '#src/money.ts';
 
 export interface FlashFigure {
   label: string;
@@ -93,10 +95,13 @@ function dayLabelOf(at: unknown): string {
   return n === 0 ? 'day 0' : `day ${Math.round((n / DAY_MS) * 10) / 10}`;
 }
 
-// An encoded amount is "CREDIT:12.34" / "USD:1.00"; the decimal is already whole units, so a
-// display figure is one split away.
-function amountFigure(label: string, encoded: unknown): FlashFigure {
-  const text = String(encoded ?? '');
+// Detail money is a branded Amount; encodeAmount yields "CREDIT:12.34" / "USD:1.00", and the
+// decimal is already whole units, so a display figure is one split away.
+function amountFigure(label: string, amount: unknown): FlashFigure {
+  const text =
+    typeof amount === 'object' && amount !== null && 'minor' in amount
+      ? encodeAmount(amount as Amount)
+      : String(amount ?? '');
   const colon = text.indexOf(':');
   const currency = colon > 0 ? text.slice(0, colon) : '';
   const value = colon > 0 ? text.slice(colon + 1) : text;

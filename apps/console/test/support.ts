@@ -14,6 +14,12 @@ import { takeFlash } from '~/flash.ts';
 
 import type { ConsoleEngine } from '~/economy.ts';
 
+// Parse an exact display figure ("1,234.56", from creditsDisplay) back to a number for
+// test arithmetic. Test-scale values sit far below 2^53 minor, so the parse is lossless here.
+export function cr(display: string | undefined): number {
+  return Number((display ?? '0').replace(/,/g, ''));
+}
+
 // The tab engine returned to its seed with no flash pending: the starting point of every suite.
 export async function fresh(): Promise<{ eco: ConsoleEngine }> {
   const eco = await getEngine();

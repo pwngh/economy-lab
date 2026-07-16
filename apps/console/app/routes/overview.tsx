@@ -125,9 +125,7 @@ export default function Overview({ loaderData }: Route.ComponentProps) {
           </div>
         </div>
         <StatusPill tone={solvency.backed ? 'green' : 'red'} dot>
-          {solvency.backed
-            ? 'Fully backed'
-            : `Short $${solvency.shortfallUsd.toFixed(2)}`}
+          {solvency.backed ? 'Fully backed' : `Short $${solvency.shortfallUsd}`}
         </StatusPill>
       </div>
 
