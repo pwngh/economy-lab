@@ -24,9 +24,12 @@ import { run as challengeAuthorization } from '../app/snippets/challenge-authori
 import { run as challengeIdempotency } from '../app/snippets/challenge-idempotency';
 import { run as drain } from '../app/snippets/drain';
 import { run as idempotency } from '../app/snippets/idempotency';
+import { run as legs } from '../app/snippets/legs';
 import { run as payout } from '../app/snippets/payout';
 import { run as prove } from '../app/snippets/prove';
+import { run as reads } from '../app/snippets/reads';
 import { run as rejection } from '../app/snippets/rejection';
+import { run as theEconomy } from '../app/snippets/the-economy';
 import { run as velocity } from '../app/snippets/velocity';
 import { renderRun } from './render';
 
@@ -42,6 +45,9 @@ const SNIPPETS: Record<string, (economy: Economy) => Promise<SnippetReport>> = {
   velocity,
   rejection,
   payout,
+  legs,
+  reads,
+  'the-economy': theEconomy,
   'challenge-idempotency': challengeIdempotency,
   'challenge-authorization': challengeAuthorization,
 };

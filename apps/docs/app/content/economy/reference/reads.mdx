@@ -12,6 +12,8 @@ sourceRefs:
 related: ['economy/reference/outcomes-and-reason-codes']
 ---
 
+import readsHtml from '../../../snippets/reads.ts?shiki';
+
 `read` is the query half of [the `Economy`](/economy/reference/the-economy/): "what's this balance?", "did this go through?", "does this user own that item?". Nothing under `read` writes a ledger entry, claims an idempotency key, or records a velocity attempt.
 
 Every method lives on the `economy.read` group, and the whole group is read-only. You call them the same way you'd call `submit`:
@@ -21,7 +23,11 @@ const balance = await economy.read.balance(spendable('usr_a1'));
 // → { currency: "CREDIT", minor: 5000n }
 ```
 
-A few of these return a single value you await; a few stream many rows you iterate; one (`status`) is synchronous. The sections below group them by what you're asking for.
+A few of these return a single value you await; a few stream many rows you iterate; one (`status`) is synchronous. Three of them, live — and free to repeat, because reads never move the books:
+
+<Runnable name="reads" html={readsHtml} />
+
+The sections below group them by what you're asking for.
 
 ## Balances and history
 
@@ -34,7 +40,7 @@ const balance = await economy.read.balance(earned('usr_seller'));
 // → { currency: "CREDIT", minor: 1200n }
 ```
 
-`read.statement(account, range)` returns one page of that account's [entries](/economy/concepts/accounts-and-double-entry/) within a time range. The range is half-open in epoch milliseconds (`from` included, `to` not) and each page carries a `cursor` you pass back to fetch the next one, or `null` when you've reached the last page:
+`read.statement(account, range)` returns one page of that account's [entries](/economy/concepts/accounts-and-double-entry/) within a time range. The range is half-open in epoch milliseconds (`from` included, `to` not), and the range is the paging model: to walk a long history, tile it with consecutive windows — the windows join losslessly because an entry belongs to exactly one half-open range. The page's `cursor` field is reserved: no read accepts one, and every engine returns `null` today.
 
 ```ts
 const page = await economy.read.statement(spendable('usr_a1'), {
@@ -145,3 +151,29 @@ const report = await economy.read.prove();
 It walks every posted account once and re-derives each balance from the recorded debit and credit lines, rather than trusting the cached running total. So `conserved`, `backed`, `noOverdraft`, `chainIntact`, and `consistent` each report on the books as the entries actually describe them. This is the readable face of [solvency](/economy/concepts/solvency/) and the [hash-chain integrity](/economy/concepts/integrity/) the economy maintains.
 
 `read.prove` is a thorough enough check to deserve its own page. For what each flag means, how `shortfall` and `drift` are computed, and how this lighter in-process check relates to the full out-of-band prover, see [the proof](/economy/concepts/the-proof/).
+
+## Caveats
+
+- `read.balance` is the live total, not the spendable one: money still inside its [maturity window](/economy/concepts/credit-maturity/) counts here but can't be spent or cashed out yet.
+- On a sharded platform account, the bare id reads as the sum over its shard rows — one logical number whatever [`PLATFORM_SHARDS`](/economy/concepts/platform-sharding/) is set to.
+- The streaming reads (`accounts`, `payouts`, `postings`, `chain`) can be long on a busy ledger. Iterate and stop early; don't collect them all.
+- Nothing under `read` claims a key or counts toward a velocity window — reads are free to repeat.
+
+## Troubleshooting
+
+### The balance says the money is there, but the spend was rejected
+
+`read.balance` reports the live total; spends and payouts draw only the part that has cleared its settlement wait. A fresh top-up can cover the price and still decline as `FUNDS_IMMATURE`. The rejection carries when the funds clear:
+
+```ts
+const outcome = await economy.submit(spend({ ...order }));
+if (outcome.status === 'rejected' && outcome.reason === 'FUNDS_IMMATURE') {
+  const readyAt = outcome.detail?.availableAt; // retry the same key after this
+}
+```
+
+[Credit maturity](/economy/concepts/credit-maturity/) owns the mechanism.
+
+### `read.posting` returns null for a transaction I just saw
+
+Only committed postings exist to read. A `rejected` outcome posted nothing, and a `duplicate` outcome's transaction is the _original_ posting — its id is the one to look up. If the id came from another economy instance (a fresh in-memory engine holds fresh history), it won't resolve here. See [outcomes & reason codes](/economy/reference/outcomes-and-reason-codes/).

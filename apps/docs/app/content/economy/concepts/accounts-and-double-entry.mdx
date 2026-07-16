@@ -16,6 +16,8 @@ related:
   ]
 ---
 
+import legsHtml from '../../../snippets/legs.ts?shiki';
+
 Every balance lives in a named account. Every operation is a balanced double-entry `Posting`: value moves _between_ accounts as paired debit and credit lines, and those lines always net to zero per currency.
 
 You never add to one account without an equal, opposite line somewhere else. A user's accounts hold credits. The platform's own "house" accounts hold its cash, its revenue, and obligations.
@@ -69,6 +71,10 @@ Different accounts grow on opposite sides, and the ledger has to know which so a
 Internally, leg amounts are stored debit-positive, credit-negative. `debit(account, amount)` stores the amount as given, and `credit(account, amount)` stores its negation, so a posting balances exactly when its leg amounts sum to zero.
 
 To turn a leg back into a balance change, `balanceDelta` flips the sign for credit-normal accounts and leaves debit-normal ones as-is. Normalized this way, the no-overdraft check can measure every account, of either polarity, against zero.
+
+Both rules are visible on any committed transaction — the legs net to zero, and `balanceDelta` reads each one as the account holder would. This one runs here; edit the price and the legs rebalance around your number:
+
+<Runnable name="legs" html={legsHtml} />
 
 <Callout type="note">
 A posting is also classified for solvency. `classify` sorts each account into one of four buckets:

@@ -5,9 +5,9 @@ order: 5
 status: stable
 sourceRefs:
   [
-    'src/index.ts#L526 · createEconomy',
-    'src/economy.ts#L79 · economyFromCapabilities',
-    'src/contract.ts#L381 · Economy',
+    'src/index.ts#L530 · createEconomy',
+    'src/economy.ts#L86 · economyFromCapabilities',
+    'src/contract.ts#L392 · Economy',
   ]
 related:
   [
@@ -17,7 +17,18 @@ related:
   ]
 ---
 
+import theEconomyHtml from '../../../snippets/the-economy.ts?shiki';
+
 An `Economy` is the object you hold and call. It has a small surface: one `submit` to change money, a `read` group to look at state, and `close` to shut down.
+
+```ts
+import { createEconomy } from '@pwngh/economy-lab';
+
+const economy = await createEconomy(options); // build — see Construction
+const outcome = await economy.submit(operation); // change money → Outcome
+const balance = await economy.read.balance(account); // look, never change
+await economy.close(); // release the store
+```
 
 You build it from a set of injected ports (a `Store`, a `Signer`, a `Processor`, a `Rates`, a `FeePolicy`, a clock, and an id source) so the core never reaches for a database driver or a wall clock. Pass in-memory ports to run the same economy with no external infrastructure.
 
@@ -48,30 +59,28 @@ const economy = economyFromCapabilities(capabilities);
 
 Each driver is imported only when its environment variable selects it, so a deployment installs only what it uses. See [configuration](/economy/reference/configuration/) for every variable `compose` reads.
 
+The in-memory economy bundles for the browser with no aliases or stubs: every Node API and driver sits behind a runtime guard, and a gate (`npm run check:browser`) bundles the entry with esbuild's browser platform on every check to keep it that way. The runnable blocks across this handbook are that property at work.
+
 ## submit
 
 `submit(operation)` applies one [`Operation`](/economy/reference/operations/) and resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/). The operation names the action and carries an `idempotencyKey`, so a retried request runs at most once.
 
 <SubmitPipeline />
 
-Here a user tops up their balance; the result tells you whether it `committed`, repeated an earlier request (`duplicate`), or was declined (`rejected`):
+Here a user tops up their balance and the balance visibly moves; the result tells you whether it `committed`, repeated an earlier request (`duplicate`), or was declined (`rejected`). Run it — then click into the code, change the amount, and run yours:
 
-```ts
-const outcome = await economy.submit(
-  topUp({
-    idempotencyKey: 'ord_8821',
-    actor: systemActor('billing'),
-    userId: 'usr_a1',
-    amount: toAmount('CREDIT', 5000n),
-    source: 'stripe',
-  }),
-);
-// → { status: "committed", transaction: { id: "txn_…", … } }
-```
+<Runnable name="the-economy" html={theEconomyHtml} />
 
 A `rejected` outcome is a normal "no" returned as data, not an error; a genuine fault throws instead. See [outcomes and reason codes](/economy/reference/outcomes-and-reason-codes/) for the full set.
 
 Every submit is also metered through the injected `Meter`: one count under `economy.submit`, tagged by operation kind and how it resolved (`committed`, `duplicate`, `rejected`, or `fault`), plus its duration under `economy.submit.ms` — request-path telemetry without wrapping `submit` yourself.
+
+### Caveats
+
+- A business "no" is a returned `rejected` outcome, never a throw. A throw means the request itself is broken (`OP.MALFORMED`, `AUTH.UNAUTHORIZED`) or infrastructure failed — a caller bug or an outage, not a decline.
+- Amounts are minor units as `bigint`: `toAmount('CREDIT', 12_000n)` is 120 credits, or `credits(120)` with the whole-unit shorthand. There is no float anywhere in the money path.
+- A `duplicate` outcome carries the original transaction. Treat it as success — the work is done — not as an error.
+- A rejected request leaves its idempotency key unused, so the same key can retry after the condition clears.
 
 ## read
 
@@ -113,3 +122,23 @@ The post then runs inside one all-or-nothing transaction. It appends the balance
 A `read.balance` returns a stored running total, so it's a single O(1) read rather than a re-sum of history. The ledger entries stay the source of truth: the [prover](/economy/concepts/the-proof/) re-derives each balance and reports drift.
 
 The background sweeps that drain the outbox and do the rest of the deferred work run off this path on their own schedule. See the [background worker](/economy/reference/background-worker/).
+
+## Troubleshooting
+
+### My retry charged the buyer twice
+
+The retry minted a fresh `idempotencyKey`, so the engine saw two different operations. The key is how a retry is recognized: mint it once, from the action's own identity, and reuse it on every attempt.
+
+```ts
+const idempotencyKey = `ord_${order.id}`; // from the order, minted once
+
+const first = await economy.submit(spend({ idempotencyKey, ...details }));
+const retried = await economy.submit(spend({ idempotencyKey, ...details }));
+// retried.status → "duplicate": same transaction, nothing new posted
+```
+
+[Idempotency & retries](/economy/concepts/idempotency/) owns the full story — and closes with this exact bug as a challenge.
+
+### `submit` throws instead of rejecting
+
+A throw is not a decline. It means the request itself was broken before any business question was asked: a `user` actor acting on someone else's account (`AUTH.UNAUTHORIZED`), a blank key or malformed payload (`OP.MALFORMED`), or a store outage. Check the `actor` against the account being drained first — see [rejected versus thrown](/economy/reference/outcomes-and-reason-codes/#rejected-versus-thrown) and [actors & authorization](/economy/concepts/actors-and-authorization/).
