@@ -92,7 +92,7 @@
     "db:clean": "node --env-file-if-exists=.env scripts/db-clean.ts",
     "prove": "node --env-file-if-exists=.env scripts/prove.ts",
     "fuzz": "node --env-file-if-exists=.env scripts/fuzz.ts",
-    "prop": "node --env-file-if-exists=.env --test --test-reporter=./test/support/numbered.reporter.mjs --test-reporter-destination=stdout \"test/propcheck.test.ts\" \"test/property-based.test.ts\"",
+    "prop": "node --env-file-if-exists=.env --test --test-reporter=./test/support/numbered.reporter.mjs --test-reporter-destination=stdout \"test/propcheck.test.ts\" \"test/property-*.test.ts\"",
     "smoke": "node --env-file-if-exists=.env scripts/smoke-adapters.ts",
     "bench": "node --env-file-if-exists=.env scripts/bench.ts",
     "scale": "node --env-file-if-exists=.env scripts/scale-probe.ts",
