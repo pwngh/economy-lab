@@ -1,0 +1,64 @@
+# The scheduled soak: the bench harness against real engines. Every run reseeds, re-proves each
+# backend's whole ledger, and reports the engines' durability settings; BENCH_REQUIRE turns a
+# skipped or failed engine into a failed run.
+name: soak
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: soak
+  cancel-in-progress: false
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: economy
+          POSTGRES_PASSWORD: economy
+          POSTGRES_DB: economy_lab
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U economy -d economy_lab"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: economy
+          MYSQL_DATABASE: economy_lab
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -peconomy"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://economy:economy@localhost:5432/economy_lab
+      MYSQL_TEST_URL: mysql://root:economy@localhost:3306/economy_lab
+      BENCH_REQUIRE: postgres,mysql
+      BENCH_PROFILE: thorough
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm run db:migrate
+      # The funded mix first, then the oversubscribed one; the prove gate runs inside both.
+      - run: npm run bench
+      - run: BENCH_MODE=contention npm run bench
+      - run: npm run db:clean

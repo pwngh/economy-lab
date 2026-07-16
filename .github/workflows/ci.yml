@@ -27,16 +27,22 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      # The property suites run inside `npm test` too; alone, a broken ledger law fails with
+      # the shrunk counterexample and its seed as the step's whole output.
+      - run: npm run prop
 
   # The two React Router apps live outside the root lint/typecheck gate (their own toolchains).
-  # The console runs its full verify suite plus the bundle budget; the docs run typecheck only —
-  # their content tests and anchor checks stay in the site deploy pipeline (pages.yml /
-  # site:deploy), where anchor rot is handled deliberately.
+  # Each runs its full verify suite; the docs add the two source-of-truth gates, so a stale
+  # anchor or an undocumented export fails the pull request, not the deploy.
   apps:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # Full history: check:ref resolves the docs' pinned REPO_REF commit, which a shallow
+      # checkout would not have.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
@@ -46,7 +52,14 @@ jobs:
       - run: npm run verify --prefix apps/console
       - run: npm run budget --prefix apps/console
       - run: npm ci --prefix apps/docs
-      - run: npm run typecheck --prefix apps/docs
+      - run: npm run verify --prefix apps/docs
+      - run: npm run check:ref --prefix apps/docs
+      # The workbench's gates need the built site: the CSP check proves the sandbox's eval grant
+      # stays confined to its one path rule, and the static check holds the no-hydration line and
+      # the runner's per-tier byte budgets.
+      - run: npm run build --prefix apps/docs
+      - run: npm run check:csp --prefix apps/docs
+      - run: npm run check:static --prefix apps/docs
 
   # The differential matrix: memory, postgres, mysql, and http proven byte-identical in CI.
   # timeout-minutes bounds a deadlock or stuck connection to a clean failure instead of the
