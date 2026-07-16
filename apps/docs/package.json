@@ -17,7 +17,8 @@
     "check:csp": "node scripts/check-csp.mjs",
     "check:static": "node scripts/check-static.mjs",
     "check:ref": "node scripts/check-ref.mjs",
-    "verify": "npm run typecheck && npm run lint && npm run test"
+    "verify": "npm run typecheck && npm run lint && npm run test && npm run test:snippets",
+    "test:snippets": "vitest run --config vitest.snippets.config.ts"
   },
   "dependencies": {
     "@react-router/node": "7.18.0",
