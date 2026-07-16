@@ -146,6 +146,11 @@ export function shardsOf(base: AccountRef, shards: number): AccountRef[] {
   return refs;
 }
 
+/** Whether `ref` is the bare id of an account that shards, so a reader must sum its rows. */
+export function isShardedBase(ref: AccountRef): boolean {
+  return SHARDED.has(ref);
+}
+
 /**
  * Picks a posting's shard: hash the key, mod the count. Outside the sharded set, or shards < 2,
  * the bare id passes through. Ops key on their idempotency key (same shard on retry);

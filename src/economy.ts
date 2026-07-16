@@ -28,9 +28,11 @@ import {
   currency,
   earned,
   isDebitNormal,
+  isShardedBase,
   isWalletAccount,
   ownerOf,
   promo,
+  shardsOf,
   spendable,
   walletKindOf,
   accountsOf,
@@ -179,7 +181,26 @@ async function bestEffortCache<T>(
 // The value is cached as its `encodeAmount` string, so the exact bigint minor-unit value survives a
 // string-only cache. Only the public `read.balance` routes through here; reads inside a write
 // transaction stay direct, so a transaction never sees a stale cached value.
+// A bare sharded platform account reads as its logical balance: the sum over its shard rows,
+// each row cached (and invalidated) under its own key.
 async function cachedBalance(
+  ctx: Ctx,
+  ledger: Ledger,
+  account: AccountRef,
+  options?: Options,
+): Promise<Amount> {
+  const shards = ctx.config.platformShards;
+  if (shards > 1 && isShardedBase(account)) {
+    let minor = 0n;
+    for (const shard of shardsOf(account, shards)) {
+      minor += (await cachedRow(ctx, ledger, shard, options)).minor;
+    }
+    return toAmount(currency(account), minor);
+  }
+  return cachedRow(ctx, ledger, account, options);
+}
+
+async function cachedRow(
   ctx: Ctx,
   ledger: Ledger,
   account: AccountRef,

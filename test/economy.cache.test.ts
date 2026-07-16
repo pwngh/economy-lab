@@ -27,7 +27,7 @@ import {
   testConfig,
 } from '#test/support/capabilities.ts';
 import { topUp, credit } from '#test/support/builders.ts';
-import { spendable } from '#src/accounts.ts';
+import { SYSTEM, shardsOf, spendable } from '#src/accounts.ts';
 
 import type { Economy } from '#src/economy.ts';
 import type { Cache } from '#src/ports.ts';
@@ -72,7 +72,11 @@ function throwingCache(): Cache {
 }
 
 // Mirrors `makeEconomy` but injects a `cache` capability, which `makeEconomy` leaves unset.
-function makeCachedEconomy(cache: Cache, seed = 1): Economy {
+function makeCachedEconomy(
+  cache: Cache,
+  seed = 1,
+  config: Partial<ReturnType<typeof testConfig>> = {},
+): Economy {
   const digest = seededDigest(seed);
   const clock = fixedClock(0);
   return economyFromCapabilities({
@@ -86,7 +90,7 @@ function makeCachedEconomy(cache: Cache, seed = 1): Economy {
     meter: noopMeter(),
     processor: fakeProcessor(),
     pricing: defaultPricing(),
-    config: testConfig(),
+    config: { ...testConfig(), ...config },
     cache,
   });
 }
@@ -133,6 +137,27 @@ describe('Read-Through Balance Cache', () => {
     assert.deepEqual(after, credit('15.00'));
   });
 
+  test('a bare sharded account reads through per-shard keys and sums them', async () => {
+    const cache = recordingCache();
+    const economy = makeCachedEconomy(cache, 1, { platformShards: 4 });
+    await economy.submit(
+      topUp({ userId: 'usr_buyer', amount: credit('10.00') }),
+    );
+
+    const total = await economy.read.balance(SYSTEM.STORED_VALUE);
+    assert.deepEqual(total, credit('10.00'));
+    const keys = shardsOf(SYSTEM.STORED_VALUE, 4).map(
+      (shard) => `bal:${shard}`,
+    );
+    assert.deepEqual(cache.gets, keys);
+    assert.deepEqual(cache.sets, keys);
+
+    // The second read is four hits: the same gets again, no new sets.
+    assert.deepEqual(await economy.read.balance(SYSTEM.STORED_VALUE), total);
+    assert.deepEqual(cache.gets, [...keys, ...keys]);
+    assert.deepEqual(cache.sets, keys);
+  });
+
   test('a rejected operation invalidates nothing', async () => {
     const cache = recordingCache();
     const economy = makeCachedEconomy(cache);
@@ -155,6 +180,7 @@ describe('Read-Through Balance Cache', () => {
       buyerId: 'usr_buyer',
       sku: 'sku_pricey',
       price: credit('999.00'),
+      recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
     });
     assert.equal(outcome.status, 'rejected');
     assert.equal(cache.invalidations.length, invalidationsBefore);

@@ -535,6 +535,50 @@ describe('Sharding: Fee Sweep', () => {
   });
 });
 
+describe('Sharding: Public Balance Read', () => {
+  test('read.balance on a bare sharded account sums its shard rows', async () => {
+    const { economy, store } = shardedEconomy();
+    for (let i = 0; i < 4; i++) {
+      const funded = await economy.submit(
+        topUp({ userId: `usr_r${i}`, amount: credit('10.00') }),
+      );
+      assert.equal(funded.status, 'committed');
+      const sale = await economy.submit(
+        spend({
+          buyerId: `usr_r${i}`,
+          sku: 'wrld_pass',
+          price: credit('4.00'),
+          recipients: [{ sellerId: `usr_rs${i}`, shareBps: 10_000 }],
+        }),
+      );
+      assert.equal(sale.status, 'committed');
+    }
+
+    const total = await logicalBalance(store, SYSTEM.REVENUE);
+    const bareRow = (await store.ledger.balance(SYSTEM.REVENUE)).minor;
+    // The workload scatters fees across more than one row, so the sum is a real claim.
+    assert.notEqual(bareRow, total);
+    assert.equal((await economy.read.balance(SYSTEM.REVENUE)).minor, total);
+    await proveAll(economy);
+  });
+
+  test('read.balance on one shard row stays that row alone', async () => {
+    const { economy, store } = shardedEconomy();
+    const funded = await economy.submit(
+      topUp({ userId: 'usr_row', amount: credit('10.00') }),
+    );
+    assert.equal(funded.status, 'committed');
+
+    for (let k = 1; k < SHARDS; k += 1) {
+      const shard = shardRef(SYSTEM.STORED_VALUE, k);
+      assert.equal(
+        (await economy.read.balance(shard)).minor,
+        (await store.ledger.balance(shard)).minor,
+      );
+    }
+  });
+});
+
 describe('Sharding: Bench Knob', () => {
   test('BENCH_SHARDS resolves into the harness config, defaulting to 1', () => {
     assert.equal(resolveConfig({}).shards, 1);

@@ -6,7 +6,7 @@ status: stable
 sourceRefs:
   [
     'src/contract.ts#L376-L436 · Economy.read',
-    'src/economy.ts#L81-L95 · read',
+    'src/economy.ts#L83-L97 · read',
     'test/economy.read.test.ts',
   ]
 related: ['economy/reference/outcomes-and-reason-codes']
@@ -27,7 +27,7 @@ A few of these return a single value you await; a few stream many rows you itera
 
 These two answer "how much, and how did it get there?" for one account at a time.
 
-`read.balance(account)` returns the account's current balance as an [`Amount`](/economy/concepts/money-model/). It's a stored running total, so it's a single O(1) read rather than a re-sum over the account's whole history. Pass an account reference built from a helper like `spendable`, `earned`, or `promo`:
+`read.balance(account)` returns the account's current balance as an [`Amount`](/economy/concepts/money-model/). It's a stored running total, so it's a single O(1) read rather than a re-sum over the account's whole history. Pass an account reference built from a helper like `spendable`, `earned`, or `promo`. One exception to "single": with [platform sharding](/economy/concepts/platform-sharding/) on, a bare sharded account reads as the sum over its shard rows — one row per shard, still no history walk:
 
 ```ts
 const balance = await economy.read.balance(earned('usr_seller'));

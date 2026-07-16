@@ -10,7 +10,7 @@ order: 10
 status: stable
 sourceRefs:
   [
-    'src/economy.ts#L79 · economyFromCapabilities',
+    'src/economy.ts#L86 · economyFromCapabilities',
     'src/index.ts#L50',
     'test/conformance/invariants.adversarial.test.ts',
     'README.md',
@@ -20,7 +20,26 @@ related: ['economy/concepts/money-model', 'economy/concepts/the-proof']
 
 economy-lab is the application layer of a credits economy (wallets, a marketplace, payouts, subscriptions, and digital ownership) built as one library over a single [double-entry](/economy/concepts/accounts-and-double-entry/) ledger.
 
-You drive it through one [`submit`](/economy/reference/the-economy/) entry point and read its state through [`read`](/economy/reference/reads/). Every action is one [`Operation`](/economy/reference/operations/) that posts a balanced transaction and returns an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
+You drive it through one [`submit`](/economy/reference/the-economy/) entry point and read its state through [`read`](/economy/reference/reads/). Every action is one [`Operation`](/economy/reference/operations/) that posts a balanced transaction and returns an [`Outcome`](/economy/reference/outcomes-and-reason-codes/). The whole loop fits in a few lines:
+
+```ts
+import { createEconomy, topUp, systemActor, toAmount, spendable } from '@pwngh/economy-lab';
+
+const economy = await createEconomy(); // in-memory, zero dependencies
+
+const outcome = await economy.submit(
+  topUp({
+    idempotencyKey: 'ord_1001',
+    actor: systemActor('billing'),
+    userId: 'usr_a1',
+    amount: toAmount('CREDIT', 5000n),
+    source: 'stripe',
+  }),
+);
+
+const balance = await economy.read.balance(spendable('usr_a1'));
+// outcome.status → "committed" · balance.minor → 5000n
+```
 
 Balances aren't stored and mutated. Every action becomes a balanced posting in an append-only, hash-chained ledger, and balances are folded back from those postings.
 

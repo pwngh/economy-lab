@@ -4,7 +4,7 @@ summary: "An account can only commit as fast as its one lock turns over, and eve
 plain: "One cash register can only serve one customer at a time, no matter how short the line. Opening four registers lets four lines move at once — and as long as every return goes back to the register that made the sale, the day's books still add up."
 order: 95
 status: stable
-sourceRefs: ['src/accounts.ts#L155 · platformShard', 'test/sharding.test.ts']
+sourceRefs: ['src/accounts.ts#L160 · platformShard', 'test/sharding.test.ts']
 related: ['economy/concepts/concurrency', 'economy/reference/configuration']
 ---
 
@@ -29,6 +29,19 @@ The routing can't be random, because a retry has to land on the same row the fir
 ## Readers sum the rows
 
 No reader cares which shard holds what. The logical balance is the sum over the rows: the [backing check](/economy/concepts/solvency/) totals `TRUST_CASH` across its shards before weighing it against what users are owed, and the fee sweep drains matured `REVENUE` from whichever shards hold it.
+
+The public read follows the same rule. `economy.read.balance` on a bare sharded account returns the sum over its shard rows, so a revenue dashboard reads one logical number whatever the shard count. A host that reads rows directly builds the ids with `shardsOf` and `shardRef` from [`/store-kit`](/economy/reference/api/#pwngheconomy-labstore-kit):
+
+```ts
+import { SYSTEM } from '@pwngh/economy-lab';
+import { shardsOf } from '@pwngh/economy-lab/store-kit';
+
+const logical = await economy.read.balance(SYSTEM.REVENUE);
+// the sum over the rows, whatever PLATFORM_SHARDS is set to
+
+const rows = shardsOf(SYSTEM.REVENUE, 4);
+// → ["platform:revenue", "platform:revenue#1", "platform:revenue#2", "platform:revenue#3"]
+```
 
 A shard also inherits its parent's currency, class, and normal side (identity checks strip the `#` suffix first), so everything downstream of [`classify`](/economy/concepts/accounts-and-double-entry/) already treats the rows as one account.
 

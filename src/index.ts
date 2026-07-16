@@ -106,6 +106,8 @@ export {
   GENESIS,
   GENESIS_HEX,
   baseOf,
+  shardRef,
+  shardsOf,
   walletKindOf,
   byCodeUnit,
   fromHex,

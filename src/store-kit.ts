@@ -20,7 +20,7 @@
  */
 
 export { chainHash, balanceDelta, GENESIS, GENESIS_HEX } from '#src/ledger.ts';
-export { baseOf, walletKindOf } from '#src/accounts.ts';
+export { baseOf, shardRef, shardsOf, walletKindOf } from '#src/accounts.ts';
 export { byCodeUnit, fromHex, toHex } from '#src/bytes.ts';
 export { metaString, metaNumber } from '#src/meta.ts';
 export { encodeAmounts, decodeAmounts } from '#src/money.ts';

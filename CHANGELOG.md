@@ -4,6 +4,11 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 
 ## Unreleased (0.2.0)
 
+### Added
+
+- `read.balance` on a bare sharded platform account sums its shard rows. `shardsOf` and
+  `shardRef` are exported from `/store-kit` and the main entry.
+
 ### Changed
 
 - The in-memory store queues overlapping transactions instead of throwing.
