@@ -186,19 +186,18 @@ describe('settlePayout', () => {
     assert.equal(event.data.usd, encodeAmount(usd('0.02')));
   });
 
-  test('rolls back the settlement on a lost CAS rather than double-paying', async () => {
+  test('answers duplicate on a lost race rather than double-paying', async () => {
     const store = newStore();
     await openSubmittedSaga(store, { id: 'pay_1', state: 'SUBMITTED' });
 
-    await assert.rejects(
-      () =>
-        run(
-          raceSettleOnce(store, 'pay_1'),
-          newCtx(),
-          buildSettlePayout({ sagaId: 'pay_1' }),
-        ),
-      (error) => codeOf(error) === 'SAGA.INVALID_TRANSITION',
+    // The rival flipped the saga to SETTLED before this settle's transaction, so the load
+    // finds the work already done and answers duplicate with nothing posted.
+    const outcome = await run(
+      raceSettleOnce(store, 'pay_1'),
+      newCtx(),
+      buildSettlePayout({ sagaId: 'pay_1' }),
     );
+    assert.equal(outcome.status, 'duplicate');
 
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
@@ -218,17 +217,16 @@ describe('settlePayout', () => {
     );
   });
 
-  test('a rolled-back settle emits no settled event', async () => {
+  test('a raced settle emits no settled event', async () => {
     const store = newStore();
     await openSubmittedSaga(store, { id: 'pay_1', state: 'SUBMITTED' });
 
-    await assert.rejects(() =>
-      run(
-        raceSettleOnce(store, 'pay_1'),
-        newCtx(),
-        buildSettlePayout({ sagaId: 'pay_1' }),
-      ),
+    const outcome = await run(
+      raceSettleOnce(store, 'pay_1'),
+      newCtx(),
+      buildSettlePayout({ sagaId: 'pay_1' }),
     );
+    assert.equal(outcome.status, 'duplicate');
 
     assert.deepEqual(
       (await store.outbox.claimBatch(10)).filter(
@@ -238,13 +236,37 @@ describe('settlePayout', () => {
     );
   });
 
-  test('refuses a non-SUBMITTED saga with INVALID_TRANSITION and posts nothing', async () => {
+  test('a settle redelivered after settlement answers duplicate, not a fault', async () => {
+    const store = newStore();
+    await openSubmittedSaga(store, { id: 'pay_1', state: 'SUBMITTED' });
+    await run(store, newCtx(), buildSettlePayout({ sagaId: 'pay_1' }));
+
+    // The rail re-sends the settlement under a fresh event id (the builder mints a fresh
+    // key per call): past the event-id dedupe, straight into the operation, and still
+    // applied at most once.
+    const redelivered = await run(
+      store,
+      newCtx(),
+      buildSettlePayout({ sagaId: 'pay_1' }),
+    );
+    assert.equal(redelivered.status, 'duplicate');
+    assert.deepEqual(redelivered.transaction.legs, []);
+    assert.deepEqual(
+      await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
+      credit('0.00'),
+    );
+  });
+
+  test('refuses a pre-submit saga retryably and posts nothing', async () => {
     const store = newStore();
     await openSubmittedSaga(store, { id: 'pay_resv', state: 'RESERVED' });
 
+    // The webhook raced the submit sweep; once the sweep submits, a retry settles cleanly.
     await assert.rejects(
       () => run(store, newCtx(), buildSettlePayout({ sagaId: 'pay_resv' })),
-      (error) => codeOf(error) === 'SAGA.INVALID_TRANSITION',
+      (error) =>
+        codeOf(error) === 'SAGA.INVALID_TRANSITION' &&
+        (error as { retryable?: boolean }).retryable === true,
     );
 
     assert.equal(await stateOf(store, 'pay_resv'), 'RESERVED');
@@ -255,6 +277,20 @@ describe('settlePayout', () => {
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.REVENUE),
       credit('0.00'),
+    );
+  });
+
+  test('a settle claim against a failed payout is a hard fault, never a retry', async () => {
+    const store = newStore();
+    await openSubmittedSaga(store, { id: 'pay_f', state: 'FAILED' });
+
+    // The reserve was already returned; a provider claiming this payout settled is a real
+    // money conflict for an operator, so it must not resolve quietly or burn retries.
+    await assert.rejects(
+      () => run(store, newCtx(), buildSettlePayout({ sagaId: 'pay_f' })),
+      (error) =>
+        codeOf(error) === 'SAGA.INVALID_TRANSITION' &&
+        (error as { retryable?: boolean }).retryable === false,
     );
   });
 

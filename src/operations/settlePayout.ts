@@ -12,7 +12,11 @@
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { credit, debit, lockAll, postEntry } from '#src/ledger.ts';
 import { convertFloor, encodeAmount, mulDiv, toAmount } from '#src/money.ts';
-import { assertKind, loadSaga } from '#src/operations/guards.ts';
+import {
+  assertKind,
+  loadSaga,
+  noopTransaction,
+} from '#src/operations/guards.ts';
 import { pendingOutbox } from '#src/outbox.ts';
 import { platformShard, SYSTEM } from '#src/accounts.ts';
 
@@ -42,6 +46,12 @@ export async function settlePayout(
   assertKind(operation, 'settlePayout');
 
   const saga = await loadSaga(unit, operation);
+  // A raced or redelivered settle: the disbursement is already recorded, so answer duplicate
+  // the way reversePayout answers for an already-failed saga. An at-least-once rail re-sends
+  // settlements under fresh event ids; that is normal traffic, not a fault.
+  if (saga.state === 'SETTLED') {
+    return { status: 'duplicate', transaction: noopTransaction() };
+  }
   refuseNotSubmitted(saga);
 
   const rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
@@ -94,15 +104,19 @@ export async function settlePayout(
   return { status: 'committed', transaction };
 }
 
-// Only SUBMITTED has a disbursement to report settled; refusing every other state avoids posting a
-// second settle's worth of entries. Throws INVALID_TRANSITION so a redelivered or early webhook
-// gets a clear refusal.
+// Only SUBMITTED has a disbursement to report settled. A webhook that raced the submit sweep
+// (REQUESTED or RESERVED) is retryable: the sweep will submit and the redelivery settles then.
+// A FAILED saga already returned its reserve, so a settle claim against it is a real conflict
+// for an operator, never a retry.
 function refuseNotSubmitted(saga: Saga): void {
   if (saga.state !== 'SUBMITTED') {
     throw fault(
       ERROR_CODES.INVALID_TRANSITION,
       'Cannot settle a payout that is not submitted.',
-      { detail: { sagaId: saga.id, state: saga.state } },
+      {
+        detail: { sagaId: saga.id, state: saga.state },
+        retryable: saga.state !== 'FAILED',
+      },
     );
   }
 }
@@ -166,7 +180,7 @@ function assertAdvanced(advanced: boolean, saga: Saga, to: SagaState): void {
     throw fault(
       ERROR_CODES.INVALID_TRANSITION,
       'The payout was advanced by another actor first.',
-      { detail: { sagaId: saga.id, from: saga.state, to } },
+      { detail: { sagaId: saga.id, from: saga.state, to }, retryable: true },
     );
   }
 }

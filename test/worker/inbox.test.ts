@@ -136,6 +136,27 @@ describe('drainInbox', () => {
 });
 
 describe('drainInbox — Retryable Failure', () => {
+  test('dead-letters a non-retryable throw immediately instead of burning attempts', async () => {
+    const store = memoryStore();
+    await enqueue(store, 'e1');
+    const economy = scriptedEconomy(() => {
+      throw fault(
+        'SAGA.INVALID_TRANSITION',
+        'settle claim on a failed payout',
+        {
+          retryable: false,
+        },
+      );
+    });
+
+    const first = await sweep(store, economy);
+    assert.deepEqual(first.failed, []);
+    assert.deepEqual(first.deadLettered, [
+      { id: 'ibx_e1', reason: 'SAGA.INVALID_TRANSITION' },
+    ]);
+    await store.close();
+  });
+
   test('leaves a row pending after a retryable throw so the next run retries it', async () => {
     const store = memoryStore();
     await enqueue(store, 'e1');

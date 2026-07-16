@@ -12,9 +12,14 @@
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { earned, routePlatformLegs, SYSTEM } from '#src/accounts.ts';
-import { assertKind, assertReason, loadSaga } from '#src/operations/guards.ts';
+import {
+  assertKind,
+  assertReason,
+  loadSaga,
+  noopTransaction,
+} from '#src/operations/guards.ts';
 
-import type { Ctx, Operation, Outcome, Transaction } from '#src/contract.ts';
+import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Saga, Unit } from '#src/ports.ts';
 
 /**
@@ -147,10 +152,4 @@ function refuseLiveSubmitted(
       },
     );
   }
-}
-
-// Receipt for the already-handled path: nothing posted this run and the original receipt is not
-// at hand, so return an empty marker rather than mint a fresh id for money that did not move.
-function noopTransaction(): Transaction {
-  return { id: '', postedAt: 0, legs: [], links: [] };
 }

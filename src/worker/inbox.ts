@@ -128,7 +128,9 @@ async function recordFailure(
 ): Promise<void> {
   const { entry, normalized, options } = work;
   const next = entry.attempts + 1;
-  if (next >= ctx.config.maxInboxAttempts) {
+  // A non-retryable fault fails identically on every retry, so burning the remaining
+  // attempts only delays the dead-letter an operator needs to see.
+  if (!normalized.retryable || next >= ctx.config.maxInboxAttempts) {
     ctx.logger.log('error', 'worker.inbox.dead_lettered', {
       entryId: entry.id,
       code: normalized.code,

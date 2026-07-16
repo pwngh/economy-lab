@@ -103,3 +103,11 @@ export function lifecycleMarker(ctx: Ctx): Transaction {
     links: [],
   };
 }
+
+/**
+ * Receipt for the already-handled path: nothing posted this run and the original receipt is not
+ * at hand, so return an empty marker rather than mint a fresh id for money that did not move.
+ */
+export function noopTransaction(): Transaction {
+  return { id: '', postedAt: 0, legs: [], links: [] };
+}
