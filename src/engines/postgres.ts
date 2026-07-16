@@ -68,6 +68,7 @@ import {
   rowToPromoGrant,
   sortByAccountId,
   withTransientRetry,
+  installMoneyRetrying,
   isSeededSystemAccount,
 } from '#src/engines/sql-shared.ts';
 import { metaString, metaNumber } from '#src/meta.ts';
@@ -1632,14 +1633,15 @@ export async function postgresStore(
 
     // Install the vendored money functions (idempotent) and make this engine prove it computes
     // the pinned arithmetic before any posting trusts it — the same fail-fast as the schema
-    // check, for semantics instead of shape.
+    // check, for semantics instead of shape. Retried: concurrent boots race the shared money.*
+    // catalog rows (see installMoneyRetrying).
     const runner = {
       run: (sql: string, params?: readonly unknown[]) =>
         pool
           .query(sql, params ? [...params] : undefined)
           .then((result) => result.rows as Record<string, unknown>[]),
     };
-    await installPostgres(runner);
+    await installMoneyRetrying(() => installPostgres(runner));
     assertMoneyConformant(
       await provePostgres(runner, moneyVectors),
       'Postgres',

@@ -217,6 +217,37 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// How a lost install race surfaces. Two sessions installing the shared money functions at once
+// collide on the same catalog rows: Postgres refuses a concurrent CREATE OR REPLACE with
+// "tuple concurrently updated" (or a duplicate pg_proc/pg_namespace key), and MySQL's
+// drop-then-create pair loses as "already exists".
+const CONCURRENT_INSTALL = new RegExp(
+  [
+    'tuple concurrently updated',
+    'duplicate key value violates unique constraint "pg_(proc|namespace)',
+    'FUNCTION [\\w.]+ already exists',
+  ].join('|'),
+  'i',
+);
+
+/**
+ * Runs the vendored money install, retrying a lost concurrent-install race: the install is
+ * idempotent, so the loser just runs it again. Any other failure propagates on the first throw.
+ */
+export async function installMoneyRetrying(
+  install: () => Promise<void>,
+): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await install();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (attempt >= 5 || !CONCURRENT_INSTALL.test(message)) throw error;
+      await sleep(50 * attempt + Math.random() * 150);
+    }
+  }
+}
+
 // --- Row decoders -----------------------------------------------------------------
 
 export function rowToSaga(row: Record<string, unknown>): Saga {

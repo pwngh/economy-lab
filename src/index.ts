@@ -23,6 +23,7 @@ import {
 import type { EnvMap } from '#src/env.ts';
 import type { Config } from '#src/config.ts';
 import { assertMoneyConformant, assertSchemaCurrent } from '#src/schema.ts';
+import { installMoneyRetrying } from '#src/engines/sql-shared.ts';
 import { installMysql, proveMysql } from '#src/db.vendored.ts';
 import { vectors as moneyVectors } from '#src/money.vendored.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
@@ -605,7 +606,8 @@ async function provenMysqlStore(
         .query(sql, params ? [...params] : undefined)
         .then(([rows]) => rows as Record<string, unknown>[]),
   };
-  await installMysql(runner);
+  // Retried: concurrent boots race the shared money functions (see installMoneyRetrying).
+  await installMoneyRetrying(() => installMysql(runner));
   assertMoneyConformant(await proveMysql(runner, moneyVectors), 'MySQL');
   return mysqlStore({
     pool,

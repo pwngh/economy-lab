@@ -27,6 +27,7 @@ import {
   proveMysql,
   provePostgres,
 } from '#src/db.vendored.ts';
+import { installMoneyRetrying } from '#src/engines/sql-shared.ts';
 import { vectors } from '#src/money.vendored.ts';
 import { createMysqlPool } from '#src/engines/mysql.ts';
 import { openPgPool } from '#src/engines/pg-driver.ts';
@@ -43,7 +44,8 @@ if (postgresUrl) {
       run: (sql, params) => pool.query(sql, params).then((r) => r.rows),
     };
     try {
-      await installPostgres(runner);
+      // Retried: parallel test files boot stores that install the same shared functions.
+      await installMoneyRetrying(() => installPostgres(runner));
       assert.deepEqual(await provePostgres(runner, vectors), []);
     } finally {
       await pool.end();
@@ -61,7 +63,7 @@ if (mysqlUrl) {
           .then(([rows]) => rows as Record<string, unknown>[]),
     };
     try {
-      await installMysql(runner);
+      await installMoneyRetrying(() => installMysql(runner));
       assert.deepEqual(await proveMysql(runner, vectors), []);
     } finally {
       await pool.end();
