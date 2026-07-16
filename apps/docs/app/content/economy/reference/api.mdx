@@ -137,6 +137,7 @@ The `Amount` value type and the exact-integer arithmetic, conversion, and wire e
 | `Amount` | A money value: currency plus amount in minor units (cents for dollars), branded to enforce construction via toAmount or decodeAmount. |
 | `Currency` | The currencies the system handles: in-app CREDIT and real-world USD. |
 | `toAmount` | Builds an Amount from currency and minor-unit count, throwing AMOUNT_OVERFLOW if outside 64-bit range. |
+| `credits` | Builds a CREDIT Amount from a whole number of credits (credits(120) = 12,000 minor units); distinct from the ledger's credit() leg builder. |
 | `decodeAmount` | Parses a decimal string (e.g. '12.34') into an Amount, throwing INVALID_AMOUNT for bad format or out-of-range values. |
 | `encodeAmount` | Encodes an amount as text (e.g. 'CREDIT:12.34') with fixed two decimals for JSON, events, and tamper-evident hashing. |
 | `decodeAmountWire` | Parses a wire amount string (e.g. 'CREDIT:12.34') back into an Amount, the inverse of encodeAmount. |
@@ -426,6 +427,8 @@ The store implementer's toolkit. The [conformance suite](#pwngheconomy-labtestin
 | `GENESIS` | The 32-byte zero hash an account's chain starts from. |
 | `GENESIS_HEX` | The genesis hash as lowercase hex, for stores that keep heads as text. |
 | `baseOf` | Strips a platform shard suffix, so identity checks see the base account. |
+| `shardRef` | The id of a platform account's shard k: the bare id for 0, base#k otherwise. |
+| `shardsOf` | All shard ids of a base account, bare id first; readers sum these for the logical balance. |
 | `walletKindOf` | The wallet kind encoded in a user account id, or null for platform accounts. |
 | `byCodeUnit` | The canonical string ordering every engine sorts by, so results match across backends. |
 | `fromHex` | Hex to bytes, for stores that keep hashes as text. |

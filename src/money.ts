@@ -125,6 +125,22 @@ export function zero(currency: Currency): Amount {
 }
 
 /**
+ * Builds a CREDIT `Amount` from a whole number of credits: `credits(120)` is 12,000 minor
+ * units. A fractional count throws INVALID_AMOUNT; sub-credit amounts take `toAmount` with
+ * minor units. Distinct from the ledger's `credit()`, which builds a posting leg.
+ */
+export function credits(whole: number | bigint): Amount {
+  if (typeof whole === 'number' && !Number.isSafeInteger(whole)) {
+    throw fault(
+      ERROR_CODES.INVALID_AMOUNT,
+      'credits() takes a whole number of credits.',
+      { detail: { whole: String(whole) } },
+    );
+  }
+  return toAmount('CREDIT', BigInt(whole) * SCALE);
+}
+
+/**
  * Encodes an amount as text, such as `'CREDIT:12.34'`, for anywhere it leaves the program
  * (JSON, events, traces, HTTP). The result is a string because `JSON.stringify` cannot
  * serialize the `bigint`. It uses a fixed two decimals so the same amount always renders

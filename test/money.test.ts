@@ -17,6 +17,7 @@ import {
   compare,
   convertCeil,
   convertFloor,
+  credits,
   decodeAmount,
   decodeAmountWire,
   encodeAmount,
@@ -47,6 +48,20 @@ describe('Money', () => {
     const amount = decodeAmount('7', 'USD');
 
     assert.deepEqual(amount, toAmount('USD', 700n));
+  });
+
+  test('credits() builds a whole-credit Amount from number or bigint', () => {
+    assert.deepEqual(credits(120), toAmount('CREDIT', 12_000n));
+    assert.deepEqual(credits(0), toAmount('CREDIT', 0n));
+    assert.deepEqual(credits(120n), toAmount('CREDIT', 12_000n));
+  });
+
+  test('credits() rejects a fractional count as a fault', () => {
+    assert.throws(
+      () => credits(4.5),
+      (error: unknown) =>
+        (error as { code?: string }).code === 'MONEY.INVALID_AMOUNT',
+    );
   });
 
   test('rejects a decimal with excess precision as a fault', () => {

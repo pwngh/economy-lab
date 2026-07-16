@@ -83,6 +83,7 @@ export {
 // sums legs or compares a balance to a price needs these.
 export {
   toAmount,
+  credits,
   decodeAmount,
   encodeAmount,
   decodeAmountWire,

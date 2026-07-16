@@ -8,6 +8,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 
 - `read.balance` on a bare sharded platform account sums its shard rows. `shardsOf` and
   `shardRef` are exported from `/store-kit` and the main entry.
+- `credits(n)` builds a CREDIT `Amount` from whole credits; fractions are refused with
+  `INVALID_AMOUNT`.
 - `Transaction` carries the posting's `meta`; `requestPayout` records its saga id there.
   Breaking: custom `Ledger.append` implementations must return it.
 

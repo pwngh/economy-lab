@@ -23,7 +23,7 @@ const price = toAmount('CREDIT', 1000n); // 10.00 CREDIT
 encodeAmount(price); // → 'CREDIT:10.00'
 ```
 
-A whole unit is `SCALE` (`100n`) minor units, two decimal places, fixed. The `__brand` field makes a plain `{ currency, minor }` object unassignable to `Amount`, so every value has to pass through `toAmount` or `decodeAmount`.
+A whole unit is `SCALE` (`100n`) minor units, two decimal places, fixed. The `__brand` field makes a plain `{ currency, minor }` object unassignable to `Amount`, so every value has to pass through `toAmount` or `decodeAmount`. For the common case of a whole number of credits, `credits(120)` is shorthand for `toAmount('CREDIT', 12_000n)`.
 
 Two guards keep currencies from mixing by accident. `add` and `compare` call `assertSameCurrency`, which throws `CURRENCY_MISMATCH` if you hand them two different currencies. Combining a `CREDIT` amount with a `USD` amount is always a bug. And `decodeAmount` rejects a string with more than two decimal places (`INVALID_AMOUNT`) rather than silently dropping the extra digits.
 
