@@ -89,6 +89,27 @@ function stillRequired(key: string, overrides: Partial<Externals>): boolean {
 }
 
 /**
+ * Refuses a malformed port at wiring time, so the deploy fails at startup rather than deep
+ * inside a request or sweep. The classic slip is passing a factory (`noopLogger`) where its
+ * product (`noopLogger()`) belongs.
+ */
+export function requireCallable(
+  owner: string,
+  service: unknown,
+  methods: ReadonlyArray<string>,
+): void {
+  for (const method of methods) {
+    if (typeof (service as Record<string, unknown>)?.[method] !== 'function') {
+      throw fault(
+        ERROR_CODES.CONFIG_INVALID,
+        `${owner}.${method} is not a function; if it comes from a factory such as noopLogger, pass the factory's result.`,
+        { detail: { owner, method }, retryable: false },
+      );
+    }
+  }
+}
+
+/**
  * Resolves the four external ports from `env`, letting `overrides` win over anything derived. Dev
  * fills sane defaults; production requires the real values for the ports not overridden and throws
  * `CONFIG.INVALID` listing every missing knob at once.
@@ -108,12 +129,17 @@ export function externalsFromEnv(
       { detail: { missing }, retryable: false },
     );
   }
-  return {
+  const externals: Externals = {
     signer: overrides.signer ?? systemSigner({ signingKey: signingKey(env) }),
     rates: overrides.rates ?? rateSource(env),
     processor: overrides.processor ?? processorFor(env),
     pricing: overrides.pricing ?? flatFee(),
   };
+  requireCallable('signer', externals.signer, ['sign', 'verify']);
+  requireCallable('rates', externals.rates, ['payout']);
+  requireCallable('processor', externals.processor, ['submitPayout']);
+  requireCallable('externals', externals, ['pricing']);
+  return externals;
 }
 
 // The signer's key is the SIGNING_SECRET hashed to a seed; dev falls back to a fixed non-secret.

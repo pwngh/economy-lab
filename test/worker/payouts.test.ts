@@ -222,6 +222,47 @@ async function forceFailsASubmittedSagaPastTheMaxAgeAndReturnsTheReserve(
   );
 }
 
+async function deadLettersEvenWhenTheLoggerThrows(store: Store): Promise<void> {
+  // A logger is observability, not a participant: its failure must neither roll back the
+  // reversal (the log call sits after the transaction) nor report the item as unfinished.
+  const config: Config = { ...testConfig(), maxPayoutAgeMs: 60_000 };
+  const logger = {
+    log: () => {
+      throw new Error('log sink down');
+    },
+  };
+  await openSaga(
+    store,
+    saga({
+      id: 'pay_1',
+      state: 'SUBMITTED',
+      reserve: credit('4.00'),
+      updatedAt: 0,
+      dueAt: 0,
+    }),
+  );
+
+  const summary = await advanceDuePayouts(
+    store,
+    makeWorkerCtx({ config, clock: fixedClock(120_000), logger }),
+    { now: 120_000, limit: 10 },
+  );
+
+  assert.equal(summary.deadLettered.length, 1);
+  assert.equal(summary.deadLettered[0]!.reason, 'payout.timeout');
+  assert.deepEqual(summary.retrying, []);
+  const failed = await store.sagas.load('pay_1');
+  assert.equal(failed!.state, 'FAILED');
+  assert.deepEqual(
+    await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
+    credit('0.00'),
+  );
+  assert.deepEqual(
+    await store.ledger.balance(earned('usr_seller')),
+    credit('4.00'),
+  );
+}
+
 async function leavesASubmittedSagaAtTheAgeBoundaryForTheWebhook(
   store: Store,
 ): Promise<void> {
@@ -664,6 +705,8 @@ describe('advanceDuePayouts', () => {
     leavesAWithinWindowSubmittedSagaForTheWebhook(memoryStore()));
   test('force-fails a submitted saga past the max age and returns the reserve', () =>
     forceFailsASubmittedSagaPastTheMaxAgeAndReturnsTheReserve(memoryStore()));
+  test('dead-letters a timed-out payout even when the logger throws', () =>
+    deadLettersEvenWhenTheLoggerThrows(memoryStore()));
   test('leaves a submitted saga at the age boundary untouched for the settlement webhook', () =>
     leavesASubmittedSagaAtTheAgeBoundaryForTheWebhook(memoryStore()));
   test('dead-letters a provider fault past the attempt limit', () =>

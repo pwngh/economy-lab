@@ -31,6 +31,7 @@ import { createWorker } from '#src/worker/index.ts';
 import { jsonlLogger, noopMeter } from '#src/runtime.ts';
 import { sha256Digest } from '#src/digest.ts';
 import { fault, ERROR_CODES } from '#src/errors.ts';
+import { requireCallable } from '#src/from-env.ts';
 
 import type { Economy } from '#src/economy.ts';
 import type { FeePolicy, WorkerCtx } from '#src/contract.ts';
@@ -367,6 +368,11 @@ export async function capabilitiesFromEnv(
 ): Promise<Capabilities> {
   const config = loadConfig(env);
   const runtime = runtimeFrom(defaults);
+  // Ports may arrive directly rather than through externalsFromEnv, so re-check them here.
+  requireCallable('signer', ports.signer, ['sign', 'verify']);
+  requireCallable('rates', ports.rates, ['payout']);
+  requireCallable('processor', ports.processor, ['submitPayout']);
+  requireCallable('ports', ports, ['pricing']);
   const selection = describeSelection(env);
   const [store, cache, dispatcher] = await Promise.all([
     selectStore(selection.store, {
@@ -649,13 +655,20 @@ async function selectDispatcher(
 function runtimeFrom(
   defaults: RuntimeDefaults,
 ): Pick<Capabilities, 'clock' | 'ids' | 'digest' | 'logger' | 'meter'> {
-  return {
+  const runtime = {
     clock: defaults.clock ?? wallClock(),
     ids: defaults.ids ?? uuidIds(),
     digest: defaults.digest ?? sha256Digest(),
     logger: defaults.logger ?? jsonlLogger(),
     meter: defaults.meter ?? noopMeter(),
   };
+  // A malformed override fails here, at wiring, not deep inside a request or sweep.
+  requireCallable('clock', runtime.clock, ['now']);
+  requireCallable('ids', runtime.ids, ['next']);
+  requireCallable('digest', runtime.digest, ['hash']);
+  requireCallable('logger', runtime.logger, ['log']);
+  requireCallable('meter', runtime.meter, ['count', 'observe']);
+  return runtime;
 }
 
 function wallClock(): Clock {

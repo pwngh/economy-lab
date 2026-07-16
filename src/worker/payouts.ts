@@ -117,7 +117,7 @@ async function deadLetter(
   saga: Saga,
   reason: string,
 ): Promise<boolean> {
-  return store.transaction(async (unit) => {
+  const failed = await store.transaction(async (unit) => {
     // The reserve routes by the saga's user, the same key requestPayout credited by, so the
     // routed shard, not the bare row, is what this locks and debits.
     const reserveRef = platformShard(
@@ -160,15 +160,24 @@ async function deadLetter(
         audience: 'internal',
       }),
     );
-    // Error-level like the inbox/outbox dead-letters, so an operator tailing logs sees the
-    // abandoned cash-out without unpacking the sweep summary.
-    ctx.logger.log('error', 'worker.payouts.dead_lettered', {
-      sagaId: saga.id,
-      userId: saga.userId,
-      reason,
-    });
     return true;
   });
+  // Error-level like the inbox/outbox dead-letters, so an operator tailing logs sees the
+  // abandoned cash-out without unpacking the sweep summary. Logged after the commit: inside
+  // the transaction, a rollback would leave the line claiming a reversal that never happened,
+  // and a throwing logger would abort the reversal itself.
+  if (failed) {
+    try {
+      ctx.logger.log('error', 'worker.payouts.dead_lettered', {
+        sagaId: saga.id,
+        userId: saga.userId,
+        reason,
+      });
+    } catch {
+      // The reversal committed; a logging failure must not report the item as unfinished.
+    }
+  }
+  return failed;
 }
 
 // Stable reason string (not a thrown-fault code) for a payout that sat in SUBMITTED past
