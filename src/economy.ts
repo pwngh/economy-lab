@@ -83,7 +83,7 @@ export function economyFromCapabilities(capabilities: Capabilities): Economy {
 
   return {
     submit: (operation, options) =>
-      submit({ store, registry, ctx }, operation, options),
+      meteredSubmit({ store, registry, ctx }, operation, options),
     read: {
       balance: (account, options) =>
         cachedBalance(ctx, store.ledger, account, options),
@@ -214,6 +214,33 @@ async function cachedBalance(
 // Authorize first, so a forbidden request is rejected before any work; then do the money work in one
 // all-or-nothing transaction. The risk-velocity attempt records inside that transaction and is
 // re-recorded below if it rolls back (see `screenRisk` for the TOCTOU reasoning).
+// Counts every submit by kind and how it resolved, and observes its wall time, so an operator
+// has request-path telemetry without wrapping submit themselves. Metering runs after the
+// outcome (or fault) is already decided and is guarded: a throwing meter must not turn a
+// committed operation into an error the caller retries.
+async function meteredSubmit(
+  pipeline: Pipeline,
+  operation: Operation,
+  options?: Options,
+): Promise<Outcome> {
+  const { meter, clock } = pipeline.ctx;
+  const kind = String((operation as { kind?: unknown })?.kind ?? 'unknown');
+  const startedAt = clock.now();
+  let status = 'fault';
+  try {
+    const outcome = await submit(pipeline, operation, options);
+    status = outcome.status;
+    return outcome;
+  } finally {
+    try {
+      meter.count('economy.submit', 1, { kind, status });
+      meter.observe('economy.submit.ms', clock.now() - startedAt, { kind });
+    } catch {
+      // Telemetry only; the outcome above is already decided.
+    }
+  }
+}
+
 async function submit(
   pipeline: Pipeline,
   operation: Operation,

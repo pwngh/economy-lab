@@ -5,9 +5,9 @@ order: 5
 status: stable
 sourceRefs:
   [
-    'src/index.ts#L489 · createEconomy',
+    'src/index.ts#L514 · createEconomy',
     'src/economy.ts#L79 · economyFromCapabilities',
-    'src/contract.ts#L368 · Economy',
+    'src/contract.ts#L374 · Economy',
   ]
 related:
   [
@@ -70,6 +70,8 @@ const outcome = await economy.submit(
 ```
 
 A `rejected` outcome is a normal "no" returned as data, not an error; a genuine fault throws instead. See [outcomes and reason codes](/economy/reference/outcomes-and-reason-codes/) for the full set.
+
+Every submit is also metered through the injected `Meter`: one count under `economy.submit`, tagged by operation kind and how it resolved (`committed`, `duplicate`, `rejected`, or `fault`), plus its duration under `economy.submit.ms` — request-path telemetry without wrapping `submit` yourself.
 
 ## read
 
