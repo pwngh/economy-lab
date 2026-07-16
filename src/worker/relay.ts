@@ -9,7 +9,7 @@
  * @license MIT
  */
 
-import { normalizeError } from '#src/errors.ts';
+import { normalizePortError, normalizeError } from '#src/errors.ts';
 
 import type { WorkerCtx } from '#src/contract.ts';
 import type { Dispatcher, OutboxMessage, Options, Store } from '#src/ports.ts';
@@ -80,7 +80,8 @@ async function dispatchOne(
     await dispatcher(message.event, options);
     tally.relayed.push(message.id);
   } catch (error) {
-    const normalized = normalizeError(error);
+    // The dispatcher is the injected port: its raw throw is a provider fault, not storage.
+    const normalized = normalizePortError(error);
     const next = message.attempts + 1;
     if (next >= ctx.config.maxOutboxAttempts) {
       ctx.logger.log('error', 'worker.relay.dead_lettered', {

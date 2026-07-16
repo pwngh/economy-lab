@@ -9,7 +9,7 @@
  * @license MIT
  */
 
-import { normalizeError } from '#src/errors.ts';
+import { normalizePortError, normalizeError } from '#src/errors.ts';
 
 import type { Economy, Outcome, WorkerCtx } from '#src/contract.ts';
 import type { InboxEntry, Options, Store } from '#src/ports.ts';
@@ -87,10 +87,11 @@ async function applyOne(
   try {
     outcome = await economy.submit(entry.operation, options);
   } catch (error) {
+    // The applier is the injected port; a fault it classified itself passes through unchanged.
     await recordFailure(
       store,
       ctx,
-      { entry, normalized: normalizeError(error), options },
+      { entry, normalized: normalizePortError(error), options },
       tally,
     );
     return;

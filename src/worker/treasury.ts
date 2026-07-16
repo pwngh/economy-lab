@@ -9,7 +9,12 @@
  * @license MIT
  */
 
-import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
+import {
+  ERROR_CODES,
+  fault,
+  normalizePortError,
+  normalizeError,
+} from '#src/errors.ts';
 import { convertFloor, encodeAmount, mulDiv, toAmount } from '#src/money.ts';
 import { credit, debit, lockAll, postEntry } from '#src/ledger.ts';
 import {
@@ -269,7 +274,10 @@ async function measureFloat(
       obligationsMinor += convertFloor(saga.reserve, rate, 'USD').minor;
     }
   }
-  const float = await feed.balance();
+  // The feed is the injected port; the store and rate reads around it keep their own codes.
+  const float = await feed.balance().catch((error) => {
+    throw normalizePortError(error);
+  });
   const shortfallMinor =
     float.minor < obligationsMinor ? obligationsMinor - float.minor : 0n;
   return {

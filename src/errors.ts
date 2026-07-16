@@ -97,8 +97,13 @@ export const ERROR_CODES = {
    */
   INVALID_SIGNATURE: 'AUTH.INVALID_SIGNATURE',
 
+  /** The storage layer failed. Reserved for the store paths that mean it (see normalizeError). */
   STORE_FAILURE: 'STORE.FAILURE',
 
+  /**
+   * An external provider or injected port failed: a payout rail, a dispatcher, a float or
+   * reconcile feed. Dead-letter reasons carry this so the operator pages the right owner.
+   */
   PROVIDER_FAILURE: 'PROVIDER.FAILURE',
 
   /**
@@ -193,6 +198,25 @@ export function normalizeError(error: unknown): EconomyError {
   return new EconomyError(
     ERROR_CODES.STORE_FAILURE,
     'An unexpected error occurred.',
+    {
+      cause: error,
+      retryable: true,
+    },
+  );
+}
+
+/**
+ * {@link normalizeError} for a call into an injected port (a dispatcher, an applier, a feed): a
+ * raw throw wraps as retryable PROVIDER.FAILURE instead of STORE.FAILURE, so a dead-letter
+ * reason or failure log names the failing subsystem rather than blaming storage.
+ */
+export function normalizePortError(error: unknown): EconomyError {
+  if (error instanceof EconomyError) {
+    return error;
+  }
+  return new EconomyError(
+    ERROR_CODES.PROVIDER_FAILURE,
+    'An injected port failed.',
     {
       cause: error,
       retryable: true,

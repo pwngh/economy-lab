@@ -104,4 +104,21 @@ describe('sweepFloatCoverage', () => {
     assert.deepEqual(summary.retrying, [{ code: 'PROVIDER.FAILURE' }]);
     assert.deepEqual(summary.breaches, []);
   });
+
+  test('a raw feed throw reads as the port failing, not storage', async () => {
+    const store = memoryStore();
+    await openSaga(store, 'pay_1', 'SUBMITTED');
+    const failing = {
+      balance: async (): Promise<Amount> => {
+        throw new Error('wallet endpoint fell over');
+      },
+    };
+
+    const summary = await sweepFloatCoverage(store, makeWorkerCtx(), failing, {
+      now: 0,
+    });
+
+    assert.equal(summary.position, null);
+    assert.deepEqual(summary.retrying, [{ code: 'PROVIDER.FAILURE' }]);
+  });
 });

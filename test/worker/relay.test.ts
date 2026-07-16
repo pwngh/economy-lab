@@ -146,7 +146,8 @@ describe('relayOutbox — Classification And Limit', () => {
 
     const summary = await sweep(store, dispatcher);
 
-    assert.equal(summary.failed[0]?.code, 'STORE.FAILURE');
+    // A raw dispatcher throw is the injected port's fault, so it never reads as a store failure.
+    assert.equal(summary.failed[0]?.code, 'PROVIDER.FAILURE');
     assert.equal(summary.failed[0]?.retryable, true);
     await store.close();
   });
@@ -212,7 +213,7 @@ describe('relayOutbox — Retry Cap', () => {
     assert.deepEqual(s2.deadLettered, []);
     assert.deepEqual(s3.failed, []);
     assert.deepEqual(s3.deadLettered, [
-      { id: 'obx_1', reason: 'STORE.FAILURE' },
+      { id: 'obx_1', reason: 'PROVIDER.FAILURE' },
     ]);
 
     const s4 = await sweep(store, dispatcher, 10, 3);

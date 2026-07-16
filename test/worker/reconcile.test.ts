@@ -155,6 +155,18 @@ describe('reconcileDueWindows', () => {
     assert.equal(summary.failed[0].retryable, true);
   });
 
+  test('a raw feed throw reads as the port failing, not storage', async () => {
+    const feed = throwingFeed(new Error('feed fell over'));
+
+    const summary = await reconcileDueWindows(feed, makeWorkerCtx(), {
+      windows: [WINDOW],
+    });
+
+    assert.equal(summary.failed.length, 1);
+    assert.equal(summary.failed[0].code, 'PROVIDER.FAILURE');
+    assert.equal(summary.failed[0].retryable, true);
+  });
+
   test('isolates a feed fault per window and continues the batch', async () => {
     const second: Range = { from: 1_000, to: 2_000 };
     const cases: Array<{ window: Range; throws: boolean }> = [

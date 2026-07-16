@@ -157,6 +157,19 @@ describe('drainInbox — Retryable Failure', () => {
     await store.close();
   });
 
+  test('a raw applier throw reads as the port failing, not storage', async () => {
+    const store = memoryStore();
+    await enqueue(store, 'raw');
+    const economy = scriptedEconomy(() => {
+      throw new Error('host applier fell over');
+    });
+
+    const summary = await sweep(store, economy);
+    assert.deepEqual(summary.failed, [
+      { id: 'ibx_raw', code: 'PROVIDER.FAILURE', retryable: true },
+    ]);
+  });
+
   test('leaves a row pending after a retryable throw so the next run retries it', async () => {
     const store = memoryStore();
     await enqueue(store, 'e1');

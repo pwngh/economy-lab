@@ -9,7 +9,7 @@
  * @license MIT
  */
 
-import { normalizeError } from '#src/errors.ts';
+import { normalizePortError, normalizeError } from '#src/errors.ts';
 import { reconcile } from '#src/reconcile.ts';
 
 import type { WorkerCtx } from '#src/contract.ts';
@@ -74,7 +74,12 @@ async function reconcileOne(
   tally: ReconcileTally,
 ): Promise<void> {
   try {
-    const inputs = await sweep.feed.pull(window, sweep.options);
+    // The feed is the injected port; its raw throw is a provider fault, not storage.
+    const inputs = await sweep.feed
+      .pull(window, sweep.options)
+      .catch((error) => {
+        throw normalizePortError(error);
+      });
     record(sweep.ctx, window, reconcile(window, inputs), tally);
   } catch (error) {
     const normalized = normalizeError(error);

@@ -69,6 +69,8 @@ A sweep handles its rows one at a time, and each row runs inside its own error b
 
 A failure that looks temporary (a flaky network or database) bumps an attempt counter and retries next run. A permanent failure, or one that has retried too many times, is set aside (dead-lettered) so the batch never wedges on a row that can't progress.
 
+The recorded reason names the failing subsystem. A raw throw from an injected port — the outbox dispatcher, the inbox applier, a float or reconcile feed — is stamped `PROVIDER.FAILURE`; `STORE.FAILURE` stays reserved for the storage layer. The dead-letter `reason` and the `worker.*.failed` logs are the operator's paging signal, so they point at the right owner.
+
 The whole sweep is isolated too. `runSweeps` wraps each job, so a job that throws is recorded as a failed result against just that job, and the other sweeps still run. The run never throws.
 
 ## Three sweeps can be skipped
@@ -129,3 +131,20 @@ See [solvency](/economy/concepts/solvency/) for what backing means and how the s
 `feeSweep` is the write the treasury sweep doesn't do. On each run it realizes the full amount the platform is allowed to take (the smaller of its cash surplus and its matured revenue) and skips cleanly when that amount is zero. A draw that would dip into users' money throws `COMMINGLING` and posts nothing.
 
 The checkpoint pair maintains the ledger's tamper-evidence. `checkpoint` seals a fresh signed snapshot of the per-account hash chains; `checkpointVerify` re-checks the previous one against the live ledger. A mismatch is a tamper signal, recorded on the summary and logged, not thrown. See [ledger integrity](/economy/concepts/integrity/) for the chain and checkpoint mechanics.
+
+## Troubleshooting
+
+### My payout never settles
+
+The `payouts` sweep only _submits_: it converts the reserve and calls the rail, advancing the saga to `SUBMITTED`. Settlement is a separate event that arrives as the provider's verified webhook, maps to a [`settlePayout`](/economy/reference/operations/settle-payout/) operation, and applies through the inbox drain — so a saga parked in `SUBMITTED` is waiting on the provider, not on you.
+
+```ts
+await worker.runOnce({ now: Date.now(), limit: 50 }); // the payouts sweep submits due RESERVED sagas
+// SUBMITTED → SETTLED happens when the provider's webhook arrives, not here
+```
+
+If the webhook never comes, the saga doesn't hang forever: past `maxPayoutAgeMs` with no provider evidence to the contrary, the sweep force-fails it and the reserve returns to the seller. [The payout saga](/economy/concepts/payout-saga/) owns the state machine.
+
+### A sweep keeps retrying the same row
+
+Each claimed row retries up to its attempt cap, then dead-letters with the failing subsystem named in the reason — a `PROVIDER.FAILURE` dead-letter is the rail misbehaving, a `STORE.FAILURE` is your database. Read the reason before restarting anything; the row tells you whose outage it was.

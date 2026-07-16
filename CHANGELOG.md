@@ -16,6 +16,7 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - `SagaStore.list` breaks `updatedAt` ties by `id` descending on every engine.
 - The in-memory store queues overlapping transactions instead of throwing.
 - The store server registers a transaction session once the queued body starts.
+- Injected-port throws dead-letter as `PROVIDER.FAILURE`, not `STORE.FAILURE`.
 
 ### Documentation
 
