@@ -3,3 +3,6 @@ build
 .react-router
 .DS_Store
 *.local
+
+# wrangler pages dev scratch (local emulation runs)
+.wrangler/

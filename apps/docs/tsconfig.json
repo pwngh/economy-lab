@@ -1,6 +1,8 @@
 {
   "include": ["**/*.ts", "**/*.tsx", ".react-router/types/**/*"],
-  "exclude": ["node_modules", "runner", "public"],
+  // app/snippets compiles under scripts/check-samples.mjs (NodeNext, entry-point paths only) —
+  // the lab's source graph doesn't typecheck under this config's DOM lib, and shouldn't have to.
+  "exclude": ["node_modules", "runner", "public", "app/snippets"],
   "compilerOptions": {
     "lib": ["DOM", "DOM.Iterable", "ES2022"],
     "types": ["node", "vite/client"],

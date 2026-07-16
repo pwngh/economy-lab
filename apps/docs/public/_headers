@@ -5,6 +5,30 @@
   Permissions-Policy: geolocation=(), microphone=(), camera=()
   Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; img-src 'self' data:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'inline-speculation-rules' 'sha256-0xr6PrkTM/eu45EacXIuX6EVWTocVC9+KMweSk/Z4sI=' 'sha256-7bsSApYREnl3FN6h17aKGuMaTKgtTPusx6QOE2uHzQg=' 'sha256-lxfQLljhZoArkJCMaXtn95XQULBS9K3y4Ec5QXmyC+k=' 'sha256-pReWcrfe2dWqB5OQ1Yu2TIR/lJyDVN4rcQ8sfXNY1KU='
 
+# Runner assets carry no policy of their own: a dedicated worker is governed by the CSP on its
+# own script response, and the site-wide policy would deny the sandbox worker the eval grant it
+# must inherit from sandbox.html. This rule must sit before the sandbox.html rule below, so its
+# detach cannot eat that rule's replacement policy.
+/runner/*
+  ! Content-Security-Policy
+
+# The workbench sandbox: the one document allowed to eval, so a reader's edited snippet can run
+# (in a worker it spawns, which inherits this policy). Cloudflare appends headers from every
+# matching rule and two CSPs enforce as their intersection, so the site-wide policy is detached
+# first (the /runner/* rule above), then the minimal replacement granted. Input reaches this
+# document only by postMessage from the embedding page — never via its URL. Two path forms:
+# Pages' clean URLs serve the document at /runner/sandbox (the .html form 308s to it), and the
+# rule must decorate the 200, not the redirect. The sha256 grants mirror the site-wide rule's:
+# the 404 document serves under any path a deep link can miss, so every rule carries its inline
+# script hashes (check-csp enforces this).
+/runner/sandbox
+  ! X-Frame-Options
+  Content-Security-Policy: default-src 'none'; base-uri 'none'; frame-ancestors 'self'; script-src 'self' 'unsafe-eval' 'sha256-0xr6PrkTM/eu45EacXIuX6EVWTocVC9+KMweSk/Z4sI=' 'sha256-7bsSApYREnl3FN6h17aKGuMaTKgtTPusx6QOE2uHzQg=' 'sha256-lxfQLljhZoArkJCMaXtn95XQULBS9K3y4Ec5QXmyC+k=' 'sha256-pReWcrfe2dWqB5OQ1Yu2TIR/lJyDVN4rcQ8sfXNY1KU='
+
+/runner/sandbox.html
+  ! X-Frame-Options
+  Content-Security-Policy: default-src 'none'; base-uri 'none'; frame-ancestors 'self'; script-src 'self' 'unsafe-eval' 'sha256-0xr6PrkTM/eu45EacXIuX6EVWTocVC9+KMweSk/Z4sI=' 'sha256-7bsSApYREnl3FN6h17aKGuMaTKgtTPusx6QOE2uHzQg=' 'sha256-lxfQLljhZoArkJCMaXtn95XQULBS9K3y4Ec5QXmyC+k=' 'sha256-pReWcrfe2dWqB5OQ1Yu2TIR/lJyDVN4rcQ8sfXNY1KU='
+
 # Content-hashed bundles: cache forever, the hash in the name busts on change.
 /assets/*
   Cache-Control: public, max-age=31536000, immutable

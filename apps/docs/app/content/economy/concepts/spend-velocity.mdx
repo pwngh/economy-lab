@@ -6,15 +6,15 @@ order: 85
 status: stable
 sourceRefs:
   [
-    'src/trust.ts#L130 · riskSubject',
-    'src/trust.ts#L150 · attemptMinor',
-    'src/economy.ts#L572 · screenRisk',
-    'src/engines/postgres.ts#L1381 · recordVelocity',
+    'src/trust.ts#L136 · riskSubject',
+    'src/trust.ts#L172 · attemptMinor',
+    'src/economy.ts#L612 · screenRisk',
+    'src/engines/postgres.ts#L1427 · recordVelocity',
   ]
 related: ['economy/concepts/concurrency', 'economy/concepts/solvency']
 ---
 
-import velocitySrc from '../../../snippets/velocity.ts?raw';
+import velocityHtml from '../../../snippets/velocity.ts?shiki';
 
 ## The idea
 
@@ -27,7 +27,7 @@ const outcome = await economy.submit(spendOperation);
 // → { status: "rejected", reason: "RISK_DENIED" }   when the window is over the limit
 ```
 
-The window counts every risk-screened write, not only spending: a top-up's amount accrues to the same per-subject total, so buying in past the limit is refused with the same `RISK_DENIED` as spending past it. The [table below](#what-counts-as-a-subject) lists every screened operation. The rejection's detail carries what was spent, the limit, the window, and `retryAfter` — when the oldest counted attempt ages out — so a caller can tell the user when to try again.
+Every risk-screened write counts, and each lands in one of two windows per user, because value flowing in and value flowing out are different threat models. The **outflow** window sums what leaves the wallet (`spend`, `subscribe`, `requestPayout`): a drained account fills this one. The **inflow** window sums what arrives (`topUp`, `grantPromo`): card testing — a run of small charges probing a stolen card — fills this one, so buying in past its limit is refused with the same `RISK_DENIED` as overspending. The [table below](#what-counts-as-a-subject) lists every screened operation and its window. The rejection's detail carries what was spent, the limit, which window (`class: 'in' | 'out'`), and `retryAfter` — when the oldest counted attempt ages out — so a caller can tell the user when to try again.
 
 ## Why it exists
 
@@ -35,19 +35,22 @@ A compromised or misbehaving account can try to move money faster than anyone re
 
 ## What counts as a subject
 
-`riskSubject` decides which operations are gated and whose account is the subject. When an operation moves no tracked subject's funds, `riskSubject` returns `null` and the operation is always allowed.
+`riskSubject` decides which operations are gated, whose account is the subject, and which window the attempt fills — the recorded subject is `<class>:<userId>`, so each class accrues its own total. When an operation moves no tracked subject's funds, `riskSubject` returns `null` and the operation is always allowed.
 
-| Operation                                                                                                                                                                      | Subject   | Amount counted |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- | -------------- |
-| [`spend`](/economy/reference/operations/spend/), [`subscribe`](/economy/reference/operations/subscribe/)                                                                       | the buyer | the `price`    |
-| [`topUp`](/economy/reference/operations/top-up/), [`grantPromo`](/economy/reference/operations/grant-promo/), [`requestPayout`](/economy/reference/operations/request-payout/) | the user  | the `amount`   |
-| everything else                                                                                                                                                                | —         | not gated      |
+| Operation                                                                                                                                                                      | Window            | Amount counted |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------- | -------------- |
+| [`spend`](/economy/reference/operations/spend/), [`subscribe`](/economy/reference/operations/subscribe/)                                                                       | the buyer's `out` | the `price`    |
+| [`requestPayout`](/economy/reference/operations/request-payout/)                                                                                                               | the user's `out`  | the `amount`   |
+| [`topUp`](/economy/reference/operations/top-up/), [`grantPromo`](/economy/reference/operations/grant-promo/)                                                                   | the user's `in`   | the `amount`   |
+| everything else                                                                                                                                                                | —                 | not gated      |
+
+One knob arms both ceilings: each class falls back to `velocityLimitMinor` unless its own `velocityInflowLimitMinor` / `velocityOutflowLimitMinor` is set, so a deployment that needs different in/out ceilings sets them apart and everyone else configures one figure.
 
 ## How it's enforced
 
 A naive limit reads the total, compares, then records — three steps another operation can interleave, so two concurrent spends both pass and together blow the limit. It's the same interleaving hazard [concurrency](/economy/concepts/concurrency/) handles for balances, and the gate closes it by recording _and_ measuring in one indivisible step per subject.
 
-`screenRisk` runs inside the submit pipeline, before the money transaction opens. It hands the attempt to `recordVelocity`, which does the whole record-and-measure as one unit: it takes a per-subject lock, dedup-inserts the attempt keyed on the [`idempotencyKey`](/economy/concepts/idempotency/) so a retry never double-counts, sums the subject's amounts where the timestamp falls inside the window, and returns that total. `screenRisk` compares it to `velocityLimitMinor` and rejects when it's over.
+`screenRisk` runs inside the submit pipeline, before the money transaction opens. It hands the attempt to `recordVelocity`, which does the whole record-and-measure as one unit: it takes a per-subject lock, dedup-inserts the attempt keyed on the [`idempotencyKey`](/economy/concepts/idempotency/) so a retry never double-counts, sums the subject's amounts where the timestamp falls inside the window, and returns that total. `screenRisk` compares it to the class's limit and rejects when it's over.
 
 The insert comes before the decision, so denied attempts still count: a flood of over-limit attempts keeps adding to the window.
 
@@ -66,6 +69,16 @@ The insert comes before the decision, so denied attempts still count: a flood of
 
 Arm the ceiling and cross it — the snippet runs the real engine on this page:
 
-<Runnable name="velocity" code={velocitySrc} />
+<Runnable name="velocity" html={velocityHtml} />
 
-The same ceiling is a live knob on the [console's Controls page](/console/controls?from=docs), which arrives with your run already replayed.
+The block above builds its own small economy — the ceiling is construction-time config, and a throwaway economy is the honest way to arm one. The same ceiling is a live knob on the [console's Controls page](/console/controls).
+
+## Recap
+
+- The gate counts value moved per user inside two rolling windows — outflow (spends, subscriptions, payout requests) and inflow (top-ups, promo grants) — and every attempt counts, denied ones included.
+- Crossing a ceiling declines as `RISK_DENIED`, carrying the window's own figures: spent, limit, which class tripped, and when a retry can find room.
+- The ceilings are construction-time config: `velocityLimitMinor` arms both, the per-class knobs override it, and `velocityWindowMs` sets the window. The window length is captured when the store is built, and the whole config object is frozen inside the engine — changing any knob means rebuilding the economy over the same store, never mutating (that is how the console's live knob works).
+
+To probe the gate yourself, edit the block above: shrink `PRICE` under the window and both
+spends commit; raise the ceiling and the wallet becomes the next gate to answer. Every attempt,
+denied ones included, stays in the window.

@@ -9,6 +9,7 @@
  * @license MIT
  */
 
+import { accessSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import mdx from '@mdx-js/rollup';
 import remarkFrontmatter from 'remark-frontmatter';
@@ -24,6 +25,22 @@ export default defineConfig({
     alias: { '~': fileURLToPath(new URL('./app', import.meta.url)) },
   },
   plugins: [
+    {
+      // `?shiki` imports, stubbed: tests read frontmatter, not highlighted HTML, but a missing
+      // snippet file must still fail here rather than at the docs build.
+      name: 'shiki-source-stub',
+      enforce: 'pre' as const,
+      async resolveId(source: string, importer: string | undefined) {
+        if (!source.includes('?shiki')) return undefined;
+        const resolved = await this.resolve(source.split('?')[0], importer, { skipSelf: true });
+        return resolved ? `${resolved.id}?shiki` : undefined;
+      },
+      load(id: string) {
+        if (!id.includes('?shiki')) return undefined;
+        accessSync(id.split('?')[0]);
+        return "export default '';";
+      },
+    },
     {
       enforce: 'pre',
       ...mdx({ remarkPlugins: [remarkFrontmatter, remarkMdxFrontmatter] }),

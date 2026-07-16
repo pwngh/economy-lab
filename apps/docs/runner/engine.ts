@@ -11,25 +11,29 @@
 
 /**
  * The docs-side engine harness, loaded on the first Run click. It builds the console's own
- * seeded engine, replays the journal earlier runnable pages wrote, runs the named snippet, and
- * appends its calls back to the journal — so the console's replay lands on the very posting any
- * snippet on any page created.
+ * seeded engine, replays the journal earlier runnable pages wrote, and runs the named snippet
+ * against the real Economy — every submitted Operation recorded back to the journal, so the
+ * console's replay lands on the very posting any snippet on any page created.
  */
 
+import { EconomyError } from '@pwngh/economy-lab';
+
 import { buildEngine } from '../../console/app/economy';
-import { REPLAYABLE, loadJournal, replayJournal, saveJournal } from '../../console/app/journal';
+import { loadJournal, replayJournal, saveJournal } from '../../console/app/journal';
 import { run as drain } from '../app/snippets/drain';
 import { run as idempotency } from '../app/snippets/idempotency';
 import { run as payout } from '../app/snippets/payout';
 import { run as prove } from '../app/snippets/prove';
 import { run as rejection } from '../app/snippets/rejection';
 import { run as velocity } from '../app/snippets/velocity';
+import { renderRun } from './render';
 
+import type { Economy } from '@pwngh/economy-lab';
 import type { ConsoleEngine } from '../../console/app/economy';
 import type { JournalEntry } from '../../console/app/journal';
-import type { SnippetCtx, SnippetReport } from '../app/snippets/context';
+import type { SnippetReport } from '../app/snippets/context';
 
-const SNIPPETS: Record<string, (eco: SnippetCtx) => Promise<SnippetReport>> = {
+const SNIPPETS: Record<string, (economy: Economy) => Promise<SnippetReport>> = {
   idempotency,
   drain,
   prove,
@@ -41,13 +45,19 @@ const SNIPPETS: Record<string, (eco: SnippetCtx) => Promise<SnippetReport>> = {
 let enginePromise: Promise<ConsoleEngine> | null = null;
 let journal: JournalEntry[] = [];
 
+// The workbench appends sandbox-run operations (or clears everything) behind this module's back;
+// the next in-page run rebuilds from the saved journal so both paths see one economy.
+window.addEventListener('elab:journal-changed', () => {
+  enginePromise = null;
+});
+
 function engine(): Promise<ConsoleEngine> {
   enginePromise ??= buildEngine().then(async (eco) => {
     journal = loadJournal();
     try {
       await replayJournal(eco, journal);
     } catch {
-      // A journal the engine refuses (stale snippet surface): start this page from the seed.
+      // A journal the engine refuses outright: start this page from the seed.
       journal = [];
     }
     return eco;
@@ -55,18 +65,17 @@ function engine(): Promise<ConsoleEngine> {
   return enginePromise;
 }
 
-// The snippet context: the real facade, with every replayable call recorded before it runs.
-function journaling(eco: ConsoleEngine): SnippetCtx {
-  return new Proxy<SnippetCtx>(eco, {
-    get(target, prop: string) {
-      const fn = (target as unknown as Record<string, unknown>)[prop];
-      if (typeof fn !== 'function' || !REPLAYABLE.has(prop)) return fn;
-      return (...args: unknown[]) => {
-        journal.push({ m: prop, a: args });
-        return (fn as (...a: unknown[]) => unknown).apply(target, args);
-      };
+// The snippet's economy: the real one, with every submitted Operation recorded before it runs.
+// A submit that faults stays recorded — replay skips it identically, posting nothing.
+function journaling(eco: ConsoleEngine): Economy {
+  const live = eco.economy;
+  return {
+    ...live,
+    submit(operation, options) {
+      journal.push(operation);
+      return live.submit(operation, options);
     },
-  });
+  };
 }
 
 export async function runSnippet(block: HTMLElement): Promise<void> {
@@ -77,34 +86,29 @@ export async function runSnippet(block: HTMLElement): Promise<void> {
 
   const started = performance.now();
   const before = journal.length;
-  const report = await snippet(journaling(await engine()));
+  let report: SnippetReport | null = null;
+  let fault: string | null = null;
+  try {
+    report = await snippet(journaling(await engine()));
+  } catch (error) {
+    // The real failure, not a curtain: a fault names its code and message verbatim.
+    fault =
+      error instanceof EconomyError
+        ? `${error.code} — ${error.message}`
+        : error instanceof Error
+          ? `${error.name}: ${error.message}`
+          : String(error);
+  }
   const ms = Math.max(1, Math.round(performance.now() - started));
   saveJournal(journal);
-  const added = journal.length - before;
 
-  out.textContent = '';
-  for (const line of report.lines) {
-    const div = document.createElement('div');
-    div.className = 'runnable-line';
-    div.textContent = line;
-    out.appendChild(div);
-  }
-
-  const foot = document.createElement('div');
-  foot.className = 'runnable-foot';
-  const meta = document.createElement('span');
-  meta.className = 'runnable-metaline';
-  meta.textContent = `ran in ${ms} ms · ${added} operation${added === 1 ? '' : 's'} journaled (${journal.length} in the handoff)`;
-  const link = document.createElement('a');
-  link.className = 'runnable-jump';
-  if (report.txnId) {
-    link.href = `/console/ledger/txn/${encodeURIComponent(report.txnId)}?from=docs`;
-    link.textContent = `open ${report.txnId} in the console`;
-  } else {
-    const path = report.consolePath ?? '/ledger';
-    link.href = `/console${path}?from=docs`;
-    link.textContent = `open ${path.replace('/', '')} in the console`;
-  }
-  foot.append(meta, link);
-  out.appendChild(foot);
+  renderRun(out, {
+    lines: report?.lines ?? [],
+    fault: fault ?? undefined,
+    txnId: report?.txnId,
+    consolePath: report?.consolePath,
+    ms,
+    added: journal.length - before,
+    total: journal.length,
+  });
 }

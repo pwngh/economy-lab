@@ -16,3 +16,9 @@ declare module '*.mdx' {
   const Component: ComponentType;
   export default Component;
 }
+
+// `?shiki` imports (vite.config.ts shikiSource): the file, highlighted at build time.
+declare module '*?shiki' {
+  const html: string;
+  export default html;
+}

@@ -5,14 +5,14 @@ order: 20
 status: stable
 sourceRefs:
   [
-    'src/contract.ts#L267 · Outcome',
+    'src/contract.ts#L272 · Outcome',
     'src/errors.ts#L22 · RejectionCode',
     'src/errors.ts#L55 · ERROR_CODES',
   ]
 related: ['economy/reference/the-economy', 'economy/reference/configuration']
 ---
 
-import rejectionSrc from '../../../snippets/rejection.ts?raw';
+import rejectionHtml from '../../../snippets/rejection.ts?shiki';
 
 ## The shape of an answer
 
@@ -101,6 +101,8 @@ if (result.status === 'rejected' && result.reason === 'INSUFFICIENT_FUNDS') {
 
 A rejection comes back as data, so you handle it in an ordinary `if` branch; see the [throw-versus-decline rule](#rejected-versus-thrown) below.
 
+The money fields in `detail` — `required`, `available`, `minimum`, `requested`, `spent`, `limit` — are branded [`Amount`](/economy/concepts/money-model/)s, so a caller compares them directly (`detail.available.minor < detail.required.minor`) and formats them with `encodeAmount`. Over the [HTTP service](/economy/reference/http-service/) they travel as the same decimal strings every other wire amount uses.
+
 ## The `RejectionCode` catalog
 
 A `RejectionCode` names one expected reason a valid request gets declined on a healthy system. Each
@@ -133,8 +135,9 @@ The `detail` names the `account`, the `required` amount that hadn't cleared, and
 user when to try again.
 
 `RISK_DENIED` is actionable the same way: its `detail` carries what was `spent` in the
-window, the `limit`, the `windowMs`, and `retryAfter` — when the oldest counted attempt
-ages out of the [velocity window](/economy/concepts/spend-velocity/).
+window, the `limit`, which window tripped (`class` — `'in'` for top-ups and promo grants,
+`'out'` for spends, subscriptions, and payout requests), the `windowMs`, and `retryAfter` —
+when the oldest counted attempt ages out of the [velocity window](/economy/concepts/spend-velocity/).
 
 `DUPLICATE_ORDER` catches a specific client mistake: a retried `spend` that lost its original
 `idempotencyKey`. The `orderId` identifies a unique purchase, so a second charge for the same order
@@ -188,8 +191,24 @@ they never light up error dashboards or page an on-call engineer.
 backstops deep in the posting and integrity paths; reaching one means an invariant was about to
 break.
 
+## Troubleshooting
+
+### I get `duplicate` but I only submitted once
+
+The key was minted from something two different actions share — a user id, a SKU, a template string that never varies. The first action claimed it; every later action replays that recorded outcome. Mint the key from the action's own identity:
+
+```ts
+const idempotencyKey = `ord_${order.id}`; // unique per order, stable per retry
+```
+
+[Idempotency & retries](/economy/concepts/idempotency/) owns the key discipline.
+
+### My code throws instead of getting a `rejected` outcome
+
+Then it wasn't a decline — the request itself was broken before any business question was asked. The two usual suspects: the `actor` is a `user` acting on an account they don't own (`AUTH.UNAUTHORIZED`), or a malformed payload (`OP.MALFORMED`, e.g. a blank key). Rejections are reserved for valid requests the economy declines; see [rejected versus thrown](#rejected-versus-thrown) above and [actors & authorization](/economy/concepts/actors-and-authorization/).
+
 ## Try it
 
 A refusal, produced live — the reason code verbatim plus the typed figures it carries:
 
-<Runnable name="rejection" code={rejectionSrc} />
+<Runnable name="rejection" html={rejectionHtml} />

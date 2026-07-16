@@ -7,14 +7,14 @@ status: stable
 sourceRefs:
   [
     'src/ledger.ts#L73 · lockAll',
-    'src/economy.ts#L609 · lockAccounts',
-    'src/engines/postgres.ts#L192 · advanceChain',
+    'src/economy.ts#L649 · lockAccounts',
+    'src/engines/postgres.ts#L198 · advanceChain',
     'db/postgresql-schema.sql#L90 · chain_links_account_prev_uq',
   ]
 related: ['economy/concepts/idempotency', 'economy/concepts/platform-sharding']
 ---
 
-import drainSrc from '../../../snippets/drain.ts?raw';
+import drainHtml from '../../../snippets/drain.ts?shiki';
 
 When two operations touch the same account at the same time, they can interleave and corrupt a balance. They can also both extend that account's [hash chain](/economy/concepts/integrity/) from the same point, which forks it. economy-lab keeps concurrent writes correct with an application-side rule and a database constraint.
 
@@ -62,6 +62,16 @@ Writes that survive the lock ordering and the no-fork index are still re-derived
 
 Six racing spends against a wallet that only covers two — the funds gate commits what the balance covers and refuses the rest:
 
-<Runnable name="drain" code={drainSrc} />
+<Runnable name="drain" html={drainHtml} />
 
 The same burst, with its tally, runs on the [console's market page](/console/market?from=docs#race).
+
+## Recap
+
+- Contending operations serialize on per-account locks taken in one global order — the engine, not luck, prevents interleaving.
+- A refusal under contention is data: the funds gate rejects with `INSUFFICIENT_FUNDS`, and no account goes below zero.
+- The books stay provable under any interleaving; `read.prove()` re-derives the invariants on demand.
+
+Edit the drain block above to push on this: raise the number of racing spends, shrink the
+wallet, and watch the tally. Commits plus refusals always sum to the attempts, and the balance
+never goes negative, whatever the interleaving.

@@ -7,7 +7,7 @@ status: stable
 sourceRefs:
   [
     'src/integrity.ts#L72 · proveEconomy',
-    'src/contract.ts#L442 · ProveReport',
+    'src/contract.ts#L460 · ProveReport',
     'scripts/prove.ts',
   ]
 related:
@@ -17,7 +17,7 @@ related:
   ]
 ---
 
-import proveSrc from '../../../snippets/prove.ts?raw';
+import proveHtml from '../../../snippets/prove.ts?shiki';
 
 ## The idea
 
@@ -107,8 +107,8 @@ Everything on this page holds per operation. The two remaining concept pages cov
 
 ## Try it
 
-The prover runs on this page. The snippet moves real credits through the same engine build the [console](/console/) drives, then re-derives every invariant from the raw ledger:
+The prover runs on this page. The snippet moves real credits through the same engine build the [console](/console/) drives, then asks `read.prove()` for the five-flag report over the books your run just changed:
 
-<Runnable name="prove" code={proveSrc} />
+<Runnable name="prove" html={proveHtml} />
 
 The [console's Integrity page](/console/integrity?from=docs) re-runs the same five checks on every load — after replaying the operations you just ran here.

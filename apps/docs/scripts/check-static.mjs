@@ -61,6 +61,9 @@ function scriptRefs(html) {
 const pages = walk(BUILD_DIR);
 const offenders = [];
 for (const file of pages) {
+  // The workbench sandbox is not a route: it exists to carry the eval-permitting CSP and runs
+  // only inside a runnable block's hidden iframe. Its module script is the point, not hydration.
+  if (relative(BUILD_DIR, file).split(sep).join('/') === 'runner/sandbox.html') continue;
   const route = routeOf(file);
   if (HYDRATED.has(route)) continue;
   const html = readFileSync(file, 'utf8');
@@ -76,23 +79,33 @@ if (offenders.length > 0) {
   console.error('flat pages must reference zero hydration chunks; hydration is allowlist-only.');
   process.exit(1);
 }
-// Runner ratchet, same policy as the console's bundle budget: the loader stays trivial, and the
-// engine graph (loaded only on the first Run click) may only shrink between deliberate
-// re-baselines. Measured 1,785 / 143,149.
+// Runner ratchet, same policy as the console's bundle budget, one budget per intent tier: the
+// loader (every runnable page) stays trivial; the run tier (engine graph, first Run click) and
+// the edit tier (workbench + sandbox relay + the sandbox worker + Sucrase, first Edit) may only
+// shrink between deliberate re-baselines. The edit tier deliberately duplicates the engine
+// graph inside the sandbox worker — the price of being able to terminate() runaway edits
+// instead of freezing the page. Measured 3,330 / 152,000-ish / 365,000-ish.
 const LOADER_BUDGET = 4_000;
-const RUNNER_BUDGET = 150_000;
+const RUN_TIER_BUDGET = 170_000;
+const EDIT_TIER_BUDGET = 380_000;
 const runnerDir = join(BUILD_DIR, 'runner');
+const isEditTier = (f) =>
+  f.startsWith('sandbox') || f.startsWith('workbench-') || f.startsWith('sucrase-');
 const loaderBytes = statSync(join(runnerDir, 'loader.js')).size;
-const runnerBytes = readdirSync(runnerDir)
-  .filter((f) => f.endsWith('.js'))
-  .reduce((sum, f) => sum + statSync(join(runnerDir, f)).size, 0);
-if (loaderBytes > LOADER_BUDGET || runnerBytes > RUNNER_BUDGET) {
+let runBytes = 0;
+let editBytes = 0;
+for (const f of readdirSync(runnerDir).filter((f) => f.endsWith('.js'))) {
+  const size = statSync(join(runnerDir, f)).size;
+  if (isEditTier(f)) editBytes += size;
+  else runBytes += size;
+}
+if (loaderBytes > LOADER_BUDGET || runBytes > RUN_TIER_BUDGET || editBytes > EDIT_TIER_BUDGET) {
   console.error(
-    `runner over budget: loader ${loaderBytes}/${LOADER_BUDGET}, total ${runnerBytes}/${RUNNER_BUDGET}.`,
+    `runner over budget: loader ${loaderBytes}/${LOADER_BUDGET}, run tier ${runBytes}/${RUN_TIER_BUDGET}, edit tier ${editBytes}/${EDIT_TIER_BUDGET}.`,
   );
   process.exit(1);
 }
 
 console.log(
-  `static check: ${pages.length} pages flat, ${HYDRATED.size} allowlisted; runner ${runnerBytes} bytes (budget ${RUNNER_BUDGET}).`,
+  `static check: ${pages.length} pages flat, ${HYDRATED.size} allowlisted; runner loader ${loaderBytes}, run tier ${runBytes}, edit tier ${editBytes} bytes.`,
 );

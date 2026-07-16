@@ -22,6 +22,8 @@ related:
   ]
 ---
 
+import payoutHtml from '../../../snippets/payout.ts?shiki';
+
 A `topUp` or a `spend` finishes the instant you call it. A payout can't: it reaches an external rail that answers in its own time.
 
 So economy-lab models a payout as an explicit state machine. The operation becomes a stored record (a `Saga`) that the [background worker](/economy/reference/background-worker/) advances one safe step at a time.<Cite n={1} /> If a crash interrupts the work, the record resumes from its last recorded state. A step that runs twice still counts once.
@@ -40,7 +42,9 @@ The same shape covers anything that outlives one request. [Subscriptions](/econo
 
 `requestPayout` does not pay. It reserves the credits (`debit earned → credit payout_reserve`, two [`CREDIT` legs](/economy/concepts/accounts-and-double-entry/) that cancel out) and opens a `Saga`, a record whose `state` walks through `SagaState` (see <SourceLink to="src/ports.ts#L800-L806 · SAGA_STATES" />).
 
-The full enum declares `REQUESTED`, `RESERVED`, `SUBMITTED`, `SETTLED`, and `FAILED`. A live payout starts at `RESERVED`, because the credits were set aside in the same database transaction that opened the saga.
+The full enum declares `REQUESTED`, `RESERVED`, `SUBMITTED`, `SETTLED`, and `FAILED`. A live payout starts at `RESERVED`, because the credits were set aside in the same database transaction that opened the saga. Watch the row appear:
+
+<Runnable name="payout" html={payoutHtml} />
 
 | State       | Meaning                                                                                                          | What advances it                   |
 | ----------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
@@ -99,6 +103,6 @@ The enforcement lives in three places, and you can verify each one in the source
 
 ## Operations and ports that rely on it
 
-[`requestPayout`](/economy/reference/operations/request-payout/) opens the saga; `settlePayout` and `reversePayout` move it. The worker's `payouts` sweep and its inbox drain drive transitions off the request path.
+[`requestPayout`](/economy/reference/operations/request-payout/) opens the saga; `settlePayout` and `reversePayout` move it. The worker's `payouts` sweep and its inbox drain drive transitions off the request path. The opening transaction's `meta.sagaId` names the saga, so the requester can follow it with `read.saga(sagaId)`.
 
 The saga records persist through the `SagaStore` sub-store of the [`Store`](/economy/ports/storage/) port, and a payout's disbursement leaves through the [`Processor`](/economy/ports/processor/) port. The discipline the saga depends on — a compare-and-set on every transition, one transaction per step — is the same machinery that keeps the [ledger's integrity invariants](/economy/concepts/integrity/) intact under concurrency.
