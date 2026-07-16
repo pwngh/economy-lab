@@ -72,10 +72,10 @@
  *
  * Backends. Postgres and MySQL run when reachable and are skipped (never failed) when not, the same
  * connect-or-skip contract the other conformance suites use. The SKIP LOCKED row locking and the
- * concurrent-submit dedup are the whole point, so the real proof is SQL. memory is single-threaded
- * (its journal forbids overlapping transactions: "in-memory transactions do not nest"), so it has no
- * genuine contention. A trivial single-sweep reference pass over the same harness pins that the
- * claim-then-mark effect logic drains the seeded set exactly once on the reference adapter.
+ * concurrent-submit dedup are the whole point, so the real proof is SQL. memory is a single writer
+ * (overlapping transactions queue FIFO rather than interleave), so it has no genuine contention. A
+ * trivial single-sweep reference pass over the same harness pins that the claim-then-mark effect
+ * logic drains the seeded set exactly once on the reference adapter.
  */
 
 import { describe, test, before, after } from 'node:test';
@@ -489,8 +489,8 @@ function inboxMethod(): ClaimMethod {
 // returns nothing, meaning its view of the set is empty. A shared barrier makes all sweeps start their
 // first claim together, maximizing the overlap so the SKIP LOCKED path, and the concurrent-mark race
 // the idempotent effect must absorb, is genuinely exercised. The SQL engines pass N. memory passes 1,
-// because its single journal forbids overlapping transactions ("in-memory transactions do not nest"),
-// so N>1 there is not a real race, just nested-transaction errors. The reference adapter drains with
+// because its store queues overlapping transactions behind one writer, so N>1 there is not a real
+// race, just the same serial order with extra bookkeeping. The reference adapter drains with
 // one sweep, and the effect checks still hold over that single logical pass. Returns nothing. The
 // method's `verify` asserts on failure.
 async function drainOnce(input: {
@@ -600,13 +600,12 @@ runClaimContention('mysql', () => adversarialMysql(process.env));
 
 // --- memory: single-threaded reference (no genuine contention) ---------------------------------
 
-// memory's journal forbids overlapping transactions, so there is no real race to run here. The same
-// claim-then-mark effect harness must still drain the seeded set exactly once. This pins that the
-// effect logic itself (claim a batch, run the idempotent step, repeat until empty) is correct on the
-// reference adapter. It uses a single sweep (sweeps=1) because N concurrent transactions cannot
-// overlap on memory's one journal: the second would throw "in-memory transactions do not nest", and
-// with no genuine parallelism a second sweep adds nothing. This is a trivial pass. The real
-// exactly-once-effect-under-parallelism proof is the SQL suites above.
+// memory queues overlapping transactions behind one writer, so there is no real race to run here.
+// The same claim-then-mark effect harness must still drain the seeded set exactly once. This pins
+// that the effect logic itself (claim a batch, run the idempotent step, repeat until empty) is
+// correct on the reference adapter. It uses a single sweep (sweeps=1) because N sweeps would just
+// take turns on the one writer; with no genuine parallelism a second sweep adds nothing. This is a
+// trivial pass. The real exactly-once-effect-under-parallelism proof is the SQL suites above.
 describe('Claim contention: memory (single-threaded reference)', () => {
   for (const method of [sagaMethod(), outboxMethod(), inboxMethod()]) {
     test(`${method.name}: drains the seeded set with the effect happening exactly once`, async () => {

@@ -48,7 +48,7 @@ Submit throughput, sequential (ops/sec, one op at a time):
 
 | Backend   | topUp  | spend  | requestPayout |
 | --------- | ------ | ------ | ------------- |
-| in-memory | 20,910 | 31,745 | 39,621        |
+| in-memory | 21,120 | 33,753 | 42,584        |
 | Postgres  | 298    | 205    | 231           |
 | MySQL     | 87     | 74     | 78            |
 
@@ -56,11 +56,11 @@ Submit throughput, concurrent (ops/sec, up to 32 in flight):
 
 | Backend   | topUp  | spend  | requestPayout |
 | --------- | ------ | ------ | ------------- |
-| in-memory | 25,063 | 33,299 | 43,468        |
+| in-memory | 24,317 | 40,091 | 44,264        |
 | Postgres  | 260    | 239    | 268           |
 | MySQL     | 155    | 123    | 121           |
 
-In memory, `submit` is CPU-bound and runs tens of thousands per second. On a SQL backend each `submit` is its own transaction, with a commit and an `fsync` per operation, so the rate drops to hundreds per second — and concurrency, pipelining independent transactions, is what recovers it.
+In memory, `submit` is CPU-bound and runs tens of thousands per second; the store is one writer, so in-flight submits queue rather than interleave and its concurrent rate stays close to sequential. On a SQL backend each `submit` is its own transaction, with a commit and an `fsync` per operation, so the rate drops to hundreds per second — and concurrency, pipelining independent transactions, is what recovers it.
 
 Integrity cost versus ledger size (in-memory, ms):
 

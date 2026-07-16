@@ -7,8 +7,8 @@ sourceRefs:
   [
     'src/ports.ts#L272 · Store',
     'src/ports.ts#L194 · Ledger',
-    'src/adapters/memory.ts#L1290 · memoryStore',
-    'src/engines/postgres.ts#L1558 · postgresStore',
+    'src/adapters/memory.ts#L1299 · memoryStore',
+    'src/engines/postgres.ts#L1604 · postgresStore',
   ]
 related: ['economy/ports/messaging', 'economy/concepts/accounts-and-double-entry']
 ---
@@ -65,7 +65,9 @@ The `Unit` is deliberately narrower than the full `Store`. The `trust` and `chec
   The in-memory adapter gets atomicity from a per-store undo log rather than a
   real database transaction: each write records a reverser, and a rollback
   replays them last-to-first. The observable contract (all-or-nothing) is the
-  same as the SQL engines.
+  same as the SQL engines. It is one writer: overlapping `transaction` callers
+  wait their turn in arrival order, so concurrent submits serialize instead of
+  interleaving.
 </Callout>
 
 ## One contract, every adapter
@@ -74,7 +76,14 @@ A port is only useful if every adapter behaves the same way. economy-lab pins th
 
 The same posting, the same overdraft rejection, and the same hash chain come back from each backend, so the choice of backend is an infrastructure decision, not a behavioral one.
 
-The suite is published (`@pwngh/economy-lab/testing`), and so are the primitives a conforming implementation computes with — the chain hash, balance deltas, the canonical ordering, the wire codecs — as [`@pwngh/economy-lab/store-kit`](/economy/reference/api/#pwngheconomy-labstore-kit). A third-party store built on both needs nothing the package doesn't export.
+The suite is published (`@pwngh/economy-lab/testing`), and so are the primitives a conforming implementation computes with — the chain hash, balance deltas, the canonical ordering, the wire codecs — as [`@pwngh/economy-lab/store-kit`](/economy/reference/api/#pwngheconomy-labstore-kit). A third-party store built on both needs nothing the package doesn't export. Its whole test file is the highlighted line:
+
+```ts filename=test/my-store.conformance.test.ts lines=[3]
+import { runStoreConformance } from '@pwngh/economy-lab/testing';
+
+runStoreConformance('my-store', () => myStore());
+// the identical test bodies memory, Postgres, and MySQL pass
+```
 
 ### The in-memory default
 

@@ -33,14 +33,14 @@
  *  - SQL engines (Postgres and MySQL, when reachable) run the genuine concurrent race. settle and
  *    reverse are fired together via Promise.all and truly interleave on the engine's row/account
  *    locks. This is the same harness concurrency.adversarial uses. Memory is deliberately excluded
- *    there because the in-memory store has a single journal and forbids overlapping transactions
- *    ("in-memory transactions do not nest"). 50 iterations, both firing orders each iteration.
+ *    there because its store queues overlapping transactions behind one writer, so a Promise.all
+ *    race never truly interleaves. 50 iterations, both firing orders each iteration.
  *
  *  - Memory runs a deterministic interleaving instead, mirroring settlePayout.test.ts's
  *    `raceSettleOnce`. It pre-empts the saga into the winner's terminal state by committing the
  *    winner's money first, then runs the loser and asserts the loser is refused with the real
  *    SAGA.INVALID_TRANSITION and posts nothing. This pins the loser-refusal and money-moves-once
- *    contract on memory without needing the nested transactions memory can't provide. 50 iterations,
+ *    contract on memory without needing the interleaving memory doesn't provide. 50 iterations,
  *    both winners (settle-wins, reverse-wins) each iteration.
  *
  * Every iteration on every backend asserts the same contract. Exactly one outcome commits. The loser

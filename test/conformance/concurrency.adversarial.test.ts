@@ -226,7 +226,12 @@ function runConcurrency(
       const affordable = 2;
       await economy.submit(topUp({ userId: buyer, amount: credit('2.00') }));
       const attempts = Array.from({ length: parallelism }, () =>
-        spend({ buyerId: buyer, sku: 'wrld_pass', price: credit('1.00') }),
+        spend({
+          buyerId: buyer,
+          sku: 'wrld_pass',
+          price: credit('1.00'),
+          recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
+        }),
       );
       const settled = await Promise.allSettled(
         attempts.map((op) => economy.submit(op)),

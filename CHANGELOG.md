@@ -2,6 +2,18 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
+## Unreleased (0.2.0)
+
+### Changed
+
+- The in-memory store queues overlapping transactions instead of throwing.
+- The store server registers a transaction session once the queued body starts.
+
+### Documentation
+
+- The performance page is re-measured with the queue; the storage page states the one-writer
+  contract.
+
 ## Unreleased (0.1.2)
 
 ### Added

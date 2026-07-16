@@ -31,7 +31,10 @@ type Session = {
 
 // Opens a db transaction paused on the gate; the commit and rollback routes settle it. Returns
 // the session id callers pass on every follow-up request.
-function beginSession(backing: Store, sessions: Map<string, Session>): string {
+async function beginSession(
+  backing: Store,
+  sessions: Map<string, Session>,
+): Promise<string> {
   const id = `sess_${sessions.size}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   let settle!: (commit: boolean) => void;
   const gate = new Promise<void>((resolve, reject) => {
@@ -39,8 +42,10 @@ function beginSession(backing: Store, sessions: Map<string, Session>): string {
       commit ? resolve() : reject(new Error('transaction rolled back'));
   });
   // Record the session from inside the transaction body so it captures the unit. `done` starts as
-  // a placeholder because the transaction promise does not exist yet. The line below overwrites it,
-  // and nothing reads `done` before then.
+  // a placeholder because the transaction promise does not exist yet; it is patched below once
+  // the body has registered.
+  let register!: () => void;
+  const registered = new Promise<void>((resolve) => (register = resolve));
   const done = backing
     .transaction(async (unit) => {
       sessions.set(id, {
@@ -48,14 +53,22 @@ function beginSession(backing: Store, sessions: Map<string, Session>): string {
         settle,
         done: undefined as unknown as Promise<void>,
       });
+      register();
       await gate;
     })
     .then(() => undefined);
-  sessions.get(id)!.done = done;
   // A rollback rejects this promise; catch it here to avoid an unhandled rejection. The
   // rollback route succeeds either way, and commit-time errors still surface because the
   // commit route awaits `done` directly.
   done.catch(() => {});
+  // The body may start asynchronously (the memory store queues overlapping callers), so wait
+  // for it to register the unit; `done` settling first means the transaction never got there.
+  await Promise.race([registered, done]);
+  const session = sessions.get(id);
+  if (!session) {
+    throw new Error('transaction ended before its session registered');
+  }
+  session.done = done;
   return id;
 }
 
@@ -503,7 +516,7 @@ async function txDispatch(
   body: Record<string, unknown>,
 ): Promise<unknown> {
   if (segments[1] === 'begin') {
-    return { session: beginSession(backing, sessions) };
+    return { session: await beginSession(backing, sessions) };
   }
   const session = segments[1]!;
   const tail = segments.slice(2);

@@ -1325,27 +1325,37 @@ export function memoryStore(deps?: {
   };
   const participants: Participant[] = Object.values(unit);
 
+  // One writer at a time: overlapping `transaction` callers wait their turn (FIFO) instead of
+  // hitting the journals' nest guard, which stays behind the queue as an invariant. A transaction
+  // that opens another from inside `work` would wait on itself — callers overlap, never nest.
+  let tail: Promise<unknown> = Promise.resolve();
+
   return {
     ...unit,
     checkpoints,
     movements,
     replay,
-    transaction: async (work) => {
-      let begun = 0;
-      try {
-        for (const participant of participants) {
-          participant.journal.begin();
-          begun += 1;
+    transaction: (work) => {
+      const run = tail.then(async () => {
+        let begun = 0;
+        try {
+          for (const participant of participants) {
+            participant.journal.begin();
+            begun += 1;
+          }
+          const result = await work(unit);
+          for (const participant of participants) {
+            participant.journal.commit();
+          }
+          return result;
+        } catch (error) {
+          rollbackAll(participants, begun);
+          throw error;
         }
-        const result = await work(unit);
-        for (const participant of participants) {
-          participant.journal.commit();
-        }
-        return result;
-      } catch (error) {
-        rollbackAll(participants, begun);
-        throw error;
-      }
+      });
+      // The queue survives a failing transaction; the caller still sees its rejection.
+      tail = run.catch(() => {});
+      return run;
     },
     close: async () => {},
   };
