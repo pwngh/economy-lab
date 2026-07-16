@@ -6,8 +6,8 @@ status: stable
 sourceRefs:
   [
     'src/config.ts#L138-L153 · loadConfig',
-    'src/index.ts#L363 · capabilitiesFromEnv',
-    'src/from-env.ts#L96 · externalsFromEnv',
+    'src/index.ts#L383 · capabilitiesFromEnv',
+    'src/from-env.ts#L117 · externalsFromEnv',
     '.env.example',
   ]
 related:
@@ -123,6 +123,17 @@ that gate.
 | `PLATFORM_FEE_BPS`     | Platform's transaction fee in basis points. The example models a ~15.3% marketplace fee.                                 | `1530`         |
 | `VELOCITY_LIMIT_MINOR` | Most a subject may spend within one window, in CREDIT minor units, before the risk check engages.                        | `100000`       |
 | `VELOCITY_WINDOW_MS`   | Length of the rolling spending window. Only a subject's attempts inside the last window count; each ages out once older. | `3600000` (1h) |
+
+## Subscriptions
+
+The price band bounds what a subscription may charge per period, so a typo'd price cannot
+silently bind a buyer to it. A price outside the band is refused at
+[subscribe](/economy/reference/operations/subscribe/) time as a wiring error.
+
+| Variable                       | Meaning                                              | Default                  |
+| ------------------------------ | ---------------------------------------------------- | ------------------------ |
+| `SUBSCRIPTION_PRICE_MIN_MINOR` | Smallest subscription price, in CREDIT minor units.  | `10000` (100.00)         |
+| `SUBSCRIPTION_PRICE_MAX_MINOR` | Largest subscription price, in CREDIT minor units.   | `1000000` (10,000.00)    |
 
 ## Platform sharding
 

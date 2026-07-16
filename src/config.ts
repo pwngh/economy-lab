@@ -60,6 +60,13 @@ export interface Config {
 
   velocityWindowMs: number;
 
+  /** Smallest subscription price, in CREDIT minor units. A price outside the band is refused
+   *  at subscribe time; the band keeps a typo'd price from silently binding a buyer. */
+  subscriptionPriceMinMinor: bigint;
+
+  /** Largest subscription price, in CREDIT minor units. */
+  subscriptionPriceMaxMinor: bigint;
+
   /**
    * How long (ms) topped-up funds must wait before they can be spent or paid out, keyed by
    * funding source ("card", "crypto", "steam", "meta"); unlisted sources use "default".
@@ -113,6 +120,8 @@ export const CONFIG_KEYS = [
   'PAYOUT_FEE_BPS',
   'VELOCITY_LIMIT_MINOR',
   'VELOCITY_WINDOW_MS',
+  'SUBSCRIPTION_PRICE_MIN_MINOR',
+  'SUBSCRIPTION_PRICE_MAX_MINOR',
   'MATURITY_HORIZON_CARD_MS',
   'MATURITY_HORIZON_CRYPTO_MS',
   'MATURITY_HORIZON_STEAM_MS',
@@ -169,6 +178,14 @@ export function loadConfig(env: EnvMap): Config {
     platformFeeBps: readInt(env.PLATFORM_FEE_BPS, 1530, { max: 10_000 }),
     payoutFeeBps: readInt(env.PAYOUT_FEE_BPS, 150, { max: 10_000 }),
     velocityLimitMinor: readBigInt(env.VELOCITY_LIMIT_MINOR, 100_000n),
+    subscriptionPriceMinMinor: readBigInt(
+      env.SUBSCRIPTION_PRICE_MIN_MINOR,
+      10_000n,
+    ),
+    subscriptionPriceMaxMinor: readBigInt(
+      env.SUBSCRIPTION_PRICE_MAX_MINOR,
+      1_000_000n,
+    ),
     velocityWindowMs: readInt(env.VELOCITY_WINDOW_MS, 60 * 60_000, { min: 1 }),
     maturityHorizonMs: {
       card: cardHorizonMs,

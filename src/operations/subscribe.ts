@@ -15,17 +15,14 @@ import { planSpend } from '#src/operations/spend.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { compare, encodeAmount, toAmount } from '#src/money.ts';
 import { promo, spendable, earned, SYSTEM } from '#src/accounts.ts';
+import { maturedAtLeast, maturedAvailableAt } from '#src/maturity.ts';
 import { feeForPrice } from '#src/pricing.ts';
 
 import type { Amount } from '#src/money.ts';
+import type { Config } from '#src/config.ts';
 import type { Ctx, Operation, Outcome, Transaction } from '#src/contract.ts';
 import type { SpendPlan } from '#src/operations/spend.ts';
 import type { Leg, Subscription, Unit } from '#src/ports.ts';
-
-// A subscription price must be 100 to 10,000 credits per month, inclusive, expressed in minor
-// units (1 credit = 100 minor). A price outside this range is a malformed request.
-const MIN_PRICE_MINOR = 10_000n; // 100.00 credits
-const MAX_PRICE_MINOR = 1_000_000n; // 10,000.00 credits
 
 // The longest accepted billing period is ten 365-day years, in milliseconds. A longer period is
 // treated as garbage off the wire (a bad unit conversion, an overflow, or seconds used for ms)
@@ -50,7 +47,7 @@ export async function subscribe(
   assertKind(operation, 'subscribe');
   rejectSelfSubscription(operation);
   validateFields(operation);
-  const price = validatedPrice(operation.price);
+  const price = validatedPrice(operation.price, ctx.config);
 
   // Refuse a second ACTIVE subscription to the same (userId, sku, sellerId), because a second one
   // would double-bill. This is an ordinary business "no", so return a rejected outcome and post
@@ -142,7 +139,8 @@ function validateFields(
 }
 
 // A wrong currency or out-of-band price is a wiring error, so throw a fault rather than decline.
-function validatedPrice(price: Amount): Amount {
+// The band is config (SUBSCRIPTION_PRICE_MIN/MAX_MINOR), defaulting to 100 to 10,000 credits.
+function validatedPrice(price: Amount, config: Config): Amount {
   if (price.currency !== 'CREDIT') {
     throw fault(
       ERROR_CODES.MALFORMED_OPERATION,
@@ -150,15 +148,17 @@ function validatedPrice(price: Amount): Amount {
       { detail: { amount: encodeAmount(price) } },
     );
   }
-  if (price.minor < MIN_PRICE_MINOR || price.minor > MAX_PRICE_MINOR) {
+  const min = config.subscriptionPriceMinMinor;
+  const max = config.subscriptionPriceMaxMinor;
+  if (price.minor < min || price.minor > max) {
     throw fault(
       ERROR_CODES.MALFORMED_OPERATION,
-      'subscribe.price is outside the 100-10000 credit/month band.',
+      'subscribe.price is outside the configured price band.',
       {
         detail: {
           amount: encodeAmount(price),
-          min: encodeAmount(toAmount('CREDIT', MIN_PRICE_MINOR)),
-          max: encodeAmount(toAmount('CREDIT', MAX_PRICE_MINOR)),
+          min: encodeAmount(toAmount('CREDIT', min)),
+          max: encodeAmount(toAmount('CREDIT', max)),
         },
       },
     );

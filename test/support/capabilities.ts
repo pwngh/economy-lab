@@ -190,6 +190,8 @@ export function testConfig(): Config {
     maxOutboxAttempts: 10,
     maxInboxAttempts: 10,
     maxSubscriptionAttempts: 3,
+    subscriptionPriceMinMinor: 10_000n,
+    subscriptionPriceMaxMinor: 1_000_000n,
     maxPayoutAgeMs: 24 * 60 * 60_000,
     platformFeeBps: 3000,
     payoutFeeBps: 150,
