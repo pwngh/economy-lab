@@ -37,7 +37,7 @@ Pass `env` and it resolves everything from the environment instead: the `Store` 
 const economy = await createEconomy({ env: process.env });
 
 // env for everything, but override one port:
-const economy = await createEconomy({ env: process.env, rates: liveRates() });
+const withLiveRates = await createEconomy({ env: process.env, rates: liveRates() });
 ```
 
 When a host already holds a full `Capabilities` bundle — for instance to share one `Store` between an economy and a background worker — it calls the low-level assembler directly:
