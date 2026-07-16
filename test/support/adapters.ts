@@ -205,8 +205,10 @@ export async function sweepStaleMysql(
 }
 
 // Once per process per engine, best-effort: a sweep failure never blocks the store being built.
+// Every throwaway-namespace creator calls this, so a crashed run's leftovers get reaped by the
+// next run rather than waiting for a manual `make db-clean`.
 const sweptEngines = new Set<'postgres' | 'mysql'>();
-async function maybeSweep(
+export async function maybeSweep(
   engine: 'postgres' | 'mysql',
   url: string,
 ): Promise<void> {

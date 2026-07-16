@@ -46,6 +46,7 @@ import {
 import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
 import {
   freshName,
+  maybeSweep,
   safeDatabaseName,
   testMysqlUrl,
   testPostgresUrl,
@@ -138,6 +139,7 @@ export async function adversarialPostgres(
   env: EnvMap,
 ): Promise<AdversarialEngine | null> {
   const url = testPostgresUrl(env);
+  await maybeSweep('postgres', url);
   const schema = freshName('el_adv_pg');
   let store: Store;
   try {
@@ -228,6 +230,7 @@ export async function adversarialMysql(
   if (url === null) {
     return null;
   }
+  await maybeSweep('mysql', url);
   const database = safeDatabaseName(freshName('el_adv_my'));
   // Every pool opened so far, so the catch below can end them all: a "skip this engine" null
   // return must not leak an open connection, or it pins the test process's event loop and the
