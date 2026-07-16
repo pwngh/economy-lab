@@ -294,7 +294,13 @@ function createLedgerStore(q: Queryable, digest: Digest, clock: Clock): Ledger {
       const postedAt = clock.now();
       const links = await advanceChain(q, digest, posting);
       await writePosting(q, posting, postedAt, links);
-      return { id: posting.txnId, postedAt, legs: posting.legs, links };
+      return {
+        id: posting.txnId,
+        postedAt,
+        legs: posting.legs,
+        links,
+        meta: posting.meta,
+      };
     },
 
     balance: async (account) => {
@@ -707,6 +713,7 @@ interface EncodedTransaction {
   postedAt: number;
   legs: ReadonlyArray<EncodedLeg>;
   links: Transaction['links'];
+  meta?: Record<string, unknown>;
 }
 
 function encodeTransaction(transaction: Transaction): EncodedTransaction {
@@ -718,6 +725,7 @@ function encodeTransaction(transaction: Transaction): EncodedTransaction {
       amount: encodeAmount(leg.amount),
     })),
     links: transaction.links,
+    meta: transaction.meta,
   };
 }
 
@@ -730,6 +738,8 @@ function decodeTransaction(encoded: EncodedTransaction): Transaction {
       amount: decodeAmountWire(leg.amount),
     })),
     links: encoded.links,
+    // Rows recorded before Transaction carried meta have none stored.
+    meta: encoded.meta ?? {},
   };
 }
 
@@ -972,7 +982,7 @@ function encodeOperation(operation: Operation): EncodedOperation {
 // No `for update`: a read-only enumeration, not a claim.
 async function* listSagasOf(q: Queryable): AsyncIterable<Saga> {
   const result = await q.query(
-    `select * from payout_sagas order by updated_at desc`,
+    `select * from payout_sagas order by updated_at desc, id desc`,
   );
   for (const row of result.rows) {
     yield rowToSaga(row);

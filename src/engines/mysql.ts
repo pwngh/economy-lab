@@ -239,7 +239,13 @@ async function insertPosting(
     JSON.stringify(args.balances),
     JSON.stringify(args.newAccounts),
   ]);
-  return { id: posting.txnId, postedAt, legs: posting.legs, links };
+  return {
+    id: posting.txnId,
+    postedAt,
+    legs: posting.legs,
+    links,
+    meta: posting.meta,
+  };
 }
 
 function mysqlQuery(exec: MysqlExecutor) {
@@ -892,7 +898,7 @@ function createInboxStore(exec: MysqlExecutor): InboxStore {
 async function* listSagasOf(exec: MysqlExecutor): AsyncIterable<Saga> {
   for (const row of await rows(
     exec,
-    'SELECT * FROM payout_sagas ORDER BY updated_at DESC',
+    'SELECT * FROM payout_sagas ORDER BY updated_at DESC, id DESC',
   )) {
     yield rowToSaga(row);
   }
@@ -1483,6 +1489,7 @@ function encodeTransaction(transaction: Transaction): string {
     postedAt: transaction.postedAt,
     legs: encodeLegs(transaction.legs),
     links: transaction.links,
+    meta: transaction.meta,
   });
 }
 
@@ -1492,12 +1499,15 @@ function parseTransaction(value: unknown): Transaction {
     postedAt: number;
     legs: ReadonlyArray<{ account: string; amount: string }>;
     links: Transaction['links'];
+    meta?: Record<string, unknown>;
   };
   return {
     id: parsed.id,
     postedAt: parsed.postedAt,
     legs: decodeLegs(parsed.legs),
     links: parsed.links,
+    // Rows recorded before Transaction carried meta have none stored.
+    meta: parsed.meta ?? {},
   };
 }
 

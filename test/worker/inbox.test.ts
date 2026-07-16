@@ -51,7 +51,7 @@ async function enqueue(store: Store, eventId: string): Promise<InboxEntry> {
 function committed(): Outcome {
   return {
     status: 'committed',
-    transaction: { id: 'txn_x', postedAt: 0, legs: [], links: [] },
+    transaction: { id: 'txn_x', postedAt: 0, legs: [], links: [], meta: {} },
   };
 }
 
@@ -124,7 +124,7 @@ describe('drainInbox', () => {
     // markApplied never landed. The row should still flip to applied so it isn't claimed forever.
     const economy = scriptedEconomy(() => ({
       status: 'duplicate',
-      transaction: { id: 'txn_x', postedAt: 0, legs: [], links: [] },
+      transaction: { id: 'txn_x', postedAt: 0, legs: [], links: [], meta: {} },
     }));
 
     const summary = await sweep(store, economy);

@@ -101,6 +101,7 @@ export function lifecycleMarker(ctx: Ctx): Transaction {
     postedAt: ctx.clock.now(),
     legs: [],
     links: [],
+    meta: {},
   };
 }
 
@@ -109,5 +110,5 @@ export function lifecycleMarker(ctx: Ctx): Transaction {
  * at hand, so return an empty marker rather than mint a fresh id for money that did not move.
  */
 export function noopTransaction(): Transaction {
-  return { id: '', postedAt: 0, legs: [], links: [] };
+  return { id: '', postedAt: 0, legs: [], links: [], meta: {} };
 }

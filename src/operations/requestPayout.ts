@@ -104,6 +104,8 @@ export async function requestPayout(
   }
 
   const rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
+  // Minted before the posting so the transaction meta can name the saga it opens.
+  const sagaId = ctx.ids.next('pay');
   // The reserve credit routes by the user id, not the idempotency key: settle and reverse know
   // only the saga, and the saga knows the user, so this is the shard their later debit finds.
   const transaction = await postEntry(unit.ledger, {
@@ -116,9 +118,10 @@ export async function requestPayout(
       operation.userId,
       ctx.config.platformShards,
     ),
-    meta: { kind: 'requestPayout', rateId: rate.rateId },
+    meta: { kind: 'requestPayout', rateId: rate.rateId, sagaId },
   });
-  await unit.sagas.open(sagaOf(operation, amount, rate.rateId, ctx));
+  const opened = { id: sagaId, reserve: amount, rateId: rate.rateId };
+  await unit.sagas.open(sagaOf(operation, opened, ctx));
 
   return { status: 'committed', transaction };
 }
@@ -128,16 +131,15 @@ export async function requestPayout(
 // https://economy-lab-docs.pages.dev/economy/concepts/payout-saga/ for the saga states.
 function sagaOf(
   operation: Extract<Operation, { kind: 'requestPayout' }>,
-  reserve: Amount,
-  rateId: string,
+  opened: { id: string; reserve: Amount; rateId: string },
   ctx: Ctx,
 ): Saga {
   const now = ctx.clock.now();
   return {
-    id: ctx.ids.next('pay'),
+    id: opened.id,
     userId: operation.userId,
-    reserve,
-    rateId,
+    reserve: opened.reserve,
+    rateId: opened.rateId,
     state: 'RESERVED',
     providerRef: null,
 

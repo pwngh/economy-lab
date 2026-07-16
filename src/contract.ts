@@ -296,6 +296,13 @@ export interface Transaction {
    * prevHash was that account's latest hash before this posting, hash is the one after.
    */
   links: ReadonlyArray<{ account: AccountRef; prevHash: string; hash: string }>;
+
+  /**
+   * The posting's metadata, as the handler recorded it: the operation `kind` plus kind-specific
+   * fields — a `requestPayout` carries the opened saga's `sagaId`, so the caller can follow its
+   * payout without scanning `read.payouts()`. Empty for a lifecycle marker that posted nothing.
+   */
+  meta: Record<string, unknown>;
 }
 
 /** The bundle of external capabilities a handler is given while processing one operation. */

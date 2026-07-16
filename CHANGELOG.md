@@ -8,9 +8,12 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 
 - `read.balance` on a bare sharded platform account sums its shard rows. `shardsOf` and
   `shardRef` are exported from `/store-kit` and the main entry.
+- `Transaction` carries the posting's `meta`; `requestPayout` records its saga id there.
+  Breaking: custom `Ledger.append` implementations must return it.
 
 ### Changed
 
+- `SagaStore.list` breaks `updatedAt` ties by `id` descending on every engine.
 - The in-memory store queues overlapping transactions instead of throwing.
 - The store server registers a transaction session once the queued body starts.
 

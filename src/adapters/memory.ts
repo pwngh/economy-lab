@@ -408,7 +408,13 @@ function createLedgerStore(deps: {
         links,
       };
       commitPosting(state, stored);
-      return { id: stored.txnId, postedAt, legs: stored.legs, links };
+      return {
+        id: stored.txnId,
+        postedAt,
+        legs: stored.legs,
+        links,
+        meta: stored.meta,
+      };
     },
 
     balance: async (account) =>
@@ -820,10 +826,13 @@ function createInboxStore(): InboxStore & Participant {
 
 // --- Saga store -------------------------------------------------------------------
 
-// Newest `updatedAt` first (see SagaStore.list), matching the SQL engines' `order by updated_at
-// desc`; a stable sort leaves ties in insertion order.
+// Newest `updatedAt` first, ties by `id` descending (see SagaStore.list), matching the SQL
+// engines' `order by updated_at desc, id desc`.
 async function* listSagasOf(rows: Map<string, Saga>): AsyncIterable<Saga> {
-  const snapshot = [...rows.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+  const snapshot = [...rows.values()].sort(
+    (a, b) =>
+      b.updatedAt - a.updatedAt || (b.id > a.id ? 1 : b.id < a.id ? -1 : 0),
+  );
   for (const saga of snapshot) {
     yield { ...saga };
   }

@@ -86,6 +86,7 @@ export const encodeWire = {
     postedAt: transaction.postedAt,
     legs: transaction.legs.map(encodeLeg),
     links: transaction.links,
+    meta: transaction.meta,
   }),
 
   sale: (sale: Sale): unknown => ({
@@ -161,6 +162,7 @@ export const decodeWire = {
       postedAt: number;
       legs: unknown[];
       links: ReadonlyArray<WireLink>;
+      meta?: Record<string, unknown>;
     };
     return {
       id: row.id,
@@ -170,6 +172,8 @@ export const decodeWire = {
         ...link,
         account: link.account as AccountRef,
       })),
+      // A peer from before Transaction carried meta sends none.
+      meta: row.meta ?? {},
     };
   },
 

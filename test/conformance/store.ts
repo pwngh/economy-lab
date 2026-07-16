@@ -728,6 +728,26 @@ async function listsSagasNewestFirst(store: Store): Promise<void> {
   assert.deepEqual(mine, [newest.id, middle.id, oldest.id]);
 }
 
+// Under a coarse or frozen clock two sagas share an `updatedAt`; the contract breaks the tie by
+// `id` descending so list order never depends on insertion order or engine internals.
+async function listsSagasTiedOnUpdatedAtByIdDescending(
+  store: Store,
+): Promise<void> {
+  const userId = freshUser();
+  const mk = (suffix: string): Saga =>
+    sagaRow(`pay_conf_tie_${userId}_${suffix}`, userId, { updatedAt: 5_000 });
+  const low = mk('a');
+  const high = mk('b');
+  // Open ascending so insertion order isn't the expected list order.
+  await store.transaction((unit) => unit.sagas.open(low));
+  await store.transaction((unit) => unit.sagas.open(high));
+
+  const mine = (await collect(store.sagas.list()))
+    .filter((saga) => saga.userId === userId)
+    .map((saga) => saga.id);
+  assert.deepEqual(mine, [high.id, low.id]);
+}
+
 // findByProviderRef is the inbound-webhook lookup: a provider callback names a payout by the
 // rail's reference, never the saga id.
 async function findsSagaByProviderRef(store: Store): Promise<void> {
@@ -1006,6 +1026,8 @@ export function runStoreConformance(
       withStore(t, markBilledIsCompareAndSet));
     test('lists every saga newest-first regardless of state', (t) =>
       withStore(t, listsSagasNewestFirst));
+    test('breaks a saga-list updatedAt tie by id descending', (t) =>
+      withStore(t, listsSagasTiedOnUpdatedAtByIdDescending));
     test('persists a payout terminal outcome (settled USD / failed reason) on the saga', (t) =>
       withStore(t, persistsTerminalOutcomeOnTheSaga));
     test('finds a saga by provider ref, newest first on a duplicated ref', (t) =>

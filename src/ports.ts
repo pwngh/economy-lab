@@ -492,7 +492,7 @@ export interface SagaStore {
     options?: Options,
   ): Promise<Saga | null>;
 
-  /** Every saga regardless of state, newest `updatedAt` first; the tie order is unspecified. */
+  /** Every saga regardless of state, newest `updatedAt` first; ties on `updatedAt` break by `id` descending. */
   list(options?: Options): AsyncIterable<Saga>;
 
   /** Grabs up to `limit` due sagas, each locked so concurrent sweeps take different ones. */

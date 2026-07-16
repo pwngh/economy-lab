@@ -160,10 +160,28 @@ async function opensPayoutSagaInReservedPinningRate(): Promise<void> {
     buildRequestPayout({ userId: 'usr_seller', amount: credit('10.00') }),
   );
 
-  const saga = await store.sagas.load('pay_2');
+  const saga = await store.sagas.load('pay_1');
   assert.equal(saga?.state, 'RESERVED');
   assert.deepEqual(saga?.reserve, credit('10.00'));
   assert.equal(saga?.rateId, 'payout:CREDIT->USD:5/3');
+}
+
+async function carriesTheSagaIdInTheTransactionMeta(): Promise<void> {
+  const store = newStore();
+  await fundEarned(store, 'usr_seller', credit('10.00'));
+
+  const outcome = await run(
+    store,
+    makeCtx(),
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('10.00') }),
+  );
+
+  assert.equal(outcome.status, 'committed');
+  const committed = outcome as Extract<Outcome, { status: 'committed' }>;
+  const sagaId = committed.transaction.meta.sagaId;
+  assert.equal(typeof sagaId, 'string');
+  const saga = await store.sagas.load(sagaId as string);
+  assert.equal(saga?.state, 'RESERVED');
 }
 
 async function rejectsAndLeavesEarnedUntouchedWhenInsufficient(): Promise<void> {
@@ -472,6 +490,8 @@ describe('requestPayout', () => {
     reservesFullEarnedBalanceIntoReserve());
   test('opens a payout saga in RESERVED that locks in the payout rate', () =>
     opensPayoutSagaInReservedPinningRate());
+  test('carries the opened saga id in the transaction meta', () =>
+    carriesTheSagaIdInTheTransactionMeta());
   test('rejects and leaves earned untouched when earned is insufficient', () =>
     rejectsAndLeavesEarnedUntouchedWhenInsufficient());
   test('rejects a payout below the configured earned-credit minimum', () =>

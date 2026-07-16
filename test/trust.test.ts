@@ -63,6 +63,7 @@ function withTransaction(status: 'committed' | 'duplicate'): Outcome {
     postedAt: 0,
     legs: [],
     links: [],
+    meta: {},
   };
   return { status, transaction };
 }
