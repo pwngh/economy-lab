@@ -318,8 +318,10 @@ export type Capabilities = {
 };
 
 /**
- * One line of a posting: an account and the amount applied, signed positive in whichever
- * direction grows that account's balance.
+ * One line of a posting: an account and the amount applied, debit-positive — a credit is stored
+ * negated whatever the account's normal side, so the sign is the ledger's, not the account
+ * holder's (a top-up's wallet leg is negative). `balanceDelta` (from `/store-kit`) converts a
+ * leg to the signed change in that account's balance.
  */
 export type Leg = { account: AccountRef; amount: Amount };
 

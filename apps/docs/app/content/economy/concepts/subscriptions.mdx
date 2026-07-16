@@ -6,7 +6,7 @@ order: 62
 status: stable
 sourceRefs:
   [
-    'src/ports.ts#L844-L845 · SUBSCRIPTION_STATES',
+    'src/ports.ts#L846-L847 · SUBSCRIPTION_STATES',
     'src/worker/subscriptions.ts',
   ]
 related:
@@ -20,6 +20,25 @@ A subscription bills period after period. Like [the payout saga](/economy/concep
 
 [`subscribe`](/economy/reference/operations/subscribe/) charges the first period and grants the buyer an `Entitlement` to the SKU. From there, the worker's `subscriptions` sweep does the recurring work.
 
+```ts
+import { subscribe, userActor, toAmount } from '@pwngh/economy-lab';
+
+const outcome = await economy.submit(
+  subscribe({
+    idempotencyKey: 'sub_3001',
+    actor: userActor('usr_b2'),
+    userId: 'usr_b2',
+    sellerId: 'usr_s1',
+    sku: 'sku_pro',
+    price: toAmount('CREDIT', 900n),
+    periodMs: 30 * 24 * 60 * 60 * 1000,
+  }),
+);
+
+const owned = await economy.read.entitled('usr_b2', 'sku_pro');
+// outcome.status → "committed" · owned → true — the charge and the grant land in one commit
+```
+
 ## Renewals
 
 Each period the sweep claims a one-charge-per-period key (so overlapping sweeps can't double-bill), debits the subscriber's `spendable`, pays the seller, and moves the next due date forward.
@@ -30,7 +49,7 @@ The first period may draw on promo credit; renewals come only from `spendable`.
 
 ## The states
 
-A `Subscription` carries its own `SubscriptionState`: `ACTIVE`, `LAPSED`, `CANCELED` (see <SourceLink to="src/ports.ts#L844-L845 · SUBSCRIPTION_STATES" />).
+A `Subscription` carries its own `SubscriptionState`: `ACTIVE`, `LAPSED`, `CANCELED` (see <SourceLink to="src/ports.ts#L846-L847 · SUBSCRIPTION_STATES" />).
 
 <SubscriptionStates />
 

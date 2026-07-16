@@ -194,12 +194,21 @@ What a `submit` resolves to, and the typed error surface a thrown fault carries.
 Run the economy as a Fetch HTTP service and apply verified provider callbacks.
 
 <SourceLink to="src/server.ts">src/server.ts</SourceLink>
+<SourceLink to="src/webhooks.ts">src/webhooks.ts</SourceLink>
 
 | Export | What it is |
 | --- | --- |
 | `createServer` | An HTTP entry point for an Economy: takes a Fetch Request, returns a Response. |
+| `decodeWebhookEvent` | Decodes a parsed purchase webhook body into a typed PurchaseEvent; a wrong-shape body throws a fault the server maps to 400. |
 | `handleWebhook` | Maps a verified provider callback to its operation and persists it to the inbox. |
+| `handlePurchaseWebhook` | The purchase case of handleWebhook, for callers that only deal in purchases. |
+| `toOperation` | Maps a verified webhook event to the operation it applies, dedup key derived from the provider eventId. |
+| `WebhookEvent` | The union of verified inbound provider callbacks, tagged by kind. |
 | `PurchaseEvent` | A verified inbound purchase event from a billing provider. |
+| `PayoutSettledEvent` | A verified payout-settled callback from the payout rail; drives settlePayout. |
+| `PayoutFailedEvent` | A verified payout-failed callback from the payout rail; drives reversePayout. |
+| `DisputeEvent` | A verified dispute or chargeback callback; drives clawback. |
+| `WebhookAck` | The result of accepting a verified webhook: accepted or duplicate, carrying the stored inbox row. |
 
 ### Background worker
 

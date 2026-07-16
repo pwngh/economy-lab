@@ -29,13 +29,7 @@ const CONTENT = join(ROOT, 'apps/docs/app/content');
 const OUT = join(ROOT, '.build-tmp/samples');
 
 // Samples exempted by content match; each entry names the change that deletes it.
-const SKIPS = [
-  {
-    file: 'economy/reference/http-service.mdx',
-    contains: 'purchaseWebhook(',
-    reason: 'host-code example; the webhook toolkit export batch replaces it',
-  },
-];
+const SKIPS = [];
 
 function mdxFiles(dir) {
   return readdirSync(dir, { withFileTypes: true, recursive: true })

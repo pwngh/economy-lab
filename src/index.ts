@@ -217,8 +217,20 @@ export type {
 // worker steps a background process drives.
 export { proveEconomy } from '#src/integrity.ts';
 export { createServer } from '#src/server.ts';
-export { handleWebhook } from '#src/webhooks.ts';
-export type { PurchaseEvent } from '#src/webhooks.ts';
+export {
+  decodeWebhookEvent,
+  handlePurchaseWebhook,
+  handleWebhook,
+  toOperation,
+} from '#src/webhooks.ts';
+export type {
+  DisputeEvent,
+  PayoutFailedEvent,
+  PayoutSettledEvent,
+  PurchaseEvent,
+  WebhookAck,
+  WebhookEvent,
+} from '#src/webhooks.ts';
 export { drainInbox } from '#src/worker/inbox.ts';
 export { relayOutbox } from '#src/worker/relay.ts';
 

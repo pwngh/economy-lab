@@ -59,8 +59,9 @@ export type Principal =
   | { kind: 'operator'; operatorId: string };
 
 /**
- * One party who gets a cut of a sale. The price is split across all recipients (each taking
- * shareBps, in basis points: 100 bps = 1%) with the platform keeping the remaining fee.
+ * One party who gets a cut of a sale. The platform's fee comes off the top (`platformFeeBps`);
+ * `shareBps` is each recipient's basis points of the post-fee net (100 bps = 1%), and the shares
+ * must sum to exactly 10,000 — the platform never keeps an unclaimed remainder.
  */
 export type Recipient = { sellerId: string; shareBps: number };
 
@@ -281,7 +282,13 @@ export interface Transaction {
   /** When it committed, in epoch milliseconds. */
   postedAt: number;
 
-  /** The individual debit and credit lines that posted. A refund reverses exactly these. */
+  /**
+   * The individual debit and credit lines that posted. A refund reverses exactly these. Amounts
+   * are debit-positive — the ledger's sign, not the account holder's, so a top-up's wallet leg
+   * is negative; `balanceDelta` (from `/store-kit`) converts a leg to the signed change in that
+   * account's balance. May be empty: a committed lifecycle operation (e.g. `cancelSubscription`)
+   * posts a marker that moves no money.
+   */
   legs: ReadonlyArray<{ account: AccountRef; amount: Amount }>;
 
   /**

@@ -2,6 +2,19 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
+## Unreleased (0.1.2)
+
+### Added
+
+- The webhook toolkit is exported from the main entry: `decodeWebhookEvent`,
+  `handlePurchaseWebhook`, `toOperation`, and the event types.
+
+### Documentation
+
+- `Recipient` documents the share rule: `shareBps` are basis points of the post-fee net,
+  summing to 10,000.
+- `Transaction.legs` documents the debit-positive sign convention.
+
 ## 0.1.1 - 2026-07-16
 
 ### Added
