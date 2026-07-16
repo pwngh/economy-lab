@@ -74,6 +74,8 @@ A port is only useful if every adapter behaves the same way. economy-lab pins th
 
 The same posting, the same overdraft rejection, and the same hash chain come back from each backend, so the choice of backend is an infrastructure decision, not a behavioral one.
 
+The suite is published (`@pwngh/economy-lab/testing`), and so are the primitives a conforming implementation computes with — the chain hash, balance deltas, the canonical ordering, the wire codecs — as [`@pwngh/economy-lab/store-kit`](/economy/reference/api/#pwngheconomy-labstore-kit). A third-party store built on both needs nothing the package doesn't export.
+
 ### The in-memory default
 
 With no `DATABASE_URL` set, the system runs on `memoryStore()` — plain JavaScript `Map`s, the zero-infrastructure default for tests and local development.

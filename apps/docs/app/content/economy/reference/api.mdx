@@ -31,6 +31,7 @@ import type { Store } from '@pwngh/economy-lab/ports';
 | [`@pwngh/economy-lab/engines/postgres`](#pwngheconomy-labenginespostgres) | The Postgres `Store` (carries `pg`).                                        |
 | [`@pwngh/economy-lab/engines/mysql`](#pwngheconomy-labenginesmysql) | The MySQL `Store` and schema helpers (carries `mysql2`).                          |
 | [`@pwngh/economy-lab/netting`](#pwngheconomy-labnetting)         | The in-instance netting session.                                                     |
+| [`@pwngh/economy-lab/store-kit`](#pwngheconomy-labstore-kit)     | The primitives a custom `Store` implementation computes with.                        |
 | [`@pwngh/economy-lab/testing`](#pwngheconomy-labtesting)         | The conformance harness for testing your own adapters.                               |
 
 Every section below links to the source it comes from.
@@ -402,6 +403,30 @@ The in-instance netting session: reserve, move, and settle many balances in memo
 | `SessionOptions` | Optional session configuration: max movements per journal batch, max accounts per settlement chunk, and shared reservation registry. |
 | `InstanceSession` | A durable journal session that accepts movements, batches them, and settles the net posting in chunks with idempotency and chain verification. |
 | `SessionDeps` | The store, digest, and clock dependencies a session needs to manage movements and settlement. |
+
+## `@pwngh/economy-lab/store-kit`
+
+The store implementer's toolkit. The [conformance suite](#pwngheconomy-labtesting) is the public invitation to bring your own `Store`; these are the primitives a conforming implementation needs to compute the same chain hashes, balance deltas, orderings, and wire encodings the built-in engines compute.
+
+<SourceLink to="src/store-kit.ts">src/store-kit.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `chainHash` | The per-account chain hash over a posting: previous head, txn id, account, legs, and meta, in the canonical byte layout. |
+| `balanceDelta` | One leg's signed effect on its account's balance, from the leg's side and the account's normal side. |
+| `GENESIS` | The 32-byte zero hash an account's chain starts from. |
+| `GENESIS_HEX` | The genesis hash as lowercase hex, for stores that keep heads as text. |
+| `baseOf` | Strips a platform shard suffix, so identity checks see the base account. |
+| `walletKindOf` | The wallet kind encoded in a user account id, or null for platform accounts. |
+| `byCodeUnit` | The canonical string ordering every engine sorts by, so results match across backends. |
+| `fromHex` | Hex to bytes, for stores that keep hashes as text. |
+| `toHex` | Bytes to lowercase hex, the inverse. |
+| `metaString` | Reads one string field out of posting meta, or null. |
+| `metaNumber` | Reads one number field out of posting meta, or null. |
+| `encodeAmounts` | Deep-encodes every Amount in a value into wire strings, for storing meta or events. |
+| `decodeAmounts` | The inverse: revives wire strings back into Amounts. |
+| `VELOCITY_CURRENCY` | The currency the trust store's velocity window counts in. |
+| `AccountKind` | The wallet kinds walletKindOf can return. |
 
 ## `@pwngh/economy-lab/testing`
 

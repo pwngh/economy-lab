@@ -1,6 +1,6 @@
 {
   "name": "@pwngh/economy-lab",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publishConfig": {
     "access": "public"
   },
@@ -42,6 +42,10 @@
     "./netting": {
       "types": "./dist/src/netting.d.ts",
       "default": "./dist/src/netting.js"
+    },
+    "./store-kit": {
+      "types": "./dist/src/store-kit.d.ts",
+      "default": "./dist/src/store-kit.js"
     },
     "./testing": {
       "types": "./dist/test/conformance/index.d.ts",

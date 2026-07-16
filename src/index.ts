@@ -98,6 +98,25 @@ export {
   SCALE,
 } from '#src/money.ts';
 export { credit, debit } from '#src/ledger.ts';
+
+// The store implementer's toolkit; also its own entry point, `@pwngh/economy-lab/store-kit`.
+export {
+  chainHash,
+  balanceDelta,
+  GENESIS,
+  GENESIS_HEX,
+  baseOf,
+  walletKindOf,
+  byCodeUnit,
+  fromHex,
+  toHex,
+  metaString,
+  metaNumber,
+  encodeAmounts,
+  decodeAmounts,
+  VELOCITY_CURRENCY,
+} from '#src/store-kit.ts';
+export type { AccountKind } from '#src/store-kit.ts';
 export type { Leg } from '#src/ports.ts';
 
 // Operation constructors: one typed builder per kind, so a caller writes topUp({ ... }) instead of
