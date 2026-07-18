@@ -29,6 +29,11 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   secrets); the 1,000-credit default applies outside production. `checkEnv` reports both
   policy anchors, `VELOCITY_LIMIT_MINOR` and `MATURITY_HORIZON_CARD_MS`.
 
+### Documentation
+
+- An Ops & runbooks section on the docs site: the supervisor, the audit trail, backup and
+  restore, key rotation, and one runbook per signature.
+
 ## 0.3.1 - 2026-07-17
 
 ### Added

@@ -58,11 +58,14 @@ Each returned `Rate` carries a descriptive `rateId` the adapter builds from the 
 Only `CREDIT` and `USD` exist in the lab. A same-currency conversion returns a 1:1 identity rate, and `USD` is the base unit, so `buy('USD')` and `par('USD')` are both 1:1. Any other currency pair is a wiring bug rather than a missing feature.
 
 <Callout type="note">
-  The adapter doesn't enforce `buy ≥ par ≥ payout` in code. It serves back
-  whatever six numbers you configure. The ordering is a contract on the rate
-  source, not a runtime guard, so a deployment that miswires the constants can
-  break the platform's margin. The money-model page explains [what that ordering
-  protects](/economy/concepts/money-model/#the-invariant-buy--par--payout).
+  The ordering is enforced at three layers. `configuredRates` checks
+  `buy ≥ par ≥ payout` at construction and throws `CONFIG_INVALID` on a
+  miswired deployment. The economy re-checks `buy ≥ par` when it is built, so
+  a custom rate source fails just as early. And a source whose answers turn
+  misordered after construction faults the top-up by name instead of booking
+  a loss. `requestPayout` likewise refuses a payout rate above `par` at the
+  moment the payout is priced. The money-model page explains [what that
+  ordering protects](/economy/concepts/money-model/#the-invariant-buy--par--payout).
 </Callout>
 
 <Callout type="warning">

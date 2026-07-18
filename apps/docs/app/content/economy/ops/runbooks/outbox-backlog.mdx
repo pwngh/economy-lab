@@ -1,0 +1,51 @@
+---
+title: 'outbox-backlog'
+summary: 'Pending events aging past threshold — the relay is down or poisoned; the supervisor re-drives the relay alone and verifies against the next gauge.'
+plain: 'Money moved but the news about it is stuck in the outbox. The supervisor runs just the delivery job again, then checks the queue actually shrank.'
+order: 2
+status: stable
+sourceRefs: ['src/ops/detect.ts', 'src/ops/supervisor.ts', 'src/worker/relay.ts']
+related: ['economy/ops/the-supervisor', 'economy/ports/messaging', 'economy/ops/runbooks/signal-silence']
+---
+
+Tier 1, automatic re-drive. Pending outbox events are aging past threshold: the relay is down,
+its dispatcher is failing, or the events are poisoned.
+
+## Symptoms
+
+Downstream consumers stop receiving events while money keeps moving. `worker.relay.backlog`
+(depth) and `worker.relay.backlog_age_ms` (oldest pending age) grow run over run.
+
+## Detection
+
+The relay sweep observes `OutboxStore.stats()` at the start of every run and emits the gauge
+pair. The detector reads the newest `worker.relay.backlog_age_ms` sample; at or past
+`outboxBacklogAgeMs` (default 5m) it is a finding. Age is computed on the store's own clock,
+so app/database skew cannot fake it.
+
+## Automatic response
+
+`detected` → `decided` → the `runRelay` lever — a targeted `worker.runOnce({ only: ['relay'] })`
+that runs the relay job and nothing else (no checkpoint sealed, no payouts advanced); it falls
+back to the full `runSweep` when the host wired no relay lever. Verification spans ticks: the
+re-drive's own gauge still shows the pre-action backlog, so the pass reads the first sample
+newer than the action and emits `verified` as `drained` or `unchanged`. Standard guardrails:
+cooldown, attempt cap into permanent escalation, containment suppression.
+
+## Manual steps
+
+1. `verified` said `drained`: done — find out why the scheduled relay was not running (see
+   [signal-silence](/economy/ops/runbooks/signal-silence/)).
+2. `unchanged`: the dispatcher itself is failing. Check `worker.relay.failed` /
+   `worker.relay.dead_lettered` logs for the failure codes, and the transport (SQS queue, HTTP
+   bus, taskq bridge) directly.
+3. Rows at the attempt cap dead-letter (`status = 'dead'`, reason recorded) so a poison event
+   cannot block the queue behind it:
+   `select id, attempts, dead_letter_reason from outbox where status = 'dead';`
+4. Delivery is at-least-once and consumers dedupe by event id, so a re-drive is always safe to
+   repeat by hand: `worker.runOnce({ only: ['relay'], dispatcher })` from any host shell.
+
+## Escalation
+
+The attempt cap escalates on its own with the advisory attached. From there the question is
+the transport's owner: the events are durable and waiting; nothing is lost, only late.

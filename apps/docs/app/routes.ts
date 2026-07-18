@@ -37,6 +37,11 @@ export default [
   route('economy/ports', 'routes/ports-index.tsx'),
   route('economy/ports/:slug', 'routes/port.tsx'),
 
+  route('economy/ops', 'routes/ops-index.tsx'),
+  route('economy/ops/runbooks', 'routes/runbooks-index.tsx'),
+  route('economy/ops/runbooks/:slug', 'routes/runbook.tsx'),
+  route('economy/ops/:slug', 'routes/ops-page.tsx'),
+
   route('economy/scope-and-non-goals', 'routes/scope.tsx'),
 
   route('sitemap.xml', 'routes/sitemap.xml.ts'),

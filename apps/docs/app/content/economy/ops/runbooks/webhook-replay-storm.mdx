@@ -1,0 +1,48 @@
+---
+title: 'webhook-replay-storm'
+summary: 'The same provider eventIds keep arriving: a provider misconfiguration or a replay attack. The gates held — the counter is what makes the storm visible.'
+plain: 'A payment provider keeps re-sending the same notifications. Nothing double-posts — duplicates are dropped at three layers — but the flood itself means their config is broken or someone is replaying captured messages.'
+order: 11
+status: stable
+sourceRefs: ['src/ops/detect.ts', 'src/ops/supervisor.ts', 'src/server.ts', 'src/webhooks.ts']
+related: ['economy/reference/http-service', 'economy/concepts/idempotency', 'economy/ops/key-rotation']
+---
+
+Tier 3, report-only. The same provider eventIds keep arriving: a provider misconfiguration
+(acknowledgements not registering) or a replay attack. The gates held — every duplicate was
+dropped and no money moved twice — but the edge is burning work.
+
+## Symptoms
+
+`economy.webhook.duplicate` counts at rate, tagged `provider` and `layer`. Provider dashboards
+may show retry queues backing up on their side.
+
+## Detection
+
+Sum of `economy.webhook.duplicate` over `webhookReplayWindowMs` (default 60s) reaches
+`webhookReplayThreshold` (default 20). The finding tallies `byProvider` and `byLayer`.
+
+## Automatic response
+
+`detected` plus a `decided` advisory once per window. There is nothing to remediate: dedup is
+already doing its job at three layers.
+
+## Manual steps
+
+1. Read `byLayer` — it localizes the leak:
+   - `stale`: deliveries with old timestamps; the provider is replaying an old queue, or clock
+     skew exceeds `REPLAY_WINDOW_MS`.
+   - `replay`: fresh signatures, seen eventIds — the classic "provider never registered our
+     200" misconfiguration, or a replay attack with captured payloads.
+   - `inbox`: redeliveries getting past the edge gates to the inbox dedupe. With the edge
+     verifying, this should be rare — investigate how.
+2. One provider dominating `byProvider`: check its webhook endpoint config and delivery logs;
+   confirm the 200 acknowledgements are reaching it.
+3. If the signatures on the duplicates are valid but the volume looks adversarial, rotate
+   `WEBHOOK_SECRET` with the provider — a valid-signature replay storm means the payloads (or
+   the secret) leaked.
+
+## Escalation
+
+Provider-side misconfiguration: their support, with eventIds and timestamps. Suspected attack:
+security, with the raw delivery log — the money is safe, but the secret may not be.

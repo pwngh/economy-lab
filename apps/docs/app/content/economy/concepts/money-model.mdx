@@ -4,11 +4,11 @@ summary: 'A dual-rate credit economy (buy ≥ par ≥ payout) where the platform
 plain: "If you have ever changed money at an airport, you have met this model: the booth sells you foreign currency at one rate and buys it back at a worse one, living on the gap between. The three rates below are that same idea, made exact."
 order: 20
 status: stable
-sourceRefs: ['src/money.ts', 'src/ports.ts#L181-L210 · Rates', 'src/pricing.ts']
+sourceRefs: ['src/money.ts', 'src/ports.ts#L165-L194 · Rates', 'src/pricing.ts']
 related: ['economy/reference/operations/top-up', 'economy/concepts/the-proof']
 ---
 
-Two kinds of value move through the economy: in-app <Code variant="value">CREDIT</Code> and real-world <Code variant="value">USD</Code>. Both are an <Code variant="type">Amount</Code>: a <Code variant="type">Currency</Code> plus a count of minor units held as a <Code variant="type">bigint</Code>. They convert to each other only at fixed, platform-set rates, never a live market.
+Two kinds of value move through the economy: in-app <Code variant="value">CREDIT</Code> and real-world <Code variant="value">USD</Code>. Each is an <Code variant="type">Amount</Code>: a <Code variant="type">Currency</Code> plus a count of minor units held as a <Code variant="type">bigint</Code>. They convert to each other only at fixed, platform-set rates, never a live market.
 
 Almost the whole model follows from three of those rates, ordered `buy ≥ par ≥ payout`. You pay the `buy` rate to acquire a credit. The platform backs and cashes out each credit at `par`. A seller settles earned credits at `payout`, which equals `par`.
 
@@ -16,7 +16,7 @@ The gap between `buy` and `par` is the platform spread, the single place the pla
 
 ## Amount: a currency and a scale
 
-Every `Amount` carries its currency with it: it's `{ currency, minor, __brand }`, where `minor` is a `bigint` of minor units (cents, for `USD`) and `Currency` is the string union `'CREDIT' | 'USD'`. Minor units are exact integers, so large platform totals never lose precision the way a `number` does past `2^53`.
+Every `Amount` carries its currency: the shape is `{ currency, minor, __brand }`, where `minor` is a `bigint` of minor units (cents, for `USD`) and `Currency` is the string union `'CREDIT' | 'USD'`. Minor units are exact integers, so large platform totals never lose precision the way a `number` does past `2^53`.
 
 ```ts
 const price = toAmount('CREDIT', 1000n); // 10.00 CREDIT
@@ -25,7 +25,7 @@ encodeAmount(price); // → 'CREDIT:10.00'
 
 A whole unit is `SCALE` (`100n`) minor units, two decimal places, fixed. The `__brand` field makes a plain `{ currency, minor }` object unassignable to `Amount`, so every value has to pass through `toAmount` or `decodeAmount`. For the common case of a whole number of credits, `credits(120)` is shorthand for `toAmount('CREDIT', 12_000n)`.
 
-Two guards keep currencies from mixing by accident. `add` and `compare` call `assertSameCurrency`, which throws `CURRENCY_MISMATCH` if you hand them two different currencies. Combining a `CREDIT` amount with a `USD` amount is always a bug. And `decodeAmount` rejects a string with more than two decimal places (`INVALID_AMOUNT`) rather than silently dropping the extra digits.
+Two guards catch bad amounts early. `add` and `compare` call `assertSameCurrency`, which throws `CURRENCY_MISMATCH` if you hand them two different currencies — combining a `CREDIT` amount with a `USD` amount is always a bug. And `decodeAmount` rejects a string with more than two decimal places (`INVALID_AMOUNT`) rather than silently dropping the extra digits.
 
 <Callout type="note">
   Credits are whole units in practice (a user buys, spends, and earns round
@@ -43,21 +43,21 @@ If a credit cashed out for exactly what you paid, the platform would earn nothin
 | `par`    | The redemption/backing rate: a credit's cash-out floor, and the value the backing check holds real USD against. | ~200 credits / USD ($0.005)   |
 | `payout` | The seller settlement rate: what an earned credit converts to USD at. Equals `par`.                            | ~200 credits / USD ($0.005)   |
 
-The `buy`-to-`par` gap is the platform spread, about 40% on the example rates above — the platform's margin, funding fees, payment processing, reserves, and operating costs. It is taken **once, at purchase**, and never mixed into the cash held to back users.
+The `buy`-to-`par` gap is the platform spread, about 40% on the example rates above — the platform's margin, which funds fees, payment processing, reserves, and operating costs. It is taken **once, at purchase**, and never mixed into the cash held to back users.
 
 <RateLadder />
 
 Walk a `$10` purchase through: it becomes `1,200` credits. Of those, `$6.00` (`1,200 × par`) is set aside as backing, and `$4.00` is the platform's to keep. And because `payout = par`, a credit a seller earns is worth exactly the dollars reserved for it.
 
-A `Rate` is stored as exact integers (`{ rate, scale, rateId }`) with the multiplier `rate / 10^scale` (so `rate: 5n, scale: 3` is `$0.005` per credit). The `rateId` names the exact rate. That lets a [transaction](/economy/concepts/accounts-and-double-entry/) record which rate it used, and lets a [payout saga](/economy/concepts/payout-saga/) lock to one. Conversion floors: `usd_minor = floor(credit_minor × rate / 10^scale)`.
+A `Rate` is stored as exact integers (`{ rate, scale, rateId }`) with the multiplier `rate / 10^scale` (so `rate: 5n, scale: 3` is `$0.005` per credit). The `rateId` names the exact rate. That lets a [transaction](/economy/concepts/accounts-and-double-entry/) record which rate it used, and lets a [payout saga](/economy/concepts/payout-saga/) lock to one. Conversion rounds in the safe direction per call site: payouts and the solvency check round down (`convertFloor`), while a top-up rounds its gross and backing up (`convertCeil`) so held cash always covers the solvency valuation.
 
 ## The invariant: buy ≥ par ≥ payout
 
-`buy ≥ par` is what keeps the platform's margin non-negative. A top-up values the buyer's cash at `buy` and the backing held in trust at `par`. It recognizes the difference as USD revenue, added as a posting line only when it's positive. If `buy` ever dropped below `par`, that difference would go negative and a purchase would book a loss.
+`buy ≥ par` is what keeps the platform's margin non-negative. A top-up values the buyer's cash at `buy` and the backing held in trust at `par`. The difference is recognized as USD revenue, added as a posting line only when positive. If `buy` ever dropped below `par`, that difference would go negative and a purchase would book a loss.
 
-The reference [`configuredRates`](/economy/ports/rates/) adapter takes `buy`, `par`, and `payout` as separate deployment constants. It doesn't enforce the ordering in code, so a deployment that miswires them breaks this invariant. The ordering is a contract on the rate source, documented on the `Rates` port.
+The reference [`configuredRates`](/economy/ports/rates/) adapter takes `buy`, `par`, and `payout` as separate deployment constants and checks the ordering at construction: a miswired deployment throws `CONFIG_INVALID` before it can book a loss. The economy itself re-checks `buy ≥ par` when it is built and again inside each top-up, so even a custom rate source fails by name rather than booking a loss.
 
-`par ≥ payout` (in practice `payout = par`) ties the seller's cash-out — the creator payout, in marketplace terms — to the same value the platform reserved. That's what [solvency](/economy/concepts/solvency/) checks: real USD in trust covers every spendable credit valued at `par`.
+`par ≥ payout` (in practice `payout = par`) ties the seller's cash-out — the creator payout, in marketplace terms — to the same value the platform reserved. That's what [solvency](/economy/concepts/solvency/) checks: real USD in trust covers every spendable credit valued at `par`. It is enforced where the payout is priced: `requestPayout` refuses a payout rate above `par` with `CONFIG_INVALID`, and the USD quote it stores is exactly what the rail is paid and the ledger posts.
 
 ## How the spread is enforced
 

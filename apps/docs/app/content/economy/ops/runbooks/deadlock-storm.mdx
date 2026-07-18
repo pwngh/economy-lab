@@ -1,0 +1,47 @@
+---
+title: 'deadlock-storm'
+summary: 'A burst of lock conflicts absorbed inside the retry budget — invisible to callers, visible as retry pressure. Advisory only.'
+plain: 'Lots of requests fighting over the same database rows at once. The engine quietly retries and everyone still succeeds, but the watchdog reports the pressure so you can fix the crowd before the retries stop being enough.'
+order: 9
+status: stable
+sourceRefs: ['src/ops/detect.ts', 'src/ops/supervisor.ts', 'src/engines/sql-shared.ts']
+related: ['economy/ops/runbooks/retry-exhaustion', 'economy/concepts/concurrency', 'economy/concepts/platform-sharding']
+---
+
+Tier 3, report-only. The engine is absorbing a burst of lock conflicts inside its retry
+budget.
+
+## Symptoms
+
+Submit latency rises while the error rate stays flat — the retries are invisible to callers.
+Nothing fails on its own; the pressure shows only in telemetry.
+
+## Detection
+
+Sum of the `engine.retry` count (any outcome) over `deadlockWindowMs` (default 60s) reaches
+`deadlockThreshold` (default 20). The metric is tagged `engine` and `outcome`; this signature
+fires on volume, not on failures — failures are
+[retry-exhaustion](/economy/ops/runbooks/retry-exhaustion/).
+
+## Automatic response
+
+One `detected` + `decided` advisory pair per window, then silence until the next window. The
+supervisor never acts on a storm: the retry budget is already the remediation.
+
+## Manual steps
+
+1. Corroborate against the engine's own counters — the known signature is InnoDB gap locks on
+   the idempotency claim under concurrent submits:
+   - MySQL: `select * from performance_schema.events_errors_summary_global_by_error where error_name = 'ER_LOCK_DEADLOCK';` and `SHOW ENGINE INNODB STATUS` sampled through the burst — never trust one snapshot.
+   - Postgres: `select deadlocks from pg_stat_database where datname = current_database();`
+2. Reproduce locally if needed: `make demo-ops-deadlock` fires a contention storm against a
+   real engine.
+3. If sustained: reduce submit concurrency at the caller, or shard the hot platform accounts
+   ([platform sharding](/economy/concepts/platform-sharding/)). Raising the retry budget only
+   converts the storm into latency.
+
+## Escalation
+
+Escalate to the ledger owner when storms recur outside load spikes, or when
+[retry-exhaustion](/economy/ops/runbooks/retry-exhaustion/) starts firing alongside — the
+budget no longer absorbs the conflicts and callers are failing.

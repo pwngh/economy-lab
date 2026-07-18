@@ -516,6 +516,62 @@ export function SubmitPipeline() {
 }
 
 /** The background worker, one `Scheduler` driving the ten sweeps of `SWEEP_NAMES`; mirrors the background-worker page and `src/worker`. */
+/** The life of one outbox row; mirrors the messaging page and `src/worker/relay.ts`. */
+export function OutboxRelay() {
+  return (
+    <Diagram
+      viewBox="0 0 760 250"
+      label="The outbox row lifecycle. A row is written PENDING in the same database transaction as the money move it announces. The relay sweep sends it through the Dispatcher and marks it DONE, a terminal state. A send that throws leaves the row pending with its attempt count bumped, retried on the next run; when attempts hit the configured cap the row is dead-lettered to the terminal DEAD state, so one poison event cannot wedge the queue behind it."
+      caption="One outbox row. The write shares the posting's transaction, so an event is never sent for a rolled-back move nor lost for a committed one. Delivery is at-least-once: the far side dedupes by event id."
+    >
+      <ArrowDefs />
+
+      <State x={70} y={48} name="PENDING" sub="written with the commit" />
+      <State x={558} y={48} name="DONE" sub="terminal" variant="ok" />
+      <State x={314} y={158} name="DEAD" sub="terminal" variant="bad" />
+
+      {/* forward path */}
+      <line className="d-edge" x1={202} y1={70} x2={554} y2={70} markerEnd="url(#dgm-arrow)" />
+      <text className="d-elabel" x={378} y={56} textAnchor="middle">
+        relay sweep
+      </text>
+      <text className="d-elabel" x={378} y={92} textAnchor="middle">
+        through the dispatcher
+      </text>
+
+      {/* retry loop: a failed send stays pending */}
+      <path
+        className="d-edge"
+        d="M104,48 C104,14 168,14 168,44"
+        fill="none"
+        markerEnd="url(#dgm-arrow)"
+      />
+      <text className="d-elabel" x={210} y={24} textAnchor="start">
+        send threw: stays pending, attempts + 1
+      </text>
+
+      {/* dead-letter branch */}
+      <path
+        className="d-edge bad"
+        d="M136,92 C136,150 240,150 310,176"
+        fill="none"
+        markerEnd="url(#dgm-arrow)"
+      />
+      <text className="d-elabel" x={470} y={172} textAnchor="start">
+        attempts hit the cap — dead-lettered,
+      </text>
+      <text className="d-elabel" x={470} y={188} textAnchor="start">
+        the queue never wedges behind it
+      </text>
+
+      <text className="d-note" x={70} y={232}>
+        The inbox mirrors this shape for events coming in: recorded with the webhook ingress,
+        applied or dead-lettered by its own sweep.
+      </text>
+    </Diagram>
+  );
+}
+
 export function WorkerSweeps() {
   const lw = 148;
   const left = 30;

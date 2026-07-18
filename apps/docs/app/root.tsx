@@ -108,6 +108,24 @@ export function Layout({ children }: { children: ReactNode }) {
                 hidden
               />
             </search>
+            <a className="icon-link" href="/console/">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="1" y="2" width="14" height="12" rx="1.5" />
+                <path d="m4 6 2.5 2.5L4 11" />
+                <path d="M8.5 11H12" />
+              </svg>
+              <span className="sr-only">Console</span>
+            </a>
             <a
               className="icon-link"
               href="https://github.com/pwngh/economy-lab"

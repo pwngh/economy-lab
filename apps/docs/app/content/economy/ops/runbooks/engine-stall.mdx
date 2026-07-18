@@ -1,0 +1,45 @@
+---
+title: 'engine-stall'
+summary: 'Connection acquires started and none completed: the pool is starved or the database is unresponsive. Submits queue rather than fail, so nothing errors on its own.'
+plain: 'The database stopped answering, but instead of errors you just get silence — requests pile up waiting for a connection. The watchdog notices starts without finishes and raises the alarm.'
+order: 6
+status: stable
+sourceRefs: ['src/ops/detect.ts', 'src/ops/supervisor.ts', 'src/engines/sql-shared.ts']
+related: ['economy/ops/runbooks/deadlock-storm', 'economy/reference/configuration']
+---
+
+Tier 3, report-only. Connection acquires started and none completed: the pool is starved or
+the database is unresponsive. Submits queue rather than fail, so nothing errors on its own.
+
+## Symptoms
+
+Latency climbs toward timeouts with no error spike. `engine.pool.acquire` counts keep arriving
+with no matching `engine.pool.acquire_ms` completions.
+
+## Detection
+
+Acquire starts (`engine.pool.acquire`) newer than the last completion
+(`engine.pool.acquire_ms`), with the oldest pending start older than `stallGraceMs` (default
+10s). The rule reads the whole signal buffer, not a sliding window — a stall emits nothing new
+to slide over.
+
+## Automatic response
+
+`detected` + `escalated` once per episode; the episode resets when a completion arrives, so a
+recovered-then-stalled pool escalates fresh. The pass runs before the saga poll so a hung
+store cannot block the audit trail.
+
+## Manual steps
+
+1. Database liveness first: can you connect at all (`psql` / `mysql` by hand)?
+2. Pool sizing second: `DB_POOL_MAX` (default 10 per driver). The known lab failure was pool
+   starvation from transactions needing a second connection mid-flight; a regression there
+   looks exactly like this signature.
+3. Check for long-running transactions holding connections:
+   - Postgres: `select pid, state, query_start, query from pg_stat_activity where state <> 'idle' order by query_start;`
+   - MySQL: `SHOW PROCESSLIST;`
+
+## Escalation
+
+If the database is up and the pool is sized sanely, escalate to whoever owns the database
+host — a stall with healthy config is an infrastructure problem.

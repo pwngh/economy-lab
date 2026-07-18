@@ -1,0 +1,46 @@
+---
+title: 'treasury-breach'
+summary: 'The backing invariant is breached: custodial CREDIT exceeds what the trust or float covers. Escalate-only — a solvency signal, never auto-fixed.'
+plain: 'The platform holds less real money than the credits it owes users. Nothing looks broken from the outside, which is exactly why the watchdog treats it as a page-a-human event and never tries to fix it itself.'
+order: 5
+status: stable
+sourceRefs: ['src/ops/detect.ts', 'src/ops/supervisor.ts', 'src/worker/treasury.ts']
+related: ['economy/concepts/integrity', 'economy/ops/runbooks/integrity-mismatch']
+---
+
+Tier 3, escalate-only, never auto-fixed. The backing invariant is breached: custodial CREDIT
+exceeds what the trust or float covers.
+
+## Symptoms
+
+`worker.treasury.breach` or `worker.treasury.float_breach` counts;
+`worker.treasury.under_backed` / `worker.treasury.float_uncovered` logs. User-visible behavior
+is normal — that is what makes it dangerous.
+
+## Detection
+
+Any `worker.treasury.breach` or `worker.treasury.float_breach` meter signal past a high-water
+mark: every new occurrence is its own episode, old signals never re-fire.
+
+## Automatic response
+
+`detected` + `escalated` per occurrence. Config changes are advisories only; the supervisor
+never rebuilds the composition and never posts a correcting entry.
+
+## Manual steps
+
+1. Read the treasury gauges around the breach: `worker.treasury.custodial_credit`,
+   `worker.treasury.trust_cash`, `worker.treasury.shortfall`, `worker.treasury.float`.
+2. `make prove` — if conservation also fails, treat as
+   [integrity-mismatch](/economy/ops/runbooks/integrity-mismatch/); a breach with an intact
+   chain means money moved wrong through the rules, not around them.
+3. Reconcile against the provider: the reconcile sweep's `worker.reconcile.drifted` logs name
+   the windows that do not tie out.
+4. Hold payouts until the shortfall is explained — a breach means cash-outs may not be
+   coverable at par.
+
+## Escalation
+
+Immediately, to whoever owns the money. This is a solvency signal, not an ops signal; the
+response — top up the trust, correct a mispriced rate, reverse an upstream mistake — is a
+business decision.

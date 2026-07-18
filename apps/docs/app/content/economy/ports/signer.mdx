@@ -5,7 +5,7 @@ order: 10
 status: stable
 sourceRefs:
   [
-    'src/ports.ts#L81-L86 · Signer',
+    'src/ports.ts#L81-L93 · Signer',
     'src/runtime.ts#L134-L171 · systemSigner',
     'src/chain.ts#L288-L382 · recordCheckpoint / verifyCheckpoint',
   ]
@@ -23,22 +23,24 @@ The `Signer` port is that seam. The core never holds a key or picks an algorithm
 
 ## The interface
 
-The port is two methods, both working on raw bytes (see <SourceLink to="src/ports.ts#L73-L76">source</SourceLink>):
+The port is two required methods and one optional one, all working on raw bytes (see <SourceLink to="src/ports.ts#L81-L93">source</SourceLink>):
 
 ```ts
 interface Signer {
   sign(bytes: Uint8Array): Promise<Uint8Array>;
   verify(bytes: Uint8Array, signature: Uint8Array): Promise<boolean>;
+  kid?(): Promise<string>;
 }
 ```
 
-`sign` always signs with the current key. `verify` returns `true` when the signature matches the current key or any still-valid older one. Because older keys still verify, a signature made before a rotation keeps verifying afterward.
+`sign` always signs with the current key. `verify` returns `true` when the signature matches the current key or any still-valid older one. Because older keys still verify, a signature made before a rotation keeps verifying afterward. `kid` names the key `sign` currently uses; the default signer answers the first 16 hex characters of its Ed25519 public key. The seal stamps it onto each checkpoint row.
 
 <Callout type="note">
-  There's no `keyId` on the port, and no key material crosses it. Which key
-  signed a given checkpoint isn't recorded on the checkpoint; `verify` simply
-  tries every key it trusts until one matches. Key selection lives entirely
-  inside the adapter.
+  The `kid` is audit metadata, never a verification input, and no key material
+  crosses the port. `verify` simply tries every key it trusts until one
+  matches, so tampering with a stored `kid` changes nothing about whether the
+  signature verifies. A signer without `kid` seals rows with a null one; key
+  selection lives entirely inside the adapter.
 </Callout>
 
 ## The default signer
@@ -80,6 +82,8 @@ From that point, every new checkpoint is signed with the new key. Old checkpoint
 
 Drop a key from `priorKeys` only once no checkpoint you still want to verify was signed under it; its signatures then stop verifying.
 
+Each checkpoint records the `kid` of the key that sealed it, so after a rotation an operator can tell from the rows alone which checkpoints predate the new key — no signature-by-signature testing needed.
+
 ## What the checkpoint relies on it for
 
 The signer has exactly one caller in the core: the checkpoint. The per-account hash chain doesn't use it. Chain links are _hashed_, not signed, so the signer never touches a [posting](/economy/concepts/accounts-and-double-entry/) or an account head directly.
@@ -96,5 +100,5 @@ The port deliberately doesn't cover a few things:
 
 - **Key storage and loading.** The adapter receives ready secrets; where they come from (a secrets manager, an env var) is the host's job.
 - **A rotation schedule.** Rotation is a redeploy with new key arguments; nothing in the port drives it on a timer.
-- **Recording which key signed what.** No `keyId` is stored, so retiring a key is the only way a past signature is invalidated.
-- **Anchoring the root externally.** The checkpoint is _meant_ to be anchored outside this system for independent proof, but publishing the signed root to a third party is left to the operator.
+- **Invalidating a past signature.** The `kid` on each checkpoint records which key sealed it, but that is audit metadata only — retiring a key from `priorKeys` is the only way its signatures stop verifying.
+- **Choosing where roots are anchored.** The [`Anchor` port](/economy/reference/offline-verification/) pushes each sealed checkpoint to an external store, but which store — and running it — is the operator's job.

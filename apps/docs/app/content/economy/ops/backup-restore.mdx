@@ -1,0 +1,61 @@
+---
+title: 'Backup & restore'
+summary: 'make backup dumps each engine data-only; make restore-drill restores the newest dump into a scratch namespace and runs the full prover against it.'
+plain: 'A backup you have never restored is a guess. The drill restores every dump into a throwaway database, re-checks every money invariant against it, and deletes the throwaway — so you know the backup works before you need it.'
+order: 3
+status: stable
+sourceRefs: ['scripts/backup.ts', 'scripts/restore-drill.ts', 'scripts/support/db-tools.ts']
+related: ['economy/ops/key-rotation', 'economy/concepts/integrity', 'economy/concepts/the-proof']
+---
+
+A backup that isn't provably restorable is a hope, not a backup. The lab ships both halves:
+`make backup` dumps, `make restore-drill` proves the dump restores — into a scratch namespace,
+under the full prover, with the scratch dropped afterward.
+
+## Backup
+
+`make backup` writes a data-only dump per env-named engine into `backups/`:
+
+- postgres: `pg_dump --data-only --no-owner --schema=public --disable-triggers` →
+  `backups/pg-<stamp>.sql`
+- mysql: `mysqldump --no-create-info --single-transaction --replace --skip-triggers` with the
+  table list parsed from `db/mysql-schema.sql` → `backups/mysql-<stamp>.sql`, so a shared
+  database's unrelated tables stay out.
+
+Data-only is deliberate: DDL comes from the repo's canonical `db/*.sql` at restore time, so
+the drill also proves the dump still matches the current schema (`schema_meta` rides in the
+data). The trigger bypass is safe because nothing is trusted to it — the prover re-checks
+every invariant the triggers enforce. An engine the env names that fails to dump fails the
+run; a backup that silently skips is a hope again.
+
+## The drill
+
+`make restore-drill` takes the newest dump per engine and closes the loop:
+
+1. Create a scratch `el_drill_*` database.
+2. Apply `db/*.sql`, then clear the seeded platform rows (postgres; the mysql dump uses
+   `REPLACE`) so the dump's values land, not the seeds.
+3. Apply the dump, open a real store on the scratch, and run the full prover: `conserved`,
+   `backed`, `noOverdraft`, `chainIntact`, `consistent` — PASS requires every one true.
+4. Drop the scratch in a `finally`. A killed drill leaves an `el_drill_*` name that
+   `make db-clean` sweeps.
+
+Run the drill after every backup-tooling or schema change and on a schedule; a drill that has
+not run since the schema last changed proves nothing.
+
+## A real restore
+
+The drill is the rehearsal; a disaster restore is the same moves against a fresh production
+database, minus the drop:
+
+1. Stop the worker and the API — no writes during restore.
+2. Create the database, apply `db/*.sql`, clear the seeded rows.
+3. Apply the chosen dump and point `DATABASE_URL` at the new database.
+4. `make prove` before taking traffic; then restart and watch the first
+   `worker.checkpoint.verify` beat.
+
+The backup contains the sealed checkpoints, and the prover re-derives the chain against them —
+so a restore is only as trustworthy as the dump's custody, which is what shipping dumps and
+the [audit trail](/economy/ops/audit-trail/) to write-once storage is for. Losing the tail
+between the last dump and the incident is expected; the chain makes the cut point provable,
+not invisible.

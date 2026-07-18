@@ -1,0 +1,87 @@
+---
+title: 'Offline verification'
+summary: 'Export the ledger as one canonical file and re-prove it anywhere: the chain, the Merkle root, and the checkpoint signature, with no database access.'
+order: 35
+status: stable
+sourceRefs:
+  [
+    'src/economy.ts#L1062 · exportLedger',
+    'scripts/support/verify-lib.ts#L156 · verifyExport',
+    'scripts/verify.ts',
+    'test/verify-export.test.ts',
+  ]
+related: ['economy/concepts/the-proof', 'economy/ports/signer']
+---
+
+## Why verification must leave the building
+
+Everything [the proof](/economy/concepts/the-proof/) checks — the per-account hash chains, the Merkle root, the signed checkpoint — lives in the same database as the ledger it vouches for. Against an outsider that's enough. Against an insider who can rewrite that database, it isn't: whoever can edit the postings can also edit the checkpoints table sitting next to them.
+
+Offline verification closes that gap by making the evidence portable. The economy exports its whole ledger as one file; anyone holding that file and the published signing public key can re-run the same provers the live system runs — on another machine, with no store credentials and no economy running. The auditor needs nothing from you but bytes.
+
+## The export file
+
+<SourceLink to="src/contract.ts#L458">read.export</SourceLink> streams the ledger as JSON Lines — one JSON object per line — with three line types in a fixed order:
+
+1. **A header** declaring the format, so the verifier can refuse random files: `{"format":"economy-lab/ledger-export","v":1}`.
+2. **One line per chain link**, grouped by account in lineage order from genesis to tip. Each link carries the full posting — transaction id, legs, metadata, and both hashes — so the file alone is enough to re-derive every chain (<SourceLink to="src/economy.ts#L1036">exportLedger</SourceLink>).
+3. **The latest checkpoint**, if one has been sealed: the signed Merkle root, its signature, and the [`kid`](/economy/ports/signer/) of the key that sealed it.
+
+Two properties make the file suitable as evidence. Money never travels as a JSON number — legs carry the same decimal strings as every other wire surface, so amounts survive any JSON parser intact. And field order comes from the wire codec, never from object iteration, so the same ledger always exports byte-for-byte the same file.
+
+```ts
+import fs from 'node:fs/promises';
+
+const lines: string[] = [];
+for await (const line of economy.read.export()) {
+  lines.push(line);
+}
+await fs.writeFile('ledger-export.jsonl', lines.join('\n'));
+```
+
+The export is always the whole ledger. A partial export cannot be chain-verified: every account's chain must start at genesis for the hashes to re-derive. That is why there is no range parameter; ranged reads belong to `read.statement`.
+
+## Running the verifier
+
+`scripts/verify.ts` is the standalone counterpart to the live provers: no store, no economy boot, the file is the only input.
+
+```
+node scripts/verify.ts ledger-export.jsonl --key <hex Ed25519 public key>
+make ledger-verify FILE=ledger-export.jsonl KEY=<hex Ed25519 public key>
+```
+
+It rebuilds a read-only ledger view over the file and runs the production provers against it — the same `proveChain` and `verifyCheckpoint` the live economy runs, not a reimplementation (<SourceLink to="scripts/support/verify-lib.ts#L156">verifyExport</SourceLink>). The report says what was checked and what held:
+
+```json
+{
+  "chainIntact": true,
+  "firstBreak": null,
+  "accounts": 5,
+  "checkpoint": {
+    "present": true,
+    "signatureChecked": true,
+    "id": "chk_1",
+    "kid": "ba89e65bb74283d6",
+    "verified": true
+  }
+}
+```
+
+A broken or tampered chain reports the first break — which account, which transaction, and whether the link chain snapped or a hash stopped matching. The exit code is `0` only when everything asked of the run verified, so the command slots straight into scripts and automated checks.
+
+Two honesty rules govern the checkpoint half:
+
+- **No key, no pass.** Without `--key`, the signature is reported `signatureChecked: false` — never silently treated as valid. Pass `--key` more than once to accept signatures from rotated-out keys, mirroring how the live signer's prior keys work.
+- **The checkpoint verifies against the exported tip.** A checkpoint sealed before the last postings honestly reports as unverified, because the root it signed no longer matches the heads in the file. Export right after a seal for a clean pass.
+
+The public key comes from <SourceLink to="src/runtime.ts#L181">signingPublicKeyHex</SourceLink>; publish it wherever your auditors can find it. The checkpoint's `kid` is the first 16 hex characters of that same public key, so an auditor can confirm at a glance that the row was sealed by the key they hold.
+
+## Anchoring checkpoints outside the ledger's database
+
+Exports are pulled; anchoring pushes. The <SourceLink to="src/ports.ts#L722">Anchor</SourceLink> port publishes every sealed checkpoint to a store outside the ledger's database — an external log, an object store, a transparency service — because a checkpoint row kept next to the postings proves nothing against whoever controls that database.
+
+Wire one through `WorkerCtx.anchor` and [the background worker's](/economy/reference/background-worker/) seal publishes each checkpoint as it lands (<SourceLink to="src/worker/checkpoint.ts#L115">publishAnchor</SourceLink>). Publishing is best-effort by design: a down anchor must degrade protection, not sealing, so a failed publish logs `worker.checkpoint.anchor_failed`, counts on the meter, and the seal completes regardless. The counter is the operator's signal to re-anchor by hand.
+
+The bundled adapter is <SourceLink to="src/adapters/http-anchor.ts#L36">httpAnchor</SourceLink> on the `adapters` subpath: it POSTs the checkpoint as JSON with the checkpoint id in an `Idempotency-Key` header, so a retried publish of the same row dedupes at the receiver. The port is one method; a file appender or an object-store writer is a few lines if HTTP doesn't fit your log.
+
+Together the three pieces close the insider gap: the anchor puts the signed root beyond the database's reach, the export puts the evidence in the auditor's hands, and the verifier lets them check one against the other without trusting you.

@@ -1,7 +1,7 @@
 ---
 title: 'The packages'
-summary: 'The three sibling packages composed into the lab — @pwngh/money, @pwngh/taskq, and @pwngh/economy-edge — and the seam where each one enters.'
-plain: 'economy-lab is built from three smaller libraries. This page shows the exact line where each one plugs in, and what that line guarantees.'
+summary: 'The one runtime sibling (@pwngh/economy-edge), the vendored arithmetic (@pwngh/money), the optional relay backend (@pwngh/taskq), and the seam where each enters.'
+plain: 'economy-lab leans on a few smaller pieces. This page shows the exact line where each one plugs in, and what that line guarantees.'
 order: 5
 status: stable
 sourceRefs:
@@ -11,16 +11,17 @@ sourceRefs:
     'scripts/support/edge-host.ts',
     'scripts/support/taskq-host.ts',
   ]
-related: ['economy/ports/processor', 'economy/ports/messaging']
+related: ['economy/ports/processor', 'economy/ports/messaging', 'economy/ops/the-supervisor']
 ---
 
-The ledger is the product; three sibling packages compose around it.
-[@pwngh/money](https://github.com/pwngh/money) is its arithmetic,
-[@pwngh/taskq](https://github.com/pwngh/taskq) is its follow-through, and
-[@pwngh/economy-edge](https://github.com/pwngh/economy-edge) is its front door. Each enters through
-one seam. This page quotes each seam from the tree, and says what it guarantees.
+The ledger is the product. One sibling package composes around it at runtime:
+[@pwngh/economy-edge](https://github.com/pwngh/economy-edge), the front door to a real payout
+rail. Two more serve it without composing: [@pwngh/money](https://github.com/pwngh/money) is
+vendored in as its arithmetic, and [@pwngh/taskq](https://github.com/pwngh/taskq) is an
+optional backend for the relay. Each enters through one seam; this page quotes each seam from
+the tree and says what it guarantees.
 
-## @pwngh/money — the arithmetic
+## @pwngh/money — the arithmetic, vendored in
 
 The money package is not a dependency; it is vendored. Two single files —
 `src/money.vendored.ts` (bigint minor-unit arithmetic with its conformance vectors embedded) and
@@ -41,7 +42,7 @@ fails before any posting trusts it. The MySQL twin runs in `selectStore` (`src/i
 vendored files themselves are pinned by `test/money.vendored.test.ts`, and
 `test/conformance/money-db.test.ts` proves both engines against the vectors in CI.
 
-## @pwngh/taskq — the follow-through
+## @pwngh/taskq — the optional relay backend
 
 Committed postings emit events through [the outbox](/economy/ports/messaging/), and the relay
 delivers them at least once. @pwngh/taskq turns those deliveries into durable work: the bridge's
@@ -74,13 +75,13 @@ one pending task per event, and consumers inherit @pwngh/taskq's retries instead
 bridge is opt-in: it runs only when `TASKQ_DATABASE_URL` is set and the optional `@pwngh/taskq`
 peer dependency is installed; the core never sees it.
 
-## @pwngh/economy-edge — the front door
+## @pwngh/economy-edge — the runtime sibling
 
 Every payout rail satisfies the same [`Processor` port](/economy/ports/processor/). The edge
 package owns one real rail's dialect — Tilia — and the host swaps it in at composition time:
 
 ```ts
-// scripts/main.ts — in both runWorker and runServe, before composing
+// scripts/main.ts — called in runWorker() and runServe(), before composing the economy
 const edge = await maybeEdgeTilia(env, log);
 if (edge !== undefined) {
   ports.processor = edge.processor;
@@ -94,6 +95,13 @@ replaces the env-selected one, the edge's hosted-KYC directory feeds the
 the float-coverage sweep, and `POST /webhooks/tilia` routes the rail's callbacks into the inbox.
 How the shim maps the rail onto the port is owned by
 [the processor page](/economy/ports/processor/).
+
+## Not a package: the ops supervisor
+
+The ops supervisor used to be a sibling package; it now ships built in at the
+`@pwngh/economy-lab/ops` entry point, composed host-side behind `OPS=1`. The core never
+imports it — leaving it out of the composition is the off switch.
+[The supervisor](/economy/ops/the-supervisor/) owns it.
 
 ## Where their own docs live
 

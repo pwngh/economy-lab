@@ -1,0 +1,99 @@
+---
+title: 'The supervisor'
+summary: 'The in-process ops supervisor at the ./ops entry point: signal capture over the meter/logger ports, twelve incident signatures, guarded remediations, and an audit trail.'
+plain: 'A watchdog that runs inside your own process. It reads the same metrics the economy already emits, recognizes a fixed set of known problems, fixes the few that are safe to fix, and writes down everything it saw and did.'
+order: 1
+status: stable
+sourceRefs:
+  [
+    'src/ops/runtime.ts',
+    'src/ops/detect.ts',
+    'src/ops/supervisor.ts',
+    'scripts/support/ops-host.ts',
+  ]
+related: ['economy/ops/audit-trail', 'economy/reference/background-worker', 'economy/reference/api']
+---
+
+The supervisor is an in-process library at the `@pwngh/economy-lab/ops` entry point. It lives in
+the tree at `src/ops`, but the dependency runs one way: the core never imports it (an eslint
+boundary enforces the direction), it observes only through the `meter` and `logger` ports the
+composition already carries, and it acts only through levers the host hands it. Leaving it out
+of the composition is the off switch — the lab cannot tell whether it is being observed.
+
+## Signal capture
+
+`opsRuntime` wraps the host's meter and logger, forwarding every call unchanged while copying
+each into a bounded in-memory ring (default 10,000 signals). Detectors read the buffer through
+`SignalFeed.since(t)`. Log entries are buffered as name and level only — field payloads never
+outlive the host's own log pipeline.
+
+```ts
+const runtime = opsRuntime({ meter, logger, clock });
+const caps = await capabilitiesFromEnv(env, ports, {
+  meter: runtime.meter,
+  logger: runtime.logger,
+});
+```
+
+## The signatures
+
+Detection is a fixed set of plain threshold rules — no models, no inference. Twelve signatures,
+three autonomy tiers in practice: report, escalate, or act. Every signature links its
+[runbook](/economy/ops/runbooks/).
+
+| Signature | Response |
+| --- | --- |
+| [stuck-saga](/economy/ops/runbooks/stuck-saga/) | Act: one guarded worker sweep, verified by re-reading the saga. |
+| [outbox-backlog](/economy/ops/runbooks/outbox-backlog/) | Act: a targeted relay re-drive, verified against the next backlog gauge. |
+| [inbox-dead-letter](/economy/ops/runbooks/inbox-dead-letter/) | Act: revive the oldest dead rows; the normal drain re-applies them. |
+| [integrity-mismatch](/economy/ops/runbooks/integrity-mismatch/) | Escalate and contain: prove once, pause the worker, never fix. |
+| [engine-stall](/economy/ops/runbooks/engine-stall/), [treasury-breach](/economy/ops/runbooks/treasury-breach/), [signal-silence](/economy/ops/runbooks/signal-silence/), [retry-exhaustion](/economy/ops/runbooks/retry-exhaustion/) | Escalate with the evidence attached. |
+| [deadlock-storm](/economy/ops/runbooks/deadlock-storm/), [velocity-anomaly](/economy/ops/runbooks/velocity-anomaly/), [webhook-replay-storm](/economy/ops/runbooks/webhook-replay-storm/), [checkpoint-seal-slow](/economy/ops/runbooks/checkpoint-seal-slow/) | Advise, once per window. |
+
+## The guardrails
+
+Every automatic action runs under the same mandatory pattern, recorded phase by phase in the
+[audit trail](/economy/ops/audit-trail/): `detected` → `decided` → `acted` → `verified`, with
+`escalated` when automation gives up.
+
+- **Cooldown** — `actionCooldownMs` between actions per subject; a repeat inside it audits as
+  `suppressed`.
+- **Attempt cap** — at `maxActionAttempts`, the action converts into a permanent escalation and
+  automation never touches that subject again.
+- **Verification** — every action is checked by re-reading what it should have changed: the
+  saga's state, the next backlog gauge, the revived rows.
+- **Containment** — an integrity episode latches a flag that refuses every lever until the
+  supervisor restarts, and pauses the worker's scheduled loop through `pauseWorker`. The
+  supervisor never resumes a paused worker; a human does.
+
+The supervisor's whole vocabulary is: call a host lever (`runSweep`, a targeted `runRelay`,
+`reviveInbox`, `pauseWorker`, a read-only `prove`), write its own audit record. It never writes
+ledger state, never mutates config, and keeps its detector state in memory — lost on restart,
+deliberately, so a fresh process starts from observed reality.
+
+## Composing it
+
+The host builds the supervisor next to the worker and hands it the levers. `OPS=1` does exactly
+this in the bundled worker process (`OPS_INTERVAL_MS` paces the ticks, default 60s):
+
+```ts
+// scripts/support/ops-host.ts — the OPS=1 seam, host-side only
+const supervisor = createSupervisor(
+  {
+    clock: host.clock,
+    signals: runtime.signals,
+    sagas: levers.sagas,
+    runSweep: levers.runSweep,
+    runRelay: levers.runRelay,
+    reviveInbox: levers.reviveInbox,
+    pauseWorker: levers.pauseWorker,
+    audit: jsonlAuditSink((line) => process.stdout.write(`${line}\n`)),
+  },
+  intervalScheduler(),
+);
+```
+
+Three demos wire the whole loop against a real in-memory economy: `make demo-ops` (the
+stuck-saga closed loop), `make demo-ops-integrity` (tamper, prove, escalate, pause), and
+`make demo-ops-deadlock` (a retry-pressure storm against a live SQL engine). The full export
+surface is on the [API reference](/economy/reference/api/).

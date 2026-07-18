@@ -1,0 +1,50 @@
+---
+title: 'The audit trail'
+summary: 'Every supervisor decision as append-only JSONL, and the hash-chained sink that makes the trail itself tamper-evident — verified by make audit-verify.'
+plain: 'The watchdog writes down everything it sees and does, one line per event. The chained variant links each line to the one before it by hash, so editing or deleting any line is detectable — the same trick the ledger itself uses.'
+order: 2
+status: stable
+sourceRefs: ['src/ops/audit.ts', 'scripts/ops-audit-verify.ts', 'scripts/ops-audit-worm.ts']
+related: ['economy/ops/the-supervisor', 'economy/concepts/integrity']
+---
+
+Every pass the supervisor runs emits `AuditRecord`s — `at`, `signature`, `tier`, `phase`
+(`detected`, `decided`, `acted`, `verified`, `escalated`), `subject`, `detail` — to a sink the
+host injects. The sink is the trail's whole persistence story: detector state is deliberately
+in-memory, so the audit trail is the only durable account of what the supervisor saw and did.
+
+## The plain sink
+
+`jsonlAuditSink` writes one JSON line per record. Bigint money fields (a prove report's drift
+amounts, a saga's reserve) encode as `{"$bigint":"..."}` — the operation-journal convention —
+so every line parses with plain `JSON.parse`.
+
+## The chained sink
+
+An audit trail that a tamperer can edit is testimony, not evidence. `hashChainedAuditSink`
+applies the ledger chain's fixed-preimage discipline to the trail itself: each line carries
+`prev` (the prior line's hash; the first line carries the all-zero genesis) and `hash`,
+computed over the line's own bytes. Editing a record, rewriting a `prev`, dropping a line, or
+reordering breaks the chain at exactly that line.
+
+```ts
+const sink = hashChainedAuditSink(
+  (line) => appendFileSync(segment, `${line}\n`, { flag: 'a' }),
+  systemDigest(),
+);
+// ... records flow during the process's life ...
+await sink.flush(); // the digest is async; flush before exit
+```
+
+`verifyAuditChain` re-derives a trail and reports in the prover's shape — intact, the first
+break (line number and reason: `malformed`, `broken-link`, or `tampered-hash`), and the count
+verified. `make audit-verify FILE=<segment>.jsonl` wraps it and exits nonzero on a break.
+
+## Shipping to write-once storage
+
+A chain proves tampering happened; write-once storage keeps the honest copy. The worked
+example in `scripts/ops-audit-worm.ts` appends through the chained sink to a segment file
+opened `O_APPEND`, seals the segment by renaming it `*.sealed.jsonl`, and leaves shipping —
+an object-lock bucket, a retention-locked store — to the host. The last line's `hash` is the
+segment's fingerprint: record it off-host and the shipped copy, the local copy, and the
+fingerprint must all agree. The observer must be as tamper-evident as the observed.

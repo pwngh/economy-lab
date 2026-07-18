@@ -1,0 +1,46 @@
+---
+title: 'velocity-anomaly'
+summary: 'Risk-gate rejections spiking — a fraud signal first: card testing or credit farming trips the per-user velocity gates long before a legitimate surge does.'
+plain: 'Suddenly lots of requests are being blocked by the spending-speed limits. That usually means someone is probing the system, not that the limits are wrong — so the first move is to look at who is being blocked, never to raise the limit.'
+order: 10
+status: stable
+sourceRefs: ['src/ops/detect.ts', 'src/ops/supervisor.ts', 'src/trust.ts']
+related: ['economy/concepts/spend-velocity', 'economy/reference/configuration']
+---
+
+Tier 3. Risk-gate rejections are spiking. Read it as a fraud signal first: a cohort probing
+the limits (card testing, credit farming) trips the per-user velocity gates long before a
+legitimate surge does.
+
+## Symptoms
+
+`economy.submit` counts tagged `status: 'rejected'`, `reason: 'RISK_DENIED'` climbing. Support
+tickets about "payment declined" may follow if the cohort includes real users.
+
+## Detection
+
+Sum of RISK_DENIED rejections over `anomalyWindowMs` (default 5m) reaches `anomalyThreshold`
+(default 20). The finding carries `byKind` — which operations tripped, outflow (`spend`,
+`requestPayout`) vs inflow (`topUp`, `grantPromo`) — and `ratePerMin`.
+
+## Automatic response
+
+Once per window: below `anomalyEscalationThreshold` (default 100), `detected` plus a
+`decided` advisory; at or above it, `detected` plus `escalated` — someone gets paged, because
+that volume is an active probe, not a tuning question.
+
+## Manual steps
+
+1. Identify the cohort: pull the rejected subjects from the application logs. One user id
+   hammering `topUp` is card testing; many fresh accounts spending into one seller is farming.
+2. Read `byKind`: inflow rejections point at payment fraud; outflow at extraction.
+3. Act on the actor, not the limit: suspend the accounts, flag the payment instruments.
+4. Only if the cohort is legitimately organic: revisit `VELOCITY_LIMIT_MINOR`,
+   `VELOCITY_INFLOW_LIMIT_MINOR`, `VELOCITY_OUTFLOW_LIMIT_MINOR`, `VELOCITY_WINDOW_MS`. A
+   limit change is a config rebuild and a deliberate decision, never a live mutation — the
+   gates held; keep them holding.
+
+## Escalation
+
+To trust & safety when the cohort is adversarial; to product when the limits are genuinely
+undersized. Crossing the escalation threshold means assume adversarial until shown otherwise.

@@ -1,0 +1,56 @@
+---
+title: 'integrity-mismatch'
+summary: 'The checkpoint reverify failed: rows changed behind the hash chain. The supervisor proves once, escalates with the evidence, pauses the worker, and latches containment — never fixes.'
+plain: 'The ledger no longer matches its own sealed fingerprint, which means someone or something changed history. The supervisor gathers proof, freezes the machinery, and hands everything to a human. It never tries to repair money records itself.'
+order: 4
+status: stable
+sourceRefs: ['src/ops/detect.ts', 'src/ops/supervisor.ts', 'src/worker/checkpoint.ts']
+related: ['economy/concepts/integrity', 'economy/ops/key-rotation', 'economy/ops/backup-restore']
+---
+
+Tier 3, escalate-never-fix — plus containment. The scheduled checkpoint reverify says the
+ledger no longer matches what was sealed: rows changed behind the hash chain.
+
+## Symptoms
+
+`worker.checkpoint.verify` counts with `outcome: 'mismatch'`; `worker.checkpoint.mismatch`
+error logs. Balances may still look plausible — tampering is designed to.
+
+## Detection
+
+Any `worker.checkpoint.verify` meter signal tagged `outcome: 'mismatch'`, or the
+`worker.checkpoint.mismatch` log event, past a high-water mark: each signal fires exactly one
+episode, ever.
+
+## Automatic response
+
+The integrity pass runs first in every tick, before the saga poll, so a hung store cannot
+block it. On a finding:
+
+1. `detected`, then one read-only `prove()` — the only unscheduled full prove in the system —
+   and `escalated` with the report attached: the drifted accounts and the conservation verdict.
+2. The **containment latch** sets: every tier-1 lever (saga sweep, relay re-drive, inbox
+   revive) is refused as `suppressed` until the supervisor restarts.
+3. If the host wired `pauseWorker`, the scheduled loop pauses — `acted` — so no new checkpoint
+   seals over the evidence. The supervisor never resumes; a human does.
+
+Nothing is ever auto-fixed. The mismatch is evidence, and evidence is preserved.
+
+## Manual steps
+
+1. Read the escalation's attached prove report: which accounts drifted, and by how much
+   (`materialized` vs `derived` per account).
+2. Freeze operationally: keep the worker paused; stop deploys against the store.
+3. `make prove` re-runs the full prover on demand while you investigate.
+4. Compare against the last good backup ([the drill](/economy/ops/backup-restore/) proves what
+   a dump contains) and database audit logs to find when and how the rows changed.
+5. Only after the cause is understood: repair the data at the database layer under review,
+   `worker.resume()` (or restart the worker process), restart the supervisor to clear the
+   latch, and watch the next `worker.checkpoint.verify` beat come back `ok`.
+
+## Escalation
+
+This signature IS the escalation. It means unauthorized writes or corruption in the system of
+record — treat as a security incident until proven otherwise. A mismatch right after a signer
+change is almost always a [key-rotation mistake](/economy/ops/key-rotation/); rule that out
+first.

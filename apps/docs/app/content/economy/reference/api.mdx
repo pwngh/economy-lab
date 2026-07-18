@@ -422,6 +422,86 @@ The in-instance netting session: reserve, move, and settle many balances in memo
 | `InstanceSession` | A durable journal session that accepts movements, batches them, and settles the net posting in chunks with idempotency and chain verification. |
 | `SessionDeps` | The store, digest, and clock dependencies a session needs to manage movements and settlement. |
 
+## `@pwngh/economy-lab/ops`
+
+The in-process operations supervisor. It observes the composition only through the `meter` and
+`logger` ports (wrapped by `opsRuntime`), detects twelve incident signatures with plain
+threshold rules, and remediates through host-provided levers under mandatory guardrails —
+cooldown, attempt cap into permanent escalation, and a containment latch on any integrity
+episode. The core never imports this entry point; leaving the supervisor out of the composition
+is the off switch. [Ops & runbooks](/economy/ops/) owns the operational story, with
+[one runbook per signature](/economy/ops/runbooks/).
+
+| Signature | Tier | Response |
+| --- | --- | --- |
+| `stuck-saga` | 1 | One guarded worker sweep, verified by re-reading the saga. |
+| `outbox-backlog` | 1 | A targeted relay re-drive (`runOnce({ only: ['relay'] })`), verified against the next gauge. |
+| `inbox-dead-letter` | 1 | Revive the oldest dead rows; the normal drain re-applies them idempotently. |
+| `integrity-mismatch` | 3 | Prove once, escalate, pause the worker, latch containment — never fix. |
+| `deadlock-storm`, `engine-stall`, `treasury-breach`, `velocity-anomaly`, `signal-silence`, `retry-exhaustion`, `webhook-replay-storm`, `checkpoint-seal-slow` | 3 | Report or escalate with an advisory; no lever. |
+
+### Signal capture
+
+<SourceLink to="src/ops/runtime.ts">src/ops/runtime.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `opsRuntime` | Wraps a host meter/logger pair, forwarding every call unchanged while buffering a bounded window of signals for the detectors. |
+| `OpsRuntime` | What opsRuntime returns: the wrapped meter and logger the composition consumes, plus the signal feed. |
+| `Signal` | One buffered telemetry event: timestamp, source (meter or log), name, value, and tags. |
+| `SignalFeed` | The read side of the buffer: every signal at or after a timestamp. |
+
+### Detection
+
+Pure threshold rules over the signal feed; each returns a finding or null, and the supervisor owns all state.
+
+<SourceLink to="src/ops/detect.ts">src/ops/detect.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `detectDeadlockStorm` | Retry-count volume over a window against a threshold; conflict pressure, not failures. |
+| `detectStuckSagas` | Non-terminal sagas older than the age threshold, one finding per saga. |
+| `detectIntegrityMismatches` | Checkpoint-verify mismatch signals past a high-water mark, on both meter and log channels. |
+| `detectEngineStall` | Pool acquires that started and never completed, past a grace period. |
+| `detectTreasuryBreaches` | Backing and float breach counts past a high-water mark. |
+| `detectVelocityAnomaly` | RISK_DENIED rejections over a window, tallied per operation kind with a per-minute rate. |
+| `detectSilences` | Declared periodic signals that have gone quiet for over twice their cadence. |
+| `detectRetryExhaustion` | Exhausted retry budgets over a window, tallied per engine — caller-visible failures. |
+| `detectOutboxBacklog` | The newest relay backlog-age gauge at or past the threshold. |
+| `detectWebhookReplayStorm` | Webhook duplicate counts over a window, tallied per provider and catching layer. |
+| `detectSlowSeal` | The slowest completed checkpoint seal in a window at or past the threshold. |
+| `detectInboxDeadLetters` | Dead-lettered inbox log signals past a watermark, against a threshold. |
+| `Finding` | The union of every finding type below. |
+| `DeadlockStormFinding` / `StuckSagaFinding` / `IntegrityMismatchFinding` / `EngineStallFinding` / `TreasuryBreachFinding` / `VelocityAnomalyFinding` / `SilenceFinding` / `RetryExhaustionFinding` / `OutboxBacklogFinding` / `WebhookReplayStormFinding` / `SlowSealFinding` / `InboxDeadLetterFinding` | One structured finding per signature, carrying the evidence its runbook starts from. |
+
+### The supervisor
+
+<SourceLink to="src/ops/supervisor.ts">src/ops/supervisor.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `createSupervisor` | Builds the supervisor from its injected deps; tick() runs every pass once, start() ticks on a Scheduler. |
+| `defaultSupervisorConfig` | Every threshold, window, cooldown, and cap, with the defaults the passes run under. |
+| `SupervisorDeps` | What the host injects: clock, signals, saga source, the levers (runSweep, runRelay, reviveInbox, pauseWorker, prove), the audit sink, and escalate. |
+| `SupervisorConfig` | The tuning surface: per-signature thresholds and windows plus the shared guardrail knobs. |
+| `Supervisor` | The handle: tick() returning the tick's audit records, and start() when a Scheduler was supplied. |
+| `SagaSource` | The saga store slice the supervisor polls: list() and load(). |
+
+### The audit trail
+
+<SourceLink to="src/ops/audit.ts">src/ops/audit.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `jsonlAuditSink` | One JSON line per audit record, bigints encoded as `{"$bigint":"..."}` — the operation-journal convention. |
+| `hashChainedAuditSink` | The tamper-evident sink: each line carries prev and hash, the ledger chain's fixed-preimage discipline applied to the trail itself. |
+| `verifyAuditChain` | Re-derives a chained trail and reports the first break: line number and reason (`make audit-verify`). |
+| `AuditChainReport` | What verifyAuditChain returns: intact, the first break, and the count verified. |
+| `AuditRecord` | One audit entry: timestamp, signature, tier, phase, subject, and detail. |
+| `AuditPhase` | The five phases: detected, decided, acted, verified, escalated. |
+| `AuditSink` | The host-injected consumer of audit records. |
+| `SignatureName` | The twelve signature names. |
+
 ## `@pwngh/economy-lab/store-kit`
 
 The store implementer's toolkit. The [conformance suite](#pwngheconomy-labtesting) is the public invitation to bring your own `Store`; these are the primitives a conforming implementation needs to compute the same chain hashes, balance deltas, orderings, and wire encodings the built-in engines compute.

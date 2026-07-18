@@ -36,6 +36,8 @@ That's the transactional outbox.<Cite n={1} /> When a money move commits, its ou
 
 The relay is `relayOutbox` in `src/worker/relay.ts`. It claims a batch of pending rows, sends each in its own try/catch so one failure can't stop the batch, and marks the delivered ones done. A send that throws is left pending with its attempt count bumped, retried next run; once it hits the configured cap it's dead-lettered<Cite n={2} /> to a terminal `dead` state, so one poison event can't wedge the queue behind it. The bundled @pwngh/taskq bridge is one consumer on the far side: it enqueues each delivery as a durable task keyed by the event id ([the packages](/economy/ports/packages/)).
 
+<OutboxRelay />
+
 ## The inbox
 
 The `inbox` is the mirror image, for events coming _in_. A verified provider webhook is mapped to the [`Operation`](/economy/reference/outcomes-and-reason-codes/) it should apply, then saved to the `inbox` in the same transaction as the webhook ingress that claimed it. A separate apply sweep submits each pending operation and marks the row applied.

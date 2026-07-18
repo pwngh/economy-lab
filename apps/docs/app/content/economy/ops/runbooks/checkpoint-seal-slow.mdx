@@ -1,0 +1,46 @@
+---
+title: 'checkpoint-seal-slow'
+summary: 'Merkle sealing is trending slower — a table-growth problem brewing, caught while it is a trend and not an outage. Advisory only.'
+plain: 'Sealing the ledger fingerprint re-reads every account, so it slows down as history grows. The watchdog flags the trend early, while fixing it is a planning exercise instead of an emergency.'
+order: 12
+status: stable
+sourceRefs: ['src/ops/detect.ts', 'src/ops/supervisor.ts', 'src/worker/checkpoint.ts']
+related: ['economy/concepts/integrity', 'economy/ops/runbooks/engine-stall', 'economy/reference/performance']
+---
+
+Tier 3, report-only. Merkle sealing is trending slower — a table-growth problem brewing,
+caught while it is a trend and not an outage.
+
+## Symptoms
+
+None yet; that is the point. `worker.checkpoint.seal_ms` observations tagged
+`outcome: 'sealed'` climb across days.
+
+## Detection
+
+Max `worker.checkpoint.seal_ms` tagged `outcome: 'sealed'` over `sealLatencyWindowMs` (default
+5m) at or past `sealLatencyMs` (default 5s). Only completed seals count — a skip or retry says
+nothing about re-derivation cost.
+
+## Automatic response
+
+`detected` plus a `decided` advisory once per window. Deliberately no remediation: the seal is
+the worker's only scheduled full-chain re-derivation, and that is a signing-path security
+property, not a cost to be flattened automatically.
+
+## Manual steps
+
+1. Confirm it is growth, not a blip: plot `seal_ms` against `chain_links` row count
+   (`select count(*) from chain_links;`). Linear tracking is the expected cost curve;
+   super-linear points at a query plan or index problem worth a look at `heads()`.
+2. Check the seal is not competing for the pool with live traffic —
+   [engine-stall](/economy/ops/runbooks/engine-stall/) symptoms during the sweep window.
+3. Capacity-plan while calm: the levers are the sweep interval (`WORKER_INTERVAL_MS`),
+   database sizing, and — as a design decision, not an ops action —
+   [platform sharding](/economy/concepts/platform-sharding/). An incremental seal is a
+   signing-path change and needs a security review, not a config tweak.
+
+## Escalation
+
+To the ledger owner as a planning item, with the trend data. This signature paging anyone at
+3am means the thresholds are set wrong.

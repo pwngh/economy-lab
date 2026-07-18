@@ -6,7 +6,7 @@ status: stable
 sourceRefs:
   [
     'src/config.ts#L173-L188 · loadConfig',
-    'src/index.ts#L404 · capabilitiesFromEnv',
+    'src/index.ts#L409 · capabilitiesFromEnv',
     'src/from-env.ts#L118 · externalsFromEnv',
     '.env.example',
   ]
@@ -128,10 +128,15 @@ The velocity variables bound how fast one subject may spend before the risk chec
 see [risk and velocity](/economy/concepts/actors-and-authorization/) for the actor side of
 that gate.
 
+The velocity ceiling splits by environment the same way the maturity anchor does. Outside
+production the default is 1,000 credits per window — sized so the velocity examples can trip
+the gate. In production `VELOCITY_LIMIT_MINOR` is required (startup fails fast naming it, like
+the secrets): a per-user hourly ceiling is a risk decision each deployment states for itself.
+
 | Variable                        | Meaning                                                                                                                  | Default        |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | `PLATFORM_FEE_BPS`              | Platform's transaction fee in basis points. The example models a ~15.3% marketplace fee.                                 | `1530`         |
-| `VELOCITY_LIMIT_MINOR`          | The single-knob ceiling per window, in CREDIT minor units; both window classes fall back to it.                          | `100000`       |
+| `VELOCITY_LIMIT_MINOR`          | The single-knob ceiling per window, in CREDIT minor units; both window classes fall back to it.                          | dev `100000` / prod req. |
 | `VELOCITY_INFLOW_LIMIT_MINOR`   | Ceiling for the inflow window (`topUp`, `grantPromo`) — the card-testing gate.                                           | `= limit`      |
 | `VELOCITY_OUTFLOW_LIMIT_MINOR`  | Ceiling for the outflow window (`spend`, `subscribe`, `requestPayout`) — the drained-wallet gate.                        | `= limit`      |
 | `VELOCITY_WINDOW_MS`            | Length of the rolling window. Only a subject's attempts inside the last window count; each ages out once older.          | `3600000` (1h) |

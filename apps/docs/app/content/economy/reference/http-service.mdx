@@ -6,7 +6,7 @@ status: stable
 sourceRefs:
   [
     'src/server.ts#L136 · createServer',
-    'scripts/main.ts#L366 · runServe',
+    'scripts/main.ts#L428 · runServe',
     'test/server.test.ts',
   ]
 related: ['economy/scope-and-non-goals', 'economy/ports/signer']
@@ -47,7 +47,7 @@ The handler routes four paths and answers `404` to everything else. Two move mon
 
 ## Submitting an operation
 
-`POST /submit` is the request-path version of a `submit` call. You send one operation as a JSON object; you get back its `Outcome`. The body's `kind` selects the operation: `topUp`, `spend`, `refund`, and the rest.
+`POST /submit` is the request-path version of a `submit` call. You send one operation as a JSON object; you get back its `Outcome`. The body's `kind` selects the operation: `topUp`, `spend`, `refund`, and the rest. Every [operation page](/economy/reference/operations/) shows both forms of its example: the HTTP tab is the same call as a `curl` against this route.
 
 One detail matters on the wire: money never travels as a JSON number. A JSON number can't safely hold the integer minor-units an [`Amount`](/economy/concepts/money-model/) carries, so money fields arrive as decimal strings like `CREDIT:10.00` and the server decodes them back into `Amount` values. Here's a `topUp` body:
 
@@ -81,7 +81,7 @@ In the status mapping below, a decline is a normal answer and a fault is an HTTP
 
 ### How thrown faults map to status codes
 
-When `submit` throws an `EconomyError`, <SourceLink to="src/server.ts#L363">statusFor</SourceLink> maps it to a status code, and the response carries only the error's `message`, never its `detail`, `cause`, or stack. Those stay server-side.
+When `submit` throws an `EconomyError`, <SourceLink to="src/server.ts#L363">statusForError</SourceLink> maps it to a status code. The response carries the caller-safe problem fields (`title`, `code`, `retryable`) and never `detail`, `cause`, or stack — those stay server-side.
 
 The mapping is by the error's stable code:
 
@@ -95,8 +95,75 @@ The mapping is by the error's stable code:
 An unexpected throw that isn't an `EconomyError` is normalized into a retryable storage fault, so it goes out as a `503` with a generic message. The internals never reach the client.
 
 <Callout type="warning">
-The error body is exactly `{ "error": "<message>" }` and nothing more. A test pins this: a fault carrying SQL text and a connection string in its `detail`/`cause` still leaks only the one human-readable message (`test/server.test.ts`). Machine-readable reason codes never ride the error wire: they live in a `rejected` outcome, not a thrown fault.
+The problem body carries `type`, `title` (the caller-safe message), `status`, and the stable `code`/`retryable` extensions — never `detail`, `cause`, or a stack. A test pins this: a fault carrying SQL text and a connection string in its `detail`/`cause` still leaks only the one human-readable message (`test/server.test.ts`). Rejection reasons never ride the error wire: they live in a `rejected` outcome, not a thrown fault.
 </Callout>
+
+## Authenticating the submit path
+
+By default the server trusts the `actor` object in the body, which is only safe when the handler runs in-process and every caller is your own code. The moment the handler sits on a network socket, the actor must come from a credential, not from the caller's say-so — otherwise any client can claim to be an operator.
+
+That is what `ServerOptions.authenticate` is for. You supply a function from the raw `Request` to a [`Principal`](/economy/concepts/actors-and-authorization/) — typically by checking a bearer token or session cookie — and <SourceLink to="src/server.ts#L251">submitRoute</SourceLink> runs it before it reads the body:
+
+```ts
+const handler = createServer(economy, {
+  authenticate: async (request) => {
+    const session = await sessions.lookup(request.headers.get('authorization'));
+    return session === null ? null : { kind: 'user', userId: session.userId };
+  },
+});
+```
+
+Three rules follow once the hook is configured:
+
+- The returned principal is stamped onto the operation as its `actor`. The body must omit `actor` entirely; a body that carries its own is rejected `400` rather than silently overridden, so a caller can never believe a claimed actor was honored.
+- Returning `null` refuses the request with a `401` problem response carrying the stable `UNAUTHORIZED` code.
+- The hook runs before the body is read, so an unauthenticated caller costs no buffering.
+
+Authorization — what the stamped principal may then do — is unchanged and stays inside the economy: a `user` principal still can't spend from someone else's wallet regardless of how it authenticated.
+
+## Body limits and cross-origin calls
+
+Every body the server accepts — `/submit` and `/webhooks/:provider` alike — is read under two bounds, both settable in `ServerOptions`:
+
+- **A byte ceiling** (`maxBodyBytes`, default 64 KiB). A declared `content-length` past it is refused before any byte is read; a lying or absent declaration is caught while the chunks arrive. Past the ceiling the reply is a `413` problem. Every legitimate operation fits in a small fraction of the default.
+- **A read deadline** (`readTimeoutMs`, default 10 seconds). A body that trickles past the deadline is answered with a `408` problem, so a slow client cannot hold the handler open.
+
+The bounded read lives at <SourceLink to="src/server.ts#L628">readBounded</SourceLink>. The Node bridge in `scripts/main.ts` buffers the body before the Fetch handler ever sees it, so the bridge itself enforces the same two limits while the bytes stream in.
+
+Cross-origin resource sharing (CORS) — the browser mechanism that decides whether a page on another origin may call this service — stays off unless you list origins:
+
+```ts
+const handler = createServer(economy, {
+  cors: { origins: ['https://app.example'] },
+});
+```
+
+Origins match exactly. With the option absent the server sets no CORS headers at all, and with it present an unlisted origin gets none either — the deny is the absence of a grant. A denied preflight is a bare `204` that leaks nothing about the allowlist (<SourceLink to="src/server.ts#L210">preflightResponse</SourceLink>).
+
+## Rate limiting the submit path
+
+`/submit` takes admission control through the `RateLimiter` port: one `allow` call per request, keyed by caller, answering a verdict. The limit and window are the adapter's policy, so the server never sees the numbers:
+
+```ts
+import { createServer, memoryRateLimiter } from '@pwngh/economy-lab';
+
+const handler = createServer(economy, {
+  authenticate,
+  rateLimit: { limiter: memoryRateLimiter({ limit: 100, windowMs: 60_000 }) },
+});
+```
+
+A denial answers `429`, with a `retry-after` header when the limiter knows how long the window has left. The default key is the authenticated principal (`user:usr_42`, `system:checkout`); without an `authenticate` hook it falls back to the client address the Node bridge reads from the socket and stamps into the `x-economy-client-ip` header, overwriting anything inbound so a caller can't spoof it. Hosts on other runtimes supply `rateLimit.keyFor`.
+
+Two adapters ship: `memoryRateLimiter` counts fixed windows in-process, and `redisRateLimiterFrom` (on the `adapters/redis` subpath) does the same over Redis so several instances share one budget. A throwing limiter fails open — a down limiter backend should degrade protection, not availability — and each such failure counts `economy.ratelimit.degraded` on the wired meter.
+
+## Correlating a request end to end
+
+Every `/submit` reply carries an `x-request-id` header, problem responses included. The server picks the id in a fixed order: the trace id of a W3C `traceparent` header wins, so a caller already running distributed tracing gets one id across both systems; an explicit `x-request-id` header is next; otherwise the server mints one (`req_…`).
+
+The id doesn't stop at the response. Submit stamps it onto the outbound event envelope, and because the envelope is persisted in the [outbox](/economy/ports/messaging/), the id survives into the relay worker running in another process — its delivery-failure and dead-letter logs name the originating request. One id, quoted from any error report, follows a money movement from the HTTP edge to its event leaving the building.
+
+Two boundaries on purpose: worker-born events (payout reversals, subscription renewals) carry a null id because no request caused them, and the health probes carry no id at all — there is nothing to trace.
 
 ## Receiving provider webhooks
 
@@ -190,4 +257,4 @@ On Bun and Deno, the Fetch handler is served directly. On Node, the entry bridge
 
 The HTTP edge (the routing, the wire codec, the webhook gate, the status mapping) is what the tests exercise: `test/server.test.ts` covers `/submit`, the HMAC and freshness checks, the leak-proof error body, and both probes.
 
-The bridge in `scripts/main.ts` is dev plumbing, not a hardened gateway. It reads the whole request body into memory before handing it over, applies no rate limiting or request-size cap, and the Node path is a minimal `node:http` translation. In a real deployment you'd typically sit this behind a reverse proxy that owns TLS, limits, and timeouts.
+The bridge in `scripts/main.ts` is dev plumbing, not a hardened gateway. It reads the whole request body into memory before handing it over — capped at the same byte ceiling and read deadline the server enforces — and wires no rate limiter by default. The Node path is a minimal `node:http` translation. In a real deployment you'd typically sit this behind a reverse proxy that owns TLS and connection limits.

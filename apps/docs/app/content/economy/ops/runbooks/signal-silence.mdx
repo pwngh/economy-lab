@@ -1,0 +1,45 @@
+---
+title: 'signal-silence'
+summary: 'A signal the host declared as periodic has gone quiet — the process that should emit it is down, paused, or wedged, and nothing downstream will say so on its own.'
+plain: 'Some heartbeats are supposed to tick forever. When one stops, no error fires anywhere — the watchdog exists to turn that silence into an alarm.'
+order: 7
+status: stable
+sourceRefs: ['src/ops/detect.ts', 'src/ops/supervisor.ts', 'src/worker/index.ts']
+related: ['economy/ops/runbooks/engine-stall', 'economy/ops/runbooks/integrity-mismatch', 'economy/reference/background-worker']
+---
+
+Tier 3, report-only. A signal the host declared as periodic has gone quiet. The process that
+should emit it is down, paused, or wedged — and nothing downstream will say so on its own.
+
+## Symptoms
+
+None, by definition. Silence is the symptom; this signature exists to make it loud.
+
+## Detection
+
+Per declared watchdog (`watchdogs: [{ signal, everyMs }]` in `SupervisorConfig` — e.g.
+`worker.sweep` on the sweep interval): no matching signal for more than twice `everyMs`,
+measured from the later of the last beat and when watching began, so a worker that never
+started is caught too.
+
+## Automatic response
+
+`detected` + `escalated` once per silence episode, per watchdog; the episode resets when the
+beat returns, so a flapping process escalates each time it dies.
+
+## Manual steps
+
+1. The usual suspect for `worker.sweep` silence: the worker process. Check the deployment;
+   `make worker` locally.
+2. A paused worker is also silent — check whether an
+   [integrity-mismatch](/economy/ops/runbooks/integrity-mismatch/) containment paused it on
+   purpose (`worker.paused()`) before restarting anything.
+3. If the process is up but silent, it is wedged: thread dump, restart, and check
+   [engine-stall](/economy/ops/runbooks/engine-stall/) — a hung pool acquire inside a sweep
+   looks exactly like this from the outside.
+
+## Escalation
+
+A silent worker means payouts, subscriptions, relays, and checkpoint audits have all stopped.
+Treat recovery as urgent; escalate to whoever owns the deployment if a restart does not bring
+the beat back.

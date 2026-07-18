@@ -1,0 +1,53 @@
+---
+title: 'stuck-saga'
+summary: 'A payout saga stopped advancing — the one classic automatic remediation: a guarded worker sweep, verified by re-reading the saga.'
+plain: 'A payout got stuck mid-journey, usually because the background worker is down. The supervisor runs one careful sweep to push it along, checks that it moved, and gives up loudly if it keeps not moving.'
+order: 1
+status: stable
+sourceRefs: ['src/ops/detect.ts', 'src/ops/supervisor.ts', 'src/worker/payouts.ts']
+related: ['economy/ops/the-supervisor', 'economy/concepts/payout-saga', 'economy/ops/runbooks/signal-silence']
+---
+
+Tier 1 — the one classic automatic remediation. A payout saga sits in a non-terminal state with
+nothing advancing it, usually because the background worker is down or its schedule stopped.
+
+## Symptoms
+
+A seller's payout stays "requested" past the SLA. `worker.payouts.saga_age_ms` grows;
+`worker.sweep` heartbeats may be missing entirely (see
+[signal-silence](/economy/ops/runbooks/signal-silence/)).
+
+## Detection
+
+`SagaStore.list()` is polled each tick; any saga in a non-terminal state (not
+`SETTLED`/`FAILED`) older than `stuckSagaAgeMs` (default 5m, by `updatedAt`) is a finding, one
+per saga id.
+
+## Automatic response
+
+Per saga: `detected` → `decided` → one worker sweep (`runSweep`, the host's `worker.runOnce`
+closure) → `verified` by re-reading the saga (`progressed` when its state or `updatedAt`
+moved). Guardrails, all mandatory:
+
+- cooldown `actionCooldownMs` (default 60s) between actions per saga;
+- attempt cap `maxActionAttempts` (default 3), then a permanent `escalated` record — the
+  supervisor never touches that saga again;
+- suppression under [containment](/economy/ops/runbooks/integrity-mismatch/) — a mismatch
+  episode outranks a stuck payout.
+
+One sweep serves every actionable saga; per-saga targeting deliberately does not exist.
+
+## Manual steps
+
+1. Read the audit trail for the saga id: was the sweep run, and did `verified` say `unchanged`?
+2. `make worker` (or check the deployment) — the usual root cause is the worker process, not
+   the saga.
+3. A saga that survives sweeps is wedged on its provider step: check the payout provider's
+   status for the saga's `providerRef`, and the `worker.payouts.*` logs
+   (`status_probe_failed`, `pending_past_timeout`).
+4. `make demo-ops` reproduces the whole closed loop in-memory.
+
+## Escalation
+
+The attempt cap escalates on its own. From there it is a provider conversation or a
+dead-letter decision (`SagaStore.deadLetter`) — never an automatic one.

@@ -1,0 +1,46 @@
+---
+title: 'retry-exhaustion'
+summary: 'Retry budgets are running out: submits failed to their callers after every retry. Unlike a deadlock storm, users are seeing errors, not just latency.'
+plain: 'The database keeps hitting conflicts, and the automatic retries that usually hide them have started running out. At that point real requests really fail, so someone gets paged.'
+order: 8
+status: stable
+sourceRefs: ['src/ops/detect.ts', 'src/ops/supervisor.ts', 'src/engines/sql-shared.ts']
+related: ['economy/ops/runbooks/deadlock-storm', 'economy/concepts/concurrency']
+---
+
+Tier 3. Retry budgets are running out: these submits failed to their callers after every
+retry. Unlike a [deadlock-storm](/economy/ops/runbooks/deadlock-storm/), users are seeing
+errors, not just latency.
+
+## Symptoms
+
+Caller-visible CONFLICT failures; `engine.retry.exhausted` warn logs; the `engine.retry` count
+moving with `outcome: 'exhausted'`.
+
+## Detection
+
+Sum of `engine.retry` tagged `outcome: 'exhausted'` over `retryExhaustionWindowMs` (default
+5m) reaches `retryExhaustionThreshold` (default 5). The finding carries `byEngine`, so a
+mysql-only exhaustion (its lock ordering differs) is visible at a glance.
+
+## Automatic response
+
+`detected` + `escalated` once per window. No lever: an exhausted budget means the conflict
+rate is beyond what retrying absorbs, and retrying harder is not a remediation.
+
+## Manual steps
+
+1. Confirm the conflict source exactly as in
+   [deadlock-storm](/economy/ops/runbooks/deadlock-storm/) — the engine deadlock counters,
+   sampled through the burst.
+2. Compare `engine.retry.recovered` against `engine.retry`: a healthy budget rescues most
+   conflicts. High pressure with low recovery is systematic lock-order contention, not bad
+   luck.
+3. Reduce contention at the source: lower submit concurrency against the hot accounts, or
+   shard the platform accounts. Raising the retry budget converts errors back into latency —
+   sometimes the right call during an incident, never the fix.
+
+## Escalation
+
+Escalate with the `byEngine` breakdown when exhaustion is sustained across windows — that is a
+capacity and design conversation, not an operational tweak.

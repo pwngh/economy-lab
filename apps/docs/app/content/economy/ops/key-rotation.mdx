@@ -1,0 +1,56 @@
+---
+title: 'Key rotation'
+summary: 'Rotating the checkpoint signer: the new secret in SIGNING_SECRET, the old in SIGNING_SECRETS_PRIOR, so every checkpoint ever sealed keeps verifying.'
+plain: 'The ledger seals its history under a signing key. Changing that key the naive way would make every old seal look forged; the rotation procedure keeps the old key around for checking while the new one takes over signing.'
+order: 4
+status: stable
+sourceRefs: ['src/from-env.ts', 'src/runtime.ts', 'src/worker/checkpoint.ts']
+related: ['economy/ops/runbooks/integrity-mismatch', 'economy/concepts/integrity']
+---
+
+The checkpoint signer derives its Ed25519 key from `SIGNING_SECRET`. Checkpoints sealed under
+an old secret must keep verifying forever — the chain of custody is only as good as the oldest
+verifiable seal — so rotation is a two-variable move, never a replacement.
+
+**Never rotate by replacing `SIGNING_SECRET` alone.** That silently breaks verification of
+every checkpoint sealed before the change: the next `checkpointVerify` sweep reports a
+mismatch, and you will be running the
+[integrity-mismatch runbook](/economy/ops/runbooks/integrity-mismatch/) against your own key
+change.
+
+## The procedure
+
+1. Generate the new secret — any high-entropy string; it is hashed to the key seed.
+2. Deploy with both variables set:
+
+   ```bash
+   SIGNING_SECRET=<new secret>
+   SIGNING_SECRETS_PRIOR=<old secret>
+   ```
+
+   `SIGNING_SECRETS_PRIOR` is comma-separated; a second rotation makes it `<old>,<older>`.
+   Each entry goes through the same derivation as `SIGNING_SECRET`, and `Signer.verify` tries
+   the current key first, then each prior in order.
+
+3. Confirm continuity: the next scheduled sweep's `worker.checkpoint.verify` beat must be
+   `outcome: 'ok'` — the old checkpoint verifying under a prior key.
+4. Confirm succession: after the next seal, the newest checkpoint is signed under the new key
+   and verifies without the prior list; `make prove` checks on demand.
+5. Keep a prior secret listed for as long as any checkpoint signed under it must verify —
+   until every pre-rotation checkpoint has been superseded and any external audit that pinned
+   `signingPublicKeyHex` for the old key has re-anchored. Dropping an entry is the deliberate
+   act of expiring that era's seals.
+
+## If verification breaks after a rotation
+
+The near-certain cause is a dropped or mistyped prior secret. Restore the exact old value into
+`SIGNING_SECRETS_PRIOR` and re-check the verify beat before suspecting tampering — but do not
+skip the check: a mismatch that survives a corrected prior list is a real
+[integrity-mismatch](/economy/ops/runbooks/integrity-mismatch/).
+
+## Scope
+
+The same secret also signs entitlement-gated URLs; those are short-lived, so rotation only
+invalidates in-flight links. `WEBHOOK_SECRET` rotation is a separate, provider-coordinated
+procedure — see [webhook-replay-storm](/economy/ops/runbooks/webhook-replay-storm/) for when
+it becomes urgent.

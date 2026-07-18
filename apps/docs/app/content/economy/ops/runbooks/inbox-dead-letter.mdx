@@ -1,0 +1,52 @@
+---
+title: 'inbox-dead-letter'
+summary: 'Inbound provider events dead-lettered before applying — the supervisor revives the oldest dead rows and lets the normal drain re-apply them idempotently.'
+plain: 'A confirmed payment arrived but repeatedly failed to post, so it was set aside. The supervisor puts the oldest set-aside events back in line; the regular pipeline retries them safely because every event can only ever post once.'
+order: 3
+status: stable
+sourceRefs: ['src/ops/detect.ts', 'src/ops/supervisor.ts', 'src/worker/inbox.ts']
+related: ['economy/ops/the-supervisor', 'economy/ports/messaging', 'economy/reference/http-service']
+---
+
+Tier 1, automatic revive. Inbound provider events exhausted their apply attempts and
+dead-lettered. Money that should have arrived (a top-up, a settlement) has not.
+
+## Symptoms
+
+`worker.inbox.dead_lettered` error logs; users report missing credits after provider-confirmed
+payments.
+
+## Detection
+
+Each `worker.inbox.dead_lettered` log signal past a watermark, against
+`inboxDeadLetterThreshold` (default 1). The signal buffer keeps event names only, never
+fields, so the dead rows' ids are not visible to the detector — the store finds them itself.
+
+## Automatic response
+
+`detected` → `decided` → `InboxStore.reviveDead` flips up to `inboxReviveLimit` (default 10)
+oldest dead rows back to pending with attempts reset, then `acted` (the revived ids) and
+`verified`. The scheduled `drainInbox` picks them up on its next sweep — the revive itself
+never applies anything, so the money still moves only through the normal drain under the row's
+idempotency key (`whk:<eventId>`); a wrong revive costs work, not money. Guardrails: episode
+cooldown, attempt cap into permanent escalation (a poison row that keeps dead-lettering opens
+a new episode each time and is bounded by the cap), containment suppression, and a `no-lever`
+decision when the host wired no revive lever.
+
+## Manual steps
+
+1. Inspect before assuming transient:
+   `select id, attempts, dead_letter_reason, received_at from inbox where status = 'dead' order by received_at;`
+2. The `dead_letter_reason` is the submit's error code. `CONFIG.INVALID` /
+   `MALFORMED_OPERATION` mean the event decodes to an operation the economy rejects —
+   replaying it will never succeed; fix the mapping or resolve with the provider. Transient
+   store codes revive freely.
+3. Manual revive without the supervisor: `store.inbox.reviveDead(limit)` from a host shell,
+   then let the worker drain.
+4. After an escalation, resolve each row deliberately: fix-and-revive, or leave dead and
+   settle with the provider out of band.
+
+## Escalation
+
+The attempt cap escalates with "poisoned, not delayed" attached. From there it is a data
+conversation: what does the event contain, and why does the economy refuse it?

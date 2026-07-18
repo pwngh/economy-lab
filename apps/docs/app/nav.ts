@@ -28,6 +28,7 @@ const leaf = (d: { slug: string; title: string }): NavLeaf => ({
 });
 
 const isOperation = (slug: string) => slug.startsWith('economy/reference/operations/');
+const isRunbook = (slug: string) => slug.startsWith('economy/ops/runbooks/');
 
 /** Human label for a sub-section, used in breadcrumbs and section landing pages. */
 export const SECTION_LABEL: Record<string, string> = {
@@ -35,6 +36,7 @@ export const SECTION_LABEL: Record<string, string> = {
   cookbook: 'Cookbook',
   reference: 'Reference',
   ports: 'Ports & edges',
+  ops: 'Ops & runbooks',
 };
 
 /**
@@ -48,6 +50,8 @@ export function buildNav(): NavGroup[] {
     .filter((d) => d.section === 'reference' && !isOperation(d.slug))
     .map(leaf);
   const ports = docsInSection('ports').map(leaf);
+  const runbooks = docs.filter((d) => isRunbook(d.slug)).map(leaf);
+  const opsPages = docs.filter((d) => d.section === 'ops' && !isRunbook(d.slug)).map(leaf);
   const scope = docs.filter((d) => d.slug === 'economy/scope-and-non-goals').map(leaf);
 
   return [
@@ -70,6 +74,18 @@ export function buildNav(): NavGroup[] {
           title: 'Operations',
           href: '/economy/reference/operations/',
           items: operations,
+        },
+      ],
+    },
+    {
+      title: 'Ops & runbooks',
+      href: '/economy/ops/',
+      items: opsPages,
+      subgroups: [
+        {
+          title: 'Runbooks',
+          href: '/economy/ops/runbooks/',
+          items: runbooks,
         },
       ],
     },
@@ -121,6 +137,12 @@ export function crumbsFor(slug: string): Crumb[] {
     crumbs.push({
       label: 'Operations',
       href: '/economy/reference/operations/',
+    });
+  }
+  if (isRunbook(slug)) {
+    crumbs.push({
+      label: 'Runbooks',
+      href: '/economy/ops/runbooks/',
     });
   }
   return crumbs;
