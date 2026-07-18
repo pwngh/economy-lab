@@ -12,9 +12,13 @@ related:
   ['economy/reference/operations/reverse', 'economy/reference/configuration']
 ---
 
+import refundHttp from '../../../../snippets/http/refund.sh?shiki';
+
 `refund` reverses a completed [`spend`](/economy/reference/operations/spend/). It returns the buyer the full price they paid, then unwinds the sale account by account.
 
 You name the order, not the buyer or the amount. The handler reads those off the recorded sale. Pass the `orderId` from the original spend. A `reason` for the audit trail is optional:
+
+<CallTabs name="refund" http={refundHttp}>
 
 ```ts
 const outcome = await economy.submit({
@@ -26,6 +30,8 @@ const outcome = await economy.submit({
 });
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
+
+</CallTabs>
 
 The buyer gets the full price back. Each seller is debited only up to the balance they still hold. Any uncollectable remainder is booked as a debt to the platform.
 

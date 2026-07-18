@@ -14,11 +14,15 @@ related:
   ['economy/reference/operations/reverse', 'economy/reference/configuration']
 ---
 
+import adjustHttp from '../../../../snippets/http/adjust.sh?shiki';
+
 `adjust` is the operator's manual correction. It moves one account by a signed `amount` and books the opposite entry to a platform account, so the books stay balanced.
 
 It exists for cases no ordinary operation covers, such as closing a gap found during reconciliation.
 
 You name the [account](/economy/concepts/accounts-and-double-entry/), the signed `amount` to move it by, and a written `reason` for the audit trail:
+
+<CallTabs name="adjust" http={adjustHttp}>
 
 ```ts
 const outcome = await economy.submit({
@@ -31,6 +35,8 @@ const outcome = await economy.submit({
 });
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
+
+</CallTabs>
 
 usr_alice's spendable balance rose by 250 credits. A negative `amount` is a valid downward correction. The same call with `toAmount("CREDIT", -250n)` lowers the account by `250` instead.
 

@@ -170,7 +170,7 @@ function shikiSource() {
         source.split('\n').flatMap((line, i) => (/^import[ {]/.test(line) ? [i + 1] : [])),
       );
       const html = await codeToHtml(source, {
-        lang: 'typescript',
+        lang: file.endsWith('.sh') ? 'shellscript' : 'typescript',
         themes: { light: 'github-light', dark: 'github-dark' },
         transformers: [
           {

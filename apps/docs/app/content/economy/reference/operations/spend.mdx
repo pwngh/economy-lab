@@ -8,11 +8,15 @@ sourceRefs:
 related: ['economy/reference/configuration']
 ---
 
+import spendHttp from '../../../../snippets/http/spend.sh?shiki';
+
 `spend` runs a marketplace purchase. It charges the buyer and pays the sellers as one balanced [double-entry posting](/economy/concepts/accounts-and-double-entry/).
 
 The same transaction also records a sale under `orderId` and grants the buyer the `sku`.
 
 A purchase with a single seller taking the whole price looks like this:
+
+<CallTabs name="spend" http={spendHttp}>
 
 ```ts
 const outcome = await economy.submit({
@@ -27,6 +31,8 @@ const outcome = await economy.submit({
 });
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
+
+</CallTabs>
 
 The buyer's `promo` balance is drawn first, then `spendable`. The seller is credited to their `earned` balance, and the platform keeps its fee.
 

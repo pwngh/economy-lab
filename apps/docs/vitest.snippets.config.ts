@@ -26,5 +26,5 @@ export default defineConfig({
       { find: /^~\/(.*)$/, replacement: `${consoleApp}$1` },
     ],
   },
-  test: { include: ['runner/snippets.test.ts'] },
+  test: { include: ['runner/snippets.test.ts', 'runner/http.test.ts'] },
 });

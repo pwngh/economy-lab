@@ -16,6 +16,8 @@ related:
   ]
 ---
 
+import reversePayoutHttp from '../../../../snippets/http/reverse-payout.sh?shiki';
+
 `reversePayout` undoes an in-flight payout by hand. It does two things in one
 [`Transaction`](/economy/concepts/accounts-and-double-entry/): it marks the payout's
 [`Saga`](/economy/concepts/payout-saga/) as `FAILED`, and it returns the reserved
@@ -32,6 +34,8 @@ trust.
 
 You name the payout by its `sagaId` and the seller by `userId`. You must also record a `reason`:
 
+<CallTabs name="reverse-payout" http={reversePayoutHttp}>
+
 ```ts
 const outcome = await economy.submit({
   kind: 'reversePayout',
@@ -43,6 +47,8 @@ const outcome = await economy.submit({
 });
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
+
+</CallTabs>
 
 ## Parameters
 

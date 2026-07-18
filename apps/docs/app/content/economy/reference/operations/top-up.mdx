@@ -18,12 +18,16 @@ related:
   ]
 ---
 
+import topUpHttp from '../../../../snippets/http/top-up.sh?shiki';
+
 `topUp` turns a buyer's cleared cash into spendable credit. It raises a user's
 [`spendable`](/economy/concepts/accounts-and-double-entry/) balance and records the USD that paid for
 it.
 
 It runs after a card or wallet charge clears, so the caller is the trusted payment service, not the
 buyer. You name the user, the credit `amount`, and the funding `source`:
+
+<CallTabs name="top-up" http={topUpHttp}>
 
 ```ts
 const outcome = await economy.submit({
@@ -36,6 +40,8 @@ const outcome = await economy.submit({
 });
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
+
+</CallTabs>
 
 The credit `amount` is what the user receives. What they paid in USD is derived from the
 [`buy` rate](/economy/concepts/money-model/), not passed in.

@@ -15,9 +15,13 @@ related:
   ]
 ---
 
+import clawbackHttp from '../../../../snippets/http/clawback.sh?shiki';
+
 `clawback` reclaims credits from a user's [`spendable`](/economy/concepts/accounts-and-double-entry/) balance after a bank chargeback or fraud recovery. The dollars themselves move back at the payment [`Processor`](/economy/ports/processor/), outside this ledger. The handler books only the credit side of the loss.
 
 You name the user and how much to reclaim. When the dispute is tied to a purchase, you also name the disputed `orderId`:
+
+<CallTabs name="clawback" http={clawbackHttp}>
 
 ```ts
 const outcome = await economy.submit({
@@ -31,6 +35,8 @@ const outcome = await economy.submit({
 });
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
+
+</CallTabs>
 
 In practice you rarely build this by hand. A verified dispute webhook maps to a `clawback` through `toClawback`, so the inbound chargeback callback is the usual caller.
 

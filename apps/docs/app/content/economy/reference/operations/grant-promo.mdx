@@ -12,9 +12,13 @@ related:
   ['economy/reference/operations/top-up', 'economy/reference/configuration']
 ---
 
+import grantPromoHttp from '../../../../snippets/http/grant-promo.sh?shiki';
+
 `grantPromo` drops marketing credit into a user's [`promo`](/economy/concepts/accounts-and-double-entry/) balance with an expiry date. A campaign can hand out credit that reverts to the platform if it goes unspent.
 
 Here a marketing service grants a user 500 credits that expire 24 hours from now:
+
+<CallTabs name="grant-promo" http={grantPromoHttp}>
 
 ```ts
 const outcome = await economy.submit({
@@ -27,6 +31,8 @@ const outcome = await economy.submit({
 });
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
+
+</CallTabs>
 
 The grant lands immediately. Promo credit carries no maturity hold, and a buyer's `promo` balance is drawn before their own money on the next [`spend`](/economy/reference/operations/spend/).
 

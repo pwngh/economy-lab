@@ -20,17 +20,6 @@ import { EconomyError } from '@pwngh/economy-lab';
 
 import { buildEngine } from '../../console/app/economy';
 import { loadJournal, replayJournal, saveJournal } from '../../console/app/journal';
-import { run as challengeAuthorization } from '../app/snippets/challenge-authorization';
-import { run as challengeIdempotency } from '../app/snippets/challenge-idempotency';
-import { run as drain } from '../app/snippets/drain';
-import { run as idempotency } from '../app/snippets/idempotency';
-import { run as legs } from '../app/snippets/legs';
-import { run as payout } from '../app/snippets/payout';
-import { run as prove } from '../app/snippets/prove';
-import { run as reads } from '../app/snippets/reads';
-import { run as rejection } from '../app/snippets/rejection';
-import { run as theEconomy } from '../app/snippets/the-economy';
-import { run as velocity } from '../app/snippets/velocity';
 import { renderRun } from './render';
 
 import type { Economy } from '@pwngh/economy-lab';
@@ -38,28 +27,33 @@ import type { ConsoleEngine } from '../../console/app/economy';
 import type { JournalEntry } from '../../console/app/journal';
 import type { SnippetReport } from '../app/snippets/context';
 
-const SNIPPETS: Record<string, (economy: Economy) => Promise<SnippetReport>> = {
-  idempotency,
-  drain,
-  prove,
-  velocity,
-  rejection,
-  payout,
-  legs,
-  reads,
-  'the-economy': theEconomy,
-  'challenge-idempotency': challengeIdempotency,
-  'challenge-authorization': challengeAuthorization,
-};
+type SnippetRun = (economy: Economy) => Promise<SnippetReport>;
+
+// A page's `data-snippet` name is its snippet's filename stem; the registry derives from the
+// directory, so a new snippet file registers itself and cannot be forgotten. context.ts (no
+// `run`) and the challenge answer keys are the deliberate exclusions; snippets.test.ts still
+// walks the content tree and fails on a name that resolves to nothing here.
+const MODULES = import.meta.glob<{ run?: SnippetRun }>('../app/snippets/*.ts', { eager: true });
+
+export const SNIPPETS: Record<string, SnippetRun> = Object.fromEntries(
+  Object.entries(MODULES).flatMap(([path, module]) => {
+    if (path.endsWith('.solution.ts') || typeof module.run !== 'function') return [];
+    const stem = path.slice(path.lastIndexOf('/') + 1, -'.ts'.length);
+    return [[stem, module.run]];
+  }),
+);
 
 let enginePromise: Promise<ConsoleEngine> | null = null;
 let journal: JournalEntry[] = [];
 
 // The workbench appends sandbox-run operations (or clears everything) behind this module's back;
-// the next in-page run rebuilds from the saved journal so both paths see one economy.
-window.addEventListener('elab:journal-changed', () => {
-  enginePromise = null;
-});
+// the next in-page run rebuilds from the saved journal so both paths see one economy. The guard
+// keeps the module importable where there is no window (snippets.test.ts reads SNIPPETS).
+if (typeof window !== 'undefined') {
+  window.addEventListener('elab:journal-changed', () => {
+    enginePromise = null;
+  });
+}
 
 function engine(): Promise<ConsoleEngine> {
   enginePromise ??= buildEngine().then(async (eco) => {
@@ -92,7 +86,18 @@ export async function runSnippet(block: HTMLElement): Promise<void> {
   const name = block.dataset.snippet ?? '';
   const snippet = SNIPPETS[name];
   const out = block.querySelector<HTMLElement>('[data-out]');
-  if (!snippet || !out) return;
+  if (!out) return;
+  if (!snippet) {
+    // A name this build doesn't know is a wiring bug — say so rather than doing nothing.
+    renderRun(out, {
+      lines: [],
+      fault: `no snippet registered as "${name}"`,
+      ms: 0,
+      added: 0,
+      total: journal.length,
+    });
+    return;
+  }
 
   const started = performance.now();
   const before = journal.length;

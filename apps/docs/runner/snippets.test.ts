@@ -97,6 +97,28 @@ it('recipe allowance: the period key absorbs the double fire', async () => {
 // renders a wiring fault — this walks the content tree so an unregistered name fails CI
 // instead of shipping a dead button.
 import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { SNIPPETS } from './engine.ts';
+
+function runnableNames(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...runnableNames(full));
+    else if (entry.name.endsWith('.mdx')) {
+      const source = readFileSync(full, 'utf8');
+      for (const m of source.matchAll(/<Runnable\s+name="([^"]+)"/g)) out.push(m[1]);
+    }
+  }
+  return out;
+}
+
+it('every Runnable on a page is registered in the engine', () => {
+  const used = runnableNames(new URL('../app/content/', import.meta.url).pathname);
+  expect(used.length).toBeGreaterThan(0);
+  const missing = used.filter((name) => !(name in SNIPPETS));
+  expect(missing).toEqual([]);
+});
 
 // The sandbox executor, driven exactly as the workbench drives it: raw snippet source in, the
 // pitch's edit applied, faults and logs on their own channels. Only the iframe/postMessage

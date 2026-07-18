@@ -14,6 +14,8 @@ sourceRefs:
 related: ['economy/reference/operations/revoke-entitlement']
 ---
 
+import grantEntitlementHttp from '../../../../snippets/http/grant-entitlement.sh?shiki';
+
 `grantEntitlement` records that a user owns an item or feature, named by a `sku` (a product code such
 as `wrld_pass`). It tracks ownership only. No money moves, and the ledger is untouched.
 
@@ -21,6 +23,8 @@ A `spend` grants the buyer's entitlement as part of the sale. You reach for `gra
 directly when ownership comes from somewhere else: a manual fulfillment, a migration, or a comp.
 
 You name the user and the SKU. The actor is a trusted `system` service or a human `operator`:
+
+<CallTabs name="grant-entitlement" http={grantEntitlementHttp}>
 
 ```ts
 const outcome = await economy.submit({
@@ -32,6 +36,8 @@ const outcome = await economy.submit({
 });
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
+
+</CallTabs>
 
 `read.entitled("usr_owner", "wrld_pass")` now returns true.
 

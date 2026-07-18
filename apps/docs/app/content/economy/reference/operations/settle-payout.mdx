@@ -17,11 +17,15 @@ related:
   ]
 ---
 
+import settlePayoutHttp from '../../../../snippets/http/settle-payout.sh?shiki';
+
 `settlePayout` runs the `SUBMITTED → SETTLED` step of the [payout saga](/economy/concepts/payout-saga/). It empties the seller's reserved credits into platform revenue and moves the matching USD out of [trust](/economy/concepts/solvency/).
 
 It does not call the [rail](/economy/ports/processor/). The rail has already paid. This operation records that fact and posts the money.
 
 A verified "payout settled" webhook from the rail drives it. The webhook maps to a `system`-actor operation, named only by the payout's saga id:
+
+<CallTabs name="settle-payout" http={settlePayoutHttp}>
 
 ```ts
 const outcome = await economy.submit({
@@ -34,6 +38,8 @@ const outcome = await economy.submit({
 });
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
+
+</CallTabs>
 
 The mapping from webhook to operation lives in <SourceLink to="src/webhooks.ts#L171-L182">toSettlePayout</SourceLink>; the [background worker](/economy/reference/background-worker/)'s inbox drain applies the result off the request path.
 

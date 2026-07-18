@@ -1240,3 +1240,68 @@ html[data-theme="dark"] .shiki span.line-hl {
     animation: none;
   }
 }
+
+/* ---- call tabs: the same operation as a TypeScript call and an HTTP request ----
+   Two hidden radio inputs drive the switch, so it works with zero client JS; the active label
+   styles via :has(), which merely loses its highlight in browsers without it. */
+.calltabs {
+  margin: 1.5rem 0;
+}
+.calltabs > input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.calltabs-bar {
+  display: flex;
+  gap: 0.25rem;
+}
+.calltabs-bar label {
+  font-size: 0.78rem;
+  font-weight: 550;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
+  padding: 0.28rem 0.9rem;
+  cursor: pointer;
+  background: var(--bg-subtle);
+}
+.calltabs-bar label:hover {
+  color: var(--text);
+}
+.calltabs:has(> input:nth-of-type(1):checked) .calltabs-bar label:nth-of-type(1),
+.calltabs:has(> input:nth-of-type(2):checked) .calltabs-bar label:nth-of-type(2) {
+  color: var(--text);
+  background: var(--code-bg);
+}
+.calltabs > input:focus-visible ~ .calltabs-bar label {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.calltabs-panel {
+  display: none;
+}
+.calltabs:has(> input:nth-of-type(1):checked) .calltabs-ts,
+.calltabs:has(> input:nth-of-type(2):checked) .calltabs-http {
+  display: block;
+}
+/* No :has() (old browsers) and no JS both land here: show the TypeScript panel. */
+@supports not (selector(:has(a))) {
+  .calltabs-ts {
+    display: block;
+  }
+}
+.calltabs-panel > *:first-child,
+.calltabs-panel pre {
+  margin-top: 0;
+  border-top-left-radius: 0;
+}
+@media print {
+  .calltabs-panel {
+    display: block;
+  }
+  .calltabs-bar {
+    display: none;
+  }
+}

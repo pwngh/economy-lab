@@ -16,11 +16,15 @@ related:
   ]
 ---
 
+import cancelSubscriptionHttp from '../../../../snippets/http/cancel-subscription.sh?shiki';
+
 `cancelSubscription` marks an active [`Subscription`](/economy/concepts/subscriptions/) `CANCELED`,
 so the [background worker's](/economy/reference/background-worker/) renewal sweep stops billing
 it. It moves no money.
 
 You submit it with just the subscription id:
+
+<CallTabs name="cancel-subscription" http={cancelSubscriptionHttp}>
 
 ```ts
 const outcome = await economy.submit({
@@ -31,6 +35,8 @@ const outcome = await economy.submit({
 });
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
+
+</CallTabs>
 
 Canceling forfeits the rest of the period already paid for. There is no refund, so
 there is nothing to post to the ledger.

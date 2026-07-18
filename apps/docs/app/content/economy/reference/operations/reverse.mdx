@@ -11,11 +11,15 @@ sourceRefs:
 related: ['economy/reference/the-economy', 'economy/reference/configuration']
 ---
 
+import reverseHttp from '../../../../snippets/http/reverse.sh?shiki';
+
 `reverse` undoes an earlier transaction by posting its exact opposite: every leg of the original, with its sign flipped.
 
 It's an operator's manual correction tool. You name the transaction to undo by its `txnId` and supply a written `reason`. The handler then posts a new, balanced transaction that cancels the original out.
 
 A reverse of `txn_1`, posted by an operator, with the reason recorded for the audit trail:
+
+<CallTabs name="reverse" http={reverseHttp}>
 
 ```ts
 const outcome = await economy.submit({
@@ -27,6 +31,8 @@ const outcome = await economy.submit({
 });
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
+
+</CallTabs>
 
 This is the general undo for any past posting. To undo a payout that hasn't disbursed yet, reach for [`reverse-payout`](/economy/reference/operations/reverse-payout/) instead, which unwinds the payout saga rather than flipping ledger legs.
 

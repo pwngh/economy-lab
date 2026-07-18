@@ -15,6 +15,8 @@ related:
   ]
 ---
 
+import subscribeHttp from '../../../../snippets/http/subscribe.sh?shiki';
+
 `subscribe` does three things in one transaction. It charges a buyer for the first period
 of a recurring plan, grants them the SKU, and saves a
 [`Subscription`](/economy/concepts/subscriptions/) record. The
@@ -23,6 +25,8 @@ period.
 
 You submit it with the buyer, the seller, the SKU, the per-period `price`, and the period
 length in milliseconds:
+
+<CallTabs name="subscribe" http={subscribeHttp}>
 
 ```ts
 const outcome = await economy.submit({
@@ -37,6 +41,8 @@ const outcome = await economy.submit({
 });
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
+
+</CallTabs>
 
 The handler bills period one only. Every period after that, the worker's renewal sweep
 bills the buyer again.

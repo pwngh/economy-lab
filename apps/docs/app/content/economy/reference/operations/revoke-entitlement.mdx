@@ -12,9 +12,13 @@ related:
   ['economy/reference/operations/spend', 'economy/reference/operations/refund']
 ---
 
+import revokeEntitlementHttp from '../../../../snippets/http/revoke-entitlement.sh?shiki';
+
 `revokeEntitlement` removes a user's ownership of a SKU, the mirror of [`grantEntitlement`](/economy/reference/operations/grant-entitlement/). Ownership is a record, not a balance. No money moves, and the ledger is untouched.
 
 You name the user and the SKU, and optionally a `reason` for the audit trail:
+
+<CallTabs name="revoke-entitlement" http={revokeEntitlementHttp}>
 
 ```ts
 const outcome = await economy.submit({
@@ -27,6 +31,8 @@ const outcome = await economy.submit({
 });
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
+
+</CallTabs>
 
 Once this commits, [`read.entitled("usr_owner", "wrld_pass")`](/economy/reference/reads/) returns `false`. Any UI that gates access on that SKU stops granting it.
 
