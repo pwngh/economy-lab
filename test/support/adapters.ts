@@ -315,6 +315,12 @@ export async function makeIsolatedMysqlStore(opts: {
     ...store,
     close: async () => {
       await store.close();
+      // Under CI the engine dies with the job, so the drop is pure DDL fsync tax; leave the
+      // database for the sweeper (maybeSweep / db:clean), whose live path this also exercises.
+      if (process.env.CI !== undefined) {
+        await admin.end();
+        return;
+      }
       await dropDatabase();
     },
   };
