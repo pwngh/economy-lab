@@ -327,6 +327,7 @@ create table checkpoints (
   at         bigint      not null,
   v          smallint    not null default 1,                -- preimage construction; pre-versioning rows are 1
   sum        text,                                          -- signed decimal minor-unit sum under a v2 root; null on v1 rows
+  kid        text,                                          -- id of the signing key that sealed the row; null before kid stamping
   seq        bigserial   unique,
   created_at timestamptz not null default now()
 );
@@ -601,6 +602,7 @@ comment on column checkpoints.root is 'Merkle root over account hashes; lowercas
 comment on column checkpoints.signature is 'Signature over the root; lowercase hex.';
 comment on column checkpoints.count is 'How many account hashes this root covers.';
 comment on column checkpoints.at is 'Epoch ms the checkpoint was taken.';
+comment on column checkpoints.kid is 'Id of the signing key that sealed the row; null before kid stamping.';
 comment on column checkpoints.seq is 'Monotonic sequence number; unique, auto-assigned.';
 comment on column checkpoints.created_at is 'UTC time the row was inserted.';
 comment on column seen_webhooks.event_id is 'Provider stable event id; primary key for replay dedup.';

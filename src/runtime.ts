@@ -142,8 +142,12 @@ export function systemSigner(options: {
       ed25519KeyPair(k).then((pair) => pair.publicKey),
     ),
   ];
+  const kid = current
+    .then((pair) => crypto.subtle.exportKey('raw', pair.publicKey))
+    .then((raw) => toHex(new Uint8Array(raw)).slice(0, 16));
 
   return {
+    kid: async () => kid,
     sign: async (bytes) =>
       new Uint8Array(
         await crypto.subtle.sign(

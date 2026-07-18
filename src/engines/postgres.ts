@@ -1550,8 +1550,8 @@ function createCheckpointStore(pool: PgPool): CheckpointStore {
   return {
     put: async (checkpoint) => {
       await pool.query(
-        `insert into checkpoints (id, root, signature, count, at, v, sum)
-           values ($1, $2, $3, $4, $5, $6, $7)`,
+        `insert into checkpoints (id, root, signature, count, at, v, sum, kid)
+           values ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           checkpoint.id,
           checkpoint.root,
@@ -1560,6 +1560,7 @@ function createCheckpointStore(pool: PgPool): CheckpointStore {
           checkpoint.at,
           checkpoint.v,
           checkpoint.sum,
+          checkpoint.kid,
         ],
       );
     },

@@ -83,6 +83,13 @@ export interface Signer {
 
   /** Accepts still-valid older keys, so a signature made before a key rotation keeps verifying. */
   verify(bytes: Uint8Array, signature: Uint8Array): Promise<boolean>;
+
+  /**
+   * Identifier of the key `sign` currently uses; the reference signer answers the first 16 hex
+   * characters of the Ed25519 public key. Stamped onto checkpoints so an auditor can tell which
+   * key sealed a row across rotations. Optional: a signer without it seals rows with a null kid.
+   */
+  kid?(): Promise<string>;
 }
 
 /**
@@ -1009,6 +1016,14 @@ export interface Checkpoint {
    * to sign a ledger whose raw leg sums do not net to zero.
    */
   sum: string | null;
+
+  /**
+   * Identifier of the signing key that sealed this row ({@link Signer.kid}), or null on rows
+   * from before kid stamping or from a signer without one. Audit metadata, not part of the
+   * signed preimage: tampering with it only makes the row's signature fail to verify under the
+   * named key, and verification still tries every configured key regardless.
+   */
+  kid: string | null;
 }
 
 /** A statement query's time range, in epoch milliseconds. Half-open: `from` is included, `to` is not. */

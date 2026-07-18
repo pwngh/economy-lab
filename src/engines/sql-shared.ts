@@ -333,6 +333,7 @@ export function rowToCheckpoint(row: Record<string, unknown>): Checkpoint {
     // them under the original hash-only construction.
     v: Number(row.v ?? 1) === 2 ? 2 : 1,
     sum: (row.sum as string | null) ?? null,
+    kid: (row.kid as string | null) ?? null,
   };
 }
 

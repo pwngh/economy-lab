@@ -103,6 +103,25 @@ describe('systemSigner (Ed25519)', () => {
     );
   });
 
+  test('kid is the 16-hex-char public key prefix and survives rotation', async () => {
+    const secret = 'cd'.repeat(32);
+    const kid = await systemSigner({ signingKey: secret }).kid?.();
+
+    assert.equal(kid, (await signingPublicKeyHex(secret)).slice(0, 16));
+    // Prior keys never change the current key's kid.
+    assert.equal(
+      await systemSigner({
+        signingKey: secret,
+        priorKeys: ['ab'.repeat(32)],
+      }).kid?.(),
+      kid,
+    );
+    assert.notEqual(
+      await systemSigner({ signingKey: 'ab'.repeat(32) }).kid?.(),
+      kid,
+    );
+  });
+
   test('a different secret cannot forge or verify; the same secret is deterministic', async () => {
     const root = new TextEncoder().encode('x');
     const sigA = await systemSigner({ signingKey: 'aa'.repeat(16) }).sign(root);

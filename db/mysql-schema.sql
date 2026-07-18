@@ -327,6 +327,7 @@ CREATE TABLE checkpoints (
      at         BIGINT      NOT NULL COMMENT 'Epoch ms the checkpoint was taken.',
      v          TINYINT     NOT NULL DEFAULT 1 COMMENT 'Preimage construction the row was sealed under; pre-versioning rows are 1.',
      sum        VARCHAR(32) NULL COMMENT 'Signed decimal minor-unit sum under a v2 root (zero when honestly sealed); null on v1 rows.',
+     kid        VARCHAR(64) NULL COMMENT 'Id of the signing key that sealed the row; null before kid stamping.',
      seq        BIGINT      AUTO_INCREMENT UNIQUE COMMENT 'Monotonic sequence number; unique, auto-assigned.',
      created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
    ) COMMENT='Signed Merkle checkpoints over the per-account hash chains.';

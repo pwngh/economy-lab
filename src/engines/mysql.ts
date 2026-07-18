@@ -1502,8 +1502,8 @@ function createCheckpointStore(pool: MysqlPool): CheckpointStore {
     put: async (checkpoint) => {
       await rows(
         pool,
-        `INSERT INTO checkpoints (id, root, signature, count, at, v, sum)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO checkpoints (id, root, signature, count, at, v, sum, kid)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           checkpoint.id,
           checkpoint.root,
@@ -1512,6 +1512,7 @@ function createCheckpointStore(pool: MysqlPool): CheckpointStore {
           checkpoint.at,
           checkpoint.v,
           checkpoint.sum,
+          checkpoint.kid,
         ],
       );
     },

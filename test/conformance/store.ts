@@ -166,6 +166,7 @@ async function roundTripsCheckpointRows(store: Store): Promise<void> {
     at: 1_000,
     v: 1,
     sum: null,
+    kid: null,
   };
   const v2: Checkpoint = {
     id: 'chk_conf_v2',
@@ -175,6 +176,7 @@ async function roundTripsCheckpointRows(store: Store): Promise<void> {
     at: 2_000,
     v: 2,
     sum: '0',
+    kid: 'feedfacefeedface',
   };
 
   await store.checkpoints.put(v1);

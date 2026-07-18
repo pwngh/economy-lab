@@ -8,6 +8,10 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 
 - `SIGNING_SECRETS_PRIOR` lists rotated-out signing secrets; checkpoints sealed under them
   still verify.
+- The seal stamps the sealing key's `kid` onto the checkpoint row. `Signer.kid` (optional on
+  the port) answers the current key's id; the default signer's is the first 16 hex characters
+  of its Ed25519 public key. The `kid` is audit metadata only — verification still tries every
+  trusted key — and rows sealed before stamping read back null.
 
 ## 0.3.0 - 2026-07-17
 

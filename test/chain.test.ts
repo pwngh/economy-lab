@@ -24,7 +24,7 @@ import {
 import { chainHash, credit, debit, postEntry } from '#src/ledger.ts';
 import { EconomyError } from '#src/errors.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
-import { systemSigner } from '#src/runtime.ts';
+import { signingPublicKeyHex, systemSigner } from '#src/runtime.ts';
 import { toAmount } from '#src/money.ts';
 import { toHex } from '#src/bytes.ts';
 import { spendable, SYSTEM } from '#src/accounts.ts';
@@ -432,6 +432,32 @@ describe('Chain', () => {
     assert.equal(ok, true);
   });
 
+  test('stamps the sealing key id, or null for a signer without one', async () => {
+    const { store } = await populatedStore();
+    const digest = seededDigest(1);
+    const key = 'aa'.repeat(32);
+
+    const stamped = await recordCheckpoint({
+      ledger: store.ledger,
+      checkpoints: captureCheckpoints(),
+      digest,
+      signer: systemSigner({ signingKey: key }),
+      clock: fixedClock(0),
+      ids: sequentialIds(),
+    });
+    assert.equal(stamped.kid, (await signingPublicKeyHex(key)).slice(0, 16));
+
+    const unstamped = await recordCheckpoint({
+      ledger: store.ledger,
+      checkpoints: captureCheckpoints(),
+      digest,
+      signer: seededSigner(1),
+      clock: fixedClock(0),
+      ids: sequentialIds(),
+    });
+    assert.equal(unstamped.kid, null);
+  });
+
   // --- The sum-carrying v2 checkpoint -------------------------------------------------
 
   test('separates the v2 sum domains from the v1 domains', async () => {
@@ -517,6 +543,7 @@ describe('Chain', () => {
       at: 0,
       v: 1 as const,
       sum: null,
+      kid: null,
     };
 
     assert.equal(

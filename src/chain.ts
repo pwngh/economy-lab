@@ -325,6 +325,7 @@ export async function recordCheckpoint(
     at: deps.clock.now(),
     v: 2,
     sum: root.sum.toString(),
+    kid: (await deps.signer.kid?.()) ?? null,
   };
   await deps.checkpoints.put(checkpoint, options);
   return checkpoint;
