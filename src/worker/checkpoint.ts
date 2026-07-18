@@ -57,6 +57,7 @@ export async function sealCheckpoint(
     retrying: [],
   };
 
+  const started = ctx.clock.now();
   try {
     await driveSeal(store, ctx, tally);
   } catch (error) {
@@ -67,8 +68,25 @@ export async function sealCheckpoint(
       tally.deadLettered.push({ reason: normalized.code });
     }
   }
+  // The seal re-derives every chain head, so its duration grows with the table: a rising trend
+  // here is the early warning that the ledger is outgrowing the sweep.
+  ctx.meter.observe('worker.checkpoint.seal_ms', ctx.clock.now() - started, {
+    outcome: sealOutcome(tally),
+  });
 
   return tally;
+}
+
+function sealOutcome(
+  tally: CheckpointTally,
+): 'sealed' | 'skipped' | 'retrying' | 'dead_lettered' {
+  if (tally.sealed !== null) {
+    return 'sealed';
+  }
+  if (tally.skipped) {
+    return 'skipped';
+  }
+  return tally.retrying.length > 0 ? 'retrying' : 'dead_lettered';
 }
 
 async function driveSeal(

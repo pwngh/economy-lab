@@ -19,6 +19,7 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - `economy.webhook.duplicate` counts duplicate webhook acknowledgements, tagged `provider` and
   `layer` (`stale`, `replay`, `inbox`), via `ServerOptions.meter` and the `handleWebhook`
   context.
+- `worker.checkpoint.seal_ms` records seal duration, tagged `outcome`.
 
 ### Changed
 

@@ -101,6 +101,28 @@ async function sealsACheckpointOverTheCurrentHeads(): Promise<void> {
   assert.match(summary.sealed!.root, /^[0-9a-f]{64}$/);
 }
 
+async function metersSealDurationWithItsOutcome(): Promise<void> {
+  const { store, digest } = await populatedStore();
+  const observed: Array<{ name: string; value: number; tags?: unknown }> = [];
+  const meter = {
+    count: () => {},
+    observe: (name: string, value: number, tags?: Record<string, string>) =>
+      observed.push({ name, value, tags }),
+  };
+
+  await sealCheckpoint(store, makeWorkerCtx({ digest, meter }));
+  const sealed = observed.find((o) => o.name === 'worker.checkpoint.seal_ms');
+  assert.notEqual(sealed, undefined);
+  assert.ok(sealed!.value >= 0);
+  assert.deepEqual(sealed!.tags, { outcome: 'sealed' });
+
+  observed.length = 0;
+  const empty = memoryStore({ digest });
+  await sealCheckpoint(empty, makeWorkerCtx({ digest, meter }));
+  const skipped = observed.find((o) => o.name === 'worker.checkpoint.seal_ms');
+  assert.deepEqual(skipped!.tags, { outcome: 'skipped' });
+}
+
 async function persistsTheSealedCheckpointThroughTheStore(): Promise<void> {
   const { store, digest } = await populatedStore();
 
@@ -373,6 +395,8 @@ async function deadLettersACorruptCheckpointRow(): Promise<void> {
 describe('Checkpoint Sweep', () => {
   test('seals a checkpoint over every account latest chain hash', () =>
     sealsACheckpointOverTheCurrentHeads());
+  test('meters the seal duration with its outcome', () =>
+    metersSealDurationWithItsOutcome());
   test('persists the sealed checkpoint through the store', () =>
     persistsTheSealedCheckpointThroughTheStore());
   test('seals a checkpoint that verifies', () =>
