@@ -17,6 +17,10 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   never blocks the seal; `httpAnchor` on the adapters subpath POSTs the row over HTTP.
 - `read.export()` streams the ledger as canonical JSONL: a header, every account's chain links
   in lineage order, then the latest checkpoint. Amounts ride as decimal strings.
+- `scripts/verify.ts` verifies an exported ledger offline — re-proves every hash chain and
+  checks the checkpoint's Merkle root and Ed25519 signature against a published public key,
+  with no store access. `make ledger-verify FILE=<jsonl> KEY=<hex public key>`; exits nonzero
+  on any break.
 
 ## 0.3.0 - 2026-07-17
 
