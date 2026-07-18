@@ -427,3 +427,64 @@ describe('Checkpoint Sweep', () => {
   test('re-verify dead-letters a corrupt checkpoint row', () =>
     deadLettersACorruptCheckpointRow());
 });
+
+describe('Checkpoint Anchoring', () => {
+  test('publishes each sealed checkpoint to the anchor and counts it', async () => {
+    const { store, digest } = await populatedStore();
+    const published: Checkpoint[] = [];
+    const counted: string[] = [];
+    const ctx = makeWorkerCtx({
+      digest,
+      anchor: {
+        publish: async (checkpoint) => {
+          published.push(checkpoint);
+        },
+      },
+      meter: {
+        count: (name) => {
+          counted.push(name);
+        },
+        observe: () => {},
+      },
+    });
+
+    const summary = await sealCheckpoint(store, ctx);
+
+    assert.notEqual(summary.sealed, null);
+    assert.deepEqual(published, [summary.sealed]);
+    assert.equal(counted.includes('worker.checkpoint.anchored'), true);
+  });
+
+  test('a failing anchor logs and counts but never blocks the seal', async () => {
+    const { store, digest } = await populatedStore();
+    const events: string[] = [];
+    const counted: string[] = [];
+    const ctx = makeWorkerCtx({
+      digest,
+      anchor: {
+        publish: async () => {
+          throw new Error('anchor endpoint down');
+        },
+      },
+      logger: {
+        log: (_level, event) => {
+          events.push(event);
+        },
+      },
+      meter: {
+        count: (name) => {
+          counted.push(name);
+        },
+        observe: () => {},
+      },
+    });
+
+    const summary = await sealCheckpoint(store, ctx);
+
+    assert.notEqual(summary.sealed, null);
+    assert.equal(summary.retrying.length, 0);
+    assert.equal(summary.deadLettered.length, 0);
+    assert.equal(events.includes('worker.checkpoint.anchor_failed'), true);
+    assert.equal(counted.includes('worker.checkpoint.anchor_failed'), true);
+  });
+});

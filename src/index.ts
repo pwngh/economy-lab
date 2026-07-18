@@ -271,6 +271,7 @@ export type {
   Dispatcher,
   Logger,
   Meter,
+  Anchor,
   Cache,
   RateLimiter,
   RateVerdict,

@@ -24,6 +24,7 @@ export { memoryRateLimiter } from '#src/adapters/memory-rate-limit.ts';
 
 // Dispatchers.
 export { httpDispatcher } from '#src/adapters/http-dispatcher.ts';
+export { httpAnchor } from '#src/adapters/http-anchor.ts';
 
 // Processors: the in-memory double for demos and tests, and the real HTTP payout provider.
 export { memoryProcessor, httpProcessor } from '#src/adapters/processor.ts';

@@ -19,6 +19,7 @@ import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { RejectionCode } from '#src/errors.ts';
 import type {
+  Anchor,
   Cache,
   Checkpoint,
   Clock,
@@ -344,6 +345,9 @@ export type WorkerCtx = {
   logger: Logger;
   meter: Meter;
   config: Config;
+
+  /** When present, every sealed checkpoint is also published to this external anchor. */
+  anchor?: Anchor;
 };
 
 /** A function that processes one operation, given an open transaction and its capabilities. */

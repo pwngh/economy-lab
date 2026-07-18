@@ -20,6 +20,7 @@ const PUBLIC_EXPORTS = [
   'AccountKind',
   'AccountRef',
   'Amount',
+  'Anchor',
   'BitsetOptions',
   'Cache',
   'Capabilities',

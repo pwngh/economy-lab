@@ -714,6 +714,17 @@ export interface CheckpointStore {
 }
 
 /**
+ * Publishes a sealed checkpoint to a store outside the ledger's own database — an external log,
+ * object store, or transparency service. The checkpoint table lives in the same database an
+ * attacker who can rewrite the ledger controls, so only an externally anchored root proves
+ * history against that attacker. Best-effort: the seal logs a failed publish and never blocks
+ * on it.
+ */
+export interface Anchor {
+  publish(checkpoint: Checkpoint, options?: Options): Promise<void>;
+}
+
+/**
  * One accepted in-instance movement: a balanced set of legs not yet posted to the ledger, made
  * ledger-final at settle. `prevHash`/`hash` chain the session's movements and the settlement
  * posting anchors the final head, so tamper-evidence extends to every movement.

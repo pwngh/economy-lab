@@ -107,6 +107,28 @@ async function driveSeal(
     clock: ctx.clock,
     ids: ctx.ids,
   });
+  await publishAnchor(ctx, tally.sealed);
+}
+
+// Best-effort by design: the anchor is an external service, and a down anchor must not stop the
+// seal. The failure log and counter are the operator's signal to re-anchor by hand.
+async function publishAnchor(
+  ctx: WorkerCtx,
+  sealed: Checkpoint,
+): Promise<void> {
+  if (ctx.anchor === undefined) {
+    return;
+  }
+  try {
+    await ctx.anchor.publish(sealed);
+    ctx.meter.count('worker.checkpoint.anchored', 1);
+  } catch (error) {
+    ctx.logger.log('warn', 'worker.checkpoint.anchor_failed', {
+      checkpointId: sealed.id,
+      code: normalizeError(error).code,
+    });
+    ctx.meter.count('worker.checkpoint.anchor_failed', 1);
+  }
 }
 
 async function isEmpty(store: Store): Promise<boolean> {

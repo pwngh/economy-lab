@@ -12,6 +12,9 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   the port) answers the current key's id; the default signer's is the first 16 hex characters
   of its Ed25519 public key. The `kid` is audit metadata only — verification still tries every
   trusted key — and rows sealed before stamping read back null.
+- The `Anchor` port publishes each sealed checkpoint to a store outside the ledger's database
+  (`WorkerCtx.anchor`, optional). A failed publish logs `worker.checkpoint.anchor_failed` and
+  never blocks the seal; `httpAnchor` on the adapters subpath POSTs the row over HTTP.
 
 ## 0.3.0 - 2026-07-17
 
