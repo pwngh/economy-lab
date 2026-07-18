@@ -252,7 +252,7 @@ async function submitRoute(
   request: Request,
 ): Promise<Response> {
   const correlationId = correlationOf(request);
-  const response = await runSubmit(economy, options, request);
+  const response = await runSubmit(economy, options, request, correlationId);
   response.headers.set(REQUEST_ID_HEADER, correlationId);
   return response;
 }
@@ -281,6 +281,7 @@ async function runSubmit(
   economy: Economy,
   options: ServerOptions,
   request: Request,
+  correlationId: string,
 ): Promise<Response> {
   let principal: Principal | undefined;
   if (options.authenticate !== undefined) {
@@ -311,7 +312,10 @@ async function runSubmit(
   }
   try {
     const operation = decodeOperation(parseJson(bytes), principal);
-    return jsonResponse(200, encodeOutcome(await economy.submit(operation)));
+    return jsonResponse(
+      200,
+      encodeOutcome(await economy.submit(operation, { correlationId })),
+    );
   } catch (error) {
     return faultResponse(error);
   }

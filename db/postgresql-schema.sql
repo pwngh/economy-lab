@@ -170,6 +170,7 @@ create table outbox (
                        check (status in ('pending', 'relayed', 'dead')),
   attempts           int         not null default 0,
   dead_letter_reason text,
+  correlation_id     text,                                  -- id of the request that enqueued this event; null for worker-born events
   created_at         timestamptz not null default now()
 );
 create index outbox_pending_idx on outbox (created_at) where status = 'pending';

@@ -91,6 +91,7 @@ function outboxRow(
     status: 'pending',
     attempts: 0,
     reason: null,
+    correlationId: null,
   };
 }
 

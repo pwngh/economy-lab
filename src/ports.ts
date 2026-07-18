@@ -19,7 +19,16 @@ import type {
 import type { AccountRef } from '#src/accounts.ts';
 import type { Config } from '#src/config.ts';
 
-export type Options = { signal?: AbortSignal };
+export type Options = {
+  signal?: AbortSignal;
+
+  /**
+   * Correlation id of the request driving this call. Read by submit's outbox enqueue, which
+   * stamps it onto the event envelope so the relay's logs can name the originating request;
+   * every other consumer ignores it.
+   */
+  correlationId?: string;
+};
 
 /**
  * Bounds a {@link Ledger.timeline} read. The default streams the whole lot history oldest-first;
@@ -777,6 +786,13 @@ export interface OutboxMessage {
 
   /** Why the relay gave up, set when the row goes 'dead'; null otherwise. */
   reason: string | null;
+
+  /**
+   * Correlation id of the request that enqueued this event, or null for worker-born events.
+   * Transport provenance lives here because the relay reads the envelope in another process;
+   * domain facts about the posting stay in its meta.
+   */
+  correlationId: string | null;
 }
 
 /** One stored inbox row: a verified inbound event mapped to the operation it applies (see InboxStore). */

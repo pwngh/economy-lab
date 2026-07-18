@@ -39,6 +39,7 @@ async function enqueue(store: Store, id: string): Promise<void> {
       status: 'pending',
       attempts: 0,
       reason: null,
+      correlationId: null,
     }),
   );
 }

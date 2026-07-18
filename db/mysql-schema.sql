@@ -200,6 +200,7 @@ CREATE TABLE outbox (
      status             VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'One of pending, relayed, dead.',
      attempts           INT         NOT NULL DEFAULT 0 COMMENT 'Number of publish attempts so far.',
      dead_letter_reason TEXT        NULL COMMENT 'Last error code if dead; else null.',
+     correlation_id     VARCHAR(128) NULL COMMENT 'Id of the request that enqueued this event; null for worker-born events.',
      created_at         TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC time the row was inserted.',
      CHECK (status IN ('pending', 'relayed', 'dead')),
      KEY outbox_pending_idx (status, created_at)

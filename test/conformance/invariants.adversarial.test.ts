@@ -404,6 +404,7 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
           status: 'pending',
           attempts: 0,
           reason: null,
+          correlationId: null,
         }),
       );
       await live.store.outbox.deadLetter(id, 'poison');

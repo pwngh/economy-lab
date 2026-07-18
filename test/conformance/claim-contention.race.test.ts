@@ -173,6 +173,7 @@ function outboxRow(id: string): OutboxMessage {
     status: 'pending',
     attempts: 0,
     reason: null,
+    correlationId: null,
   };
 }
 

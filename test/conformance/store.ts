@@ -77,6 +77,7 @@ function outboxRow(userId: string, messageId: string): OutboxMessage {
     status: 'pending',
     attempts: 0,
     reason: null,
+    correlationId: null,
   };
 }
 
@@ -381,7 +382,10 @@ async function relaysOutboxOnce(store: Store): Promise<void> {
   const messageId = `obx_conf_${userId}`;
   await store.transaction(async (unit) => {
     await fundSpendable(unit, userId, '1.00', 'txn_conf_outbox');
-    await unit.outbox.enqueue(outboxRow(userId, messageId));
+    await unit.outbox.enqueue({
+      ...outboxRow(userId, messageId),
+      correlationId: 'req_conf',
+    });
   });
 
   const batch = await store.outbox.claimBatch(10);
@@ -392,6 +396,8 @@ async function relaysOutboxOnce(store: Store): Promise<void> {
     batch.map((message) => message.id),
     [messageId],
   );
+  // The correlation id survives the round trip so relay logs can name the request.
+  assert.equal(batch[0]!.correlationId, 'req_conf');
   assert.deepEqual(afterRelay, []);
 }
 

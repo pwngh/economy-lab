@@ -349,6 +349,7 @@ export function rowToOutbox(row: Record<string, unknown>): OutboxMessage {
     status: row.status as OutboxMessage['status'],
     attempts: Number(row.attempts),
     reason: (row.dead_letter_reason as string | null) ?? null,
+    correlationId: (row.correlation_id as string | null) ?? null,
   };
 }
 

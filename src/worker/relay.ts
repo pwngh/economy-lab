@@ -108,6 +108,7 @@ async function dispatchOne(
     if (next >= ctx.config.maxOutboxAttempts) {
       ctx.logger.log('error', 'worker.relay.dead_lettered', {
         messageId: message.id,
+        correlationId: message.correlationId,
         code: normalized.code,
         attempts: next,
       });
@@ -117,6 +118,7 @@ async function dispatchOne(
     }
     ctx.logger.log('warn', 'worker.relay.failed', {
       messageId: message.id,
+      correlationId: message.correlationId,
       code: normalized.code,
       retryable: normalized.retryable,
       attempts: next,

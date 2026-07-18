@@ -886,19 +886,20 @@ function createOutboxStore(q: Queryable): OutboxStore {
   return {
     enqueue: async (message) => {
       await q.query(
-        `insert into outbox (id, event, status, attempts)
-           values ($1, $2::jsonb, $3, $4)`,
+        `insert into outbox (id, event, status, attempts, correlation_id)
+           values ($1, $2::jsonb, $3, $4, $5)`,
         [
           message.id,
           JSON.stringify(message.event),
           message.status,
           message.attempts,
+          message.correlationId,
         ],
       );
     },
     claimBatch: async (limit) => {
       const result = await q.query(
-        `select id, event, status, attempts, dead_letter_reason from outbox
+        `select id, event, status, attempts, dead_letter_reason, correlation_id from outbox
           where status = 'pending'
           order by created_at asc
           limit $1

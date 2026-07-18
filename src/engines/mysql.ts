@@ -808,19 +808,20 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
     enqueue: async (message) => {
       await rows(
         exec,
-        `INSERT INTO outbox (id, event, status, attempts) VALUES (?, ?, ?, ?)`,
+        `INSERT INTO outbox (id, event, status, attempts, correlation_id) VALUES (?, ?, ?, ?, ?)`,
         [
           message.id,
           JSON.stringify(message.event),
           message.status,
           message.attempts,
+          message.correlationId,
         ],
       );
     },
     claimBatch: async (limit) => {
       const result = await rows(
         exec,
-        `SELECT id, event, status, attempts, dead_letter_reason FROM outbox
+        `SELECT id, event, status, attempts, dead_letter_reason, correlation_id FROM outbox
           WHERE status = 'pending'
           ORDER BY created_at, id
           LIMIT ?

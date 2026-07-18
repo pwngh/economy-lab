@@ -674,7 +674,10 @@ async function emitEvents(
     data: descriptor.data(operation, outcome),
     audience: descriptor.audience,
   };
-  await unit.outbox.enqueue(pendingOutbox(ctx.ids, event), options);
+  await unit.outbox.enqueue(
+    pendingOutbox(ctx.ids, event, options?.correlationId),
+    options,
+  );
 }
 
 // --- Integrity check ---------------------------------------------------------------

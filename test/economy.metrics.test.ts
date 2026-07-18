@@ -20,8 +20,9 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { economyFromCapabilities } from '#src/economy.ts';
+import { economyWithStore } from '#test/support/economy.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
-import { topUp, credit } from '#test/support/builders.ts';
+import { spend, topUp, credit } from '#test/support/builders.ts';
 import {
   defaultPricing,
   fakeProcessor,
@@ -117,5 +118,26 @@ describe('economy.submit telemetry', () => {
     );
     assert.equal(outcome.status, 'committed');
     await economy.close();
+  });
+});
+
+describe('Submit Correlation', () => {
+  test('the outbox envelope carries the submit correlation id', async () => {
+    const { economy, store } = economyWithStore(1);
+
+    await economy.submit(
+      {
+        kind: 'topUp',
+        idempotencyKey: 'idem_corr',
+        actor: { kind: 'system', service: 'test' },
+        userId: 'usr_corr',
+        source: 'card',
+        amount: credit('1.00'),
+      } as never,
+      { correlationId: 'req_end_to_end' },
+    );
+
+    const [row] = await store.outbox.claimBatch(10);
+    assert.equal(row!.correlationId, 'req_end_to_end');
   });
 });

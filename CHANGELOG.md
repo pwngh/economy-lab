@@ -9,6 +9,9 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - `OutboxStore.stats` and `InboxStore.reviveDead` join the store contract, covered by the
   conformance suite; the relay emits `worker.relay.backlog` and `worker.relay.backlog_age_ms`
   from `stats` each run. Breaking: a custom store must implement both to satisfy the interface.
+- `Options.correlationId` stamps the submit correlation id onto the outbox envelope
+  (`OutboxMessage.correlationId`, a new nullable column for store implementors). Relay failure
+  logs carry it; worker-born events carry null.
 
 ### Changed
 
