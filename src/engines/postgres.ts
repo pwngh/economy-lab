@@ -933,6 +933,21 @@ function createOutboxStore(q: Queryable): OutboxStore {
         [id, reason],
       );
     },
+    // Age comes from the database's own now(), so an app/database clock skew never distorts it.
+    stats: async () => {
+      const result = await q.query(
+        `select count(*)::int as pending,
+                floor(extract(epoch from (now() - min(created_at))) * 1000) as age_ms
+           from outbox where status = 'pending'`,
+        [],
+      );
+      const row = result.rows[0] as { pending: number; age_ms: string | null };
+      return {
+        pending: row.pending,
+        oldestPendingAgeMs:
+          row.age_ms === null ? null : Math.max(0, Number(row.age_ms)),
+      };
+    },
   };
 }
 

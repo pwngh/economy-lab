@@ -452,7 +452,21 @@ export interface OutboxStore {
    * a non-existent or already-terminal row is left untouched.
    */
   deadLetter(id: string, reason: string, options?: Options): Promise<void>;
+
+  /**
+   * A read-only gauge of the pending backlog: how many rows wait and how old the oldest is.
+   * Age is computed on the store's own time base, so an app/database clock skew never distorts
+   * it. The relay sweep observes this each run — a backlog that only grows means the relay is
+   * down or the events are poisoned.
+   */
+  stats(options?: Options): Promise<OutboxStats>;
 }
+
+/** What {@link OutboxStore.stats} reports; `oldestPendingAgeMs` is null when nothing is pending. */
+export type OutboxStats = {
+  pending: number;
+  oldestPendingAgeMs: number | null;
+};
 
 /**
  * A transactional inbox: the inbound mirror of {@link OutboxStore}. A verified provider event,

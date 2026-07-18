@@ -684,20 +684,23 @@ function createSaleStore(): SaleStore & Participant {
 // --- Outbox store -----------------------------------------------------------------
 
 // Transactional outbox: events are saved in the money move's transaction and relayed later, at
-// least once.
-function createOutboxStore(): OutboxStore & Participant {
+// least once. The clock stamps enqueue times so `stats` can age the backlog.
+function createOutboxStore(deps: { clock: Clock }): OutboxStore & Participant {
   const journal = createJournal();
   const rows = new Map<string, OutboxMessage>();
   const order: string[] = [];
+  const enqueuedAt = new Map<string, number>();
 
   return {
     journal,
     enqueue: async (message, _options?: Options) => {
       rows.set(message.id, message);
       order.push(message.id);
+      enqueuedAt.set(message.id, deps.clock.now());
       journal.record(() => {
         rows.delete(message.id);
         order.pop();
+        enqueuedAt.delete(message.id);
       });
     },
     claimBatch: async (limit, _options?: Options) => {
@@ -745,6 +748,31 @@ function createOutboxStore(): OutboxStore & Participant {
       journal.record(() => rows.set(id, prior));
       rows.set(id, { ...message, status: 'dead', reason });
     },
+    stats: async (_options?: Options) =>
+      outboxStatsOf(rows, enqueuedAt, deps.clock),
+  };
+}
+
+function outboxStatsOf(
+  rows: ReadonlyMap<string, OutboxMessage>,
+  enqueuedAt: ReadonlyMap<string, number>,
+  clock: Clock,
+): { pending: number; oldestPendingAgeMs: number | null } {
+  let pending = 0;
+  let oldestAt: number | null = null;
+  for (const [id, message] of rows) {
+    if (message.status !== 'pending') {
+      continue;
+    }
+    pending += 1;
+    const at = enqueuedAt.get(id);
+    if (at !== undefined && (oldestAt === null || at < oldestAt)) {
+      oldestAt = at;
+    }
+  }
+  return {
+    pending,
+    oldestPendingAgeMs: oldestAt === null ? null : clock.now() - oldestAt,
   };
 }
 
@@ -1309,7 +1337,7 @@ export function memoryStore(deps?: {
   const ledger = createLedgerStore({ digest, clock });
   const idempotency = createIdempotencyStore();
   const sales = createSaleStore();
-  const outbox = createOutboxStore();
+  const outbox = createOutboxStore({ clock });
   const inbox = createInboxStore();
   const sagas = createSagaStore();
   const entitlements = createEntitlementStore({ clock });

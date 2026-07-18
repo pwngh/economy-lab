@@ -260,6 +260,7 @@ const SUBSTORE_ROUTES: Record<string, SubHandler> = {
     await unit.outbox.deadLetter(body.id as string, body.reason as string);
     return null;
   },
+  'outbox/stats': (unit) => unit.outbox.stats(),
   'inbox/enqueueInbound': async (unit, body) => {
     const stored = await unit.inbox.enqueueInbound(
       decodeWire.inboxEntry(body.entry),

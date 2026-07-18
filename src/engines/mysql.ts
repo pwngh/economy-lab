@@ -856,6 +856,24 @@ function createOutboxStore(exec: MysqlExecutor): OutboxStore {
         [reason, id],
       );
     },
+    // Age comes from the database's own NOW(6), so an app/database clock skew never distorts it.
+    stats: async () => {
+      const result = await rows(
+        exec,
+        `SELECT COUNT(*) AS pending,
+                FLOOR(TIMESTAMPDIFF(MICROSECOND, MIN(created_at), NOW(6)) / 1000) AS age_ms
+           FROM outbox WHERE status = 'pending'`,
+      );
+      const row = result[0] as unknown as {
+        pending: number | string;
+        age_ms: number | string | null;
+      };
+      return {
+        pending: Number(row.pending),
+        oldestPendingAgeMs:
+          row.age_ms === null ? null : Math.max(0, Number(row.age_ms)),
+      };
+    },
   };
 }
 

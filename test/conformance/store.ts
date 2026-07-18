@@ -562,6 +562,27 @@ async function bumpsInboxAttemptThenDeadLetters(store: Store): Promise<void> {
   assert.equal(stillResolved.reason, 'poison');
 }
 
+// stats is a whole-table gauge, so the test works in deltas and then drains every pending row —
+// exactly what a relay run does — before asserting the empty shape.
+async function reportsOutboxBacklogStats(store: Store): Promise<void> {
+  const userId = freshUser();
+  const before = await store.outbox.stats();
+
+  await store.transaction(async (unit) => {
+    await unit.outbox.enqueue(outboxRow(userId, `obx_conf_stats_a_${userId}`));
+    await unit.outbox.enqueue(outboxRow(userId, `obx_conf_stats_b_${userId}`));
+  });
+
+  const loaded = await store.outbox.stats();
+  assert.equal(loaded.pending, before.pending + 2);
+  assert.notEqual(loaded.oldestPendingAgeMs, null);
+  assert.ok(loaded.oldestPendingAgeMs! >= 0);
+
+  const batch = await store.outbox.claimBatch(1_000);
+  await store.outbox.markRelayed(batch.map((message) => message.id));
+  const drained = await store.outbox.stats();
+  assert.deepEqual(drained, { pending: 0, oldestPendingAgeMs: null });
+}
 async function recomputesChainHead(store: Store): Promise<void> {
   const userId = freshUser();
   const transaction = await store.transaction((unit) =>
@@ -1008,6 +1029,8 @@ export function runStoreConformance(
       withStore(t, dedupesInboxByKey));
     test('bumps an inbox apply attempt then dead-letters a poison event', (t) =>
       withStore(t, bumpsInboxAttemptThenDeadLetters));
+    test('reports the pending outbox backlog depth and oldest age', (t) =>
+      withStore(t, reportsOutboxBacklogStats));
     test('recomputes a per-account chain head deterministically over the digest', (t) =>
       withStore(t, recomputesChainHead));
     test('stores a posting with multiple debit/credit lines to one account', (t) =>

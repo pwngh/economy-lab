@@ -28,6 +28,7 @@ import type {
   MovementJournal,
   Options,
   OutboxMessage,
+  OutboxStats,
   Posting,
   StoredLink,
   Store,
@@ -317,6 +318,8 @@ function sessionOutbox(transport: Transport, session: string): OutboxStore {
     deadLetter: async (id, reason, options) => {
       await call(transport, at('deadLetter'), { id, reason }, options);
     },
+    stats: (options) =>
+      call(transport, at('stats'), {}, options) as Promise<OutboxStats>,
   };
 }
 
