@@ -54,8 +54,15 @@ export async function settlePayout(
   }
   refuseNotSubmitted(saga);
 
-  const rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
-  const usd = convertFloor(saga.reserve, rate, 'USD');
+  // The quote requestPayout priced and stored — the same USD the worker submitted to the rail.
+  // Rows opened before pricing-at-request carry no quote and fall back to the current rate.
+  const usd =
+    saga.payoutUsd ??
+    convertFloor(
+      saga.reserve,
+      await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now()),
+      'USD',
+    );
   // The payout-rail fee (config.payoutFeeBps) is the rail's cut, not platform revenue. The gross
   // `usd` leaves trust, the rail keeps `fee`, and the seller gets `net`. The split happens at the
   // external rail downstream of USD_CLEARING, so `fee` and `net` are recorded for audit rather than
@@ -68,7 +75,7 @@ export async function settlePayout(
     usd,
     fee,
     net,
-    rateId: rate.rateId,
+    rateId: saga.rateId,
   });
   // Record the gross USD on the saga in the same transaction as the postings and state change, so
   // the terminal outcome reads straight off the record instead of being re-derived from posting meta.
@@ -95,7 +102,7 @@ export async function settlePayout(
         usd: encodeAmount(usd),
         payoutFee: encodeAmount(fee),
         netUsd: encodeAmount(net),
-        rateId: rate.rateId,
+        rateId: saga.rateId,
       },
       audience: 'internal',
     }),

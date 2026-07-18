@@ -775,3 +775,33 @@ describe('advanceDuePayouts', () => {
   test('falls back to the timeout when the probe answers unknown or fails', () =>
     fallsBackToTheTimeoutWhenTheProbeCannotAnswer());
 });
+
+describe('advanceDuePayouts Pricing At Request', () => {
+  test('submits the stored quote, not a re-fetched rate', async () => {
+    const store = memoryStore();
+    const recorded: Array<{ key: string; userId: string; amount: Amount }> = [];
+    const processor: Processor = {
+      submitPayout: async (input) => {
+        recorded.push(input);
+        return { providerRef: `prov_${input.key}` };
+      },
+    };
+    await openSaga(
+      store,
+      saga({
+        id: 'pay_quote',
+        state: 'RESERVED',
+        reserve: credit('4.00'),
+        payoutUsd: usd('0.09'),
+      }),
+    );
+
+    await advanceDuePayouts(store, makeWorkerCtx({ processor }), {
+      now: 1_000,
+      limit: 10,
+    });
+
+    // The current rate would price the reserve at $0.02; the stored quote wins.
+    assert.deepEqual(recorded[0]!.amount, usd('0.09'));
+  });
+});

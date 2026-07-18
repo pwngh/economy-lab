@@ -326,3 +326,47 @@ describe('settlePayout', () => {
     );
   });
 });
+
+describe('settlePayout Pricing At Request', () => {
+  test('settles at the stored quote even when the current rate has moved', async () => {
+    const store = newStore();
+    const row = await openSubmittedSaga(store, {
+      id: 'pay_quote',
+      state: 'SUBMITTED',
+      payoutUsd: usd('0.09'),
+    });
+
+    const outcome = await run(
+      store,
+      newCtx(),
+      buildSettlePayout({ sagaId: 'pay_quote' }),
+    );
+
+    assert.equal(outcome.status, 'committed');
+    // The current fixed rate would convert the 4.00 reserve to $0.02; the stored quote wins.
+    const settled = await store.sagas.load('pay_quote');
+    assert.deepEqual(settled?.payoutUsd, usd('0.09'));
+    const trust = await store.ledger.balance(SYSTEM.TRUST_CASH);
+    assert.equal(trust.minor, -9n);
+    assert.equal(
+      (outcome as { transaction: { meta: Record<string, unknown> } })
+        .transaction.meta.rateId,
+      row.rateId,
+    );
+  });
+
+  test('a row opened before pricing-at-request settles at the current rate', async () => {
+    const store = newStore();
+    await openSubmittedSaga(store, { id: 'pay_legacy', state: 'SUBMITTED' });
+
+    const outcome = await run(
+      store,
+      newCtx(),
+      buildSettlePayout({ sagaId: 'pay_legacy' }),
+    );
+
+    assert.equal(outcome.status, 'committed');
+    const settled = await store.sagas.load('pay_legacy');
+    assert.deepEqual(settled?.payoutUsd, usd('0.02'));
+  });
+});

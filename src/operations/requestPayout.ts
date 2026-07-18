@@ -12,7 +12,13 @@
 import { fault, rejected, ERROR_CODES } from '#src/errors.ts';
 import { assertKind } from '#src/operations/guards.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
-import { compare, encodeAmount, toAmount } from '#src/money.ts';
+import {
+  compare,
+  convertFloor,
+  encodeAmount,
+  rateGte,
+  toAmount,
+} from '#src/money.ts';
 import { earned, routePlatformLegs, SYSTEM } from '#src/accounts.ts';
 import { maturedAtLeast, maturedAvailableAt } from '#src/maturity.ts';
 
@@ -101,7 +107,7 @@ export async function requestPayout(
     });
   }
 
-  const rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
+  const { rateId, payoutUsd } = await priceQuote(ctx, amount);
   // Minted before the posting so the transaction meta can name the saga it opens.
   const sagaId = ctx.ids.next('pay');
   // The reserve credit routes by the user id, not the idempotency key: settle and reverse know
@@ -116,20 +122,44 @@ export async function requestPayout(
       operation.userId,
       ctx.config.platformShards,
     ),
-    meta: { kind: 'requestPayout', rateId: rate.rateId, sagaId },
+    meta: { kind: 'requestPayout', rateId, sagaId },
   });
-  const opened = { id: sagaId, reserve: amount, rateId: rate.rateId };
+  const opened = { id: sagaId, reserve: amount, rateId, payoutUsd };
   await unit.sagas.open(sagaOf(operation, opened, ctx));
 
   return { status: 'committed', transaction };
 }
 
-// Opens in RESERVED because the credits were set aside in the same DB transaction. `rateId` locks
-// the CREDIT-to-USD rate at request time; `dueAt` is the worker's first submit attempt. See
+// Prices the payout once: this quote is the USD the worker submits to the rail and settle posts
+// out of trust; neither re-fetches a rate. A payout rate above par would disburse more USD per
+// credit than was ever collected for it, and the loss would only surface later as aggregate
+// solvency drift — refuse it by name at the one place the payout is priced.
+async function priceQuote(
+  ctx: Ctx,
+  amount: Amount,
+): Promise<{ rateId: string; payoutUsd: Amount }> {
+  const rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
+  const par = ctx.rates.par('CREDIT');
+  if (!rateGte(par, rate)) {
+    throw fault(
+      ERROR_CODES.CONFIG_INVALID,
+      'Rates are misordered: payout is above par.',
+      {
+        retryable: false,
+        detail: { parRateId: par.rateId, payoutRateId: rate.rateId },
+      },
+    );
+  }
+  return { rateId: rate.rateId, payoutUsd: convertFloor(amount, rate, 'USD') };
+}
+
+// Opens in RESERVED because the credits were set aside in the same DB transaction. `payoutUsd`
+// is the quote priced above, and `rateId` names the rate that priced it; `dueAt` is the
+// worker's first submit attempt. See
 // https://economy-lab-docs.pages.dev/economy/concepts/payout-saga/ for the saga states.
 function sagaOf(
   operation: Extract<Operation, { kind: 'requestPayout' }>,
-  opened: { id: string; reserve: Amount; rateId: string },
+  opened: { id: string; reserve: Amount; rateId: string; payoutUsd: Amount },
   ctx: Ctx,
 ): Saga {
   const now = ctx.clock.now();
@@ -142,7 +172,7 @@ function sagaOf(
     providerRef: null,
 
     reason: null,
-    payoutUsd: null,
+    payoutUsd: opened.payoutUsd,
     attempts: 0,
     dueAt: now + pendingSlaMs(ctx),
     updatedAt: now,

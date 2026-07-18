@@ -397,8 +397,8 @@ function decodeSagaPatch(
 ): Parameters<Unit['sagas']['advance']>[3] {
   const row = { ...(patch as Record<string, unknown>) };
   // The amount-typed fields `reserve` and `payoutUsd` ride the wire as encoded strings. Decode
-  // them back to Amounts, and let every other field pass through. `payoutUsd` is null before
-  // settlement, so decode it only when it is an actual encoded-amount string.
+  // them back to Amounts, and let every other field pass through. `payoutUsd` can be null on
+  // rows from before pricing-at-request, so decode it only when it is an encoded-amount string.
   if (typeof row.reserve === 'string') {
     row.reserve = decodeWire.amount(row.reserve);
   }

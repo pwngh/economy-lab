@@ -16,6 +16,7 @@ import { pendingOutbox } from '#src/outbox.ts';
 import { earned, platformShard, SYSTEM } from '#src/accounts.ts';
 
 import type { WorkerCtx } from '#src/contract.ts';
+import type { Amount } from '#src/money.ts';
 import type { PayoutProviderStatus, Saga, Store } from '#src/ports.ts';
 
 /**
@@ -330,8 +331,7 @@ async function submitToProvider(
   ctx: WorkerCtx,
   saga: Saga,
 ): Promise<void> {
-  const rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
-  const usd = convertFloor(saga.reserve, rate, 'USD');
+  const usd = await quotedUsd(ctx, saga);
 
   const { providerRef } = await ctx.processor.submitPayout({
     key: saga.id,
@@ -346,6 +346,17 @@ async function submitToProvider(
     dueAt: now + submittedSlaMs(ctx),
     updatedAt: now,
   });
+}
+
+// The USD a payout disburses: the quote requestPayout priced and stored. Rows opened before
+// pricing-at-request carry no quote, and fall back to the old behavior of converting at the
+// current rate.
+async function quotedUsd(ctx: WorkerCtx, saga: Saga): Promise<Amount> {
+  if (saga.payoutUsd !== null) {
+    return saga.payoutUsd;
+  }
+  const rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
+  return convertFloor(saga.reserve, rate, 'USD');
 }
 
 // Milliseconds before the sweep next checks a submitted payout. The sweep re-examines it on this

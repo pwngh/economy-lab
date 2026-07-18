@@ -188,8 +188,9 @@ export interface Rates {
 }
 
 /**
- * An exchange rate as exact integers: the multiplier is `rate / 10^scale`, and
- * usd_minor = floor(credit_minor * rate / 10^scale). `rateId` names the rate a transaction used.
+ * An exchange rate as exact integers: the multiplier is `rate / 10^scale`. Each conversion
+ * names its own rounding (a payout floors, a top-up ceils), and `rateId` names the rate a
+ * transaction used.
  */
 export type Rate = { rate: bigint; scale: number; rateId: string };
 
@@ -892,8 +893,9 @@ export interface Saga {
   updatedAt: number;
 
   /**
-   * The gross USD disbursed, set when settlePayout marks this payout SETTLED; null otherwise.
-   * Stored on the saga so a reader never re-derives it from posting meta.
+   * The gross USD this payout disburses, priced once by requestPayout at the locked rate; the
+   * worker submits it to the rail and settlePayout posts it out of trust unchanged. Null only
+   * on rows opened before pricing-at-request, which convert at the current rate instead.
    */
   payoutUsd: Amount | null;
 }

@@ -18,6 +18,7 @@ import { credit as creditLeg, debit as debitLeg } from '#src/ledger.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
 import {
   fixedClock,
+  hasCode,
   seededDigest,
   testConfig,
   makeCtx,
@@ -29,7 +30,7 @@ import {
 } from '#test/support/builders.ts';
 
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
-import type { Store, Unit } from '#src/ports.ts';
+import type { Rates, Store, Unit } from '#src/ports.ts';
 import type { Amount } from '#src/money.ts';
 
 // requestPayout is not wired to `economy.submit` yet, so each test calls the handler directly
@@ -517,4 +518,48 @@ describe('requestPayout', () => {
   for (const { name, amount, code } of faultCases) {
     test(`faults on ${name}`, () => faultsOn(amount, code));
   }
+});
+
+describe('requestPayout Pricing At Request', () => {
+  test('stores the USD quote on the saga at the request-time rate', async () => {
+    const store = newStore();
+    await fundEarned(store, 'usr_quote', credit('10.00'));
+
+    const outcome = await store.transaction((unit) =>
+      requestPayout(
+        buildRequestPayout({ userId: 'usr_quote', amount: credit('10.00') }),
+        unit,
+        makeCtx(),
+      ),
+    );
+
+    assert.equal(outcome.status, 'committed');
+    const sagaId = (
+      outcome as { transaction: { meta: Record<string, unknown> } }
+    ).transaction.meta.sagaId as string;
+    const saga = await store.sagas.load(sagaId);
+    // 10.00 CREDIT at the fixed payout rate 5/10^3, floored: $0.05.
+    assert.deepEqual(saga?.payoutUsd, usd('0.05'));
+  });
+
+  test('rejects a payout rate above par by name', async () => {
+    const store = newStore();
+    await fundEarned(store, 'usr_over', credit('10.00'));
+    const rates: Rates = {
+      buy: () => ({ rate: 1n, scale: 2, rateId: 'r_buy' }),
+      par: () => ({ rate: 5n, scale: 3, rateId: 'r_par' }),
+      payout: async () => ({ rate: 6n, scale: 3, rateId: 'r_payout_high' }),
+    };
+
+    await assert.rejects(
+      store.transaction((unit) =>
+        requestPayout(
+          buildRequestPayout({ userId: 'usr_over', amount: credit('10.00') }),
+          unit,
+          makeCtx({ rates }),
+        ),
+      ),
+      hasCode('CONFIG.INVALID'),
+    );
+  });
 });

@@ -271,7 +271,11 @@ async function measureFloat(
   let obligationsMinor = 0n;
   for await (const saga of store.sagas.list()) {
     if (saga.state === 'RESERVED' || saga.state === 'SUBMITTED') {
-      obligationsMinor += convertFloor(saga.reserve, rate, 'USD').minor;
+      // The stored quote is the USD this payout will actually disburse; only rows opened
+      // before pricing-at-request are valued at the current rate instead.
+      obligationsMinor += (
+        saga.payoutUsd ?? convertFloor(saga.reserve, rate, 'USD')
+      ).minor;
     }
   }
   // The feed is the injected port; the store and rate reads around it keep their own codes.

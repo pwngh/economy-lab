@@ -27,6 +27,11 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - The rate ordering `buy >= par` is enforced for every rate source: `economyFromCapabilities`
   throws `CONFIG_INVALID` at construction on a misordered source, and a source that turns
   misordered afterward faults the top-up with the same code and both rate ids.
+- Payouts are priced once, at request: `requestPayout` stores the USD quote on the saga
+  (`Saga.payoutUsd`), the worker submits that quote to the rail, `settlePayout` posts it
+  unchanged under the locked `rateId`, and the treasury float sweep values in-flight payouts
+  at it. `requestPayout` throws `CONFIG_INVALID` when the payout rate exceeds `par`. Rows
+  opened before pricing-at-request keep converting at the current rate.
 
 ### Changed
 
