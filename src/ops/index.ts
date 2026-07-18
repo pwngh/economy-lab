@@ -59,3 +59,14 @@ export type {
   VelocityAnomalyFinding,
   WebhookReplayStormFinding,
 } from '#src/ops/detect.ts';
+
+export {
+  createSupervisor,
+  defaultSupervisorConfig,
+} from '#src/ops/supervisor.ts';
+export type {
+  SagaSource,
+  Supervisor,
+  SupervisorConfig,
+  SupervisorDeps,
+} from '#src/ops/supervisor.ts';

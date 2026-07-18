@@ -6,6 +6,13 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 
 ### Added
 
+- `@pwngh/economy-lab/ops`: the operations supervisor, folded in from `@pwngh/economy-ops` —
+  `opsRuntime` signal capture over the `meter`/`logger` ports, twelve signature detectors,
+  `createSupervisor` with guarded remediations, audit records to an injected `AuditSink`. The
+  core never imports it.
+- Supervisor levers: a targeted relay re-drive (`SupervisorDeps.runRelay`), an inbox
+  dead-letter revive (`SupervisorDeps.reviveInbox`), and worker pause on integrity mismatch
+  (`SupervisorDeps.pauseWorker`) with a containment latch over every tier-1 lever.
 - `hashChainedAuditSink` hash-chains the audit trail; `verifyAuditChain` reports the first
   break. `make audit-verify FILE=...`; `scripts/ops-audit-worm.ts` is the sealed-segment
   example.
