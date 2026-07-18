@@ -1,9 +1,9 @@
 # Developer entry points: wraps the npm scripts and drives the database/Docker tooling.
 
 .DEFAULT_GOAL := help
-.PHONY: help up down bootstrap db-migrate db-clean test coverage check prove fuzz prop smoke bench bench-prod scale trace demo ledger-verify dev start worker samples
+.PHONY: help up down bootstrap db-migrate db-clean test coverage check prove fuzz prop smoke bench bench-prod scale trace demo audit-verify ledger-verify dev start worker samples
 
-help: ; @printf '%s\n' 'targets:' '  up down bootstrap db-migrate db-clean' '  test coverage check prove fuzz prop smoke bench bench-prod scale trace demo samples' '  dev start worker' '' 'make bootstrap  = up + wait for health + db-migrate (one-step setup)' 'make db-migrate = apply the schema for $$DATABASE_URL (or .env) via psql/mysql' 'make db-clean   = drop orphaned throwaway namespaces a killed run left behind (el_* schemas/databases)' 'make coverage   = the test suite with per-file line/branch coverage' 'make prop       = property-based ledger laws with a shrinking counterexample search (in-memory)' 'make bench      = throughput + integrity bench (in-memory + any reachable DB), reseeded per run' 'make bench-prod = run the bench INSIDE a Linux container vs the compose DBs (production-parity fsync)' 'make scale      = per-subject scale probe across backends (does per-op cost stay flat as history grows?)' 'make samples    = compile the docs fenced ts samples against the real entry points' 'make ledger-verify FILE=<jsonl> KEY=<hex public key> = offline chain + checkpoint verification of a read.export file'
+help: ; @printf '%s\n' 'targets:' '  up down bootstrap db-migrate db-clean' '  test coverage check prove fuzz prop smoke bench bench-prod scale trace demo samples' '  dev start worker' '' 'make bootstrap  = up + wait for health + db-migrate (one-step setup)' 'make db-migrate = apply the schema for $$DATABASE_URL (or .env) via psql/mysql' 'make db-clean   = drop orphaned throwaway namespaces a killed run left behind (el_* schemas/databases)' 'make coverage   = the test suite with per-file line/branch coverage' 'make prop       = property-based ledger laws with a shrinking counterexample search (in-memory)' 'make bench      = throughput + integrity bench (in-memory + any reachable DB), reseeded per run' 'make bench-prod = run the bench INSIDE a Linux container vs the compose DBs (production-parity fsync)' 'make scale      = per-subject scale probe across backends (does per-op cost stay flat as history grows?)' 'make samples    = compile the docs fenced ts samples against the real entry points' 'make audit-verify FILE=<jsonl> = re-derive a hash-chained ops audit trail and report the first break' 'make ledger-verify FILE=<jsonl> KEY=<hex public key> = offline chain + checkpoint verification of a read.export file'
 
 up:         ; sh scripts/docker.sh up -d
 down:       ; sh scripts/docker.sh down
@@ -23,6 +23,7 @@ scale:      ; npm run scale
 trace:      ; npm run trace
 samples:    ; npm run check:samples
 demo:       ; npm run demo
+audit-verify:       ; npm run audit:verify -- $(FILE)
 ledger-verify:      ; npm run ledger:verify -- $(FILE) $(if $(KEY),--key $(KEY))
 dev:        ; npm run dev
 start:      ; npm start

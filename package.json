@@ -43,6 +43,10 @@
       "types": "./dist/src/netting.d.ts",
       "default": "./dist/src/netting.js"
     },
+    "./ops": {
+      "types": "./dist/src/ops/index.d.ts",
+      "default": "./dist/src/ops/index.js"
+    },
     "./store-kit": {
       "types": "./dist/src/store-kit.d.ts",
       "default": "./dist/src/store-kit.js"
@@ -99,6 +103,7 @@
     "trace": "node scripts/trace.ts",
     "trace:check": "node scripts/trace.ts --check",
     "demo": "node --env-file-if-exists=.env scripts/compose-demo.ts",
+    "audit:verify": "node scripts/ops-audit-verify.ts",
     "ledger:verify": "node scripts/verify.ts"
   },
   "devDependencies": {

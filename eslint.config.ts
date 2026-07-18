@@ -93,6 +93,14 @@ const OPTIONAL_DRIVER_IMPORTS = [
     'Load optional drivers via dynamic import() so an unused peer dependency never loads.',
 }));
 
+// Layering invariant 3: the supervisor observes the core through its ports; the core never
+// knows it is observed. Leaving src/ops out of the composition is the off switch.
+const OPS_BOUNDARY = {
+  regex: '^#src/ops/',
+  message:
+    'The core must not import src/ops; the supervisor is opt-in host composition.',
+};
+
 export default tseslint.config(
   // apps/ has its own build/lint tooling, so it stays outside this gate; packages/ holds the trivial
   // browser-build shim stubs the apps alias to (bundled by vite, never imported by name), the same
@@ -156,7 +164,42 @@ export default tseslint.config(
   // here. Both layering invariants apply.
   {
     files: ['src/**/*.ts'],
-    ignores: ['src/adapters/**', 'src/engines/**'],
+    ignores: ['src/adapters/**', 'src/engines/**', 'src/ops/**'],
+    rules: {
+      'no-restricted-globals': ['error', ...BANNED_GLOBALS],
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [...BANNED_IMPORTS.paths, ...OPTIONAL_DRIVER_IMPORTS],
+          patterns: [
+            ...BANNED_IMPORTS.patterns,
+            ...NON_SHIPPED_IMPORTS,
+            OPS_BOUNDARY,
+          ],
+        },
+      ],
+    },
+  },
+
+  // The adapter/engine layers wrap Node APIs, so the node:* and Node-global bans lift here.
+  // They are still shipped code, so both layering invariants remain, and so does the ops boundary.
+  {
+    files: ['src/adapters/**/*.ts', 'src/engines/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: OPTIONAL_DRIVER_IMPORTS,
+          patterns: [...NON_SHIPPED_IMPORTS, OPS_BOUNDARY],
+        },
+      ],
+    },
+  },
+
+  // src/ops is shipped code on the WinterCG surface like the core; only the ops boundary lifts,
+  // so the supervisor may import its own modules.
+  {
+    files: ['src/ops/**/*.ts'],
     rules: {
       'no-restricted-globals': ['error', ...BANNED_GLOBALS],
       'no-restricted-imports': [
@@ -165,18 +208,6 @@ export default tseslint.config(
           paths: [...BANNED_IMPORTS.paths, ...OPTIONAL_DRIVER_IMPORTS],
           patterns: [...BANNED_IMPORTS.patterns, ...NON_SHIPPED_IMPORTS],
         },
-      ],
-    },
-  },
-
-  // The adapter/engine layers wrap Node APIs, so the node:* and Node-global bans lift here.
-  // They are still shipped code, so both layering invariants remain.
-  {
-    files: ['src/adapters/**/*.ts', 'src/engines/**/*.ts'],
-    rules: {
-      'no-restricted-imports': [
-        'error',
-        { paths: OPTIONAL_DRIVER_IMPORTS, patterns: NON_SHIPPED_IMPORTS },
       ],
     },
   },
