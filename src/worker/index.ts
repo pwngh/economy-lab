@@ -10,6 +10,7 @@
  */
 
 import { normalizeError } from '#src/errors.ts';
+import { encodeAmount, toAmount } from '#src/money.ts';
 import { advanceDuePayouts } from '#src/worker/payouts.ts';
 import { sweepDueSubscriptions } from '#src/worker/subscriptions.ts';
 import {
@@ -94,6 +95,10 @@ export type SweepInput = {
   // External float source for the treasury tie-out's coverage half. Optional like `dispatcher`:
   // absent, `floatCoverage` is skipped — the internal backing check in `treasury` runs regardless.
   float?: FloatFeed;
+  // Narrows the run to just these jobs — the lever behind a supervisor's targeted re-drive
+  // (e.g. `only: ['relay']` to push a backlog without sealing a checkpoint). A job left out
+  // reports its idle summary, the same shape an absent optional dependency produces.
+  only?: ReadonlyArray<SweepName>;
   options?: Options;
 };
 
@@ -151,31 +156,84 @@ export async function runSweeps(
   input: SweepInput,
 ): Promise<SweepBatch> {
   const { now, limit, options } = input;
+  return runSweepJobs(store, ctx, input, { now, limit, options });
+}
+
+type SummaryOf<K extends SweepName> = Extract<
+  SweepBatch[K],
+  { ok: true }
+>['summary'];
+
+// The empty-ok summary each job reports when it does not run — left out of `SweepInput.only`,
+// or missing its optional dependency — so callers never see a third result shape.
+const IDLE_SUMMARIES: { [K in SweepName]: SummaryOf<K> } = {
+  payouts: { submitted: [], deadLettered: [], retrying: [] },
+  subscriptions: { charged: [], lapsed: [], deadLettered: [], retrying: [] },
+  treasury: { position: null, breaches: [], retrying: [], failed: [] },
+  feeSweep: {
+    swept: encodeAmount(toAmount('CREDIT', 0n)),
+    skipped: true,
+    duplicate: false,
+  },
+  floatCoverage: { position: null, breaches: [], retrying: [], failed: [] },
+  checkpointVerify: {
+    verified: null,
+    skipped: true,
+    mismatch: false,
+    deadLettered: [],
+    retrying: [],
+  },
+  checkpoint: { sealed: null, skipped: true, deadLettered: [], retrying: [] },
+  relay: { relayed: [], failed: [], deadLettered: [] },
+  drainInbox: { applied: [], failed: [], deadLettered: [] },
+  reconcile: { reconciled: [], drifted: [], failed: [] },
+  promos: { reversed: [], failed: [] },
+};
+
+async function runSweepJobs(
+  store: Store,
+  ctx: WorkerCtx,
+  input: SweepInput,
+  { now, limit, options }: Pick<SweepInput, 'now' | 'limit' | 'options'>,
+): Promise<SweepBatch> {
+  const gate = <K extends SweepName>(
+    name: K,
+    run: () => Promise<SweepResult<SummaryOf<K>>>,
+  ): Promise<SweepResult<SummaryOf<K>>> =>
+    input.only === undefined || input.only.includes(name)
+      ? run()
+      : Promise.resolve({ ok: true, summary: IDLE_SUMMARIES[name] });
   return {
-    payouts: await isolate(() => advanceDuePayouts(store, ctx, { now, limit })),
-    subscriptions: await isolate(() =>
-      sweepDueSubscriptions(store, ctx, { now, limit }),
+    payouts: await gate('payouts', () =>
+      isolate(() => advanceDuePayouts(store, ctx, { now, limit })),
     ),
-    treasury: await isolate(() => sweepTreasury(store, ctx, { now })),
-    feeSweep: await isolate(() => realizeFees(store, ctx, { now })),
-    floatCoverage:
+    subscriptions: await gate('subscriptions', () =>
+      isolate(() => sweepDueSubscriptions(store, ctx, { now, limit })),
+    ),
+    treasury: await gate('treasury', () =>
+      isolate(() => sweepTreasury(store, ctx, { now })),
+    ),
+    feeSweep: await gate('feeSweep', () =>
+      isolate(() => realizeFees(store, ctx, { now })),
+    ),
+    floatCoverage: await gate('floatCoverage', () =>
       input.float === undefined
-        ? {
-            ok: true,
-            summary: { position: null, breaches: [], retrying: [], failed: [] },
-          }
-        : await isolate(() =>
-            sweepFloatCoverage(store, ctx, input.float!, { now }),
-          ),
+        ? Promise.resolve({ ok: true, summary: IDLE_SUMMARIES.floatCoverage })
+        : isolate(() => sweepFloatCoverage(store, ctx, input.float!, { now })),
+    ),
     // A verify mismatch is recorded on the summary, not thrown; only a corrupt row or storage
     // failure becomes a failed result.
-    checkpointVerify: await isolate(() => reverifyCheckpoint(store, ctx)),
-    checkpoint: await isolate(() => sealCheckpoint(store, ctx)),
+    checkpointVerify: await gate('checkpointVerify', () =>
+      isolate(() => reverifyCheckpoint(store, ctx)),
+    ),
+    checkpoint: await gate('checkpoint', () =>
+      isolate(() => sealCheckpoint(store, ctx)),
+    ),
     // The optional dispatcher is handled only here; relayOutbox itself always requires one.
-    relay:
+    relay: await gate('relay', () =>
       input.dispatcher === undefined
-        ? { ok: true, summary: { relayed: [], failed: [], deadLettered: [] } }
-        : await isolate(() =>
+        ? Promise.resolve({ ok: true, summary: IDLE_SUMMARIES.relay })
+        : isolate(() =>
             relayOutbox(
               store,
               ctx,
@@ -183,10 +241,11 @@ export async function runSweeps(
               options,
             ),
           ),
-    drainInbox:
+    ),
+    drainInbox: await gate('drainInbox', () =>
       input.economy === undefined
-        ? { ok: true, summary: { applied: [], failed: [], deadLettered: [] } }
-        : await isolate(() =>
+        ? Promise.resolve({ ok: true, summary: IDLE_SUMMARIES.drainInbox })
+        : isolate(() =>
             drainInbox(
               store,
               ctx,
@@ -194,10 +253,11 @@ export async function runSweeps(
               options,
             ),
           ),
-    reconcile:
+    ),
+    reconcile: await gate('reconcile', () =>
       input.feed === undefined
-        ? { ok: true, summary: { reconciled: [], drifted: [], failed: [] } }
-        : await isolate(() =>
+        ? Promise.resolve({ ok: true, summary: IDLE_SUMMARIES.reconcile })
+        : isolate(() =>
             reconcileDueWindows(
               input.feed!,
               ctx,
@@ -205,8 +265,9 @@ export async function runSweeps(
               options,
             ),
           ),
-    promos: await isolate(() =>
-      sweepExpiredPromos(store, ctx, { now, limit }, options),
+    ),
+    promos: await gate('promos', () =>
+      isolate(() => sweepExpiredPromos(store, ctx, { now, limit }, options)),
     ),
   };
 }

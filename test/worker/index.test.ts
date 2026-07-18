@@ -187,6 +187,49 @@ async function invokesEverySweep(): Promise<void> {
   await store.close();
 }
 
+// `only: ['relay']` is the supervisor's targeted re-drive: relay runs, everything else reports
+// its idle summary and provably touches nothing — no posting, no checkpoint sealed.
+async function onlyRunsTheNamedJobs(): Promise<void> {
+  const { store, digest } = await seededStore();
+  const touched = freshTouched();
+  const reconcileTouched = { reconcile: false };
+  const recording = recordingStore(store, touched);
+
+  const batch = await runSweeps(
+    recording,
+    makeWorkerCtx({ digest }),
+    sweepInput({
+      feed: recordingFeed(reconcileTouched),
+      only: ['relay'],
+    }),
+  );
+
+  assert.deepEqual(touched, {
+    payouts: false,
+    subscriptions: false,
+    treasury: false,
+    checkpoint: false,
+    checkpointVerify: false,
+    relay: true,
+    promos: false,
+  });
+  assert.equal(reconcileTouched.reconcile, false);
+  assert.equal(batch.relay.ok, true);
+  assert.equal(batch.payouts.ok, true);
+  if (batch.payouts.ok) {
+    assert.deepEqual(batch.payouts.summary, {
+      submitted: [],
+      deadLettered: [],
+      retrying: [],
+    });
+  }
+  if (batch.checkpoint.ok) {
+    assert.equal(batch.checkpoint.summary.sealed, null);
+    assert.equal(batch.checkpoint.summary.skipped, true);
+  }
+  await store.close();
+}
+
 async function reportsEverySweepUnderItsName(): Promise<void> {
   const { store, digest } = await seededStore();
 
@@ -423,6 +466,8 @@ async function skipsTheRelaySweepWhenNoDispatcherIsConfigured(): Promise<void> {
 
 describe('Worker Composition Root', () => {
   test('invokes every sweep once', () => invokesEverySweep());
+  test('only runs the named jobs; the rest report idle summaries', () =>
+    onlyRunsTheNamedJobs());
   test('reports every sweep under its name', () =>
     reportsEverySweepUnderItsName());
   test('skips the relay sweep cleanly when no dispatcher is configured', () =>

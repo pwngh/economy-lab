@@ -20,6 +20,7 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   `layer` (`stale`, `replay`, `inbox`), via `ServerOptions.meter` and the `handleWebhook`
   context.
 - `worker.checkpoint.seal_ms` records seal duration, tagged `outcome`.
+- `SweepInput.only` narrows a worker run to the named jobs; the rest report idle summaries.
 
 ### Changed
 
