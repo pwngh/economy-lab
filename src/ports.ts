@@ -91,6 +91,20 @@ export interface Cache {
   invalidate(key: string): Promise<void>;
 }
 
+/**
+ * Admission control for the HTTP edge. Each `allow` call counts one request against `key` and
+ * answers whether it may proceed; the limit and window are the adapter's policy, so the server
+ * only ever asks for the verdict. A throwing limiter is treated as absent for that request —
+ * the edge fails open, because a down limiter backend should degrade protection, not
+ * availability.
+ */
+export interface RateLimiter {
+  allow(key: string): Promise<RateVerdict>;
+}
+
+/** What {@link RateLimiter.allow} returns; `retryAfterMs` rides denials that know their window. */
+export type RateVerdict = { allowed: boolean; retryAfterMs?: number };
+
 export interface Scheduler {
   /** Runs `task` every `ms` milliseconds; the returned function stops the loop. */
   every(ms: number, task: () => Promise<void>, options?: Options): () => void;

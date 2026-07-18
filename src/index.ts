@@ -66,6 +66,7 @@ export { externalsFromEnv } from '#src/from-env.ts';
 export type { Externals } from '#src/from-env.ts';
 export { memoryStore } from '#src/adapters/memory.ts';
 export { memoryCache } from '#src/adapters/memory-cache.ts';
+export { memoryRateLimiter } from '#src/adapters/memory-rate-limit.ts';
 
 export { createWorker } from '#src/worker/index.ts';
 
@@ -271,6 +272,8 @@ export type {
   Logger,
   Meter,
   Cache,
+  RateLimiter,
+  RateVerdict,
   Scheduler,
 } from '#src/ports.ts';
 

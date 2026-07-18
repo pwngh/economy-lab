@@ -20,6 +20,7 @@ export { memoryStore } from '#src/adapters/memory.ts';
 
 // Caches.
 export { memoryCache } from '#src/adapters/memory-cache.ts';
+export { memoryRateLimiter } from '#src/adapters/memory-rate-limit.ts';
 
 // Dispatchers.
 export { httpDispatcher } from '#src/adapters/http-dispatcher.ts';
