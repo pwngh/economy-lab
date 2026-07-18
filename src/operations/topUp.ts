@@ -46,6 +46,20 @@ export async function topUp(
   const backingUsd = convertCeil(amount, par, 'USD');
   const marginUsd = toAmount('USD', grossUsd.minor - backingUsd.minor);
 
+  // A negative margin means the rate source turned misordered after construction. Without this
+  // named fault, the skipped spread leg would surface as LEDGER_UNBALANCED, blaming the ledger
+  // for a configuration error.
+  if (marginUsd.minor < 0n) {
+    throw fault(
+      ERROR_CODES.CONFIG_INVALID,
+      'Rates are misordered: buy is below par.',
+      {
+        retryable: false,
+        detail: { buyRateId: buy.rateId, parRateId: par.rateId },
+      },
+    );
+  }
+
   // The issuance posts first, so the returned transaction is the buyer's credits going up. Both
   // postings route platform legs by the idempotency key — the key the lock set routed by — so the
   // rows locked are the rows posted.

@@ -78,4 +78,16 @@ describe('Rate Ordering', () => {
     assert.equal(typeof economyWith(equal).submit, 'function');
   });
 
+  test('a source that turns misordered after construction faults the topUp by name', async () => {
+    // Ordered at boot, flipped before the submit — the guard must name the configuration,
+    // not surface as an unbalanced-ledger fault.
+    let par = rate('r_par', 5n, 3);
+    const economy = economyWith(ratesOf(rate('r_buy', 1n, 2), () => par));
+    par = rate('r_par_flipped', 2n, 2);
+
+    await assert.rejects(
+      economy.submit(topUp({ userId: 'usr_flip', amount: credit('10.00') })),
+      hasCode('CONFIG.INVALID'),
+    );
+  });
 });

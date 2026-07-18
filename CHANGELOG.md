@@ -24,6 +24,9 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   `worker.checkpoint.verify` counts each clean verify (`outcome: 'ok'`).
 - `economy.submit` carries a rejection's `reason` code alongside `kind` and `status`.
 - `SweepInput.only` narrows a worker run to the named jobs; the rest report idle summaries.
+- The rate ordering `buy >= par` is enforced for every rate source: `economyFromCapabilities`
+  throws `CONFIG_INVALID` at construction on a misordered source, and a source that turns
+  misordered afterward faults the top-up with the same code and both rate ids.
 
 ### Changed
 
