@@ -26,3 +26,36 @@ export type {
   AuditSink,
   SignatureName,
 } from '#src/ops/audit.ts';
+
+export { opsRuntime } from '#src/ops/runtime.ts';
+export type { OpsRuntime, Signal, SignalFeed } from '#src/ops/runtime.ts';
+
+export {
+  detectDeadlockStorm,
+  detectEngineStall,
+  detectInboxDeadLetters,
+  detectIntegrityMismatches,
+  detectOutboxBacklog,
+  detectRetryExhaustion,
+  detectSilences,
+  detectSlowSeal,
+  detectStuckSagas,
+  detectTreasuryBreaches,
+  detectVelocityAnomaly,
+  detectWebhookReplayStorm,
+} from '#src/ops/detect.ts';
+export type {
+  DeadlockStormFinding,
+  EngineStallFinding,
+  Finding,
+  InboxDeadLetterFinding,
+  IntegrityMismatchFinding,
+  OutboxBacklogFinding,
+  RetryExhaustionFinding,
+  SilenceFinding,
+  SlowSealFinding,
+  StuckSagaFinding,
+  TreasuryBreachFinding,
+  VelocityAnomalyFinding,
+  WebhookReplayStormFinding,
+} from '#src/ops/detect.ts';
