@@ -15,6 +15,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - The `Anchor` port publishes each sealed checkpoint to a store outside the ledger's database
   (`WorkerCtx.anchor`, optional). A failed publish logs `worker.checkpoint.anchor_failed` and
   never blocks the seal; `httpAnchor` on the adapters subpath POSTs the row over HTTP.
+- `read.export()` streams the ledger as canonical JSONL: a header, every account's chain links
+  in lineage order, then the latest checkpoint. Amounts ride as decimal strings.
 
 ## 0.3.0 - 2026-07-17
 

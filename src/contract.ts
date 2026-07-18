@@ -450,6 +450,14 @@ export interface Economy {
      */
     lineage(account: AccountRef, options?: Options): AsyncIterable<StoredLink>;
     /**
+     * Streams the ledger as canonical JSONL for offline verification: a header line, every
+     * account's chain links in lineage order, then the latest checkpoint. `scripts/verify.ts`
+     * re-proves the chain and checks the checkpoint signature from the file alone, with no
+     * store access.
+     */
+    export(options?: Options): AsyncIterable<string>;
+
+    /**
      * The latest signed checkpoint (the Merkle root over all account heads, its signature, and the
      * count it covers), or null before the worker has sealed one. The read side of the periodic
      * seal a UI verifies against the live heads. Delegates to `CheckpointStore.latest`.

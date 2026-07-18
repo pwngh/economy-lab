@@ -53,6 +53,7 @@ import {
   VELOCITY_CURRENCY,
 } from '#src/trust.ts';
 import { economyPaused } from '#src/config.ts';
+import { encodeWire } from '#src/adapters/http-wire.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
 import type { BackingTotals } from '#src/integrity.ts';
@@ -114,6 +115,7 @@ export function economyFromCapabilities(capabilities: Capabilities): Economy {
       payouts: (options) => store.sagas.list(options),
       postings: (options) => store.ledger.list(options),
       lineage: (account, options) => store.ledger.lineage(account, options),
+      export: (options) => exportLedger(store, options),
       checkpoint: (options) => store.checkpoints.latest(options),
       prove: (options) => proveEconomy(store, ctx, options),
     },
@@ -1047,4 +1049,36 @@ function userSubject(operation: Operation): string {
     return operation.userId;
   }
   return 'unknown';
+}
+
+// --- Ledger export (the offline-verification file) --------------------------------
+
+/** First-line marker of a ledger export; scripts/verify.ts refuses files without it. */
+export const EXPORT_FORMAT = 'economy-lab/ledger-export';
+
+// Link lines carry the full posting (legs, meta, both hashes), so the file alone re-proves
+// every chain and re-derives the Merkle root the checkpoint signed. Field order comes from the
+// wire codec and never changes: the file is canonical, byte-for-byte stable for the same data.
+async function* exportLedger(
+  store: Store,
+  options?: Options,
+): AsyncIterable<string> {
+  yield JSON.stringify({ format: EXPORT_FORMAT, v: 1 });
+  const accounts: AccountRef[] = [];
+  for await (const [account] of store.ledger.heads()) {
+    accounts.push(account);
+  }
+  for (const account of accounts) {
+    for await (const link of store.ledger.lineage(account, options)) {
+      yield JSON.stringify({
+        type: 'link',
+        account,
+        link: encodeWire.storedLink(link),
+      });
+    }
+  }
+  const checkpoint = await store.checkpoints.latest(options);
+  if (checkpoint !== null) {
+    yield JSON.stringify({ type: 'checkpoint', checkpoint });
+  }
 }

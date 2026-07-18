@@ -81,6 +81,14 @@ export const encodeWire = {
     meta: posting.meta,
   }),
 
+  storedLink: (link: StoredLink): unknown => ({
+    txnId: link.txnId,
+    legs: link.legs.map(encodeLeg),
+    meta: link.meta,
+    prevHash: link.prevHash,
+    hash: link.hash,
+  }),
+
   transaction: (transaction: Transaction): unknown => ({
     id: transaction.id,
     postedAt: transaction.postedAt,
