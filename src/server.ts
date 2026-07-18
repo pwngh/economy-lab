@@ -27,7 +27,7 @@ import { encodeAmounts } from '#src/money.ts';
 import type { Amount } from '#src/money.ts';
 import type { Clock, ReplayStore } from '#src/ports.ts';
 import type { Config } from '#src/config.ts';
-import type { Economy, Operation, Outcome } from '#src/contract.ts';
+import type { Economy, Operation, Outcome, Principal } from '#src/contract.ts';
 
 /**
  * Host handler for inbound provider callbacks (webhooks), e.g. a payment processor reporting a
@@ -55,6 +55,12 @@ export interface ServerOptions {
   // Dedup store for provider `eventId`s: a repeat delivery returns 200 without invoking the
   // handler. When absent, the host dedups. The claim-last ordering lives at webhookRoute.
   replay?: ReplayStore;
+
+  // Authentication for `/submit`: maps the request to the acting principal, or null to refuse
+  // with 401. When set, the server stamps the result onto the operation and rejects a body that
+  // carries its own `actor`. When absent, the body's actor is trusted — safe only for in-process
+  // hosts, never for a network-exposed handler.
+  authenticate?: (request: Request) => Promise<Principal | null>;
 }
 
 const SIGNATURE_HEADER = 'x-signature';
@@ -105,7 +111,7 @@ export function createServer(
       segments.length === 1 &&
       segments[0] === 'submit'
     ) {
-      return submitRoute(economy, request);
+      return submitRoute(economy, options, request);
     }
     if (
       request.method === 'POST' &&
@@ -141,13 +147,31 @@ async function readinessRoute(economy: Economy): Promise<Response> {
 // --- /submit ----------------------------------------------------------------------
 
 // A `rejected` outcome is not an error: the economy declined a valid request for a business
-// reason, and the response is a 200 holding the decline.
+// reason, and the response is a 200 holding the decline. Authentication runs before the body is
+// read, so an unauthenticated caller costs no buffering.
 async function submitRoute(
   economy: Economy,
+  options: ServerOptions,
   request: Request,
 ): Promise<Response> {
+  let principal: Principal | undefined;
+  if (options.authenticate !== undefined) {
+    let verdict: Principal | null;
+    try {
+      verdict = await options.authenticate(request);
+    } catch (error) {
+      return faultResponse(error);
+    }
+    if (verdict === null) {
+      return faultResponse(
+        fault(ERROR_CODES.UNAUTHORIZED, 'Request is not authenticated.'),
+      );
+    }
+    principal = verdict;
+  }
+
   try {
-    const operation = decodeOperation(await readJson(request));
+    const operation = decodeOperation(await readJson(request), principal);
     return jsonResponse(200, encodeOutcome(await economy.submit(operation)));
   } catch (error) {
     return faultResponse(error);
@@ -304,17 +328,25 @@ const systemClock: Clock = { now: () => Date.now() };
 
 // --- Operation codec (money travels as a decimal string) --------------------------
 
-// Money amounts arrive as decimal strings because a JSON number can't safely hold them.
-function decodeOperation(body: unknown): Operation {
+// Money amounts arrive as decimal strings because a JSON number can't safely hold them. An
+// authenticated principal replaces the actor outright, and a body that names its own is refused
+// rather than silently overridden, so a caller can never believe a claimed actor was honored.
+function decodeOperation(body: unknown, principal?: Principal): Operation {
   if (body === null || typeof body !== 'object') {
     throw malformed('Operation body must be a JSON object.');
   }
   const row = body as Record<string, unknown>;
+  if (principal !== undefined && 'actor' in row) {
+    throw malformed("Operation must not carry 'actor'; the server stamps it.");
+  }
   const kind = row.kind;
   if (typeof kind !== 'string' || !(kind in AMOUNT_FIELDS)) {
     throw malformed(`Unknown operation kind: ${String(kind)}.`);
   }
   const decoded: Record<string, unknown> = { ...row };
+  if (principal !== undefined) {
+    decoded.actor = principal;
+  }
   for (const field of AMOUNT_FIELDS[kind]!) {
     decoded[field] = decodeAmountField(row[field], field);
   }

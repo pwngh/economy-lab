@@ -442,3 +442,69 @@ describe('createServer Health And Readiness', () => {
     assert.equal(payload.status, 'unavailable');
   });
 });
+
+describe('createServer /submit Authentication', () => {
+  test('stamps the authenticated principal as the actor', async () => {
+    const server = createServer(makeEconomy(), {
+      authenticate: async () => ({ kind: 'system', service: 'gateway' }),
+    });
+
+    const response = await server(
+      submitRequest({
+        kind: 'topUp',
+        idempotencyKey: 'idem_auth_stamp',
+        userId: 'usr_auth',
+        source: 'card',
+        amount: encodeAmount(credit('10.00')),
+      }),
+    );
+    const payload = (await response.json()) as { status: string };
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.status, 'committed');
+  });
+
+  test('returns a 401 problem when the hook refuses the request', async () => {
+    const server = createServer(makeEconomy(), {
+      authenticate: async () => null,
+    });
+
+    const response = await server(
+      submitRequest(topUpBody('usr_denied', '1.00')),
+    );
+    const payload = (await response.json()) as Record<string, unknown>;
+
+    assert.equal(response.status, 401);
+    assert.equal(
+      response.headers.get('content-type'),
+      'application/problem+json',
+    );
+    assert.equal(payload.code, ERROR_CODES.UNAUTHORIZED);
+  });
+
+  test('rejects an authenticated body that carries its own actor', async () => {
+    const server = createServer(makeEconomy(), {
+      authenticate: async () => ({ kind: 'system', service: 'gateway' }),
+    });
+
+    const response = await server(
+      submitRequest(topUpBody('usr_spoof', '1.00')),
+    );
+    const payload = (await response.json()) as Record<string, unknown>;
+
+    assert.equal(response.status, 400);
+    assert.equal(payload.code, ERROR_CODES.MALFORMED_OPERATION);
+  });
+
+  test('trusts the body actor when no hook is configured', async () => {
+    const server = createServer(makeEconomy());
+
+    const response = await server(
+      submitRequest(topUpBody('usr_inproc', '1.00')),
+    );
+    const payload = (await response.json()) as { status: string };
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.status, 'committed');
+  });
+});

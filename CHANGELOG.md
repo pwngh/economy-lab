@@ -2,6 +2,14 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
+## Unreleased (0.2.3)
+
+### Added
+
+- `ServerOptions.authenticate` resolves the acting principal for a `/submit` request and stamps
+  it as the operation's `actor`. A `null` result answers `401`; a body that carries its own
+  `actor` is rejected `400`.
+
 ## 0.2.2 - 2026-07-17
 
 ### Fixed
