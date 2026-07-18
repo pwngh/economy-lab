@@ -26,11 +26,12 @@ import type { Store } from '@pwngh/economy-lab/ports';
 | [`@pwngh/economy-lab`](#pwngheconomy-lab)                        | Everything: construction, operations, money, the ledger, the worker, and every type. |
 | [`@pwngh/economy-lab/ports`](#pwngheconomy-labports)             | The port interfaces you implement to plug in your own infrastructure.                |
 | [`@pwngh/economy-lab/adapters`](#pwngheconomy-labadapters)       | The bundled in-memory and HTTP adapters, plus the runtime services.                  |
-| [`@pwngh/economy-lab/adapters/redis`](#pwngheconomy-labadaptersredis) | The Redis-backed `Cache` (carries the `ioredis` driver).                        |
-| [`@pwngh/economy-lab/adapters/sqs`](#pwngheconomy-labadapterssqs) | The SQS-backed `Dispatcher` (carries the AWS SDK).                                  |
+| [`@pwngh/economy-lab/adapters/redis`](#pwngheconomy-labadaptersredis) | The Redis-backed `Cache` and `RateLimiter`; adapts an `ioredis` client you connect. |
+| [`@pwngh/economy-lab/adapters/sqs`](#pwngheconomy-labadapterssqs) | The SQS-backed `Dispatcher`; adapts an SQS client you connect.                      |
 | [`@pwngh/economy-lab/engines/postgres`](#pwngheconomy-labenginespostgres) | The Postgres `Store` (carries `pg`).                                        |
 | [`@pwngh/economy-lab/engines/mysql`](#pwngheconomy-labenginesmysql) | The MySQL `Store` and schema helpers (carries `mysql2`).                          |
 | [`@pwngh/economy-lab/netting`](#pwngheconomy-labnetting)         | The in-instance netting session.                                                     |
+| [`@pwngh/economy-lab/ops`](#pwngheconomy-labops)                 | The in-process operations supervisor: signal capture, incident detectors, guarded remediations, and the audit trail. |
 | [`@pwngh/economy-lab/store-kit`](#pwngheconomy-labstore-kit)     | The primitives a custom `Store` implementation computes with.                        |
 | [`@pwngh/economy-lab/testing`](#pwngheconomy-labtesting)         | The conformance harness for testing your own adapters.                               |
 
@@ -241,6 +242,7 @@ Zero-infrastructure `Store`, `Cache`, and `Processor` implementations for tests 
 | --- | --- |
 | `memoryStore` | Build an in-memory Store with working transaction rollback for tests and development. |
 | `memoryCache` | Builds an in-process Cache backed by a Map; reference implementation and single-process cache when no Redis. |
+| `memoryRateLimiter` | Builds an in-process fixed-window RateLimiter counting in a Map; single-process limiter when no Redis. |
 | `memoryProcessor` | Build an in-memory Processor for demos and tests that accepts every payout with deterministic providerRef. |
 
 ### Rates, pricing, and entitlements
@@ -314,6 +316,9 @@ The port interfaces — the contracts you implement to plug your own infrastruct
 | `Logger` | Logs events at specified levels with structured fields. |
 | `Meter` | Records metrics via count and observe methods. |
 | `Cache` | Optional read-through cache for hot reads such as balances; best-effort, so any error degrades to a direct ledger read. |
+| `Anchor` | Publishes a sealed checkpoint to a store outside the ledger's database; best-effort, never blocks the seal. |
+| `RateLimiter` | Admission control for the HTTP edge: counts one request per allow call and answers the verdict. |
+| `RateVerdict` | What RateLimiter.allow returns: allowed, with an optional retryAfterMs on a denial. |
 | `Scheduler` | Runs a task every N milliseconds; the returned function stops the loop. |
 | `PayeeDirectory` | Verifies payee status; checks if a user is cleared, pending, blocked, or has no verification. |
 | `Capabilities` | Every external capability `economyFromCapabilities(...)` needs, gathered into one object. |
@@ -329,7 +334,9 @@ The bundled adapter factories: in-memory and HTTP implementations of the ports, 
 | --- | --- |
 | `memoryStore` | Build an in-memory Store with working transaction rollback for tests and development. |
 | `memoryCache` | Builds an in-process Cache backed by a Map; reference implementation and single-process cache when no Redis. |
+| `memoryRateLimiter` | Builds an in-process fixed-window RateLimiter counting in a Map; single-process limiter when no Redis. |
 | `httpDispatcher` | Build the Dispatcher that POSTs one economy event to a remote endpoint over HTTP with at-least-once delivery. |
+| `httpAnchor` | Build the Anchor that POSTs one sealed checkpoint to an external endpoint over HTTP. |
 | `memoryProcessor` | Build an in-memory Processor for demos and tests that accepts every payout with deterministic providerRef. |
 | `httpProcessor` | Build a Processor that pays sellers via an external provider over HTTP. |
 | `configuredRates` | Build the production CREDIT-to-USD rate source from a deployment's configured rates. |
@@ -349,17 +356,18 @@ The bundled adapter factories: in-memory and HTTP implementations of the ports, 
 
 ## `@pwngh/economy-lab/adapters/redis`
 
-The Redis-backed `Cache`. Carries the `ioredis` driver, so it is imported only when Redis is configured.
+The Redis-backed `Cache` and `RateLimiter`. Both adapt an already-connected `ioredis` client; the module never imports the driver, so it loads with nothing installed.
 
 <SourceLink to="src/adapters/redis.ts">src/adapters/redis.ts</SourceLink>
 
 | Export | What it is |
 | --- | --- |
 | `redisCacheFrom` | Adapt an already-connected ioredis client into the Cache the core expects. |
+| `redisRateLimiterFrom` | Adapt an already-connected ioredis client into a fixed-window RateLimiter over INCR and PEXPIRE. |
 
 ## `@pwngh/economy-lab/adapters/sqs`
 
-The SQS-backed `Dispatcher` for the outbox relay. Carries the AWS SDK, so it is imported only when SQS is configured.
+The SQS-backed `Dispatcher` for the outbox relay. It adapts an already-connected SQS client; the module never imports the AWS SDK, so it loads with nothing installed.
 
 <SourceLink to="src/adapters/sqs.ts">src/adapters/sqs.ts</SourceLink>
 
