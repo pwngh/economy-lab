@@ -94,7 +94,9 @@ describe('chrome frame', () => {
 
   it('opens the tour strip at the step named by ?tour', () => {
     const html = render('/?tour=0');
-    expect(html).toContain('The one number this ledger defends');
+    expect(html).toContain(
+      'Every purchased credit is backed by real USD in trust',
+    );
     expect(html).toContain('1/7');
     expect(html).toContain('Next: Market');
   });

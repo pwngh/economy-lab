@@ -185,10 +185,42 @@ input[type="number"] {
   margin-bottom: var(--s3);
   border-bottom: 1px solid var(--rule);
 }
+.brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+}
 .brand-title {
   font-weight: 600;
   font-size: var(--t-md);
   letter-spacing: -0.01em;
+}
+.site-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+}
+.icon-link {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: var(--r);
+  color: var(--ink-3);
+}
+.icon-link:hover {
+  color: var(--ink);
+  background: var(--inset);
+}
+/* Wire outcomes: a committed response settles into a green wash, a replayed duplicate into a
+   blue one — both a whisper of the status hue over the inset, so the second click answers
+   visually before the JSON is read. */
+.curl.wire-committed {
+  background: color-mix(in srgb, var(--pos) 7%, var(--inset));
+  border-color: color-mix(in srgb, var(--pos) 35%, var(--rule));
+}
+.curl.wire-duplicate {
+  background: color-mix(in srgb, var(--accent) 7%, var(--inset));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--rule));
 }
 
 /* The one-shot guidance pulse: an accent ring breathing off the control it points at. */

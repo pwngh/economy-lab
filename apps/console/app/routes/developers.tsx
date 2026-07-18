@@ -69,6 +69,19 @@ const ENDPOINTS: [string, string][] = [
   ['Dispute / chargeback', 'Transaction.status: chargeback → reversal'],
 ];
 
+// The response settles into an outcome tint: committed washes green, a replayed duplicate washes
+// blue — the second click answers visually before anyone reads the JSON.
+function wireTone(body: unknown): string {
+  const status = (body as { status?: string } | null)?.status;
+  if (status === 'committed') {
+    return ' wire-committed';
+  }
+  if (status === 'duplicate') {
+    return ' wire-duplicate';
+  }
+  return '';
+}
+
 // The wire runner: one operation as JSON, posted to the mounted service, the raw wire response
 // beside it. A committed run revalidates every loader, so the tickers and X-ray move with it.
 function WireRunner() {
@@ -120,7 +133,10 @@ function WireRunner() {
         {parseError ? <span className="field-error">{parseError}</span> : null}
       </div>
       {fetcher.data ? (
-        <pre className="curl mono" aria-live="polite">
+        <pre
+          className={`curl mono${wireTone(fetcher.data.body)}`}
+          aria-live="polite"
+        >
           {`HTTP ${fetcher.data.status}\n${JSON.stringify(fetcher.data.body, null, 2)}`}
         </pre>
       ) : null}
