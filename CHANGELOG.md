@@ -2,6 +2,13 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
+## Unreleased (0.3.1)
+
+### Added
+
+- `SIGNING_SECRETS_PRIOR` lists rotated-out signing secrets; checkpoints sealed under them
+  still verify.
+
 ## 0.3.0 - 2026-07-17
 
 ### Added

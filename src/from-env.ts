@@ -14,6 +14,7 @@ import {
   isProduction,
   readBigIntOrNull,
   readIntOrNull,
+  readList,
   serviceUrls,
 } from '#src/env.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
@@ -130,7 +131,12 @@ export function externalsFromEnv(
     );
   }
   const externals: Externals = {
-    signer: overrides.signer ?? systemSigner({ signingKey: signingKey(env) }),
+    signer:
+      overrides.signer ??
+      systemSigner({
+        signingKey: signingKey(env),
+        priorKeys: priorSigningKeys(env),
+      }),
     rates: overrides.rates ?? rateSource(env),
     processor: overrides.processor ?? processorFor(env),
     pricing: overrides.pricing ?? flatFee(),
@@ -146,6 +152,17 @@ export function externalsFromEnv(
 function signingKey(env: EnvMap): string {
   const secret = env.SIGNING_SECRET ?? '';
   return toHex(ENCODER.encode(secret === '' ? DEV_SIGNING_SECRET : secret));
+}
+
+// Rotated-out secrets (SIGNING_SECRETS_PRIOR, comma-separated), each transformed exactly as
+// SIGNING_SECRET is: new seals sign under the current key while checkpoints sealed under a
+// listed prior still verify. Rotation = move the old secret here, never just replace it.
+function priorSigningKeys(env: EnvMap): ReadonlyArray<string> | undefined {
+  const secrets = readList(env.SIGNING_SECRETS_PRIOR);
+  if (secrets.length === 0) {
+    return undefined;
+  }
+  return secrets.map((secret) => toHex(ENCODER.encode(secret)));
 }
 
 // Dev uses the fixed DEV_RATES; production reads the six knobs (already validated present by the

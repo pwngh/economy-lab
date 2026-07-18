@@ -75,4 +75,24 @@ describe('wiring rejects malformed services at startup', () => {
     assert.equal(typeof caps.logger.log, 'function');
     await caps.store.close();
   });
+
+  test('a signature under a rotated-out secret verifies only while SIGNING_SECRETS_PRIOR lists it', async () => {
+    const payload = new TextEncoder().encode('checkpoint-root');
+    const old = externalsFromEnv({ SIGNING_SECRET: 'old-secret' });
+    const signature = await old.signer.sign(payload);
+
+    const rotated = externalsFromEnv({
+      SIGNING_SECRET: 'new-secret',
+      SIGNING_SECRETS_PRIOR: 'old-secret',
+    });
+    assert.equal(await rotated.signer.verify(payload, signature), true);
+    // The new key signs fresh payloads that verify without the prior list.
+    const fresh = await rotated.signer.sign(payload);
+    const current = externalsFromEnv({ SIGNING_SECRET: 'new-secret' });
+    assert.equal(await current.signer.verify(payload, fresh), true);
+
+    // Dropping the prior secret is exactly what breaks old checkpoints.
+    const replaced = externalsFromEnv({ SIGNING_SECRET: 'new-secret' });
+    assert.equal(await replaced.signer.verify(payload, signature), false);
+  });
 });

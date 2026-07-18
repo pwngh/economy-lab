@@ -19,6 +19,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 import {
+  OPTIONAL_SECRETS,
   REQUIRED_SECRETS,
   SERVICE_URL_KEYS,
   STORE_URL_KEYS,
@@ -46,6 +47,7 @@ const DECLARED = new Set<string>([
   ...STORE_URL_KEYS,
   ...SERVICE_URL_KEYS,
   ...REQUIRED_SECRETS,
+  ...OPTIONAL_SECRETS,
   ...CONFIG_KEYS,
   ...SERVER_KEYS,
   ...EXTERNALS_KEYS,

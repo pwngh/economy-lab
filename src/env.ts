@@ -200,6 +200,12 @@ export function serviceUrls(env: EnvMap): ServiceUrls {
  */
 export const REQUIRED_SECRETS = ['WEBHOOK_SECRET', 'SIGNING_SECRET'] as const;
 
+/**
+ * Optional secret-family names. SIGNING_SECRETS_PRIOR lists rotated-out signing secrets
+ * (comma-separated) that checkpoints sealed under them must still verify against.
+ */
+export const OPTIONAL_SECRETS = ['SIGNING_SECRETS_PRIOR'] as const;
+
 /** The required secrets that are unset or blank in `env`. */
 export function missingSecrets(env: EnvMap): string[] {
   return REQUIRED_SECRETS.filter((key) => (env[key] ?? '') === '');
