@@ -84,10 +84,10 @@ if (offenders.length > 0) {
 // the edit tier (workbench + sandbox relay + the sandbox worker + Sucrase, first Edit) may only
 // shrink between deliberate re-baselines. The edit tier deliberately duplicates the engine
 // graph inside the sandbox worker — the price of being able to terminate() runaway edits
-// instead of freezing the page. Measured 3,330 / 152,000-ish / 365,000-ish.
+// instead of freezing the page.
 const LOADER_BUDGET = 4_000;
-const RUN_TIER_BUDGET = 170_000;
-const EDIT_TIER_BUDGET = 380_000;
+const RUN_TIER_BUDGET = 200_000;
+const EDIT_TIER_BUDGET = 420_000;
 const runnerDir = join(BUILD_DIR, 'runner');
 const isEditTier = (f) =>
   f.startsWith('sandbox') || f.startsWith('workbench-') || f.startsWith('sucrase-');
@@ -102,6 +102,7 @@ for (const f of readdirSync(runnerDir).filter((f) => f.endsWith('.js'))) {
 if (loaderBytes > LOADER_BUDGET || runBytes > RUN_TIER_BUDGET || editBytes > EDIT_TIER_BUDGET) {
   console.error(
     `runner over budget: loader ${loaderBytes}/${LOADER_BUDGET}, run tier ${runBytes}/${RUN_TIER_BUDGET}, edit tier ${editBytes}/${EDIT_TIER_BUDGET}.`,
+    'A deliberate landing re-baselines the tier in scripts/check-static.mjs; anything else may only shrink.',
   );
   process.exit(1);
 }

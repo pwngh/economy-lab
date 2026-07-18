@@ -13,6 +13,10 @@ related: ['economy/reference/the-economy', 'economy/reference/configuration']
 ---
 
 import rejectionHtml from '../../../snippets/rejection.ts?shiki';
+import rejectionRecordsHtml from '../../../snippets/rejection-records.ts?shiki';
+import rejectionPayoutGatesHtml from '../../../snippets/rejection-payout-gates.ts?shiki';
+import rejectionMaturityHtml from '../../../snippets/rejection-maturity.ts?shiki';
+import rejectionPausedHtml from '../../../snippets/rejection-paused.ts?shiki';
 
 ## The shape of an answer
 
@@ -207,8 +211,38 @@ const idempotencyKey = `ord_${order.id}`; // unique per order, stable per retry
 
 Then it wasn't a decline — the request itself was broken before any business question was asked. The two usual suspects: the `actor` is a `user` acting on an account they don't own (`AUTH.UNAUTHORIZED`), or a malformed payload (`OP.MALFORMED`, e.g. a blank key). Rejections are reserved for valid requests the economy declines; see [rejected versus thrown](#rejected-versus-thrown) above and [actors & authorization](/economy/concepts/actors-and-authorization/).
 
-## Try it
+## The catalog, live
 
-A refusal, produced live — the reason code verbatim plus the typed figures it carries:
+Every code in the table can be produced on demand, and each block below prints the reason
+verbatim plus the exact `RejectionDetail` it carries. Run them as they are, or edit the figures
+and run again.
+
+The classic first: an underfunded spend, declined with the funds gate's own numbers.
 
 <Runnable name="rejection" html={rejectionHtml} />
+
+The record-keyed declines — `DUPLICATE_ORDER`, `UNKNOWN_ORDER`, `UNKNOWN_SUBSCRIPTION`,
+`ALREADY_SUBSCRIBED`, and `NOT_ENTITLED` — each name the record they couldn't find or refuse to
+double-book:
+
+<Runnable name="rejection-records" html={rejectionRecordsHtml} />
+
+The three payout gates in the order `requestPayout` checks them — `BELOW_MINIMUM`,
+`PAYOUT_TOO_SOON`, `PAYEE_UNVERIFIED` — on an economy built with a 100-credit minimum, a
+seven-day gap, and a payee directory that has cleared only one seller:
+
+<Runnable name="rejection-payout-gates" html={rejectionPayoutGatesHtml} />
+
+`FUNDS_IMMATURE`, from giving card credit a three-day
+[holding window](/economy/concepts/credit-maturity/) — the money is in the wallet, and the
+detail says when it clears:
+
+<Runnable name="rejection-maturity" html={rejectionMaturityHtml} />
+
+`ECONOMY_PAUSED`, inside a live maintenance window — the user's write waits, the system's
+settlement does not:
+
+<Runnable name="rejection-paused" html={rejectionPausedHtml} />
+
+That leaves `RISK_DENIED`, which runs live where the velocity window is explained: on the
+[spend velocity](/economy/concepts/spend-velocity/) page.

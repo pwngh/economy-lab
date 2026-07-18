@@ -23,6 +23,10 @@ import { run as recipeEntitlementGate } from './app/snippets/recipe-entitlement-
 import { run as recipeFeeSplit } from './app/snippets/recipe-fee-split';
 import { run as recipePromo } from './app/snippets/recipe-promo';
 import { run as rejection } from './app/snippets/rejection';
+import { run as rejectionMaturity } from './app/snippets/rejection-maturity';
+import { run as rejectionPaused } from './app/snippets/rejection-paused';
+import { run as rejectionPayoutGates } from './app/snippets/rejection-payout-gates';
+import { run as rejectionRecords } from './app/snippets/rejection-records';
 import { run as velocity } from './app/snippets/velocity';
 
 it('idempotency: first committed, retry duplicate, one posting', async () => {
@@ -66,6 +70,36 @@ it('velocity: its own economy arms the ceiling and the second spend declines', a
   const report = await velocity();
   expect(report.lines[1]).toBe('spend of 160: committed — 160 of 300 out this window');
   expect(report.lines[2]).toMatch(/160 more: rejected \(RISK_DENIED\) — spent .+ against limit .+/);
+});
+
+it('rejection-records: five record-keyed declines, each naming its record', async () => {
+  const report = await rejectionRecords();
+  expect(report.lines[0]).toMatch(/DUPLICATE_ORDER — detail .*ord_r1/);
+  expect(report.lines[1]).toMatch(/UNKNOWN_ORDER — detail .*ord_ghost/);
+  expect(report.lines[2]).toMatch(/UNKNOWN_SUBSCRIPTION — detail .*sub_ghost/);
+  expect(report.lines[3]).toMatch(/ALREADY_SUBSCRIBED — detail .*"subscriptionId"/);
+  expect(report.lines[4]).toMatch(/NOT_ENTITLED — detail .*sku_never_granted/);
+});
+
+it('rejection-payout-gates: the three gates trip in check order', async () => {
+  const report = await rejectionPayoutGates();
+  expect(report.lines[0]).toMatch(/BELOW_MINIMUM — detail .*"minimum":"CREDIT:100\.00"/);
+  expect(report.lines[1]).toMatch(/PAYOUT_TOO_SOON — detail .*"retryAfter"/);
+  expect(report.lines[2]).toMatch(/PAYEE_UNVERIFIED — detail .*"state":"PENDING"/);
+});
+
+it('rejection-maturity: held card credit declines with when it clears', async () => {
+  const report = await rejectionMaturity();
+  expect(report.lines[0]).toBe('status: rejected (FUNDS_IMMATURE)');
+  expect(report.lines[1]).toMatch(/"required":"CREDIT:50\.00"/);
+});
+
+it('rejection-paused: the window stops the user write and not the settlement', async () => {
+  const report = await rejectionPaused();
+  expect(report.lines[0]).toBe(
+    'system top-up in the window: committed — settlement is never paused',
+  );
+  expect(report.lines[1]).toMatch(/rejected \(ECONOMY_PAUSED\) — resumes in ~\d+ min/);
 });
 
 it('recipe promo: the grant draws first and leaves spendable whole', async () => {
