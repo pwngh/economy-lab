@@ -29,6 +29,7 @@ A provably-solvent credits economy: wallets, payouts, subscriptions, and a marke
 - **Tamper-evident by construction** — every balance folds from an append-only, hash-chained, double-entry log under signed Merkle checkpoints.
 - **Five backends** — in-memory, Postgres, MySQL, Redis, and SQS run identical logic, pinned by a single conformance suite.
 - **Safe by default** — `submit` returns an `Outcome` and never throws for a "no"; every request is idempotent.
+- **Ops supervisor built in** — the `./ops` entry point watches the meter/logger ports for twelve incident signatures, remediates under guardrails, and writes a hash-chained audit trail; leaving it out of the composition is the off switch.
 
 ## Quick start
 
@@ -120,11 +121,11 @@ conformance suite holds them to identical behavior.
 
 ## Ecosystem
 
-Three sibling packages compose around the ledger, each entering behind a stable seam — the lab runs unchanged without any of them. See [the packages](https://economy-lab-docs.pages.dev/economy/ports/packages/) for where each one plugs in.
+One sibling package composes around the ledger at runtime, behind a stable seam — the lab runs unchanged without it. See [the packages](https://economy-lab-docs.pages.dev/economy/ports/packages/) for where everything plugs in.
 
-- **[@pwngh/money](https://github.com/pwngh/money)** — the ledger's arithmetic, vendored and pinned by embedded conformance vectors; each boot proves the live database computes the same semantics before any posting trusts it.
-- **[@pwngh/taskq](https://github.com/pwngh/taskq)** — with `TASKQ=1` the outbox relay rides taskq's task table beside the ledger: one at-least-once task per event, keyed by event id, inheriting its retries.
-- **[@pwngh/economy-edge](https://github.com/pwngh/economy-edge)** — a real payout rail (Tilia) behind the same `Processor` port; an optional peer the lab composes without.
+- **[@pwngh/economy-edge](https://github.com/pwngh/economy-edge)** — the runtime sibling: a real payout rail (Tilia) behind the same `Processor` port; an optional peer the lab composes without.
+
+Two more packages serve the ledger without composing as siblings. **[@pwngh/money](https://github.com/pwngh/money)** is vendored into `src/` as the ledger's arithmetic, pinned by embedded conformance vectors — each boot proves the live database computes the same semantics before any posting trusts it. **[@pwngh/taskq](https://github.com/pwngh/taskq)** is an optional relay backend: with `TASKQ=1` the outbox relay rides taskq's task table beside the ledger, one at-least-once task per event, keyed by event id. The ops supervisor is not a package at all: it ships built in as the `./ops` entry point.
 
 ## Run it
 

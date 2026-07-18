@@ -27,7 +27,12 @@ import {
   describeSelection,
   externalsFromEnv,
 } from '#src/index.ts';
-import { REQUIRED_SECRETS, isProduction, missingSecrets } from '#src/env.ts';
+import {
+  REQUIRED_SECRETS,
+  isProduction,
+  missingSecrets,
+  readFlag,
+} from '#src/env.ts';
 import { serverRuntime } from '#scripts/support/server-env.ts';
 import { economyFromCapabilities } from '#src/economy.ts';
 import {
@@ -38,6 +43,7 @@ import {
 } from '#src/server.ts';
 import {
   jsonlLogger,
+  noopMeter,
   randomIds,
   systemClock,
   systemDigest,
@@ -46,11 +52,16 @@ import { ERROR_CODES, EconomyError } from '#src/errors.ts';
 import { decodeWebhookEvent, handlePurchaseWebhook } from '#src/webhooks.ts';
 import { describeTaskq, maybeTaskqHost } from '#scripts/support/taskq-host.ts';
 import { maybeEdgeTilia } from '#scripts/support/edge-host.ts';
+import { maybeOps } from '#scripts/support/ops-host.ts';
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { EnvMap } from '#src/env.ts';
 import type { ServerRuntime } from '#scripts/support/server-env.ts';
-import type { ExternalPorts, RuntimeDefaults } from '#src/index.ts';
+import type {
+  ComposedWorker,
+  ExternalPorts,
+  RuntimeDefaults,
+} from '#src/index.ts';
 import type { Clock, Ids, Logger, Meter, Store } from '#src/ports.ts';
 import type { WebhookHandler } from '#src/server.ts';
 
@@ -242,14 +253,30 @@ type RunningWorker = {
   drain: () => Promise<void>;
 };
 
-async function runWorker(
-  env: EnvMap,
-  runtime: ServerRuntime,
-): Promise<RunningWorker> {
+// The worker composition plus the host bridges around it, gathered so `runWorker` reads as the
+// tick loop it is. OPS=1 wraps the composition's meter/logger in the supervisor's signal buffer;
+// the wrapped ports forward every call unchanged, so the worker behaves identically either way.
+async function workerHost(env: EnvMap): Promise<{
+  worker: ComposedWorker['worker'];
+  store: Store;
+  relayDispatcher: ComposedWorker['dispatcher'];
+  edge: Awaited<ReturnType<typeof maybeEdgeTilia>>;
+  bridge: Awaited<ReturnType<typeof maybeTaskqHost>>;
+  ops: ReturnType<typeof maybeOps>;
+}> {
   const { ports, defaults } = wiring(env);
   const edge = await maybeEdgeTilia(env, log);
   if (edge !== undefined) {
     ports.processor = edge.processor;
+  }
+  const ops = maybeOps(env, {
+    clock: defaults.clock ?? systemClock(),
+    logger: log,
+    meter: noopMeter(),
+  });
+  if (ops !== undefined) {
+    defaults.logger = ops.runtime.logger;
+    defaults.meter = ops.runtime.meter;
   }
   const { worker, store, dispatcher } = await composeWorker(
     env,
@@ -257,7 +284,22 @@ async function runWorker(
     defaults,
   );
   const bridge = await maybeTaskqHost(env, log);
-  const relayDispatcher = bridge?.dispatcher ?? dispatcher;
+  return {
+    worker,
+    store,
+    relayDispatcher: bridge?.dispatcher ?? dispatcher,
+    edge,
+    bridge,
+    ops,
+  };
+}
+
+async function runWorker(
+  env: EnvMap,
+  runtime: ServerRuntime,
+): Promise<RunningWorker> {
+  const { worker, store, relayDispatcher, edge, bridge, ops } =
+    await workerHost(env);
   const { workerIntervalMs: intervalMs, workerBatch: limit } = runtime;
 
   // Non-overlap guard: while a tick runs, later interval fires are skipped. The shutdown handler
@@ -301,11 +343,31 @@ async function runWorker(
   await tick();
   const timer = setInterval(() => void tick(), intervalMs);
   log.log('info', 'worker.started', { intervalMs, batch: limit });
+  const stopOps = ops?.start({
+    sagas: store.sagas,
+    runSweep: (now) =>
+      worker.runOnce({
+        now,
+        limit,
+        dispatcher: relayDispatcher,
+        float: edge?.float,
+      }),
+    runRelay: (now) =>
+      worker.runOnce({
+        now,
+        limit,
+        dispatcher: relayDispatcher,
+        only: ['relay'],
+      }),
+    reviveInbox: (n) => store.inbox.reviveDead(n),
+    pauseWorker: () => worker.pause(),
+  });
 
   return {
     timer,
     store,
     drain: async () => {
+      stopOps?.();
       if (inFlight) {
         await inFlight;
       }
@@ -435,6 +497,7 @@ function logResolved(mode: string, env: EnvMap, runtime: ServerRuntime): void {
           workerIntervalMs: runtime.workerIntervalMs,
           workerBatch: runtime.workerBatch,
           queue: queue.kind === 'off' ? 'off' : `taskq(${queue.engine})`,
+          ops: readFlag(env.OPS) ? 'on' : 'off',
         }
       : { port: runtime.port }),
     shutdownTimeoutMs: runtime.shutdownTimeoutMs,

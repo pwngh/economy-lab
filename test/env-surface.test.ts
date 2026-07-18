@@ -29,6 +29,7 @@ import { BENCH_KEYS } from '#scripts/support/harness.ts';
 import { EXTERNALS_KEYS, SERVER_KEYS } from '#scripts/support/server-env.ts';
 import { TILIA_KEYS } from '#scripts/support/edge-host.ts';
 import { TASKQ_KEYS } from '#scripts/support/taskq-host.ts';
+import { OPS_KEYS } from '#scripts/support/ops-host.ts';
 
 // Names read by entry scripts that execute on import (so their lists can't live in the script):
 // DEMO_RESET is scripts/compose-demo.ts's reset flag.
@@ -54,6 +55,7 @@ const DECLARED = new Set<string>([
   ...BENCH_KEYS,
   ...TILIA_KEYS,
   ...TASKQ_KEYS,
+  ...OPS_KEYS,
   ...SCRIPT_KEYS,
 ]);
 
