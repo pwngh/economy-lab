@@ -11,7 +11,7 @@
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 
-import type { Cache } from '#src/ports.ts';
+import type { Cache, RateLimiter } from '#src/ports.ts';
 
 // Hand-written shape of the ioredis methods we use, so the file typechecks without ioredis (an
 // optional dependency) installed. This module never imports ioredis, so loading it opens nothing.
@@ -75,6 +75,61 @@ export function redisCacheFrom(
         await client.del(namespaced(key));
       } catch (error) {
         storeFault('invalidate', error);
+      }
+    },
+
+    close: async () => {
+      await client.quit();
+    },
+  };
+}
+
+// The counter methods the limiter uses, kept separate from RedisClient so cache fakes and
+// callers don't grow methods they never touch.
+interface RedisCounterClient {
+  incr(key: string): Promise<number>;
+  pexpire(key: string, ttlMs: number): Promise<unknown>;
+  pttl(key: string): Promise<number>;
+  quit(): Promise<unknown>;
+}
+
+const LIMIT_PREFIX = 'economy:ratelimit:';
+
+/**
+ * Adapts an already-connected ioredis client into a fixed-window {@link RateLimiter}: `INCR` on
+ * the windowed key, `PEXPIRE` arms the window on its first hit, and a denial reports the key's
+ * remaining `PTTL`. The caller creates and owns the client, same as {@link redisCacheFrom}; the
+ * returned `close()` releases the connection.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for
+ *   how the server keys and answers denials.
+ */
+export function redisRateLimiterFrom(
+  client: RedisCounterClient,
+  options: { limit: number; windowMs: number },
+): RateLimiter & { close(): Promise<void> } {
+  return {
+    allow: async (key) => {
+      try {
+        const windowed = `${LIMIT_PREFIX}${key}`;
+        const count = await client.incr(windowed);
+        if (count === 1) {
+          await client.pexpire(windowed, options.windowMs);
+        }
+        if (count <= options.limit) {
+          return { allowed: true };
+        }
+        const remaining = await client.pttl(windowed);
+        return {
+          allowed: false,
+          retryAfterMs: remaining > 0 ? remaining : options.windowMs,
+        };
+      } catch (error) {
+        throw fault(ERROR_CODES.STORE_FAILURE, 'Redis rate limit failed.', {
+          cause: error,
+          retryable: true,
+          detail: { operation: 'allow' },
+        });
       }
     },
 

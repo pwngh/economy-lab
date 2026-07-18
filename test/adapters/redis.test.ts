@@ -13,7 +13,8 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { redisCacheFrom } from '#src/adapters/redis.ts';
+import { redisCacheFrom, redisRateLimiterFrom } from '#src/adapters/redis.ts';
+import { EconomyError } from '#src/errors.ts';
 import { runCacheConformance } from '#test/conformance/cache.ts';
 
 interface FakeRedis {
@@ -181,3 +182,110 @@ describe('redisCacheFrom', () => {
 });
 
 runCacheConformance('redis', () => redisCacheFrom(fakeRedis()));
+
+interface FakeCounter {
+  incr(key: string): Promise<number>;
+  pexpire(key: string, ttlMs: number): Promise<unknown>;
+  pttl(key: string): Promise<number>;
+  quit(): Promise<unknown>;
+  counts: Map<string, number>;
+  expiries: ReadonlyArray<ReadonlyArray<unknown>>;
+}
+
+function fakeCounter(remainingTtl = 500): FakeCounter {
+  const counts = new Map<string, number>();
+  const expiries: unknown[][] = [];
+  return {
+    counts,
+    expiries,
+    incr: async (key) => {
+      const next = (counts.get(key) ?? 0) + 1;
+      counts.set(key, next);
+      return next;
+    },
+    pexpire: async (key, ttlMs) => {
+      expiries.push([key, ttlMs]);
+      return 1;
+    },
+    pttl: async () => remainingTtl,
+    quit: async () => 'OK',
+  };
+}
+
+describe('redisRateLimiterFrom', () => {
+  test('allows under the limit and arms the window on the first hit', async () => {
+    const client = fakeCounter();
+    const limiter = redisRateLimiterFrom(client, {
+      limit: 2,
+      windowMs: 1_000,
+    });
+
+    assert.deepEqual(await limiter.allow('k'), { allowed: true });
+    assert.deepEqual(await limiter.allow('k'), { allowed: true });
+
+    // PEXPIRE ran once, on the count that created the key, under the namespaced form.
+    assert.deepEqual(client.expiries, [['economy:ratelimit:k', 1_000]]);
+  });
+
+  test('denies past the limit with the remaining window as retryAfterMs', async () => {
+    const limiter = redisRateLimiterFrom(fakeCounter(500), {
+      limit: 1,
+      windowMs: 1_000,
+    });
+
+    await limiter.allow('k');
+
+    assert.deepEqual(await limiter.allow('k'), {
+      allowed: false,
+      retryAfterMs: 500,
+    });
+  });
+
+  test('a non-positive PTTL falls back to the full window', async () => {
+    const limiter = redisRateLimiterFrom(fakeCounter(-1), {
+      limit: 1,
+      windowMs: 1_000,
+    });
+
+    await limiter.allow('k');
+
+    assert.deepEqual(await limiter.allow('k'), {
+      allowed: false,
+      retryAfterMs: 1_000,
+    });
+  });
+
+  test('a redis failure surfaces as a retryable fault', async () => {
+    const limiter = redisRateLimiterFrom(
+      {
+        ...fakeCounter(),
+        incr: async () => Promise.reject(new Error('down')),
+      },
+      { limit: 1, windowMs: 1_000 },
+    );
+
+    await assert.rejects(limiter.allow('k'), (error: unknown) => {
+      assert.equal(error instanceof EconomyError, true);
+      assert.equal((error as EconomyError).retryable, true);
+      return true;
+    });
+  });
+
+  test('closes by quitting the underlying client', async () => {
+    let quit = false;
+    const limiter = redisRateLimiterFrom(
+      {
+        ...fakeCounter(),
+        quit: async () => {
+          quit = true;
+          return 'OK';
+        },
+      },
+      { limit: 1, windowMs: 1_000 },
+    );
+
+    await limiter.close();
+
+    assert.equal(quit, true);
+  });
+});
