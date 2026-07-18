@@ -58,6 +58,19 @@ it('runs a wire operation through the ledger and returns the committed outcome',
   expect(debit?.amount).toBe('CREDIT:100.00');
 });
 
+it('the mounted path the fetcher really posts (/console/submit) reaches the engine', async () => {
+  // The app runs under the /console/ basename; the bridge strips it before the engine routes.
+  await (await getEngine()).reset();
+  const request = new Request('http://console.test/console/submit', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(SPEND),
+  });
+  const res = (await callRoute(clientAction, request)) as Wire;
+  expect(res.status).toBe(200);
+  expect(res.body.status).toBe('committed');
+});
+
 it('a redelivered idempotency key is a duplicate that posts nothing new', async () => {
   await (await getEngine()).reset();
   const first = await post(SPEND);

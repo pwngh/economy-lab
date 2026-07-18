@@ -1581,7 +1581,10 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     // dropped after, since a submitted operation may have moved balances.
     httpFetch: (request) =>
       mutate(async () => {
-        const response = await createServer(economy)(request);
+        // The app mounts at /console/, but the engine's server routes from the path root.
+        const url = new URL(request.url);
+        url.pathname = url.pathname.replace(/^\/console/, '');
+        const response = await createServer(economy)(new Request(url, request));
         invalidateReadCaches();
         return response;
       }),
