@@ -87,6 +87,8 @@ test('checkEnv is empty for a complete env and lists every problem otherwise', (
       PAYOUT_RATE: '5',
       PAYOUT_SCALE: '3',
       PROCESSOR_URL: 'https://payouts.example',
+      MATURITY_HORIZON_CARD_MS: '604800000',
+      VELOCITY_LIMIT_MINOR: '5000000',
     }),
     [],
   );

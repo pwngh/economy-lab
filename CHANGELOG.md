@@ -23,6 +23,12 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - `make ci` runs the whole GitHub CI locally: the check and apps jobs; `DB=1` adds the db
   matrix against live engines.
 
+### Changed
+
+- `VELOCITY_LIMIT_MINOR` is required in production (startup fails fast naming it, like the
+  secrets); the 1,000-credit default applies outside production. `checkEnv` reports both
+  policy anchors, `VELOCITY_LIMIT_MINOR` and `MATURITY_HORIZON_CARD_MS`.
+
 ## 0.3.1 - 2026-07-17
 
 ### Added

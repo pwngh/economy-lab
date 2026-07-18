@@ -58,7 +58,7 @@ export interface Config {
   payoutFeeBps: number;
 
   /** The single-knob velocity ceiling (CREDIT minor units): both window classes fall back to it
-   *  unless their own limit below is set. */
+   *  unless their own limit below is set. The default is demo-scale; production must state it. */
   velocityLimitMinor: bigint;
 
   /** Ceiling for the inflow window (topUp, grantPromo) — card testing fills this one. Unset
@@ -172,8 +172,8 @@ export const CONFIG_KEYS = [
 /**
  * Build {@link Config} from env vars, defaulting any value that is unset or invalid.
  *
- * If any required secret — or the maturity anchor MATURITY_HORIZON_CARD_MS — is missing in
- * production, throws a single CONFIG.INVALID fault listing all missing keys at once, so the
+ * If any required secret — or a policy anchor, MATURITY_HORIZON_CARD_MS or VELOCITY_LIMIT_MINOR —
+ * is missing in production, throws a single CONFIG.INVALID fault listing all missing keys at once, so the
  * program fails at startup rather than one key at a time during requests.
  */
 export function loadConfig(env: EnvMap): Config {
@@ -185,6 +185,9 @@ export function loadConfig(env: EnvMap): Config {
   const missing = production ? missingSecrets(env) : [];
   if (production && (env.MATURITY_HORIZON_CARD_MS ?? '') === '') {
     missing.push('MATURITY_HORIZON_CARD_MS');
+  }
+  if (production && (env.VELOCITY_LIMIT_MINOR ?? '') === '') {
+    missing.push('VELOCITY_LIMIT_MINOR');
   }
   if (missing.length > 0) {
     throw fault(
@@ -212,6 +215,7 @@ export function loadConfig(env: EnvMap): Config {
 
     platformFeeBps: readInt(env.PLATFORM_FEE_BPS, 1530, { max: 10_000 }),
     payoutFeeBps: readInt(env.PAYOUT_FEE_BPS, 150, { max: 10_000 }),
+    // 1,000 credits an hour: small enough that the velocity demos can trip the gate.
     velocityLimitMinor: readBigInt(env.VELOCITY_LIMIT_MINOR, 100_000n),
     ...bigIntIfSet('velocityInflowLimitMinor', env.VELOCITY_INFLOW_LIMIT_MINOR),
     ...bigIntIfSet(

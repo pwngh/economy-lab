@@ -366,8 +366,8 @@ export function describeSelection(env: EnvMap): Selection {
 
 /**
  * Validates `env` without constructing anything: returns every problem a deployment would hit at
- * startup (an unsupported `DATABASE_URL`, missing production secrets, missing or malformed external
- * knobs), or an empty array when the environment is complete. Run it at deploy time so a bad config
+ * startup (an unsupported `DATABASE_URL`, missing production secrets or policy anchors, missing or
+ * malformed external knobs), or an empty array when the environment is complete. Run it at deploy time so a bad config
  * fails on a health check, not on the first request. Outside production only the store scheme is
  * checked, since the dev defaults fill everything else.
  */
@@ -381,6 +381,11 @@ export function checkEnv(env: EnvMap): string[] {
   if (isProduction(env)) {
     for (const secret of missingSecrets(env)) {
       problems.add(`${secret}: required in production but missing`);
+    }
+    for (const key of ['MATURITY_HORIZON_CARD_MS', 'VELOCITY_LIMIT_MINOR']) {
+      if ((env[key] ?? '') === '') {
+        problems.add(`${key}: required in production but missing`);
+      }
     }
   }
   for (const key of missingExternals(env)) {

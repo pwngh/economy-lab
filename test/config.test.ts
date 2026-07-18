@@ -66,6 +66,7 @@ describe('loadConfig maturity horizons', () => {
           NODE_ENV: 'production',
           WEBHOOK_SECRET: 's',
           SIGNING_SECRET: 's',
+          VELOCITY_LIMIT_MINOR: '100000',
         }),
       (error: unknown) => {
         const fault = error as {
@@ -79,15 +80,38 @@ describe('loadConfig maturity horizons', () => {
     );
   });
 
-  test('production with an explicit card horizon loads clean', () => {
+  test('production requires the velocity ceiling, named in the fail-fast', () => {
+    assert.throws(
+      () =>
+        loadConfig({
+          NODE_ENV: 'production',
+          WEBHOOK_SECRET: 's',
+          SIGNING_SECRET: 's',
+          MATURITY_HORIZON_CARD_MS: String(CARD_HORIZON_MS),
+        }),
+      (error: unknown) => {
+        const fault = error as {
+          code?: unknown;
+          detail?: { missing?: unknown };
+        };
+        assert.equal(fault.code, ERROR_CODES.CONFIG_INVALID);
+        assert.deepEqual(fault.detail?.missing, ['VELOCITY_LIMIT_MINOR']);
+        return true;
+      },
+    );
+  });
+
+  test('production with the anchors stated loads clean', () => {
     const config = loadConfig({
       NODE_ENV: 'production',
       WEBHOOK_SECRET: 's',
       SIGNING_SECRET: 's',
       MATURITY_HORIZON_CARD_MS: String(CARD_HORIZON_MS),
+      VELOCITY_LIMIT_MINOR: '5000000',
     });
 
     assert.equal(config.maturityHorizonMs.card, CARD_HORIZON_MS);
+    assert.equal(config.velocityLimitMinor, 5_000_000n);
   });
 });
 
@@ -105,6 +129,7 @@ describe('loadConfig startup check', () => {
           'WEBHOOK_SECRET',
           'SIGNING_SECRET',
           'MATURITY_HORIZON_CARD_MS',
+          'VELOCITY_LIMIT_MINOR',
         ]);
         return true;
       },
