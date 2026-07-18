@@ -16,6 +16,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - `hashChainedAuditSink` hash-chains the audit trail; `verifyAuditChain` reports the first
   break. `make audit-verify FILE=...`; `scripts/ops-audit-worm.ts` is the sealed-segment
   example.
+- `OPS=1` composes the supervisor around the worker (`OPS_INTERVAL_MS` paces it); `demo:ops`
+  runs the `stuck-saga`, `integrity`, and `deadlock` demos.
 
 ## 0.3.1 - 2026-07-17
 
