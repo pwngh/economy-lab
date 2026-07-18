@@ -30,6 +30,7 @@ import type { ReactNode } from 'react';
 import { DAY_MS } from '~/demo';
 import { getEngine } from '~/engine';
 import { takeFlash } from '~/flash';
+import { advanceHint, hintOn } from '~/hints';
 import {
   BackField,
   FlashBanner,
@@ -248,7 +249,7 @@ function TourStrip({ step, exitTo }: { step: number; exitTo: string }) {
         {next ? (
           <Link
             to={`${next.to}?tour=${step + 1}`}
-            className="tour-next"
+            className="tour-next hint-pulse"
             viewTransition
           >
             Next: {next.label} →
@@ -303,6 +304,18 @@ function Topbar({
     return () => clearInterval(tick);
   }, [live, revalidate]);
 
+  // The one-shot hint's clock steps: a tick per settled navigation re-reads the experiment's
+  // position, and tick 0 (prerender + hydration) never pulses.
+  const [tick, setTick] = useState(0);
+  const idle = navigation.state === 'idle';
+  useEffect(() => {
+    if (idle) {
+      setTick((t) => t + 1);
+    }
+  }, [idle]);
+  const pulse = (control: 'day' | 'jobs') =>
+    tick > 0 && !live && hintOn(control);
+
   return (
     <div className="topbar">
       <div className="topbar-clock">
@@ -315,13 +328,26 @@ function Topbar({
         >
           {dayLabel(now)}
         </span>
-        <SimButton op="advance" back={back} extra={{ days: '1' }} busy={busy}>
+        <SimButton
+          op="advance"
+          back={back}
+          extra={{ days: '1' }}
+          busy={busy}
+          pulse={pulse('day')}
+          onClick={() => advanceHint('day')}
+        >
           +1 day
         </SimButton>
         <SimButton op="advance" back={back} extra={{ days: '7' }} busy={busy}>
           +7 days
         </SimButton>
-        <SimButton op="runJobs" back={back} busy={busy}>
+        <SimButton
+          op="runJobs"
+          back={back}
+          busy={busy}
+          pulse={pulse('jobs')}
+          onClick={() => advanceHint('jobs')}
+        >
           Run jobs
         </SimButton>
         <button
@@ -359,6 +385,8 @@ function SimButton({
   extra,
   busy,
   primary,
+  pulse,
+  onClick,
   children,
 }: {
   op: string;
@@ -366,6 +394,8 @@ function SimButton({
   extra?: Record<string, string>;
   busy: boolean;
   primary?: boolean;
+  pulse?: boolean;
+  onClick?: () => void;
   children: ReactNode;
 }) {
   return (
@@ -377,8 +407,13 @@ function SimButton({
       ))}
       <button
         type="submit"
-        className={primary ? 'primary' : undefined}
+        className={
+          [primary ? 'primary' : '', pulse ? 'hint-pulse' : '']
+            .filter(Boolean)
+            .join(' ') || undefined
+        }
         disabled={busy}
+        onClick={onClick}
       >
         {children}
       </button>

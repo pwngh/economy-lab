@@ -190,6 +190,34 @@ input[type="number"] {
   font-size: var(--t-md);
   letter-spacing: -0.01em;
 }
+
+/* The one-shot guidance pulse: an accent ring breathing off the control it points at. */
+.hint-pulse {
+  border-radius: var(--r);
+  animation: hint-pulse 1.6s ease-out infinite;
+}
+/* On the inline tour link the ring needs a little air; the negative margin keeps the text put. */
+.tour-next.hint-pulse {
+  padding: 2px 6px;
+  margin: -2px -6px;
+}
+@keyframes hint-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hint-pulse {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+}
 .brand-sub {
   font-family: var(--mono);
   font-size: var(--t-xs);

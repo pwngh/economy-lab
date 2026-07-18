@@ -11,9 +11,12 @@
  * reset/clear of the sample economy. These moved off the pages into one place.
  */
 
+import { useEffect, useState } from 'react';
+
 import { Form, Link, useLocation, useNavigation } from 'react-router';
 
 import { getEngine } from '~/engine';
+import { hintsOn, setHintsOn } from '~/hints';
 import { BackField, PageError, StatusPill, pageMeta } from '~/ui';
 import type { Route } from './+types/controls';
 
@@ -101,6 +104,8 @@ export default function Controls({ loaderData }: Route.ComponentProps) {
         </div>
       </div>
 
+      <HintsCard />
+
       <div className="card">
         <div className="card-head">
           <h3>Sample economy</h3>
@@ -126,6 +131,41 @@ export default function Controls({ loaderData }: Route.ComponentProps) {
           </Form>
         </div>
       </div>
+    </div>
+  );
+}
+
+// The guided-hints toggle is tab-local preference like the theme, so it is a plain button over
+// localStorage, not a form post; the state seeds in an effect so prerendered markup matches.
+function HintsCard() {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    setOn(hintsOn());
+  }, []);
+  return (
+    <div className="card">
+      <div className="card-head">
+        <h3>Show hints</h3>
+        <p className="card-sub">
+          A pulse that walks the payout cycle — settle, advance a day, run jobs,
+          settle again — looping while on. Off by default.
+        </p>
+      </div>
+      <span className="toggle">
+        <StatusPill tone={on ? 'blue' : 'neutral'} dot>
+          {on ? 'on' : 'off'}
+        </StatusPill>
+        <button
+          type="button"
+          aria-pressed={on}
+          onClick={() => {
+            setHintsOn(!on);
+            setOn(!on);
+          }}
+        >
+          {on ? 'Hide hints' : 'Show hints'}
+        </button>
+      </span>
     </div>
   );
 }

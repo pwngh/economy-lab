@@ -12,11 +12,14 @@
  * engine's refusal.
  */
 
+import { useEffect, useState } from 'react';
+
 import { Form, Link, useLocation, useNavigation } from 'react-router';
 
 import { PAGE_SIZE } from '~/economy';
 import { getEngine } from '~/engine';
 import type { Flash } from '~/flash';
+import { advanceHint, hintOn } from '~/hints';
 import {
   Amount,
   BackField,
@@ -96,6 +99,14 @@ export default function Payouts({ loaderData }: Route.ComponentProps) {
   const navigation = useNavigation();
   const busy = navigation.state !== 'idle';
 
+  // The one-shot hint: pulse Settle submitted while it is the experiment's current step and
+  // cards wait in Submitted (set in an effect so the prerendered markup never reads
+  // localStorage; `counts` is fresh per navigation, so the step re-reads after every click).
+  const [settleHint, setSettleHint] = useState(false);
+  useEffect(() => {
+    setSettleHint(hintOn('settle') && counts.SUBMITTED > 0);
+  }, [counts]);
+
   // Opening or closing a drill must not lose the board's page, and paging must not close the drill:
   // `boardQs` is the board state without `saga`, `pagerBase` the board state without `page`.
   const boardParams = new URLSearchParams(location.search);
@@ -136,7 +147,12 @@ export default function Payouts({ loaderData }: Route.ComponentProps) {
           <Form method="post" action="/actions/simulate">
             <BackField to={back} />
             <input type="hidden" name="op" value="settle" />
-            <button type="submit" disabled={busy}>
+            <button
+              type="submit"
+              disabled={busy}
+              className={settleHint ? 'hint-pulse' : undefined}
+              onClick={() => advanceHint('settle')}
+            >
               Settle submitted
             </button>
           </Form>
