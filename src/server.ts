@@ -68,6 +68,10 @@ export interface ServerOptions {
   // Deadline on reading a request body; past it the reply is 408, so a trickled body cannot
   // hold the handler open. Defaults to DEFAULT_READ_TIMEOUT_MS.
   readTimeoutMs?: number;
+
+  // Browser origins allowed by CORS, matched exactly. Absent means no CORS headers at all, so
+  // cross-origin browser calls fail closed.
+  cors?: { origins: ReadonlyArray<string> };
 }
 
 /** Default byte ceiling on request bodies. The Node host bridge enforces the same limit. */
@@ -95,6 +99,9 @@ const TIMESTAMP_HEADER = 'x-timestamp';
  * the status, `title` carries the caller-safe message, and the stable `code` and `retryable` ride
  * as extensions. `detail`, `cause`, and stack never leave the server.
  *
+ * `/submit` authenticates through `authenticate` when configured; every body reads under a byte
+ * ceiling and deadline; CORS stays off unless `cors` lists origins.
+ *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for
  *   the routes, codec, and webhook gate.
  */
@@ -103,38 +110,89 @@ export function createServer(
   options: ServerOptions = {},
 ): (request: Request) => Promise<Response> {
   return async (request) => {
-    const segments = new URL(request.url).pathname.split('/').filter(Boolean);
-
-    if (
-      request.method === 'GET' &&
-      segments.length === 1 &&
-      segments[0] === 'healthz'
-    ) {
-      return livenessRoute();
+    const origin = allowedOrigin(request, options);
+    if (request.method === 'OPTIONS' && options.cors !== undefined) {
+      return preflightResponse(request, origin);
     }
-    if (
-      request.method === 'GET' &&
-      segments.length === 1 &&
-      segments[0] === 'readyz'
-    ) {
-      return readinessRoute(economy);
+    const response = await route(economy, options, request);
+    if (origin !== null) {
+      response.headers.set('access-control-allow-origin', origin);
+      response.headers.append('vary', 'origin');
     }
-    if (
-      request.method === 'POST' &&
-      segments.length === 1 &&
-      segments[0] === 'submit'
-    ) {
-      return submitRoute(economy, options, request);
-    }
-    if (
-      request.method === 'POST' &&
-      segments.length === 2 &&
-      segments[0] === 'webhooks'
-    ) {
-      return webhookRoute(options, segments[1]!, request);
-    }
-    return problemResponse(404, 'Not found.');
+    return response;
   };
+}
+
+async function route(
+  economy: Economy,
+  options: ServerOptions,
+  request: Request,
+): Promise<Response> {
+  const segments = new URL(request.url).pathname.split('/').filter(Boolean);
+
+  if (
+    request.method === 'GET' &&
+    segments.length === 1 &&
+    segments[0] === 'healthz'
+  ) {
+    return livenessRoute();
+  }
+  if (
+    request.method === 'GET' &&
+    segments.length === 1 &&
+    segments[0] === 'readyz'
+  ) {
+    return readinessRoute(economy);
+  }
+  if (
+    request.method === 'POST' &&
+    segments.length === 1 &&
+    segments[0] === 'submit'
+  ) {
+    return submitRoute(economy, options, request);
+  }
+  if (
+    request.method === 'POST' &&
+    segments.length === 2 &&
+    segments[0] === 'webhooks'
+  ) {
+    return webhookRoute(options, segments[1]!, request);
+  }
+  return problemResponse(404, 'Not found.');
+}
+
+// --- CORS -------------------------------------------------------------------------
+
+// Exact-match against the allowlist. Null (CORS off, no Origin header, or an unlisted origin)
+// means no CORS headers are set, which is the deny.
+function allowedOrigin(
+  request: Request,
+  options: ServerOptions,
+): string | null {
+  const origin = request.headers.get('origin');
+  if (origin === null || options.cors === undefined) {
+    return null;
+  }
+  return options.cors.origins.includes(origin) ? origin : null;
+}
+
+// A denied preflight is a bare 204: the browser blocks the caller because the grant headers are
+// absent, and the response leaks nothing about the allowlist.
+function preflightResponse(request: Request, origin: string | null): Response {
+  if (origin === null) {
+    return new Response(null, { status: 204 });
+  }
+  const headers = new Headers({
+    'access-control-allow-origin': origin,
+    'access-control-allow-methods': 'GET, POST, OPTIONS',
+    'access-control-max-age': '600',
+    vary: 'origin',
+  });
+  const requested = request.headers.get('access-control-request-headers');
+  if (requested !== null) {
+    headers.set('access-control-allow-headers', requested);
+  }
+  return new Response(null, { status: 204, headers });
 }
 
 // --- /healthz and /readyz ---------------------------------------------------------

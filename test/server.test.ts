@@ -556,3 +556,79 @@ describe('createServer Body Limits', () => {
     assert.equal(response.status, 413);
   });
 });
+
+describe('createServer CORS', () => {
+  const allowlisted = { cors: { origins: ['https://app.example'] } };
+
+  test('sets no CORS headers when the option is absent', async () => {
+    const server = createServer(makeEconomy());
+
+    const response = await server(
+      new Request('https://economy.test/healthz', {
+        headers: { origin: 'https://app.example' },
+      }),
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('access-control-allow-origin'), null);
+  });
+
+  test('grants a preflight from an allowlisted origin', async () => {
+    const server = createServer(makeEconomy(), allowlisted);
+
+    const response = await server(
+      new Request('https://economy.test/submit', {
+        method: 'OPTIONS',
+        headers: {
+          origin: 'https://app.example',
+          'access-control-request-method': 'POST',
+          'access-control-request-headers': 'content-type',
+        },
+      }),
+    );
+
+    assert.equal(response.status, 204);
+    assert.equal(
+      response.headers.get('access-control-allow-origin'),
+      'https://app.example',
+    );
+    assert.equal(
+      response.headers.get('access-control-allow-headers'),
+      'content-type',
+    );
+  });
+
+  test('answers a preflight from an unlisted origin with no grant', async () => {
+    const server = createServer(makeEconomy(), allowlisted);
+
+    const response = await server(
+      new Request('https://economy.test/submit', {
+        method: 'OPTIONS',
+        headers: {
+          origin: 'https://evil.example',
+          'access-control-request-method': 'POST',
+        },
+      }),
+    );
+
+    assert.equal(response.status, 204);
+    assert.equal(response.headers.get('access-control-allow-origin'), null);
+  });
+
+  test('rides the grant on route responses for an allowlisted origin', async () => {
+    const server = createServer(makeEconomy(), allowlisted);
+
+    const response = await server(
+      new Request('https://economy.test/healthz', {
+        headers: { origin: 'https://app.example' },
+      }),
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(
+      response.headers.get('access-control-allow-origin'),
+      'https://app.example',
+    );
+    assert.equal(response.headers.get('vary'), 'origin');
+  });
+});

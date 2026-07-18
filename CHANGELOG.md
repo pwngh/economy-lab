@@ -12,6 +12,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - Request bodies read under a byte ceiling (`ServerOptions.maxBodyBytes`, default 64 KiB,
   answers `413`) and a read deadline (`ServerOptions.readTimeoutMs`, default 10 s, answers
   `408`), on the Fetch handler and the Node bridge alike.
+- `ServerOptions.cors` allowlists browser origins with exact matching and preflight handling;
+  absent, the server sets no CORS headers.
 
 ## 0.2.2 - 2026-07-17
 
