@@ -14,6 +14,11 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   `408`), on the Fetch handler and the Node bridge alike.
 - `ServerOptions.cors` allowlists browser origins with exact matching and preflight handling;
   absent, the server sets no CORS headers.
+- `ServerOptions.rateLimit` admits `/submit` through the new `RateLimiter` port, keyed by the
+  authenticated principal or the bridge-stamped client address; a denial answers `429` with
+  `retry-after`, and a throwing limiter fails open, counting `economy.ratelimit.degraded`.
+  `memoryRateLimiter` counts fixed windows in-process; `redisRateLimiterFrom` shares one
+  budget across instances.
 
 ## 0.2.2 - 2026-07-17
 

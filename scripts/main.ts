@@ -31,6 +31,7 @@ import { REQUIRED_SECRETS, isProduction, missingSecrets } from '#src/env.ts';
 import { serverRuntime } from '#scripts/support/server-env.ts';
 import { economyFromCapabilities } from '#src/economy.ts';
 import {
+  CLIENT_IP_HEADER,
   DEFAULT_MAX_BODY_BYTES,
   DEFAULT_READ_TIMEOUT_MS,
   createServer,
@@ -201,6 +202,8 @@ async function bridge(
       headers.set(name, value.join(', '));
     }
   }
+  // Always overwrite: the socket, not the caller, says who is connecting.
+  headers.set(CLIENT_IP_HEADER, req.socket.remoteAddress ?? 'unknown');
   const hasBody = method !== 'GET' && method !== 'HEAD' && chunks.length > 0;
   const request = new Request(
     `http://${req.headers.host ?? 'localhost'}${req.url ?? '/'}`,

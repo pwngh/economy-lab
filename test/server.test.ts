@@ -632,3 +632,106 @@ describe('createServer CORS', () => {
     assert.equal(response.headers.get('vary'), 'origin');
   });
 });
+
+describe('createServer Rate Limiting', () => {
+  test('answers 429 with retry-after when the limiter denies', async () => {
+    const server = createServer(makeEconomy(), {
+      rateLimit: {
+        limiter: {
+          allow: async () => ({ allowed: false, retryAfterMs: 1_500 }),
+        },
+      },
+    });
+
+    const response = await server(
+      submitRequest(topUpBody('usr_limited', '1.00')),
+    );
+
+    assert.equal(response.status, 429);
+    assert.equal(response.headers.get('retry-after'), '2');
+    assert.equal(
+      response.headers.get('content-type'),
+      'application/problem+json',
+    );
+  });
+
+  test('keys by the authenticated principal', async () => {
+    const keys: string[] = [];
+    const server = createServer(makeEconomy(), {
+      authenticate: async () => ({ kind: 'user', userId: 'usr_keyed' }),
+      rateLimit: {
+        limiter: {
+          allow: async (key) => {
+            keys.push(key);
+            return { allowed: true };
+          },
+        },
+      },
+    });
+
+    await server(
+      submitRequest({
+        kind: 'topUp',
+        idempotencyKey: 'idem_rate_key',
+        userId: 'usr_keyed',
+        source: 'card',
+        amount: encodeAmount(credit('1.00')),
+      }),
+    );
+
+    assert.deepEqual(keys, ['user:usr_keyed']);
+  });
+
+  test('falls back to the stamped client address without a principal', async () => {
+    const keys: string[] = [];
+    const server = createServer(makeEconomy(), {
+      rateLimit: {
+        limiter: {
+          allow: async (key) => {
+            keys.push(key);
+            return { allowed: true };
+          },
+        },
+      },
+    });
+
+    await server(
+      new Request('https://economy.test/submit', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-economy-client-ip': '10.0.0.9',
+        },
+        body: JSON.stringify(topUpBody('usr_ip', '1.00')),
+      }),
+    );
+
+    assert.deepEqual(keys, ['ip:10.0.0.9']);
+  });
+
+  test('a throwing limiter fails open and counts degraded', async () => {
+    const counted: string[] = [];
+    const server = createServer(makeEconomy(), {
+      meter: {
+        count: (name) => {
+          counted.push(name);
+        },
+        observe: () => {},
+      },
+      rateLimit: {
+        limiter: {
+          allow: async () => {
+            throw new Error('limiter backend down');
+          },
+        },
+      },
+    });
+
+    const response = await server(submitRequest(topUpBody('usr_open', '1.00')));
+    const payload = (await response.json()) as { status: string };
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.status, 'committed');
+    assert.equal(counted.includes('economy.ratelimit.degraded'), true);
+  });
+});

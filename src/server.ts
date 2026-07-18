@@ -25,7 +25,13 @@ import { decodeWebhookEvent } from '#src/webhooks.ts';
 
 import { encodeAmounts } from '#src/money.ts';
 import type { Amount } from '#src/money.ts';
-import type { Clock, ReplayStore } from '#src/ports.ts';
+import type {
+  Clock,
+  Meter,
+  RateLimiter,
+  RateVerdict,
+  ReplayStore,
+} from '#src/ports.ts';
 import type { Config } from '#src/config.ts';
 import type { Economy, Operation, Outcome, Principal } from '#src/contract.ts';
 
@@ -56,11 +62,16 @@ export interface ServerOptions {
   // handler. When absent, the host dedups. The claim-last ordering lives at webhookRoute.
   replay?: ReplayStore;
 
+  // Failure sink for the rate limiter: a throwing limiter fails open and counts
+  // `economy.ratelimit.degraded` here.
+  meter?: Meter;
+
   // Authentication for `/submit`: maps the request to the acting principal, or null to refuse
   // with 401. When set, the server stamps the result onto the operation and rejects a body that
   // carries its own `actor`. When absent, the body's actor is trusted — safe only for in-process
   // hosts, never for a network-exposed handler.
   authenticate?: (request: Request) => Promise<Principal | null>;
+
   // Byte ceiling on request bodies; past it the reply is 413. Defaults to
   // DEFAULT_MAX_BODY_BYTES, which every legitimate operation fits well under.
   maxBodyBytes?: number;
@@ -72,6 +83,14 @@ export interface ServerOptions {
   // Browser origins allowed by CORS, matched exactly. Absent means no CORS headers at all, so
   // cross-origin browser calls fail closed.
   cors?: { origins: ReadonlyArray<string> };
+
+  // Admission control for `/submit`: each request counts against a caller key and a denial
+  // answers 429 with retry-after. The default key is the authenticated principal, else the
+  // client address the Node bridge stamps; hosts on other runtimes supply keyFor.
+  rateLimit?: {
+    limiter: RateLimiter;
+    keyFor?: (request: Request, principal?: Principal) => string;
+  };
 }
 
 /** Default byte ceiling on request bodies. The Node host bridge enforces the same limit. */
@@ -79,6 +98,12 @@ export const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
 
 /** Default deadline on reading a request body. The Node host bridge enforces the same limit. */
 export const DEFAULT_READ_TIMEOUT_MS = 10_000;
+
+/**
+ * Where the trusted client address rides. The Node bridge stamps this from the socket,
+ * overwriting anything inbound, so a caller can't spoof it.
+ */
+export const CLIENT_IP_HEADER = 'x-economy-client-ip';
 
 const SIGNATURE_HEADER = 'x-signature';
 
@@ -241,6 +266,11 @@ async function submitRoute(
     principal = verdict;
   }
 
+  const denied = await admitSubmit(options, request, principal);
+  if (denied !== null) {
+    return denied;
+  }
+
   let bytes: Uint8Array;
   try {
     bytes = await readBounded(request, options);
@@ -253,6 +283,59 @@ async function submitRoute(
   } catch (error) {
     return faultResponse(error);
   }
+}
+
+// Fail open on a throwing limiter: a down limiter backend should degrade protection, not
+// availability. The degraded counter is what makes that trade visible.
+async function admitSubmit(
+  options: ServerOptions,
+  request: Request,
+  principal: Principal | undefined,
+): Promise<Response | null> {
+  const limit = options.rateLimit;
+  if (limit === undefined) {
+    return null;
+  }
+  const key =
+    limit.keyFor?.(request, principal) ?? limiterKey(request, principal);
+  let verdict: RateVerdict;
+  try {
+    verdict = await limit.limiter.allow(key);
+  } catch {
+    options.meter?.count('economy.ratelimit.degraded', 1);
+    return null;
+  }
+  if (verdict.allowed) {
+    return null;
+  }
+  const response = problemResponse(429, 'Too many requests.');
+  if (verdict.retryAfterMs !== undefined) {
+    response.headers.set(
+      'retry-after',
+      String(Math.ceil(verdict.retryAfterMs / 1000)),
+    );
+  }
+  return response;
+}
+
+// The authenticated principal is the fairest key; without one, the bridge-stamped client
+// address stands in. 'unknown' pools every caller a runtime leaves unstamped, so such hosts
+// should supply keyFor.
+function limiterKey(
+  request: Request,
+  principal: Principal | undefined,
+): string {
+  if (principal !== undefined) {
+    switch (principal.kind) {
+      case 'user':
+        return `user:${principal.userId}`;
+      case 'system':
+        return `system:${principal.service}`;
+      case 'operator':
+        return `operator:${principal.operatorId}`;
+    }
+  }
+  return `ip:${request.headers.get(CLIENT_IP_HEADER) ?? 'unknown'}`;
 }
 
 // --- /webhooks/:provider ----------------------------------------------------------
