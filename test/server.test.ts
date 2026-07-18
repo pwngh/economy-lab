@@ -735,3 +735,68 @@ describe('createServer Rate Limiting', () => {
     assert.equal(counted.includes('economy.ratelimit.degraded'), true);
   });
 });
+
+describe('createServer Correlation', () => {
+  test('mints a request id and echoes it on the submit response', async () => {
+    const server = createServer(makeEconomy());
+
+    const response = await server(
+      submitRequest(topUpBody('usr_corr_mint', '1.00')),
+    );
+
+    assert.match(response.headers.get('x-request-id') ?? '', /^req_/);
+  });
+
+  test('echoes a caller-supplied x-request-id', async () => {
+    const server = createServer(makeEconomy());
+
+    const request = new Request('https://economy.test/submit', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-request-id': 'req_caller_1',
+      },
+      body: JSON.stringify(topUpBody('usr_corr_echo', '1.00')),
+    });
+    const response = await server(request);
+
+    assert.equal(response.headers.get('x-request-id'), 'req_caller_1');
+  });
+
+  test('a traceparent trace id wins over x-request-id', async () => {
+    const server = createServer(makeEconomy());
+    const traceId = 'ab'.repeat(16);
+
+    const request = new Request('https://economy.test/submit', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        traceparent: `00-${traceId}-${'cd'.repeat(8)}-01`,
+        'x-request-id': 'req_loser',
+      },
+      body: JSON.stringify(topUpBody('usr_corr_trace', '1.00')),
+    });
+    const response = await server(request);
+
+    assert.equal(response.headers.get('x-request-id'), traceId);
+  });
+
+  test('a malformed supplied id is replaced, and problems still echo', async () => {
+    const server = createServer(makeEconomy(), {
+      authenticate: async () => null,
+    });
+
+    const request = new Request('https://economy.test/submit', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-request-id': 'bad id with spaces',
+      },
+      body: JSON.stringify(topUpBody('usr_corr_bad', '1.00')),
+    });
+    const response = await server(request);
+
+    assert.equal(response.status, 401);
+    assert.match(response.headers.get('x-request-id') ?? '', /^req_/);
+  });
+});

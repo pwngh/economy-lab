@@ -14,6 +14,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   `408`), on the Fetch handler and the Node bridge alike.
 - `ServerOptions.cors` allowlists browser origins with exact matching and preflight handling;
   absent, the server sets no CORS headers.
+- A correlation id rides every `/submit` reply: the server derives it (`traceparent` trace
+  id, else `x-request-id`, else minted) and echoes it on problem responses and outcomes alike.
 - `ServerOptions.rateLimit` admits `/submit` through the new `RateLimiter` port, keyed by the
   authenticated principal or the bridge-stamped client address; a denial answers `429` with
   `retry-after`, and a throwing limiter fails open, counting `economy.ratelimit.degraded`.

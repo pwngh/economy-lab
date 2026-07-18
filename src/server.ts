@@ -105,6 +105,9 @@ export const DEFAULT_READ_TIMEOUT_MS = 10_000;
  */
 export const CLIENT_IP_HEADER = 'x-economy-client-ip';
 
+/** Where the correlation id is accepted and echoed on `/submit`. */
+export const REQUEST_ID_HEADER = 'x-request-id';
+
 const SIGNATURE_HEADER = 'x-signature';
 
 // The provider's send time in epoch milliseconds, used to reject stale deliveries.
@@ -242,10 +245,40 @@ async function readinessRoute(economy: Economy): Promise<Response> {
 
 // --- /submit ----------------------------------------------------------------------
 
+// Every reply on the submit path echoes the correlation id, problem responses included, so a
+// caller can quote one id and an operator can follow it through submit, outbox, and relay logs.
+async function submitRoute(
+  economy: Economy,
+  options: ServerOptions,
+  request: Request,
+): Promise<Response> {
+  const correlationId = correlationOf(request);
+  const response = await runSubmit(economy, options, request);
+  response.headers.set(REQUEST_ID_HEADER, correlationId);
+  return response;
+}
+
+// The trace id of a W3C traceparent header wins, so a caller already running distributed
+// tracing gets one id across both systems; an explicit x-request-id is next; otherwise mint.
+function correlationOf(request: Request): string {
+  const traceparent = request.headers.get('traceparent');
+  const traceId = traceparent?.match(
+    /^[\da-f]{2}-([\da-f]{32})-[\da-f]{16}-[\da-f]{2}$/,
+  )?.[1];
+  if (traceId !== undefined && traceId !== '0'.repeat(32)) {
+    return traceId;
+  }
+  const supplied = request.headers.get(REQUEST_ID_HEADER);
+  if (supplied !== null && /^[\w.:-]{1,128}$/.test(supplied)) {
+    return supplied;
+  }
+  return `req_${crypto.randomUUID()}`;
+}
+
 // A `rejected` outcome is not an error: the economy declined a valid request for a business
 // reason, and the response is a 200 holding the decline. Authentication runs before the body is
 // read, so an unauthenticated caller costs no buffering.
-async function submitRoute(
+async function runSubmit(
   economy: Economy,
   options: ServerOptions,
   request: Request,
