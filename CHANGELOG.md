@@ -2,6 +2,16 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
+## Unreleased (0.2.2)
+
+### Fixed
+
+- Concurrent MySQL submits above the pool limit used to starve the pool permanently: planting a
+  transaction's first-use account rows took a second pool connection, so every in-flight
+  transaction waited for a connection none could release. A transaction now uses one connection
+  for its whole life — first-use rows plant on its own connection (safe at READ COMMITTED, which
+  takes no gap lock on a missing key) and roll back with the operation.
+
 ## 0.2.1 - 2026-07-16
 
 ### Added

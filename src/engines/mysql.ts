@@ -281,14 +281,16 @@ function rowKind(account: AccountRef): string {
 
 // lockMany's body: create any missing balance rows first, then lock the whole set in one ordered
 // FOR UPDATE. A row has to exist before it can be locked, so first-use accounts get a placeholder
-// row here. The plant runs on the pool, not in the transaction: locking a missing key inside the
-// transaction takes a gap lock, and a burst of new accounts (neighboring ids, one shared gap)
-// would deadlock on each other's inserts. A pool statement commits and releases its locks
-// immediately.
+// row here. Everything runs on the transaction's own connection: the money transaction is READ
+// COMMITTED, which takes no gap lock on a missing key, so the old reason to plant on the pool
+// (bursts of neighboring first-use inserts deadlocking through one shared gap under REPEATABLE
+// READ) is gone. Planting through the pool while the transaction holds a connection starved the
+// pool at full occupancy — every in-flight transaction waited for a second connection that could
+// never free — so a transaction now uses exactly one connection for its whole life.
 //
-// A planted row therefore stays even if the operation rolls back. It is the same placeholder the
-// schema seeds for system accounts — zero balance, genesis head — which every reader treats
-// like no row at all.
+// A plant rolls back with its operation; the next attempt simply replants. A committed placeholder
+// is the same one the schema seeds for system accounts — zero balance, genesis head — which every
+// reader treats like no row at all.
 async function plantAndLock(
   deps: ExecDeps,
   accounts: ReadonlyArray<AccountRef>,
@@ -298,7 +300,7 @@ async function plantAndLock(
   }
   const marks = accounts.map(() => '?').join(', ');
   const found = await rows(
-    deps.pool,
+    deps.exec,
     `SELECT account_id FROM account_balances
       WHERE account_id IN (${marks})`,
     [...accounts],
@@ -311,13 +313,13 @@ async function plantAndLock(
   if (missing.length > 0) {
     // INSERT IGNORE, so losing a plant race is fine: the row is there either way.
     await execWrite(
-      deps.pool,
+      deps.exec,
       `INSERT IGNORE INTO accounts (id, kind, currency)
         VALUES ${missing.map(() => '(?, ?, ?)').join(', ')}`,
       missing.flatMap((a) => [a, rowKind(a), currency(a)]),
     );
     await execWrite(
-      deps.pool,
+      deps.exec,
       `INSERT IGNORE INTO account_balances (account_id, currency, balance, head_hash)
         VALUES ${missing.map(() => `(?, ?, 0, REPEAT('0', 64))`).join(', ')}`,
       missing.flatMap((a) => [a, currency(a)]),

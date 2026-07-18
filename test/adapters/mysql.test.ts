@@ -80,3 +80,55 @@ describe('MySQL ledger.lock GET_LOCK return handling', () => {
     await store.ledger.lock(spendable('usr_x'));
   });
 });
+
+// A transaction uses exactly one pool connection for its whole life, so concurrency above the
+// pool limit queues and drains instead of starving. Regression for the wedge where every
+// in-flight transaction planted first-use rows through the pool and full occupancy left all of
+// them waiting forever for a connection none could release.
+if (url) {
+  describe('mysql pool occupancy', () => {
+    test('concurrent first-use transactions above the pool limit all commit', async () => {
+      const pool = await createMysqlPool(url, { connectionLimit: 4 });
+      try {
+        await applyMysqlSchema(pool);
+        const acquires: string[] = [];
+        const waits: number[] = [];
+        const store = mysqlStore({
+          pool,
+          meter: {
+            count: (name) => {
+              acquires.push(name);
+            },
+            observe: (name, value) => {
+              if (name === 'engine.pool.acquire_ms') waits.push(value);
+            },
+          },
+        });
+        const run = `pool_${crypto.randomUUID().slice(0, 8)}`;
+        const work = Promise.all(
+          Array.from({ length: 8 }, (_, i) =>
+            store.transaction(async (unit) => {
+              assert.notEqual(unit.ledger.lockMany, undefined);
+              await unit.ledger.lockMany?.([spendable(`usr_${run}_${i}`)]);
+            }),
+          ),
+        );
+        const watchdog = new Promise((_, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error('pool starved: transactions never drained')),
+            20_000,
+          );
+          void work.finally(() => clearTimeout(timer));
+        });
+        await Promise.race([work, watchdog]);
+        assert.equal(
+          acquires.filter((name) => name === 'engine.pool.acquire').length,
+          8,
+        );
+        assert.equal(waits.length, 8);
+      } finally {
+        await pool.end();
+      }
+    });
+  });
+}
