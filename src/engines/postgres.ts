@@ -1697,6 +1697,7 @@ export async function postgresStore(
     { meter: options.meter, logger: options.logger },
     'postgres',
   );
+  const meter = options.meter;
 
   return {
     ledger,
@@ -1715,7 +1716,7 @@ export async function postgresStore(
     transaction: async (work) =>
       runInTransaction(
         pool,
-        { digest, clock, velocityWindowMs, retryObserver },
+        { digest, clock, velocityWindowMs, retryObserver, meter },
         work,
       ),
     close: async () => {
@@ -1761,12 +1762,20 @@ async function runInTransaction<T>(
     clock: Clock;
     velocityWindowMs: number;
     retryObserver?: RetryObserver;
+    meter?: Meter;
   },
   work: (unit: Unit) => Promise<T>,
 ): Promise<T> {
   return withTransientRetry(
     async () => {
+      deps.meter?.count('engine.pool.acquire', 1, { engine: 'postgres' });
+      const acquireStarted = deps.clock.now();
       const client = await pool.connect();
+      deps.meter?.observe(
+        'engine.pool.acquire_ms',
+        deps.clock.now() - acquireStarted,
+        { engine: 'postgres' },
+      );
       try {
         await client.query('begin');
         const unit = buildUnit(

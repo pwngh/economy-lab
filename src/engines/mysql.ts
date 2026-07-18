@@ -1693,6 +1693,15 @@ export function mysqlStore(deps: {
     { meter: deps.meter, logger: deps.logger },
     'mysql',
   );
+  const acquireTimed = async () => {
+    deps.meter?.count('engine.pool.acquire', 1, { engine: 'mysql' });
+    const started = clock.now();
+    const connection = await pool.getConnection();
+    deps.meter?.observe('engine.pool.acquire_ms', clock.now() - started, {
+      engine: 'mysql',
+    });
+    return connection;
+  };
   const poolDeps: ExecDeps = { exec: pool, digest, clock, pool };
 
   const trust = createTrustStore(pool, clock, velocityWindowMs);
@@ -1722,7 +1731,7 @@ export function mysqlStore(deps: {
     transaction: async (work) =>
       withTransientRetry(
         async () => {
-          const connection = await pool.getConnection();
+          const connection = await acquireTimed();
           try {
             // Run the money transaction at READ COMMITTED, like Postgres. Correctness comes from
             // the explicit FOR UPDATE locks, which behave the same at either level. REPEATABLE

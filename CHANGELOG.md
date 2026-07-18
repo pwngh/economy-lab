@@ -12,6 +12,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - `Options.correlationId` stamps the submit correlation id onto the outbox envelope
   (`OutboxMessage.correlationId`, a new nullable column for store implementors). Relay failure
   logs carry it; worker-born events carry null.
+- `engine.pool.acquire` counts each SQL connection-pool acquisition and `engine.pool.acquire_ms`
+  records the wait (both tagged `engine`).
 
 ### Changed
 
