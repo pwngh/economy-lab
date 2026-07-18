@@ -76,7 +76,10 @@ jobs:
           POSTGRES_DB: economy_lab
         ports:
           - 5432:5432
+        # tmpfs datadir: the engine dies with the job, so durability buys nothing and every
+        # fsync (commit, create, drop) becomes a memory write.
         options: >-
+          --tmpfs /var/lib/postgresql/data
           --health-cmd "pg_isready -U economy -d economy_lab"
           --health-interval 5s
           --health-timeout 5s
@@ -89,6 +92,7 @@ jobs:
         ports:
           - 3306:3306
         options: >-
+          --tmpfs /var/lib/mysql
           --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -peconomy"
           --health-interval 5s
           --health-timeout 5s
