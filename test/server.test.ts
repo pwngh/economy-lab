@@ -83,6 +83,7 @@ function spendBody(buyerId: string, dollars: string): Record<string, unknown> {
     buyerId,
     sku: 'sku_demo',
     price: encodeAmount(credit(dollars)),
+    recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
   };
 }
 
@@ -125,6 +126,113 @@ describe('createServer /submit', () => {
     // Detail Amounts ride the wire as the same decimal strings every other amount uses.
     assert.equal(payload.detail?.required, 'CREDIT:5.00');
     assert.equal(payload.detail?.available, 'CREDIT:0.00');
+  });
+
+  test('decodes settlePayout, its optional providerAmount absent or as a wire string', async () => {
+    const server = createServer(makeEconomy());
+    const body = (providerAmount?: string) => ({
+      kind: 'settlePayout',
+      idempotencyKey: 'idem_settle_1',
+      actor: { kind: 'operator', operatorId: 'op_1' },
+      sagaId: 'pay_missing',
+      providerRef: 'prov_1',
+      ...(providerAmount === undefined ? {} : { providerAmount }),
+    });
+
+    // Both forms clear the decode gate and reach the operation, which answers for the
+    // unknown saga — not "Unknown operation kind".
+    for (const request of [body(), body('USD:12.34')]) {
+      const response = await server(submitRequest(request));
+      const payload = (await response.json()) as { title: string };
+      assert.equal(response.status, 400);
+      assert.match(payload.title, /names a payout that does not exist/);
+    }
+  });
+
+  test('a non-string providerAmount on settlePayout is refused at the decode gate', async () => {
+    const server = createServer(makeEconomy());
+    const response = await server(
+      submitRequest({
+        kind: 'settlePayout',
+        idempotencyKey: 'idem_settle_2',
+        actor: { kind: 'operator', operatorId: 'op_1' },
+        sagaId: 'pay_missing',
+        providerRef: 'prov_1',
+        providerAmount: 12.34,
+      }),
+    );
+    const payload = (await response.json()) as { title: string };
+    assert.equal(response.status, 400);
+    assert.match(
+      payload.title,
+      /'providerAmount' must be an encoded amount string/,
+    );
+  });
+
+  test('refuses wrong-shaped fields at the decode gate, one uniform 400 each', async () => {
+    const server = createServer(makeEconomy());
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['idempotencyKey', { ...topUpBody('usr_a', '1.00'), idempotencyKey: '' }],
+      ['actor', { ...topUpBody('usr_a', '1.00'), actor: { kind: 'user' } }],
+      ['source', { ...topUpBody('usr_a', '1.00'), source: 7 }],
+      [
+        'periodMs',
+        {
+          ...spendBody('usr_a', '1.00'),
+          kind: 'subscribe',
+          userId: 'usr_a',
+          sellerId: 'usr_s',
+          periodMs: 'soon',
+          orderId: undefined,
+          buyerId: undefined,
+          recipients: undefined,
+        },
+      ],
+      ['recipients', { ...spendBody('usr_a', '1.00'), recipients: 'lol' }],
+      [
+        'recipients',
+        {
+          ...spendBody('usr_a', '1.00'),
+          recipients: [{ sellerId: '', shareBps: 10_000 }],
+        },
+      ],
+      [
+        'ageRestricted',
+        { ...spendBody('usr_a', '1.00'), ageRestricted: 'yes' },
+      ],
+    ];
+    for (const [field, body] of cases) {
+      const response = await server(submitRequest(body));
+      const payload = (await response.json()) as {
+        code: string;
+        title: string;
+      };
+      assert.equal(response.status, 400, `${field}: ${payload.title}`);
+      assert.equal(payload.code, 'OP.MALFORMED');
+      assert.match(payload.title, new RegExp(`'${field}'`));
+    }
+  });
+
+  test('a field no variant declares is refused, and a required field cannot be absent', async () => {
+    const server = createServer(makeEconomy());
+
+    const stray = await server(
+      submitRequest({ ...topUpBody('usr_a', '1.00'), giftto: 'usr_b' }),
+    );
+    assert.equal(stray.status, 400);
+    assert.match(
+      ((await stray.json()) as { title: string }).title,
+      /'giftto' is not part of topUp/,
+    );
+
+    const body = topUpBody('usr_a', '1.00');
+    delete body.source;
+    const missing = await server(submitRequest(body));
+    assert.equal(missing.status, 400);
+    assert.match(
+      ((await missing.json()) as { title: string }).title,
+      /'source' must be a non-empty string/,
+    );
   });
 
   test('maps a malformed body to a 400 problem+json with the stable code', async () => {

@@ -2,6 +2,21 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
+## Unreleased (0.3.0)
+
+### Changed
+
+- `POST /submit` validates every operation field at the decode gate: a missing or wrong-shaped
+  field, a malformed `actor`, or a field no variant declares answers `400` `OP.MALFORMED`
+  naming the field. Breaking: bodies carrying stray fields were previously accepted and the
+  extras ignored.
+
+### Fixed
+
+- `POST /submit` used to refuse `settlePayout` as an unknown kind. The server decodes it like
+  every other operation; its optional `providerAmount` rides the wire as a decimal string or
+  stays absent.
+
 ## 0.2.3 - 2026-07-17
 
 ### Added

@@ -24,7 +24,6 @@ import { fromHex } from '#src/bytes.ts';
 import { decodeWebhookEvent } from '#src/webhooks.ts';
 
 import { encodeAmounts } from '#src/money.ts';
-import type { Amount } from '#src/money.ts';
 import type {
   Clock,
   Meter,
@@ -538,46 +537,218 @@ function decodeOperation(body: unknown, principal?: Principal): Operation {
     throw malformed("Operation must not carry 'actor'; the server stamps it.");
   }
   const kind = row.kind;
-  if (typeof kind !== 'string' || !(kind in AMOUNT_FIELDS)) {
+  if (typeof kind !== 'string' || !(kind in FIELDS)) {
     throw malformed(`Unknown operation kind: ${String(kind)}.`);
   }
+  const spec = FIELDS[kind as Operation['kind']] as Record<string, Spec>;
+
+  refuseStrayFields(row, spec, kind);
+  if (typeof row.idempotencyKey !== 'string' || row.idempotencyKey === '') {
+    throw malformed(
+      "Operation field 'idempotencyKey' must be a non-empty string.",
+    );
+  }
+  if (principal === undefined) {
+    decodePrincipal(row.actor);
+  }
+
   const decoded: Record<string, unknown> = { ...row };
   if (principal !== undefined) {
     decoded.actor = principal;
   }
-  for (const field of AMOUNT_FIELDS[kind]!) {
-    decoded[field] = decodeAmountField(row[field], field);
-  }
+  decodeFields(row, spec, decoded);
   return decoded as unknown as Operation;
 }
 
-// Non-string field -> malformed fault (wrong shape); a bad string -> a money fault (wrong amount).
-// Keeping the two distinct lets the caller tell a shape error from an amount error.
-function decodeAmountField(value: unknown, field: string): Amount {
-  if (typeof value !== 'string') {
-    throw malformed(
-      `Operation field '${field}' must be an encoded amount string.`,
-    );
+function refuseStrayFields(
+  row: Record<string, unknown>,
+  spec: Record<string, Spec>,
+  kind: string,
+): void {
+  for (const field of Object.keys(row)) {
+    if (field === 'kind' || field === 'idempotencyKey' || field === 'actor')
+      continue;
+    if (!(field in spec)) {
+      throw malformed(`Operation field '${field}' is not part of ${kind}.`);
+    }
   }
-  return decodeWire.amount(value);
 }
 
-// Every valid kind has an entry (some empty), so this map also gates known-vs-unknown kinds: a body
-// whose kind is absent here is rejected as malformed before it reaches submit.
-const AMOUNT_FIELDS: Record<string, ReadonlyArray<string>> = {
-  topUp: ['amount'],
-  spend: ['price'],
-  refund: [],
-  clawback: ['amount'],
-  requestPayout: ['amount'],
-  subscribe: ['price'],
-  cancelSubscription: [],
-  grantEntitlement: [],
-  revokeEntitlement: [],
-  grantPromo: ['amount'],
-  adjust: ['amount'],
-  reverse: [],
-  reversePayout: [],
+function decodeFields(
+  row: Record<string, unknown>,
+  spec: Record<string, Spec>,
+  decoded: Record<string, unknown>,
+): void {
+  for (const [field, tag] of Object.entries(spec)) {
+    const optional = tag.endsWith('?');
+    const value = row[field];
+    if (optional && value === undefined) continue;
+    decoded[field] = decodeField(
+      value,
+      field,
+      (optional ? tag.slice(0, -1) : tag) as BaseSpec,
+    );
+  }
+}
+
+// The wire shape of one field, checked at the boundary so a wrong-shaped body answers a uniform
+// 400 instead of faulting deeper. A trailing `?` marks the field optional; absent, it stays
+// absent. Semantics (positive amounts, shares summing to 10,000, saga states) stay with the
+// operation handlers.
+type BaseSpec =
+  | 'string'
+  | 'int'
+  | 'boolean'
+  | 'amount'
+  | 'recipients'
+  | 'object';
+type Spec = BaseSpec | `${BaseSpec}?`;
+
+function decodeField(value: unknown, field: string, tag: BaseSpec): unknown {
+  return DECODERS[tag](value, field);
+}
+
+const DECODERS: {
+  [T in BaseSpec]: (value: unknown, field: string) => unknown;
+} = {
+  string: (value, field) => {
+    if (typeof value !== 'string' || value === '') {
+      throw malformed(`Operation field '${field}' must be a non-empty string.`);
+    }
+    return value;
+  },
+  int: (value, field) => {
+    if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
+      throw malformed(`Operation field '${field}' must be an integer.`);
+    }
+    return value;
+  },
+  boolean: (value, field) => {
+    if (typeof value !== 'boolean') {
+      throw malformed(`Operation field '${field}' must be a boolean.`);
+    }
+    return value;
+  },
+  // Non-string -> malformed fault (wrong shape); a bad string -> a money fault (wrong amount).
+  // Keeping the two distinct lets the caller tell a shape error from an amount error.
+  amount: (value, field) => {
+    if (typeof value !== 'string') {
+      throw malformed(
+        `Operation field '${field}' must be an encoded amount string.`,
+      );
+    }
+    return decodeWire.amount(value);
+  },
+  recipients: (value, field) => {
+    if (!Array.isArray(value)) {
+      throw malformed(
+        `Operation field '${field}' must be an array of recipients.`,
+      );
+    }
+    if (!value.every(isRecipient)) {
+      throw malformed(
+        `Operation field '${field}' entries must be { sellerId: string, shareBps: integer }.`,
+      );
+    }
+    return value;
+  },
+  object: (value, field) => {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      throw malformed(`Operation field '${field}' must be an object.`);
+    }
+    return value;
+  },
+};
+
+function isRecipient(entry: unknown): boolean {
+  const recipient = entry as { sellerId?: unknown; shareBps?: unknown } | null;
+  return (
+    recipient !== null &&
+    typeof recipient === 'object' &&
+    typeof recipient.sellerId === 'string' &&
+    recipient.sellerId !== '' &&
+    typeof recipient.shareBps === 'number' &&
+    Number.isSafeInteger(recipient.shareBps)
+  );
+}
+
+function decodePrincipal(value: unknown): void {
+  const actor = value as Record<string, unknown> | null;
+  const ok =
+    actor !== null &&
+    typeof actor === 'object' &&
+    ((actor.kind === 'user' &&
+      typeof actor.userId === 'string' &&
+      actor.userId !== '') ||
+      (actor.kind === 'system' &&
+        typeof actor.service === 'string' &&
+        actor.service !== '') ||
+      (actor.kind === 'operator' &&
+        typeof actor.operatorId === 'string' &&
+        actor.operatorId !== ''));
+  if (!ok) {
+    throw malformed(
+      "Operation field 'actor' must be a user, system, or operator principal.",
+    );
+  }
+}
+
+// Every field of every operation kind, with its wire shape. The mapped type is the gate's
+// completeness proof: a new kind in the union, or a new field on any variant, stops this file
+// compiling until its wire shape is declared — and the registry carries the same lock, so the
+// union, the handlers, and this map cannot drift apart. `kind`, `idempotencyKey`, and `actor`
+// are on every variant and checked above, so the rows list only what varies.
+const FIELDS: {
+  [K in Operation['kind']]: {
+    [F in Exclude<
+      keyof Extract<Operation, { kind: K }>,
+      'kind' | 'idempotencyKey' | 'actor'
+    >]-?: Spec;
+  };
+} = {
+  topUp: { userId: 'string', amount: 'amount', source: 'string' },
+  spend: {
+    orderId: 'string',
+    buyerId: 'string',
+    sku: 'string',
+    price: 'amount',
+    recipients: 'recipients',
+    ageRestricted: 'boolean?',
+    giftTo: 'string?',
+  },
+  refund: { orderId: 'string', reason: 'string?' },
+  clawback: {
+    userId: 'string',
+    amount: 'amount',
+    orderId: 'string?',
+    key: 'string?',
+    reason: 'string?',
+  },
+  requestPayout: { userId: 'string', amount: 'amount' },
+  subscribe: {
+    userId: 'string',
+    sellerId: 'string',
+    sku: 'string',
+    price: 'amount',
+    periodMs: 'int',
+  },
+  cancelSubscription: { subscriptionId: 'string' },
+  grantEntitlement: { userId: 'string', sku: 'string', attrs: 'object?' },
+  revokeEntitlement: { userId: 'string', sku: 'string', reason: 'string?' },
+  grantPromo: { userId: 'string', amount: 'amount', expiresAt: 'int' },
+  adjust: { account: 'string', amount: 'amount', reason: 'string' },
+  reverse: { txnId: 'string', reason: 'string' },
+  reversePayout: {
+    userId: 'string',
+    sagaId: 'string',
+    reason: 'string',
+    providerReported: 'boolean?',
+  },
+  settlePayout: {
+    sagaId: 'string',
+    providerRef: 'string',
+    providerAmount: 'amount?',
+  },
 };
 
 function encodeOutcome(outcome: Outcome): unknown {
