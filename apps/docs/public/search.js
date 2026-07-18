@@ -10,8 +10,10 @@
  */
 
 // Lightweight client search for the docs. Vanilla, no framework, deferred and non-blocking. Lazily
-// fetches the prebuilt index (/search-index.json) on first use and filters on title, summary, slug,
-// and the page's full body text (pre-stripped to plain text at build; matched, never displayed).
+// fetches the prebuilt index (/search-index.json) on first use and ranks on title, code tokens
+// (reason codes and fault codes, matched verbatim), summary, slug, and the page's full body text
+// (pre-stripped to lowercase plain text at build; matched, never displayed). Title matches outrank
+// body matches, and among close scores operation pages surface first.
 // Progressive enhancement: with JS off the input is simply inert and the sidebar handles navigation.
 (() => {
   const input = document.getElementById('site-search-input');
@@ -63,6 +65,26 @@
     input.setAttribute('aria-expanded', 'true');
   };
 
+  // Where the query matched decides the rank: a title hit beats a code-token hit beats summary,
+  // slug, then body. Codes compare uppercased so a typed insufficient_funds still lands the
+  // verbatim INSUFFICIENT_FUNDS. The small Operations bump only reorders pages whose best match
+  // is the same kind — it never lifts a body-only hit over a title hit elsewhere.
+  const score = (d, q) => {
+    const upper = q.toUpperCase();
+    const title = d.title.toLowerCase();
+    let s = 0;
+    if (title === q) s = 200;
+    else if (title.startsWith(q)) s = 120;
+    else if (title.includes(q)) s = 100;
+    else if ((d.code || []).some((c) => c === upper || c.endsWith(`.${upper}`))) s = 90;
+    else if ((d.code || []).some((c) => c.includes(upper))) s = 60;
+    else if (d.summary.toLowerCase().includes(q)) s = 40;
+    else if (d.slug.includes(q)) s = 30;
+    else if ((d.body || '').includes(q)) s = 10;
+    if (s > 0 && d.section === 'Operations') s += 5;
+    return s;
+  };
+
   const search = async () => {
     await load();
     const q = input.value.trim().toLowerCase();
@@ -71,12 +93,11 @@
       return;
     }
     const matches = (index || [])
-      .filter(
-        (d) =>
-          `${d.title} ${d.summary} ${d.slug}`.toLowerCase().includes(q) ||
-          (d.body || '').includes(q),
-      )
-      .slice(0, 8);
+      .map((d, i) => ({ d, s: score(d, q), i }))
+      .filter((m) => m.s > 0)
+      .sort((a, b) => b.s - a.s || a.i - b.i)
+      .slice(0, 8)
+      .map((m) => m.d);
     render(matches);
   };
 

@@ -16,8 +16,9 @@ import { SECTION_LABEL } from '~/nav.ts';
 /**
  * Emits the client search index as JSON, prerendered to a static file. It is built from the same
  * content collection the pages render from, so it can never list a page that does not exist. Each
- * entry carries the page's body as pre-stripped plain text — read off disk by content.fs.ts, since
- * the compiled MDX modules hold components, not source — matched against, never displayed.
+ * entry carries the page's body as pre-stripped lowercase plain text — read off disk by
+ * content.fs.ts, since the compiled MDX modules hold components, not source — matched against,
+ * never displayed, plus the verbatim code tokens the stripping would otherwise erase.
  */
 export function loader() {
   const bodies = getDocBodies();
@@ -28,7 +29,8 @@ export function loader() {
     section: d.slug.startsWith('economy/reference/operations/')
       ? 'Operations'
       : (SECTION_LABEL[d.section] ?? 'Economy'),
-    body: bodies.get(d.slug) ?? '',
+    body: bodies.get(d.slug)?.text ?? '',
+    code: bodies.get(d.slug)?.code ?? [],
   }));
 
   return new Response(JSON.stringify(index), {

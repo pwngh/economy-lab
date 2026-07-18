@@ -68,18 +68,26 @@ function plainText(body: string): string {
     .trim();
 }
 
+// Verbatim code tokens: reason codes (INSUFFICIENT_FUNDS) and namespaced fault codes
+// (LEDGER.OVERDRAFT). Pulled from the raw body before plainText runs, because the stripper
+// lowercases and eats underscores — a pasted code would never match the stripped text.
+const CODE_TOKEN = /\b[A-Z][A-Z0-9]*(?:[._][A-Z0-9]+)+\b/g;
+
 /**
- * Every page's body as searchable plain text, keyed by slug; joined onto the collection at prerender,
- * so none of it reaches a client bundle.
+ * Every page's body as searchable plain text plus its verbatim code tokens, keyed by slug; joined
+ * onto the collection at prerender, so none of it reaches a client bundle.
  */
-export function getDocBodies(): Map<string, string> {
+export function getDocBodies(): Map<string, { text: string; code: string[] }> {
   return new Map(
-    walk(CONTENT_DIR).map((file) => [
-      relative(CONTENT_DIR, file)
-        .replace(/\.mdx$/, '')
-        .split(sep)
-        .join('/'),
-      plainText(matter(readFileSync(file, 'utf8')).content),
-    ]),
+    walk(CONTENT_DIR).map((file) => {
+      const body = matter(readFileSync(file, 'utf8')).content;
+      return [
+        relative(CONTENT_DIR, file)
+          .replace(/\.mdx$/, '')
+          .split(sep)
+          .join('/'),
+        { text: plainText(body), code: [...new Set(body.match(CODE_TOKEN) ?? [])] },
+      ];
+    }),
   );
 }
