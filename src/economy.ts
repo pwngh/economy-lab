@@ -22,6 +22,7 @@ import {
   decodeAmountWire,
   encodeAmount,
   isNegative,
+  rateGte,
   toAmount,
 } from '#src/money.ts';
 import {
@@ -71,6 +72,7 @@ import type {
   EconomyEvent,
   Ledger,
   Options,
+  Rates,
   Store,
   Unit,
 } from '#src/ports.ts';
@@ -91,6 +93,7 @@ export function economyFromCapabilities(capabilities: Capabilities): Economy {
   Object.freeze(capabilities.config);
   Object.freeze(capabilities.config.maturityHorizonMs);
   Object.freeze(capabilities.config.payoutSla);
+  assertBuyCoversPar(capabilities.rates);
   const ctx = contextOf(capabilities);
   const registry = REGISTRY;
 
@@ -116,6 +119,26 @@ export function economyFromCapabilities(capabilities: Capabilities): Economy {
     },
     close: () => store.close(),
   };
+}
+
+// Refuses a misordered rate source at construction, the same way a bad signing key fails at
+// startup rather than deep inside a request. Only `buy >= par` is checkable here: both are
+// synchronous constants, while `payout` is asked per settlement time and guarded at
+// requestPayout. A source whose answers change after construction is caught again by topUp's
+// own guard.
+function assertBuyCoversPar(rates: Rates): void {
+  const buy = rates.buy('CREDIT');
+  const par = rates.par('CREDIT');
+  if (!rateGte(buy, par)) {
+    throw fault(
+      ERROR_CODES.CONFIG_INVALID,
+      'Rates are misordered: buy is below par, so every top-up would book a loss.',
+      {
+        retryable: false,
+        detail: { buyRateId: buy.rateId, parRateId: par.rateId },
+      },
+    );
+  }
 }
 
 type Pipeline = { store: Store; registry: Registry; ctx: Ctx };

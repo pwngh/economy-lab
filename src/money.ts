@@ -209,6 +209,11 @@ export function decodeAmountWire(encoded: string): Amount {
   return decodeAmount(encoded.slice(colon + 1), currency);
 }
 
+/** `a >= b` as rates, compared across scales without division. */
+export function rateGte(a: Rate, b: Rate): boolean {
+  return a.rate * 10n ** BigInt(b.scale) >= b.rate * 10n ** BigInt(a.scale);
+}
+
 /**
  * Converts an amount to another currency at `rate`, rounding down. A rate is an integer scaled by
  * `10^scale`, so the result is `floor(minor * rate / 10^scale)` — a true floor for either sign,
