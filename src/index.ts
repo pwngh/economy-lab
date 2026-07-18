@@ -418,6 +418,7 @@ export async function capabilitiesFromEnv(
       digest: runtime.digest,
       clock: runtime.clock,
       velocityWindowMs: config.velocityWindowMs,
+      poolMax: config.dbPoolMax,
       meter: runtime.meter,
       logger: runtime.logger,
     }),
@@ -552,6 +553,7 @@ export async function createEconomy(
         digest: runtime.digest,
         clock: runtime.clock,
         velocityWindowMs: config.velocityWindowMs,
+        poolMax: config.dbPoolMax,
         meter: runtime.meter,
         logger: runtime.logger,
       }),
@@ -578,6 +580,7 @@ async function selectStore(
     digest: Digest;
     clock: Clock;
     velocityWindowMs: number;
+    poolMax?: number | null;
     meter?: Meter;
     logger?: Logger;
   },
@@ -592,6 +595,7 @@ async function selectStore(
       digest: deps.digest,
       clock: deps.clock,
       velocityWindowMs: deps.velocityWindowMs,
+      ...(deps.poolMax ? { poolMax: deps.poolMax } : {}),
       meter: deps.meter,
       logger: deps.logger,
     });
@@ -614,13 +618,17 @@ async function provenMysqlStore(
     digest: Digest;
     clock: Clock;
     velocityWindowMs: number;
+    poolMax?: number | null;
     meter?: Meter;
     logger?: Logger;
   },
 ): Promise<Store> {
   const { createMysqlPool, mysqlStore, readSchemaVersion } =
     await import('#src/engines/mysql.ts');
-  const pool = await createMysqlPool(url);
+  const pool = await createMysqlPool(
+    url,
+    deps.poolMax ? { connectionLimit: deps.poolMax } : {},
+  );
   assertSchemaCurrent(await readSchemaVersion(pool), 'MySQL');
   const runner = {
     run: (sql: string, params?: readonly unknown[]) =>

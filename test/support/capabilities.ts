@@ -185,6 +185,7 @@ export function testConfig(): Config {
   return {
     webhookSecret: 'test-webhook-secret',
     signingSecret: 'test-signing-secret',
+    dbPoolMax: null,
     replayWindowMs: 5 * 60_000,
     maxPayoutAttempts: 5,
     maxOutboxAttempts: 10,

@@ -14,6 +14,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   logs carry it; worker-born events carry null.
 - `engine.pool.acquire` counts each SQL connection-pool acquisition and `engine.pool.acquire_ms`
   records the wait (both tagged `engine`).
+- `DB_POOL_MAX` sizes the SQL connection pool through the composition (`Config.dbPoolMax`);
+  unset keeps each driver's default of 10.
 
 ### Changed
 

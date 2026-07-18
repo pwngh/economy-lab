@@ -112,6 +112,13 @@ export interface Config {
   pauseEndMs: number | null;
 
   /**
+   * Max connections in the SQL engine's pool (`DB_POOL_MAX`). Null keeps each driver's default
+   * of 10. Excess concurrent submits queue for a connection; a transaction holds exactly one
+   * connection for its whole life, so the queue always drains.
+   */
+  dbPoolMax: number | null;
+
+  /**
    * Rows each hot platform account is split across. Shard 0 keeps the bare id, so raising the
    * count later is safe; only ever lower it back to 1.
    */
@@ -242,6 +249,7 @@ export function loadConfig(env: EnvMap): Config {
     payoutMinIntervalMs: readInt(env.PAYOUT_MIN_INTERVAL_MS, 24 * 60 * 60_000),
     pauseStartMs: readIntOrNull(env.ECONOMY_PAUSE_START_MS),
     pauseEndMs: readIntOrNull(env.ECONOMY_PAUSE_END_MS),
+    dbPoolMax: readIntOrNull(env.DB_POOL_MAX),
     platformShards: readInt(env.PLATFORM_SHARDS, 1, { min: 1 }),
   };
 }
