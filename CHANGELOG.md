@@ -18,6 +18,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   example.
 - `OPS=1` composes the supervisor around the worker (`OPS_INTERVAL_MS` paces it); `demo:ops`
   runs the `stuck-saga`, `integrity`, and `deadlock` demos.
+- `make backup` dumps each configured engine into `backups/`; `make restore-drill` restores
+  the newest dump into a scratch `el_drill_*` namespace and proves it.
 
 ## 0.3.1 - 2026-07-17
 

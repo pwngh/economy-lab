@@ -104,6 +104,8 @@
     "trace:check": "node scripts/trace.ts --check",
     "demo": "node --env-file-if-exists=.env scripts/compose-demo.ts",
     "demo:ops": "node --env-file-if-exists=.env scripts/ops-demo.ts",
+    "backup": "node --env-file-if-exists=.env scripts/backup.ts",
+    "restore:drill": "node --env-file-if-exists=.env scripts/restore-drill.ts",
     "audit:verify": "node scripts/ops-audit-verify.ts",
     "ledger:verify": "node scripts/verify.ts"
   },

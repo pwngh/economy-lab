@@ -136,14 +136,18 @@ make worker      # background sweep loop
 make test        # the full suite, zero infra, all in-memory
 make check       # typecheck + eslint + prettier + test + golden trace (the CI gate)
 make demo        # compose an economy and run a sample money flow
+make demo-ops    # ops supervisor closed loop: a stuck payout is detected, swept, verified
 make prove       # randomized invariant proof; exits non-zero on any leak or drift
 make fuzz        # cross-backend differential — every backend must produce identical results
+make backup      # data-only dump of every configured engine into backups/
+make restore-drill # restore the newest dump into a scratch namespace and prove it
 make db-clean    # drop the orphaned throwaway namespaces a killed run left behind
 ```
 
 The bundled host process runs as an HTTP service (`POST /submit`, `POST /webhooks/:provider`, plus
 `/healthz` and `/readyz`) and a background worker (ten sweeps on an interval). Every backend is
-selected by an environment variable.
+selected by an environment variable; `OPS=1` composes the ops supervisor around the worker, and
+[Ops & runbooks](https://economy-lab-docs.pages.dev/economy/ops/) holds one runbook per incident signature.
 
 ## Performance
 

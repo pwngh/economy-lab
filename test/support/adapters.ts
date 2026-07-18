@@ -152,8 +152,9 @@ export async function sweepStalePostgres(
         }
       }
     }
+    // el_* databases are the restore drill's scratches; el_* schemas above are everyone else's.
     const databases = await client.query(
-      "select datname from pg_database where datname like 'tilia_payees_it\\_%' or datname like 'taskq_lab_it\\_%'",
+      "select datname from pg_database where datname like 'el\\_%' or datname like 'tilia_payees_it\\_%' or datname like 'taskq_lab_it\\_%'",
     );
     for (const row of databases.rows) {
       const name = String(row.datname);
