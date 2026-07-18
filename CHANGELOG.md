@@ -20,6 +20,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   runs the `stuck-saga`, `integrity`, and `deadlock` demos.
 - `make backup` dumps each configured engine into `backups/`; `make restore-drill` restores
   the newest dump into a scratch `el_drill_*` namespace and proves it.
+- `make ci` runs the whole GitHub CI locally: the check and apps jobs; `DB=1` adds the db
+  matrix against live engines.
 
 ## 0.3.1 - 2026-07-17
 
