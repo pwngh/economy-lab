@@ -226,6 +226,28 @@ describe('Webhooks handlePurchaseWebhook (Persist To Inbox, Apply Later)', () =>
     );
   });
 
+  test('a redelivery that reaches the inbox counts on the meter under the inbox layer', async () => {
+    const store = memoryStore();
+    const ctx = webhookCtx();
+    const counts: Array<{ name: string; tags?: Record<string, string> }> = [];
+    const meter = {
+      count: (name: string, _n: number, tags?: Record<string, string>) =>
+        counts.push({ name, tags }),
+      observe: () => {},
+    };
+
+    await handlePurchaseWebhook(store, { ...ctx, meter }, SAMPLE);
+    assert.deepEqual(counts, []);
+
+    await handlePurchaseWebhook(store, { ...ctx, meter }, SAMPLE);
+    assert.deepEqual(counts, [
+      {
+        name: 'economy.webhook.duplicate',
+        tags: { provider: 'billing', layer: 'inbox' },
+      },
+    ]);
+  });
+
   test('re-draining an applied row is a no-op; the operation idempotency key holds exactly-once', async () => {
     const store = memoryStore();
     const economy = makeEconomy(1, store);

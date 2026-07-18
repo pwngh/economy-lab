@@ -16,6 +16,9 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   records the wait (both tagged `engine`).
 - `DB_POOL_MAX` sizes the SQL connection pool through the composition (`Config.dbPoolMax`);
   unset keeps each driver's default of 10.
+- `economy.webhook.duplicate` counts duplicate webhook acknowledgements, tagged `provider` and
+  `layer` (`stale`, `replay`, `inbox`), via `ServerOptions.meter` and the `handleWebhook`
+  context.
 
 ### Changed
 

@@ -51,7 +51,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { EnvMap } from '#src/env.ts';
 import type { ServerRuntime } from '#scripts/support/server-env.ts';
 import type { ExternalPorts, RuntimeDefaults } from '#src/index.ts';
-import type { Clock, Ids, Logger, Store } from '#src/ports.ts';
+import type { Clock, Ids, Logger, Meter, Store } from '#src/ports.ts';
 import type { WebhookHandler } from '#src/server.ts';
 
 type FetchHandler = (request: Request) => Promise<Response>;
@@ -95,12 +95,21 @@ function wiring(env: EnvMap): {
 // createServer runs the verification gate first, so the body here is already trusted. The decoded
 // "topUp" is persisted to the inbox (deduped on the provider event id) rather than posted inline:
 // ack fast, and the apply worker (`drainInbox`) settles off the request path.
-function purchaseWebhook(store: Store, ids: Ids, clock: Clock): WebhookHandler {
+function purchaseWebhook(
+  store: Store,
+  ids: Ids,
+  clock: Clock,
+  meter?: Meter,
+): WebhookHandler {
   return async (provider, request) => {
     try {
       const body = await request.json();
       const event = decodeWebhookEvent(provider, body);
-      const ack = await handlePurchaseWebhook(store, { ids, clock }, event);
+      const ack = await handlePurchaseWebhook(
+        store,
+        { ids, clock, meter },
+        event,
+      );
       return new Response(JSON.stringify({ status: ack.status }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -368,7 +377,12 @@ async function runServe(env: EnvMap, runtime: ServerRuntime): Promise<void> {
   }
   const economy = economyFromCapabilities(caps);
   const config = caps.config;
-  const purchases = purchaseWebhook(caps.store, caps.ids, caps.clock);
+  const purchases = purchaseWebhook(
+    caps.store,
+    caps.ids,
+    caps.clock,
+    caps.meter,
+  );
   const tiliaPayouts = edge?.webhookFor(caps.store, caps.ids, caps.clock);
   // config and clock are what activate the webhook gate. Without them createServer can't verify a
   // callback's signature and timestamp, so a forged or stale one would reach the handler unchecked.
@@ -379,6 +393,7 @@ async function runServe(env: EnvMap, runtime: ServerRuntime): Promise<void> {
         : purchases(provider, request),
     config,
     clock: defaults.clock,
+    meter: caps.meter,
   });
   const closeServer = serve(handler, runtime.port);
   onShutdown(runtime.shutdownTimeoutMs, async () => {

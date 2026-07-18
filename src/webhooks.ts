@@ -19,7 +19,14 @@ import { decodeAmountWire } from '#src/money.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { Operation } from '#src/contract.ts';
-import type { Clock, Ids, InboxEntry, Options, Store } from '#src/ports.ts';
+import type {
+  Clock,
+  Ids,
+  InboxEntry,
+  Meter,
+  Options,
+  Store,
+} from '#src/ports.ts';
 
 /**
  * Fields every verified provider callback carries, whatever its kind. `provider` comes from the
@@ -270,7 +277,7 @@ export type WebhookAck = {
  */
 export async function handleWebhook(
   store: Store,
-  ctx: { ids: Ids; clock: Clock },
+  ctx: { ids: Ids; clock: Clock; meter?: Meter },
   event: WebhookEvent,
   options?: Options,
 ): Promise<WebhookAck> {
@@ -291,8 +298,17 @@ export async function handleWebhook(
   );
   // A duplicate provider event is a no-op that returns the row already stored under this key; its id
   // differs from the one we just minted, so an id mismatch is exactly the dedupe case.
+  const duplicate = stored.id !== row.id;
+  if (duplicate) {
+    // The layer tag separates this deep-dedupe catch from the edge's stale/replay gates; a storm
+    // landing here means redeliveries are getting past the edge.
+    ctx.meter?.count('economy.webhook.duplicate', 1, {
+      provider: event.provider,
+      layer: 'inbox',
+    });
+  }
   return {
-    status: stored.id === row.id ? 'accepted' : 'duplicate',
+    status: duplicate ? 'duplicate' : 'accepted',
     entry: stored,
   };
 }
@@ -303,7 +319,7 @@ export async function handleWebhook(
  */
 export async function handlePurchaseWebhook(
   store: Store,
-  ctx: { ids: Ids; clock: Clock },
+  ctx: { ids: Ids; clock: Clock; meter?: Meter },
   event: PurchaseEvent,
   options?: Options,
 ): Promise<WebhookAck> {

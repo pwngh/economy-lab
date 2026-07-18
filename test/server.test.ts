@@ -494,6 +494,74 @@ describe('createServer /webhooks Freshness', () => {
   });
 });
 
+describe('createServer /webhooks Duplicate Metering', () => {
+  test('each duplicate acknowledgement counts once, tagged with the layer that caught it', async () => {
+    const secret = 'sek_test';
+    const body = JSON.stringify({
+      eventId: 'evt_dup',
+      userId: 'usr_buyer',
+      amount: encodeAmount(credit('10.00')),
+      source: 'card',
+    });
+    const signature = await signHex(body, secret);
+    const counts: Array<{ name: string; tags?: Record<string, string> }> = [];
+    const meter = {
+      count: (name: string, _n: number, tags?: Record<string, string>) =>
+        counts.push({ name, tags }),
+      observe: () => {},
+    };
+    const seen = new Set<string>();
+    const server = createServer(makeEconomy(), {
+      webhook: async () =>
+        new Response(JSON.stringify({ status: 'accepted' }), { status: 200 }),
+      config: { ...testConfig(), webhookSecret: secret },
+      clock: fixedClock(0),
+      replay: {
+        claim: async (eventId) => {
+          const claimed = !seen.has(eventId);
+          seen.add(eventId);
+          return { claimed };
+        },
+      },
+      meter,
+    });
+    const deliver = (timestamp: string): Promise<Response> =>
+      server(
+        webhookRequest('billing', body, {
+          'x-signature': signature,
+          'x-timestamp': timestamp,
+        }),
+      );
+
+    // First sighting: accepted, nothing counted.
+    const first = await deliver('0');
+    assert.equal(first.status, 200);
+    assert.equal(counts.length, 0);
+
+    // Redelivery of a seen eventId: the replay gate catches it.
+    const second = await deliver('0');
+    assert.equal(
+      ((await second.json()) as { status: string }).status,
+      'duplicate',
+    );
+    assert.deepEqual(
+      [...counts],
+      [
+        {
+          name: 'economy.webhook.duplicate',
+          tags: { provider: 'billing', layer: 'replay' },
+        },
+      ],
+    );
+
+    // A stale timestamp never reaches the replay gate; freshness catches it first.
+    const stale = String(-(testConfig().replayWindowMs + 1));
+    await deliver(stale);
+    assert.equal(counts.length, 2);
+    assert.deepEqual(counts[1]?.tags, { provider: 'billing', layer: 'stale' });
+  });
+});
+
 describe('createServer Health And Readiness', () => {
   test('GET /healthz returns 200 without touching the store', async () => {
     const server = createServer(makeEconomy());

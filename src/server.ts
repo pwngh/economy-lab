@@ -61,8 +61,9 @@ export interface ServerOptions {
   // handler. When absent, the host dedups. The claim-last ordering lives at webhookRoute.
   replay?: ReplayStore;
 
-  // Failure sink for the rate limiter: a throwing limiter fails open and counts
-  // `economy.ratelimit.degraded` here.
+  // When present, every 200-duplicate the gate returns counts as `economy.webhook.duplicate`
+  // tagged with the provider and which layer caught it. A redelivery storm on one eventId is a
+  // provider misconfiguration or an attack; the counter is what makes it visible.
   meter?: Meter;
 
   // Authentication for `/submit`: maps the request to the acting principal, or null to refuse
@@ -431,6 +432,10 @@ async function webhookRoute(
   ) {
     // Stale or replayed: 200 duplicate (no mutation) so the provider stops redelivering, not a 5xx
     // that triggers repeated retries.
+    options.meter?.count('economy.webhook.duplicate', 1, {
+      provider,
+      layer: 'stale',
+    });
     return jsonResponse(200, { status: 'duplicate' });
   }
 
@@ -482,6 +487,10 @@ async function replayGate(
   }
   if (!claimed) {
     // Redelivery of a seen eventId: 200 and run nothing, so the credit posts once.
+    options.meter?.count('economy.webhook.duplicate', 1, {
+      provider,
+      layer: 'replay',
+    });
     return jsonResponse(200, { status: 'duplicate' });
   }
   return null;
