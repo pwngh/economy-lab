@@ -50,6 +50,7 @@ export async function relayOutbox(
   input: { dispatcher: Dispatcher; limit: number },
   options?: Options,
 ): Promise<RelaySummary> {
+  await observeBacklog(store, ctx, options);
   const pending = await store.outbox.claimBatch(input.limit, options);
   const tally: RelayTally = { relayed: [], failed: [], deadLettered: [] };
 
@@ -65,6 +66,27 @@ export async function relayOutbox(
   await markRelayed(store, ctx, tally.relayed, options);
 
   return tally;
+}
+
+// Telemetry only: a stats failure never blocks delivery. The gauge pair is what the ops
+// backlog detector reads — a growing age means the relay is down or the events are poisoned.
+async function observeBacklog(
+  store: Store,
+  ctx: WorkerCtx,
+  options?: Options,
+): Promise<void> {
+  try {
+    const stats = await store.outbox.stats(options);
+    ctx.meter.observe('worker.relay.backlog', stats.pending);
+    if (stats.oldestPendingAgeMs !== null) {
+      ctx.meter.observe(
+        'worker.relay.backlog_age_ms',
+        stats.oldestPendingAgeMs,
+      );
+    }
+  } catch {
+    // The relay's own delivery accounting below still runs; a broken gauge is not a broken relay.
+  }
 }
 
 // The cap test is `>=`, so the default `maxOutboxAttempts` of 10 dead-letters on the 10th

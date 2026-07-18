@@ -4,6 +4,12 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 
 ## Unreleased (0.3.0)
 
+### Added
+
+- `OutboxStore.stats` and `InboxStore.reviveDead` join the store contract, covered by the
+  conformance suite; the relay emits `worker.relay.backlog` and `worker.relay.backlog_age_ms`
+  from `stats` each run. Breaking: a custom store must implement both to satisfy the interface.
+
 ### Changed
 
 - `POST /submit` validates every operation field at the decode gate: a missing or wrong-shaped

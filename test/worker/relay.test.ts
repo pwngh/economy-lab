@@ -67,6 +67,38 @@ function sweep(
 }
 
 describe('relayOutbox', () => {
+  test('observes the backlog gauge pair before claiming, and no age once drained', async () => {
+    const store = memoryStore();
+    await enqueue(store, '1');
+    const observed: Array<{ name: string; value: number }> = [];
+    const ctx = makeWorkerCtx({
+      meter: {
+        count: () => {},
+        observe: (name, value) => observed.push({ name, value }),
+      },
+    });
+    const dispatcher = recordingDispatcher();
+
+    await relayOutbox(store, ctx, { dispatcher, limit: 10 });
+    const backlog = observed.find((o) => o.name === 'worker.relay.backlog');
+    const age = observed.find((o) => o.name === 'worker.relay.backlog_age_ms');
+    assert.equal(backlog?.value, 1);
+    assert.notEqual(age, undefined);
+    assert.ok(age!.value >= 0);
+
+    observed.length = 0;
+    await relayOutbox(store, ctx, { dispatcher, limit: 10 });
+    assert.equal(
+      observed.find((o) => o.name === 'worker.relay.backlog')?.value,
+      0,
+    );
+    assert.equal(
+      observed.find((o) => o.name === 'worker.relay.backlog_age_ms'),
+      undefined,
+    );
+    await store.close();
+  });
+
   test('relays every pending row and marks it relayed', async () => {
     const store = memoryStore();
     await enqueue(store, '1');
