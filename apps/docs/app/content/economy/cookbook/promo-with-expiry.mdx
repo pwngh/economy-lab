@@ -1,0 +1,39 @@
+---
+title: 'A promo with an expiry'
+summary: 'Grant marketing credit that spends first and claws itself back when the deadline passes.'
+order: 10
+status: stable
+sourceRefs:
+  ['src/operations/promo.ts#L30 · grantPromo', 'src/worker/promos.ts#L49 · sweepExpiredPromos']
+related:
+  [
+    'economy/reference/operations/grant-promo',
+    'economy/concepts/credit-maturity',
+    'economy/reference/background-worker',
+  ]
+---
+
+import recipePromoHtml from '../../../snippets/recipe-promo.ts?shiki';
+
+You want to hand out launch credit that costs the house nothing if it goes unused. That is what a
+promo grant is: marketing money with a deadline, kept in its own
+[`promo` balance](/economy/concepts/accounts-and-double-entry/) so it never masquerades as money
+the user paid.
+
+Two properties do all the work:
+
+- **Promo spends first.** Any [`spend`](/economy/reference/operations/spend/) draws the buyer's
+  `promo` balance before touching `spendable`, so granted credit is always the first to go.
+- **Expiry needs no code.** The [background worker's](/economy/reference/background-worker/)
+  `promos` sweep finds grants whose `expiresAt` has passed and posts back whatever remains
+  unspent. You set the deadline at grant time and never schedule anything.
+
+<Runnable name="recipe-promo" html={recipePromoHtml} />
+
+The grant is [restricted](/economy/concepts/actors-and-authorization/) to `system` and `operator`
+actors — a user cannot grant themselves credit — and `expiresAt` must be a future timestamp within
+five years, checked at submit.
+
+Since a promo-funded purchase is not the buyer's money, the seller is still paid real earnings:
+the promo part of a sale routes from house revenue, which is exactly why an expired, unspent
+grant can be reclaimed without touching anyone else's balance.

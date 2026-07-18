@@ -32,6 +32,7 @@ const isOperation = (slug: string) => slug.startsWith('economy/reference/operati
 /** Human label for a sub-section, used in breadcrumbs and section landing pages. */
 export const SECTION_LABEL: Record<string, string> = {
   concepts: 'Concepts',
+  cookbook: 'Cookbook',
   reference: 'Reference',
   ports: 'Ports & edges',
 };
@@ -54,6 +55,11 @@ export function buildNav(): NavGroup[] {
       title: 'Concepts',
       href: '/economy/concepts/',
       items: docsInSection('concepts').map(leaf),
+    },
+    {
+      title: 'Cookbook',
+      href: '/economy/cookbook/',
+      items: docsInSection('cookbook').map(leaf),
     },
     {
       title: 'Reference',

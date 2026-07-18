@@ -1,0 +1,32 @@
+---
+title: 'Scheduled top-ups'
+summary: 'A recurring allowance from any timer, made safe by minting the idempotency key from the period.'
+order: 40
+status: stable
+sourceRefs: ['src/operations/topUp.ts#L30 · topUp', 'src/contract.ts#L76 · idempotencyKey']
+related:
+  [
+    'economy/reference/operations/top-up',
+    'economy/concepts/idempotency',
+    'economy/reference/background-worker',
+  ]
+---
+
+import recipeAllowanceHtml from '../../../snippets/recipe-allowance.ts?shiki';
+
+A monthly allowance, a daily login grant, a weekly stipend — every recurring credit is the same
+recipe: any timer you already have, plus an idempotency key minted from the period instead of from
+the moment.
+
+The timer is deliberately not the interesting part. A cron job, a queue with a delay, or the same
+[`Scheduler`](/economy/reference/background-worker/) seam the background worker runs on all work,
+because the safety lives in the key: fire twice in one period and the second submit is a
+[`duplicate`](/economy/reference/outcomes-and-reason-codes/), not a second grant.
+
+<Runnable name="recipe-allowance" html={recipeAllowanceHtml} />
+
+The key discipline is the whole trick, and it is the same one every
+[idempotent retry](/economy/concepts/idempotency/) uses: derive the key from the action's own
+identity (`allowance_usr_kid_2026-07`), never from `Date.now()` or a random id at fire time. A
+timer that misfires, a job that retries after a crash, and a deploy that replays a backlog all
+collapse into the one grant the period was owed.

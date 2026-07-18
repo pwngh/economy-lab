@@ -1,0 +1,35 @@
+---
+title: 'A marketplace fee split'
+summary: 'One sale, several sellers: the fee off the top, shares in basis points, no unclaimed remainder.'
+order: 30
+status: stable
+sourceRefs: ['src/pricing.ts#L52 · splitLegs', 'src/operations/spend.ts#L80 · spend']
+related:
+  [
+    'economy/reference/operations/spend',
+    'economy/ports/pricing',
+    'economy/reference/operations/request-payout',
+  ]
+---
+
+import recipeFeeSplitHtml from '../../../snippets/recipe-fee-split.ts?shiki';
+
+A collab sells: an artist and an animator split the price, and the platform keeps its cut. That is
+one [`spend`](/economy/reference/operations/spend/) with several `recipients` — never several
+transfers to reconcile after the fact.
+
+The split rule is owned by the [pricing policy](/economy/ports/pricing/) and runs inside the sale's
+one balanced transaction:
+
+1. The platform's fee comes off the top.
+2. Each recipient takes their `shareBps` of the net — basis points, and the shares must sum to
+   exactly `10_000`, so no share of the price can go unclaimed.
+3. Whatever rounding leaves over goes to the house, not into thin air: the books stay balanced to
+   the minor unit.
+
+<Runnable name="recipe-fee-split" html={recipeFeeSplitHtml} />
+
+Each seller's cut lands in their [`earned` balance](/economy/concepts/accounts-and-double-entry/),
+which is the balance [`requestPayout`](/economy/reference/operations/request-payout/) later pays
+out as real money. A [`refund`](/economy/reference/operations/refund/) of the order unwinds every
+share — both sellers and the fee — in one opposite posting.

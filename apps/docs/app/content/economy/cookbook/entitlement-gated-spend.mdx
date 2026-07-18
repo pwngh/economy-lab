@@ -1,0 +1,46 @@
+---
+title: 'An entitlement-gated feature'
+summary: 'Sell a SKU once, gate access on read.entitled, and revoke it when the money comes back.'
+order: 20
+status: stable
+sourceRefs:
+  ['src/operations/entitlements.ts#L32 · grantEntitlement', 'src/operations/spend.ts#L80 · spend']
+related:
+  [
+    'economy/reference/operations/grant-entitlement',
+    'economy/reference/operations/spend',
+    'economy/reference/reads',
+  ]
+---
+
+import recipeEntitlementHtml from '../../../snippets/recipe-entitlement-gate.ts?shiki';
+
+You are selling access — a world, a feature, an upload slot — not a stack of consumables. The
+recipe is to let the sale itself record ownership and to ask one reader everywhere access is
+decided.
+
+A [`spend`](/economy/reference/operations/spend/) grants its `sku` to the buyer in the same
+transaction that moves the money, so there is no separate fulfillment step to lose. From then on,
+`read.entitled` answers the gate:
+
+<Runnable name="recipe-entitlement-gate" html={recipeEntitlementHtml} />
+
+The gate in your service is one guard clause:
+
+```ts
+async function equipCape(userId: string) {
+  if (!(await economy.read.entitled(userId, 'wrld_cape'))) {
+    return refuse('This feature needs the Cape.');
+  }
+  equip(userId, 'wrld_cape');
+}
+```
+
+Two edges complete the recipe:
+
+- **Comped access** is [`grantEntitlement`](/economy/reference/operations/grant-entitlement/):
+  the same ownership record without a sale, for support gestures and creator comps.
+- **Money coming back takes the access with it.** A
+  [`refund`](/economy/reference/operations/refund/) or a chargeback-driven revoke calls
+  [`revokeEntitlement`](/economy/reference/operations/revoke-entitlement/), and the same
+  `read.entitled` gate closes everywhere at once.

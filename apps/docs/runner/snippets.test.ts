@@ -18,6 +18,10 @@ import { run as drain } from './app/snippets/drain';
 import { run as idempotency } from './app/snippets/idempotency';
 import { run as payout } from './app/snippets/payout';
 import { run as prove } from './app/snippets/prove';
+import { run as recipeAllowance } from './app/snippets/recipe-allowance';
+import { run as recipeEntitlementGate } from './app/snippets/recipe-entitlement-gate';
+import { run as recipeFeeSplit } from './app/snippets/recipe-fee-split';
+import { run as recipePromo } from './app/snippets/recipe-promo';
 import { run as rejection } from './app/snippets/rejection';
 import { run as velocity } from './app/snippets/velocity';
 
@@ -64,10 +68,39 @@ it('velocity: its own economy arms the ceiling and the second spend declines', a
   expect(report.lines[2]).toMatch(/160 more: rejected \(RISK_DENIED\) — spent .+ against limit .+/);
 });
 
+it('recipe promo: the grant draws first and leaves spendable whole', async () => {
+  const report = await recipePromo();
+  expect(report.lines[2]).toBe('promo left: CREDIT:50.00 · spendable untouched: CREDIT:100.00');
+});
+
+it('recipe entitlement gate: the sale itself flips read.entitled', async () => {
+  const report = await recipeEntitlementGate();
+  expect(report.lines[0]).toBe("entitled('usr_g', 'wrld_cape') before the purchase: false");
+  expect(report.lines[2]).toBe("entitled('usr_g', 'wrld_cape') after: true");
+});
+
+it('recipe fee split: fee off the top, shares of the net, leftover to the house', async () => {
+  const report = await recipeFeeSplit();
+  expect(report.lines[1]).toMatch(/artist \(6,000 bps\): {3}CREDIT:/);
+  expect(report.lines[3]).toMatch(/house \(fee \+ rounding leftover\): CREDIT:/);
+});
+
+it('recipe allowance: the period key absorbs the double fire', async () => {
+  const report = await recipeAllowance();
+  expect(report.lines[0]).toBe('2026-07 fired:    committed');
+  expect(report.lines[1]).toBe('2026-07 re-fired: duplicate — the key absorbed the retry');
+  expect(report.lines[2]).toBe('2026-08 fired:    committed');
+  expect(report.lines[3]).toBe('two months, one retry, balance: CREDIT:100.00');
+});
+
+// Every Runnable a page renders must resolve in the engine's registry, or its Run button
+// renders a wiring fault — this walks the content tree so an unregistered name fails CI
+// instead of shipping a dead button.
+import { readFileSync, readdirSync } from 'node:fs';
+
 // The sandbox executor, driven exactly as the workbench drives it: raw snippet source in, the
 // pitch's edit applied, faults and logs on their own channels. Only the iframe/postMessage
 // plumbing is left to the browser.
-import { readFileSync } from 'node:fs';
 import { execute } from './sandbox-worker.ts';
 
 const velocitySource = readFileSync(

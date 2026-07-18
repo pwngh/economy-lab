@@ -26,6 +26,9 @@ export default [
   route('economy/concepts', 'routes/concepts-index.tsx'),
   route('economy/concepts/:slug', 'routes/concept.tsx'),
 
+  route('economy/cookbook', 'routes/cookbook-index.tsx'),
+  route('economy/cookbook/:slug', 'routes/cookbook-page.tsx'),
+
   route('economy/reference', 'routes/reference-index.tsx'),
   route('economy/reference/operations', 'routes/operations-index.tsx'),
   route('economy/reference/operations/:slug', 'routes/operation.tsx'),

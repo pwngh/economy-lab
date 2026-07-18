@@ -48,6 +48,15 @@ export default function EconomyIndex() {
         </li>
         <li className="doc-card">
           <h3>
+            <a href="/economy/cookbook/">Cookbook</a>
+          </h3>
+          <p>
+            Copy-pasteable patterns: a promo with an expiry, an entitlement-gated feature, a
+            marketplace fee split, and scheduled top-ups — each around a runnable snippet.
+          </p>
+        </li>
+        <li className="doc-card">
+          <h3>
             <a href="/economy/reference/">Reference</a>
           </h3>
           <p>
