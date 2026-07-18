@@ -89,6 +89,35 @@ describe('economy.submit telemetry', () => {
     await economy.close();
   });
 
+  test('a rejection carries its reason code in the count tags', async () => {
+    const counts: Count[] = [];
+    const observed: string[] = [];
+    const economy = meteredEconomy(counts, observed);
+
+    const outcome = await economy.submit(
+      spend({
+        buyerId: 'usr_unfunded',
+        sku: 'sku_m',
+        price: credit('5.00'),
+        recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
+      }),
+    );
+
+    assert.equal(outcome.status, 'rejected');
+    assert.deepEqual(
+      counts.map((c) => ({ name: c.name, ...c.tags })),
+      [
+        {
+          name: 'economy.submit',
+          kind: 'spend',
+          status: 'rejected',
+          reason: 'INSUFFICIENT_FUNDS',
+        },
+      ],
+    );
+    await economy.close();
+  });
+
   test('a throwing meter never changes the outcome', async () => {
     const digest = seededDigest(1);
     const clock = fixedClock(0);

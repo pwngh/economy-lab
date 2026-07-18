@@ -333,6 +333,31 @@ async function runOnceDrivesOneBatch(): Promise<void> {
   await store.close();
 }
 
+async function emitsTheSweepHeartbeatAndTheCleanVerifyBeat(): Promise<void> {
+  const { store, digest } = await seededStore();
+  const counts: Array<{ name: string; tags?: Record<string, string> }> = [];
+  const meter = {
+    count: (name: string, _n: number, tags?: Record<string, string>) => {
+      counts.push({ name, tags });
+    },
+    observe: () => {},
+  };
+  const ctx = makeWorkerCtx({ digest, meter });
+
+  await runSweeps(store, ctx, sweepInput());
+  const beats = counts.filter((c) => c.name === 'worker.sweep');
+  assert.equal(beats.length, 1);
+  assert.equal(beats[0].tags?.failed, '0');
+
+  // The first batch verifies before it seals, so the clean-verify beat lands on the second.
+  await runSweeps(store, ctx, sweepInput());
+  const verified = counts.filter(
+    (c) => c.name === 'worker.checkpoint.verify' && c.tags?.outcome === 'ok',
+  );
+  assert.equal(verified.length, 1);
+  await store.close();
+}
+
 async function pauseSkipsScheduledRunsAndResumeRestoresThem(): Promise<void> {
   const { store, digest } = await seededStore();
   let scheduled: { task: () => Promise<void> } | null = null;
@@ -487,4 +512,6 @@ describe('Worker Composition Root', () => {
     startSchedulesTheBatchOnTheInjectedScheduler());
   test('pause skips scheduled runs, runOnce still works, resume restores', () =>
     pauseSkipsScheduledRunsAndResumeRestoresThem());
+  test('emits the sweep heartbeat and the clean-verify beat', () =>
+    emitsTheSweepHeartbeatAndTheCleanVerifyBeat());
 });

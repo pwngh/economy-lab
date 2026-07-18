@@ -156,7 +156,19 @@ export async function runSweeps(
   input: SweepInput,
 ): Promise<SweepBatch> {
   const { now, limit, options } = input;
-  return runSweepJobs(store, ctx, input, { now, limit, options });
+  const batch = await runSweepJobs(store, ctx, input, { now, limit, options });
+  // The batch heartbeat: a supervisor watching for this count going silent learns the worker
+  // died faster than any downstream symptom can say so.
+  try {
+    ctx.meter.count('worker.sweep', 1, {
+      failed: String(
+        Object.values(batch).filter((result) => !result.ok).length,
+      ),
+    });
+  } catch {
+    // Telemetry only; the batch is already decided.
+  }
+  return batch;
 }
 
 type SummaryOf<K extends SweepName> = Extract<

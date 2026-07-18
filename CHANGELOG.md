@@ -20,6 +20,9 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   `layer` (`stale`, `replay`, `inbox`), via `ServerOptions.meter` and the `handleWebhook`
   context.
 - `worker.checkpoint.seal_ms` records seal duration, tagged `outcome`.
+- `worker.sweep` counts each worker batch, tagged `failed` with the batch's failed-job count;
+  `worker.checkpoint.verify` counts each clean verify (`outcome: 'ok'`).
+- `economy.submit` carries a rejection's `reason` code alongside `kind` and `status`.
 - `SweepInput.only` narrows a worker run to the named jobs; the rest report idle summaries.
 
 ### Changed

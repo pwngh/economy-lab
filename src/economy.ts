@@ -259,13 +259,21 @@ async function meteredSubmit(
   const kind = String((operation as { kind?: unknown })?.kind ?? 'unknown');
   const startedAt = clock.now();
   let status = 'fault';
+  let reason: string | undefined;
   try {
     const outcome = await submit(pipeline, operation, options);
     status = outcome.status;
+    if (outcome.status === 'rejected') reason = outcome.reason;
     return outcome;
   } finally {
     try {
-      meter.count('economy.submit', 1, { kind, status });
+      // A rejection carries its reason code (a bounded enum), so a supervisor can tell a
+      // velocity storm from an underfunded buyer without seeing any outcome.
+      meter.count('economy.submit', 1, {
+        kind,
+        status,
+        ...(reason === undefined ? {} : { reason }),
+      });
       meter.observe('economy.submit.ms', clock.now() - startedAt, { kind });
     } catch {
       // Telemetry only; the outcome above is already decided.

@@ -200,5 +200,8 @@ async function driveVerify(
     ctx.meter.count('worker.checkpoint.verify', 1, {
       outcome: 'mismatch',
     });
+    return;
   }
+  // The clean verify beats too: a silent auditor and a healthy one must not look alike.
+  ctx.meter.count('worker.checkpoint.verify', 1, { outcome: 'ok' });
 }
