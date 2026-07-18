@@ -849,7 +849,38 @@ function createInboxStore(): InboxStore & Participant {
       journal.record(() => rows.set(id, prior));
       rows.set(id, { ...entry, status: 'dead', reason });
     },
+    reviveDead: async (limit, _options?: Options) =>
+      reviveDeadRows(journal, rows, limit),
   };
+}
+
+// Oldest receivedAt first, mirroring the SQL engines' `order by received_at`.
+function reviveDeadRows(
+  journal: Journal,
+  rows: Map<string, InboxEntry>,
+  limit: number,
+): InboxEntry[] {
+  const dead: InboxEntry[] = [];
+  for (const entry of rows.values()) {
+    if (entry.status === 'dead') {
+      dead.push(entry);
+    }
+  }
+  dead.sort((a, b) => a.receivedAt - b.receivedAt);
+  const revived: InboxEntry[] = [];
+  for (const entry of dead.slice(0, Math.max(0, limit))) {
+    const prior = { ...entry };
+    journal.record(() => rows.set(entry.id, prior));
+    const next: InboxEntry = {
+      ...entry,
+      status: 'pending',
+      attempts: 0,
+      reason: null,
+    };
+    rows.set(entry.id, next);
+    revived.push({ ...next });
+  }
+  return revived;
 }
 
 // --- Saga store -------------------------------------------------------------------

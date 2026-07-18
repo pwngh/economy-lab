@@ -583,6 +583,66 @@ async function reportsOutboxBacklogStats(store: Store): Promise<void> {
   const drained = await store.outbox.stats();
   assert.deepEqual(drained, { pending: 0, oldestPendingAgeMs: null });
 }
+
+// reviveDead flips dead rows back to pending with attempts reset, oldest-first. The opening
+// drain clears every dead row the suite has left behind, so the limit assertions below see
+// only this test's rows.
+async function revivesDeadInboxRowsOldestFirst(store: Store): Promise<void> {
+  const userId = freshUser();
+  const olderId = `ibx_conf_rev_a_${userId}`;
+  const newerId = `ibx_conf_rev_b_${userId}`;
+  await store.transaction(async (unit) => {
+    await unit.inbox.enqueueInbound({
+      ...inboxRow(userId, olderId, `evt_${olderId}`),
+      receivedAt: 1_000,
+    });
+    await unit.inbox.enqueueInbound({
+      ...inboxRow(userId, newerId, `evt_${newerId}`),
+      receivedAt: 2_000,
+    });
+  });
+  await store.inbox.bumpAttempt(olderId);
+  await store.inbox.deadLetter(olderId, 'poison');
+  await store.inbox.deadLetter(newerId, 'poison');
+
+  assert.deepEqual(await store.inbox.reviveDead(0), []);
+
+  const drainedRows = await store.inbox.reviveDead(1_000);
+  const olderRevived = drainedRows.find((entry) => entry.id === olderId);
+  const newerRevived = drainedRows.find((entry) => entry.id === newerId);
+  for (const entry of [olderRevived, newerRevived]) {
+    assert.notEqual(entry, undefined);
+    assert.equal(entry!.status, 'pending');
+    assert.equal(entry!.attempts, 0);
+    assert.equal(entry!.reason, null);
+  }
+
+  // Selection is oldest-first by receivedAt: with only these two dead, limit 1 takes the older.
+  await store.inbox.deadLetter(olderId, 'again');
+  await store.inbox.deadLetter(newerId, 'again');
+  const one = await store.inbox.reviveDead(1);
+  assert.deepEqual(
+    one.map((entry) => entry.id),
+    [olderId],
+  );
+  const rest = await store.inbox.reviveDead(10);
+  assert.deepEqual(
+    rest.map((entry) => entry.id),
+    [newerId],
+  );
+
+  // A revived row is claimable again; once applied it is terminal and nothing is left to revive.
+  const claimed = await store.inbox.claimInbound({ now: 0, limit: 1_000 });
+  for (const id of [olderId, newerId]) {
+    assert.equal(
+      claimed.some((entry) => entry.id === id),
+      true,
+    );
+    await store.inbox.markApplied(id);
+  }
+  assert.deepEqual(await store.inbox.reviveDead(10), []);
+}
+
 async function recomputesChainHead(store: Store): Promise<void> {
   const userId = freshUser();
   const transaction = await store.transaction((unit) =>
@@ -1031,6 +1091,8 @@ export function runStoreConformance(
       withStore(t, bumpsInboxAttemptThenDeadLetters));
     test('reports the pending outbox backlog depth and oldest age', (t) =>
       withStore(t, reportsOutboxBacklogStats));
+    test('revives dead inbox rows oldest-first with attempts reset', (t) =>
+      withStore(t, revivesDeadInboxRowsOldestFirst));
     test('recomputes a per-account chain head deterministically over the digest', (t) =>
       withStore(t, recomputesChainHead));
     test('stores a posting with multiple debit/credit lines to one account', (t) =>

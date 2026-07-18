@@ -285,6 +285,10 @@ const SUBSTORE_ROUTES: Record<string, SubHandler> = {
     await unit.inbox.deadLetter(body.id as string, body.reason as string);
     return null;
   },
+  'inbox/reviveDead': async (unit, body) => {
+    const revived = await unit.inbox.reviveDead(body.limit as number);
+    return revived.map(encodeWire.inboxEntry);
+  },
   'sagas/open': async (unit, body) => {
     await unit.sagas.open(decodeWire.saga(body.saga));
     return null;

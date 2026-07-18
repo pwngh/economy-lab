@@ -61,6 +61,7 @@ import type {
   Digest,
   EntitlementStore,
   IdempotencyStore,
+  InboxEntry,
   InboxStore,
   Leg,
   Logger,
@@ -946,7 +947,44 @@ function createInboxStore(exec: MysqlExecutor): InboxStore {
         [reason, id],
       );
     },
+    reviveDead: (limit) => reviveDeadInbox(exec, limit),
   };
+}
+
+// Three statements (MySQL has no RETURNING and no self-referencing update subquery): pick the
+// oldest dead ids, flip them behind a status guard so a concurrent revive no-ops, re-read the
+// revived rows.
+async function reviveDeadInbox(
+  exec: MysqlExecutor,
+  limit: number,
+): Promise<ReadonlyArray<InboxEntry>> {
+  const capped = Math.max(0, limit);
+  if (capped === 0) {
+    return [];
+  }
+  const dead = await rows(
+    exec,
+    `SELECT id FROM inbox WHERE status = 'dead' ORDER BY received_at, id LIMIT ?`,
+    [capped],
+  );
+  if (dead.length === 0) {
+    return [];
+  }
+  const ids = dead.map((row) => String(row.id));
+  const placeholders = ids.map(() => '?').join(', ');
+  await rows(
+    exec,
+    `UPDATE inbox SET status = 'pending', attempts = 0, dead_letter_reason = NULL
+      WHERE id IN (${placeholders}) AND status = 'dead'`,
+    [...ids],
+  );
+  const revived = await rows(
+    exec,
+    `SELECT id, \`key\`, operation, status, attempts, received_at, dead_letter_reason FROM inbox
+      WHERE id IN (${placeholders}) AND status = 'pending'`,
+    [...ids],
+  );
+  return revived.map(rowToInbox);
 }
 
 // --- Saga store -------------------------------------------------------------------

@@ -1019,6 +1019,22 @@ function createInboxStore(q: Queryable): InboxStore {
         [id, reason],
       );
     },
+    // `for update skip locked` on the dead rows keeps two overlapping revives disjoint, the same
+    // discipline as the claims.
+    reviveDead: async (limit) => {
+      const result = await q.query(
+        `update inbox set status = 'pending', attempts = 0, dead_letter_reason = null
+          where id in (
+            select id from inbox where status = 'dead'
+             order by received_at asc
+             limit $1
+             for update skip locked
+          )
+          returning id, key, operation, status, attempts, received_at, dead_letter_reason`,
+        [Math.max(0, limit)],
+      );
+      return result.rows.map(rowToInbox);
+    },
   };
 }
 

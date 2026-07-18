@@ -503,6 +503,17 @@ export interface InboxStore {
    * operators; a non-existent or already-terminal row is left untouched.
    */
   deadLetter(id: string, reason: string, options?: Options): Promise<void>;
+
+  /**
+   * Flips up to `limit` oldest 'dead' rows back to 'pending', resetting `attempts` to 0 and
+   * clearing `reason`, and returns the revived rows. 'applied' rows never revive. Only queue
+   * state changes, never the ledger: a revived row still applies through the normal drain under
+   * its idempotency key, so a wrong revive costs work, not money.
+   */
+  reviveDead(
+    limit: number,
+    options?: Options,
+  ): Promise<ReadonlyArray<InboxEntry>>;
 }
 
 /**

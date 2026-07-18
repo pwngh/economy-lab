@@ -348,6 +348,15 @@ function sessionInbox(transport: Transport, session: string): InboxStore {
     deadLetter: async (id, reason, options) => {
       await call(transport, at('deadLetter'), { id, reason }, options);
     },
+    reviveDead: async (limit, options) =>
+      (
+        (await call(
+          transport,
+          at('reviveDead'),
+          { limit },
+          options,
+        )) as unknown[]
+      ).map(decodeWire.inboxEntry),
   };
 }
 
