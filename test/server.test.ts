@@ -508,3 +508,51 @@ describe('createServer /submit Authentication', () => {
     assert.equal(payload.status, 'committed');
   });
 });
+
+describe('createServer Body Limits', () => {
+  test('returns a 413 problem past the byte ceiling', async () => {
+    const server = createServer(makeEconomy(), { maxBodyBytes: 64 });
+
+    const body = topUpBody('usr_big', '10.00');
+    body.memo = 'x'.repeat(256);
+    const response = await server(submitRequest(body));
+
+    assert.equal(response.status, 413);
+    assert.equal(
+      response.headers.get('content-type'),
+      'application/problem+json',
+    );
+  });
+
+  test('returns a 408 problem when the body read passes the deadline', async () => {
+    const server = createServer(makeEconomy(), { readTimeoutMs: 20 });
+
+    const stalled = new ReadableStream<Uint8Array>({ start() {} });
+    const request = new Request('https://economy.test/submit', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: stalled,
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' });
+    // The deadline rides an unref'ed timer; a live server has sockets holding the loop open,
+    // but here a ref'ed keepalive must stand in for them or the process drains first.
+    const keepalive = setTimeout(() => {}, 5_000);
+    const response = await server(request);
+    clearTimeout(keepalive);
+
+    assert.equal(response.status, 408);
+  });
+
+  test('caps the webhook body under the same ceiling', async () => {
+    const server = createServer(makeEconomy(), {
+      webhook: (async () => new Response('ok')) as WebhookHandler,
+      maxBodyBytes: 64,
+    });
+
+    const response = await server(
+      webhookRequest('tilia', JSON.stringify({ pad: 'x'.repeat(256) })),
+    );
+
+    assert.equal(response.status, 413);
+  });
+});

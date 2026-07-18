@@ -30,7 +30,11 @@ import {
 import { REQUIRED_SECRETS, isProduction, missingSecrets } from '#src/env.ts';
 import { serverRuntime } from '#scripts/support/server-env.ts';
 import { economyFromCapabilities } from '#src/economy.ts';
-import { createServer } from '#src/server.ts';
+import {
+  DEFAULT_MAX_BODY_BYTES,
+  DEFAULT_READ_TIMEOUT_MS,
+  createServer,
+} from '#src/server.ts';
 import {
   jsonlLogger,
   randomIds,
@@ -165,8 +169,28 @@ async function bridge(
   res: ServerResponse,
 ): Promise<void> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(chunk as Buffer);
+  let received = 0;
+  // The Fetch handler only ever sees a fully buffered body, so the byte ceiling and read
+  // deadline must act here, while the bytes stream in.
+  const timer = setTimeout(() => {
+    problem(res, 408, 'Request body read timed out.');
+    req.destroy();
+  }, DEFAULT_READ_TIMEOUT_MS);
+  try {
+    for await (const chunk of req) {
+      received += (chunk as Buffer).byteLength;
+      if (received > DEFAULT_MAX_BODY_BYTES) {
+        problem(res, 413, 'Request body is too large.');
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk as Buffer);
+    }
+  } catch {
+    // Destroyed mid-read after a ceiling or deadline reply; nothing more to send.
+    return;
+  } finally {
+    clearTimeout(timer);
   }
   const method = req.method ?? 'GET';
   const headers = new Headers();
@@ -188,6 +212,14 @@ async function bridge(
     Object.fromEntries(response.headers.entries()),
   );
   res.end(Buffer.from(await response.arrayBuffer()));
+}
+
+function problem(res: ServerResponse, status: number, title: string): void {
+  if (res.headersSent) {
+    return;
+  }
+  res.writeHead(status, { 'content-type': 'application/problem+json' });
+  res.end(JSON.stringify({ type: 'about:blank', title, status }));
 }
 
 // --- worker -----------------------------------------------------------------------

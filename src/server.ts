@@ -61,7 +61,20 @@ export interface ServerOptions {
   // carries its own `actor`. When absent, the body's actor is trusted — safe only for in-process
   // hosts, never for a network-exposed handler.
   authenticate?: (request: Request) => Promise<Principal | null>;
+  // Byte ceiling on request bodies; past it the reply is 413. Defaults to
+  // DEFAULT_MAX_BODY_BYTES, which every legitimate operation fits well under.
+  maxBodyBytes?: number;
+
+  // Deadline on reading a request body; past it the reply is 408, so a trickled body cannot
+  // hold the handler open. Defaults to DEFAULT_READ_TIMEOUT_MS.
+  readTimeoutMs?: number;
 }
+
+/** Default byte ceiling on request bodies. The Node host bridge enforces the same limit. */
+export const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
+
+/** Default deadline on reading a request body. The Node host bridge enforces the same limit. */
+export const DEFAULT_READ_TIMEOUT_MS = 10_000;
 
 const SIGNATURE_HEADER = 'x-signature';
 
@@ -170,8 +183,14 @@ async function submitRoute(
     principal = verdict;
   }
 
+  let bytes: Uint8Array;
   try {
-    const operation = decodeOperation(await readJson(request), principal);
+    bytes = await readBounded(request, options);
+  } catch (error) {
+    return bodyFault(error);
+  }
+  try {
+    const operation = decodeOperation(parseJson(bytes), principal);
     return jsonResponse(200, encodeOutcome(await economy.submit(operation)));
   } catch (error) {
     return faultResponse(error);
@@ -198,15 +217,20 @@ async function webhookRoute(
     return problemResponse(404, 'No webhook handler configured.');
   }
 
+  let rawBytes: Uint8Array;
+  try {
+    rawBytes = await readBounded(request, options);
+  } catch (error) {
+    return bodyFault(error);
+  }
+
   const config = options.config;
   if (config === undefined || config.webhookSecret === '') {
     // No secret configured: keep the bare pass-through (the host owns verification).
-    return runHandler(handler, provider, request);
+    return runHandler(handler, provider, rebuildRequest(request, rawBytes));
   }
 
-  let rawBytes: Uint8Array;
   try {
-    rawBytes = new Uint8Array(await request.arrayBuffer());
     if (
       !(await verifyHmac(rawBytes, signatureOf(request), config.webhookSecret))
     ) {
@@ -407,13 +431,75 @@ function faultResponse(error: unknown): Response {
   });
 }
 
-async function readJson(request: Request): Promise<unknown> {
-  const text = await request.text();
-  if (text.length === 0) {
+// Local verdicts, not EconomyErrors: they map to 413/408 in bodyFault and never leave the file.
+class BodyTooLarge extends Error {}
+class BodyTimeout extends Error {}
+
+// Reads the whole body under the byte ceiling and read deadline. A declared content-length past
+// the ceiling is refused before any byte is read; a lying or absent declaration is caught by
+// counting as chunks arrive.
+async function readBounded(
+  request: Request,
+  options: ServerOptions,
+): Promise<Uint8Array> {
+  const maxBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+  if (Number(request.headers.get('content-length') ?? '0') > maxBytes) {
+    throw new BodyTooLarge();
+  }
+  const body = request.body;
+  if (body === null) {
+    return new Uint8Array(0);
+  }
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  // Cancelling resolves the pending read as done, so the loop observes the deadline promptly
+  // without racing promises. AbortSignal.timeout, not a raw timer: it self-cleans and is a web
+  // standard present on every target runtime.
+  const deadline = AbortSignal.timeout(
+    options.readTimeoutMs ?? DEFAULT_READ_TIMEOUT_MS,
+  );
+  deadline.addEventListener('abort', () => void reader.cancel());
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (deadline.aborted) {
+      throw new BodyTimeout();
+    }
+    if (done) {
+      break;
+    }
+    total += value.byteLength;
+    if (total > maxBytes) {
+      void reader.cancel();
+      throw new BodyTooLarge();
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+function bodyFault(error: unknown): Response {
+  if (error instanceof BodyTooLarge) {
+    return problemResponse(413, 'Request body is too large.');
+  }
+  if (error instanceof BodyTimeout) {
+    return problemResponse(408, 'Request body read timed out.');
+  }
+  return faultResponse(error);
+}
+
+function parseJson(bytes: Uint8Array): unknown {
+  if (bytes.byteLength === 0) {
     throw malformed('Request body is empty.');
   }
   try {
-    return JSON.parse(text);
+    return JSON.parse(new TextDecoder().decode(bytes));
   } catch (error) {
     throw malformed('Request body is not valid JSON.', error);
   }

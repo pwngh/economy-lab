@@ -9,6 +9,9 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - `ServerOptions.authenticate` resolves the acting principal for a `/submit` request and stamps
   it as the operation's `actor`. A `null` result answers `401`; a body that carries its own
   `actor` is rejected `400`.
+- Request bodies read under a byte ceiling (`ServerOptions.maxBodyBytes`, default 64 KiB,
+  answers `413`) and a read deadline (`ServerOptions.readTimeoutMs`, default 10 s, answers
+  `408`), on the Fetch handler and the Node bridge alike.
 
 ## 0.2.2 - 2026-07-17
 
