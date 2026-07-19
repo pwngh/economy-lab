@@ -15,7 +15,7 @@
 
 import { SYSTEM } from '#src/accounts.ts';
 import { ERROR_CODES } from '#src/errors.ts';
-import { toAmount } from '#src/money.ts';
+import { encodeAmount, toAmount } from '#src/money.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
 import type { Amount } from '#src/money.ts';
@@ -164,7 +164,7 @@ export interface RateBoard {
   locked: boolean;
   // Payouts that would settle at the new rate if repriced now (RESERVED/SUBMITTED); must be 0.
   inFlightPayouts: number;
-  paused: boolean;
+  maintenanceActive: boolean;
   // The band a new rate may be set within, in USD per 1,000 credits.
   parFloor: number;
   parCeil: number;
@@ -173,7 +173,7 @@ export interface RateBoard {
 
 // The economy's live pause state, for the maintenance banner. Times are simulated-clock epochs.
 export interface StatusView {
-  paused: boolean;
+  maintenanceActive: boolean;
   pauseStart: number | null;
   pauseEnd: number | null;
   resumesAt: number | null;
@@ -406,12 +406,14 @@ export function toCredits(a: Amount): number {
 
 // Exact display figure ("1,234.56") straight from the bigint minor, at any size. The unit
 // ($ / Cr) is the component's job.
+// The codec owns the two-decimal split; only the thousands grouping is display-local.
 export function creditsDisplay(a: Amount): string {
-  const sign = a.minor < 0n ? '-' : '';
-  const abs = a.minor < 0n ? -a.minor : a.minor;
-  const whole = (abs / 100n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  const cents = (abs % 100n).toString().padStart(2, '0');
-  return `${sign}${whole}.${cents}`;
+  const decimal = encodeAmount(a).split(':')[1] ?? '0.00';
+  const sign = decimal.startsWith('-') ? '-' : '';
+  const [whole = '0', cents = '00'] = (sign ? decimal.slice(1) : decimal).split(
+    '.',
+  );
+  return `${sign}${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}.${cents}`;
 }
 
 // Readable label for an account id. Platform accounts have fixed names (above); a user account

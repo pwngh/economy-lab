@@ -15,6 +15,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
 
+import { GENESIS_HEX } from '#src/store-kit.ts';
+
 import { getEngine } from '~/engine';
 import {
   Amount,
@@ -80,8 +82,6 @@ function Hash({ value }: { value: string }) {
 export default function TxnDetail({ loaderData }: Route.ComponentProps) {
   const { txnId, account, posting, statement, lineage, checkpoint } =
     loaderData;
-  const GENESIS = '0'.repeat(64);
-
   return (
     <div className="page">
       <div className="view-head">
@@ -210,7 +210,7 @@ export default function TxnDetail({ loaderData }: Route.ComponentProps) {
                     {link.txnId}
                   </Link>
                   <span className="chain-hashes">
-                    {link.prevHash === GENESIS ? (
+                    {link.prevHash === GENESIS_HEX ? (
                       <span className="dim small">genesis</span>
                     ) : (
                       <Hash value={link.prevHash} />
