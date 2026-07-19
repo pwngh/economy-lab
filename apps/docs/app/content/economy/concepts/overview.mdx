@@ -10,7 +10,7 @@ order: 10
 status: stable
 sourceRefs:
   [
-    'src/economy.ts#L89 · economyFromCapabilities',
+    'src/economy.ts#L92 · createEconomy',
     'src/index.ts#L50',
     'test/conformance/invariants.adversarial.test.ts',
     'README.md',
@@ -23,9 +23,9 @@ economy-lab is the application layer of a credits economy (wallets, a marketplac
 You drive it through one [`submit`](/economy/reference/the-economy/) entry point and read its state through [`read`](/economy/reference/reads/). Every action is one [`Operation`](/economy/reference/operations/) that posts a balanced transaction and returns an [`Outcome`](/economy/reference/outcomes-and-reason-codes/). The whole loop fits in a few lines:
 
 ```ts
-import { createEconomy, topUp, systemActor, toAmount, spendable } from '@pwngh/economy-lab';
+import { createEconomy, memoryPorts, topUp, systemActor, toAmount, spendable } from '@pwngh/economy-lab';
 
-const economy = await createEconomy(); // in-memory, zero dependencies
+const economy = createEconomy(memoryPorts({ signingKey: 'dev-signing-key' })); // in-memory, zero dependencies
 
 const outcome = await economy.submit(
   topUp({

@@ -6,7 +6,7 @@ status: stable
 sourceRefs:
   [
     'src/ports.ts#L132-L148 · Processor',
-    'src/adapters/processor.ts#L58 · httpProcessor',
+    'src/adapters/processor.ts#L62 · httpProcessor',
   ]
 related:
   [
@@ -33,12 +33,12 @@ The lab proves it asked for a disbursement and proves the saga that tracks it; w
 interface Processor {
   submitPayout(
     input: { key: string; userId: string; amount: Amount },
-    options?: Options,
+    options?: CallOptions,
   ): Promise<{ providerRef: string }>;
 
   payoutStatus?(
     input: { providerRef: string },
-    options?: Options,
+    options?: CallOptions,
   ): Promise<{ state: 'SETTLED' | 'RETURNED' | 'FAILED' | 'PENDING' | 'UNKNOWN' }>;
 }
 ```

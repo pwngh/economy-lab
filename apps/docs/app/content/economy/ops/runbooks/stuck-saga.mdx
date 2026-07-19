@@ -25,7 +25,7 @@ per saga id.
 
 ## Automatic response
 
-Per saga: `detected` → `decided` → one worker sweep (`runSweep`, the host's `worker.runOnce`
+Per saga: `detected` → `decided` → one worker sweep (`runSweep`, the host's `worker.sweep`
 closure) → `verified` by re-reading the saga (`progressed` when its state or `updatedAt`
 moved). Guardrails, all mandatory:
 

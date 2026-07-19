@@ -5,9 +5,9 @@ order: 20
 status: stable
 sourceRefs:
   [
-    'src/contract.ts#L273 · Outcome',
-    'src/errors.ts#L22 · RejectionCode',
-    'src/errors.ts#L55 · ERROR_CODES',
+    'src/contract.ts#L290 · Outcome',
+    'src/errors.ts#L27 · RejectionCode',
+    'src/errors.ts#L103 · ERROR_CODES',
   ]
 related: ['economy/reference/the-economy', 'economy/reference/configuration']
 ---
@@ -28,11 +28,7 @@ what that status implies.
 type Outcome =
   | { status: 'committed'; transaction: Transaction }
   | { status: 'duplicate'; transaction: Transaction }
-  | {
-      status: 'rejected';
-      reason: RejectionCode;
-      detail?: RejectionDetail;
-    };
+  | { status: 'rejected'; detail: RejectionDetail };
 ```
 
 A request lands one of three ways: it went through, it repeated an operation already done, or it
@@ -82,8 +78,9 @@ and the caller can treat `duplicate` exactly like `committed`.
 ### `rejected`: a declined-but-valid request
 
 A `rejected` outcome means the request was well-formed and the system was healthy, but the answer is
-no. It carries a [`RejectionCode`](#the-rejectioncode-catalog) in `reason` and an optional `detail`
-object with the specifics: the account that was short, the order that wasn't found, when writes
+no. It carries a `RejectionDetail` in `detail`: a discriminated union whose `detail.reason` names
+the [`RejectionCode`](#the-rejectioncode-catalog), and whose remaining fields are exactly the
+specifics that decline needs — the account that was short, the order that wasn't found, when writes
 resume.
 
 ```ts
@@ -98,14 +95,14 @@ const result = await economy.submit(
     recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
   }),
 );
-if (result.status === 'rejected' && result.reason === 'INSUFFICIENT_FUNDS') {
+if (result.status === 'rejected' && result.detail.reason === 'INSUFFICIENT_FUNDS') {
   // show the buyer a "not enough funds" message
 }
 ```
 
 A rejection comes back as data, so you handle it in an ordinary `if` branch; see the [throw-versus-decline rule](#rejected-versus-thrown) below.
 
-The money fields in `detail` — `required`, `available`, `minimum`, `requested`, `spent`, `limit` — are branded [`Amount`](/economy/concepts/money-model/)s, so a caller compares them directly (`detail.available.minor < detail.required.minor`) and formats them with `encodeAmount`. Over the [HTTP service](/economy/reference/http-service/) they travel as the same decimal strings every other wire amount uses.
+The money fields in `detail` — `need`, `have`, `minimum`, `amount` — are branded [`Amount`](/economy/concepts/money-model/)s, so a caller compares them directly (`detail.have.minor < detail.need.minor`) and formats them with `encodeAmount`. Over the [HTTP service](/economy/reference/http-service/) a rejection travels as `{ status, reason, detail }`: the top-level `reason` is a convenience copy derived from `detail.reason` — in TypeScript, `detail.reason` is the sole discriminant — and the money fields travel as the same decimal strings every other wire amount uses (`bigint` fields such as `limitMinor` become decimal strings too).
 
 ## The `RejectionCode` catalog
 
@@ -134,14 +131,13 @@ A few of these reward a closer look.
 
 `FUNDS_IMMATURE` is a timing problem: the money is there, but it hasn't cleared its
 maturity window yet, a concept that lives with [credit maturity](/economy/concepts/credit-maturity/).
-The `detail` names the `account`, the `required` amount that hadn't cleared, and
-`availableAt` — when it will have, assuming no further activity — so a caller can tell the
-user when to try again.
+The `detail` names the `source` whose window is still open and `availableAt` — when the funds
+will have cleared, assuming no further activity — so a caller can tell the user when to try again.
 
-`RISK_DENIED` is actionable the same way: its `detail` carries what was `spent` in the
-window, the `limit`, which window tripped (`class` — `'in'` for top-ups and promo grants,
-`'out'` for spends, subscriptions, and payout requests), the `windowMs`, and `retryAfter` —
-when the oldest counted attempt ages out of the [velocity window](/economy/concepts/spend-velocity/).
+`RISK_DENIED` names its trigger the same way: its `detail` carries which window tripped
+(`window` — `'inflow'` for top-ups and promo grants, `'outflow'` for spends, subscriptions,
+and payout requests) and the `limitMinor` ceiling of that
+[velocity window](/economy/concepts/spend-velocity/).
 
 `DUPLICATE_ORDER` catches a specific client mistake: a retried `spend` that lost its original
 `idempotencyKey`. The `orderId` identifies a unique purchase, so a second charge for the same order

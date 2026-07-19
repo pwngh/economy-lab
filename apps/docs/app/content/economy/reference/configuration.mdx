@@ -5,9 +5,9 @@ order: 40
 status: stable
 sourceRefs:
   [
-    'src/config.ts#L173-L188 · loadConfig',
-    'src/index.ts#L409 · capabilitiesFromEnv',
-    'src/from-env.ts#L118 · externalsFromEnv',
+    'src/config.ts#L240-L255 · loadConfig',
+    'src/index.ts#L623 · openPorts',
+    'src/from-env.ts#L137 · resolveExternals',
     '.env.example',
   ]
 related:
@@ -31,7 +31,7 @@ That single read also means defaults live in one file. Every tunable below is pa
 rather than leaving the config half-applied. These are the same defaults the operation and
 [background-worker](/economy/reference/background-worker/) pages cite.
 
-A `config` override passed to `createEconomy` (or `defaultConfig`) applies last-wins per knob,
+A `config` override passed to `openPorts` (or `defaultConfig`) applies last-wins per knob,
 except the record-valued knobs — `maturityHorizonMs` and `payoutSla` — which merge one level
 deep: overriding one funding source or one SLA step keeps the others rather than replacing the
 whole record.
@@ -50,7 +50,7 @@ the end, because they pick adapters rather than tune policy.
 ## Required secrets
 
 Two secrets have no honest default. In production (`NODE_ENV=production`) a blank value for
-either makes `loadConfig` throw a single `CONFIG.INVALID` fault listing every missing key at
+either makes `loadSecrets` throw a single `CONFIG.INVALID` fault listing every missing key at
 once.
 
 | Variable         | Meaning                                                                                                                  | Default                       |
@@ -61,7 +61,7 @@ once.
 <Callout type="warning">
   The serve and worker entry point (`scripts/main.ts`) refuses to start if
   either secret is blank, in *any* `NODE_ENV`, a stricter check than
-  `loadConfig`'s production-only one.
+  `loadSecrets`'s production-only one.
 </Callout>
 
 ## Payouts
@@ -187,8 +187,8 @@ it holds, end-user discretionary writes are declined with `ECONOMY_PAUSED`; sett
 ## Production externals
 
 These choose which adapter fills each port, so the edge reads them at wiring time rather than
-through `loadConfig`. In production, `externalsFromEnv` (`src/from-env.ts`) fails fast with one
-message if any rate or the provider URL is missing or malformed, so a prod process never runs
+through `loadConfig`. In production, `openPorts` fails fast with one preflight message naming
+every rate or provider URL that is missing or malformed, so a prod process never runs
 on the 1:1 dev rate or an auto-approve payout stub. Outside production these fall back to dev
 stubs, and a local run needs none of them.
 
@@ -209,14 +209,26 @@ gap between `buy` and `par` is the platform [spread](/economy/concepts/money-mod
 `DATABASE_URL` picks the storage backend, and the cache and dispatcher URLs pick their
 transports. Each is optional: unset means the dependency-free in-memory adapter. These belong
 to [storage](/economy/ports/storage/), read by
-`capabilitiesFromEnv` in `src/index.ts`.
+`openPorts` in `src/index.ts`.
 
 | Variable         | Meaning                                                                                 | Default                     |
 | ---------------- | --------------------------------------------------------------------------------------- | --------------------------- |
 | `DATABASE_URL`   | A `postgres://` or `mysql://` connection string selects that engine; any other scheme throws.         | unset (in-memory store)     |
+| `DB_POOL_MAX`    | Max connections in the SQL engine's pool. Excess concurrent submits queue for a connection, and a transaction holds exactly one for its whole life, so the queue always drains. | unset (driver default `10`) |
 | `REDIS_URL`      | Adds a Redis read-through cache the store consults before the database.                 | unset (no cache)            |
 | `SQS_QUEUE_URL`  | Delivers outgoing events via an Amazon SQS queue. Wins if `DISPATCHER_URL` is also set. | unset                       |
 | `DISPATCHER_URL` | Posts outgoing events over HTTP to your event bus.                                      | unset (in-process delivery) |
+
+Three of the optional ports — the dispatcher, the payee directory, and the checkpoint anchor —
+production refuses to lose silently: leaving one unwired without a word is a preflight error.
+Each has a decline flag (`1` or `true`) that declares the deployment runs without that port on
+purpose.
+
+| Variable              | Meaning                                                                                  | Default |
+| --------------------- | ---------------------------------------------------------------------------------------- | ------- |
+| `DISPATCHER_DECLINED` | Declares a production deploy runs without a dispatcher on purpose.                       | unset   |
+| `PAYEES_DECLINED`     | Declares a production deploy runs without a payee directory on purpose.                  | unset   |
+| `ANCHOR_DECLINED`     | Declares a production deploy runs without a checkpoint anchor on purpose.                | unset   |
 
 ## HTTP server and worker loop
 

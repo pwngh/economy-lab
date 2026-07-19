@@ -5,7 +5,7 @@ order: 35
 status: stable
 sourceRefs:
   [
-    'src/economy.ts#L1062 · exportLedger',
+    'src/economy.ts#L1061 · exportLedger',
     'scripts/support/verify-lib.ts#L156 · verifyExport',
     'scripts/verify.ts',
     'test/verify-export.test.ts',
@@ -80,7 +80,7 @@ The public key comes from <SourceLink to="src/runtime.ts#L181">signingPublicKeyH
 
 Exports are pulled; anchoring pushes. The <SourceLink to="src/ports.ts#L722">Anchor</SourceLink> port publishes every sealed checkpoint to a store outside the ledger's database — an external log, an object store, a transparency service — because a checkpoint row kept next to the postings proves nothing against whoever controls that database.
 
-Wire one through `WorkerCtx.anchor` and [the background worker's](/economy/reference/background-worker/) seal publishes each checkpoint as it lands (<SourceLink to="src/worker/checkpoint.ts#L115">publishAnchor</SourceLink>). Publishing is best-effort by design: a down anchor must degrade protection, not sealing, so a failed publish logs `worker.checkpoint.anchor_failed`, counts on the meter, and the seal completes regardless. The counter is the operator's signal to re-anchor by hand.
+Wire one through `Ports.anchor` and [the background worker's](/economy/reference/background-worker/) seal publishes each checkpoint as it lands (<SourceLink to="src/worker/checkpoint.ts#L115">publishAnchor</SourceLink>). Publishing is best-effort by design: a down anchor must degrade protection, not sealing, so a failed publish logs `worker.checkpoint.anchor_failed`, counts on the meter, and the seal completes regardless. The counter is the operator's signal to re-anchor by hand.
 
 The bundled adapter is <SourceLink to="src/adapters/http-anchor.ts#L36">httpAnchor</SourceLink> on the `adapters` subpath: it POSTs the checkpoint as JSON with the checkpoint id in an `Idempotency-Key` header, so a retried publish of the same row dedupes at the receiver. The port is one method; a file appender or an object-store writer is a few lines if HTTP doesn't fit your log.
 

@@ -5,9 +5,9 @@ order: 5
 status: stable
 sourceRefs:
   [
-    'src/index.ts#L543 · createEconomy',
-    'src/economy.ts#L89 · economyFromCapabilities',
-    'src/contract.ts#L396 · Economy',
+    'src/index.ts#L78 · createEconomy',
+    'src/economy.ts#L92 · createEconomy',
+    'src/contract.ts#L415 · Economy',
   ]
 related:
   [
@@ -24,7 +24,7 @@ An `Economy` is the object you hold and call. It has a small surface: one `submi
 ```ts
 import { createEconomy } from '@pwngh/economy-lab';
 
-const economy = await createEconomy(options); // build — see Construction
+const economy = createEconomy(ports); // build — see Construction
 const outcome = await economy.submit(operation); // change money → Outcome
 const balance = await economy.read.balance(account); // look, never change
 await economy.close(); // release the store
@@ -34,30 +34,34 @@ You build it from a set of injected ports (a `Store`, a `Signer`, a `Processor`,
 
 ## Construction
 
-`createEconomy(options?)` is the one call. With nothing, it builds a batteries-included in-memory economy: the in-memory `Store`, a dev `Signer`, a dev `Rates` table, a flat `FeePolicy`, and an in-memory `Processor`, all wired. No environment, no infrastructure:
+`createEconomy(ports)` is the one call: hand it a full `Ports` bag and it assembles the economy, synchronously. `memoryPorts` builds a batteries-included in-memory bag: the in-memory `Store`, a dev `Signer`, a dev `Rates` table, a flat `FeePolicy`, and an in-memory `Processor`, all wired. No environment, no infrastructure:
 
 ```ts
-import { createEconomy } from '@pwngh/economy-lab';
+import { createEconomy, memoryPorts } from '@pwngh/economy-lab';
 
-const economy = await createEconomy();
+const economy = createEconomy(memoryPorts({ signingKey: 'dev-signing-key' }));
 ```
 
-Pass `env` and it resolves everything from the environment instead: the `Store` from `DATABASE_URL` (a `postgres://` or `mysql://` connection string picks that engine, and an unset value falls back to the in-memory store), and the four external ports and config from their own keys. Outside production it fills sane defaults for anything absent; in production it requires the real values and fails fast with one message naming what is missing. Any field you pass explicitly wins over the env-derived one:
+`openPorts(env, init?)` resolves the bag from the environment instead: the `Store` from `DATABASE_URL` (a `postgres://` or `mysql://` connection string picks that engine, and an unset value falls back to the in-memory store), and the external ports, config, and secrets from their own keys. Outside production it fills sane defaults for anything absent; in production it requires each external port set or expressly declined, and fails fast with one message naming everything missing. Any field you pass in `init` wins over the env-derived one:
 
 ```ts
-const economy = await createEconomy({ env: process.env });
+import { createEconomy, openPorts } from '@pwngh/economy-lab';
+
+const economy = createEconomy(await openPorts(process.env));
 
 // env for everything, but override one port:
-const withLiveRates = await createEconomy({ env: process.env, rates: liveRates() });
+const withLiveRates = createEconomy(await openPorts(process.env, { rates: liveRates() }));
 ```
 
-When a host already holds a full `Capabilities` bundle — for instance to share one `Store` between an economy and a background worker — it calls the low-level assembler directly:
+A host that wants the whole stack from one call uses `boot`, which opens the ports, assembles the economy over them, and builds the [background worker](/economy/reference/background-worker/) over the same bag (pass `worker: false` to skip it):
 
 ```ts
-const economy = economyFromCapabilities(capabilities);
+import { boot } from '@pwngh/economy-lab';
+
+const { ports, economy, worker } = await boot(process.env);
 ```
 
-Each driver is imported only when its environment variable selects it, so a deployment installs only what it uses. See [configuration](/economy/reference/configuration/) for every variable `compose` reads.
+Each driver is imported only when its environment variable selects it, so a deployment installs only what it uses. See [configuration](/economy/reference/configuration/) for every variable `openPorts` reads.
 
 The in-memory economy bundles for the browser with no aliases or stubs: every Node API and driver sits behind a runtime guard, and a gate (`npm run check:browser`) bundles the entry with esbuild's browser platform on every check to keep it that way. The runnable blocks across this handbook are that property at work.
 

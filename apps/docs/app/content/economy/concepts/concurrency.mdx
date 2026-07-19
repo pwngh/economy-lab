@@ -7,8 +7,8 @@ status: stable
 sourceRefs:
   [
     'src/ledger.ts#L73 · lockAll',
-    'src/economy.ts#L682 · lockAccounts',
-    'src/engines/postgres.ts#L201 · advanceChain',
+    'src/economy.ts#L680 · lockAccounts',
+    'src/engines/postgres.ts#L205 · advanceChain',
     'db/postgresql-schema.sql#L90 · chain_links_account_prev_uq',
   ]
 related: ['economy/concepts/idempotency', 'economy/concepts/platform-sharding']
@@ -70,7 +70,7 @@ The same burst, with its tally, runs on the [console's market page](/console/mar
 
 - Contending operations serialize on per-account locks taken in one global order — the engine, not luck, prevents interleaving.
 - A refusal under contention is data: the funds gate rejects with `INSUFFICIENT_FUNDS`, and no account goes below zero.
-- The books stay provable under any interleaving; `read.prove()` re-derives the invariants on demand.
+- The books stay provable under any interleaving; `read.health()` re-derives the invariants on demand.
 
 Edit the drain block above to push on this: raise the number of racing spends, shrink the
 wallet, and watch the tally. Commits plus refusals always sum to the attempts, and the balance

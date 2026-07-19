@@ -1,6 +1,6 @@
 ---
 title: 'API reference'
-summary: 'Every public export, by entry point: the main package plus the ports, adapters, engines, netting, and testing subpaths.'
+summary: 'Every public export, by entry point: the main package plus the ports, adapters, engines, worker, server, netting, and testing subpaths.'
 plain: 'A complete list of everything the library exports, grouped by the import path you reach it through.'
 order: 4
 status: stable
@@ -8,7 +8,7 @@ sourceRefs: ['package.json', 'src/index.ts']
 related: ['economy/reference/the-economy', 'economy/ports/packages']
 ---
 
-The library ships a curated, faceted [`exports`](https://nodejs.org/api/packages.html#exports) map: the main package re-exports everything, and each subpath is a focused entry point. Install it, then import from whichever one you need.
+The library ships a curated, faceted [`exports`](https://nodejs.org/api/packages.html#exports) map: the main package carries the day-to-day surface, and each subpath is a focused entry point. Install it, then import from whichever one you need.
 
 ```bash
 npm install @pwngh/economy-lab
@@ -23,13 +23,15 @@ import type { Store } from '@pwngh/economy-lab/ports';
 
 | Import                                                          | What it holds                                                                        |
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| [`@pwngh/economy-lab`](#pwngheconomy-lab)                        | Everything: construction, operations, money, the ledger, the worker, and every type. |
+| [`@pwngh/economy-lab`](#pwngheconomy-lab)                        | Construction, operations, money, the ledger, outcomes, and the principal types.      |
 | [`@pwngh/economy-lab/ports`](#pwngheconomy-labports)             | The port interfaces you implement to plug in your own infrastructure.                |
 | [`@pwngh/economy-lab/adapters`](#pwngheconomy-labadapters)       | The bundled in-memory and HTTP adapters, plus the runtime services.                  |
 | [`@pwngh/economy-lab/adapters/redis`](#pwngheconomy-labadaptersredis) | The Redis-backed `Cache` and `RateLimiter`; adapts an `ioredis` client you connect. |
 | [`@pwngh/economy-lab/adapters/sqs`](#pwngheconomy-labadapterssqs) | The SQS-backed `Dispatcher`; adapts an SQS client you connect.                      |
 | [`@pwngh/economy-lab/engines/postgres`](#pwngheconomy-labenginespostgres) | The Postgres `Store` (carries `pg`).                                        |
 | [`@pwngh/economy-lab/engines/mysql`](#pwngheconomy-labenginesmysql) | The MySQL `Store` and schema helpers (carries `mysql2`).                          |
+| [`@pwngh/economy-lab/worker`](#pwngheconomy-labworker)           | The full background-worker surface: the sweeps, the relay and drain, and the feeds.  |
+| [`@pwngh/economy-lab/server`](#pwngheconomy-labserver)           | The full HTTP surface: the server internals and the webhook intake.                  |
 | [`@pwngh/economy-lab/netting`](#pwngheconomy-labnetting)         | The in-instance netting session.                                                     |
 | [`@pwngh/economy-lab/ops`](#pwngheconomy-labops)                 | The in-process operations supervisor: signal capture, incident detectors, guarded remediations, and the audit trail. |
 | [`@pwngh/economy-lab/store-kit`](#pwngheconomy-labstore-kit)     | The primitives a custom `Store` implementation computes with.                        |
@@ -39,46 +41,47 @@ Every section below links to the source it comes from.
 
 ## `@pwngh/economy-lab`
 
-The main entry point. It re-exports the whole surface, so you can import any symbol here — construction, operations, money, the ledger, errors, the worker, and every type. The focused subpaths further down are curated subsets of this one.
+The main entry point. It carries the day-to-day surface — construction, operations, money, the ledger, outcomes and errors, and the principal types. The focused subpaths further down hold the port contracts, the adapter factories, the full worker and HTTP surfaces, and the testing harness.
 
 ### Construction
 
-Stand up an `Economy` in one call, or assemble one from a `Capabilities` bundle you built yourself.
+Stand up an `Economy` from a fully-built `Ports` bag — batteries-included in memory, or resolved from the environment (see [composition](#composition-and-environment)).
 
 <SourceLink to="src/index.ts">src/index.ts</SourceLink>
 
 | Export | What it is |
 | --- | --- |
-| `createEconomy` | The one call to stand up an Economy; batteries-included in-memory with env-driven config and overridable ports. |
-| `EconomyOptions` | Everything createEconomy accepts, all optional; wins over env-derived config when passed explicitly. |
-| `economyFromCapabilities` | The low-level assembler: an Economy from a fully-built Capabilities bundle; escape hatch for sharing a store. |
-| `Economy` | The request-processing and read interface: submit operations, query state, prove integrity, and close the store. |
+| `createEconomy` | The one call: assembles an Economy from a fully-built Ports bag, synchronously. |
+| `memoryPorts` | A batteries-included in-memory Ports bag from one signing key; config, secrets, and store overridable at build. |
+| `systemRuntime` | Bundles the four production runtime ports (clock, id generator, hasher, signer) from a signing key. |
+| `Ports` | Every port the assembler needs, gathered into one readonly bag, secrets and config included. |
+| `Runtime` | The four runtime ports systemRuntime returns: clock, ids, digest, signer. |
+| `Economy` | The request-processing and read interface: submit operations, query state, check health, and close the store. |
 
 ### Composition and environment
 
-Wire an economy or worker from environment variables, or resolve the store, ports, and adapter selection yourself.
+Resolve the `Ports` bag from environment variables, validate a deployment before constructing, or boot the whole stack in one call.
 
 <SourceLink to="src/index.ts">src/index.ts</SourceLink>
 
 | Export | What it is |
 | --- | --- |
-| `compose` | Wires an Economy whose store, cache, and dispatcher come from env; thin over capabilitiesFromEnv. |
-| `composeWorker` | Wires a background Worker for deferred, time-driven work over the same env-selected store and dispatcher. |
-| `ComposedWorker` | What composeWorker returns: the worker plus the handles its host must manage—the store to close and dispatcher. |
-| `capabilitiesFromEnv` | Assembles the full Capabilities bundle from env: store, cache, dispatcher, external ports, and runtime services. |
-| `workerCtxFrom` | Derives a worker context from a capability bundle: runtime services minus request-path-only pieces. |
-| `externalsFromEnv` | Resolves the four external ports from env; dev defaults, production requires real values and fails fast. |
-| `Externals` | The four external services: signer (signing key), processor (payout provider), rates (CREDIT-to-USD), pricing (fee split). |
-| `ExternalPorts` | External services with no built-in stand-in: pricing, processor, signer, and rates. |
-| `RuntimeDefaults` | Runtime services capabilitiesFromEnv fills in; pass any to override, e.g. a fixed clock for reproducible tests. |
-| `describeSelection` | Reads the adapter selection from env: DATABASE_URL picks store, REDIS_URL adds cache, SQS_QUEUE_URL or DISPATCHER_URL picks dispatcher. |
-| `Selection` | Which concrete adapter each env knob picks, before any driver loads; one reading of the selection. |
-| `checkEnv` | Validates env without constructing: returns every deployment startup problem or empty array when complete. |
+| `boot` | The whole stack from one call: opens the ports, assembles the economy, and builds the worker over the same bag. |
+| `Boot` | What boot returns: the ports, the economy, and the worker (null when declined). |
+| `BootInit` | Everything boot accepts: PortsInit plus the worker switch. |
+| `openPorts` | Assembles the full Ports bag from env: store, cache, dispatcher, external ports, secrets, and runtime services. |
+| `PortsInit` | Overrides openPorts accepts; a field passed explicitly replaces the env-derived one, and `false` declines an optional port. |
+| `preflight` | Validates env without constructing: every deployment problem as structured issues, its errors exactly what openPorts refuses. |
+| `PreflightIssue` | One preflight finding: code, path, message, and severity. |
+| `describeEnv` | Reads the adapter selection from env without loading a driver: store, cache, dispatcher, processor, payees, anchor, secrets. |
+| `EnvDescription` | What describeEnv returns: the kind and URL each knob selects, before any driver loads. |
+| `RatesConfig` | The rate knobs openPorts accepts in place of a built Rates port. |
+| `DEV_RATES` | The dev rate table openPorts and memoryPorts wire outside production, shared so a host that displays or re-mints the dev rates uses this one definition. |
 | `EnvMap` | A read-only view of the environment variables the library reads. |
 
 ### Configuration
 
-Load the tunable `Config` and fill in its defaults.
+Load the tunable `Config`, keep credentials in the separate `Secrets` bag, and fill in defaults.
 
 <SourceLink to="src/config.ts">src/config.ts</SourceLink>
 
@@ -86,7 +89,14 @@ Load the tunable `Config` and fill in its defaults.
 | --- | --- |
 | `loadConfig` | Build Config from env vars, defaulting any value that is unset or invalid. |
 | `defaultConfig` | The default Config without an environment: the exact values loadConfig derives from an empty env, with any knobs in overrides applied on top. |
-| `Config` | All tunable settings in one object. |
+| `mergeConfig` | Overrides applied on a base Config; the nested records merge one level deep so one knob keeps its siblings. |
+| `inspectConfig` | The resolved Config a given env produces, overrides applied — carries no secrets, safe to print whole. |
+| `maintenanceWindow` | The config slice for a scheduled maintenance window, ready to spread into a PortsInit config. |
+| `Config` | All tunable settings in one object; policy only, so it is safe to log. |
+| `Secrets` | The credential bag: webhook secret, signing secret, and any prior signing keys. |
+| `CONFIG_KEYS` | Every policy name loadConfig reads; .env.example is held to this list. |
+| `SECRET_KEYS` | Every credential name loadSecrets reads, kept apart so the log-safe list can never grow a secret. |
+| `DECLINE_KEYS` | The production decline flags: each declares a deployment runs without that optional port on purpose. |
 
 ### Operation constructors
 
@@ -110,6 +120,7 @@ One typed builder per operation kind: each sets `kind` and returns a ready `Oper
 | `reverse` | Manual undo an operator runs by hand to cancel a prior transaction. |
 | `reversePayout` | Undo a not-yet-paid payout and return reserved credits to seller. |
 | `settlePayout` | Move settled payout funds from reserve to revenue. |
+| `idempotencyKey` | Mints a key: `idem_` plus the joined parts, so a caller derives the same key on retry from its own identifiers. |
 
 ### Operations and actors
 
@@ -122,7 +133,8 @@ The `Operation` union, the `Principal` that authorizes it, and the factories tha
 | `Operation` | Union of all request types a caller can submit to the economy. |
 | `Principal` | Who is making a request, and what they are allowed to do. |
 | `Recipient` | One party who gets a cut of a sale; the price splits across all recipients. |
-| `EntitlementAttrs` | Optional details carried on an entitlement grant. |
+| `EntitlementAttributes` | Optional details carried on an entitlement grant. |
+| `CallOptions` | Per-call options every submit, read, and store method accepts, such as an AbortSignal. |
 | `userActor` | An end user; may act only on their own accounts. |
 | `systemActor` | A trusted internal service acting on the platform's behalf. |
 | `operatorActor` | A human operator running a manual, fully-audited action. |
@@ -139,12 +151,13 @@ The `Amount` value type and the exact-integer arithmetic, conversion, and wire e
 | `Currency` | The currencies the system handles: in-app CREDIT and real-world USD. |
 | `toAmount` | Builds an Amount from currency and minor-unit count, throwing AMOUNT_OVERFLOW if outside 64-bit range. |
 | `credits` | Builds a CREDIT Amount from a whole number of credits (credits(120) = 12,000 minor units); distinct from the ledger's credit() leg builder. |
+| `usd` | Builds a USD Amount from a two-decimal string, e.g. usd('9.99'). |
 | `decodeAmount` | Parses a decimal string (e.g. '12.34') into an Amount, throwing INVALID_AMOUNT for bad format or out-of-range values. |
 | `encodeAmount` | Encodes an amount as text (e.g. 'CREDIT:12.34') with fixed two decimals for JSON, events, and tamper-evident hashing. |
 | `decodeAmountWire` | Parses a wire amount string (e.g. 'CREDIT:12.34') back into an Amount, the inverse of encodeAmount. |
 | `isAmount` | Type guard to check if a value is a branded Amount. |
 | `add` | Adds two amounts of the same currency, throwing CURRENCY_MISMATCH or AMOUNT_OVERFLOW. |
-| `neg` | Returns the negation of an amount, checking it stays in 64-bit range. |
+| `negate` | Returns the negation of an amount, checking it stays in 64-bit range. |
 | `compare` | Compares two amounts of the same currency, throwing CURRENCY_MISMATCH. |
 | `zero` | Creates a zero amount for the given currency. |
 | `isZero` | Checks if an amount is zero. |
@@ -182,101 +195,63 @@ What a `submit` resolves to, and the typed error surface a thrown fault carries.
 | Export | What it is |
 | --- | --- |
 | `Outcome` | The result of submitting an operation: committed, duplicate, or rejected. |
-| `RejectionDetail` | Structured context on a rejection, with fields depending on the reason (account, required, available, minimum, etc.). |
+| `Success` | The two outcomes that carry a committed transaction; duplicate is a success replayed. |
+| `Rejection` | The rejected arm of Outcome. |
+| `RejectionDetail` | Structured context on a rejection, discriminated by detail.reason; each arm carries exactly the fields that decline needs. |
 | `Transaction` | A committed posting: the record of money that actually moved. |
+| `isSuccess` | Type guard: the outcome carries a committed transaction. |
+| `isRejection` | Type guard: the outcome is a decline. |
+| `requireSuccess` | Narrows to a success or throws a plain Error naming the rejection, for hosts where a decline is unexpected. |
 | `EconomyError` | The thrown-error type for every fault, carrying one stable error code and retry decision. |
 | `ERROR_CODES` | Stable, namespaced error codes for thrown faults (e.g., LEDGER.OVERDRAFT). |
 | `ErrorCode` | The union of every ERROR_CODES value for autocompletion and exhaustiveness checking. |
 | `RejectionCode` | Reasons a well-formed request is declined on a healthy system (expected 'no' answers). |
+| `REJECTION_CODES` | Every RejectionCode, enumerable for docs and exhaustiveness checks. |
+| `REJECTION_SPEC` | Per-code registry of the fields each rejection's detail carries, compile-locked to the union. |
 | `normalizeError` | Turns anything caught in a catch into an EconomyError, wrapping raw exceptions as retryable STORE.FAILURE. |
 | `statusForError` | Maps an EconomyError to its HTTP status: 401 for auth, 400 for caller-fixable requests, 503 for retryable, 500 otherwise. |
 
-### HTTP server and webhooks
+### HTTP server
 
-Run the economy as a Fetch HTTP service and apply verified provider callbacks.
+Run the economy as a Fetch HTTP service. The server internals and the webhook intake surface live on [`@pwngh/economy-lab/server`](#pwngheconomy-labserver); the main entry carries the one constructor and its types.
 
 <SourceLink to="src/server.ts">src/server.ts</SourceLink>
-<SourceLink to="src/webhooks.ts">src/webhooks.ts</SourceLink>
 
 | Export | What it is |
 | --- | --- |
-| `createServer` | An HTTP entry point for an Economy: takes a Fetch Request, returns a Response. |
-| `decodeWebhookEvent` | Decodes a parsed purchase webhook body into a typed PurchaseEvent; a wrong-shape body throws a fault the server maps to 400. |
-| `handleWebhook` | Maps a verified provider callback to its operation and persists it to the inbox. |
-| `handlePurchaseWebhook` | The purchase case of handleWebhook, for callers that only deal in purchases. |
-| `toOperation` | Maps a verified webhook event to the operation it applies, dedup key derived from the provider eventId. |
-| `WebhookEvent` | The union of verified inbound provider callbacks, tagged by kind. |
-| `PurchaseEvent` | A verified inbound purchase event from a billing provider. |
-| `PayoutSettledEvent` | A verified payout-settled callback from the payout rail; drives settlePayout. |
-| `PayoutFailedEvent` | A verified payout-failed callback from the payout rail; drives reversePayout. |
-| `DisputeEvent` | A verified dispute or chargeback callback; drives clawback. |
-| `WebhookAck` | The result of accepting a verified webhook: accepted or duplicate, carrying the stored inbox row. |
+| `createServer` | An HTTP entry point for an Economy: takes its options (economy, ports, authenticate), returns a Fetch handler. |
+| `ServerOptions` | Everything createServer accepts: the economy, the ports pick, the required authenticate posture, and the edge knobs. |
+| `ServerPorts` | The narrow pick of Ports the routes read: config, secrets, clock, meter, logger; a full Ports is assignable. |
+| `FetchHandler` | What createServer returns: (request: Request) => Promise&lt;Response&gt;, runnable on any WinterCG runtime. |
 
 ### Background worker
 
-Drive the deferred, time-based work: the per-cycle sweeps, the outbox relay, the inbox, and the full prover.
+Drive the deferred, time-based work. The full sweep surface — names, batches, the relay and drain, the feeds — lives on [`@pwngh/economy-lab/worker`](#pwngheconomy-labworker); the main entry carries the constructor and its types.
 
 <SourceLink to="src/worker/index.ts">src/worker/index.ts</SourceLink>
 
 | Export | What it is |
 | --- | --- |
-| `createWorker` | Build the worker from the store and context; always has runOnce, with scheduler also gets start(intervalMs). |
-| `Worker` | Handle the host program uses to drive background jobs: runOnce runs every job once, start runs them on a timer. |
-| `WorkerCtx` | Capabilities for the background worker (clock, ids, digest, signer, processor, rates, logger, meter, config). |
-| `drainInbox` | Applies a batch of pending inbox events (verified provider callbacks) to the ledger. |
-| `relayOutbox` | Delivers a batch of pending outbox events, each written in the posting transaction. |
-| `proveEconomy` | The thorough read-only prover: recomputes the whole hash chain to catch any altered entry. |
-| `SweepName` | Names of the background jobs run each cycle: payouts, subscriptions, treasury, feeSweep, floatCoverage, etc. |
-| `SweepInput` | Arguments for every background job in one object; limit caps each due-item pass, options may carry AbortSignal. |
-| `SweepResult` | One job's outcome: its summary, or its caught error as data with code and retry flag. |
-| `SweepBatch` | One entry per job, keyed by name; a failing job never hides the others. |
-| `SweepRun` | runOnce's result: the batch plus the txn id of every posting the run minted. |
+| `createWorker` | Build the worker over the ports bag and its bound economy. |
+| `Worker` | The handle: sweep runs every job once, start(everyMs) runs them on a timer, pause/resume gate the loop. |
+| `WorkerDefaults` | Steady-state sweep arguments bound at createWorker; any SweepRequest field overrides them per sweep. |
+| `SweepRequest` | Arguments for one sweep pass, all optional: now defaults to the clock, limit to the default, economy to the bound one. |
+| `DEFAULT_SWEEP_LIMIT` | The per-sweep due-item cap when no limit is given. |
 
-### In-memory adapters
+### Adapters and policies
 
-Zero-infrastructure `Store`, `Cache`, and `Processor` implementations for tests and local runs.
+The adapter factories — the in-memory and HTTP ports, the rates and fee builders, and the runtime services — live on [`@pwngh/economy-lab/adapters`](#pwngheconomy-labadapters). The two policy types stay importable from the main entry.
 
-<SourceLink to="src/adapters/memory.ts">src/adapters/memory.ts</SourceLink>
+<SourceLink to="src/contract.ts">src/contract.ts</SourceLink>
 
 | Export | What it is |
 | --- | --- |
-| `memoryStore` | Build an in-memory Store with working transaction rollback for tests and development. |
-| `memoryCache` | Builds an in-process Cache backed by a Map; reference implementation and single-process cache when no Redis. |
-| `memoryRateLimiter` | Builds an in-process fixed-window RateLimiter counting in a Map; single-process limiter when no Redis. |
-| `memoryProcessor` | Build an in-memory Processor for demos and tests that accepts every payout with deterministic providerRef. |
-
-### Rates, pricing, and entitlements
-
-Configure the CREDIT-to-USD rates and the fee split, and cache entitlement lookups.
-
-<SourceLink to="src/adapters/rates.ts">src/adapters/rates.ts</SourceLink>
-
-| Export | What it is |
-| --- | --- |
-| `configuredRates` | Build the production CREDIT-to-USD rate source from a deployment's configured rates. |
-| `flatFee` | Built-in constructor for the required external port: the fee split policy. |
 | `FeePolicy` | Splits a sale's price across recipients and the platform into debit/credit legs with no rounding loss. |
-| `cachedEntitlements` | Wrap a store so entitlements.owns is served from a bitset when warm, for fast ownership checks. |
 | `BitsetOptions` | Tuning knobs for the entitlement bitset cache (TTL, resident user cap). |
 
-### Runtime services
+### Read model and integrity
 
-The concrete clock, ids, digest, signer, logger, and meter a production host wires in.
-
-<SourceLink to="src/runtime.ts">src/runtime.ts</SourceLink>
-
-| Export | What it is |
-| --- | --- |
-| `jsonlLogger` | Structured logger for production hosts, writing one JSON object per line. |
-| `noopLogger` | A Logger that discards every line: the silent default for a host that wants no log output. |
-| `noopMeter` | A Meter that discards every count and observation: the default when a host collects no metrics. |
-| `systemDigest` | Production hasher returning the shared SHA-256 Digest. |
-| `systemSigner` | Production signer using Ed25519 so an auditor can confirm a checkpoint wasn't rewritten. |
-| `signingPublicKeyHex` | Hex-encoded raw 32-byte Ed25519 public key derived from signingKey for external verification. |
-
-### Read model
-
-The shapes `read` returns: statements, postings, sagas, rates, checkpoints, and the solvency proof.
+The shapes `read` returns — statements, postings, sagas, rates, checkpoints — plus the health report and the thorough prover.
 
 <SourceLink to="src/contract.ts">src/contract.ts</SourceLink>
 
@@ -290,27 +265,51 @@ The shapes `read` returns: statements, postings, sagas, rates, checkpoints, and 
 | `StoredLink` | One posting as lineage returns it, carrying the two hashes that tie it into the account's tamper-evident chain. |
 | `Rate` | An exchange rate as exact integers: the multiplier is rate / 10^scale. |
 | `EconomyEvent` | The fixed shape of every event the system emits, with type, version, subject, and audience. |
-| `EconomyStatus` | The economy's pause state at a moment in time, derived from maintenance window and clock. |
+| `EconomyStatus` | What read.status() returns: maintenanceActive plus the window bounds, derived from config and clock. |
 | `ProveReport` | The integrity check result: one flag per property the ledger must hold. |
+| `HealthReport` | What read.health() resolves to; the same shape as ProveReport. |
+| `proveEconomy` | The thorough read-only prover: recomputes the whole hash chain from one bag of ports to catch any altered entry. |
+| `ProvePorts` | The bag proveEconomy takes: store, rates, digest. |
+| `allInvariantsHold` | Rolls a report's five flags into a single boolean. |
+| `paginate` | One bounded page of an async stream plus the full total; drains the source, so it is for quiescent reads — consoles, ops scripts, tests. |
+| `findByHash` | Locates the chain link carrying a hash by walking every lineage through the read surface: a bounded forensic lookup, not an indexed query. |
 
 ## Focused entry points
 
-Each subpath re-exports a slice of the surface. The **ports**, **adapters**, and **netting** symbols below are also available from the main package; the **driver-carrying** adapters and the **engines** are not — they load a database or cloud driver, so they live behind their own subpath and are imported only where that driver is installed.
+Each subpath owns a slice of the surface. The principal **ports** types are also re-exported from the main package; everything else below lives only on its subpath — the **driver-carrying** adapters and the **engines** load a database or cloud driver, so they are imported only where that driver is installed.
 
 ## `@pwngh/economy-lab/ports`
 
-The port interfaces — the contracts you implement to plug your own infrastructure into the economy. Types only; import them to type an adapter you are writing.
+The port interfaces — the contracts you implement to plug your own infrastructure into the economy. Import them to type an adapter you are writing; the two state catalogs are the only values.
 
 <SourceLink to="src/ports.ts">src/ports.ts</SourceLink>
 
 | Export | What it is |
 | --- | --- |
 | `Store` | The full set of stores the system reads and writes. |
+| `Ledger` | The append-only double-entry ledger: records money movements, reads back balances and history. |
+| `Unit` | The stores one operation's handler may write to, all inside one database transaction. |
+| `IdempotencyStore` | Makes a repeated request run at most once, keyed by the caller's idempotency key. |
+| `ReplayStore` | Dedups raw inbound provider webhooks by provider event id, in a key space separate from the domain IdempotencyStore. |
+| `SaleStore` | Stores the summary of each completed sale, keyed by order id. |
+| `OutboxStore` | A transactional outbox: events save in the same database transaction as the money move. |
+| `OutboxStats` | What OutboxStore.stats reports: the pending count and the age of the oldest pending row. |
+| `InboxStore` | A transactional inbox, the inbound mirror of OutboxStore: a recorded event is eventually applied or dead-lettered. |
+| `SagaStore` | Tracks each multi-step payout (a saga) as it moves through its states. |
+| `EntitlementStore` | Tracks which users own which items or features (entitlements), keyed by SKU. |
+| `SubscriptionStore` | Tracks recurring subscriptions and when each is next due to bill. |
+| `PromoStore` | Tracks each marketing promo grant so the promo-expiry sweep can reverse the unspent remainder. |
+| `TrustStore` | Tracks how much each subject has spent recently — the risk gate's input. |
+| `CheckpointStore` | Stores signed ledger snapshots; written only by the background worker. |
+| `MovementJournal` | The append-only instance-netting journal; a batch commits in one transaction, outside money transactions. |
 | `Signer` | Signs bytes and checks signatures, used to vouch for ledger checkpoints. |
 | `Processor` | External payment provider: all money leaving the platform goes through this. |
+| `PayoutProviderStatus` | What Processor.payoutStatus answers; the sweep treats UNKNOWN like having no probe. |
 | `Rates` | Supplies fixed CREDIT-to-USD rates from an audited source, never from config or caller input. |
+| `Rate` | An exchange rate as exact integers: the multiplier is rate / 10^scale, and rateId names the rate a transaction used. |
 | `Clock` | Provides milliseconds since the Unix epoch. |
 | `Ids` | Mints prefixed unique identifiers, one namespace per entity kind. |
+| `IdPrefix` | The allowed id prefixes; every minted id is the prefix, an underscore, and a UUID (txn_..., pay_...). |
 | `Digest` | The SHA-256 hash of the input. |
 | `Dispatcher` | Hands an outgoing event off for delivery (e.g. SQS or HTTP); the core doesn't know which. |
 | `Logger` | Logs events at specified levels with structured fields. |
@@ -321,8 +320,32 @@ The port interfaces — the contracts you implement to plug your own infrastruct
 | `RateVerdict` | What RateLimiter.allow returns: allowed, with an optional retryAfterMs on a denial. |
 | `Scheduler` | Runs a task every N milliseconds; the returned function stops the loop. |
 | `PayeeDirectory` | Verifies payee status; checks if a user is cleared, pending, blocked, or has no verification. |
-| `Capabilities` | Every external capability `economyFromCapabilities(...)` needs, gathered into one object. |
-| `Options` | Per-transaction options for the store, such as an AbortSignal. |
+| `PayeeVerification` | What PayeeDirectory.status answers: cleared, pending, blocked, or none. |
+| `Ports` | Every port `createEconomy(...)` needs, gathered into one readonly bag, secrets and config included. |
+| `CallOptions` | Per-call options for the store and reads, such as an AbortSignal. |
+| `TimelineOptions` | Bounds a Ledger.timeline read: order, limit, and offset over an account's settlement lots. |
+| `Leg` | One line of a posting: an account and the amount applied, debit-positive. |
+| `Posting` | A balanced double-entry posting: legs sum to zero in each currency. |
+| `StoredLink` | One posting as lineage returns it, carrying the two hashes that tie it into the account's tamper-evident chain. |
+| `Movement` | One accepted in-instance movement: a balanced set of legs not yet posted to the ledger, made ledger-final at settle. |
+| `EconomyEvent` | The fixed shape of every event the system emits, with type, version, subject, and audience. |
+| `OutboxMessage` | One stored outbox row: an event plus the bookkeeping for delivering it. |
+| `InboxMessage` | One stored inbox row: a verified inbound event mapped to the operation it applies. |
+| `Sale` | A summary of a completed sale, recording the exact lines that posted so a refund can reverse them precisely. |
+| `Saga` | The stored state of one in-flight payout, tracking reserve, rate, state, attempts, and settlement. |
+| `SagaState` | One of the payout saga's states, as a type. |
+| `SAGA_STATES` | The payout saga's states in lifecycle order, as a value. |
+| `Subscription` | The stored state of one recurring subscription: price, period, state, attempts, and the next due time. |
+| `SubscriptionState` | One of the subscription lifecycle states, as a type. |
+| `SUBSCRIPTION_STATES` | The subscription lifecycle states, as a value. |
+| `EntitlementGrant` | One non-revoked grant as EntitlementStore.list streams it: the sku and the expiry owns applies at read time. |
+| `PromoGrant` | One stored marketing promo grant, for the promo-expiry sweep to reverse. |
+| `Velocity` | A subject's recent spending, accumulated over one time window for the risk gate to check. |
+| `Attempt` | One recorded spending attempt, idempotent on its key so a genuine retry never double-counts. |
+| `Checkpoint` | A signed snapshot of the whole ledger: every account's head hash reduced to one Merkle root and signed. |
+| `Range` | A statement query's half-open time range, in epoch milliseconds. |
+| `Statement` | One page of an account's entries; paging is by narrowing the Range, window by window. |
+| `Lot` | One settlement lot for a top-up: an amount that matures at a set time, consumed oldest-first by the maturity calculation. |
 
 ## `@pwngh/economy-lab/adapters`
 
@@ -349,10 +372,9 @@ The bundled adapter factories: in-memory and HTTP implementations of the ports, 
 | `systemDigest` | Production hasher returning the shared SHA-256 Digest. |
 | `systemSigner` | Production signer using Ed25519 so an auditor can confirm a checkpoint wasn't rewritten. |
 | `signingPublicKeyHex` | Hex-encoded raw 32-byte Ed25519 public key derived from signingKey for external verification. |
-| `systemCapabilities` | Bundles the four capabilities (clock, id generator, hasher, signer) for a production host. |
 | `jsonlLogger` | Structured logger for production hosts, writing one JSON object per line. |
-| `noopLogger` | A Logger that discards every line: the silent default for a host that wants no log output. |
-| `noopMeter` | A Meter that discards every count and observation: the default when a host collects no metrics. |
+| `silentLogger` | A Logger that discards every line: the silent default for a host that wants no log output. |
+| `silentMeter` | A Meter that discards every count and observation: the default when a host collects no metrics. |
 
 ## `@pwngh/economy-lab/adapters/redis`
 
@@ -362,8 +384,8 @@ The Redis-backed `Cache` and `RateLimiter`. Both adapt an already-connected `ior
 
 | Export | What it is |
 | --- | --- |
-| `redisCacheFrom` | Adapt an already-connected ioredis client into the Cache the core expects. |
-| `redisRateLimiterFrom` | Adapt an already-connected ioredis client into a fixed-window RateLimiter over INCR and PEXPIRE. |
+| `redisCache` | Adapt an already-connected ioredis client into the Cache the core expects. |
+| `redisRateLimiter` | Adapt an already-connected ioredis client into a fixed-window RateLimiter over INCR and PEXPIRE. |
 
 ## `@pwngh/economy-lab/adapters/sqs`
 
@@ -374,9 +396,9 @@ The SQS-backed `Dispatcher` for the outbox relay. It adapts an already-connected
 | Export | What it is |
 | --- | --- |
 | `sqsDispatcher` | Build the dispatcher that publishes events to SQS as JSON messages with automatic deduplication. |
-| `SqsDispatcherConfig` | Configuration for the SQS dispatcher including queue URL and client. |
-| `SqsClient` | Structural shape of the SQS client method the adapter calls. |
-| `SqsCommand` | Structural shape of one SQS client method this adapter calls. |
+| `SqsDispatcherOptions` | Configuration for the SQS dispatcher including queue URL and client. |
+| `SqsClient` | Structural shape of the SQS client the adapter calls: just the send method, so a real SQSClient satisfies it. |
+| `SqsCommand` | Structural shape of the command object SqsClient.send takes: an object carrying its input fields. |
 
 ## `@pwngh/economy-lab/engines/postgres`
 
@@ -387,7 +409,9 @@ The Postgres `Store`. Carries the `pg` driver.
 | Export | What it is |
 | --- | --- |
 | `postgresStore` | Build a Store backed by Postgres using real database transactions with proper isolation and chain-based ledger verification. |
-| `PostgresStoreOptions` | Configuration for postgresStore including URL, schema isolation, digest, clock, velocity window, pool sizing, and connection timeouts. |
+| `PostgresStoreOptions` | Configuration for postgresStore including URL, schemaName isolation, schema posture, digest, clock, velocity window, pool sizing, and connection timeouts. |
+| `PgPool` | The pg pool interface the store rides, exported for type compatibility without importing the driver. |
+| `EngineOpenOptions` | The shared field vocabulary for opening this engine, with the pool type bound to its driver. |
 
 ## `@pwngh/economy-lab/engines/mysql`
 
@@ -402,6 +426,64 @@ The MySQL `Store` and its schema helpers. Carries the `mysql2` driver.
 | `createMysqlPool` | Create a mysql2 connection pool from a connection URL, with configurable connection limit and proper bigint/collation handling. |
 | `readSchemaVersion` | Read the database's stamped schema version from schema_meta, or null when absent (un-migrated or pre-versioning database). |
 | `applyMysqlSchema` | Create all tables and stored routines from db/mysql-schema.sql; drops and recreates tables so running this resets to a clean schema. |
+| `EngineOpenOptions` | The shared field vocabulary for opening this engine, with the pool type bound to its driver. |
+
+## `@pwngh/economy-lab/worker`
+
+The full background-worker surface. The constructor and its types are re-exported from the main entry; the sweep internals — the job names, the batch shapes, the standalone relay and drain, and the host-implemented feeds — live here.
+
+<SourceLink to="src/worker/index.ts">src/worker/index.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `createWorker` | Build the worker over the ports bag and its bound economy; also on the main entry. |
+| `Worker` | The handle: sweep runs every job once, start(everyMs) ticks on the scheduler or a real timer, pause/resume gate the loop, sweepsPaused reads the gate. |
+| `WorkerDefaults` | Steady-state sweep arguments bound at createWorker; any SweepRequest field overrides them per sweep. |
+| `SweepRequest` | Arguments for one sweep pass, all optional: now defaults to the clock, limit to the default, economy to the bound one. |
+| `DEFAULT_SWEEP_LIMIT` | The per-sweep due-item cap when no limit is given. |
+| `runSweeps` | Run every sweep once over a store and worker context, without building a Worker; each job is isolated, so one throw never hides the others. |
+| `drainInbox` | Applies a batch of pending inbox events (verified provider callbacks) to the ledger. |
+| `relayOutbox` | Delivers a batch of pending outbox events, each written in the posting transaction. |
+| `SWEEP_NAMES` | Every sweep name in run order, as a value. |
+| `SweepName` | Names of the background jobs run each cycle: payouts, subscriptions, treasury, feeSweep, floatCoverage, etc. |
+| `SweepResult` | One job's outcome: its summary, or its caught error as data with code and retry flag. |
+| `SweepBatch` | One entry per job, keyed by name; a failing job never hides the others. |
+| `SweepRun` | sweep's result: the batch plus the txn id of every posting the run minted. |
+| `FloatFeed` | Host-implemented feed of the external float balance, for the float-coverage sweep. |
+| `ReconcileFeed` | Host-implemented feed supplying both sides of one reconcile window: the processor's settled records and the ledger's own. |
+
+## `@pwngh/economy-lab/server`
+
+The full HTTP surface. `createServer` and its types are re-exported from the main entry; the wire codec, the problem responses, the edge constants, and the webhook intake live here.
+
+<SourceLink to="src/server.ts">src/server.ts</SourceLink>
+<SourceLink to="src/webhooks.ts">src/webhooks.ts</SourceLink>
+
+| Export | What it is |
+| --- | --- |
+| `createServer` | An HTTP entry point for an Economy: takes its options (economy, ports, authenticate), returns a Fetch handler; also on the main entry. |
+| `ServerOptions` | Everything createServer accepts: the economy, the ports pick, the required authenticate posture, and the edge knobs; also on the main entry. |
+| `ServerPorts` | The narrow pick of Ports the routes read: config, secrets, clock, meter, logger; a full Ports is assignable; also on the main entry. |
+| `FetchHandler` | What createServer returns: (request: Request) => Promise&lt;Response&gt;, runnable on any WinterCG runtime; also on the main entry. |
+| `Authenticate` | The submit authentication hook: maps the raw Request to a Principal, or null to refuse with 401. |
+| `RateLimitConfig` | Admission control for /submit: the limiter plus an optional caller-key function. |
+| `WebhookHandler` | The injected handler a verified provider callback is handed to. |
+| `encodeOutcome` | The wire shape of an Outcome: Amounts and bigints become decimal strings, and a rejected outcome gains the derived top-level reason. |
+| `problemResponse` | An RFC 9457 problem-details response: the caller-safe title, status, and stable code, never detail or cause. |
+| `CLIENT_IP_HEADER` | The header the Node bridge stamps with the socket's client address, overwriting anything inbound. |
+| `REQUEST_ID_HEADER` | The header every /submit reply carries for end-to-end correlation. |
+| `DEFAULT_MAX_BODY_BYTES` | The default byte ceiling on request bodies. |
+| `DEFAULT_READ_TIMEOUT_MS` | The default deadline on reading a request body. |
+| `decodeWebhookEvent` | Decodes a parsed purchase webhook body into a typed PurchaseEvent; a wrong-shape body throws a fault the server maps to 400. |
+| `handleWebhook` | Maps a verified provider callback to its operation and persists it to the inbox. |
+| `handlePurchaseWebhook` | The purchase case of handleWebhook, for callers that only deal in purchases. |
+| `toOperation` | Maps a verified webhook event to the operation it applies, dedup key derived from the provider eventId. |
+| `WebhookEvent` | The union of verified inbound provider callbacks, tagged by kind. |
+| `PurchaseEvent` | A verified inbound purchase event from a billing provider. |
+| `PayoutSettledEvent` | A verified payout-settled callback from the payout rail; drives settlePayout. |
+| `PayoutFailedEvent` | A verified payout-failed callback from the payout rail; drives reversePayout. |
+| `DisputeEvent` | A verified dispute or chargeback callback; drives clawback. |
+| `WebhookReceipt` | The result of accepting a verified webhook: accepted or duplicate, carrying the stored inbox row. |
 
 ## `@pwngh/economy-lab/netting`
 
@@ -411,7 +493,7 @@ The in-instance netting session: reserve, move, and settle many balances in memo
 
 | Export | What it is |
 | --- | --- |
-| `instanceSession` | Open a netting session that accepts movements (idempotent per key, guarded by reservation registry) and settles the net in clearing chunks. |
+| `openInstanceSession` | Open a netting session that accepts movements (idempotent per key, guarded by reservation registry) and settles the net in clearing chunks. |
 | `recoverSession` | Rebuild a session from its journal (crash-recovery path); outcomes and running net re-derive from journal rows for consistency. |
 | `createReservations` | Create a cross-session reservation registry that tracks pending per-user-account totals to prevent overdraft races across sessions. |
 | `Reservations` | The cross-session registry tracking pending per-account totals to prevent overdraft races across the process. |
@@ -420,12 +502,16 @@ The in-instance netting session: reserve, move, and settle many balances in memo
 | `SettleReport` | The outcome of settling a session: mode (netted or replayed), postings committed, rejected movements, journal head, and count of netted movements. |
 | `SessionOptions` | Optional session configuration: max movements per journal batch, max accounts per settlement chunk, and shared reservation registry. |
 | `InstanceSession` | A durable journal session that accepts movements, batches them, and settles the net posting in chunks with idempotency and chain verification. |
-| `SessionDeps` | The store, digest, and clock dependencies a session needs to manage movements and settlement. |
+| `SessionPorts` | The store, digest, and clock ports a session needs to manage movements and settlement. |
+| `Movement` | One accepted in-instance movement, as the journal stores it; a type-only re-export from /ports. |
+| `Leg` | One line of a movement: an account and the amount applied, debit-positive; a type-only re-export from /ports. |
+| `Amount` | A money value: currency plus amount in minor units; a type-only re-export from the main entry. |
+| `Currency` | The currencies the system handles: in-app CREDIT and real-world USD; a type-only re-export from the main entry. |
 
 ## `@pwngh/economy-lab/ops`
 
 The in-process operations supervisor. It observes the composition only through the `meter` and
-`logger` ports (wrapped by `opsRuntime`), detects twelve incident signatures with plain
+`logger` ports (wrapped by `createOpsRuntime`), detects twelve incident signatures with plain
 threshold rules, and remediates through host-provided levers under mandatory guardrails —
 cooldown, attempt cap into permanent escalation, and a containment latch on any integrity
 episode. The core never imports this entry point; leaving the supervisor out of the composition
@@ -435,7 +521,7 @@ is the off switch. [Ops & runbooks](/economy/ops/) owns the operational story, w
 | Signature | Tier | Response |
 | --- | --- | --- |
 | `stuck-saga` | 1 | One guarded worker sweep, verified by re-reading the saga. |
-| `outbox-backlog` | 1 | A targeted relay re-drive (`runOnce({ only: ['relay'] })`), verified against the next gauge. |
+| `outbox-backlog` | 1 | A targeted relay re-drive (`sweep({ only: ['relay'] })`), verified against the next gauge. |
 | `inbox-dead-letter` | 1 | Revive the oldest dead rows; the normal drain re-applies them idempotently. |
 | `integrity-mismatch` | 3 | Prove once, escalate, pause the worker, latch containment — never fix. |
 | `deadlock-storm`, `engine-stall`, `treasury-breach`, `velocity-anomaly`, `signal-silence`, `retry-exhaustion`, `webhook-replay-storm`, `checkpoint-seal-slow` | 3 | Report or escalate with an advisory; no lever. |
@@ -446,8 +532,8 @@ is the off switch. [Ops & runbooks](/economy/ops/) owns the operational story, w
 
 | Export | What it is |
 | --- | --- |
-| `opsRuntime` | Wraps a host meter/logger pair, forwarding every call unchanged while buffering a bounded window of signals for the detectors. |
-| `OpsRuntime` | What opsRuntime returns: the wrapped meter and logger the composition consumes, plus the signal feed. |
+| `createOpsRuntime` | Wraps a host meter/logger pair, forwarding every call unchanged while buffering a bounded window of signals for the detectors. |
+| `OpsRuntime` | What createOpsRuntime returns: the wrapped meter and logger the composition consumes, plus the signal feed. |
 | `Signal` | One buffered telemetry event: timestamp, source (meter or log), name, value, and tags. |
 | `SignalFeed` | The read side of the buffer: every signal at or after a timestamp. |
 
@@ -480,9 +566,10 @@ Pure threshold rules over the signal feed; each returns a finding or null, and t
 
 | Export | What it is |
 | --- | --- |
-| `createSupervisor` | Builds the supervisor from its injected deps; tick() runs every pass once, start() ticks on a Scheduler. |
+| `createSupervisor` | Builds the supervisor from its injected ports; tick() runs every pass once, start() ticks on a Scheduler. |
+| `createSupervisorFrom` | The same supervisor over an already-built ops runtime: its signal feed slots in and the host supplies the rest. |
 | `defaultSupervisorConfig` | Every threshold, window, cooldown, and cap, with the defaults the passes run under. |
-| `SupervisorDeps` | What the host injects: clock, signals, saga source, the levers (runSweep, runRelay, reviveInbox, pauseWorker, prove), the audit sink, and escalate. |
+| `SupervisorPorts` | What the host injects: clock, signals, saga source, the levers (runSweep, runRelay, reviveInbox, pauseWorker, prove), the audit sink, and escalate. |
 | `SupervisorConfig` | The tuning surface: per-signature thresholds and windows plus the shared guardrail knobs. |
 | `Supervisor` | The handle: tick() returning the tick's audit records, and start() when a Scheduler was supplied. |
 | `SagaSource` | The saga store slice the supervisor polls: list() and load(). |

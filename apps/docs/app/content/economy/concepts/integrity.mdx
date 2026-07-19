@@ -89,11 +89,11 @@ A second worker job, `checkpointVerify`, runs <SourceLink to="src/worker/checkpo
 
 ## Two provers
 
-Two provers re-check the chain, and [the proof](/economy/concepts/the-proof/) covers how the light `read.prove()` and the thorough `make prove` replay divide the work. Of the proof's five flags, integrity supplies `chainIntact`; <SourceLink to="src/integrity.ts#L280">allInvariantsHold</SourceLink> rolls all five into a single boolean.
+Two provers re-check the chain, and [the proof](/economy/concepts/the-proof/) covers how the light `read.health()` and the thorough `make prove` replay divide the work. Of the proof's five flags, integrity supplies `chainIntact`; <SourceLink to="src/integrity.ts#L280">allInvariantsHold</SourceLink> rolls all five into a single boolean.
 
 The light prover is one read away at any moment:
 
 ```ts
-const report = await economy.read.prove();
+const report = await economy.read.health();
 // → { conserved: true, backed: true, noOverdraft: true, chainIntact: true, consistent: true }
 ```

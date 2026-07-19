@@ -8,8 +8,8 @@ sourceRefs:
   [
     'src/trust.ts#L136 · riskSubject',
     'src/trust.ts#L172 · attemptMinor',
-    'src/economy.ts#L645 · screenRisk',
-    'src/engines/postgres.ts#L1462 · recordVelocity',
+    'src/economy.ts#L648 · screenRisk',
+    'src/engines/postgres.ts#L1477 · recordVelocity',
   ]
 related: ['economy/concepts/concurrency', 'economy/concepts/solvency']
 ---
@@ -24,10 +24,10 @@ Amounts are summed in `CREDIT` minor units, and the limit and window come from t
 
 ```ts
 const outcome = await economy.submit(spendOperation);
-// → { status: "rejected", reason: "RISK_DENIED" }   when the window is over the limit
+// → { status: "rejected", detail: { reason: "RISK_DENIED", … } }   when the window is over the limit
 ```
 
-Every risk-screened write counts, and each lands in one of two windows per user, because value flowing in and value flowing out are different threat models. The **outflow** window sums what leaves the wallet (`spend`, `subscribe`, `requestPayout`): a drained account fills this one. The **inflow** window sums what arrives (`topUp`, `grantPromo`): card testing — a run of small charges probing a stolen card — fills this one, so buying in past its limit is refused with the same `RISK_DENIED` as overspending. The [table below](#what-counts-as-a-subject) lists every screened operation and its window. The rejection's detail carries what was spent, the limit, which window (`class: 'in' | 'out'`), and `retryAfter` — when the oldest counted attempt ages out — so a caller can tell the user when to try again.
+Every risk-screened write counts, and each lands in one of two windows per user, because value flowing in and value flowing out are different threat models. The **outflow** window sums what leaves the wallet (`spend`, `subscribe`, `requestPayout`): a drained account fills this one. The **inflow** window sums what arrives (`topUp`, `grantPromo`): card testing — a run of small charges probing a stolen card — fills this one, so buying in past its limit is refused with the same `RISK_DENIED` as overspending. The [table below](#what-counts-as-a-subject) lists every screened operation and its window. The rejection's detail carries which window tripped (`window: 'inflow' | 'outflow' | 'both'`) and the `limitMinor` ceiling it hit.
 
 ## Why it exists
 
@@ -63,7 +63,7 @@ The insert comes before the decision, so denied attempts still count: a flood of
 ## What relies on it
 
 - The gated operations — [`spend`](/economy/reference/operations/spend/), [`topUp`](/economy/reference/operations/top-up/), [`requestPayout`](/economy/reference/operations/request-payout/), [`grantPromo`](/economy/reference/operations/grant-promo/), and [`subscribe`](/economy/reference/operations/subscribe/) — pass through `screenRisk` before any of them move money.
-- [`RISK_DENIED`](/economy/reference/outcomes-and-reason-codes/) is the `rejected` reason a caller sees when the window is over the limit.
+- [`RISK_DENIED`](/economy/reference/outcomes-and-reason-codes/) is the `detail.reason` a caller sees on the `rejected` outcome when the window is over the limit.
 
 ## Try it
 
@@ -76,7 +76,7 @@ The block above builds its own small economy — the ceiling is construction-tim
 ## Recap
 
 - The gate counts value moved per user inside two rolling windows — outflow (spends, subscriptions, payout requests) and inflow (top-ups, promo grants) — and every attempt counts, denied ones included.
-- Crossing a ceiling declines as `RISK_DENIED`, carrying the window's own figures: spent, limit, which class tripped, and when a retry can find room.
+- Crossing a ceiling declines as `RISK_DENIED`, carrying which window tripped and the `limitMinor` ceiling it hit.
 - The ceilings are construction-time config: `velocityLimitMinor` arms both, the per-class knobs override it, and `velocityWindowMs` sets the window. The window length is captured when the store is built, and the whole config object is frozen inside the engine — changing any knob means rebuilding the economy over the same store, never mutating (that is how the console's live knob works).
 
 To probe the gate yourself, edit the block above: shrink `PRICE` under the window and both

@@ -93,7 +93,7 @@ const owns = await economy.read.entitled('usr_a1', 'wrld_pass');
 
 ```ts
 const status = economy.read.status();
-// → { paused: false, pauseStart: null, pauseEnd: null, resumesAt: null }
+// → { maintenanceActive: false, pauseStart: null, pauseEnd: null, resumesAt: null }
 ```
 
 This lets a UI render a maintenance banner directly, instead of inferring the pause from a declined write. While the window is active, a [`user` principal's](/economy/concepts/actors-and-authorization/) discretionary write is declined with `ECONOMY_PAUSED`; `system` and `operator` writes keep flowing so external money can still settle.
@@ -141,22 +141,22 @@ for await (const posting of economy.read.postings()) {
 
 ## The solvency proof
 
-`read.prove()` runs the integrity check and returns a [`ProveReport`](/economy/concepts/the-proof/): a set of flags, each one a property the ledger is supposed to hold:
+`read.health()` runs the integrity check and returns a [`ProveReport`](/economy/concepts/the-proof/): a set of flags, each one a property the ledger is supposed to hold:
 
 ```ts
-const report = await economy.read.prove();
+const report = await economy.read.health();
 // → { conserved: true, backed: true, noOverdraft: true, … }
 ```
 
 It walks every posted account once and re-derives each balance from the recorded debit and credit lines, rather than trusting the cached running total. So `conserved`, `backed`, `noOverdraft`, `chainIntact`, and `consistent` each report on the books as the entries actually describe them. This is the readable face of [solvency](/economy/concepts/solvency/) and the [hash-chain integrity](/economy/concepts/integrity/) the economy maintains.
 
-`read.prove` is a thorough enough check to deserve its own page. For what each flag means, how `shortfall` and `drift` are computed, and how this lighter in-process check relates to the full out-of-band prover, see [the proof](/economy/concepts/the-proof/).
+`read.health` is a thorough enough check to deserve its own page. For what each flag means, how `shortfall` and `drift` are computed, and how this lighter in-process check relates to the full out-of-band prover, see [the proof](/economy/concepts/the-proof/).
 
 ## Caveats
 
 - `read.balance` is the live total, not the spendable one: money still inside its [maturity window](/economy/concepts/credit-maturity/) counts here but can't be spent or cashed out yet.
 - On a sharded platform account, the bare id reads as the sum over its shard rows — one logical number whatever [`PLATFORM_SHARDS`](/economy/concepts/platform-sharding/) is set to.
-- The streaming reads (`accounts`, `payouts`, `postings`, `chain`) can be long on a busy ledger. Iterate and stop early; don't collect them all.
+- The streaming reads (`accounts`, `payouts`, `postings`, `lineage`) can be long on a busy ledger. Iterate and stop early; don't collect them all.
 - Nothing under `read` claims a key or counts toward a velocity window — reads are free to repeat.
 
 ## Troubleshooting
@@ -167,8 +167,8 @@ It walks every posted account once and re-derives each balance from the recorded
 
 ```ts
 const outcome = await economy.submit(spend({ ...order }));
-if (outcome.status === 'rejected' && outcome.reason === 'FUNDS_IMMATURE') {
-  const readyAt = outcome.detail?.availableAt; // retry the same key after this
+if (outcome.status === 'rejected' && outcome.detail.reason === 'FUNDS_IMMATURE') {
+  const readyAt = outcome.detail.availableAt; // retry the same key after this
 }
 ```
 

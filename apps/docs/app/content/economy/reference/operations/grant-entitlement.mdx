@@ -8,8 +8,8 @@ sourceRefs:
     'src/operations/entitlements.ts#L42 · grantEntitlement',
     'src/operations/registry.ts#L65 · REGISTRY',
     "src/contract.ts#L136 · kind 'grantEntitlement'",
-    'src/contract.ts#L46 · EntitlementAttrs',
-    'src/economy.ts#L867 · RESTRICTED_TO_PRIVILEGED',
+    'src/contract.ts#L46 · EntitlementAttributes',
+    'src/economy.ts#L866 · RESTRICTED_TO_PRIVILEGED',
   ]
 related: ['economy/reference/operations/revoke-entitlement']
 ---
@@ -53,9 +53,9 @@ The payload fields, beyond the `kind` tag, are:
 | `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`.                                                         |
 | `userId`         | `string`                                               | (required) | The user who gains ownership. Must be non-empty after trimming whitespace.                             |
 | `sku`            | `string`                                               | (required) | The item or feature owned. Must be non-empty after trimming whitespace.                                |
-| `attrs`          | `EntitlementAttrs`                                     | `{}`       | Optional details stored with the grant (see below).                                                    |
+| `attrs`          | `EntitlementAttributes`                                     | `{}`       | Optional details stored with the grant (see below).                                                    |
 
-`EntitlementAttrs` carries four optional fields: `quantity` (a count), `version` (a number),
+`EntitlementAttributes` carries four optional fields: `quantity` (a count), `version` (a number),
 `expiresAt` (an instant in epoch milliseconds, or `null` for "never expires"), and `source` (a free
 string). Omit `attrs` entirely to record the bare ownership fact without inventing defaults.
 

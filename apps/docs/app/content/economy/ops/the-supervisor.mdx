@@ -22,14 +22,17 @@ of the composition is the off switch — the lab cannot tell whether it is being
 
 ## Signal capture
 
-`opsRuntime` wraps the host's meter and logger, forwarding every call unchanged while copying
+`createOpsRuntime` wraps the host's meter and logger, forwarding every call unchanged while copying
 each into a bounded in-memory ring (default 10,000 signals). Detectors read the buffer through
 `SignalFeed.since(t)`. Log entries are buffered as name and level only — field payloads never
 outlive the host's own log pipeline.
 
 ```ts
-const runtime = opsRuntime({ meter, logger, clock });
-const caps = await capabilitiesFromEnv(env, ports, {
+import { openPorts } from '@pwngh/economy-lab';
+import { createOpsRuntime } from '@pwngh/economy-lab/ops';
+
+const runtime = createOpsRuntime({ meter, logger, clock });
+const ports = await openPorts(env, {
   meter: runtime.meter,
   logger: runtime.logger,
 });

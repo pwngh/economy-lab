@@ -33,7 +33,7 @@ beat returns, so a flapping process escalates each time it dies.
    `make worker` locally.
 2. A paused worker is also silent — check whether an
    [integrity-mismatch](/economy/ops/runbooks/integrity-mismatch/) containment paused it on
-   purpose (`worker.paused()`) before restarting anything.
+   purpose (`worker.sweepsPaused`) before restarting anything.
 3. If the process is up but silent, it is wedged: thread dump, restart, and check
    [engine-stall](/economy/ops/runbooks/engine-stall/) — a hung pool acquire inside a sweep
    looks exactly like this from the outside.

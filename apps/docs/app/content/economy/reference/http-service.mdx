@@ -5,8 +5,8 @@ order: 30
 status: stable
 sourceRefs:
   [
-    'src/server.ts#L136 · createServer',
-    'scripts/main.ts#L428 · runServe',
+    'src/server.ts#L148 · createServer',
+    'scripts/main.ts#L404 · runServe',
     'test/server.test.ts',
   ]
 related: ['economy/scope-and-non-goals', 'economy/ports/signer']
@@ -16,12 +16,12 @@ related: ['economy/scope-and-non-goals', 'economy/ports/signer']
 
 Most of these docs talk about the [`Economy`](/economy/reference/the-economy/) as an in-process object: you hold a reference and call `submit` against it directly. But a deployed service has to take requests off a socket. That's what the HTTP service is: a thin wrapper that turns a Fetch `Request` into one `submit` call and a `Response`.
 
-<SourceLink to="src/server.ts#L80">createServer</SourceLink> takes an `Economy` and returns a handler with the signature `(request: Request) => Promise<Response>`:
+<SourceLink to="src/server.ts#L80">createServer</SourceLink> takes one options object — the `Economy`, the narrow `ports` pick the routes read (`config`, `secrets`, `clock`, `meter`, `logger`; a full `Ports` is assignable), and an `authenticate` posture — and returns a handler with the signature `(request: Request) => Promise<Response>`:
 
 ```ts
 import { createServer } from '@pwngh/economy-lab';
 
-const handler = createServer(economy);
+const handler = createServer({ economy, ports, authenticate });
 const response = await handler(new Request('http://service/healthz'));
 ```
 
@@ -74,8 +74,19 @@ A committed operation comes back `200` with its transaction, each [leg's](/econo
 A `rejected` outcome is not an error. When the economy declines a valid request for a business reason (say a `spend` the buyer can't cover) the response is still `200`, carrying the decline:
 
 ```json
-{ "status": "rejected", "reason": "INSUFFICIENT_FUNDS" }
+{
+  "status": "rejected",
+  "reason": "INSUFFICIENT_FUNDS",
+  "detail": {
+    "reason": "INSUFFICIENT_FUNDS",
+    "account": "usr_buyer:spendable",
+    "need": "CREDIT:4.00",
+    "have": "CREDIT:0.00"
+  }
+}
 ```
+
+The wire shape is `{ status, reason, detail }`: the top-level `reason` is a convenience copy derived from `detail.reason`, which is the rejection's sole TypeScript discriminant, and every money figure in `detail` travels as the same decimal string as any other wire amount.
 
 In the status mapping below, a decline is a normal answer and a fault is an HTTP error.
 
@@ -100,12 +111,14 @@ The problem body carries `type`, `title` (the caller-safe message), `status`, an
 
 ## Authenticating the submit path
 
-By default the server trusts the `actor` object in the body, which is only safe when the handler runs in-process and every caller is your own code. The moment the handler sits on a network socket, the actor must come from a credential, not from the caller's say-so — otherwise any client can claim to be an operator.
+`ServerOptions.authenticate` is a required posture, not a default: `createServer` refuses to construct without it. Passing `authenticate: false` declares that the server trusts the `actor` object in the body, which is only safe when the handler runs in-process and every caller is your own code. The moment the handler sits on a network socket, the actor must come from a credential, not from the caller's say-so — otherwise any client can claim to be an operator.
 
-That is what `ServerOptions.authenticate` is for. You supply a function from the raw `Request` to a [`Principal`](/economy/concepts/actors-and-authorization/) — typically by checking a bearer token or session cookie — and <SourceLink to="src/server.ts#L251">submitRoute</SourceLink> runs it before it reads the body:
+For that, you supply a function from the raw `Request` to a [`Principal`](/economy/concepts/actors-and-authorization/) — typically by checking a bearer token or session cookie — and <SourceLink to="src/server.ts#L251">submitRoute</SourceLink> runs it before it reads the body:
 
 ```ts
-const handler = createServer(economy, {
+const handler = createServer({
+  economy,
+  ports,
   authenticate: async (request) => {
     const session = await sessions.lookup(request.headers.get('authorization'));
     return session === null ? null : { kind: 'user', userId: session.userId };
@@ -133,7 +146,10 @@ The bounded read lives at <SourceLink to="src/server.ts#L628">readBounded</Sourc
 Cross-origin resource sharing (CORS) — the browser mechanism that decides whether a page on another origin may call this service — stays off unless you list origins:
 
 ```ts
-const handler = createServer(economy, {
+const handler = createServer({
+  economy,
+  ports,
+  authenticate,
   cors: { origins: ['https://app.example'] },
 });
 ```
@@ -145,9 +161,12 @@ Origins match exactly. With the option absent the server sets no CORS headers at
 `/submit` takes admission control through the `RateLimiter` port: one `allow` call per request, keyed by caller, answering a verdict. The limit and window are the adapter's policy, so the server never sees the numbers:
 
 ```ts
-import { createServer, memoryRateLimiter } from '@pwngh/economy-lab';
+import { createServer } from '@pwngh/economy-lab';
+import { memoryRateLimiter } from '@pwngh/economy-lab/adapters';
 
-const handler = createServer(economy, {
+const handler = createServer({
+  economy,
+  ports,
   authenticate,
   rateLimit: { limiter: memoryRateLimiter({ limit: 100, windowMs: 60_000 }) },
 });
@@ -155,7 +174,7 @@ const handler = createServer(economy, {
 
 A denial answers `429`, with a `retry-after` header when the limiter knows how long the window has left. The default key is the authenticated principal (`user:usr_42`, `system:checkout`); without an `authenticate` hook it falls back to the client address the Node bridge reads from the socket and stamps into the `x-economy-client-ip` header, overwriting anything inbound so a caller can't spoof it. Hosts on other runtimes supply `rateLimit.keyFor`.
 
-Two adapters ship: `memoryRateLimiter` counts fixed windows in-process, and `redisRateLimiterFrom` (on the `adapters/redis` subpath) does the same over Redis so several instances share one budget. A throwing limiter fails open — a down limiter backend should degrade protection, not availability — and each such failure counts `economy.ratelimit.degraded` on the wired meter.
+Two adapters ship: `memoryRateLimiter` (on the `adapters` subpath) counts fixed windows in-process, and `redisRateLimiter` (on the `adapters/redis` subpath) does the same over Redis so several instances share one budget. A throwing limiter fails open — a down limiter backend should degrade protection, not availability — and each such failure counts `economy.ratelimit.degraded` on the wired meter.
 
 ## Correlating a request end to end
 
@@ -173,10 +192,10 @@ The server doesn't apply these itself. It verifies the callback, then hands the 
 
 ### The verification gate
 
-When you pass a `Config` with a webhook secret, the server gates every callback before the handler runs. A forged request never reaches code that changes balances. The checks run in order:
+When `ports.secrets` carries a webhook secret, the server gates every callback before the handler runs. A forged request never reaches code that changes balances. The checks run in order:
 
 1. **Signature.** The hex `x-signature` header must be an HMAC-SHA256 of the raw body, keyed with the configured secret. A mismatch is `401 INVALID_SIGNATURE` and nothing downstream runs. The check uses `crypto.subtle.verify`, which compares in constant time.
-2. **Freshness.** The `x-timestamp` header must be finite and within `config.replayWindowMs` of the clock. A stale or missing timestamp is answered `200` with `{ "status": "duplicate" }`, not a `5xx` that would invite a retry storm.
+2. **Freshness.** The `x-timestamp` header must be finite and within `ports.config.replayWindowMs` of `ports.clock`. A stale or missing timestamp is answered `200` with `{ "status": "duplicate" }`, not a `5xx` that would invite a retry storm.
 3. **Replay.** When you also wire a `ReplayStore`, the server claims the provider's `eventId` last, after signature and freshness. A repeat `eventId` is answered `200` and the handler never runs, so its work happens once. Claiming last means a forged or stale delivery can never burn a real `eventId` and block a later genuine one.
 
 This is the request-path half of [idempotency](/economy/concepts/idempotency/): the replay store drops most redeliveries here, at the edge, before they reach the handler.
@@ -207,7 +226,7 @@ The two `GET` probes are for your orchestrator, and they answer different questi
 { "status": "unavailable" } // 503, store read threw
 ```
 
-The probe goes through the economy's public read surface, not the ledger directly, since `createServer` only ever receives an `Economy`, so it can't reach past that boundary.
+The probe goes through the economy's public read surface, not the ledger directly, since `createServer` only ever receives the `Economy` and the narrow ports pick, so it can't reach past that boundary.
 
 ## Wiring it onto a runtime
 
@@ -221,25 +240,23 @@ It runs in three modes, selected by `argv[2]`:
 | `dev`    | The same API, forced to in-memory adapters with dev secrets, no infrastructure, for `make dev`.   |
 | `worker` | The [background worker](/economy/reference/background-worker/) loop, not the HTTP service.        |
 
-In `serve` and `dev`, <SourceLink to="scripts/main.ts#L322">runServe</SourceLink> builds the economy from the environment and mounts the handler. It passes three things into `createServer`: the purchase-webhook handler, the `Config`, and the clock. Those last two are what _activate_ the verification gate, so a genuine callback is persisted and a forged or stale one is rejected before it changes anything.
+In `serve` and `dev`, <SourceLink to="scripts/main.ts#L322">runServe</SourceLink> builds the economy from the environment and mounts the handler. It passes the purchase-webhook handler and the `ports` bag into `createServer`. The bag's `secrets` and `config` are what _activate_ the verification gate, so a genuine callback is persisted and a forged or stale one is rejected before it changes anything.
 
-The handler itself is yours to write, and its body is two exported calls. `decodeWebhookEvent` turns the parsed JSON body into a typed `PurchaseEvent`; a wrong-shape body or bad amount throws a fault the service maps to a `400` problem response before anything reaches the ledger. `handlePurchaseWebhook` persists the decoded event to the inbox, deduplicated on the provider's event id, for the apply worker to settle off the request path:
+The handler itself is yours to write, and its body is two calls exported from the `server` subpath. `decodeWebhookEvent` turns the parsed JSON body into a typed `PurchaseEvent`; a wrong-shape body or bad amount throws a fault the service maps to a `400` problem response before anything reaches the ledger. `handlePurchaseWebhook` persists the decoded event to the inbox, deduplicated on the provider's event id, for the apply worker to settle off the request path:
 
 ```ts
-import {
-  createServer,
-  decodeWebhookEvent,
-  handlePurchaseWebhook,
-} from '@pwngh/economy-lab';
+import { createServer } from '@pwngh/economy-lab';
+import { decodeWebhookEvent, handlePurchaseWebhook } from '@pwngh/economy-lab/server';
 
-const handler = createServer(economy, {
+const handler = createServer({
+  economy,
+  ports,
+  authenticate,
   webhook: async (provider, request) => {
     const event = decodeWebhookEvent(provider, await request.json());
-    const ack = await handlePurchaseWebhook(store, { ids, clock }, event);
-    return Response.json({ status: ack.status });
+    const receipt = await handlePurchaseWebhook(store, { ids, clock }, event);
+    return Response.json({ status: receipt.status });
   },
-  config,
-  clock,
 });
 ```
 

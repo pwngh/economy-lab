@@ -7,7 +7,7 @@ sourceRefs:
   [
     'src/worker/index.ts#L63-L74 · SWEEP_NAMES',
     'src/worker/payouts.ts#L49 · advanceDuePayouts',
-    'src/worker/relay.ts#L47 · relayOutbox',
+    'src/worker/relay.ts#L53 · relayOutbox',
   ]
 related:
   [
@@ -106,21 +106,20 @@ A re-applied inbox row is deduped by the stored `idempotencyKey` (the provider e
 
 ## Driving the worker
 
-A host builds the worker with `createWorker(store, ctx)` and drives it with `runOnce`, which runs every sweep once over a shared input and returns the per-job batch plus the txn ids the run committed:
+A host builds the worker with `createWorker(ports, economy)` and drives it with `sweep`, which runs every sweep once over a shared request and returns the per-job batch plus the txn ids the run committed. Every field of the request is optional — `now` defaults to the clock, `limit` to the worker's default:
 
 ```ts
-const worker = createWorker(store, ctx);
-let { batch, postings } = await worker.runOnce(input);
+const worker = createWorker(ports, economy);
+let { batch, postings } = await worker.sweep();
 ```
 
-Pass a `Scheduler` to `createWorker` and the worker also gets `start(intervalMs, input)`, which runs the jobs on a timer and returns a stop function:
+`start(everyMs, request)` runs the jobs on a timer and returns a stop function:
 
 ```ts
-const worker = createWorker(store, ctx, scheduler);
-const stop = worker.start?.(60_000, input);
+const stop = worker.start(60_000);
 ```
 
-Using the scheduler rather than a built-in timer keeps start and stop on the same code path. Without a scheduler, only `runOnce` is present.
+`start` is always present: it drives the ticks through `ports.scheduler` when one is set and a real timer otherwise, so start and stop stay on the same code path either way.
 
 ## Treasury and checkpoints
 
@@ -139,7 +138,7 @@ The checkpoint pair maintains the ledger's tamper-evidence. `checkpoint` seals a
 The `payouts` sweep only _submits_: it converts the reserve and calls the rail, advancing the saga to `SUBMITTED`. Settlement is a separate event that arrives as the provider's verified webhook, maps to a [`settlePayout`](/economy/reference/operations/settle-payout/) operation, and applies through the inbox drain — so a saga parked in `SUBMITTED` is waiting on the provider, not on you.
 
 ```ts
-await worker.runOnce({ now: Date.now(), limit: 50 }); // the payouts sweep submits due RESERVED sagas
+await worker.sweep({ limit: 50 }); // the payouts sweep submits due RESERVED sagas
 // SUBMITTED → SETTLED happens when the provider's webhook arrives, not here
 ```
 

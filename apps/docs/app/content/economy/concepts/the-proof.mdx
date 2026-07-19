@@ -6,8 +6,8 @@ order: 80
 status: stable
 sourceRefs:
   [
-    'src/integrity.ts#L72 · proveEconomy',
-    'src/contract.ts#L472 · ProveReport',
+    'src/integrity.ts#L76 · proveEconomy',
+    'src/contract.ts#L504 · ProveReport',
     'scripts/prove.ts',
   ]
 related:
@@ -25,10 +25,10 @@ You don't have to take "the books balance" on faith: the prover rebuilds every m
 
 It only reads, it never writes. It sums the debit and credit lines itself instead of trusting any cached balance. It recomputes each account's hash chain from genesis. Then it compares the result against what the [ledger](/economy/concepts/integrity/) actually stored.
 
-You call it three ways. [`read.prove()`](/economy/reference/reads/) runs it on demand. `make prove` runs it after every operation in a randomized program. `make fuzz` runs it against every backend and checks they agree.
+You call it three ways. [`read.health()`](/economy/reference/reads/) runs it on demand. `make prove` runs it after every operation in a randomized program. `make fuzz` runs it against every backend and checks they agree.
 
 ```ts
-const report = await economy.read.prove();
+const report = await economy.read.health();
 report.conserved &&
   report.backed &&
   report.noOverdraft &&
@@ -68,7 +68,7 @@ The whole proof runs in one pass over the ledger. `foldLedger` walks every accou
 
 <Callout type="note">
   There are two provers, and they differ in one flag.
-  [`read.prove()`](/economy/reference/reads/) is the lighter twin in
+  [`read.health()`](/economy/reference/reads/) is the lighter twin in
   `src/economy.ts`: its `chainIntact` is only a shape check on each account's
   latest hash. The thorough{' '}
   <SourceLink to="src/integrity.ts#L72">proveEconomy</SourceLink> calls
@@ -87,7 +87,7 @@ Backing is the one flag that crosses currencies. It converts custodial credits t
 
 The [`treasury` worker job](/economy/reference/background-worker/) re-checks backing every cycle, and two verification scripts double as CI gates.
 
-`make prove` drives the real economy through a seeded-random program (top-ups, promo grants, spends) and calls `read.prove()` after _every committed operation_, failing on the first violation. Each run is `8` seeds × `60` operations per backend. After each step it does two more checks:
+`make prove` drives the real economy through a seeded-random program (top-ups, promo grants, spends) and calls `read.health()` after _every committed operation_, failing on the first violation. Each run is `8` seeds × `60` operations per backend. After each step it does two more checks:
 
 - It resubmits the operation to confirm a retry returns `duplicate` (`replayIsDuplicate`).
 - It checks that each touched account's stored head matches the hash the operation reported (`verifyChainLinks`).
@@ -107,7 +107,7 @@ Everything on this page holds per operation. The two remaining concept pages cov
 
 ## Try it
 
-The prover runs on this page. The snippet moves real credits through the same engine build the [console](/console/) drives, then asks `read.prove()` for the five-flag report over the books your run just changed:
+The prover runs on this page. The snippet moves real credits through the same engine build the [console](/console/) drives, then asks `read.health()` for the five-flag report over the books your run just changed:
 
 <Runnable name="prove" html={proveHtml} />
 

@@ -6,7 +6,7 @@ order: 40
 status: stable
 sourceRefs:
   [
-    'src/integrity.ts#L84-L92 · backed',
+    'src/integrity.ts#L96-L104 · backed',
     'src/reconcile.ts',
     'src/accounts.ts#L275-L287 · classify',
   ]
@@ -21,7 +21,7 @@ Solvency is the promise that a user can always cash out. The platform keeps enou
 You don't have to take that promise on faith. You can check it. After every operation, a backing check re-derives the answer straight from the ledger: it sums the credits users can spend, converts them to the USD they're owed, and weighs that against the cash actually on hand. What you get back is a single `backed` flag, and a `shortfall` when the cash falls short.
 
 ```ts
-const report = await economy.read.prove();
+const report = await economy.read.health();
 report.backed; // true: trust cash covers every spendable credit at par
 report.shortfall; // an Amount in USD; zero when backed is true
 ```

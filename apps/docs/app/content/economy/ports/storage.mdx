@@ -5,10 +5,10 @@ order: 50
 status: stable
 sourceRefs:
   [
-    'src/ports.ts#L303 · Store',
-    'src/ports.ts#L225 · Ledger',
-    'src/adapters/memory.ts#L1353 · memoryStore',
-    'src/engines/postgres.ts#L1646 · postgresStore',
+    'src/ports.ts#L310 · Store',
+    'src/ports.ts#L229 · Ledger',
+    'src/adapters/memory.ts#L1365 · memoryStore',
+    'src/engines/postgres.ts#L1665 · postgresStore',
   ]
 related: ['economy/ports/messaging', 'economy/concepts/accounts-and-double-entry']
 ---
@@ -122,7 +122,9 @@ That belongs to [integrity](/economy/concepts/integrity/), which owns the conser
   The schema is declarative and applied by hand or in CI, never on app startup.
   The engines fail fast instead: each checks the database's recorded schema
   version against the code's and refuses to run on a mismatch, rather than
-  silently operating on a drifted shape.
+  silently operating on a drifted shape. `openPorts` runs that check eagerly on
+  the pool; a directly-constructed `mysqlStore` defaults to `schema: 'skip'`, so
+  no check runs unless you pass `'assert'`.
 </Callout>
 
 ## The `Cache`
@@ -131,7 +133,7 @@ The `Cache` is a read-through key/value port for hot reads, mainly balances — 
 
 That guarantee is built into the contract. When no cache is injected, the read path skips it and goes straight to the ledger. When a cache _is_ present but errors, the read degrades to a direct ledger read rather than failing the request.
 
-Two adapters back it. `memoryCache` is an in-process `Map`: the zero-infrastructure reference, with its own conformance suite the way `memoryStore` is the reference for the `Store`. `redisCacheFrom` in `src/adapters/redis.ts` adapts an already-connected `ioredis` client; setting `REDIS_URL` wires it in. Either way the cache stores opaque strings and never parses them.
+Two adapters back it. `memoryCache` is an in-process `Map`: the zero-infrastructure reference, with its own conformance suite the way `memoryStore` is the reference for the `Store`. `redisCache` in `src/adapters/redis.ts` adapts an already-connected `ioredis` client; setting `REDIS_URL` wires it in. Either way the cache stores opaque strings and never parses them.
 
 ## What the host owns
 

@@ -6,7 +6,7 @@ order: 62
 status: stable
 sourceRefs:
   [
-    'src/ports.ts#L921-L922 · SUBSCRIPTION_STATES',
+    'src/ports.ts#L948-L949 · SUBSCRIPTION_STATES',
     'src/worker/subscriptions.ts',
   ]
 related:
@@ -43,13 +43,13 @@ const owned = await economy.read.entitled('usr_b2', 'sku_pro');
 
 Each period the sweep claims a one-charge-per-period key (so overlapping sweeps can't double-bill), debits the subscriber's `spendable`, pays the seller, and moves the next due date forward.
 
-The renewal claim is a compare-and-set. `subscriptions.markBilled` sets the next period only if the row still shows the period the sweep claimed, so the loser of a race treats it as a no-op (see <SourceLink to="src/ports.ts#L612-L617 · SubscriptionStore.markBilled" />).
+The renewal claim is a compare-and-set. `subscriptions.markBilled` sets the next period only if the row still shows the period the sweep claimed, so the loser of a race treats it as a no-op (see <SourceLink to="src/ports.ts#L637-L642 · SubscriptionStore.markBilled" />).
 
 The first period may draw on promo credit; renewals come only from `spendable`.
 
 ## The states
 
-A `Subscription` carries its own `SubscriptionState`: `ACTIVE`, `LAPSED`, `CANCELED` (see <SourceLink to="src/ports.ts#L921-L922 · SUBSCRIPTION_STATES" />).
+A `Subscription` carries its own `SubscriptionState`: `ACTIVE`, `LAPSED`, `CANCELED` (see <SourceLink to="src/ports.ts#L948-L949 · SUBSCRIPTION_STATES" />).
 
 <SubscriptionStates />
 

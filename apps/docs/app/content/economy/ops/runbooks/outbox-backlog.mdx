@@ -25,7 +25,7 @@ so app/database skew cannot fake it.
 
 ## Automatic response
 
-`detected` → `decided` → the `runRelay` lever — a targeted `worker.runOnce({ only: ['relay'] })`
+`detected` → `decided` → the `runRelay` lever — a targeted `worker.sweep({ only: ['relay'] })`
 that runs the relay job and nothing else (no checkpoint sealed, no payouts advanced); it falls
 back to the full `runSweep` when the host wired no relay lever. Verification spans ticks: the
 re-drive's own gauge still shows the pre-action backlog, so the pass reads the first sample
@@ -43,7 +43,7 @@ cooldown, attempt cap into permanent escalation, containment suppression.
    cannot block the queue behind it:
    `select id, attempts, dead_letter_reason from outbox where status = 'dead';`
 4. Delivery is at-least-once and consumers dedupe by event id, so a re-drive is always safe to
-   repeat by hand: `worker.runOnce({ only: ['relay'], dispatcher })` from any host shell.
+   repeat by hand: `worker.sweep({ only: ['relay'], dispatcher })` from any host shell.
 
 ## Escalation
 
