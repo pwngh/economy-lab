@@ -23,7 +23,7 @@ import { byCodeUnit } from '#src/bytes.ts';
 
 import type {
   Checkpoint,
-  InboxEntry,
+  InboxMessage,
   Movement,
   OutboxMessage,
   Saga,
@@ -82,7 +82,7 @@ function outboxRow(userId: string, messageId: string): OutboxMessage {
 }
 
 // `key` is both the dedupe key on enqueue and the operation's idempotencyKey.
-function inboxRow(userId: string, rowId: string, key: string): InboxEntry {
+function inboxRow(userId: string, rowId: string, key: string): InboxMessage {
   return {
     id: rowId,
     key,
@@ -817,6 +817,37 @@ async function listsSagasNewestFirst(store: Store): Promise<void> {
   assert.deepEqual(mine, [newest.id, middle.id, oldest.id]);
 }
 
+// The `states` filter narrows the board to exactly those states, keeping the newest-first
+// order; a provided-but-empty list yields nothing (it names zero states, not "all").
+async function listsSagasFilteredByState(store: Store): Promise<void> {
+  const userId = freshUser();
+  const mk = (suffix: string, updatedAt: number, state: SagaState): Saga =>
+    sagaRow(`pay_conf_filter_${userId}_${suffix}`, userId, {
+      state,
+      dueAt: updatedAt,
+      updatedAt,
+    });
+  const settled = mk('a', 1_000, 'SETTLED');
+  const reserved = mk('b', 2_000, 'RESERVED');
+  const submitted = mk('c', 3_000, 'SUBMITTED');
+  await store.transaction((unit) => unit.sagas.open(settled));
+  await store.transaction((unit) => unit.sagas.open(reserved));
+  await store.transaction((unit) => unit.sagas.open(submitted));
+
+  const ids = async (states?: readonly SagaState[]): Promise<string[]> =>
+    (await collect(store.sagas.list(states && { states })))
+      .filter((saga) => saga.userId === userId)
+      .map((saga) => saga.id);
+
+  assert.deepEqual(await ids(['RESERVED']), [reserved.id]);
+  assert.deepEqual(await ids(['SUBMITTED', 'RESERVED']), [
+    submitted.id,
+    reserved.id,
+  ]);
+  assert.deepEqual(await ids([]), []);
+  assert.deepEqual(await ids(), [submitted.id, reserved.id, settled.id]);
+}
+
 // Under a coarse or frozen clock two sagas share an `updatedAt`; the contract breaks the tie by
 // `id` descending so list order never depends on insertion order or engine internals.
 async function listsSagasTiedOnUpdatedAtByIdDescending(
@@ -1119,6 +1150,8 @@ export function runStoreConformance(
       withStore(t, markBilledIsCompareAndSet));
     test('lists every saga newest-first regardless of state', (t) =>
       withStore(t, listsSagasNewestFirst));
+    test('filters the saga list to exactly the named states', (t) =>
+      withStore(t, listsSagasFilteredByState));
     test('breaks a saga-list updatedAt tie by id descending', (t) =>
       withStore(t, listsSagasTiedOnUpdatedAtByIdDescending));
     test('persists a payout terminal outcome (settled USD / failed reason) on the saga', (t) =>

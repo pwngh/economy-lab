@@ -23,13 +23,16 @@ import {
 import type { Amount, Currency } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { ProveReport } from '#src/contract.ts';
+import { GENESIS_HEX } from '#src/ledger.ts';
+
 import type {
   Digest,
   Ledger,
-  Options,
+  CallOptions,
   Rate,
   Rates,
   Store,
+  StoredLink,
 } from '#src/ports.ts';
 
 // Records one account whose cached running balance disagrees with the balance re-derived by
@@ -37,10 +40,11 @@ import type {
 type Drift = { account: AccountRef; materialized: Amount; derived: Amount };
 
 /**
- * A subset of the app-wide `Ctx`, so a full `Ctx` can be passed straight in. `digest` is required
- * because the tamper check always recomputes entry hashes; no path trusts a stored hash.
+ * What the thorough prover needs — a narrow pick of the Ports bag, so a host passes the whole
+ * bag or hand-builds three fields. `digest` is required because the tamper check always
+ * recomputes entry hashes; no path trusts a stored hash.
  */
-export type ProveCtx = { rates: Rates; digest: Digest };
+export type ProvePorts = { store: Store; rates: Rates; digest: Digest };
 
 // The hash chain is not checked in this fold — `chain.ts` `proveChain` does that.
 type LedgerFold = {
@@ -62,7 +66,7 @@ type LedgerFold = {
 
 /**
  * The thorough prover, reads only: it recomputes the entire hash chain to catch any altered entry,
- * unlike the lighter `economy.read.prove`. An independent audit, not the enforcer — the DB enforces
+ * unlike the lighter `economy.read.health`. An independent audit, not the enforcer — the DB enforces
  * these invariants (see db/*-schema.sql); this re-derives them from the legs to catch a bug in the
  * enforcement itself.
  *
@@ -70,20 +74,20 @@ type LedgerFold = {
  *   prover re-derives every invariant.
  */
 export async function proveEconomy(
-  store: Store,
-  ctx: ProveCtx,
-  options?: Options,
+  ports: ProvePorts,
+  options?: CallOptions,
 ): Promise<ProveReport> {
+  const { store } = ports;
   const fold = await foldLedger(store.ledger, options);
   const required = backingRequiredMinor(
     fold.custodialCreditMinor,
-    ctx.rates.par('CREDIT'),
+    ports.rates.par('CREDIT'),
   );
 
   const shortfallMinor = backingShortfallMinor(required, fold.trustCashMinor);
 
   const chain = await proveChain(
-    { ledger: store.ledger, digest: ctx.digest },
+    { ledger: store.ledger, digest: ports.digest },
     options,
   );
 
@@ -105,7 +109,7 @@ export async function proveEconomy(
 // and overdraft read the stored balance directly — the figure they vouch for.
 async function foldLedger(
   ledger: Ledger,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<LedgerFold> {
   const signedByCurrency = new Map<Currency, bigint>();
   const backing: BackingTotals = {
@@ -152,7 +156,7 @@ async function accumulateLegs(
   ledger: Ledger,
   account: AccountRef,
   signedByCurrency: Map<Currency, bigint>,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<bigint> {
   const sign = isDebitNormal(account) ? 1n : -1n;
   let derivedMinor = 0n;
@@ -285,4 +289,48 @@ export function allInvariantsHold(report: ProveReport): boolean {
     report.chainIntact &&
     report.consistent
   );
+}
+
+/**
+ * Locates the chain link carrying `hash`, walking every account's lineage through the public
+ * read surface — a bounded forensic lookup, not an indexed query. Case-insensitive exact match;
+ * the genesis prevHash never matches (it is not a posting hash). Null on a miss, or once
+ * `scanMax` links (default 20 000) have been walked.
+ */
+export async function findByHash(
+  read: {
+    accounts(options?: CallOptions): AsyncIterable<AccountRef>;
+    lineage(
+      account: AccountRef,
+      options?: CallOptions,
+    ): AsyncIterable<StoredLink>;
+  },
+  hash: string,
+  options?: CallOptions & { scanMax?: number },
+): Promise<{
+  account: AccountRef;
+  link: StoredLink;
+  field: 'hash' | 'prevHash';
+} | null> {
+  const target = hash.toLowerCase();
+  const scanMax = options?.scanMax ?? 20_000;
+  let scanned = 0;
+  for await (const account of read.accounts(options)) {
+    for await (const link of read.lineage(account, options)) {
+      scanned += 1;
+      if (scanned > scanMax) {
+        return null;
+      }
+      if (link.hash.toLowerCase() === target) {
+        return { account, link, field: 'hash' };
+      }
+      if (
+        link.prevHash !== GENESIS_HEX &&
+        link.prevHash.toLowerCase() === target
+      ) {
+        return { account, link, field: 'prevHash' };
+      }
+    }
+  }
+  return null;
 }

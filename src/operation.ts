@@ -37,3 +37,13 @@ export const adjust = define('adjust');
 export const reverse = define('reverse');
 export const reversePayout = define('reversePayout');
 export const settlePayout = define('settlePayout');
+
+/**
+ * Mints an idempotency key: `idem_` plus the joined parts when given (so a caller can derive the
+ * same key on retry from its own identifiers), else a random UUID for one-shot scripts.
+ */
+export function idempotencyKey(...parts: ReadonlyArray<string>): string {
+  return parts.length > 0
+    ? `idem_${parts.join(':')}`
+    : `idem_${crypto.randomUUID()}`;
+}

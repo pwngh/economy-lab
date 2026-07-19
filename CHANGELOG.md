@@ -29,6 +29,11 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - `Secrets` splits from `Config`: secrets load into `ports.secrets`, `SECRET_KEYS` names
   them, and `CONFIG_KEYS` is secrets-free. `DB_POOL_MAX` caps the SQL connection pool.
 - `read.health()` is the light liveness read; `proveEconomy` stays the thorough pass.
+- `DEV_RATES` names the development rate table; `paginate` walks any cursor read to
+  completion; `findByHash` looks a transaction up by chain hash; `read.payouts` and
+  `SagaStore.list` take a `states` filter.
+- `idempotencyKey(...parts)` mints an idempotency key from the joined parts, or a random
+  one when called bare.
 - `usd(decimal)` builds a USD amount from a two-decimal string.
 
 ## 0.3.2 - 2026-07-17
