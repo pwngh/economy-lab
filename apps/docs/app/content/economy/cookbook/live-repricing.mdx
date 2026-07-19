@@ -1,0 +1,41 @@
+---
+title: 'Live repricing'
+summary: 'Change the CREDIT-to-USD rates on a running economy by rebuilding over the same store.'
+order: 50
+status: stable
+sourceRefs:
+  ['src/adapters/rates.ts#L84 · configuredRates', 'src/economy.ts#L92 · createEconomy']
+related:
+  [
+    'economy/ports/rates',
+    'economy/reference/the-economy',
+    'economy/concepts/money-model',
+  ]
+---
+
+import recipeRepricingHtml from '../../../snippets/recipe-repricing.ts?shiki';
+
+Rates and config freeze into an economy at construction — on purpose, so a half-applied change
+can never price two legs of one posting differently. The sanctioned way to change them is a
+rebuild: [`createEconomy(ports)`](/economy/reference/the-economy/) is cheap because the store
+carries all the state, and a rebuild over the *same* store is the same economy with new policy.
+
+Two pieces make the reprice safe:
+
+- **A fresh table, re-asserted.** The new [`configuredRates`](/economy/ports/rates/) build rides
+  a new bag into `createEconomy`, which re-checks `buy ≥ par` — a bad table refuses to build.
+  Each build hands out frozen `Rate` objects whose `rateId` embeds the value, so no reader sees
+  a torn rate and every posting records exactly which rate priced it.
+- **Quiesce before the rebuild.** A payout in flight was reserved at the old rate and would
+  settle at the new one. `read.payouts({ states: ['REQUESTED', 'RESERVED', 'SUBMITTED'] })`
+  streams exactly the sagas that must reach zero first.
+
+<Runnable name="recipe-repricing" html={recipeRepricingHtml} />
+
+If you run the [background worker](/economy/reference/background-worker/), rebuild it from the
+same new bag: the worker settles payouts at the rates it was built with, so an economy rebuilt
+without it would settle payouts at the stale table. The console rebuilds both together —
+`createEconomy(ports)` then `createWorker(ports, economy)`.
+
+The `buy` rate may move freely between quiesced payouts; changing `par` also revalues the
+backing requirement, so treat it as a governed operation with the solvency check re-run after.
