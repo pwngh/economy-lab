@@ -1,7 +1,7 @@
 import {
   createEconomy,
   credits,
-  encodeAmounts,
+  memoryPorts,
   spend,
   systemActor,
   topUp,
@@ -13,11 +13,12 @@ import type { SnippetReport } from './context.ts';
 // FUNDS_IMMATURE, produced by giving card credit a three-day holding window: the money is
 // there, it just hasn't cleared, and the detail says when it will have.
 export async function run(): Promise<SnippetReport> {
-  const economy = await createEconomy({
-    config: {
-      maturityHorizonMs: { card: 3 * 86_400_000 },
-    },
-  });
+  const economy = createEconomy(
+    memoryPorts({
+      signingKey: 'docs-signing-key',
+      config: { maturityHorizonMs: { card: 3 * 86_400_000 } },
+    }),
+  );
   await economy.submit(
     topUp({
       idempotencyKey: 'idem_fund',
@@ -40,13 +41,13 @@ export async function run(): Promise<SnippetReport> {
   );
   await economy.close();
 
-  if (outcome.status !== 'rejected') {
+  if (outcome.status !== 'rejected' || outcome.detail.reason !== 'FUNDS_IMMATURE') {
     return { lines: [`status: ${outcome.status}`], consolePath: '/market' };
   }
   return {
     lines: [
-      `status: rejected (${outcome.reason})`,
-      `detail: ${JSON.stringify(encodeAmounts(outcome.detail ?? {}))}`,
+      `status: rejected (${outcome.detail.reason})`,
+      `detail: ${JSON.stringify(outcome.detail)} — clears ${new Date(outcome.detail.availableAt).toISOString()}`,
     ],
     consolePath: '/market',
   };

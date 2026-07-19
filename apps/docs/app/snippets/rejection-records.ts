@@ -2,6 +2,7 @@ import {
   cancelSubscription,
   createEconomy,
   credits,
+  memoryPorts,
   refund,
   revokeEntitlement,
   spend,
@@ -11,12 +12,13 @@ import {
   userActor,
 } from '@pwngh/economy-lab';
 
+import type { Outcome } from '@pwngh/economy-lab';
 import type { SnippetReport } from './context.ts';
 
 // The record-keyed declines, produced in one sitting against a private little economy: each
 // answer is the code plus the record it couldn't find or refuses to double-book.
 export async function run(): Promise<SnippetReport> {
-  const economy = await createEconomy();
+  const economy = createEconomy(memoryPorts({ signingKey: 'docs-signing-key' }));
   const buyer = userActor('usr_r');
   await economy.submit(
     topUp({
@@ -71,9 +73,8 @@ export async function run(): Promise<SnippetReport> {
   );
   await economy.close();
 
-  const reason = (o: { status: string; reason?: string }) =>
-    o.status === 'rejected' ? (o.reason ?? '?') : o.status;
-  const detail = (o: { status: string; detail?: unknown }) => JSON.stringify(o.detail ?? {});
+  const reason = (o: Outcome) => (o.status === 'rejected' ? o.detail.reason : o.status);
+  const detail = (o: Outcome) => JSON.stringify(o.status === 'rejected' ? o.detail : {});
   return {
     lines: [
       `same order, new key: ${reason(dupOrder)} — detail ${detail(dupOrder)}`,

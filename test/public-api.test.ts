@@ -15,11 +15,10 @@ import { test } from 'node:test';
 import {
   ERROR_CODES,
   EconomyError,
-  checkEnv,
   createEconomy,
-  noopLogger,
-  noopMeter,
+  memoryPorts,
   operatorActor,
+  preflight,
   spend,
   statusForError,
   systemActor,
@@ -27,6 +26,7 @@ import {
   topUp,
   userActor,
 } from '#src/index.ts';
+import { silentLogger, silentMeter } from '#src/runtime.ts';
 
 test('actor factories build each Principal kind', () => {
   assert.deepEqual(userActor('usr_1'), { kind: 'user', userId: 'usr_1' });
@@ -40,14 +40,15 @@ test('actor factories build each Principal kind', () => {
   });
 });
 
-test('noopLogger and noopMeter accept every call and swallow it', async () => {
-  noopLogger().log('info', 'x', {});
-  noopMeter().count('c', 1);
-  noopMeter().observe('o', 2);
-  // and they plug into RuntimeDefaults without complaint
-  const economy = await createEconomy({
-    logger: noopLogger(),
-    meter: noopMeter(),
+test('silentLogger and silentMeter accept every call and swallow it', async () => {
+  silentLogger().log('info', 'x', {});
+  silentMeter().count('c', 1);
+  silentMeter().observe('o', 2);
+  // and they plug into a Ports bag without complaint
+  const economy = createEconomy({
+    ...memoryPorts({ signingKey: 'test-signing-key-32-bytes!!' }),
+    logger: silentLogger(),
+    meter: silentMeter(),
   });
   await economy.close();
 });
@@ -65,18 +66,20 @@ test('statusForError maps codes to the canonical HTTP status', () => {
   assert.equal(status(ERROR_CODES.STORE_FAILURE, false), 500);
 });
 
-test('checkEnv is empty for a complete env and lists every problem otherwise', () => {
-  assert.deepEqual(checkEnv({}), []);
+test('preflight has no errors for a complete env and lists every problem otherwise', () => {
+  const errors = (env: Record<string, string>) =>
+    preflight(env).filter((issue) => issue.severity === 'error');
+  assert.deepEqual(errors({}), []);
   assert.ok(
-    checkEnv({ DATABASE_URL: 'mongodb://x' }).some((p) =>
-      p.includes('DATABASE_URL'),
+    errors({ DATABASE_URL: 'mongodb://x' }).some(
+      (issue) => issue.path === 'DATABASE_URL',
     ),
   );
   // Production with nothing set: secrets + rates + provider all reported at once.
-  assert.ok(checkEnv({ NODE_ENV: 'production' }).length >= 3);
-  // Production, fully configured: no problems.
+  assert.ok(errors({ NODE_ENV: 'production' }).length >= 3);
+  // Production, fully configured, each absent optional port declined: no problems.
   assert.deepEqual(
-    checkEnv({
+    errors({
       NODE_ENV: 'production',
       WEBHOOK_SECRET: 'w',
       SIGNING_SECRET: 's',
@@ -89,13 +92,18 @@ test('checkEnv is empty for a complete env and lists every problem otherwise', (
       PROCESSOR_URL: 'https://payouts.example',
       MATURITY_HORIZON_CARD_MS: '604800000',
       VELOCITY_LIMIT_MINOR: '5000000',
+      DISPATCHER_DECLINED: '1',
+      PAYEES_DECLINED: '1',
+      ANCHOR_DECLINED: '1',
     }),
     [],
   );
 });
 
 test('a rejected outcome carries the typed RejectionDetail', async () => {
-  const economy = await createEconomy();
+  const economy = createEconomy(
+    memoryPorts({ signingKey: 'test-signing-key-32-bytes!!' }),
+  );
   await economy.submit(
     topUp({
       idempotencyKey: 't1',
@@ -117,11 +125,15 @@ test('a rejected outcome carries the typed RejectionDetail', async () => {
     }),
   );
   assert.equal(outcome.status, 'rejected');
-  if (outcome.status === 'rejected') {
-    assert.equal(outcome.reason, 'INSUFFICIENT_FUNDS');
-    // The detail is typed (RejectionDetail): `required`/`available` are nameable, not `unknown`.
-    assert.ok(outcome.detail?.required !== undefined);
-    assert.ok(outcome.detail?.available !== undefined);
+  if (
+    outcome.status === 'rejected' &&
+    outcome.detail.reason === 'INSUFFICIENT_FUNDS'
+  ) {
+    // The detail is typed (RejectionDetail): `need`/`have` are nameable, not `unknown`.
+    assert.ok(outcome.detail.need !== undefined);
+    assert.ok(outcome.detail.have !== undefined);
+  } else {
+    assert.fail('expected an INSUFFICIENT_FUNDS rejection');
   }
   await economy.close();
 });

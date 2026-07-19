@@ -3,6 +3,7 @@ import {
   credits,
   encodeAmount,
   grantPromo,
+  memoryPorts,
   promo,
   spend,
   spendable,
@@ -17,7 +18,7 @@ import type { SnippetReport } from './context.ts';
 // first when the user buys, and the worker's promos sweep claws back whatever is left once
 // expiresAt passes. The grant and the promo-first draw are the recipe; the expiry needs no code.
 export async function run(): Promise<SnippetReport> {
-  const economy = await createEconomy();
+  const economy = createEconomy(memoryPorts({ signingKey: 'docs-signing-key' }));
   await economy.submit(
     topUp({
       idempotencyKey: 'idem_fund',

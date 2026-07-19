@@ -63,6 +63,7 @@ export default defineConfig({
       { find: /^node:crypto$/, replacement: `${engineBrowser}no-node-crypto.ts` },
       // The published names, as the snippets import them; same sources the #src rules resolve.
       { find: /^@pwngh\/economy-lab\/store-kit$/, replacement: `${repoRoot}src/store-kit.ts` },
+      { find: /^@pwngh\/economy-lab\/adapters$/, replacement: `${repoRoot}src/adapters/index.ts` },
       { find: /^@pwngh\/economy-lab$/, replacement: `${repoRoot}src/index.ts` },
       { find: /^#(.*)$/, replacement: `${repoRoot}$1` },
       { find: /^~\/(.*)$/, replacement: `${consoleApp}$1` },

@@ -21,6 +21,7 @@ export default defineConfig({
   resolve: {
     alias: [
       { find: /^@pwngh\/economy-lab\/store-kit$/, replacement: `${repoRoot}src/store-kit.ts` },
+      { find: /^@pwngh\/economy-lab\/adapters$/, replacement: `${repoRoot}src/adapters/index.ts` },
       { find: /^@pwngh\/economy-lab$/, replacement: `${repoRoot}src/index.ts` },
       { find: /^#(.*)$/, replacement: `${repoRoot}$1` },
       { find: /^~\/(.*)$/, replacement: `${consoleApp}$1` },

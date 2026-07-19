@@ -2,6 +2,7 @@ import {
   createEconomy,
   credits,
   encodeAmount,
+  memoryPorts,
   spendable,
   systemActor,
   topUp,
@@ -13,7 +14,7 @@ import type { SnippetReport } from './context.ts';
 // what makes the schedule safe: a cron that fires twice, a retried job, a redeployed worker —
 // same period, same key, at most one grant.
 export async function run(): Promise<SnippetReport> {
-  const economy = await createEconomy();
+  const economy = createEconomy(memoryPorts({ signingKey: 'docs-signing-key' }));
   const monthly = (period: string) =>
     economy.submit(
       topUp({

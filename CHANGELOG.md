@@ -39,6 +39,11 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - `preflight(env, init)` reports `PreflightIssue`s without constructing anything; every issue
   with severity `error` is exactly what `openPorts` throws as one `CONFIG.INVALID`. A decline
   flag shadowing a configured source reports a `warning`.
+- `boot(env, init)` returns `{ ports, economy, worker }` over one set of ports;
+  `worker: false` skips the worker.
+- `memoryPorts({ signingKey })` is a complete in-memory `Ports` value for tests and
+  quickstarts: memory store, dev rates and fees, in-memory processor, and a real Ed25519
+  signer.
 - Production requires `dispatcher`, `payees`, and `anchor` to be set or explicitly declined
   (init `false`, or env `DISPATCHER_DECLINED`/`PAYEES_DECLINED`/`ANCHOR_DECLINED`); a bare
   omission fails startup. `DECLINE_KEYS` lists the flags.

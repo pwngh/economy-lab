@@ -1,4 +1,12 @@
-import { createEconomy, credits, spend, systemActor, topUp, userActor } from '@pwngh/economy-lab';
+import {
+  createEconomy,
+  credits,
+  memoryPorts,
+  spend,
+  systemActor,
+  topUp,
+  userActor,
+} from '@pwngh/economy-lab';
 
 import type { SnippetReport } from './context.ts';
 
@@ -6,7 +14,7 @@ import type { SnippetReport } from './context.ts';
 // transaction, and `read.entitled` is the gate the rest of your service asks before it unlocks
 // anything. No separate fulfillment step to lose.
 export async function run(): Promise<SnippetReport> {
-  const economy = await createEconomy();
+  const economy = createEconomy(memoryPorts({ signingKey: 'docs-signing-key' }));
   await economy.submit(
     topUp({
       idempotencyKey: 'idem_fund',

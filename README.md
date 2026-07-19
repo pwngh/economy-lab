@@ -25,7 +25,7 @@ A provably-solvent credits economy: wallets, payouts, subscriptions, and a marke
 ## Highlights
 
 - **Zero runtime dependencies** — pure TypeScript; the whole economy runs in-memory with no infrastructure.
-- **Provably solvent** — `read.prove()` checks every solvency and integrity invariant; `make prove` and `make fuzz` surface any leak or drift.
+- **Provably solvent** — `read.health()` snapshots every solvency and integrity invariant, and `proveEconomy` re-derives them thoroughly for CI; `make prove` and `make fuzz` surface any leak or drift.
 - **Tamper-evident by construction** — every balance folds from an append-only, hash-chained, double-entry log under signed Merkle checkpoints.
 - **Five backends** — in-memory, Postgres, MySQL, Redis, and SQS run identical logic, pinned by a single conformance suite.
 - **Safe by default** — `submit` returns an `Outcome` and never throws for a "no"; every request is idempotent.
@@ -34,13 +34,14 @@ A provably-solvent credits economy: wallets, payouts, subscriptions, and a marke
 ## Quick start
 
 Build an `Economy`, drive it through a single `submit`, and read derived state through `read`.
-`createEconomy()` with no arguments wires a complete in-memory build — the store, a dev signer,
-a dev rate table, a flat fee policy, and an in-memory processor — so there is nothing to configure:
+`boot()` with no arguments wires a complete in-memory build — the store, a dev signer, a dev
+rate table, a flat fee policy, an in-memory processor, and a worker — so there is nothing to
+configure:
 
 ```ts
-import { createEconomy, topUp, toAmount, spendable } from '@pwngh/economy-lab';
+import { boot, topUp, toAmount, spendable } from '@pwngh/economy-lab';
 
-const economy = await createEconomy();
+const { economy, worker } = await boot();
 
 // Credit a wallet after a card charge clears.
 const outcome = await economy.submit(
@@ -57,7 +58,9 @@ outcome.status; // 'committed'
 const balance = await economy.read.balance(spendable('usr_ada'));
 balance.minor; // 5_000n — 50.00 CREDIT in minor units
 
-const report = await economy.read.prove(); // every solvency & integrity invariant
+await worker?.sweep(); // payouts, fees, checkpoints — one background pass
+
+const report = await economy.read.health(); // every solvency & integrity invariant
 report.conserved; // true
 
 await economy.close();
@@ -145,7 +148,7 @@ make db-clean    # drop the orphaned throwaway namespaces a killed run left behi
 ```
 
 The bundled host process runs as an HTTP service (`POST /submit`, `POST /webhooks/:provider`, plus
-`/healthz` and `/readyz`) and a background worker (ten sweeps on an interval). Every backend is
+`/healthz` and `/readyz`) and a background worker (eleven sweeps on an interval). Every backend is
 selected by an environment variable; `OPS=1` composes the ops supervisor around the worker, and
 [Ops & runbooks](https://economy-lab-docs.pages.dev/economy/ops/) holds one runbook per incident signature.
 
@@ -171,7 +174,7 @@ the measured tables and how to read them.
 - [The Economy surface](https://economy-lab-docs.pages.dev/economy/reference/the-economy/) — the whole `submit` / `read` / `close` API.
 - [The proof](https://economy-lab-docs.pages.dev/economy/concepts/the-proof/) — how `make prove` and `make fuzz` attack the invariants.
 - [HTTP service](https://economy-lab-docs.pages.dev/economy/reference/http-service/) — `POST /submit`, webhooks, and health checks.
-- [Background worker](https://economy-lab-docs.pages.dev/economy/reference/background-worker/) — the ten sweeps and how they run.
+- [Background worker](https://economy-lab-docs.pages.dev/economy/reference/background-worker/) — the eleven sweeps and how they run.
 - [Configuration](https://economy-lab-docs.pages.dev/economy/reference/configuration/) — every environment variable and backend selector.
 
 ## License

@@ -15,20 +15,23 @@ import { test } from 'node:test';
 import {
   ERROR_CODES,
   EconomyError,
-  configuredRates,
+  boot,
   createEconomy,
-  memoryProcessor,
+  memoryPorts,
+  openPorts,
   spend,
   spendable,
   toAmount,
   topUp,
 } from '#src/index.ts';
+import { configuredRates, memoryProcessor } from '#src/adapters/index.ts';
+import { silentLogger } from '#src/runtime.ts';
 import type { Principal } from '#src/index.ts';
 
 const SYSTEM_ACTOR: Principal = { kind: 'system', service: 'quickstart-test' };
 
-test('createEconomy() runs a topUp end to end with no infrastructure', async () => {
-  const economy = await createEconomy();
+test('boot() runs the quickstart end to end with no infrastructure', async () => {
+  const { economy, worker } = await boot({}, { logger: silentLogger() });
   const outcome = await economy.submit(
     topUp({
       idempotencyKey: 'k1',
@@ -43,11 +46,20 @@ test('createEconomy() runs a topUp end to end with no infrastructure', async () 
     await economy.read.balance(spendable('usr_1')),
     toAmount('CREDIT', 5_000n),
   );
+
+  assert.ok(worker, 'boot() binds a worker by default');
+  const run = await worker.sweep();
+  assert.equal(run.batch.checkpoint.ok, true);
+
+  const report = await economy.read.health();
+  assert.equal(report.conserved, true);
   await economy.close();
 });
 
-test('createEconomy() lets a fresh topUp be spent immediately (dev horizon is 0)', async () => {
-  const economy = await createEconomy();
+test('createEconomy(memoryPorts(...)) lets a fresh topUp be spent immediately (dev horizon is 0)', async () => {
+  const economy = createEconomy(
+    memoryPorts({ signingKey: 'test-signing-key-32-bytes!!' }),
+  );
   await economy.submit(
     topUp({
       idempotencyKey: 'k_fund',
@@ -109,14 +121,17 @@ test('memoryProcessor answers a resend of one key with the same providerRef', as
   assert.notEqual(first.providerRef, other.providerRef);
 });
 
-test('createEconomy({ env }) in production fails fast when the real externals are missing', async () => {
+test('openPorts in production fails fast when the real externals are missing', async () => {
   await assert.rejects(
-    createEconomy({
-      env: { NODE_ENV: 'production', WEBHOOK_SECRET: 'x', SIGNING_SECRET: 'y' },
+    openPorts({
+      NODE_ENV: 'production',
+      WEBHOOK_SECRET: 'x',
+      SIGNING_SECRET: 'y',
     }),
     (error: unknown) =>
       error instanceof EconomyError &&
-      error.code === ERROR_CODES.CONFIG_INVALID,
+      error.code === ERROR_CODES.CONFIG_INVALID &&
+      error.message.startsWith('Preflight failed:'),
   );
 });
 

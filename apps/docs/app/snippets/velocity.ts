@@ -1,7 +1,7 @@
 import {
   createEconomy,
   credits,
-  encodeAmount,
+  memoryPorts,
   spend,
   systemActor,
   topUp,
@@ -15,11 +15,12 @@ import type { SnippetReport } from './context.ts';
 // funded counts against inflow only, the first 160 spent fits the outflow window, and
 // 160 more crosses it — declined as RISK_DENIED with the window's own figures.
 export async function run(): Promise<SnippetReport> {
-  const economy = await createEconomy({
-    config: {
-      velocityLimitMinor: 30_000n, // 300 credits per window, both classes
-    },
-  });
+  const economy = createEconomy(
+    memoryPorts({
+      signingKey: 'docs-signing-key',
+      config: { velocityLimitMinor: 30_000n }, // 300 credits per window, both classes
+    }),
+  );
   await economy.submit(
     topUp({
       idempotencyKey: 'idem_fund',
@@ -50,9 +51,9 @@ export async function run(): Promise<SnippetReport> {
     lines: [
       'ceiling armed at construction: 300 credits per window',
       `spend of ${PRICE}: ${within.status} — ${PRICE} of 300 out this window`,
-      past.status === 'rejected' && past.detail?.spent && past.detail.limit
-        ? `${PRICE} more: ${past.status} (${past.reason}) — spent ` +
-          `${encodeAmount(past.detail.spent)} against limit ${encodeAmount(past.detail.limit)}`
+      past.status === 'rejected' && past.detail.reason === 'RISK_DENIED'
+        ? `${PRICE} more: ${past.status} (${past.detail.reason}) — the ` +
+          `${past.detail.window} window at its ${past.detail.limitMinor / 100n}-credit limit`
         : `${PRICE} more: ${past.status}`,
     ],
     consolePath: '/controls',

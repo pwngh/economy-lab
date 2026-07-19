@@ -4,6 +4,7 @@ import {
   credits,
   earned,
   encodeAmount,
+  memoryPorts,
   spend,
   systemActor,
   topUp,
@@ -16,7 +17,7 @@ import type { SnippetReport } from './context.ts';
 // basis points of the net, and any rounding leftover stays with the house — the shares must
 // sum to exactly 10,000 so no remainder goes unclaimed.
 export async function run(): Promise<SnippetReport> {
-  const economy = await createEconomy();
+  const economy = createEconomy(memoryPorts({ signingKey: 'docs-signing-key' }));
   await economy.submit(
     topUp({
       idempotencyKey: 'idem_fund',
