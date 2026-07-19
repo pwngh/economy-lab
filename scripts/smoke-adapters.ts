@@ -28,7 +28,7 @@ import { createServer } from 'node:http';
 import { connect } from 'node:net';
 import assert from 'node:assert/strict';
 
-import { capabilitiesFromEnv } from '#src/index.ts';
+import { openPorts } from '#src/index.ts';
 import { encodeEvent } from '#src/adapters/event-wire.ts';
 import {
   seededSigner,
@@ -37,10 +37,10 @@ import {
   defaultPricing,
 } from '#test/support/capabilities.ts';
 
-import type { ExternalPorts } from '#src/index.ts';
+import type { PortsInit } from '#src/index.ts';
 import type { EconomyEvent } from '#src/ports.ts';
 
-const ports: ExternalPorts = {
+const ports: PortsInit = {
   signer: seededSigner(1),
   processor: fakeProcessor(),
   rates: fixedRates(),
@@ -90,14 +90,14 @@ function failed(name: string, e: unknown): void {
   lines.push(`  FAIL  ${name}: ${e instanceof Error ? e.message : String(e)}`);
 }
 
-// --- Redis cache: capabilitiesFromEnv -> selectCache (real ioredis) ---------------
+// --- Redis cache: openPorts -> selectCache (real ioredis) -------------------------
 async function smokeRedis(): Promise<void> {
   if (!(await reachable('localhost', 6379))) {
     skip('redis cache (localhost:6379 unreachable)');
     return;
   }
   try {
-    const caps = await capabilitiesFromEnv(
+    const caps = await openPorts(
       { REDIS_URL: 'redis://localhost:6379' },
       ports,
     );
@@ -114,7 +114,7 @@ async function smokeRedis(): Promise<void> {
   }
 }
 
-// --- HTTP dispatcher: capabilitiesFromEnv -> selectDispatcher (real fetch) ---------
+// --- HTTP dispatcher: openPorts -> selectDispatcher (real fetch) -------------------
 async function smokeHttp(): Promise<void> {
   const captured: {
     request?: { headers: Record<string, unknown>; body: string };
@@ -134,7 +134,7 @@ async function smokeHttp(): Promise<void> {
   try {
     await new Promise<void>((r) => server.listen(0, () => r()));
     const port = (server.address() as { port: number }).port;
-    const caps = await capabilitiesFromEnv(
+    const caps = await openPorts(
       { DISPATCHER_URL: `http://localhost:${port}/events` },
       ports,
     );
@@ -153,7 +153,7 @@ async function smokeHttp(): Promise<void> {
   }
 }
 
-// --- SQS dispatcher: capabilitiesFromEnv -> selectDispatcher (real LocalStack) -----
+// --- SQS dispatcher: openPorts -> selectDispatcher (real LocalStack) ---------------
 async function smokeSqs(): Promise<void> {
   if (!(await reachable('localhost', 4566))) {
     skip('sqs dispatcher (LocalStack localhost:4566 unreachable)');
@@ -188,7 +188,7 @@ async function smokeSqs(): Promise<void> {
       new CreateQueueCommand({ QueueName: 'economy-smoke' }),
     );
     const queueUrl = created.QueueUrl!;
-    const caps = await capabilitiesFromEnv({ SQS_QUEUE_URL: queueUrl }, ports);
+    const caps = await openPorts({ SQS_QUEUE_URL: queueUrl }, ports);
     await caps.dispatcher!(sampleEvent());
     const recv = await admin.send(
       new ReceiveMessageCommand({

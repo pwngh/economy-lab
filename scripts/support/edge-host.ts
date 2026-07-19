@@ -23,7 +23,7 @@ import {
   payoutEventIdOf,
   sagaByProviderRef,
 } from '#src/adapters/edge-webhooks.ts';
-import { describeSelection } from '#src/index.ts';
+import { describeEnv } from '#src/index.ts';
 import { openPgPool } from '#src/engines/pg-driver.ts';
 import { serviceUrls } from '#src/env.ts';
 import { handleWebhook } from '#src/webhooks.ts';
@@ -132,10 +132,10 @@ function tiliaSettings(env: EnvMap, clientId: string): TiliaSettings {
   // The payee table follows the ledger: with a postgres store the durable payee store lands in
   // the ledger's own database, and TILIA_PAYEE_DATABASE_URL overrides for a split deployment.
   // With no postgres ledger and no override, the env-JSON map is the dev-shaped fallback below.
-  const store = describeSelection(env).store;
+  const store = describeEnv(env).store;
   const payeeDbUrl =
     serviceUrls(env).tiliaPayees ??
-    (store.kind === 'postgres' ? store.url : '');
+    (store.kind === 'postgres' ? (store.url ?? '') : '');
   const payeeMapRaw = payeeDbUrl === '' ? requireOf('TILIA_PAYEE_MAP') : '';
   const webhookSecret = env.TILIA_WEBHOOK_SECRET ?? '';
   if (environment === 'production') {

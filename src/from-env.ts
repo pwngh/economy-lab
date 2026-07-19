@@ -14,7 +14,6 @@ import {
   isProduction,
   readBigIntOrNull,
   readIntOrNull,
-  readList,
   serviceUrls,
 } from '#src/env.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
@@ -24,27 +23,48 @@ import { flatFee } from '#src/pricing.ts';
 import { systemSigner } from '#src/runtime.ts';
 
 import type { EnvMap } from '#src/env.ts';
+import type { Secrets } from '#src/config.ts';
 import type { FeePolicy } from '#src/contract.ts';
 import type { Processor, Rates, Signer } from '#src/ports.ts';
 
-// The four external ports have no built-in production stand-in, so createEconomy resolves them here:
-// each falls back to a safe dev default outside production, and in production is required from the
-// environment, failing fast with one message that lists everything missing. This is the wiring the
-// reference host used to hand-roll; the library owns it now, so every consumer gets the same rules.
+// The external ports have no built-in production stand-in, so openPorts resolves them here: each
+// falls back to a safe dev default outside production, and in production is required from the
+// environment, failing fast with one message that lists everything missing.
 
 const ENCODER = new TextEncoder();
 const DEV_SIGNING_SECRET = 'dev-signing-secret';
 
-// Dev rates through the production constructor, so dev and production run the same rate code and
-// differ only in where the numbers come from: buy ~$0.00833/credit, backing peg and cash-out $0.005.
-const DEV_RATES = {
+/**
+ * The dev rate table `openPorts` and `memoryPorts` wire outside production: buy ~$0.00833 per
+ * credit, backing peg and cash-out $0.005. Public so a host or console that displays or re-mints
+ * the dev rates shares this one definition; production rates come from env or the init.
+ */
+export const DEV_RATES: RatesConfig = {
   buyRate: 8333n,
   buyScale: 6,
   parRate: 5n,
   parScale: 3,
   payoutRate: 5n,
   payoutScale: 3,
-} as const;
+};
+
+/** The exact integer knobs `configuredRates` takes; accepted anywhere a Rates instance is. */
+export type RatesConfig = {
+  readonly buyRate: bigint;
+  readonly buyScale: number;
+  readonly parRate: bigint;
+  readonly parScale: number;
+  readonly payoutRate: bigint;
+  readonly payoutScale: number;
+};
+
+// What openPorts may override the env-derived externals with (a slice of PortsInit).
+export type ExternalInit = {
+  signer?: Signer;
+  processor?: Processor;
+  rates?: Rates | RatesConfig;
+  pricing?: FeePolicy;
+};
 
 export type Externals = {
   signer: Signer;
@@ -54,45 +74,44 @@ export type Externals = {
 };
 
 /**
- * The env keys production requires but that are missing or malformed: the signing secret, the six
- * CREDIT-to-USD rate knobs, and the payout provider URL. Empty outside production and when every
- * value is present. The single source {@link externalsFromEnv} throws on and `checkEnv` reports.
+ * The env keys production requires but that are missing or malformed — the six CREDIT-to-USD
+ * rate knobs and the payout provider URL — skipping any family the init already supplies.
+ * Empty outside production. The single source `preflight` reports and `openPorts` throws on.
  */
-export function missingExternals(env: EnvMap): string[] {
+export function missingExternals(
+  env: EnvMap,
+  init: ExternalInit = {},
+): string[] {
   if (!isProduction(env)) {
     return [];
   }
   const missing: string[] = [];
-  if ((env.SIGNING_SECRET ?? '') === '') {
-    missing.push('SIGNING_SECRET');
-  }
-  for (const key of ['CREDIT_BUY_RATE', 'CREDIT_PAR_RATE', 'PAYOUT_RATE']) {
-    if (readBigIntOrNull(env[key]) === null) {
-      missing.push(key);
+  if (init.rates === undefined) {
+    for (const key of ['CREDIT_BUY_RATE', 'CREDIT_PAR_RATE', 'PAYOUT_RATE']) {
+      if (readBigIntOrNull(env[key]) === null) {
+        missing.push(key);
+      }
+    }
+    for (const key of [
+      'CREDIT_BUY_SCALE',
+      'CREDIT_PAR_SCALE',
+      'PAYOUT_SCALE',
+    ]) {
+      if (readIntOrNull(env[key]) === null) {
+        missing.push(key);
+      }
     }
   }
-  for (const key of ['CREDIT_BUY_SCALE', 'CREDIT_PAR_SCALE', 'PAYOUT_SCALE']) {
-    if (readIntOrNull(env[key]) === null) {
-      missing.push(key);
-    }
-  }
-  if (serviceUrls(env).processor === null) {
+  if (init.processor === undefined && serviceUrls(env).processor === null) {
     missing.push('PROCESSOR_URL');
   }
   return missing;
 }
 
-// A missing key still matters only if an override does not already supply that port.
-function stillRequired(key: string, overrides: Partial<Externals>): boolean {
-  if (key === 'SIGNING_SECRET') return overrides.signer === undefined;
-  if (key === 'PROCESSOR_URL') return overrides.processor === undefined;
-  return overrides.rates === undefined; // the six rate knobs
-}
-
 /**
  * Refuses a malformed port at wiring time, so the deploy fails at startup rather than deep
- * inside a request or sweep. The classic slip is passing a factory (`noopLogger`) where its
- * product (`noopLogger()`) belongs.
+ * inside a request or sweep. The classic slip is passing a factory (`silentLogger`) where its
+ * product (`silentLogger()`) belongs.
  */
 export function requireCallable(
   owner: string,
@@ -103,7 +122,7 @@ export function requireCallable(
     if (typeof (service as Record<string, unknown>)?.[method] !== 'function') {
       throw fault(
         ERROR_CODES.CONFIG_INVALID,
-        `${owner}.${method} is not a function; if it comes from a factory such as noopLogger, pass the factory's result.`,
+        `${owner}.${method} is not a function; if it comes from a factory such as silentLogger, pass the factory's result.`,
         { detail: { owner, method }, retryable: false },
       );
     }
@@ -111,35 +130,29 @@ export function requireCallable(
 }
 
 /**
- * Resolves the four external ports from `env`, letting `overrides` win over anything derived. Dev
- * fills sane defaults; production requires the real values for the ports not overridden and throws
- * `CONFIG.INVALID` listing every missing knob at once.
+ * Resolves the external ports from `env` and `secrets`, letting the init win over anything
+ * derived. Dev fills sane defaults; production requires the real values for the ports not
+ * overridden and throws `CONFIG.INVALID` listing every missing knob at once.
  */
-export function externalsFromEnv(
+export function resolveExternals(
   env: EnvMap,
-  overrides: Partial<Externals> = {},
+  init: ExternalInit,
+  secrets: Secrets,
 ): Externals {
-  const missing = missingExternals(env).filter((key) =>
-    stillRequired(key, overrides),
-  );
+  const missing = missingExternals(env, init);
   if (missing.length > 0) {
     throw fault(
       ERROR_CODES.CONFIG_INVALID,
       `NODE_ENV=production requires real externals; missing or malformed: ${missing.join(', ')}. ` +
-        'Set the CREDIT-to-USD rates, the payout provider, and the signing secret.',
+        'Set the CREDIT-to-USD rates and the payout provider.',
       { detail: { missing }, retryable: false },
     );
   }
   const externals: Externals = {
-    signer:
-      overrides.signer ??
-      systemSigner({
-        signingKey: signingKey(env),
-        priorKeys: priorSigningKeys(env),
-      }),
-    rates: overrides.rates ?? rateSource(env),
-    processor: overrides.processor ?? processorFor(env),
-    pricing: overrides.pricing ?? flatFee(),
+    signer: init.signer ?? signerFromSecrets(secrets),
+    rates: resolveRates(env, init.rates),
+    processor: init.processor ?? processorFor(env),
+    pricing: init.pricing ?? flatFee(),
   };
   requireCallable('signer', externals.signer, ['sign', 'verify']);
   requireCallable('rates', externals.rates, ['payout']);
@@ -148,29 +161,39 @@ export function externalsFromEnv(
   return externals;
 }
 
-// The signer's key is the SIGNING_SECRET hashed to a seed; dev falls back to a fixed non-secret.
-function signingKey(env: EnvMap): string {
-  const secret = env.SIGNING_SECRET ?? '';
+/**
+ * The Ed25519 signer the secrets bag names: the signing secret hashed to a seed, each rotated-out
+ * prior transformed the same way so checkpoints sealed under one still verify. A blank secret
+ * (dev only — production refuses it upstream) falls back to a fixed non-secret.
+ */
+export function signerFromSecrets(secrets: Secrets): Signer {
+  const priors = (secrets.signingSecretsPrior ?? []).map((secret) =>
+    toHex(ENCODER.encode(secret)),
+  );
+  return systemSigner({
+    signingKey: signingKey(secrets.signingSecret),
+    ...(priors.length > 0 ? { priorKeys: priors } : {}),
+  });
+}
+
+function signingKey(secret: string): string {
   return toHex(ENCODER.encode(secret === '' ? DEV_SIGNING_SECRET : secret));
 }
 
-// Rotated-out secrets (SIGNING_SECRETS_PRIOR, comma-separated), each transformed exactly as
-// SIGNING_SECRET is: new seals sign under the current key while checkpoints sealed under a
-// listed prior still verify. Rotation = move the old secret here, never just replace it.
-function priorSigningKeys(env: EnvMap): ReadonlyArray<string> | undefined {
-  const secrets = readList(env.SIGNING_SECRETS_PRIOR);
-  if (secrets.length === 0) {
-    return undefined;
+// A RatesConfig is told apart from a live Rates source by its callable `payout`.
+function resolveRates(
+  env: EnvMap,
+  rates: Rates | RatesConfig | undefined,
+): Rates {
+  if (rates !== undefined) {
+    return typeof (rates as Rates).payout === 'function'
+      ? (rates as Rates)
+      : configuredRates(rates as RatesConfig);
   }
-  return secrets.map((secret) => toHex(ENCODER.encode(secret)));
-}
-
-// Dev uses the fixed DEV_RATES; production reads the six knobs (already validated present by the
-// missing check that runs before this).
-function rateSource(env: EnvMap): Rates {
   if (!isProduction(env)) {
     return configuredRates(DEV_RATES);
   }
+  // Production: the six knobs were validated present by the missing check above.
   return configuredRates({
     buyRate: readBigIntOrNull(env.CREDIT_BUY_RATE) ?? 0n,
     buyScale: readIntOrNull(env.CREDIT_BUY_SCALE) ?? 0,

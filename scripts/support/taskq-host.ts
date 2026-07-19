@@ -23,7 +23,7 @@
 // engine. A memory ledger has no database for the table to live beside, so
 // the flag without an override fails loudly at startup.
 
-import { describeSelection } from '#src/index.ts';
+import { describeEnv } from '#src/index.ts';
 import { openPgPool } from '#src/engines/pg-driver.ts';
 import {
   isMysqlUrl,
@@ -75,8 +75,11 @@ export function describeTaskq(env: EnvMap): TaskqSelection {
   if (!readFlag(env.TASKQ)) {
     return { kind: 'off' };
   }
-  const store = describeSelection(env).store;
-  if (store.kind === 'postgres' || store.kind === 'mysql') {
+  const store = describeEnv(env).store;
+  if (
+    (store.kind === 'postgres' || store.kind === 'mysql') &&
+    store.url !== null
+  ) {
     return { kind: 'taskq', engine: store.kind, url: store.url };
   }
   throw new Error(

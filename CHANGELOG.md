@@ -23,12 +23,25 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - Breaking: `createEconomy(ports)` is the single construction call — the zero-arg and
   options-object forms are deleted; `createWorker(ports, economy)` replaces
   `createWorker(store, ctx)`.
+- Breaking: the old composition entry points are deleted: `compose`, `composeWorker`,
+  `workerCtxFrom`, `economyFromCapabilities`, `externalsFromEnv`, `ExternalPorts`,
+  `Externals`, `RuntimeDefaults`, `EconomyOptions`, `WorkerCtx`.
 - `postgresStore` and `mysqlStore` open without touching schema; `schema: 'assert'` checks
   the stamped version (`postgresStore` at open, `mysqlStore` once before the first operation),
   and `openPorts` asserts eagerly on the pool.
 
 ### Added
 
+- `openPorts(env, init)` is the sole path from environment to ports: it loads `Config` and
+  `Secrets` (init wins per field, both frozen), fills runtime and external ports with dev
+  stand-ins outside production, opens the store the `DATABASE_URL` scheme names, and applies
+  the production absence policy.
+- `preflight(env, init)` reports `PreflightIssue`s without constructing anything; every issue
+  with severity `error` is exactly what `openPorts` throws as one `CONFIG.INVALID`. A decline
+  flag shadowing a configured source reports a `warning`.
+- Production requires `dispatcher`, `payees`, and `anchor` to be set or explicitly declined
+  (init `false`, or env `DISPATCHER_DECLINED`/`PAYEES_DECLINED`/`ANCHOR_DECLINED`); a bare
+  omission fails startup. `DECLINE_KEYS` lists the flags.
 - `Secrets` splits from `Config`: secrets load into `ports.secrets`, `SECRET_KEYS` names
   them, and `CONFIG_KEYS` is secrets-free. `DB_POOL_MAX` caps the SQL connection pool.
 - `read.health()` is the light liveness read; `proveEconomy` stays the thorough pass.

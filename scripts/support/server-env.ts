@@ -11,7 +11,7 @@
 
 // The serve/dev/worker host's own runtime knobs: the names, the bounds, and the one parse.
 // scripts/main.ts builds ServerRuntime once at dispatch and threads the values from there — the
-// raw env map flows only into compose()/the hosts, the library's designed env seam. The key lists
+// raw env map flows only into openPorts()/the hosts, the library's designed env seam. The key lists
 // live here (not in main.ts) so test/env-surface.test.ts can import them without executing the
 // entry point.
 

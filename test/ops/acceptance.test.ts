@@ -13,25 +13,22 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  capabilitiesFromEnv,
   createWorker,
   credits,
-  economyFromCapabilities,
-  externalsFromEnv,
-  noopLogger,
-  noopMeter,
+  createEconomy,
+  openPorts,
   requestPayout,
   spend,
   systemActor,
   topUp,
   userActor,
-  workerCtxFrom,
 } from '#src/index.ts';
+import { silentLogger, silentMeter } from '#src/runtime.ts';
 
 import {
   createSupervisor,
   jsonlAuditSink,
-  opsRuntime,
+  createOpsRuntime,
 } from '#src/ops/index.ts';
 import { fixedClock } from '#test/support/capabilities.ts';
 
@@ -40,21 +37,20 @@ import type { AuditRecord } from '#src/ops/index.ts';
 
 test('acceptance: a stuck payout saga is detected, swept, verified, and audited', async () => {
   const clock = fixedClock(1_000_000);
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
   const processor: Processor = {
     submitPayout: async () => ({ providerRef: 'prov_acceptance' }),
   };
-  const caps = await capabilitiesFromEnv(
+  const ports = await openPorts(
     { PAYOUT_MIN_EARNED_MINOR: '1000' },
-    externalsFromEnv({}, { processor }),
-    { clock, logger: runtime.logger, meter: runtime.meter },
+    { processor, clock, logger: runtime.logger, meter: runtime.meter },
   );
-  const economy = economyFromCapabilities(caps);
-  const worker = createWorker(caps.store, workerCtxFrom(caps));
+  const economy = createEconomy(ports);
+  const worker = createWorker(ports, economy);
 
   const buyer = 'usr_buyer';
   const seller = 'usr_seller';
@@ -102,8 +98,8 @@ test('acceptance: a stuck payout saga is detected, swept, verified, and audited'
   const supervisor = createSupervisor({
     clock,
     signals: runtime.signals,
-    sagas: caps.store.sagas,
-    runSweep: (now) => worker.runOnce({ now, limit: 10 }),
+    sagas: ports.store.sagas,
+    runSweep: (now) => worker.sweep({ now, limit: 10 }),
     audit: (record) => {
       records.push(record);
       jsonl(record);
@@ -140,7 +136,7 @@ test('acceptance: a stuck payout saga is detected, swept, verified, and audited'
     records,
   );
 
-  const report = await economy.read.prove();
+  const report = await economy.read.health();
   assert.equal(report.conserved, true);
   assert.equal(report.chainIntact, true);
   assert.equal(report.noOverdraft, true);

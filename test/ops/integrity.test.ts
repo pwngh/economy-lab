@@ -13,22 +13,19 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  capabilitiesFromEnv,
   createWorker,
   credits,
-  economyFromCapabilities,
-  externalsFromEnv,
-  noopLogger,
-  noopMeter,
+  createEconomy,
+  openPorts,
   systemActor,
   topUp,
-  workerCtxFrom,
 } from '#src/index.ts';
+import { silentLogger, silentMeter } from '#src/runtime.ts';
 
 import {
   createSupervisor,
   jsonlAuditSink,
-  opsRuntime,
+  createOpsRuntime,
 } from '#src/ops/index.ts';
 import { fixedClock } from '#test/support/capabilities.ts';
 import { frozenSagaSource, recorder } from '#test/ops/support.ts';
@@ -37,21 +34,22 @@ import type { AuditRecord } from '#src/ops/index.ts';
 
 test('integrity: a real ledger tamper escalates through the checkpoint mismatch, once, with a prove report', async () => {
   const clock = fixedClock(1_000_000);
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
-  const caps = await capabilitiesFromEnv(
+  const ports = await openPorts(
     {},
-    externalsFromEnv(
-      {},
-      { processor: { submitPayout: async () => ({ providerRef: 'p' }) } },
-    ),
-    { clock, logger: runtime.logger, meter: runtime.meter },
+    {
+      processor: { submitPayout: async () => ({ providerRef: 'p' }) },
+      clock,
+      logger: runtime.logger,
+      meter: runtime.meter,
+    },
   );
-  const economy = economyFromCapabilities(caps);
-  const worker = createWorker(caps.store, workerCtxFrom(caps));
+  const economy = createEconomy(ports);
+  const worker = createWorker(ports, economy);
 
   const topped = await economy.submit(
     topUp({
@@ -66,7 +64,7 @@ test('integrity: a real ledger tamper escalates through the checkpoint mismatch,
   if (topped.status !== 'committed') {
     return;
   }
-  await worker.runOnce({ now: clock.now(), limit: 10 });
+  await worker.sweep({ now: clock.now(), limit: 10 });
 
   const { records, sink } = recorder();
   const lines: string[] = [];
@@ -83,14 +81,14 @@ test('integrity: a real ledger tamper escalates through the checkpoint mismatch,
       sink(record);
       jsonl(record);
     },
-    prove: () => economy.read.prove(),
+    prove: () => economy.read.health(),
     escalate: (record) => escalations.push(record),
   });
 
   assert.deepEqual(await supervisor.tick(), []);
 
   const tamper = (
-    caps.store.ledger as unknown as {
+    ports.store.ledger as unknown as {
       __tamper?: (
         txnId: string,
         mutate: (legs: Array<{ amount: { minor: bigint } }>) => void,
@@ -101,7 +99,7 @@ test('integrity: a real ledger tamper escalates through the checkpoint mismatch,
   tamper?.(topped.transaction.id, (legs) => {
     legs[0].amount.minor += 1n;
   });
-  await worker.runOnce({ now: clock.now(), limit: 10 });
+  await worker.sweep({ now: clock.now(), limit: 10 });
 
   const escalated = await supervisor.tick();
   assert.deepEqual(

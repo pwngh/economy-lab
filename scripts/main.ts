@@ -21,12 +21,7 @@
 
 import { createServer as nodeHttpServer } from 'node:http';
 
-import {
-  capabilitiesFromEnv,
-  composeWorker,
-  describeSelection,
-  externalsFromEnv,
-} from '#src/index.ts';
+import { createWorker, describeEnv, openPorts } from '#src/index.ts';
 import {
   REQUIRED_SECRETS,
   isProduction,
@@ -34,7 +29,7 @@ import {
   readFlag,
 } from '#src/env.ts';
 import { serverRuntime } from '#scripts/support/server-env.ts';
-import { economyFromCapabilities } from '#src/economy.ts';
+import { createEconomy } from '#src/economy.ts';
 import {
   CLIENT_IP_HEADER,
   DEFAULT_MAX_BODY_BYTES,
@@ -43,7 +38,7 @@ import {
 } from '#src/server.ts';
 import {
   jsonlLogger,
-  noopMeter,
+  silentMeter,
   randomIds,
   systemClock,
   systemDigest,
@@ -57,12 +52,16 @@ import { maybeOps } from '#scripts/support/ops-host.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { EnvMap } from '#src/env.ts';
 import type { ServerRuntime } from '#scripts/support/server-env.ts';
+import type { PortsInit, Worker } from '#src/index.ts';
+import type { SweepResult } from '#src/worker/index.ts';
 import type {
-  ComposedWorker,
-  ExternalPorts,
-  RuntimeDefaults,
-} from '#src/index.ts';
-import type { Clock, Ids, Logger, Meter, Store } from '#src/ports.ts';
+  Clock,
+  Dispatcher,
+  Ids,
+  Logger,
+  Meter,
+  Store,
+} from '#src/ports.ts';
 import type { WebhookHandler } from '#src/server.ts';
 
 type FetchHandler = (request: Request) => Promise<Response>;
@@ -84,20 +83,14 @@ function requireSecrets(env: EnvMap): void {
   }
 }
 
-function wiring(env: EnvMap): {
-  ports: ExternalPorts;
-  defaults: RuntimeDefaults;
-} {
+// The host's own runtime trio; openPorts resolves everything else from env with the same
+// dev-default and production-required rules the library applies — no hand-rolled wiring here.
+function wiring(env: EnvMap): PortsInit {
   requireSecrets(env);
-  // externalsFromEnv resolves the four external ports from env with the same dev-default and
-  // production-required rules the library applies in createEconomy; no hand-rolled wiring here.
   return {
-    ports: externalsFromEnv(env),
-    defaults: {
-      clock: systemClock(),
-      ids: randomIds(),
-      digest: systemDigest(),
-    },
+    clock: systemClock(),
+    ids: randomIds(),
+    digest: systemDigest(),
   };
 }
 
@@ -248,7 +241,7 @@ function problem(res: ServerResponse, status: number, title: string): void {
 // --- worker -----------------------------------------------------------------------
 
 type RunningWorker = {
-  timer: NodeJS.Timeout;
+  stop: () => void;
   store: Store;
   drain: () => Promise<void>;
 };
@@ -257,37 +250,35 @@ type RunningWorker = {
 // tick loop it is. OPS=1 wraps the composition's meter/logger in the supervisor's signal buffer;
 // the wrapped ports forward every call unchanged, so the worker behaves identically either way.
 async function workerHost(env: EnvMap): Promise<{
-  worker: ComposedWorker['worker'];
+  worker: Worker;
   store: Store;
-  relayDispatcher: ComposedWorker['dispatcher'];
+  relayDispatcher: Dispatcher | undefined;
   edge: Awaited<ReturnType<typeof maybeEdgeTilia>>;
   bridge: Awaited<ReturnType<typeof maybeTaskqHost>>;
   ops: ReturnType<typeof maybeOps>;
 }> {
-  const { ports, defaults } = wiring(env);
+  const base = wiring(env);
   const edge = await maybeEdgeTilia(env, log);
-  if (edge !== undefined) {
-    ports.processor = edge.processor;
-  }
   const ops = maybeOps(env, {
-    clock: defaults.clock ?? systemClock(),
+    clock: base.clock ?? systemClock(),
     logger: log,
-    meter: noopMeter(),
+    meter: silentMeter(),
   });
-  if (ops !== undefined) {
-    defaults.logger = ops.runtime.logger;
-    defaults.meter = ops.runtime.meter;
-  }
-  const { worker, store, dispatcher } = await composeWorker(
-    env,
-    ports,
-    defaults,
-  );
+  const ports = await openPorts(env, {
+    ...base,
+    ...(edge !== undefined && { processor: edge.processor }),
+    ...(ops !== undefined && {
+      logger: ops.runtime.logger,
+      meter: ops.runtime.meter,
+    }),
+  });
+  const economy = createEconomy(ports);
+  const worker = createWorker(ports, economy);
   const bridge = await maybeTaskqHost(env, log);
   return {
     worker,
-    store,
-    relayDispatcher: bridge?.dispatcher ?? dispatcher,
+    store: ports.store,
+    relayDispatcher: bridge?.dispatcher ?? ports.dispatcher,
     edge,
     bridge,
     ops,
@@ -302,58 +293,46 @@ async function runWorker(
     await workerHost(env);
   const { workerIntervalMs: intervalMs, workerBatch: limit } = runtime;
 
-  // Non-overlap guard: while a tick runs, later interval fires are skipped. The shutdown handler
-  // awaits this same promise.
-  let inFlight: Promise<void> | null = null;
+  // The steady-state request. `start` may not carry a `now`: the worker re-reads the clock on
+  // every tick, so each sweep runs at its own moment.
+  const request = {
+    limit,
+    dispatcher: relayDispatcher,
+    float: edge?.float,
+  };
 
-  const tick = (): Promise<void> => {
-    if (inFlight) {
-      return inFlight;
-    }
-    inFlight = (async () => {
-      try {
-        const { batch } = await worker.runOnce({
-          now: Date.now(),
-          limit,
-          dispatcher: relayDispatcher,
-          float: edge?.float,
-        });
-        const failed = Object.entries(batch).flatMap(([sweep, result]) =>
+  // One eager sweep at startup, with its verdict logged; the interval loop then runs inside the
+  // worker, which skips ticks while paused (the supervisor's containment lever).
+  const firstSweep = async (): Promise<void> => {
+    try {
+      const { batch } = await worker.sweep(request);
+      const failed = Object.entries(batch).flatMap(
+        ([sweep, result]: [string, SweepResult<unknown>]) =>
           result.ok
             ? []
             : [{ sweep, code: result.code, retryable: result.retryable }],
-        );
-        if (failed.length === 0) {
-          log.log('info', 'worker.sweep', { ok: true });
-        } else {
-          log.log('warn', 'worker.sweep', { ok: false, failed });
-        }
-      } catch (error) {
-        log.log('error', 'worker.sweep', {
-          ok: false,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      } finally {
-        inFlight = null;
+      );
+      if (failed.length === 0) {
+        log.log('info', 'worker.sweep', { ok: true });
+      } else {
+        log.log('warn', 'worker.sweep', { ok: false, failed });
       }
-    })();
-    return inFlight;
+    } catch (error) {
+      log.log('error', 'worker.sweep', {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   };
 
-  await tick();
-  const timer = setInterval(() => void tick(), intervalMs);
+  await firstSweep();
+  const stopLoop = worker.start(intervalMs, request);
   log.log('info', 'worker.started', { intervalMs, batch: limit });
   const stopOps = ops?.start({
     sagas: store.sagas,
-    runSweep: (now) =>
-      worker.runOnce({
-        now,
-        limit,
-        dispatcher: relayDispatcher,
-        float: edge?.float,
-      }),
+    runSweep: (now) => worker.sweep({ ...request, now }),
     runRelay: (now) =>
-      worker.runOnce({
+      worker.sweep({
         now,
         limit,
         dispatcher: relayDispatcher,
@@ -364,13 +343,10 @@ async function runWorker(
   });
 
   return {
-    timer,
+    stop: stopLoop,
     store,
     drain: async () => {
       stopOps?.();
-      if (inFlight) {
-        await inFlight;
-      }
       if (bridge !== undefined) {
         await bridge.stop();
       }
@@ -426,36 +402,36 @@ function onShutdown(timeoutMs: number, drain: () => Promise<void>): void {
  * the routes, wire format, and webhook gate this entry point mounts.
  */
 async function runServe(env: EnvMap, runtime: ServerRuntime): Promise<void> {
-  const { ports, defaults } = wiring(env);
+  const base = wiring(env);
   const edge = await maybeEdgeTilia(env, log);
-  if (edge !== undefined) {
-    ports.processor = edge.processor;
-  }
-  // capabilitiesFromEnv rather than compose: the webhook handler writes the inbox, so it needs the
-  // same store handle the economy runs on, and compose would return only the economy.
-  const caps = await capabilitiesFromEnv(env, ports, defaults);
-  if (edge !== undefined) {
-    caps.payees = edge.payees;
-  }
-  const economy = economyFromCapabilities(caps);
-  const config = caps.config;
+  // openPorts hands back the whole bag, not just the economy: the webhook handler writes the
+  // inbox, so it needs the same store handle the economy runs on.
+  const ports = await openPorts(env, {
+    ...base,
+    ...(edge !== undefined && {
+      processor: edge.processor,
+      payees: edge.payees,
+    }),
+  });
+  const economy = createEconomy(ports);
   const purchases = purchaseWebhook(
-    caps.store,
-    caps.ids,
-    caps.clock,
-    caps.meter,
+    ports.store,
+    ports.ids,
+    ports.clock,
+    ports.meter,
   );
-  const tiliaPayouts = edge?.webhookFor(caps.store, caps.ids, caps.clock);
-  // config and clock are what activate the webhook gate. Without them createServer can't verify a
-  // callback's signature and timestamp, so a forged or stale one would reach the handler unchecked.
-  const handler = createServer(economy, {
+  const tiliaPayouts = edge?.webhookFor(ports.store, ports.ids, ports.clock);
+  // The full bag carries the secrets, config, and clock the webhook gate verifies a callback's
+  // signature and timestamp with, so a forged or stale one never reaches the handler.
+  // `authenticate: false` keeps this host's posture: the body's actor is trusted.
+  const handler = createServer({
+    economy,
+    ports,
+    authenticate: false,
     webhook: async (provider, request) =>
       provider === 'tilia' && tiliaPayouts !== undefined
         ? tiliaPayouts(provider, request)
         : purchases(provider, request),
-    config,
-    clock: defaults.clock,
-    meter: caps.meter,
   });
   const closeServer = serve(handler, runtime.port);
   onShutdown(runtime.shutdownTimeoutMs, async () => {
@@ -480,10 +456,10 @@ function devEnv(env: EnvMap): EnvMap {
 }
 
 // One startup line naming the resolved selection and knobs; each secret logs set/MISSING, never
-// its value. It reads describeSelection — the same reading the wiring consumes — so the line
+// its value. It reads describeEnv — the same reading the wiring consumes — so the line
 // cannot drift from what actually runs.
 function logResolved(mode: string, env: EnvMap, runtime: ServerRuntime): void {
-  const selection = describeSelection(env);
+  const selection = describeEnv(env);
   // describeTaskq throws on a misconfigured opt-in; startup, right here, is where that surfaces.
   const queue = mode === 'worker' ? describeTaskq(env) : null;
   log.log('info', 'config.resolved', {
@@ -530,7 +506,7 @@ logResolved(mode, env, runtime);
 if (mode === 'worker') {
   const running = await runWorker(env, runtime);
   onShutdown(runtime.shutdownTimeoutMs, async () => {
-    clearInterval(running.timer);
+    running.stop();
     await running.drain();
     await running.store.close();
   });

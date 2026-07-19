@@ -24,7 +24,7 @@ import {
   SERVICE_URL_KEYS,
   STORE_URL_KEYS,
 } from '#src/env.ts';
-import { CONFIG_KEYS } from '#src/config.ts';
+import { CONFIG_KEYS, DECLINE_KEYS, SECRET_KEYS } from '#src/config.ts';
 import { BENCH_KEYS } from '#scripts/support/harness.ts';
 import { EXTERNALS_KEYS, SERVER_KEYS } from '#scripts/support/server-env.ts';
 import { TILIA_KEYS } from '#scripts/support/edge-host.ts';
@@ -50,6 +50,8 @@ const DECLARED = new Set<string>([
   ...REQUIRED_SECRETS,
   ...OPTIONAL_SECRETS,
   ...CONFIG_KEYS,
+  ...SECRET_KEYS,
+  ...DECLINE_KEYS,
   ...SERVER_KEYS,
   ...EXTERNALS_KEYS,
   ...BENCH_KEYS,

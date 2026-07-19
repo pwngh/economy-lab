@@ -19,17 +19,20 @@ import { currency, isWalletAccount, ownerOf } from '#src/accounts.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { MemoryLedger } from '#src/adapters/memory.ts';
 import { configuredRates } from '#src/adapters/rates.ts';
-import { economyPaused, mergeConfig } from '#src/config.ts';
+import { mergeConfig } from '#src/config.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import {
+  DEV_RATES,
   SYSTEM,
   cancelSubscription,
-  capabilitiesFromEnv,
+  createEconomy,
   createWorker,
   credits,
   earned,
-  economyFromCapabilities,
+  findByHash,
   grantPromo,
+  openPorts,
+  paginate,
   promo,
   requestPayout,
   reversePayout,
@@ -38,26 +41,29 @@ import {
   spendable,
   subscribe,
   topUp,
-  workerCtxFrom,
 } from '#src/index.ts';
 import { proveEconomy } from '#src/integrity.ts';
-import { convertFloor, toAmount } from '#src/money.ts';
+import { add, convertFloor, toAmount } from '#src/money.ts';
 import { flatFee } from '#src/pricing.ts';
-import { jsonlLogger, systemDigest, systemSigner } from '#src/runtime.ts';
+import {
+  jsonlLogger,
+  silentMeter,
+  systemDigest,
+  systemSigner,
+} from '#src/runtime.ts';
 import { createServer } from '#src/server.ts';
+import { GENESIS_HEX } from '#src/store-kit.ts';
 import { handleWebhook } from '#src/webhooks.ts';
-import { drainInbox } from '#src/worker/inbox.ts';
-import { relayOutbox } from '#src/worker/relay.ts';
 
 import type {
-  Capabilities,
   Config,
   Economy,
   Operation,
   Outcome,
+  Ports,
   Principal,
   ProveReport,
-  WorkerCtx,
+  RatesConfig,
 } from '#src/index.ts';
 import type {
   Clock,
@@ -67,7 +73,6 @@ import type {
   Ids,
   Leg,
   Posting,
-  Rates,
   Saga,
   Store,
 } from '#src/ports.ts';
@@ -172,21 +177,11 @@ function clampCount(n: number): number {
   return Math.min(MAX_BURST, Math.max(2, Math.floor(Number(n)) || 2));
 }
 
-// The genesis prevHash (a first link's "before"); never a real posting hash, so never a search hit.
-const GENESIS_HASH = '0'.repeat(64);
 // Bounds the account/chain walk a hash search does, so a pasted junk hash cannot fan out unbounded work.
 const FIND_SCAN_MAX = 20_000;
 
 // Rates are shown and set as USD per 1,000 credits — readable (8.33 to buy a credit, 5.00 to redeem
 // one), where the per-1,000 form of a { rate, scale } is `rate / 10^scale * 1000`.
-const DEFAULT_RATES = {
-  buyRate: 8333n,
-  buyScale: 6,
-  parRate: 5n,
-  parScale: 3,
-  payoutRate: 5n,
-  payoutScale: 3,
-};
 function rateToPerThousand(r: { rate: bigint; scale: number }): number {
   return (Number(r.rate) / 10 ** r.scale) * 1000;
 }
@@ -233,9 +228,9 @@ function tally(results: Outcome[], movedCredits: number): RaceResult {
       committed++;
     } else if (r.status === 'duplicate') {
       duplicates++;
-    } else if (r.reason === 'DUPLICATE_ORDER') {
+    } else if (r.detail.reason === 'DUPLICATE_ORDER') {
       duplicates++;
-    } else if (r.reason === 'INSUFFICIENT_FUNDS') {
+    } else if (r.detail.reason === 'INSUFFICIENT_FUNDS') {
       insufficient++;
     } else {
       other++;
@@ -249,6 +244,19 @@ function tally(results: Outcome[], movedCredits: number): RaceResult {
     other,
     movedCredits,
   };
+}
+
+// Sagas that must reach zero before repricing is safe: reserved credits would settle at the
+// changed rate. Counted through the store's own state filter.
+async function inFlightPayoutCount(eco: Economy): Promise<number> {
+  let count = 0;
+  for await (const saga of eco.read.payouts({
+    states: ['REQUESTED', 'RESERVED', 'SUBMITTED'],
+  })) {
+    void saga;
+    count++;
+  }
+  return count;
 }
 
 // One payout saga as a board card. The terminal captions (failure reason / USD paid) come from the
@@ -340,11 +348,11 @@ export interface ConsoleEngine {
   ledger(page?: Partial<PageReq>): Promise<Page<TxnView>>;
   payouts(page?: Partial<PageReq>): Promise<Page<PayoutView>>;
   payoutCounts(): Promise<PayoutCounts>;
-  prove(): Promise<ProveView>;
+  health(): Promise<ProveView>;
   // The thorough prover (src/integrity.ts): re-derives the whole hash chain and every balance
-  // from the raw lines — the audit that catches tampering the light read.prove() shape check
+  // from the raw lines — the audit that catches tampering the light read.health() shape check
   // cannot. Heavier by design; the page defers it behind the light report.
-  proveFull(): Promise<ProveView>;
+  prove(): Promise<ProveView>;
   // Integrity theater: corrupt a stored posting / plant an unexplained balance, so the visitor
   // can watch the full prover catch each one. Heal by reset().
   tamper(): Promise<{ txnId: string; account: string }>;
@@ -431,7 +439,6 @@ export async function buildEngine(): Promise<ConsoleEngine> {
 
   let economy: Economy;
   let workerRef: Worker;
-  let workerCtx: WorkerCtx;
   // The store the economy and worker share; the pipeline page reaches it directly (outbox/inbox
   // have no read surface to promote onto Economy.read).
   let store: Store;
@@ -473,15 +480,15 @@ export async function buildEngine(): Promise<ConsoleEngine> {
   }
 
   // Memoized chrome reads: the page frame asks for solvency() (every user's balances plus a
-  // prove()) and the light prove() on every navigation, and live mode every few seconds. Both are
+  // health()) and the light health() on every navigation, and live mode every few seconds. Both are
   // cached for a short TTL and cleared on every mutation, so a figure is never stale across a
   // change the user made.
   const READ_TTL_MS = 5_000;
   let solvencyCache: { at: number; value: SolvencyView } | null = null;
-  let proveCache: { at: number; value: ProveView } | null = null;
+  let healthCache: { at: number; value: ProveView } | null = null;
   function invalidateReadCaches(): void {
     solvencyCache = null;
-    proveCache = null;
+    healthCache = null;
   }
 
   const digest: Digest = systemDigest();
@@ -506,22 +513,10 @@ export async function buildEngine(): Promise<ConsoleEngine> {
   };
 
   // Dual-rate on purpose, not a 1:1 placeholder: buy is what a user pays per credit, par is the
-  // redemption/settlement rate, and payout settles at par. The buy-vs-par gap is the platform spread.
-  // Only `buy` is adjustable at runtime (setBuyRate): par and payout stay fixed because backing and
-  // settlement value credits at par live, and a mid-flight par/payout change could break solvency.
-  let ratesConfig = { ...DEFAULT_RATES };
-  let builtRates = configuredRates(ratesConfig);
-  function rebuildRates(): void {
-    builtRates = configuredRates(ratesConfig);
-  }
-  // A stable Rates port over a rebuildable configuredRates. Swapping in a fresh build on a rate
-  // change gives whole new frozen Rate objects — a new rateId embeds the value — so a synchronous
-  // reader never sees a torn rate and the recorded rateId stays a faithful function of the value.
-  const rates: Rates = {
-    payout: (from, to, at, options) => builtRates.payout(from, to, at, options),
-    par: (c) => builtRates.par(c),
-    buy: (c) => builtRates.buy(c),
-  };
+  // redemption/settlement rate, and payout settles at par. The buy-vs-par gap is the platform
+  // spread. A rate change rebuilds the bag over the same store (setRates), so construction
+  // re-asserts buy >= par and a new rateId embeds each value.
+  let ratesConfig: RatesConfig = { ...DEV_RATES };
   // Rates are locked by default: a change is a governed operation (unlockRates), not a live knob.
   let ratesUnlocked = false;
 
@@ -532,44 +527,47 @@ export async function buildEngine(): Promise<ConsoleEngine> {
 
   // Discards output so the demo's injected faults don't flood the dev terminal.
   const logger = jsonlLogger({ out: () => {}, err: () => {} });
-  // Discard metrics sink, hand-rolled — there is no Meter counterpart to jsonlLogger.
-  const meter = { count: () => {}, observe: () => {} };
+  const meter = silentMeter();
 
   // Build (or rebuild) the engine + worker over one env-selected store — two separate selections
   // would leave the worker blind to the economy's in-memory state.
-  let caps: Capabilities;
+  let ports: Ports;
   async function rebuild(): Promise<void> {
     idSeq = 0;
     clock.set(0);
     // A reset restores the default spread and re-locks the rate desk, like every other knob
     // returns to its seed value.
-    ratesConfig = { ...DEFAULT_RATES };
-    rebuildRates();
+    ratesConfig = { ...DEV_RATES };
     ratesUnlocked = false;
 
-    caps = await capabilitiesFromEnv(
-      demoEnv(maturityDays, maxAttempts),
-      { signer, processor, rates, pricing: flatFee() },
-      { clock, ids, digest, logger, meter },
-    );
-    applyCaps();
+    ports = await openPorts(demoEnv(maturityDays, maxAttempts), {
+      signer,
+      processor,
+      rates: configuredRates(ratesConfig),
+      pricing: flatFee(),
+      clock,
+      ids,
+      digest,
+      logger,
+      meter,
+    });
+    applyPorts();
     deliveredEvents = [];
     subIds = [];
   }
 
-  function applyCaps(): void {
-    economy = economyFromCapabilities(caps);
-    workerCtx = workerCtxFrom(caps);
-    workerRef = createWorker(caps.store, workerCtx);
-    store = caps.store;
+  function applyPorts(): void {
+    economy = createEconomy(ports);
+    workerRef = createWorker(ports, economy);
+    store = ports.store;
   }
 
   // The engine freezes its config, so a knob change rebuilds the economy and worker over the
   // same store. State lives in the store and the clock and id sequence continue, so nothing
   // visible resets — reset() minus the store.
   function reconfigure(patch: Partial<Config>): void {
-    caps = { ...caps, config: mergeConfig(caps.config, patch) };
-    applyCaps();
+    ports = { ...ports, config: mergeConfig(ports.config, patch) };
+    applyPorts();
   }
 
   // Summed in bigint minor units and rendered exactly; a wallet total can cross 2^53 minor,
@@ -583,7 +581,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
       purchased: creditsDisplay(p),
       earned: creditsDisplay(e),
       promotional: creditsDisplay(m),
-      total: creditsDisplay(toAmount('CREDIT', p.minor + e.minor + m.minor)),
+      total: creditsDisplay(add(add(p, e), m)),
     };
   }
 
@@ -840,17 +838,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
   async function runWorkerOnce(): Promise<{
     batch: Record<string, { ok: boolean; summary?: unknown }>;
   }> {
-    const run = await workerRef.runOnce({
-      now: clock.now(),
-      limit: 100,
-      dispatcher: undefined,
-      feed: {
-        pull: async () => {
-          throw new Error('no reconcile feed in the console');
-        },
-      },
-      windows: [],
-    });
+    const run = await workerRef.sweep({ now: clock.now(), limit: 100 });
     return {
       batch: run.batch as unknown as Record<
         string,
@@ -1131,21 +1119,17 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     },
 
     // Newest first, streamed from the engine's posting log: views are built only for the page
-    // window, the rest of the pass just counts toward `total`. Reading the log (not a side feed)
-    // is why a direct-to-DB write — e.g. the bench's — shows up here.
+    // window. Reading the log (not a side feed) is why a direct-to-DB write — e.g. the bench's —
+    // shows up here.
     ledger: async (req) => {
       const eco = economy;
       const { offset, limit } = clampPage(req);
+      const page = await paginate(eco.read.postings(), { offset, limit });
       const rows: TxnView[] = [];
-      let total = 0;
-      for await (const posting of eco.read.postings()) {
-        const index = total++;
-        if (index < offset || rows.length >= limit) {
-          continue;
-        }
+      for (const posting of page.rows) {
         rows.push(await viewFromPosting(eco, posting.txnId, posting));
       }
-      return { rows, total, offset, limit };
+      return { rows, total: page.total, offset, limit };
     },
 
     // Newest first, streamed from the saga list; views are built only for the page window. The
@@ -1154,16 +1138,13 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     payouts: async (req) => {
       const eco = economy;
       const { offset, limit } = clampPage(req);
-      const rows: PayoutView[] = [];
-      let total = 0;
-      for await (const saga of eco.read.payouts()) {
-        const index = total++;
-        if (index < offset || rows.length >= limit) {
-          continue;
-        }
-        rows.push(sagaView(saga));
-      }
-      return { rows, total, offset, limit };
+      const page = await paginate(eco.read.payouts(), { offset, limit });
+      return {
+        rows: page.rows.map(sagaView),
+        total: page.total,
+        offset,
+        limit,
+      };
     },
 
     // REQUESTED folds into RESERVED to match the board's columns (requestPayout opens directly in
@@ -1226,19 +1207,20 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     },
 
     // The light prover: a shape check, cheap enough for the chrome ticker on every navigation
-    // (proveFull is the one that recomputes hashes). Memoized on the same short TTL as solvency so
+    // (prove is the one that recomputes hashes). Memoized on the same short TTL as solvency so
     // a burst of navigations or live-mode ticks re-runs neither.
-    prove: async () => {
+    health: async () => {
       const now = clock.now();
-      if (proveCache && now - proveCache.at < READ_TTL_MS) {
-        return proveCache.value;
+      if (healthCache && now - healthCache.at < READ_TTL_MS) {
+        return healthCache.value;
       }
-      const value = toProveView(await economy.read.prove());
-      proveCache = { at: now, value };
+      const value = toProveView(await economy.read.health());
+      healthCache = { at: now, value };
       return value;
     },
 
-    proveFull: () => proveEconomy(store, { rates, digest }).then(toProveView),
+    prove: () =>
+      proveEconomy({ store, rates: ports.rates, digest }).then(toProveView),
 
     // Corrupt the newest posting's first leg in place, through the memory store's documented test
     // back door — an after-the-fact edit that leaves the recorded chain untouched, exactly what
@@ -1363,13 +1345,13 @@ export async function buildEngine(): Promise<ConsoleEngine> {
         earnedMinor += (await eco.read.balance(earned(userId))).minor;
         promoMinor += (await eco.read.balance(promo(userId))).minor;
       }
-      const r = await eco.read.prove();
+      const r = await eco.read.health();
       const trustCash = await eco.read.balance(SYSTEM.TRUST_CASH);
       // What trust cash must cover: only the custodial (purchased) credits, valued at par — the
       // same basis the engine's backing check uses. Earned and promo credits are not trust-backed.
       const backingUsd = convertFloor(
         toAmount('CREDIT', purchasedMinor),
-        rates.par('CREDIT'),
+        ports.rates.par('CREDIT'),
         'USD',
       );
       const value: SolvencyView = {
@@ -1504,6 +1486,20 @@ export async function buildEngine(): Promise<ConsoleEngine> {
           return { kind: 'checkpoint', field: 'signature', checkpoint: cp };
         }
       }
+      if (!query.includes('…') && !query.includes('...')) {
+        const hit = await findByHash(eco.read, query, {
+          scanMax: FIND_SCAN_MAX,
+        });
+        return hit
+          ? {
+              kind: 'link',
+              txnId: hit.link.txnId,
+              account: hit.account,
+              field: hit.field,
+            }
+          : null;
+      }
+      // The truncated `prefix…suffix` display form: findByHash is exact-only, so walk locally.
       let scanned = 0;
       for await (const account of eco.read.accounts()) {
         for await (const link of eco.read.lineage(account)) {
@@ -1513,7 +1509,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
           if (matches(link.hash)) {
             return { kind: 'link', txnId: link.txnId, account, field: 'hash' };
           }
-          if (link.prevHash !== GENESIS_HASH && matches(link.prevHash)) {
+          if (link.prevHash !== GENESIS_HEX && matches(link.prevHash)) {
             return {
               kind: 'link',
               txnId: link.txnId,
@@ -1542,15 +1538,23 @@ export async function buildEngine(): Promise<ConsoleEngine> {
             audience: event.audience,
           });
         };
-        const summary = await relayOutbox(store, workerCtx, {
+        const run = await workerRef.sweep({
+          only: ['relay'],
           dispatcher,
           limit: 100,
         });
+        const relay = run.batch.relay;
+        if (!relay.ok) {
+          throw fault(
+            ERROR_CODES.STORE_FAILURE,
+            `Relay failed: ${relay.code}.`,
+          );
+        }
         deliveredEvents = [...captured, ...deliveredEvents].slice(0, 50);
         return {
-          relayed: summary.relayed.length,
-          failed: summary.failed.length,
-          deadLettered: summary.deadLettered.length,
+          relayed: relay.summary.relayed.length,
+          failed: relay.summary.failed.length,
+          deadLettered: relay.summary.deadLettered.length,
         };
       }),
 
@@ -1568,13 +1572,16 @@ export async function buildEngine(): Promise<ConsoleEngine> {
           source: 'card',
         };
         const ack = await handleWebhook(store, { ids, clock }, event);
-        const drained = await drainInbox(store, workerCtx, {
-          economy,
-          now: clock.now(),
+        const run = await workerRef.sweep({
+          only: ['drainInbox'],
           limit: 100,
         });
+        const drained = run.batch.drainInbox;
         invalidateReadCaches();
-        return { status: ack.status, applied: drained.applied.length > 0 };
+        return {
+          status: ack.status,
+          applied: drained.ok && drained.summary.applied.length > 0,
+        };
       }),
 
     // Serialized with UI mutations (the memory store is a single writer); the solvency cache is
@@ -1584,7 +1591,11 @@ export async function buildEngine(): Promise<ConsoleEngine> {
         // The app mounts at /console/, but the engine's server routes from the path root.
         const url = new URL(request.url);
         url.pathname = url.pathname.replace(/^\/console/, '');
-        const response = await createServer(economy)(new Request(url, request));
+        const response = await createServer({
+          economy,
+          ports,
+          authenticate: false,
+        })(new Request(url, request));
         invalidateReadCaches();
         return response;
       }),
@@ -1594,7 +1605,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     status: async () => {
       const s = economy.read.status();
       return {
-        paused: s.paused,
+        maintenanceActive: s.maintenanceActive,
         pauseStart: s.pauseStart,
         pauseEnd: s.pauseEnd,
         resumesAt: s.resumesAt,
@@ -1614,11 +1625,10 @@ export async function buildEngine(): Promise<ConsoleEngine> {
       faultMode,
       maturityHorizonDays: maturityDays,
       maxPayoutAttempts: maxAttempts,
-      velocityLimitCredits: Number(workerCtx.config.velocityLimitMinor) / 100,
-      maintenancePaused: economyPaused(clock.now(), workerCtx.config),
-      payoutMinimumCredits:
-        Number(workerCtx.config.payoutMinimumEarnedMinor) / 100,
-      payoutIntervalDays: workerCtx.config.payoutMinIntervalMs / DAY_MS,
+      velocityLimitCredits: Number(ports.config.velocityLimitMinor) / 100,
+      maintenancePaused: economy.read.status().maintenanceActive,
+      payoutMinimumCredits: Number(ports.config.payoutMinimumEarnedMinor) / 100,
+      payoutIntervalDays: ports.config.payoutMinIntervalMs / DAY_MS,
       now: clock.now(),
     }),
 
@@ -1655,18 +1665,9 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     // settlement prices reserved credits at the live rate, so a payout mid-flight would settle wrong.
     rateBoard: async () => {
       const eco = economy;
-      const buyPerThousand = rateToPerThousand(rates.buy('CREDIT'));
-      const parPerThousand = rateToPerThousand(rates.par('CREDIT'));
-      let inFlightPayouts = 0;
-      for await (const saga of eco.read.payouts()) {
-        if (
-          saga.state === 'REQUESTED' ||
-          saga.state === 'RESERVED' ||
-          saga.state === 'SUBMITTED'
-        ) {
-          inFlightPayouts++;
-        }
-      }
+      const buyPerThousand = rateToPerThousand(ports.rates.buy('CREDIT'));
+      const parPerThousand = rateToPerThousand(ports.rates.par('CREDIT'));
+      const inFlightPayouts = await inFlightPayoutCount(eco);
       return {
         buyPerThousand,
         parPerThousand,
@@ -1674,7 +1675,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
         spreadPerThousand: buyPerThousand - parPerThousand,
         locked: !ratesUnlocked,
         inFlightPayouts,
-        paused: economyPaused(clock.now(), workerCtx.config),
+        maintenanceActive: economy.read.status().maintenanceActive,
         parFloor: PAR_FLOOR,
         parCeil: PAR_CEIL,
         maxSpreadMultiple: MAX_SPREAD_MULTIPLE,
@@ -1686,16 +1687,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     unlockRates: () =>
       mutate(async () => {
         const eco = economy;
-        let inFlight = 0;
-        for await (const saga of eco.read.payouts()) {
-          if (
-            saga.state === 'REQUESTED' ||
-            saga.state === 'RESERVED' ||
-            saga.state === 'SUBMITTED'
-          ) {
-            inFlight++;
-          }
-        }
+        const inFlight = await inFlightPayoutCount(eco);
         if (inFlight > 0) {
           return {
             ok: false,
@@ -1761,7 +1753,8 @@ export async function buildEngine(): Promise<ConsoleEngine> {
         payoutRate: par.rate,
         payoutScale: par.scale,
       };
-      rebuildRates();
+      ports = { ...ports, rates: configuredRates(ratesConfig) };
+      applyPorts();
       invalidateReadCaches();
       return {
         ok: true,

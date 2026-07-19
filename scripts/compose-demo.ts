@@ -10,7 +10,7 @@
  */
 
 /**
- * Runnable demo of `compose` (src/index.ts), which wires up the economy from env vars. Reads the
+ * Runnable demo of `openPorts` (src/index.ts), which wires up the economy from env vars. Reads the
  * same env a real deployment would, prints which backend each var picked (db, optional cache, event
  * dispatcher), runs a small money flow, then reads balances back from the selected backend. Switch
  * backends via env:
@@ -30,7 +30,7 @@
 
 import { readFile } from 'node:fs/promises';
 
-import { compose, describeSelection } from '#src/index.ts';
+import { createEconomy, describeEnv, openPorts } from '#src/index.ts';
 import { loadPg } from '#src/engines/pg-driver.ts';
 import { isMysqlUrl, isPostgresUrl, readFlag, readUrl } from '#src/env.ts';
 import { topUp, spend, requestPayout, credit } from '#test/support/builders.ts';
@@ -46,28 +46,30 @@ import { maskUrl } from '#scripts/support/harness.ts';
 import type { EnvMap } from '#src/env.ts';
 import type { Amount } from '#src/money.ts';
 
-// Builds human-readable labels for the backends the env picks, from describeSelection — the very
-// reading compose() wires from — so a printed label can never diverge from the actual selection.
+// Builds human-readable labels for the backends the env picks, from describeEnv — the very
+// reading openPorts() wires from — so a printed label can never diverge from the actual selection.
 function selection(env: EnvMap): {
   store: string;
   cache: string;
   dispatcher: string;
 } {
-  const picked = describeSelection(env);
+  const picked = describeEnv(env);
   const store =
     picked.store.kind === 'memory'
       ? 'memory (no DATABASE_URL)'
       : picked.store.kind === 'unsupported'
-        ? `?? unsupported scheme: ${picked.store.url.split(':')[0]}`
-        : `${picked.store.kind} (${maskUrl(picked.store.url)})`;
+        ? `?? unsupported scheme: ${(picked.store.url ?? '').split(':')[0]}`
+        : `${picked.store.kind} (${maskUrl(picked.store.url ?? '')})`;
   const cache =
     picked.cache.kind === 'none'
       ? 'none (reads hit the store)'
-      : `redis (${maskUrl(picked.cache.url)})`;
+      : `redis (${maskUrl(picked.cache.url ?? '')})`;
   const dispatcher =
-    picked.dispatcher.kind === 'in-process'
-      ? 'in-process (default)'
-      : `${picked.dispatcher.kind} (${picked.dispatcher.url})`;
+    picked.dispatcher.kind === 'missing'
+      ? 'none (no dispatcher configured)'
+      : picked.dispatcher.url === null
+        ? picked.dispatcher.kind
+        : `${picked.dispatcher.kind} (${picked.dispatcher.url})`;
   return { store, cache, dispatcher };
 }
 
@@ -128,19 +130,21 @@ const env = {
 };
 
 const sel = selection(env);
-console.warn('=== compose() adapter selection ===');
+console.warn('=== openPorts() adapter selection ===');
 console.warn(`Store:      ${sel.store}`);
 console.warn(`Cache:      ${sel.cache}`);
 console.warn(`Dispatcher: ${sel.dispatcher}`);
 
 await ensureSchema(env);
 
-const economy = await compose(env, {
-  pricing: defaultPricing(),
-  signer: seededSigner(1),
-  processor: fakeProcessor(),
-  rates: fixedRates(),
-});
+const economy = createEconomy(
+  await openPorts(env, {
+    pricing: defaultPricing(),
+    signer: seededSigner(1),
+    processor: fakeProcessor(),
+    rates: fixedRates(),
+  }),
+);
 
 // Fresh ids per run so the printed balances are clean regardless of accumulated DB state.
 const tag = Math.random().toString(36).slice(2, 8);
@@ -180,7 +184,7 @@ const r3 = await economy.submit(
 );
 console.warn(
   `requestPayout 5.00 <- sellerA:  ${r3.status}` +
-    (r3.status === 'rejected' ? ` (${r3.reason})` : ''),
+    (r3.status === 'rejected' ? ` (${r3.detail.reason})` : ''),
 );
 
 console.warn('\n--- balances (read back from the selected store) ---');
@@ -198,14 +202,14 @@ console.warn(
 );
 
 // 4. Regardless of the above, the ledger still holds on every invariant prove() checks.
-const report = await economy.read.prove();
+const report = await economy.read.health();
 console.warn(
   `\nprove(): conserved=${report.conserved} backed=${report.backed} ` +
     `noOverdraft=${report.noOverdraft} chainIntact=${report.chainIntact} ` +
     `consistent=${report.consistent}`,
 );
 
-// compose() holds the postgres/mysql connection pools; this script has no handle to close them, and
-// open pools keep Node.js running forever. Run-once demo, so exit explicitly once the flow is done.
+// openPorts() holds the postgres/mysql connection pools; this script has no handle to close them,
+// and open pools keep Node.js running forever. Run-once demo, so exit explicitly once the flow is done.
 // eslint-disable-next-line n/no-process-exit
 process.exit(0);

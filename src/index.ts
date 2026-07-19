@@ -9,37 +9,52 @@
  * @license MIT
  */
 
-import { economyFromCapabilities } from '#src/economy.ts';
-import { loadConfig, mergeConfig } from '#src/config.ts';
+import { createEconomy } from '#src/economy.ts';
+import {
+  defaultConfig,
+  inspectConfig,
+  loadSecrets,
+  missingPolicyAnchors,
+  missingSecretFields,
+} from '#src/config.ts';
 import {
   isMysqlUrl,
   isPostgresUrl,
   isProduction,
-  missingSecrets,
+  readFlag,
+  readIntOrNull,
   readUrl,
   serviceUrls,
 } from '#src/env.ts';
-
-import type { EnvMap } from '#src/env.ts';
-import type { Config } from '#src/config.ts';
 import { assertMoneyConformant, assertSchemaCurrent } from '#src/schema.ts';
 import { installMoneyRetrying } from '#src/engines/sql-shared.ts';
 import { installMysql, proveMysql } from '#src/db.vendored.ts';
 import { vectors as moneyVectors } from '#src/money.vendored.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
-import { externalsFromEnv, missingExternals } from '#src/from-env.ts';
+import {
+  DEV_RATES,
+  missingExternals,
+  requireCallable,
+  resolveExternals,
+  signerFromSecrets,
+} from '#src/from-env.ts';
 import { createWorker } from '#src/worker/index.ts';
-import { jsonlLogger, noopMeter } from '#src/runtime.ts';
+import { jsonlLogger, silentMeter } from '#src/runtime.ts';
 import { sha256Digest } from '#src/digest.ts';
 import { fault, ERROR_CODES } from '#src/errors.ts';
-import { requireCallable } from '#src/from-env.ts';
+import { configuredRates } from '#src/adapters/rates.ts';
+import { flatFee } from '#src/pricing.ts';
+import { memoryProcessor } from '#src/adapters/processor.ts';
 
+import type { EnvMap } from '#src/env.ts';
+import type { Config, Secrets } from '#src/config.ts';
+import type { RatesConfig } from '#src/from-env.ts';
 import type { Economy } from '#src/economy.ts';
-import type { FeePolicy, WorkerCtx } from '#src/contract.ts';
+import type { FeePolicy } from '#src/contract.ts';
 import type { Worker } from '#src/worker/index.ts';
 import type {
+  Anchor,
   Cache,
-  Capabilities,
   Clock,
   Digest,
   Dispatcher,
@@ -47,6 +62,7 @@ import type {
   Logger,
   Meter,
   PayeeDirectory,
+  Ports,
   Processor,
   Rates,
   Scheduler,
@@ -56,19 +72,22 @@ import type {
 
 // --- Public surface (re-exports only) ---------------------------------------------
 
-// The low-level assembler: an Economy from a fully-built Capabilities bundle. createEconomy (below)
-// is the one a host reaches for; this is the escape hatch for a host that already holds a Capabilities
-// (e.g. to share one store between an economy and a worker).
-export { economyFromCapabilities } from '#src/economy.ts';
-// Resolve the four external ports from env (the same rules createEconomy applies): the piece a host
-// building a Capabilities bundle by hand pairs with capabilitiesFromEnv.
-export { externalsFromEnv } from '#src/from-env.ts';
-export type { Externals } from '#src/from-env.ts';
-export { memoryStore } from '#src/adapters/memory.ts';
-export { memoryCache } from '#src/adapters/memory-cache.ts';
-export { memoryRateLimiter } from '#src/adapters/memory-rate-limit.ts';
-
-export { createWorker } from '#src/worker/index.ts';
+// Construction: the three altitudes are boot, openPorts + create*, and memoryPorts or a
+// hand-built structural Ports. createEconomy is sync over a finished bag; openPorts is the sole
+// env-to-bag path, sharing every decision with preflight and describeEnv (defined below).
+export { createEconomy } from '#src/economy.ts';
+export { createWorker, DEFAULT_SWEEP_LIMIT } from '#src/worker/index.ts';
+export type {
+  Worker,
+  SweepRequest,
+  WorkerDefaults,
+} from '#src/worker/index.ts';
+export { createServer } from '#src/server.ts';
+export type { FetchHandler, ServerOptions, ServerPorts } from '#src/server.ts';
+export { systemRuntime } from '#src/runtime.ts';
+export type { Ports } from '#src/ports.ts';
+export { DEV_RATES } from '#src/from-env.ts';
+export type { RatesConfig } from '#src/from-env.ts';
 
 export {
   spendable,
@@ -86,11 +105,12 @@ export {
 export {
   toAmount,
   credits,
+  usd,
   decodeAmount,
   encodeAmount,
   decodeAmountWire,
   add,
-  neg,
+  negate,
   zero,
   compare,
   isZero,
@@ -101,27 +121,6 @@ export {
   SCALE,
 } from '#src/money.ts';
 export { credit, debit } from '#src/ledger.ts';
-
-// The store implementer's toolkit; also its own entry point, `@pwngh/economy-lab/store-kit`.
-export {
-  chainHash,
-  balanceDelta,
-  GENESIS,
-  GENESIS_HEX,
-  baseOf,
-  shardRef,
-  shardsOf,
-  walletKindOf,
-  byCodeUnit,
-  fromHex,
-  toHex,
-  metaString,
-  metaNumber,
-  encodeAmounts,
-  decodeAmounts,
-  VELOCITY_CURRENCY,
-} from '#src/store-kit.ts';
-export type { AccountKind } from '#src/store-kit.ts';
 export type { Leg } from '#src/ports.ts';
 
 // Operation constructors: one typed builder per kind, so a caller writes topUp({ ... }) instead of
@@ -141,69 +140,64 @@ export {
   reverse,
   reversePayout,
   settlePayout,
+  idempotencyKey,
 } from '#src/operation.ts';
 
 // Actor constructors: build the `actor` every operation carries, e.g. userActor('usr_1').
 export { userActor, systemActor, operatorActor } from '#src/actor.ts';
 
-export { defaultConfig, loadConfig } from '#src/config.ts';
-
-// Opt-in, host-level extensions; the core submit pipeline never touches either.
+// Config is policy only and safe to log; Secrets is the credential bag. The key registries are
+// the enumerable env surface: policy, secrets, and the production decline flags.
 export {
-  createReservations,
-  instanceSession,
-  recoverSession,
-} from '#src/netting.ts';
-export type {
-  MovementOutcome,
-  MovementRequest,
-  Reservations,
-  SessionOptions,
-  SettleReport,
-} from '#src/netting.ts';
-export { cachedEntitlements } from '#src/adapters/entitlement-bitset.ts';
-export type { BitsetOptions } from '#src/adapters/entitlement-bitset.ts';
+  defaultConfig,
+  loadConfig,
+  mergeConfig,
+  inspectConfig,
+  maintenanceWindow,
+  CONFIG_KEYS,
+  SECRET_KEYS,
+  DECLINE_KEYS,
+} from '#src/config.ts';
+export type { Config, Secrets } from '#src/config.ts';
 
 export {
   EconomyError,
   ERROR_CODES,
   normalizeError,
   statusForError,
+  REJECTION_CODES,
+  REJECTION_SPEC,
+  isSuccess,
+  isRejection,
+  requireSuccess,
 } from '#src/errors.ts';
 export type { ErrorCode, RejectionCode } from '#src/errors.ts';
 
 export type { Economy } from '#src/economy.ts';
-// The worker and the input/result types of its one public method, Worker.runOnce.
-export type {
-  Worker,
-  SweepName,
-  SweepInput,
-  SweepBatch,
-  SweepRun,
-  SweepResult,
-} from '#src/worker/index.ts';
-export type { WorkerCtx } from '#src/contract.ts';
-export type { Config } from '#src/config.ts';
-// The env-map shape every composition entry point takes; parsing rules live in src/env.ts.
+// The env-map shape every construction entry point takes; parsing rules live in src/env.ts.
 export type { EnvMap } from '#src/env.ts';
 export type {
   Operation,
   Outcome,
+  Success,
+  Rejection,
   RejectionDetail,
   Transaction,
   Principal,
   Recipient,
-  EntitlementAttrs,
+  EntitlementAttributes,
   FeePolicy,
   ProveReport,
+  HealthReport,
+  EconomyStatus,
 } from '#src/contract.ts';
 export type { Amount, Currency } from '#src/money.ts';
 export type { AccountRef } from '#src/accounts.ts';
+export type { BitsetOptions } from '#src/adapters/entitlement-bitset.ts';
 // Read-side return types: the checkpoint read.checkpoint hands back, the chain link read.lineage
 // streams, and the CREDIT-to-USD rate convertFloor/convertCeil take.
 export type {
-  Capabilities,
-  Options,
+  CallOptions,
   Range,
   Statement,
   Checkpoint,
@@ -211,55 +205,13 @@ export type {
   Rate,
 } from '#src/ports.ts';
 
-// --- Advanced: building blocks a host wires by hand -------------------------------
-//
-// The bundled entry points above cover the common path. Below is what a host that runs the economy
-// itself reaches for: the pieces to build past createEconomy, and the types to name every port and
-// record the exported contract already hands back. The full port contract is at the '/ports'
-// subpath and the built-in adapters at '/adapters'; these re-export the common ones.
+// The thorough prover for CI and audits; read.health() is the light in-process snapshot.
+export { allInvariantsHold, proveEconomy, findByHash } from '#src/integrity.ts';
+export type { ProvePorts } from '#src/integrity.ts';
+export { paginate } from '#src/paginate.ts';
 
-// Run the economy directly: the thorough prover, the HTTP service, webhook intake, and the two
-// worker steps a background process drives.
-export { proveEconomy } from '#src/integrity.ts';
-export { createServer } from '#src/server.ts';
-export {
-  decodeWebhookEvent,
-  handlePurchaseWebhook,
-  handleWebhook,
-  toOperation,
-} from '#src/webhooks.ts';
-export type {
-  DisputeEvent,
-  PayoutFailedEvent,
-  PayoutSettledEvent,
-  PurchaseEvent,
-  WebhookAck,
-  WebhookEvent,
-} from '#src/webhooks.ts';
-export { drainInbox } from '#src/worker/inbox.ts';
-export { relayOutbox } from '#src/worker/relay.ts';
-
-// Runtime capability constructors a host swaps in: a structured logger, the shared hasher, the
-// Ed25519 signer, and the public key to publish for an external auditor.
-export {
-  jsonlLogger,
-  systemDigest,
-  systemSigner,
-  signingPublicKeyHex,
-} from '#src/runtime.ts';
-// The silent defaults a host plugs into RuntimeDefaults to discard log output or metrics.
-export { noopLogger, noopMeter } from '#src/runtime.ts';
-
-// A built-in constructor for every required external port, so ExternalPorts is satisfiable from this
-// entry alone: CREDIT-to-USD rates, the fee split, and an in-memory payout processor (the signer is
-// systemSigner above). httpProcessor, the real payout provider, is at the '/adapters' subpath.
-export { configuredRates } from '#src/adapters/rates.ts';
-export { flatFee } from '#src/pricing.ts';
-export { memoryProcessor } from '#src/adapters/processor.ts';
-
-// Port types: the members of ExternalPorts, RuntimeDefaults, Capabilities, and ComposedWorker, so a
-// host can name every port it supplies or receives. The remaining sub-store contracts are at the
-// '/ports' subpath.
+// Port types, so a host can name every port it supplies or receives. The remaining sub-store
+// contracts are at the '/ports' subpath and the built-in adapters at '/adapters'.
 export type {
   Signer,
   Processor,
@@ -279,11 +231,10 @@ export type {
 } from '#src/ports.ts';
 
 // Domain records the read side hands back: a payout saga, a ledger posting, an outbound event, and
-// the economy's health-and-pause status.
+// the economy's maintenance status.
 export type { Saga, Posting, EconomyEvent } from '#src/ports.ts';
-export type { EconomyStatus } from '#src/contract.ts';
 
-// --- Composition from env ---------------------------------------------------------
+// --- Construction from env ---------------------------------------------------------
 //
 // src/engines/ are the systems of record that enforce ledger invariants natively (Postgres, MySQL),
 // and src/adapters/ are everything pluggable that does not. See
@@ -291,52 +242,96 @@ export type { EconomyStatus } from '#src/contract.ts';
 // for how every adapter meets one contract and the SQL engines also enforce it in the database.
 
 /**
- * External services with no built-in stand-in: `pricing` splits a sale's money (platform fee vs.
- * seller share), `processor` is the payout provider, `signer` holds the signing key, and `rates`
- * supplies CREDIT-to-USD rates.
+ * Overrides for {@link openPorts} — every field optional. A port field set to `false` is an
+ * explicit decline, which production accepts where a bare omission is an error (see the absence
+ * policy on {@link preflight}). `rates` takes a live source or the exact integer knobs.
  */
-export type ExternalPorts = {
-  signer: Signer;
-  processor: Processor;
-  rates: Rates;
-  pricing: FeePolicy;
+export type PortsInit = {
+  readonly store?: Store;
+  readonly clock?: Clock;
+  readonly ids?: Ids;
+  readonly digest?: Digest;
+  readonly signer?: Signer;
+  readonly processor?: Processor;
+  readonly rates?: Rates | RatesConfig;
+  readonly pricing?: FeePolicy;
+  readonly logger?: Logger;
+  readonly meter?: Meter;
+  readonly config?: Partial<Config>;
+  readonly secrets?: Partial<Secrets>;
+  readonly cache?: Cache | false;
+  readonly dispatcher?: Dispatcher | false;
+  readonly payees?: PayeeDirectory | false;
+  readonly anchor?: Anchor | false;
+  readonly scheduler?: Scheduler | false;
 };
 
-/**
- * Runtime services {@link capabilitiesFromEnv} fills in; pass any to override, e.g. a fixed clock
- * for reproducible tests.
- */
-export type RuntimeDefaults = {
-  clock?: Clock;
-  ids?: Ids;
-  digest?: Digest;
-  logger?: Logger;
-  meter?: Meter;
+export type BootInit = PortsInit & {
+  /** Default true; false boots the API-process shape with `worker: null`. */
+  readonly worker?: boolean;
 };
 
-/**
- * Which concrete adapter each env knob picks, before any driver loads. This is the ONE reading of
- * the selection: the selectors below consume it to do the wiring, and hosts print it (the startup
- * `config.resolved` line, the compose demo's labels), so a displayed selection can never diverge
- * from the wired one. `url` is the raw connection string — mask it before printing.
- */
-export interface Selection {
+export type PreflightIssue = {
+  readonly code: string;
+  readonly path: string;
+  readonly message: string;
+  readonly severity: 'error' | 'warning';
+};
+
+/** The runtime quartet a production host wires from one signing key via {@link systemRuntime}. */
+export type Runtime = Pick<Ports, 'clock' | 'ids' | 'digest' | 'signer'>;
+
+export type EnvDescription = {
+  readonly production: boolean;
+  readonly store: {
+    readonly kind: 'memory' | 'postgres' | 'mysql' | 'unsupported';
+    readonly url: string | null;
+  };
+  readonly cache: {
+    readonly kind: 'none' | 'redis';
+    readonly url: string | null;
+  };
+  readonly dispatcher: {
+    readonly kind: 'in-process' | 'http' | 'sqs' | 'declined' | 'missing';
+    readonly url: string | null;
+  };
+  readonly processor: {
+    readonly kind: 'memory' | 'http';
+    readonly url: string | null;
+  };
+  readonly payees: 'set' | 'declined' | 'missing';
+  readonly anchor: 'set' | 'declined' | 'missing';
+  readonly secrets: {
+    readonly webhook: 'missing' | 'set';
+    readonly signing: 'missing' | 'set';
+    readonly signingPriors: number;
+  };
+  readonly velocityWindowMs: number | null;
+};
+
+export type Boot = {
+  readonly ports: Ports;
+  readonly economy: Economy;
+  readonly worker: Worker | null;
+};
+
+// Which concrete adapter each env knob picks, before any driver loads. This is the ONE reading of
+// the selection: the selectors below consume it to do the wiring, and describeEnv reports it, so
+// a displayed selection can never diverge from the wired one.
+type EnvSelection = {
   store:
     | { kind: 'memory'; url: null }
     | { kind: 'postgres' | 'mysql' | 'unsupported'; url: string };
   cache: { kind: 'none'; url: null } | { kind: 'redis'; url: string };
   dispatcher:
-    | { kind: 'in-process'; url: null }
+    | { kind: 'missing'; url: null }
     | { kind: 'sqs' | 'http'; url: string };
-}
+};
 
-/**
- * Reads the selection from env: `DATABASE_URL` picks the store by scheme (unset = in-memory,
- * `postgres://`/`mysql://` = that engine, anything else = 'unsupported', which selectStore
- * rejects); `REDIS_URL` adds the cache; `SQS_QUEUE_URL` beats `DISPATCHER_URL` for delivery,
- * neither = in-process. All through the shared resolver rules (src/env.ts).
- */
-export function describeSelection(env: EnvMap): Selection {
+// DATABASE_URL picks the store by scheme (unset = in-memory, postgres://|mysql:// = that engine,
+// anything else = 'unsupported', which selectStore rejects); REDIS_URL adds the cache;
+// SQS_QUEUE_URL beats DISPATCHER_URL for delivery. All through the shared resolver rules (env.ts).
+function envSelection(env: EnvMap): EnvSelection {
   const db = readUrl(env.DATABASE_URL);
   const services = serviceUrls(env);
   return {
@@ -360,228 +355,444 @@ export function describeSelection(env: EnvMap): Selection {
         ? { kind: 'sqs', url: services.sqs }
         : services.dispatcher !== null
           ? { kind: 'http', url: services.dispatcher }
-          : { kind: 'in-process', url: null },
+          : { kind: 'missing', url: null },
+  };
+}
+
+// The three optional ports production refuses to lose silently, with each one's decline flag.
+const ABSENCE_SLOTS = [
+  { slot: 'dispatcher', flag: 'DISPATCHER_DECLINED' },
+  { slot: 'payees', flag: 'PAYEES_DECLINED' },
+  { slot: 'anchor', flag: 'ANCHOR_DECLINED' },
+] as const;
+
+type AbsenceSlot = (typeof ABSENCE_SLOTS)[number]['slot'];
+
+type SlotState = 'set' | 'declined' | 'missing';
+
+// One reading of set/declined/missing per slot, shared by preflight, describeEnv, and openPorts.
+function slotStates(
+  env: EnvMap,
+  init: PortsInit,
+): Record<AbsenceSlot, SlotState> {
+  const state = (
+    value: object | ((...args: never[]) => unknown) | false | undefined,
+    flag: string,
+    envSet: boolean,
+  ): SlotState =>
+    value === false || readFlag(env[flag])
+      ? 'declined'
+      : value !== undefined || envSet
+        ? 'set'
+        : 'missing';
+  const selection = envSelection(env);
+  return {
+    dispatcher: state(
+      init.dispatcher,
+      'DISPATCHER_DECLINED',
+      selection.dispatcher.kind !== 'missing',
+    ),
+    payees: state(init.payees, 'PAYEES_DECLINED', false),
+    anchor: state(init.anchor, 'ANCHOR_DECLINED', false),
   };
 }
 
 /**
- * Validates `env` without constructing anything: returns every problem a deployment would hit at
- * startup (an unsupported `DATABASE_URL`, missing production secrets or policy anchors, missing or
- * malformed external knobs), or an empty array when the environment is complete. Run it at deploy time so a bad config
- * fails on a health check, not on the first request. Outside production only the store scheme is
- * checked, since the dev defaults fill everything else.
+ * Validates `env` plus `init` without constructing anything: every issue here with severity
+ * 'error' is exactly what {@link openPorts} would throw on. Run it at deploy time so a bad
+ * config fails on a health check, not on the first request. Outside production only the store
+ * scheme and the shape of init-supplied ports are checked, since the dev defaults fill
+ * everything else.
  */
-export function checkEnv(env: EnvMap): string[] {
-  const problems = new Set<string>();
-  if (describeSelection(env).store.kind === 'unsupported') {
-    problems.add(
-      'DATABASE_URL: not a postgres:// or mysql:// connection string',
+export function preflight(
+  env: EnvMap = {},
+  init: PortsInit = {},
+): readonly PreflightIssue[] {
+  if (!isProduction(env)) {
+    return [...storeIssues(env, init), ...declinablePortIssues(init)];
+  }
+  return [
+    ...storeIssues(env, init),
+    ...secretIssues(env, init),
+    ...policyAnchorIssues(env, init),
+    ...externalIssues(env, init),
+    ...absenceIssues(env, init),
+    ...declinablePortIssues(init),
+    ...declineConflictIssues(env, init),
+  ];
+}
+
+function issue(
+  code: string,
+  path: string,
+  message: string,
+  severity: PreflightIssue['severity'] = 'error',
+): PreflightIssue {
+  return { code, path, message, severity };
+}
+
+function storeIssues(env: EnvMap, init: PortsInit): PreflightIssue[] {
+  if (init.store !== undefined) {
+    return [];
+  }
+  if (envSelection(env).store.kind !== 'unsupported') {
+    return [];
+  }
+  return [
+    issue(
+      'store.unsupported-url',
+      'DATABASE_URL',
+      'DATABASE_URL is not a postgres:// or mysql:// connection string.',
+    ),
+  ];
+}
+
+function secretIssues(env: EnvMap, init: PortsInit): PreflightIssue[] {
+  const secrets: Secrets = {
+    webhookSecret: init.secrets?.webhookSecret ?? env.WEBHOOK_SECRET ?? '',
+    signingSecret: init.secrets?.signingSecret ?? env.SIGNING_SECRET ?? '',
+  };
+  return missingSecretFields(secrets).map((key) =>
+    issue(
+      'secret.missing',
+      key,
+      `${key} is required in production but missing.`,
+    ),
+  );
+}
+
+function policyAnchorIssues(env: EnvMap, init: PortsInit): PreflightIssue[] {
+  return missingPolicyAnchors(env, init.config ?? {}).map((key) =>
+    issue(
+      'config.missing',
+      key,
+      `${key} is required in production but missing.`,
+    ),
+  );
+}
+
+function externalIssues(env: EnvMap, init: PortsInit): PreflightIssue[] {
+  return missingExternals(env, init).map((key) =>
+    issue(
+      'external.missing',
+      key,
+      `${key} is required in production but missing or malformed.`,
+    ),
+  );
+}
+
+function absenceIssues(env: EnvMap, init: PortsInit): PreflightIssue[] {
+  const states = slotStates(env, init);
+  return ABSENCE_SLOTS.filter(({ slot }) => states[slot] === 'missing').map(
+    ({ slot, flag }) =>
+      issue(
+        'port.absent',
+        slot,
+        `Production requires ${slot} to be set or explicitly declined (init ${slot}: false, or env ${flag}=1).`,
+      ),
+  );
+}
+
+// The wiring-time shape probes for the declinable ports, so a malformed init fails preflight
+// exactly as it fails openPorts.
+function declinablePortIssues(init: PortsInit): PreflightIssue[] {
+  const issues: PreflightIssue[] = [];
+  const malformed = (slot: AbsenceSlot, probe: () => void): void => {
+    try {
+      probe();
+    } catch (error) {
+      issues.push(
+        issue(
+          'port.malformed',
+          slot,
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+    }
+  };
+  if (
+    init.dispatcher !== undefined &&
+    init.dispatcher !== false &&
+    typeof init.dispatcher !== 'function'
+  ) {
+    issues.push(
+      issue(
+        'port.malformed',
+        'dispatcher',
+        'dispatcher is not a function; pass the dispatch function itself, not an object carrying one.',
+      ),
     );
   }
-  if (isProduction(env)) {
-    for (const secret of missingSecrets(env)) {
-      problems.add(`${secret}: required in production but missing`);
-    }
-    for (const key of ['MATURITY_HORIZON_CARD_MS', 'VELOCITY_LIMIT_MINOR']) {
-      if ((env[key] ?? '') === '') {
-        problems.add(`${key}: required in production but missing`);
-      }
-    }
+  if (init.payees !== undefined && init.payees !== false) {
+    malformed('payees', () =>
+      requireCallable('payees', init.payees, ['status']),
+    );
   }
-  for (const key of missingExternals(env)) {
-    // SIGNING_SECRET is already reported through missingSecrets above.
-    if (key !== 'SIGNING_SECRET') {
-      problems.add(`${key}: required in production but missing or malformed`);
-    }
+  if (init.anchor !== undefined && init.anchor !== false) {
+    malformed('anchor', () =>
+      requireCallable('anchor', init.anchor, ['publish']),
+    );
   }
-  return [...problems];
+  return issues;
 }
 
-/**
- * Assembles the full {@link Capabilities} bundle from `env`: the Store (chosen by `DATABASE_URL`),
- * an optional cache and dispatcher, the external `ports`, and default runtime services unless
- * overridden. Drivers import only when selected; config is read once and fails fast with one
- * combined `CONFIG.INVALID`.
- *
- * {@link compose} and {@link composeWorker} both build from it. A single-process host that wants
- * both over one store calls it once.
- */
-export async function capabilitiesFromEnv(
-  env: EnvMap,
-  ports: ExternalPorts,
-  defaults: RuntimeDefaults = {},
-): Promise<Capabilities> {
-  const config = loadConfig(env);
-  const runtime = runtimeFrom(defaults);
-  // Ports may arrive directly rather than through externalsFromEnv, so re-check them here.
-  requireCallable('signer', ports.signer, ['sign', 'verify']);
-  requireCallable('rates', ports.rates, ['payout']);
-  requireCallable('processor', ports.processor, ['submitPayout']);
-  requireCallable('ports', ports, ['pricing']);
-  const selection = describeSelection(env);
-  const [store, cache, dispatcher] = await Promise.all([
-    selectStore(selection.store, {
-      digest: runtime.digest,
-      clock: runtime.clock,
-      velocityWindowMs: config.velocityWindowMs,
-      poolMax: config.dbPoolMax,
-      meter: runtime.meter,
-      logger: runtime.logger,
-    }),
-    selectCache(selection.cache),
-    selectDispatcher(selection.dispatcher),
-  ]);
-  return {
-    ...runtime,
-    ...ports,
-    config,
-    store,
-    ...(cache && { cache }),
-    ...(dispatcher && { dispatcher }),
+// An explicit decline beats a configured source, so the shadowed source surfaces as a warning.
+function declineConflictIssues(env: EnvMap, init: PortsInit): PreflightIssue[] {
+  const states = slotStates(env, init);
+  const configured: Record<AbsenceSlot, boolean> = {
+    dispatcher:
+      (init.dispatcher !== undefined && init.dispatcher !== false) ||
+      envSelection(env).dispatcher.kind !== 'missing',
+    payees: init.payees !== undefined && init.payees !== false,
+    anchor: init.anchor !== undefined && init.anchor !== false,
   };
-}
-
-/**
- * Derives a worker context from a capability bundle: the runtime services a background pass needs,
- * minus the request-path-only pieces (pricing, cache, dispatcher).
- */
-export function workerCtxFrom(caps: Capabilities): WorkerCtx {
-  return {
-    clock: caps.clock,
-    ids: caps.ids,
-    digest: caps.digest,
-    signer: caps.signer,
-    processor: caps.processor,
-    rates: caps.rates,
-    logger: caps.logger,
-    meter: caps.meter,
-    config: caps.config,
-  };
-}
-
-/**
- * Wires an {@link Economy} whose store, cache, and dispatcher come from `env`, falling back to the
- * in-memory store when `DATABASE_URL` is unset. Thin over {@link capabilitiesFromEnv}.
- *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy} for
- *   composing an economy from env.
- */
-export async function compose(
-  env: EnvMap,
-  ports: ExternalPorts,
-  defaults: RuntimeDefaults = {},
-): Promise<Economy> {
-  return economyFromCapabilities(
-    await capabilitiesFromEnv(env, ports, defaults),
+  return ABSENCE_SLOTS.filter(
+    ({ slot }) => states[slot] === 'declined' && configured[slot],
+  ).map(({ slot }) =>
+    issue(
+      'port.decline-conflict',
+      slot,
+      `${slot} is declined but also configured; the decline wins and the configured ${slot} is ignored.`,
+      'warning',
+    ),
   );
 }
 
 /**
- * Wires a background {@link Worker} for the deferred, time-driven work over the same env-selected
- * store and dispatcher as {@link compose}. Two processes each call this with their own store handle;
- * a single process that shares one store calls {@link capabilitiesFromEnv} once instead — required
- * for the in-memory backend, where two stores are two separate maps.
+ * Reports what a given env and init would wire, presence only — no secret values, no
+ * connections. `declined` versus `missing` mirrors the production absence policy.
  */
-export async function composeWorker(
-  env: EnvMap,
-  ports: ExternalPorts,
-  defaults: RuntimeDefaults = {},
-): Promise<ComposedWorker> {
-  const caps = await capabilitiesFromEnv(env, ports, defaults);
+export function describeEnv(
+  env: EnvMap = {},
+  init: PortsInit = {},
+): EnvDescription {
+  const selection = envSelection(env);
+  const states = slotStates(env, init);
+  const processorUrl = serviceUrls(env).processor;
   return {
-    worker: createWorker(caps.store, workerCtxFrom(caps)),
-    store: caps.store,
-    dispatcher: caps.dispatcher,
+    production: isProduction(env),
+    store: selection.store,
+    cache: selection.cache,
+    dispatcher:
+      states.dispatcher === 'declined'
+        ? { kind: 'declined', url: null }
+        : typeof init.dispatcher === 'function'
+          ? { kind: 'in-process', url: null }
+          : selection.dispatcher,
+    processor:
+      processorUrl === null
+        ? { kind: 'memory', url: null }
+        : { kind: 'http', url: processorUrl },
+    payees: states.payees,
+    anchor: states.anchor,
+    secrets: describeSecrets(env, init),
+    velocityWindowMs:
+      init.config?.velocityWindowMs ??
+      readIntOrNull(env.VELOCITY_WINDOW_MS) ??
+      null,
   };
 }
 
-/** What {@link composeWorker} returns: the worker plus the handles its host must manage — the
- * store to close on shutdown and the env-selected dispatcher the relay delivers through. */
-export type ComposedWorker = {
-  worker: Worker;
-  store: Store;
-  dispatcher: Dispatcher | undefined;
-};
-
-// --- createEconomy: the one call --------------------------------------------------
-
-/**
- * Everything {@link createEconomy} accepts, all optional. With none, it builds a batteries-included
- * in-memory economy. With `env`, it resolves the store (from `DATABASE_URL`), the four external
- * ports, and config from the environment. Any field passed explicitly wins over the env-derived one.
- */
-export type EconomyOptions = {
-  env?: EnvMap;
-  store?: Store;
-  cache?: Cache;
-  dispatcher?: Dispatcher;
-  scheduler?: Scheduler;
-  payees?: PayeeDirectory;
-  signer?: Signer;
-  processor?: Processor;
-  rates?: Rates;
-  pricing?: FeePolicy;
-  clock?: Clock;
-  ids?: Ids;
-  digest?: Digest;
-  logger?: Logger;
-  meter?: Meter;
-  config?: Partial<Config>;
-};
+function describeSecrets(
+  env: EnvMap,
+  init: PortsInit,
+): EnvDescription['secrets'] {
+  const webhookSet =
+    (init.secrets?.webhookSecret ?? env.WEBHOOK_SECRET ?? '') !== '';
+  const signingSet =
+    (init.secrets?.signingSecret ?? env.SIGNING_SECRET ?? '') !== '';
+  const priors =
+    init.secrets?.signingSecretsPrior ??
+    (env.SIGNING_SECRETS_PRIOR ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s !== '');
+  return {
+    webhook: webhookSet ? 'set' : 'missing',
+    signing: signingSet ? 'set' : 'missing',
+    signingPriors: priors.length,
+  };
+}
 
 /**
- * The one call to stand up an {@link Economy}. `createEconomy()` needs nothing: an in-memory store, a
- * dev signer, a dev rate table, a flat fee, and an in-memory processor, all wired.
- * `createEconomy({ env })` resolves everything from the environment instead — the store from
- * `DATABASE_URL`, the external ports and config from their own keys — dev-defaulting outside
- * production and failing fast in production with one message. Pass any field to override just that
- * one. When a host already holds a full {@link Capabilities} bundle (e.g. to share one store with a
- * worker), use {@link economyFromCapabilities} instead.
- *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy}.
+ * The sole env-to-bag path: loads Config and Secrets (init wins per field, both frozen), builds
+ * the runtime and external ports with dev stand-ins outside production, opens the store the
+ * `DATABASE_URL` scheme names, and applies the production absence policy. Everything
+ * {@link preflight} flags as an error throws here as one CONFIG.INVALID.
  */
-export async function createEconomy(
-  options: EconomyOptions = {},
-): Promise<Economy> {
-  const env = options.env ?? {};
-  const config = mergeConfig(loadConfig(env), options.config ?? {});
-  const runtime = runtimeFrom(options);
-  const externals = externalsFromEnv(env, {
-    signer: options.signer,
-    processor: options.processor,
-    rates: options.rates,
-    pricing: options.pricing,
+export async function openPorts(
+  env: EnvMap = {},
+  init: PortsInit = {},
+): Promise<Ports> {
+  assertPreflight(env, init);
+
+  const config = inspectConfig(env, init.config ?? {});
+  const secrets = loadSecrets(env, init.secrets);
+  const runtime = runtimeFrom(init);
+  const externals = resolveExternals(env, init, secrets);
+
+  const states = slotStates(env, init);
+  const [store, cache, dispatcher] = await openSelected(env, init, states, {
+    ...runtime,
+    config,
   });
-  const selection = describeSelection(env);
-  const [store, cache, dispatcher] = await Promise.all([
-    options.store ??
-      selectStore(selection.store, {
-        digest: runtime.digest,
-        clock: runtime.clock,
-        velocityWindowMs: config.velocityWindowMs,
-        poolMax: config.dbPoolMax,
-        meter: runtime.meter,
-        logger: runtime.logger,
-      }),
-    options.cache ?? selectCache(selection.cache),
-    options.dispatcher ?? selectDispatcher(selection.dispatcher),
-  ]);
-  return economyFromCapabilities({
+  const payees = init.payees === false ? undefined : init.payees;
+  const anchor = init.anchor === false ? undefined : init.anchor;
+  const scheduler = init.scheduler === false ? undefined : init.scheduler;
+  countAbsence(runtime.meter, states);
+
+  Object.freeze(config);
+  Object.freeze(config.maturityHorizonMs);
+  Object.freeze(config.payoutSla);
+  Object.freeze(secrets);
+
+  return {
     ...runtime,
     ...externals,
     config,
+    secrets,
     store,
     ...(cache && { cache }),
     ...(dispatcher && { dispatcher }),
-    ...(options.scheduler && { scheduler: options.scheduler }),
-    ...(options.payees && { payees: options.payees }),
-  });
+    ...(payees && { payees }),
+    ...(anchor && { anchor }),
+    ...(scheduler && { scheduler }),
+  };
+}
+
+function assertPreflight(env: EnvMap, init: PortsInit): void {
+  const problems = preflight(env, init).filter(
+    (found) => found.severity === 'error',
+  );
+  if (problems.length === 0) {
+    return;
+  }
+  throw fault(
+    ERROR_CODES.CONFIG_INVALID,
+    `Preflight failed: ${problems.map((found) => found.message).join(' ')}`,
+    {
+      retryable: false,
+      detail: { issues: problems.map(({ code, path }) => ({ code, path })) },
+    },
+  );
+}
+
+// The store the env selects (or the init supplies), the optional cache, and the dispatcher when
+// the slot resolved 'set' — an init-supplied instance or the env-selected transport.
+function openSelected(
+  env: EnvMap,
+  init: PortsInit,
+  states: Record<AbsenceSlot, SlotState>,
+  deps: Pick<Ports, 'clock' | 'digest' | 'meter' | 'logger'> & {
+    config: Config;
+  },
+): Promise<[Store, Cache | undefined, Dispatcher | undefined]> {
+  const selection = envSelection(env);
+  const config = deps.config;
+  return Promise.all([
+    init.store ??
+      selectStore(selection.store, {
+        digest: deps.digest,
+        clock: deps.clock,
+        velocityWindowMs: config.velocityWindowMs,
+        poolMax: config.dbPoolMax,
+        meter: deps.meter,
+        logger: deps.logger,
+      }),
+    init.cache === false
+      ? undefined
+      : (init.cache ?? selectCache(selection.cache)),
+    states.dispatcher !== 'set'
+      ? undefined
+      : typeof init.dispatcher === 'function'
+        ? init.dispatcher
+        : selectDispatcher(selection.dispatcher),
+  ]);
+}
+
+// The absence telemetry: how each optional slot resolved, so a fleet dashboard can spot a
+// deployment quietly running without its dispatcher.
+function countAbsence(
+  meter: Meter,
+  states: Record<AbsenceSlot, SlotState>,
+): void {
+  try {
+    for (const { slot } of ABSENCE_SLOTS) {
+      meter.count('economy.preflight.absence', 1, {
+        slot,
+        state: states[slot],
+      });
+    }
+  } catch {
+    // Telemetry only.
+  }
+}
+
+/**
+ * The day-one door: openPorts, createEconomy, and (unless `worker: false`) a worker bound to
+ * that economy over the same bag.
+ */
+export async function boot(
+  env: EnvMap = {},
+  init: BootInit = {},
+): Promise<Boot> {
+  const { worker: withWorker = true, ...portsInit } = init;
+  const ports = await openPorts(env, portsInit);
+  const economy = createEconomy(ports);
+  const worker = withWorker ? createWorker(ports, economy) : null;
+  return { ports, economy, worker };
+}
+
+/**
+ * A finished in-memory Ports bag for tests and quickstarts: memory store, dev rates and fees,
+ * in-memory processor, and a real Ed25519 signer seeded from `signingKey`. Sync, no env.
+ */
+export function memoryPorts(options: {
+  readonly signingKey: string;
+  readonly config?: Partial<Config>;
+  readonly secrets?: Partial<Secrets>;
+  readonly store?: Store;
+}): Ports {
+  const config = defaultConfig(options.config ?? {});
+  const secrets: Secrets = {
+    webhookSecret: options.secrets?.webhookSecret ?? '',
+    signingSecret: options.secrets?.signingSecret ?? options.signingKey,
+    ...(options.secrets?.signingSecretsPrior !== undefined
+      ? { signingSecretsPrior: options.secrets.signingSecretsPrior }
+      : {}),
+  };
+  const digest = sha256Digest();
+  const clock = wallClock();
+  Object.freeze(config);
+  Object.freeze(config.maturityHorizonMs);
+  Object.freeze(config.payoutSla);
+  Object.freeze(secrets);
+  return {
+    clock,
+    ids: uuidIds(),
+    digest,
+    signer: signerFromSecrets(secrets),
+    processor: memoryProcessor(),
+    rates: configuredRates(DEV_RATES),
+    pricing: flatFee(),
+    logger: jsonlLogger(),
+    meter: silentMeter(),
+    config,
+    secrets,
+    store:
+      options.store ??
+      memoryStore({
+        digest,
+        clock,
+        velocityWindowMs: config.velocityWindowMs,
+      }),
+  };
 }
 
 // --- The wiring (drivers import here, only when selected) ---------------------------
 
 async function selectStore(
-  selection: Selection['store'],
+  selection: EnvSelection['store'],
   deps: {
     digest: Digest;
     clock: Clock;
@@ -670,26 +881,26 @@ async function loadPeer<T>(pkg: string, load: () => Promise<T>): Promise<T> {
 }
 
 async function selectCache(
-  selection: Selection['cache'],
+  selection: EnvSelection['cache'],
 ): Promise<Cache | undefined> {
   if (selection.kind === 'none') {
     return undefined;
   }
   const url = selection.url;
-  const { redisCacheFrom } = await import('#src/adapters/redis.ts');
+  const { redisCache } = await import('#src/adapters/redis.ts');
   // ioredis' default export is the client constructor at runtime; the cast pins it to the
   // adapter's minimal RedisClient surface (its module types don't expose the construct signature).
   const Redis = (await loadPeer('ioredis', () => import('ioredis')))
     .default as unknown as {
-    new (connection: string): Parameters<typeof redisCacheFrom>[0];
+    new (connection: string): Parameters<typeof redisCache>[0];
   };
-  return redisCacheFrom(new Redis(url));
+  return redisCache(new Redis(url));
 }
 
 async function selectDispatcher(
-  selection: Selection['dispatcher'],
+  selection: EnvSelection['dispatcher'],
 ): Promise<Dispatcher | undefined> {
-  if (selection.kind === 'in-process') {
+  if (selection.kind === 'missing') {
     return undefined;
   }
   if (selection.kind === 'sqs') {
@@ -727,14 +938,14 @@ async function selectDispatcher(
 // --- Default runtime services -----------------------------------------------------
 
 function runtimeFrom(
-  defaults: RuntimeDefaults,
-): Pick<Capabilities, 'clock' | 'ids' | 'digest' | 'logger' | 'meter'> {
+  init: PortsInit,
+): Pick<Ports, 'clock' | 'ids' | 'digest' | 'logger' | 'meter'> {
   const runtime = {
-    clock: defaults.clock ?? wallClock(),
-    ids: defaults.ids ?? uuidIds(),
-    digest: defaults.digest ?? sha256Digest(),
-    logger: defaults.logger ?? jsonlLogger(),
-    meter: defaults.meter ?? noopMeter(),
+    clock: init.clock ?? wallClock(),
+    ids: init.ids ?? uuidIds(),
+    digest: init.digest ?? sha256Digest(),
+    logger: init.logger ?? jsonlLogger(),
+    meter: init.meter ?? silentMeter(),
   };
   // A malformed override fails here, at wiring, not deep inside a request or sweep.
   requireCallable('clock', runtime.clock, ['now']);

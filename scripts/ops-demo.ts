@@ -15,29 +15,26 @@
 //   scripts/ops-demo.ts integrity   # ledger tamper: prove and escalate, fix nothing
 //   scripts/ops-demo.ts deadlock    # retry-pressure storm on a real engine ($DATABASE_URL)
 //
-// Each wires the supervisor exactly as a host would: opsRuntime wraps the
+// Each wires the supervisor exactly as a host would: createOpsRuntime wraps the
 // composition's meter/logger, and audit records stream to stdout as JSONL.
 
 import {
-  capabilitiesFromEnv,
   createWorker,
   credits,
-  economyFromCapabilities,
-  externalsFromEnv,
-  noopLogger,
-  noopMeter,
+  createEconomy,
+  openPorts,
   requestPayout,
   spend,
   systemActor,
   topUp,
   userActor,
-  workerCtxFrom,
 } from '#src/index.ts';
+import { silentLogger, silentMeter } from '#src/runtime.ts';
 
 import {
   createSupervisor,
   jsonlAuditSink,
-  opsRuntime,
+  createOpsRuntime,
 } from '#src/ops/index.ts';
 
 import type { Clock, Processor, Store } from '#src/ports.ts';
@@ -67,21 +64,20 @@ async function runStuckSaga(): Promise<void> {
   say('');
 
   const clock = manualClock(Date.parse('2026-07-16T12:00:00Z'));
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
   const processor: Processor = {
     submitPayout: async () => ({ providerRef: 'prov_demo' }),
   };
-  const caps = await capabilitiesFromEnv(
+  const caps = await openPorts(
     { PAYOUT_MIN_EARNED_MINOR: '1000' },
-    externalsFromEnv({}, { processor }),
-    { clock, logger: runtime.logger, meter: runtime.meter },
+    { processor, clock, logger: runtime.logger, meter: runtime.meter },
   );
-  const economy = economyFromCapabilities(caps);
-  const worker = createWorker(caps.store, workerCtxFrom(caps));
+  const economy = createEconomy(caps);
+  const worker = createWorker(caps, economy);
 
   const buyer = 'usr_buyer';
   const seller = 'usr_seller';
@@ -124,7 +120,7 @@ async function runStuckSaga(): Promise<void> {
     clock,
     signals: runtime.signals,
     sagas: caps.store.sagas,
-    runSweep: (now) => worker.runOnce({ now, limit: 10 }),
+    runSweep: (now) => worker.sweep({ now, limit: 10 }),
     audit: stdoutAudit,
     config: { stuckSagaAgeMs: 60_000, actionCooldownMs: 30_000 },
   });
@@ -141,7 +137,7 @@ async function runStuckSaga(): Promise<void> {
   const after = await economy.read.saga(sagaId);
   say(`saga ${sagaId} is now ${after?.state}: the sweep advanced it.`);
 
-  const report = await economy.read.prove();
+  const report = await economy.read.health();
   say(
     `prove: conserved=${report.conserved} chainIntact=${report.chainIntact} ` +
       `noOverdraft=${report.noOverdraft} — the supervisor wrote no ledger state.`,
@@ -161,21 +157,22 @@ async function runIntegrity(): Promise<void> {
   say('');
 
   const clock = manualClock(Date.parse('2026-07-16T12:00:00Z'));
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
-  const caps = await capabilitiesFromEnv(
+  const caps = await openPorts(
     {},
-    externalsFromEnv(
-      {},
-      { processor: { submitPayout: async () => ({ providerRef: 'p' }) } },
-    ),
-    { clock, logger: runtime.logger, meter: runtime.meter },
+    {
+      processor: { submitPayout: async () => ({ providerRef: 'p' }) },
+      clock,
+      logger: runtime.logger,
+      meter: runtime.meter,
+    },
   );
-  const economy = economyFromCapabilities(caps);
-  const worker = createWorker(caps.store, workerCtxFrom(caps));
+  const economy = createEconomy(caps);
+  const worker = createWorker(caps, economy);
 
   const topped = await economy.submit(
     topUp({
@@ -189,7 +186,7 @@ async function runIntegrity(): Promise<void> {
   if (topped.status !== 'committed') {
     throw new Error(`topUp ${topped.status}`);
   }
-  await worker.runOnce({ now: clock.now(), limit: 10 });
+  await worker.sweep({ now: clock.now(), limit: 10 });
   say(
     `a top-up committed (${topped.transaction.id}) and the checkpoint sealed.`,
   );
@@ -202,7 +199,7 @@ async function runIntegrity(): Promise<void> {
       throw new Error('integrity findings must never trigger the sweep');
     },
     audit: stdoutAudit,
-    prove: () => economy.read.prove(),
+    prove: () => economy.read.health(),
     pauseWorker: () => worker.pause(),
     escalate: sayEscalation,
   });
@@ -215,20 +212,20 @@ async function runIntegrity(): Promise<void> {
     'a leg of the stored posting is tampered: +1 minor unit out of thin air.',
   );
 
-  await worker.runOnce({ now: clock.now(), limit: 10 });
+  await worker.sweep({ now: clock.now(), limit: 10 });
   say(
     'the next sweep reverifies the sealed checkpoint and reports a mismatch.',
   );
   say('tick (audit records on stdout):');
   await supervisor.tick();
 
-  const report = await economy.read.prove();
+  const report = await economy.read.health();
   say(
     `prove now says conserved=${report.conserved} — the evidence is attached, ` +
       'the response is human. No automated action touched the ledger.',
   );
   say(
-    `worker.paused()=${worker.paused()} — containment: the scheduled loop is ` +
+    `worker.sweepsPaused=${worker.sweepsPaused} — containment: the scheduled loop is ` +
       'held until a human resumes it; the supervisor never resumes on its own.',
   );
 }
@@ -356,21 +353,22 @@ async function runDeadlock(): Promise<void> {
   say('');
 
   const clock: Clock = { now: () => Date.now() };
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
-  const caps = await capabilitiesFromEnv(
+  const caps = await openPorts(
     { DATABASE_URL: url, DB_POOL_MAX: '60' },
-    externalsFromEnv(
-      {},
-      { processor: { submitPayout: async () => ({ providerRef: 'p' }) } },
-    ),
-    { clock, logger: runtime.logger, meter: runtime.meter },
+    {
+      processor: { submitPayout: async () => ({ providerRef: 'p' }) },
+      clock,
+      logger: runtime.logger,
+      meter: runtime.meter,
+    },
   );
-  const economy = economyFromCapabilities(caps);
-  createWorker(caps.store, workerCtxFrom(caps));
+  const economy = createEconomy(caps);
+  createWorker(caps, economy);
 
   const run = `storm_${crypto.randomUUID().slice(0, 8)}`;
   const seller = `usr_${run}_seller`;
@@ -409,7 +407,7 @@ async function runDeadlock(): Promise<void> {
     );
   }
 
-  const report = await economy.read.prove();
+  const report = await economy.read.health();
   say(
     `prove: conserved=${report.conserved} chainIntact=${report.chainIntact} — ` +
       'every retried conflict committed nothing; the pressure was real, the money never wrong.',

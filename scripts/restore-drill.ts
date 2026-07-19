@@ -20,8 +20,8 @@
 // Scratches drop in a `finally`; a killed run leaves an el_drill_* name that `make db-clean`
 // sweeps.
 
-import { economyFromCapabilities } from '#src/economy.ts';
-import { capabilitiesFromEnv, externalsFromEnv } from '#src/index.ts';
+import { createEconomy } from '#src/economy.ts';
+import { openPorts } from '#src/index.ts';
 import { LOCAL_POSTGRES_URL, storeUrls } from '#src/env.ts';
 import {
   freshName,
@@ -39,16 +39,13 @@ const say = (line: string): void => console.warn(line);
 // The prover re-derives every invariant from the restored rows alone; a dump missing rows or
 // restored out of shape cannot pass it.
 async function proveRestored(scratchUrl: string): Promise<boolean> {
-  const caps = await capabilitiesFromEnv(
+  const caps = await openPorts(
     { DATABASE_URL: scratchUrl },
-    externalsFromEnv(
-      {},
-      { processor: { submitPayout: async () => ({ providerRef: 'drill' }) } },
-    ),
+    { processor: { submitPayout: async () => ({ providerRef: 'drill' }) } },
   );
-  const economy = economyFromCapabilities(caps);
+  const economy = createEconomy(caps);
   try {
-    const report = await economy.read.prove();
+    const report = await economy.read.health();
     say(
       `  prove: conserved=${report.conserved} backed=${report.backed} ` +
         `noOverdraft=${report.noOverdraft} chainIntact=${report.chainIntact} ` +
