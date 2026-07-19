@@ -20,14 +20,16 @@ import type {
   Digest,
   Logger,
   Meter,
+  Ports,
   Processor,
   Rates,
   Signer,
+  Store,
 } from '#src/ports.ts';
 import type { Amount } from '#src/money.ts';
 import type { Ctx, FeePolicy, Recipient, WorkerCtx } from '#src/contract.ts';
 import type { Leg } from '#src/ports.ts';
-import type { Config } from '#src/config.ts';
+import type { Config, Secrets } from '#src/config.ts';
 
 // --- Clock & ids ------------------------------------------------------------------
 
@@ -129,7 +131,7 @@ export function testLogger(): Logger {
   return { log: () => {} };
 }
 
-export function noopMeter(): Meter {
+export function silentMeter(): Meter {
   return { count: () => {}, observe: () => {} };
 }
 
@@ -180,11 +182,16 @@ export function defaultPricing(): FeePolicy {
 
 // --- Config -----------------------------------------------------------------------
 
-/** Throwaway secrets are fine here; test/config.test.ts covers loadConfig's missing-secret check. */
-export function testConfig(): Config {
+/** Throwaway secrets are fine here; test/config.test.ts covers loadSecrets' missing-secret check. */
+export function testSecrets(): Secrets {
   return {
     webhookSecret: 'test-webhook-secret',
     signingSecret: 'test-signing-secret',
+  };
+}
+
+export function testConfig(): Config {
+  return {
     dbPoolMax: null,
     replayWindowMs: 5 * 60_000,
     maxPayoutAttempts: 5,
@@ -227,7 +234,7 @@ export function makeCtx(overrides: Partial<Ctx> = {}): Ctx {
     pricing: defaultPricing(),
     rates: fixedRates(),
     logger: testLogger(),
-    meter: noopMeter(),
+    meter: silentMeter(),
     ...overrides,
   };
 }
@@ -242,8 +249,27 @@ export function makeWorkerCtx(overrides: Partial<WorkerCtx> = {}): WorkerCtx {
     processor: fakeProcessor(),
     rates: fixedRates(),
     logger: testLogger(),
-    meter: noopMeter(),
+    meter: silentMeter(),
     config: testConfig(),
+    ...overrides,
+  };
+}
+
+/** A finished test Ports bag over the given store; any field overridable. */
+export function makePorts(store: Store, overrides: Partial<Ports> = {}): Ports {
+  return {
+    store,
+    clock: fixedClock(0),
+    ids: sequentialIds(),
+    digest: seededDigest(1),
+    signer: seededSigner(1),
+    processor: fakeProcessor(),
+    rates: fixedRates(),
+    pricing: defaultPricing(),
+    logger: testLogger(),
+    meter: silentMeter(),
+    config: testConfig(),
+    secrets: testSecrets(),
     ...overrides,
   };
 }

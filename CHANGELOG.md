@@ -23,6 +23,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 
 ### Added
 
+- `Secrets` splits from `Config`: secrets load into `ports.secrets`, `SECRET_KEYS` names
+  them, and `CONFIG_KEYS` is secrets-free. `DB_POOL_MAX` caps the SQL connection pool.
 - `read.health()` is the light liveness read; `proveEconomy` stays the thorough pass.
 - `usd(decimal)` builds a USD amount from a two-decimal string.
 

@@ -12,7 +12,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { defaultConfig, loadConfig } from '#src/config.ts';
+import { defaultConfig, loadConfig, loadSecrets } from '#src/config.ts';
 import { ERROR_CODES } from '#src/errors.ts';
 
 const CARD_HORIZON_MS = 7 * 24 * 60 * 60_000;
@@ -64,8 +64,6 @@ describe('loadConfig maturity horizons', () => {
       () =>
         loadConfig({
           NODE_ENV: 'production',
-          WEBHOOK_SECRET: 's',
-          SIGNING_SECRET: 's',
           VELOCITY_LIMIT_MINOR: '100000',
         }),
       (error: unknown) => {
@@ -85,8 +83,6 @@ describe('loadConfig maturity horizons', () => {
       () =>
         loadConfig({
           NODE_ENV: 'production',
-          WEBHOOK_SECRET: 's',
-          SIGNING_SECRET: 's',
           MATURITY_HORIZON_CARD_MS: String(CARD_HORIZON_MS),
         }),
       (error: unknown) => {
@@ -104,8 +100,6 @@ describe('loadConfig maturity horizons', () => {
   test('production with the anchors stated loads clean', () => {
     const config = loadConfig({
       NODE_ENV: 'production',
-      WEBHOOK_SECRET: 's',
-      SIGNING_SECRET: 's',
       MATURITY_HORIZON_CARD_MS: String(CARD_HORIZON_MS),
       VELOCITY_LIMIT_MINOR: '5000000',
     });
@@ -116,7 +110,7 @@ describe('loadConfig maturity horizons', () => {
 });
 
 describe('loadConfig startup check', () => {
-  test('fails in production when required secrets are missing, listing all of them', () => {
+  test('fails in production when the policy anchors are missing, listing all of them', () => {
     assert.throws(
       () => loadConfig({ NODE_ENV: 'production' }),
       (error: unknown) => {
@@ -126,8 +120,6 @@ describe('loadConfig startup check', () => {
         };
         assert.equal(fault.code, ERROR_CODES.CONFIG_INVALID);
         assert.deepEqual(fault.detail?.missing, [
-          'WEBHOOK_SECRET',
-          'SIGNING_SECRET',
           'MATURITY_HORIZON_CARD_MS',
           'VELOCITY_LIMIT_MINOR',
         ]);
@@ -135,12 +127,42 @@ describe('loadConfig startup check', () => {
       },
     );
   });
+});
+
+describe('loadSecrets startup check', () => {
+  test('fails in production when required secrets are missing, listing all of them', () => {
+    assert.throws(
+      () => loadSecrets({ NODE_ENV: 'production' }),
+      (error: unknown) => {
+        const fault = error as {
+          code?: unknown;
+          detail?: { missing?: unknown };
+        };
+        assert.equal(fault.code, ERROR_CODES.CONFIG_INVALID);
+        assert.deepEqual(fault.detail?.missing, [
+          'WEBHOOK_SECRET',
+          'SIGNING_SECRET',
+        ]);
+        return true;
+      },
+    );
+  });
+
+  test('an override fills a secret the env leaves blank', () => {
+    const secrets = loadSecrets(
+      { NODE_ENV: 'production', WEBHOOK_SECRET: 'wh' },
+      { signingSecret: 'sg' },
+    );
+
+    assert.equal(secrets.webhookSecret, 'wh');
+    assert.equal(secrets.signingSecret, 'sg');
+  });
 
   test('tolerates missing secrets outside production for local composition', () => {
-    const config = loadConfig({});
+    const secrets = loadSecrets({});
 
-    assert.equal(config.webhookSecret, '');
-    assert.equal(config.signingSecret, '');
+    assert.equal(secrets.webhookSecret, '');
+    assert.equal(secrets.signingSecret, '');
   });
 });
 

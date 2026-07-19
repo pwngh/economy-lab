@@ -12,17 +12,18 @@
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import {
   isProduction,
-  missingSecrets,
   readBigInt,
   readBigIntOrNull,
   readInt,
   readIntOrNull,
+  readList,
 } from '#src/env.ts';
 
 import type { EnvMap } from '#src/env.ts';
 
 /**
- * All tunable settings in one object.
+ * All tunable policy settings in one object. Policy only — no secrets live here, so the whole
+ * object is safe to log; credentials ride in {@link Secrets}.
  *
  * No module reads env vars itself; the startup program builds this once (via
  * {@link loadConfig}) and passes it in, so a misconfigured deploy fails at startup
@@ -32,10 +33,6 @@ import type { EnvMap } from '#src/env.ts';
  *   for every tunable and its default.
  */
 export interface Config {
-  webhookSecret: string;
-
-  signingSecret: string;
-
   replayWindowMs: number;
 
   maxPayoutAttempts: number;
@@ -135,11 +132,10 @@ function bigIntIfSet(
   return parsed === null ? {} : { [key]: parsed };
 }
 
-/** Every name {@link loadConfig} reads; .env.example is held to this list. */
+/** Every name {@link loadConfig} reads; .env.example is held to this list. Policy only —
+ * the secret names live in {@link SECRET_KEYS}. */
 export const CONFIG_KEYS = [
   'NODE_ENV',
-  'WEBHOOK_SECRET',
-  'SIGNING_SECRET',
   'REPLAY_WINDOW_MS',
   'MAX_PAYOUT_ATTEMPTS',
   'MAX_OUTBOX_ATTEMPTS',
@@ -167,41 +163,117 @@ export const CONFIG_KEYS = [
   'ECONOMY_PAUSE_START_MS',
   'ECONOMY_PAUSE_END_MS',
   'PLATFORM_SHARDS',
+  'DB_POOL_MAX',
 ] as const;
+
+/** Every name {@link loadSecrets} reads. Kept apart from {@link CONFIG_KEYS} so the log-safe
+ * policy list can never grow a credential. */
+export const SECRET_KEYS = [
+  'WEBHOOK_SECRET',
+  'SIGNING_SECRET',
+  'SIGNING_SECRETS_PRIOR',
+] as const;
+
+/** Boolean flags (1/true) that declare a production deployment runs without the named optional
+ * port on purpose; openPorts treats a bare omission as an error (§ absence policy). */
+export const DECLINE_KEYS = [
+  'DISPATCHER_DECLINED',
+  'PAYEES_DECLINED',
+  'ANCHOR_DECLINED',
+] as const;
+
+/**
+ * Credentials, split from {@link Config} so the policy object stays log-safe. `signingSecretsPrior`
+ * lists rotated-out signing secrets old checkpoints must still verify against.
+ */
+export interface Secrets {
+  readonly webhookSecret: string;
+  readonly signingSecret: string;
+  readonly signingSecretsPrior?: readonly string[];
+}
+
+/**
+ * Build {@link Secrets} from env vars, any `overrides` winning per field. In production a blank
+ * required secret on the merged bag throws one CONFIG.INVALID fault listing every missing key;
+ * outside production a blank stays blank and the construction layer supplies its dev stand-in.
+ */
+export function loadSecrets(
+  env: EnvMap,
+  overrides: Partial<Secrets> = {},
+): Secrets {
+  const prior = readList(env.SIGNING_SECRETS_PRIOR);
+  const secrets: Secrets = {
+    webhookSecret: overrides.webhookSecret ?? env.WEBHOOK_SECRET ?? '',
+    signingSecret: overrides.signingSecret ?? env.SIGNING_SECRET ?? '',
+    ...(overrides.signingSecretsPrior !== undefined
+      ? { signingSecretsPrior: overrides.signingSecretsPrior }
+      : prior.length > 0
+        ? { signingSecretsPrior: prior }
+        : {}),
+  };
+  if (isProduction(env)) {
+    const missing = missingSecretFields(secrets);
+    if (missing.length > 0) {
+      throw fault(ERROR_CODES.CONFIG_INVALID, 'Required secrets are missing.', {
+        detail: { missing },
+      });
+    }
+  }
+  return secrets;
+}
+
+/** The required secret env names still blank on a merged bag; `preflight` reports these. */
+export function missingSecretFields(secrets: Secrets): string[] {
+  const missing: string[] = [];
+  if (secrets.webhookSecret === '') missing.push('WEBHOOK_SECRET');
+  if (secrets.signingSecret === '') missing.push('SIGNING_SECRET');
+  return missing;
+}
 
 /**
  * Build {@link Config} from env vars, defaulting any value that is unset or invalid.
  *
- * If any required secret — or a policy anchor, MATURITY_HORIZON_CARD_MS or VELOCITY_LIMIT_MINOR —
- * is missing in production, throws a single CONFIG.INVALID fault listing all missing keys at once, so the
+ * If a policy anchor — MATURITY_HORIZON_CARD_MS or VELOCITY_LIMIT_MINOR — is missing in
+ * production, throws a single CONFIG.INVALID fault listing all missing keys at once, so the
  * program fails at startup rather than one key at a time during requests.
  */
 export function loadConfig(env: EnvMap): Config {
-  const production = isProduction(env);
+  return inspectConfig(env);
+}
+
+/**
+ * The production policy-anchor env names satisfied by neither `env` nor `overrides`; empty
+ * outside production. `preflight` reports these; {@link inspectConfig} throws on them.
+ */
+export function missingPolicyAnchors(
+  env: EnvMap,
+  overrides: Partial<Config> = {},
+): string[] {
+  if (!isProduction(env)) {
+    return [];
+  }
+  const missing: string[] = [];
+  if (
+    overrides.maturityHorizonMs?.card === undefined &&
+    (env.MATURITY_HORIZON_CARD_MS ?? '') === ''
+  ) {
+    missing.push('MATURITY_HORIZON_CARD_MS');
+  }
+  if (
+    overrides.velocityLimitMinor === undefined &&
+    (env.VELOCITY_LIMIT_MINOR ?? '') === ''
+  ) {
+    missing.push('VELOCITY_LIMIT_MINOR');
+  }
+  return missing;
+}
+
+function buildConfig(env: EnvMap): Config {
   // Outside production unset horizons are 0, so the zero-config quickstart's topUp → spend
   // works. Production must state the card horizon, the anchor every other rail defaults to.
   const cardHorizonMs = readInt(env.MATURITY_HORIZON_CARD_MS, 0);
 
-  const missing = production ? missingSecrets(env) : [];
-  if (production && (env.MATURITY_HORIZON_CARD_MS ?? '') === '') {
-    missing.push('MATURITY_HORIZON_CARD_MS');
-  }
-  if (production && (env.VELOCITY_LIMIT_MINOR ?? '') === '') {
-    missing.push('VELOCITY_LIMIT_MINOR');
-  }
-  if (missing.length > 0) {
-    throw fault(
-      ERROR_CODES.CONFIG_INVALID,
-      'Required configuration is missing.',
-      {
-        detail: { missing },
-      },
-    );
-  }
-
   return {
-    webhookSecret: env.WEBHOOK_SECRET ?? '',
-    signingSecret: env.SIGNING_SECRET ?? '',
     replayWindowMs: readInt(env.REPLAY_WINDOW_MS, 5 * 60_000),
     maxPayoutAttempts: readInt(env.MAX_PAYOUT_ATTEMPTS, 5, { min: 1 }),
     maxOutboxAttempts: readInt(env.MAX_OUTBOX_ATTEMPTS, 10, { min: 1 }),
@@ -284,6 +356,39 @@ export function mergeConfig(base: Config, overrides: Partial<Config>): Config {
     merged.payoutSla = { ...base.payoutSla, ...overrides.payoutSla };
   }
   return merged;
+}
+
+/**
+ * The resolved {@link Config} a given env produces, with `overrides` applied on top — the same
+ * derivation openPorts runs, so an override-supplied policy anchor satisfies the production
+ * check. Config carries no secrets, so the result is safe to print whole.
+ */
+export function inspectConfig(
+  env: EnvMap = {},
+  overrides: Partial<Config> = {},
+): Config {
+  const missing = missingPolicyAnchors(env, overrides);
+  if (missing.length > 0) {
+    throw fault(
+      ERROR_CODES.CONFIG_INVALID,
+      'Required configuration is missing.',
+      {
+        detail: { missing },
+      },
+    );
+  }
+  return mergeConfig(buildConfig(env), overrides);
+}
+
+/**
+ * The config slice for a scheduled maintenance window, ready to spread into a PortsInit config:
+ * `{ config: maintenanceWindow(start, end) }`. Bounds are epoch ms; end is exclusive.
+ */
+export function maintenanceWindow(
+  startMs: number,
+  endMs: number,
+): Pick<Config, 'pauseStartMs' | 'pauseEndMs'> {
+  return { pauseStartMs: startMs, pauseEndMs: endMs };
 }
 
 /**
