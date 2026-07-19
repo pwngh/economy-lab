@@ -18,7 +18,7 @@ import { topUp, credit } from '#test/support/builders.ts';
 import { spendable } from '#src/accounts.ts';
 import { isPostgresUrl } from '#src/env.ts';
 import { relayOutbox } from '#src/worker/relay.ts';
-import { makeWorkerCtx } from '#test/support/capabilities.ts';
+import { makePorts } from '#test/support/capabilities.ts';
 
 import type { Dispatcher, EconomyEvent } from '#src/ports.ts';
 
@@ -233,7 +233,7 @@ describe('taskq integration (optional peer)', { skip: skipReason() }, () => {
       await economy.submit(
         topUp({ userId: 'usr_evt', amount: credit('5.00') }),
       );
-      await relayOutbox(store, makeWorkerCtx(), { dispatcher, limit: 10 });
+      await relayOutbox(store, makePorts(store), { dispatcher, limit: 10 });
       assert.equal(delivered.length, 1);
       assert.equal(delivered[0].type, 'economy.credits.topped_up');
 

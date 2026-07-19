@@ -13,7 +13,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { economyFromCapabilities } from '#src/economy.ts';
+import { createEconomy } from '#src/economy.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { topUp, credit } from '#test/support/builders.ts';
 import {
@@ -21,11 +21,12 @@ import {
   fakeProcessor,
   fixedClock,
   hasCode,
-  noopMeter,
+  silentMeter,
   seededDigest,
   seededSigner,
   sequentialIds,
   testConfig,
+  testSecrets,
   testLogger,
 } from '#test/support/capabilities.ts';
 
@@ -44,10 +45,10 @@ function rate(rateId: string, minor: bigint, scale: number): Rate {
   return { rate: minor, scale, rateId };
 }
 
-function economyWith(rates: Rates): ReturnType<typeof economyFromCapabilities> {
+function economyWith(rates: Rates): ReturnType<typeof createEconomy> {
   const digest = seededDigest(1);
   const clock = fixedClock(0);
-  return economyFromCapabilities({
+  return createEconomy({
     store: memoryStore({ digest, clock }),
     clock,
     ids: sequentialIds(),
@@ -55,10 +56,11 @@ function economyWith(rates: Rates): ReturnType<typeof economyFromCapabilities> {
     signer: seededSigner(1),
     rates,
     logger: testLogger(),
-    meter: noopMeter(),
+    meter: silentMeter(),
     processor: fakeProcessor(),
     pricing: defaultPricing(),
     config: testConfig(),
+    secrets: testSecrets(),
   });
 }
 

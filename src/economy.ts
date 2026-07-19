@@ -11,7 +11,7 @@
 
 /**
  * The submit pipeline: validate, authorize, then one all-or-nothing transaction that claims the
- * idempotency key, screens risk and funds, runs the handler, and queues the event. `economyFromCapabilities`
+ * idempotency key, screens risk and funds, runs the handler, and queues the event. `createEconomy`
  * builds the public Economy (submit + read + close); the handlers live in src/operations/.
  */
 
@@ -69,10 +69,10 @@ import type {
 } from '#src/contract.ts';
 import type {
   Attempt,
-  Capabilities,
+  Ports,
   EconomyEvent,
   Ledger,
-  Options,
+  CallOptions,
   Rates,
   Store,
   Unit,
@@ -83,19 +83,22 @@ export type { Economy } from '#src/contract.ts';
 type Registry = Partial<Record<Operation['kind'], Handler>>;
 
 /**
+ * The one door to an {@link Economy}: sync, over a finished {@link Ports} bag — `openPorts`,
+ * `memoryPorts`, or a hand-built structural object.
+ *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy} for the
  * construction, the submit/read surface, and the request path.
  */
-export function economyFromCapabilities(capabilities: Capabilities): Economy {
-  const store = capabilities.store;
+export function createEconomy(ports: Ports): Economy {
+  const store = ports.store;
   // A runtime config mutation would half-apply: most knobs are read per submit, but
   // velocityWindowMs is captured at store construction. Frozen, a mutation throws instead;
   // change a knob by rebuilding over the same store.
-  Object.freeze(capabilities.config);
-  Object.freeze(capabilities.config.maturityHorizonMs);
-  Object.freeze(capabilities.config.payoutSla);
-  assertBuyCoversPar(capabilities.rates);
-  const ctx = contextOf(capabilities);
+  Object.freeze(ports.config);
+  Object.freeze(ports.config.maturityHorizonMs);
+  Object.freeze(ports.config.payoutSla);
+  assertBuyCoversPar(ports.rates);
+  const ctx = contextOf(ports);
   const registry = REGISTRY;
 
   return {
@@ -117,7 +120,7 @@ export function economyFromCapabilities(capabilities: Capabilities): Economy {
       lineage: (account, options) => store.ledger.lineage(account, options),
       export: (options) => exportLedger(store, options),
       checkpoint: (options) => store.checkpoints.latest(options),
-      prove: (options) => proveEconomy(store, ctx, options),
+      health: (options) => healthReport(store, ctx, options),
     },
     close: () => store.close(),
   };
@@ -149,28 +152,28 @@ type Step = {
   pipeline: Pipeline;
   unit: Unit;
   operation: Operation;
-  options?: Options;
+  options?: CallOptions;
   // Called by screenRisk with the velocity attempt it is about to record inside the transaction,
   // so `submit` can re-record the attempt if that transaction rolls back.
   staged?: (subject: string, attempt: Attempt) => void;
 };
 
-// Every capability except the store (handlers get a per-transaction view) and the scheduler and
-// dispatcher, which this factory keeps.
-function contextOf(capabilities: Capabilities): Ctx {
+// Every port except the store (handlers get a per-transaction view), the scheduler and
+// dispatcher (worker concerns), and the secrets bag, which the submit path never reads.
+function contextOf(ports: Ports): Ctx {
   return {
-    clock: capabilities.clock,
-    ids: capabilities.ids,
-    digest: capabilities.digest,
-    signer: capabilities.signer,
-    processor: capabilities.processor,
-    config: capabilities.config,
-    pricing: capabilities.pricing,
-    rates: capabilities.rates,
-    logger: capabilities.logger,
-    meter: capabilities.meter,
-    cache: capabilities.cache,
-    payees: capabilities.payees,
+    clock: ports.clock,
+    ids: ports.ids,
+    digest: ports.digest,
+    signer: ports.signer,
+    processor: ports.processor,
+    config: ports.config,
+    pricing: ports.pricing,
+    rates: ports.rates,
+    logger: ports.logger,
+    meter: ports.meter,
+    cache: ports.cache,
+    payees: ports.payees,
   };
 }
 
@@ -178,12 +181,12 @@ function contextOf(capabilities: Capabilities): Ctx {
 // ECONOMY_PAUSED gate in `submit` agree.
 function economyStatus(ctx: Ctx): EconomyStatus {
   const { pauseStartMs, pauseEndMs } = ctx.config;
-  const paused = economyPaused(ctx.clock.now(), ctx.config);
+  const active = economyPaused(ctx.clock.now(), ctx.config);
   return {
-    paused,
+    maintenanceActive: active,
     pauseStart: pauseStartMs,
     pauseEnd: pauseEndMs,
-    resumesAt: paused ? pauseEndMs : null,
+    resumesAt: active ? pauseEndMs : null,
   };
 }
 
@@ -223,7 +226,7 @@ async function cachedBalance(
   ctx: Ctx,
   ledger: Ledger,
   account: AccountRef,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<Amount> {
   const shards = ctx.config.platformShards;
   if (shards > 1 && isShardedBase(account)) {
@@ -240,7 +243,7 @@ async function cachedRow(
   ctx: Ctx,
   ledger: Ledger,
   account: AccountRef,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<Amount> {
   const cache = ctx.cache;
   if (!cache) {
@@ -278,7 +281,7 @@ async function cachedRow(
 async function meteredSubmit(
   pipeline: Pipeline,
   operation: Operation,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<Outcome> {
   const { meter, clock } = pipeline.ctx;
   const kind = String((operation as { kind?: unknown })?.kind ?? 'unknown');
@@ -288,7 +291,7 @@ async function meteredSubmit(
   try {
     const outcome = await submit(pipeline, operation, options);
     status = outcome.status;
-    if (outcome.status === 'rejected') reason = outcome.reason;
+    if (outcome.status === 'rejected') reason = outcome.detail.reason;
     return outcome;
   } finally {
     try {
@@ -309,7 +312,7 @@ async function meteredSubmit(
 async function submit(
   pipeline: Pipeline,
   operation: Operation,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<Outcome> {
   validateOperation(operation, pipeline.ctx.config.platformShards);
   authorize(operation);
@@ -593,8 +596,8 @@ async function screenFunds(step: Step): Promise<Outcome | null> {
     if (compare(have, need.amount) < 0) {
       return rejected('INSUFFICIENT_FUNDS', {
         account: need.account,
-        required: need.amount,
-        available: have,
+        need: need.amount,
+        have,
       });
     }
   }
@@ -607,7 +610,7 @@ async function screenFunds(step: Step): Promise<Outcome | null> {
 async function fundsNeeded(
   unit: Unit,
   operation: Operation,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<ReadonlyArray<{ account: AccountRef; amount: Amount }>> {
   if (operation.kind !== 'spend') {
     return [];
@@ -628,7 +631,7 @@ async function fundsNeeded(
 async function readCachedBalance(
   unit: Unit,
   account: AccountRef,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<Amount> {
   const cached = unit.balances?.get(account);
   if (cached !== undefined) {
@@ -663,13 +666,8 @@ async function screenRisk(step: Step): Promise<Outcome | null> {
   const limitMinor = classLimitMinor(config, risk.class);
   if (velocity.spent.minor > limitMinor) {
     return rejected('RISK_DENIED', {
-      subject: risk.subject,
-      class: risk.class,
-      spent: velocity.spent,
-      limit: toAmount(VELOCITY_CURRENCY, limitMinor),
-      windowMs: config.velocityWindowMs,
-      // The oldest counted attempt ages out then: the earliest a retry can find room.
-      retryAfter: velocity.windowStart + config.velocityWindowMs,
+      window: risk.class === 'in' ? 'inflow' : 'outflow',
+      limitMinor,
     });
   }
   return null;
@@ -716,17 +714,18 @@ async function emitEvents(
 // --- Integrity check ---------------------------------------------------------------
 
 /**
- * The lighter in-process prover: its `chainIntact` is only a shape check on each account's latest
- * hash, while the full replay that re-verifies every posting lives in integrity.ts.
+ * The lighter in-process prover behind `read.health()`: its `chainIntact` is only a shape check
+ * on each account's latest hash, while the full replay that re-verifies every posting lives in
+ * integrity.ts (`proveEconomy`).
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/the-proof/ The proof} for why this
  * is an independent audit rather than the primary guard, how `backed` converts custodial credits to
  * USD, and how the two provers differ.
  */
-async function proveEconomy(
+async function healthReport(
   store: Store,
   ctx: Ctx,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<ProveReport> {
   const fold = await foldLedger(store, options);
   const required = backingRequiredMinor(
@@ -767,7 +766,7 @@ type LedgerFold = {
 // See https://economy-lab-docs.pages.dev/economy/concepts/the-proof/ for what each figure proves.
 async function foldLedger(
   store: Store,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<LedgerFold> {
   const signedByCurrency = new Map<Currency, bigint>();
   const backing: BackingTotals = {
@@ -804,7 +803,7 @@ async function foldLedger(
     }
   }
   // heads() only visits posted-to accounts, so a balance row with no backing posting slips past this
-  // prover. The thorough prover closes that gap (integrity.ts foldLedger, R33); read.prove() trades
+  // prover. The thorough prover closes that gap (integrity.ts foldLedger, R33); read.health() trades
   // it for speed on purpose.
   return { signedByCurrency, ...backing, anyUserNegative, chainIntact, drift };
 }
@@ -814,7 +813,7 @@ async function foldLedger(
 async function deriveBalanceMinor(
   store: Store,
   account: AccountRef,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<bigint> {
   let derivedMinor = 0n;
   const page = await store.ledger.statement(account, FULL_RANGE, options);
@@ -1061,7 +1060,7 @@ export const EXPORT_FORMAT = 'economy-lab/ledger-export';
 // wire codec and never changes: the file is canonical, byte-for-byte stable for the same data.
 async function* exportLedger(
   store: Store,
-  options?: Options,
+  options?: CallOptions,
 ): AsyncIterable<string> {
   yield JSON.stringify({ format: EXPORT_FORMAT, v: 1 });
   const accounts: AccountRef[] = [];

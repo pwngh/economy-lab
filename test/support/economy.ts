@@ -9,7 +9,7 @@
  * @license MIT
  */
 
-import { economyFromCapabilities, type Economy } from '#src/economy.ts';
+import { createEconomy, type Economy } from '#src/economy.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import type { EconomyEvent, Store } from '#src/ports.ts';
 import type { Config } from '#src/config.ts';
@@ -20,10 +20,11 @@ import {
   seededSigner,
   fixedRates,
   testLogger,
-  noopMeter,
+  silentMeter,
   fakeProcessor,
   defaultPricing,
   testConfig,
+  testSecrets,
 } from '#test/support/capabilities.ts';
 
 /**
@@ -38,7 +39,7 @@ export function makeEconomy(
 ): Economy {
   const digest = seededDigest(seed);
   const clock = fixedClock(0);
-  return economyFromCapabilities({
+  return createEconomy({
     store: store ?? memoryStore({ digest, clock }),
     clock,
     ids: sequentialIds(),
@@ -46,10 +47,11 @@ export function makeEconomy(
     signer: seededSigner(seed),
     rates: fixedRates(),
     logger: testLogger(),
-    meter: noopMeter(),
+    meter: silentMeter(),
     processor: fakeProcessor(),
     pricing: defaultPricing(),
     config: { ...testConfig(), ...config },
+    secrets: testSecrets(),
   });
 }
 

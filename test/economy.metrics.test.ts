@@ -19,7 +19,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { economyFromCapabilities } from '#src/economy.ts';
+import { createEconomy } from '#src/economy.ts';
 import { economyWithStore } from '#test/support/economy.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { spend, topUp, credit } from '#test/support/builders.ts';
@@ -32,6 +32,7 @@ import {
   seededSigner,
   sequentialIds,
   testConfig,
+  testSecrets,
   testLogger,
 } from '#test/support/capabilities.ts';
 
@@ -46,7 +47,7 @@ function meteredEconomy(counts: Count[], observed: string[]) {
     count: (name, _n, tags) => counts.push({ name, tags }),
     observe: (name) => observed.push(name),
   };
-  return economyFromCapabilities({
+  return createEconomy({
     store: memoryStore({ digest, clock }),
     clock,
     ids: sequentialIds(),
@@ -58,6 +59,7 @@ function meteredEconomy(counts: Count[], observed: string[]) {
     processor: fakeProcessor(),
     pricing: defaultPricing(),
     config: testConfig(),
+    secrets: testSecrets(),
   });
 }
 
@@ -121,7 +123,7 @@ describe('economy.submit telemetry', () => {
   test('a throwing meter never changes the outcome', async () => {
     const digest = seededDigest(1);
     const clock = fixedClock(0);
-    const economy = economyFromCapabilities({
+    const economy = createEconomy({
       store: memoryStore({ digest, clock }),
       clock,
       ids: sequentialIds(),
@@ -140,6 +142,7 @@ describe('economy.submit telemetry', () => {
       processor: fakeProcessor(),
       pricing: defaultPricing(),
       config: testConfig(),
+      secrets: testSecrets(),
     });
 
     const outcome = await economy.submit(

@@ -22,12 +22,13 @@ import { toAmount } from '#src/money.ts';
 import { fault } from '#src/errors.ts';
 import { spendable, earned, SYSTEM } from '#src/accounts.ts';
 import {
+  makePorts,
   makeWorkerCtx,
   seededDigest,
   seededSigner,
 } from '#test/support/capabilities.ts';
 
-import type { SweepInput } from '#src/worker/index.ts';
+import type { SweepRequest } from '#src/worker/index.ts';
 import type { ReconcileFeed } from '#src/worker/reconcile.ts';
 import type {
   Checkpoint,
@@ -45,7 +46,7 @@ function nullDispatcher(): Dispatcher {
   return async () => {};
 }
 
-function sweepInput(overrides?: Partial<SweepInput>): SweepInput {
+function sweepInput(overrides?: Partial<SweepRequest>): SweepRequest {
   return {
     now: 1_000,
     limit: 10,
@@ -297,7 +298,11 @@ async function verifiesThePriorCheckpointBeforeSealingAFreshOne(): Promise<void>
   await sealCheckpoint(store, ctx);
   await mutateLedger(store, 'usr_a');
 
-  const batch = await runSweeps(store, ctx, sweepInput());
+  const batch = await runSweeps(
+    store,
+    makePorts(store, { digest }),
+    sweepInput(),
+  );
 
   assert.equal(batch.checkpointVerify.ok, true);
   assert.equal(

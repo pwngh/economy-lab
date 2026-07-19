@@ -12,7 +12,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { economyFromCapabilities } from '#src/economy.ts';
+import { createEconomy } from '#src/economy.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import {
   fixedClock,
@@ -21,21 +21,22 @@ import {
   seededSigner,
   fixedRates,
   testLogger,
-  noopMeter,
+  silentMeter,
   fakeProcessor,
   defaultPricing,
   testConfig,
+  testSecrets,
 } from '#test/support/capabilities.ts';
 
 // Config is read live on every submit while velocityWindowMs is captured at store construction,
 // so a runtime mutation would half-apply. The freeze makes "a config change requires a rebuild"
 // uniformly true: mutation throws instead of half-working.
-describe('economyFromCapabilities freezes its config', () => {
+describe('createEconomy freezes its config', () => {
   function build() {
     const digest = seededDigest(1);
     const clock = fixedClock(0);
     const config = testConfig();
-    economyFromCapabilities({
+    createEconomy({
       store: memoryStore({ digest, clock }),
       clock,
       ids: sequentialIds(),
@@ -43,10 +44,11 @@ describe('economyFromCapabilities freezes its config', () => {
       signer: seededSigner(1),
       rates: fixedRates(),
       logger: testLogger(),
-      meter: noopMeter(),
+      meter: silentMeter(),
       processor: fakeProcessor(),
       pricing: defaultPricing(),
       config,
+      secrets: testSecrets(),
     });
     return config;
   }

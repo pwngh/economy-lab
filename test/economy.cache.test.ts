@@ -12,7 +12,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { economyFromCapabilities } from '#src/economy.ts';
+import { createEconomy } from '#src/economy.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import {
   fixedClock,
@@ -21,10 +21,11 @@ import {
   seededSigner,
   fixedRates,
   testLogger,
-  noopMeter,
+  silentMeter,
   fakeProcessor,
   defaultPricing,
   testConfig,
+  testSecrets,
 } from '#test/support/capabilities.ts';
 import { topUp, credit } from '#test/support/builders.ts';
 import { SYSTEM, shardsOf, spendable } from '#src/accounts.ts';
@@ -79,7 +80,7 @@ function makeCachedEconomy(
 ): Economy {
   const digest = seededDigest(seed);
   const clock = fixedClock(0);
-  return economyFromCapabilities({
+  return createEconomy({
     store: memoryStore({ digest, clock }),
     clock,
     ids: sequentialIds(),
@@ -87,10 +88,11 @@ function makeCachedEconomy(
     signer: seededSigner(seed),
     rates: fixedRates(),
     logger: testLogger(),
-    meter: noopMeter(),
+    meter: silentMeter(),
     processor: fakeProcessor(),
     pricing: defaultPricing(),
     config: { ...testConfig(), ...config },
+    secrets: testSecrets(),
     cache,
   });
 }

@@ -19,9 +19,10 @@ import { credit, debit, postEntry } from '#src/ledger.ts';
 import { toAmount } from '#src/money.ts';
 import { fault } from '#src/errors.ts';
 import { spendable, SYSTEM } from '#src/accounts.ts';
-import { makeWorkerCtx, seededDigest } from '#test/support/capabilities.ts';
+import { makePorts, seededDigest } from '#test/support/capabilities.ts';
+import { makeEconomy } from '#test/support/economy.ts';
 
-import type { SweepInput } from '#src/worker/index.ts';
+import type { SweepRequest } from '#src/worker/index.ts';
 import type { ReconcileFeed } from '#src/worker/reconcile.ts';
 import type {
   Digest,
@@ -39,7 +40,7 @@ function nullDispatcher(): Dispatcher {
   return async () => {};
 }
 
-function sweepInput(overrides?: Partial<SweepInput>): SweepInput {
+function sweepInput(overrides?: Partial<SweepRequest>): SweepRequest {
   return {
     now: 1_000,
     limit: 10,
@@ -170,7 +171,7 @@ async function invokesEverySweep(): Promise<void> {
 
   await runSweeps(
     recording,
-    makeWorkerCtx({ digest }),
+    makePorts(recording, { digest }),
     sweepInput({ feed: recordingFeed(reconcileTouched) }),
   );
 
@@ -197,7 +198,7 @@ async function onlyRunsTheNamedJobs(): Promise<void> {
 
   const batch = await runSweeps(
     recording,
-    makeWorkerCtx({ digest }),
+    makePorts(recording, { digest }),
     sweepInput({
       feed: recordingFeed(reconcileTouched),
       only: ['relay'],
@@ -233,7 +234,11 @@ async function onlyRunsTheNamedJobs(): Promise<void> {
 async function reportsEverySweepUnderItsName(): Promise<void> {
   const { store, digest } = await seededStore();
 
-  const batch = await runSweeps(store, makeWorkerCtx({ digest }), sweepInput());
+  const batch = await runSweeps(
+    store,
+    makePorts(store, { digest }),
+    sweepInput(),
+  );
 
   for (const name of [
     'payouts',
@@ -262,7 +267,7 @@ async function isolatesAThrownSweepFromTheBatch(): Promise<void> {
 
   const batch = await runSweeps(
     recording,
-    makeWorkerCtx({ digest }),
+    makePorts(recording, { digest }),
     sweepInput(),
   );
 
@@ -286,7 +291,7 @@ async function classifiesTheIsolatedFaultOnItsRetryVerdict(): Promise<void> {
 
   const batch = await runSweeps(
     recording,
-    makeWorkerCtx({ digest }),
+    makePorts(recording, { digest }),
     sweepInput(),
   );
 
@@ -310,7 +315,7 @@ async function wrapsANonEconomyThrowAsRetryableStoreFailure(): Promise<void> {
 
   const batch = await runSweeps(
     recording,
-    makeWorkerCtx({ digest }),
+    makePorts(recording, { digest }),
     sweepInput(),
   );
 
@@ -322,14 +327,17 @@ async function wrapsANonEconomyThrowAsRetryableStoreFailure(): Promise<void> {
 
 // --- createWorker composition root ------------------------------------------------
 
-async function runOnceDrivesOneBatch(): Promise<void> {
+async function sweepDrivesOneBatch(): Promise<void> {
   const { store, digest } = await seededStore();
-  const worker = createWorker(store, makeWorkerCtx({ digest }));
+  const worker = createWorker(
+    makePorts(store, { digest }),
+    makeEconomy(1, store),
+  );
 
-  const run = await worker.runOnce(sweepInput());
+  const run = await worker.sweep(sweepInput());
 
   assert.equal(run.batch.payouts.ok, true);
-  assert.equal(worker.start, undefined); // no scheduler injected
+  assert.equal(typeof worker.start, 'function'); // present even without a scheduler
   await store.close();
 }
 
@@ -342,7 +350,7 @@ async function emitsTheSweepHeartbeatAndTheCleanVerifyBeat(): Promise<void> {
     },
     observe: () => {},
   };
-  const ctx = makeWorkerCtx({ digest, meter });
+  const ctx = makePorts(store, { digest, meter });
 
   await runSweeps(store, ctx, sweepInput());
   const beats = counts.filter((c) => c.name === 'worker.sweep');
@@ -377,27 +385,64 @@ async function pauseSkipsScheduledRunsAndResumeRestoresThem(): Promise<void> {
     },
   };
   const worker = createWorker(
-    store,
-    makeWorkerCtx({ digest, meter }),
-    scheduler,
+    makePorts(store, { digest, meter, scheduler }),
+    makeEconomy(1, store),
   );
-  worker.start!(5_000, sweepInput());
+  worker.start(5_000, sweepInput());
 
-  assert.equal(worker.paused(), false);
+  assert.equal(worker.sweepsPaused, false);
   worker.pause();
-  assert.equal(worker.paused(), true);
+  assert.equal(worker.sweepsPaused, true);
   await scheduled!.task();
   assert.equal(metered, 0); // the scheduled run was a no-op
 
-  // An explicit runOnce is deliberate and ignores the pause.
-  await worker.runOnce(sweepInput());
-  const afterRunOnce = metered;
-  assert.notEqual(afterRunOnce, 0);
+  // An explicit sweep is deliberate and ignores the pause.
+  await worker.sweep(sweepInput());
+  const afterExplicitSweep = metered;
+  assert.notEqual(afterExplicitSweep, 0);
 
   worker.resume();
-  assert.equal(worker.paused(), false);
+  assert.equal(worker.sweepsPaused, false);
   await scheduled!.task();
-  assert.notEqual(metered, afterRunOnce);
+  assert.notEqual(metered, afterExplicitSweep);
+  await store.close();
+}
+
+async function startReadsNowFromTheClockOnEveryTick(): Promise<void> {
+  const { store, digest } = await seededStore();
+  const nows: number[] = [];
+  const probed: Store = {
+    ...store,
+    sagas: {
+      ...store.sagas,
+      claimDue: (now, limit, options) => {
+        nows.push(now);
+        return store.sagas.claimDue(now, limit, options);
+      },
+    },
+  };
+  let at = 50_000;
+  let scheduled: { task: () => Promise<void> } | null = null;
+  const scheduler: Scheduler = {
+    every: (_ms, task) => {
+      scheduled = { task };
+      return () => {};
+    },
+  };
+  const worker = createWorker(
+    makePorts(probed, { digest, clock: { now: () => at }, scheduler }),
+    makeEconomy(1, probed),
+  );
+  // start's request cannot carry `now`: every tick reads the clock.
+  const { now, ...request } = sweepInput();
+  void now;
+  worker.start(5_000, request);
+
+  await scheduled!.task();
+  at = 60_000;
+  await scheduled!.task();
+
+  assert.deepEqual(nows, [50_000, 60_000]);
   await store.close();
 }
 
@@ -413,10 +458,12 @@ async function startSchedulesTheBatchOnTheInjectedScheduler(): Promise<void> {
       };
     },
   };
-  const worker = createWorker(store, makeWorkerCtx({ digest }), scheduler);
+  const worker = createWorker(
+    makePorts(store, { digest, scheduler }),
+    makeEconomy(1, store),
+  );
 
-  assert.notEqual(worker.start, undefined);
-  const stop = worker.start!(5_000, sweepInput());
+  const stop = worker.start(5_000, sweepInput());
   assert.equal(scheduled!.ms, 5_000);
   await scheduled!.task();
   stop();
@@ -426,7 +473,7 @@ async function startSchedulesTheBatchOnTheInjectedScheduler(): Promise<void> {
 
 async function skipsTheReconcileSweepWhenNoFeedIsConfigured(): Promise<void> {
   const { store, digest } = await seededStore();
-  const ctx = makeWorkerCtx({ digest });
+  const ctx = makePorts(store, { digest });
 
   // No feed and no windows: a host with no provider settlement report passes neither, and
   // the reconcile job reports a clean empty run instead of demanding a throwing stub.
@@ -468,7 +515,7 @@ async function skipsTheRelaySweepWhenNoDispatcherIsConfigured(): Promise<void> {
   // An undefined `dispatcher` is the no-dispatcher deployment (see selectDispatcher in src/index.ts).
   const batch = await runSweeps(
     store,
-    makeWorkerCtx({ digest }),
+    makePorts(store, { digest }),
     sweepInput({ dispatcher: undefined }),
   );
 
@@ -507,10 +554,12 @@ describe('Worker Composition Root', () => {
   test('wraps a raw thrown Error as a retryable STORE.FAILURE', () =>
     wrapsANonEconomyThrowAsRetryableStoreFailure());
 
-  test('runOnce drives one batch', () => runOnceDrivesOneBatch());
+  test('sweep drives one batch', () => sweepDrivesOneBatch());
   test('start schedules the batch on the injected scheduler', () =>
     startSchedulesTheBatchOnTheInjectedScheduler());
-  test('pause skips scheduled runs, runOnce still works, resume restores', () =>
+  test('start reads now from the clock on every tick', () =>
+    startReadsNowFromTheClockOnEveryTick());
+  test('pause skips scheduled runs, sweep still works, resume restores', () =>
     pauseSkipsScheduledRunsAndResumeRestoresThem());
   test('emits the sweep heartbeat and the clean-verify beat', () =>
     emitsTheSweepHeartbeatAndTheCleanVerifyBeat());

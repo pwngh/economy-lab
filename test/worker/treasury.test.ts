@@ -20,7 +20,11 @@ import { fault } from '#src/errors.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { SYSTEM, spendable } from '#src/accounts.ts';
 import { credit, usd } from '#test/support/builders.ts';
-import { makeWorkerCtx, testConfig } from '#test/support/capabilities.ts';
+import {
+  makePorts,
+  makeWorkerCtx,
+  testConfig,
+} from '#test/support/capabilities.ts';
 
 import type { Amount, Currency } from '#src/money.ts';
 import type { Config } from '#src/config.ts';
@@ -564,7 +568,11 @@ describe('runSweeps: Fee Realization Is Wired Into The Worker Cycle', () => {
       }),
     );
 
-    const batch = await runSweeps(store, workerCtx(), cycleInput(1_000));
+    const batch = await runSweeps(
+      store,
+      makePorts(store, { rates: treasuryRates() }),
+      cycleInput(1_000),
+    );
 
     assert.equal(batch.feeSweep.ok, true);
     assert.equal(
@@ -593,7 +601,11 @@ describe('runSweeps: Fee Realization Is Wired Into The Worker Cycle', () => {
       }),
     );
 
-    const batch = await runSweeps(store, workerCtx(), cycleInput(1_000));
+    const batch = await runSweeps(
+      store,
+      makePorts(store, { rates: treasuryRates() }),
+      cycleInput(1_000),
+    );
 
     assert.equal(batch.feeSweep.ok, true);
     assert.equal(

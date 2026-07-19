@@ -13,7 +13,8 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { allInvariantsHold, proveEconomy } from '#src/integrity.ts';
+import { allInvariantsHold, findByHash, proveEconomy } from '#src/integrity.ts';
+import { GENESIS_HEX } from '#src/ledger.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { credit as creditLeg, debit, postEntry } from '#src/ledger.ts';
 import { spendable, earned, SYSTEM } from '#src/accounts.ts';
@@ -42,10 +43,11 @@ type Recorder = {
 };
 
 function ctx(rec: Recorder): {
+  store: Store;
   rates: ReturnType<typeof fixedRates>;
   digest: Digest;
 } {
-  return { rates: fixedRates(), digest: rec.digest };
+  return { store: rec.store, rates: fixedRates(), digest: rec.digest };
 }
 
 function recorder(): Recorder {
@@ -107,7 +109,7 @@ describe('proveEconomy', () => {
   test('reports every invariant holding on a fresh empty economy', async () => {
     const rec = recorder();
 
-    const report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(ctx(rec));
 
     assert.equal(allInvariantsHold(report), true);
     assert.deepEqual(report.shortfall, zero('USD'));
@@ -117,7 +119,7 @@ describe('proveEconomy', () => {
     const rec = recorder();
     await topUp(rec, 'usr_buyer', '10.00');
 
-    const report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(ctx(rec));
 
     assert.equal(report.conserved, true);
     assert.equal(report.backed, true);
@@ -134,7 +136,7 @@ describe('proveEconomy', () => {
       creditLeg(earned('usr_b'), credit('5.00')),
     ]);
 
-    const report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(ctx(rec));
 
     assert.equal(report.conserved, true);
     assert.equal(report.backed, true);
@@ -148,7 +150,7 @@ describe('proveEconomy', () => {
       creditLeg(earned('usr_seller'), credit('4.00')),
     ]);
 
-    const report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(ctx(rec));
 
     assert.equal(report.conserved, true);
   });
@@ -164,7 +166,7 @@ describe('proveEconomy On A Broken Book', () => {
       creditLeg(earned('usr_seller'), credit('3.00')),
     ]);
 
-    const report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(ctx(rec));
 
     assert.equal(report.conserved, false);
   });
@@ -176,7 +178,7 @@ describe('proveEconomy On A Broken Book', () => {
       creditLeg(SYSTEM.REVENUE, credit('5.00')),
     ]);
 
-    const report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(ctx(rec));
 
     assert.equal(report.noOverdraft, false);
     assert.equal(report.conserved, true); // the debit and credit still cancel, so the books balance
@@ -191,7 +193,7 @@ describe('proveEconomy On A Broken Book', () => {
       creditLeg(spendable('usr_buyer'), credit('8.00')),
     ]);
 
-    const report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(ctx(rec));
 
     assert.equal(report.backed, false);
     assert.deepEqual(report.shortfall, usd('0.04'));
@@ -205,7 +207,7 @@ describe('proveEconomy On A Broken Book', () => {
       creditLeg(earned('usr_seller'), credit('20.00')),
     ]);
 
-    const report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(ctx(rec));
 
     assert.equal(report.backed, true);
     assert.deepEqual(report.shortfall, usd('0.00'));
@@ -219,7 +221,7 @@ describe('proveEconomy Drift Detection', () => {
     const rec = recorder();
     await topUp(rec, 'usr_buyer', '10.00');
 
-    const report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(ctx(rec));
 
     assert.equal(report.consistent, true);
     assert.deepEqual(report.drift, []);
@@ -233,7 +235,7 @@ describe('proveEconomy Drift Detection', () => {
       legs[1] = creditLeg(spendable('usr_buyer'), credit('3.00'));
     });
 
-    const report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(ctx(rec));
 
     assert.equal(report.consistent, false);
     const drifted = report.drift.find(
@@ -251,7 +253,7 @@ describe('proveEconomy Drift Detection', () => {
     const phantom = earned('usr_ghost');
     rec.seedBalance(phantom, credit('5.00'));
 
-    const report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(ctx(rec));
 
     assert.equal(report.consistent, false);
     const drifted = report.drift.find((row) => row.account === phantom);
@@ -275,7 +277,7 @@ describe('proveEconomy Drift Detection', () => {
       };
     });
 
-    const report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(ctx(rec));
 
     assert.equal(report.consistent, false);
     assert.equal(report.conserved, true);
@@ -295,7 +297,7 @@ describe('proveEconomy Chain Verification', () => {
       creditLeg(earned('usr_seller'), credit('6.00')),
     ]);
 
-    const report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(ctx(rec));
 
     assert.equal(report.chainIntact, true);
   });
@@ -307,7 +309,7 @@ describe('proveEconomy Chain Verification', () => {
       legs[1] = { account: legs[1]!.account, amount: credit('999.00') };
     });
 
-    const report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(ctx(rec));
 
     assert.equal(report.chainIntact, false);
   });
@@ -326,7 +328,7 @@ describe('proveEconomy Chain Verification', () => {
       };
     });
 
-    const report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(ctx(rec));
 
     assert.equal(report.chainIntact, false);
     assert.equal(report.conserved, true); // the two edits cancel, so the books still balance
@@ -346,7 +348,7 @@ describe('The All-Checks Roll-Up', () => {
     const rec = recorder();
     await topUp(rec, 'usr_buyer', '3.00');
 
-    const report = await proveEconomy(rec.store, ctx(rec));
+    const report = await proveEconomy(ctx(rec));
 
     assert.equal(
       allInvariantsHold(report),
@@ -355,6 +357,102 @@ describe('The All-Checks Roll-Up', () => {
         report.noOverdraft &&
         report.chainIntact &&
         report.consistent,
+    );
+  });
+});
+
+// The forensic lookup over the public read surface: exact match, genesis excluded, scan bounded.
+describe('findByHash', () => {
+  function readOf(rec: Recorder) {
+    return {
+      accounts: () => rec.store.ledger.balanceAccounts(),
+      lineage: (account: AccountRef) => rec.store.ledger.lineage(account),
+    };
+  }
+
+  async function firstLink(rec: Recorder) {
+    for await (const account of rec.store.ledger.balanceAccounts()) {
+      for await (const link of rec.store.ledger.lineage(account)) {
+        return { account, link };
+      }
+    }
+    throw new Error('no links recorded');
+  }
+
+  test('locates the link carrying a hash, case-insensitively', async () => {
+    const rec = recorder();
+    await topUp(rec, 'usr_find', '10.00');
+    const { link } = await firstLink(rec);
+
+    const hit = await findByHash(readOf(rec), link.hash.toUpperCase());
+
+    assert.notEqual(hit, null);
+    assert.equal(hit!.link.hash, link.hash);
+    assert.equal(hit!.field, 'hash');
+  });
+
+  test('a chained prevHash resolves via the prior link that carries it as hash', async () => {
+    const rec = recorder();
+    await topUp(rec, 'usr_find', '10.00');
+    await topUp(rec, 'usr_find', '5.00');
+    let second: string | null = null;
+    for await (const link of rec.store.ledger.lineage(spendable('usr_find'))) {
+      if (link.prevHash !== GENESIS_HEX) {
+        second = link.prevHash;
+        break;
+      }
+    }
+
+    const hit = await findByHash(readOf(rec), second!);
+
+    // A well-formed chain carries every non-genesis prevHash as the prior link's hash, and
+    // lineage streams oldest-first, so the walk lands on the prior link.
+    assert.notEqual(hit, null);
+    assert.equal(hit!.field, 'hash');
+    assert.equal(hit!.link.hash, second);
+  });
+
+  test('a dangling prevHash (no link carries it as hash) reports the prevHash field', async () => {
+    const orphan: import('#src/ports.ts').StoredLink = {
+      txnId: 'txn_orphan',
+      legs: [],
+      meta: {},
+      prevHash: 'ab'.repeat(32),
+      hash: 'cd'.repeat(32),
+    };
+    const read = {
+      accounts: async function* () {
+        yield 'usr_x:spendable' as AccountRef;
+      },
+      lineage: async function* () {
+        yield orphan;
+      },
+    };
+
+    const hit = await findByHash(read, 'AB'.repeat(32));
+
+    assert.notEqual(hit, null);
+    assert.equal(hit!.field, 'prevHash');
+    assert.equal(hit!.link.txnId, 'txn_orphan');
+  });
+
+  test('the genesis prevHash never matches', async () => {
+    const rec = recorder();
+    await topUp(rec, 'usr_find', '10.00');
+
+    assert.equal(await findByHash(readOf(rec), GENESIS_HEX), null);
+  });
+
+  test('an unknown hash misses, and scanMax bounds the walk', async () => {
+    const rec = recorder();
+    await topUp(rec, 'usr_find', '10.00');
+    const { link } = await firstLink(rec);
+
+    assert.equal(await findByHash(readOf(rec), 'f'.repeat(64)), null);
+    // A one-link budget cannot reach anything beyond the first link scanned.
+    assert.equal(
+      await findByHash(readOf(rec), link.hash, { scanMax: 0 }),
+      null,
     );
   });
 });

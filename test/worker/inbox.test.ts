@@ -15,12 +15,13 @@ import assert from 'node:assert/strict';
 
 import { drainInbox, type InboxSummary } from '#src/worker/inbox.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
+import { spendable } from '#src/accounts.ts';
 import { fault } from '#src/errors.ts';
 import { credit } from '#test/support/builders.ts';
-import { makeWorkerCtx, testConfig } from '#test/support/capabilities.ts';
+import { makePorts, testConfig } from '#test/support/capabilities.ts';
 
 import type { Economy, Operation, Outcome } from '#src/contract.ts';
-import type { InboxEntry, Store } from '#src/ports.ts';
+import type { InboxMessage, Store } from '#src/ports.ts';
 
 // The provider event id doubles as the row `key` and the operation's idempotencyKey.
 function topUp(eventId: string): Operation {
@@ -34,7 +35,7 @@ function topUp(eventId: string): Operation {
   } as unknown as Operation;
 }
 
-async function enqueue(store: Store, eventId: string): Promise<InboxEntry> {
+async function enqueue(store: Store, eventId: string): Promise<InboxMessage> {
   return store.transaction((unit) =>
     unit.inbox.enqueueInbound({
       id: `ibx_${eventId}`,
@@ -74,11 +75,11 @@ function sweep(
   limit = 10,
   maxInboxAttempts?: number,
 ): Promise<InboxSummary> {
-  const ctx =
+  const ports =
     maxInboxAttempts === undefined
-      ? makeWorkerCtx()
-      : makeWorkerCtx({ config: { ...testConfig(), maxInboxAttempts } });
-  return drainInbox(store, ctx, {
+      ? makePorts(store)
+      : makePorts(store, { config: { ...testConfig(), maxInboxAttempts } });
+  return drainInbox(store, ports, {
     economy: economy as Economy,
     now: 0,
     limit,
@@ -252,7 +253,12 @@ describe('drainInbox — Dead-Letter', () => {
     // A business decline is data, not a throw; it would repeat forever, so the row parks at once.
     const economy = scriptedEconomy(() => ({
       status: 'rejected',
-      reason: 'INSUFFICIENT_FUNDS',
+      detail: {
+        reason: 'INSUFFICIENT_FUNDS',
+        account: spendable('usr_buyer'),
+        need: credit('10.00'),
+        have: credit('0.00'),
+      },
     }));
 
     const summary = await sweep(store, economy);

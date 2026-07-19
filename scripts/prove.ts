@@ -11,7 +11,7 @@
 
 import process from 'node:process';
 
-import { economyFromCapabilities } from '#src/economy.ts';
+import { createEconomy } from '#src/economy.ts';
 import { adapterMatrix } from '#test/support/adapters.ts';
 import { seededProgram } from '#test/support/seeded-program.ts';
 import {
@@ -21,10 +21,11 @@ import {
   seededSigner,
   fixedRates,
   testLogger,
-  noopMeter,
+  silentMeter,
   fakeProcessor,
   defaultPricing,
   testConfig,
+  testSecrets,
 } from '#test/support/capabilities.ts';
 
 import type { AdapterCase } from '#test/support/adapters.ts';
@@ -44,7 +45,7 @@ async function makeProvable(
   const digest = seededDigest(1);
   const clock = fixedClock(0);
   const store = await adapter.makeStore();
-  const economy = economyFromCapabilities({
+  const economy = createEconomy({
     store,
     clock,
     ids: sequentialIds(),
@@ -52,10 +53,11 @@ async function makeProvable(
     signer: seededSigner(seed),
     rates: fixedRates(),
     logger: testLogger(),
-    meter: noopMeter(),
+    meter: silentMeter(),
     processor: fakeProcessor(),
     pricing: defaultPricing(),
     config: testConfig(),
+    secrets: testSecrets(),
   });
   return { economy, store };
 }
@@ -69,7 +71,7 @@ async function checkInvariants(
   outcome: Outcome,
   heads: Map<AccountRef, string>,
 ): Promise<Failure | null> {
-  const report = await provable.economy.read.prove();
+  const report = await provable.economy.read.health();
   if (!report.conserved) {
     return { invariant: 'conserves', detail: {} };
   }

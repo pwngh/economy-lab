@@ -20,6 +20,9 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   responses still carry `reason` beside `detail`.
 - Breaking: `EconomyStatus.paused` is `maintenanceActive`; the worker's own switch stays
   `sweepsPaused`.
+- Breaking: `createEconomy(ports)` is the single construction call — the zero-arg and
+  options-object forms are deleted; `createWorker(ports, economy)` replaces
+  `createWorker(store, ctx)`.
 - `postgresStore` and `mysqlStore` open without touching schema; `schema: 'assert'` checks
   the stamped version (`postgresStore` at open, `mysqlStore` once before the first operation),
   and `openPorts` asserts eagerly on the pool.
@@ -32,9 +35,12 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - `DEV_RATES` names the development rate table; `paginate` walks any cursor read to
   completion; `findByHash` looks a transaction up by chain hash; `read.payouts` and
   `SagaStore.list` take a `states` filter.
+- `worker.start()` runs on a built-in interval scheduler when no `scheduler` port is set.
 - `idempotencyKey(...parts)` mints an idempotency key from the joined parts, or a random
   one when called bare.
 - `usd(decimal)` builds a USD amount from a two-decimal string.
+- `createSupervisorFrom(runtime, ports, scheduler)` builds the ops supervisor over an
+  existing runtime's signals.
 
 ## 0.3.2 - 2026-07-17
 

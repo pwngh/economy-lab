@@ -16,11 +16,8 @@
 
 import { writeFile } from 'node:fs/promises';
 
-import {
-  economyFromCapabilities,
-  memoryStore,
-  workerCtxFrom,
-} from '#src/index.ts';
+import { createEconomy } from '#src/index.ts';
+import { memoryStore } from '#src/adapters/index.ts';
 import { createMysqlPool } from '#src/engines/mysql.ts';
 import { loadConfig } from '#src/config.ts';
 import {
@@ -51,17 +48,18 @@ import {
   fakeProcessor,
   fixedClock,
   fixedRates,
-  noopMeter,
+  silentMeter,
   seededSigner,
   sequentialIds,
   testLogger,
 } from '#test/support/capabilities.ts';
 
-import type { Capabilities, Clock, Digest, Store } from '#src/ports.ts';
+import type { Ports, Clock, Digest, Store } from '#src/ports.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Config } from '#src/config.ts';
 import type { EnvMap } from '#src/env.ts';
-import type { Economy, ProveReport, WorkerCtx } from '#src/index.ts';
+import type { Economy, ProveReport } from '#src/index.ts';
+import type { WorkerCtx } from '#src/contract.ts';
 
 // 'in-memory' always runs; a SQL backend is skipped when its database is unreachable (see tryProvision).
 export type BackendName = 'in-memory' | 'postgres' | 'mysql';
@@ -168,15 +166,10 @@ const PROFILES: Record<ProfileName, Partial<HarnessConfig>> = {
 // Parsed through the real loadConfig so the measured Config cannot drift from production (gate
 // semantics: GatesMode).
 function buildBenchConfig(gates: GatesMode, shards: number): Config {
-  const secrets = {
-    WEBHOOK_SECRET: 'bench-webhook-secret',
-    SIGNING_SECRET: 'bench-signing-secret',
-  };
   if (gates === 'on') {
     // Maturity stays 0 even with gates on: on the fixed clock a non-zero hold would immature every
     // payout — a clock artifact, not a measured cost.
     return loadConfig({
-      ...secrets,
       MATURITY_HORIZON_CARD_MS: '0',
       MATURITY_HORIZON_CRYPTO_MS: '0',
       MATURITY_HORIZON_DEFAULT_MS: '0',
@@ -187,7 +180,6 @@ function buildBenchConfig(gates: GatesMode, shards: number): Config {
     });
   }
   return loadConfig({
-    ...secrets,
     MATURITY_HORIZON_CARD_MS: '0',
     MATURITY_HORIZON_CRYPTO_MS: '0',
     MATURITY_HORIZON_DEFAULT_MS: '0',
@@ -332,7 +324,7 @@ function assemble(
   clock: Clock,
   opts: { seed: number; gates: GatesMode; shards: number },
 ): { economy: Economy; workerCtx: WorkerCtx } {
-  const caps: Capabilities = {
+  const caps: Ports = {
     store,
     clock,
     digest,
@@ -342,14 +334,26 @@ function assemble(
     // fixedRates is the production configuredRates under pinned values — the production rate source is measured.
     rates: fixedRates(),
     logger: testLogger(),
-    meter: noopMeter(),
+    meter: silentMeter(),
     pricing: defaultPricing(),
     config: buildBenchConfig(opts.gates, opts.shards),
+    secrets: {
+      webhookSecret: 'bench-webhook-secret',
+      signingSecret: 'bench-signing-secret',
+    },
   };
-  return {
-    economy: economyFromCapabilities(caps),
-    workerCtx: workerCtxFrom(caps),
+  const workerCtx: WorkerCtx = {
+    clock,
+    ids: caps.ids,
+    digest,
+    signer: caps.signer,
+    processor: caps.processor,
+    rates: caps.rates,
+    logger: caps.logger,
+    meter: caps.meter,
+    config: caps.config,
   };
+  return { economy: createEconomy(caps), workerCtx };
 }
 
 // The production digest, not the test seededDigest: the chain hash is on every submit's hot path,
@@ -1026,7 +1030,7 @@ export type ProveResult = { ok: boolean; report: ProveReport };
 export async function proveEconomyOrReport(
   economy: Economy,
 ): Promise<ProveResult> {
-  const report = await economy.read.prove();
+  const report = await economy.read.health();
   return { ok: allInvariantsHold(report), report };
 }
 

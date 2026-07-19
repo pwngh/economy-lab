@@ -83,7 +83,7 @@ import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { memoryStore } from '#src/adapters/memory.ts';
-import { economyFromCapabilities } from '#src/economy.ts';
+import { createEconomy } from '#src/economy.ts';
 import { toAmount } from '#src/money.ts';
 import { spendable } from '#src/accounts.ts';
 import {
@@ -93,10 +93,11 @@ import {
   sequentialIds,
   fixedRates,
   testLogger,
-  noopMeter,
+  silentMeter,
   fakeProcessor,
   defaultPricing,
   testConfig,
+  testSecrets,
 } from '#test/support/capabilities.ts';
 import {
   adversarialPostgres,
@@ -105,7 +106,7 @@ import {
 
 import type { AdversarialEngine } from '#test/conformance/adversarial-engines.ts';
 import type { Economy, Operation } from '#src/contract.ts';
-import type { InboxEntry, OutboxMessage, Saga, Store } from '#src/ports.ts';
+import type { InboxMessage, OutboxMessage, Saga, Store } from '#src/ports.ts';
 
 // M seeded rows, N concurrent sweeps, per-claim batch limit, and how many independent drains to run
 // per claim method. M is far larger than N*LIMIT so the drain takes many overlapping rounds and the
@@ -182,7 +183,7 @@ function outboxRow(id: string): OutboxMessage {
 // each row's ledger effect is independently checkable and enqueue never dedupes two seeds. The
 // `system` actor and `card` source mirror a real settlement webhook's stored Operation, which the
 // pause gate exempts so drainInbox runs continuously.
-function inboxRow(id: string): InboxEntry {
+function inboxRow(id: string): InboxMessage {
   const userId = `usr_claim_${id}`;
   return {
     id,
@@ -387,7 +388,7 @@ function inboxMethod(): ClaimMethod {
       // re-submit of the same idempotencyKey is deduped by `submit`'s atomic key claim, the
       // production mechanism. It must share the store's seeded digest and fixed clock, or hashes
       // diverge.
-      const economy: Economy = economyFromCapabilities({
+      const economy: Economy = createEconomy({
         store,
         clock: fixedClock(0),
         ids: sequentialIds(),
@@ -395,10 +396,11 @@ function inboxMethod(): ClaimMethod {
         signer: seededSigner(1),
         rates: fixedRates(),
         logger: testLogger(),
-        meter: noopMeter(),
+        meter: silentMeter(),
         processor: fakeProcessor(),
         pricing: defaultPricing(),
         config: testConfig(),
+        secrets: testSecrets(),
       });
       return {
         seed: async (ids) => {

@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 
 import { relayOutbox, type RelaySummary } from '#src/worker/relay.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
-import { makeWorkerCtx, testConfig } from '#test/support/capabilities.ts';
+import { makePorts, testConfig } from '#test/support/capabilities.ts';
 
 import type { Dispatcher, EconomyEvent, Store } from '#src/ports.ts';
 
@@ -60,11 +60,11 @@ function sweep(
   maxOutboxAttempts?: number,
 ): Promise<RelaySummary> {
   // A small `maxOutboxAttempts` drives a poison row to its dead-letter cap in a few sweeps.
-  const ctx =
+  const ports =
     maxOutboxAttempts === undefined
-      ? makeWorkerCtx()
-      : makeWorkerCtx({ config: { ...testConfig(), maxOutboxAttempts } });
-  return relayOutbox(store, ctx, { dispatcher, limit });
+      ? makePorts(store)
+      : makePorts(store, { config: { ...testConfig(), maxOutboxAttempts } });
+  return relayOutbox(store, ports, { dispatcher, limit });
 }
 
 describe('relayOutbox', () => {
@@ -72,7 +72,7 @@ describe('relayOutbox', () => {
     const store = memoryStore();
     await enqueue(store, '1');
     const observed: Array<{ name: string; value: number }> = [];
-    const ctx = makeWorkerCtx({
+    const ctx = makePorts(store, {
       meter: {
         count: () => {},
         observe: (name, value) => observed.push({ name, value }),

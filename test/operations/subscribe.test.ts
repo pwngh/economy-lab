@@ -13,7 +13,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { subscribe } from '#src/operations/subscribe.ts';
-import { economyFromCapabilities } from '#src/economy.ts';
+import { createEconomy } from '#src/economy.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { spendable, promo, earned, SYSTEM } from '#src/accounts.ts';
 import { toAmount } from '#src/money.ts';
@@ -23,6 +23,7 @@ import {
   seededDigest,
   seededSigner,
   testConfig,
+  testSecrets,
   makeCtx,
 } from '#test/support/capabilities.ts';
 import {
@@ -50,7 +51,7 @@ function makeHarness(seed = 1): Harness {
   const clock = fixedClock(0);
   const store = memoryStore({ digest, clock });
   const ctx = makeCtx({ clock, digest, signer: seededSigner(seed) });
-  const economy = economyFromCapabilities({
+  const economy = createEconomy({
     store,
     clock,
     ids: ctx.ids,
@@ -62,6 +63,7 @@ function makeHarness(seed = 1): Harness {
     meter: ctx.meter,
     pricing: ctx.pricing,
     config: ctx.config,
+    secrets: testSecrets(),
   });
   return {
     economy,
@@ -172,7 +174,12 @@ async function rejectsWhenSpendableIsInsufficient(
 
   const outcome = await harness.run(subscribeOf('100.00'));
 
-  assert.equal(rejectionOf(outcome).reason, 'INSUFFICIENT_FUNDS');
+  assert.deepEqual(rejectionOf(outcome).detail, {
+    reason: 'INSUFFICIENT_FUNDS',
+    account: spendable('usr_buyer'),
+    need: credit('100.00'),
+    have: credit('50.00'),
+  });
 }
 
 async function opensAnActiveSubscription(harness: Harness): Promise<void> {
@@ -215,8 +222,11 @@ async function rejectsAFirstChargeOnImmatureCredit(): Promise<void> {
   const outcome = await economy.submit(subscribeOf('150.00'));
   assert.equal(outcome.status, 'rejected');
   const rejection = outcome as Extract<Outcome, { status: 'rejected' }>;
-  assert.equal(rejection.reason, 'FUNDS_IMMATURE');
-  assert.equal(rejection.detail?.availableAt, 60_000);
+  assert.deepEqual(rejection.detail, {
+    reason: 'FUNDS_IMMATURE',
+    source: 'card',
+    availableAt: 60_000,
+  });
   await economy.close();
 }
 
@@ -331,7 +341,7 @@ async function preservesConservation(harness: Harness): Promise<void> {
 
   await harness.run(subscribeOf('120.00'));
 
-  const report = await harness.economy.read.prove();
+  const report = await harness.economy.read.health();
   assert.equal(report.conserved, true);
   assert.equal(report.backed, true);
 }

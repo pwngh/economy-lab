@@ -24,11 +24,12 @@ import { relayOutbox } from '#src/worker/relay.ts';
 import { drainInbox } from '#src/worker/inbox.ts';
 import { reconcileDueWindows } from '#src/worker/reconcile.ts';
 
-import type { Economy, WorkerCtx } from '#src/contract.ts';
+import type { Economy } from '#src/contract.ts';
 import type {
   Dispatcher,
   Ids,
-  Options,
+  CallOptions,
+  Ports,
   Range,
   Scheduler,
   Store,
@@ -76,30 +77,48 @@ export const SWEEP_NAMES = [
 ] as const;
 export type SweepName = (typeof SWEEP_NAMES)[number];
 
-// Arguments for every background job in one object; not every job uses every field. `limit` caps
-// each due-item pass, and `options` may carry an AbortSignal that cancels a running job.
-export type SweepInput = {
-  now: number;
-  limit: number;
-  // Transport the relay job delivers outgoing events through. Optional (see `selectDispatcher` in
-  // src/index.ts): when absent the relay job is skipped and pending outbox rows wait for a later run.
-  dispatcher?: Dispatcher;
-  // Economy the inbox-apply job submits each stored inbound Operation through, so the money move runs
-  // through the same invariants and idempotency a direct caller hits. Optional like `dispatcher`:
-  // absent, `drainInbox` is skipped and pending inbox rows wait for a later run.
-  economy?: Economy;
-  // Settlement-report source for the reconcile job. Optional like `dispatcher`: absent (or with
-  // no windows), `reconcile` is skipped — a host with no provider report has nothing to compare.
-  feed?: ReconcileFeed;
-  windows?: ReadonlyArray<Range>;
-  // External float source for the treasury tie-out's coverage half. Optional like `dispatcher`:
-  // absent, `floatCoverage` is skipped — the internal backing check in `treasury` runs regardless.
-  float?: FloatFeed;
+/** Default per-job batch cap when neither the sweep request nor {@link WorkerDefaults} sets one. */
+export const DEFAULT_SWEEP_LIMIT = 100;
+
+// Per-sweep arguments; every field optional, falling back to the worker's construction-time
+// defaults. `now` defaults to the clock; `limit` to WorkerDefaults.limit, then
+// DEFAULT_SWEEP_LIMIT. `options` may carry an AbortSignal that cancels a running job.
+export type SweepRequest = {
+  readonly limit?: number;
+  readonly now?: number;
   // Narrows the run to just these jobs — the lever behind a supervisor's targeted re-drive
   // (e.g. `only: ['relay']` to push a backlog without sealing a checkpoint). A job left out
   // reports its idle summary, the same shape an absent optional dependency produces.
-  only?: ReadonlyArray<SweepName>;
-  options?: Options;
+  readonly only?: ReadonlyArray<SweepName>;
+  // Transport the relay job delivers outgoing events through; absent, the relay job is skipped
+  // and pending outbox rows wait for a later run.
+  readonly dispatcher?: Dispatcher;
+  // Economy the inbox-apply job submits each stored inbound Operation through, so the money move
+  // runs through the same invariants and idempotency a direct caller hits. createWorker binds
+  // one; absent both, `drainInbox` is skipped.
+  readonly economy?: Pick<Economy, 'submit'>;
+  // External float source for the treasury tie-out's coverage half; absent, `floatCoverage` is
+  // skipped — the internal backing check in `treasury` runs regardless.
+  readonly float?: FloatFeed;
+  // Settlement-report source for the reconcile job; absent (or with no windows), `reconcile` is
+  // skipped — a host with no provider report has nothing to compare.
+  readonly feed?: ReconcileFeed;
+  readonly windows?: ReadonlyArray<Range>;
+  readonly options?: CallOptions;
+};
+
+/**
+ * Steady-state sweep arguments bound at {@link createWorker}; any {@link SweepRequest} field
+ * overrides them per sweep.
+ */
+export type WorkerDefaults = {
+  readonly dispatcher?: Dispatcher;
+  readonly float?: FloatFeed;
+  readonly feed?: ReconcileFeed;
+  readonly windows?: ReadonlyArray<Range>;
+  readonly only?: ReadonlyArray<SweepName>;
+  /** Default DEFAULT_SWEEP_LIMIT when omitted. */
+  readonly limit?: number;
 };
 
 // One job's outcome: its summary, or its caught error as data (code and retry flag). A job's
@@ -123,27 +142,29 @@ export type SweepBatch = {
   promos: SweepResult<PromoExpirySummary>;
 };
 
-// runOnce's result: the batch plus the txn id of every posting the run minted, so a host can build
+// sweep's result: the batch plus the txn id of every posting the run minted, so a host can build
 // a feed without intercepting the id generator. A rolled-back job can mint an id that never
 // commits, so resolve each id via read.posting and skip a null.
 export type SweepRun = { batch: SweepBatch; postings: ReadonlyArray<string> };
 
 /**
- * Handle the host program uses to drive the background jobs. `runOnce` runs every job once.
- * `start` runs them on a timer and returns a stop function; present only when a Scheduler was
- * supplied at creation (without one there's nothing to drive the loop).
+ * Handle the host program uses to drive the background jobs. `sweep` runs every job once.
+ * `start` runs them on a timer (the Scheduler port when supplied, a built-in interval timer
+ * otherwise) and returns a stop function; every tick reads `now` from the clock, which is why
+ * its request cannot carry one.
  *
  * `pause` makes the scheduled runs no-ops until `resume`; the timer keeps ticking so stop stays
- * with whoever holds the stop function. An explicit `runOnce` still runs while paused — a
- * supervisor or operator acting deliberately is not the loop being paused.
+ * with whoever holds the stop function. An explicit `sweep` still runs while paused — a
+ * supervisor or operator acting deliberately is not the loop being paused. `sweepsPaused` is
+ * that flag, named apart from the economy's own `maintenanceActive`.
  */
-export type Worker = {
-  runOnce(input: SweepInput): Promise<SweepRun>;
+export interface Worker {
+  sweep(request?: SweepRequest): Promise<SweepRun>;
+  start(everyMs: number, request?: Omit<SweepRequest, 'now'>): () => void;
   pause(): void;
   resume(): void;
-  paused(): boolean;
-  start?(intervalMs: number, input: SweepInput): () => void;
-};
+  readonly sweepsPaused: boolean;
+}
 
 /**
  * Run every background job once over the same shared context and input. Each job runs inside its
@@ -152,15 +173,21 @@ export type Worker = {
  */
 export async function runSweeps(
   store: Store,
-  ctx: WorkerCtx,
-  input: SweepInput,
+  ports: Ports,
+  input: SweepRequest = {},
 ): Promise<SweepBatch> {
-  const { now, limit, options } = input;
-  const batch = await runSweepJobs(store, ctx, input, { now, limit, options });
+  const now = input.now ?? ports.clock.now();
+  const limit = input.limit ?? DEFAULT_SWEEP_LIMIT;
+  const options = input.options;
+  const batch = await runSweepJobs(store, ports, input, {
+    now,
+    limit,
+    options,
+  });
   // The batch heartbeat: a supervisor watching for this count going silent learns the worker
   // died faster than any downstream symptom can say so.
   try {
-    ctx.meter.count('worker.sweep', 1, {
+    ports.meter.count('worker.sweep', 1, {
       failed: String(
         Object.values(batch).filter((result) => !result.ok).length,
       ),
@@ -176,7 +203,7 @@ type SummaryOf<K extends SweepName> = Extract<
   { ok: true }
 >['summary'];
 
-// The empty-ok summary each job reports when it does not run — left out of `SweepInput.only`,
+// The empty-ok summary each job reports when it does not run — left out of `SweepRequest.only`,
 // or missing its optional dependency — so callers never see a third result shape.
 const IDLE_SUMMARIES: { [K in SweepName]: SummaryOf<K> } = {
   payouts: { submitted: [], deadLettered: [], retrying: [] },
@@ -202,11 +229,13 @@ const IDLE_SUMMARIES: { [K in SweepName]: SummaryOf<K> } = {
   promos: { reversed: [], failed: [] },
 };
 
+type ResolvedTick = { now: number; limit: number; options?: CallOptions };
+
 async function runSweepJobs(
   store: Store,
-  ctx: WorkerCtx,
-  input: SweepInput,
-  { now, limit, options }: Pick<SweepInput, 'now' | 'limit' | 'options'>,
+  ctx: Ports,
+  input: SweepRequest,
+  { now, limit, options }: ResolvedTick,
 ): Promise<SweepBatch> {
   const gate = <K extends SweepName>(
     name: K,
@@ -300,60 +329,97 @@ async function isolate<TSummary>(
 }
 
 /**
- * Build the worker from the store and context it uses. Always has `runOnce` (every job once).
- * With a `scheduler`, also gets `start(intervalMs, input)`, which runs the jobs every
- * `intervalMs` ms via that scheduler and returns a stop function. Using the scheduler rather
- * than a built-in timer keeps start and stop on the same code path.
+ * Build the worker over an open Ports bag and the economy its inbox job submits through.
+ * `defaults` binds the steady-state feeds, dispatcher, and limit; a sweep request overrides any
+ * of them per run. The dispatcher falls back to the bag's own, so an env-selected transport
+ * relays without restating. `start` drives the loop through the bag's Scheduler when one is
+ * present, else a built-in interval timer.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background
  *   worker} for the sweep cycle, ordering, and isolation model.
  */
 export function createWorker(
-  store: Store,
-  ctx: WorkerCtx,
-  scheduler?: Scheduler,
+  ports: Ports,
+  economy: Economy,
+  defaults: WorkerDefaults = {},
 ): Worker {
+  const store = ports.store;
+  const resolve = (request: SweepRequest): SweepRequest => ({
+    now: request.now ?? ports.clock.now(),
+    limit: request.limit ?? defaults.limit ?? DEFAULT_SWEEP_LIMIT,
+    only: request.only ?? defaults.only,
+    dispatcher: request.dispatcher ?? defaults.dispatcher ?? ports.dispatcher,
+    economy: request.economy ?? economy,
+    float: request.float ?? defaults.float,
+    feed: request.feed ?? defaults.feed,
+    windows: request.windows ?? defaults.windows,
+    options: request.options,
+  });
   let paused = false;
-  const controls = {
+  const scheduler = ports.scheduler ?? intervalScheduler();
+
+  const sweep = async (request: SweepRequest = {}): Promise<SweepRun> => {
+    // A wrapped id generator records the run's txn ids (see SweepRun). `start` below does not need
+    // this, so it stays on the bare runSweeps.
+    const postings: string[] = [];
+    const recordingPorts: Ports = {
+      ...ports,
+      ids: {
+        next: (prefix) => {
+          const id = ports.ids.next(prefix);
+          if (prefix === 'txn') postings.push(id);
+          return id;
+        },
+      } satisfies Ids,
+    };
+    const batch = await runSweeps(store, recordingPorts, resolve(request));
+    return { batch, postings };
+  };
+
+  return {
+    sweep,
+    start: (everyMs, request = {}) =>
+      scheduler.every(
+        everyMs,
+        async () => {
+          if (paused) return;
+          // resolve() reads the clock here, so every tick sweeps at its own moment.
+          await runSweeps(store, ports, resolve(request));
+        },
+        request.options,
+      ),
     pause: () => {
       paused = true;
     },
     resume: () => {
       paused = false;
     },
-    paused: () => paused,
-  };
-  const runOnce = async (input: SweepInput): Promise<SweepRun> => {
-    // A wrapped id generator records the run's txn ids (see SweepRun). `start` below does not need
-    // this, so it stays on the bare runSweeps.
-    const postings: string[] = [];
-    const recordingCtx: WorkerCtx = {
-      ...ctx,
-      ids: {
-        next: (prefix) => {
-          const id = ctx.ids.next(prefix);
-          if (prefix === 'txn') postings.push(id);
-          return id;
-        },
-      } satisfies Ids,
-    };
-    const batch = await runSweeps(store, recordingCtx, input);
-    return { batch, postings };
-  };
-  if (scheduler === undefined) {
-    return { runOnce, ...controls };
-  }
-  return {
-    runOnce,
-    ...controls,
-    start: (intervalMs, input) =>
-      scheduler.every(
-        intervalMs,
-        async () => {
-          if (paused) return;
-          await runSweeps(store, ctx, input);
-        },
-        input.options,
-      ),
+    get sweepsPaused() {
+      return paused;
+    },
   };
 }
+
+function intervalScheduler(): Scheduler {
+  return {
+    every: (ms, task) => {
+      // The one sanctioned raw timer: this IS the fallback Scheduler the restriction elsewhere
+      // points to. runSweeps never throws, so the fire-and-forget tick cannot leak a rejection.
+      // eslint-disable-next-line no-restricted-globals
+      const timer = setInterval(() => void task(), ms);
+      // Node's interval holds the event loop open; unref (absent on web runtimes) lets an
+      // embedding host exit without calling the stop handle.
+      const handle = timer as { unref?: () => void };
+      if (typeof handle.unref === 'function') {
+        handle.unref();
+      }
+      return () => clearInterval(timer);
+    },
+  };
+}
+
+// The rest of the /worker facet: the two directly-drivable jobs and the host-implemented feeds.
+export { drainInbox } from '#src/worker/inbox.ts';
+export { relayOutbox } from '#src/worker/relay.ts';
+export type { FloatFeed } from '#src/worker/treasury.ts';
+export type { ReconcileFeed } from '#src/worker/reconcile.ts';
