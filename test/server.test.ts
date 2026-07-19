@@ -19,10 +19,49 @@ import { toHex } from '#src/bytes.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { makeEconomy } from '#test/support/economy.ts';
 import { credit } from '#test/support/builders.ts';
-import { fixedClock, testConfig } from '#test/support/capabilities.ts';
+import {
+  fixedClock,
+  hasCode,
+  silentMeter,
+  testConfig,
+  testLogger,
+  testSecrets,
+} from '#test/support/capabilities.ts';
 
 import type { Economy } from '#src/contract.ts';
-import type { WebhookHandler } from '#src/server.ts';
+import type { Secrets } from '#src/config.ts';
+import type {
+  FetchHandler,
+  ServerOptions,
+  ServerPorts,
+  WebhookHandler,
+} from '#src/server.ts';
+
+// The narrow bag the routes read, from the deterministic test doubles; any slot overridable.
+function testPorts(
+  overrides: Partial<Omit<ServerPorts, 'secrets'>> & {
+    secrets?: Partial<Secrets>;
+  } = {},
+): ServerPorts {
+  return {
+    config: overrides.config ?? testConfig(),
+    secrets: { ...testSecrets(), ...overrides.secrets },
+    clock: overrides.clock ?? fixedClock(0),
+    meter: overrides.meter ?? silentMeter(),
+    logger: overrides.logger ?? testLogger(),
+  };
+}
+
+// A server over a fresh test economy: default ports, body actor trusted unless the test
+// supplies its own authenticate.
+function makeServer(options: Partial<ServerOptions> = {}): FetchHandler {
+  return createServer({
+    economy: makeEconomy(),
+    ports: testPorts(),
+    authenticate: false,
+    ...options,
+  });
+}
 
 // Lowercase hex HMAC-SHA256 over the body — the form the `x-signature` header carries.
 async function signHex(body: string, secret: string): Promise<string> {
@@ -89,7 +128,7 @@ function spendBody(buyerId: string, dollars: string): Record<string, unknown> {
 
 describe('createServer /submit', () => {
   test('commits a valid operation and returns 200 with the encoded transaction', async () => {
-    const server = createServer(makeEconomy());
+    const server = makeServer();
 
     const response = await server(
       submitRequest(topUpBody('usr_buyer', '10.00')),
@@ -109,7 +148,7 @@ describe('createServer /submit', () => {
   });
 
   test('returns 200 with the rejected Outcome for a valid decline', async () => {
-    const server = createServer(makeEconomy());
+    const server = makeServer();
 
     const response = await server(
       submitRequest(spendBody('usr_broke', '5.00')),
@@ -117,19 +156,21 @@ describe('createServer /submit', () => {
     const payload = (await response.json()) as {
       status: string;
       reason: string;
-      detail?: { required?: unknown; available?: unknown };
+      detail?: { reason?: string; need?: unknown; have?: unknown };
     };
 
     assert.equal(response.status, 200);
     assert.equal(payload.status, 'rejected');
+    // The top-level reason is kept on the wire, derived from detail.reason.
     assert.equal(payload.reason, 'INSUFFICIENT_FUNDS');
+    assert.equal(payload.detail?.reason, 'INSUFFICIENT_FUNDS');
     // Detail Amounts ride the wire as the same decimal strings every other amount uses.
-    assert.equal(payload.detail?.required, 'CREDIT:5.00');
-    assert.equal(payload.detail?.available, 'CREDIT:0.00');
+    assert.equal(payload.detail?.need, 'CREDIT:5.00');
+    assert.equal(payload.detail?.have, 'CREDIT:0.00');
   });
 
   test('decodes settlePayout, its optional providerAmount absent or as a wire string', async () => {
-    const server = createServer(makeEconomy());
+    const server = makeServer();
     const body = (providerAmount?: string) => ({
       kind: 'settlePayout',
       idempotencyKey: 'idem_settle_1',
@@ -150,7 +191,7 @@ describe('createServer /submit', () => {
   });
 
   test('a non-string providerAmount on settlePayout is refused at the decode gate', async () => {
-    const server = createServer(makeEconomy());
+    const server = makeServer();
     const response = await server(
       submitRequest({
         kind: 'settlePayout',
@@ -170,7 +211,7 @@ describe('createServer /submit', () => {
   });
 
   test('refuses wrong-shaped fields at the decode gate, one uniform 400 each', async () => {
-    const server = createServer(makeEconomy());
+    const server = makeServer();
     const cases: Array<[string, Record<string, unknown>]> = [
       ['idempotencyKey', { ...topUpBody('usr_a', '1.00'), idempotencyKey: '' }],
       ['actor', { ...topUpBody('usr_a', '1.00'), actor: { kind: 'user' } }],
@@ -214,7 +255,7 @@ describe('createServer /submit', () => {
   });
 
   test('a field no variant declares is refused, and a required field cannot be absent', async () => {
-    const server = createServer(makeEconomy());
+    const server = makeServer();
 
     const stray = await server(
       submitRequest({ ...topUpBody('usr_a', '1.00'), giftto: 'usr_b' }),
@@ -236,7 +277,7 @@ describe('createServer /submit', () => {
   });
 
   test('maps a malformed body to a 400 problem+json with the stable code', async () => {
-    const server = createServer(makeEconomy());
+    const server = makeServer();
 
     const response = await server(submitRequest({ kind: 'no-such-kind' }));
     const payload = (await response.json()) as Record<string, unknown>;
@@ -269,14 +310,14 @@ describe('createServer /submit', () => {
         statement: async () => {
           throw new Error('not used');
         },
-        prove: async () => {
+        health: async () => {
           throw new Error('not used');
         },
       },
       close: async () => {},
     } as unknown as Economy;
 
-    const server = createServer(economy);
+    const server = makeServer({ economy });
 
     const response = await server(submitRequest(topUpBody('usr_x', '1.00')));
     const payload = (await response.json()) as Record<string, unknown>;
@@ -301,7 +342,7 @@ describe('createServer /submit', () => {
 
 describe('createServer Routing', () => {
   test('returns 404 for an unknown route', async () => {
-    const server = createServer(makeEconomy());
+    const server = makeServer();
 
     const response = await server(
       new Request('https://economy.test/nope', { method: 'POST' }),
@@ -328,10 +369,9 @@ describe('createServer /webhooks HMAC Verification', () => {
       });
     };
 
-    const server = createServer(makeEconomy(), {
+    const server = makeServer({
       webhook,
-      config: { ...testConfig(), webhookSecret: secret },
-      clock: fixedClock(0),
+      ports: testPorts({ secrets: { webhookSecret: secret } }),
     });
 
     const response = await server(
@@ -357,10 +397,9 @@ describe('createServer /webhooks HMAC Verification', () => {
       return new Response(null, { status: 200 });
     };
 
-    const server = createServer(makeEconomy(), {
+    const server = makeServer({
       webhook,
-      config: { ...testConfig(), webhookSecret: secret },
-      clock: fixedClock(0),
+      ports: testPorts({ secrets: { webhookSecret: secret } }),
     });
 
     const response = await server(
@@ -387,10 +426,9 @@ describe('createServer /webhooks HMAC Verification', () => {
       return new Response(null, { status: 200 });
     };
 
-    const server = createServer(makeEconomy(), {
+    const server = makeServer({
       webhook,
-      config: { ...testConfig(), webhookSecret: secret },
-      clock: fixedClock(0),
+      ports: testPorts({ secrets: { webhookSecret: secret } }),
     });
 
     const response = await server(
@@ -407,9 +445,8 @@ describe('createServer /webhooks Freshness', () => {
     const secret = 'sek_test';
     const body = JSON.stringify({ eventId: 'evt_4', amount: '10.00' });
     const signature = await signHex(body, secret);
-    const config = { ...testConfig(), webhookSecret: secret };
     // Clock is at 0; send a timestamp older than the window so it is out of range.
-    const staleTimestamp = -(config.replayWindowMs + 1);
+    const staleTimestamp = -(testConfig().replayWindowMs + 1);
 
     let invoked = false;
     const webhook: WebhookHandler = async () => {
@@ -417,10 +454,9 @@ describe('createServer /webhooks Freshness', () => {
       return new Response(null, { status: 200 });
     };
 
-    const server = createServer(makeEconomy(), {
+    const server = makeServer({
       webhook,
-      config,
-      clock: fixedClock(0),
+      ports: testPorts({ secrets: { webhookSecret: secret } }),
     });
 
     const response = await server(
@@ -447,10 +483,9 @@ describe('createServer /webhooks Freshness', () => {
       return new Response(null, { status: 200 });
     };
 
-    const server = createServer(makeEconomy(), {
+    const server = makeServer({
       webhook,
-      config: { ...testConfig(), webhookSecret: secret },
-      clock: fixedClock(0),
+      ports: testPorts({ secrets: { webhookSecret: secret } }),
     });
 
     const response = await server(
@@ -476,10 +511,9 @@ describe('createServer /webhooks Freshness', () => {
       });
     };
 
-    const server = createServer(makeEconomy(), {
+    const server = makeServer({
       webhook,
-      config: { ...testConfig(), webhookSecret: secret },
-      clock: fixedClock(0),
+      ports: testPorts({ secrets: { webhookSecret: secret } }),
     });
 
     const response = await server(
@@ -511,19 +545,17 @@ describe('createServer /webhooks Duplicate Metering', () => {
       observe: () => {},
     };
     const seen = new Set<string>();
-    const server = createServer(makeEconomy(), {
+    const server = makeServer({
       webhook: async () =>
         new Response(JSON.stringify({ status: 'accepted' }), { status: 200 }),
-      config: { ...testConfig(), webhookSecret: secret },
-      clock: fixedClock(0),
+      ports: testPorts({ secrets: { webhookSecret: secret }, meter }),
       replay: {
-        claim: async (eventId) => {
+        claim: async (eventId: string) => {
           const claimed = !seen.has(eventId);
           seen.add(eventId);
           return { claimed };
         },
       },
-      meter,
     });
     const deliver = (timestamp: string): Promise<Response> =>
       server(
@@ -564,7 +596,7 @@ describe('createServer /webhooks Duplicate Metering', () => {
 
 describe('createServer Health And Readiness', () => {
   test('GET /healthz returns 200 without touching the store', async () => {
-    const server = createServer(makeEconomy());
+    const server = makeServer();
 
     const response = await server(
       new Request('https://economy.test/healthz', { method: 'GET' }),
@@ -576,7 +608,7 @@ describe('createServer Health And Readiness', () => {
   });
 
   test('GET /readyz returns 200 when the store read succeeds', async () => {
-    const server = createServer(makeEconomy());
+    const server = makeServer();
 
     const response = await server(
       new Request('https://economy.test/readyz', { method: 'GET' }),
@@ -600,14 +632,14 @@ describe('createServer Health And Readiness', () => {
         statement: async () => {
           throw new Error('not used');
         },
-        prove: async () => {
+        health: async () => {
           throw new Error('not used');
         },
       },
       close: async () => {},
     } as unknown as Economy;
 
-    const server = createServer(economy);
+    const server = makeServer({ economy });
 
     const response = await server(
       new Request('https://economy.test/readyz', { method: 'GET' }),
@@ -621,7 +653,7 @@ describe('createServer Health And Readiness', () => {
 
 describe('createServer /submit Authentication', () => {
   test('stamps the authenticated principal as the actor', async () => {
-    const server = createServer(makeEconomy(), {
+    const server = makeServer({
       authenticate: async () => ({ kind: 'system', service: 'gateway' }),
     });
 
@@ -641,7 +673,7 @@ describe('createServer /submit Authentication', () => {
   });
 
   test('returns a 401 problem when the hook refuses the request', async () => {
-    const server = createServer(makeEconomy(), {
+    const server = makeServer({
       authenticate: async () => null,
     });
 
@@ -659,7 +691,7 @@ describe('createServer /submit Authentication', () => {
   });
 
   test('rejects an authenticated body that carries its own actor', async () => {
-    const server = createServer(makeEconomy(), {
+    const server = makeServer({
       authenticate: async () => ({ kind: 'system', service: 'gateway' }),
     });
 
@@ -672,8 +704,8 @@ describe('createServer /submit Authentication', () => {
     assert.equal(payload.code, ERROR_CODES.MALFORMED_OPERATION);
   });
 
-  test('trusts the body actor when no hook is configured', async () => {
-    const server = createServer(makeEconomy());
+  test('trusts the body actor when authenticate is explicitly false', async () => {
+    const server = makeServer({ authenticate: false });
 
     const response = await server(
       submitRequest(topUpBody('usr_inproc', '1.00')),
@@ -683,11 +715,18 @@ describe('createServer /submit Authentication', () => {
     assert.equal(response.status, 200);
     assert.equal(payload.status, 'committed');
   });
+
+  test('omitting authenticate refuses to construct with CONFIG.INVALID', () => {
+    assert.throws(
+      () => createServer({ economy: makeEconomy(), ports: testPorts() }),
+      hasCode('CONFIG.INVALID'),
+    );
+  });
 });
 
 describe('createServer Body Limits', () => {
   test('returns a 413 problem past the byte ceiling', async () => {
-    const server = createServer(makeEconomy(), { maxBodyBytes: 64 });
+    const server = makeServer({ maxBodyBytes: 64 });
 
     const body = topUpBody('usr_big', '10.00');
     body.memo = 'x'.repeat(256);
@@ -701,7 +740,7 @@ describe('createServer Body Limits', () => {
   });
 
   test('returns a 408 problem when the body read passes the deadline', async () => {
-    const server = createServer(makeEconomy(), { readTimeoutMs: 20 });
+    const server = makeServer({ readTimeoutMs: 20 });
 
     const stalled = new ReadableStream<Uint8Array>({ start() {} });
     const request = new Request('https://economy.test/submit', {
@@ -720,7 +759,7 @@ describe('createServer Body Limits', () => {
   });
 
   test('caps the webhook body under the same ceiling', async () => {
-    const server = createServer(makeEconomy(), {
+    const server = makeServer({
       webhook: (async () => new Response('ok')) as WebhookHandler,
       maxBodyBytes: 64,
     });
@@ -737,7 +776,7 @@ describe('createServer CORS', () => {
   const allowlisted = { cors: { origins: ['https://app.example'] } };
 
   test('sets no CORS headers when the option is absent', async () => {
-    const server = createServer(makeEconomy());
+    const server = makeServer();
 
     const response = await server(
       new Request('https://economy.test/healthz', {
@@ -750,7 +789,7 @@ describe('createServer CORS', () => {
   });
 
   test('grants a preflight from an allowlisted origin', async () => {
-    const server = createServer(makeEconomy(), allowlisted);
+    const server = makeServer(allowlisted);
 
     const response = await server(
       new Request('https://economy.test/submit', {
@@ -775,7 +814,7 @@ describe('createServer CORS', () => {
   });
 
   test('answers a preflight from an unlisted origin with no grant', async () => {
-    const server = createServer(makeEconomy(), allowlisted);
+    const server = makeServer(allowlisted);
 
     const response = await server(
       new Request('https://economy.test/submit', {
@@ -792,7 +831,7 @@ describe('createServer CORS', () => {
   });
 
   test('rides the grant on route responses for an allowlisted origin', async () => {
-    const server = createServer(makeEconomy(), allowlisted);
+    const server = makeServer(allowlisted);
 
     const response = await server(
       new Request('https://economy.test/healthz', {
@@ -811,7 +850,7 @@ describe('createServer CORS', () => {
 
 describe('createServer Rate Limiting', () => {
   test('answers 429 with retry-after when the limiter denies', async () => {
-    const server = createServer(makeEconomy(), {
+    const server = makeServer({
       rateLimit: {
         limiter: {
           allow: async () => ({ allowed: false, retryAfterMs: 1_500 }),
@@ -833,7 +872,7 @@ describe('createServer Rate Limiting', () => {
 
   test('keys by the authenticated principal', async () => {
     const keys: string[] = [];
-    const server = createServer(makeEconomy(), {
+    const server = makeServer({
       authenticate: async () => ({ kind: 'user', userId: 'usr_keyed' }),
       rateLimit: {
         limiter: {
@@ -860,7 +899,7 @@ describe('createServer Rate Limiting', () => {
 
   test('falls back to the stamped client address without a principal', async () => {
     const keys: string[] = [];
-    const server = createServer(makeEconomy(), {
+    const server = makeServer({
       rateLimit: {
         limiter: {
           allow: async (key) => {
@@ -887,13 +926,15 @@ describe('createServer Rate Limiting', () => {
 
   test('a throwing limiter fails open and counts degraded', async () => {
     const counted: string[] = [];
-    const server = createServer(makeEconomy(), {
-      meter: {
-        count: (name) => {
-          counted.push(name);
+    const server = makeServer({
+      ports: testPorts({
+        meter: {
+          count: (name) => {
+            counted.push(name);
+          },
+          observe: () => {},
         },
-        observe: () => {},
-      },
+      }),
       rateLimit: {
         limiter: {
           allow: async () => {
@@ -914,7 +955,7 @@ describe('createServer Rate Limiting', () => {
 
 describe('createServer Correlation', () => {
   test('mints a request id and echoes it on the submit response', async () => {
-    const server = createServer(makeEconomy());
+    const server = makeServer();
 
     const response = await server(
       submitRequest(topUpBody('usr_corr_mint', '1.00')),
@@ -924,7 +965,7 @@ describe('createServer Correlation', () => {
   });
 
   test('echoes a caller-supplied x-request-id', async () => {
-    const server = createServer(makeEconomy());
+    const server = makeServer();
 
     const request = new Request('https://economy.test/submit', {
       method: 'POST',
@@ -940,7 +981,7 @@ describe('createServer Correlation', () => {
   });
 
   test('a traceparent trace id wins over x-request-id', async () => {
-    const server = createServer(makeEconomy());
+    const server = makeServer();
     const traceId = 'ab'.repeat(16);
 
     const request = new Request('https://economy.test/submit', {
@@ -958,7 +999,7 @@ describe('createServer Correlation', () => {
   });
 
   test('a malformed supplied id is replaced, and problems still echo', async () => {
-    const server = createServer(makeEconomy(), {
+    const server = makeServer({
       authenticate: async () => null,
     });
 

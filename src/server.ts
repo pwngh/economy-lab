@@ -25,13 +25,11 @@ import { decodeWebhookEvent } from '#src/webhooks.ts';
 
 import { encodeAmounts } from '#src/money.ts';
 import type {
-  Clock,
-  Meter,
   RateLimiter,
   RateVerdict,
   ReplayStore,
+  Ports,
 } from '#src/ports.ts';
-import type { Config } from '#src/config.ts';
 import type { Economy, Operation, Outcome, Principal } from '#src/contract.ts';
 
 /**
@@ -46,31 +44,57 @@ export type WebhookHandler = (
   request: Request,
 ) => Promise<Response>;
 
+/**
+ * Authentication for `/submit`: maps the request to the acting principal, or null to refuse
+ * with 401. The server stamps the result onto the operation and rejects a body that carries its
+ * own `actor`.
+ */
+export type Authenticate = (request: Request) => Promise<Principal | null>;
+
+/** What the HTTP layer needs from the bag; a full Ports is assignable. */
+export type ServerPorts = Pick<
+  Ports,
+  'config' | 'secrets' | 'clock' | 'meter' | 'logger'
+>;
+
+/** What {@link createServer} returns: a Fetch-native handler for any WinterCG runtime. */
+export type FetchHandler = (request: Request) => Promise<Response>;
+
+// Admission control for `/submit`: each request counts against a caller key and a denial
+// answers 429 with retry-after. The default key is the authenticated principal, else the
+// client address the Node bridge stamps; hosts on other runtimes supply keyFor.
+export type RateLimitConfig = {
+  limiter: RateLimiter;
+  keyFor?: (request: Request, principal?: Principal) => string;
+};
+
 export interface ServerOptions {
+  economy: Economy;
+
+  // The narrow pick the routes read: config for webhook policy, secrets for the webhook HMAC,
+  // clock for freshness, meter for the duplicate and degraded counters.
+  ports: ServerPorts;
+
+  /**
+   * Required posture, not a default: a function authenticates `/submit`, and an explicit `false`
+   * declares the body's actor is trusted — safe only for in-process hosts, never for a
+   * network-exposed handler. Omitting it entirely refuses to construct.
+   */
+  authenticate?: Authenticate | false;
+
   webhook?: WebhookHandler;
 
-  // When present, the server verifies inbound webhooks (signature and freshness) before the
-  // handler runs. When absent, the webhook path is a bare pass-through and the host verifies.
-  config?: Config;
-
-  // Clock for webhook freshness. Time is read only through this, never `Date.now()`, so tests can
-  // freeze it. Defaults to wall-clock when verification is enabled and no clock is given.
-  clock?: Clock;
+  // `false` declares admission control off; absent means off too (infra silence is allowed
+  // here, unlike authentication).
+  rateLimit?: RateLimitConfig | false;
 
   // Dedup store for provider `eventId`s: a repeat delivery returns 200 without invoking the
   // handler. When absent, the host dedups. The claim-last ordering lives at webhookRoute.
   replay?: ReplayStore;
 
-  // When present, every 200-duplicate the gate returns counts as `economy.webhook.duplicate`
-  // tagged with the provider and which layer caught it. A redelivery storm on one eventId is a
-  // provider misconfiguration or an attack; the counter is what makes it visible.
-  meter?: Meter;
-
-  // Authentication for `/submit`: maps the request to the acting principal, or null to refuse
-  // with 401. When set, the server stamps the result onto the operation and rejects a body that
-  // carries its own `actor`. When absent, the body's actor is trusted — safe only for in-process
-  // hosts, never for a network-exposed handler.
-  authenticate?: (request: Request) => Promise<Principal | null>;
+  // Browser origins allowed by CORS, matched exactly. Absent means no CORS headers at all, so
+  // cross-origin browser calls fail closed.
+  cors?: { origins: ReadonlyArray<string> };
 
   // Byte ceiling on request bodies; past it the reply is 413. Defaults to
   // DEFAULT_MAX_BODY_BYTES, which every legitimate operation fits well under.
@@ -79,18 +103,6 @@ export interface ServerOptions {
   // Deadline on reading a request body; past it the reply is 408, so a trickled body cannot
   // hold the handler open. Defaults to DEFAULT_READ_TIMEOUT_MS.
   readTimeoutMs?: number;
-
-  // Browser origins allowed by CORS, matched exactly. Absent means no CORS headers at all, so
-  // cross-origin browser calls fail closed.
-  cors?: { origins: ReadonlyArray<string> };
-
-  // Admission control for `/submit`: each request counts against a caller key and a denial
-  // answers 429 with retry-after. The default key is the authenticated principal, else the
-  // client address the Node bridge stamps; hosts on other runtimes supply keyFor.
-  rateLimit?: {
-    limiter: RateLimiter;
-    keyFor?: (request: Request, principal?: Principal) => string;
-  };
 }
 
 /** Default byte ceiling on request bodies. The Node host bridge enforces the same limit. */
@@ -133,10 +145,17 @@ const TIMESTAMP_HEADER = 'x-timestamp';
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for
  *   the routes, codec, and webhook gate.
  */
-export function createServer(
-  economy: Economy,
-  options: ServerOptions = {},
-): (request: Request) => Promise<Response> {
+export function createServer(options: ServerOptions): FetchHandler {
+  // Authentication is a posture, never a default: require the host to choose a verifier or to
+  // state in code that the body's actor is trusted.
+  if (options.authenticate === undefined) {
+    throw fault(
+      ERROR_CODES.CONFIG_INVALID,
+      "createServer requires 'authenticate': pass a verifier, or false to trust the body's actor (in-process hosts only).",
+      { retryable: false },
+    );
+  }
+  const economy = options.economy;
   return async (request) => {
     const origin = allowedOrigin(request, options);
     if (request.method === 'OPTIONS' && options.cors !== undefined) {
@@ -285,7 +304,7 @@ async function runSubmit(
   correlationId: string,
 ): Promise<Response> {
   let principal: Principal | undefined;
-  if (options.authenticate !== undefined) {
+  if (options.authenticate !== undefined && options.authenticate !== false) {
     let verdict: Principal | null;
     try {
       verdict = await options.authenticate(request);
@@ -330,7 +349,7 @@ async function admitSubmit(
   principal: Principal | undefined,
 ): Promise<Response | null> {
   const limit = options.rateLimit;
-  if (limit === undefined) {
+  if (limit === undefined || limit === false) {
     return null;
   }
   const key =
@@ -339,7 +358,7 @@ async function admitSubmit(
   try {
     verdict = await limit.limiter.allow(key);
   } catch {
-    options.meter?.count('economy.ratelimit.degraded', 1);
+    options.ports.meter.count('economy.ratelimit.degraded', 1);
     return null;
   }
   if (verdict.allowed) {
@@ -402,16 +421,14 @@ async function webhookRoute(
     return bodyFault(error);
   }
 
-  const config = options.config;
-  if (config === undefined || config.webhookSecret === '') {
+  const secret = options.ports.secrets.webhookSecret;
+  if (secret === '') {
     // No secret configured: keep the bare pass-through (the host owns verification).
     return runHandler(handler, provider, rebuildRequest(request, rawBytes));
   }
 
   try {
-    if (
-      !(await verifyHmac(rawBytes, signatureOf(request), config.webhookSecret))
-    ) {
+    if (!(await verifyHmac(rawBytes, signatureOf(request), secret))) {
       throw fault(
         ERROR_CODES.INVALID_SIGNATURE,
         'Webhook signature is invalid.',
@@ -421,18 +438,18 @@ async function webhookRoute(
     return faultResponse(error);
   }
 
-  const now = (options.clock ?? systemClock).now();
+  const now = options.ports.clock.now();
   // `Number(null)` is 0, finite, and would slip past the check below. Map a missing header to NaN so
   // a missing timestamp is rejected rather than read as the epoch.
   const header = request.headers.get(TIMESTAMP_HEADER);
   const timestamp = header === null ? Number.NaN : Number(header);
   if (
     !Number.isFinite(timestamp) ||
-    Math.abs(now - timestamp) > config.replayWindowMs
+    Math.abs(now - timestamp) > options.ports.config.replayWindowMs
   ) {
     // Stale or replayed: 200 duplicate (no mutation) so the provider stops redelivering, not a 5xx
     // that triggers repeated retries.
-    options.meter?.count('economy.webhook.duplicate', 1, {
+    options.ports.meter.count('economy.webhook.duplicate', 1, {
       provider,
       layer: 'stale',
     });
@@ -487,7 +504,7 @@ async function replayGate(
   }
   if (!claimed) {
     // Redelivery of a seen eventId: 200 and run nothing, so the credit posts once.
-    options.meter?.count('economy.webhook.duplicate', 1, {
+    options.ports.meter.count('economy.webhook.duplicate', 1, {
       provider,
       layer: 'replay',
     });
@@ -531,10 +548,6 @@ function rebuildRequest(request: Request, rawBytes: Uint8Array): Request {
     body: rawBytes,
   });
 }
-
-// Defined here, not imported from runtime.ts, so this file pulls in no Node/signing/hashing deps and
-// stays cross-runtime (Node, Bun, Deno, Cloudflare Workers).
-const systemClock: Clock = { now: () => Date.now() };
 
 // --- Operation codec (money travels as a decimal string) --------------------------
 
@@ -764,12 +777,19 @@ const FIELDS: {
   },
 };
 
-function encodeOutcome(outcome: Outcome): unknown {
+/**
+ * The wire shape of an Outcome. A rejected outcome carries both the typed `detail` (branded
+ * Amounts and bigints become decimal strings) and a top-level `reason` derived from
+ * `detail.reason` — HTTP clients live outside the type system, so the wire keeps the harmless
+ * duplicate for stability even though `detail.reason` is the sole discriminant in TypeScript.
+ */
+export function encodeOutcome(outcome: Outcome): unknown {
   if (outcome.status === 'rejected') {
-    // The detail's branded Amounts (bigint minors) become decimal strings on the wire.
-    return outcome.detail === undefined
-      ? outcome
-      : { ...outcome, detail: encodeAmounts(outcome.detail) };
+    return {
+      status: outcome.status,
+      reason: outcome.detail.reason,
+      detail: encodeAmounts(outcome.detail),
+    };
   }
   return {
     status: outcome.status,
@@ -876,7 +896,7 @@ function jsonResponse(status: number, payload: unknown): Response {
 
 // RFC 9457 problem details: `title` is the caller-safe message; `detail`/`cause`/stack stay
 // server-side. See https://www.rfc-editor.org/rfc/rfc9457 for the format.
-function problemResponse(
+export function problemResponse(
   status: number,
   title: string,
   fault?: { code: ErrorCode; retryable: boolean },
@@ -894,3 +914,19 @@ function problemResponse(
     headers: { 'content-type': 'application/problem+json' },
   });
 }
+
+// The webhook intake surface rides the /server facet with the HTTP service that fronts it.
+export {
+  decodeWebhookEvent,
+  handlePurchaseWebhook,
+  handleWebhook,
+  toOperation,
+} from '#src/webhooks.ts';
+export type {
+  DisputeEvent,
+  PayoutFailedEvent,
+  PayoutSettledEvent,
+  PurchaseEvent,
+  WebhookEvent,
+  WebhookReceipt,
+} from '#src/webhooks.ts';

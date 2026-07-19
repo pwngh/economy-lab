@@ -20,22 +20,18 @@ import { expect, it } from 'vitest';
 
 import { earned, spendable } from '#src/accounts.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
-import { economyFromCapabilities } from '#src/economy.ts';
-import { workerCtxFrom } from '#src/index.ts';
+import { createEconomy } from '#src/economy.ts';
 import { toAmount } from '#src/money.ts';
 import { createServer } from '#src/server.ts';
 import { createWorker } from '#src/worker/index.ts';
 import {
-  defaultPricing,
-  fakeProcessor,
   fixedClock,
-  fixedRates,
-  noopMeter,
+  makePorts,
   seededDigest,
-  seededSigner,
-  sequentialIds,
+  silentMeter,
   testConfig,
   testLogger,
+  testSecrets,
 } from '#test/support/capabilities.ts';
 
 import type { Economy, Operation, Principal } from '#src/contract.ts';
@@ -53,26 +49,11 @@ function freshEconomy(): { economy: Economy; store: Store; worker: Worker } {
   const digest = seededDigest(1);
   const clock = fixedClock(NOW);
   const store = memoryStore({ digest, clock });
-  const caps = {
-    store,
-    clock,
-    ids: sequentialIds(),
-    digest,
-    signer: seededSigner(1),
-    rates: fixedRates(),
-    logger: testLogger(),
-    meter: noopMeter(),
-    processor: fakeProcessor(),
-    pricing: defaultPricing(),
-    config: testConfig(),
-  };
-  // The worker shares the economy's store and context, so a page whose example presumes a
+  const ports = makePorts(store, { clock, digest });
+  const economy = createEconomy(ports);
+  // The worker shares the economy's store and ports, so a page whose example presumes a
   // sweep already ran (settle-payout needs a SUBMITTED saga) can run that sweep for real.
-  return {
-    economy: economyFromCapabilities(caps),
-    store,
-    worker: createWorker(store, workerCtxFrom(caps)),
-  };
+  return { economy, store, worker: createWorker(ports, economy) };
 }
 
 type Body = Record<string, unknown>;
@@ -88,7 +69,18 @@ function payload(name: string): Body {
 }
 
 async function commitOverHttp(economy: Economy, body: Body): Promise<void> {
-  const server = createServer(economy);
+  const server = createServer({
+    economy,
+    ports: {
+      config: testConfig(),
+      secrets: testSecrets(),
+      clock: fixedClock(NOW),
+      meter: silentMeter(),
+      logger: testLogger(),
+    },
+    // The .sh payloads carry their own actor, the in-process trust posture.
+    authenticate: false,
+  });
   const response = await server(
     new Request('https://economy.example/submit', {
       method: 'POST',
@@ -203,7 +195,7 @@ it('settle-payout commits as shown, against the saga the worker submitted', asyn
   });
   // The payouts sweep converts the reserve and calls the rail: RESERVED becomes SUBMITTED,
   // which is the state the settle example presumes.
-  await worker.runOnce({ now: NOW + 60_000, limit: 10 });
+  await worker.sweep({ now: NOW + 60_000, limit: 10 });
   const sagaId = request.meta.sagaId as string;
   const saga = await economy.read.saga(sagaId);
   expect(saga?.state).toBe('SUBMITTED');

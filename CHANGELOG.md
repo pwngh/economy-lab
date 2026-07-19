@@ -23,6 +23,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - Breaking: `createEconomy(ports)` is the single construction call — the zero-arg and
   options-object forms are deleted; `createWorker(ports, economy)` replaces
   `createWorker(store, ctx)`.
+- Breaking: `createServer` requires `authenticate`: pass a verifier, or `false` to trust the
+  body's actor; leaving it unset throws `CONFIG.INVALID`.
 - Breaking: the old composition entry points are deleted: `compose`, `composeWorker`,
   `workerCtxFrom`, `economyFromCapabilities`, `externalsFromEnv`, `ExternalPorts`,
   `Externals`, `RuntimeDefaults`, `EconomyOptions`, `WorkerCtx`.

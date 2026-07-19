@@ -37,10 +37,14 @@ import {
 } from '#test/support/builders.ts';
 import {
   fixedClock,
+  makePorts,
   makeWorkerCtx,
   sequentialIds,
   seededDigest,
+  silentMeter,
   testConfig,
+  testLogger,
+  testSecrets,
 } from '#test/support/capabilities.ts';
 
 import type { Economy } from '#src/economy.ts';
@@ -120,7 +124,11 @@ function drainOnce(
   store: Store,
   economy: Economy,
 ): ReturnType<typeof drainInbox> {
-  return drainInbox(store, workerCtxAt(0), { economy, now: 0, limit: 10 });
+  return drainInbox(store, makePorts(store, { clock: fixedClock(0) }), {
+    economy,
+    now: 0,
+    limit: 10,
+  });
 }
 
 describe('Webhooks toTopUp / Idempotency', () => {
@@ -286,10 +294,17 @@ function gatedServer(secret: string): {
       headers: { 'content-type': 'application/json' },
     });
   };
-  const server = createServer(economy, {
+  const server = createServer({
+    economy,
+    ports: {
+      config: testConfig(),
+      secrets: { ...testSecrets(), webhookSecret: secret },
+      clock,
+      meter: silentMeter(),
+      logger: testLogger(),
+    },
+    authenticate: false,
     webhook,
-    config: { ...testConfig(), webhookSecret: secret },
-    clock,
     replay,
   });
   return { server, store, economy };
@@ -544,7 +559,7 @@ describe('Webhooks payout settled (worker submits, the settlement webhook settle
       toAmount('USD', trustBefore.minor - usdMoved.minor),
     );
 
-    const report = await economy.read.prove();
+    const report = await economy.read.health();
     assert.equal(report.conserved, true);
     assert.equal(report.backed, true);
   });
@@ -591,7 +606,7 @@ describe('Webhooks payout settled (worker submits, the settlement webhook settle
       await onlySagaFor(store, seller).then((s) => s.state),
       'SETTLED',
     );
-    const report = await economy.read.prove();
+    const report = await economy.read.health();
     assert.equal(report.conserved, true);
     assert.equal(report.backed, true);
   });
@@ -664,7 +679,7 @@ describe('Webhooks payout failed (the failure webhook promptly returns the reser
       trustBefore,
     );
 
-    const report = await economy.read.prove();
+    const report = await economy.read.health();
     assert.equal(report.conserved, true);
     assert.equal(report.backed, true);
   });

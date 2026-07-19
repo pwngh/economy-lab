@@ -21,6 +21,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { economyWithStore, eventsOf } from '#test/support/economy.ts';
+import { makePorts } from '#test/support/capabilities.ts';
 import { topUp, grantPromo, spend, credit } from '#test/support/builders.ts';
 import { SWEEP_NAMES } from '#src/worker/index.ts';
 import { createServer } from '#src/server.ts';
@@ -88,8 +89,12 @@ describe('No Money-Laundering-Detection Background Job Exists', () => {
 
 describe('The Server Has No Asset-Download Route', () => {
   test('a download-style path 404s', async () => {
-    const { economy } = economyWithStore();
-    const handler = createServer(economy);
+    const { economy, store } = economyWithStore();
+    const handler = createServer({
+      economy,
+      ports: makePorts(store),
+      authenticate: false,
+    });
 
     const res = await handler(
       new Request('http://economy.local/assets/wrld_pass', { method: 'GET' }),
