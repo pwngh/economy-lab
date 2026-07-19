@@ -74,7 +74,11 @@ import {
 } from '#src/engines/sql-shared.ts';
 import { metaString, metaNumber } from '#src/meta.ts';
 
-import type { Link, RetryObserver } from '#src/engines/sql-shared.ts';
+import type {
+  EngineOpenShape,
+  Link,
+  RetryObserver,
+} from '#src/engines/sql-shared.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
@@ -119,7 +123,7 @@ interface PgClient {
 interface PgResult {
   rows: Array<Record<string, unknown>>;
 }
-interface PgPool {
+export interface PgPool {
   connect(): Promise<PgClient>;
   query(text: string, values?: ReadonlyArray<unknown>): Promise<PgResult>;
   end(): Promise<void>;
@@ -1050,11 +1054,22 @@ function encodeOperation(operation: Operation): EncodedOperation {
 
 // --- Saga store -------------------------------------------------------------------
 
-// No `for update`: a read-only enumeration, not a claim.
-async function* listSagasOf(q: Queryable): AsyncIterable<Saga> {
-  const result = await q.query(
-    `select * from payout_sagas order by updated_at desc, id desc`,
-  );
+// No `for update`: a read-only enumeration, not a claim. An empty `states` list yields nothing
+// (`= any('{}')` matches no row), per the SagaStore contract.
+async function* listSagasOf(
+  q: Queryable,
+  states?: readonly Saga['state'][],
+): AsyncIterable<Saga> {
+  const result =
+    states === undefined
+      ? await q.query(
+          `select * from payout_sagas order by updated_at desc, id desc`,
+        )
+      : await q.query(
+          `select * from payout_sagas where state = any($1::text[])
+            order by updated_at desc, id desc`,
+          [[...states]],
+        );
   for (const row of result.rows) {
     yield rowToSaga(row);
   }
@@ -1108,7 +1123,7 @@ function createSagaStore(q: Queryable): SagaStore {
       return row ? rowToSaga(row) : null;
     },
     findByProviderRef: (providerRef) => findSagaByRef(q, providerRef),
-    list: () => listSagasOf(q),
+    list: (options) => listSagasOf(q, options?.states),
     // Due payouts still in progress: only RESERVED and SUBMITTED rows. A row stuck in REQUESTED
     // means its opening step crashed partway, and it is skipped on purpose — the schema's partial
     // index excludes it the same way.
@@ -1603,9 +1618,13 @@ function buildUnit(
 export interface PostgresStoreOptions {
   url: string;
 
-  // Optional dedicated Postgres schema, created/loaded then dropped on close, so parallel test runs
-  // don't collide. Omit to use the schema the connection already points at.
-  schema?: string;
+  // Optional dedicated Postgres schema name, created/loaded then dropped on close, so parallel
+  // test runs don't collide. Omit to use the schema the connection already points at.
+  schemaName?: string;
+
+  // Open-path schema policy: 'assert' (the default) requires the schema_meta stamp to match this
+  // build; 'skip' is break-glass. Migration is an external job — never an open option.
+  schema?: 'assert' | 'skip';
 
   digest?: Digest;
 
@@ -1636,7 +1655,7 @@ export interface PostgresStoreOptions {
  * Build a {@link Store} backed by Postgres, using real database transactions. The returned
  * `transaction(work)` checks out one connection, runs `work` between BEGIN and COMMIT, and rolls
  * back if `work` throws. The trust and checkpoint stores hang off the pool directly, not off a
- * transaction, so their writes are never rolled back. If `schema` is given, a fresh schema with
+ * transaction, so their writes are never rolled back. If `schemaName` is given, a fresh schema with
  * that name is created, loaded with db/postgresql-schema.sql, and used for all queries; `close()`
  * drops it. The hash dependency defaults to the deterministic SHA-256; the clock defaults to
  * wall-clock time. Pass a fixed clock when reproducible `postedAt` values matter.
@@ -1650,7 +1669,7 @@ export async function postgresStore(
   const digest = options.digest ?? defaultDigest();
   const clock = options.clock ?? systemClock();
   const velocityWindowMs = options.velocityWindowMs ?? 60 * 60_000;
-  const schema = options.schema ? safeSchemaName(options.schema) : null;
+  const schema = options.schemaName ? safeSchemaName(options.schemaName) : null;
 
   // Setting search_path through the connection options points every connection the pool opens at
   // the dedicated schema, so unqualified table names resolve there on reads and transactions alike.
@@ -1671,7 +1690,9 @@ export async function postgresStore(
 
     // Refuse to run against a database whose schema has drifted from this code. For an
     // isolated test schema we just applied the current SQL, so this passes by construction.
-    assertSchemaCurrent(await readSchemaVersion(pool), 'Postgres');
+    if (options.schema !== 'skip') {
+      assertSchemaCurrent(await readSchemaVersion(pool), 'Postgres');
+    }
 
     // Install the vendored money functions (idempotent) and make this engine prove it computes
     // the pinned arithmetic before any posting trusts it — the same fail-fast as the schema
@@ -1825,3 +1846,5 @@ function isTransientConflict(error: unknown): boolean {
       String(e?.message ?? '').includes(CHAIN_CONTINUITY_MARKER))
   );
 }
+
+export type EngineOpenOptions = EngineOpenShape<PgPool>;

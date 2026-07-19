@@ -25,7 +25,7 @@ import type { OutboxMessage, Saga, Store, Subscription } from '#src/ports.ts';
 const url = testPostgresUrl(process.env);
 
 runStoreConformance('postgres', () =>
-  postgresStore({ url, schema: freshName('el_conf') }),
+  postgresStore({ url, schemaName: freshName('el_conf') }),
 );
 
 // Regression: folding a balance with `insert ... on conflict do update` ran the
@@ -37,7 +37,7 @@ describe('Store Conformance: postgres (Posting Onto A Funded Account)', () => {
 
   before(async () => {
     try {
-      store = await postgresStore({ url, schema: freshName('el_conf') });
+      store = await postgresStore({ url, schemaName: freshName('el_conf') });
     } catch {
       store = null;
     }
@@ -146,7 +146,7 @@ describe('Store Conformance: postgres (Outbox)', () => {
 
   before(async () => {
     try {
-      store = await postgresStore({ url, schema: freshName('el_conf') });
+      store = await postgresStore({ url, schemaName: freshName('el_conf') });
     } catch {
       store = null;
     }
@@ -225,7 +225,7 @@ describe('Store Conformance: postgres (Sagas)', () => {
 
   before(async () => {
     try {
-      store = await postgresStore({ url, schema: freshName('el_conf') });
+      store = await postgresStore({ url, schemaName: freshName('el_conf') });
     } catch {
       store = null;
     }
@@ -284,7 +284,7 @@ describe('Store Conformance: postgres (Subscriptions)', () => {
 
   before(async () => {
     try {
-      store = await postgresStore({ url, schema: freshName('el_conf') });
+      store = await postgresStore({ url, schemaName: freshName('el_conf') });
     } catch {
       store = null;
     }

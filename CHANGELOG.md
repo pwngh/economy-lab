@@ -20,6 +20,9 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   responses still carry `reason` beside `detail`.
 - Breaking: `EconomyStatus.paused` is `maintenanceActive`; the worker's own switch stays
   `sweepsPaused`.
+- `postgresStore` and `mysqlStore` open without touching schema; `schema: 'assert'` checks
+  the stamped version (`postgresStore` at open, `mysqlStore` once before the first operation),
+  and `openPorts` asserts eagerly on the pool.
 
 ### Added
 

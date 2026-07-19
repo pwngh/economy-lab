@@ -145,7 +145,7 @@ export async function adversarialPostgres(
   try {
     store = await postgresStore({
       url,
-      schema,
+      schemaName: schema,
       digest: seededDigest(1),
       clock: fixedClock(0),
     });

@@ -48,8 +48,9 @@ import {
   isSeededSystemAccount,
 } from '#src/engines/sql-shared.ts';
 import { metaString, metaNumber } from '#src/meta.ts';
+import { assertSchemaCurrent } from '#src/schema.ts';
 
-import type { Link } from '#src/engines/sql-shared.ts';
+import type { EngineOpenShape, Link } from '#src/engines/sql-shared.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
@@ -61,7 +62,7 @@ import type {
   Digest,
   EntitlementStore,
   IdempotencyStore,
-  InboxEntry,
+  InboxMessage,
   InboxStore,
   Leg,
   Logger,
@@ -958,7 +959,7 @@ function createInboxStore(exec: MysqlExecutor): InboxStore {
 async function reviveDeadInbox(
   exec: MysqlExecutor,
   limit: number,
-): Promise<ReadonlyArray<InboxEntry>> {
+): Promise<ReadonlyArray<InboxMessage>> {
   const capped = Math.max(0, limit);
   if (capped === 0) {
     return [];
@@ -990,11 +991,25 @@ async function reviveDeadInbox(
 
 // --- Saga store -------------------------------------------------------------------
 
-// No FOR UPDATE: a read-only enumeration, not a claim.
-async function* listSagasOf(exec: MysqlExecutor): AsyncIterable<Saga> {
+// No FOR UPDATE: a read-only enumeration, not a claim. An empty `states` list yields nothing
+// per the SagaStore contract (`IN ()` is not valid MySQL, so it short-circuits here).
+async function* listSagasOf(
+  exec: MysqlExecutor,
+  states?: readonly Saga['state'][],
+): AsyncIterable<Saga> {
+  if (states !== undefined && states.length === 0) {
+    return;
+  }
+  const sql =
+    states === undefined
+      ? 'SELECT * FROM payout_sagas ORDER BY updated_at DESC, id DESC'
+      : `SELECT * FROM payout_sagas WHERE state IN (${states
+          .map(() => '?')
+          .join(', ')}) ORDER BY updated_at DESC, id DESC`;
   for (const row of await rows(
     exec,
-    'SELECT * FROM payout_sagas ORDER BY updated_at DESC, id DESC',
+    sql,
+    states === undefined ? [] : [...states],
   )) {
     yield rowToSaga(row);
   }
@@ -1043,7 +1058,7 @@ function createSagaStore(exec: MysqlExecutor): SagaStore {
       );
       return found.length ? rowToSaga(found[0]!) : null;
     },
-    list: () => listSagasOf(exec),
+    list: (options) => listSagasOf(exec, options?.states),
     claimDue: async (now, limit) => {
       const result = await rows(
         exec,
@@ -1681,15 +1696,21 @@ export function mysqlStore(deps: {
   digest?: Digest;
   clock?: Clock;
   velocityWindowMs?: number;
+  // Open-path schema policy: 'assert' verifies the schema_meta stamp before the first operation
+  // of any kind; 'skip' (the default here) is for the staged open that already asserted on the
+  // pool. Migration is applyMysqlSchema or an external migrate job — never an open option.
+  schema?: 'assert' | 'skip';
   // Optional runtime ports for the engine's own telemetry (transient-retry pressure, see
   // retryTelemetry). The composition passes the runtime meter and logger; unset emits nothing.
   meter?: Meter;
   logger?: Logger;
 }): Store {
-  const pool = deps.pool;
   const digest = deps.digest ?? defaultDigest();
   const clock = deps.clock ?? systemClock();
   const velocityWindowMs = deps.velocityWindowMs ?? 60 * 60_000;
+  const ensureSchemaAsserted = lazySchemaAssert(deps.pool, deps.schema);
+  // Under 'assert' every pool query below waits for the one-time schema check; 'skip' is raw.
+  const pool = gatePool(deps.pool, deps.schema, ensureSchemaAsserted);
   const retryObserver = retryTelemetry(
     { meter: deps.meter, logger: deps.logger },
     'mysql',
@@ -1729,8 +1750,9 @@ export function mysqlStore(deps: {
     // retries into a clean SAGA.INVALID_TRANSITION (the retried op reloads a now-terminal saga) rather
     // than escaping as a raw deadlock; any non-transient error propagates unchanged on its first throw.
     // @see https://economy-lab-docs.pages.dev/economy/ports/messaging/
-    transaction: async (work) =>
-      withTransientRetry(
+    transaction: async (work) => {
+      await ensureSchemaAsserted();
+      return withTransientRetry(
         async () => {
           const connection = await acquireTimed();
           try {
@@ -1761,11 +1783,61 @@ export function mysqlStore(deps: {
         },
         isTransientConflict,
         { observer: retryObserver },
-      ),
+      );
+    },
 
     close: async () => {
       await pool.end();
     },
+  };
+}
+
+// The store factory is sync, so an 'assert' schema policy runs lazily before the first operation
+// of any kind — reads through the gated pool, transactions directly — rather than at open.
+// Concurrent first calls share one in-flight check; once verified it never re-checks. A failed
+// check clears so the next call retries.
+function lazySchemaAssert(
+  pool: MysqlPool,
+  mode: 'assert' | 'skip' | undefined,
+): () => Promise<void> {
+  if (mode !== 'assert') {
+    return () => Promise.resolve();
+  }
+  let checked = false;
+  let inFlight: Promise<void> | undefined;
+  return () => {
+    if (checked) {
+      return Promise.resolve();
+    }
+    inFlight ??= (async () => {
+      assertSchemaCurrent(await readSchemaVersion(pool), 'MySQL');
+      checked = true;
+    })().catch((error: unknown) => {
+      inFlight = undefined;
+      throw error;
+    });
+    return inFlight;
+  };
+}
+
+// Under 'assert', wraps the pool so every query first waits for the one-time schema assertion,
+// gating all pool-backed reads at one chokepoint; any other mode returns the pool untouched.
+// getConnection passes through: transaction() asserts itself before borrowing a connection.
+function gatePool(
+  pool: MysqlPool,
+  mode: 'assert' | 'skip' | undefined,
+  ensureSchemaAsserted: () => Promise<void>,
+): MysqlPool {
+  if (mode !== 'assert') {
+    return pool;
+  }
+  return {
+    query: async (sql, params) => {
+      await ensureSchemaAsserted();
+      return pool.query(sql, params);
+    },
+    getConnection: () => pool.getConnection(),
+    end: () => pool.end(),
   };
 }
 
@@ -1929,3 +2001,5 @@ export async function createMysqlPool(
     charset: 'UTF8MB4_0900_AI_CI',
   });
 }
+
+export type EngineOpenOptions = EngineOpenShape<MysqlPool>;

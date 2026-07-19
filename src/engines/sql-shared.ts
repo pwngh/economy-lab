@@ -21,7 +21,7 @@ import type { Operation } from '#src/contract.ts';
 import type {
   Checkpoint,
   Digest,
-  InboxEntry,
+  InboxMessage,
   Leg,
   Logger,
   Meter,
@@ -35,6 +35,31 @@ import type {
 
 // Helpers shared by the Postgres and MySQL engines: default services, distinct-account ordering,
 // chain-link derivation, and row-to-domain decoders. No SQL strings, no driver specifics.
+
+import type { Clock } from '#src/ports.ts';
+
+/**
+ * The shared field vocabulary for opening either SQL engine; each engine entry exports its
+ * `EngineOpenOptions` alias with `TPool` bound to that driver's typed pool, and implements its
+ * subset (`postgresStore` opens by `url`, `mysqlStore` takes a pre-built `pool`). Open-path
+ * schema policy is `assert` (require the schema_meta stamp to match) or `skip` (break-glass);
+ * applying or migrating a schema is a separate operator job, never an open option.
+ */
+export type EngineOpenShape<TPool> = {
+  readonly url?: string;
+  readonly pool?: TPool;
+  readonly poolMax?: number | null;
+  readonly connectionTimeoutMillis?: number;
+  /** Frozen at store construction; changing it means a rebuild over the same database. */
+  readonly velocityWindowMs: number;
+  readonly digest: Digest;
+  readonly clock: Clock;
+  readonly meter?: Meter;
+  readonly logger?: Logger;
+  readonly schema?: 'assert' | 'skip';
+  /** Postgres test isolation; created at open, dropped on close. */
+  readonly schemaName?: string;
+};
 
 // --- Default services -------------------------------------------------------------
 
@@ -355,12 +380,12 @@ export function rowToOutbox(row: Record<string, unknown>): OutboxMessage {
 }
 
 // decodeAmounts re-brands every stored `CREDIT:12.34` string back into an Amount (money.ts).
-export function rowToInbox(row: Record<string, unknown>): InboxEntry {
+export function rowToInbox(row: Record<string, unknown>): InboxMessage {
   return {
     id: row.id as string,
     key: row.key as string,
     operation: decodeAmounts(parseJson(row.operation)) as Operation,
-    status: row.status as InboxEntry['status'],
+    status: row.status as InboxMessage['status'],
     attempts: Number(row.attempts),
     receivedAt: Number(row.received_at),
     reason: (row.dead_letter_reason as string | null) ?? null,

@@ -249,7 +249,7 @@ export async function makeIsolatedPostgresStore(opts: {
   await maybeSweep('postgres', opts.url);
   return postgresStore({
     url: opts.url,
-    schema: freshName('el_iso'),
+    schemaName: freshName('el_iso'),
     digest: opts.digest,
     clock: opts.clock,
     ...(opts.poolMax ? { poolMax: opts.poolMax } : {}),
