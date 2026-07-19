@@ -26,6 +26,9 @@ export interface SandboxResult {
   lines: string[];
   logs: string[];
   ops: JournalEntry[];
+  // False when the evaluated run() takes no economy parameter, so the footer skips the
+  // journal count a self-contained snippet can never move.
+  journals?: boolean;
   txnId?: string;
   consolePath?: string;
   error?: string;

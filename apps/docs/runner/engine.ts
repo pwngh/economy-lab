@@ -93,18 +93,22 @@ export async function runSnippet(block: HTMLElement): Promise<void> {
       lines: [],
       fault: `no snippet registered as "${name}"`,
       ms: 0,
-      added: 0,
-      total: journal.length,
     });
     return;
   }
 
   const started = performance.now();
-  const before = journal.length;
+  // A run() that never takes the economy cannot journal; its footer shows no journal count.
+  const journals = snippet.length > 0;
   let report: SnippetReport | null = null;
   let fault: string | null = null;
+  // Read after engine() settles: a reset makes engine() reassign `journal`, and a length taken
+  // before that reads the cleared-away entries and counts negative.
+  let before = journal.length;
   try {
-    report = await snippet(journaling(await engine()));
+    const eco = await engine();
+    before = journal.length;
+    report = await snippet(journaling(eco));
   } catch (error) {
     // The real failure, not a curtain: a fault names its code and message verbatim.
     fault =
@@ -123,7 +127,6 @@ export async function runSnippet(block: HTMLElement): Promise<void> {
     txnId: report?.txnId,
     consolePath: report?.consolePath,
     ms,
-    added: journal.length - before,
-    total: journal.length,
+    ...(journals && { added: journal.length - before, total: journal.length }),
   });
 }

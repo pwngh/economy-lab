@@ -244,8 +244,7 @@ export async function runEdited(block: HTMLElement, out: HTMLElement): Promise<v
     txnId: result.txnId,
     consolePath: result.consolePath,
     ms: Math.max(1, Math.round(performance.now() - started)),
-    added: result.ops.length,
-    total,
+    ...(result.journals !== false && { added: result.ops.length, total }),
   });
 }
 

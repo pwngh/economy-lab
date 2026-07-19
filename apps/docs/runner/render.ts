@@ -22,8 +22,9 @@ export interface RunView {
   txnId?: string;
   consolePath?: string;
   ms: number;
-  added: number;
-  total: number;
+  // Absent when the snippet never takes the economy: a self-contained run has no journal line.
+  added?: number;
+  total?: number;
 }
 
 export function renderRun(out: HTMLElement, view: RunView): void {
@@ -51,12 +52,16 @@ export function renderRun(out: HTMLElement, view: RunView): void {
   foot.className = 'runnable-foot';
   const meta = document.createElement('span');
   meta.className = 'runnable-metaline';
-  meta.textContent = `ran in ${view.ms} ms · ${view.added} operation${view.added === 1 ? '' : 's'} journaled (${view.total} in the handoff)`;
+  meta.textContent =
+    view.added === undefined || view.total === undefined
+      ? `ran in ${view.ms} ms`
+      : `ran in ${view.ms} ms · ${view.added} operation${view.added === 1 ? '' : 's'} journaled (${view.total} in the handoff)`;
   // The economy reset sits beside the journal count it clears; it delegates to the block's
   // hidden header button so the loader's one binding stays the only wiring.
-  const resetTarget = out
-    .closest('[data-snippet]')
-    ?.querySelector<HTMLButtonElement>('[data-reset-economy]');
+  const resetTarget =
+    view.added === undefined
+      ? null
+      : out.closest('[data-snippet]')?.querySelector<HTMLButtonElement>('[data-reset-economy]');
   if (resetTarget) {
     const reset = document.createElement('button');
     reset.type = 'button';

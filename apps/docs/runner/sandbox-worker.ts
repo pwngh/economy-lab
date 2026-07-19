@@ -95,6 +95,7 @@ export async function execute(
       lines: Array.isArray(report?.lines) ? report.lines.map(String) : [],
       logs,
       ops,
+      journals: run.length > 0,
       txnId: typeof report?.txnId === 'string' ? report.txnId : undefined,
       consolePath: typeof report?.consolePath === 'string' ? report.consolePath : undefined,
     };
