@@ -39,6 +39,14 @@
       "types": "./dist/src/engines/mysql.d.ts",
       "default": "./dist/src/engines/mysql.js"
     },
+    "./worker": {
+      "types": "./dist/src/worker/index.d.ts",
+      "default": "./dist/src/worker/index.js"
+    },
+    "./server": {
+      "types": "./dist/src/server.d.ts",
+      "default": "./dist/src/server.js"
+    },
     "./netting": {
       "types": "./dist/src/netting.d.ts",
       "default": "./dist/src/netting.js"

@@ -28,6 +28,9 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - Breaking: the old composition entry points are deleted: `compose`, `composeWorker`,
   `workerCtxFrom`, `economyFromCapabilities`, `externalsFromEnv`, `ExternalPorts`,
   `Externals`, `RuntimeDefaults`, `EconomyOptions`, `WorkerCtx`.
+- Breaking: the main entry slims to construction and domain; adapters, worker, server,
+  store-kit, and netting symbols live on their own subpaths, with the construction calls
+  dual-homed on the main entry.
 - `postgresStore` and `mysqlStore` open without touching schema; `schema: 'assert'` checks
   the stamped version (`postgresStore` at open, `mysqlStore` once before the first operation),
   and `openPorts` asserts eagerly on the pool.
@@ -61,6 +64,7 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - `usd(decimal)` builds a USD amount from a two-decimal string.
 - `createSupervisorFrom(runtime, ports, scheduler)` builds the ops supervisor over an
   existing runtime's signals.
+- The `./worker` and `./server` subpaths export the worker and HTTP server entry points.
 
 ## 0.3.2 - 2026-07-17
 
