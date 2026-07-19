@@ -48,7 +48,7 @@ function storeFault(operation: string, cause: unknown): never {
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage} for how the cache port backs hot reads.
  */
-export function redisCacheFrom(
+export function redisCache(
   client: RedisClient,
 ): Cache & { close(): Promise<void> } {
   return {
@@ -98,13 +98,13 @@ const LIMIT_PREFIX = 'economy:ratelimit:';
 /**
  * Adapts an already-connected ioredis client into a fixed-window {@link RateLimiter}: `INCR` on
  * the windowed key, `PEXPIRE` arms the window on its first hit, and a denial reports the key's
- * remaining `PTTL`. The caller creates and owns the client, same as {@link redisCacheFrom}; the
+ * remaining `PTTL`. The caller creates and owns the client, same as {@link redisCache}; the
  * returned `close()` releases the connection.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for
  *   how the server keys and answers denials.
  */
-export function redisRateLimiterFrom(
+export function redisRateLimiter(
   client: RedisCounterClient,
   options: { limit: number; windowMs: number },
 ): RateLimiter & { close(): Promise<void> } {

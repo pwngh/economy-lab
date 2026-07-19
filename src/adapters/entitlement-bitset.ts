@@ -26,7 +26,7 @@
 import type {
   Clock,
   EntitlementStore,
-  Options,
+  CallOptions,
   Store,
   Unit,
 } from '#src/ports.ts';
@@ -106,7 +106,7 @@ class BitsetCache {
     return deadline === 0 || now <= deadline;
   };
 
-  async rebuild(userId: string, options?: Options): Promise<void> {
+  async rebuild(userId: string, options?: CallOptions): Promise<void> {
     const grants: Array<{ id: number; expiresAt: number | null }> = [];
     for await (const grant of this.source.list(userId, options)) {
       grants.push({ id: this.idOf(grant.sku), expiresAt: grant.expiresAt });
@@ -217,7 +217,7 @@ export function cachedEntitlements(
     entitlements: wrapEntitlements(base.entitlements, cache, clock),
     transaction: async <T>(
       work: (unit: Unit) => Promise<T>,
-      txOptions?: Options,
+      txOptions?: CallOptions,
     ): Promise<T> => {
       const touched = new Set<string>();
       try {

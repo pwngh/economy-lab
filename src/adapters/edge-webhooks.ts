@@ -13,12 +13,12 @@ import { toAmount } from '#src/money.ts';
 
 import type { CanonicalPayoutEvent } from '@pwngh/economy-edge';
 import type { Amount, Currency } from '#src/money.ts';
-import type { Options, Saga, Store } from '#src/ports.ts';
+import type { CallOptions, Saga, Store } from '#src/ports.ts';
 import type { PayoutFailedEvent, PayoutSettledEvent } from '#src/webhooks.ts';
 
 export type SagaLookup = (
   providerRef: string,
-  options?: Options,
+  options?: CallOptions,
 ) => Promise<Saga | null>;
 
 export function sagaByProviderRef(store: Store): SagaLookup {

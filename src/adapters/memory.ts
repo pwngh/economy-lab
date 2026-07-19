@@ -29,12 +29,12 @@ import type {
   Digest,
   EntitlementStore,
   IdempotencyStore,
-  InboxEntry,
+  InboxMessage,
   InboxStore,
   Leg,
   Ledger,
   Lot,
-  Options,
+  CallOptions,
   Movement,
   MovementJournal,
   OutboxMessage,
@@ -56,7 +56,7 @@ import type {
   TrustStore,
   Velocity,
 } from '#src/ports.ts';
-import type { EntitlementAttrs } from '#src/contract.ts';
+import type { EntitlementAttributes } from '#src/contract.ts';
 
 // --- Per-store undo log -----------------------------------------------------------
 
@@ -643,7 +643,7 @@ function createIdempotencyStore(): IdempotencyStore & Participant {
   return {
     journal,
 
-    claim: async (key, _options?: Options) => {
+    claim: async (key, _options?: CallOptions) => {
       const prior = committed.get(key);
       if (prior) {
         return { claimed: false, transaction: prior };
@@ -653,7 +653,7 @@ function createIdempotencyStore(): IdempotencyStore & Participant {
       return { claimed: true };
     },
 
-    record: async (key, transaction, _options?: Options) => {
+    record: async (key, transaction, _options?: CallOptions) => {
       committed.set(key, transaction);
       pending.delete(key);
       journal.record(() => {
@@ -673,11 +673,11 @@ function createSaleStore(): SaleStore & Participant {
   const rows = new Map<string, Sale>();
   return {
     journal,
-    put: async (sale, _options?: Options) => {
+    put: async (sale, _options?: CallOptions) => {
       recordRowUndo(journal, rows, sale.orderId);
       rows.set(sale.orderId, sale);
     },
-    get: async (orderId, _options?: Options) => rows.get(orderId) ?? null,
+    get: async (orderId, _options?: CallOptions) => rows.get(orderId) ?? null,
   };
 }
 
@@ -693,7 +693,7 @@ function createOutboxStore(deps: { clock: Clock }): OutboxStore & Participant {
 
   return {
     journal,
-    enqueue: async (message, _options?: Options) => {
+    enqueue: async (message, _options?: CallOptions) => {
       rows.set(message.id, message);
       order.push(message.id);
       enqueuedAt.set(message.id, deps.clock.now());
@@ -703,7 +703,7 @@ function createOutboxStore(deps: { clock: Clock }): OutboxStore & Participant {
         enqueuedAt.delete(message.id);
       });
     },
-    claimBatch: async (limit, _options?: Options) => {
+    claimBatch: async (limit, _options?: CallOptions) => {
       const batch: OutboxMessage[] = [];
       for (const id of order) {
         if (batch.length >= limit) {
@@ -716,7 +716,7 @@ function createOutboxStore(deps: { clock: Clock }): OutboxStore & Participant {
       }
       return batch;
     },
-    markRelayed: async (ids, _options?: Options) => {
+    markRelayed: async (ids, _options?: CallOptions) => {
       for (const id of ids) {
         const message = rows.get(id);
         if (message && message.status === 'pending') {
@@ -728,7 +728,7 @@ function createOutboxStore(deps: { clock: Clock }): OutboxStore & Participant {
         }
       }
     },
-    recordFailure: async (id, _options?: Options) => {
+    recordFailure: async (id, _options?: CallOptions) => {
       const message = rows.get(id);
       if (!message || message.status !== 'pending') {
         return;
@@ -739,7 +739,7 @@ function createOutboxStore(deps: { clock: Clock }): OutboxStore & Participant {
       });
       message.attempts += 1;
     },
-    deadLetter: async (id, reason, _options?: Options) => {
+    deadLetter: async (id, reason, _options?: CallOptions) => {
       const message = rows.get(id);
       if (!message || message.status !== 'pending') {
         return;
@@ -748,7 +748,7 @@ function createOutboxStore(deps: { clock: Clock }): OutboxStore & Participant {
       journal.record(() => rows.set(id, prior));
       rows.set(id, { ...message, status: 'dead', reason });
     },
-    stats: async (_options?: Options) =>
+    stats: async (_options?: CallOptions) =>
       outboxStatsOf(rows, enqueuedAt, deps.clock),
   };
 }
@@ -783,13 +783,13 @@ function outboxStatsOf(
 // the existing row for a redelivery.
 function createInboxStore(): InboxStore & Participant {
   const journal = createJournal();
-  const rows = new Map<string, InboxEntry>();
+  const rows = new Map<string, InboxMessage>();
   const order: string[] = [];
   const byKey = new Map<string, string>();
 
   return {
     journal,
-    enqueueInbound: async (entry, _options?: Options) => {
+    enqueueInbound: async (entry, _options?: CallOptions) => {
       const existingId = byKey.get(entry.key);
       if (existingId !== undefined) {
         return { ...rows.get(existingId)! };
@@ -804,10 +804,10 @@ function createInboxStore(): InboxStore & Participant {
       });
       return { ...entry };
     },
-    claimInbound: async (input, _options?: Options) => {
+    claimInbound: async (input, _options?: CallOptions) => {
       // Oldest `receivedAt` first across the whole table, then the `limit` cap. `input.now` is
       // unused: the inbox has no due-time gate.
-      const pending: InboxEntry[] = [];
+      const pending: InboxMessage[] = [];
       for (const id of order) {
         const entry = rows.get(id);
         if (entry && entry.status === 'pending') {
@@ -817,7 +817,7 @@ function createInboxStore(): InboxStore & Participant {
       pending.sort((a, b) => a.receivedAt - b.receivedAt);
       return pending.slice(0, input.limit);
     },
-    markApplied: async (id, _options?: Options) => {
+    markApplied: async (id, _options?: CallOptions) => {
       const entry = rows.get(id);
       if (!entry || entry.status !== 'pending') {
         return;
@@ -828,7 +828,7 @@ function createInboxStore(): InboxStore & Participant {
       });
       entry.status = 'applied';
     },
-    bumpAttempt: async (id, _options?: Options) => {
+    bumpAttempt: async (id, _options?: CallOptions) => {
       const entry = rows.get(id);
       if (!entry || entry.status !== 'pending') {
         return;
@@ -839,7 +839,7 @@ function createInboxStore(): InboxStore & Participant {
       });
       entry.attempts += 1;
     },
-    deadLetter: async (id, reason, _options?: Options) => {
+    deadLetter: async (id, reason, _options?: CallOptions) => {
       const entry = rows.get(id);
 
       if (!entry || entry.status !== 'pending') {
@@ -849,7 +849,7 @@ function createInboxStore(): InboxStore & Participant {
       journal.record(() => rows.set(id, prior));
       rows.set(id, { ...entry, status: 'dead', reason });
     },
-    reviveDead: async (limit, _options?: Options) =>
+    reviveDead: async (limit, _options?: CallOptions) =>
       reviveDeadRows(journal, rows, limit),
   };
 }
@@ -857,21 +857,21 @@ function createInboxStore(): InboxStore & Participant {
 // Oldest receivedAt first, mirroring the SQL engines' `order by received_at`.
 function reviveDeadRows(
   journal: Journal,
-  rows: Map<string, InboxEntry>,
+  rows: Map<string, InboxMessage>,
   limit: number,
-): InboxEntry[] {
-  const dead: InboxEntry[] = [];
+): InboxMessage[] {
+  const dead: InboxMessage[] = [];
   for (const entry of rows.values()) {
     if (entry.status === 'dead') {
       dead.push(entry);
     }
   }
   dead.sort((a, b) => a.receivedAt - b.receivedAt);
-  const revived: InboxEntry[] = [];
+  const revived: InboxMessage[] = [];
   for (const entry of dead.slice(0, Math.max(0, limit))) {
     const prior = { ...entry };
     journal.record(() => rows.set(entry.id, prior));
-    const next: InboxEntry = {
+    const next: InboxMessage = {
       ...entry,
       status: 'pending',
       attempts: 0,
@@ -887,11 +887,17 @@ function reviveDeadRows(
 
 // Newest `updatedAt` first, ties by `id` descending (see SagaStore.list), matching the SQL
 // engines' `order by updated_at desc, id desc`.
-async function* listSagasOf(rows: Map<string, Saga>): AsyncIterable<Saga> {
-  const snapshot = [...rows.values()].sort(
-    (a, b) =>
-      b.updatedAt - a.updatedAt || (b.id > a.id ? 1 : b.id < a.id ? -1 : 0),
-  );
+async function* listSagasOf(
+  rows: Map<string, Saga>,
+  states?: readonly Saga['state'][],
+): AsyncIterable<Saga> {
+  const wanted = states === undefined ? null : new Set(states);
+  const snapshot = [...rows.values()]
+    .filter((saga) => wanted === null || wanted.has(saga.state))
+    .sort(
+      (a, b) =>
+        b.updatedAt - a.updatedAt || (b.id > a.id ? 1 : b.id < a.id ? -1 : 0),
+    );
   for (const saga of snapshot) {
     yield { ...saga };
   }
@@ -939,19 +945,19 @@ function createSagaStore(): SagaStore & Participant {
 
   return {
     journal,
-    open: async (saga, _options?: Options) => {
+    open: async (saga, _options?: CallOptions) => {
       recordRowUndo(journal, rows, saga.id);
       rows.set(saga.id, { ...saga });
       bumpLast(saga.userId, saga.updatedAt);
     },
-    load: async (id, _options?: Options) => {
+    load: async (id, _options?: CallOptions) => {
       const saga = rows.get(id);
       return saga ? { ...saga } : null;
     },
-    findByProviderRef: (providerRef, _options?: Options) =>
+    findByProviderRef: (providerRef, _options?: CallOptions) =>
       findSagaByRef(rows, providerRef),
-    list: () => listSagasOf(rows),
-    claimDue: async (now, limit, _options?: Options) => {
+    list: (options) => listSagasOf(rows, options?.states),
+    claimDue: async (now, limit, _options?: CallOptions) => {
       const due: Saga[] = [];
       for (const saga of rows.values()) {
         if (due.length >= limit) {
@@ -979,10 +985,10 @@ function createSagaStore(): SagaStore & Participant {
       bumpLast(saga.userId, patch.updatedAt ?? saga.updatedAt);
       return true;
     },
-    lastPayoutAt: async (userId, _options?: Options) => {
+    lastPayoutAt: async (userId, _options?: CallOptions) => {
       return lastByUser.get(userId) ?? null;
     },
-    deadLetter: async (id, reason, _options?: Options) => {
+    deadLetter: async (id, reason, _options?: CallOptions) => {
       const saga = rows.get(id);
       if (!saga) {
         return;
@@ -996,7 +1002,7 @@ function createSagaStore(): SagaStore & Participant {
 // --- Entitlement store ------------------------------------------------------------
 
 interface EntitlementRow {
-  attrs: EntitlementAttrs;
+  attrs: EntitlementAttributes;
   revoked: boolean;
 }
 
@@ -1011,13 +1017,13 @@ function createEntitlementStore(deps: {
 
   return {
     journal,
-    grant: async (userId, sku, attrs, _options?: Options) => {
+    grant: async (userId, sku, attrs, _options?: CallOptions) => {
       // Overwriting clears any earlier revoke, so re-buying after a refund restores ownership.
       const key = keyOf(userId, sku);
       recordRowUndo(journal, rows, key);
       rows.set(key, { attrs: { ...attrs }, revoked: false });
     },
-    revoke: async (userId, sku, _options?: Options) => {
+    revoke: async (userId, sku, _options?: CallOptions) => {
       const key = keyOf(userId, sku);
       const row = rows.get(key);
       if (!row || row.revoked) {
@@ -1026,7 +1032,7 @@ function createEntitlementStore(deps: {
       recordRowUndo(journal, rows, key);
       rows.set(key, { ...row, revoked: true });
     },
-    owns: async (userId, sku, _options?: Options) => {
+    owns: async (userId, sku, _options?: CallOptions) => {
       // Expiry check is inclusive of `expiresAt`; null `expiresAt` never expires.
       const row = rows.get(keyOf(userId, sku));
       if (!row || row.revoked) {
@@ -1035,7 +1041,7 @@ function createEntitlementStore(deps: {
       const expiresAt = row.attrs.expiresAt;
       return expiresAt == null || deps.clock.now() <= expiresAt;
     },
-    list: async function* (userId, _options?: Options) {
+    list: async function* (userId, _options?: CallOptions) {
       const prefix = `${userId}::`;
       // noinspection JSMismatchedCollectionQueryUpdate
       const grants: Array<{ sku: string; expiresAt: number | null }> = [];
@@ -1062,15 +1068,15 @@ function createSubscriptionStore(): SubscriptionStore & Participant {
 
   return {
     journal,
-    open: async (sub, _options?: Options) => {
+    open: async (sub, _options?: CallOptions) => {
       recordRowUndo(journal, rows, sub.id);
       rows.set(sub.id, { ...sub });
     },
-    load: async (id, _options?: Options) => {
+    load: async (id, _options?: CallOptions) => {
       const sub = rows.get(id);
       return sub ? { ...sub } : null;
     },
-    activeFor: async (userId, sku, sellerId, _options?: Options) => {
+    activeFor: async (userId, sku, sellerId, _options?: CallOptions) => {
       for (const sub of rows.values()) {
         if (
           sub.userId === userId &&
@@ -1083,7 +1089,7 @@ function createSubscriptionStore(): SubscriptionStore & Participant {
       }
       return null;
     },
-    cancel: async (id, _options?: Options) => {
+    cancel: async (id, _options?: CallOptions) => {
       const sub = rows.get(id);
       if (!sub) {
         return;
@@ -1091,7 +1097,7 @@ function createSubscriptionStore(): SubscriptionStore & Participant {
       recordRowUndo(journal, rows, id);
       rows.set(id, { ...sub, state: 'CANCELED' });
     },
-    claimDue: async (now, limit, _options?: Options) => {
+    claimDue: async (now, limit, _options?: CallOptions) => {
       const due: Subscription[] = [];
       for (const sub of rows.values()) {
         if (due.length >= limit) {
@@ -1103,7 +1109,12 @@ function createSubscriptionStore(): SubscriptionStore & Participant {
       }
       return due;
     },
-    markBilled: async (id, nextDueAt, expectedDueAt, _options?: Options) => {
+    markBilled: async (
+      id,
+      nextDueAt,
+      expectedDueAt,
+      _options?: CallOptions,
+    ) => {
       // Compare-and-set on `expectedDueAt`: if an overlapping sweep already moved `nextDueAt`,
       // this one returns false and changes nothing, so a billing period is charged at most once.
       const sub = rows.get(id);
@@ -1115,7 +1126,7 @@ function createSubscriptionStore(): SubscriptionStore & Participant {
       rows.set(id, { ...sub, nextDueAt, period: sub.period + 1, attempts: 0 });
       return true;
     },
-    markLapsed: async (id, _options?: Options) => {
+    markLapsed: async (id, _options?: CallOptions) => {
       const sub = rows.get(id);
       if (!sub) {
         return;
@@ -1136,7 +1147,7 @@ function createPromoStore(): PromoStore & Participant {
 
   return {
     journal,
-    open: async (grant, _options?: Options) => {
+    open: async (grant, _options?: CallOptions) => {
       // Grant id equals its posting's txnId, so re-opening must leave the first row untouched (unlike
       // SagaStore/SubscriptionStore.open, which replace).
       if (rows.has(grant.id)) {
@@ -1145,7 +1156,7 @@ function createPromoStore(): PromoStore & Participant {
       journal.record(() => rows.delete(grant.id));
       rows.set(grant.id, { ...grant });
     },
-    claimDue: async (now, limit, _options?: Options) => {
+    claimDue: async (now, limit, _options?: CallOptions) => {
       // Oldest `expiresAt` first across the whole table, then the `limit` cap.
       const due: PromoGrant[] = [];
       for (const grant of rows.values()) {
@@ -1156,7 +1167,7 @@ function createPromoStore(): PromoStore & Participant {
       due.sort((a, b) => a.expiresAt - b.expiresAt);
       return due.slice(0, limit);
     },
-    markReversed: async (id, _options?: Options) => {
+    markReversed: async (id, _options?: CallOptions) => {
       const grant = rows.get(id);
       if (!grant || grant.reversed) {
         return;
@@ -1257,12 +1268,13 @@ function createTrustStore(
   };
 
   return {
-    read: async (subject, _options?: Options) => measure(subject, clock.now()),
-    bump: async (subject, attempt, _options?: Options) =>
+    read: async (subject, _options?: CallOptions) =>
+      measure(subject, clock.now()),
+    bump: async (subject, attempt, _options?: CallOptions) =>
       insert(subject, attempt),
     // No `await` between the insert and the windowing, so two concurrent same-subject `record`
     // calls can't interleave — the atomicity `TrustStore.record` requires (ports.ts).
-    record: async (subject, attempt, _options?: Options) => {
+    record: async (subject, attempt, _options?: CallOptions) => {
       insert(subject, attempt);
       return measure(subject, clock.now());
     },
@@ -1316,10 +1328,10 @@ function createMovementJournal(): MovementJournal {
 function createCheckpointStore(): CheckpointStore {
   const rows: Checkpoint[] = [];
   return {
-    put: async (checkpoint, _options?: Options) => {
+    put: async (checkpoint, _options?: CallOptions) => {
       rows.push({ ...checkpoint });
     },
-    latest: async (_options?: Options) => {
+    latest: async (_options?: CallOptions) => {
       const last = rows[rows.length - 1];
       return last ? { ...last } : null;
     },
@@ -1333,7 +1345,7 @@ function createCheckpointStore(): CheckpointStore {
 function createReplayStore(): ReplayStore {
   const seen = new Set<string>();
   return {
-    claim: async (eventId, _options?: Options) => {
+    claim: async (eventId, _options?: CallOptions) => {
       if (seen.has(eventId)) {
         return { claimed: false };
       }

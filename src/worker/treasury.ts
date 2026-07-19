@@ -29,7 +29,7 @@ import { SYSTEM, shardsOf } from '#src/accounts.ts';
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Transaction, WorkerCtx } from '#src/contract.ts';
-import type { Leg, Options, Rate, Store, Unit } from '#src/ports.ts';
+import type { Leg, CallOptions, Rate, Store, Unit } from '#src/ports.ts';
 
 /**
  * Result of one backing check. A credit is backed when it can be redeemed from cash held in
@@ -192,7 +192,7 @@ function toNumber(minor: bigint): number {
 // --- Float coverage: the external half of the treasury tie-out --------------------
 
 export type FloatFeed = {
-  balance(options?: Options): Promise<Amount>;
+  balance(options?: CallOptions): Promise<Amount>;
 };
 
 export type FloatPosition = {

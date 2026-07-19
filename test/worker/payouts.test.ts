@@ -29,7 +29,7 @@ import type { AccountRef } from '#src/accounts.ts';
 import type { Amount } from '#src/money.ts';
 import type { Config } from '#src/config.ts';
 import type {
-  Options,
+  CallOptions,
   PayoutProviderStatus,
   Processor,
   Saga,
@@ -43,7 +43,7 @@ async function fund(
   unit: Unit,
   account: AccountRef,
   amount: Amount,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<void> {
   await postEntry(
     unit.ledger,

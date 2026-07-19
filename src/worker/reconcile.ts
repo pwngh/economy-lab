@@ -14,7 +14,7 @@ import { reconcile } from '#src/reconcile.ts';
 
 import type { WorkerCtx } from '#src/contract.ts';
 import type { ReconcileInputs, ReconcileReport } from '#src/reconcile.ts';
-import type { Options, Range } from '#src/ports.ts';
+import type { CallOptions, Range } from '#src/ports.ts';
 
 /**
  * Host-implemented feed that supplies both sides of one window: the processor's settled records
@@ -22,7 +22,7 @@ import type { Options, Range } from '#src/ports.ts';
  * the ledger store offers a "list everything settled in this window" read.
  */
 export type ReconcileFeed = {
-  pull(window: Range, options?: Options): Promise<ReconcileInputs>;
+  pull(window: Range, options?: CallOptions): Promise<ReconcileInputs>;
 };
 
 /**
@@ -54,7 +54,7 @@ export async function reconcileDueWindows(
   feed: ReconcileFeed,
   ctx: WorkerCtx,
   input: { windows: ReadonlyArray<Range> },
-  options?: Options,
+  options?: CallOptions,
 ): Promise<ReconcileSummary> {
   const tally: ReconcileTally = { reconciled: [], drifted: [], failed: [] };
   const sweep: Sweep = { feed, ctx, options };
@@ -66,7 +66,7 @@ export async function reconcileDueWindows(
   return tally;
 }
 
-type Sweep = { feed: ReconcileFeed; ctx: WorkerCtx; options?: Options };
+type Sweep = { feed: ReconcileFeed; ctx: WorkerCtx; options?: CallOptions };
 
 async function reconcileOne(
   sweep: Sweep,

@@ -34,7 +34,7 @@ function episode(): AuditRecord[] {
       tier: 1,
       phase: 'decided',
       subject: 'pay_1',
-      detail: { decision: 'act', action: 'runOnce', reserve: 4_000n },
+      detail: { decision: 'act', action: 'sweep', reserve: 4_000n },
     },
     {
       at: 20,

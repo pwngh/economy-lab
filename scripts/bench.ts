@@ -20,15 +20,14 @@
 
 import { sealCheckpoint, reverifyCheckpoint } from '#src/worker/checkpoint.ts';
 import {
-  cachedEntitlements,
-  createReservations,
   credit as creditLeg,
   debit as debitLeg,
   decodeAmount,
   earned,
-  instanceSession,
   spendable,
 } from '#src/index.ts';
+import { cachedEntitlements } from '#src/adapters/index.ts';
+import { createReservations, openInstanceSession } from '#src/netting.ts';
 import { topUp, spend, requestPayout, credit } from '#test/support/builders.ts';
 import { I64Column, foldColumn } from '#src/fold-column.ts';
 import { seededDeltas } from '#test/support/seeded-deltas.ts';
@@ -350,7 +349,7 @@ async function measureNetting(p: Provisioned): Promise<NettingResult> {
       topUp({ userId: viewer, amount: credit(`${perViewer}.00`) }),
     );
   }
-  const session = instanceSession(
+  const session = openInstanceSession(
     { store: p.store, digest: p.workerCtx.digest, clock: p.workerCtx.clock },
     `sess_${tag}`,
     { reservations: createReservations() },
@@ -599,7 +598,7 @@ async function integrityCurve(): Promise<CurveRow[]> {
       );
     }
 
-    const prove = await bestMs(cfg.curveReps, () => economy.read.prove());
+    const prove = await bestMs(cfg.curveReps, () => economy.read.health());
     const seal = await bestMs(cfg.curveReps, () =>
       sealCheckpoint(store, workerCtx),
     );

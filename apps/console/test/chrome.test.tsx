@@ -35,7 +35,7 @@ const chromeData = {
     earned: 0,
     promotional: 0,
   },
-  prove: {
+  health: {
     conserved: true,
     backed: true,
     noOverdraft: true,

@@ -75,7 +75,7 @@ import {
   fakeProcessor,
   fixedRates,
   testLogger,
-  noopMeter,
+  silentMeter,
 } from '#test/support/capabilities.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import {
@@ -283,7 +283,7 @@ function assertReverseWonBooks(
 }
 
 async function assertInvariants(engine: Economy, tag: string): Promise<void> {
-  const report = await engine.read.prove();
+  const report = await engine.read.health();
   assert.ok(report.conserved, `${tag}: conservation broken after the race`);
   assert.ok(report.noOverdraft, `${tag}: overdraft after the race`);
   assert.ok(report.chainIntact, `${tag}: hash chain broken after the race`);
@@ -462,7 +462,7 @@ function raceWorkerCtx(): WorkerCtx {
     processor: fakeProcessor(),
     rates: fixedRates(),
     logger: testLogger(),
-    meter: noopMeter(),
+    meter: silentMeter(),
     config: testConfig(),
   };
 }

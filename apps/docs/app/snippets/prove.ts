@@ -29,7 +29,7 @@ export async function run(economy: Economy): Promise<SnippetReport> {
     }),
   );
 
-  const p = await economy.read.prove();
+  const p = await economy.read.health();
   const allGreen = p.conserved && p.backed && p.noOverdraft && p.chainIntact && p.consistent;
   const mark = (ok: boolean) => (ok ? 'holds' : 'FAILED');
 

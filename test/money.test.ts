@@ -23,7 +23,7 @@ import {
   encodeAmount,
   isNegative,
   isZero,
-  neg,
+  negate,
   toAmount,
   zero,
 } from '#src/money.ts';
@@ -91,7 +91,7 @@ describe('Money', () => {
 
   test('negates an amount while preserving its currency', () => {
     assert.deepEqual(
-      neg(decodeAmount('4.00', 'USD')),
+      negate(decodeAmount('4.00', 'USD')),
       decodeAmount('-4.00', 'USD'),
     );
   });

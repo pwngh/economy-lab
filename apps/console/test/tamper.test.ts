@@ -26,7 +26,7 @@ it('tampering flips chainIntact with the victim named; heal restores green', asy
   const eco = await getEngine();
   await eco.reset();
   takeFlash();
-  expect((await eco.proveFull()).chainIntact).toBe(true);
+  expect((await eco.prove()).chainIntact).toBe(true);
 
   const flash = await op('tamper');
   if (flash?.kind !== 'notice') {
@@ -36,10 +36,10 @@ it('tampering flips chainIntact with the victim named; heal restores green', asy
   expect(flash.message).toContain('Edited txn_');
   expect(flash.message).toContain(' on ');
 
-  expect((await eco.proveFull()).chainIntact).toBe(false);
+  expect((await eco.prove()).chainIntact).toBe(false);
 
   await op('heal');
-  expect((await eco.proveFull()).allGreen).toBe(true);
+  expect((await eco.prove()).allGreen).toBe(true);
 });
 
 it('a planted balance is a drift row carrying both figures', async () => {
@@ -48,12 +48,12 @@ it('a planted balance is a drift row carrying both figures', async () => {
   takeFlash();
 
   await op('drift');
-  const p = await eco.proveFull();
+  const p = await eco.prove();
   expect(p.consistent).toBe(false);
   const row = p.drift.find((d) => d.account === 'usr_ghost:spendable');
   expect(row?.cachedCredits).toBe(123);
   expect(row?.derivedCredits).toBe(0);
 
   await op('heal');
-  expect((await eco.proveFull()).consistent).toBe(true);
+  expect((await eco.prove()).consistent).toBe(true);
 });

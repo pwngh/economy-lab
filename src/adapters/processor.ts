@@ -13,7 +13,11 @@ import { encodeAmount } from '#src/money.ts';
 import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
 
 import type { Amount } from '#src/money.ts';
-import type { Options, PayoutProviderStatus, Processor } from '#src/ports.ts';
+import type {
+  CallOptions,
+  PayoutProviderStatus,
+  Processor,
+} from '#src/ports.ts';
 
 /**
  * Structural `fetch` shape rather than the built-in type, so tests can inject a stand-in and the
@@ -97,7 +101,7 @@ async function submitPayout(
   config: HttpProcessorConfig,
   doFetch: FetchLike,
   input: { key: string; userId: string; amount: Amount },
-  options?: Options,
+  options?: CallOptions,
 ): Promise<{ providerRef: string }> {
   let response: { ok: boolean; status: number; text(): Promise<string> };
   try {

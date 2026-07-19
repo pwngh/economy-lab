@@ -2,6 +2,24 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
+## Unreleased (0.4.0)
+
+### Changed
+
+- Breaking: hard renames with the old names deleted, no aliases: `capabilitiesFromEnv` →
+  `openPorts`, `Capabilities` → `Ports`, `checkEnv` → `preflight`, `describeSelection` /
+  `Selection` → `describeEnv` / `EnvDescription`, `systemCapabilities` → `systemRuntime`,
+  `runOnce` → `sweep`, `read.prove` → `read.health`, `SweepInput` → `SweepRequest`,
+  `WebhookAck` → `WebhookReceipt`, `Options` → `CallOptions`, `noopLogger` / `noopMeter` →
+  `silentLogger` / `silentMeter`, `redisCacheFrom` / `redisRateLimiterFrom` → `redisCache` /
+  `redisRateLimiter`, `instanceSession` → `openInstanceSession`, `neg` → `negate`,
+  `opsRuntime` → `createOpsRuntime`, `SessionDeps` / `SupervisorDeps` → `SessionPorts` /
+  `SupervisorPorts`, `EntitlementAttrs` → `EntitlementAttributes`.
+
+### Added
+
+- `read.health()` is the light liveness read; `proveEconomy` stays the thorough pass.
+
 ## 0.3.2 - 2026-07-17
 
 ### Added

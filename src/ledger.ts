@@ -23,7 +23,7 @@ import { toHex } from '#src/bytes.ts';
 
 import type { Amount, Currency } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
-import type { Digest, Ledger, Leg, Options, Posting } from '#src/ports.ts';
+import type { Digest, Ledger, Leg, CallOptions, Posting } from '#src/ports.ts';
 import type { Transaction } from '#src/contract.ts';
 
 /**
@@ -73,7 +73,7 @@ export function balanceDelta(leg: Leg): Amount {
 export async function lockAll(
   ledger: Ledger,
   accounts: ReadonlyArray<AccountRef>,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<void> {
   const ordered = [...new Set(accounts)].sort();
   // `lockMany` grabs the whole set in one round trip (Postgres' ordered `for update`); either path
@@ -98,7 +98,7 @@ export async function lockAll(
 export async function postEntry(
   ledger: Ledger,
   posting: Posting,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<Transaction> {
   // The schema forbids zero-amount legs (`legs.amount <> 0`); they arise when a split rounds a
   // share down to zero. Dropping them here, the one path every posting takes, keeps the in-memory
@@ -222,7 +222,7 @@ function assertBalanced(posting: Posting): void {
 async function assertKnownAccounts(
   ledger: Ledger,
   posting: Posting,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<void> {
   for (const leg of posting.legs) {
     if (!(await ledger.hasAccount(leg.account, options))) {
@@ -243,7 +243,7 @@ async function assertKnownAccounts(
 async function assertNoOverdraft(
   ledger: Ledger,
   posting: Posting,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<void> {
   const resulting = new Map<AccountRef, Amount>();
   for (const leg of posting.legs) {

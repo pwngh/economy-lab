@@ -18,12 +18,12 @@ import type {
   ProcessorRecord,
   ReconcileKind,
 } from '#src/reconcile.ts';
-import type { Options, Range, Store } from '#src/ports.ts';
+import type { CallOptions, Range, Store } from '#src/ports.ts';
 import type { ReconcileFeed } from '#src/worker/reconcile.ts';
 
 export type LedgerSide = (
   window: Range,
-  options?: Options,
+  options?: CallOptions,
 ) => Promise<ReadonlyArray<LedgerRecord>>;
 
 export function settledPayoutLedgerRecords(

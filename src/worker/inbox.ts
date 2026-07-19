@@ -12,7 +12,7 @@
 import { normalizePortError, normalizeError } from '#src/errors.ts';
 
 import type { Economy, Outcome, WorkerCtx } from '#src/contract.ts';
-import type { InboxEntry, Options, Store } from '#src/ports.ts';
+import type { InboxMessage, CallOptions, Ports, Store } from '#src/ports.ts';
 
 /**
  * Result of one inbox-apply run, the inbound mirror of {@link RelaySummary}.
@@ -54,9 +54,9 @@ type Applier = Pick<Economy, 'submit'>;
  */
 export async function drainInbox(
   store: Store,
-  ctx: WorkerCtx,
+  ports: Ports,
   input: { economy: Applier; now: number; limit: number },
-  options?: Options,
+  options?: CallOptions,
 ): Promise<InboxSummary> {
   const pending = await store.inbox.claimInbound(
     { now: input.now, limit: input.limit },
@@ -67,7 +67,7 @@ export async function drainInbox(
   for (const entry of pending) {
     await applyOne(
       store,
-      ctx,
+      ports,
       { economy: input.economy, entry, options },
       tally,
     );
@@ -79,7 +79,7 @@ export async function drainInbox(
 async function applyOne(
   store: Store,
   ctx: WorkerCtx,
-  work: { economy: Applier; entry: InboxEntry; options?: Options },
+  work: { economy: Applier; entry: InboxMessage; options?: CallOptions },
   tally: InboxTally,
 ): Promise<void> {
   const { economy, entry, options } = work;
@@ -102,10 +102,10 @@ async function applyOne(
     // dead-letter rather than burn attempts.
     ctx.logger.log('warn', 'worker.inbox.rejected', {
       entryId: entry.id,
-      reason: outcome.reason,
+      reason: outcome.detail.reason,
     });
-    await store.inbox.deadLetter(entry.id, outcome.reason, options);
-    tally.deadLettered.push({ id: entry.id, reason: outcome.reason });
+    await store.inbox.deadLetter(entry.id, outcome.detail.reason, options);
+    tally.deadLettered.push({ id: entry.id, reason: outcome.detail.reason });
     return;
   }
 
@@ -121,9 +121,9 @@ async function recordFailure(
   store: Store,
   ctx: WorkerCtx,
   work: {
-    entry: InboxEntry;
+    entry: InboxMessage;
     normalized: ReturnType<typeof normalizeError>;
-    options?: Options;
+    options?: CallOptions;
   },
   tally: InboxTally,
 ): Promise<void> {

@@ -12,9 +12,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { credits, noopLogger, noopMeter } from '#src/index.ts';
+import { credits } from '#src/index.ts';
+import { silentLogger, silentMeter } from '#src/runtime.ts';
 
-import { createSupervisor, opsRuntime } from '#src/ops/index.ts';
+import { createSupervisor, createOpsRuntime } from '#src/ops/index.ts';
 import { fixedClock } from '#test/support/capabilities.ts';
 import { frozenSagaSource, noSignals, recorder } from '#test/ops/support.ts';
 
@@ -163,9 +164,9 @@ test('a healthy tick emits nothing', async () => {
 
 test('an integrity mismatch proves once, escalates once, and never re-fires', async () => {
   const clock = fixedClock(0);
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
   const { records, sink } = recorder();
@@ -208,9 +209,9 @@ test('an integrity mismatch proves once, escalates once, and never re-fires', as
 
 test('an engine stall escalates once and resets when acquires complete again', async () => {
   const clock = fixedClock(0);
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
   const { records, sink } = recorder();
@@ -271,9 +272,9 @@ test('an engine stall escalates once and resets when acquires complete again', a
 
 test('a treasury breach escalates per occurrence and never re-fires on old signals', async () => {
   const clock = fixedClock(0);
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
   const { records, sink } = recorder();
@@ -312,9 +313,9 @@ test('a treasury breach escalates per occurrence and never re-fires on old signa
 
 test('a velocity rejection spike advises once per window; other rejections do not count', async () => {
   const clock = fixedClock(0);
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
   const { records, sink } = recorder();
@@ -355,9 +356,9 @@ test('a velocity rejection spike advises once per window; other rejections do no
 
 test('a declared watchdog escalates on silence and resets when the beat returns', async () => {
   const clock = fixedClock(0);
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
   const { records, sink } = recorder();
@@ -406,9 +407,9 @@ test('a declared watchdog escalates on silence and resets when the beat returns'
 
 test('retry exhaustion escalates once per window with the per-engine tally', async () => {
   const clock = fixedClock(0);
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
   const { records, sink } = recorder();
@@ -467,9 +468,9 @@ test('retry exhaustion escalates once per window with the per-engine tally', asy
 
 test('a webhook replay storm advises once per window', async () => {
   const clock = fixedClock(0);
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
   const { records, sink } = recorder();
@@ -504,9 +505,9 @@ test('a webhook replay storm advises once per window', async () => {
 
 test('a slow checkpoint seal advises once per window on completed seals only', async () => {
   const clock = fixedClock(0);
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
   const { records, sink } = recorder();
@@ -541,9 +542,9 @@ test('a slow checkpoint seal advises once per window on completed seals only', a
 
 test('a velocity spike past the escalation threshold escalates instead of advising', async () => {
   const clock = fixedClock(0);
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
   const { records, sink } = recorder();
@@ -582,9 +583,9 @@ test('a velocity spike past the escalation threshold escalates instead of advisi
 
 test('an integrity episode pauses the worker and containment suppresses every tier-1 lever', async () => {
   const clock = fixedClock(100_000);
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
   const { sink } = recorder();
@@ -655,9 +656,9 @@ test('an integrity episode pauses the worker and containment suppresses every ti
 
 test('an outbox backlog re-drives the relay under guardrails and verifies against the next gauge', async () => {
   const clock = fixedClock(0);
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
   const { sink } = recorder();
@@ -749,9 +750,9 @@ test('an outbox backlog re-drives the relay under guardrails and verifies agains
 
 test('the outbox re-drive falls back to the full sweep when no relay lever is wired', async () => {
   const clock = fixedClock(0);
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
   const { sink } = recorder();
@@ -769,15 +770,15 @@ test('the outbox re-drive falls back to the full sweep when no relay lever is wi
 
   runtime.meter.observe('worker.relay.backlog_age_ms', 5_000, {});
   const acted = await supervisor.tick();
-  assert.equal(acted[1].detail.action, 'runOnce');
+  assert.equal(acted[1].detail.action, 'sweep');
   assert.equal(sweeps, 1);
 });
 
 test('inbox dead letters revive under episode guardrails; without the lever the pass only reports', async () => {
   const clock = fixedClock(0);
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
   const { sink } = recorder();
@@ -844,9 +845,9 @@ test('inbox dead letters revive under episode guardrails; without the lever the 
 
 test('without a revive lever the inbox pass reports and suppresses, once per episode', async () => {
   const clock = fixedClock(0);
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
   const { records, sink } = recorder();
@@ -875,9 +876,9 @@ test('without a revive lever the inbox pass reports and suppresses, once per epi
 
 test('a deadlock storm advises once per window and takes no action', async () => {
   const clock = fixedClock(0);
-  const runtime = opsRuntime({
-    meter: noopMeter(),
-    logger: noopLogger(),
+  const runtime = createOpsRuntime({
+    meter: silentMeter(),
+    logger: silentLogger(),
     clock,
   });
   const { records, sink } = recorder();

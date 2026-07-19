@@ -18,7 +18,7 @@
 import {
   createSupervisor,
   jsonlAuditSink,
-  opsRuntime,
+  createOpsRuntime,
 } from '#src/ops/index.ts';
 import { readFlag, readInt } from '#src/env.ts';
 
@@ -60,7 +60,7 @@ export function maybeOps(
     return undefined;
   }
   const intervalMs = readInt(env.OPS_INTERVAL_MS, 60_000, { min: 1 });
-  const runtime = opsRuntime(host);
+  const runtime = createOpsRuntime(host);
   return {
     runtime,
     start: (levers) => {

@@ -28,7 +28,7 @@ import type {
   Ids,
   Clock,
   Ledger,
-  Options,
+  CallOptions,
   Posting,
   Signer,
   StoredLink,
@@ -130,7 +130,7 @@ export async function advanceHeads(
  */
 export async function proveChain(
   deps: { ledger: Ledger; digest: Digest },
-  options?: Options,
+  options?: CallOptions,
 ): Promise<ChainReport> {
   const heads = [...(await collectHeadPairs(deps.ledger))].sort((a, b) =>
     byCodeUnit(a[0], b[0]),
@@ -149,7 +149,7 @@ export async function proveChain(
 async function recomputeAccount(
   deps: { ledger: Ledger; digest: Digest },
   account: AccountRef,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<ChainBreak | null> {
   let prev = GENESIS_HEX;
   for await (const link of deps.ledger.lineage(account, options)) {
@@ -294,7 +294,7 @@ export async function recordCheckpoint(
     clock: Clock;
     ids: Ids;
   },
-  options?: Options,
+  options?: CallOptions,
 ): Promise<Checkpoint> {
   const report = await proveChain(
     { ledger: deps.ledger, digest: deps.digest },
@@ -494,7 +494,7 @@ async function collectHeadPairs(
 // statement (see Ledger.headSums), so no concurrent posting can tear a head from its sum.
 async function collectHeadSums(
   ledger: Ledger,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<ReadonlyArray<readonly [AccountRef, string, bigint]>> {
   const leaves: Array<readonly [AccountRef, string, bigint]> = [];
   for await (const leaf of ledger.headSums(options)) {

@@ -12,7 +12,7 @@
 import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
 import { encodeEvent } from '#src/adapters/event-wire.ts';
 
-import type { Dispatcher, EconomyEvent, Options } from '#src/ports.ts';
+import type { Dispatcher, EconomyEvent, CallOptions } from '#src/ports.ts';
 
 // --- Outbound dispatcher (HTTP transport) -----------------------------------------
 
@@ -43,7 +43,7 @@ export interface HttpDispatcherConfig {
 export function httpDispatcher(config: HttpDispatcherConfig): Dispatcher {
   const send = config.fetch ?? fetch;
 
-  return async (event: EconomyEvent, options?: Options): Promise<void> => {
+  return async (event: EconomyEvent, options?: CallOptions): Promise<void> => {
     let response: Response;
     try {
       response = await send(config.url, {

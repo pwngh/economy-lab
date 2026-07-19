@@ -11,7 +11,7 @@
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { lockAll, postEntry } from '#src/ledger.ts';
-import { neg } from '#src/money.ts';
+import { negate } from '#src/money.ts';
 import {
   assertKind,
   assertOperator,
@@ -118,7 +118,10 @@ async function extendLocks(
 // Same account, sign flipped. The original's legs sum to zero per currency, so the flipped set
 // does too.
 function reverseLegs(legs: ReadonlyArray<Leg>): Leg[] {
-  return legs.map((leg) => ({ account: leg.account, amount: neg(leg.amount) }));
+  return legs.map((leg) => ({
+    account: leg.account,
+    amount: negate(leg.amount),
+  }));
 }
 
 function reverseMeta(

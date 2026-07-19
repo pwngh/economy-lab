@@ -134,7 +134,7 @@ async function snapshot(
     balances.set(account, encodeAmount(await economy.read.balance(account)));
     heads.set(account, head);
   }
-  return { balances, heads, report: await economy.read.prove(), fault };
+  return { balances, heads, report: await economy.read.health(), fault };
 }
 
 // Compares a candidate snapshot against the memory reference. Returns the first difference as a

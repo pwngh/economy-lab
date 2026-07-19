@@ -200,7 +200,7 @@ async function assertInvariants(
   at: number,
   total: number,
 ): Promise<void> {
-  const report: ProveReport = await economy.read.prove();
+  const report: ProveReport = await economy.read.health();
   const where =
     `seed 0x${seed.toString(16)} after ${at}/${total} ops ` +
     `(reproduce: program(0x${seed.toString(16)}, ${OPS_PER_SEED}))`;

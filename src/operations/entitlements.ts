@@ -13,7 +13,7 @@ import { rejected, fault, ERROR_CODES } from '#src/errors.ts';
 import { assertKind, lifecycleMarker } from '#src/operations/guards.ts';
 
 import type {
-  EntitlementAttrs,
+  EntitlementAttributes,
   Ctx,
   Operation,
   Outcome,
@@ -109,7 +109,7 @@ function assertIdentified(userId: string, sku: string): void {
 
 // Wire input: a number field can arrive as NaN, Infinity, or a fraction. `expiresAt` must be
 // finite when present (null means "never expires"); `quantity` a positive integer when present.
-function assertAttrs(attrs: EntitlementAttrs | undefined): void {
+function assertAttrs(attrs: EntitlementAttributes | undefined): void {
   if (attrs === undefined) {
     return;
   }
@@ -136,4 +136,4 @@ function assertAttrs(attrs: EntitlementAttrs | undefined): void {
   }
 }
 
-const EMPTY_ATTRS: EntitlementAttrs = {};
+const EMPTY_ATTRS: EntitlementAttributes = {};

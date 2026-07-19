@@ -36,7 +36,7 @@ export async function clientLoader() {
   // The reads a dashboard loader makes, run through the recorder so the page can show its own work.
   await Promise.all([
     eco.solvency(),
-    eco.prove(),
+    eco.health(),
     eco.wallets({ offset: 0, limit: 8 }),
     eco.status(),
     eco.checkpoint(),

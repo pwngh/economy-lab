@@ -44,7 +44,7 @@ function captureSignals(
 
 // The lineage generator only runs once iterated, so the test drives it with `for await` to
 // force the request to be sent.
-describe('http Ledger Streamed Reads Forward Options', () => {
+describe('http Ledger Streamed Reads Forward CallOptions', () => {
   test('lineage forwards the abort signal to the transport', async () => {
     const signals: AbortSignal[] = [];
     const fetch = captureSignals(

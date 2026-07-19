@@ -87,7 +87,7 @@ export function createReservations(): Reservations {
   };
 }
 
-export interface SessionDeps {
+export interface SessionPorts {
   store: Store;
   digest: Digest;
   clock: Clock;
@@ -109,14 +109,14 @@ export interface SessionOptions {
  * per the reservation registry, durable per journal batch); `flush` forces the pending batch out;
  * `settle` derives the net from the journal, verifies the chain, and posts it in clearing chunks.
  *
- * `deps` is a structural subset of {@link Capabilities}, so a host composed via
- * `capabilitiesFromEnv` passes its capabilities straight through. Share ONE `reservations`
+ * `deps` is a structural subset of {@link Ports}, so a host composed via
+ * `openPorts` passes its ports straight through. Share ONE `reservations`
  * registry across every session in the process (see {@link Reservations}).
  *
  * @example
- *   const caps = await capabilitiesFromEnv(process.env, ports);
+ *   const ports = await openPorts(process.env, init);
  *   const reservations = createReservations(); // one per process
- *   const session = instanceSession(caps, `sess_${instanceId}`, { reservations });
+ *   const session = openInstanceSession(ports, `sess_${instanceId}`, { reservations });
  *   const amount = decodeAmount('0.50', 'CREDIT');
  *   await session.record({
  *     idempotencyKey: tipId,
@@ -124,8 +124,8 @@ export interface SessionOptions {
  *   });
  *   await session.settle(); // at instance close
  */
-export function instanceSession(
-  deps: SessionDeps,
+export function openInstanceSession(
+  deps: SessionPorts,
   sessionId: string,
   options?: SessionOptions,
 ): InstanceSession {
@@ -139,7 +139,7 @@ export function instanceSession(
  * session finish rather than double-post.
  */
 export async function recoverSession(
-  deps: SessionDeps,
+  deps: SessionPorts,
   sessionId: string,
   options?: SessionOptions,
 ): Promise<InstanceSession> {
@@ -149,7 +149,7 @@ export async function recoverSession(
 }
 
 export class InstanceSession {
-  private readonly deps: SessionDeps;
+  private readonly deps: SessionPorts;
   private readonly sessionId: string;
   private readonly maxBatch: number;
   private readonly chunkWidth: number;
@@ -162,7 +162,7 @@ export class InstanceSession {
   private head = GENESIS_HEX;
   private seq = 0;
 
-  constructor(deps: SessionDeps, sessionId: string, options?: SessionOptions) {
+  constructor(deps: SessionPorts, sessionId: string, options?: SessionOptions) {
     this.deps = deps;
     this.sessionId = sessionId;
     this.maxBatch = options?.maxBatch ?? 64;

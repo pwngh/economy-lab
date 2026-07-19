@@ -51,7 +51,7 @@ import {
   fakeProcessor,
   fixedClock,
   fixedRates,
-  noopMeter,
+  silentMeter,
   seededDigest,
   seededSigner,
   sequentialIds,
@@ -106,7 +106,7 @@ function committedTxn(
 
 // Asserts every invariant in a prove report individually, so a failure names the broken one.
 async function proveAll(economy: Economy): Promise<void> {
-  const report = await economy.read.prove();
+  const report = await economy.read.health();
   assert.equal(report.conserved, true);
   assert.equal(report.backed, true);
   assert.equal(report.noOverdraft, true);
@@ -517,7 +517,7 @@ describe('Sharding: Fee Sweep', () => {
       processor: fakeProcessor(),
       rates: fixedRates(),
       logger: testLogger(),
-      meter: noopMeter(),
+      meter: silentMeter(),
       config: { ...testConfig(), platformShards: SHARDS },
     };
     const summary = await realizeFees(store, ctx, { now: 1_000 });

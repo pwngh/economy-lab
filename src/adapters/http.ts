@@ -26,7 +26,7 @@ import type {
   Checkpoint,
   Lot,
   MovementJournal,
-  Options,
+  CallOptions,
   OutboxMessage,
   OutboxStats,
   Posting,
@@ -89,7 +89,7 @@ async function call(
   transport: Transport,
   path: string,
   payload: unknown,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<unknown> {
   const request = new Request(new URL(path, transport.baseUrl), {
     method: 'POST',
@@ -197,7 +197,7 @@ async function* streamHeadSums(
 async function* streamBalanceAccounts(
   transport: Transport,
   session: string,
-  options?: Options,
+  options?: CallOptions,
 ): AsyncIterable<AccountRef> {
   const rows = (await call(
     transport,
@@ -231,7 +231,7 @@ async function* streamLineage(
   transport: Transport,
   account: AccountRef,
   session: string,
-  options?: Options,
+  options?: CallOptions,
 ): AsyncIterable<StoredLink> {
   const rows = (await call(
     transport,
@@ -247,7 +247,7 @@ async function* streamLineage(
 async function* streamPostings(
   transport: Transport,
   session: string,
-  options?: Options,
+  options?: CallOptions,
 ): AsyncIterable<Posting> {
   const rows = (await call(
     transport,
@@ -327,18 +327,18 @@ function sessionInbox(transport: Transport, session: string): InboxStore {
   const at = (method: string): string => `/tx/${session}/inbox/${method}`;
   return {
     enqueueInbound: async (entry, options) =>
-      decodeWire.inboxEntry(
+      decodeWire.inboxMessage(
         await call(
           transport,
           at('enqueueInbound'),
-          { entry: encodeWire.inboxEntry(entry) },
+          { entry: encodeWire.inboxMessage(entry) },
           options,
         ),
       ),
     claimInbound: async (input, options) =>
       (
         (await call(transport, at('claimInbound'), input, options)) as unknown[]
-      ).map(decodeWire.inboxEntry),
+      ).map(decodeWire.inboxMessage),
     markApplied: async (id, options) => {
       await call(transport, at('markApplied'), { id }, options);
     },
@@ -356,7 +356,7 @@ function sessionInbox(transport: Transport, session: string): InboxStore {
           { limit },
           options,
         )) as unknown[]
-      ).map(decodeWire.inboxEntry),
+      ).map(decodeWire.inboxMessage),
   };
 }
 
@@ -388,7 +388,7 @@ function sessionSagas(transport: Transport, session: string): SagaStore {
       const rows = (await call(
         transport,
         at('list'),
-        {},
+        options?.states === undefined ? {} : { states: [...options.states] },
         options,
       )) as unknown[];
       for (const row of rows) {
@@ -608,7 +608,7 @@ function rootReplay(transport: Transport): ReplayStore {
 async function runTransaction<T>(
   transport: Transport,
   work: (unit: Unit) => Promise<T>,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<T> {
   const { session } = (await call(transport, '/tx/begin', {}, options)) as {
     session: string;
@@ -664,7 +664,7 @@ export function httpStore(options?: HttpStoreOptions): Store {
     replay: rootReplay(transport),
     transaction: (work, txOptions) =>
       runTransaction(transport, work, txOptions),
-    close: async (closeOptions?: Options) => {
+    close: async (closeOptions?: CallOptions) => {
       await call(transport, '/close', {}, closeOptions);
     },
   };

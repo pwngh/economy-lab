@@ -27,7 +27,7 @@ import {
 import type { Clock, Saga, Scheduler } from '#src/ports.ts';
 import type { AuditPhase, AuditRecord, AuditSink } from '#src/ops/audit.ts';
 import type { StuckSagaFinding } from '#src/ops/detect.ts';
-import type { SignalFeed } from '#src/ops/runtime.ts';
+import type { OpsRuntime, SignalFeed } from '#src/ops/runtime.ts';
 
 export type SagaSource = {
   list(): AsyncIterable<Saga>;
@@ -82,7 +82,7 @@ export const defaultSupervisorConfig: SupervisorConfig = {
   watchdogs: [],
 };
 
-export type SupervisorDeps = {
+export type SupervisorPorts = {
   clock: Clock;
   signals: SignalFeed;
   sagas: SagaSource;
@@ -98,7 +98,7 @@ export type SupervisorDeps = {
   pauseWorker?: () => void;
   /**
    * A targeted relay run for the outbox-backlog remediation, typically
-   * `worker.runOnce({ ...input, only: ['relay'] })`. Falls back to `runSweep` when absent.
+   * `worker.sweep({ ...input, only: ['relay'] })`. Falls back to `runSweep` when absent.
    */
   runRelay?: (now: number) => Promise<unknown>;
   /** Flips up to `limit` dead inbox rows back to pending, typically `store.inbox.reviveDead`. */
@@ -130,7 +130,7 @@ type SupervisorState = {
   replayStormReportedAt: number;
   sealSlowReportedAt: number;
   // The containment latch: set by any integrity episode, cleared only by a supervisor restart.
-  // While set, no tier-1 pass calls its lever — `runOnce` deliberately ignores `paused()`, so
+  // While set, no tier-1 pass calls its lever — `sweep` deliberately ignores `paused()`, so
   // without this the supervisor's own remediations would keep writing through a paused worker.
   containment: boolean;
   outboxAction: SagaActionState;
@@ -169,15 +169,27 @@ function idleAction(): SagaActionState {
 }
 
 type Pass = {
-  deps: SupervisorDeps;
+  deps: SupervisorPorts;
   config: SupervisorConfig;
   state: SupervisorState;
   now: number;
   emit: (record: AuditRecord) => void;
 };
 
+/**
+ * A supervisor over an already-built ops runtime: the runtime's signal feed slots in and the
+ * host supplies the rest of the ports.
+ */
+export function createSupervisorFrom(
+  runtime: OpsRuntime,
+  ports: Omit<SupervisorPorts, 'signals'>,
+  scheduler?: Scheduler,
+): Supervisor {
+  return createSupervisor({ ...ports, signals: runtime.signals }, scheduler);
+}
+
 export function createSupervisor(
-  deps: SupervisorDeps,
+  deps: SupervisorPorts,
   scheduler?: Scheduler,
 ): Supervisor {
   const config = { ...defaultSupervisorConfig, ...deps.config };
@@ -293,7 +305,7 @@ async function runIntegrityPass(pass: Pass): Promise<void> {
   );
 }
 
-async function runProver(deps: SupervisorDeps): Promise<unknown> {
+async function runProver(deps: SupervisorPorts): Promise<unknown> {
   if (deps.prove === undefined) {
     return null;
   }
@@ -706,7 +718,7 @@ async function runStuckSagaPass(pass: Pass): Promise<void> {
       );
     } else {
       emit(
-        stuckRecord(now, 'decided', id, { decision: 'act', action: 'runOnce' }),
+        stuckRecord(now, 'decided', id, { decision: 'act', action: 'sweep' }),
       );
       actionable.push(finding);
     }
@@ -738,8 +750,8 @@ async function actOnStuckSagas(
     subject: null,
     detail:
       failure === null
-        ? { action: 'runOnce', sagas: ids }
-        : { action: 'runOnce', sagas: ids, failure },
+        ? { action: 'sweep', sagas: ids }
+        : { action: 'sweep', sagas: ids, failure },
   });
   for (const finding of actionable) {
     const action = state.perSaga.get(finding.saga.id);
@@ -807,7 +819,7 @@ async function runOutboxBacklogPass(pass: Pass): Promise<void> {
     return;
   }
   const lever = deps.runRelay ?? deps.runSweep;
-  const actionName = deps.runRelay === undefined ? 'runOnce' : 'redriveRelay';
+  const actionName = deps.runRelay === undefined ? 'sweep' : 'redriveRelay';
   emit(backlogRecord(now, 'decided', { decision: 'act', action: actionName }));
   let failure: string | null = null;
   try {

@@ -239,13 +239,13 @@ async function replay(
       const authViolation = checkAuthorization(result, i);
       if (authViolation) return authViolation;
       if (mode.proveEachStep) {
-        const violation = checkInvariants(await economy.read.prove(), i);
+        const violation = checkInvariants(await economy.read.health(), i);
         if (violation) return violation;
       }
     }
     if (!mode.proveEachStep) {
       const atEnd = checkInvariants(
-        await economy.read.prove(),
+        await economy.read.health(),
         steps.length - 1,
       );
       if (atEnd) {

@@ -180,7 +180,7 @@ async function assertLinearizable(
       (await model.read.balance(earned(seller))).minor,
       `${tag}: seller earned diverged from the sequential model`,
     );
-    const report = await engine.read.prove();
+    const report = await engine.read.health();
     assert.ok(
       report.conserved,
       `${tag}: conservation broken under concurrency`,
@@ -259,7 +259,7 @@ function runConcurrency(
         `wallet went negative: ${encodeAmount(balance)}`,
       );
       // And the whole ledger still proves out.
-      const report = await economy.read.prove();
+      const report = await economy.read.health();
       assert.ok(report.conserved, 'conservation broken under concurrency');
       assert.ok(report.noOverdraft, 'overdraft under concurrency');
     });

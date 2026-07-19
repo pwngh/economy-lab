@@ -27,7 +27,7 @@ import {
 
 import type { AccountRef } from '#src/accounts.ts';
 import type { Amount } from '#src/money.ts';
-import type { Options, Store, Subscription, Unit } from '#src/ports.ts';
+import type { CallOptions, Store, Subscription, Unit } from '#src/ports.ts';
 
 // The matching debit goes to STORED_VALUE, which may go negative, keeping the seed balanced
 // and REVENUE at zero for the assertions.
@@ -35,7 +35,7 @@ async function fund(
   unit: Unit,
   account: AccountRef,
   amount: Amount,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<void> {
   await postEntry(
     unit.ledger,

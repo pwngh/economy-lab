@@ -96,11 +96,11 @@ export function shouldRevalidate() {
 
 export async function clientLoader() {
   const eco = await getEngine();
-  const [solvency, prove] = await Promise.all([eco.solvency(), eco.prove()]);
+  const [solvency, health] = await Promise.all([eco.solvency(), eco.health()]);
   return {
     settings: eco.settings(),
     solvency,
-    prove,
+    health,
     flash: takeFlash(),
   };
 }
@@ -257,7 +257,7 @@ export default function Chrome({ loaderData }: Route.ComponentProps) {
       <main className="main">
         <Topbar
           now={loaderData.settings.now}
-          prove={loaderData.prove}
+          health={loaderData.health}
           solvency={solvency}
           back={back}
         />
@@ -303,15 +303,15 @@ function TourStrip({ step, exitTo }: { step: number; exitTo: string }) {
 }
 
 // The clock and the thesis, on every page: simulated time with its advance controls beside it,
-// and the solvency ticker — the prove() verdict re-checked on every revalidation.
+// and the solvency ticker — the health() verdict re-checked on every revalidation.
 function Topbar({
   now,
-  prove,
+  health,
   solvency,
   back,
 }: {
   now: number;
-  prove: Route.ComponentProps['loaderData']['prove'];
+  health: Route.ComponentProps['loaderData']['health'];
   solvency: Route.ComponentProps['loaderData']['solvency'];
   back: string;
 }) {
@@ -407,9 +407,9 @@ function Topbar({
           </StatusPill>
         </Link>
         <Link to="/integrity" className="topbar-ticker">
-          <StatusPill tone={prove.allGreen ? 'green' : 'red'} dot>
+          <StatusPill tone={health.allGreen ? 'green' : 'red'} dot>
             Σ debits = Σ credits ·{' '}
-            {prove.allGreen ? 'proven on this load' : 'proof failing'}
+            {health.allGreen ? 'proven on this load' : 'proof failing'}
           </StatusPill>
         </Link>
       </div>

@@ -13,7 +13,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { redisCacheFrom, redisRateLimiterFrom } from '#src/adapters/redis.ts';
+import { redisCache, redisRateLimiter } from '#src/adapters/redis.ts';
 import { EconomyError } from '#src/errors.ts';
 import { runCacheConformance } from '#test/conformance/cache.ts';
 
@@ -55,10 +55,10 @@ function failingRedis(cause: Error): FakeRedis {
   };
 }
 
-describe('redisCacheFrom', () => {
+describe('redisCache', () => {
   test('round-trips a value under the namespaced key', async () => {
     const client = fakeRedis();
-    const cache = redisCacheFrom(client);
+    const cache = redisCache(client);
 
     await cache.set('balance:usr_42:spendable', 'CREDIT:12.34');
     const read = await cache.get('balance:usr_42:spendable');
@@ -71,7 +71,7 @@ describe('redisCacheFrom', () => {
   });
 
   test('returns null for a missing key', async () => {
-    const cache = redisCacheFrom(fakeRedis());
+    const cache = redisCache(fakeRedis());
 
     const read = await cache.get('balance:usr_absent:spendable');
 
@@ -80,7 +80,7 @@ describe('redisCacheFrom', () => {
 
   test('forwards a TTL as the PX millisecond flag', async () => {
     const client = fakeRedis();
-    const cache = redisCacheFrom(client);
+    const cache = redisCache(client);
 
     await cache.set('balance:usr_7:spendable', 'CREDIT:1.00', 60_000);
 
@@ -94,7 +94,7 @@ describe('redisCacheFrom', () => {
 
   test('omits the TTL flag when no ttl is given', async () => {
     const client = fakeRedis();
-    const cache = redisCacheFrom(client);
+    const cache = redisCache(client);
 
     await cache.set('balance:usr_7:earned', 'CREDIT:2.00');
 
@@ -106,7 +106,7 @@ describe('redisCacheFrom', () => {
 
   test('invalidates the namespaced key', async () => {
     const client = fakeRedis();
-    const cache = redisCacheFrom(client);
+    const cache = redisCache(client);
     await cache.set('balance:usr_9:spendable', 'CREDIT:5.00');
 
     await cache.invalidate('balance:usr_9:spendable');
@@ -118,7 +118,7 @@ describe('redisCacheFrom', () => {
 
   test('translates a driver failure into a retryable STORE.FAILURE fault', async () => {
     const cause = new Error('ECONNRESET');
-    const cache = redisCacheFrom(failingRedis(cause));
+    const cache = redisCache(failingRedis(cause));
 
     await assert.rejects(
       cache.get('balance:usr_1:spendable'),
@@ -137,7 +137,7 @@ describe('redisCacheFrom', () => {
   });
 
   test('translates a set failure into a retryable STORE.FAILURE fault', async () => {
-    const cache = redisCacheFrom(failingRedis(new Error('ECONNRESET')));
+    const cache = redisCache(failingRedis(new Error('ECONNRESET')));
 
     await assert.rejects(
       cache.set('balance:usr_1:spendable', 'CREDIT:1.00'),
@@ -151,7 +151,7 @@ describe('redisCacheFrom', () => {
   });
 
   test('translates an invalidate failure into a retryable STORE.FAILURE fault', async () => {
-    const cache = redisCacheFrom(failingRedis(new Error('ECONNRESET')));
+    const cache = redisCache(failingRedis(new Error('ECONNRESET')));
 
     await assert.rejects(
       cache.invalidate('balance:usr_1:spendable'),
@@ -167,7 +167,7 @@ describe('redisCacheFrom', () => {
   test('closes by quitting the underlying client', async () => {
     const client = fakeRedis();
     let quit = false;
-    const cache = redisCacheFrom({
+    const cache = redisCache({
       ...client,
       quit: async () => {
         quit = true;
@@ -181,7 +181,7 @@ describe('redisCacheFrom', () => {
   });
 });
 
-runCacheConformance('redis', () => redisCacheFrom(fakeRedis()));
+runCacheConformance('redis', () => redisCache(fakeRedis()));
 
 interface FakeCounter {
   incr(key: string): Promise<number>;
@@ -212,10 +212,10 @@ function fakeCounter(remainingTtl = 500): FakeCounter {
   };
 }
 
-describe('redisRateLimiterFrom', () => {
+describe('redisRateLimiter', () => {
   test('allows under the limit and arms the window on the first hit', async () => {
     const client = fakeCounter();
-    const limiter = redisRateLimiterFrom(client, {
+    const limiter = redisRateLimiter(client, {
       limit: 2,
       windowMs: 1_000,
     });
@@ -228,7 +228,7 @@ describe('redisRateLimiterFrom', () => {
   });
 
   test('denies past the limit with the remaining window as retryAfterMs', async () => {
-    const limiter = redisRateLimiterFrom(fakeCounter(500), {
+    const limiter = redisRateLimiter(fakeCounter(500), {
       limit: 1,
       windowMs: 1_000,
     });
@@ -242,7 +242,7 @@ describe('redisRateLimiterFrom', () => {
   });
 
   test('a non-positive PTTL falls back to the full window', async () => {
-    const limiter = redisRateLimiterFrom(fakeCounter(-1), {
+    const limiter = redisRateLimiter(fakeCounter(-1), {
       limit: 1,
       windowMs: 1_000,
     });
@@ -256,7 +256,7 @@ describe('redisRateLimiterFrom', () => {
   });
 
   test('a redis failure surfaces as a retryable fault', async () => {
-    const limiter = redisRateLimiterFrom(
+    const limiter = redisRateLimiter(
       {
         ...fakeCounter(),
         incr: async () => Promise.reject(new Error('down')),
@@ -273,7 +273,7 @@ describe('redisRateLimiterFrom', () => {
 
   test('closes by quitting the underlying client', async () => {
     let quit = false;
-    const limiter = redisRateLimiterFrom(
+    const limiter = redisRateLimiter(
       {
         ...fakeCounter(),
         quit: async () => {

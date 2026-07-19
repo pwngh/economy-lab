@@ -27,7 +27,7 @@ export type {
   SignatureName,
 } from '#src/ops/audit.ts';
 
-export { opsRuntime } from '#src/ops/runtime.ts';
+export { createOpsRuntime } from '#src/ops/runtime.ts';
 export type { OpsRuntime, Signal, SignalFeed } from '#src/ops/runtime.ts';
 
 export {
@@ -62,11 +62,12 @@ export type {
 
 export {
   createSupervisor,
+  createSupervisorFrom,
   defaultSupervisorConfig,
 } from '#src/ops/supervisor.ts';
 export type {
   SagaSource,
   Supervisor,
   SupervisorConfig,
-  SupervisorDeps,
+  SupervisorPorts,
 } from '#src/ops/supervisor.ts';

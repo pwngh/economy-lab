@@ -33,7 +33,7 @@ import {
 } from '#src/operation.ts';
 
 import type {
-  EntitlementAttrs,
+  EntitlementAttributes,
   Operation,
   Principal,
   Recipient,
@@ -180,7 +180,7 @@ export const cancelSubscription = (o: {
 export const grantEntitlement = (o: {
   userId: string;
   sku: string;
-  attrs?: EntitlementAttrs;
+  attrs?: EntitlementAttributes;
   actor?: Principal;
 }): Operation =>
   makeGrantEntitlement({ idempotencyKey: claim(), actor: system, ...o });

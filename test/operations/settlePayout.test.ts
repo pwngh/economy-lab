@@ -37,7 +37,7 @@ import {
   seededSigner,
   fixedRates,
   testLogger,
-  noopMeter,
+  silentMeter,
   fakeProcessor,
   defaultPricing,
   testConfig,
@@ -61,7 +61,7 @@ function newCtx(): Ctx {
     pricing: defaultPricing(),
     rates: fixedRates(),
     logger: testLogger(),
-    meter: noopMeter(),
+    meter: silentMeter(),
   };
 }
 

@@ -25,7 +25,7 @@ import type { AccountRef } from '#src/accounts.ts';
 import type { Operation, Transaction } from '#src/contract.ts';
 import type {
   Attempt,
-  InboxEntry,
+  InboxMessage,
   Leg,
   Lot,
   Movement,
@@ -137,7 +137,7 @@ export const encodeWire = {
     amount: encodeAmount(attempt.amount),
   }),
 
-  inboxEntry: (entry: InboxEntry): unknown => ({
+  inboxMessage: (entry: InboxMessage): unknown => ({
     ...entry,
     operation: encodeAmounts(entry.operation),
   }),
@@ -228,8 +228,8 @@ export const decodeWire = {
     return { ...row, amount: amountFrom(row.amount) };
   },
 
-  inboxEntry: (wire: unknown): InboxEntry => {
-    const row = wire as InboxEntry & { operation: unknown };
+  inboxMessage: (wire: unknown): InboxMessage => {
+    const row = wire as InboxMessage & { operation: unknown };
     return { ...row, operation: decodeAmounts(row.operation) as Operation };
   },
 

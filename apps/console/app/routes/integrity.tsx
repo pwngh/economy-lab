@@ -39,14 +39,14 @@ export function meta(args: Route.MetaArgs) {
 
 export async function clientLoader() {
   const eco = await getEngine();
-  const [prove, solvency, checkpoint] = await Promise.all([
-    eco.prove(),
+  const [health, solvency, checkpoint] = await Promise.all([
+    eco.health(),
     eco.solvency(),
     eco.checkpoint(),
   ]);
   // Deferred on purpose: the full prover re-derives every hash and balance, so the light report
   // paints first and the audit streams in under it.
-  return { prove, solvency, checkpoint, full: eco.proveFull() };
+  return { health, solvency, checkpoint, full: eco.prove() };
 }
 
 const CHECKS: {
@@ -84,7 +84,7 @@ const CHECKS: {
 // The integrity (prove) report: the five properties the ledger guarantees, read live — plus the
 // theater: break the books on purpose and watch the prover catch it.
 export default function Integrity({ loaderData }: Route.ComponentProps) {
-  const { prove, solvency, checkpoint, full } = loaderData;
+  const { health, solvency, checkpoint, full } = loaderData;
   const flash = useFlash();
   const location = useLocation();
   const back = `${location.pathname}${location.search}`;
@@ -106,13 +106,13 @@ export default function Integrity({ loaderData }: Route.ComponentProps) {
         <div>
           <h3>Quick checks</h3>
           <p className="card-sub m-0">
-            {prove.allGreen
+            {health.allGreen
               ? 'The light pass holds. The full audit below re-derives everything from the raw ledger.'
               : 'One or more quick checks need attention.'}
           </p>
         </div>
-        <StatusPill tone={prove.allGreen ? 'green' : 'red'} dot>
-          {prove.allGreen ? 'All green' : 'Attention'}
+        <StatusPill tone={health.allGreen ? 'green' : 'red'} dot>
+          {health.allGreen ? 'All green' : 'Attention'}
         </StatusPill>
       </div>
 

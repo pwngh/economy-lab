@@ -21,7 +21,7 @@ import assert from 'node:assert/strict';
 
 import {
   createReservations,
-  instanceSession,
+  openInstanceSession,
   recoverSession,
 } from '#src/netting.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
@@ -73,7 +73,7 @@ describe('Instance netting', () => {
   test('accepts, journals in batches, and replays a repeated key', async () => {
     const { store, deps } = harness();
     await fund(store, 'usr_v1', 1_000n);
-    const session = instanceSession(deps, 'sess_a', { maxBatch: 2 });
+    const session = openInstanceSession(deps, 'sess_a', { maxBatch: 2 });
 
     const first = await session.record({
       idempotencyKey: 'tip_1',
@@ -117,7 +117,7 @@ describe('Instance netting', () => {
   test('settles the net through clearing and leaves the ledger provable', async () => {
     const { store, digest, deps } = harness();
     await fund(store, 'usr_v1', 1_000n);
-    const session = instanceSession(deps, 'sess_b');
+    const session = openInstanceSession(deps, 'sess_b');
     for (let i = 0; i < 10; i++) {
       await session.record({
         idempotencyKey: `tip_b_${i}`,
@@ -149,7 +149,7 @@ describe('Instance netting', () => {
   test('bounds every settlement posting at the chunk width', async () => {
     const { store, deps } = harness();
     await fund(store, 'usr_v1', 1_000n);
-    const session = instanceSession(deps, 'sess_c', { chunkWidth: 3 });
+    const session = openInstanceSession(deps, 'sess_c', { chunkWidth: 3 });
     for (let i = 0; i < 7; i++) {
       await session.record({
         idempotencyKey: `tip_c_${i}`,
@@ -171,7 +171,7 @@ describe('Instance netting', () => {
   test('rejects an unaffordable movement at accept time', async () => {
     const { store, deps } = harness();
     await fund(store, 'usr_v2', 100n);
-    const session = instanceSession(deps, 'sess_d');
+    const session = openInstanceSession(deps, 'sess_d');
 
     await session.record({
       idempotencyKey: 'd_1',
@@ -190,7 +190,7 @@ describe('Instance netting', () => {
 
   test('throws on unbalanced or non-CREDIT legs instead of rejecting', async () => {
     const { deps } = harness();
-    const session = instanceSession(deps, 'sess_m');
+    const session = openInstanceSession(deps, 'sess_m');
     const amount = toAmount('CREDIT', 10n);
 
     await assert.rejects(
@@ -216,8 +216,8 @@ describe('Instance netting', () => {
     const { store, deps } = harness();
     await fund(store, 'usr_v3', 500n);
     const reservations = createReservations();
-    const one = instanceSession(deps, 'sess_e1', { reservations });
-    const two = instanceSession(deps, 'sess_e2', { reservations });
+    const one = openInstanceSession(deps, 'sess_e1', { reservations });
+    const two = openInstanceSession(deps, 'sess_e2', { reservations });
 
     assert.equal(
       (
@@ -253,7 +253,7 @@ describe('Instance netting', () => {
     await fund(store, 'usr_v4', 500n);
     await fund(store, 'usr_v5', 500n);
     // chunkWidth 2 forces several chunks, so at least one posts before the refusal.
-    const session = instanceSession(deps, 'sess_f', { chunkWidth: 2 });
+    const session = openInstanceSession(deps, 'sess_f', { chunkWidth: 2 });
     await session.record({
       idempotencyKey: 'f_1',
       legs: tip('usr_v4', 'usr_c1', 300n),
@@ -295,7 +295,7 @@ describe('Instance netting', () => {
   test('recovers a session from the journal and settles it', async () => {
     const { store, deps } = harness();
     await fund(store, 'usr_v6', 1_000n);
-    const session = instanceSession(deps, 'sess_g');
+    const session = openInstanceSession(deps, 'sess_g');
     await session.record({
       idempotencyKey: 'g_1',
       legs: tip('usr_v6', 'usr_c1', 100n),
@@ -326,7 +326,7 @@ describe('Instance netting', () => {
   test('refuses to settle over a tampered journal', async () => {
     const { store, deps } = harness();
     await fund(store, 'usr_v7', 1_000n);
-    const session = instanceSession(deps, 'sess_h');
+    const session = openInstanceSession(deps, 'sess_h');
     await session.record({
       idempotencyKey: 'h_1',
       legs: tip('usr_v7', 'usr_c1', 100n),

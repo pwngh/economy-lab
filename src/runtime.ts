@@ -191,7 +191,7 @@ export async function signingPublicKeyHex(signingKey: string): Promise<string> {
  * loads from its own config and passes in; this module never reads them from a
  * global or the environment.
  */
-export function systemCapabilities(options: {
+export function systemRuntime(options: {
   signingKey: string;
   priorKeys?: ReadonlyArray<string>;
 }): { clock: Clock; ids: Ids; digest: Digest; signer: Signer } {
@@ -236,12 +236,12 @@ export function jsonlLogger(
 }
 
 /** A Logger that discards every line: the silent default for a host that wants no log output. */
-export function noopLogger(): Logger {
+export function silentLogger(): Logger {
   return { log: () => {} };
 }
 
 /** A Meter that discards every count and observation: the default when a host collects no metrics. */
-export function noopMeter(): Meter {
+export function silentMeter(): Meter {
   return { count: () => {}, observe: () => {} };
 }
 

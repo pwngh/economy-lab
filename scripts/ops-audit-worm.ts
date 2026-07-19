@@ -52,7 +52,7 @@ sink({
   tier: 1,
   phase: 'decided',
   subject: 'pay_example',
-  detail: { decision: 'act', action: 'runOnce', reserve: 4_000n },
+  detail: { decision: 'act', action: 'sweep', reserve: 4_000n },
 });
 await sink.flush();
 

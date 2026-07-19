@@ -26,10 +26,10 @@ import { toAmount, isAmount } from '#src/money.ts';
 
 import type { MysqlPool } from '#src/engines/mysql.ts';
 import type { Operation } from '#src/contract.ts';
-import type { InboxEntry } from '#src/ports.ts';
+import type { InboxMessage } from '#src/ports.ts';
 
 // Mirrors the conformance suite's inboxRow, so the same amount-bearing shape is covered.
-function topUpEntry(): InboxEntry {
+function topUpEntry(): InboxMessage {
   return {
     id: 'ibx_codec_1',
     key: 'evt_codec_1',

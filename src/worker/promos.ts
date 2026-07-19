@@ -16,7 +16,7 @@ import { promo, SYSTEM } from '#src/accounts.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { WorkerCtx } from '#src/contract.ts';
-import type { Options, PromoGrant, Store, Unit } from '#src/ports.ts';
+import type { CallOptions, PromoGrant, Store, Unit } from '#src/ports.ts';
 
 const SWEEP_METRIC = 'worker.promos.expired';
 
@@ -50,7 +50,7 @@ export async function sweepExpiredPromos(
   store: Store,
   ctx: WorkerCtx,
   input: { now: number; limit: number },
-  options?: Options,
+  options?: CallOptions,
 ): Promise<PromoExpirySummary> {
   const due = await store.promos.claimDue(input.now, input.limit, options);
   const tally: PromoExpiryTally = { reversed: [], failed: [] };
@@ -68,7 +68,7 @@ async function reverseOne(args: {
   ctx: WorkerCtx;
   grant: PromoGrant;
   tally: PromoExpiryTally;
-  options?: Options;
+  options?: CallOptions;
 }): Promise<void> {
   const { grant, tally } = args;
   try {
@@ -86,7 +86,7 @@ async function settle(args: {
   store: Store;
   ctx: WorkerCtx;
   grant: PromoGrant;
-  options?: Options;
+  options?: CallOptions;
 }): Promise<Amount> {
   const { store, ctx, grant, options } = args;
   return store.transaction(async (unit) => {
@@ -110,7 +110,7 @@ async function postReversal(args: {
   ctx: WorkerCtx;
   grant: PromoGrant;
   amount: Amount;
-  options?: Options;
+  options?: CallOptions;
 }): Promise<void> {
   const { unit, ctx, grant, amount, options } = args;
   await postEntry(

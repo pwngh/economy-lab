@@ -12,7 +12,7 @@
 import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
 import { encodeEvent } from '#src/adapters/event-wire.ts';
 
-import type { Dispatcher, EconomyEvent, Options } from '#src/ports.ts';
+import type { Dispatcher, EconomyEvent, CallOptions } from '#src/ports.ts';
 
 // --- The @aws-sdk/client-sqs surface, typed structurally --------------------------
 
@@ -42,7 +42,7 @@ function sendMessageCommand(input: {
 
 // --- Outbound dispatcher ----------------------------------------------------------
 
-export interface SqsDispatcherConfig {
+export interface SqsDispatcherOptions {
   queueUrl: string;
 
   /** The SQS client the caller created and owns (a real one, or a test stand-in). */
@@ -57,13 +57,13 @@ export interface SqsDispatcherConfig {
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/messaging/ Messaging} for how dispatchers deliver events.
  */
-export function sqsDispatcher(config: SqsDispatcherConfig): Dispatcher {
+export function sqsDispatcher(config: SqsDispatcherOptions): Dispatcher {
   const client = config.client;
   // The FIFO-only params (MessageGroupId, MessageDeduplicationId) draw InvalidParameterValue on a
   // standard queue, so attach them only when the URL suffix says FIFO.
   const fifo = config.queueUrl.endsWith('.fifo');
 
-  return async (event: EconomyEvent, options?: Options): Promise<void> => {
+  return async (event: EconomyEvent, options?: CallOptions): Promise<void> => {
     try {
       await client.send(
         sendMessageCommand({

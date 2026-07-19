@@ -12,14 +12,14 @@
 import type { Amount, Currency } from '#src/money.ts';
 import type {
   Transaction,
-  EntitlementAttrs,
+  EntitlementAttributes,
   FeePolicy,
   Operation,
 } from '#src/contract.ts';
 import type { AccountRef } from '#src/accounts.ts';
-import type { Config } from '#src/config.ts';
+import type { Config, Secrets } from '#src/config.ts';
 
-export type Options = {
+export type CallOptions = {
   signal?: AbortSignal;
 
   /**
@@ -123,13 +123,17 @@ export type RateVerdict = { allowed: boolean; retryAfterMs?: number };
 
 export interface Scheduler {
   /** Runs `task` every `ms` milliseconds; the returned function stops the loop. */
-  every(ms: number, task: () => Promise<void>, options?: Options): () => void;
+  every(
+    ms: number,
+    task: () => Promise<void>,
+    options?: CallOptions,
+  ): () => void;
 }
 
 /** Hands an outgoing event off for delivery (e.g. SQS or HTTP); the core doesn't know which. */
 export type Dispatcher = (
   event: EconomyEvent,
-  options?: Options,
+  options?: CallOptions,
 ) => Promise<void>;
 
 /**
@@ -142,7 +146,7 @@ export interface Processor {
   /** `amount` is in real USD; `key` makes the request safe to retry without paying twice. */
   submitPayout(
     input: { key: string; userId: string; amount: Amount },
-    options?: Options,
+    options?: CallOptions,
   ): Promise<{ providerRef: string }>;
 
   /**
@@ -152,7 +156,7 @@ export interface Processor {
    */
   payoutStatus?(
     input: { providerRef: string },
-    options?: Options,
+    options?: CallOptions,
   ): Promise<PayoutProviderStatus>;
 }
 
@@ -162,7 +166,7 @@ export type PayoutProviderStatus = {
 };
 
 export interface PayeeDirectory {
-  status(userId: string, options?: Options): Promise<PayeeVerification>;
+  status(userId: string, options?: CallOptions): Promise<PayeeVerification>;
 }
 
 export type PayeeVerification = {
@@ -184,7 +188,7 @@ export interface Rates {
     from: Currency,
     to: Currency,
     at: number,
-    options?: Options,
+    options?: CallOptions,
   ): Promise<Rate>;
 
   /** The redemption and backing rate; reconciliation values spendable credits in USD at it. */
@@ -223,10 +227,10 @@ export interface Meter {
  * for postings, legs, and the chart of accounts.
  */
 export interface Ledger {
-  hasAccount(account: AccountRef, options?: Options): Promise<boolean>;
+  hasAccount(account: AccountRef, options?: CallOptions): Promise<boolean>;
 
   /** Takes a row lock on an account so concurrent operations can't race on its balance. */
-  lock(account: AccountRef, options?: Options): Promise<void>;
+  lock(account: AccountRef, options?: CallOptions): Promise<void>;
 
   /**
    * Locks several accounts in one round trip, in a single deadlock-free global order; when
@@ -234,18 +238,18 @@ export interface Ledger {
    */
   lockMany?(
     accounts: ReadonlyArray<AccountRef>,
-    options?: Options,
+    options?: CallOptions,
   ): Promise<void>;
 
-  append(posting: Posting, options?: Options): Promise<Transaction>;
+  append(posting: Posting, options?: CallOptions): Promise<Transaction>;
 
   /** A maintained running total: one read, not a sum over the account's whole history. */
-  balance(account: AccountRef, options?: Options): Promise<Amount>;
+  balance(account: AccountRef, options?: CallOptions): Promise<Amount>;
 
   statement(
     account: AccountRef,
     range: Range,
-    options?: Options,
+    options?: CallOptions,
   ): Promise<Statement>;
 
   /**
@@ -254,7 +258,7 @@ export interface Ledger {
    */
   derivedBalances(
     account: AccountRef,
-    options?: Options,
+    options?: CallOptions,
   ): Promise<ReadonlyArray<Amount>>;
 
   /** Streams the account's settlement lots; {@link TimelineOptions} bounds the read. */
@@ -269,29 +273,32 @@ export interface Ledger {
    * so a concurrent posting can never tear the pair.
    */
   headSums(
-    options?: Options,
+    options?: CallOptions,
   ): AsyncIterable<readonly [AccountRef, string, bigint]>;
 
   /**
    * Streams every account that has a cached running-balance row — such a row can exist with no
    * posting behind it, which `heads` never visits, so the prover surfaces the mismatch from here.
    */
-  balanceAccounts(options?: Options): AsyncIterable<AccountRef>;
+  balanceAccounts(options?: CallOptions): AsyncIterable<AccountRef>;
 
   /**
    * Streams every posting that touched `account`, in commit order, with each recorded hash; the
    * prover replays these because head hashes alone cannot catch an edited line.
    */
-  lineage(account: AccountRef, options?: Options): AsyncIterable<StoredLink>;
+  lineage(
+    account: AccountRef,
+    options?: CallOptions,
+  ): AsyncIterable<StoredLink>;
 
   /** The whole posting committed under `txnId`, with all its legs, or null on an unknown id. */
-  posting(txnId: string, options?: Options): Promise<Posting | null>;
+  posting(txnId: string, options?: CallOptions): Promise<Posting | null>;
 
   /**
    * Streams every committed posting with its full legs, newest first by commit sequence — a total
    * order, so ties never reorder a page.
    */
-  list(options?: Options): AsyncIterable<Posting>;
+  list(options?: CallOptions): AsyncIterable<Posting>;
 }
 
 /**
@@ -323,29 +330,37 @@ export interface Store {
   /** Runs `work` in one database transaction: everything it writes commits together or not at all. */
   transaction<T>(
     work: (unit: Unit) => Promise<T>,
-    options?: Options,
+    options?: CallOptions,
   ): Promise<T>;
 
   close(): Promise<void>;
 }
 
-/** Every external capability `economyFromCapabilities(...)` needs, gathered into one object. */
-export type Capabilities = {
-  store: Store;
-  clock: Clock;
-  ids: Ids;
-  digest: Digest;
-  signer: Signer;
-  processor: Processor;
-  rates: Rates;
-  logger: Logger;
-  meter: Meter;
-  cache?: Cache;
-  scheduler?: Scheduler;
-  dispatcher?: Dispatcher;
-  payees?: PayeeDirectory;
-  pricing: FeePolicy;
-  config: Config;
+/**
+ * The finished DI bag every `create*` door takes. Structural — a plain object literal with these
+ * fields is a Ports; `openPorts` and `memoryPorts` build one and freeze its config and secrets
+ * after mint.
+ */
+export type Ports = {
+  readonly store: Store;
+  readonly clock: Clock;
+  readonly ids: Ids;
+  readonly digest: Digest;
+  readonly signer: Signer;
+  readonly processor: Processor;
+  readonly rates: Rates;
+  readonly pricing: FeePolicy;
+  readonly logger: Logger;
+  readonly meter: Meter;
+  /** Policy only — log-safe; credentials ride in `secrets`. */
+  readonly config: Config;
+  /** Never log. */
+  readonly secrets: Secrets;
+  readonly cache?: Cache;
+  readonly dispatcher?: Dispatcher;
+  readonly payees?: PayeeDirectory;
+  readonly scheduler?: Scheduler;
+  readonly anchor?: Anchor;
 };
 
 /**
@@ -413,14 +428,14 @@ export interface IdempotencyStore {
    */
   claim(
     key: string,
-    options?: Options,
+    options?: CallOptions,
   ): Promise<{ claimed: true } | { claimed: false; transaction: Transaction }>;
 
   /** Called inside the posting's transaction, so it only takes effect if the posting commits. */
   record(
     key: string,
     transaction: Transaction,
-    options?: Options,
+    options?: CallOptions,
   ): Promise<void>;
 }
 
@@ -431,14 +446,14 @@ export interface IdempotencyStore {
  */
 export interface ReplayStore {
   /** Atomically inserts `eventId` if absent; `claimed` is true only on the first sighting. */
-  claim(eventId: string, options?: Options): Promise<{ claimed: boolean }>;
+  claim(eventId: string, options?: CallOptions): Promise<{ claimed: boolean }>;
 }
 
 /** Stores the summary of each completed sale, keyed by order id (a separate key from the idempotency key). */
 export interface SaleStore {
-  put(sale: Sale, options?: Options): Promise<void>;
+  put(sale: Sale, options?: CallOptions): Promise<void>;
 
-  get(orderId: string, options?: Options): Promise<Sale | null>;
+  get(orderId: string, options?: CallOptions): Promise<Sale | null>;
 }
 
 /**
@@ -447,7 +462,7 @@ export interface SaleStore {
  */
 export interface OutboxStore {
   /** Saves an event to send later. Called inside the posting's transaction. */
-  enqueue(message: OutboxMessage, options?: Options): Promise<void>;
+  enqueue(message: OutboxMessage, options?: CallOptions): Promise<void>;
 
   /**
    * Grabs up to `limit` pending messages, each locked so a concurrent relay picks different ones.
@@ -455,20 +470,20 @@ export interface OutboxStore {
    */
   claimBatch(
     limit: number,
-    options?: Options,
+    options?: CallOptions,
   ): Promise<ReadonlyArray<OutboxMessage>>;
 
   /** Delivery may still double-send, so the consumer drops duplicates by message id. */
-  markRelayed(ids: ReadonlyArray<string>, options?: Options): Promise<void>;
+  markRelayed(ids: ReadonlyArray<string>, options?: CallOptions): Promise<void>;
 
   /** Bumps `attempts` and leaves the row 'pending'; only `deadLetter` may flip the status. */
-  recordFailure(id: string, options?: Options): Promise<void>;
+  recordFailure(id: string, options?: CallOptions): Promise<void>;
 
   /**
    * Sets status 'dead' so `claimBatch` never returns it again, recording `reason` for operators;
    * a non-existent or already-terminal row is left untouched.
    */
-  deadLetter(id: string, reason: string, options?: Options): Promise<void>;
+  deadLetter(id: string, reason: string, options?: CallOptions): Promise<void>;
 
   /**
    * A read-only gauge of the pending backlog: how many rows wait and how old the oldest is.
@@ -476,7 +491,7 @@ export interface OutboxStore {
    * it. The relay sweep observes this each run — a backlog that only grows means the relay is
    * down or the events are poisoned.
    */
-  stats(options?: Options): Promise<OutboxStats>;
+  stats(options?: CallOptions): Promise<OutboxStats>;
 }
 
 /** What {@link OutboxStore.stats} reports; `oldestPendingAgeMs` is null when nothing is pending. */
@@ -492,7 +507,10 @@ export type OutboxStats = {
  */
 export interface InboxStore {
   /** Dedupes on `entry.key`, so a redelivered provider event is applied at most once. */
-  enqueueInbound(entry: InboxEntry, options?: Options): Promise<InboxEntry>;
+  enqueueInbound(
+    entry: InboxMessage,
+    options?: CallOptions,
+  ): Promise<InboxMessage>;
 
   /**
    * Grabs up to `limit` pending rows oldest-first, each locked so a concurrent worker picks
@@ -500,26 +518,26 @@ export interface InboxStore {
    */
   claimInbound(
     input: { now: number; limit: number },
-    options?: Options,
-  ): Promise<ReadonlyArray<InboxEntry>>;
+    options?: CallOptions,
+  ): Promise<ReadonlyArray<InboxMessage>>;
 
   /**
    * Called inside the apply's transaction, so a rolled-back apply leaves the row 'pending'; a
    * non-existent or already-terminal row is left untouched.
    */
-  markApplied(id: string, options?: Options): Promise<void>;
+  markApplied(id: string, options?: CallOptions): Promise<void>;
 
   /**
    * Bumps `attempts` and leaves the row 'pending'; only `deadLetter` may flip the status. A
    * non-existent row is left untouched.
    */
-  bumpAttempt(id: string, options?: Options): Promise<void>;
+  bumpAttempt(id: string, options?: CallOptions): Promise<void>;
 
   /**
    * Sets status 'dead' so `claimInbound` never returns it again, recording `reason` for
    * operators; a non-existent or already-terminal row is left untouched.
    */
-  deadLetter(id: string, reason: string, options?: Options): Promise<void>;
+  deadLetter(id: string, reason: string, options?: CallOptions): Promise<void>;
 
   /**
    * Flips up to `limit` oldest 'dead' rows back to 'pending', resetting `attempts` to 0 and
@@ -529,8 +547,8 @@ export interface InboxStore {
    */
   reviveDead(
     limit: number,
-    options?: Options,
-  ): Promise<ReadonlyArray<InboxEntry>>;
+    options?: CallOptions,
+  ): Promise<ReadonlyArray<InboxMessage>>;
 }
 
 /**
@@ -538,24 +556,30 @@ export interface InboxStore {
  * sweep picks up sagas that are due and pushes each one to its next state.
  */
 export interface SagaStore {
-  open(saga: Saga, options?: Options): Promise<void>;
+  open(saga: Saga, options?: CallOptions): Promise<void>;
 
-  load(id: string, options?: Options): Promise<Saga | null>;
+  load(id: string, options?: CallOptions): Promise<Saga | null>;
 
   /** If more than one saga ever carried this provider reference, the newest `updatedAt` wins. */
   findByProviderRef(
     providerRef: string,
-    options?: Options,
+    options?: CallOptions,
   ): Promise<Saga | null>;
 
-  /** Every saga regardless of state, newest `updatedAt` first; ties on `updatedAt` break by `id` descending. */
-  list(options?: Options): AsyncIterable<Saga>;
+  /**
+   * Every saga newest `updatedAt` first; ties on `updatedAt` break by `id` descending.
+   * `states` narrows to exactly those states (an empty list yields nothing); the SQL engines
+   * push the filter down.
+   */
+  list(
+    options?: CallOptions & { states?: readonly SagaState[] },
+  ): AsyncIterable<Saga>;
 
   /** Grabs up to `limit` due sagas, each locked so concurrent sweeps take different ones. */
   claimDue(
     now: number,
     limit: number,
-    options?: Options,
+    options?: CallOptions,
   ): Promise<ReadonlyArray<Saga>>;
 
   /**
@@ -567,18 +591,18 @@ export interface SagaStore {
     from: SagaState,
     to: SagaState,
     patch: Partial<Saga>,
-    options?: Options,
+    options?: CallOptions,
   ): Promise<boolean>;
 
   /** Gives up on a saga that can't make progress, recording why. */
-  deadLetter(id: string, reason: string, options?: Options): Promise<void>;
+  deadLetter(id: string, reason: string, options?: CallOptions): Promise<void>;
 
   /**
    * The max `updatedAt` over all of the user's sagas in any state, enforcing
    * config.payoutMinIntervalMs. `updatedAt` only advances, so the max never undershoots the
    * latest request; null when the user has no sagas, so a first request is always allowed.
    */
-  lastPayoutAt(userId: string, options?: Options): Promise<number | null>;
+  lastPayoutAt(userId: string, options?: CallOptions): Promise<number | null>;
 }
 
 /** Tracks which users own which items or features (entitlements), keyed by SKU (the product code). */
@@ -586,20 +610,20 @@ export interface EntitlementStore {
   grant(
     userId: string,
     sku: string,
-    attrs: EntitlementAttrs,
-    options?: Options,
+    attrs: EntitlementAttributes,
+    options?: CallOptions,
   ): Promise<void>;
 
-  revoke(userId: string, sku: string, options?: Options): Promise<void>;
+  revoke(userId: string, sku: string, options?: CallOptions): Promise<void>;
 
-  owns(userId: string, sku: string, options?: Options): Promise<boolean>;
+  owns(userId: string, sku: string, options?: CallOptions): Promise<boolean>;
 
   /**
    * Streams every non-revoked grant for the user, expired ones included, sorted by sku. Each row
    * carries the expiry `owns` applies at read time (null never lapses), so a caller can reproduce
    * the ownership decision.
    */
-  list(userId: string, options?: Options): AsyncIterable<EntitlementGrant>;
+  list(userId: string, options?: CallOptions): AsyncIterable<EntitlementGrant>;
 }
 
 export interface EntitlementGrant {
@@ -611,9 +635,9 @@ export interface EntitlementGrant {
 
 /** Tracks recurring subscriptions and when each is next due to bill. */
 export interface SubscriptionStore {
-  open(sub: Subscription, options?: Options): Promise<void>;
+  open(sub: Subscription, options?: CallOptions): Promise<void>;
 
-  load(id: string, options?: Options): Promise<Subscription | null>;
+  load(id: string, options?: CallOptions): Promise<Subscription | null>;
 
   /**
    * The one ACTIVE subscription for this (userId, sku, sellerId), or null; subscribe uses it to
@@ -623,16 +647,16 @@ export interface SubscriptionStore {
     userId: string,
     sku: string,
     sellerId: string,
-    options?: Options,
+    options?: CallOptions,
   ): Promise<Subscription | null>;
 
-  cancel(id: string, options?: Options): Promise<void>;
+  cancel(id: string, options?: CallOptions): Promise<void>;
 
   /** Finds up to `limit` subscriptions whose next charge is due, for the renewal sweep. */
   claimDue(
     now: number,
     limit: number,
-    options?: Options,
+    options?: CallOptions,
   ): Promise<ReadonlyArray<Subscription>>;
 
   /**
@@ -644,14 +668,14 @@ export interface SubscriptionStore {
     id: string,
     nextDueAt: number,
     expectedDueAt: number,
-    options?: Options,
+    options?: CallOptions,
   ): Promise<boolean>;
 
   /**
    * Marks a subscription LAPSED because a renewal couldn't be paid — distinct from a
    * user-requested cancel; either way the sweep stops re-billing it.
    */
-  markLapsed(id: string, options?: Options): Promise<void>;
+  markLapsed(id: string, options?: CallOptions): Promise<void>;
 }
 
 /**
@@ -663,7 +687,7 @@ export interface PromoStore {
    * Idempotent on `grant.id`: opening the same id twice never overwrites the first row. Called
    * inside the grant's transaction, so it only takes effect if that transaction commits.
    */
-  open(grant: PromoGrant, options?: Options): Promise<void>;
+  open(grant: PromoGrant, options?: CallOptions): Promise<void>;
 
   /**
    * Grabs up to `limit` expired (`expiresAt <= now`), not-yet-reversed grants, oldest `expiresAt`
@@ -672,14 +696,14 @@ export interface PromoStore {
   claimDue(
     now: number,
     limit: number,
-    options?: Options,
+    options?: CallOptions,
   ): Promise<ReadonlyArray<PromoGrant>>;
 
   /**
    * Marks a grant reversed so `claimDue` never returns it again; a missing or already-reversed
    * row is a no-op, so re-running the sweep is harmless.
    */
-  markReversed(id: string, options?: Options): Promise<void>;
+  markReversed(id: string, options?: CallOptions): Promise<void>;
 }
 
 /**
@@ -689,10 +713,10 @@ export interface PromoStore {
  * rolls back.
  */
 export interface TrustStore {
-  read(subject: string, options?: Options): Promise<Velocity>;
+  read(subject: string, options?: CallOptions): Promise<Velocity>;
 
   /** Idempotent on `attempt.idempotencyKey`, so a genuine retry doesn't double-count. */
-  bump(subject: string, attempt: Attempt, options?: Options): Promise<void>;
+  bump(subject: string, attempt: Attempt, options?: CallOptions): Promise<void>;
 
   /**
    * Records the attempt (idempotent on `attempt.idempotencyKey`) and returns the subject's
@@ -702,15 +726,15 @@ export interface TrustStore {
   record(
     subject: string,
     attempt: Attempt,
-    options?: Options,
+    options?: CallOptions,
   ): Promise<Velocity>;
 }
 
 /** Stores signed ledger snapshots. Written only by the background worker. */
 export interface CheckpointStore {
-  put(checkpoint: Checkpoint, options?: Options): Promise<void>;
+  put(checkpoint: Checkpoint, options?: CallOptions): Promise<void>;
 
-  latest(options?: Options): Promise<Checkpoint | null>;
+  latest(options?: CallOptions): Promise<Checkpoint | null>;
 }
 
 /**
@@ -721,7 +745,7 @@ export interface CheckpointStore {
  * on it.
  */
 export interface Anchor {
-  publish(checkpoint: Checkpoint, options?: Options): Promise<void>;
+  publish(checkpoint: Checkpoint, options?: CallOptions): Promise<void>;
 }
 
 /**
@@ -757,10 +781,13 @@ export interface Movement {
  * the poison row.
  */
 export interface MovementJournal {
-  append(movements: ReadonlyArray<Movement>, options?: Options): Promise<void>;
+  append(
+    movements: ReadonlyArray<Movement>,
+    options?: CallOptions,
+  ): Promise<void>;
 
   /** Streams a session's movements in seq order — the source of truth settle derives from. */
-  bySession(sessionId: string, options?: Options): AsyncIterable<Movement>;
+  bySession(sessionId: string, options?: CallOptions): AsyncIterable<Movement>;
 }
 
 // --- Record types -----------------------------------------------------------------
@@ -815,7 +842,7 @@ export interface OutboxMessage {
 }
 
 /** One stored inbox row: a verified inbound event mapped to the operation it applies (see InboxStore). */
-export interface InboxEntry {
+export interface InboxMessage {
   id: string;
 
   /**

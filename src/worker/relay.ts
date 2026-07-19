@@ -12,7 +12,13 @@
 import { normalizePortError, normalizeError } from '#src/errors.ts';
 
 import type { WorkerCtx } from '#src/contract.ts';
-import type { Dispatcher, OutboxMessage, Options, Store } from '#src/ports.ts';
+import type {
+  Dispatcher,
+  OutboxMessage,
+  CallOptions,
+  Ports,
+  Store,
+} from '#src/ports.ts';
 
 /**
  * Outcome of one relay run.
@@ -46,24 +52,24 @@ type RelayTally = {
  */
 export async function relayOutbox(
   store: Store,
-  ctx: WorkerCtx,
+  ports: Ports,
   input: { dispatcher: Dispatcher; limit: number },
-  options?: Options,
+  options?: CallOptions,
 ): Promise<RelaySummary> {
-  await observeBacklog(store, ctx, options);
+  await observeBacklog(store, ports, options);
   const pending = await store.outbox.claimBatch(input.limit, options);
   const tally: RelayTally = { relayed: [], failed: [], deadLettered: [] };
 
   for (const message of pending) {
     await dispatchOne(
       store,
-      ctx,
+      ports,
       { dispatcher: input.dispatcher, message, options },
       tally,
     );
   }
 
-  await markRelayed(store, ctx, tally.relayed, options);
+  await markRelayed(store, ports, tally.relayed, options);
 
   return tally;
 }
@@ -73,7 +79,7 @@ export async function relayOutbox(
 async function observeBacklog(
   store: Store,
   ctx: WorkerCtx,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<void> {
   try {
     const stats = await store.outbox.stats(options);
@@ -94,7 +100,11 @@ async function observeBacklog(
 async function dispatchOne(
   store: Store,
   ctx: WorkerCtx,
-  work: { dispatcher: Dispatcher; message: OutboxMessage; options?: Options },
+  work: {
+    dispatcher: Dispatcher;
+    message: OutboxMessage;
+    options?: CallOptions;
+  },
   tally: RelayTally,
 ): Promise<void> {
   const { dispatcher, message, options } = work;
@@ -138,7 +148,7 @@ async function markRelayed(
   store: Store,
   ctx: WorkerCtx,
   relayed: ReadonlyArray<string>,
-  options?: Options,
+  options?: CallOptions,
 ): Promise<void> {
   if (relayed.length === 0) {
     return;

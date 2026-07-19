@@ -22,9 +22,9 @@ import type { Operation } from '#src/contract.ts';
 import type {
   Clock,
   Ids,
-  InboxEntry,
+  InboxMessage,
   Meter,
-  Options,
+  CallOptions,
   Store,
 } from '#src/ports.ts';
 
@@ -259,9 +259,9 @@ function isPurchase(event: WebhookEvent): event is PurchaseEvent {
  *
  * `entry` is the stored row, so the caller can surface its id without a second read.
  */
-export type WebhookAck = {
+export type WebhookReceipt = {
   status: 'accepted' | 'duplicate';
-  entry: InboxEntry;
+  entry: InboxMessage;
 };
 
 /**
@@ -279,11 +279,11 @@ export async function handleWebhook(
   store: Store,
   ctx: { ids: Ids; clock: Clock; meter?: Meter },
   event: WebhookEvent,
-  options?: Options,
-): Promise<WebhookAck> {
+  options?: CallOptions,
+): Promise<WebhookReceipt> {
   // `key` is the provider `eventId` — the inbox dedupe key and the basis of the operation's
   // idempotencyKey (see `toOperation`) — so the two layers agree on what "the same event" means.
-  const row: InboxEntry = {
+  const row: InboxMessage = {
     id: ctx.ids.next('ibx'),
     key: event.eventId,
     operation: toOperation(event),
@@ -321,8 +321,8 @@ export async function handlePurchaseWebhook(
   store: Store,
   ctx: { ids: Ids; clock: Clock; meter?: Meter },
   event: PurchaseEvent,
-  options?: Options,
-): Promise<WebhookAck> {
+  options?: CallOptions,
+): Promise<WebhookReceipt> {
   return handleWebhook(store, ctx, event, options);
 }
 

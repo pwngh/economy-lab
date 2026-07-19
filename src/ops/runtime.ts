@@ -33,7 +33,7 @@ const DEFAULT_CAPACITY = 10_000;
 
 // Log fields are forwarded but never buffered: detectors match on event names and
 // levels only, so arbitrary field payloads never outlive the host's own log pipeline.
-export function opsRuntime(
+export function createOpsRuntime(
   host: { meter: Meter; logger: Logger; clock: Clock },
   options: { capacity?: number } = {},
 ): OpsRuntime {

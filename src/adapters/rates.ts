@@ -12,7 +12,7 @@
 import { ERROR_CODES, fault } from '#src/errors.ts';
 
 import type { Currency } from '#src/money.ts';
-import type { Rate, Rates, Options } from '#src/ports.ts';
+import type { Rate, Rates, CallOptions } from '#src/ports.ts';
 
 /**
  * Holds the three CREDIT-to-USD rates a deployment configures for its {@link Rates} dual-rate credit
@@ -109,7 +109,7 @@ export function configuredRates(config: RatesConfig): Rates {
       from: Currency,
       to: Currency,
       _at: number,
-      _options?: Options,
+      _options?: CallOptions,
     ): Promise<Rate> {
       if (from === to) {
         return identityRate(from, to);

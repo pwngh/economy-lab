@@ -24,7 +24,7 @@ export const postgresStore = () => unavailable('postgresStore');
 export const createMysqlPool = () => unavailable('createMysqlPool');
 export const mysqlStore = () => unavailable('mysqlStore');
 export const readSchemaVersion = () => unavailable('readSchemaVersion');
-export const redisCacheFrom = () => unavailable('redisCacheFrom');
+export const redisCache = () => unavailable('redisCache');
 export const sqsDispatcher = () => unavailable('sqsDispatcher');
 
 // Also aliased over the bare ioredis and @aws-sdk/client-sqs specifiers src/index.ts

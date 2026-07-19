@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { jsonlAuditSink, opsRuntime } from '#src/ops/index.ts';
+import { jsonlAuditSink, createOpsRuntime } from '#src/ops/index.ts';
 import { fixedClock } from '#test/support/capabilities.ts';
 
 import type { Logger, Meter } from '#src/ports.ts';
@@ -42,7 +42,7 @@ test('the runtime forwards every call to the host sinks unchanged', () => {
   const clock = fixedClock(100);
   const { calls, meter } = spyMeter();
   const { events, logger } = spyLogger();
-  const runtime = opsRuntime({ meter, logger, clock });
+  const runtime = createOpsRuntime({ meter, logger, clock });
 
   runtime.meter.count('economy.submit', 2, { kind: 'spend' });
   runtime.meter.observe('economy.submit.ms', 17, { kind: 'spend' });
@@ -57,7 +57,7 @@ test('the runtime forwards every call to the host sinks unchanged', () => {
 
 test('signals are stamped by the clock and windowed by since', () => {
   const clock = fixedClock(0);
-  const runtime = opsRuntime({
+  const runtime = createOpsRuntime({
     meter: { count: () => {}, observe: () => {} },
     logger: { log: () => {} },
     clock,
@@ -81,7 +81,7 @@ test('signals are stamped by the clock and windowed by since', () => {
 
 test('the buffer keeps the newest signals once capacity is hit', () => {
   const clock = fixedClock(0);
-  const runtime = opsRuntime(
+  const runtime = createOpsRuntime(
     {
       meter: { count: () => {}, observe: () => {} },
       logger: { log: () => {} },

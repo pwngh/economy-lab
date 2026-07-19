@@ -11,7 +11,7 @@
 
 import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
 
-import type { Anchor, Checkpoint, Options } from '#src/ports.ts';
+import type { Anchor, Checkpoint, CallOptions } from '#src/ports.ts';
 
 export interface HttpAnchorConfig {
   /**
@@ -39,7 +39,7 @@ export function httpAnchor(config: HttpAnchorConfig): Anchor {
   return {
     publish: async (
       checkpoint: Checkpoint,
-      options?: Options,
+      options?: CallOptions,
     ): Promise<void> => {
       let response: Response;
       try {

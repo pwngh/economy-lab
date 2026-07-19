@@ -13,7 +13,7 @@ import { decodeWire, encodeWire } from '#src/adapters/http-wire.ts';
 import { EconomyError, normalizeError } from '#src/errors.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
-import type { Store, Unit } from '#src/ports.ts';
+import type { SagaState, Store, Unit } from '#src/ports.ts';
 
 // Holds a db transaction open across several requests. The transaction body pauses on a promise
 // called the gate, so later requests run inside it before it commits or rolls back.
@@ -263,15 +263,15 @@ const SUBSTORE_ROUTES: Record<string, SubHandler> = {
   'outbox/stats': (unit) => unit.outbox.stats(),
   'inbox/enqueueInbound': async (unit, body) => {
     const stored = await unit.inbox.enqueueInbound(
-      decodeWire.inboxEntry(body.entry),
+      decodeWire.inboxMessage(body.entry),
     );
-    return encodeWire.inboxEntry(stored);
+    return encodeWire.inboxMessage(stored);
   },
   'inbox/claimInbound': async (unit, body) => {
     const pending = await unit.inbox.claimInbound(
       body as Parameters<typeof unit.inbox.claimInbound>[0],
     );
-    return pending.map(encodeWire.inboxEntry);
+    return pending.map(encodeWire.inboxMessage);
   },
   'inbox/markApplied': async (unit, body) => {
     await unit.inbox.markApplied(body.id as string);
@@ -287,7 +287,7 @@ const SUBSTORE_ROUTES: Record<string, SubHandler> = {
   },
   'inbox/reviveDead': async (unit, body) => {
     const revived = await unit.inbox.reviveDead(body.limit as number);
-    return revived.map(encodeWire.inboxEntry);
+    return revived.map(encodeWire.inboxMessage);
   },
   'sagas/open': async (unit, body) => {
     await unit.sagas.open(decodeWire.saga(body.saga));
@@ -301,7 +301,15 @@ const SUBSTORE_ROUTES: Record<string, SubHandler> = {
     const saga = await unit.sagas.findByProviderRef(body.providerRef as string);
     return saga === null ? null : encodeWire.saga(saga);
   },
-  'sagas/list': (unit) => collect(unit.sagas.list(), encodeWire.saga),
+  'sagas/list': (unit, body) =>
+    collect(
+      unit.sagas.list(
+        body.states === undefined
+          ? undefined
+          : { states: body.states as SagaState[] },
+      ),
+      encodeWire.saga,
+    ),
   'sagas/claimDue': async (unit, body) => {
     const due = await unit.sagas.claimDue(
       body.now as number,
