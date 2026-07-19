@@ -17,7 +17,6 @@
 
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
-import type { RejectionCode } from '#src/errors.ts';
 import type {
   Anchor,
   Cache,
@@ -28,13 +27,14 @@ import type {
   Leg,
   Logger,
   Meter,
-  Options,
+  CallOptions,
   PayeeDirectory,
   Posting,
   Processor,
   Range,
   Rates,
   Saga,
+  SagaState,
   Signer,
   Statement,
   StoredLink,
@@ -43,7 +43,7 @@ import type {
 import type { Config } from '#src/config.ts';
 
 /** Optional details on an entitlement grant (a user owning an item or feature). */
-export type EntitlementAttrs = {
+export type EntitlementAttributes = {
   quantity?: number;
   version?: number;
   expiresAt?: number | null;
@@ -147,7 +147,7 @@ export type Operation =
       actor: Principal;
       userId: string;
       sku: string;
-      attrs?: EntitlementAttrs;
+      attrs?: EntitlementAttributes;
     }
   | {
       kind: 'revokeEntitlement';
@@ -231,53 +231,71 @@ export type Operation =
     };
 
 /**
+ * Structured context on a rejection, discriminated by `reason` — each arm carries exactly the
+ * fields that decline needs. Money fields are branded {@link Amount}s a caller can compare
+ * directly (the HTTP service encodes them to decimal strings on the wire); times are epoch
+ * milliseconds.
+ */
+export type RejectionDetail =
+  | {
+      readonly reason: 'INSUFFICIENT_FUNDS';
+      readonly account: AccountRef;
+      readonly need: Amount;
+      readonly have: Amount;
+    }
+  | {
+      readonly reason: 'FUNDS_IMMATURE';
+      readonly source: string;
+      readonly availableAt: number;
+    }
+  | {
+      readonly reason: 'RISK_DENIED';
+      readonly window: 'inflow' | 'outflow' | 'both';
+      readonly limitMinor: bigint;
+    }
+  | { readonly reason: 'DUPLICATE_ORDER'; readonly orderId: string }
+  | { readonly reason: 'UNKNOWN_ORDER'; readonly orderId: string }
+  | {
+      readonly reason: 'NOT_ENTITLED';
+      readonly userId: string;
+      readonly sku: string;
+    }
+  | {
+      readonly reason: 'UNKNOWN_SUBSCRIPTION';
+      readonly subscriptionId: string;
+    }
+  | {
+      readonly reason: 'ALREADY_SUBSCRIBED';
+      readonly userId: string;
+      readonly sku: string;
+    }
+  | {
+      readonly reason: 'BELOW_MINIMUM';
+      readonly minimum: Amount;
+      readonly amount: Amount;
+    }
+  | { readonly reason: 'PAYOUT_TOO_SOON'; readonly retryAt: number }
+  | { readonly reason: 'PAYEE_UNVERIFIED'; readonly userId: string }
+  | {
+      readonly reason: 'ECONOMY_PAUSED';
+      readonly resumesAt: number | null;
+    };
+
+/**
  * The result of submitting an operation: `committed`, `duplicate` (a repeat, earlier result
  * returned unchanged), or `rejected`. A rejection is a normal "no" returned as data; a genuine
- * fault is thrown instead.
+ * fault is thrown instead. The rejected arm's sole discriminant is `detail.reason`; the HTTP
+ * wire additionally carries a derived top-level `reason` for client stability.
  */
-/**
- * Structured context on a rejection. Which fields are present depends on the `reason`:
- * INSUFFICIENT_FUNDS carries `account` + `required` (+ `available`), FUNDS_IMMATURE carries
- * `account` + `required` (+ `availableAt`, when the funds finish maturing), RISK_DENIED carries
- * `subject` + `spent` + `limit` + `windowMs` + `retryAfter`, BELOW_MINIMUM
- * carries `minimum` + `requested`, PAYOUT_TOO_SOON carries `lastRequestedAt` + `retryAfter`, ECONOMY_PAUSED carries
- * `resumesAt`, and the id-not-found reasons carry `orderId` / `subscriptionId`. Money fields are
- * branded {@link Amount}s a caller can compare directly (the HTTP service encodes them to
- * decimal strings on the wire); times are epoch milliseconds.
- */
-export type RejectionDetail = {
-  account?: AccountRef;
-  required?: Amount;
-  available?: Amount;
-  availableAt?: number;
-  minimum?: Amount;
-  requested?: Amount;
-  spent?: Amount;
-  limit?: Amount;
-  /** Which velocity window a RISK_DENIED tripped: value flowing in (topUp, grantPromo) or out
-   *  (spend, subscribe, requestPayout). */
-  class?: 'in' | 'out';
-  windowMs?: number;
-  retryAfter?: number;
-  lastRequestedAt?: number;
-  resumesAt?: number | null;
-  state?: string;
-  subject?: string;
-  subscriptionId?: string;
-  orderId?: string;
-  userId?: string;
-  sku?: string;
-  sellerId?: string;
-};
-
 export type Outcome =
-  | { status: 'committed'; transaction: Transaction }
-  | { status: 'duplicate'; transaction: Transaction }
-  | {
-      status: 'rejected';
-      reason: RejectionCode;
-      detail?: RejectionDetail;
-    };
+  | { readonly status: 'committed'; readonly transaction: Transaction }
+  | { readonly status: 'duplicate'; readonly transaction: Transaction }
+  | { readonly status: 'rejected'; readonly detail: RejectionDetail };
+
+/** The two outcomes that carry a committed transaction; `duplicate` is a success replayed. */
+export type Success = Extract<Outcome, { status: 'committed' | 'duplicate' }>;
+
+export type Rejection = Extract<Outcome, { status: 'rejected' }>;
 
 /** A committed posting: the record of money that actually moved. */
 export interface Transaction {
@@ -331,7 +349,7 @@ export type Ctx = {
 };
 
 /**
- * Capabilities for the background worker. Payout settlement and periodic checkpoint jobs run on
+ * Ports for the background worker. Payout settlement and periodic checkpoint jobs run on
  * their own schedule rather than inside a caller's submit, so they get their own bundle. Includes
  * `rates` because settling a payout converts credits to USD.
  */
@@ -374,16 +392,17 @@ export type FeePolicy = (input: {
 
 /**
  * The economy's pause state at a moment in time, derived from the configured maintenance window and
- * the clock. `paused` is true only inside the window. `pauseStart` and `pauseEnd` are the configured
- * bounds in epoch ms, or null when no window is set. `resumesAt` is `pauseEnd` while paused, else
- * null. This is the readable side of the ECONOMY_PAUSED gate: a UI reads it to show a banner without
- * inferring the state from a declined write.
+ * the clock. `maintenanceActive` is true only inside the window — distinct from the worker's own
+ * `sweepsPaused`. `pauseStart` and `pauseEnd` are the configured bounds in epoch ms, or null when
+ * no window is set. `resumesAt` is `pauseEnd` while paused, else null. This is the readable side of
+ * the ECONOMY_PAUSED gate: a UI reads it to show a banner without inferring the state from a
+ * declined write.
  */
 export type EconomyStatus = {
-  paused: boolean;
-  pauseStart: number | null;
-  pauseEnd: number | null;
-  resumesAt: number | null;
+  readonly maintenanceActive: boolean;
+  readonly pauseStart: number | null;
+  readonly pauseEnd: number | null;
+  readonly resumesAt: number | null;
 };
 
 /**
@@ -394,30 +413,34 @@ export type EconomyStatus = {
  * submit/read/close surface and its construction.
  */
 export interface Economy {
-  submit(operation: Operation, options?: Options): Promise<Outcome>;
+  submit(operation: Operation, options?: CallOptions): Promise<Outcome>;
   read: {
-    balance(account: AccountRef, options?: Options): Promise<Amount>;
+    balance(account: AccountRef, options?: CallOptions): Promise<Amount>;
     statement(
       account: AccountRef,
       range: Range,
-      options?: Options,
+      options?: CallOptions,
     ): Promise<Statement>;
     /**
      * One committed posting by transaction id (its legs and meta), or null if unknown. Lets a reader
      * resolve a posting without reaching past `read` into the raw Store.
      */
-    posting(txnId: string, options?: Options): Promise<Posting | null>;
+    posting(txnId: string, options?: CallOptions): Promise<Posting | null>;
     /**
      * One payout saga by id (state, provider ref, attempts), or null if unknown. The background
      * worker advances these; a UI reads them to render payout status.
      */
-    saga(id: string, options?: Options): Promise<Saga | null>;
+    saga(id: string, options?: CallOptions): Promise<Saga | null>;
     /**
      * Whether a user currently owns an entitlement (a SKU: an item or feature), true or false.
      * Ownership is a record, not a balance, so it has its own reader. This is the readable side of
      * `grantEntitlement`/`revokeEntitlement` that a UI gates access on.
      */
-    entitled(userId: string, sku: string, options?: Options): Promise<boolean>;
+    entitled(
+      userId: string,
+      sku: string,
+      options?: CallOptions,
+    ): Promise<boolean>;
     /**
      * The economy's current pause state (see {@link EconomyStatus}). Derived from config + the
      * clock, not stored, so it always reflects the live window.
@@ -428,45 +451,57 @@ export interface Economy {
      * stop when you've seen enough rather than collecting them all. Lets a reader enumerate accounts
      * (and derive users) without tracking them itself. This is the prover's own enumeration.
      */
-    accounts(options?: Options): AsyncIterable<AccountRef>;
+    accounts(options?: CallOptions): AsyncIterable<AccountRef>;
     /**
      * Every payout saga, newest first, streamed (a busy economy can have many). Includes settled
      * and failed payouts, not only the due ones the worker claims. Lets a UI
      * render payout status without tracking minted payout ids itself. Delegates to `SagaStore.list`.
      */
-    payouts(options?: Options): AsyncIterable<Saga>;
+    payouts(
+      options?: CallOptions & { states?: readonly SagaState[] },
+    ): AsyncIterable<Saga>;
     /**
      * Every committed posting, newest first, streamed (a busy ledger can have many). Includes user
      * and worker postings alike, every account touched, not only the ones a given reader
      * minted. Each posting carries its full legs, so a UI renders a row without a second lookup.
      * Delegates to `Ledger.list`.
      */
-    postings(options?: Options): AsyncIterable<Posting>;
+    postings(options?: CallOptions): AsyncIterable<Posting>;
     /**
      * One account's hash chain, oldest first: every posting that touched it, each carrying the
      * head hash before and after, so a reader can walk the tamper-evident chain a link at a time.
      * The first link's `prevHash` is the fixed genesis; each later `prevHash` equals the prior
      * `hash`. Delegates to `Ledger.lineage`.
      */
-    lineage(account: AccountRef, options?: Options): AsyncIterable<StoredLink>;
+    lineage(
+      account: AccountRef,
+      options?: CallOptions,
+    ): AsyncIterable<StoredLink>;
     /**
      * Streams the ledger as canonical JSONL for offline verification: a header line, every
      * account's chain links in lineage order, then the latest checkpoint. `scripts/verify.ts`
      * re-proves the chain and checks the checkpoint signature from the file alone, with no
      * store access.
      */
-    export(options?: Options): AsyncIterable<string>;
+    export(options?: CallOptions): AsyncIterable<string>;
 
     /**
      * The latest signed checkpoint (the Merkle root over all account heads, its signature, and the
      * count it covers), or null before the worker has sealed one. The read side of the periodic
      * seal a UI verifies against the live heads. Delegates to `CheckpointStore.latest`.
      */
-    checkpoint(options?: Options): Promise<Checkpoint | null>;
-    prove(options?: Options): Promise<ProveReport>;
+    checkpoint(options?: CallOptions): Promise<Checkpoint | null>;
+    /**
+     * The light in-process snapshot for health pages and consoles; its chain check is
+     * shape-only. CI and audits run the thorough `proveEconomy` instead.
+     */
+    health(options?: CallOptions): Promise<HealthReport>;
   };
   close(): Promise<void>;
 }
+
+/** What `read.health()` reports — the same shape the thorough prover fills. */
+export type HealthReport = ProveReport;
 
 /** The result of the integrity check: each flag is one property the ledger is supposed to hold. */
 export interface ProveReport {

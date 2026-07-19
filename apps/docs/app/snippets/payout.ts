@@ -20,7 +20,7 @@ export async function run(economy: Economy): Promise<SnippetReport> {
     return {
       lines: [
         `requestPayout: ${request.status}` +
-          `${request.status === 'rejected' ? ` (${request.reason})` : ''} — a gate answered first`,
+          `${request.status === 'rejected' ? ` (${request.detail.reason})` : ''} — a gate answered first`,
       ],
       consolePath: '/payouts',
     };

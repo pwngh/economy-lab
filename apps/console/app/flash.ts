@@ -122,18 +122,18 @@ function figuresFor(
   switch (reason) {
     case 'INSUFFICIENT_FUNDS':
       return [
-        amountFigure('Required', detail.required),
-        amountFigure('Available', detail.available),
+        amountFigure('Required', detail.need),
+        amountFigure('Available', detail.have),
       ];
     case 'FUNDS_IMMATURE':
-      return [amountFigure('Requested', detail.required)];
+      return [{ label: 'Clears', value: dayLabelOf(detail.availableAt) }];
     case 'BELOW_MINIMUM':
       return [
         amountFigure('Minimum', detail.minimum),
-        amountFigure('Requested', detail.requested),
+        amountFigure('Requested', detail.amount),
       ];
     case 'PAYOUT_TOO_SOON':
-      return [{ label: 'Retry after', value: dayLabelOf(detail.retryAfter) }];
+      return [{ label: 'Retry after', value: dayLabelOf(detail.retryAt) }];
     case 'ECONOMY_PAUSED':
       return [
         {
@@ -144,7 +144,7 @@ function figuresFor(
     case 'DUPLICATE_ORDER':
       return [{ label: 'Order id', value: String(detail.orderId ?? '') }];
     case 'RISK_DENIED':
-      return [{ label: 'Subject', value: String(detail.subject ?? '') }];
+      return [{ label: 'Window', value: String(detail.window ?? '') }];
     default:
       return [];
   }

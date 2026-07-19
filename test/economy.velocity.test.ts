@@ -66,7 +66,7 @@ function tally(outcomes: ReadonlyArray<Outcome>): {
       committed += 1;
     } else if (
       outcome.status === 'rejected' &&
-      outcome.reason === 'RISK_DENIED'
+      outcome.detail.reason === 'RISK_DENIED'
     ) {
       riskDenied += 1;
     }
@@ -75,7 +75,7 @@ function tally(outcomes: ReadonlyArray<Outcome>): {
 }
 
 function reasonOf(outcome: Outcome): string | undefined {
-  return outcome.status === 'rejected' ? outcome.reason : undefined;
+  return outcome.status === 'rejected' ? outcome.detail.reason : undefined;
 }
 
 function attemptAtLimit(i: number): Attempt {
@@ -171,13 +171,11 @@ describe('Velocity limit under concurrency', () => {
       'RISK_DENIED',
       'the second trips velocity: the first unaffordable attempt counted toward the window',
     );
-    // The refusal is actionable: it names what was spent, the limit, the window, and when
-    // the oldest counted attempt ages out.
+    // The refusal names the window class that tripped and its ceiling.
     const detail = (second as Extract<Outcome, { status: 'rejected' }>).detail;
-    assert.equal(typeof detail?.spent?.minor, 'bigint');
-    assert.equal(detail?.limit?.minor, PRICE_MINOR);
-    assert.equal(typeof detail?.windowMs, 'number');
-    assert.equal(typeof detail?.retryAfter, 'number');
+    if (detail.reason !== 'RISK_DENIED') throw new Error('unreachable');
+    assert.equal(detail.window, 'outflow');
+    assert.equal(detail.limitMinor, PRICE_MINOR);
 
     await economy.close();
   });

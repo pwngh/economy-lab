@@ -86,7 +86,7 @@ async function fire(
     return {
       status:
         outcome.status === 'rejected'
-          ? `rejected:${outcome.reason}`
+          ? `rejected:${outcome.detail.reason}`
           : outcome.status,
       typed: true,
     };
@@ -267,7 +267,7 @@ export async function refusedCleanly(
     if (after !== before) {
       return { law: 'noTrace', step: 0, detail: { before, after } };
     }
-    const report = await economy.read.prove();
+    const report = await economy.read.health();
     if (
       !(
         report.conserved &&

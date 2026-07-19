@@ -15,7 +15,7 @@ import { planSpend } from '#src/operations/spend.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { compare, encodeAmount, toAmount } from '#src/money.ts';
 import { promo, spendable, earned, SYSTEM } from '#src/accounts.ts';
-import { maturedAtLeast, maturedAvailableAt } from '#src/maturity.ts';
+import { maturedAtLeast, maturityBlocker } from '#src/maturity.ts';
 import { feeForPrice } from '#src/pricing.ts';
 
 import type { Amount } from '#src/money.ts';
@@ -61,8 +61,6 @@ export async function subscribe(
     return rejected('ALREADY_SUBSCRIBED', {
       userId: operation.userId,
       sku: operation.sku,
-      sellerId: operation.sellerId,
-      subscriptionId: existing.id,
     });
   }
 
@@ -180,8 +178,8 @@ async function screenSpendable(
   if (compare(have, plan.spendablePart) < 0) {
     return rejected('INSUFFICIENT_FUNDS', {
       account: spendable(userId),
-      required: plan.spendablePart,
-      available: have,
+      need: plan.spendablePart,
+      have,
     });
   }
   // The same maturity gate spend runs: the spendable-funded part must be covered by cleared
@@ -194,17 +192,14 @@ async function screenSpendable(
     { config: ctx.config, amount: plan.spendablePart, live: have },
   );
   if (!cleared) {
-    const availableAt = await maturedAvailableAt(
-      unit.ledger,
-      spendable(userId),
-      ctx.clock.now(),
-      { config: ctx.config, amount: plan.spendablePart, live: have },
+    return rejected(
+      'FUNDS_IMMATURE',
+      await maturityBlocker(unit.ledger, spendable(userId), ctx.clock.now(), {
+        config: ctx.config,
+        amount: plan.spendablePart,
+        live: have,
+      }),
     );
-    return rejected('FUNDS_IMMATURE', {
-      account: spendable(userId),
-      required: plan.spendablePart,
-      ...(availableAt === null ? {} : { availableAt }),
-    });
   }
   return null;
 }

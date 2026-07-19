@@ -54,8 +54,8 @@ function seedEarned(
   );
 }
 
-function reasonOf(outcome: Outcome): string | undefined {
-  return outcome.status === 'rejected' ? outcome.reason : undefined;
+function detailOf(outcome: Outcome): unknown {
+  return outcome.status === 'rejected' ? outcome.detail : undefined;
 }
 
 describe('Rolling Spend-Limit Throttling Through economy.submit', () => {
@@ -77,7 +77,11 @@ describe('Rolling Spend-Limit Throttling Through economy.submit', () => {
       buildRequestPayout({ userId: 'usr_seller', amount: credit('6.00') }),
     );
     assert.equal(second.status, 'rejected');
-    assert.equal(reasonOf(second), 'RISK_DENIED');
+    assert.deepEqual(detailOf(second), {
+      reason: 'RISK_DENIED',
+      window: 'outflow',
+      limitMinor: 1_000n,
+    });
   });
 
   test('a single requestPayout at exactly the limit is allowed', async () => {

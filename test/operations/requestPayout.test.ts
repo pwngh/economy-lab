@@ -196,9 +196,14 @@ async function rejectsAndLeavesEarnedUntouchedWhenInsufficient(): Promise<void> 
   );
 
   assert.equal(outcome.status, 'rejected');
-  assert.equal(
-    (outcome as Extract<Outcome, { status: 'rejected' }>).reason,
-    'INSUFFICIENT_FUNDS',
+  assert.deepEqual(
+    (outcome as Extract<Outcome, { status: 'rejected' }>).detail,
+    {
+      reason: 'INSUFFICIENT_FUNDS',
+      account: earned('usr_seller'),
+      need: credit('8.00'),
+      have: credit('5.00'),
+    },
   );
   assert.deepEqual(
     await store.ledger.balance(earned('usr_seller')),
@@ -224,9 +229,13 @@ async function rejectsPayoutBelowConfiguredEarnedMinimum(): Promise<void> {
   );
 
   assert.equal(outcome.status, 'rejected');
-  assert.equal(
-    (outcome as Extract<Outcome, { status: 'rejected' }>).reason,
-    'BELOW_MINIMUM',
+  assert.deepEqual(
+    (outcome as Extract<Outcome, { status: 'rejected' }>).detail,
+    {
+      reason: 'BELOW_MINIMUM',
+      minimum: credit('20000.00'),
+      amount: credit('100.00'),
+    },
   );
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
@@ -248,10 +257,12 @@ async function rejectsPayoutAgainstImmatureEarnedCredit(): Promise<void> {
 
   assert.equal(outcome.status, 'rejected');
   const rejection = outcome as Extract<Outcome, { status: 'rejected' }>;
-  assert.equal(rejection.reason, 'FUNDS_IMMATURE');
-  assert.equal(rejection.detail?.account, earned('usr_seller'));
   // Funded at time 0 with a 60s horizon: the refusal says exactly when a retry clears.
-  assert.equal(rejection.detail?.availableAt, 60_000);
+  assert.deepEqual(rejection.detail, {
+    reason: 'FUNDS_IMMATURE',
+    source: 'card',
+    availableAt: 60_000,
+  });
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
     credit('0.00'),
@@ -355,9 +366,10 @@ async function rejectsSecondPayoutInsideTheMinimumInterval(): Promise<void> {
 
   assert.equal(second.status, 'rejected');
   const rejection = second as Extract<Outcome, { status: 'rejected' }>;
-  assert.equal(rejection.reason, 'PAYOUT_TOO_SOON');
-  assert.equal(rejection.detail?.lastRequestedAt, 0);
-  assert.equal(rejection.detail?.retryAfter, 60_000);
+  assert.deepEqual(rejection.detail, {
+    reason: 'PAYOUT_TOO_SOON',
+    retryAt: 60_000,
+  });
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
     credit('10.00'),
@@ -449,13 +461,9 @@ async function rejectsAPayoutForAnUnverifiedPayee(): Promise<void> {
     );
 
     assert.equal(outcome.status, 'rejected', state);
-    assert.equal(
-      outcome.status === 'rejected' ? outcome.reason : undefined,
-      'PAYEE_UNVERIFIED',
-      state,
-    );
-    assert.equal(
-      outcome.status === 'rejected' ? outcome.detail?.state : undefined,
+    assert.deepEqual(
+      outcome.status === 'rejected' ? outcome.detail : undefined,
+      { reason: 'PAYEE_UNVERIFIED', userId: 'usr_seller' },
       state,
     );
     assert.deepEqual(

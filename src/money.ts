@@ -104,7 +104,7 @@ export function add(a: Amount, b: Amount): Amount {
   return toAmount(a.currency, a.minor + b.minor);
 }
 
-export function neg(amount: Amount): Amount {
+export function negate(amount: Amount): Amount {
   return toAmount(amount.currency, -amount.minor);
 }
 
@@ -156,6 +156,11 @@ export function encodeAmount(amount: Amount): string {
  * more than two decimal places, digit grouping (the canonical wire is ungrouped), or a
  * value past the 64-bit range throws INVALID_AMOUNT rather than silently accepting it.
  */
+/** Builds a USD amount from a two-decimal string, e.g. `usd('9.99')`. */
+export function usd(decimal: string): Amount {
+  return decodeAmount(decimal, 'USD');
+}
+
 export function decodeAmount(decimal: string, currency: Currency): Amount {
   const minor = decimal.includes(',') ? null : parse(decimal, FRACTION_DIGITS);
   if (minor === null) {
@@ -276,6 +281,10 @@ function assertSameCurrency(a: Amount, b: Amount): void {
 export function encodeAmounts(value: unknown): unknown {
   if (isAmount(value)) {
     return encodeAmount(value);
+  }
+  // A bare bigint (e.g. a minor-unit limit) rides as its decimal string; JSON has no bigint.
+  if (typeof value === 'bigint') {
+    return value.toString();
   }
   if (Array.isArray(value)) {
     return value.map(encodeAmounts);

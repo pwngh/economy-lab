@@ -54,7 +54,10 @@ function velocityAt(windowStart: number, spentMinor: bigint): Velocity {
 }
 
 // Denied attempts still count toward the limit, so denial-path tests use this outcome.
-const REJECTED: Outcome = { status: 'rejected', reason: 'RISK_DENIED' };
+const REJECTED: Outcome = {
+  status: 'rejected',
+  detail: { reason: 'RISK_DENIED', window: 'outflow', limitMinor: 0n },
+};
 
 // The contents do not matter: the attempt builder reads only the outcome status and the operation key.
 function withTransaction(status: 'committed' | 'duplicate'): Outcome {

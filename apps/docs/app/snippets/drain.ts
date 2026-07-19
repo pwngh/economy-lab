@@ -38,7 +38,7 @@ export async function run(economy: Economy): Promise<SnippetReport> {
 
   const committed = attempts.filter((o) => o.status === 'committed').length;
   const refused = attempts.filter(
-    (o) => o.status === 'rejected' && o.reason === 'INSUFFICIENT_FUNDS',
+    (o) => o.status === 'rejected' && o.detail.reason === 'INSUFFICIENT_FUNDS',
   ).length;
   const left = await economy.read.balance(spendable(buyerId));
 

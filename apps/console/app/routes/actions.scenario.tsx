@@ -86,7 +86,11 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
         if (outcome.status === 'rejected') {
           return land(
             '/market',
-            outcomeFlash(outcome.reason, outcome.detail ?? {}, 'market-payout'),
+            outcomeFlash(
+              outcome.detail.reason,
+              outcome.detail,
+              'market-payout',
+            ),
           );
         }
         return land(

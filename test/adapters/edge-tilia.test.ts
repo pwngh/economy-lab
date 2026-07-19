@@ -38,7 +38,7 @@ import {
   fixedClock,
   fixedRates,
   makeWorkerCtx,
-  noopMeter,
+  silentMeter,
   seededDigest,
   seededSigner,
   sequentialIds,
@@ -301,7 +301,7 @@ describe('edge-tilia shim (the compiled @pwngh/economy-edge package behind the l
         pricing: defaultPricing(),
         rates: fixedRates(),
         logger: testLogger(),
-        meter: noopMeter(),
+        meter: silentMeter(),
         payees: edgeTiliaPayees(edge.outbound),
       };
 
@@ -321,7 +321,11 @@ describe('edge-tilia shim (the compiled @pwngh/economy-edge package behind the l
 
       assert.equal(outcome.status, expected, kyc);
       if (outcome.status === 'rejected') {
-        assert.equal(outcome.reason, 'PAYEE_UNVERIFIED', kyc);
+        assert.deepEqual(
+          outcome.detail,
+          { reason: 'PAYEE_UNVERIFIED', userId: 'usr_seller' },
+          kyc,
+        );
       }
     }
   });

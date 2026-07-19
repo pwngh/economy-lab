@@ -15,10 +15,14 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   `redisRateLimiter`, `instanceSession` → `openInstanceSession`, `neg` → `negate`,
   `opsRuntime` → `createOpsRuntime`, `SessionDeps` / `SupervisorDeps` → `SessionPorts` /
   `SupervisorPorts`, `EntitlementAttrs` → `EntitlementAttributes`.
+- Breaking: a rejected `Outcome` carries `detail` as its sole discriminant; the top-level
+  `reason` field is deleted (`detail.reason` holds the code). Unchanged on the wire: HTTP
+  responses still carry `reason` beside `detail`.
 
 ### Added
 
 - `read.health()` is the light liveness read; `proveEconomy` stays the thorough pass.
+- `usd(decimal)` builds a USD amount from a two-decimal string.
 
 ## 0.3.2 - 2026-07-17
 

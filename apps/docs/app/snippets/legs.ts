@@ -1,4 +1,5 @@
-import { balanceDelta, credits, spend, spendable, userActor } from '@pwngh/economy-lab';
+import { credits, spend, spendable, userActor } from '@pwngh/economy-lab';
+import { balanceDelta } from '@pwngh/economy-lab/store-kit';
 
 import type { Economy } from '@pwngh/economy-lab';
 import type { SnippetReport } from './context.ts';
@@ -34,5 +35,5 @@ export async function run(economy: Economy): Promise<SnippetReport> {
       txnId: outcome.transaction.id,
     };
   }
-  return { lines: [`spend: rejected (${outcome.reason}) — no posting to read`] };
+  return { lines: [`spend: rejected (${outcome.detail.reason}) — no posting to read`] };
 }

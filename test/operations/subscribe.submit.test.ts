@@ -69,9 +69,14 @@ async function rejectsInsufficientFundsCleanly(): Promise<void> {
     }),
   );
   assert.equal(outcome.status, 'rejected');
-  assert.equal(
-    (outcome as Extract<Outcome, { status: 'rejected' }>).reason,
-    'INSUFFICIENT_FUNDS',
+  assert.deepEqual(
+    (outcome as Extract<Outcome, { status: 'rejected' }>).detail,
+    {
+      reason: 'INSUFFICIENT_FUNDS',
+      account: spendable('usr_buyer'),
+      need: credit('100.00'),
+      have: credit('0.00'),
+    },
   );
 }
 
@@ -151,9 +156,9 @@ async function rejectsSecondActiveSubscription(): Promise<void> {
     }),
   );
   assert.equal(second.status, 'rejected');
-  assert.equal(
-    (second as Extract<Outcome, { status: 'rejected' }>).reason,
-    'ALREADY_SUBSCRIBED',
+  assert.deepEqual(
+    (second as Extract<Outcome, { status: 'rejected' }>).detail,
+    { reason: 'ALREADY_SUBSCRIBED', userId: 'usr_buyer', sku: 'sub_pro' },
   );
 
   assert.deepEqual(

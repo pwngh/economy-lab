@@ -52,7 +52,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
     if (outcome.status === 'rejected') {
       return redirectWithFlash(
         form,
-        outcomeFlash(outcome.reason, outcome.detail ?? {}, owner),
+        outcomeFlash(outcome.detail.reason, outcome.detail, owner),
       );
     }
     return redirectWithFlash(form, noticeFlash('Recorded payout request.'));

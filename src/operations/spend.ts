@@ -22,7 +22,7 @@ import {
   routePlatformLegs,
   spendable,
 } from '#src/accounts.ts';
-import { maturedAtLeast, maturedAvailableAt } from '#src/maturity.ts';
+import { maturedAtLeast, maturityBlocker } from '#src/maturity.ts';
 import { revenueForSplit } from '#src/pricing.ts';
 
 import type { Amount } from '#src/money.ts';
@@ -118,23 +118,16 @@ export async function spend(
     },
   );
   if (!cleared) {
-    // The second walk runs only on this rejection path; availableAt lets a caller tell the
-    // buyer when the same purchase will clear.
-    const availableAt = await maturedAvailableAt(
-      unit.ledger,
-      spendableAccount,
-      ctx.clock.now(),
-      {
+    // The second walk runs only on this rejection path; the blocker names the funding source
+    // that set the wait and when the same purchase will clear.
+    return rejected(
+      'FUNDS_IMMATURE',
+      await maturityBlocker(unit.ledger, spendableAccount, ctx.clock.now(), {
         config: ctx.config,
         amount: plan.spendablePart,
         live: unit.balances?.get(spendableAccount),
-      },
+      }),
     );
-    return rejected('FUNDS_IMMATURE', {
-      account: spendable(operation.buyerId),
-      required: plan.spendablePart,
-      ...(availableAt === null ? {} : { availableAt }),
-    });
   }
 
   // Route the finished legs' platform accounts (PROMO_FLOAT and REVENUE, including the REVENUE

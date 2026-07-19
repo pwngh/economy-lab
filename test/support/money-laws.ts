@@ -193,7 +193,7 @@ async function applyScreened(
         amountMinor,
         outcome:
           outcome.status === 'rejected'
-            ? `rejected:${outcome.reason}`
+            ? `rejected:${outcome.detail.reason}`
             : outcome.status,
         txnId: outcome.status === 'rejected' ? null : outcome.transaction.id,
       };
@@ -227,7 +227,7 @@ async function applyScreened(
     amountMinor,
     outcome:
       outcome.status === 'rejected'
-        ? `rejected:${outcome.reason}`
+        ? `rejected:${outcome.detail.reason}`
         : outcome.status,
     txnId: outcome.status === 'rejected' ? null : outcome.transaction.id,
   };

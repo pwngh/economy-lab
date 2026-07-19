@@ -12,7 +12,7 @@
 /**
  * Concurrent use of the in-memory store: overlapping `transaction` callers queue FIFO behind one
  * writer instead of throwing "in-memory transactions do not nest", so `Promise.all` against
- * `createEconomy()` just works — outcomes stay correct and the books prove.
+ * a `createEconomy` economy just works — outcomes stay correct and the books prove.
  */
 
 import { describe, test } from 'node:test';
@@ -77,7 +77,7 @@ describe('concurrent submits through economy.submit', () => {
       await economy.read.balance(spendable('usr_storm')),
       credit('10.00'),
     );
-    const report = await economy.read.prove();
+    const report = await economy.read.health();
     assert.equal(report.conserved && report.backed && report.noOverdraft, true);
   });
 
@@ -104,14 +104,14 @@ describe('concurrent submits through economy.submit', () => {
     assert.deepEqual(statuses(outcomes), { committed: 3, rejected: 2 });
     for (const outcome of outcomes) {
       if (outcome.status === 'rejected') {
-        assert.equal(outcome.reason, 'INSUFFICIENT_FUNDS');
+        assert.equal(outcome.detail.reason, 'INSUFFICIENT_FUNDS');
       }
     }
     assert.deepEqual(
       await economy.read.balance(spendable('usr_rush')),
       credit('0.00'),
     );
-    const report = await economy.read.prove();
+    const report = await economy.read.health();
     assert.equal(report.conserved && report.backed && report.noOverdraft, true);
   });
 });

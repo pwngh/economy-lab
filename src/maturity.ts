@@ -74,8 +74,13 @@ export function isMatured(lot: Lot, now: number, config: Config): boolean {
 const TAIL_PAGE = 64;
 
 // One slice of the FIFO tail: how much of the live balance a lot covers, whether that slice
-// has matured by `now`, and when it does.
-type TailSlice = { take: bigint; matured: boolean; maturesAt: number };
+// has matured by `now`, when it does, and the funding source that set its wait.
+type TailSlice = {
+  take: bigint;
+  matured: boolean;
+  maturesAt: number;
+  source: string;
+};
 
 // Walks the newest lots first, a bounded page at a time, yielding each lot's slice of the FIFO
 // tail until the live balance is covered. The boundary lot contributes only what is left to
@@ -101,7 +106,12 @@ async function* tailSlices(
       drained += 1;
       const take = lot.amount.minor < remaining ? lot.amount.minor : remaining;
       const maturesAt = lotMaturesAt(lot, options.config);
-      yield { take, matured: maturesAt <= options.now, maturesAt };
+      yield {
+        take,
+        matured: maturesAt <= options.now,
+        maturesAt,
+        source: lot.source,
+      };
       remaining -= take;
       if (remaining === 0n) {
         return;
@@ -150,6 +160,49 @@ export async function maturedAvailableAt(
     }
   }
   return null;
+}
+
+/**
+ * The lot that blocks an immature draw: the binding slice of the same walk as
+ * {@link maturedAvailableAt}, with the funding source that set its wait. When the walk cannot
+ * name a binding lot (a balance row that outran its lots), the answer falls back to the
+ * 'default' horizon from `now` — the module's conservative rule for unknown funding.
+ */
+export async function maturityBlocker(
+  ledger: Ledger,
+  account: AccountRef,
+  now: number,
+  options: MaturedAtLeastOptions,
+): Promise<{ source: string; availableAt: number }> {
+  const need = options.amount.minor;
+  const fallback = {
+    source: DEFAULT_SOURCE,
+    availableAt: now + maturityHorizonMs(DEFAULT_SOURCE, options.config),
+  };
+  if (need <= 0n) {
+    return { source: DEFAULT_SOURCE, availableAt: now };
+  }
+  const live =
+    options.live ?? (await ledger.balance(account, { signal: options.signal }));
+  if (live.minor < need) {
+    return fallback;
+  }
+  const slices: TailSlice[] = [];
+  for await (const slice of tailSlices(ledger, account, live.minor, {
+    now,
+    config: options.config,
+  })) {
+    slices.push(slice);
+  }
+  slices.sort((a, b) => a.maturesAt - b.maturesAt);
+  let covered = 0n;
+  for (const slice of slices) {
+    covered += slice.take;
+    if (covered >= need) {
+      return { source: slice.source, availableAt: slice.maturesAt };
+    }
+  }
+  return fallback;
 }
 
 /**

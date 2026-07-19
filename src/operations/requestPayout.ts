@@ -20,7 +20,7 @@ import {
   toAmount,
 } from '#src/money.ts';
 import { earned, routePlatformLegs, SYSTEM } from '#src/accounts.ts';
-import { maturedAtLeast, maturedAvailableAt } from '#src/maturity.ts';
+import { maturedAtLeast, maturityBlocker } from '#src/maturity.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
@@ -45,33 +45,27 @@ export async function requestPayout(
 
   if (amount.minor < ctx.config.payoutMinimumEarnedMinor) {
     return rejected('BELOW_MINIMUM', {
-      account: earned(operation.userId),
       minimum: toAmount('CREDIT', ctx.config.payoutMinimumEarnedMinor),
-      requested: amount,
+      amount,
     });
   }
   // Minimum gap between a user's payout requests. `lastPayoutAt` is the max `updatedAt` over
   // their sagas; strict `<`, so a request exactly the interval later passes. Rejection, not
-  // throw, so the caller can surface `retryAfter`.
+  // throw, so the caller can surface `retryAt`.
   const last = await unit.sagas.lastPayoutAt(operation.userId);
   if (
     last !== null &&
     ctx.clock.now() - last < ctx.config.payoutMinIntervalMs
   ) {
     return rejected('PAYOUT_TOO_SOON', {
-      account: earned(operation.userId),
-      lastRequestedAt: last,
-      retryAfter: last + ctx.config.payoutMinIntervalMs,
+      retryAt: last + ctx.config.payoutMinIntervalMs,
     });
   }
 
   if (ctx.payees !== undefined) {
     const verification = await ctx.payees.status(operation.userId);
     if (verification.state !== 'CLEARED') {
-      return rejected('PAYEE_UNVERIFIED', {
-        account: earned(operation.userId),
-        state: verification.state,
-      });
+      return rejected('PAYEE_UNVERIFIED', { userId: operation.userId });
     }
   }
 
@@ -79,8 +73,8 @@ export async function requestPayout(
   if (compare(available, amount) < 0) {
     return rejected('INSUFFICIENT_FUNDS', {
       account: earned(operation.userId),
-      required: amount,
-      available,
+      need: amount,
+      have: available,
     });
   }
 
@@ -91,20 +85,22 @@ export async function requestPayout(
     unit.ledger,
     earned(operation.userId),
     ctx.clock.now(),
-    { config: ctx.config, amount },
+    { config: ctx.config, amount, live: available },
   );
   if (!cleared) {
-    const availableAt = await maturedAvailableAt(
-      unit.ledger,
-      earned(operation.userId),
-      ctx.clock.now(),
-      { config: ctx.config, amount },
+    return rejected(
+      'FUNDS_IMMATURE',
+      await maturityBlocker(
+        unit.ledger,
+        earned(operation.userId),
+        ctx.clock.now(),
+        {
+          config: ctx.config,
+          amount,
+          live: available,
+        },
+      ),
     );
-    return rejected('FUNDS_IMMATURE', {
-      account: earned(operation.userId),
-      required: amount,
-      ...(availableAt === null ? {} : { availableAt }),
-    });
   }
 
   const { rateId, payoutUsd } = await priceQuote(ctx, amount);

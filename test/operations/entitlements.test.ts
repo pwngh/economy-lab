@@ -274,10 +274,11 @@ describe('revokeEntitlement', () => {
     );
 
     assert.equal(outcome.status, 'rejected');
-    assert.equal(
-      outcome.status === 'rejected' ? outcome.reason : null,
-      'NOT_ENTITLED',
-    );
+    assert.deepEqual(outcome.status === 'rejected' ? outcome.detail : null, {
+      reason: 'NOT_ENTITLED',
+      userId: 'usr_stranger',
+      sku: 'wrld_pass',
+    });
   });
 
   test('throws MALFORMED_OPERATION on the wrong operation kind', async () => {

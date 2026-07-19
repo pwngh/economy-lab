@@ -116,7 +116,15 @@ describe('Spend', () => {
     );
 
     assert.equal(outcome.status, 'rejected');
-    assert.equal(outcome.reason, 'INSUFFICIENT_FUNDS');
+    assert.deepEqual(
+      (outcome as Extract<Outcome, { status: 'rejected' }>).detail,
+      {
+        reason: 'INSUFFICIENT_FUNDS',
+        account: spendable('usr_buyer'),
+        need: credit('4.00'),
+        have: credit('3.00'),
+      },
+    );
   });
 
   test('keeps debits equal to credits across an N-way split', async () => {
@@ -137,7 +145,7 @@ describe('Spend', () => {
       }),
     );
 
-    const report = await economy.read.prove();
+    const report = await economy.read.health();
     assert.equal(report.conserved, true);
 
     // backed: TRUST_CASH covers every user's spendable balance at the CREDIT-to-USD rate.
@@ -202,9 +210,11 @@ async function rejectsSpendDrawingOnImmatureCredit(): Promise<void> {
 
   assert.equal(outcome.status, 'rejected');
   const rejection = outcome as Extract<Outcome, { status: 'rejected' }>;
-  assert.equal(rejection.reason, 'FUNDS_IMMATURE');
-  assert.equal(rejection.detail?.account, spendable('usr_buyer'));
-  assert.equal(typeof rejection.detail?.availableAt, 'number');
+  assert.deepEqual(rejection.detail, {
+    reason: 'FUNDS_IMMATURE',
+    source: 'card',
+    availableAt: 60_000,
+  });
   assert.deepEqual(
     await store.ledger.balance(spendable('usr_buyer')),
     credit('10.00'),
@@ -358,8 +368,10 @@ async function rejectsDuplicateOrderId(): Promise<void> {
   );
   const rejection = second as Extract<Outcome, { status: 'rejected' }>;
   assert.equal(rejection.status, 'rejected');
-  assert.equal(rejection.reason, 'DUPLICATE_ORDER');
-  assert.equal(rejection.detail?.orderId, 'ord_dup');
+  assert.deepEqual(rejection.detail, {
+    reason: 'DUPLICATE_ORDER',
+    orderId: 'ord_dup',
+  });
 
   assert.deepEqual(
     await store.ledger.balance(spendable('usr_buyer')),

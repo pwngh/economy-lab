@@ -105,9 +105,9 @@ describe('cancelSubscription', () => {
     const { outcome } = await cancel(store, ctx, 'sub_absent');
 
     assert.equal(outcome.status, 'rejected');
-    assert.equal(
-      outcome.status === 'rejected' && outcome.reason,
-      'UNKNOWN_SUBSCRIPTION',
+    assert.deepEqual(
+      outcome.status === 'rejected' ? outcome.detail : undefined,
+      { reason: 'UNKNOWN_SUBSCRIPTION', subscriptionId: 'sub_absent' },
     );
   });
 
@@ -133,9 +133,9 @@ describe('cancelSubscription', () => {
     const { outcome } = await cancel(store, ctx, 'sub_done');
 
     assert.equal(outcome.status, 'rejected');
-    assert.equal(
-      outcome.status === 'rejected' && outcome.reason,
-      'UNKNOWN_SUBSCRIPTION',
+    assert.deepEqual(
+      outcome.status === 'rejected' ? outcome.detail : undefined,
+      { reason: 'UNKNOWN_SUBSCRIPTION', subscriptionId: 'sub_done' },
     );
   });
 });

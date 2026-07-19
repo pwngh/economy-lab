@@ -72,7 +72,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
       }
       return redirectWithFlash(
         form,
-        outcomeFlash(outcome.reason, outcome.detail ?? {}, FORM),
+        outcomeFlash(outcome.detail.reason, outcome.detail, FORM),
       );
     }
 
@@ -87,8 +87,10 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
               form: FORM,
             })
           : outcomeFlash(
-              outcome.status === 'rejected' ? outcome.reason : 'DUPLICATE',
-              outcome.status === 'rejected' ? (outcome.detail ?? {}) : {},
+              outcome.status === 'rejected'
+                ? outcome.detail.reason
+                : 'DUPLICATE',
+              outcome.status === 'rejected' ? outcome.detail : {},
               FORM,
             ),
       );

@@ -16,7 +16,7 @@ import { refund } from '#src/operations/refund.ts';
 import { spend } from '#src/operations/spend.ts';
 import { postEntry, debit, credit } from '#src/ledger.ts';
 import { spendable, earned, SYSTEM } from '#src/accounts.ts';
-import type { EntitlementAttrs } from '#src/contract.ts';
+import type { EntitlementAttributes } from '#src/contract.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import {
   fixedClock,
@@ -43,7 +43,11 @@ type Fixture = {
   refund(operation: Operation): Promise<Outcome>;
   balanceOf(account: AccountRef): Promise<Amount>;
   drainEarned(userId: string, amount: Amount): Promise<void>;
-  grant(userId: string, sku: string, attrs?: EntitlementAttrs): Promise<void>;
+  grant(
+    userId: string,
+    sku: string,
+    attrs?: EntitlementAttributes,
+  ): Promise<void>;
   owns(userId: string, sku: string): Promise<boolean>;
 };
 
@@ -159,7 +163,10 @@ async function rejectsUnknownOrderWhenNoSaleRecorded(): Promise<void> {
 
   assert.equal(outcome.status, 'rejected');
   if (outcome.status !== 'rejected') return;
-  assert.equal(outcome.reason, 'UNKNOWN_ORDER');
+  assert.deepEqual(outcome.detail, {
+    reason: 'UNKNOWN_ORDER',
+    orderId: 'ord_missing',
+  });
 }
 
 async function refundsBuyerEvenAfterSellerPaidOut(): Promise<void> {

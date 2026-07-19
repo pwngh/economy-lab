@@ -113,9 +113,14 @@ describe('velocity attempts survive a real rollback', () => {
           }),
         );
         assert.equal(broke.status, 'rejected');
-        assert.equal(
-          (broke as Extract<typeof broke, { status: 'rejected' }>).reason,
-          'INSUFFICIENT_FUNDS',
+        assert.deepEqual(
+          (broke as Extract<typeof broke, { status: 'rejected' }>).detail,
+          {
+            reason: 'INSUFFICIENT_FUNDS',
+            account: spendable(buyer),
+            need: credit('10.00'),
+            have: credit('5.00'),
+          },
         );
         const afterBroke = await store.trust.read(`out:${buyer}`);
         assert.equal(afterBroke.attempts, afterTopUp.attempts + 1);
@@ -134,9 +139,13 @@ describe('velocity attempts survive a real rollback', () => {
           }),
         );
         assert.equal(denied.status, 'rejected');
-        assert.equal(
-          (denied as Extract<typeof denied, { status: 'rejected' }>).reason,
-          'RISK_DENIED',
+        assert.deepEqual(
+          (denied as Extract<typeof denied, { status: 'rejected' }>).detail,
+          {
+            reason: 'RISK_DENIED',
+            window: 'outflow',
+            limitMinor: VELOCITY_LIMIT_MINOR,
+          },
         );
         const afterDenied = await store.trust.read(`out:${buyer}`);
         assert.equal(afterDenied.attempts, afterBroke.attempts + 1);

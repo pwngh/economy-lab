@@ -9,7 +9,12 @@
  * @license MIT
  */
 
-import type { Outcome, RejectionDetail } from '#src/contract.ts';
+import type {
+  Outcome,
+  Rejection,
+  RejectionDetail,
+  Success,
+} from '#src/contract.ts';
 
 /**
  * Reasons a well-formed request is declined on a healthy system, returned as a `rejected`
@@ -43,6 +48,49 @@ export type RejectionCode =
   // Settlement (actor 'system') and operator fixes are never paused; the decline carries `resumesAt`
   // (the window's end) so the caller can tell the user when to retry.
   | 'ECONOMY_PAUSED';
+
+/** Every {@link RejectionCode}, enumerable for docs and exhaustiveness checks. */
+export const REJECTION_CODES = [
+  'INSUFFICIENT_FUNDS',
+  'RISK_DENIED',
+  'FUNDS_IMMATURE',
+  'NOT_ENTITLED',
+  'UNKNOWN_ORDER',
+  'DUPLICATE_ORDER',
+  'UNKNOWN_SUBSCRIPTION',
+  'ALREADY_SUBSCRIBED',
+  'BELOW_MINIMUM',
+  'PAYOUT_TOO_SOON',
+  'PAYEE_UNVERIFIED',
+  'ECONOMY_PAUSED',
+] as const satisfies readonly RejectionCode[];
+
+/**
+ * Per-code registry of the fields each rejection's `detail` carries. The mapped key set and the
+ * keyof-derived field lists are both compile-locked to {@link RejectionDetail}, so this catalog
+ * cannot drift from the union.
+ */
+export const REJECTION_SPEC: {
+  readonly [K in RejectionCode]: {
+    readonly fields: readonly Exclude<
+      keyof Extract<RejectionDetail, { reason: K }>,
+      'reason'
+    >[];
+  };
+} = {
+  INSUFFICIENT_FUNDS: { fields: ['account', 'need', 'have'] },
+  RISK_DENIED: { fields: ['window', 'limitMinor'] },
+  FUNDS_IMMATURE: { fields: ['source', 'availableAt'] },
+  NOT_ENTITLED: { fields: ['userId', 'sku'] },
+  UNKNOWN_ORDER: { fields: ['orderId'] },
+  DUPLICATE_ORDER: { fields: ['orderId'] },
+  UNKNOWN_SUBSCRIPTION: { fields: ['subscriptionId'] },
+  ALREADY_SUBSCRIBED: { fields: ['userId', 'sku'] },
+  BELOW_MINIMUM: { fields: ['minimum', 'amount'] },
+  PAYOUT_TOO_SOON: { fields: ['retryAt'] },
+  PAYEE_UNVERIFIED: { fields: ['userId'] },
+  ECONOMY_PAUSED: { fields: ['resumesAt'] },
+};
 
 /**
  * Codes for thrown faults, as opposed to the expected "no" answers in {@link RejectionCode}.
@@ -171,17 +219,38 @@ export function fault(
 }
 
 /**
- * Builds a `rejected` Outcome: the value an operation returns (not throws) when it
- * declines a valid request for one of the expected business reasons in
- * {@link RejectionCode}.
+ * Builds a `rejected` Outcome: the value an operation returns (not throws) when it declines a
+ * valid request for one of the expected business reasons in {@link RejectionCode}. The generic
+ * pins `fields` to exactly the arm the reason selects.
  */
-export function rejected(
-  reason: RejectionCode,
-  detail?: RejectionDetail,
-): Extract<Outcome, { status: 'rejected' }> {
-  return detail === undefined
-    ? { status: 'rejected', reason }
-    : { status: 'rejected', reason, detail };
+export function rejected<K extends RejectionCode>(
+  reason: K,
+  fields: Omit<Extract<RejectionDetail, { reason: K }>, 'reason'>,
+): Rejection {
+  return {
+    status: 'rejected',
+    detail: { reason, ...fields } as unknown as RejectionDetail,
+  };
+}
+
+export function isSuccess(outcome: Outcome): outcome is Success {
+  return outcome.status === 'committed' || outcome.status === 'duplicate';
+}
+
+export function isRejection(outcome: Outcome): outcome is Rejection {
+  return outcome.status === 'rejected';
+}
+
+/**
+ * Narrows to a success or throws a plain Error naming the rejection — for hosts and tests where
+ * a decline is unexpected. Deliberately not an {@link EconomyError}: an assertion failure has no
+ * fault code or retry policy.
+ */
+export function requireSuccess(outcome: Outcome): Success {
+  if (isSuccess(outcome)) {
+    return outcome;
+  }
+  throw new Error(`Operation was rejected: ${outcome.detail.reason}.`);
 }
 
 /**

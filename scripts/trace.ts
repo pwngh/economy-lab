@@ -66,7 +66,7 @@ function render(value: unknown): string {
 // Stable across runs: the test economy issues ids in a fixed sequence and uses a frozen clock.
 function recordStep(kind: string, outcome: Outcome): Record<string, unknown> {
   if (outcome.status === 'rejected') {
-    return { kind, status: outcome.status, reason: outcome.reason };
+    return { kind, status: outcome.status, reason: outcome.detail.reason };
   }
   return {
     kind,
@@ -131,7 +131,7 @@ async function buildTrace(): Promise<Record<string, unknown>> {
   return {
     scenario: SCENARIO,
     steps,
-    prove: await economy.read.prove(),
+    prove: await economy.read.health(),
     balances: await keyBalances(economy),
   };
 }

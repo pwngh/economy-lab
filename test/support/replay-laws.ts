@@ -96,7 +96,8 @@ async function concretize(
 async function submitTagged(economy: Economy, op: Operation): Promise<string> {
   try {
     const outcome = await economy.submit(op);
-    if (outcome.status === 'rejected') return `rejected:${outcome.reason}`;
+    if (outcome.status === 'rejected')
+      return `rejected:${outcome.detail.reason}`;
     return `${outcome.status}:${outcome.transaction.id}`;
   } catch (error) {
     return `threw:${(error as { code?: string }).code ?? String(error)}`;
