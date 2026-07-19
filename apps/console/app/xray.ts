@@ -56,15 +56,15 @@ function summarizeResult(result: unknown): string {
     if ('rows' in o && 'total' in o) {
       return `${o.total} total`;
     }
-    // allGreen is prove()'s summary; test it before backed, which prove() also carries.
+    // allGreen is health()'s summary; test it before backed, which prove() also carries.
     if ('allGreen' in o) {
       return `allGreen=${o.allGreen}`;
     }
     if ('backed' in o) {
       return `backed=${o.backed}`;
     }
-    if ('paused' in o) {
-      return `paused=${o.paused}`;
+    if ('maintenanceActive' in o) {
+      return `maintenanceActive=${o.maintenanceActive}`;
     }
     return `{ ${Object.keys(o).slice(0, 3).join(', ')} }`;
   }

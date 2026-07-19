@@ -18,6 +18,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - Breaking: a rejected `Outcome` carries `detail` as its sole discriminant; the top-level
   `reason` field is deleted (`detail.reason` holds the code). Unchanged on the wire: HTTP
   responses still carry `reason` beside `detail`.
+- Breaking: `EconomyStatus.paused` is `maintenanceActive`; the worker's own switch stays
+  `sweepsPaused`.
 
 ### Added
 

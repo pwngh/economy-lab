@@ -39,7 +39,7 @@ it('maintenance: user writes decline as ECONOMY_PAUSED on the market', async () 
   const { location } = await stage('maintenance');
   expect(location).toBe('/market');
   const eco = await getEngine();
-  expect((await eco.status()).paused).toBe(true);
+  expect((await eco.status()).maintenanceActive).toBe(true);
 });
 
 it('race: one order id, eight buyers, the tally lands on the market', async () => {
@@ -66,6 +66,6 @@ it('tamper: the full audit catches the edited posting', async () => {
   const { location } = await stage('tamper');
   expect(location).toBe('/integrity');
   const eco = await getEngine();
-  expect((await eco.proveFull()).chainIntact).toBe(false);
+  expect((await eco.prove()).chainIntact).toBe(false);
   await eco.reset();
 });

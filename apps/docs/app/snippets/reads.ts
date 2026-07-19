@@ -3,7 +3,7 @@ import { spendable } from '@pwngh/economy-lab';
 import type { Economy } from '@pwngh/economy-lab';
 import type { SnippetReport } from './context.ts';
 
-// One block, three reads: a balance, an ownership check, and the pause status. Nothing
+// One block, three reads: a balance, an ownership check, and the maintenance status. Nothing
 // here writes a ledger entry, claims a key, or counts toward a velocity window — run it
 // as often as you like and the books never move.
 export async function run(economy: Economy): Promise<SnippetReport> {
@@ -15,7 +15,7 @@ export async function run(economy: Economy): Promise<SnippetReport> {
     lines: [
       `balance: ${balance.minor / 100n} credits in usr_alice's spendable`,
       `entitled('usr_alice', 'Aurora Avatar') → ${owns} — ownership is a record, not a balance`,
-      `status: ${status.paused ? 'paused' : 'open'}`,
+      `status: ${status.maintenanceActive ? 'maintenance window active' : 'open'}`,
     ],
     consolePath: '/wallets',
   };

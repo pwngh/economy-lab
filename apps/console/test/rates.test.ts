@@ -43,7 +43,7 @@ it('reprices only when quiesced, within bounds, and pauses then resumes', async 
   expect((await eco.unlockRates()).ok).toBe(true);
   const open = await eco.rateBoard();
   expect(open.locked).toBe(false);
-  expect(open.paused).toBe(true);
+  expect(open.maintenanceActive).toBe(true);
 
   // Bounds: buy below par, spread over the cap, and par over the ceiling are all refused.
   expect(eco.setRates({ buyPerThousand: 4, parPerThousand: 5 }).ok).toBe(false);
@@ -67,7 +67,7 @@ it('reprices only when quiesced, within bounds, and pauses then resumes', async 
   expect((await eco.lockRates()).ok).toBe(true);
   const relocked = await eco.rateBoard();
   expect(relocked.locked).toBe(true);
-  expect(relocked.paused).toBe(false);
+  expect(relocked.maintenanceActive).toBe(false);
 
   await eco.reset();
   const afterReset = await eco.rateBoard();

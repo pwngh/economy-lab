@@ -79,7 +79,7 @@ export default function Market({ loaderData }: Route.ComponentProps) {
         </p>
       </div>
 
-      {status.paused ? (
+      {status.maintenanceActive ? (
         <div className="notice warn" aria-live="polite">
           A maintenance window is in effect, so everyday writes decline as{' '}
           <code className="reason-code">ECONOMY_PAUSED</code>. Settlement and

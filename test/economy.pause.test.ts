@@ -47,9 +47,11 @@ describe('economy pause window', () => {
 
       assert.equal(out.status, 'rejected');
       if (out.status !== 'rejected') throw new Error('unreachable');
-      assert.equal(out.reason, 'ECONOMY_PAUSED');
+      assert.equal(out.detail.reason, 'ECONOMY_PAUSED');
+      if (out.detail.reason !== 'ECONOMY_PAUSED')
+        throw new Error('unreachable');
       assert.equal(
-        out.detail?.resumesAt,
+        out.detail.resumesAt,
         ACTIVE.pauseEndMs,
         'the decline reports when writes resume',
       );
@@ -94,7 +96,7 @@ describe('economy pause window', () => {
     }
   });
 
-  test('reads stay open during the window and status.paused is true', async () => {
+  test('reads stay open during the window and status.maintenanceActive is true', async () => {
     const economy = makeEconomy(1, undefined, ACTIVE);
     try {
       await economy.submit(
@@ -108,11 +110,11 @@ describe('economy pause window', () => {
       const balance = await economy.read.balance(spendable('usr_pause_read'));
       assert.equal(balance.minor, credit('25.00').minor, 'read.balance works');
 
-      const report = await economy.read.prove();
-      assert.equal(report.conserved, true, 'read.prove works');
+      const report = await economy.read.health();
+      assert.equal(report.conserved, true, 'read.health works');
 
       const status = economy.read.status();
-      assert.equal(status.paused, true);
+      assert.equal(status.maintenanceActive, true);
       assert.equal(status.pauseStart, ACTIVE.pauseStartMs);
       assert.equal(status.pauseEnd, ACTIVE.pauseEndMs);
       assert.equal(
@@ -125,7 +127,7 @@ describe('economy pause window', () => {
     }
   });
 
-  test('outside the window a user op commits and status.paused is false', async () => {
+  test('outside the window a user op commits and status.maintenanceActive is false', async () => {
     const economy = makeEconomy(1, undefined, PAST);
     try {
       const funded = await economy.submit(
@@ -152,7 +154,7 @@ describe('economy pause window', () => {
       );
 
       const status = economy.read.status();
-      assert.equal(status.paused, false);
+      assert.equal(status.maintenanceActive, false);
       assert.equal(status.resumesAt, null, 'resumesAt is null when not paused');
       assert.equal(
         status.pauseStart,

@@ -65,7 +65,7 @@ it(
       ledger,
       payouts,
       counts,
-      prove,
+      health,
       status,
     ] = await Promise.all([
       eco.wallets({ offset: 0, limit: 8 }),
@@ -74,7 +74,7 @@ it(
       eco.ledger({ offset: 0, limit: 50 }),
       eco.payouts({ offset: 0, limit: 50 }),
       eco.payoutCounts(),
-      eco.prove(),
+      eco.health(),
       eco.status(),
     ]);
     const settings = eco.settings();
@@ -135,7 +135,7 @@ it(
       ...rateBoard,
       locked: false,
       inFlightPayouts: 0,
-      paused: true,
+      maintenanceActive: true,
     };
 
     // Developers X-ray: the recorded engine calls the page's own loader would make.
@@ -143,7 +143,7 @@ it(
     const xrayEco = recordCalls(eco, xrayCalls as never);
     await Promise.all([
       xrayEco.solvency(),
-      xrayEco.prove(),
+      xrayEco.health(),
       xrayEco.wallets({ offset: 0, limit: 8 }),
       xrayEco.status(),
       xrayEco.checkpoint(),
@@ -180,7 +180,7 @@ it(
       movedCredits: 200,
     };
     const paused = {
-      paused: true,
+      maintenanceActive: true,
       pauseStart: 0,
       pauseEnd: 86_400_000,
       resumesAt: 86_400_000,
@@ -220,7 +220,7 @@ it(
         { page: payouts, counts, settings, detail: sagaDetail, flash: null },
       ],
       // `full` as an already-resolved value renders the audit cards and the break form, not the fallback.
-      ['integrity', Integrity, { prove, solvency, checkpoint, full: prove }],
+      ['integrity', Integrity, { health, solvency, checkpoint, full: health }],
       ['market', Market, mkt],
       ['market-outcome', Market, { ...mkt, flash: outcomeFlash }],
       ['market-invalid', Market, { ...mkt, flash: invalidFlash }],
