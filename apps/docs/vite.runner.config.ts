@@ -23,7 +23,7 @@ const consoleApp = fileURLToPath(new URL('../console/app/', import.meta.url));
 const runnerDir = fileURLToPath(new URL('./runner/', import.meta.url));
 // The shared browser-shim package (driver stubs + node:crypto rejection), aliased instead of
 // reaching into the console app's private dir.
-const engineBrowser = fileURLToPath(new URL('../../packages/engine-browser/', import.meta.url));
+const engineBrowser = fileURLToPath(new URL('../support/engine-browser/', import.meta.url));
 
 // One license header per generated chunk instead of the per-module copies the bundler would
 // otherwise inline dozens of times. legalComments:'none' strips them all; a post-order renderChunk

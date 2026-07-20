@@ -95,8 +95,8 @@ const ENTRIES: Record<string, () => Promise<object>> = {
   './store-kit': () => import('#src/store-kit.ts'),
   // Not a package entry: the browser-sandbox stand-in the apps' vite configs alias over the DB,
   // cache, and queue modules. A removed name lingering here would resurface in the sandbox bundle.
-  'packages/engine-browser': () =>
-    import('../packages/engine-browser/unavailable.ts'),
+  'apps/support/engine-browser': () =>
+    import('../apps/support/engine-browser/unavailable.ts'),
 };
 
 describe('no compatibility shims exist', () => {
@@ -125,7 +125,7 @@ describe('no compatibility shims exist', () => {
   });
 
   test('the browser stub exports no name the aliased modules lack', async () => {
-    const stub = await import('../packages/engine-browser/unavailable.ts');
+    const stub = await import('../apps/support/engine-browser/unavailable.ts');
     const real = {
       ...(await import('#src/engines/postgres.ts')),
       ...(await import('#src/engines/mysql.ts')),
@@ -141,7 +141,7 @@ describe('no compatibility shims exist', () => {
       assert.equal(
         name in real,
         true,
-        `packages/engine-browser stub exports stale name "${name}"`,
+        `apps/support/engine-browser stub exports stale name "${name}"`,
       );
     }
   });

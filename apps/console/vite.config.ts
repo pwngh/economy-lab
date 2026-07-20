@@ -26,7 +26,7 @@ const appDir = fileURLToPath(new URL('./app/', import.meta.url));
 // The shared browser-shim package (driver stubs + node:crypto rejection), aliased by both this app
 // and the docs runner so neither reaches into the other's private dir.
 const engineBrowser = fileURLToPath(
-  new URL('../../packages/engine-browser/', import.meta.url),
+  new URL('../support/engine-browser/', import.meta.url),
 );
 
 // The engine at ../../src is `.ts` source with explicit `.ts` specifiers (the repo's no-build
