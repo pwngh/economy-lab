@@ -32,11 +32,11 @@ import { TASKQ_KEYS } from '#scripts/support/taskq-host.ts';
 import { OPS_KEYS } from '#scripts/support/ops-host.ts';
 
 // Names read by entry scripts that execute on import (so their lists can't live in the script):
-// DEMO_RESET is scripts/compose-demo.ts's reset flag.
+// DEMO_RESET is scripts/demo.ts's reset flag.
 const SCRIPT_KEYS = ['DEMO_RESET'] as const;
 
 // Names .env.example documents that the lab never parses itself: the AWS SDK reads these from the
-// environment directly (scripts/smoke-adapters.ts seeds them for LocalStack).
+// environment directly (scripts/smoke.ts seeds them for LocalStack).
 const SDK_PASSTHROUGH = new Set([
   'AWS_REGION',
   'AWS_ENDPOINT_URL',

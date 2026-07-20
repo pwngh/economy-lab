@@ -9,7 +9,7 @@
  * @license MIT
  */
 
-// Shared harness for scripts/bench.ts and scripts/scale-probe.ts, so both measure the same way.
+// Shared harness for scripts/bench.ts and scripts/scale.ts, so both measure the same way.
 // Every SQL run gets its own throwaway schema (Postgres) / database (MySQL), dropped on teardown.
 // Every knob is an env var resolved in resolveConfig, and every reported number comes from a
 // ledger that just passed its invariants.
@@ -126,7 +126,7 @@ export type HarnessConfig = {
   curveUsers: number;
   curveSizes: number[];
   curveReps: number;
-  // Scale-probe knobs (scripts/scale-probe.ts): segment count and size for the history-growth curve.
+  // Scale-probe knobs (scripts/scale.ts): segment count and size for the history-growth curve.
   segments: number;
   segmentSize: number;
 };

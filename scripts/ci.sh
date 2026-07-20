@@ -13,7 +13,7 @@ node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)
 FAILED=''
 step() {
   name="$1"; shift
-  printf '%s' "ci-check: $name ... "
+  printf '%s' "ci: $name ... "
   if "$@" >/tmp/ci-step.log 2>&1; then
     echo ok
   else
@@ -40,11 +40,11 @@ if [ "${DB:-0}" = 1 ]; then
   step "db:fuzz"    npm run fuzz
   step "db:clean"   npm run db:clean
 else
-  echo "ci-check: db matrix skipped (DB=1 to run against live engines)"
+  echo "ci: db matrix skipped (DB=1 to run against live engines)"
 fi
 
 if [ -n "$FAILED" ]; then
-  echo "ci-check: FAILED:$FAILED"
+  echo "ci: FAILED:$FAILED"
   exit 1
 fi
-echo "ci-check: all green"
+echo "ci: all green"

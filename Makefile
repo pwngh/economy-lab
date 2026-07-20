@@ -30,7 +30,7 @@ backup:             ; npm run backup
 restore-drill:      ; npm run restore:drill
 audit-verify:       ; npm run audit:verify -- $(FILE)
 ledger-verify:      ; npm run ledger:verify -- $(FILE) $(if $(KEY),--key $(KEY))
-ci:                 ; sh scripts/ci-check.sh
+ci:                 ; sh scripts/ci.sh
 dev:        ; npm run dev
 start:      ; npm start
 worker:     ; npm run worker

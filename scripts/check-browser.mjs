@@ -44,7 +44,7 @@ try {
   });
 } catch (error) {
   console.error(
-    'check-browser-entry failed — src/index.ts no longer bundles for the browser without aliases:',
+    'check-browser failed — src/index.ts no longer bundles for the browser without aliases:',
   );
   for (const message of error.errors ?? [{ text: String(error) }]) {
     console.error(
@@ -64,12 +64,12 @@ if (result !== null) {
   const leaked = [...found].filter((s) => !GUARDED_EXTERNALS.includes(s));
   if (leaked.length > 0) {
     console.error(
-      `check-browser-entry failed — node: specifiers outside the guarded set: ${leaked.join(', ')}`,
+      `check-browser failed — node: specifiers outside the guarded set: ${leaked.join(', ')}`,
     );
     process.exitCode = 1;
   } else {
     console.log(
-      `check-browser-entry passed — src/index.ts bundles for the browser (${Math.round(output.length / 1024)} KiB, ${found.size} guarded node: externals).`,
+      `check-browser passed — src/index.ts bundles for the browser (${Math.round(output.length / 1024)} KiB, ${found.size} guarded node: externals).`,
     );
   }
 }

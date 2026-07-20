@@ -17,7 +17,7 @@
 // `make audit-verify` can then hold both copies to the same chain. The shipping step itself is
 // the host's job; a daemon does not belong here.
 //
-//   node scripts/ops-audit-worm.ts     # writes a sample segment, seals it, prints next steps
+//   node scripts/audit-worm.ts     # writes a sample segment, seals it, prints next steps
 
 import { appendFileSync, mkdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';

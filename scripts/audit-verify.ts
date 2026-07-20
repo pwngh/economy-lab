@@ -22,7 +22,7 @@ import { systemDigest } from '#src/runtime.ts';
 
 const file = process.argv[2];
 if (file === undefined) {
-  console.error('usage: scripts/ops-audit-verify.ts <audit.jsonl>');
+  console.error('usage: scripts/audit-verify.ts <audit.jsonl>');
   // eslint-disable-next-line n/no-process-exit
   process.exit(1);
 }

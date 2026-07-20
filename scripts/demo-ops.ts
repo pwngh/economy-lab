@@ -11,9 +11,9 @@
 
 // Ops supervisor demos. argv[2] picks the mode:
 //
-//   scripts/ops-demo.ts stuck-saga  # closed loop: detect, sweep, verify (default)
-//   scripts/ops-demo.ts integrity   # ledger tamper: prove and escalate, fix nothing
-//   scripts/ops-demo.ts deadlock    # retry-pressure storm on a real engine ($DATABASE_URL)
+//   scripts/demo-ops.ts stuck-saga  # closed loop: detect, sweep, verify (default)
+//   scripts/demo-ops.ts integrity   # ledger tamper: prove and escalate, fix nothing
+//   scripts/demo-ops.ts deadlock    # retry-pressure storm on a real engine ($DATABASE_URL)
 //
 // Each wires the supervisor exactly as a host would: createOpsRuntime wraps the
 // composition's meter/logger, and audit records stream to stdout as JSONL.
@@ -339,7 +339,7 @@ async function runDeadlock(): Promise<void> {
     say('Set DATABASE_URL to a migrated database:');
     say('  make bootstrap');
     say(
-      '  DATABASE_URL=mysql://root:economy@localhost:3306/economy_lab npm run demo:ops -- deadlock',
+      '  DATABASE_URL=mysql://root:economy@localhost:53306/economy_lab npm run demo:ops -- deadlock',
     );
     throw new Error('DATABASE_URL is not a mysql:// or postgres:// DSN');
   }

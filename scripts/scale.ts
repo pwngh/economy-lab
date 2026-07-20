@@ -13,8 +13,8 @@
 // seller (payout) are hammered in SEG-sized segments — a flat ops/sec row is O(1) in that subject's
 // history, a falling row is O(history). Runs over the shared harness backends (scripts/support/harness.ts).
 //
-//   node scripts/scale-probe.ts                                  # in-memory + any reachable DB
-//   SEG=1000 SEGMENTS=12 node scripts/scale-probe.ts             # bigger curve
+//   node scripts/scale.ts                                  # in-memory + any reachable DB
+//   SEG=1000 SEGMENTS=12 node scripts/scale.ts             # bigger curve
 
 import { topUp, spend, requestPayout, credit } from '#test/support/builders.ts';
 import {

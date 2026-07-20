@@ -17,9 +17,9 @@
  * Each adapter skips when its service is unreachable, so this is safe to run anywhere; it exits
  * non-zero only when a reachable adapter actually fails.
  *
- *   node scripts/smoke-adapters.ts        # or: make smoke
+ *   node scripts/smoke.ts        # or: make smoke
  *
- * Services (docker compose up -d): Redis :6379, LocalStack/SQS :4566.
+ * Services (docker compose up -d): Redis :56379, LocalStack/SQS :54566.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage} for the adapter wiring this exercises.
  */
@@ -93,12 +93,12 @@ function failed(name: string, e: unknown): void {
 // --- Redis cache: openPorts -> selectCache (real ioredis) -------------------------
 async function smokeRedis(): Promise<void> {
   if (!(await reachable('localhost', 6379))) {
-    skip('redis cache (localhost:6379 unreachable)');
+    skip('redis cache (localhost:56379 unreachable)');
     return;
   }
   try {
     const caps = await openPorts(
-      { REDIS_URL: 'redis://localhost:6379' },
+      { REDIS_URL: 'redis://localhost:56379' },
       ports,
     );
     const cache = caps.cache!;
@@ -156,7 +156,7 @@ async function smokeHttp(): Promise<void> {
 // --- SQS dispatcher: openPorts -> selectDispatcher (real LocalStack) ---------------
 async function smokeSqs(): Promise<void> {
   if (!(await reachable('localhost', 4566))) {
-    skip('sqs dispatcher (LocalStack localhost:4566 unreachable)');
+    skip('sqs dispatcher (LocalStack localhost:54566 unreachable)');
     return;
   }
   let sqsMod;
@@ -168,7 +168,7 @@ async function smokeSqs(): Promise<void> {
   }
   // The SDK reads these when selectDispatcher builds its SQSClient. Only fill the blanks so a real
   // AWS setup in the environment is never clobbered.
-  process.env.AWS_ENDPOINT_URL ??= 'http://localhost:4566';
+  process.env.AWS_ENDPOINT_URL ??= 'http://localhost:54566';
   process.env.AWS_REGION ??= 'us-east-1';
   process.env.AWS_ACCESS_KEY_ID ??= 'test';
   process.env.AWS_SECRET_ACCESS_KEY ??= 'test';
@@ -179,7 +179,7 @@ async function smokeSqs(): Promise<void> {
     DeleteQueueCommand,
   } = sqsMod;
   const admin = new SQSClient({
-    endpoint: 'http://localhost:4566',
+    endpoint: 'http://localhost:54566',
     region: 'us-east-1',
     credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
   });

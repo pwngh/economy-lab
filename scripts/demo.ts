@@ -15,10 +15,10 @@
  * dispatcher), runs a small money flow, then reads balances back from the selected backend. Switch
  * backends via env:
  *
- *   node scripts/compose-demo.ts                                              # memory
- *   DATABASE_URL=postgres://economy:economy@localhost:5432/economy_lab  ...    # postgres
- *   DATABASE_URL=mysql://root:economy@localhost:3306/economy_lab        ...    # mysql
- *   REDIS_URL=redis://localhost:6379 ...                                       # + cache in front of reads
+ *   node scripts/demo.ts                                              # memory
+ *   DATABASE_URL=postgres://economy:economy@localhost:55432/economy_lab  ...    # postgres
+ *   DATABASE_URL=mysql://root:economy@localhost:53306/economy_lab        ...    # mysql
+ *   REDIS_URL=redis://localhost:56379 ...                                       # + cache in front of reads
  *
  * The in-memory backend is self-contained. SQL backends use the existing schema, so run
  * `make db-migrate` first. Setting DEMO_RESET=1 drops and recreates that schema, which DESTROYS all

@@ -4,7 +4,7 @@ summary: 'Every supervisor decision as append-only JSONL, and the hash-chained s
 plain: 'The watchdog writes down everything it sees and does, one line per event. The chained variant links each line to the one before it by hash, so editing or deleting any line is detectable — the same trick the ledger itself uses.'
 order: 2
 status: stable
-sourceRefs: ['src/ops/audit.ts', 'scripts/ops-audit-verify.ts', 'scripts/ops-audit-worm.ts']
+sourceRefs: ['src/ops/audit.ts', 'scripts/audit-verify.ts', 'scripts/audit-worm.ts']
 related: ['economy/ops/the-supervisor', 'economy/concepts/integrity']
 ---
 
@@ -43,7 +43,7 @@ verified. `make audit-verify FILE=<segment>.jsonl` wraps it and exits nonzero on
 ## Shipping to write-once storage
 
 A chain proves tampering happened; write-once storage keeps the honest copy. The worked
-example in `scripts/ops-audit-worm.ts` appends through the chained sink to a segment file
+example in `scripts/audit-worm.ts` appends through the chained sink to a segment file
 opened `O_APPEND`, seals the segment by renaming it `*.sealed.jsonl`, and leaves shipping —
 an object-lock bucket, a retention-locked store — to the host. The last line's `hash` is the
 segment's fingerprint: record it off-host and the shipped copy, the local copy, and the
