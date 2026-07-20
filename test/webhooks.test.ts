@@ -26,7 +26,6 @@ import { advanceDuePayouts } from '#src/worker/payouts.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { encodeAmount, toAmount } from '#src/money.ts';
 import { earned, spendable, SYSTEM } from '#src/accounts.ts';
-import { toHex } from '#src/bytes.ts';
 import { makeEconomy } from '#test/support/economy.ts';
 import {
   credit,
@@ -46,6 +45,7 @@ import {
   testLogger,
   testSecrets,
 } from '#test/support/capabilities.ts';
+import { signHex, webhookRequest } from '#test/support/http-sign.ts';
 
 import type { Economy } from '#src/economy.ts';
 import type {
@@ -56,35 +56,6 @@ import type {
 import type { WebhookHandler } from '#src/server.ts';
 import type { WorkerCtx } from '#src/contract.ts';
 import type { Clock, Ids, Saga, Store } from '#src/ports.ts';
-
-// Lowercase hex HMAC-SHA256 over the body — the digest the server expects in `x-signature`.
-async function signHex(body: string, secret: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const signature = await crypto.subtle.sign(
-    'HMAC',
-    key,
-    new TextEncoder().encode(body),
-  );
-  return toHex(new Uint8Array(signature));
-}
-
-function webhookRequest(
-  provider: string,
-  body: string,
-  headers: Record<string, string> = {},
-): Request {
-  return new Request(`https://economy.test/webhooks/${provider}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', ...headers },
-    body,
-  });
-}
 
 function purchaseBody(o: {
   eventId: string;

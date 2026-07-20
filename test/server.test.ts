@@ -15,7 +15,6 @@ import assert from 'node:assert/strict';
 
 import { createServer } from '#src/server.ts';
 import { encodeAmount } from '#src/money.ts';
-import { toHex } from '#src/bytes.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { makeEconomy } from '#test/support/economy.ts';
 import { credit } from '#test/support/builders.ts';
@@ -27,6 +26,7 @@ import {
   testLogger,
   testSecrets,
 } from '#test/support/capabilities.ts';
+import { signHex, webhookRequest } from '#test/support/http-sign.ts';
 
 import type { Economy } from '#src/contract.ts';
 import type { Secrets } from '#src/config.ts';
@@ -60,35 +60,6 @@ function makeServer(options: Partial<ServerOptions> = {}): FetchHandler {
     ports: testPorts(),
     authenticate: false,
     ...options,
-  });
-}
-
-// Lowercase hex HMAC-SHA256 over the body — the form the `x-signature` header carries.
-async function signHex(body: string, secret: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const signature = await crypto.subtle.sign(
-    'HMAC',
-    key,
-    new TextEncoder().encode(body),
-  );
-  return toHex(new Uint8Array(signature));
-}
-
-function webhookRequest(
-  provider: string,
-  body: string,
-  headers: Record<string, string> = {},
-): Request {
-  return new Request(`https://economy.test/webhooks/${provider}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', ...headers },
-    body,
   });
 }
 
