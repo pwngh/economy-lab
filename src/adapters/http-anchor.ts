@@ -9,7 +9,7 @@
  * @license MIT
  */
 
-import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
+import { transportFault } from '#src/adapters/transport-fault.ts';
 
 import type { Anchor, Checkpoint, CallOptions } from '#src/ports.ts';
 
@@ -63,11 +63,4 @@ export function httpAnchor(config: HttpAnchorConfig): Anchor {
       }
     },
   };
-}
-
-function transportFault(message: string, error: unknown): Error {
-  return fault(ERROR_CODES.PROVIDER_FAILURE, message, {
-    cause: normalizeError(error),
-    retryable: true,
-  });
 }

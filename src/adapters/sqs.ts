@@ -9,7 +9,7 @@
  * @license MIT
  */
 
-import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
+import { transportFault } from '#src/adapters/transport-fault.ts';
 import { encodeEvent } from '#src/adapters/event-wire.ts';
 
 import type { Dispatcher, EconomyEvent, CallOptions } from '#src/ports.ts';
@@ -85,11 +85,3 @@ export function sqsDispatcher(config: SqsDispatcherOptions): Dispatcher {
 }
 
 // --- Local helpers ----------------------------------------------------------------
-
-function transportFault(message: string, error: unknown): Error {
-  const normalized = normalizeError(error);
-  return fault(ERROR_CODES.PROVIDER_FAILURE, message, {
-    cause: normalized,
-    retryable: true,
-  });
-}
