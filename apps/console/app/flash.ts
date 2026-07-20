@@ -18,6 +18,7 @@
 import { redirect } from 'react-router';
 
 import { DAY_MS } from '~/demo';
+import { fmtAmount } from '~/ui';
 import { EconomyError } from '#src/errors.ts';
 import { encodeAmount } from '#src/money.ts';
 import type { Amount } from '#src/money.ts';
@@ -80,13 +81,6 @@ export function reasonText(code: string): string {
   );
 }
 
-function format2(n: number): string {
-  return n.toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
 function dayLabelOf(at: unknown): string {
   const n = Number(at);
   if (!Number.isFinite(n)) {
@@ -111,7 +105,7 @@ function amountFigure(label: string, amount: unknown): FlashFigure {
   }
   return {
     label,
-    value: currency === 'USD' ? `$${format2(n)}` : `${format2(n)} Cr`,
+    value: currency === 'USD' ? `$${fmtAmount(n)}` : `${fmtAmount(n)} Cr`,
   };
 }
 
