@@ -1,3 +1,5 @@
+# Host ports sit off the well-known defaults (55432/53306/56379/54566) so a native service on
+# the developer's machine (a Homebrew postgres on 5432, say) can never shadow these containers.
 services:
   postgres:
     # Pinned by multi-arch index digest; refresh with
@@ -8,7 +10,7 @@ services:
       POSTGRES_PASSWORD: economy
       POSTGRES_DB: economy_lab
     ports:
-      - '5432:5432'
+      - '55432:5432'
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U economy -d economy_lab']
       interval: 5s
@@ -22,7 +24,7 @@ services:
     environment:
       SERVICES: sqs
     ports:
-      - '4566:4566'
+      - '54566:4566'
     healthcheck:
       test: ['CMD-SHELL', 'curl -sf http://localhost:4566/_localstack/health']
       interval: 5s
@@ -40,7 +42,7 @@ services:
       MYSQL_ROOT_PASSWORD: economy
       MYSQL_DATABASE: economy_lab
     ports:
-      - '3306:3306'
+      - '53306:3306'
     healthcheck:
       test:
         ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '-uroot', '-peconomy']
@@ -52,7 +54,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - '6379:6379'
+      - '56379:6379'
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s

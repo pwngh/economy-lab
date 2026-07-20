@@ -146,9 +146,9 @@ export function storeUrls(env: EnvMap): StoreUrls {
  * all; a reachability probe turns their absence into a skip, never a hang or a false pass.
  */
 export const LOCAL_POSTGRES_URL =
-  'postgres://economy:economy@localhost:5432/economy_lab';
+  'postgres://economy:economy@localhost:55432/economy_lab';
 export const LOCAL_MYSQL_URL =
-  'mysql://root:economy@localhost:3306/economy_lab';
+  'mysql://root:economy@localhost:53306/economy_lab';
 
 // --- Service URLs (every optional external) ------------------------------------------
 

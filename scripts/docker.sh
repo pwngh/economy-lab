@@ -53,7 +53,7 @@ wait_healthy() {
 
 # Migrates against DATABASE_URL if set, else the compose Postgres instance.
 bootstrap() {
-  : "${DATABASE_URL:=postgres://economy:economy@localhost:5432/economy_lab}"
+  : "${DATABASE_URL:=postgres://economy:economy@localhost:55432/economy_lab}"
   export DATABASE_URL
   echo "==> starting services"
   # shellcheck disable=SC2086

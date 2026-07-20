@@ -2,8 +2,8 @@
 # Applies the database schema for the engine named by DATABASE_URL, using that engine's native
 # client (psql or mysql). The running server never creates tables on startup.
 #
-#   DATABASE_URL=postgres://economy:economy@localhost:5432/economy_lab  sh scripts/migrate.sh
-#   DATABASE_URL=mysql://root:economy@localhost:3306/economy_lab        sh scripts/migrate.sh
+#   DATABASE_URL=postgres://economy:economy@localhost:55432/economy_lab  sh scripts/migrate.sh
+#   DATABASE_URL=mysql://root:economy@localhost:53306/economy_lab        sh scripts/migrate.sh
 #   make db-migrate        # reads DATABASE_URL from the environment, falling back to .env
 #
 # See: https://economy-lab-docs.pages.dev/economy/reference/configuration/  (Configuration)
