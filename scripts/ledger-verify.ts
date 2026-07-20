@@ -14,7 +14,7 @@
  * only input. Re-proves every account's hash chain from the export's links, then checks the
  * embedded checkpoint's Merkle root and Ed25519 signature against the supplied public keys.
  *
- *   node scripts/verify.ts export.jsonl --key <hex Ed25519 public key> [--key <older key>]...
+ *   node scripts/ledger-verify.ts export.jsonl --key <hex Ed25519 public key> [--key <older key>]...
  *   make ledger-verify FILE=export.jsonl KEY=<hex public key>
  *
  * Produce the file with `economy.read.export()`; publish the key with `signingPublicKeyHex`.
@@ -24,11 +24,11 @@
 import { readFileSync } from 'node:fs';
 import process from 'node:process';
 
-import { verifyExport } from '#scripts/support/verify-lib.ts';
+import { verifyExport } from '#src/verify-export.ts';
 
 function usage(): void {
   console.error(
-    'Usage: node scripts/verify.ts <export.jsonl> [--key <hex Ed25519 public key>]...',
+    'Usage: node scripts/ledger-verify.ts <export.jsonl> [--key <hex Ed25519 public key>]...',
   );
 }
 

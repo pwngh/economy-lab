@@ -25,6 +25,7 @@ import {
   DEFAULT_SWEEP_LIMIT,
   describeEnv,
   DEV_RATES,
+  EXPORT_FORMAT,
   findByHash,
   idempotencyKey,
   inspectConfig,
@@ -35,6 +36,7 @@ import {
   mergeConfig,
   openPorts,
   paginate,
+  parseExport,
   preflight,
   REJECTION_CODES,
   REJECTION_SPEC,
@@ -42,6 +44,7 @@ import {
   SECRET_KEYS,
   systemRuntime,
   usd,
+  verifyExport,
 } from '#src/index.ts';
 import { SWEEP_NAMES } from '#src/worker/index.ts';
 import {
@@ -61,11 +64,13 @@ import type {
   Operation,
   Outcome,
   Posting,
+  ParsedExport,
   Saga,
   ServerOptions,
   Statement,
   StoredLink,
   SweepRequest,
+  VerifyReport,
 } from '#src/index.ts';
 import type {
   FloatFeed,
@@ -109,6 +114,8 @@ export type PublicSurfaceGuards = [
   Expect<Exact<FloatFeed, NonNullable<SweepRequest['float']>>>,
   Expect<Exact<ReconcileFeed, NonNullable<SweepRequest['feed']>>>,
   Expect<Exact<SweepName, (typeof SWEEP_NAMES)[number]>>,
+  Expect<Exact<ReturnType<typeof parseExport>, ParsedExport>>,
+  Expect<Exact<Awaited<ReturnType<typeof verifyExport>>, VerifyReport>>,
 ];
 
 test('public entry names every Economy.read and Worker I/O type (enforced at typecheck)', () => {});
@@ -152,6 +159,9 @@ test('the promoted values are live on the public entry', () => {
   assert.equal(typeof createServer, 'function');
   assert.equal(typeof paginate, 'function');
   assert.equal(typeof findByHash, 'function');
+  assert.equal(typeof parseExport, 'function');
+  assert.equal(typeof EXPORT_FORMAT, 'string');
+  assert.equal(typeof verifyExport, 'function');
   assert.equal(DEV_RATES.parRate, 5n);
 });
 

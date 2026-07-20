@@ -210,6 +210,11 @@ export { allInvariantsHold, proveEconomy, findByHash } from '#src/integrity.ts';
 export type { ProvePorts } from '#src/integrity.ts';
 export { paginate } from '#src/paginate.ts';
 
+// Offline verification of a read.export file: the same provers, no store access.
+export { parseExport, verifyExport } from '#src/verify-export.ts';
+export type { ParsedExport, VerifyReport } from '#src/verify-export.ts';
+export { EXPORT_FORMAT } from '#src/economy.ts';
+
 // Port types, so a host can name every port it supplies or receives. The remaining sub-store
 // contracts are at the '/ports' subpath and the built-in adapters at '/adapters'.
 export type {

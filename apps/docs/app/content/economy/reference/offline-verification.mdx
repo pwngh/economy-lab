@@ -6,8 +6,8 @@ status: stable
 sourceRefs:
   [
     'src/economy.ts#L1061 · exportLedger',
-    'scripts/support/verify-lib.ts#L156 · verifyExport',
-    'scripts/verify.ts',
+    'src/verify-export.ts#L156 · verifyExport',
+    'scripts/ledger-verify.ts',
     'test/verify-export.test.ts',
   ]
 related: ['economy/concepts/the-proof', 'economy/ports/signer']
@@ -43,14 +43,23 @@ The export is always the whole ledger. A partial export cannot be chain-verified
 
 ## Running the verifier
 
-`scripts/verify.ts` is the standalone counterpart to the live provers: no store, no economy boot, the file is the only input.
+<SourceLink to="src/verify-export.ts#L156">verifyExport</SourceLink> on the main entry is the standalone counterpart to the live provers: no store, no economy boot, the file is the only input. An auditor holding the export and the published key needs the package, not this repository.
+
+```ts
+import { verifyExport } from '@pwngh/economy-lab';
+
+const lines = exported.split('\n');
+const report = await verifyExport(lines, [publicKeyHex]);
+```
+
+The repository wraps the same call as a command (`scripts/ledger-verify.ts`):
 
 ```
-node scripts/verify.ts ledger-export.jsonl --key <hex Ed25519 public key>
+node scripts/ledger-verify.ts ledger-export.jsonl --key <hex Ed25519 public key>
 make ledger-verify FILE=ledger-export.jsonl KEY=<hex Ed25519 public key>
 ```
 
-It rebuilds a read-only ledger view over the file and runs the production provers against it — the same `proveChain` and `verifyCheckpoint` the live economy runs, not a reimplementation (<SourceLink to="scripts/support/verify-lib.ts#L156">verifyExport</SourceLink>). The report says what was checked and what held:
+Either way it rebuilds a read-only ledger view over the file and runs the production provers against it — the same `proveChain` and `verifyCheckpoint` the live economy runs, not a reimplementation. The report says what was checked and what held:
 
 ```json
 {

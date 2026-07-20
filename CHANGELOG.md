@@ -2,6 +2,17 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
+## Unreleased (0.4.1)
+
+### Added
+
+- `verifyExport` and `parseExport` move offline ledger verification onto the main entry: an
+  auditor holding a `read.export` file and the published public key verifies it from the
+  package alone. `VerifyReport` and `ParsedExport` name the shapes;
+  `scripts/ledger-verify.ts` stays the repository's CLI over the same call.
+- `EXPORT_FORMAT` names the marker an export file's header line declares; `verifyExport`
+  refuses files without it.
+
 ## 0.4.0 - 2026-07-18
 
 ### Changed

@@ -17,7 +17,7 @@ import { recordCheckpoint } from '#src/chain.ts';
 import { EXPORT_FORMAT } from '#src/economy.ts';
 import { signingPublicKeyHex, systemSigner } from '#src/runtime.ts';
 import { encodeAmount } from '#src/money.ts';
-import { parseExport, verifyExport } from '#scripts/support/verify-lib.ts';
+import { parseExport, verifyExport } from '#src/verify-export.ts';
 import { economyWithStore } from '#test/support/economy.ts';
 import { credit } from '#test/support/builders.ts';
 import {

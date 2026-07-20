@@ -115,7 +115,7 @@
     "backup": "node --env-file-if-exists=.env scripts/backup.ts",
     "restore:drill": "node --env-file-if-exists=.env scripts/restore-drill.ts",
     "audit:verify": "node scripts/audit-verify.ts",
-    "ledger:verify": "node scripts/verify.ts"
+    "ledger:verify": "node scripts/ledger-verify.ts"
   },
   "devDependencies": {
     "@aws-sdk/client-sqs": "^3.1073.0",

@@ -12,7 +12,7 @@
 /**
  * The offline half of `read.export`: parse an exported ledger file, rebuild a read-only ledger
  * view over it, and run the same provers the live economy runs — no store, no economy boot.
- * scripts/verify.ts is the CLI over this; the test suite drives it directly.
+ * scripts/ledger-verify.ts is the CLI over this; a consumer imports `verifyExport` directly.
  */
 
 import { proveChain, verifyCheckpoint } from '#src/chain.ts';
@@ -75,7 +75,7 @@ export function parseExport(lines: Iterable<string>): ParsedExport {
 // A read-only ledger over the parsed file: exactly the members the provers walk (heads,
 // headSums, lineage). Every other Ledger member is a store-side concern the file can never
 // serve, so the cast is safe.
-export function fileLedger(parsed: ParsedExport): Ledger {
+function fileLedger(parsed: ParsedExport): Ledger {
   const view = {
     heads: async function* () {
       for (const [account, links] of parsed.lineage) {
@@ -105,7 +105,7 @@ export function fileLedger(parsed: ParsedExport): Ledger {
 }
 
 /** A Signer that verifies against the given hex Ed25519 public keys and refuses to sign. */
-export function verifyOnlySigner(publicKeysHex: ReadonlyArray<string>): Signer {
+function verifyOnlySigner(publicKeysHex: ReadonlyArray<string>): Signer {
   const keys = publicKeysHex.map((hex) =>
     crypto.subtle.importKey('raw', fromHex(hex), { name: 'Ed25519' }, false, [
       'verify',

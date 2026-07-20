@@ -1052,7 +1052,7 @@ function userSubject(operation: Operation): string {
 
 // --- Ledger export (the offline-verification file) --------------------------------
 
-/** First-line marker of a ledger export; scripts/verify.ts refuses files without it. */
+/** First-line marker of a ledger export; scripts/ledger-verify.ts refuses files without it. */
 export const EXPORT_FORMAT = 'economy-lab/ledger-export';
 
 // Link lines carry the full posting (legs, meta, both hashes), so the file alone re-proves

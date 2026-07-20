@@ -479,7 +479,7 @@ export interface Economy {
     ): AsyncIterable<StoredLink>;
     /**
      * Streams the ledger as canonical JSONL for offline verification: a header line, every
-     * account's chain links in lineage order, then the latest checkpoint. `scripts/verify.ts`
+     * account's chain links in lineage order, then the latest checkpoint. `scripts/ledger-verify.ts`
      * re-proves the chain and checks the checkpoint signature from the file alone, with no
      * store access.
      */
