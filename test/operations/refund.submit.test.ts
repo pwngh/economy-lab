@@ -12,7 +12,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { makeEconomy } from '#test/support/economy.ts';
+import { economyWithStore } from '#test/support/economy.ts';
 import {
   refund as buildRefund,
   spend as buildSpend,
@@ -20,27 +20,17 @@ import {
   principal,
   credit,
 } from '#test/support/builders.ts';
-import { memoryStore } from '#src/adapters/memory.ts';
 import { spendable } from '#src/accounts.ts';
-import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
+import { hasCode } from '#test/support/capabilities.ts';
 
 import type { Economy } from '#src/contract.ts';
-import type { Store } from '#src/ports.ts';
 
 // These tests drive the full `economy.submit` path, where the permission check (`authorize`) runs;
 // the sibling refund.test.ts calls the handler directly and never reaches it. They pin refund as
 // system/operator-only — a refund credits the buyer and debits others, so the ownership rule never
 // fires for the caller.
 
-function isUnauthorized(error: unknown): boolean {
-  return (error as { code?: string }).code === 'AUTH.UNAUTHORIZED';
-}
-
-// The economy and the store share one seeded digest and fixed clock so their hashes agree.
-function economyWithStore(): { economy: Economy; store: Store } {
-  const store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
-  return { economy: makeEconomy(1, store), store };
-}
+const isUnauthorized = hasCode('AUTH.UNAUTHORIZED');
 
 async function seedSale(economy: Economy, orderId: string): Promise<void> {
   const funded = await economy.submit(

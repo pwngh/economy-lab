@@ -12,17 +12,19 @@
 
 /**
  * Property-based invariant test: replays seeded randomized operation sequences against a fresh
- * in-memory economy and proves every ProveReport flag at checkpoints. The generator is lifted
- * unchanged from scripts/fuzz.ts and scripts/prove.ts, so a seed reproduces the byte-identical
- * sequence in all three. The seed alone reproduces any failure; a failing seed is a real bug,
- * not a flaky test.
+ * in-memory economy and proves every ProveReport flag at checkpoints. The generator shares the
+ * scripts' PRNG (mulberry32, via test/support) but keeps its own distribution: it carves a
+ * requestPayout band out of the spend band, which seededProgram does not emit. The seed alone
+ * reproduces any failure; a failing seed is a real bug, not a flaky test.
  */
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { makeEconomy } from '#test/support/economy.ts';
-import { decodeAmount, encodeAmount } from '#src/money.ts';
+import { encodeAmount } from '#src/money.ts';
+import { mulberry32 } from '#test/support/propcheck.ts';
+import { creditMinor } from '#test/support/seeded-program.ts';
 
 import type { Economy, Operation, ProveReport } from '#src/contract.ts';
 
@@ -39,31 +41,8 @@ const CHECKPOINTS = 4;
 // Adds one kind the scripts do not produce: requestPayout. Under testConfig() there is no minimum,
 // no interval throttle, and immediate maturity, so an affordable request commits.
 
-// mulberry32, in [0, 1). Keep identical to the copies in scripts/fuzz.ts and scripts/prove.ts — a
-// seed must yield the same stream in all three.
-function rng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 // Local tally, in minor units, so the generator emits only affordable spends and payout asks.
 type Wallet = { spendable: bigint; promo: bigint; earned: bigint };
-
-function dollars(minor: bigint): string {
-  const whole = minor / 100n;
-  const frac = (minor % 100n).toString().padStart(2, '0');
-  return `${whole}.${frac}`;
-}
-
-function creditMinor(minor: bigint) {
-  return decodeAmount(dollars(minor), 'CREDIT');
-}
 
 function walletOf(wallets: Map<string, Wallet>, userId: string): Wallet {
   let wallet = wallets.get(userId);
@@ -174,7 +153,7 @@ function op(
 }
 
 function program(seed: number, length: number): Operation[] {
-  const next = rng(seed);
+  const next = mulberry32(seed);
   const wallets = new Map<string, Wallet>();
   const operations: Operation[] = [];
   for (let step = 0; step < length; step += 1) {

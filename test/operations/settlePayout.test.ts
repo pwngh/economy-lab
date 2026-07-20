@@ -18,6 +18,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { hasCode } from '#test/support/capabilities.ts';
 
 import { settlePayout } from '#src/operations/settlePayout.ts';
 import { makeEconomy } from '#test/support/economy.ts';
@@ -99,10 +100,6 @@ async function openSubmittedSaga(
 
 function run(store: Store, ctx: Ctx, operation: Operation): Promise<Outcome> {
   return store.transaction((unit: Unit) => settlePayout(operation, unit, ctx));
-}
-
-function codeOf(error: unknown): string | undefined {
-  return error instanceof Error ? (error as { code?: string }).code : undefined;
 }
 
 async function stateOf(
@@ -265,7 +262,7 @@ describe('settlePayout', () => {
     await assert.rejects(
       () => run(store, newCtx(), buildSettlePayout({ sagaId: 'pay_resv' })),
       (error) =>
-        codeOf(error) === 'SAGA.INVALID_TRANSITION' &&
+        hasCode('SAGA.INVALID_TRANSITION')(error) &&
         (error as { retryable?: boolean }).retryable === true,
     );
 
@@ -289,7 +286,7 @@ describe('settlePayout', () => {
     await assert.rejects(
       () => run(store, newCtx(), buildSettlePayout({ sagaId: 'pay_f' })),
       (error) =>
-        codeOf(error) === 'SAGA.INVALID_TRANSITION' &&
+        hasCode('SAGA.INVALID_TRANSITION')(error) &&
         (error as { retryable?: boolean }).retryable === false,
     );
   });
@@ -299,7 +296,7 @@ describe('settlePayout', () => {
 
     await assert.rejects(
       () => run(store, newCtx(), buildSettlePayout({ sagaId: 'pay_missing' })),
-      (error) => codeOf(error) === 'OP.MALFORMED',
+      hasCode('OP.MALFORMED'),
     );
   });
 
@@ -316,7 +313,7 @@ describe('settlePayout', () => {
             actor: { kind: 'user', userId: 'usr_seller' },
           }),
         ),
-      (error) => codeOf(error) === 'AUTH.UNAUTHORIZED',
+      hasCode('AUTH.UNAUTHORIZED'),
     );
 
     assert.equal(await stateOf(store, 'pay_1'), 'SUBMITTED');

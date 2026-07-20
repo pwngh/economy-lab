@@ -11,7 +11,8 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { decodeAmount, zero, type Amount } from '#src/money.ts';
+import { decodeAmount, usd, zero, type Amount } from '#src/money.ts';
+import { userActor } from '#src/actor.ts';
 // The PUBLIC operation constructors, aliased so the test builders below can default the boilerplate
 // and delegate to them. This routes the whole suite through the shipped constructors, so a drift in
 // any Operation arm surfaces as a compile error here rather than two literals diverging in silence.
@@ -64,13 +65,10 @@ export const emptyVelocity = (subject: string): Velocity => ({
 });
 
 /** Builds a USD amount from a dollars-and-cents string like `'12.34'`. */
-export const usd = (dollars: string): Amount => decodeAmount(dollars, 'USD');
+export { usd };
 
 /** A user actor; users may only act on their own accounts. */
-export const principal = (userId: string): Principal => ({
-  kind: 'user',
-  userId,
-});
+export const principal = userActor;
 
 // One builder per Operation kind: default the boilerplate (a fresh idempotency key, an actor, and
 // per-kind fixture fields), then delegate to the public constructor so the Operation shape is

@@ -11,6 +11,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { hasCode } from '#test/support/capabilities.ts';
 
 import { balanceDelta, credit, debit, postEntry } from '#src/ledger.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
@@ -22,11 +23,6 @@ import type { AccountRef } from '#src/accounts.ts';
 
 function freshStore(): Store {
   return memoryStore();
-}
-
-function codeIs(code: string) {
-  return (error: unknown): boolean =>
-    (error as { code?: string }).code === code;
 }
 
 describe('Ledger', () => {
@@ -94,7 +90,7 @@ describe('Ledger', () => {
           meta: {},
         }),
       ),
-      codeIs('LEDGER.UNBALANCED'),
+      hasCode('LEDGER.UNBALANCED'),
     );
   });
 
@@ -111,7 +107,7 @@ describe('Ledger', () => {
           meta: {},
         }),
       ),
-      codeIs('LEDGER.CURRENCY_MISMATCH'),
+      hasCode('LEDGER.CURRENCY_MISMATCH'),
     );
   });
 
@@ -130,7 +126,7 @@ describe('Ledger', () => {
           meta: {},
         }),
       ),
-      codeIs('LEDGER.UNKNOWN_ACCOUNT'),
+      hasCode('LEDGER.UNKNOWN_ACCOUNT'),
     );
   });
 
@@ -151,7 +147,7 @@ describe('Ledger', () => {
           meta: {},
         }),
       ),
-      codeIs('LEDGER.OVERDRAFT'),
+      hasCode('LEDGER.OVERDRAFT'),
     );
   });
 });

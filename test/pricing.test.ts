@@ -12,6 +12,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { hasCode } from '#test/support/capabilities.ts';
 
 import { flatFee } from '#src/pricing.ts';
 import { credit } from '#test/support/builders.ts';
@@ -36,11 +37,6 @@ function creditedTo(legs: ReadonlyArray<Leg>, account: string): Amount {
   const leg = legs.find((l) => l.account === account);
   assert.ok(leg, `expected a leg crediting ${account}`);
   return toAmount(leg.amount.currency, -leg.amount.minor);
-}
-
-function codeIs(code: string) {
-  return (error: unknown): boolean =>
-    (error as { code?: string }).code === code;
 }
 
 const soloSeller: Recipient[] = [{ sellerId: 'usr_seller', shareBps: 10_000 }];
@@ -185,7 +181,7 @@ describe('Pricing', () => {
           ],
           feeBps: 3000,
         }),
-      codeIs('OP.MALFORMED'),
+      hasCode('OP.MALFORMED'),
     );
   });
 });

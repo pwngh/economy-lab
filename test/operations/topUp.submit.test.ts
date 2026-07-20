@@ -12,33 +12,21 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { makeEconomy } from '#test/support/economy.ts';
+import { economyWithStore } from '#test/support/economy.ts';
 import {
   topUp as buildTopUp,
   principal,
   credit,
   usd,
 } from '#test/support/builders.ts';
-import { memoryStore } from '#src/adapters/memory.ts';
 import { spendable, SYSTEM } from '#src/accounts.ts';
-import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
-
-import type { Economy } from '#src/contract.ts';
-import type { Store } from '#src/ports.ts';
+import { hasCode } from '#test/support/capabilities.ts';
 
 // Drives the full `economy.submit` path, where the `authorize` check runs; the sibling
 // topUp.test.ts calls the handler directly and never reaches it. topUp is system/operator-only:
 // it mints spendable credits against real cash held in trust.
 
-function isUnauthorized(error: unknown): boolean {
-  return (error as { code?: string }).code === 'AUTH.UNAUTHORIZED';
-}
-
-// The economy and the store share one seeded digest and fixed clock so their hashes agree.
-function economyWithStore(): { economy: Economy; store: Store } {
-  const store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
-  return { economy: makeEconomy(1, store), store };
-}
+const isUnauthorized = hasCode('AUTH.UNAUTHORIZED');
 
 describe('topUp authorization through economy.submit', () => {
   test('rejects a topUp by a kind:user actor with AUTH.UNAUTHORIZED', async () => {

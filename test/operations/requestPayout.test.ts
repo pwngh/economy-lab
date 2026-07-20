@@ -101,10 +101,6 @@ function run(store: Store, ctx: Ctx, operation: Operation): Promise<Outcome> {
   return store.transaction((unit: Unit) => requestPayout(operation, unit, ctx));
 }
 
-function codeOf(error: unknown): string | undefined {
-  return error instanceof Error ? (error as { code?: string }).code : undefined;
-}
-
 const faultCases = [
   { name: 'a non-CREDIT amount', amount: usd('10.00'), code: 'OP.MALFORMED' },
   {
@@ -328,7 +324,7 @@ async function faultsOn(amount: Amount, code: string): Promise<void> {
 
   await assert.rejects(
     run(store, makeCtx(), buildRequestPayout({ userId: 'usr_seller', amount })),
-    (error: unknown) => codeOf(error) === code,
+    hasCode(code),
   );
 }
 

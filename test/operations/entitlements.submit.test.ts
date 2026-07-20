@@ -12,32 +12,22 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { makeEconomy } from '#test/support/economy.ts';
+import { economyWithStore } from '#test/support/economy.ts';
 import {
   grantEntitlement as buildGrantEntitlement,
   revokeEntitlement as buildRevokeEntitlement,
   principal,
 } from '#test/support/builders.ts';
-import { memoryStore } from '#src/adapters/memory.ts';
-import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
+import { hasCode } from '#test/support/capabilities.ts';
 
 import type { Economy } from '#src/contract.ts';
-import type { Store } from '#src/ports.ts';
 
 // Drives the full `economy.submit` path, where the permission check (`authorize`) runs; the sibling
 // entitlements.test.ts calls handlers directly and never reaches it. Pins revokeEntitlement as
 // system/operator-only — it moves no money, so the ownership rule alone would let a user revoke
 // anyone's entitlement.
 
-function isUnauthorized(error: unknown): boolean {
-  return (error as { code?: string }).code === 'AUTH.UNAUTHORIZED';
-}
-
-// The economy and the store share one seeded digest and fixed clock so their hashes agree.
-function economyWithStore(): { economy: Economy; store: Store } {
-  const store = memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
-  return { economy: makeEconomy(1, store), store };
-}
+const isUnauthorized = hasCode('AUTH.UNAUTHORIZED');
 
 async function grantToVictim(economy: Economy, sku: string): Promise<void> {
   const outcome = await economy.submit(

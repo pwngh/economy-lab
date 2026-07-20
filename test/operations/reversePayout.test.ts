@@ -18,6 +18,8 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { eventsOf } from '#test/support/economy.ts';
+import { hasCode } from '#test/support/capabilities.ts';
 
 import { reversePayout } from '#src/operations/reversePayout.ts';
 import { makeEconomy } from '#test/support/economy.ts';
@@ -43,7 +45,7 @@ import {
 
 import type { Ctx, Economy, Operation, Outcome } from '#src/contract.ts';
 import type { Amount } from '#src/money.ts';
-import type { EconomyEvent, Saga, SagaState, Store, Unit } from '#src/ports.ts';
+import type { Saga, SagaState, Store, Unit } from '#src/ports.ts';
 
 function newStore(): Store {
   return memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
@@ -123,10 +125,6 @@ function run(store: Store, ctx: Ctx, operation: Operation): Promise<Outcome> {
   return store.transaction((unit: Unit) => reversePayout(operation, unit, ctx));
 }
 
-function codeOf(error: unknown): string | undefined {
-  return error instanceof Error ? (error as { code?: string }).code : undefined;
-}
-
 async function stateOf(
   store: Store,
   sagaId: string,
@@ -197,7 +195,7 @@ describe('reversePayout', () => {
 
     await assert.rejects(
       run(store, ctx, buildReversePayout({ sagaId: 'pay_live' })),
-      (error: unknown) => codeOf(error) === 'SAGA.INVALID_TRANSITION',
+      hasCode('SAGA.INVALID_TRANSITION'),
     );
 
     assert.equal(await stateOf(store, 'pay_live'), 'SUBMITTED');
@@ -275,7 +273,7 @@ describe('reversePayout — Refusals & Validation', () => {
 
     await assert.rejects(
       run(store, newCtx(), buildReversePayout({ sagaId: 'pay_4' })),
-      (error: unknown) => codeOf(error) === 'SAGA.INVALID_TRANSITION',
+      hasCode('SAGA.INVALID_TRANSITION'),
     );
 
     assert.equal(await stateOf(store, 'pay_4'), 'SETTLED');
@@ -287,7 +285,7 @@ describe('reversePayout — Refusals & Validation', () => {
     const store = newStore();
     await assert.rejects(
       run(store, newCtx(), buildReversePayout({ sagaId: 'pay_missing' })),
-      (error: unknown) => codeOf(error) === 'OP.MALFORMED',
+      hasCode('OP.MALFORMED'),
     );
   });
 
@@ -300,7 +298,7 @@ describe('reversePayout — Refusals & Validation', () => {
         newCtx(),
         buildReversePayout({ sagaId: 'pay_5', reason: '   ' }),
       ),
-      (error: unknown) => codeOf(error) === 'OP.MALFORMED',
+      hasCode('OP.MALFORMED'),
     );
   });
 
@@ -316,7 +314,7 @@ describe('reversePayout — Refusals & Validation', () => {
         newCtx(),
         buildReversePayout({ sagaId: 'pay_8', userId: 'usr_other' }),
       ),
-      (error: unknown) => codeOf(error) === 'OP.MALFORMED',
+      hasCode('OP.MALFORMED'),
     );
 
     assert.equal(await stateOf(store, 'pay_8'), 'RESERVED');
@@ -341,7 +339,7 @@ describe('reversePayout Through Submit', () => {
     );
     assert.equal(outcome.status, 'committed');
 
-    const events = await drainEvents(store);
+    const events = await eventsOf(store);
     const reversed = events.filter((e) => e.type === 'economy.payout.reversed');
     assert.equal(reversed.length, 1);
     assert.equal(reversed[0]!.audience, 'internal');
@@ -367,17 +365,9 @@ describe('reversePayout Through Submit', () => {
           actor: { kind: 'user', userId: 'usr_seller' },
         }),
       ),
-      (error: unknown) => codeOf(error) === 'AUTH.UNAUTHORIZED',
+      hasCode('AUTH.UNAUTHORIZED'),
     );
 
     assert.equal(await stateOf(store, 'pay_7'), 'RESERVED');
   });
 });
-
-// claimBatch reads unsent rows without removing them; marking them relayed keeps a second call
-// from seeing the same events.
-async function drainEvents(store: Store): Promise<EconomyEvent[]> {
-  const batch = await store.outbox.claimBatch(100);
-  await store.outbox.markRelayed(batch.map((message) => message.id));
-  return batch.map((message) => message.event);
-}

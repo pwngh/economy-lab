@@ -15,6 +15,7 @@
 // JS runtime.
 
 import { decodeAmount } from '#src/money.ts';
+import { mulberry32 } from '#test/support/propcheck.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { Operation } from '#src/contract.ts';
@@ -34,29 +35,17 @@ type Identity = Required<ProgramIdentity>;
 
 type Gen = { next: () => number; id: Identity };
 
-// mulberry32: a seed yields the same [0, 1) sequence on every JS runtime.
-function rng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 // Local tally of each user's balances, so the generator only produces affordable spends.
 type Wallet = { spendable: bigint; promo: bigint };
 
 // Formats minor units (cents) as the two-decimal string decodeAmount expects, like "12.34".
-function dollars(minor: bigint): string {
+export function dollars(minor: bigint): string {
   const whole = minor / 100n;
   const frac = (minor % 100n).toString().padStart(2, '0');
   return `${whole}.${frac}`;
 }
 
-function creditMinor(minor: bigint): Amount {
+export function creditMinor(minor: bigint): Amount {
   return decodeAmount(dollars(minor), 'CREDIT');
 }
 
@@ -153,7 +142,7 @@ export function seededProgram(
   identity: ProgramIdentity,
 ): Operation[] {
   const gen: Gen = {
-    next: rng(seed),
+    next: mulberry32(seed),
     id: {
       prefix: identity.prefix,
       service: identity.service,

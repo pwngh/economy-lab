@@ -446,7 +446,7 @@ async function runDeterministicRaces(
 // ids never collide with the economy's over the shared store, since both otherwise count from zero.
 function prefixedIds(prefix: string): WorkerCtx['ids'] {
   const base = sequentialIds();
-  return { next: (kind) => base.next(`${prefix}-${kind}`) };
+  return { next: (kind) => `${prefix}-${base.next(kind)}` };
 }
 
 // Builds a WorkerCtx for the sweep. The clock is at 0 so a saga seeded with a stale `updatedAt`

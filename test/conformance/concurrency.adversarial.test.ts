@@ -36,6 +36,7 @@ import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { makeEconomy } from '#test/support/economy.ts';
+import { mulberry32 } from '#test/support/propcheck.ts';
 import { topUp, spend, credit } from '#test/support/builders.ts';
 import { spendable, earned } from '#src/accounts.ts';
 import { encodeAmount } from '#src/money.ts';
@@ -48,20 +49,6 @@ import type { AdversarialEngine } from '#test/conformance/adversarial-engines.ts
 import type { Economy, Operation, Outcome } from '#src/contract.ts';
 
 let seq = 0;
-
-// A reproducible PRNG (mulberry32) so each randomized batch replays identically across runs and
-// engines: the same seed produces the same workload everywhere. Matches scripts/prove.ts and
-// scripts/fuzz.ts.
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 // Builds one deliberately oversubscribed batch. It funds 1 to 2 buyers a few credits each, then
 // scatters exactly 4 spends across them at price 1 to 3. After routing, it bumps one price so total

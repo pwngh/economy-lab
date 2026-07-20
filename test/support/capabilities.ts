@@ -16,10 +16,7 @@ import { feeForPrice } from '#src/pricing.ts';
 import { configuredRates } from '#src/adapters/rates.ts';
 
 import type {
-  Clock,
   Digest,
-  Logger,
-  Meter,
   Ports,
   Processor,
   Rates,
@@ -33,30 +30,19 @@ import type { Config, Secrets } from '#src/config.ts';
 
 // --- Clock & ids ------------------------------------------------------------------
 
-/** A manual clock: reports `start` until `advance(ms)` jumps it forward and returns the new time. */
-export function fixedClock(
-  start = 0,
-): Clock & { advance: (ms: number) => number } {
-  let t = start;
-  return {
-    now: () => t,
-    advance: (ms) => {
-      t += ms;
-      return t;
-    },
-  };
-}
+// The deterministic clock and id fakes live in src/runtime.ts beside their production twins;
+// re-exported here so every test keeps one import path for its doubles.
+import {
+  fixedClock,
+  sequentialIds,
+  silentLogger,
+  silentMeter,
+} from '#src/runtime.ts';
 
-/** Deterministic ids: `<prefix>_<n>`, counting up from `seed`. */
-export function sequentialIds(seed = 0): { next: (prefix: string) => string } {
-  let n = seed;
-  return {
-    next: (prefix: string) => {
-      n += 1;
-      return `${prefix}_${n}`;
-    },
-  };
-}
+export { fixedClock, sequentialIds, silentMeter };
+
+/** The silent logger under the name the suite has always used. */
+export const testLogger = silentLogger;
 
 // --- Digest & signer (seeded, deterministic) --------------------------------------
 
@@ -126,14 +112,6 @@ export function fixedRates(): Rates {
 }
 
 // --- logger, meter, processor -----------------------------------------------------
-
-export function testLogger(): Logger {
-  return { log: () => {} };
-}
-
-export function silentMeter(): Meter {
-  return { count: () => {}, observe: () => {} };
-}
 
 /** Approves every payout with the predictable reference `prov_<key>`. */
 export function fakeProcessor(): Processor {
