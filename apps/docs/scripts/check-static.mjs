@@ -15,6 +15,7 @@
 // never silently turn a flat page interactive.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+import { walk } from './html-walk.mjs';
 
 const BUILD_DIR = 'build/client';
 
@@ -28,16 +29,6 @@ const HYDRATED = new Set();
 // hydration.
 const ALLOWED_SRC = new Set(['/search.js']);
 const RUNNER_SRC = '/runner/loader.js';
-
-function walk(dir) {
-  let out = [];
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, e.name);
-    if (e.isDirectory()) out = out.concat(walk(full));
-    else if (e.name.endsWith('.html')) out.push(full);
-  }
-  return out;
-}
 
 function routeOf(file) {
   const rel = relative(BUILD_DIR, file).split(sep).join('/');

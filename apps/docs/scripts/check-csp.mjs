@@ -21,6 +21,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+import { walk } from './html-walk.mjs';
 
 const SITE_DIR = process.argv[2];
 const BUILD_DIR = SITE_DIR ?? 'build/client';
@@ -93,16 +94,6 @@ for (const [pattern, rule] of rules) {
       process.exit(1);
     }
   }
-}
-
-function walk(dir) {
-  let out = [];
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, e.name);
-    if (e.isDirectory()) out = out.concat(walk(full));
-    else if (e.name.endsWith('.html')) out.push(full);
-  }
-  return out;
 }
 
 const missing = new Map(); // hash -> first file it appeared in
