@@ -39,7 +39,12 @@ import {
   signerFromSecrets,
 } from '#src/from-env.ts';
 import { createWorker } from '#src/worker/index.ts';
-import { jsonlLogger, silentMeter } from '#src/runtime.ts';
+import {
+  jsonlLogger,
+  randomIds,
+  silentMeter,
+  systemClock,
+} from '#src/runtime.ts';
 import { sha256Digest } from '#src/digest.ts';
 import { fault, ERROR_CODES } from '#src/errors.ts';
 import { configuredRates } from '#src/adapters/rates.ts';
@@ -767,14 +772,14 @@ export function memoryPorts(options: {
       : {}),
   };
   const digest = sha256Digest();
-  const clock = wallClock();
+  const clock = systemClock();
   Object.freeze(config);
   Object.freeze(config.maturityHorizonMs);
   Object.freeze(config.payoutSla);
   Object.freeze(secrets);
   return {
     clock,
-    ids: uuidIds(),
+    ids: randomIds(),
     digest,
     signer: signerFromSecrets(secrets),
     processor: memoryProcessor(),
@@ -946,8 +951,8 @@ function runtimeFrom(
   init: PortsInit,
 ): Pick<Ports, 'clock' | 'ids' | 'digest' | 'logger' | 'meter'> {
   const runtime = {
-    clock: init.clock ?? wallClock(),
-    ids: init.ids ?? uuidIds(),
+    clock: init.clock ?? systemClock(),
+    ids: init.ids ?? randomIds(),
     digest: init.digest ?? sha256Digest(),
     logger: init.logger ?? jsonlLogger(),
     meter: init.meter ?? silentMeter(),
@@ -959,12 +964,4 @@ function runtimeFrom(
   requireCallable('logger', runtime.logger, ['log']);
   requireCallable('meter', runtime.meter, ['count', 'observe']);
   return runtime;
-}
-
-function wallClock(): Clock {
-  return { now: () => Date.now() };
-}
-
-function uuidIds(): Ids {
-  return { next: (prefix) => `${prefix}_${crypto.randomUUID()}` };
 }
