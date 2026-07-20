@@ -7,8 +7,8 @@ set -u
 REPO="${REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$REPO"
 
-node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)' \
-  || { echo 'ci-check: node >= 20 required'; exit 1; }
+node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)' \
+  || { echo 'ci: node >= 22 required (nvm use 22)'; exit 1; }
 
 FAILED=''
 step() {

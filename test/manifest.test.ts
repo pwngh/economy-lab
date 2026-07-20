@@ -23,6 +23,7 @@ type Manifest = {
   dependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+  files?: string[];
 };
 
 const manifest: Manifest = JSON.parse(
@@ -52,5 +53,16 @@ describe('package manifest', () => {
     }
     // No stray meta entry for a peer that does not exist.
     assert.deepEqual(Object.keys(meta).sort(), peers);
+  });
+
+  test('the package ships dist and db, never src', () => {
+    const files = manifest.files ?? [];
+    assert.equal(files.includes('dist'), true);
+    assert.equal(files.includes('db'), true);
+    assert.equal(
+      files.includes('src'),
+      false,
+      'package.json "files" grew "src" back; the tarball is dist + db only',
+    );
   });
 });

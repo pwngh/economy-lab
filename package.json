@@ -65,9 +65,9 @@
     },
     "./package.json": "./package.json"
   },
+  "sideEffects": false,
   "files": [
     "dist",
-    "src",
     "db",
     "README.md",
     "CHANGELOG.md",
@@ -79,6 +79,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/pwngh/economy-lab.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pwngh/economy-lab/issues"
   },
   "homepage": "https://economy-lab-docs.pages.dev/economy/",
   "scripts": {

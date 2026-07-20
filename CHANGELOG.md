@@ -13,6 +13,12 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - `EXPORT_FORMAT` names the marker an export file's header line declares; `verifyExport`
   refuses files without it.
 
+### Changed
+
+- The npm package no longer carries `src/`; `dist` is the shipped code and `db/` the schema.
+- The manifest declares `sideEffects: false`; no module does work at import time, so bundlers
+  drop what a consumer does not use.
+
 ## 0.4.0 - 2026-07-18
 
 ### Changed
