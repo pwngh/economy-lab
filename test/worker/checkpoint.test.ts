@@ -12,6 +12,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { balancedPosting, sweepInput } from '#test/support/sweeps.ts';
 
 import { reverifyCheckpoint, sealCheckpoint } from '#src/worker/checkpoint.ts';
 import { runSweeps } from '#src/worker/index.ts';
@@ -28,44 +29,7 @@ import {
   seededSigner,
 } from '#test/support/capabilities.ts';
 
-import type { SweepRequest } from '#src/worker/index.ts';
-import type { ReconcileFeed } from '#src/worker/reconcile.ts';
-import type {
-  Checkpoint,
-  Digest,
-  Dispatcher,
-  Posting,
-  Store,
-} from '#src/ports.ts';
-
-function emptyFeed(): ReconcileFeed {
-  return { pull: async () => ({ processor: [], ledger: [] }) };
-}
-
-function nullDispatcher(): Dispatcher {
-  return async () => {};
-}
-
-function sweepInput(overrides?: Partial<SweepRequest>): SweepRequest {
-  return {
-    now: 1_000,
-    limit: 10,
-    dispatcher: nullDispatcher(),
-    feed: emptyFeed(),
-    windows: [{ from: 0, to: 1_000 }],
-    ...overrides,
-  };
-}
-
-// Touches two accounts, so the ledger has two heads to snapshot.
-function balancedPosting(txnId: string, user: string): Posting {
-  const amount = toAmount('CREDIT', 500n);
-  return {
-    txnId,
-    legs: [credit(spendable(user), amount), debit(SYSTEM.REVENUE, amount)],
-    meta: { kind: 'test', source: 'card' },
-  };
-}
+import type { Checkpoint, Digest, Store } from '#src/ports.ts';
 
 // Returns the store with its digest so seal and verify hash with the same function.
 async function populatedStore(): Promise<{ store: Store; digest: Digest }> {

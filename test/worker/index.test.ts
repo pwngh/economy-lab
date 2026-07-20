@@ -12,6 +12,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { sweepInput } from '#test/support/sweeps.ts';
 
 import { runSweeps, createWorker } from '#src/worker/index.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
@@ -22,34 +23,8 @@ import { spendable, SYSTEM } from '#src/accounts.ts';
 import { makePorts, seededDigest } from '#test/support/capabilities.ts';
 import { makeEconomy } from '#test/support/economy.ts';
 
-import type { SweepRequest } from '#src/worker/index.ts';
 import type { ReconcileFeed } from '#src/worker/reconcile.ts';
-import type {
-  Digest,
-  Dispatcher,
-  Posting,
-  Scheduler,
-  Store,
-} from '#src/ports.ts';
-
-function emptyFeed(): ReconcileFeed {
-  return { pull: async () => ({ processor: [], ledger: [] }) };
-}
-
-function nullDispatcher(): Dispatcher {
-  return async () => {};
-}
-
-function sweepInput(overrides?: Partial<SweepRequest>): SweepRequest {
-  return {
-    now: 1_000,
-    limit: 10,
-    dispatcher: nullDispatcher(),
-    feed: emptyFeed(),
-    windows: [{ from: 0, to: 1_000 }],
-    ...overrides,
-  };
-}
+import type { Digest, Posting, Scheduler, Store } from '#src/ports.ts';
 
 // Two real accounts, so the checkpoint job has heads to snapshot.
 function seedPosting(): Posting {

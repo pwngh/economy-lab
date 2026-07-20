@@ -21,11 +21,12 @@ import {
   recordCheckpoint,
   verifyCheckpoint,
 } from '#src/chain.ts';
-import { chainHash, credit, debit, postEntry } from '#src/ledger.ts';
+import { chainHash, postEntry } from '#src/ledger.ts';
 import { EconomyError } from '#src/errors.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { signingPublicKeyHex, systemSigner } from '#src/runtime.ts';
 import { toAmount } from '#src/money.ts';
+import { balancedPosting } from '#test/support/sweeps.ts';
 import { toHex } from '#src/bytes.ts';
 import { spendable, SYSTEM } from '#src/accounts.ts';
 import {
@@ -37,26 +38,10 @@ import {
 
 import type { MemoryLedger } from '#src/adapters/memory.ts';
 import type { AccountRef } from '#src/accounts.ts';
-import type {
-  CheckpointStore,
-  Digest,
-  Leg,
-  Posting,
-  Store,
-} from '#src/ports.ts';
+import type { CheckpointStore, Digest, Leg, Store } from '#src/ports.ts';
 
 // The genesis prevHash: 32 zero bytes as lowercase hex.
 const GENESIS_HEX = '0'.repeat(64);
-
-// Two legs on distinct accounts, so advanceHeads produces two chain links to assert on.
-function balancedPosting(txnId: string, user: string): Posting {
-  const amount = toAmount('CREDIT', 500n);
-  return {
-    txnId,
-    legs: [credit(spendable(user), amount), debit(SYSTEM.REVENUE, amount)],
-    meta: { kind: 'test', source: 'card' },
-  };
-}
 
 // Counts put() calls, so a test can assert exactly how many checkpoints were saved.
 function captureCheckpoints(): CheckpointStore & { rows: () => number } {
