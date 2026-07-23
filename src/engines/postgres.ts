@@ -1094,27 +1094,30 @@ async function findSagaByRef(
 
 // `advance` is a compare-and-set: the update applies only while the saga is still in the state
 // the caller expected, so two racing sweeps can't advance the same payout twice.
+async function openSagaRow(q: Queryable, saga: Saga): Promise<void> {
+  await q.query(
+    `insert into payout_sagas
+       (id, user_id, reserve, rate_id, state, provider_ref, attempts, payout_usd, due_at, updated_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       on conflict (id) do nothing`,
+    [
+      saga.id,
+      saga.userId,
+      saga.reserve.minor,
+      saga.rateId,
+      saga.state,
+      saga.providerRef,
+      saga.attempts,
+      saga.payoutUsd === null ? null : saga.payoutUsd.minor,
+      saga.dueAt,
+      saga.updatedAt,
+    ],
+  );
+}
+
 function createSagaStore(q: Queryable): SagaStore {
   return {
-    open: async (saga) => {
-      await q.query(
-        `insert into payout_sagas
-           (id, user_id, reserve, rate_id, state, provider_ref, attempts, due_at, updated_at)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-           on conflict (id) do nothing`,
-        [
-          saga.id,
-          saga.userId,
-          saga.reserve.minor,
-          saga.rateId,
-          saga.state,
-          saga.providerRef,
-          saga.attempts,
-          saga.dueAt,
-          saga.updatedAt,
-        ],
-      );
-    },
+    open: (saga) => openSagaRow(q, saga),
     load: async (id) => {
       const result = await q.query(`select * from payout_sagas where id = $1`, [
         id,

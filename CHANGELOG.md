@@ -2,6 +2,13 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
+## Unreleased (0.4.2)
+
+### Fixed
+
+- The SQL engines write `payout_usd` on the payout saga row at request time; it used to land
+  only at settle, so an in-flight saga row carried no quote.
+
 ## 0.4.1 - 2026-07-19
 
 ### Added

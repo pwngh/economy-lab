@@ -1021,12 +1021,13 @@ function createSagaStore(exec: MysqlExecutor): SagaStore {
       await rows(
         exec,
         `INSERT INTO payout_sagas
-           (id, user_id, reserve, rate_id, state, provider_ref, attempts, due_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (id, user_id, reserve, rate_id, state, provider_ref, attempts, payout_usd, due_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            user_id = VALUES(user_id), reserve = VALUES(reserve),
            rate_id = VALUES(rate_id), state = VALUES(state),
            provider_ref = VALUES(provider_ref), attempts = VALUES(attempts),
+           payout_usd = VALUES(payout_usd),
            due_at = VALUES(due_at), updated_at = VALUES(updated_at)`,
         [
           saga.id,
@@ -1036,6 +1037,7 @@ function createSagaStore(exec: MysqlExecutor): SagaStore {
           saga.state,
           saga.providerRef,
           saga.attempts,
+          saga.payoutUsd === null ? null : saga.payoutUsd.minor.toString(),
           saga.dueAt,
           saga.updatedAt,
         ],
