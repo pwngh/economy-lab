@@ -96,6 +96,7 @@ import type {
   AccrualRowKey,
   AccrualStore,
   Attempt,
+  BatchSlot,
   CheckpointStore,
   Clock,
   Digest,
@@ -2172,6 +2173,7 @@ export async function postgresStore(
     movements: createMovementJournal(pool),
     replay: createReplayStore(pool),
     transaction: async (work) => runInTransaction(pool, txDeps, work),
+    batchTransaction: async (works) => runBatchTransaction(pool, txDeps, works),
     close: async () => {
       if (schema) {
         await pool
@@ -2261,6 +2263,82 @@ async function runInTransaction<T>(
     isTransientConflict,
     { observer: deps.retryObserver },
   );
+}
+
+// Submit micro-batching, the Postgres strategy: optimistic group commit with bisect isolation.
+// Any statement error aborts a Postgres transaction outright, and the savepoint alternative
+// costs a subtransaction per item — past 64 the subxid cache spills to disk, the documented
+// cliff. So the batch runs in one plain transaction, no savepoints; when an item fails, the
+// group rolls back and splits in half, each half its own batch, until the failing item isolates
+// into a solo transaction whose failure fills only its slot. A rolled-back item re-runs from
+// scratch — its idempotency claim rolled back with the group, so the replay is exactly-once by
+// construction. The clean path (the common one) is exactly one commit for the whole batch; a
+// failing item costs O(log n) extra transactions.
+async function runBatchTransaction<T>(
+  pool: PgPool,
+  deps: TxDeps,
+  works: ReadonlyArray<(unit: Unit) => Promise<T>>,
+): Promise<Array<BatchSlot<T>>> {
+  if (works.length === 0) {
+    return [];
+  }
+  try {
+    const values = await withTransientRetry(
+      () => groupAttempt(pool, deps, works),
+      isTransientConflict,
+      { observer: deps.retryObserver },
+    );
+    return values.map((value): BatchSlot<T> => ({ ok: true, value }));
+  } catch (error) {
+    if (isTransientConflict(error)) {
+      // Retries exhausted: the whole batch fails as one, exactly like `transaction`.
+      throw error;
+    }
+    if (works.length === 1) {
+      return [{ ok: false, error }];
+    }
+    const mid = Math.ceil(works.length / 2);
+    return [
+      ...(await runBatchTransaction(pool, deps, works.slice(0, mid))),
+      ...(await runBatchTransaction(pool, deps, works.slice(mid))),
+    ];
+  }
+}
+
+async function groupAttempt<T>(
+  pool: PgPool,
+  deps: TxDeps,
+  works: ReadonlyArray<(unit: Unit) => Promise<T>>,
+): Promise<T[]> {
+  const client = await pool.connect();
+  // Staging either commits with the group or is discarded with it; nothing partial promotes.
+  const staged = new StagedAccounts();
+  try {
+    await client.query('begin');
+    const unit = buildUnit(
+      {
+        q: client,
+        digest: deps.digest,
+        clock: deps.clock,
+        known: deps.known,
+        staged,
+        heads: new TxHeads(),
+      },
+      deps.velocityWindowMs,
+    );
+    const values: T[] = [];
+    for (const work of works) {
+      values.push(await work(unit));
+    }
+    await client.query('commit');
+    staged.promoteInto(deps.known);
+    return values;
+  } catch (error) {
+    await client.query('rollback').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 // A transient Postgres abort committed nothing, so it is safe to retry; anything else (a domain

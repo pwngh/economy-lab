@@ -60,6 +60,7 @@ import type { Config } from '#src/config.ts';
 import type { BackingTotals } from '#src/integrity.ts';
 import type { Amount, Currency } from '#src/money.ts';
 import type {
+  BatchOutcome,
   Ctx,
   Economy,
   EconomyStatus,
@@ -105,6 +106,8 @@ export function createEconomy(ports: Ports): Economy {
   return {
     submit: (operation, options) =>
       meteredSubmit({ store, registry, ctx }, operation, options),
+    submitBatch: (operations, options) =>
+      submitBatch({ store, registry, ctx }, operations, options),
     read: {
       balance: (account, options) =>
         cachedBalance(ctx, store.ledger, account, options),
@@ -307,6 +310,225 @@ async function meteredSubmit(
     } catch {
       // Telemetry only; the outcome above is already decided.
     }
+  }
+}
+
+// One operation's place in a batch while it runs: its input position, plus the velocity attempt
+// its risk screen staged (re-recorded if the operation's savepoint rolls back, exactly as
+// `submit` re-records after a transaction rollback).
+type BatchEntry = {
+  index: number;
+  operation: Operation;
+  staged: { subject: string; attempt: Attempt } | null;
+};
+
+// Economy.submitBatch. The pre-transaction phase (validation, authorization, the pause gate, and
+// the distinct-key guard) decides what enters the shared transaction; each entrant then runs the
+// same claimed pipeline as `submit` under its own savepoint. Without store batch support the
+// batch degrades to sequential submits with faults captured per slot.
+async function submitBatch(
+  pipeline: Pipeline,
+  operations: ReadonlyArray<Operation>,
+  options?: CallOptions,
+): Promise<ReadonlyArray<BatchOutcome>> {
+  if (pipeline.store.batchTransaction === undefined) {
+    return sequentialBatch(pipeline, operations, options);
+  }
+  const slots: Array<BatchOutcome | null> = operations.map(() => null);
+  const entries = screenBatch(pipeline, operations, slots);
+  if (entries.length === 0) {
+    // Everything was decided pre-transaction; don't pay for an empty BEGIN/COMMIT.
+    await finishBatch(pipeline, operations, slots);
+    return slots as BatchOutcome[];
+  }
+
+  const results = await pipeline.store
+    .batchTransaction(
+      entries.map(
+        (entry) => (unit: Unit) =>
+          rejectionsRollBack({
+            pipeline,
+            unit,
+            operation: entry.operation,
+            options,
+            staged: (subject, attempt) => {
+              entry.staged = { subject, attempt };
+            },
+          }),
+      ),
+      options,
+    )
+    .catch(async (error: unknown) => {
+      // The shared transaction itself failed, erasing every entrant's in-transaction velocity
+      // attempt; re-record them best-effort (`bump` dedupes on the attempt key), as submit does
+      // when its transaction dies, then let the batch's error reach the caller.
+      for (const entry of entries) {
+        if (entry.staged) {
+          await pipeline.store.trust
+            .bump(entry.staged.subject, entry.staged.attempt, options)
+            .catch(() => {});
+        }
+      }
+      throw error;
+    });
+
+  for (let i = 0; i < entries.length; i += 1) {
+    slots[entries[i]!.index] = await settleBatchSlot(
+      pipeline,
+      entries[i]!,
+      results[i]!,
+      options,
+    );
+  }
+  await finishBatch(pipeline, operations, slots);
+  return slots as BatchOutcome[];
+}
+
+async function sequentialBatch(
+  pipeline: Pipeline,
+  operations: ReadonlyArray<Operation>,
+  options?: CallOptions,
+): Promise<ReadonlyArray<BatchOutcome>> {
+  const slots: BatchOutcome[] = [];
+  for (const operation of operations) {
+    try {
+      slots.push({
+        ok: true,
+        outcome: await meteredSubmit(pipeline, operation, options),
+      });
+    } catch (error) {
+      slots.push({ ok: false, error });
+    }
+  }
+  // meteredSubmit already counted each operation; the batch counter still fires so batch rate
+  // stays visible on stores without batch support.
+  try {
+    pipeline.ctx.meter.count('economy.submit.batch', 1, {
+      size: String(operations.length),
+    });
+  } catch {
+    // Telemetry only.
+  }
+  return slots;
+}
+
+// The pre-transaction screens, per operation: a failure fills the slot and keeps the operation
+// out of the shared transaction. Duplicate idempotency keys are refused up front — inside one
+// transaction the second claim would see the first's uncommitted placeholder as its own and run
+// the operation twice, the very double-run the key exists to prevent.
+function screenBatch(
+  pipeline: Pipeline,
+  operations: ReadonlyArray<Operation>,
+  slots: Array<BatchOutcome | null>,
+): BatchEntry[] {
+  const ctx = pipeline.ctx;
+  const entries: BatchEntry[] = [];
+  const seen = new Set<string>();
+  operations.forEach((operation, index) => {
+    try {
+      validateOperation(operation, ctx.config);
+      authorize(operation);
+      if (seen.has(operation.idempotencyKey)) {
+        throw fault(
+          ERROR_CODES.MALFORMED_OPERATION,
+          'A submitBatch may not carry the same idempotencyKey twice.',
+          { detail: { kind: operation.kind } },
+        );
+      }
+      seen.add(operation.idempotencyKey);
+      if (
+        operation.actor.kind === 'user' &&
+        economyPaused(ctx.clock.now(), ctx.config)
+      ) {
+        slots[index] = {
+          ok: true,
+          outcome: rejected('ECONOMY_PAUSED', {
+            resumesAt: ctx.config.pauseEndMs,
+          }),
+        };
+        return;
+      }
+      entries.push({ index, operation, staged: null });
+    } catch (error) {
+      slots[index] = { ok: false, error };
+    }
+  });
+  return entries;
+}
+
+// One savepoint result to one slot, with `submit`'s post-rollback bookkeeping: a rejected
+// operation's velocity attempt is re-recorded (its savepoint erased it), and a failed re-record
+// turns the slot into a fault rather than silently letting the caller probe the limit for free.
+async function settleBatchSlot(
+  pipeline: Pipeline,
+  entry: BatchEntry,
+  result: { ok: true; value: Outcome } | { ok: false; error: unknown },
+  options?: CallOptions,
+): Promise<BatchOutcome> {
+  if (result.ok) {
+    return { ok: true, outcome: result.value };
+  }
+  if (result.error instanceof RejectedRollback) {
+    if (entry.staged) {
+      try {
+        await pipeline.store.trust.bump(
+          entry.staged.subject,
+          entry.staged.attempt,
+          options,
+        );
+      } catch (error) {
+        return { ok: false, error };
+      }
+    }
+    return { ok: true, outcome: result.error.outcome };
+  }
+  if (entry.staged) {
+    await pipeline.store.trust
+      .bump(entry.staged.subject, entry.staged.attempt, options)
+      .catch(() => {});
+  }
+  return { ok: false, error: result.error };
+}
+
+// The per-operation aftercare `submit` does outside its transaction: cache invalidation for
+// committed slots and the submit counter, plus one batch counter. Metering is guarded like
+// meteredSubmit's: a throwing meter must not fail outcomes already decided.
+async function finishBatch(
+  pipeline: Pipeline,
+  operations: ReadonlyArray<Operation>,
+  slots: ReadonlyArray<BatchOutcome | null>,
+): Promise<void> {
+  for (let i = 0; i < operations.length; i += 1) {
+    const slot = slots[i];
+    if (slot?.ok === true) {
+      await invalidateCache(pipeline, operations[i]!, slot.outcome);
+    }
+    try {
+      const status =
+        slot === null || slot === undefined
+          ? 'fault'
+          : slot.ok
+            ? slot.outcome.status
+            : 'fault';
+      const reason =
+        slot?.ok === true && slot.outcome.status === 'rejected'
+          ? slot.outcome.detail.reason
+          : undefined;
+      pipeline.ctx.meter.count('economy.submit', 1, {
+        kind: String((operations[i] as { kind?: unknown })?.kind ?? 'unknown'),
+        status,
+        ...(reason === undefined ? {} : { reason }),
+      });
+    } catch {
+      // Telemetry only.
+    }
+  }
+  try {
+    pipeline.ctx.meter.count('economy.submit.batch', 1, {
+      size: String(operations.length),
+    });
+  } catch {
+    // Telemetry only.
   }
 }
 

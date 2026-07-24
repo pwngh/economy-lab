@@ -162,6 +162,20 @@ const TIMESTAMP_HEADER = 'x-timestamp';
  * `/submit` authenticates through `authenticate` when configured; every body reads under a byte
  * ceiling and deadline; CORS stays off unless `cors` lists origins.
  *
+ * Single-submit on purpose: `Economy.submitBatch` and the submit coalescer are in-process
+ * surface for the host composing the economy, not a route — a shared batch transaction cannot
+ * carry each request's own correlation id.
+ *
+ * @example
+ * const handler = createServer({
+ *   economy,
+ *   ports,
+ *   authenticate: async (request) => {
+ *     const userId = await verifyToken(request.headers.get('authorization'));
+ *     return userId === null ? null : { kind: 'user', userId }; // null answers 401
+ *   },
+ * });
+ *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for
  *   the routes, codec, and webhook gate.
  */

@@ -26,6 +26,7 @@ import type {
   AccrualRowKey,
   AccrualStore,
   Attempt,
+  BatchSlot,
   Checkpoint,
   CheckpointStore,
   Clock,
@@ -59,6 +60,7 @@ import type {
   Subscription,
   SubscriptionStore,
   TrustStore,
+  Unit,
   Velocity,
 } from '#src/ports.ts';
 import type { EntitlementAttributes } from '#src/contract.ts';
@@ -66,13 +68,17 @@ import type { EntitlementAttributes } from '#src/contract.ts';
 // --- Per-store undo log -----------------------------------------------------------
 
 // While a transaction is open, every write records a reverser; rollback runs them last-to-first.
-// With no transaction open, nothing is recorded.
+// With no transaction open, nothing is recorded. `mark`/`rollbackTo` are the savepoint pair
+// batchTransaction uses: a mark names a point in the undo log, and rolling back to it reverses
+// only the writes recorded past it.
 interface Journal {
   begin(): void;
   commit(): void;
   rollback(): void;
   recording(): boolean;
   record(undo: () => void): void;
+  mark(): number;
+  rollbackTo(mark: number): void;
 }
 
 function createJournal(): Journal {
@@ -99,6 +105,15 @@ function createJournal(): Journal {
     recording: () => undos !== null,
     record: (undo) => {
       undos?.push(undo);
+    },
+    mark: () => undos?.length ?? 0,
+    rollbackTo: (mark) => {
+      if (!undos) {
+        return;
+      }
+      while (undos.length > mark) {
+        undos.pop()!();
+      }
     },
   };
 }
@@ -1675,8 +1690,53 @@ export function memoryStore(deps?: {
       tail = run.catch(() => {});
       return run;
     },
+    // One shared transaction, one journal savepoint per item: a failing item rolls back to its
+    // own mark and the rest still commit together (see Store.batchTransaction).
+    batchTransaction: <T>(
+      works: ReadonlyArray<(u: Unit) => Promise<T>>,
+    ): Promise<Array<BatchSlot<T>>> => {
+      const run = tail.then(() => runMemoryBatch(participants, unit, works));
+      tail = run.catch(() => {});
+      return run;
+    },
     close: async () => {},
   };
+}
+
+// The batchTransaction body, run on the store's single-writer queue: every journal opens once,
+// each work item runs against a fresh set of journal marks (its savepoint), and a failing item
+// reverses only the writes past its own marks.
+async function runMemoryBatch<T>(
+  participants: Participant[],
+  unit: Unit,
+  works: ReadonlyArray<(u: Unit) => Promise<T>>,
+): Promise<Array<BatchSlot<T>>> {
+  let begun = 0;
+  try {
+    for (const participant of participants) {
+      participant.journal.begin();
+      begun += 1;
+    }
+    const slots: Array<BatchSlot<T>> = [];
+    for (const work of works) {
+      const marks = participants.map((p) => p.journal.mark());
+      try {
+        slots.push({ ok: true, value: await work(unit) });
+      } catch (error) {
+        for (let i = participants.length - 1; i >= 0; i -= 1) {
+          participants[i]!.journal.rollbackTo(marks[i]!);
+        }
+        slots.push({ ok: false, error });
+      }
+    }
+    for (const participant of participants) {
+      participant.journal.commit();
+    }
+    return slots;
+  } catch (error) {
+    rollbackAll(participants, begun);
+    throw error;
+  }
 }
 
 // Rolls back only the stores that started this transaction — the first `begun` of them, newest

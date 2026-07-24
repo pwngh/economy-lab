@@ -467,7 +467,6 @@ export interface Store {
   replay: ReplayStore;
 
   /**
-   * The instance-netting journal; it commits outside money transactions, so an accepted movement
    * is durable regardless of any ledger posting's fate.
    */
   movements: MovementJournal;
@@ -479,11 +478,34 @@ export interface Store {
   ): Promise<T>;
 
   /**
+   * Submit micro-batching support, optional: commits K work items for one fsync on the clean
+   * path while isolating failures per item — a failing item's slot carries its error and its
+   * writes roll back alone; its batch-mates still commit. Items run sequentially, and a later
+   * item can observe an earlier one's writes. How isolation is achieved is each engine's own
+   * strategy. Under any strategy an item can execute more than once across attempts — always
+   * fully rolled back in between — so the caller's idempotency keys make the replay
+   * exactly-once. When absent, callers fall back to one transaction per item.
+   */
+  batchTransaction?<T>(
+    works: ReadonlyArray<(unit: Unit) => Promise<T>>,
+    options?: CallOptions,
+  ): Promise<Array<BatchSlot<T>>>;
+
+  /**
    * Releases the store's resources — the SQL engines end their connection pool. Terminal: no
    * call on the store is valid after it.
    */
   close(): Promise<void>;
 }
+
+/**
+ * One work item's slot in a {@link Store.batchTransaction}: its return value, or the error its
+ * savepoint rolled back with. The batch itself only rejects when the shared transaction cannot
+ * commit at all.
+ */
+export type BatchSlot<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: unknown };
 
 /**
  * The finished DI bag every `create*` door takes. Structural — a plain object literal with these

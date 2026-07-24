@@ -81,6 +81,8 @@ import type {
 // hand-built structural Ports. createEconomy is sync over a finished bag; openPorts is the sole
 // env-to-bag path, sharing every decision with preflight and describeEnv (defined below).
 export { createEconomy } from '#src/economy.ts';
+export { createSubmitCoalescer } from '#src/batching.ts';
+export type { CoalescerOptions, SubmitCoalescer } from '#src/batching.ts';
 export { createWorker, DEFAULT_SWEEP_LIMIT } from '#src/worker/index.ts';
 export type {
   Worker,
@@ -184,6 +186,7 @@ export type { EnvMap } from '#src/env.ts';
 export type {
   Operation,
   Outcome,
+  BatchOutcome,
   Success,
   Rejection,
   RejectionDetail,

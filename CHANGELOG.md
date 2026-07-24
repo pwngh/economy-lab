@@ -13,6 +13,10 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - `post_entries` fuses each posting's writes into one stored-procedure call on both SQL
   engines, and the engines answer account existence from a cache whose entries are added only
   at commit.
+- `Economy.submitBatch(operations, options)` commits a group of operations in one store
+  transaction and isolates a failing member by bisection; `BatchOutcome` reports each slot,
+  index-aligned with the input. `createSubmitCoalescer` folds concurrent submits into batches
+  behind one flush. Breaking: custom `Economy` implementations must provide `submitBatch`.
 
 ## 0.5.0 - 2026-07-23
 

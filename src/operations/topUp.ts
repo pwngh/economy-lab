@@ -10,7 +10,7 @@
  */
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
-import { credit, debit, postEntry } from '#src/ledger.ts';
+import { credit, debit, postEntries } from '#src/ledger.ts';
 import {
   convertCeil,
   encodeAmount,
@@ -68,37 +68,39 @@ export async function topUp(
   }
 
   // The issuance posts first, so the returned transaction is the buyer's credits going up. Both
-  // postings route platform legs by the idempotency key — the key the lock set routed by — so the
-  // rows locked are the rows posted.
-  const issuance = await postEntry(unit.ledger, {
-    txnId: ctx.ids.next('txn'),
-    legs: routePlatformLegs(
-      [
-        debit(SYSTEM.STORED_VALUE, amount),
-        credit(spendable(operation.userId), amount),
-      ],
-      operation.idempotencyKey,
-      ctx.config.platformShards,
-    ),
-    meta: { kind: 'topUp', source: operation.source },
-  });
-  // The spread leg is added only when positive, so a purchase at exactly par has just two legs.
+  // postings route platform legs by the idempotency key — the key the lock set routed by — so
+  // the rows locked are the rows posted. The spread leg is added only when positive, so a
+  // purchase at exactly par has just two legs. The CREDIT and USD sides share no account, so
+  // postEntries can fuse the pair.
   const cashLegs = [debit(SYSTEM.TRUST_CASH, backingUsd)];
   if (marginUsd.minor > 0n) {
     cashLegs.push(debit(SYSTEM.REVENUE_USD, marginUsd));
   }
   cashLegs.push(credit(SYSTEM.USD_CLEARING, grossUsd));
-  await postEntry(unit.ledger, {
-    txnId: ctx.ids.next('txn'),
-    legs: routePlatformLegs(
-      cashLegs,
-      operation.idempotencyKey,
-      ctx.config.platformShards,
-    ),
-    meta: { kind: 'topUp.cash', rateId: buy.rateId, parRateId: par.rateId },
-  });
+  const [issuance] = await postEntries(unit.ledger, [
+    {
+      txnId: ctx.ids.next('txn'),
+      legs: routePlatformLegs(
+        [
+          debit(SYSTEM.STORED_VALUE, amount),
+          credit(spendable(operation.userId), amount),
+        ],
+        operation.idempotencyKey,
+        ctx.config.platformShards,
+      ),
+      meta: { kind: 'topUp', source: operation.source },
+    },
+    {
+      txnId: ctx.ids.next('txn'),
+      legs: routePlatformLegs(
+        cashLegs,
+        operation.idempotencyKey,
+        ctx.config.platformShards,
+      ),
+      meta: { kind: 'topUp.cash', rateId: buy.rateId, parRateId: par.rateId },
+    },
+  ]);
 
-  return { status: 'committed', transaction: issuance };
   return { status: 'committed', transaction: issuance! };
 }
 

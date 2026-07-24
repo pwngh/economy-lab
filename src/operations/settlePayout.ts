@@ -10,7 +10,7 @@
  */
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
-import { credit, debit, lockAll, postEntry } from '#src/ledger.ts';
+import { credit, debit, lockAll, postEntries } from '#src/ledger.ts';
 import { encodeAmount, mulDiv, toAmount } from '#src/money.ts';
 import {
   assertKind,
@@ -150,26 +150,29 @@ async function postSettlementEntries(
   if (reserveRef !== SYSTEM.PAYOUT_RESERVE) {
     await lockAll(unit.ledger, [reserveRef]);
   }
-  const transaction = await postEntry(unit.ledger, {
-    txnId: ctx.ids.next('txn'),
-    legs: [
-      debit(reserveRef, saga.reserve),
-      credit(SYSTEM.REVENUE, saga.reserve),
-    ],
-    meta: { kind: 'settlePayout', sagaId: saga.id, rateId },
-  });
-  await postEntry(unit.ledger, {
-    txnId: ctx.ids.next('txn'),
-    legs: [debit(SYSTEM.USD_CLEARING, usd), credit(SYSTEM.TRUST_CASH, usd)],
-    meta: {
-      kind: 'settlePayout.cash',
-      sagaId: saga.id,
-      rateId,
-      payoutFee: encodeAmount(fee),
-      netUsd: encodeAmount(net),
+  // The CREDIT and USD sides share no account, so postEntries can fuse the pair.
+  const [transaction] = await postEntries(unit.ledger, [
+    {
+      txnId: ctx.ids.next('txn'),
+      legs: [
+        debit(reserveRef, saga.reserve),
+        credit(SYSTEM.REVENUE, saga.reserve),
+      ],
+      meta: { kind: 'settlePayout', sagaId: saga.id, rateId },
     },
-  });
-  return transaction;
+    {
+      txnId: ctx.ids.next('txn'),
+      legs: [debit(SYSTEM.USD_CLEARING, usd), credit(SYSTEM.TRUST_CASH, usd)],
+      meta: {
+        kind: 'settlePayout.cash',
+        sagaId: saga.id,
+        rateId,
+        payoutFee: encodeAmount(fee),
+        netUsd: encodeAmount(net),
+      },
+    },
+  ]);
+  return transaction!;
 }
 
 // Rail fee on the gross USD disbursement, rounded down. `feeBps` is basis points (150 = 1.5%).

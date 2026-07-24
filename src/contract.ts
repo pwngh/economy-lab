@@ -311,6 +311,15 @@ export type Outcome =
   | { readonly status: 'duplicate'; readonly transaction: Transaction }
   | { readonly status: 'rejected'; readonly detail: RejectionDetail };
 
+/**
+ * One operation's slot in a {@link Economy.submitBatch} result, index-aligned with the input.
+ * `ok: true` carries what `submit` would have returned; `ok: false` carries what `submit` would
+ * have thrown — a fault never poisons its batch-mates, so it comes back as data.
+ */
+export type BatchOutcome =
+  | { readonly ok: true; readonly outcome: Outcome }
+  | { readonly ok: false; readonly error: unknown };
+
 /** The two outcomes that carry a committed transaction; `duplicate` is a success replayed. */
 export type Success = Extract<Outcome, { status: 'committed' | 'duplicate' }>;
 
@@ -319,7 +328,6 @@ export type Rejection = Extract<Outcome, { status: 'rejected' }>;
 
 /** A committed posting: the record of money that actually moved. */
 export interface Transaction {
-  /** Unique id, of the form txn_<uuid>. */
   id: string;
 
   /** When it committed, in epoch milliseconds. */
@@ -443,6 +451,24 @@ export interface Economy {
    * retry under the same key can still succeed.
    */
   submit(operation: Operation, options?: CallOptions): Promise<Outcome>;
+  /**
+   * Submits several independent operations through the full pipeline for one database commit
+   * (one fsync) on the clean path — the aggregate-throughput lever — while each operation keeps
+   * exactly `submit`'s semantics: a rejection or fault rolls back that operation alone, and its
+   * batch-mates still commit. The isolation strategy is the store engine's own (see
+   * {@link Store.batchTransaction}). Slots are index-aligned with the input. Operations in one
+   * batch must carry distinct idempotency keys; a duplicate key's slot faults. On a store
+   * without batch support, this degrades to sequential submits.
+   */
+  submitBatch(
+    operations: ReadonlyArray<Operation>,
+    options?: CallOptions,
+  ): Promise<ReadonlyArray<BatchOutcome>>;
+  /**
+   * The read surface: balances, statements, postings, sagas, entitlements, status, capacity,
+   * the streamed enumerations, and the export. Reads never mutate; `balance` alone consults the
+   * optional cache, every other reader goes to the store.
+   */
   read: {
     /**
      * The account's current balance in its own currency, from the maintained running total —

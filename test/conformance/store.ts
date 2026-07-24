@@ -1354,6 +1354,110 @@ async function appendAllThreadsChains(store: Store): Promise<void> {
   assert.equal(heads.get(spendable(userId)), lineage[1]!.hash);
 }
 
+// A batch bigger than the 64-item savepoint cliff, with one failing item in the middle: the
+// engine's own strategy must produce identical slots — 79 committed exactly once, the failure
+// isolated to its slot with no legs left behind.
+async function batchSurvivesLargeBatches(store: Store): Promise<void> {
+  if (store.batchTransaction === undefined) {
+    return;
+  }
+  const users = Array.from({ length: 80 }, () => freshUser());
+  const failAt = 40;
+  const slots = await store.batchTransaction(
+    users.map((userId, i) => async (unit: Unit) => {
+      const txn = await fundSpendable(
+        unit,
+        userId,
+        '1.00',
+        `txn_conf_big_${userId}`,
+      );
+      if (i === failAt) {
+        throw new Error('boom');
+      }
+      return txn;
+    }),
+  );
+  assert.equal(slots.length, 80);
+  assert.equal(slots.filter((slot) => slot.ok).length, 79);
+  assert.equal(slots[failAt]!.ok, false);
+  assert.deepEqual(
+    await store.ledger.derivedBalances(spendable(users[failAt]!)),
+    [],
+  );
+  assert.deepEqual(
+    await store.ledger.balance(spendable(users[0]!)),
+    toAmount('CREDIT', 100n),
+  );
+  assert.deepEqual(
+    await store.ledger.balance(spendable(users[79]!)),
+    toAmount('CREDIT', 100n),
+  );
+}
+
+// batchTransaction (optional): a failing item's savepoint rolls back that item alone; its
+// batch-mates' writes commit together. Skipped by stores without batch support.
+async function batchIsolatesFailedItems(store: Store): Promise<void> {
+  if (store.batchTransaction === undefined) {
+    return;
+  }
+  const alice = freshUser();
+  const bob = freshUser();
+  const slots = await store.batchTransaction([
+    (unit) => fundSpendable(unit, alice, '5.00', `txn_conf_batch_a_${alice}`),
+    async (unit) => {
+      await fundSpendable(unit, bob, '9.00', `txn_conf_batch_b_${bob}`);
+      throw new Error('boom');
+    },
+    (unit) => fundSpendable(unit, bob, '2.50', `txn_conf_batch_c_${bob}`),
+  ]);
+  assert.equal(slots.length, 3);
+  assert.equal(slots[0]!.ok, true);
+  assert.equal(slots[1]!.ok, false);
+  assert.equal(slots[2]!.ok, true);
+  // The failed item's 9.00 vanished; its batch-mates' money landed.
+  assert.deepEqual(
+    await store.ledger.balance(spendable(alice)),
+    toAmount('CREDIT', 500n),
+  );
+  assert.deepEqual(
+    await store.ledger.balance(spendable(bob)),
+    toAmount('CREDIT', 250n),
+  );
+}
+
+// A probe hit inside a transaction can be the item's own uncommitted plant, so it must stage
+// for commit-promotion, never enter the store-wide known-set directly: after the item's
+// savepoint rollback the account's rows are gone, and a poisoned cache would skip the re-plant
+// and fail the next posting on the legs foreign key until restart.
+async function batchRollbackForgetsFirstUsedAccounts(
+  store: Store,
+): Promise<void> {
+  if (store.batchTransaction === undefined) {
+    return;
+  }
+  const userId = freshUser();
+  const slots = await store.batchTransaction([
+    async (unit) => {
+      // Two postings: the first plants the brand-new account, the second's probe hits that
+      // uncommitted plant; the throw then rolls both back to the item's savepoint.
+      await fundSpendable(unit, userId, '1.00', `txn_conf_replant_a_${userId}`);
+      await fundSpendable(unit, userId, '2.00', `txn_conf_replant_b_${userId}`);
+      throw new Error('boom');
+    },
+  ]);
+  assert.equal(slots.length, 1);
+  assert.equal(slots[0]!.ok, false);
+  assert.deepEqual(await store.ledger.derivedBalances(spendable(userId)), []);
+  // The fresh transaction must plant the account again; a poisoned cache fails right here.
+  await store.transaction((unit) =>
+    fundSpendable(unit, userId, '3.00', `txn_conf_replant_c_${userId}`),
+  );
+  assert.deepEqual(
+    await store.ledger.balance(spendable(userId)),
+    toAmount('CREDIT', 300n),
+  );
+}
+
 /**
  * Registers the shared conformance suite every {@link Store} implementation must pass — the same
  * tests the built-in memory, Postgres, and MySQL stores run, with the memory adapter as the
@@ -1445,6 +1549,12 @@ export function runStoreConformance(
       withStore(t, journalRejectsDuplicateBatches));
     test('commits a transaction durably and leaves no trace when one throws', (t) =>
       withStore(t, commitsDurablyAndRollsBack));
+    test('rolls a batch item back to its savepoint without touching its batch-mates', (t) =>
+      withStore(t, batchIsolatesFailedItems));
+    test('isolates one failure in a batch past the savepoint cliff', (t) =>
+      withStore(t, batchSurvivesLargeBatches));
+    test('re-plants an account whose first use rolled back with its batch item', (t) =>
+      withStore(t, batchRollbackForgetsFirstUsedAccounts));
     test('appendAll threads chains exactly like sequential appends', (t) =>
       withStore(t, appendAllThreadsChains));
     test('claims an idempotency key once and replays the recorded transaction', (t) =>

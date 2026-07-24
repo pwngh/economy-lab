@@ -67,6 +67,7 @@ import type {
   AccrualRowKey,
   AccrualStore,
   Attempt,
+  BatchSlot,
   CheckpointStore,
   Clock,
   Digest,
@@ -2190,6 +2191,23 @@ export function mysqlStore(deps: {
       );
     },
 
+    // Submit micro-batching: one transaction, one savepoint per work item. A failing item rolls
+    // back to its savepoint only; the batch commits the rest with one fsync. Named locks a
+    // rolled-back item took stay held until the connection's RELEASE_ALL_LOCKS — over-holding,
+    // never under-holding. A transient abort re-runs the whole batch like any transaction.
+    batchTransaction: async (works, _options?) => {
+      await ensureSchemaAsserted();
+      return withTransientRetry(
+        () =>
+          batchAttempt(
+            { acquireTimed, digest, clock, pool, velocityWindowMs, known },
+            works,
+          ),
+        isTransientConflict,
+        { observer: retryObserver },
+      );
+    },
+
     close: async () => {
       await pool.end();
     },
@@ -2225,6 +2243,7 @@ async function ensureReadCommitted(connection: MysqlConnection): Promise<void> {
   );
   readCommittedSet.add(key);
 }
+
 // The per-transaction scratch state the savepoint walk needs to roll back alongside the data:
 // staged plants and captured heads.
 type TxScratch = { staged: StagedAccounts; heads: TxHeads };
@@ -2268,6 +2287,48 @@ async function transactionAttempt<T>(
     connection.release();
   }
 }
+
+async function batchAttempt<T>(
+  env: AttemptEnv,
+  works: ReadonlyArray<(u: Unit) => Promise<T>>,
+): Promise<Array<BatchSlot<T>>> {
+  return transactionAttempt(env, (unit, connection, scratch) =>
+    runSavepointed(connection, unit, scratch, works),
+  );
+}
+
+// The savepoint walk batchTransaction runs between BEGIN and COMMIT. A transient InnoDB abort
+// inside an item poisons the whole transaction (InnoDB may have rolled it back already), so it
+// rethrows to retry the batch rather than being absorbed into the item's slot.
+async function runSavepointed<T>(
+  connection: MysqlConnection,
+  unit: Unit,
+  scratch: TxScratch,
+  works: ReadonlyArray<(u: Unit) => Promise<T>>,
+): Promise<Array<BatchSlot<T>>> {
+  const slots: Array<BatchSlot<T>> = [];
+  for (let i = 0; i < works.length; i += 1) {
+    await connection.query(`SAVEPOINT op_${i}`);
+    // A savepoint rollback undoes the item's plants and chain links, so its staging and head
+    // advances roll back with it — a stale forward head would fork the chain on the next append.
+    const stagedMark = scratch.staged.mark();
+    const headsMark = scratch.heads.mark();
+    try {
+      slots.push({ ok: true, value: await works[i]!(unit) });
+      await connection.query(`RELEASE SAVEPOINT op_${i}`);
+    } catch (error) {
+      if (isTransientConflict(error)) {
+        throw error;
+      }
+      await connection.query(`ROLLBACK TO SAVEPOINT op_${i}`);
+      scratch.staged.rollbackTo(stagedMark);
+      scratch.heads.rollbackTo(headsMark);
+      slots.push({ ok: false, error });
+    }
+  }
+  return slots;
+}
+
 // The store factory is sync, so an 'assert' schema policy runs lazily before the first operation
 // of any kind — reads through the gated pool, transactions directly — rather than at open.
 // Concurrent first calls share one in-flight check; once verified it never re-checks. A failed
@@ -2326,7 +2387,10 @@ function isTransientConflict(error: unknown): boolean {
     message?: unknown;
   } | null;
   const errno = e?.errno;
-  // 1213 (deadlock) and 1205 (lock-wait timeout) are the classic "try again" aborts. A 1062 on
+  // 1213 (deadlock) and 1205 (lock-wait timeout) are the classic "try again" aborts, and 3058 is
+  // the named-lock (GET_LOCK) deadlock the MDL detector raises — the same would-block verdict as
+  // 1213, seen from the user-lock side; nothing committed, so a fresh attempt after rollback is
+  // safe. Batching raises its odds (one connection holds several subjects' locks). A 1062 on
   // chain_links_account_prev_uq is a stale-head chain fork, not a real duplicate: the head moved,
   // and a retry re-reads it and attaches cleanly. mysql2 surfaces no constraint name, so the fork is
   // matched by key name in sqlMessage; a real duplicate names a different key and still fails fast.
@@ -2339,6 +2403,7 @@ function isTransientConflict(error: unknown): boolean {
   return (
     errno === 1213 ||
     errno === 1205 ||
+    errno === 3058 ||
     (errno === 1062 && text.includes(CHAIN_FORK_INDEX)) ||
     (errno === 1644 && text.includes(CHAIN_CONTINUITY_MARKER))
   );

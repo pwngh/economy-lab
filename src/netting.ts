@@ -177,6 +177,8 @@ export class InstanceSession {
   constructor(deps: SessionPorts, sessionId: string, options?: SessionOptions) {
     this.deps = deps;
     this.sessionId = sessionId;
+    // 64 default: at or under the Postgres cached-subxid cliff (see runBatchTransaction in
+    // src/engines/postgres.ts); 16 keeps a settle chunk's lock set narrow.
     this.maxBatch = options?.maxBatch ?? 64;
     this.chunkWidth = options?.chunkWidth ?? 16;
     this.reservations = options?.reservations ?? createReservations();
