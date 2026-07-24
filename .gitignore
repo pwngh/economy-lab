@@ -7,6 +7,7 @@
 .env
 .env.*
 !.env.example
+!.env.compose
 
 # apps/console (Remix) — its own deps + build output; the library stays no-build
 apps/*/node_modules

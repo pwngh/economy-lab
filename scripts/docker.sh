@@ -53,6 +53,8 @@ wait_healthy() {
 
 # Migrates against DATABASE_URL if set, else the compose Postgres instance.
 bootstrap() {
+  echo "==> materializing compose-local URLs into .env (make env)"
+  sh scripts/env-merge.sh
   : "${DATABASE_URL:=postgres://economy:economy@localhost:55432/economy_lab}"
   export DATABASE_URL
   echo "==> starting services"
