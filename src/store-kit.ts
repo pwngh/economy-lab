@@ -155,4 +155,8 @@ export { decodeAmounts } from '#src/money.ts';
  */
 export { VELOCITY_CURRENCY } from '#src/trust.ts';
 
+/**
+ * The wallet kinds {@link walletKindOf} can return: `spendable`, `earned`, `promo`, and `escrow`.
+ * A category, not a currency — the currency of any money movement comes from the amount itself.
+ */
 export type { AccountKind } from '#src/accounts.ts';

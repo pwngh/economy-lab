@@ -300,6 +300,31 @@ async function journalRejectsDuplicateBatches(store: Store): Promise<void> {
   assert.equal(rows.length, 1);
 }
 
+// Store.reservations (optional): the multi-node counter. `add` must return the post-add total
+// (the accept screen's add-then-check stands on it), a storm of concurrent adds must sum
+// exactly (no lost updates), and `entries` must list the row for the reconciliation walk.
+async function reservationCounterIsExact(store: Store): Promise<void> {
+  if (store.reservations === undefined) {
+    return;
+  }
+  const counter = store.reservations;
+  const account = spendable(freshUser());
+  assert.equal(await counter.add(account, -100n), -100n);
+  await Promise.all(
+    Array.from({ length: 24 }, (_, i) =>
+      counter.add(account, i % 2 === 0 ? -5n : 5n),
+    ),
+  );
+  assert.equal(await counter.pending(account), -100n);
+  let listed: bigint | null = null;
+  for await (const [id, pending] of counter.entries()) {
+    if (id === account) {
+      listed = pending;
+    }
+  }
+  assert.equal(listed, -100n);
+  assert.equal(await counter.add(account, 100n), 0n);
+}
 async function commitsDurablyAndRollsBack(store: Store): Promise<void> {
   const committedUser = freshUser();
   const thrownUser = freshUser();
@@ -1547,6 +1572,8 @@ export function runStoreConformance(
       withStore(t, journalAppendsAndStreamsBySession));
     test('rejects a movement batch on a duplicate key or position', (t) =>
       withStore(t, journalRejectsDuplicateBatches));
+    test('keeps the reservation counter exact under concurrent adds', (t) =>
+      withStore(t, reservationCounterIsExact));
     test('commits a transaction durably and leaves no trace when one throws', (t) =>
       withStore(t, commitsDurablyAndRollsBack));
     test('rolls a batch item back to its savepoint without touching its batch-mates', (t) =>

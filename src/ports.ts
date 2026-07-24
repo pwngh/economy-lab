@@ -471,6 +471,14 @@ export interface Store {
    */
   movements: MovementJournal;
 
+  /**
+   * The shared cross-node reservation counter behind multi-node netting (`sharedReservations`,
+   * src/netting.ts): one row per account, `add` folds a delta in atomically and returns the
+   * post-add pending total. Absent on stores that cannot host a shared counter (the HTTP edge
+   * adapter); the in-process registry remains the single-node default either way.
+   */
+  reservations?: ReservationStore;
+
   /** Runs `work` in one database transaction: everything it writes commits together or not at all. */
   transaction<T>(
     work: (unit: Unit) => Promise<T>,
@@ -1151,6 +1159,36 @@ export interface MovementJournal {
 
   /** Streams a session's movements in seq order — the source of truth settle derives from. */
   bySession(sessionId: string, options?: CallOptions): AsyncIterable<Movement>;
+}
+
+/**
+ * The shared cross-node reservation counter: one pending total per account, folded atomically.
+ * `add` returns the post-add total, so accept screens are add-then-check — a concurrent add on
+ * another node is either already in the returned total or arrives later and sees ours; totals
+ * only drift conservative (at-or-after our add). Fail-closed by construction: an unreachable
+ * counter throws, and the caller refuses the movement rather than accepting blind.
+ */
+export interface ReservationStore {
+  /**
+   * Folds `naturalDelta` — the movement leg's signed effect on the account's balance in minor
+   * units (`balanceDelta`; a spend adds a negative delta) — into the account's pending total and
+   * returns the post-add total. Atomic per account: two nodes adding concurrently both see a
+   * total that includes at least their own delta.
+   */
+  add(
+    account: AccountRef,
+    naturalDelta: bigint,
+    options?: CallOptions,
+  ): Promise<bigint>;
+
+  /** The account's current net pending total; 0n for an account with no row. */
+  pending(account: AccountRef, options?: CallOptions): Promise<bigint>;
+
+  /**
+   * Streams every counter row — what `reconcileReservations` (src/worker/orphans.ts) walks to
+   * repair leaked pending against the journal-derived truth during quiesced maintenance.
+   */
+  entries(options?: CallOptions): AsyncIterable<[AccountRef, bigint]>;
 }
 
 // --- Record types -----------------------------------------------------------------

@@ -107,6 +107,7 @@ import type {
   LinkPage,
   Logger,
   MovementJournal,
+  ReservationStore,
   Ledger,
   Lot,
   Meter,
@@ -1901,6 +1902,54 @@ function createMovementJournal(pool: PgPool): MovementJournal {
     },
   };
 }
+// --- Reservation store ------------------------------------------------------------
+// The multi-node counter (see the reservations banner in db/postgresql-schema.sql): the upsert
+// folds the delta and RETURNING carries the post-add total in the same atomic statement, so the
+// caller's add-then-check never reads a total that misses its own add.
+function createReservationStore(pool: PgPool): ReservationStore {
+  return {
+    add: async (account, naturalDelta) => {
+      const result = await pool.query(
+        `insert into reservations (account_id, pending) values ($1, $2)
+           on conflict (account_id) do update
+           set pending = reservations.pending + excluded.pending
+           returning pending`,
+        [account, naturalDelta],
+      );
+      return readMinor(result.rows[0]!.pending);
+    },
+    pending: async (account) => {
+      const result = await pool.query(
+        `select pending from reservations where account_id = $1`,
+        [account],
+      );
+      const row = result.rows[0];
+      return row === undefined ? 0n : readMinor(row.pending);
+    },
+    entries: async function* () {
+      let after = '';
+      for (;;) {
+        const result = await pool.query(
+          `select account_id, pending from reservations
+            where account_id > $1
+            order by account_id
+            limit 500`,
+          [after],
+        );
+        if (result.rows.length === 0) {
+          return;
+        }
+        for (const row of result.rows) {
+          yield [row.account_id as AccountRef, readMinor(row.pending)] as [
+            AccountRef,
+            bigint,
+          ];
+        }
+        after = result.rows[result.rows.length - 1]!.account_id as string;
+      }
+    },
+  };
+}
 
 function createCheckpointStore(pool: PgPool): CheckpointStore {
   return {
@@ -2057,6 +2106,33 @@ export interface PostgresStoreOptions {
   logger?: Logger;
 }
 
+// The open-path checks, in trust order: apply the isolated schema when asked, refuse a database
+// whose schema drifted from this code, then install the vendored money functions (idempotent)
+// and make the engine prove it computes the pinned arithmetic before any posting trusts it —
+// the same fail-fast as the schema check, for semantics instead of shape. Retried: concurrent
+// boots race the shared money.* catalog rows (see installMoneyRetrying).
+async function verifySchemaAndMoney(
+  pool: PgPool,
+  options: PostgresStoreOptions,
+  schema: string | null,
+): Promise<void> {
+  if (schema) {
+    await applyIsolatedSchema(pool, schema);
+  }
+  // For an isolated test schema we just applied the current SQL, so this passes by construction.
+  if (options.schema !== 'skip') {
+    assertSchemaCurrent(await readSchemaVersion(pool), 'Postgres');
+  }
+  const runner = {
+    run: (sql: string, params?: readonly unknown[]) =>
+      pool
+        .query(sql, params ? [...params] : undefined)
+        .then((result) => result.rows as Record<string, unknown>[]),
+  };
+  await installMoneyRetrying(() => installPostgres(runner));
+  assertMoneyConformant(await provePostgres(runner, moneyVectors), 'Postgres');
+}
+
 /**
  * Build a {@link Store} backed by Postgres, using real database transactions. The returned
  * `transaction(work)` checks out one connection, runs `work` between BEGIN and COMMIT, and rolls
@@ -2111,31 +2187,7 @@ export async function postgresStore(
   // End the pool if setup throws: this factory owns the pool it just created, and handing a
   // leaked open connection to a caller that only sees the throw keeps the process alive.
   try {
-    if (schema) {
-      await applyIsolatedSchema(pool, schema);
-    }
-
-    // Refuse to run against a database whose schema has drifted from this code. For an
-    // isolated test schema we just applied the current SQL, so this passes by construction.
-    if (options.schema !== 'skip') {
-      assertSchemaCurrent(await readSchemaVersion(pool), 'Postgres');
-    }
-
-    // Install the vendored money functions (idempotent) and make this engine prove it computes
-    // the pinned arithmetic before any posting trusts it — the same fail-fast as the schema
-    // check, for semantics instead of shape. Retried: concurrent boots race the shared money.*
-    // catalog rows (see installMoneyRetrying).
-    const runner = {
-      run: (sql: string, params?: readonly unknown[]) =>
-        pool
-          .query(sql, params ? [...params] : undefined)
-          .then((result) => result.rows as Record<string, unknown>[]),
-    };
-    await installMoneyRetrying(() => installPostgres(runner));
-    assertMoneyConformant(
-      await provePostgres(runner, moneyVectors),
-      'Postgres',
-    );
+    await verifySchemaAndMoney(pool, options, schema);
   } catch (error) {
     await pool.end().catch(() => {});
     throw error;
@@ -2171,6 +2223,7 @@ export async function postgresStore(
     accruals: createAccrualStore(pool, clock),
     checkpoints: createCheckpointStore(pool),
     movements: createMovementJournal(pool),
+    reservations: createReservationStore(pool),
     replay: createReplayStore(pool),
     transaction: async (work) => runInTransaction(pool, txDeps, work),
     batchTransaction: async (works) => runBatchTransaction(pool, txDeps, works),

@@ -17,7 +17,7 @@
 -- ============================================================================
 create table accounts (
   id         text        primary key,
-  kind       text        not null check (kind in ('spendable', 'earned', 'promo', 'system')),
+  kind       text        not null check (kind in ('spendable', 'earned', 'promo', 'escrow', 'system')),
   currency   text        not null check (currency in ('CREDIT', 'USD')),
   created_at timestamptz not null default now(),
   -- Lets legs carry a composite FK to (id, currency), so a leg's currency must match its account's.
@@ -36,7 +36,8 @@ insert into accounts (id, kind, currency) values
   ('platform:usd_clearing',   'system', 'USD'),
   ('platform:revenue_usd',    'system', 'USD'),
   ('platform:opening_equity', 'system', 'CREDIT'),
-  ('platform:netting_clearing', 'system', 'CREDIT');
+  ('platform:netting_clearing', 'system', 'CREDIT'),
+  ('platform:settlement_accrual', 'system', 'CREDIT');
 
 -- ============================================================================
 -- Postings: the append-only record of everything that happened. Each posting splits into
@@ -346,6 +347,17 @@ create table instance_movements (
 );
 
 -- ============================================================================
+-- The multi-node reservation counter (Store.reservations / sharedReservations in
+-- src/netting.ts): one pending total per account, folded atomically by the upsert, whose
+-- RETURNING is the post-add total the accept screen checks. Advisory accept-screen state, never
+-- money: settle derives from the journal and the ledger, and a stale-high total only refuses
+-- movements (the fail-closed direction).
+-- ============================================================================
+create table reservations (
+  account_id text   primary key,
+  pending    bigint not null
+);
+-- ============================================================================
 -- Seal heads: the latest checkpoint's Merkle leaves, one row per account — each account's chain
 -- head and raw signed leg sum as of the last seal. The incremental seal re-derives this table's
 -- Merkle root and checks it against the latest signed checkpoint before trusting a byte of it,
@@ -603,7 +615,7 @@ create or replace trigger account_balances_integrity
 -- src/schema.ts together, whenever this file changes.
 -- ============================================================================
 create table schema_meta (version text not null);
-insert into schema_meta (version) values ('15');
+insert into schema_meta (version) values ('16');
 
 -- Deployed at-a-glance column docs (visible via \d+); the banners above carry the depth.
 comment on column accounts.id is 'Account id; platform:<name> or usr_<uuid>:<kind>.';
@@ -723,6 +735,7 @@ comment on table accrual_rows is 'Parked seller shares under the accrual split; 
 comment on table entitlements is 'What each user owns (SKU ownership), with version and expiry.';
 comment on table subscriptions is 'Recurring charges: one row per subscription and its billing state.';
 comment on table trust_attempts is 'Per-key spend attempts feeding the velocity and risk check.';
+comment on table reservations is 'Multi-node reservation counter behind sharedReservations; stale-high totals only refuse movements.';
 comment on table seal_heads is 'Latest checkpoint leaves per account; the incremental seal authenticates then diffs against it.';
 comment on table chain_reproof is 'Rolling re-proof cursor and last-rotation watermark; single row.';
 comment on table checkpoints is 'Signed Merkle checkpoints over the per-account hash chains.';

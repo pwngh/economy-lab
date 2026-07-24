@@ -17,6 +17,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   transaction and isolates a failing member by bisection; `BatchOutcome` reports each slot,
   index-aligned with the input. `createSubmitCoalescer` folds concurrent submits into batches
   behind one flush. Breaking: custom `Economy` implementations must provide `submitBatch`.
+- The stamped SQL schema version is 16: `accrual_rows`, the `reservations` table, and the
+  `escrow` account kind.
 
 ## 0.5.0 - 2026-07-23
 

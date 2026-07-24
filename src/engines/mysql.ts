@@ -79,6 +79,7 @@ import type {
   LinkPage,
   Logger,
   MovementJournal,
+  ReservationStore,
   Ledger,
   Lot,
   Meter,
@@ -1855,7 +1856,64 @@ function createMovementJournal(pool: MysqlPool): MovementJournal {
     },
   };
 }
+// --- Reservation store ------------------------------------------------------------
+// The multi-node counter (see the reservations banner in db/postgresql-schema.sql). MySQL's
+// upsert cannot return the updated value, so the read is a second autocommitted statement: it
+// sees a total at-or-after our own add (a concurrent add is either already inside it or arrives
+// later and sees ours), so the caller's add-then-check only ever drifts conservative — refusing
+// a marginal movement, never accepting one blind.
+function createReservationStore(pool: MysqlPool): ReservationStore {
+  return {
+    add: async (account, naturalDelta) => {
+      await execWrite(
+        pool,
+        `INSERT INTO reservations (account_id, pending) VALUES (?, ?)
+           ON DUPLICATE KEY UPDATE pending = pending + VALUES(pending)`,
+        [account, naturalDelta.toString()],
+      );
+      const found = await rows(
+        pool,
+        `SELECT pending FROM reservations WHERE account_id = ?`,
+        [account],
+      );
+      return readMinor(found[0]!.pending);
+    },
+    pending: async (account) => {
+      const found = await rows(
+        pool,
+        `SELECT pending FROM reservations WHERE account_id = ?`,
+        [account],
+      );
+      const row = found[0];
+      return row === undefined ? 0n : readMinor(row.pending);
+    },
+    entries: async function* () {
+      let after = '';
+      for (;;) {
+        const page = await rows(
+          pool,
+          `SELECT account_id, pending FROM reservations
+            WHERE account_id > ?
+            ORDER BY account_id
+            LIMIT 500`,
+          [after],
+        );
+        if (page.length === 0) {
+          return;
+        }
+        for (const row of page) {
+          yield [row.account_id as AccountRef, readMinor(row.pending)] as [
+            AccountRef,
+            bigint,
+          ];
+        }
+        after = page[page.length - 1]!.account_id as string;
+      }
+    },
+  };
+}
 
+// --- Checkpoint store (used only by background workers) ---------------------------
 // The incremental seal's snapshot leaves. Writes are chunked so a full-mode rewrite stays under
 // max_allowed_packet; a crash between the replaceAll delete and the inserts leaves a partial
 // snapshot that fails the next seal's authentication and heals through another full replay.
@@ -2170,6 +2228,7 @@ export function mysqlStore(deps: {
     accruals: auto.accruals,
     checkpoints: createCheckpointStore(pool),
     movements: createMovementJournal(pool),
+    reservations: createReservationStore(pool),
     replay: createReplayStore(pool),
 
     // The whole unit of work lives in this one transaction, so a transient InnoDB abort (deadlock or

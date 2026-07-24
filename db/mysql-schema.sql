@@ -44,6 +44,7 @@ DROP TABLE IF EXISTS seal_heads;
 DROP TABLE IF EXISTS checkpoints;
 
 DROP TABLE IF EXISTS instance_movements;
+DROP TABLE IF EXISTS reservations;
 
 DROP TABLE IF EXISTS trust_attempts;
 
@@ -80,7 +81,7 @@ CREATE TABLE accounts (
      kind       VARCHAR(16)  NOT NULL COMMENT 'One of spendable, earned, promo, system.',
      currency   VARCHAR(8)   NOT NULL COMMENT 'One of CREDIT or USD.',
      created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.',
-     CHECK (kind IN ('spendable', 'earned', 'promo', 'system')),
+     CHECK (kind IN ('spendable', 'earned', 'promo', 'escrow', 'system')),
      CHECK (currency IN ('CREDIT', 'USD')),
      -- Lets legs carry a composite FK to (id, currency), so a leg's currency must match its account's.
      UNIQUE KEY accounts_id_currency_uq (id, currency)
@@ -96,7 +97,8 @@ INSERT INTO accounts (id, kind, currency) VALUES
      ('platform:usd_clearing',   'system', 'USD'),
      ('platform:revenue_usd',    'system', 'USD'),
      ('platform:opening_equity', 'system', 'CREDIT'),
-     ('platform:netting_clearing','system', 'CREDIT');
+     ('platform:netting_clearing','system', 'CREDIT'),
+     ('platform:settlement_accrual','system', 'CREDIT');
 
 -- Rationale in db/postgresql-schema.sql (postings banner).
 CREATE TABLE postings (
@@ -343,6 +345,11 @@ CREATE TABLE instance_movements (
      UNIQUE KEY instance_movements_session_seq_uq (session_id, seq)
    ) COMMENT='Append-only instance-netting journal; the settlement posting anchors its chain head.';
 
+-- Rationale in db/postgresql-schema.sql (reservations banner).
+CREATE TABLE reservations (
+     account_id VARCHAR(96) PRIMARY KEY COMMENT 'Account whose cross-node pending total this row holds.',
+     pending    BIGINT      NOT NULL COMMENT 'Natural pending total across every node; advisory, never money.'
+   ) COMMENT='Multi-node reservation counter behind sharedReservations; stale-high totals only refuse movements.';
 -- Rationale in db/postgresql-schema.sql (seal_heads banner).
 CREATE TABLE seal_heads (
      account_id VARCHAR(96) PRIMARY KEY COMMENT 'Account the sealed leaf belongs to.',
@@ -615,4 +622,4 @@ INSERT INTO account_balances (account_id, currency, balance, head_hash)
 CREATE TABLE schema_meta (
      version VARCHAR(32) NOT NULL COMMENT 'Schema version stamp; must match SCHEMA_VERSION at startup.'
    ) COMMENT='Single-row schema version stamp, checked at startup.';
-INSERT INTO schema_meta (version) VALUES ('15');
+INSERT INTO schema_meta (version) VALUES ('16');

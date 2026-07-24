@@ -42,6 +42,7 @@ import type {
   CallOptions,
   Movement,
   MovementJournal,
+  ReservationStore,
   OutboxMessage,
   OutboxStore,
   Posting,
@@ -1549,6 +1550,25 @@ function createMovementJournal(): MovementJournal {
   };
 }
 
+// --- Reservation store ------------------------------------------------------------
+
+// The in-process twin of the SQL engines' single-row-per-account counter: add folds the delta
+// and returns the post-add total, exactly the add-then-check contract in ports.ts.
+function createReservationStore(): ReservationStore {
+  const totals = new Map<AccountRef, bigint>();
+  return {
+    add: async (account, naturalDelta) => {
+      const total = (totals.get(account) ?? 0n) + naturalDelta;
+      totals.set(account, total);
+      return total;
+    },
+    pending: async (account) => totals.get(account) ?? 0n,
+    entries: async function* () {
+      yield* [...totals.entries()].sort(([a], [b]) => (a < b ? -1 : 1));
+    },
+  };
+}
+
 // --- Checkpoint store -------------------------------------------------------------
 
 // Append-only and never part of a money transaction, so a rollback can't delete a recorded
@@ -1642,6 +1662,7 @@ export function memoryStore(deps?: {
   const checkpoints = createCheckpointStore();
   const movements = createMovementJournal();
   const replay = createReplayStore();
+  const reservations = createReservationStore();
 
   const unit = {
     ledger,
@@ -1668,6 +1689,7 @@ export function memoryStore(deps?: {
     checkpoints,
     movements,
     replay,
+    reservations,
     transaction: (work) => {
       const run = tail.then(async () => {
         let begun = 0;

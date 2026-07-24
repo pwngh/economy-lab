@@ -21,13 +21,13 @@ import type { Currency } from '#src/money.ts';
 import type { Operation } from '#src/contract.ts';
 
 /**
- * The three kinds of account a single user can have. This is a category, not a currency. The
+ * The kinds of account a single user can have. This is a category, not a currency. The
  * currency of any money movement comes from the amount's own `Currency`.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/
  *   Accounts & double-entry} for how these accounts and their normal sides balance.
  */
-export type AccountKind = 'spendable' | 'earned' | 'promo';
+export type AccountKind = 'spendable' | 'earned' | 'promo' | 'escrow';
 
 /**
  * A branded account identifier string, so a plain string can't be used as an account. The only
@@ -305,7 +305,10 @@ export function classify(
   if (traits) {
     return traits.class;
   }
-  return walletKindOf(ref) === 'spendable' ? 'custodial' : 'excluded';
+  const kind = walletKindOf(ref);
+  // Escrow holds a user's spendable money mid-session, so it stays custodial: the backing
+  // requirement follows the money into escrow and back out.
+  return kind === 'spendable' || kind === 'escrow' ? 'custodial' : 'excluded';
 }
 
 /**
@@ -442,7 +445,12 @@ export function walletKindOf(ref: AccountRef): AccountKind | null {
     return null;
   }
   const suffix = ref.slice(colon + 1);
-  if (suffix === 'spendable' || suffix === 'earned' || suffix === 'promo') {
+  if (
+    suffix === 'spendable' ||
+    suffix === 'earned' ||
+    suffix === 'promo' ||
+    suffix === 'escrow'
+  ) {
     return suffix;
   }
   return null;
