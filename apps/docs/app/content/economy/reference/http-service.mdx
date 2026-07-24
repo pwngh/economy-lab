@@ -6,18 +6,18 @@ status: stable
 sourceRefs:
   [
     'src/server.ts#L185 · createServer',
-    'src/server.ts#L185 · createServer',
     'scripts/main.ts#L404 · runServe',
     'test/server.test.ts',
   ]
 related: ['economy/scope-and-non-goals', 'economy/ports/signer']
 ---
 
+import instancePurchaseHttp from '../../../snippets/http/instance-purchase.sh?shiki';
+
 ## The request-path counterpart to the Economy
 
 Most of these docs talk about the [`Economy`](/economy/reference/the-economy/) as an in-process object: you hold a reference and call `submit` against it directly. But a deployed service has to take requests off a socket. That's what the HTTP service is: a thin wrapper that turns a Fetch `Request` into one `submit` call and a `Response`.
 
-<SourceLink to="src/server.ts#L80">createServer</SourceLink> takes one options object — the `Economy`, the narrow `ports` pick the routes read (`config`, `secrets`, `clock`, `meter`, `logger`; a full `Ports` is assignable), and an `authenticate` posture — and returns a handler with the signature `(request: Request) => Promise<Response>`:
 <SourceLink to="src/server.ts#L80">createServer</SourceLink> takes one options object — the `Economy`, the narrow `ports` pick the routes read (`config`, `secrets`, `clock`, `meter`, `logger`; a full <ApiLink to="types/src_ports.Ports" /> is assignable), and an `authenticate` posture — and returns a handler with the signature `(request: Request) => Promise<Response>`:
 
 ```ts
@@ -38,18 +38,18 @@ It uses only Fetch globals (`Request`, `Response`, `URL`, `crypto.subtle`) and n
 
 ## What it exposes
 
-The handler routes four paths and answers `404` to everything else. Two move money or report state; two are for your orchestrator.
+The handler routes five paths and answers `404` to everything else. Three move money or report state; two are for your orchestrator.
 
-| Method and path            | What it does                                                                                                                             |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /submit`             | Decode one operation from the JSON body, run it through `submit`, return the [`Outcome`](/economy/reference/outcomes-and-reason-codes/). |
-| `POST /webhooks/:provider` | Verify an inbound provider callback, then hand it to the injected handler.                                                               |
-| `GET /healthz`             | Report liveness without touching storage.                                                                                                |
-| `GET /readyz`              | Report readiness via one cheap store-touching read.                                                                                      |
+| Method and path                   | What it does                                                                                                                             |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /submit`                    | Decode one operation from the JSON body, run it through `submit`, return the [`Outcome`](/economy/reference/outcomes-and-reason-codes/). |
+| `POST /instances/:scope/purchase` | Hand an in-world purchase to the scope's [fast lane](/economy/concepts/instance-economy/). Routed only when the server is built with `instances`; `404` otherwise. |
+| `POST /webhooks/:provider`        | Verify an inbound provider callback, then hand it to the injected handler.                                                               |
+| `GET /healthz`                    | Report liveness without touching storage.                                                                                                |
+| `GET /readyz`                     | Report readiness via one cheap store-touching read.                                                                                      |
 
 ## Submitting an operation
 
-`POST /submit` is the request-path version of a `submit` call. You send one operation as a JSON object; you get back its `Outcome`. The body's `kind` selects the operation: `topUp`, `spend`, `refund`, and the rest. Every [operation page](/economy/reference/operations/) shows both forms of its example: the HTTP tab is the same call as a `curl` against this route.
 `POST /submit` is the request-path version of a `submit` call. You send one operation as a JSON object; you get back its `Outcome`. The body's `kind` selects the operation: <ApiLink to="variables/src.topUp" />, <ApiLink to="variables/src.spend" />, <ApiLink to="variables/src.refund" />, and the rest. Every [operation page](/economy/reference/operations/) shows both forms of its example: the HTTP tab is the same call as a `curl` against this route.
 
 One detail matters on the wire: money never travels as a JSON number. A JSON number can't safely hold the integer minor-units an [`Amount`](/economy/concepts/money-model/) carries, so money fields arrive as decimal strings like `CREDIT:10.00` and the server decodes them back into `Amount` values. Here's a `topUp` body:
@@ -108,13 +108,34 @@ The mapping is by the error's stable code:
 
 An unexpected throw that isn't an `EconomyError` is normalized into a retryable storage fault, so it goes out as a `503` with a generic message. The internals never reach the client.
 
+## The instance purchase lane
+
+`POST /instances/:scope/purchase` is the transport an unprivileged game server calls to buy through the [instance economy](/economy/concepts/instance-economy/). It exists only when `ServerOptions.instances` carries the lane manager — an `InstanceEconomies` built over the same ports — and answers `404` otherwise. The route hands the decoded purchase to `laneFor(scope)` and returns the `PurchaseOutcome`; the money settles later, on the lane's own schedule.
+
+<CallTabs name="instance-purchase" http={instancePurchaseHttp}>
+
+```ts
+const outcome = await lanes.laneFor('wrld_1043').purchase({
+  buyerId: 'usr_buyer',
+  price: toAmount('CREDIT', 30_000n),
+  recipients: [{ sellerId: 'usr_creator', shareBps: 10_000 }],
+  product: { sku: 'wrld_1043:jetpack', kind: 'permanent' },
+});
+// → { status: "accepted", orderId: "sess_…", seq: 0 }
+```
+
+</CallTabs>
+
+The route shares `/submit`'s authentication posture, and a `user` principal may only purchase with their own wallet — a body naming someone else's `buyerId` is refused with `AUTH.UNAUTHORIZED` before the lane sees it.
+
+There is deliberately no batch route: `Economy.submitBatch` and the [submit coalescer](/economy/reference/the-economy/#batches-and-bursts) are in-process surface. An HTTP edge that wants burst-coalescing wraps its own economy handle; the wire protocol stays one operation, one outcome.
+
 <Callout type="warning">
 The problem body carries `type`, `title` (the caller-safe message), `status`, and the stable `code`/`retryable` extensions — never `detail`, `cause`, or a stack. A test pins this: a fault carrying SQL text and a connection string in its `detail`/`cause` still leaks only the one human-readable message (`test/server.test.ts`). Rejection reasons never ride the error wire: they live in a `rejected` outcome, not a thrown fault.
 </Callout>
 
 ## Authenticating the submit path
 
-`ServerOptions.authenticate` is a required posture, not a default: `createServer` refuses to construct without it. Passing `authenticate: false` declares that the server trusts the `actor` object in the body, which is only safe when the handler runs in-process and every caller is your own code. The moment the handler sits on a network socket, the actor must come from a credential, not from the caller's say-so — otherwise any client can claim to be an operator.
 `ServerOptions.authenticate` is a required posture, not a default: <ApiLink to="functions/src_server.createServer" /> refuses to construct without it. Passing `authenticate: false` declares that the server trusts the `actor` object in the body, which is only safe when the handler runs in-process and every caller is your own code. The moment the handler sits on a network socket, the actor must come from a credential, not from the caller's say-so — otherwise any client can claim to be an operator.
 
 For that, you supply a function from the raw `Request` to a [`Principal`](/economy/concepts/actors-and-authorization/) — typically by checking a bearer token or session cookie — and <SourceLink to="src/server.ts#L251">submitRoute</SourceLink> runs it before it reads the body:

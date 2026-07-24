@@ -49,6 +49,9 @@ Here is what each sweep does:
 | `promos`           | Claw back the unspent part of an expired promo grant.                                            |
 | `accrualDrain`     | Move parked seller shares to <ApiLink to="functions/src.earned" />, one posting per seller per run ([the accrual split](/economy/concepts/accrual-split/)). A no-op with `ACCRUAL_DRAIN` off. |
 | `reproof`          | Re-derive a page of stored chain links on a rolling cursor ([integrity](/economy/concepts/integrity/)). |
+| `orphans`          | Enumerate [sessions](/economy/concepts/session-netting/) journaled but never settled, and settle the old ones when opted in ([cluster nodes](/economy/concepts/cluster/)). |
+| `archive`          | Move the oldest sealed postings to the host's cold store ([archival](/economy/ops/archival/)).   |
+| `retention`        | Delete idempotency rows and settled-session journal rows past their horizons ([archival](/economy/ops/archival/)). |
 
 Two pairs are deliberately adjacent. `feeSweep` runs right after `treasury`: treasury only measures the surplus, then `feeSweep` moves it. And `checkpointVerify` runs before `checkpoint`, so the old snapshot is checked against the ledger before a fresh one overwrites it.
 

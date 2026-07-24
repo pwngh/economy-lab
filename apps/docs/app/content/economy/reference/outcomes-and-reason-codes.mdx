@@ -172,6 +172,8 @@ Thrown faults carry their own codes, kept deliberately separate from the rejecti
 | `MONEY.INVALID_AMOUNT`    | `INVALID_AMOUNT`      | A money amount was invalid, such as negative or not a whole minor unit.                                  |
 | `AUTH.UNAUTHORIZED`       | `UNAUTHORIZED`        | The actor isn't permitted to perform this action.                                                        |
 | `SAGA.INVALID_TRANSITION` | `INVALID_TRANSITION`  | A [saga](/economy/concepts/payout-saga/) was told to move to a state it can't reach from its current one. |
+| `SESSION.SETTLED`         | `SESSION_SETTLED`     | A settled [netting session](/economy/concepts/session-netting/) refuses further movements; rotate to a new session id (epoch). |
+| `SESSION.MISROUTED`       | `SESSION_MISROUTED`   | A scope's traffic reached a [cluster node](/economy/concepts/cluster/) that doesn't own it; `detail.owner` names the node that does. |
 
 The line between the two follows cause rather than severity. `INSUFFICIENT_FUNDS` is a healthy system
 giving an expected answer — a rejection you show the user. `INVALID_AMOUNT` means the caller sent a

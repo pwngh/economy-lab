@@ -45,6 +45,7 @@ Everything else hangs off the `Store` as a purpose-built sub-store, one per conc
 | `accruals`      | The [accrual split](/economy/concepts/accrual-split/)'s parked seller shares, claimed by the drain sweep and by refunds. |
 | `checkpoints`   | Signed ledger snapshots, written only by the worker — plus the re-proof cursor, seal heads, and the archive boundary. |
 | `replay`        | Raw inbound webhook ids, deduped separately from the domain idempotency keys.                          |
+| `movements`     | The append-only [session-netting](/economy/concepts/session-netting/) journal; batches commit outside money transactions. |
 
 The `outbox` and `inbox` rows are storage; what flows through them is [messaging](/economy/ports/messaging/).
 

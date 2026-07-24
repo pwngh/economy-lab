@@ -98,9 +98,9 @@ function Acct({
 export function ChartOfAccounts() {
   return (
     <Diagram
-      viewBox="0 0 760 250"
-      label="The chart of accounts. A user holds three CREDIT accounts: spendable (backed by trust cash), earned, and promo. The platform holds nine house accounts: the USD accounts trust_cash, usd_clearing, and revenue_usd; and the CREDIT accounts stored_value, promo_float, receivable, revenue, payout_reserve, and opening_equity. A user's spendable balance is backed one-for-one by trust_cash."
-      caption="The fixed chart of accounts. A user's spendable credits are the only balance backed one-for-one by USD in trust_cash; every other account is the platform's own cash, revenue, or a contra entry."
+      viewBox="0 0 760 306"
+      label="The chart of accounts. A user holds four CREDIT accounts: spendable (backed by trust cash), earned, promo, and per-session escrow (also backed, since escrow is custodial). The platform holds eleven house accounts: the USD accounts trust_cash, usd_clearing, and revenue_usd; and the CREDIT accounts stored_value, promo_float, receivable, revenue, payout_reserve, opening_equity, settlement_accrual, and netting_clearing. A user's spendable balance is backed one-for-one by trust_cash."
+      caption="The fixed chart of accounts. A user's spendable credits — and the per-session escrow a prefunded fast lane parks them in — are backed one-for-one by USD in trust_cash; every other account is the platform's own cash, revenue, or a contra entry. settlement_accrual holds sellers' parked shares between charge and drain; netting_clearing is the pass-through a session's net settles across."
     >
       <ArrowDefs />
 
@@ -110,6 +110,7 @@ export function ChartOfAccounts() {
       <Acct x={40} y={40} w={190} name="spendable" note="CREDIT, backed by trust" />
       <Acct x={40} y={96} w={190} name="earned" note="CREDIT, owed to seller" />
       <Acct x={40} y={152} w={190} name="promo" note="CREDIT, expires if unspent" />
+      <Acct x={40} y={208} w={190} name="escrow" note="CREDIT, per session, backed" />
 
       <text className="d-head" x={527} y={22} textAnchor="middle">
         PLATFORM (HOUSE) ACCOUNTS
@@ -124,19 +125,23 @@ export function ChartOfAccounts() {
       <Acct x={462} y={152} w={130} name="PAYOUT_RESERVE" note="CREDIT" />
       <Acct x={604} y={152} w={130} name="OPENING_EQUITY" note="CREDIT" />
       <Acct x={320} y={208} w={200} name="SETTLEMENT_ACCRUAL" note="CREDIT, parked shares" />
+      <Acct x={534} y={208} w={200} name="NETTING_CLEARING" note="CREDIT, settle pass-through" />
 
       {/* the backing edge — the solvency invariant */}
       <line className="d-edge" x1={230} y1={62} x2={316} y2={62} markerEnd="url(#dgm-arrow)" />
-      <text className="d-elabel" x={273} y={55} textAnchor="middle">
-        backed one-for-one
+      <text className="d-elabel" x={273} y={52} textAnchor="middle">
+        backed
+      </text>
+      <text className="d-elabel" x={273} y={78} textAnchor="middle">
+        one-for-one
       </text>
 
-      <rect className="d-box usd" x={40} y={214} width={16} height={12} rx={2} />
-      <text className="d-sub" x={62} y={224}>
+      <rect className="d-box usd" x={40} y={270} width={16} height={12} rx={2} />
+      <text className="d-sub" x={62} y={280}>
         USD account
       </text>
-      <rect className="d-box" x={170} y={214} width={16} height={12} rx={2} />
-      <text className="d-sub" x={192} y={224}>
+      <rect className="d-box" x={170} y={270} width={16} height={12} rx={2} />
+      <text className="d-sub" x={192} y={280}>
         CREDIT account
       </text>
     </Diagram>
@@ -807,6 +812,62 @@ export function IdempotentRetry() {
     </Diagram>
   );
 }
+
+/** A netting session: movements journal in batches, and settle folds the journal into one net posting; mirrors the session-netting page and `src/netting.ts`. */
+export function SessionNetting() {
+  return (
+    <Diagram
+      viewBox="0 0 760 262"
+      label="One netting session. Three movements arrive — record screens each against the reservation registry and appends the accepted ones to the session journal, whose rows are hash-chained: a genesis value, then links through the current head. Settle derives the net from the journal, verifies the chain, and posts the net to the ledger in clearing chunks through the netting_clearing account; each chunk's posting anchors the journal's final head."
+      caption="The journal is the source of truth, never session memory. Settle reads the journal back, verifies its chain, and posts the net in clearing chunks — and because each chunk's posting anchors the final head, tamper-evidence runs from the proved ledger down to every movement."
+    >
+      <ArrowDefs />
+
+      <text className="d-head" x={30} y={22} textAnchor="start">
+        MOVEMENTS
+      </text>
+      <Pill x={30} y={34} w={148} name="record" sub="buyer → seller · 300.00" />
+      <Pill x={30} y={90} w={148} name="record" sub="buyer → seller · 120.00" />
+      <Pill x={30} y={146} w={148} name="record" sub="rejected: insufficient funds" variant="bad" />
+
+      {/* accepted movements append to the journal */}
+      <line className="d-edge" x1={178} y1={56} x2={268} y2={88} markerEnd="url(#dgm-arrow)" />
+      <line className="d-edge" x1={178} y1={112} x2={268} y2={98} markerEnd="url(#dgm-arrow)" />
+      <text className="d-elabel" x={222} y={52} textAnchor="middle">
+        journal batch
+      </text>
+
+      <text className="d-head" x={272} y={64} textAnchor="start">
+        SESSION JOURNAL
+      </text>
+      <Link x={272} y={78} text="0000…" variant="genesis" />
+      <Link x={362} y={78} text="b4c9…" />
+      <Link x={452} y={78} text="d21e…" variant="head" />
+      <line className="d-edge" x1={342} y1={93} x2={358} y2={93} markerEnd="url(#dgm-arrow)" />
+      <line className="d-edge" x1={432} y1={93} x2={448} y2={93} markerEnd="url(#dgm-arrow)" />
+      <text className="d-note" x={272} y={136}>
+        rows hash-chained per session
+      </text>
+
+      {/* settle folds the journal into the net postings */}
+      <line className="d-edge" x1={522} y1={93} x2={574} y2={93} markerEnd="url(#dgm-arrow)" />
+      <text className="d-elabel" x={550} y={80} textAnchor="middle">
+        settle
+      </text>
+
+      <Pill x={578} y={71} w={152} name="net postings" sub="via NETTING_CLEARING" variant="head" />
+
+      <line className="d-edge" x1={654} y1={115} x2={654} y2={158} markerEnd="url(#dgm-arrow)" />
+      <Pill x={578} y={162} w={152} name="ledger" sub="anchors the final head" variant="ok" />
+
+      <text className="d-note" x={30} y={232}>
+        A session settles once: record on a settled session throws SESSION.SETTLED; a long-lived
+        scope rotates epochs instead.
+      </text>
+    </Diagram>
+  );
+}
+
 /** The accrual split: a charge parks the seller's share, the drain sweep settles it; mirrors the accrual-split page, `src/operations/accrual.ts`, and `src/worker/accrual.ts`. */
 export function AccrualSplit() {
   return (
@@ -1057,6 +1118,86 @@ export function SystemShape() {
       <text className="d-note" x={30} y={292}>
         A verified provider callback lands in the inbox and applies through the same submit a direct
         caller hits.
+      </text>
+    </Diagram>
+  );
+}
+
+/** The fast lane's two tracks: ownership durable at purchase, money settling at epoch end; mirrors the instance-economy page and `src/instance.ts`. */
+export function InstanceLane() {
+  return (
+    <Diagram
+      viewBox="0 0 760 260"
+      label="The instance economy's two tracks over one epoch. On the ownership track, a purchase accepted at time zero writes the grant through to the entitlement store immediately — every reader sees it from that moment. On the money track, the same purchase appends to the hash-chained session journal, and at epoch end one settle folds the journal into a single net posting on the ledger. One backward arrow shows the backstop: a movement the settle replay refuses takes its grant with it, listed in the report's revoked entries."
+      caption="Ownership is durable immediately; the ledger money is settle-deferred. The journal — not lane memory — is what settle replays, so a crash between purchase and settle loses nothing, and a movement the replay refuses revokes exactly its own grant."
+    >
+      <ArrowDefs />
+
+      <text className="d-head" x={30} y={22} textAnchor="start">
+        OWNERSHIP
+      </text>
+      <Pill x={30} y={34} w={130} name="purchase" sub="accepted at t₀" />
+      <Pill x={220} y={34} w={170} name="grant durable" sub="entitlement store" variant="ok" />
+      <line className="d-edge" x1={160} y1={56} x2={216} y2={56} markerEnd="url(#dgm-arrow)" />
+      <line
+        className="d-edge"
+        strokeDasharray="4 3"
+        x1={390}
+        y1={56}
+        x2={726}
+        y2={56}
+        markerEnd="url(#dgm-arrow)"
+      />
+      <text className="d-elabel" x={558} y={44} textAnchor="middle">
+        every reader sees it from t₀
+      </text>
+
+      <text className="d-head" x={30} y={116} textAnchor="start">
+        MONEY
+      </text>
+      <Link x={220} y={128} text="0000…" variant="genesis" />
+      <Link x={310} y={128} text="b4c9…" />
+      <Link x={400} y={128} text="d21e…" variant="head" />
+      <line className="d-edge" x1={290} y1={143} x2={306} y2={143} markerEnd="url(#dgm-arrow)" />
+      <line className="d-edge" x1={380} y1={143} x2={396} y2={143} markerEnd="url(#dgm-arrow)" />
+      <line className="d-edge" x1={95} y1={78} x2={230} y2={126} markerEnd="url(#dgm-arrow)" />
+      <text className="d-elabel" x={118} y={112} textAnchor="start">
+        journals
+      </text>
+      <line className="d-edge" x1={470} y1={143} x2={546} y2={143} markerEnd="url(#dgm-arrow)" />
+      <text className="d-elabel" x={510} y={130} textAnchor="middle">
+        settle
+      </text>
+      <Pill
+        x={550}
+        y={121}
+        w={180}
+        name="one net posting"
+        sub="on the ledger, at epoch end"
+        variant="head"
+      />
+
+      {/* the backstop */}
+      <path
+        className="d-edge bad"
+        d="M596,121 C516,84 420,80 394,76"
+        fill="none"
+        markerEnd="url(#dgm-arrow)"
+      />
+      <text className="d-elabel" x={452} y={72} textAnchor="start">
+        replay refused → revoked
+      </text>
+
+      {/* the time axis */}
+      <line className="d-edge" x1={30} y1={210} x2={730} y2={210} markerEnd="url(#dgm-arrow)" />
+      <text className="d-sub" x={95} y={228} textAnchor="middle">
+        t₀ — purchase
+      </text>
+      <text className="d-sub" x={640} y={228} textAnchor="middle">
+        epoch end (≤ 60 s default)
+      </text>
+      <text className="d-note" x={30} y={252}>
+        The epoch rotates by movements or age; a settle that throws keeps its lane and retries.
       </text>
     </Diagram>
   );

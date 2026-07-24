@@ -21,6 +21,7 @@ import { expect, it } from 'vitest';
 import { earned, spendable } from '#src/accounts.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { createEconomy } from '#src/economy.ts';
+import { openInstanceEconomies } from '#src/instance.ts';
 import { toAmount } from '#src/money.ts';
 import { createServer } from '#src/server.ts';
 import { createWorker } from '#src/worker/index.ts';
@@ -267,6 +268,30 @@ it('reverse commits as shown, against the posting its page names', async () => {
   expect(body.txnId).toBe('txn_1');
   body.txnId = adjusted.id;
   await commitOverHttp(economy, body);
+});
+
+it('instance-purchase is accepted as shown, on the lane route its page names', async () => {
+  const digest = seededDigest(1);
+  const clock = fixedClock(NOW);
+  const store = memoryStore({ digest, clock });
+  const ports = makePorts(store, { clock, digest });
+  const economy = createEconomy(ports);
+  await seed(economy, seedTopUp('usr_buyer', 50_000n));
+  const server = createServer({
+    economy,
+    ports,
+    authenticate: false,
+    instances: openInstanceEconomies(ports),
+  });
+  const response = await server(
+    new Request('https://economy.example/instances/wrld_1043/purchase', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload('instance-purchase')),
+    }),
+  );
+  expect(response.status).toBe(200);
+  expect(((await response.json()) as { status: string }).status).toBe('accepted');
 });
 
 it('every http snippet file is exercised above', () => {

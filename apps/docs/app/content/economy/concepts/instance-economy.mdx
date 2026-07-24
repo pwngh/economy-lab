@@ -1,0 +1,90 @@
+---
+title: 'The instance economy'
+summary: "The opt-in fast lane for in-world product purchases, layered on session netting. A purchase grants ownership immediately and durably; the money rides the journal and nets to the ledger at settle. The lane lives in the economy service — game servers stay unprivileged callers."
+plain: "A busy toy shop. You get the toy the moment you pay — nobody makes you wait at the counter. Each receipt goes into a drawer, and the shopkeeper adds the day's numbers into the big book at closing; the drawer means nothing is lost or counted twice."
+order: 105
+status: stable
+sourceRefs:
+  [
+    'src/instance.ts · openInstanceEconomy',
+    'src/instance.ts · openInstanceEconomies',
+    'test/instance.test.ts',
+    'test/instance.prefund.test.ts',
+  ]
+related:
+  [
+    'economy/concepts/session-netting',
+    'economy/concepts/cluster',
+    'economy/reference/http-service',
+    'economy/concepts/credit-maturity',
+  ]
+---
+
+A [netting session](/economy/concepts/session-netting/) moves money in bulk; the instance economy turns it into a product lane. `purchase` takes a buyer, a CREDIT price, a sale split, and a product — and returns an accepted order in the time it takes to journal one movement.
+
+## The deliberate inversion
+
+The lane inverts the usual order of durability. Ownership is durable _immediately_: an accepted purchase writes the grant through to the entitlement store that every reader checks, so the world can hand over the product on the spot. The ledger money is settle-deferred: it rides the hash-chained journal and nets into one posting when the epoch settles.
+
+<InstanceLane />
+
+Both halves are honest. The grant is real the moment `purchase` returns, and the journal — not lane memory — is what settle replays, so a crash between purchase and settle loses nothing.
+
+## Products
+
+A purchase names a `product` with a `sku` and a `kind`:
+
+| Kind        | Grant                                                        |
+| ----------- | ------------------------------------------------------------ |
+| `permanent` | An entitlement that persists until revoked                   |
+| `temporary` | An entitlement that lapses at `expiresAt` (required here, forbidden otherwise) |
+| `instant`   | Consumed on the spot — money moves, nothing is granted       |
+
+The split follows [spend](/economy/reference/operations/spend/)'s rule: recipients' `shareBps` divide the post-fee net and must sum to exactly 10000 basis points.
+
+## Epochs rotate themselves
+
+A session settles once, so the lane manager `openInstanceEconomies` runs the rotation. `laneFor(scope)` returns the scope's current-epoch lane, opened on demand; an epoch becomes due after `epochMaxMovements` (default 512) or `epochMaxAgeMs` (default 60 seconds), and `sweep()` — or the interval `start()` drives — settles due epochs and lets the next `laneFor` open fresh ones. `settleAll()` drains everything at shutdown.
+
+A settle that throws keeps its lane: a settled session refuses new movements on its own and the journal is durable, so the next rotation retries instead of stranding the epoch.
+
+## The production screens
+
+Two options bound what the fast lane forgoes from the [submit pipeline](/economy/reference/the-economy/):
+
+- **`perUserCapMinor`** — a ceiling on what one buyer may spend in a session. It bounds the [velocity](/economy/concepts/spend-velocity/) exposure the lane gives up and the cross-node residual race. Production configs set it.
+- **`prefund`** — each buyer's first purchase moves `amountMinor` of matured spendable credits into a per-user, per-session escrow account by a real ledger posting, and every movement in the lane debits that escrow instead of <ApiLink to="functions/src.spendable" />. The escrow belongs to this session alone, which makes the accept screen session-local — that is what removes cross-node contention on the buyer's wallet. Settle refunds the remainder to `spendable`, and the orphan sweep repairs a crashed refund.
+
+Without prefund, the lane parks each buyer's immature slice in the reservation registry at first touch, so the affordability screen only ever sees matured funds — the [maturity](/economy/concepts/credit-maturity/) rule holds in either mode.
+
+## The settle backstop
+
+Settle replays the journal through the same verification the ledger applies, and a movement the replay refuses takes its grant with it: the report's `revoked` list names each buyer, SKU, and order whose entitlement was withdrawn. The lane grants eagerly and settle has the last word.
+
+## The whole host program
+
+```ts
+import { openPorts } from '@pwngh/economy-lab';
+import { openInstanceEconomies } from '@pwngh/economy-lab/netting';
+
+const ports = await openPorts(process.env, init);
+const lanes = openInstanceEconomies(ports, {
+  epochMaxAgeMs: 30_000,
+  lane: { perUserCapMinor: 500_000n }, // 5,000.00 CREDIT per buyer per session
+});
+const stopSettling = lanes.start(5_000); // rotate due epochs on cadence
+
+// Per request from a game server (an unprivileged caller):
+await lanes.laneFor(worldInstanceId).purchase({
+  buyerId,
+  price, // 300.00 CREDIT, say — drawn from spendable only
+  recipients: [{ sellerId: creatorId, shareBps: 10_000 }],
+  product: { sku: 'world-42:jetpack', kind: 'permanent' },
+});
+
+// Shutdown or drain:
+stopSettling();
+await lanes.settleAll();
+```
+
+The [HTTP service](/economy/reference/http-service/) exposes this lane as `POST /instances/:scope/purchase` when the server is constructed with an `instances` manager; running more than one economy node adds [routing and recovery](/economy/concepts/cluster/) on top.
