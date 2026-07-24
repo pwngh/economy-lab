@@ -8,7 +8,7 @@ sourceRefs: ['src/money.ts', 'src/ports.ts#L253-L282 · Rates', 'src/pricing.ts'
 related: ['economy/reference/operations/top-up', 'economy/concepts/the-proof']
 ---
 
-Two kinds of value move through the economy: in-app <Code variant="value">CREDIT</Code> and real-world <Code variant="value">USD</Code>. Each is an <Code variant="type">Amount</Code>: a <Code variant="type">Currency</Code> plus a count of minor units held as a <Code variant="type">bigint</Code>. They convert to each other only at fixed, platform-set rates, never a live market.
+Two kinds of value move through the economy: in-app <Code variant="value">CREDIT</Code> and real-world <Code variant="value">USD</Code>. Each is an <ApiLink to="types/src.Amount" />: a <ApiLink to="types/src.Currency" /> plus a count of minor units held as a <Code variant="type">bigint</Code>. They convert to each other only at fixed, platform-set rates, never a live market.
 
 Almost the whole model follows from three of those rates, ordered `buy ≥ par ≥ payout`. You pay the `buy` rate to acquire a credit. The platform backs and cashes out each credit at `par`. A seller settles earned credits at `payout`, which equals `par`.
 
@@ -23,9 +23,9 @@ const price = toAmount('CREDIT', 1000n); // 10.00 CREDIT
 encodeAmount(price); // → 'CREDIT:10.00'
 ```
 
-A whole unit is `SCALE` (`100n`) minor units, two decimal places, fixed. The `__brand` field makes a plain `{ currency, minor }` object unassignable to `Amount`, so every value has to pass through `toAmount` or `decodeAmount`. For the common case of a whole number of credits, `credits(120)` is shorthand for `toAmount('CREDIT', 12_000n)`.
+A whole unit is <ApiLink to="variables/src.SCALE" /> (`100n`) minor units, two decimal places, fixed. The `__brand` field makes a plain `{ currency, minor }` object unassignable to `Amount`, so every value has to pass through <ApiLink to="functions/src.toAmount" /> or <ApiLink to="functions/src.decodeAmount" />. For the common case of a whole number of credits, <ApiLink to="functions/src.credits">credits(120)</ApiLink> is shorthand for `toAmount('CREDIT', 12_000n)`.
 
-Two guards catch bad amounts early. `add` and `compare` call `assertSameCurrency`, which throws `CURRENCY_MISMATCH` if you hand them two different currencies — combining a `CREDIT` amount with a `USD` amount is always a bug. And `decodeAmount` rejects a string with more than two decimal places (`INVALID_AMOUNT`) rather than silently dropping the extra digits.
+Two guards catch bad amounts early. <ApiLink to="functions/src.add" /> and <ApiLink to="functions/src.compare" /> call `assertSameCurrency`, which throws `CURRENCY_MISMATCH` if you hand them two different currencies — combining a `CREDIT` amount with a `USD` amount is always a bug. And `decodeAmount` rejects a string with more than two decimal places (`INVALID_AMOUNT`) rather than silently dropping the extra digits.
 
 <Callout type="note">
   Credits are whole units in practice (a user buys, spends, and earns round
@@ -49,7 +49,7 @@ The `buy`-to-`par` gap is the platform spread, about 40% on the example rates ab
 
 Walk a `$10` purchase through: it becomes `1,200` credits. Of those, `$6.00` (`1,200 × par`) is set aside as backing, and `$4.00` is the platform's to keep. And because `payout = par`, a credit a seller earns is worth exactly the dollars reserved for it.
 
-A `Rate` is stored as exact integers (`{ rate, scale, rateId }`) with the multiplier `rate / 10^scale` (so `rate: 5n, scale: 3` is `$0.005` per credit). The `rateId` names the exact rate. That lets a [transaction](/economy/concepts/accounts-and-double-entry/) record which rate it used, and lets a [payout saga](/economy/concepts/payout-saga/) lock to one. Conversion rounds in the safe direction per call site: payouts and the solvency check round down (`convertFloor`), while a top-up rounds its gross and backing up (`convertCeil`) so held cash always covers the solvency valuation.
+A <ApiLink to="types/src_ports.Rate" /> is stored as exact integers (`{ rate, scale, rateId }`) with the multiplier `rate / 10^scale` (so `rate: 5n, scale: 3` is `$0.005` per credit). The `rateId` names the exact rate. That lets a [transaction](/economy/concepts/accounts-and-double-entry/) record which rate it used, and lets a [payout saga](/economy/concepts/payout-saga/) lock to one. Conversion rounds in the safe direction per call site: payouts and the solvency check round down (<ApiLink to="functions/src.convertFloor" />), while a top-up rounds its gross and backing up (<ApiLink to="functions/src.convertCeil" />) so held cash always covers the solvency valuation.
 
 ## The invariant: buy ≥ par ≥ payout
 
@@ -63,7 +63,7 @@ The reference [`configuredRates`](/economy/ports/rates/) adapter takes `buy`, `p
 
 There is no "purchase fee" anywhere in the code. The spread is realized by the split at top-up. Because cash is valued at `buy` going in and backing at `par`, the margin just falls out of `buy − par`.
 
-The marketplace **fee** on a sale sits outside the money model entirely. How a sale's price splits into recipient shares and platform revenue is the [pricing policy](/economy/ports/pricing/)'s job. You can see the balanced `Leg`s it produces in [accounts and double-entry](/economy/concepts/accounts-and-double-entry/).
+The marketplace **fee** on a sale sits outside the money model entirely. How a sale's price splits into recipient shares and platform revenue is the [pricing policy](/economy/ports/pricing/)'s job. You can see the balanced <ApiLink to="types/src_ports.Leg" />s it produces in [accounts and double-entry](/economy/concepts/accounts-and-double-entry/).
 
 ## What relies on it
 

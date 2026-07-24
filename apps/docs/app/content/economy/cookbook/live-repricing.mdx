@@ -23,8 +23,8 @@ carries all the state, and a rebuild over the *same* store is the same economy w
 Two pieces make the reprice safe:
 
 - **A fresh table, re-asserted.** The new [`configuredRates`](/economy/ports/rates/) build rides
-  a new bag into `createEconomy`, which re-checks `buy ≥ par` — a bad table refuses to build.
-  Each build hands out frozen `Rate` objects whose `rateId` embeds the value, so no reader sees
+  a new bag into <ApiLink to="functions/src.createEconomy" />, which re-checks `buy ≥ par` — a bad table refuses to build.
+  Each build hands out frozen <ApiLink to="types/src_ports.Rate" /> objects whose `rateId` embeds the value, so no reader sees
   a torn rate and every posting records exactly which rate priced it.
 - **Quiesce before the rebuild.** A payout in flight was reserved at the old rate and would
   settle at the new one. `read.payouts({ states: ['REQUESTED', 'RESERVED', 'SUBMITTED'] })`
@@ -35,7 +35,7 @@ Two pieces make the reprice safe:
 If you run the [background worker](/economy/reference/background-worker/), rebuild it from the
 same new bag: the worker settles payouts at the rates it was built with, so an economy rebuilt
 without it would settle payouts at the stale table. The console rebuilds both together —
-`createEconomy(ports)` then `createWorker(ports, economy)`.
+`createEconomy(ports)` then <ApiLink to="functions/src_worker.createWorker">createWorker(ports, economy)</ApiLink>.
 
 The `buy` rate may move freely between quiesced payouts; changing `par` also revalues the
 backing requirement, so treat it as a governed operation with the solvency check re-run after.

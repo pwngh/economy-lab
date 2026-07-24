@@ -7,7 +7,7 @@ status: stable
 sourceRefs:
   [
     'src/contract.ts#L68-L75 · Principal',
-    'src/economy.ts#L549-L552 · authorize',
+    'src/economy.ts#L552-L555 · authorize',
   ]
 related:
   [
@@ -41,7 +41,7 @@ await economy.submit(
 ```
 
 <Callout type="note">
-  The source type is named `Principal` in `src/contract.ts`. The `Operation`
+  The source type is named <ApiLink to="types/src.Principal" /> in `src/contract.ts`. The <ApiLink to="types/src.Operation" />
   field that carries it is `actor`, and this site uses `Actor` for the concept.
   They all mean the same thing: the value attached to every request that says
   who is asking.
@@ -61,9 +61,9 @@ Each kind of principal carries its own identifier and its own reach.
 
 | Actor      | Carries      | What it may do                                                                                                                                                                 |
 | ---------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `user`     | `userId`     | Act on its own accounts: `spend`, `subscribe`, `requestPayout`, `cancelSubscription`, and reads. It may pay _into_ another account but never debit out of one it does not own. |
-| `system`   | `service`    | A trusted internal service. The privileged automated flows: `topUp`, `refund`, `clawback`, promo and entitlement grants and revokes, `settlePayout`. Full access today.        |
-| `operator` | `operatorId` | A human running a manual, fully-audited fix: `adjust` and `reverse`, plus anything `system` can do.                                                                            |
+| `user`     | `userId`     | Act on its own accounts: <ApiLink to="variables/src.spend" />, <ApiLink to="variables/src.subscribe" />, <ApiLink to="variables/src.requestPayout" />, <ApiLink to="variables/src.cancelSubscription" />, and reads. It may pay _into_ another account but never debit out of one it does not own. |
+| `system`   | `service`    | A trusted internal service. The privileged automated flows: <ApiLink to="variables/src.topUp" />, <ApiLink to="variables/src.refund" />, <ApiLink to="variables/src.clawback" />, promo and entitlement grants and revokes, <ApiLink to="variables/src.settlePayout" />. Full access today.        |
+| `operator` | `operatorId` | A human running a manual, fully-audited fix: <ApiLink to="variables/src.adjust" /> and <ApiLink to="variables/src.reverse" />, plus anything `system` can do.                                                                            |
 
 <Callout type="note">
   `system` has full access for now; the source notes per-service permission
@@ -83,14 +83,14 @@ The privileged set is, per <SourceLink to="src/economy.ts#L812-L823">source</Sou
 
 | Restricted operation                     | Why a `user` is barred                                                                                     |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `topUp`                                  | Mints `spendable` credits; only the trusted payment path may issue.                                        |
-| `grantPromo`                             | Issues marketing credit a user could otherwise grant themself.                                             |
-| `grantEntitlement` / `revokeEntitlement` | Names an arbitrary account the caller need not own; no debit for the ownership check to catch.             |
-| `refund`                                 | Debits a seller's `earned` balance. Self-serve refund is a fraud vector.                                   |
-| `clawback`                               | Reclaims credits from an account the actor need not own.                                                   |
-| `reversePayout`                          | Force-fails a payout in flight; an emergency action run by hand.                                           |
-| `settlePayout`                           | Disburses real [USD](/economy/concepts/solvency/) out of trust; a user must never settle their own payout. |
-| `adjust` / `reverse`                     | Manual operator corrections, each requiring a written reason in the audit trail.                           |
+| <ApiLink to="variables/src.topUp" />                                  | Mints `spendable` credits; only the trusted payment path may issue.                                        |
+| <ApiLink to="variables/src.grantPromo" />                             | Issues marketing credit a user could otherwise grant themself.                                             |
+| <ApiLink to="variables/src.grantEntitlement" /> / <ApiLink to="variables/src.revokeEntitlement" /> | Names an arbitrary account the caller need not own; no debit for the ownership check to catch.             |
+| <ApiLink to="variables/src.refund" />                                 | Debits a seller's `earned` balance. Self-serve refund is a fraud vector.                                   |
+| <ApiLink to="variables/src.clawback" />                               | Reclaims credits from an account the actor need not own.                                                   |
+| <ApiLink to="variables/src.reversePayout" />                          | Force-fails a payout in flight; an emergency action run by hand.                                           |
+| <ApiLink to="variables/src.settlePayout" />                           | Disburses real [USD](/economy/concepts/solvency/) out of trust; a user must never settle their own payout. |
+| <ApiLink to="variables/src.adjust" /> / <ApiLink to="variables/src.reverse" />                     | Manual operator corrections, each requiring a written reason in the audit trail.                           |
 
 ## How it's enforced
 

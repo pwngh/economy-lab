@@ -20,8 +20,8 @@ tickets about "payment declined" may follow if the cohort includes real users.
 ## Detection
 
 Sum of RISK_DENIED rejections over `anomalyWindowMs` (default 5m) reaches `anomalyThreshold`
-(default 20). The finding carries `byKind` — which operations tripped, outflow (`spend`,
-`requestPayout`) vs inflow (`topUp`, `grantPromo`) — and `ratePerMin`.
+(default 20). The finding carries `byKind` — which operations tripped, outflow (<ApiLink to="variables/src.spend" />,
+<ApiLink to="variables/src.requestPayout" />) vs inflow (<ApiLink to="variables/src.topUp" />, <ApiLink to="variables/src.grantPromo" />) — and `ratePerMin`.
 
 ## Automatic response
 

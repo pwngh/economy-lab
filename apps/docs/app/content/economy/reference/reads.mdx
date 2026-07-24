@@ -6,10 +6,10 @@ status: stable
 sourceRefs:
   [
     'src/contract.ts#L376-L436 · Economy.read',
-    'src/economy.ts#L83-L97 · read',
     'src/economy.ts#L98-L112 · read',
     'test/economy.read.test.ts',
   ]
+apiRefs: ['interfaces/src.Economy']
 related: ['economy/reference/outcomes-and-reason-codes']
 ---
 
@@ -34,7 +34,7 @@ The sections below group them by what you're asking for.
 
 These two answer "how much, and how did it get there?" for one account at a time.
 
-`read.balance(account)` returns the account's current balance as an [`Amount`](/economy/concepts/money-model/). It's a stored running total, so it's a single O(1) read rather than a re-sum over the account's whole history. Pass an account reference built from a helper like `spendable`, `earned`, or `promo`. One exception to "single": with [platform sharding](/economy/concepts/platform-sharding/) on, a bare sharded account reads as the sum over its shard rows — one row per shard, still no history walk:
+`read.balance(account)` returns the account's current balance as an [`Amount`](/economy/concepts/money-model/). It's a stored running total, so it's a single O(1) read rather than a re-sum over the account's whole history. Pass an account reference built from a helper like <ApiLink to="functions/src.spendable" />, <ApiLink to="functions/src.earned" />, or <ApiLink to="functions/src.promo" />. One exception to "single": with [platform sharding](/economy/concepts/platform-sharding/) on, a bare sharded account reads as the sum over its shard rows — one row per shard, still no history walk:
 
 ```ts
 const balance = await economy.read.balance(earned('usr_seller'));

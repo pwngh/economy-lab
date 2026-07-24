@@ -9,12 +9,13 @@ sourceRefs:
     'src/ports.ts#L274 · Rate',
     'src/adapters/rates.ts#L84-L125 · configuredRates',
   ]
+apiRefs: ['interfaces/src_ports.Rates']
 related: ['economy/ports/pricing']
 ---
 
 ## The seam
 
-Somewhere, the economy has to answer a single question: how many real dollars is a credit worth? Buying credits, backing them, and paying sellers out all turn on that number. The `Rates` port is the seam where that answer comes in, so the core never hard-codes a price and never trusts a caller to supply one.
+Somewhere, the economy has to answer a single question: how many real dollars is a credit worth? Buying credits, backing them, and paying sellers out all turn on that number. The <ApiLink to="interfaces/src_ports.Rates" /> port is the seam where that answer comes in, so the core never hard-codes a price and never trusts a caller to supply one.
 
 It hands the rest of the system three rates, each tagged with the exact `rateId` it used. A top-up reads one rate, the backing check reads another, and a payout saga reads a third, and because each call returns the rate's id, a transaction can record which number it priced against.
 
@@ -34,13 +35,13 @@ Each method answers a different question:
 
 The rates hold the order `buy ≥ par ≥ payout`, and the `buy`-to-`par` gap is the platform spread. The full story of why that ordering matters lives on the money-model page.
 
-Two of the methods are synchronous and one is not. `buy` and `par` return a `Rate` directly, because they're constants the core reads on the hot path. `payout` is `async` and takes an `at` timestamp. It carries the shape a live, time-varying settlement feed would need, even though the reference adapter ignores the timestamp.
+Two of the methods are synchronous and one is not. `buy` and `par` return a <ApiLink to="types/src_ports.Rate" /> directly, because they're constants the core reads on the hot path. `payout` is `async` and takes an `at` timestamp. It carries the shape a live, time-varying settlement feed would need, even though the reference adapter ignores the timestamp.
 
 A `Rate` is three integers, not a float: `{ rate, scale, rateId }`, where the multiplier is `rate / 10^scale`. Storing the price as exact integers keeps conversion free of floating-point drift. See `Rate` in `src/ports.ts`.
 
 ## The configured adapter
 
-The default adapter is `configuredRates` in `src/adapters/rates.ts`. You hand it a `RatesConfig` (six integers, a `rate` and a `scale` for each of the three rates) and it returns a `Rates` instance that serves them back.
+The default adapter is `configuredRates` in `src/adapters/rates.ts`. You hand it a <ApiLink to="types/src.RatesConfig" /> (six integers, a `rate` and a `scale` for each of the three rates) and it returns a `Rates` instance that serves them back.
 
 ```ts
 const rates = configuredRates({
@@ -63,7 +64,7 @@ Only `CREDIT` and `USD` exist in the lab. A same-currency conversion returns a 1
   miswired deployment. The economy re-checks `buy ≥ par` when it is built, so
   a custom rate source fails just as early. And a source whose answers turn
   misordered after construction faults the top-up by name instead of booking
-  a loss. `requestPayout` likewise refuses a payout rate above `par` at the
+  a loss. <ApiLink to="variables/src.requestPayout" /> likewise refuses a payout rate above `par` at the
   moment the payout is priced. The money-model page explains [what that
   ordering protects](/economy/concepts/money-model/#the-invariant-buy--par--payout).
 </Callout>

@@ -30,11 +30,11 @@ const balance = await economy.read.balance(account); // look, never change
 await economy.close(); // release the store
 ```
 
-You build it from a set of injected ports (a `Store`, a `Signer`, a `Processor`, a `Rates`, a `FeePolicy`, a clock, and an id source) so the core never reaches for a database driver or a wall clock. Pass in-memory ports to run the same economy with no external infrastructure.
+You build it from a set of injected ports (a <ApiLink to="interfaces/src_ports.Store" />, a <ApiLink to="interfaces/src_ports.Signer" />, a <ApiLink to="interfaces/src_ports.Processor" />, a `Rates`, a `FeePolicy`, a clock, and an id source) so the core never reaches for a database driver or a wall clock. Pass in-memory ports to run the same economy with no external infrastructure.
 
 ## Construction
 
-`createEconomy(ports)` is the one call: hand it a full `Ports` bag and it assembles the economy, synchronously. `memoryPorts` builds a batteries-included in-memory bag: the in-memory `Store`, a dev `Signer`, a dev `Rates` table, a flat `FeePolicy`, and an in-memory `Processor`, all wired. No environment, no infrastructure:
+`createEconomy(ports)` is the one call: hand it a full <ApiLink to="types/src_ports.Ports" /> bag and it assembles the economy, synchronously. <ApiLink to="functions/src.memoryPorts" /> builds a batteries-included in-memory bag: the in-memory `Store`, a dev `Signer`, a dev <ApiLink to="interfaces/src_ports.Rates" /> table, a flat <ApiLink to="types/src.FeePolicy" />, and an in-memory `Processor`, all wired. No environment, no infrastructure:
 
 ```ts
 import { createEconomy, memoryPorts } from '@pwngh/economy-lab';
@@ -42,7 +42,7 @@ import { createEconomy, memoryPorts } from '@pwngh/economy-lab';
 const economy = createEconomy(memoryPorts({ signingKey: 'dev-signing-key' }));
 ```
 
-`openPorts(env, init?)` resolves the bag from the environment instead: the `Store` from `DATABASE_URL` (a `postgres://` or `mysql://` connection string picks that engine, and an unset value falls back to the in-memory store), and the external ports, config, and secrets from their own keys. Outside production it fills sane defaults for anything absent; in production it requires each external port set or expressly declined, and fails fast with one message naming everything missing. Any field you pass in `init` wins over the env-derived one:
+<ApiLink to="functions/src.openPorts">openPorts(env, init?)</ApiLink> resolves the bag from the environment instead: the `Store` from `DATABASE_URL` (a `postgres://` or `mysql://` connection string picks that engine, and an unset value falls back to the in-memory store), and the external ports, config, and secrets from their own keys. Outside production it fills sane defaults for anything absent; in production it requires each external port set or expressly declined, and fails fast with one message naming everything missing. Any field you pass in `init` wins over the env-derived one:
 
 ```ts
 import { createEconomy, openPorts } from '@pwngh/economy-lab';
@@ -53,7 +53,7 @@ const economy = createEconomy(await openPorts(process.env));
 const withLiveRates = createEconomy(await openPorts(process.env, { rates: liveRates() }));
 ```
 
-A host that wants the whole stack from one call uses `boot`, which opens the ports, assembles the economy over them, and builds the [background worker](/economy/reference/background-worker/) over the same bag (pass `worker: false` to skip it):
+A host that wants the whole stack from one call uses <ApiLink to="functions/src.boot" />, which opens the ports, assembles the economy over them, and builds the [background worker](/economy/reference/background-worker/) over the same bag (pass `worker: false` to skip it):
 
 ```ts
 import { boot } from '@pwngh/economy-lab';
@@ -78,11 +78,13 @@ Here a user tops up their balance and the balance visibly moves; the result tell
 A `rejected` outcome is a normal "no" returned as data, not an error; a genuine fault throws instead. See [outcomes and reason codes](/economy/reference/outcomes-and-reason-codes/) for the full set.
 
 Every submit is also metered through the injected `Meter`: one count under `economy.submit`, tagged by operation kind and how it resolved (`committed`, `duplicate`, `rejected`, or `fault`), plus its duration under `economy.submit.ms` — request-path telemetry without wrapping `submit` yourself.
+Every submit is also metered through the injected <ApiLink to="interfaces/src_ports.Meter" />: one count under `economy.submit`, tagged by operation kind and how it resolved (`committed`, `duplicate`, `rejected`, or `fault`), plus its duration under `economy.submit.ms` — request-path telemetry without wrapping `submit` yourself.
 
 ### Caveats
 
 - A business "no" is a returned `rejected` outcome, never a throw. A throw means the request itself is broken (`OP.MALFORMED`, `AUTH.UNAUTHORIZED`) or infrastructure failed — a caller bug or an outage, not a decline.
 - Amounts are minor units as `bigint`: `toAmount('CREDIT', 12_000n)` is 120 credits, or `credits(120)` with the whole-unit shorthand. There is no float anywhere in the money path.
+- Amounts are minor units as `bigint`: <ApiLink to="functions/src.toAmount">toAmount('CREDIT', 12_000n)</ApiLink> is 120 credits, or <ApiLink to="functions/src.credits">credits(120)</ApiLink> with the whole-unit shorthand. There is no float anywhere in the money path.
 - A `duplicate` outcome carries the original transaction. Treat it as success — the work is done — not as an error.
 - A rejected request leaves its idempotency key unused, so the same key can retry after the condition clears.
 

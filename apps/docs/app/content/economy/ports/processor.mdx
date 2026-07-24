@@ -5,9 +5,10 @@ order: 20
 status: stable
 sourceRefs:
   [
-    'src/ports.ts#L199-L215 · Processor',
+    'src/ports.ts#L216-L232 · Processor',
     'src/adapters/processor.ts#L64 · httpProcessor',
   ]
+apiRefs: ['interfaces/src_ports.Processor']
 related:
   [
     'economy/ports/packages',
@@ -19,7 +20,7 @@ related:
 
 ## The seam where real money leaves
 
-economy-lab never moves real money on its own. It keeps a double-entry ledger of credits and tracks what each seller is owed, but the actual USD disbursement lives at a payment provider you plug in. The `Processor` port is that seam.
+economy-lab never moves real money on its own. It keeps a double-entry ledger of credits and tracks what each seller is owed, but the actual USD disbursement lives at a payment provider you plug in. The <ApiLink to="interfaces/src_ports.Processor" /> port is that seam.
 
 Everything else (balances, reserves, the hash chain) stays inside the lab and is provable. A payout is money the lab can no longer see once it lands, so the lab hands that step to a provider and records only the provider's reference.
 
@@ -98,7 +99,7 @@ The package is an optional peer dependency: without it installed, the lab compos
 
 Submitting is only half the loop. The other half (did the money land, or did the seller dispute a purchase) comes back through inbound webhooks, not a return value.
 
-A settlement webhook drives the `SUBMITTED → SETTLED` step. The webhook edge maps the verified event to a `settlePayout` operation via `toSettlePayout`, which clears the saga and moves the gross USD out of trust. The provider's reported amount is recorded for reconciliation but never trusted as the posted figure.
+A settlement webhook drives the `SUBMITTED → SETTLED` step. The webhook edge maps the verified event to a <ApiLink to="variables/src.settlePayout" /> operation via `toSettlePayout`, which clears the saga and moves the gross USD out of trust. The provider's reported amount is recorded for reconciliation but never trusted as the posted figure.
 
 A failed payout comes back the same way, and promptly. The common real-world failure is asynchronous — the rail accepts a payout and only rejects it during processing (a rejected beneficiary, an unsupported destination) — so a verified `PayoutFailedEvent` maps to a [`reversePayout`](/economy/reference/operations/reverse-payout/) via `toReversePayout` with `providerReported` set. That waives the operation's still-live `SUBMITTED` refusal on the strength of the rail's own report, returning the seller's reserve as soon as the rail gives up rather than after the `maxPayoutAgeMs` timeout; the saga-state compare-and-set still stands down if a settle callback won the race.
 

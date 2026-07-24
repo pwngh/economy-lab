@@ -9,6 +9,7 @@ sourceRefs:
     "src/contract.ts#L178 · kind 'reversePayout'",
     'src/operations/registry.ts#L70 · REGISTRY',
   ]
+apiRefs: ['variables/src.reversePayout']
 related:
   [
     'economy/reference/operations/request-payout',
@@ -18,7 +19,7 @@ related:
 
 import reversePayoutHttp from '../../../../snippets/http/reverse-payout.sh?shiki';
 
-`reversePayout` undoes an in-flight payout by hand. It does two things in one
+<ApiLink to="variables/src.reversePayout" /> undoes an in-flight payout by hand. It does two things in one
 [`Transaction`](/economy/concepts/accounts-and-double-entry/): it marks the payout's
 [`Saga`](/economy/concepts/payout-saga/) as `FAILED`, and it returns the reserved
 credits to the seller's `earned` account.
@@ -64,7 +65,7 @@ The payload fields, beyond the `kind` tag, are:
 
 The operation names no account directly. The seller's `earned` account and the
 [`PAYOUT_RESERVE`](/economy/concepts/accounts-and-double-entry/) account both come off the loaded
-`Saga` inside the handler.
+<ApiLink to="interfaces/src_ports.Saga" /> inside the handler.
 
 <Callout type="warning">
   `userId` must equal the saga's own `userId`. The engine locks the account

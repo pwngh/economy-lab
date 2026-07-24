@@ -8,8 +8,9 @@ sourceRefs:
     'src/operations/requestPayout.ts#L38 · requestPayout',
     "src/contract.ts#L110 · kind 'requestPayout'",
     'src/operations/registry.ts#L62 · REGISTRY',
-    'src/ports.ts#L1050-L1056 · SAGA_STATES',
+    'src/ports.ts#L1058-L1064 · SAGA_STATES',
   ]
+apiRefs: ['variables/src.requestPayout']
 related:
   [
     'economy/reference/operations/settle-payout',
@@ -21,7 +22,7 @@ related:
 import payoutHtml from '../../../../snippets/payout.ts?shiki';
 import requestPayoutHttp from '../../../../snippets/http/request-payout.sh?shiki';
 
-`requestPayout` starts a seller's cash-out. It reserves some of their earned credits and opens a payout [saga](/economy/concepts/payout-saga/) that a [background worker](/economy/reference/background-worker/) later finishes by paying real USD. It does not pay anyone itself.
+<ApiLink to="variables/src.requestPayout" /> starts a seller's cash-out. It reserves some of their earned credits and opens a payout [saga](/economy/concepts/payout-saga/) that a [background worker](/economy/reference/background-worker/) later finishes by paying real USD. It does not pay anyone itself.
 
 Here a seller asks to cash out `25,000.00` of their earned credits, clearing the default payout minimum. The amount is their own [`earned`](/economy/concepts/accounts-and-double-entry/) balance, in `CREDIT` minor units:
 
@@ -74,13 +75,13 @@ The commit posts one balanced [double-entry](/economy/concepts/accounts-and-doub
 
 This moves the credits out of the seller's reach and into `PAYOUT_RESERVE`, which holds credits owed out as a payout. The USD side posts later, when the worker settles the saga. See [the payout saga](/economy/concepts/payout-saga/).
 
-The same transaction opens a `Saga` in state `RESERVED` (see <SourceLink to="src/ports.ts#L1050-L1056 · SAGA_STATES" />). The saga also stores the USD quote itself — the reserve converted at the request-time [`payout`](/economy/concepts/money-model/) rate, floored — alongside the rate's id. The worker submits exactly that quote to the rail and settlement posts it unchanged, so the amount can never drift between quoting, paying, and recording. A payout rate above `par` is refused here with `CONFIG_INVALID`, at the one place the payout is priced.
+The same transaction opens a <ApiLink to="interfaces/src_ports.Saga" /> in state `RESERVED` (see <SourceLink to="src/ports.ts#L1058-L1064 · SAGA_STATES" />). The saga also stores the USD quote itself — the reserve converted at the request-time [`payout`](/economy/concepts/money-model/) rate, floored — alongside the rate's id. The worker submits exactly that quote to the rail and settlement posts it unchanged, so the amount can never drift between quoting, paying, and recording. A payout rate above `par` is refused here with `CONFIG_INVALID`, at the one place the payout is priced.
 
 The committed transaction's `meta.sagaId` names the saga it opened, so a caller can follow the payout with `read.saga(sagaId)` instead of scanning `read.payouts()` for its own request.
 
 ## Authorization
 
-`requestPayout` is not a privileged operation, so an end `user` can run it, but only for their own account. The ownership check requires the caller to own the `earned` account being debited; a `user` requesting another seller's payout is refused with `AUTH.UNAUTHORIZED` (see <SourceLink to="src/economy.ts#L568 · debitedUserAccounts" />).
+`requestPayout` is not a privileged operation, so an end `user` can run it, but only for their own account. The ownership check requires the caller to own the `earned` account being debited; a `user` requesting another seller's payout is refused with `AUTH.UNAUTHORIZED` (see <SourceLink to="src/economy.ts#L950 · debitedUserAccounts" />).
 
 A `system` service or a human `operator` may also request a payout on a seller's behalf. See [actors and authorization](/economy/concepts/actors-and-authorization/) for the full rule.
 
@@ -118,7 +119,7 @@ A malformed request throws instead:
 | Code                   | When                                                                                                                        |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `OP.MALFORMED`         | The `amount` isn't `CREDIT`.                                                                                                |
-| `MONEY.INVALID_AMOUNT` | The `amount` is zero or negative (see <SourceLink to="src/operations/requestPayout.ts#L190 · payableCredit" />).             |
+| `MONEY.INVALID_AMOUNT` | The `amount` is zero or negative (see <SourceLink to="src/operations/requestPayout.ts#L186 · payableCredit" />).             |
 
 Both are programming errors.
 

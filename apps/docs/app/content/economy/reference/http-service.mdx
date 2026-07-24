@@ -6,6 +6,7 @@ status: stable
 sourceRefs:
   [
     'src/server.ts#L168 · createServer',
+    'src/server.ts#L168 · createServer',
     'scripts/main.ts#L404 · runServe',
     'test/server.test.ts',
   ]
@@ -17,6 +18,7 @@ related: ['economy/scope-and-non-goals', 'economy/ports/signer']
 Most of these docs talk about the [`Economy`](/economy/reference/the-economy/) as an in-process object: you hold a reference and call `submit` against it directly. But a deployed service has to take requests off a socket. That's what the HTTP service is: a thin wrapper that turns a Fetch `Request` into one `submit` call and a `Response`.
 
 <SourceLink to="src/server.ts#L80">createServer</SourceLink> takes one options object — the `Economy`, the narrow `ports` pick the routes read (`config`, `secrets`, `clock`, `meter`, `logger`; a full `Ports` is assignable), and an `authenticate` posture — and returns a handler with the signature `(request: Request) => Promise<Response>`:
+<SourceLink to="src/server.ts#L80">createServer</SourceLink> takes one options object — the `Economy`, the narrow `ports` pick the routes read (`config`, `secrets`, `clock`, `meter`, `logger`; a full <ApiLink to="types/src_ports.Ports" /> is assignable), and an `authenticate` posture — and returns a handler with the signature `(request: Request) => Promise<Response>`:
 
 ```ts
 import { createServer } from '@pwngh/economy-lab';
@@ -48,6 +50,7 @@ The handler routes four paths and answers `404` to everything else. Two move mon
 ## Submitting an operation
 
 `POST /submit` is the request-path version of a `submit` call. You send one operation as a JSON object; you get back its `Outcome`. The body's `kind` selects the operation: `topUp`, `spend`, `refund`, and the rest. Every [operation page](/economy/reference/operations/) shows both forms of its example: the HTTP tab is the same call as a `curl` against this route.
+`POST /submit` is the request-path version of a `submit` call. You send one operation as a JSON object; you get back its `Outcome`. The body's `kind` selects the operation: <ApiLink to="variables/src.topUp" />, <ApiLink to="variables/src.spend" />, <ApiLink to="variables/src.refund" />, and the rest. Every [operation page](/economy/reference/operations/) shows both forms of its example: the HTTP tab is the same call as a `curl` against this route.
 
 One detail matters on the wire: money never travels as a JSON number. A JSON number can't safely hold the integer minor-units an [`Amount`](/economy/concepts/money-model/) carries, so money fields arrive as decimal strings like `CREDIT:10.00` and the server decodes them back into `Amount` values. Here's a `topUp` body:
 
@@ -92,7 +95,7 @@ In the status mapping below, a decline is a normal answer and a fault is an HTTP
 
 ### How thrown faults map to status codes
 
-When `submit` throws an `EconomyError`, <SourceLink to="src/server.ts#L363">statusForError</SourceLink> maps it to a status code. The response carries the caller-safe problem fields (`title`, `code`, `retryable`) and never `detail`, `cause`, or stack — those stay server-side.
+When `submit` throws an <ApiLink to="classes/src.EconomyError" />, <SourceLink to="src/server.ts#L363">statusForError</SourceLink> maps it to a status code. The response carries the caller-safe problem fields (`title`, `code`, `retryable`) and never `detail`, `cause`, or stack — those stay server-side.
 
 The mapping is by the error's stable code:
 
@@ -112,6 +115,7 @@ The problem body carries `type`, `title` (the caller-safe message), `status`, an
 ## Authenticating the submit path
 
 `ServerOptions.authenticate` is a required posture, not a default: `createServer` refuses to construct without it. Passing `authenticate: false` declares that the server trusts the `actor` object in the body, which is only safe when the handler runs in-process and every caller is your own code. The moment the handler sits on a network socket, the actor must come from a credential, not from the caller's say-so — otherwise any client can claim to be an operator.
+`ServerOptions.authenticate` is a required posture, not a default: <ApiLink to="functions/src_server.createServer" /> refuses to construct without it. Passing `authenticate: false` declares that the server trusts the `actor` object in the body, which is only safe when the handler runs in-process and every caller is your own code. The moment the handler sits on a network socket, the actor must come from a credential, not from the caller's say-so — otherwise any client can claim to be an operator.
 
 For that, you supply a function from the raw `Request` to a [`Principal`](/economy/concepts/actors-and-authorization/) — typically by checking a bearer token or session cookie — and <SourceLink to="src/server.ts#L251">submitRoute</SourceLink> runs it before it reads the body:
 
@@ -136,7 +140,7 @@ Authorization — what the stamped principal may then do — is unchanged and st
 
 ## Body limits and cross-origin calls
 
-Every body the server accepts — `/submit` and `/webhooks/:provider` alike — is read under two bounds, both settable in `ServerOptions`:
+Every body the server accepts — `/submit` and `/webhooks/:provider` alike — is read under two bounds, both settable in <ApiLink to="interfaces/src_server.ServerOptions" />:
 
 - **A byte ceiling** (`maxBodyBytes`, default 64 KiB). A declared `content-length` past it is refused before any byte is read; a lying or absent declaration is caught while the chunks arrive. Past the ceiling the reply is a `413` problem. Every legitimate operation fits in a small fraction of the default.
 - **A read deadline** (`readTimeoutMs`, default 10 seconds). A body that trickles past the deadline is answered with a `408` problem, so a slow client cannot hold the handler open.
@@ -158,7 +162,7 @@ Origins match exactly. With the option absent the server sets no CORS headers at
 
 ## Rate limiting the submit path
 
-`/submit` takes admission control through the `RateLimiter` port: one `allow` call per request, keyed by caller, answering a verdict. The limit and window are the adapter's policy, so the server never sees the numbers:
+`/submit` takes admission control through the <ApiLink to="interfaces/src_ports.RateLimiter" /> port: one `allow` call per request, keyed by caller, answering a verdict. The limit and window are the adapter's policy, so the server never sees the numbers:
 
 ```ts
 import { createServer } from '@pwngh/economy-lab';
@@ -188,7 +192,7 @@ Two boundaries on purpose: worker-born events (payout reversals, subscription re
 
 The other money-moving path is inbound. A payment provider calls `POST /webhooks/:provider` to report a real-world event: a user's purchase cleared, a payout settled or failed, a charge was disputed. The `:provider` segment names who's calling (`steam`, `billing`); it comes from the route, not the body, so it can't be spoofed.
 
-The server doesn't apply these itself. It verifies the callback, then hands the trusted bytes to a `WebhookHandler` you inject through <SourceLink to="src/server.ts#L42">ServerOptions</SourceLink>. With no handler wired, the path answers `404`. The handler is where the callback becomes a ledger operation: a cleared purchase maps to a `topUp`, a settled payout to a `settlePayout`, a failed payout to a `reversePayout`, a dispute to a `clawback`. Those mappers (`toTopUp`, `toSettlePayout`, `toReversePayout`, `toClawback`) and the event shapes they consume belong to the [processor port](/economy/ports/processor/), so see that page for the dispatch. The economy-edge bridge injects exactly such a handler for the Tilia rail's callbacks ([the packages](/economy/ports/packages/)).
+The server doesn't apply these itself. It verifies the callback, then hands the trusted bytes to a `WebhookHandler` you inject through <SourceLink to="src/server.ts#L42">ServerOptions</SourceLink>. With no handler wired, the path answers `404`. The handler is where the callback becomes a ledger operation: a cleared purchase maps to a `topUp`, a settled payout to a <ApiLink to="variables/src.settlePayout" />, a failed payout to a <ApiLink to="variables/src.reversePayout" />, a dispute to a <ApiLink to="variables/src.clawback" />. Those mappers (`toTopUp`, `toSettlePayout`, `toReversePayout`, `toClawback`) and the event shapes they consume belong to the [processor port](/economy/ports/processor/), so see that page for the dispatch. The economy-edge bridge injects exactly such a handler for the Tilia rail's callbacks ([the packages](/economy/ports/packages/)).
 
 ### The verification gate
 

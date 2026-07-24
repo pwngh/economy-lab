@@ -9,6 +9,7 @@ sourceRefs:
     'src/operations/cancelSubscription.ts#L70 · assertMayCancel',
     'src/operations/guards.ts#L98 · lifecycleMarker',
   ]
+apiRefs: ['variables/src.cancelSubscription']
 related:
   [
     'economy/reference/operations/grant-entitlement',
@@ -18,7 +19,7 @@ related:
 
 import cancelSubscriptionHttp from '../../../../snippets/http/cancel-subscription.sh?shiki';
 
-`cancelSubscription` marks an active [`Subscription`](/economy/concepts/subscriptions/) `CANCELED`,
+<ApiLink to="variables/src.cancelSubscription" /> marks an active [`Subscription`](/economy/concepts/subscriptions/) `CANCELED`,
 so the [background worker's](/economy/reference/background-worker/) renewal sweep stops billing
 it. It moves no money.
 

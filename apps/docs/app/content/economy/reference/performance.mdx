@@ -23,7 +23,7 @@ make bench   # in-memory, plus any Postgres/MySQL that's reachable
 
 The bench prints five tables.
 
-- **Submit throughput** — `submit()` rate for `topUp`, `spend`, and `requestPayout`, per backend (in-memory, plus Postgres and MySQL when they're up), measured both sequentially (one op at a time, latency-bound) and concurrently (up to `BENCH_CONCURRENCY` in flight — the throughput the engine sustains). This is the engine cost of the double-entry and hash-chain work per operation.
+- **Submit throughput** — `submit()` rate for <ApiLink to="variables/src.topUp" />, <ApiLink to="variables/src.spend" />, and <ApiLink to="variables/src.requestPayout" />, per backend (in-memory, plus Postgres and MySQL when they're up), measured both sequentially (one op at a time, latency-bound) and concurrently (up to `BENCH_CONCURRENCY` in flight — the throughput the engine sustains). This is the engine cost of the double-entry and hash-chain work per operation.
 - **Instance netting** — the opt-in netting path: accept many small balanced movements into an in-instance journal, then settle the net to the ledger in one posting. Measures the accept rate and the settle cost.
 - **Entitlement bitset** — the same `owns()` ownership check answered by a store round-trip versus a warm in-process bitmap.
 - **Integrity cost versus ledger size** — for a growing number of postings, the time to [prove](/economy/concepts/the-proof/) the ledger, to seal a [checkpoint](/economy/concepts/integrity/), and to verify the latest checkpoint.

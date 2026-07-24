@@ -29,6 +29,8 @@ export const docSchema = z.object({
   status: z.enum(['stable', 'draft', 'planned']).default('stable'),
   // Source files/symbols this page documents, rendered as the "Source" chips.
   sourceRefs: z.array(z.string()).default([]),
+  // TypeDoc output paths ('variables/src.topUp') this page's surface renders at, as "API" chips.
+  apiRefs: z.array(z.string()).default([]),
   // Slugs of related pages, rendered as "See also".
   related: z.array(z.string()).default([]),
   // An optional plain-language "what this is" for a complete newcomer (the ten-year-old test),

@@ -11,15 +11,16 @@ sourceRefs:
     'src/contract.ts#L46 · EntitlementAttributes',
     'src/economy.ts#L866 · RESTRICTED_TO_PRIVILEGED',
   ]
+apiRefs: ['variables/src.grantEntitlement']
 related: ['economy/reference/operations/revoke-entitlement']
 ---
 
 import grantEntitlementHttp from '../../../../snippets/http/grant-entitlement.sh?shiki';
 
-`grantEntitlement` records that a user owns an item or feature, named by a `sku` (a product code such
+<ApiLink to="variables/src.grantEntitlement" /> records that a user owns an item or feature, named by a `sku` (a product code such
 as `wrld_pass`). It tracks ownership only. No money moves, and the ledger is untouched.
 
-A `spend` grants the buyer's entitlement as part of the sale. You reach for `grantEntitlement`
+A <ApiLink to="variables/src.spend" /> grants the buyer's entitlement as part of the sale. You reach for `grantEntitlement`
 directly when ownership comes from somewhere else: a manual fulfillment, a migration, or a comp.
 
 You name the user and the SKU. The actor is a trusted `system` service or a human `operator`:
@@ -53,7 +54,7 @@ The payload fields, beyond the `kind` tag, are:
 | `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`.                                                         |
 | `userId`         | `string`                                               | (required) | The user who gains ownership. Must be non-empty after trimming whitespace.                             |
 | `sku`            | `string`                                               | (required) | The item or feature owned. Must be non-empty after trimming whitespace.                                |
-| `attrs`          | `EntitlementAttributes`                                     | `{}`       | Optional details stored with the grant (see below).                                                    |
+| `attrs`          | <ApiLink to="types/src.EntitlementAttributes" />                                     | `{}`       | Optional details stored with the grant (see below).                                                    |
 
 `EntitlementAttributes` carries four optional fields: `quantity` (a count), `version` (a number),
 `expiresAt` (an instant in epoch milliseconds, or `null` for "never expires"), and `source` (a free

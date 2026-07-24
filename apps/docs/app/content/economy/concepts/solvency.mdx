@@ -40,7 +40,7 @@ Only spendable credits need backing. [`classify`](/economy/concepts/accounts-and
 
 The excluded credits are obligations owed in credits, not dollars, so they don't raise the cash the platform must hold. Three classes stay out of the backing total:
 
-- Credits a seller has `earned` but not yet cashed out.
+- Credits a seller has <ApiLink to="functions/src.earned" /> but not yet cashed out.
 - Credits reserved for a payout in flight (`payout_reserve`).
 - Promo grants.
 
@@ -58,7 +58,7 @@ The platform gets paid only from the **surplus** — cash beyond what's owed to 
 
 ## How it's enforced
 
-The backing check never blocks a write. It's an audit that re-derives the position from the ledger after the fact. `proveEconomy` runs it in three steps.
+The backing check never blocks a write. It's an audit that re-derives the position from the ledger after the fact. <ApiLink to="functions/src.proveEconomy" /> runs it in three steps.
 
 First, it walks every account and sums the balances `classify` marks `custodial`, filtered to `CREDIT` so a stray USD balance can't slip in. Then it converts that total to required USD at par, rounding down. Finally it reads the trust cash on hand and sets `shortfall` to `required − trust_cash` when the cash falls short, or zero otherwise. On a [sharded ledger](/economy/concepts/platform-sharding/), that trust-cash figure is the sum of every `trust_cash` shard row.
 

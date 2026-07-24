@@ -9,6 +9,7 @@ sourceRefs:
     'src/runtime.ts#L134-L171 · systemSigner',
     'src/chain.ts#L288-L382 · recordCheckpoint / verifyCheckpoint',
   ]
+apiRefs: ['interfaces/src_ports.Signer', 'interfaces/src_ports.Anchor']
 related:
   ['economy/ports/storage', 'economy/reference/http-service']
 ---
@@ -19,7 +20,7 @@ A hash chain proves the ledger is _internally consistent_: that nobody edited a 
 
 A signature closes that gap. The platform periodically signs a snapshot of the ledger with a secret only it holds. An auditor with the matching public key can then confirm two things at once: the snapshot is intact, and it came from the platform. A forged chain won't carry a valid signature.
 
-The `Signer` port is that seam. The core never holds a key or picks an algorithm. It asks the port to `sign` some bytes and, later, to `verify` them. This is what lets the [signed checkpoint](/economy/concepts/integrity/) be tamper-evident rather than merely self-consistent.
+The <ApiLink to="interfaces/src_ports.Signer" /> port is that seam. The core never holds a key or picks an algorithm. It asks the port to `sign` some bytes and, later, to `verify` them. This is what lets the [signed checkpoint](/economy/concepts/integrity/) be tamper-evident rather than merely self-consistent.
 
 ## The interface
 

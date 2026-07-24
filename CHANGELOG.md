@@ -14,6 +14,9 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 
 - TSDoc across the public surface feeds the `/api` reference; `@see` lines pair each symbol
   with its handbook page.
+- Handbook pages cite the reference with `ApiLink` chips and `apiRefs` frontmatter; a docs test
+  proves every link resolves into the generated output. The api reference page points at `/api`
+  instead of keeping a hand-written symbol table.
 
 ## 0.4.3 - 2026-07-23
 

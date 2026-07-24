@@ -7,6 +7,8 @@ sourceRefs:
   [
     'src/worker/index.ts#L63-L74 · SWEEP_NAMES',
     'src/worker/payouts.ts#L49 · advanceDuePayouts',
+    'src/worker/index.ts · SWEEP_NAMES',
+    'src/worker/payouts.ts#L49 · advanceDuePayouts',
     'src/worker/relay.ts#L53 · relayOutbox',
   ]
 related:
@@ -18,7 +20,7 @@ related:
   ]
 ---
 
-The synchronous core posts to the ledger and returns an `Outcome` on the request path. But plenty of work outlives a single request.
+The synchronous core posts to the ledger and returns an <ApiLink to="types/src.Outcome" /> on the request path. But plenty of work outlives a single request.
 
 A payout waits on an external rail. A subscription bills over time. A promo grant expires. A platform fee only becomes the platform's once its refund window closes. The outbox holds events that still need to drain to the dispatcher.
 
@@ -101,12 +103,14 @@ The relay drains the [outbox](/economy/ports/messaging/) — that page owns the 
 A delivery that keeps failing bumps the row's attempt count and retries, up to `config.maxOutboxAttempts` (default `10`). At the cap the event is dead-lettered, so one poison event can't block the events behind it.
 
 The inbox is the inbound mirror. Where the relay delivers committed money moves outward, `drainInbox` applies received events inward, submitting each stored `Operation` through the same economy a direct caller hits.
+The inbox is the inbound mirror. Where the relay delivers committed money moves outward, `drainInbox` applies received events inward, submitting each stored <ApiLink to="types/src.Operation" /> through the same economy a direct caller hits.
 
 A re-applied inbox row is deduped by the stored `idempotencyKey` (the provider event id), so a second apply resolves to a `duplicate` `Outcome` rather than a second posting. A `rejected` `Outcome` (a terminal business "no" like `INSUFFICIENT_FUNDS`) is dead-lettered, since retrying the same doomed apply every sweep would never succeed.
 
 ## Driving the worker
 
 A host builds the worker with `createWorker(ports, economy)` and drives it with `sweep`, which runs every sweep once over a shared request and returns the per-job batch plus the txn ids the run committed. Every field of the request is optional — `now` defaults to the clock, `limit` to the worker's default:
+A host builds the worker with <ApiLink to="functions/src_worker.createWorker">createWorker(ports, economy)</ApiLink> and drives it with `sweep`, which runs every sweep once over a shared request and returns the per-job batch plus the txn ids the run committed. Every field of the request is optional — `now` defaults to the clock, `limit` to the worker's default:
 
 ```ts
 const worker = createWorker(ports, economy);

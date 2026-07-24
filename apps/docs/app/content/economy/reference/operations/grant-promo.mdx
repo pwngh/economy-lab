@@ -8,13 +8,14 @@ sourceRefs:
     'src/operations/promo.ts#L30 · grantPromo',
     'src/worker/promos.ts#L49 · sweepExpiredPromos',
   ]
+apiRefs: ['variables/src.grantPromo']
 related:
   ['economy/reference/operations/top-up', 'economy/reference/configuration']
 ---
 
 import grantPromoHttp from '../../../../snippets/http/grant-promo.sh?shiki';
 
-`grantPromo` drops marketing credit into a user's [`promo`](/economy/concepts/accounts-and-double-entry/) balance with an expiry date. A campaign can hand out credit that reverts to the platform if it goes unspent.
+<ApiLink to="variables/src.grantPromo" /> drops marketing credit into a user's [`promo`](/economy/concepts/accounts-and-double-entry/) balance with an expiry date. A campaign can hand out credit that reverts to the platform if it goes unspent.
 
 Here a marketing service grants a user 500 credits that expire 24 hours from now:
 
@@ -81,7 +82,7 @@ The handler also records the grant in the same unit of work, reusing the posting
 
 `grantPromo` is privileged: only a `system` or `operator` [`Actor`](/economy/concepts/actors-and-authorization/) may call it.
 
-An end-user principal is refused. The operation mints credit into an arbitrary user's account, so it sits in the engine's restricted-to-privileged set alongside `topUp` and the entitlement grants. A `user` principal raises an `AUTH.UNAUTHORIZED` fault before any work runs.
+An end-user principal is refused. The operation mints credit into an arbitrary user's account, so it sits in the engine's restricted-to-privileged set alongside <ApiLink to="variables/src.topUp" /> and the entitlement grants. A `user` principal raises an `AUTH.UNAUTHORIZED` fault before any work runs.
 
 ## Reason codes
 

@@ -8,12 +8,13 @@ sourceRefs:
     'src/operations/reverse.ts#L44-L75 · reverse',
     "src/contract.ts#L169-L177 · kind 'reverse'",
   ]
+apiRefs: ['variables/src.reverse']
 related: ['economy/reference/the-economy', 'economy/reference/configuration']
 ---
 
 import reverseHttp from '../../../../snippets/http/reverse.sh?shiki';
 
-`reverse` undoes an earlier transaction by posting its exact opposite: every leg of the original, with its sign flipped.
+<ApiLink to="variables/src.reverse" /> undoes an earlier transaction by posting its exact opposite: every leg of the original, with its sign flipped.
 
 It's an operator's manual correction tool. You name the transaction to undo by its `txnId` and supply a written `reason`. The handler then posts a new, balanced transaction that cancels the original out.
 

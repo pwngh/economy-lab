@@ -20,7 +20,7 @@ import rejectionPausedHtml from '../../../snippets/rejection-paused.ts?shiki';
 
 ## The shape of an answer
 
-Every call to `submit` resolves to one `Outcome`. The
+Every call to `submit` resolves to one <ApiLink to="types/src.Outcome" />. The
 `status` field tells you which of three things happened, and the rest of the object carries exactly
 what that status implies.
 
@@ -65,7 +65,7 @@ A `duplicate` outcome means you submitted an operation whose `idempotencyKey` ma
 processed, so the economy returned the earlier result instead of running it again. This is the
 visible side of [idempotency](/economy/concepts/idempotency/): a retried request runs at most once.
 
-It carries the same `Transaction` the original commit did, so a `duplicate` counts as success.
+It carries the same <ApiLink to="interfaces/src.Transaction" /> the original commit did, so a `duplicate` counts as success.
 A network retry, a double-clicked button, or an at-least-once delivery queue all land here,
 and the caller can treat `duplicate` exactly like `committed`.
 
@@ -78,7 +78,7 @@ and the caller can treat `duplicate` exactly like `committed`.
 ### `rejected`: a declined-but-valid request
 
 A `rejected` outcome means the request was well-formed and the system was healthy, but the answer is
-no. It carries a `RejectionDetail` in `detail`: a discriminated union whose `detail.reason` names
+no. It carries a <ApiLink to="types/src.RejectionDetail" /> in `detail`: a discriminated union whose `detail.reason` names
 the [`RejectionCode`](#the-rejectioncode-catalog), and whose remaining fields are exactly the
 specifics that decline needs — the account that was short, the order that wasn't found, when writes
 resume.
@@ -102,11 +102,11 @@ if (result.status === 'rejected' && result.detail.reason === 'INSUFFICIENT_FUNDS
 
 A rejection comes back as data, so you handle it in an ordinary `if` branch; see the [throw-versus-decline rule](#rejected-versus-thrown) below.
 
-The money fields in `detail` — `need`, `have`, `minimum`, `amount` — are branded [`Amount`](/economy/concepts/money-model/)s, so a caller compares them directly (`detail.have.minor < detail.need.minor`) and formats them with `encodeAmount`. Over the [HTTP service](/economy/reference/http-service/) a rejection travels as `{ status, reason, detail }`: the top-level `reason` is a convenience copy derived from `detail.reason` — in TypeScript, `detail.reason` is the sole discriminant — and the money fields travel as the same decimal strings every other wire amount uses (`bigint` fields such as `limitMinor` become decimal strings too).
+The money fields in `detail` — `need`, `have`, `minimum`, `amount` — are branded [`Amount`](/economy/concepts/money-model/)s, so a caller compares them directly (`detail.have.minor < detail.need.minor`) and formats them with <ApiLink to="functions/src.encodeAmount" />. Over the [HTTP service](/economy/reference/http-service/) a rejection travels as `{ status, reason, detail }`: the top-level `reason` is a convenience copy derived from `detail.reason` — in TypeScript, `detail.reason` is the sole discriminant — and the money fields travel as the same decimal strings every other wire amount uses (`bigint` fields such as `limitMinor` become decimal strings too).
 
 ## The `RejectionCode` catalog
 
-A `RejectionCode` names one expected reason a valid request gets declined on a healthy system. Each
+A <ApiLink to="types/src.RejectionCode" /> names one expected reason a valid request gets declined on a healthy system. Each
 one is a stable string you can branch on, and each is raised by a specific set of operations.
 
 The table lists every code, what it means, and which operation kinds return it. The operation names
@@ -114,17 +114,17 @@ map to the pages under [operations](/economy/reference/operations/).
 
 | Code                   | What it means                                                                                              | Raised by                                                                                |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `INSUFFICIENT_FUNDS`   | The account can't cover the amount the request needs.                                                      | `spend`, `subscribe`, `requestPayout`                                                    |
-| `FUNDS_IMMATURE`       | The funds exist but are still in their holding period, so they aren't usable yet.                          | `spend`, `subscribe`, `requestPayout` (renewals defer on it)                             |
-| `RISK_DENIED`          | The [velocity / abuse check](/economy/concepts/spend-velocity/) declined this request.                     | `spend`, `subscribe`, `topUp`, `grantPromo`, `requestPayout` (every risk-screened write) |
-| `DUPLICATE_ORDER`      | A `spend` reused an `orderId` that already has a completed sale, but carried a different `idempotencyKey`. | `spend`                                                                                  |
-| `UNKNOWN_ORDER`        | No sale was found for the `orderId` the request refers to.                                                 | `refund`                                                                                 |
-| `NOT_ENTITLED`         | The user doesn't own the item or feature the request needs.                                                | `revokeEntitlement`                                                                      |
-| `UNKNOWN_SUBSCRIPTION` | No subscription matched the request.                                                                       | `cancelSubscription`                                                                     |
-| `ALREADY_SUBSCRIBED`   | The user already has an active subscription to this `sku` / seller; a second would double-bill.            | `subscribe`                                                                              |
-| `BELOW_MINIMUM`        | A payout was requested for less than the configured minimum.                                               | `requestPayout`                                                                          |
-| `PAYOUT_TOO_SOON`      | A payout was requested before the configured minimum gap since the user's last request.                    | `requestPayout`                                                                          |
-| `PAYEE_UNVERIFIED`     | The configured payee directory hasn't cleared the seller's identity verification.                          | `requestPayout`                                                                          |
+| `INSUFFICIENT_FUNDS`   | The account can't cover the amount the request needs.                                                      | <ApiLink to="variables/src.spend" />, <ApiLink to="variables/src.subscribe" />, <ApiLink to="variables/src.requestPayout" />                                                    |
+| `FUNDS_IMMATURE`       | The funds exist but are still in their holding period, so they aren't usable yet.                          | <ApiLink to="variables/src.spend" />, <ApiLink to="variables/src.subscribe" />, <ApiLink to="variables/src.requestPayout" /> (renewals defer on it)                             |
+| `RISK_DENIED`          | The [velocity / abuse check](/economy/concepts/spend-velocity/) declined this request.                     | <ApiLink to="variables/src.spend" />, <ApiLink to="variables/src.subscribe" />, <ApiLink to="variables/src.topUp" />, <ApiLink to="variables/src.grantPromo" />, <ApiLink to="variables/src.requestPayout" /> (every risk-screened write) |
+| `DUPLICATE_ORDER`      | A `spend` reused an `orderId` that already has a completed sale, but carried a different `idempotencyKey`. | <ApiLink to="variables/src.spend" />                                                                                  |
+| `UNKNOWN_ORDER`        | No sale was found for the `orderId` the request refers to.                                                 | <ApiLink to="variables/src.refund" />                                                                                 |
+| `NOT_ENTITLED`         | The user doesn't own the item or feature the request needs.                                                | <ApiLink to="variables/src.revokeEntitlement" />                                                                      |
+| `UNKNOWN_SUBSCRIPTION` | No subscription matched the request.                                                                       | <ApiLink to="variables/src.cancelSubscription" />                                                                     |
+| `ALREADY_SUBSCRIBED`   | The user already has an active subscription to this `sku` / seller; a second would double-bill.            | <ApiLink to="variables/src.subscribe" />                                                                              |
+| `BELOW_MINIMUM`        | A payout was requested for less than the configured minimum.                                               | <ApiLink to="variables/src.requestPayout" />                                                                          |
+| `PAYOUT_TOO_SOON`      | A payout was requested before the configured minimum gap since the user's last request.                    | <ApiLink to="variables/src.requestPayout" />                                                                          |
+| `PAYEE_UNVERIFIED`     | The configured payee directory hasn't cleared the seller's identity verification.                          | <ApiLink to="variables/src.requestPayout" />                                                                          |
 | `ECONOMY_PAUSED`       | A maintenance window is in effect, so an end user's discretionary write is declined.                       | Any paused user write                                                                    |
 
 A few of these reward a closer look.

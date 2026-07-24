@@ -9,6 +9,7 @@
  * @license MIT
  */
 
+import { ApiLink } from '~/components/ApiLink.tsx';
 import { Brand, brandize } from '~/components/Brand.tsx';
 import { CallTabs } from '~/components/CallTabs.tsx';
 import { Callout } from '~/components/Callout.tsx';
@@ -49,6 +50,7 @@ const MDX_COMPONENTS = {
   CreditMaturity,
   IdempotentRetry,
   SourceLink,
+  ApiLink,
   Runnable,
   Cite,
   Brand,
@@ -76,6 +78,17 @@ function SourceChip({ refStr }: { refStr: string }) {
     </a>
   ) : (
     <span className="source-chip">{body}</span>
+  );
+}
+
+/** One /api-reference chip: the symbol name linked to its TypeDoc page, ApiLink's chip-row twin. */
+function ApiChip({ refStr }: { refStr: string }) {
+  const [page = '', member] = refStr.split('#');
+  const symbol = page.split('.').pop() ?? page;
+  return (
+    <a className="source-chip" href={`/api/${page}.html${member ? `#${member}` : ''}`}>
+      <code>{member ? `${symbol}.${member}` : symbol}</code>
+    </a>
   );
 }
 
@@ -162,6 +175,15 @@ export function DocPage({ slug }: { slug: string }) {
           <span className="source-label">Source</span>{' '}
           {doc.sourceRefs.map((r) => (
             <SourceChip key={r} refStr={r} />
+          ))}
+        </p>
+      )}
+
+      {doc.apiRefs.length > 0 && (
+        <p className="source-refs">
+          <span className="source-label">API</span>{' '}
+          {doc.apiRefs.map((r) => (
+            <ApiChip key={r} refStr={r} />
           ))}
         </p>
       )}

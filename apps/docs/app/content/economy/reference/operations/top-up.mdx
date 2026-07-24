@@ -6,11 +6,11 @@ status: stable
 sourceRefs:
   [
     'src/operations/topUp.ts#L36 · topUp',
-    'src/operations/topUp.ts#L36 · topUp',
     'src/operations/registry.ts#L58 · REGISTRY',
     "src/contract.ts#L68 · kind 'topUp'",
     'src/webhooks.ts#L154 · toTopUp',
   ]
+apiRefs: ['variables/src.topUp']
 related:
   [
     'economy/reference/operations/spend',
@@ -21,7 +21,7 @@ related:
 
 import topUpHttp from '../../../../snippets/http/top-up.sh?shiki';
 
-`topUp` turns a buyer's cleared cash into spendable credit. It raises a user's
+<ApiLink to="variables/src.topUp" /> turns a buyer's cleared cash into spendable credit. It raises a user's
 [`spendable`](/economy/concepts/accounts-and-double-entry/) balance and records the USD that paid for
 it.
 

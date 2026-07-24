@@ -8,6 +8,7 @@ sourceRefs:
     'src/operations/clawback.ts#L37 · clawback',
     'src/webhooks.ts#L216 · toClawback',
   ]
+apiRefs: ['variables/src.clawback']
 related:
   [
     'economy/reference/operations/adjust',
@@ -17,7 +18,7 @@ related:
 
 import clawbackHttp from '../../../../snippets/http/clawback.sh?shiki';
 
-`clawback` reclaims credits from a user's [`spendable`](/economy/concepts/accounts-and-double-entry/) balance after a bank chargeback or fraud recovery. The dollars themselves move back at the payment [`Processor`](/economy/ports/processor/), outside this ledger. The handler books only the credit side of the loss.
+<ApiLink to="variables/src.clawback" /> reclaims credits from a user's [`spendable`](/economy/concepts/accounts-and-double-entry/) balance after a bank chargeback or fraud recovery. The dollars themselves move back at the payment [`Processor`](/economy/ports/processor/), outside this ledger. The handler books only the credit side of the loss.
 
 You name the user and how much to reclaim. When the dispute is tied to a purchase, you also name the disputed `orderId`:
 
@@ -85,7 +86,7 @@ A zero piece is omitted, not posted as a zero line. A clawback fully covered by 
 
 ## Authorization
 
-`clawback` is restricted to a `system` or `operator` [`Actor`](/economy/concepts/actors-and-authorization/); an end user may never call it. It takes money out of an account the caller need not own, which the ownership rule for ordinary user operations does not cover. So, like `adjust` and `reverse`, it is platform-initiated only.
+`clawback` is restricted to a `system` or `operator` [`Actor`](/economy/concepts/actors-and-authorization/); an end user may never call it. It takes money out of an account the caller need not own, which the ownership rule for ordinary user operations does not cover. So, like <ApiLink to="variables/src.adjust" /> and <ApiLink to="variables/src.reverse" />, it is platform-initiated only.
 
 An end-user `actor` is refused with an `AUTH.UNAUTHORIZED` fault before any work begins. The dispute-webhook path satisfies the rule: `toClawback` builds the operation with a `system` actor (`webhook:${provider}`).
 

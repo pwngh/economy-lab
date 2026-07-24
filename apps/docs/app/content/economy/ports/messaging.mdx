@@ -9,16 +9,17 @@ notes:
   - text: "Dead-lettering is messaging's Dead Letter Channel pattern, from Hohpe and Woolf's Enterprise Integration Patterns (2003)."
     href: 'https://www.enterpriseintegrationpatterns.com/patterns/messaging/DeadLetterChannel.html'
 sourceRefs: ['src/worker/relay.ts#L53 · relayOutbox', 'src/adapters/sqs.ts']
+apiRefs: ['types/src_ports.Dispatcher']
 related: ['economy/ports/storage', 'economy/ports/processor']
 ---
 
 A posting either commits or it doesn't; a message can be sent and lost, sent twice, or sent about a move that never committed.
 
-This page covers the ports that keep the two honest with each other: the `Dispatcher` (events out), and the transactional outbox and inbox rows those events flow through. The rows themselves live on the [`Store`](/economy/ports/storage/); the patterns that use them live here.
+This page covers the ports that keep the two honest with each other: the <ApiLink to="types/src_ports.Dispatcher" /> (events out), and the transactional outbox and inbox rows those events flow through. The rows themselves live on the [`Store`](/economy/ports/storage/); the patterns that use them live here.
 
 ## The `Dispatcher`: events out
 
-The `Dispatcher` is the simplest port in the system: a single function that takes an `EconomyEvent` and hands it off for delivery. The core builds the event; the adapter decides where it goes.
+The `Dispatcher` is the simplest port in the system: a single function that takes an <ApiLink to="interfaces/src_ports.EconomyEvent" /> and hands it off for delivery. The core builds the event; the adapter decides where it goes.
 
 ```ts
 type Dispatcher = (event: EconomyEvent, options?: CallOptions) => Promise<void>;

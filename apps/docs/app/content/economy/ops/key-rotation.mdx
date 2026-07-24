@@ -29,7 +29,7 @@ change.
    ```
 
    `SIGNING_SECRETS_PRIOR` is comma-separated; a second rotation makes it `<old>,<older>`.
-   Each entry goes through the same derivation as `SIGNING_SECRET`, and `Signer.verify` tries
+   Each entry goes through the same derivation as `SIGNING_SECRET`, and <ApiLink to="interfaces/src_ports.Signer">Signer.verify</ApiLink> tries
    the current key first, then each prior in order.
 
 3. Confirm continuity: the next scheduled sweep's `worker.checkpoint.verify` beat must be

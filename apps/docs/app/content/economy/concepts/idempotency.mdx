@@ -5,7 +5,7 @@ plain: "“Idempotent” is a fancy word for “safe to repeat”: do it once or
 order: 55
 status: stable
 sourceRefs:
-  ['src/ports.ts#L521 · IdempotencyStore', 'src/economy.ts#L503 · runClaimed']
+  ['src/ports.ts#L521 · IdempotencyStore', 'src/economy.ts#L506 · runClaimed']
 related:
   [
     'economy/reference/the-economy',
@@ -20,7 +20,7 @@ import challengeSolutionHtml from '../../../snippets/challenge-idempotency.solut
 
 Networks drop responses and processes crash mid-write. A caller that never hears back can't know whether its operation applied, so it retries; the platform has to make that safe: a retried operation takes effect at most once.
 
-Every operation carries an `idempotencyKey`. The key is how the system recognizes a retry and replays the original result instead of repeating the work.
+Every operation carries an <ApiLink to="functions/src.idempotencyKey" />. The key is how the system recognizes a retry and replays the original result instead of repeating the work.
 
 ## The idea
 

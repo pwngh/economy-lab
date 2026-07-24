@@ -5,10 +5,16 @@ order: 10
 status: stable
 sourceRefs:
   [
-    'src/ports.ts#L199-L215 · Processor',
+    'src/ports.ts#L216-L232 · Processor',
     'src/ports.ts#L188-L191 · Dispatcher',
     'src/ports.ts#L253-L266 · Rates',
     'test/conformance/invariants.adversarial.test.ts',
+  ]
+apiRefs:
+  [
+    'interfaces/src_ports.Processor',
+    'types/src_ports.Dispatcher',
+    'interfaces/src_ports.Rates',
   ]
 related: ['economy/concepts/overview', 'economy/reference/configuration']
 ---
@@ -44,7 +50,7 @@ The reference adapter (`src/adapters/processor.ts`) is an HTTP client that `POST
 
 When an operation finishes, some emit a [domain event](/economy/ports/messaging/): a sale completed, a payout settled. economy-lab writes that event to an outbox table in the same transaction as the money move, so it can't be lost or double-sent. Then a relay sweep ships it onward through a [`Dispatcher`](/economy/ports/messaging/).
 
-But the thing that receives the event is not part of economy-lab. The `Dispatcher` is a one-function port that hands an event off for delivery; the SQS or HTTP adapter behind it sends it to _your_ endpoint: an internal bus, a broker, a webhook receiver.
+But the thing that receives the event is not part of economy-lab. The <ApiLink to="types/src_ports.Dispatcher" /> is a one-function port that hands an event off for delivery; the SQS or HTTP adapter behind it sends it to _your_ endpoint: an internal bus, a broker, a webhook receiver.
 
 The same is true in reverse for inbound provider callbacks. economy-lab verifies and applies them, but it does not host the messaging fabric they ride on. With no dispatcher configured, events simply stay in the outbox, undelivered, and nothing leaves the process.
 

@@ -18,7 +18,7 @@ related:
 
 import legsHtml from '../../../snippets/legs.ts?shiki';
 
-Every balance lives in a named account. Every operation is a balanced double-entry `Posting`: value moves _between_ accounts as paired debit and credit lines, and those lines always net to zero per currency.
+Every balance lives in a named account. Every operation is a balanced double-entry <ApiLink to="types/src_ports.Posting" />: value moves _between_ accounts as paired debit and credit lines, and those lines always net to zero per currency.
 
 You never add to one account without an equal, opposite line somewhere else. A user's accounts hold credits. The platform's own "house" accounts hold its cash, its revenue, and obligations.
 
@@ -43,6 +43,7 @@ The set of account kinds is fixed. A user has up to three accounts, keyed by `Ac
 | `promo`     | `CREDIT` | A marketing grant that expires if unspent.                                     |
 
 The platform's house accounts are the fixed `SYSTEM` map, each id prefixed `platform:`. They hold three things: the platform's cash, its revenue, and the offsetting (contra) entries that keep a one-sided user move balanced.
+The platform's house accounts are the fixed <ApiLink to="variables/src.SYSTEM" /> map, each id prefixed `platform:`. They hold three things: the platform's cash, its revenue, and the offsetting (contra) entries that keep a one-sided user move balanced.
 
 | `SYSTEM` account | Currency | Holds                                                                              |
 | ---------------- | -------- | ---------------------------------------------------------------------------------- |
@@ -59,6 +60,7 @@ The platform's house accounts are the fixed `SYSTEM` map, each id prefixed `plat
 One wrinkle on the table above: with [`PLATFORM_SHARDS`](/economy/reference/configuration/#platform-sharding) set past `1`, each hot `SYSTEM` account splits into shard rows, the bare id plus `platform:revenue#1` and so on. A shard row behaves like its parent in every way that matters here (identity checks strip the `#` suffix first, so currency, class, and normal side all come from the base account), and the logical balance is the sum over the rows. [Platform sharding](/economy/concepts/platform-sharding/) explains why the split exists and how a posting picks its shard.
 
 Currency is a property of the account, not the posting. Everything is `CREDIT` except `TRUST_CASH`, `USD_CLEARING`, and `REVENUE_USD`, which are `USD` (see [the money model](/economy/concepts/money-model/) for `Amount` and `Currency`). If a leg's amount currency doesn't match its account, the posting is rejected with `CURRENCY_MISMATCH`.
+Currency is a property of the account, not the posting. Everything is `CREDIT` except `TRUST_CASH`, `USD_CLEARING`, and `REVENUE_USD`, which are `USD` (see [the money model](/economy/concepts/money-model/) for <ApiLink to="types/src.Amount" /> and <ApiLink to="types/src.Currency" />). If a leg's amount currency doesn't match its account, the posting is rejected with `CURRENCY_MISMATCH`.
 
 <ChartOfAccounts />
 
@@ -68,7 +70,7 @@ Different accounts grow on opposite sides, and the ledger has to know which so a
 
 `isDebitNormal` records the side per account. The `USD` accounts, `STORED_VALUE`, `RECEIVABLE`, `PROMO_FLOAT`, and `OPENING_EQUITY` grow on a debit; the rest grow on a credit.
 
-Internally, leg amounts are stored debit-positive, credit-negative. `debit(account, amount)` stores the amount as given, and `credit(account, amount)` stores its negation, so a posting balances exactly when its leg amounts sum to zero.
+Internally, leg amounts are stored debit-positive, credit-negative. <ApiLink to="functions/src.debit">debit(account, amount)</ApiLink> stores the amount as given, and <ApiLink to="functions/src.credit">credit(account, amount)</ApiLink> stores its negation, so a posting balances exactly when its leg amounts sum to zero.
 
 To turn a leg back into a balance change, `balanceDelta` flips the sign for credit-normal accounts and leaves debit-normal ones as-is. Normalized this way, the no-overdraft check can measure every account, of either polarity, against zero.
 

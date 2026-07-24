@@ -34,7 +34,7 @@ The matured balance is the part of the live balance whose lots have cleared thei
 
 The maturity window holds new funds just long enough that, by the time they mature, the risk of a reversal has passed.
 
-The gate is visible at the call site. A seller whose raw `earned` balance covers a cash-out is still refused while that money is inside its window:
+The gate is visible at the call site. A seller whose raw <ApiLink to="functions/src.earned" /> balance covers a cash-out is still refused while that money is inside its window:
 
 ```ts
 import { requestPayout, userActor, toAmount } from '@pwngh/economy-lab';

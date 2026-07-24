@@ -7,9 +7,10 @@ status: stable
 sourceRefs:
   [
     'src/integrity.ts#L76 · proveEconomy',
-    'src/contract.ts#L551 · ProveReport',
+    'src/contract.ts#L554 · ProveReport',
     'scripts/prove.ts',
   ]
+apiRefs: ['functions/src.proveEconomy']
 related:
   [
     'economy/concepts/accounts-and-double-entry',
@@ -21,7 +22,7 @@ import proveHtml from '../../../snippets/prove.ts?shiki';
 
 ## The idea
 
-You don't have to take "the books balance" on faith: the prover rebuilds every money invariant from scratch, straight from the ledger's [posted legs](/economy/concepts/accounts-and-double-entry/), and hands you one `ProveReport` telling you whether the books still hold.
+You don't have to take "the books balance" on faith: the prover rebuilds every money invariant from scratch, straight from the ledger's [posted legs](/economy/concepts/accounts-and-double-entry/), and hands you one <ApiLink to="interfaces/src.ProveReport" /> telling you whether the books still hold.
 
 It only reads, it never writes. It sums the debit and credit lines itself instead of trusting any cached balance. It recomputes each account's hash chain from genesis. Then it compares the result against what the [ledger](/economy/concepts/integrity/) actually stored.
 
@@ -60,7 +61,7 @@ The prover checks five properties and reports each as a boolean flag on `ProveRe
 
 Two more fields carry the detail behind a failing flag. `shortfall` is the missing USD when `backed` is false, and zero otherwise. `drift` lists each account whose cached balance disagrees with its legs. Each drift entry names both the `materialized` and the `derived` figure, so an operator can see the size and direction of the gap.
 
-`allInvariantsHold(report)` is the convenience roll-up. It is `true` only when all five flags are `true` (see <SourceLink to="src/integrity.ts#L280">source</SourceLink>). If you only care about one property, read its field directly.
+<ApiLink to="functions/src.allInvariantsHold">allInvariantsHold(report)</ApiLink> is the convenience roll-up. It is `true` only when all five flags are `true` (see <SourceLink to="src/integrity.ts#L280">source</SourceLink>). If you only care about one property, read its field directly.
 
 ## How it's enforced
 

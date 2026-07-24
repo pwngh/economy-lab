@@ -8,13 +8,14 @@ sourceRefs:
     'src/operations/refund.ts#L39 · refund',
     'src/operations/registry.ts#L60 · refund',
   ]
+apiRefs: ['variables/src.refund']
 related:
   ['economy/reference/operations/reverse', 'economy/reference/configuration']
 ---
 
 import refundHttp from '../../../../snippets/http/refund.sh?shiki';
 
-`refund` reverses a completed [`spend`](/economy/reference/operations/spend/). It returns the buyer the full price they paid, then unwinds the sale account by account.
+<ApiLink to="variables/src.refund" /> reverses a completed [`spend`](/economy/reference/operations/spend/). It returns the buyer the full price they paid, then unwinds the sale account by account.
 
 You name the order, not the buyer or the amount. The handler reads those off the recorded sale. Pass the `orderId` from the original spend. A `reason` for the audit trail is optional:
 

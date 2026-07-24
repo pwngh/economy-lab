@@ -8,6 +8,7 @@ sourceRefs:
     'src/operations/subscribe.ts#L42 · subscribe',
     'src/worker/subscriptions.ts#L62 · sweepDueSubscriptions',
   ]
+apiRefs: ['variables/src.subscribe']
 related:
   [
     'economy/reference/operations/cancel-subscription',
@@ -17,7 +18,7 @@ related:
 
 import subscribeHttp from '../../../../snippets/http/subscribe.sh?shiki';
 
-`subscribe` does three things in one transaction. It charges a buyer for the first period
+<ApiLink to="variables/src.subscribe" /> does three things in one transaction. It charges a buyer for the first period
 of a recurring plan, grants them the SKU, and saves a
 [`Subscription`](/economy/concepts/subscriptions/) record. The
 [background worker](/economy/reference/background-worker/) renews that record every later

@@ -5,12 +5,13 @@ order: 20
 status: stable
 sourceRefs:
   ['src/operations/spend.ts#L80 · spend', 'src/pricing.ts#L60 · splitLegs']
+apiRefs: ['variables/src.spend', 'types/src.FeePolicy']
 related: ['economy/reference/configuration']
 ---
 
 import spendHttp from '../../../../snippets/http/spend.sh?shiki';
 
-`spend` runs a marketplace purchase. It charges the buyer and pays the sellers as one balanced [double-entry posting](/economy/concepts/accounts-and-double-entry/).
+<ApiLink to="variables/src.spend" /> runs a marketplace purchase. It charges the buyer and pays the sellers as one balanced [double-entry posting](/economy/concepts/accounts-and-double-entry/).
 
 The same transaction also records a sale under `orderId` and grants the buyer the `sku`.
 
@@ -36,7 +37,7 @@ const outcome = await economy.submit({
 
 The buyer's `promo` balance is drawn first, then `spendable`. The seller is credited to their `earned` balance, and the platform keeps its fee.
 
-A purchase can split the price across several sellers. Each `Recipient` takes a share in basis points (bps), and the shares must sum to `10_000`:
+A purchase can split the price across several sellers. Each <ApiLink to="types/src.Recipient" /> takes a share in basis points (bps), and the shares must sum to `10_000`:
 
 ```ts
 recipients: [

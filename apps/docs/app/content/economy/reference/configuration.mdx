@@ -6,13 +6,11 @@ status: stable
 sourceRefs:
   [
     'src/config.ts#L294-L309 · loadConfig',
-    'src/index.ts#L651 · openPorts',
-    'src/from-env.ts#L145 · resolveExternals',
-    'src/config.ts#L294-L309 · loadConfig',
     'src/index.ts#L657 · openPorts',
     'src/from-env.ts#L145 · resolveExternals',
     '.env.example',
   ]
+apiRefs: ['interfaces/src.Config']
 related:
   [
     'economy/ports/rates',
@@ -24,7 +22,7 @@ related:
 
 ## How configuration is read
 
-economy-lab reads the environment once, at startup: the edge calls `loadConfig`, gets a
+economy-lab reads the environment once, at startup: the edge calls <ApiLink to="functions/src.loadConfig" />, gets a
 plain [`Config`](https://github.com/pwngh/economy-lab/blob/main/src/config.ts) object, and
 passes it in — the library modules never touch `process.env`. A misconfigured deploy fails
 at startup, not deep inside a request.
@@ -34,7 +32,7 @@ That single read also means defaults live in one file. Every tunable below is pa
 rather than leaving the config half-applied. These are the same defaults the operation and
 [background-worker](/economy/reference/background-worker/) pages cite.
 
-A `config` override passed to `openPorts` (or `defaultConfig`) applies last-wins per knob,
+A `config` override passed to <ApiLink to="functions/src.openPorts" /> (or <ApiLink to="functions/src.defaultConfig" />) applies last-wins per knob,
 except the record-valued knobs — `maturityHorizonMs` and `payoutSla` — which merge one level
 deep: overriding one funding source or one SLA step keeps the others rather than replacing the
 whole record.
@@ -140,8 +138,8 @@ the secrets): a per-user hourly ceiling is a risk decision each deployment state
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | `PLATFORM_FEE_BPS`              | Platform's transaction fee in basis points. The example models a ~15.3% marketplace fee.                                 | `1530`         |
 | `VELOCITY_LIMIT_MINOR`          | The single-knob ceiling per window, in CREDIT minor units; both window classes fall back to it.                          | dev `100000` / prod req. |
-| `VELOCITY_INFLOW_LIMIT_MINOR`   | Ceiling for the inflow window (`topUp`, `grantPromo`) — the card-testing gate.                                           | `= limit`      |
-| `VELOCITY_OUTFLOW_LIMIT_MINOR`  | Ceiling for the outflow window (`spend`, `subscribe`, `requestPayout`) — the drained-wallet gate.                        | `= limit`      |
+| `VELOCITY_INFLOW_LIMIT_MINOR`   | Ceiling for the inflow window (<ApiLink to="variables/src.topUp" />, <ApiLink to="variables/src.grantPromo" />) — the card-testing gate.                                           | `= limit`      |
+| `VELOCITY_OUTFLOW_LIMIT_MINOR`  | Ceiling for the outflow window (<ApiLink to="variables/src.spend" />, <ApiLink to="variables/src.subscribe" />, <ApiLink to="variables/src.requestPayout" />) — the drained-wallet gate.                        | `= limit`      |
 | `VELOCITY_WINDOW_MS`            | Length of the rolling window. Only a subject's attempts inside the last window count; each ages out once older.          | `3600000` (1h) |
 
 ## Subscriptions

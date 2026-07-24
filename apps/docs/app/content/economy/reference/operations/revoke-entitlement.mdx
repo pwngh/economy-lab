@@ -8,13 +8,14 @@ sourceRefs:
     'src/operations/entitlements.ts#L69-L90 · revokeEntitlement',
     'src/operations/registry.ts#L66 · REGISTRY',
   ]
+apiRefs: ['variables/src.revokeEntitlement']
 related:
   ['economy/reference/operations/spend', 'economy/reference/operations/refund']
 ---
 
 import revokeEntitlementHttp from '../../../../snippets/http/revoke-entitlement.sh?shiki';
 
-`revokeEntitlement` removes a user's ownership of a SKU, the mirror of [`grantEntitlement`](/economy/reference/operations/grant-entitlement/). Ownership is a record, not a balance. No money moves, and the ledger is untouched.
+<ApiLink to="variables/src.revokeEntitlement" /> removes a user's ownership of a SKU, the mirror of [`grantEntitlement`](/economy/reference/operations/grant-entitlement/). Ownership is a record, not a balance. No money moves, and the ledger is untouched.
 
 You name the user and the SKU, and optionally a `reason` for the audit trail:
 

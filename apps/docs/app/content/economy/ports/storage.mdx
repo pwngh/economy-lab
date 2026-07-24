@@ -7,13 +7,10 @@ sourceRefs:
   [
     'src/ports.ts#L404 · Store',
     'src/ports.ts#L307 · Ledger',
-    'src/adapters/memory.ts#L1367 · memoryStore',
-    'src/engines/postgres.ts#L1697 · postgresStore',
-    'src/ports.ts#L404 · Store',
-    'src/ports.ts#L307 · Ledger',
     'src/adapters/memory.ts#L1376 · memoryStore',
     'src/engines/postgres.ts#L1708 · postgresStore',
   ]
+apiRefs: ['interfaces/src_ports.Store']
 related: ['economy/ports/messaging', 'economy/concepts/accounts-and-double-entry']
 ---
 
@@ -21,7 +18,7 @@ related: ['economy/ports/messaging', 'economy/concepts/accounts-and-double-entry
 
 Everything the economy persists passes through one of a few narrow interfaces. The core never opens a connection or knows whether it's talking to memory or Postgres: it calls a method on a port, and an adapter does the rest.
 
-These ports all live in `src/ports.ts`. This page covers the ones that hold state: the `Store` (the ledger and its sub-stores) and the read-through `Cache`. The ports that move messages — the outbox, the inbox, and the `Dispatcher` — write through the same `Store` and have [their own page](/economy/ports/messaging/).
+These ports all live in `src/ports.ts`. This page covers the ones that hold state: the <ApiLink to="interfaces/src_ports.Store" /> (the ledger and its sub-stores) and the read-through <ApiLink to="interfaces/src_ports.Cache" />. The ports that move messages — the outbox, the inbox, and the <ApiLink to="types/src_ports.Dispatcher" /> — write through the same `Store` and have [their own page](/economy/ports/messaging/).
 
 The rules that keep money conserved are written once, not re-implemented per backend. They're verified against every adapter, and the SQL engines push them down into the database as well.
 
@@ -29,7 +26,7 @@ The rules that keep money conserved are written once, not re-implemented per bac
 
 The `Store` is the one object that gathers everything the system reads and writes. It exposes the `ledger` plus a set of named sub-stores, and a `transaction` method that runs a block of work across all of them atomically.
 
-The `ledger` is the append-only, double-entry book itself, see [accounts and double-entry](/economy/concepts/accounts-and-double-entry/) for what a `Posting` and its `Leg`s are. The `Ledger` interface records a `Posting` with `append`, reads a `balance`, pages a `statement`, and streams history for the [integrity prover](/economy/concepts/integrity/) to replay.
+The `ledger` is the append-only, double-entry book itself, see [accounts and double-entry](/economy/concepts/accounts-and-double-entry/) for what a <ApiLink to="types/src_ports.Posting" /> and its <ApiLink to="types/src_ports.Leg" />s are. The `Ledger` interface records a `Posting` with `append`, reads a `balance`, pages a `statement`, and streams history for the [integrity prover](/economy/concepts/integrity/) to replay.
 
 Everything else hangs off the `Store` as a purpose-built sub-store, one per concern:
 
@@ -128,6 +125,7 @@ That belongs to [integrity](/economy/concepts/integrity/), which owns the conser
   The engines fail fast instead: each checks the database's recorded schema
   version against the code's and refuses to run on a mismatch, rather than
   silently operating on a drifted shape. `openPorts` runs that check eagerly on
+  silently operating on a drifted shape. <ApiLink to="functions/src.openPorts" /> runs that check eagerly on
   the pool; a directly-constructed `mysqlStore` defaults to `schema: 'skip'`, so
   no check runs unless you pass `'assert'`.
 </Callout>
