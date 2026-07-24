@@ -14,8 +14,8 @@ import { verifiedPosting } from '#src/chain.ts';
 import { earned } from '#src/accounts.ts';
 import { encodeAmount } from '#src/money.ts';
 
-import type { Ctx, Operation, Transaction } from '#src/contract.ts';
 import type { Amount } from '#src/money.ts';
+import type { Ctx, Operation, Recipient, Transaction } from '#src/contract.ts';
 import type { Digest, Ledger, Saga, Subscription, Unit } from '#src/ports.ts';
 
 /**
@@ -62,6 +62,70 @@ export function assertReason(
       ERROR_CODES.MALFORMED_OPERATION,
       `${operation.kind} requires a non-empty reason.`,
       { detail: { kind: operation.kind } },
+    );
+  }
+}
+
+/**
+ * The recipient-share law, shared by spend and the instance lane's purchase: at least one
+ * recipient, no recipient who is the buyer, no sellerId twice, each share in (0, 10000] basis
+ * points, and shares summing to exactly 10000. The sum check alone is not enough — shares like
+ * [-5000, 15000] still sum to 10000, but a negative share is a hidden debit and a >100% share
+ * pays out more of the part than exists. A buyer who is also a recipient would convert their own
+ * non-payable credit into payable earned credit funded by the house, so it is a fault, not a
+ * business "no". `what` names the operation in messages; `detail` is merged into every fault.
+ */
+export function assertRecipientShares(
+  recipients: ReadonlyArray<Recipient>,
+  buyerId: string,
+  what: string,
+  detail: Record<string, string | number> = {},
+): void {
+  if (recipients.length === 0) {
+    throw fault(
+      ERROR_CODES.MALFORMED_OPERATION,
+      `A ${what} names at least one recipient.`,
+      { detail },
+    );
+  }
+  let total = 0;
+  const seen = new Set<string>();
+  for (const recipient of recipients) {
+    if (recipient.sellerId === buyerId) {
+      throw fault(
+        ERROR_CODES.MALFORMED_OPERATION,
+        `A ${what} recipient may not be the buyer (self-dealing).`,
+        { detail: { ...detail, buyerId } },
+      );
+    }
+    if (seen.has(recipient.sellerId)) {
+      throw fault(
+        ERROR_CODES.MALFORMED_OPERATION,
+        `A ${what} may not name the same sellerId twice.`,
+        { detail: { ...detail, sellerId: recipient.sellerId } },
+      );
+    }
+    seen.add(recipient.sellerId);
+    if (recipient.shareBps <= 0 || recipient.shareBps > 10_000) {
+      throw fault(
+        ERROR_CODES.MALFORMED_OPERATION,
+        'Each recipient share must be > 0 and <= 10000 basis points.',
+        {
+          detail: {
+            ...detail,
+            sellerId: recipient.sellerId,
+            shareBps: recipient.shareBps,
+          },
+        },
+      );
+    }
+    total += recipient.shareBps;
+  }
+  if (total !== 10_000) {
+    throw fault(
+      ERROR_CODES.MALFORMED_OPERATION,
+      'Recipient shareBps must sum to 10000.',
+      { detail: { ...detail, total } },
     );
   }
 }

@@ -170,6 +170,23 @@ export interface RateLimiter {
 /** What {@link RateLimiter.allow} returns; `retryAfterMs` rides denials that know their window. */
 export type RateVerdict = { allowed: boolean; retryAfterMs?: number };
 
+/**
+ * Runs the worker's periodic tasks. Every task the core hands a scheduler catches its own
+ * errors, so a tick can be fired and forgotten — the built-in fallback is a plain `setInterval`
+ * (`intervalScheduler` in src/runtime.ts). The returned stop function halts future ticks; it
+ * does not cancel a tick already in flight.
+ *
+ * @example
+ * // A test scheduler that fires on demand instead of on a timer.
+ * const ticks: Array<() => Promise<void>> = [];
+ * const scheduler: Scheduler = {
+ *   every: (_ms, task) => {
+ *     ticks.push(task);
+ *     return () => void ticks.splice(ticks.indexOf(task), 1);
+ *   },
+ * };
+ * await ticks[0]!(); // drive one worker tick by hand
+ */
 export interface Scheduler {
   /** Runs `task` every `ms` milliseconds; the returned function stops the loop. */
   every(

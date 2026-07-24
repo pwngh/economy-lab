@@ -31,6 +31,7 @@ import type {
   Ports,
 } from '#src/ports.ts';
 import type { Economy, Operation, Outcome, Principal } from '#src/contract.ts';
+import type { InstanceEconomies, InstancePurchase } from '#src/instance.ts';
 
 /**
  * Host handler for inbound provider callbacks (webhooks), e.g. a payment processor reporting a
@@ -72,6 +73,11 @@ export type RateLimitConfig = {
   keyFor?: (request: Request, principal?: Principal) => string;
 };
 
+/**
+ * Everything {@link createServer} accepts. `economy`, `ports`, and the `authenticate` posture are
+ * required; the rest are opt-in edge behavior — absent, CORS stays off, admission control is
+ * off, and the webhook and instance routes answer 404.
+ */
 export interface ServerOptions {
   economy: Economy;
 
@@ -113,6 +119,13 @@ export interface ServerOptions {
   cors?: { origins: ReadonlyArray<string> };
 
   /**
+   * The instance-economy lane manager (see src/instance.ts). When present, the server exposes
+   * `POST /instances/:scope/purchase` — the transport an unprivileged game server calls to
+   * request in-world purchases, with the lane living in this tier. Absent, the routes 404.
+   */
+  instances?: InstanceEconomies;
+
+  /**
    * Byte ceiling on request bodies; past it the reply is 413. Defaults to
    * {@link DEFAULT_MAX_BODY_BYTES}, which every legitimate operation fits well under.
    */
@@ -151,6 +164,8 @@ const TIMESTAMP_HEADER = 'x-timestamp';
  *
  * Routes these paths, 404s the rest:
  * - `POST /submit` reads one operation from the JSON body, runs it, returns the result.
+ * - `POST /instances/:scope/purchase` (only with `instances` configured) hands an in-world
+ *   purchase to the scope's fast-lane session — the transport an unprivileged game server calls.
  * - `POST /webhooks/:provider` verifies the callback, then hands it to the injected handler.
  * - `GET /healthz` reports liveness without touching storage.
  * - `GET /readyz` reports readiness via one cheap store-touching read through the economy.
@@ -225,21 +240,151 @@ async function route(
   ) {
     return readinessRoute(economy);
   }
-  if (
-    request.method === 'POST' &&
-    segments.length === 1 &&
-    segments[0] === 'submit'
-  ) {
-    return submitRoute(economy, options, request);
-  }
-  if (
-    request.method === 'POST' &&
-    segments.length === 2 &&
-    segments[0] === 'webhooks'
-  ) {
-    return webhookRoute(options, segments[1]!, request);
+  if (request.method === 'POST') {
+    return postRoute(economy, options, segments, request);
   }
   return problemResponse(404, 'Not found.');
+}
+
+function postRoute(
+  economy: Economy,
+  options: ServerOptions,
+  segments: string[],
+  request: Request,
+): Promise<Response> {
+  if (segments.length === 1 && segments[0] === 'submit') {
+    return submitRoute(economy, options, request);
+  }
+  if (segments.length === 2 && segments[0] === 'webhooks') {
+    return webhookRoute(options, segments[1]!, request);
+  }
+  if (
+    segments.length === 3 &&
+    segments[0] === 'instances' &&
+    segments[2] === 'purchase' &&
+    options.instances !== undefined
+  ) {
+    return instancePurchaseRoute(options, segments[1]!, request);
+  }
+  return Promise.resolve(problemResponse(404, 'Not found.'));
+}
+
+// --- /instances/:scope/purchase -----------------------------------------------------
+
+// The game-server edge to the fast lane. Same authorization posture as /submit: a `user`
+// principal may only spend its own wallet; acting for an arbitrary buyer takes a system or
+// operator principal (or the explicit `authenticate: false` in-process trust posture).
+async function instancePurchaseRoute(
+  options: ServerOptions,
+  scopeRaw: string,
+  request: Request,
+): Promise<Response> {
+  const correlationId = correlationOf(request);
+  const response = await runInstancePurchase(options, scopeRaw, request);
+  response.headers.set(REQUEST_ID_HEADER, correlationId);
+  return response;
+}
+
+async function runInstancePurchase(
+  options: ServerOptions,
+  scopeRaw: string,
+  request: Request,
+): Promise<Response> {
+  const scope = decodeURIComponent(scopeRaw);
+  if (!/^[\w.:-]{1,128}$/.test(scope)) {
+    return problemResponse(400, 'Malformed scope.');
+  }
+  let principal: Principal | undefined;
+  if (options.authenticate !== undefined && options.authenticate !== false) {
+    let verdict: Principal | null;
+    try {
+      verdict = await options.authenticate(request);
+    } catch (error) {
+      return faultResponse(error);
+    }
+    if (verdict === null) {
+      return faultResponse(
+        fault(ERROR_CODES.UNAUTHORIZED, 'Request is not authenticated.'),
+      );
+    }
+    principal = verdict;
+  }
+  const denied = await admitSubmit(options, request, principal);
+  if (denied !== null) {
+    return denied;
+  }
+
+  let bytes: Uint8Array;
+  try {
+    bytes = await readBounded(request, options);
+  } catch (error) {
+    return bodyFault(error);
+  }
+  try {
+    const purchase = decodeInstancePurchase(parseJson(bytes), principal);
+    const outcome = await options.instances!.laneFor(scope).purchase(purchase);
+    return jsonResponse(200, outcome as unknown as Record<string, unknown>);
+  } catch (error) {
+    return faultResponse(error);
+  }
+}
+
+// The wire shape of one purchase request; the price rides as an encoded amount string like every
+// other money field on this API. Faults on shape belong to decode; business "no"s come back as
+// 200 rejected outcomes, exactly like /submit.
+function decodeInstancePurchase(
+  body: unknown,
+  principal: Principal | undefined,
+): InstancePurchase {
+  const raw = (body ?? {}) as Record<string, unknown>;
+  if (typeof raw.buyerId !== 'string' || raw.buyerId.trim() === '') {
+    throw fault(
+      ERROR_CODES.MALFORMED_OPERATION,
+      'purchase.buyerId must be a non-empty string.',
+    );
+  }
+  if (
+    principal !== undefined &&
+    principal.kind === 'user' &&
+    principal.userId !== raw.buyerId
+  ) {
+    throw fault(
+      ERROR_CODES.UNAUTHORIZED,
+      'A user may only purchase with their own wallet.',
+    );
+  }
+  const product = (raw.product ?? {}) as Record<string, unknown>;
+  const recipients = Array.isArray(raw.recipients) ? raw.recipients : [];
+  return {
+    buyerId: raw.buyerId,
+    price: decodeWire.amount(raw.price),
+    recipients: recipients.map((entry) => {
+      const recipient = (entry ?? {}) as Record<string, unknown>;
+      // Rejected here because the lane's own share check does not re-test seller ids, and an
+      // empty one would mint an earned account with an empty owner.
+      if (
+        typeof recipient.sellerId !== 'string' ||
+        recipient.sellerId.trim() === ''
+      ) {
+        throw fault(
+          ERROR_CODES.MALFORMED_OPERATION,
+          'purchase.recipients[].sellerId must be a non-empty string.',
+        );
+      }
+      return {
+        sellerId: recipient.sellerId,
+        shareBps: Number(recipient.shareBps ?? 0),
+      };
+    }),
+    product: {
+      sku: String(product.sku ?? ''),
+      kind: product.kind as InstancePurchase['product']['kind'],
+      ...(product.expiresAt === undefined
+        ? {}
+        : { expiresAt: Number(product.expiresAt) }),
+    },
+    ...(raw.orderId === undefined ? {} : { orderId: String(raw.orderId) }),
+  };
 }
 
 // --- CORS -------------------------------------------------------------------------

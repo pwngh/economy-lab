@@ -12,6 +12,11 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   by epoch (`epochMinter`).
 - `sharedReservations` keeps the reservation counter in the store, so it holds across processes
   and nodes; `createReservations` stays the in-process default.
+- `openInstanceEconomy` is the session fast lane over netting: ownership is durable at the
+  purchase call, ledger money moves at settle. Purchases screen against matured balance,
+  per-user session caps, and idempotent replay.
+- `InstanceEconomyOptions.prefund` funds a per-session escrow up front so draws cannot fail at
+  settle; settle refunds the remainder.
 
 ## 0.6.0 - 2026-07-23
 

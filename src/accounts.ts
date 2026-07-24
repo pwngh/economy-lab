@@ -45,6 +45,35 @@ export function spendable(userId: string): AccountRef {
 }
 
 /**
+ * A session escrow account: the prefund lane's crash-safe attribution. The account key is the
+ * (user, session) pair, so recovery derives the unspent remainder from durable postings plus
+ * the journal — no session-memory truth anywhere. Funded from `spendable` at session first
+ * touch, drained by the session settlement, remainder refunded to `spendable` at close (see
+ * src/instance.ts prefund).
+ */
+export function sessionEscrow(userId: string, sessionId: string): AccountRef {
+  return `${userId}:${sessionId}:escrow` as AccountRef;
+}
+
+/**
+ * Parses a session-escrow id back into its (user, session) pair, or null for any other account —
+ * what the orphan-escrow sweep uses to find each remainder's owner.
+ */
+export function escrowPartsOf(
+  ref: AccountRef,
+): { userId: string; sessionId: string } | null {
+  if (walletKindOf(ref) !== 'escrow') {
+    return null;
+  }
+  const first = ref.indexOf(':');
+  const last = ref.lastIndexOf(':');
+  if (first < 0 || last <= first) {
+    return null;
+  }
+  return { userId: ref.slice(0, first), sessionId: ref.slice(first + 1, last) };
+}
+
+/**
  * A user's earned account: revenue owed to them as a seller, which the platform must pay out.
  * Cashing out goes through `requestPayout`, which moves earned money into the payout reserve;
  * earned balances class as `excluded` in the backing check, so only the custodial spendable
@@ -55,7 +84,6 @@ export function earned(userId: string): AccountRef {
 }
 
 /**
- * A user's promo account: a marketing grant that expires.
  * A user's promo account: a marketing grant that expires. Its offsetting entry sits in
  * `SYSTEM.PROMO_FLOAT`, and promo balances class as `excluded` in the backing check — granted
  * credits are the platform's marketing spend, not user money held in trust.
@@ -222,7 +250,8 @@ export function isWalletAccount(ref: AccountRef): boolean {
  * The user id a wallet account belongs to: the part before its `:kind` suffix. For
  * `usr_alice:spendable` this is `usr_alice`; for a malformed `:spendable` (empty user id) it's the
  * empty string, which the submit pipeline rejects. Only meaningful for the wallet accounts
- * {@link isWalletAccount} identifies.
+ * {@link isWalletAccount} identifies. For a session escrow account this returns the
+ * `<userId>:<sessionId>` prefix, not a user id; use `escrowPartsOf` for those.
  */
 export function ownerOf(ref: AccountRef): string {
   const colon = ref.lastIndexOf(':');

@@ -36,8 +36,19 @@
  *   chain-and-anchor construction the journal reuses.
  */
 
-import { GENESIS_HEX, postEntry, balanceDelta } from '#src/ledger.ts';
-import { isWalletAccount, SYSTEM } from '#src/accounts.ts';
+import {
+  GENESIS_HEX,
+  credit,
+  debit,
+  postEntry,
+  balanceDelta,
+} from '#src/ledger.ts';
+import {
+  isWalletAccount,
+  sessionEscrow,
+  spendable,
+  SYSTEM,
+} from '#src/accounts.ts';
 import { toAmount } from '#src/money.ts';
 import { toHex } from '#src/bytes.ts';
 import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
@@ -245,12 +256,44 @@ export async function recoverSession(
 }
 
 /**
+ * Refunds one prefund escrow's remainder to its owner's spendable balance, by the deterministic
+ * `esc_refund_` txn id every repair path shares: the lane's own close, the orphan sweep, and the
+ * retention sweep post this identical entry, so whichever runs first wins and the rest no-op on
+ * the existing posting. Returns the refunded minor amount, or null when the escrow is empty or
+ * already refunded.
+ */
+export async function refundEscrowRemainder(
+  store: Store,
+  sessionId: string,
+  userId: string,
+): Promise<bigint | null> {
+  const escrow = sessionEscrow(userId, sessionId);
+  const remainder = await store.ledger.balance(escrow);
+  if (remainder.minor <= 0n) {
+    return null;
+  }
+  const txnId = `esc_refund_${sessionId}_${userId}`;
+  if ((await store.ledger.posting(txnId)) !== null) {
+    return null;
+  }
+  await store.transaction((unit) =>
+    postEntry(unit.ledger, {
+      txnId,
+      legs: [debit(escrow, remainder), credit(spendable(userId), remainder)],
+      meta: { kind: 'prefund_refund', sessionId, userId },
+    }),
+  );
+  return remainder.minor;
+}
+
+/**
  * A durable journal session: `record` accepts movements (idempotent per key, screened against
  * the reservation registry), `flush` commits the pending batch, `settle` re-derives the net
  * from the journal, re-verifies the hash chain, and posts it in clearing chunks — once per
  * session id, epochs rotate after that. Construct through {@link openInstanceSession}, or
  * {@link recoverSession} after a crash. A session is a single-writer object: interleaved
  * concurrent `record` calls can fork the chain on one seq, so a concurrent edge serializes on
+ * top (as {@link InstanceEconomy} does).
  */
 export class InstanceSession {
   private readonly deps: SessionPorts;
@@ -750,3 +793,19 @@ export class InstanceSession {
 
 // Type-only re-exports so hosts can speak the session's language without reaching into ports.
 export type { Movement, Leg, Amount, Currency };
+
+// The instance fast lane, re-exported so the published `./netting` subpath carries the whole
+// session story.
+export { openInstanceEconomy, openInstanceEconomies } from '#src/instance.ts';
+export type {
+  InstanceEconomies,
+  InstanceEconomiesOptions,
+  InstanceEconomy,
+  InstanceEconomyDeps,
+  InstanceEconomyOptions,
+  InstancePurchase,
+  InstanceSettleReport,
+  InstanceSweepReport,
+  ProductKind,
+  PurchaseOutcome,
+} from '#src/instance.ts';

@@ -19,6 +19,7 @@ import type {
   IdPrefix,
   Logger,
   Meter,
+  Scheduler,
   Signer,
 } from '#src/ports.ts';
 
@@ -250,6 +251,29 @@ export function jsonlLogger(
 /** A Logger that discards every line: the silent default for a host that wants no log output. */
 export function silentLogger(): Logger {
   return { log: () => {} };
+}
+
+/**
+ * The built-in fallback {@link Scheduler} for hosts that inject none: a plain interval timer.
+ * The worker's `start` and the instance-economy manager's `start` both fall back to it.
+ */
+export function intervalScheduler(): Scheduler {
+  return {
+    every: (ms, task) => {
+      // The one sanctioned raw timer: this is the fallback Scheduler the restriction elsewhere
+      // points to. Callers pass tasks that never throw, so the fire-and-forget tick cannot leak
+      // a rejection.
+      // eslint-disable-next-line no-restricted-globals
+      const timer = setInterval(() => void task(), ms);
+      // Node's interval holds the event loop open; unref (absent on web runtimes) lets an
+      // embedding host exit without calling the stop handle.
+      const handle = timer as { unref?: () => void };
+      if (typeof handle.unref === 'function') {
+        handle.unref();
+      }
+      return () => clearInterval(timer);
+    },
+  };
 }
 
 /** A Meter that discards every count and observation: the default when a host collects no metrics. */

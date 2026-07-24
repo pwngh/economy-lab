@@ -324,6 +324,120 @@ describe('Instance netting', () => {
     assert.equal(await balanceOf(store, earned('usr_c1')), 150n);
   });
 
+  test('a settled session refuses further movements; a new epoch takes them', async () => {
+    const { store, deps } = harness();
+    await fund(store, 'usr_v8', 1_000n);
+    const session = openInstanceSession(deps, 'sess:scope:0');
+    await session.record({
+      idempotencyKey: 'h_1',
+      legs: purchase('usr_v8', 'usr_c1', 100n),
+    });
+    await session.settle();
+
+    // Re-recording would collide with the settled epoch's chunk txn ids and strand the money;
+    // the session throws instead, and the rotation pattern carries on in a fresh epoch.
+    await assert.rejects(
+      () =>
+        session.record({
+          idempotencyKey: 'h_2',
+          legs: purchase('usr_v8', 'usr_c1', 50n),
+        }),
+      (error: unknown) =>
+        error instanceof Error &&
+        (error as { code?: string }).code === 'SESSION.SETTLED',
+    );
+
+    const next = openInstanceSession(deps, 'sess:scope:1');
+    await next.record({
+      idempotencyKey: 'h_2',
+      legs: purchase('usr_v8', 'usr_c1', 50n),
+    });
+    await next.settle();
+    assert.equal(await balanceOf(store, spendable('usr_v8')), 850n);
+    assert.equal(await balanceOf(store, earned('usr_c1')), 150n);
+  });
+
+  test('an empty settle does not seal the session', async () => {
+    const { store, deps } = harness();
+    await fund(store, 'usr_v9', 1_000n);
+    const session = openInstanceSession(deps, 'sess_empty');
+    await session.settle();
+    // Nothing was netted, so no txn id was minted and recording may begin.
+    await session.record({
+      idempotencyKey: 'i_1',
+      legs: purchase('usr_v9', 'usr_c1', 100n),
+    });
+    const report = await session.settle();
+    assert.equal(report.netted, 1);
+    assert.equal(await balanceOf(store, earned('usr_c1')), 100n);
+  });
+
+  test('recovery of a settled session refuses new movements and re-settles idempotently', async () => {
+    const { store, deps } = harness();
+    await fund(store, 'usr_v10', 1_000n);
+    const session = openInstanceSession(deps, 'sess_j');
+    await session.record({
+      idempotencyKey: 'j_1',
+      legs: purchase('usr_v10', 'usr_c1', 100n),
+    });
+    await session.settle();
+
+    const recovered = await recoverSession(deps, 'sess_j');
+    await assert.rejects(
+      () =>
+        recovered.record({
+          idempotencyKey: 'j_2',
+          legs: purchase('usr_v10', 'usr_c1', 50n),
+        }),
+      (error: unknown) =>
+        (error as { code?: string }).code === 'SESSION.SETTLED',
+    );
+    // A second settle finishes idempotently: every chunk already exists, so nothing re-posts.
+    const report = await recovered.settle();
+    assert.equal(report.mode, 'netted');
+    assert.equal(await balanceOf(store, spendable('usr_v10')), 900n);
+    assert.equal(await balanceOf(store, earned('usr_c1')), 100n);
+  });
+
+  test('recovery after a partial replay finishes down the replay path, never re-netting', async () => {
+    const { store, deps } = harness();
+    await fund(store, 'usr_v11', 1_000n);
+    const session = openInstanceSession(deps, 'sess_k');
+    await session.record({
+      idempotencyKey: 'k_1',
+      legs: purchase('usr_v11', 'usr_c1', 100n),
+    });
+    await session.record({
+      idempotencyKey: 'k_2',
+      legs: purchase('usr_v11', 'usr_c2', 40n),
+    });
+    await session.flush();
+
+    // Simulate a crash mid-replay: movement seq 1 already went ledger-final under its replay
+    // txn id; seq 0 did not. A netted re-settle would re-post seq 1's money inside the net.
+    await store.transaction((unit) =>
+      postEntry(unit.ledger, {
+        txnId: 'mv_sess_k_1',
+        legs: purchase('usr_v11', 'usr_c2', 40n),
+        meta: { kind: 'instance_movement_replay', sessionId: 'sess_k', seq: 1 },
+      }),
+    );
+
+    const recovered = await recoverSession(deps, 'sess_k');
+    const report = await recovered.settle();
+
+    assert.equal(report.mode, 'replayed');
+    // Each movement is ledger-final exactly once: seq 1's existing posting was skipped.
+    assert.equal(await balanceOf(store, spendable('usr_v11')), 860n);
+    assert.equal(await balanceOf(store, earned('usr_c1')), 100n);
+    assert.equal(await balanceOf(store, earned('usr_c2')), 40n);
+    const chain = await proveChain({
+      ledger: store.ledger,
+      digest: deps['digest'],
+    });
+    assert.equal(chain.intact, true);
+  });
+
   test('refuses to settle over a tampered journal', async () => {
     const { store, deps } = harness();
     await fund(store, 'usr_v7', 1_000n);
