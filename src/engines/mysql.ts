@@ -1854,6 +1854,27 @@ function createMovementJournal(pool: MysqlPool): MovementJournal {
         };
       }
     },
+    // Keyset-paged so an unbounded journal never materializes in one result set.
+    sessionIds: async function* () {
+      let after = '';
+      for (;;) {
+        const page = await rows(
+          pool,
+          `SELECT DISTINCT session_id FROM instance_movements
+            WHERE session_id > ?
+            ORDER BY session_id
+            LIMIT 500`,
+          [after],
+        );
+        if (page.length === 0) {
+          return;
+        }
+        for (const row of page) {
+          yield row.session_id as string;
+        }
+        after = page[page.length - 1]!.session_id as string;
+      }
+    },
   };
 }
 // --- Reservation store ------------------------------------------------------------

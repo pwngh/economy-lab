@@ -1179,6 +1179,13 @@ export interface MovementJournal {
 
   /** Streams a session's movements in seq order — the source of truth settle derives from. */
   bySession(sessionId: string, options?: CallOptions): AsyncIterable<Movement>;
+
+  /**
+   * Streams every distinct session id present in the journal — the orphan sweep's enumeration
+   * (src/worker/orphans.ts): a session with journaled movements and no settlement posting is an
+   * orphan candidate. Optional; a store without it cannot host the sweep.
+   */
+  sessionIds?(options?: CallOptions): AsyncIterable<string>;
 }
 
 /**

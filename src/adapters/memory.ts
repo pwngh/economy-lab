@@ -1547,6 +1547,13 @@ function createMovementJournal(): MovementJournal {
       own.sort((a, b) => a.seq - b.seq);
       yield* own;
     },
+    sessionIds: async function* () {
+      const seen = new Set<string>();
+      for (const row of log) {
+        seen.add(row.sessionId);
+      }
+      yield* [...seen].sort();
+    },
   };
 }
 

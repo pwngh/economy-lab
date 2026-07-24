@@ -300,6 +300,22 @@ async function journalRejectsDuplicateBatches(store: Store): Promise<void> {
   assert.equal(rows.length, 1);
 }
 
+// sessionIds (optional): every journaled session id appears exactly once.
+async function journalEnumeratesSessions(store: Store): Promise<void> {
+  if (store.movements.sessionIds === undefined) {
+    return;
+  }
+  const a = `sess_conf_e_${freshUser()}`;
+  const b = `sess_conf_e_${freshUser()}`;
+  await store.movements.append([
+    movementRow(a, 0, `${a}_m0`),
+    movementRow(a, 1, `${a}_m1`),
+    movementRow(b, 0, `${b}_m0`),
+  ]);
+  const ids = await collect(store.movements.sessionIds());
+  assert.equal(ids.filter((id) => id === a).length, 1);
+  assert.equal(ids.filter((id) => id === b).length, 1);
+}
 // Store.reservations (optional): the multi-node counter. `add` must return the post-add total
 // (the accept screen's add-then-check stands on it), a storm of concurrent adds must sum
 // exactly (no lost updates), and `entries` must list the row for the reconciliation walk.
@@ -818,6 +834,34 @@ function sagaRow(id: string, userId: string, overrides: Partial<Saga>): Saga {
     payoutUsd: null,
     ...overrides,
   };
+}
+
+// claimDue hands the worker only the in-progress states, RESERVED and SUBMITTED: a REQUESTED
+// row is a crashed opening (the schema's due indexes exclude it) and the terminal states are
+// done, so none of them reach the sweep however overdue.
+async function claimsOnlyInProgressDueSagas(store: Store): Promise<void> {
+  const userId = freshUser();
+  const mk = (suffix: string, state: SagaState): Saga =>
+    sagaRow(`pay_conf_due_${userId}_${suffix}`, userId, {
+      state,
+      dueAt: 1_000,
+      updatedAt: 1_000,
+    });
+  const requested = mk('req', 'REQUESTED');
+  const reserved = mk('res', 'RESERVED');
+  const submitted = mk('sub', 'SUBMITTED');
+  const settled = mk('set', 'SETTLED');
+  const failed = mk('fail', 'FAILED');
+  for (const saga of [requested, reserved, submitted, settled, failed]) {
+    await store.transaction((unit) => unit.sagas.open(saga));
+  }
+
+  // A generous limit, then filter to this test's user because the store is shared.
+  const mine = (await store.sagas.claimDue(2_000, 1_000))
+    .filter((saga) => saga.userId === userId)
+    .map((saga) => saga.id)
+    .sort();
+  assert.deepEqual(mine, [reserved.id, submitted.id].sort());
 }
 
 // SagaStore.list returns the whole payout board (every state, newest updatedAt first), not the
@@ -1572,6 +1616,8 @@ export function runStoreConformance(
       withStore(t, journalAppendsAndStreamsBySession));
     test('rejects a movement batch on a duplicate key or position', (t) =>
       withStore(t, journalRejectsDuplicateBatches));
+    test('enumerates journaled session ids exactly once each', (t) =>
+      withStore(t, journalEnumeratesSessions));
     test('keeps the reservation counter exact under concurrent adds', (t) =>
       withStore(t, reservationCounterIsExact));
     test('commits a transaction durably and leaves no trace when one throws', (t) =>
@@ -1634,6 +1680,8 @@ export function runStoreConformance(
       withStore(t, persistsTerminalOutcomeOnTheSaga));
     test('finds a saga by provider ref, newest first on a duplicated ref', (t) =>
       withStore(t, findsSagaByProviderRef));
+    test('claims only RESERVED and SUBMITTED due sagas, never REQUESTED or terminal', (t) =>
+      withStore(t, claimsOnlyInProgressDueSagas));
     test('lists every posting newest-first with its full legs', (t) =>
       withStore(t, listsPostingsNewestFirst));
     test('streams an account lineage in commit order (read.lineage)', (t) =>

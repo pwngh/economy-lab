@@ -1900,6 +1900,26 @@ function createMovementJournal(pool: PgPool): MovementJournal {
         };
       }
     },
+    // Keyset-paged so an unbounded journal never materializes in one result set.
+    sessionIds: async function* () {
+      let after = '';
+      for (;;) {
+        const result = await pool.query(
+          `select distinct session_id from instance_movements
+            where session_id > $1
+            order by session_id
+            limit 500`,
+          [after],
+        );
+        if (result.rows.length === 0) {
+          return;
+        }
+        for (const row of result.rows) {
+          yield row.session_id as string;
+        }
+        after = result.rows[result.rows.length - 1]!.session_id as string;
+      }
+    },
   };
 }
 // --- Reservation store ------------------------------------------------------------

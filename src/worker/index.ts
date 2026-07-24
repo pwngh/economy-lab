@@ -20,6 +20,10 @@ import {
 } from '#src/worker/treasury.ts';
 import { reverifyCheckpoint, sealCheckpoint } from '#src/worker/checkpoint.ts';
 import { sweepExpiredPromos } from '#src/worker/promos.ts';
+import { sweepOrphanSessions } from '#src/worker/orphans.ts';
+
+import type { OrphanSweepSummary } from '#src/worker/orphans.ts';
+import type { Reservations } from '#src/netting.ts';
 import { relayOutbox } from '#src/worker/relay.ts';
 import { drainInbox } from '#src/worker/inbox.ts';
 import { drainAccruals } from '#src/worker/accrual.ts';
@@ -80,6 +84,7 @@ export const SWEEP_NAMES = [
   'promos',
   'accrualDrain',
   'reproof',
+  'orphans',
 ] as const;
 
 /** The name of one background job in the sweep cycle; {@link SWEEP_NAMES} fixes the run order. */
@@ -127,7 +132,26 @@ export type SweepRequest = {
   readonly feed?: ReconcileFeed;
   /** The settlement windows the reconcile job compares, each reconciled independently. */
   readonly windows?: ReadonlyArray<Range>;
+  /**
+   * Multi-node orphan-session sweep (src/worker/orphans.ts); absent, `orphans` is skipped —
+   * enumerating and settling crashed epochs is the multi-node host's opt-in.
+   */
+  readonly orphans?: OrphanJobOptions;
   readonly options?: CallOptions;
+};
+
+/** What the orphans job needs beyond the shared tick. */
+export type OrphanJobOptions = {
+  /**
+   * Finish orphan sessions whose newest movement is older than this. Absent, the sweep is
+   * report-only — the default, because settling moves money.
+   */
+  readonly settleOlderThanMs?: number;
+  /**
+   * The registry recovered sessions release into. A multi-node host passes its shared registry
+   * so a finished orphan frees the dead node's pending.
+   */
+  readonly reservations?: Reservations;
 };
 
 /**
@@ -139,6 +163,7 @@ export type WorkerDefaults = {
   readonly float?: FloatFeed;
   readonly feed?: ReconcileFeed;
   readonly windows?: ReadonlyArray<Range>;
+  readonly orphans?: OrphanJobOptions;
   readonly only?: ReadonlyArray<SweepName>;
   /** Default DEFAULT_SWEEP_LIMIT when omitted. */
   readonly limit?: number;
@@ -167,6 +192,7 @@ export type SweepBatch = {
   promos: SweepResult<PromoExpirySummary>;
   accrualDrain: SweepResult<AccrualDrainSummary>;
   reproof: SweepResult<ReproofSummary>;
+  orphans: SweepResult<OrphanSweepSummary>;
 };
 
 /**
@@ -269,6 +295,14 @@ const IDLE_SUMMARIES: { [K in SweepName]: SummaryOf<K> } = {
   promos: { reversed: [], failed: [] },
   accrualDrain: { drained: [], failed: [], skipped: true },
   reproof: { checked: 0, cursor: null, rotatedAt: null, skipped: true },
+  orphans: {
+    scanned: 0,
+    orphans: [],
+    settled: [],
+    escrowRefunds: [],
+    failed: [],
+    skipped: true,
+  },
 };
 
 type ResolvedTick = { now: number; limit: number; options?: CallOptions };
@@ -342,18 +376,7 @@ async function runSweepJobs(
             ),
           ),
     ),
-    reconcile: await gate('reconcile', () =>
-      input.feed === undefined
-        ? Promise.resolve({ ok: true, summary: IDLE_SUMMARIES.reconcile })
-        : isolate(() =>
-            reconcileDueWindows(
-              input.feed!,
-              ctx,
-              { windows: input.windows ?? [] },
-              options,
-            ),
-          ),
-    ),
+    reconcile: await gate('reconcile', () => runReconcile(ctx, input, options)),
     promos: await gate('promos', () =>
       isolate(() => sweepExpiredPromos(store, ctx, { now, limit }, options)),
     ),
@@ -363,9 +386,39 @@ async function runSweepJobs(
     reproof: await gate('reproof', () =>
       isolate(() => reproveStoredChains(store, ctx, { now, limit })),
     ),
+    orphans: await gate('orphans', () =>
+      runOrphans(store, ctx, input, { now, limit }),
+    ),
   };
 }
 
+function runReconcile(
+  ctx: Ports,
+  input: SweepRequest,
+  options?: CallOptions,
+): Promise<SweepResult<ReconcileSummary>> {
+  if (input.feed === undefined) {
+    return Promise.resolve({ ok: true, summary: IDLE_SUMMARIES.reconcile });
+  }
+  const feed = input.feed;
+  return isolate(() =>
+    reconcileDueWindows(feed, ctx, { windows: input.windows ?? [] }, options),
+  );
+}
+function runOrphans(
+  store: Store,
+  ctx: Ports,
+  input: SweepRequest,
+  tick: { now: number; limit: number },
+): Promise<SweepResult<OrphanSweepSummary>> {
+  if (input.orphans === undefined) {
+    return Promise.resolve({ ok: true, summary: IDLE_SUMMARIES.orphans });
+  }
+  const options = input.orphans;
+  return isolate(() =>
+    sweepOrphanSessions(store, ctx, { ...tick, ...options }),
+  );
+}
 async function isolate<TSummary>(
   run: () => Promise<TSummary>,
 ): Promise<SweepResult<TSummary>> {

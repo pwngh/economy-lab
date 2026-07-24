@@ -386,6 +386,15 @@ export class InstanceSession {
   }
 
   /**
+   * Whether this session's settle already ran — on a recovered session, what the stored
+   * settlement evidence proved. The orphan sweep (src/worker/orphans.ts) reads this to tell a
+   * finished epoch from one that still needs settling.
+   */
+  wasSettled(): boolean {
+    return this.settled;
+  }
+
+  /**
    * Settles the whole session: flush, re-derive the net from the JOURNAL (never from memory),
    * re-verify the session chain, then post the net in clearing chunks. On a refused chunk,
    * compensate what posted and replay movement-by-movement, so every accepted movement ends in
@@ -793,6 +802,16 @@ export class InstanceSession {
 
 // Type-only re-exports so hosts can speak the session's language without reaching into ports.
 export type { Movement, Leg, Amount, Currency };
+
+export {
+  sweepOrphanSessions,
+  reconcileReservations,
+} from '#src/worker/orphans.ts';
+export type {
+  OrphanSweepCtx,
+  OrphanSweepInput,
+  OrphanSweepSummary,
+} from '#src/worker/orphans.ts';
 
 // The instance fast lane, re-exported so the published `./netting` subpath carries the whole
 // session story.

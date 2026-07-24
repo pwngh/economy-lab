@@ -17,6 +17,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   per-user session caps, and idempotent replay.
 - `InstanceEconomyOptions.prefund` funds a per-session escrow up front so draws cannot fail at
   settle; settle refunds the remainder.
+- `sweepOrphanSessions` settles or releases sessions whose owner vanished and
+  `reconcileReservations` repairs the shared counter; both run as worker jobs.
 
 ## 0.6.0 - 2026-07-23
 
