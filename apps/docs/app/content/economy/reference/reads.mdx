@@ -7,6 +7,7 @@ sourceRefs:
   [
     'src/contract.ts#L376-L436 · Economy.read',
     'src/economy.ts#L83-L97 · read',
+    'src/economy.ts#L98-L112 · read',
     'test/economy.read.test.ts',
   ]
 related: ['economy/reference/outcomes-and-reason-codes']
@@ -66,7 +67,7 @@ const posting = await economy.read.posting('txn_8821');
 
 This lets a reader resolve a posting through `read` without reaching past it into the raw [`Store`](/economy/ports/storage/). Unlike a statement, it isn't scoped to one account. It returns the whole transaction with every leg it touched.
 
-Two conventions to hold onto when rendering legs. Amounts are debit-positive: the sign is the ledger's, not the account holder's, so a top-up shows a negative amount on the wallet it credits. To display a leg the way that account's owner reads it, convert it with `balanceDelta` from [`/store-kit`](/economy/reference/api/#pwngheconomy-labstore-kit). And a committed outcome's `legs` may be empty — lifecycle operations like [`cancelSubscription`](/economy/reference/operations/cancel-subscription/) post a marker transaction that moves no money — so render from the legs themselves rather than assuming every commit carries lines.
+Two conventions to hold onto when rendering legs. Amounts are debit-positive: the sign is the ledger's, not the account holder's, so a top-up shows a negative amount on the wallet it credits. To display a leg the way that account's owner reads it, convert it with `balanceDelta` from [`/store-kit`](/api/modules/src_store-kit.html). And a committed outcome's `legs` may be empty — lifecycle operations like [`cancelSubscription`](/economy/reference/operations/cancel-subscription/) post a marker transaction that moves no money — so render from the legs themselves rather than assuming every commit carries lines.
 
 `read.saga(id)` loads one payout [saga](/economy/concepts/payout-saga/) by its id: its current state, the provider reference once submitted, the attempt count, and the reason it failed if it did. The row's key is `id`; an operation that acts on one, like [`settlePayout`](/economy/reference/operations/settle-payout/), takes that same value as its `sagaId`. It returns `null` for an unknown payout id:
 

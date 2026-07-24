@@ -9,193 +9,94 @@
  * @license MIT
  */
 
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+// The generated /api reference must cover the whole export surface: every exports-map subpath
+// renders a module page, and every name an entry point exports renders a symbol page. This is
+// what keeps typedoc.json's entryPoints from silently falling behind package.json, and the
+// reference from silently dropping a symbol. Run `npm run docs:api` first if docs/ is absent.
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
-// The public surface the API reference must list in full. Regenerated intent: every symbol
-// src/index.ts re-exports has a row on reference/api.mdx, so the page cannot silently fall behind
-// the code. Update the page (not this list) when the surface changes.
-const PUBLIC_EXPORTS = [
-  'AccountRef',
-  'Amount',
-  'Anchor',
-  'BitsetOptions',
-  'Boot',
-  'BootInit',
-  'CONFIG_KEYS',
-  'Cache',
-  'CallOptions',
-  'Checkpoint',
-  'Clock',
-  'Config',
-  'Currency',
-  'DECLINE_KEYS',
-  'DEFAULT_SWEEP_LIMIT',
-  'Digest',
-  'Dispatcher',
-  'ERROR_CODES',
-  'Economy',
-  'EconomyError',
-  'EconomyEvent',
-  'EconomyStatus',
-  'EntitlementAttributes',
-  'EnvDescription',
-  'EnvMap',
-  'EXPORT_FORMAT',
-  'ErrorCode',
-  'FeePolicy',
-  'FetchHandler',
-  'HealthReport',
-  'Ids',
-  'Leg',
-  'Logger',
-  'Meter',
-  'Operation',
-  'Outcome',
-  'ParsedExport',
-  'Ports',
-  'PortsInit',
-  'Posting',
-  'PreflightIssue',
-  'Principal',
-  'Processor',
-  'ProvePorts',
-  'ProveReport',
-  'REJECTION_CODES',
-  'REJECTION_SPEC',
-  'Range',
-  'Rate',
-  'RateLimiter',
-  'RateVerdict',
-  'Rates',
-  'RatesConfig',
-  'Recipient',
-  'Rejection',
-  'RejectionCode',
-  'RejectionDetail',
-  'Runtime',
-  'SCALE',
-  'SECRET_KEYS',
-  'SYSTEM',
-  'Saga',
-  'Scheduler',
-  'Secrets',
-  'ServerOptions',
-  'ServerPorts',
-  'Signer',
-  'Statement',
-  'Store',
-  'StoredLink',
-  'Success',
-  'SweepRequest',
-  'Transaction',
-  'VerifyReport',
-  'Worker',
-  'WorkerDefaults',
-  'add',
-  'adjust',
-  'allInvariantsHold',
-  'boot',
-  'cancelSubscription',
-  'clawback',
-  'compare',
-  'convertCeil',
-  'convertFloor',
-  'createEconomy',
-  'createServer',
-  'createWorker',
-  'credit',
-  'credits',
-  'currency',
-  'debit',
-  'decodeAmount',
-  'decodeAmountWire',
-  'defaultConfig',
-  'describeEnv',
-  'DEV_RATES',
-  'earned',
-  'findByHash',
-  'encodeAmount',
-  'grantEntitlement',
-  'grantPromo',
-  'idempotencyKey',
-  'inspectConfig',
-  'isAmount',
-  'isNegative',
-  'isRejection',
-  'isSuccess',
-  'isWalletAccount',
-  'isZero',
-  'loadConfig',
-  'maintenanceWindow',
-  'memoryPorts',
-  'mergeConfig',
-  'negate',
-  'normalizeError',
-  'openPorts',
-  'paginate',
-  'parseExport',
-  'operatorActor',
-  'ownerOf',
-  'preflight',
-  'promo',
-  'proveEconomy',
-  'refund',
-  'requestPayout',
-  'requireSuccess',
-  'reverse',
-  'reversePayout',
-  'revokeEntitlement',
-  'settlePayout',
-  'spend',
-  'spendable',
-  'statusForError',
-  'subscribe',
-  'systemActor',
-  'systemRuntime',
-  'toAmount',
-  'topUp',
-  'usd',
-  'userActor',
-  'verifyExport',
-  'zero',
-];
+const REPO_ROOT = resolve(__dirname, '../../..');
+const API_OUT = join(REPO_ROOT, 'docs');
 
-describe('the API reference lists the whole public surface', () => {
-  const page = readFileSync(join(import.meta.dirname, 'content/economy/reference/api.mdx'), 'utf8');
-  // Drop fenced code blocks first so their triple-backticks don't desync the inline-span scan.
-  const inline = page.replace(/```[\s\S]*?```/g, '');
-  const spans = new Set([...inline.matchAll(/`([^`]+)`/g)].map((m) => m[1]));
-  for (const name of PUBLIC_EXPORTS) {
-    test(`documents ${name}`, () => {
-      expect(spans.has(name), `api.mdx has no code span for ${name}`).toBe(true);
+// A subpath's module page is its source path with '/' → '_', minus the extension:
+// './worker' → src/worker/index.ts → src_worker.html.
+function modulePageOf(sourcePath: string): string {
+  return sourcePath
+    .replace(/^\.\/dist\//, '')
+    .replace(/\.d\.ts$/, '')
+    .replace(/\/index$/, '')
+    .replace(/\//g, '_');
+}
+
+// The entry's source file for an exports-map types target: './dist/src/index.d.ts' → 'src/index.ts'.
+function sourceFileOf(typesPath: string): string {
+  return typesPath.replace(/^\.\/dist\//, '').replace(/\.d\.ts$/, '.ts');
+}
+
+type ExportsMap = Record<string, { types?: string } | string>;
+const pkg = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')) as {
+  exports: ExportsMap;
+};
+const entries = Object.values(pkg.exports).flatMap((target) =>
+  typeof target === 'object' && target.types ? [target.types] : [],
+);
+
+// Every symbol page the reference rendered, by bare symbol name ('src_ports.Store' → 'Store').
+const renderedSymbols = new Set(
+  ['classes', 'functions', 'interfaces', 'types', 'variables'].flatMap((kind) => {
+    const dir = join(API_OUT, kind);
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir)
+      .filter((f) => f.endsWith('.html'))
+      .map((f) => f.slice(0, -5).split('.').pop() ?? '');
+  }),
+);
+
+// Textual export parse — named re-export blocks plus direct declarations — so the library's
+// sources stay out of this app's TypeScript program. None of the entry points uses `export *`.
+function exportedNames(sourceFile: string): string[] {
+  const text = readFileSync(join(REPO_ROOT, sourceFile), 'utf8');
+  return [...text.matchAll(/^export (?:type )?\{([\s\S]*?)\}/gm)]
+    .flatMap((block) => (block[1] ?? '').split(','))
+    .map((name) => name.replace(/^\s*type\s+/, '').trim())
+    .filter(Boolean)
+    .map((name) => name.split(' as ').pop()?.trim() ?? name)
+    .concat(
+      [
+        ...text.matchAll(
+          /^export (?:async )?(?:function|const|class|type|interface) ([A-Za-z0-9_]+)/gm,
+        ),
+      ].flatMap((decl) => (decl[1] ? [decl[1]] : [])),
+    );
+}
+
+describe('the generated reference covers every entry point', () => {
+  test('the TypeDoc output exists', () => {
+    expect(existsSync(join(API_OUT, 'index.html')), 'run npm run docs:api first').toBe(true);
+  });
+
+  for (const types of entries) {
+    const modulePage = modulePageOf(types);
+    test(`module page for ${types}`, () => {
+      const page = join(API_OUT, 'modules', `${modulePage}.html`);
+      expect(
+        existsSync(page),
+        `no module page ${modulePage}.html — entry point missing from typedoc.json?`,
+      ).toBe(true);
     });
   }
 });
 
-describe('the hand-kept list covers the whole export surface', () => {
-  // The other half of the guard: PUBLIC_EXPORTS itself must not fall behind the code. The barrel
-  // is parsed textually — named re-export blocks plus the entry's own function and type
-  // declarations, so this sees values and types both — rather than imported, which keeps the
-  // library's sources out of this app's TypeScript program.
-  test('every name src/index.ts exports appears in PUBLIC_EXPORTS', () => {
-    const barrel = readFileSync(join(import.meta.dirname, '../../../src/index.ts'), 'utf8');
-    const names = [...barrel.matchAll(/^export (?:type )?\{([\s\S]*?)\}/gm)]
-      .flatMap((block) => (block[1] ?? '').split(','))
-      .map((name) => name.replace(/^\s*type\s+/, '').trim())
-      .filter(Boolean)
-      .map((name) => name.split(' as ').pop()?.trim() ?? name)
-      .concat(
-        [
-          ...barrel.matchAll(
-            /^export (?:async )?(?:function|const|class|type|interface) ([A-Za-z0-9_]+)/gm,
-          ),
-        ].map((decl) => decl[1] ?? ''),
-      );
-    expect(names.length).toBeGreaterThan(100);
-    const listed = new Set(PUBLIC_EXPORTS);
-    const missing = names.filter((name) => !listed.has(name));
-    expect(missing, 'add these exports to PUBLIC_EXPORTS and api.mdx').toEqual([]);
-  });
+describe('every export renders a symbol page', () => {
+  for (const types of entries) {
+    const sourceFile = sourceFileOf(types);
+    test(`exports of ${sourceFile}`, () => {
+      const names = exportedNames(sourceFile);
+      expect(names.length).toBeGreaterThan(0);
+      const missing = names.filter((name) => !renderedSymbols.has(name));
+      expect(missing, 'exports with no rendered /api page').toEqual([]);
+    });
+  }
 });
