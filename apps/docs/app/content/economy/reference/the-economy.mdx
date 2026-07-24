@@ -19,7 +19,7 @@ related:
 
 import theEconomyHtml from '../../../snippets/the-economy.ts?shiki';
 
-An `Economy` is the object you hold and call. It has a small surface: one `submit` to change money, a `read` group to look at state, and `close` to shut down.
+An <ApiLink to="interfaces/src.Economy" /> is the object you hold and call. It has a small surface: one `submit` to change money (with `submitBatch` for bursts), a `read` group to look at state, `capacity` for the growth gauges, and `close` to shut down.
 
 ```ts
 import { createEconomy } from '@pwngh/economy-lab';
@@ -118,6 +118,12 @@ const balance = await economy.read.balance(spendable('usr_a1'));
 ```
 
 See [reads](/economy/reference/reads/) for the whole surface and what each method returns.
+
+## capacity
+
+`capacity()` returns a <ApiLink to="types/src.CapacityReport" />: the live gauges of everything that grows for the life of the economy — total postings (`historySize`), the [re-proof](/economy/concepts/integrity/) watermark's age, the latest checkpoint's age, the [accrual](/economy/concepts/accrual-split/) backlog, session and reservation footprints, and the secondary-table row counts. A gauge the store cannot measure comes back `null` — unknown, never zero.
+
+`advisories` are stated facts against <ApiLink to="variables/src.CAPACITY_THRESHOLDS" />, the documented crossover constants: the system informs, the host decides, and no advisory ever changes behavior. When `historySize` crosses its threshold, the answer is [archival](/economy/ops/archival/); when a backlog ages past its bound, the answer is the [worker](/economy/reference/background-worker/) cadence.
 
 ## close
 

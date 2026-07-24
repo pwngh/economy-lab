@@ -1,0 +1,65 @@
+---
+title: 'Archival'
+summary: 'History only grows. The archive sweep moves the oldest sealed postings to a host-provided cold store and deletes them from hot storage without weakening a proof — the mover signs its own progress, so the pruned edge stays verifiable at every instant. The retention sweep gives the other growth surfaces a correctness-safe deletion horizon.'
+plain: "Moving last year's ledger books into a vault so the counter stays clear. Before a book goes, the owner checks every page still adds up and signs a slip naming exactly which books are in the vault — so an auditor can trust the shelf and the vault together."
+order: 5
+status: stable
+sourceRefs:
+  [
+    'src/worker/archive.ts · archiveSealedPrefix',
+    'src/worker/retention.ts · sweepRetention',
+    'test/worker/archive.test.ts',
+    'test/worker/retention.test.ts',
+  ]
+related:
+  [
+    'economy/reference/background-worker',
+    'economy/concepts/integrity',
+    'economy/reference/offline-verification',
+  ]
+---
+
+An append-only ledger's hot tables grow for the life of the economy, and `economy.capacity()` reports `historySize` as exactly that signal. Two worker sweeps govern the growth, both host opt-ins that do nothing until configured: **archive** moves proved history to cold storage, and **retention** deletes the secondary rows whose usefulness has a horizon.
+
+## What the archive moves
+
+The `archive` sweep moves a strict prefix of postings in commit order — the oldest first, never a gap — and only history a signed [checkpoint](/economy/concepts/integrity/) already covers, gated by `checkpointOlderThanMs`. Before anything is copied or deleted, the sweep re-derives the candidate links from their stored content and checks them against the signed heads; a mismatch refuses with `CHAIN.BROKEN` (or `LEDGER.UNBALANCED`) rather than move unverified history. Corrupt rows never reach the archive, and the refusal is the alarm.
+
+## The mover signs its progress
+
+Deleting proved history would ordinarily weaken the proof — the chain would start mid-air. The archive sweep prevents that by signing its own progress: per-account archive heads sealed under a Merkle sum-root, and a signed watermark recording how far the move has reached. The pruned edge is therefore verifiable at every instant, including after a crash mid-page: the sweep resumes from the watermark, and `verifyArchiveHeads` re-checks the boundary on demand. [Offline verification](/economy/reference/offline-verification/) composes the same way — the hot chain proves back to the boundary, and the boundary's signature vouches for what moved.
+
+## Opting in
+
+The host provides the cold store as an `ArchiveSink` — the destination pages are copied into before any delete — and passes the sweep its options through the worker:
+
+```ts
+import { createWorker } from '@pwngh/economy-lab/worker';
+
+const worker = createWorker(ports, economy, {
+  archive: {
+    sink: myColdStore, // an ArchiveSink: pages copied in before any delete
+    checkpointOlderThanMs: 30 * 24 * 60 * 60 * 1000, // move history sealed a month ago
+  },
+});
+```
+
+Absent the option, the `archive` sweep reports its idle summary and touches nothing.
+
+## The retention horizons
+
+The `retention` sweep covers the two other lifetime-growth surfaces, each behind its own horizon and untouched while the horizon is unset:
+
+- **Idempotency rows** (`idempotencyOlderThanMs`) — a deleted key is open again, so a duplicate request arriving after deletion re-executes instead of replaying. Set the horizon beyond every window in which a caller could still retry; the [idempotency](/economy/concepts/idempotency/) guarantee holds exactly up to it.
+- **Settled sessions' journal rows** (`sessionsOlderThanMs`) — pruning a [session](/economy/concepts/session-netting/) removes it from the orphan sweep's enumeration and from reads, so the sweep verifies then prunes: rows are deleted only for a session whose settlement evidence checks out and whose escrow remainders were refunded, and only past the horizon. Set it beyond the refund and dispute window.
+
+```ts
+const worker = createWorker(ports, economy, {
+  retention: {
+    idempotencyOlderThanMs: 90 * 24 * 60 * 60 * 1000,
+    sessionsOlderThanMs: 90 * 24 * 60 * 60 * 1000,
+  },
+});
+```
+
+Both sweeps ride the ordinary [worker cycle](/economy/reference/background-worker/) — bounded batches, safe to re-run, one step per tick.

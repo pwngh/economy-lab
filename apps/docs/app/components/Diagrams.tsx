@@ -578,31 +578,38 @@ export function OutboxRelay() {
   );
 }
 
+/** The background worker, one `Scheduler` driving the sixteen sweeps of `SWEEP_NAMES`; mirrors the background-worker page and `src/worker`. */
 export function WorkerSweeps() {
   const lw = 148;
   const left = 30;
   const right = 582;
-  const rows = [20, 80, 140, 200, 260];
-  const sched = { x: 312, y: 140, w: 136 };
+  const rows = [20, 76, 132, 188, 244, 300, 356, 412];
+  const sched = { x: 312, y: 216, w: 136 };
   const lefts: [string, string][] = [
     ['payouts', 'advance sagas'],
     ['subscriptions', 'renew or lapse'],
     ['treasury', 'measure backing'],
     ['feeSweep', 'realize fees'],
+    ['floatCoverage', 'external float'],
     ['checkpointVerify', 're-check last'],
-  ];
-  const rights: [string, string][] = [
     ['checkpoint', 'seal a new one'],
     ['relay', 'outbox → dispatcher'],
+  ];
+  const rights: [string, string][] = [
     ['drainInbox', 'apply inbound'],
     ['reconcile', 'match provider'],
     ['promos', 'claw back expired'],
+    ['accrualDrain', 'parked shares → earned'],
+    ['reproof', 're-derive old links'],
+    ['orphans', 'crashed sessions'],
+    ['archive', 'sealed prefix → cold'],
+    ['retention', 'expire old rows'],
   ];
   return (
     <Diagram
-      viewBox="0 0 760 314"
-      label="The background worker. A single Scheduler drives ten sweeps, each on its own interval: payouts advances payout sagas; subscriptions renews or lapses a due subscription; treasury measures whether held USD still backs spendable credit; feeSweep realizes the matured fee surplus into cash; checkpointVerify re-checks the previous signed checkpoint; checkpoint seals a fresh one; relay drains the outbox to the dispatcher; drainInbox applies received provider events; reconcile compares the provider's records against the ledger; and promos claws back the unspent part of an expired grant. Each sweep claims a bounded batch of due work and is safe to re-run."
-      caption="One scheduler drives the ten sweeps of SWEEP_NAMES, in array order. Each claims a bounded batch of due rows, advances each one step, and is safe to re-run, so a re-driven sweep repeats no effect and a crash mid-cycle costs nothing."
+      viewBox="0 0 760 466"
+      label="The background worker. A single Scheduler drives sixteen sweeps, each on its own interval: payouts advances payout sagas; subscriptions renews or lapses a due subscription; treasury measures whether held USD still backs spendable credit; feeSweep realizes the matured fee surplus into cash; floatCoverage weighs an external float feed against obligations; checkpointVerify re-checks the previous signed checkpoint; checkpoint seals a fresh one; relay drains the outbox to the dispatcher; drainInbox applies received provider events; reconcile compares the provider's records against the ledger; promos claws back the unspent part of an expired grant; accrualDrain moves parked seller shares to earned; reproof re-derives stored chain links on a rolling cursor; orphans enumerates crashed sessions; archive moves the sealed prefix to cold storage; and retention deletes rows past their horizons. Each sweep claims a bounded batch of due work and is safe to re-run."
+      caption="One scheduler drives the sixteen sweeps of SWEEP_NAMES, in array order. Each claims a bounded batch of due rows, advances each one step, and is safe to re-run, so a re-driven sweep repeats no effect and a crash mid-cycle costs nothing. A sweep whose opt-in dependency is absent — a float feed, a reconcile feed, an archive sink, an orphan or retention horizon — reports an idle summary and touches nothing."
     >
       <ArrowDefs />
 

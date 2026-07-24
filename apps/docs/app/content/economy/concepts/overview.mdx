@@ -59,6 +59,7 @@ A [prover](/economy/concepts/the-proof/) re-checks all of them after every opera
 
 A `submit` is synchronous. It validates and authorizes the request first. Then it posts one balanced transaction to the [ledger](/economy/concepts/accounts-and-double-entry/), writing a matching event to an outbox in the same transaction. The [Economy API](/economy/reference/the-economy/) walks that request path step by step.
 
+Anything that outlives a request happens off that path: a [background worker](/economy/reference/background-worker/) drains the outbox and runs the recurring sweeps — payouts, subscriptions, promos, fees, and checkpoints, plus the history-lifecycle jobs that re-prove, archive, and expire old rows.
 
 ## A lab, not a product
 

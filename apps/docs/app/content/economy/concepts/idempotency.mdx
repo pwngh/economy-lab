@@ -95,6 +95,10 @@ A caller can retry a rejected request under the _same_ key — a decline isn't p
   request under that key starts fresh.
 </Callout>
 
+## The horizon is the host's
+
+Claims live forever by default. A host that opts into the [retention sweep](/economy/ops/archival/)'s `idempotencyOlderThanMs` bounds that: a claim older than the horizon is deleted, and a duplicate request arriving after the deletion re-executes instead of replaying. The guarantee on this page holds exactly up to the horizon, which is why the horizon must exceed every window in which a caller could still retry.
+
 ## What relies on it
 
 - Every [`submit`](/economy/reference/the-economy/) runs through this guard, so the property is universal: no operation can be applied twice.

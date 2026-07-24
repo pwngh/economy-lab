@@ -27,6 +27,12 @@ each into a bounded in-memory ring (default 10,000 signals). Detectors read the 
 `SignalFeed.since(t)`. Log entries are buffered as name and level only — field payloads never
 outlive the host's own log pipeline.
 
+The [worker](/economy/reference/background-worker/)'s lifecycle sweeps feed the same capture:
+the accrual drain publishes its backlog and oldest-row age, the orphan sweep its open-session
+gauge, the re-proof its watermark age, and the archive and retention sweeps their move and
+delete counts — so a wedged drain or a stalled re-proof pass is visible in the ring the same
+way a payout backlog is.
+
 ```ts
 import { openPorts } from '@pwngh/economy-lab';
 import { createOpsRuntime } from '@pwngh/economy-lab/ops';

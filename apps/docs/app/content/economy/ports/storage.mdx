@@ -41,14 +41,13 @@ Everything else hangs off the `Store` as a purpose-built sub-store, one per conc
 | `entitlements`  | Which users own which SKUs.                                                                            |
 | `promos`        | Each promo grant, so the worker can reverse the unspent remainder at expiry.                           |
 | `trust`         | Each subject's recent spending, the input to the risk gate.                                            |
-| `checkpoints`   | Signed ledger snapshots, written only by the worker.                                                   |
 | `accruals`      | The [accrual split](/economy/concepts/accrual-split/)'s parked seller shares, claimed by the drain sweep and by refunds. |
 | `checkpoints`   | Signed ledger snapshots, written only by the worker — plus the re-proof cursor, seal heads, and the archive boundary. |
 | `replay`        | Raw inbound webhook ids, deduped separately from the domain idempotency keys.                          |
 | `movements`     | The append-only [session-netting](/economy/concepts/session-netting/) journal; batches commit outside money transactions. |
 | `reservations`  | Optional: the store-backed shared reservation counter [cluster nodes](/economy/concepts/cluster/) share.  |
 
-The `outbox` and `inbox` rows are storage; what flows through them is [messaging](/economy/ports/messaging/).
+The `outbox` and `inbox` rows are storage; what flows through them is [messaging](/economy/ports/messaging/). Two optional methods sit beside `transaction`: `batchTransaction` commits several independent units in one database transaction (what [`submitBatch`](/economy/reference/the-economy/#batches-and-bursts) rides; absent, batches degrade to sequential), and `tableSizes` gauges the growing secondary tables for [`capacity()`](/economy/reference/the-economy/#capacity).
 
 ### Atomicity is the contract
 
@@ -137,10 +136,13 @@ That belongs to [integrity](/economy/concepts/integrity/), which owns the conser
   The schema is declarative and applied by hand or in CI, never on app startup.
   The engines fail fast instead: each checks the database's recorded schema
   version against the code's and refuses to run on a mismatch, rather than
-  silently operating on a drifted shape. `openPorts` runs that check eagerly on
   silently operating on a drifted shape. <ApiLink to="functions/src.openPorts" /> runs that check eagerly on
   the pool; a directly-constructed `mysqlStore` defaults to `schema: 'skip'`, so
-  no check runs unless you pass `'assert'`.
+  no check runs unless you pass `'assert'`. The current schema carries the
+  accrual, shared-reservation, seal-head, re-proof, and archive tables; a
+  database stamped by an older version fails the check until `make db-migrate`
+  re-applies it — the drop-and-rebuild posture stated in [scope and
+  non-goals](/economy/scope-and-non-goals/).
 </Callout>
 
 ## The `Cache`

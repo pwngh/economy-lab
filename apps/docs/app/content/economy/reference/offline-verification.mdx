@@ -95,3 +95,7 @@ Wire one through `Ports.anchor` and [the background worker's](/economy/reference
 The bundled adapter is <SourceLink to="src/adapters/http-anchor.ts#L36">httpAnchor</SourceLink> on the `adapters` subpath: it POSTs the checkpoint as JSON with the checkpoint id in an `Idempotency-Key` header, so a retried publish of the same row dedupes at the receiver. The port is one method; a file appender or an object-store writer is a few lines if HTTP doesn't fit your log.
 
 Together the three pieces close the insider gap: the anchor puts the signed root beyond the database's reach, the export puts the evidence in the auditor's hands, and the verifier lets them check one against the other without trusting you.
+
+## When history has been archived
+
+A ledger that has [archived](/economy/ops/archival/) its oldest history no longer holds every posting in hot storage, and an export reflects that: the hot chains prove back to the archive boundary, and the boundary itself is signed — per-account archive heads sealed under a Merkle sum-root, with a watermark recording how far the move reached. Verification composes across the seam: the hot prefix re-derives from the export as before, and the boundary's signature vouches for everything that moved, checkable against the archived pages in the host's cold store.

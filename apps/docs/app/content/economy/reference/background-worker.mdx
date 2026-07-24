@@ -1,12 +1,10 @@
 ---
 title: 'Background worker'
-summary: 'The sweeps that run off the request path: payouts, subscriptions, fee realization, checkpoints, and the outbox/inbox relay.'
+summary: 'The sweeps that run off the request path: payouts, subscriptions, fee realization, checkpoints, the outbox/inbox relay, and the lifecycle jobs — accrual drain, re-proof, orphans, archive, and retention.'
 order: 35
 status: stable
 sourceRefs:
   [
-    'src/worker/index.ts#L78-L89 · SWEEP_NAMES',
-    'src/worker/payouts.ts#L50 · advanceDuePayouts',
     'src/worker/index.ts · SWEEP_NAMES',
     'src/worker/payouts.ts#L50 · advanceDuePayouts',
     'src/worker/relay.ts#L53 · relayOutbox',
@@ -80,9 +78,9 @@ The recorded reason names the failing subsystem. A raw throw from an injected po
 
 The whole sweep is isolated too. `runSweeps` wraps each job, so a job that throws is recorded as a failed result against just that job, and the other sweeps still run. The run never throws.
 
-## Three sweeps can be skipped
+## Six sweeps can be skipped
 
-Most sweeps always run. Three carry an optional capability and short-circuit when it's absent.
+Most sweeps always run. Six carry an optional capability or opt-in and short-circuit when it's absent, each reporting the fixed idle summary `IDLE_SUMMARIES` declares for it — the same shape a real run with nothing to do produces, so a dashboard never special-cases the gap.
 
 `floatCoverage` needs a float feed (the payout rail's wallet balance) — the economy-edge bridge supplies one when enabled ([the packages](/economy/ports/packages/)). With none configured, it returns an empty successful summary and the internal `treasury` backing check stands alone. The check is alert-level either way: a shortfall is logged and counted, never posted against.
 
@@ -94,6 +92,8 @@ const summary = await relayOutbox(store, ctx, { dispatcher, limit });
 ```
 
 `drainInbox` needs an economy handle to submit through. With none, it likewise short-circuits and leaves pending inbox rows in place.
+
+The three lifecycle jobs are host opt-ins, configured through the worker's defaults (below): `orphans` runs with an `orphans` options object (and only _settles_ with `settleOlderThanMs` set — without it the sweep reports and touches nothing), `archive` runs with an archive sink and `checkpointOlderThanMs`, and `retention` runs with at least one horizon set. [Archival](/economy/ops/archival/) owns what each option means and how to choose the bounds.
 
 <Callout type="note">
   `drainInbox` is never gated on the economy pause. A provider settlement the
@@ -107,19 +107,26 @@ The relay drains the [outbox](/economy/ports/messaging/) — that page owns the 
 
 A delivery that keeps failing bumps the row's attempt count and retries, up to `config.maxOutboxAttempts` (default `10`). At the cap the event is dead-lettered, so one poison event can't block the events behind it.
 
-The inbox is the inbound mirror. Where the relay delivers committed money moves outward, `drainInbox` applies received events inward, submitting each stored `Operation` through the same economy a direct caller hits.
 The inbox is the inbound mirror. Where the relay delivers committed money moves outward, `drainInbox` applies received events inward, submitting each stored <ApiLink to="types/src.Operation" /> through the same economy a direct caller hits.
 
 A re-applied inbox row is deduped by the stored `idempotencyKey` (the provider event id), so a second apply resolves to a `duplicate` `Outcome` rather than a second posting. A `rejected` `Outcome` (a terminal business "no" like `INSUFFICIENT_FUNDS`) is dead-lettered, since retrying the same doomed apply every sweep would never succeed.
 
 ## Driving the worker
 
-A host builds the worker with `createWorker(ports, economy)` and drives it with `sweep`, which runs every sweep once over a shared request and returns the per-job batch plus the txn ids the run committed. Every field of the request is optional — `now` defaults to the clock, `limit` to the worker's default:
 A host builds the worker with <ApiLink to="functions/src_worker.createWorker">createWorker(ports, economy)</ApiLink> and drives it with `sweep`, which runs every sweep once over a shared request and returns the per-job batch plus the txn ids the run committed. Every field of the request is optional — `now` defaults to the clock, `limit` to the worker's default:
 
 ```ts
 const worker = createWorker(ports, economy);
 let { batch, postings } = await worker.sweep();
+```
+
+The optional third argument, <ApiLink to="types/src_worker.WorkerDefaults" />, binds steady-state arguments once — the dispatcher, float and reconcile feeds, the batch `limit`, and the lifecycle opt-ins (`orphans`, `archive`, `retention`); any <ApiLink to="types/src_worker.SweepRequest" /> field overrides them per sweep:
+
+```ts
+const worker = createWorker(ports, economy, {
+  orphans: { settleOlderThanMs: 180_000 },
+  retention: { idempotencyOlderThanMs: 90 * 24 * 60 * 60 * 1000 },
+});
 ```
 
 `start(everyMs, request)` runs the jobs on a timer and returns a stop function:
