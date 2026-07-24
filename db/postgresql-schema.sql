@@ -323,6 +323,17 @@ create table instance_movements (
 );
 
 -- ============================================================================
+-- Seal heads: the latest checkpoint's Merkle leaves, one row per account — each account's chain
+-- head and raw signed leg sum as of the last seal. The incremental seal re-derives this table's
+-- Merkle root and checks it against the latest signed checkpoint before trusting a byte of it,
+-- then re-proves only the accounts whose live heads moved. Upserted per account at each seal.
+-- ============================================================================
+create table seal_heads (
+  account_id text   primary key,
+  head       text   not null,
+  sum        bigint not null
+);
+-- ============================================================================
 -- Checkpoints: a signed snapshot of ledger state. Each row holds a Merkle root over every account's
 -- latest hash, signed with a key the ledger writer can't reach, so an insider who rewrites a history
 -- and recomputes its hashes is caught: the new root no longer matches the old signature. In production
@@ -632,6 +643,7 @@ comment on table promo_grants is 'Promotional credit grants with their expiry an
 comment on table entitlements is 'What each user owns (SKU ownership), with version and expiry.';
 comment on table subscriptions is 'Recurring charges: one row per subscription and its billing state.';
 comment on table trust_attempts is 'Per-key spend attempts feeding the velocity and risk check.';
+comment on table seal_heads is 'Latest checkpoint leaves per account; the incremental seal authenticates then diffs against it.';
 comment on table checkpoints is 'Signed Merkle checkpoints over the per-account hash chains.';
 comment on table seen_webhooks is 'Replay-dedup guard for inbound provider webhooks, by event id.';
 comment on table schema_meta is 'Single-row schema version stamp, checked at startup.';

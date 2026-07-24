@@ -24,6 +24,7 @@ import type { ErrorCode } from '#src/errors.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type {
   Checkpoint,
+  LineageOptions,
   Lot,
   MovementJournal,
   CallOptions,
@@ -254,12 +255,12 @@ async function* streamLineage(
   transport: Transport,
   account: AccountRef,
   session: string,
-  options?: CallOptions,
+  options?: LineageOptions,
 ): AsyncIterable<StoredLink> {
   const rows = (await call(
     transport,
     `/tx/${session}/ledger/lineage`,
-    { account },
+    { account, sinceHash: options?.sinceHash },
     options,
   )) as unknown[];
   for (const row of rows) {

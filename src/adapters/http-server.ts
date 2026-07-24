@@ -172,13 +172,18 @@ async function ledgerReadRoute(
   if (method === 'list') {
     return collect(ledger.list(), (posting) => encodeWire.posting(posting));
   }
-  return collect(ledger.lineage(body.account as AccountRef), (link) => ({
-    ...link,
-    legs: link.legs.map((leg) => ({
-      account: leg.account,
-      amount: encodeWire.amount(leg.amount),
-    })),
-  }));
+  return collect(
+    ledger.lineage(body.account as AccountRef, {
+      sinceHash: body.sinceHash as string | undefined,
+    }),
+    (link) => ({
+      ...link,
+      legs: link.legs.map((leg) => ({
+        account: leg.account,
+        amount: encodeWire.amount(leg.amount),
+      })),
+    }),
+  );
 }
 
 function encodeEntry(entry: {

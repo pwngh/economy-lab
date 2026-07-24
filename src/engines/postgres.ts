@@ -339,7 +339,7 @@ function createLedgerStore(q: Queryable, digest: Digest, clock: Clock): Ledger {
 
     headSums: () => headSumsOf(q),
 
-    lineage: (account) => lineageOf(q, account),
+    lineage: (account, options) => lineageOf(q, account, options?.sinceHash),
 
     posting: async (txnId) => postingOf(q, txnId),
 
@@ -598,15 +598,32 @@ async function* balanceAccountsOf(q: Queryable): AsyncIterable<AccountRef> {
 async function* lineageOf(
   q: Queryable,
   account: AccountRef,
+  sinceHash?: string,
 ): AsyncIterable<StoredLink> {
-  const result = await q.query(
-    `select c.posting_id, c.prev_hash, c.hash, p.meta
-       from chain_links c
-       join postings p on p.id = c.posting_id
-      where c.account_id = $1
-      order by p.seq asc`,
-    [account],
-  );
+  // With `sinceHash`, only links past the one carrying that head — the subquery resolves its
+  // seq, and `seq > null` matches nothing, so an unknown hash streams nothing (see
+  // Ledger.lineage).
+  const result =
+    sinceHash === undefined
+      ? await q.query(
+          `select c.posting_id, c.prev_hash, c.hash, p.meta
+             from chain_links c
+             join postings p on p.id = c.posting_id
+            where c.account_id = $1
+            order by p.seq asc`,
+          [account],
+        )
+      : await q.query(
+          `select c.posting_id, c.prev_hash, c.hash, p.meta
+             from chain_links c
+             join postings p on p.id = c.posting_id
+            where c.account_id = $1
+              and p.seq > (select p2.seq from chain_links c2
+                             join postings p2 on p2.id = c2.posting_id
+                            where c2.account_id = $1 and c2.hash = $2)
+            order by p.seq asc`,
+          [account, sinceHash],
+        );
   // The whole posting's legs load, not just this account's: chainPreimage filters itself.
   const legsByTxn = await legsByPosting(
     q,
@@ -1647,6 +1664,32 @@ function createCheckpointStore(pool: PgPool): CheckpointStore {
       );
       const row = result.rows[0];
       return row ? rowToCheckpoint(row) : null;
+    },
+    // A crash between the replaceAll delete and the inserts leaves a partial snapshot that fails
+    // the next seal's authentication and heals through another full replay.
+    putSealHeads: async (leaves, options) => {
+      if (options?.replaceAll === true) {
+        await pool.query(`delete from seal_heads`);
+      }
+      for (const [account, head, sum] of leaves) {
+        await pool.query(
+          `insert into seal_heads (account_id, head, sum) values ($1, $2, $3)
+             on conflict (account_id) do update set
+               head = excluded.head, sum = excluded.sum`,
+          [account, head, sum],
+        );
+      }
+    },
+    sealHeads: async () => {
+      const result = await pool.query(`select * from seal_heads`);
+      return result.rows.map(
+        (row) =>
+          [
+            row.account_id as AccountRef,
+            row.head as string,
+            readMinor(row.sum),
+          ] as const,
+      );
     },
   };
 }

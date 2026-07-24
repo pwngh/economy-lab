@@ -379,10 +379,12 @@ export interface Ledger {
   /**
    * Streams every posting that touched `account`, in commit order, with each recorded hash; the
    * prover replays these because head hashes alone cannot catch an edited line.
+   * `options.sinceHash` bounds the walk to links recorded after the one carrying that head hash —
+   * the incremental seal's tail read; an unknown hash streams nothing.
    */
   lineage(
     account: AccountRef,
-    options?: CallOptions,
+    options?: LineageOptions,
   ): AsyncIterable<StoredLink>;
 
   /** The whole posting committed under `txnId`, with all its legs, or null on an unknown id. */
@@ -909,6 +911,15 @@ export interface TrustStore {
   ): Promise<Velocity>;
 }
 
+/** Bounds a {@link Ledger.lineage} walk; see the method for `sinceHash` semantics. */
+export type LineageOptions = CallOptions & { sinceHash?: string };
+/**
+ * One sealed leaf `(account, head hash at seal, raw signed leg sum at seal)` — exactly a
+ * {@link Ledger.headSums} row frozen at seal time. These are the leaves the sealed checkpoint's
+ * Merkle root was built over, which is what makes a stored snapshot verifiable: re-derive the
+ * root and check it against the already-signed checkpoint.
+ */
+export type SealHead = readonly [AccountRef, string, bigint];
 /** Stores signed ledger snapshots. Written only by the background worker. */
 export interface CheckpointStore {
   /**
@@ -919,6 +930,20 @@ export interface CheckpointStore {
 
   /** The most recently written checkpoint, or null before the first seal. */
   latest(options?: CallOptions): Promise<Checkpoint | null>;
+  /**
+   * Optional incremental-seal snapshot: upserts leaves into the one-row-per-account sealed-head
+   * table. The seal writes only the accounts that changed, so the table always mirrors the
+   * latest checkpoint's full leaf set at O(dirty) cost. With `replaceAll`, rows absent from
+   * `leaves` are removed first — the full-replay seal's rewrite, which purges any stray row a
+   * corruption left behind so the fast path can return. Absent (with `sealHeads`), every seal
+   * re-proves the whole chain.
+   */
+  putSealHeads?(
+    leaves: ReadonlyArray<SealHead>,
+    options?: CallOptions & { replaceAll?: boolean },
+  ): Promise<void>;
+  /** Every stored sealed head; empty before the first snapshotting seal. */
+  sealHeads?(options?: CallOptions): Promise<ReadonlyArray<SealHead>>;
 }
 
 /**

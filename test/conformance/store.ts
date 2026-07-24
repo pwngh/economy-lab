@@ -1058,6 +1058,33 @@ async function markBilledIsCompareAndSet(store: Store): Promise<void> {
   assert.equal(reloaded!.nextDueAt, secondDue);
 }
 
+// lineage with `sinceHash` streams only the links recorded after the named head — the
+// incremental seal's tail read — and an unknown hash streams nothing rather than everything.
+async function lineageSinceStreamsTheTail(store: Store): Promise<void> {
+  const userId = freshUser();
+  await store.transaction(async (unit) => {
+    await fundSpendable(unit, userId, '1.00', `txn_conf_since_a_${userId}`);
+    await fundSpendable(unit, userId, '2.00', `txn_conf_since_b_${userId}`);
+    await fundSpendable(unit, userId, '3.00', `txn_conf_since_c_${userId}`);
+  });
+  const full = await collect(store.ledger.lineage(spendable(userId)));
+  assert.equal(full.length, 3);
+
+  const tail = await collect(
+    store.ledger.lineage(spendable(userId), { sinceHash: full[0]!.hash }),
+  );
+  assert.deepEqual(
+    tail.map((link) => link.txnId),
+    [full[1]!.txnId, full[2]!.txnId],
+  );
+  assert.equal(tail[0]!.prevHash, full[0]!.hash);
+
+  const none = await collect(
+    store.ledger.lineage(spendable(userId), { sinceHash: 'f'.repeat(64) }),
+  );
+  assert.equal(none.length, 0);
+}
+
 // links(txnId) answers one link per touched account, byte-identical to what lineage streams —
 // the verified-read path depends on this fidelity on every adapter.
 async function linksMatchLineage(store: Store): Promise<void> {
@@ -1186,6 +1213,8 @@ export function runStoreConformance(
       withStore(t, appliesExpiryAtReadTime));
     test('lists non-revoked entitlement grants sorted by sku', (t) =>
       withStore(t, listsNonRevokedGrantsSorted));
+    test('streams a lineage tail from sinceHash and nothing from an unknown hash', (t) =>
+      withStore(t, lineageSinceStreamsTheTail));
     test("answers a posting's chain links byte-identical to its lineage", (t) =>
       withStore(t, linksMatchLineage));
     test('pages every stored chain link with content on a resumable cursor', (t) =>

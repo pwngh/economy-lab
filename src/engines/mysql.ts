@@ -409,7 +409,8 @@ function createLedgerStore(deps: ExecDeps): Ledger {
       }
     },
 
-    lineage: (account) => lineageOf(deps.exec, account),
+    lineage: (account, options) =>
+      lineageOf(deps.exec, account, options?.sinceHash),
 
     posting: (txnId) => postingOf(deps.exec, txnId),
 
@@ -645,20 +646,37 @@ async function lotPage(
 }
 
 // Streams the account's chain links in commit order, legs and metadata as written, for the
-// verifier to re-hash.
+// verifier to re-hash. With `sinceHash`, only links past the one carrying that head — the
+// subquery resolves its seq, and `seq > NULL` matches nothing, so an unknown hash streams
+// nothing (see Ledger.lineage).
 async function* lineageOf(
   exec: MysqlExecutor,
   account: AccountRef,
+  sinceHash?: string,
 ): AsyncIterable<StoredLink> {
-  const postings = await rows(
-    exec,
-    `SELECT c.posting_id AS txn_id, p.meta AS meta,
-            c.prev_hash AS prev_hash, c.hash AS hash
-       FROM chain_links c JOIN postings p ON p.id = c.posting_id
-      WHERE c.account_id = ?
-      ORDER BY p.seq ASC`,
-    [account],
-  );
+  const postings =
+    sinceHash === undefined
+      ? await rows(
+          exec,
+          `SELECT c.posting_id AS txn_id, p.meta AS meta,
+                  c.prev_hash AS prev_hash, c.hash AS hash
+             FROM chain_links c JOIN postings p ON p.id = c.posting_id
+            WHERE c.account_id = ?
+            ORDER BY p.seq ASC`,
+          [account],
+        )
+      : await rows(
+          exec,
+          `SELECT c.posting_id AS txn_id, p.meta AS meta,
+                  c.prev_hash AS prev_hash, c.hash AS hash
+             FROM chain_links c JOIN postings p ON p.id = c.posting_id
+            WHERE c.account_id = ?
+              AND p.seq > (SELECT p2.seq FROM chain_links c2
+                             JOIN postings p2 ON p2.id = c2.posting_id
+                            WHERE c2.account_id = ? AND c2.hash = ?)
+            ORDER BY p.seq ASC`,
+          [account, account, sinceHash],
+        );
   // chainPreimage filters legs itself, so this loads the whole posting's legs, not just this account's.
   const legsByTxn = await legsByPosting(
     exec,
@@ -1576,8 +1594,48 @@ function createMovementJournal(pool: MysqlPool): MovementJournal {
   };
 }
 
+// The incremental seal's snapshot leaves. Writes are chunked so a full-mode rewrite stays under
+// max_allowed_packet; a crash between the replaceAll delete and the inserts leaves a partial
+// snapshot that fails the next seal's authentication and heals through another full replay.
+function sealHeadSurfaces(
+  pool: MysqlPool,
+): Pick<CheckpointStore, 'putSealHeads' | 'sealHeads'> {
+  return {
+    putSealHeads: async (leaves, options) => {
+      if (options?.replaceAll === true) {
+        await rows(pool, 'DELETE FROM seal_heads');
+      }
+      for (let i = 0; i < leaves.length; i += 500) {
+        const chunk = leaves.slice(i, i + 500);
+        await rows(
+          pool,
+          `INSERT INTO seal_heads (account_id, head, sum)
+           VALUES ${chunk.map(() => '(?, ?, ?)').join(', ')}
+           ON DUPLICATE KEY UPDATE head = VALUES(head), sum = VALUES(sum)`,
+          chunk.flatMap(([account, head, sum]) => [
+            account,
+            head,
+            sum.toString(),
+          ]),
+        );
+      }
+    },
+    sealHeads: async () => {
+      const result = await rows(pool, 'SELECT * FROM seal_heads');
+      return result.map(
+        (row) =>
+          [
+            row.account_id as AccountRef,
+            row.head as string,
+            readMinor(row.sum),
+          ] as const,
+      );
+    },
+  };
+}
 function createCheckpointStore(pool: MysqlPool): CheckpointStore {
   return {
+    ...sealHeadSurfaces(pool),
     put: async (checkpoint) => {
       await rows(
         pool,

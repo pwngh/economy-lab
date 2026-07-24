@@ -13,6 +13,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   metadata before acting.
 - Subscription, promo, and instance-movement rows carry `txnId` naming their creating posting;
   renewals and sweeps re-prove it before charging or granting.
+- The checkpoint seal re-proves only chains whose heads moved since the prior seal
+  (`seal_heads`).
 
 ### Changed
 

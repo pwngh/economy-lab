@@ -36,6 +36,7 @@ DROP TABLE IF EXISTS schema_meta;
 
 DROP TABLE IF EXISTS seen_webhooks;
 
+DROP TABLE IF EXISTS seal_heads;
 DROP TABLE IF EXISTS checkpoints;
 
 DROP TABLE IF EXISTS instance_movements;
@@ -320,6 +321,12 @@ CREATE TABLE instance_movements (
      UNIQUE KEY instance_movements_session_seq_uq (session_id, seq)
    ) COMMENT='Append-only instance-netting journal; the settlement posting anchors its chain head.';
 
+-- Rationale in db/postgresql-schema.sql (seal_heads banner).
+CREATE TABLE seal_heads (
+     account_id VARCHAR(96) PRIMARY KEY COMMENT 'Account the sealed leaf belongs to.',
+     head       CHAR(64)    NOT NULL COMMENT 'Chain-head hash at the latest seal; lowercase hex.',
+     sum        BIGINT      NOT NULL COMMENT 'Raw signed leg sum at the latest seal (debit positive).'
+   ) COMMENT='The latest checkpoint\'s Merkle leaves, one row per account; authenticated against the signed root before the incremental seal trusts it.';
 -- Rationale in db/postgresql-schema.sql (checkpoints banner).
 CREATE TABLE checkpoints (
      id         VARCHAR(64) PRIMARY KEY COMMENT 'Checkpoint id, chk_<uuid>; primary key.',

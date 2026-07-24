@@ -445,20 +445,7 @@ function createLedgerStore(deps: {
       }
     },
 
-    // Heads paired with each account's raw signed leg sum, for the v2 checkpoint's sum leaves.
-    // Raw means as posted (debit positive), not the account's natural side, so all accounts
-    // together net to zero.
-    headSums: async function* () {
-      const raw = new Map<AccountRef, bigint>();
-      for (const row of state.log) {
-        for (const leg of row.legs) {
-          raw.set(leg.account, (raw.get(leg.account) ?? 0n) + leg.amount.minor);
-        }
-      }
-      for (const [account, head] of sortedHeads(state.heads)) {
-        yield [account, head, raw.get(account) ?? 0n] as const;
-      }
-    },
+    headSums: () => headSumsOf(state),
 
     // Reads `state.balances` keys, not heads, so a balance with no posting still reaches the
     // integrity checker. Sorted by code unit so every engine lists accounts in the same order.
@@ -468,7 +455,8 @@ function createLedgerStore(deps: {
       }
     },
 
-    lineage: (account) => lineageOf(state.log, account),
+    lineage: (account, options) =>
+      lineageOf(state.log, account, options?.sinceHash),
 
     posting: async (txnId) => postingOf(state.log, txnId),
 
@@ -488,6 +476,22 @@ function createLedgerStore(deps: {
   };
 }
 
+// Heads paired with each account's raw signed leg sum, for the v2 checkpoint's sum leaves.
+// Raw means as posted (debit positive), not the account's natural side, so all accounts
+// together net to zero.
+async function* headSumsOf(
+  state: LedgerState,
+): AsyncGenerator<readonly [AccountRef, string, bigint]> {
+  const raw = new Map<AccountRef, bigint>();
+  for (const row of state.log) {
+    for (const leg of row.legs) {
+      raw.set(leg.account, (raw.get(leg.account) ?? 0n) + leg.amount.minor);
+    }
+  }
+  for (const [account, head] of sortedHeads(state.heads)) {
+    yield [account, head, raw.get(account) ?? 0n] as const;
+  }
+}
 // Whole postings per page so links never split; the cursor is the last consumed posting's seq.
 function linksPageOf(
   log: ReadonlyArray<StoredPosting>,
@@ -619,22 +623,32 @@ function* lotsOfPosting(
 }
 
 // Every posting that touched this account, in order, with the prevHash/hash pair the chain
-// verifier recomputes against.
+// verifier recomputes against. With `sinceHash`, only links recorded after the one carrying that
+// head; an unknown hash yields nothing (see Ledger.lineage).
 async function* lineageOf(
   log: ReadonlyArray<StoredPosting>,
   account: AccountRef,
+  sinceHash?: string,
 ): AsyncIterable<StoredLink> {
+  let started = sinceHash === undefined;
   for (const row of log) {
     const link = row.links.find((entry) => entry.account === account);
-    if (link) {
-      yield {
-        txnId: row.txnId,
-        legs: row.legs,
-        meta: row.meta,
-        prevHash: link.prevHash,
-        hash: link.hash,
-      };
+    if (!link) {
+      continue;
     }
+    if (!started) {
+      if (link.hash === sinceHash) {
+        started = true;
+      }
+      continue;
+    }
+    yield {
+      txnId: row.txnId,
+      legs: row.legs,
+      meta: row.meta,
+      prevHash: link.prevHash,
+      hash: link.hash,
+    };
   }
 }
 
@@ -1371,9 +1385,12 @@ function createMovementJournal(): MovementJournal {
 
 // --- Checkpoint store -------------------------------------------------------------
 
-// Append-only and never part of a money transaction, so a rollback can't delete a recorded checkpoint.
+// Append-only and never part of a money transaction, so a rollback can't delete a recorded
+// checkpoint. The seal-head snapshot upserts per account and mirrors the SQL engines' seal_heads
+// table for the incremental seal.
 function createCheckpointStore(): CheckpointStore {
   const rows: Checkpoint[] = [];
+  const heads = new Map<AccountRef, { head: string; sum: bigint }>();
   return {
     put: async (checkpoint, _options?: CallOptions) => {
       rows.push({ ...checkpoint });
@@ -1382,6 +1399,16 @@ function createCheckpointStore(): CheckpointStore {
       const last = rows[rows.length - 1];
       return last ? { ...last } : null;
     },
+    putSealHeads: async (leaves, options?) => {
+      if (options?.replaceAll === true) {
+        heads.clear();
+      }
+      for (const [account, head, sum] of leaves) {
+        heads.set(account, { head, sum });
+      }
+    },
+    sealHeads: async (_options?: CallOptions) =>
+      [...heads].map(([account, row]) => [account, row.head, row.sum] as const),
   };
 }
 

@@ -30,6 +30,7 @@ import type {
   Ledger,
   CallOptions,
   Posting,
+  SealHead,
   Signer,
   StoredLink,
 } from '#src/ports.ts';
@@ -344,8 +345,10 @@ export async function merkleSumRoot(
 }
 
 /**
- * Takes a tamper-evident snapshot, called a "checkpoint". It first proves the chain re-derives, then
- * signs the sum-carrying Merkle root (v2) over every head and saves it. On a break this throws a
+ * Takes a tamper-evident snapshot, called a "checkpoint". It first proves the chain re-derives —
+ * from genesis, or, when the store carries the previous seal's authenticated leaves, only the
+ * dirty tails since that seal — then signs the sum-carrying Merkle root (v2) over every head and
+ * saves it. On a break this throws a
  * non-retryable CHAIN_BROKEN fault and persists nothing, so a signed root never attests to a
  * tampered ledger, and the caller sets the job aside for an operator rather than retrying. It also
  * refuses to sign when the collected sums do not net to zero (a non-retryable LEDGER_UNBALANCED
@@ -370,18 +373,30 @@ export async function recordCheckpoint(
   },
   options?: CallOptions,
 ): Promise<Checkpoint> {
-  const report = await proveChain(
-    { ledger: deps.ledger, digest: deps.digest },
-    options,
-  );
-  if (!report.intact) {
+  const leaves = await collectHeadSums(deps.ledger, options);
+
+  // The incremental strategy: when the store carries an authenticated snapshot of the last
+  // seal's leaves, only the accounts whose heads moved since then need their chain tails
+  // re-proved — the previous signature already vouches for everything else. Any doubt about the
+  // snapshot falls back to the full from-genesis replay, so the seal is never weaker for having
+  // the fast path.
+  const plan = await planSeal(deps, leaves, options);
+  const broken =
+    plan.mode === 'incremental'
+      ? await proveDirtyTails(deps, plan, options)
+      : (
+          await proveChain(
+            { ledger: deps.ledger, digest: deps.digest },
+            options,
+          )
+        ).firstBreak;
+  if (broken !== null) {
     throw fault(
       ERROR_CODES.CHAIN_BROKEN,
       'The hash chain failed to re-derive; refusing to sign a checkpoint over a tampered ledger.',
-      { retryable: false, detail: { firstBreak: report.firstBreak } },
+      { retryable: false, detail: { firstBreak: broken } },
     );
   }
-  const leaves = await collectHeadSums(deps.ledger, options);
   const root = await merkleSumRoot(deps.digest, leaves);
   if (root.sum !== 0n) {
     throw fault(
@@ -402,7 +417,140 @@ export async function recordCheckpoint(
     kid: (await deps.signer.kid?.()) ?? null,
   };
   await deps.checkpoints.put(checkpoint, options);
+  // After the checkpoint, so a crash between the two leaves a stale snapshot that fails next
+  // seal's authentication and heals through the full-replay path. Incremental upserts only the
+  // dirty leaves; the full path replaces the whole table, purging any stray row a corruption
+  // left behind.
+  if (deps.checkpoints.putSealHeads !== undefined) {
+    await deps.checkpoints.putSealHeads(
+      plan.mode === 'incremental' ? plan.dirty : leaves,
+      plan.mode === 'incremental' ? options : { ...options, replaceAll: true },
+    );
+  }
   return checkpoint;
+}
+
+// What planSeal decided: which leaves changed since the authenticated snapshot, and the sealed
+// head each dirty account's tail replay starts from (absent for an account new since the seal).
+type SealPlan =
+  | { mode: 'full' }
+  | {
+      mode: 'incremental';
+      dirty: ReadonlyArray<SealHead>;
+      since: ReadonlyMap<AccountRef, string>;
+    };
+
+// Chooses the seal strategy. The snapshot lives in the same database an attacker who can rewrite
+// the ledger controls, so nothing in it is trusted until its recomputed Merkle root and sum match
+// the latest checkpoint and that checkpoint's signature verifies. A snapshot account missing from
+// the live leaves is truncation and fails the seal loudly rather than falling back.
+async function planSeal(
+  deps: {
+    checkpoints: CheckpointStore;
+    digest: Digest;
+    signer: Signer;
+  },
+  liveLeaves: ReadonlyArray<SealHead>,
+  options?: CallOptions,
+): Promise<SealPlan> {
+  if (
+    deps.checkpoints.sealHeads === undefined ||
+    deps.checkpoints.putSealHeads === undefined
+  ) {
+    return { mode: 'full' };
+  }
+  const snapshot = await deps.checkpoints.sealHeads(options);
+  const latest = await deps.checkpoints.latest(options);
+  if (
+    snapshot.length === 0 ||
+    latest === null ||
+    latest.v !== 2 ||
+    latest.sum === null
+  ) {
+    return { mode: 'full' };
+  }
+  const root = await merkleSumRoot(deps.digest, snapshot);
+  if (
+    toHex(root.hash) !== latest.root ||
+    root.sum.toString() !== latest.sum ||
+    !(await deps.signer.verify(sumRootPayload(root), fromHex(latest.signature)))
+  ) {
+    return { mode: 'full' };
+  }
+
+  const since = new Map<AccountRef, string>();
+  for (const [account, head] of snapshot) {
+    since.set(account, head);
+  }
+  const live = new Set(liveLeaves.map(([account]) => account));
+  for (const account of since.keys()) {
+    if (!live.has(account)) {
+      throw fault(
+        ERROR_CODES.CHAIN_BROKEN,
+        'A sealed account has vanished from the live heads; refusing to sign over a truncated ledger.',
+        { retryable: false, detail: { account } },
+      );
+    }
+  }
+  return {
+    mode: 'incremental',
+    dirty: liveLeaves.filter(([account, head]) => since.get(account) !== head),
+    since,
+  };
+}
+
+// Replays each dirty account's chain from its sealed head instead of genesis. The walk must pass
+// through the head the leaves were read at: reaching it proves the tail links continuously from
+// sealed history to the head being signed, and links appended by concurrent postings beyond it
+// are simply verified too. A walk that never reaches it means the tail is broken or truncated.
+async function proveDirtyTails(
+  deps: { ledger: Ledger; digest: Digest },
+  plan: Extract<SealPlan, { mode: 'incremental' }>,
+  options?: CallOptions,
+): Promise<ChainBreak | null> {
+  for (const [account, liveHead] of plan.dirty) {
+    const sinceHash = plan.since.get(account);
+    let prev = sinceHash ?? GENESIS_HEX;
+    let reached = false;
+    for await (const link of deps.ledger.lineage(account, {
+      ...options,
+      ...(sinceHash === undefined ? {} : { sinceHash }),
+    })) {
+      if (link.prevHash !== prev) {
+        return {
+          account,
+          txnId: link.txnId,
+          reason: 'broken-link',
+          expected: prev,
+          actual: link.prevHash,
+        };
+      }
+      const recomputed = await recomputeLink(deps.digest, account, link);
+      if (recomputed !== link.hash) {
+        return {
+          account,
+          txnId: link.txnId,
+          reason: 'tampered-hash',
+          expected: recomputed,
+          actual: link.hash,
+        };
+      }
+      prev = link.hash;
+      if (prev === liveHead) {
+        reached = true;
+      }
+    }
+    if (!reached) {
+      return {
+        account,
+        txnId: '',
+        reason: 'broken-link',
+        expected: liveHead,
+        actual: prev,
+      };
+    }
+  }
+  return null;
 }
 
 /**
