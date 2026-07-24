@@ -39,6 +39,10 @@
       "types": "./dist/src/engines/mysql.d.ts",
       "default": "./dist/src/engines/mysql.js"
     },
+    "./engines/mysql-mariadb": {
+      "types": "./dist/src/engines/mysql-mariadb.d.ts",
+      "default": "./dist/src/engines/mysql-mariadb.js"
+    },
     "./worker": {
       "types": "./dist/src/worker/index.d.ts",
       "default": "./dist/src/worker/index.js"
@@ -137,6 +141,7 @@
     "ioredis": "^5.11.1",
     "jiti": "^2.0.0",
     "jsdom": "^29.1.1",
+    "mariadb": "^3.5.3",
     "mysql2": "^3.22.5",
     "pg": "^8.22.0",
     "prettier": "^3.3.3",
@@ -149,6 +154,7 @@
     "@pwngh/economy-edge": "^0.1.0",
     "@pwngh/taskq": "^0.1.0",
     "ioredis": "^5.0.0",
+    "mariadb": "^3.0.0",
     "mysql2": "^3.0.0",
     "pg": "^8.22.0"
   },
@@ -163,6 +169,9 @@
       "optional": true
     },
     "ioredis": {
+      "optional": true
+    },
+    "mariadb": {
       "optional": true
     },
     "mysql2": {

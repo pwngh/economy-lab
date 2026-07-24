@@ -19,6 +19,7 @@ import {
 } from '#src/engines/mysql.ts';
 import { httpStore, createStoreServer } from '#src/adapters/http.ts';
 import { loadPg } from '#src/engines/pg-driver.ts';
+import { createMariadbPool } from '#src/engines/mysql-mariadb.ts';
 import { LOCAL_POSTGRES_URL, storeUrls } from '#src/env.ts';
 import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
 
@@ -271,6 +272,10 @@ export async function makeIsolatedMysqlStore(opts: {
   digest: Digest;
   clock: Clock;
   connectionLimit?: number;
+  // 'mariadb' mounts the pipelining mariadb pool (src/engines/mysql-mariadb.ts) behind
+  // mysqlStore's pool seam instead of mysql2; administrative work (database create/drop) stays
+  // on mysql2 either way.
+  driver?: 'mysql2' | 'mariadb';
 }): Promise<Store> {
   await maybeSweep('mysql', opts.url);
   const database = safeDatabaseName(freshName('el_iso'));
@@ -297,10 +302,20 @@ export async function makeIsolatedMysqlStore(opts: {
 
   let pool;
   try {
-    pool = await createMysqlPool(
-      withDatabase(opts.url, database),
-      opts.connectionLimit ? { connectionLimit: opts.connectionLimit } : {},
-    );
+    pool =
+      opts.driver === 'mariadb'
+        ? await createMariadbPool(
+            withDatabase(opts.url, database),
+            opts.connectionLimit
+              ? { connectionLimit: opts.connectionLimit }
+              : {},
+          )
+        : await createMysqlPool(
+            withDatabase(opts.url, database),
+            opts.connectionLimit
+              ? { connectionLimit: opts.connectionLimit }
+              : {},
+          );
     await applyMysqlSchema(pool);
   } catch (error) {
     if (pool) {

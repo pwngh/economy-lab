@@ -19,8 +19,13 @@ import {
   createMysqlPool,
   mysqlStore,
 } from '#src/engines/mysql.ts';
+import { createMariadbPool } from '#src/engines/mysql-mariadb.ts';
 import { spendable } from '#src/accounts.ts';
-import { testMysqlUrl } from '#test/support/adapters.ts';
+import {
+  makeIsolatedMysqlStore,
+  testMysqlUrl,
+} from '#test/support/adapters.ts';
+import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
 
 import type { MysqlPool } from '#src/engines/mysql.ts';
 
@@ -41,6 +46,58 @@ if (url) {
       throw error;
     }
     return mysqlStore({ pool });
+  });
+
+  // The mariadb pool (src/engines/mysql-mariadb.ts) must be runtime-identical behind the same
+  // seam, so the whole conformance suite runs against it too. The driver is an optional peer;
+  // absent, the factory throw becomes the suite's usual skip.
+  runStoreConformance('mysql (mariadb wire)', () =>
+    makeIsolatedMysqlStore({
+      url,
+      digest: seededDigest(1),
+      clock: fixedClock(0),
+      driver: 'mariadb',
+    }),
+  );
+
+  // Both drivers run under bigNumberStrings, which stringifies every numeric result — raw
+  // SELECT 1 included. The engine converts explicitly at each read; this pin is the loud
+  // failure for the next raw-row read, or driver swap, that forgets.
+  describe('bigNumberStrings returns every numeric result as a string', () => {
+    const pools: Array<{ name: string; make: () => Promise<MysqlPool> }> = [
+      { name: 'mysql2', make: () => createMysqlPool(url) },
+      { name: 'mariadb', make: () => createMariadbPool(url) },
+    ];
+    for (const { name, make } of pools) {
+      test(`${name}: raw SELECT 1 comes back as the string '1', pool and connection alike`, async (t) => {
+        let pool: MysqlPool;
+        try {
+          pool = await make();
+        } catch (error) {
+          t.skip(`${name} driver unavailable: ${(error as Error).message}`);
+          return;
+        }
+        try {
+          let viaPool: unknown;
+          try {
+            [viaPool] = await pool.query('SELECT 1 AS one');
+          } catch (error) {
+            t.skip(`mysql backend unreachable: ${(error as Error).message}`);
+            return;
+          }
+          assert.equal((viaPool as Array<{ one: unknown }>)[0]!.one, '1');
+          const conn = await pool.getConnection();
+          try {
+            const [viaConn] = await conn.query('SELECT 1 AS one');
+            assert.equal((viaConn as Array<{ one: unknown }>)[0]!.one, '1');
+          } finally {
+            conn.release();
+          }
+        } finally {
+          await pool.end();
+        }
+      });
+    }
   });
 }
 

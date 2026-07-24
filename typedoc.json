@@ -8,6 +8,7 @@
     "src/adapters/sqs.ts",
     "src/engines/postgres.ts",
     "src/engines/mysql.ts",
+    "src/engines/mysql-mariadb.ts",
     "src/worker/index.ts",
     "src/server.ts",
     "src/netting.ts",

@@ -121,6 +121,14 @@ interface MysqlExecutor {
 interface MysqlConnection extends MysqlExecutor {
   release(): void;
 }
+/**
+ * The pool seam the store rides, structurally matching `mysql2/promise`'s pool. Declared by hand
+ * so `mysql2` stays an optional dependency, and satisfied by any pool with these members: the
+ * pool {@link createMysqlPool} builds, or the pipelining `mariadb` pool from
+ * `@pwngh/economy-lab/engines/mysql-mariadb`, which {@link mysqlStore} rides unchanged. `query`
+ * resolves a tuple whose first slot holds rows for a SELECT or an affected-rows header for a
+ * write.
+ */
 export interface MysqlPool extends MysqlExecutor {
   getConnection(): Promise<MysqlConnection>;
   end(): Promise<void>;
@@ -144,6 +152,8 @@ interface ExecDeps {
   heads?: TxHeads;
 }
 
+// bigNumberStrings stringifies every numeric column — even SELECT 1 — so every raw-row read
+// converts explicitly.
 async function rows(
   exec: MysqlExecutor,
   sql: string,
@@ -2166,6 +2176,10 @@ function buildUnit(deps: ExecDeps, trust: TrustStore): Unit {
 // --- The assembled store ----------------------------------------------------------
 
 /**
+ * Build the full MySQL-backed store on a connection pool the caller creates and owns — the
+ * `mysql2` pool from {@link createMysqlPool}, or the pipelining `mariadb` pool from
+ * `@pwngh/economy-lab/engines/mysql-mariadb`; both fill the same {@link MysqlPool} seam and run
+ * the same SQL against the same schema.
  *
  * `transaction(work)` borrows one connection, wraps `work` in START TRANSACTION ... COMMIT, and
  * rolls back if `work` throws. Money transactions run at READ COMMITTED (set once per pooled

@@ -2,6 +2,13 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
+## Unreleased (0.6.2)
+
+### Added
+
+- `@pwngh/economy-lab/engines/mysql-mariadb` opens the MySQL store over a `mariadb` pool
+  (`createMariadbPool`; the dependency is an optional peer). `mysql2` stays the default engine.
+
 ## 0.6.1 - 2026-07-23
 
 ### Added
