@@ -10,6 +10,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   (`createMariadbPool`; the dependency is an optional peer). `mysql2` stays the default engine.
 - `partitionedSchemaSql(canonical)` rewrites the PostgreSQL schema onto a hash-partitioned
   layout; the store conformance suite covers it.
+- `WIRE_TRIAL` runs the store conformance suite over an alternative wire driver behind the pool
+  seam; `BENCH_PG_DRIVER` and `BENCH_MYSQL_DRIVER` pick the drivers a bench run uses.
 
 ## 0.6.1 - 2026-07-23
 

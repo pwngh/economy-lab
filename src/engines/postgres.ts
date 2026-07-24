@@ -141,6 +141,12 @@ interface PgResult {
   // (null only for commands with no row count), so the optionality is just wire caution.
   rowCount?: number | null;
 }
+/**
+ * The slice of a `pg` pool this engine calls, declared structurally so nothing here imports the
+ * driver's types. A real `pg.Pool` satisfies it, and so does any caller-built implementation
+ * handed in as {@link PostgresStoreOptions.pool} — see that option for what a replacement pool
+ * must provide (BigInt numeric parsing, and schema resolution when `schemaName` is used).
+ */
 export interface PgPool {
   connect(): Promise<PgClient>;
   query(text: string, values?: ReadonlyArray<unknown>): Promise<PgResult>;
@@ -2126,6 +2132,16 @@ export interface PostgresStoreOptions {
   connectionTimeoutMillis?: number;
 
   /**
+   * The driver seam: a caller-built pool takes the place of the default `pg` pool — the same
+   * {@link PgPool} surface with any wire implementation behind it. The caller points it at the
+   * right database and returns int8/numeric columns as BigInt (the default pool's type parsers);
+   * with `schemaName`, its connections must also resolve unqualified names to that schema (the
+   * default pool does this via a search_path startup option). The store owns the pool it is
+   * given and ends it on close(). `poolMax` and `connectionTimeoutMillis` do not apply.
+   */
+  pool?: PgPool;
+
+  /**
    * Optional runtime ports for the engine's own telemetry (transient-retry pressure). The
    * composition passes the runtime meter and logger; unset emits nothing.
    */
@@ -2204,14 +2220,16 @@ export async function postgresStore(
 
   // Setting search_path through the connection options points every connection the pool opens at
   // the dedicated schema, so unqualified table names resolve there on reads and transactions alike.
-  const pool = new pg.Pool({
-    connectionString: options.url,
-    ...(schema ? { options: `-c search_path=${schema}` } : {}),
-    ...(options.poolMax ? { max: options.poolMax } : {}),
-    ...(options.connectionTimeoutMillis
-      ? { connectionTimeoutMillis: options.connectionTimeoutMillis }
-      : {}),
-  });
+  const pool =
+    options.pool ??
+    new pg.Pool({
+      connectionString: options.url,
+      ...(schema ? { options: `-c search_path=${schema}` } : {}),
+      ...(options.poolMax ? { max: options.poolMax } : {}),
+      ...(options.connectionTimeoutMillis
+        ? { connectionTimeoutMillis: options.connectionTimeoutMillis }
+        : {}),
+    });
   // End the pool if setup throws: this factory owns the pool it just created, and handing a
   // leaked open connection to a caller that only sees the throw keeps the process alive.
   try {

@@ -456,7 +456,10 @@ function reportBitset(r: BitsetResult): void {
 }
 
 type BackendResult = {
+  // Display name: the provisioned label, which names a wire-trial driver swap when one is
+  // mounted. `kind` stays the plain backend for the require and reference checks.
   backend: string;
+  kind: string;
   durability: string;
   provable: boolean;
   mode: BenchMode;
@@ -508,6 +511,7 @@ async function throughputFor(p: Provisioned): Promise<BackendResult> {
   }
   return {
     backend: p.label,
+    kind: p.backend,
     durability: p.durability,
     provable: ok,
     mode: p.mode,
@@ -760,8 +764,7 @@ for (const r of results) {
 // in-memory when present, else any backend that ran, so two SQL engines still compare.
 if (results.length >= 2) {
   determinismChecked = true;
-  const reference =
-    results.find((r) => r.backend === 'in-memory') ?? results[0]!;
+  const reference = results.find((r) => r.kind === 'in-memory') ?? results[0]!;
   const disagree = results.filter(
     (r) => r.determinismRoot !== reference.determinismRoot,
   );
@@ -788,7 +791,7 @@ if (results.length >= 2) {
 // A backend named in BENCH_REQUIRE that skipped or failed flips the exit code, so partial coverage
 // never reads as a clean pass.
 const missingRequired = cfg.required.filter(
-  (b) => !results.some((r) => r.backend === b),
+  (b) => !results.some((r) => r.kind === b),
 );
 if (missingRequired.length > 0) {
   anyProveFailed = true;

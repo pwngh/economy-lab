@@ -30,6 +30,9 @@ import {
   storeUrls,
 } from '#src/env.ts';
 import { openPgPool } from '#src/engines/pg-driver.ts';
+
+import type { MysqlPool } from '#src/engines/mysql.ts';
+import type { PgPool } from '#src/engines/postgres.ts';
 import { sha256Digest } from '#src/digest.ts';
 import { allInvariantsHold } from '#src/integrity.ts';
 import { merkleRoot } from '#src/chain.ts';
@@ -93,6 +96,8 @@ export const BENCH_KEYS = [
   'BENCH_POOL_MAX',
   'BENCH_POSTGRES_URL',
   'BENCH_MYSQL_URL',
+  'BENCH_PG_DRIVER',
+  'BENCH_MYSQL_DRIVER',
   'BENCH_CURVE_USERS',
   'BENCH_CURVE_REPS',
   'SEGMENTS',
@@ -122,6 +127,10 @@ export type HarnessConfig = {
   poolHeadroom: number; // spare connections above connsPerOp*concurrency (borrows, probes, seal)
   poolMax: number | null; // explicit pool-size override; null = derive from the formula above
   urls: { postgres: string; mysql: string };
+  // Wire-trial driver selection (test/support/wire-trial.ts): the incumbent driver unless the
+  // BENCH_PG_DRIVER / BENCH_MYSQL_DRIVER env names a trial; the report labels the swap.
+  pgDriver: 'pg' | 'postgresjs';
+  mysqlDriver: 'mysql2' | 'mariadb';
   // Integrity-curve knobs (scripts/bench.ts): a fixed user set so accounts stay flat while postings grow.
   curveUsers: number;
   curveSizes: number[];
@@ -239,6 +248,16 @@ export function resolveConfig(env: EnvMap): HarnessConfig {
     poolHeadroom: readInt(env.BENCH_POOL_HEADROOM, 4),
     poolMax: readIntOrNull(env.BENCH_POOL_MAX, one),
     urls: resolveUrls(env),
+    pgDriver: readEnum(
+      env.BENCH_PG_DRIVER,
+      ['pg', 'postgresjs'] as const,
+      'pg',
+    ),
+    mysqlDriver: readEnum(
+      env.BENCH_MYSQL_DRIVER,
+      ['mysql2', 'mariadb'] as const,
+      'mysql2',
+    ),
     curveUsers: readInt(env.BENCH_CURVE_USERS, 20, one),
     curveSizes: base.curveSizes!,
     curveReps: readInt(env.BENCH_CURVE_REPS, 2, one),
@@ -390,7 +409,10 @@ async function provisionInMemory(cfg: HarnessConfig): Promise<Provisioned> {
   };
 }
 
-async function provisionPostgres(cfg: HarnessConfig): Promise<Provisioned> {
+async function provisionPostgres(
+  cfg: HarnessConfig,
+  wrap?: PoolWrap,
+): Promise<Provisioned> {
   const { digest, clock } = digestAndClock();
   // Fit the pool to the server: a pool the server can't take dies mid-burst as opaque 53300 faults.
   // Clamp while the pool still clears the self-deadlock floor; fail fast when it doesn't.
@@ -419,6 +441,8 @@ async function provisionPostgres(cfg: HarnessConfig): Promise<Provisioned> {
     poolMax,
     // Fail fast on a routable-but-stalled host so an unreachable backend is skipped, not a hang.
     connectionTimeoutMillis: 5000,
+    driver: cfg.pgDriver,
+    ...(wrap?.pg ? { wrapPool: wrap.pg } : {}),
   });
   const { economy, workerCtx } = assemble(store, digest, clock, {
     seed: cfg.seed,
@@ -428,7 +452,8 @@ async function provisionPostgres(cfg: HarnessConfig): Promise<Provisioned> {
   const probe = await makePostgresCounterProbe(cfg.urls.postgres);
   return {
     backend: 'postgres',
-    label: 'postgres',
+    label:
+      cfg.pgDriver === 'pg' ? 'postgres' : `postgres (${cfg.pgDriver} wire)`,
     durable: true,
     durability: await probePostgresDurability(cfg.urls.postgres),
     concurrency: cfg.concurrency,
@@ -447,7 +472,10 @@ async function provisionPostgres(cfg: HarnessConfig): Promise<Provisioned> {
   };
 }
 
-async function provisionMysql(cfg: HarnessConfig): Promise<Provisioned> {
+async function provisionMysql(
+  cfg: HarnessConfig,
+  wrap?: PoolWrap,
+): Promise<Provisioned> {
   const { digest, clock } = digestAndClock();
   const poolMax = assertPoolSizing(cfg, poolSizeFor(cfg));
   const store = await makeIsolatedMysqlStore({
@@ -455,6 +483,8 @@ async function provisionMysql(cfg: HarnessConfig): Promise<Provisioned> {
     digest,
     clock,
     connectionLimit: poolMax,
+    driver: cfg.mysqlDriver,
+    ...(wrap?.mysql ? { wrapPool: wrap.mysql } : {}),
   });
   const { economy, workerCtx } = assemble(store, digest, clock, {
     seed: cfg.seed,
@@ -464,7 +494,10 @@ async function provisionMysql(cfg: HarnessConfig): Promise<Provisioned> {
   const probe = await makeMysqlCounterProbe(cfg.urls.mysql);
   return {
     backend: 'mysql',
-    label: 'mysql',
+    label:
+      cfg.mysqlDriver === 'mysql2'
+        ? 'mysql'
+        : `mysql (${cfg.mysqlDriver} wire)`,
     durable: true,
     durability: await probeMysqlDurability(cfg.urls.mysql),
     concurrency: cfg.concurrency,
@@ -483,12 +516,19 @@ async function provisionMysql(cfg: HarnessConfig): Promise<Provisioned> {
   };
 }
 
+/** Statement-tap hooks, applied to each provisioned pool at the engines' driver seam. */
+export type PoolWrap = {
+  pg?: (pool: PgPool) => PgPool;
+  mysql?: (pool: MysqlPool) => MysqlPool;
+};
+
 // Returns null when the backend's database is unreachable — a skip, not a failure; the rest of the
 // run proceeds. A required backend (BENCH_REQUIRE) gets a few connection attempts first, so a
 // momentary compose DNS or just-healthy-container hiccup can't fail a whole run at its very end.
 export async function tryProvision(
   backend: BackendName,
   cfg: HarnessConfig,
+  wrap?: PoolWrap,
 ): Promise<Provisioned | null> {
   const attempts = cfg.required.includes(backend) ? 5 : 1;
   for (let attempt = 1; ; attempt++) {
@@ -497,8 +537,8 @@ export async function tryProvision(
         console.warn(`    shards ${cfg.shards}`);
       }
       if (backend === 'in-memory') return await provisionInMemory(cfg);
-      if (backend === 'postgres') return await provisionPostgres(cfg);
-      return await provisionMysql(cfg);
+      if (backend === 'postgres') return await provisionPostgres(cfg, wrap);
+      return await provisionMysql(cfg, wrap);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       if (attempt < attempts) {

@@ -38,6 +38,8 @@ export interface PgPoolConfig {
   connectionString: string;
   max?: number;
   connectionTimeoutMillis?: number;
+  /** Startup parameter string (e.g. `-c search_path=...`), applied to every connection. */
+  options?: string;
 }
 
 interface PgModule {

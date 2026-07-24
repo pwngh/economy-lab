@@ -18,12 +18,15 @@ import {
   mysqlStore,
 } from '#src/engines/mysql.ts';
 import { httpStore, createStoreServer } from '#src/adapters/http.ts';
-import { loadPg } from '#src/engines/pg-driver.ts';
 import { createMariadbPool } from '#src/engines/mysql-mariadb.ts';
+import { loadPg, openPgPool } from '#src/engines/pg-driver.ts';
 import { LOCAL_POSTGRES_URL, storeUrls } from '#src/env.ts';
 import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
+import { postgresJsPool } from '#test/support/wire-trial.ts';
 
 import type { EnvMap } from '#src/env.ts';
+import type { MysqlPool } from '#src/engines/mysql.ts';
+import type { PgPool } from '#src/engines/postgres.ts';
 import type { Clock, Digest, Store } from '#src/ports.ts';
 
 /** One matrix adapter: a test-title name and a factory returning a fresh, isolated store. */
@@ -238,7 +241,8 @@ export async function maybeSweep(
 /**
  * A Postgres store on its own throwaway schema, dropped on close (postgresStore's `schema`
  * option does all of that). Shared by the conformance matrix and the bench harness, which
- * differ only in digest/clock and pool sizing.
+ * differ only in digest/clock and pool sizing. `driver: 'postgresjs'` mounts the wire-trial
+ * postgres.js pool behind the store's driver seam instead of pg.
  */
 export async function makeIsolatedPostgresStore(opts: {
   url: string;
@@ -246,18 +250,65 @@ export async function makeIsolatedPostgresStore(opts: {
   clock: Clock;
   poolMax?: number;
   connectionTimeoutMillis?: number;
+  driver?: 'pg' | 'postgresjs';
+  /** Applied to the pool behind the store's driver seam — the profiler's statement tap. */
+  wrapPool?: (pool: PgPool) => PgPool;
 }): Promise<Store> {
   await maybeSweep('postgres', opts.url);
+  const schemaName = freshName('el_iso');
+  const pool = await isolatedPgPool(opts, schemaName);
   return postgresStore({
     url: opts.url,
-    schemaName: freshName('el_iso'),
+    schemaName,
     digest: opts.digest,
     clock: opts.clock,
     ...(opts.poolMax ? { poolMax: opts.poolMax } : {}),
     ...(opts.connectionTimeoutMillis
       ? { connectionTimeoutMillis: opts.connectionTimeoutMillis }
       : {}),
+    ...(pool ? { pool } : {}),
   });
+}
+
+// The pool behind the seam, when one must be built here: the postgres.js trial wire, or the
+// default pg pool made explicit so `wrapPool` has an object to wrap. Without either, the store
+// builds its own pool — the branch production hosts run, kept covered by the conformance matrix.
+async function isolatedPgPool(
+  opts: {
+    url: string;
+    poolMax?: number;
+    connectionTimeoutMillis?: number;
+    driver?: 'pg' | 'postgresjs';
+    wrapPool?: (pool: PgPool) => PgPool;
+  },
+  schemaName: string,
+): Promise<PgPool | null> {
+  const wrap = opts.wrapPool ?? ((pool: PgPool) => pool);
+  if (opts.driver === 'postgresjs') {
+    return wrap(
+      await postgresJsPool({
+        url: opts.url,
+        schemaName,
+        ...(opts.poolMax ? { max: opts.poolMax } : {}),
+        ...(opts.connectionTimeoutMillis
+          ? { connectionTimeoutMillis: opts.connectionTimeoutMillis }
+          : {}),
+      }),
+    );
+  }
+  if (opts.wrapPool === undefined) {
+    return null;
+  }
+  // pg.Pool also carries connect(); the driver doorway's PgPoolLike omits it, the seam needs it.
+  const raw = (await openPgPool({
+    connectionString: opts.url,
+    options: `-c search_path=${schemaName}`,
+    ...(opts.poolMax ? { max: opts.poolMax } : {}),
+    ...(opts.connectionTimeoutMillis
+      ? { connectionTimeoutMillis: opts.connectionTimeoutMillis }
+      : {}),
+  })) as unknown as PgPool;
+  return wrap(raw);
 }
 
 /**
@@ -276,6 +327,8 @@ export async function makeIsolatedMysqlStore(opts: {
   // mysqlStore's pool seam instead of mysql2; administrative work (database create/drop) stays
   // on mysql2 either way.
   driver?: 'mysql2' | 'mariadb';
+  /** Applied to the built pool at the driver seam — the profiler's statement tap. */
+  wrapPool?: (pool: MysqlPool) => MysqlPool;
 }): Promise<Store> {
   await maybeSweep('mysql', opts.url);
   const database = safeDatabaseName(freshName('el_iso'));
@@ -316,6 +369,9 @@ export async function makeIsolatedMysqlStore(opts: {
               ? { connectionLimit: opts.connectionLimit }
               : {},
           );
+    if (opts.wrapPool) {
+      pool = opts.wrapPool(pool);
+    }
     await applyMysqlSchema(pool);
   } catch (error) {
     if (pool) {
