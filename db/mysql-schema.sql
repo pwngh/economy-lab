@@ -40,7 +40,11 @@ DROP TABLE IF EXISTS schema_meta;
 DROP TABLE IF EXISTS seen_webhooks;
 
 DROP TABLE IF EXISTS chain_reproof;
+DROP TABLE IF EXISTS archive_state;
+DROP TABLE IF EXISTS archive_heads;
+
 DROP TABLE IF EXISTS seal_heads;
+
 DROP TABLE IF EXISTS checkpoints;
 
 DROP TABLE IF EXISTS instance_movements;
@@ -49,6 +53,7 @@ DROP TABLE IF EXISTS reservations;
 DROP TABLE IF EXISTS trust_attempts;
 
 DROP TABLE IF EXISTS accrual_rows;
+
 DROP TABLE IF EXISTS promo_grants;
 
 DROP TABLE IF EXISTS subscriptions;
@@ -352,17 +357,36 @@ CREATE TABLE reservations (
      account_id VARCHAR(96) PRIMARY KEY COMMENT 'Account whose cross-node pending total this row holds.',
      pending    BIGINT      NOT NULL COMMENT 'Natural pending total across every node; advisory, never money.'
    ) COMMENT='Multi-node reservation counter behind sharedReservations; stale-high totals only refuse movements.';
+
 -- Rationale in db/postgresql-schema.sql (seal_heads banner).
 CREATE TABLE seal_heads (
      account_id VARCHAR(96) PRIMARY KEY COMMENT 'Account the sealed leaf belongs to.',
      head       CHAR(64)    NOT NULL COMMENT 'Chain-head hash at the latest seal; lowercase hex.',
      sum        BIGINT      NOT NULL COMMENT 'Raw signed leg sum at the latest seal (debit positive).'
    ) COMMENT='The latest checkpoint\'s Merkle leaves, one row per account; authenticated against the signed root before the incremental seal trusts it.';
+
 -- Rationale in db/postgresql-schema.sql (chain_reproof banner).
 CREATE TABLE chain_reproof (
      cursor_seq BIGINT NULL COMMENT 'Where the rolling re-proof walk stands; NULL between rotations.',
      rotated_at BIGINT NULL COMMENT 'Epoch ms the last complete rotation finished; the verified-through watermark.'
    ) COMMENT='Rolling re-proof cursor and last-rotation watermark; single row.';
+
+-- Rationale in db/postgresql-schema.sql (archival boundary banner).
+CREATE TABLE archive_state (
+     through_seq   BIGINT       NOT NULL COMMENT 'Postings with seq at or below this are archived.',
+     cursor_seq    BIGINT       NULL COMMENT 'Mid-run resume point; NULL between runs.',
+     root          CHAR(64)     NOT NULL COMMENT 'Merkle sum-root over archive_heads; lowercase hex.',
+     signature     VARCHAR(144) NOT NULL COMMENT 'Domain-tagged signature over the root and sum.',
+     checkpoint_id VARCHAR(64)  NOT NULL COMMENT 'The sealed checkpoint this archival ran under.',
+     at            BIGINT       NOT NULL COMMENT 'Epoch ms the last page moved.'
+   ) COMMENT='Signed archival watermark; single row, verified before any prover anchors on it.';
+
+CREATE TABLE archive_heads (
+     account_id VARCHAR(96) PRIMARY KEY COMMENT 'Account whose archival boundary this row holds.',
+     head       CHAR(64)    NOT NULL COMMENT 'Hash of the last archived chain link; lowercase hex.',
+     sum        BIGINT      NOT NULL COMMENT 'Raw signed leg sum of the archived prefix (debit positive).'
+   ) COMMENT='Per-account archival boundary, sealed under archive_state root+signature.';
+
 -- Rationale in db/postgresql-schema.sql (checkpoints banner).
 CREATE TABLE checkpoints (
      id         VARCHAR(64) PRIMARY KEY COMMENT 'Checkpoint id, chk_<uuid>; primary key.',
@@ -624,4 +648,6 @@ INSERT INTO account_balances (account_id, currency, balance, head_hash)
 CREATE TABLE schema_meta (
      version VARCHAR(32) NOT NULL COMMENT 'Schema version stamp; must match SCHEMA_VERSION at startup.'
    ) COMMENT='Single-row schema version stamp, checked at startup.';
-INSERT INTO schema_meta (version) VALUES ('16');
+-- = SCHEMA_VERSION (src/schema.ts) and the Postgres stamp. No trailing comment on the INSERT
+-- line: the statement splitter reads line ends for the delimiter.
+INSERT INTO schema_meta (version) VALUES ('17');

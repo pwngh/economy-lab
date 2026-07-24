@@ -89,13 +89,14 @@ import type {
   RetryObserver,
 } from '#src/engines/sql-shared.ts';
 
-import type { Amount } from '#src/money.ts';
+import type { Amount, Currency } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Operation, Transaction } from '#src/contract.ts';
 import type {
   AccrualRow,
   AccrualRowKey,
   AccrualStore,
+  ArchivedPosting,
   Attempt,
   BatchSlot,
   CheckpointStore,
@@ -482,15 +483,108 @@ function createLedgerStore(env: LedgerEnv): Ledger {
         hash: row.hash as string,
       }));
     },
+
     linksPage: (cursor, limit) => linksPageOf(q, cursor, limit),
+
     historySize: async () => {
       const result = await q.query(
         `select coalesce(max(seq), 0) as size from postings`,
       );
       return Number(result.rows[0]!.size);
     },
+
+    archivePage: (cursor, limit) => archivePageOf(q, cursor, limit),
+
+    prune: (txnIds) => pruneWholePostings(q, txnIds),
+
     list: () => listPostingsOf(q),
   };
+}
+
+// The mover's page read: whole postings in commit order with legs and links, grouped in
+// process from three keyed queries. Legs come back in insert order (their serial id), the
+// same order the chain preimage hashed them in.
+async function archivePageOf(
+  q: Queryable,
+  cursor: number | null,
+  limit: number,
+): Promise<{ postings: ArchivedPosting[]; cursor: number | null }> {
+  const page = await q.query(
+    `select id, seq, posted_at, meta from postings
+      where seq > $1 order by seq asc limit $2`,
+    [cursor ?? 0, limit],
+  );
+  if (page.rows.length === 0) {
+    return { postings: [], cursor: null };
+  }
+  const ids = page.rows.map((row) => row.id as string);
+  const legs = await q.query(
+    `select posting_id, account_id, currency, amount from legs
+      where posting_id = any($1::text[]) order by id`,
+    [ids],
+  );
+  const links = await q.query(
+    `select posting_id, account_id, prev_hash, hash from chain_links
+      where posting_id = any($1::text[])`,
+    [ids],
+  );
+  const legsBy = new Map<string, Array<Leg>>();
+  for (const row of legs.rows) {
+    const list = legsBy.get(row.posting_id as string) ?? [];
+    list.push({
+      account: row.account_id as AccountRef,
+      amount: toAmount(row.currency as Currency, readMinor(row.amount)),
+    });
+    legsBy.set(row.posting_id as string, list);
+  }
+  const linksBy = new Map<
+    string,
+    Array<{ account: AccountRef; prevHash: string; hash: string }>
+  >();
+  for (const row of links.rows) {
+    const list = linksBy.get(row.posting_id as string) ?? [];
+    list.push({
+      account: row.account_id as AccountRef,
+      prevHash: row.prev_hash as string,
+      hash: row.hash as string,
+    });
+    linksBy.set(row.posting_id as string, list);
+  }
+  const size = await q.query(
+    `select coalesce(max(seq), 0) as size from postings`,
+  );
+  const newest = Number(size.rows[0]!.size);
+  const last = page.rows[page.rows.length - 1]!;
+  return {
+    postings: page.rows.map((row) => ({
+      txnId: row.id as string,
+      seq: Number(row.seq),
+      postedAt: Number(row.posted_at),
+      meta: (row.meta ?? {}) as Record<string, unknown>,
+      legs: legsBy.get(row.id as string) ?? [],
+      links: linksBy.get(row.id as string) ?? [],
+    })),
+    cursor: Number(last.seq) >= newest ? null : Number(last.seq),
+  };
+}
+
+// The mover's delete half: children first (both reference postings), whole postings only.
+async function pruneWholePostings(
+  q: Queryable,
+  txnIds: ReadonlyArray<string>,
+): Promise<void> {
+  if (txnIds.length === 0) {
+    return;
+  }
+  await q.query(`delete from chain_links where posting_id = any($1::text[])`, [
+    [...txnIds],
+  ]);
+  await q.query(`delete from legs where posting_id = any($1::text[])`, [
+    [...txnIds],
+  ]);
+  await q.query(`delete from postings where id = any($1::text[])`, [
+    [...txnIds],
+  ]);
 }
 
 // Same as createLedgerStore but with a working `lock`: a row-level lock on the account's
@@ -1955,7 +2049,9 @@ function createMovementJournal(pool: PgPool): MovementJournal {
     },
   };
 }
+
 // --- Reservation store ------------------------------------------------------------
+
 // The six growth gauges in one statement; count(*) comes back as a string, converted explicitly.
 async function readTableSizes(pool: PgPool): Promise<TableSizes> {
   const result = await pool.query(
@@ -1977,6 +2073,7 @@ async function readTableSizes(pool: PgPool): Promise<TableSizes> {
     accruals: Number(row.accruals),
   };
 }
+
 // The multi-node counter (see the reservations banner in db/postgresql-schema.sql): the upsert
 // folds the delta and RETURNING carries the post-add total in the same atomic statement, so the
 // caller's add-then-check never reads a total that misses its own add.
@@ -2025,6 +2122,85 @@ function createReservationStore(pool: PgPool): ReservationStore {
   };
 }
 
+// --- Checkpoint store -------------------------------------------------------------
+
+// The archival mover's boundary records: the signed archive state (single-row rewrite, like the
+// reproof state — a crash between delete and insert is repaired by the mover re-writing state
+// before its next prune) and the per-account archived heads/sums it authenticates.
+function archiveStateSurfaces(
+  pool: PgPool,
+): Pick<
+  CheckpointStore,
+  'archiveState' | 'archiveHeads' | 'putArchiveBoundary'
+> {
+  return {
+    archiveState: async () => {
+      const result = await pool.query(
+        `select through_seq, cursor_seq, root, signature, checkpoint_id, at
+           from archive_state limit 1`,
+      );
+      const row = result.rows[0];
+      if (!row) {
+        return null;
+      }
+      return {
+        throughSeq: Number(row.through_seq),
+        cursor: row.cursor_seq === null ? null : Number(row.cursor_seq),
+        root: row.root as string,
+        signature: row.signature as string,
+        checkpointId: row.checkpoint_id as string,
+        at: Number(row.at),
+      };
+    },
+    archiveHeads: async () => {
+      const result = await pool.query(
+        `select account_id, head, sum from archive_heads order by account_id`,
+      );
+      return result.rows.map((row) => ({
+        account: row.account_id as AccountRef,
+        head: row.head as string,
+        sum: readMinor(row.sum),
+      }));
+    },
+    // One transaction: the state's signature authenticates the head set, so the pair must land
+    // together or not at all.
+    putArchiveBoundary: async (state, heads) => {
+      const client = await pool.connect();
+      try {
+        await client.query('begin');
+        for (const row of heads) {
+          await client.query(
+            `insert into archive_heads (account_id, head, sum) values ($1, $2, $3)
+               on conflict (account_id) do update set head = excluded.head, sum = excluded.sum`,
+            [row.account, row.head, row.sum],
+          );
+        }
+        await client.query(`delete from archive_state`);
+        await client.query(
+          `insert into archive_state (through_seq, cursor_seq, root, signature, checkpoint_id, at)
+             values ($1, $2, $3, $4, $5, $6)`,
+          [
+            state.throughSeq,
+            state.cursor,
+            state.root,
+            state.signature,
+            state.checkpointId,
+            state.at,
+          ],
+        );
+        await client.query('commit');
+      } catch (error) {
+        await client.query('rollback').catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+  };
+}
+
+// Append-only, written through the pool rather than a transaction, so a money transaction rolling
+// back can't erase a snapshot already taken.
 function createCheckpointStore(pool: PgPool): CheckpointStore {
   return {
     reproof: async () => {
@@ -2049,6 +2225,7 @@ function createCheckpointStore(pool: PgPool): CheckpointStore {
         [state.cursor, state.rotatedAt],
       );
     },
+    ...archiveStateSurfaces(pool),
     put: async (checkpoint) => {
       await pool.query(
         `insert into checkpoints (id, root, signature, count, at, v, sum, kid)

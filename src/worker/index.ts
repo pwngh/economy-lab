@@ -21,8 +21,10 @@ import {
 import { reverifyCheckpoint, sealCheckpoint } from '#src/worker/checkpoint.ts';
 import { sweepExpiredPromos } from '#src/worker/promos.ts';
 import { sweepOrphanSessions } from '#src/worker/orphans.ts';
+import { archiveSealedPrefix } from '#src/worker/archive.ts';
 import { sweepRetention } from '#src/worker/retention.ts';
 
+import type { ArchiveSummary } from '#src/worker/archive.ts';
 import type { OrphanSweepSummary } from '#src/worker/orphans.ts';
 import type { RetentionSweepSummary } from '#src/worker/retention.ts';
 import type { Reservations } from '#src/netting.ts';
@@ -40,6 +42,7 @@ import type {
   Ports,
   Range,
   Scheduler,
+  ArchiveSink,
   Store,
 } from '#src/ports.ts';
 import type { PayoutSweepSummary } from '#src/worker/payouts.ts';
@@ -87,6 +90,7 @@ export const SWEEP_NAMES = [
   'accrualDrain',
   'reproof',
   'orphans',
+  'archive',
   'retention',
 ] as const;
 
@@ -141,6 +145,11 @@ export type SweepRequest = {
    */
   readonly orphans?: OrphanJobOptions;
   /**
+   * Archival mover (src/worker/archive.ts); absent, `archive` is skipped — moving history to
+   * cold storage is the host's opt-in, and the sink plus checkpoint-age bound are the host's to set.
+   */
+  readonly archive?: ArchiveJobOptions;
+  /**
    * Secondary-table retention (src/worker/retention.ts); absent, `retention` is skipped —
    * deleting replay-guard rows and settled-session journal history is the host's opt-in, and
    * each horizon is the host's to set.
@@ -148,6 +157,18 @@ export type SweepRequest = {
   readonly retention?: RetentionJobOptions;
   /** Per-call options; an AbortSignal here cancels a running job. */
   readonly options?: CallOptions;
+};
+
+/** What the archive job needs beyond the shared tick. */
+export type ArchiveJobOptions = {
+  /** The cold store pages are copied into before any delete. */
+  readonly sink: ArchiveSink;
+  /**
+   * Only history sealed by a checkpoint at least this old moves. Must exceed every refund and
+   * dispute window the deployment honors: archived history reads as absent, and money paths
+   * that need it reject rather than move.
+   */
+  readonly checkpointOlderThanMs: number;
 };
 
 /** What the orphans job needs beyond the shared tick. */
@@ -185,6 +206,7 @@ export type WorkerDefaults = {
   readonly feed?: ReconcileFeed;
   readonly windows?: ReadonlyArray<Range>;
   readonly orphans?: OrphanJobOptions;
+  readonly archive?: ArchiveJobOptions;
   readonly retention?: RetentionJobOptions;
   readonly only?: ReadonlyArray<SweepName>;
   /** Default DEFAULT_SWEEP_LIMIT when omitted. */
@@ -215,6 +237,7 @@ export type SweepBatch = {
   accrualDrain: SweepResult<AccrualDrainSummary>;
   reproof: SweepResult<ReproofSummary>;
   orphans: SweepResult<OrphanSweepSummary>;
+  archive: SweepResult<ArchiveSummary>;
   retention: SweepResult<RetentionSweepSummary>;
 };
 
@@ -326,6 +349,7 @@ const IDLE_SUMMARIES: { [K in SweepName]: SummaryOf<K> } = {
     failed: [],
     skipped: true,
   },
+  archive: { moved: 0, throughSeq: null, finished: false, skipped: true },
   retention: {
     idempotency: { deleted: 0, skipped: true },
     sessions: {
@@ -422,10 +446,33 @@ async function runSweepJobs(
     orphans: await gate('orphans', () =>
       runOrphans(store, ctx, input, { now, limit }),
     ),
+    archive: await gate('archive', () =>
+      runArchive(store, ctx, input, { now, limit, options }),
+    ),
     retention: await gate('retention', () =>
       runRetention(store, ctx, input, { now, limit }),
     ),
   };
+}
+
+function runArchive(
+  store: Store,
+  ctx: Ports,
+  input: SweepRequest,
+  tick: ResolvedTick,
+): Promise<SweepResult<ArchiveSummary>> {
+  if (input.archive === undefined) {
+    return Promise.resolve({ ok: true, summary: IDLE_SUMMARIES.archive });
+  }
+  const job = input.archive;
+  return isolate(() =>
+    archiveSealedPrefix(
+      store,
+      ctx,
+      { now: tick.now, limit: tick.limit, ...job },
+      tick.options,
+    ),
+  );
 }
 
 function runReconcile(
@@ -441,6 +488,7 @@ function runReconcile(
     reconcileDueWindows(feed, ctx, { windows: input.windows ?? [] }, options),
   );
 }
+
 function runOrphans(
   store: Store,
   ctx: Ports,
@@ -455,6 +503,7 @@ function runOrphans(
     sweepOrphanSessions(store, ctx, { ...tick, ...options }),
   );
 }
+
 function runRetention(
   store: Store,
   ctx: Ports,
@@ -467,6 +516,7 @@ function runRetention(
   const options = input.retention;
   return isolate(() => sweepRetention(store, ctx, { ...tick, ...options }));
 }
+
 async function isolate<TSummary>(
   run: () => Promise<TSummary>,
 ): Promise<SweepResult<TSummary>> {
@@ -514,6 +564,8 @@ export function createWorker(
     float: request.float ?? defaults.float,
     feed: request.feed ?? defaults.feed,
     windows: request.windows ?? defaults.windows,
+    orphans: request.orphans ?? defaults.orphans,
+    archive: request.archive ?? defaults.archive,
     retention: request.retention ?? defaults.retention,
     options: request.options,
   });

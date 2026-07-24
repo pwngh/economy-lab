@@ -450,6 +450,28 @@ export interface Ledger {
   historySize?(options?: CallOptions): Promise<number>;
 
   /**
+   * The archival mover's page read: postings in commit order after `cursor`, each with its
+   * full content, links, posted time, and seq — everything verify-copy-delete needs in one
+   * shot (see src/worker/archive.ts). Optional, with `prune`; both absent means the store
+   * cannot host the mover.
+   */
+  archivePage?(
+    cursor: number | null,
+    limit: number,
+    options?: CallOptions,
+  ): Promise<{
+    postings: ReadonlyArray<ArchivedPosting>;
+    cursor: number | null;
+  }>;
+
+  /**
+   * Deletes the named postings with their legs and chain links — the mover's final step, run
+   * inside the same store transaction that updates the signed archive heads, after the page
+   * has been re-proved and copied. Never called on unverified or uncopied history.
+   */
+  prune?(txnIds: ReadonlyArray<string>, options?: CallOptions): Promise<void>;
+
+  /**
    * Streams every committed posting with its full legs, newest first by commit sequence — a total
    * order, so ties never reorder a page.
    */
@@ -1108,6 +1130,7 @@ export interface TrustStore {
 
 /** Bounds a {@link Ledger.lineage} walk; see the method for `sinceHash` semantics. */
 export type LineageOptions = CallOptions & { sinceHash?: string };
+
 /**
  * One sealed leaf `(account, head hash at seal, raw signed leg sum at seal)` — exactly a
  * {@link Ledger.headSums} row frozen at seal time. These are the leaves the sealed checkpoint's
@@ -1115,6 +1138,7 @@ export type LineageOptions = CallOptions & { sinceHash?: string };
  * root and check it against the already-signed checkpoint.
  */
 export type SealHead = readonly [AccountRef, string, bigint];
+
 /** Stores signed ledger snapshots. Written only by the background worker. */
 export interface CheckpointStore {
   /**
@@ -1125,6 +1149,7 @@ export interface CheckpointStore {
 
   /** The most recently written checkpoint, or null before the first seal. */
   latest(options?: CallOptions): Promise<Checkpoint | null>;
+
   /**
    * Optional incremental-seal snapshot: upserts leaves into the one-row-per-account sealed-head
    * table. The seal writes only the accounts that changed, so the table always mirrors the
@@ -1137,8 +1162,10 @@ export interface CheckpointStore {
     leaves: ReadonlyArray<SealHead>,
     options?: CallOptions & { replaceAll?: boolean },
   ): Promise<void>;
+
   /** Every stored sealed head; empty before the first snapshotting seal. */
   sealHeads?(options?: CallOptions): Promise<ReadonlyArray<SealHead>>;
+
   /**
    * Optional rolling re-proof state (src/worker/reproof.ts): where the link walk stands and when
    * the last full rotation completed — the verified-through watermark that makes "how much of
@@ -1146,8 +1173,86 @@ export interface CheckpointStore {
    * assumption. Null before the first sweep. Absent (with `putReproof`), the sweep is a no-op.
    */
   reproof?(options?: CallOptions): Promise<Reproof | null>;
+
   /** The write half of {@link CheckpointStore.reproof}: replaces the stored state whole. */
   putReproof?(state: Reproof, options?: CallOptions): Promise<void>;
+
+  /**
+   * The archival watermark (see {@link ArchiveState}): how much of the oldest history the mover
+   * has moved to cold storage, under a root and signature over the per-account archive heads.
+   * Null before the first archival. Absent (with the other archive surfaces), the mover refuses
+   * to run — a mover that cannot record its progress durably and signed must not delete
+   * anything.
+   */
+  archiveState?(options?: CallOptions): Promise<ArchiveState | null>;
+
+  /**
+   * Every per-account archive head (see {@link ArchiveHead}); empty before the first archival.
+   * The prover authenticates these rows against {@link ArchiveState}'s signed root before
+   * trusting any pruned boundary — an unauthenticated boundary row would be an anchor the
+   * attacker can move.
+   */
+  archiveHeads?(options?: CallOptions): Promise<ReadonlyArray<ArchiveHead>>;
+
+  /**
+   * Replaces the signed state and upserts the advanced heads in one atomic write. The state's
+   * root and signature authenticate the head set, so a partial write would read as a tampered
+   * boundary on the next resume.
+   */
+  putArchiveBoundary?(
+    state: ArchiveState,
+    heads: ReadonlyArray<ArchiveHead>,
+    options?: CallOptions,
+  ): Promise<void>;
+}
+
+/**
+ * The archival mover's persisted state (see src/worker/archive.ts). Postings with
+ * seq <= `throughSeq` have been re-proved, copied to the archive sink, and deleted from hot
+ * storage. `root`/`signature` seal the full {@link ArchiveHead} set as of this state (the
+ * seal_heads construction reapplied to the archival boundary), so the pruned edge is verifiable
+ * at every instant — including mid-run, which `cursor` marks for resume.
+ */
+export type ArchiveState = {
+  throughSeq: number;
+  cursor: number | null;
+  root: string;
+  signature: string;
+  checkpointId: string;
+  at: number;
+};
+
+/**
+ * One account's archival boundary: the hash of its last archived chain link (the anchor the
+ * account's first remaining link must extend) and the signed sum of its archived legs (the
+ * baseline the consistency fold starts from). Authenticated via {@link ArchiveState}.
+ */
+export type ArchiveHead = {
+  account: AccountRef;
+  head: string;
+  sum: bigint;
+};
+
+/** What the mover hands the archive sink: one verified posting with its full content. */
+export type ArchivedPosting = {
+  txnId: string;
+  seq: number;
+  postedAt: number;
+  meta: Record<string, unknown>;
+  legs: ReadonlyArray<Leg>;
+  links: ReadonlyArray<PostingLink>;
+};
+
+/**
+ * The cold store the archival mover copies into before deleting — host-provided (WORM bucket,
+ * cold database, file store). `put` must be idempotent per txn id: a crashed mover re-sends its
+ * last page before pruning resumes.
+ */
+export interface ArchiveSink {
+  put(
+    page: ReadonlyArray<ArchivedPosting>,
+    options?: CallOptions,
+  ): Promise<void>;
 }
 
 /**
@@ -1161,6 +1266,7 @@ export type Reproof = {
   cursor: number | null;
   rotatedAt: number | null;
 };
+
 /**
  * Publishes a sealed checkpoint to a store outside the ledger's own database — an external log,
  * object store, or transparency service. The checkpoint table lives in the same database an

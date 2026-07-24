@@ -359,6 +359,7 @@ create table reservations (
   account_id text   primary key,
   pending    bigint not null
 );
+
 -- ============================================================================
 -- Seal heads: the latest checkpoint's Merkle leaves, one row per account — each account's chain
 -- head and raw signed leg sum as of the last seal. The incremental seal re-derives this table's
@@ -370,6 +371,7 @@ create table seal_heads (
   head       text   not null,
   sum        bigint not null
 );
+
 -- ============================================================================
 -- Chain re-proof cursor: one row of rolling re-verification state. The worker's reproof sweep
 -- re-derives every stored chain link's hash from its own content in budget-bounded pages —
@@ -381,6 +383,29 @@ create table chain_reproof (
   cursor_seq bigint,
   rotated_at bigint
 );
+
+-- ============================================================================
+-- The archival boundary (src/worker/archive.ts): postings with seq <= through_seq have been
+-- verified, copied cold, and deleted. archive_heads holds each account's last archived link
+-- hash and raw leg sum. archive_state's root and signature seal the whole head set (domain-
+-- tagged, so it can never pass as a checkpoint signature). Nothing here is trusted unread:
+-- provers and seals recompute the root and verify the signature before anchoring on any row.
+-- ============================================================================
+create table archive_state (
+  through_seq   bigint not null,
+  cursor_seq    bigint,
+  root          text   not null,
+  signature     text   not null,
+  checkpoint_id text   not null,
+  at            bigint not null
+);
+
+create table archive_heads (
+  account_id text   primary key,
+  head       text   not null,
+  sum        bigint not null
+);
+
 -- ============================================================================
 -- Checkpoints: a signed snapshot of ledger state. Each row holds a Merkle root over every account's
 -- latest hash, signed with a key the ledger writer can't reach, so an insider who rewrites a history
@@ -617,7 +642,8 @@ create or replace trigger account_balances_integrity
 -- src/schema.ts together, whenever this file changes.
 -- ============================================================================
 create table schema_meta (version text not null);
-insert into schema_meta (version) values ('16');
+insert into schema_meta (version) values ('12');
+insert into schema_meta (version) values ('17');
 
 -- Deployed at-a-glance column docs (visible via \d+); the banners above carry the depth.
 comment on column accounts.id is 'Account id; platform:<name> or usr_<uuid>:<kind>.';
@@ -740,6 +766,8 @@ comment on table trust_attempts is 'Per-key spend attempts feeding the velocity 
 comment on table reservations is 'Multi-node reservation counter behind sharedReservations; stale-high totals only refuse movements.';
 comment on table seal_heads is 'Latest checkpoint leaves per account; the incremental seal authenticates then diffs against it.';
 comment on table chain_reproof is 'Rolling re-proof cursor and last-rotation watermark; single row.';
+comment on table archive_state is 'Signed archival watermark; single row, verified before any prover anchors on it.';
+comment on table archive_heads is 'Per-account archival boundary, sealed under archive_state root+signature.';
 comment on table checkpoints is 'Signed Merkle checkpoints over the per-account hash chains.';
 comment on table seen_webhooks is 'Replay-dedup guard for inbound provider webhooks, by event id.';
 comment on table schema_meta is 'Single-row schema version stamp, checked at startup.';

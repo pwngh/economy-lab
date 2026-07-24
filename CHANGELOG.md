@@ -13,6 +13,12 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   (`IdempotencyStore.deleteOlderThan`) and settled sessions older than `sessionsOlderThanMs`; a
   session is pruned only after its settle posting re-proves. The worker runs it as the
   `retention` job.
+- `archiveSealedPrefix` moves sealed history pages to an `ArchiveSink` under signed per-account
+  archive heads, and the prover verifies the pruned boundary at every proof
+  (`CheckpointStore.putArchiveBoundary`). `Ledger.archivePage` pages postings out;
+  `Ledger.prune` deletes them once archived.
+- The stamped SQL schema version is 17: `archive_state`, `archive_heads`, and an
+  oldest-first index on `idempotency.created_at`.
 
 ## 0.6.3 - 2026-07-23
 

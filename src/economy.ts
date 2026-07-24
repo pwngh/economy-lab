@@ -53,6 +53,9 @@ import {
   VELOCITY_CURRENCY,
 } from '#src/trust.ts';
 import { economyPaused } from '#src/config.ts';
+import { loadArchiveBoundary } from '#src/chain.ts';
+
+import type { ArchiveBoundary } from '#src/chain.ts';
 import { encodeWire } from '#src/adapters/http-wire.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
@@ -60,6 +63,7 @@ import type { Config } from '#src/config.ts';
 import type { BackingTotals } from '#src/integrity.ts';
 import type { Amount, Currency } from '#src/money.ts';
 import { CAPACITY_THRESHOLDS } from '#src/contract.ts';
+
 import type {
   BatchOutcome,
   CapacityReport,
@@ -165,8 +169,8 @@ type Step = {
   staged?: (subject: string, attempt: Attempt) => void;
 };
 
-// Every port except the store (handlers get a per-transaction view), the scheduler and
-// dispatcher (worker concerns), and the secrets bag, which the submit path never reads.
+// Every port except the store (handlers get a per-transaction view), the scheduler, dispatcher,
+// and anchor (worker concerns), and the secrets bag, which the submit path never reads.
 function contextOf(ports: Ports): Ctx {
   return {
     clock: ports.clock,
@@ -1130,7 +1134,15 @@ async function healthReport(
   ctx: Ctx,
   options?: CallOptions,
 ): Promise<ProveReport> {
-  const fold = await foldLedger(store, options);
+  // The verified archival boundary, when one exists: each account's derived balance is its
+  // signed archived portion plus its remaining legs. Fails loud on a boundary that does not
+  // verify — health never vouches over an anchor an attacker could have moved.
+  const boundary = await loadArchiveBoundary(
+    store.checkpoints,
+    { digest: ctx.digest, signer: ctx.signer },
+    options,
+  );
+  const fold = await foldLedger(store, boundary, options);
   const required = backingRequiredMinor(
     fold.custodialCreditMinor,
     ctx.rates.par('CREDIT'),
@@ -1169,6 +1181,7 @@ type LedgerFold = {
 // See https://economy-lab-docs.pages.dev/economy/concepts/the-proof/ for what each figure proves.
 async function foldLedger(
   store: Store,
+  boundary: ArchiveBoundary | null,
   options?: CallOptions,
 ): Promise<LedgerFold> {
   const signedByCurrency = new Map<Currency, bigint>();
@@ -1179,11 +1192,22 @@ async function foldLedger(
   let anyUserNegative = false;
   let chainIntact = true;
   const drift: LedgerDrift[] = [];
+  const seen = new Set<AccountRef>();
 
-  for await (const [account, head] of store.ledger.heads()) {
-    const bal = await store.ledger.balance(account, options);
+  const baselineOf = (account: AccountRef): bigint => {
+    const raw = boundary?.rawSums.get(account);
+    return raw === undefined ? 0n : raw * (isDebitNormal(account) ? 1n : -1n);
+  };
+
+  // One account's contribution, shared by the heads walk and the archived-account sweep so the
+  // two can never drift apart. Backing sums read the stored balance; `foldBackingAccount`
+  // (integrity.ts) owns what counts.
+  const foldAccount = (
+    account: AccountRef,
+    bal: Amount,
+    derivedMinor: bigint,
+  ): void => {
     const cur = currency(account);
-    const derivedMinor = await deriveBalanceMinor(store, account, options);
     const sign = isDebitNormal(account) ? 1n : -1n;
     signedByCurrency.set(
       cur,
@@ -1196,13 +1220,32 @@ async function foldLedger(
         derived: toAmount(cur, derivedMinor),
       });
     }
-    // Backing sums read the stored balance; `foldBackingAccount` (integrity.ts) owns what counts.
     foldBackingAccount(backing, account, bal.minor);
     if (isWalletAccount(account) && isNegative(bal)) {
       anyUserNegative = true;
     }
+  };
+
+  for await (const [account, head] of store.ledger.heads()) {
+    seen.add(account);
+    const bal = await store.ledger.balance(account, options);
+    const derivedMinor =
+      baselineOf(account) + (await deriveBalanceMinor(store, account, options));
+    foldAccount(account, bal, derivedMinor);
     if (!isWellFormedHead(head)) {
       chainIntact = false;
+    }
+  }
+  // A fully-archived account has no remaining postings, so heads() skips it — but its balance is
+  // still real money the backing requirement must count. The signed boundary names every such
+  // account; fold each one the heads walk missed.
+  if (boundary !== null) {
+    for (const account of boundary.rawSums.keys()) {
+      if (seen.has(account)) {
+        continue;
+      }
+      const bal = await store.ledger.balance(account, options);
+      foldAccount(account, bal, baselineOf(account));
     }
   }
   // heads() only visits posted-to accounts, so a balance row with no backing posting slips past this

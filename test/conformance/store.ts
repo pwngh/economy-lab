@@ -316,6 +316,7 @@ async function journalEnumeratesSessions(store: Store): Promise<void> {
   assert.equal(ids.filter((id) => id === a).length, 1);
   assert.equal(ids.filter((id) => id === b).length, 1);
 }
+
 // Store.reservations (optional): the multi-node counter. `add` must return the post-add total
 // (the accept screen's add-then-check stands on it), a storm of concurrent adds must sum
 // exactly (no lost updates), and `entries` must list the row for the reconciliation walk.
@@ -341,6 +342,68 @@ async function reservationCounterIsExact(store: Store): Promise<void> {
   assert.equal(listed, -100n);
   assert.equal(await counter.add(account, 100n), 0n);
 }
+
+// The archival surfaces (optional): signed state and heads round-trip exactly, and
+// archivePage/prune move whole postings — content out, rows gone, balances untouched.
+async function archiveSurfacesRoundTrip(store: Store): Promise<void> {
+  if (
+    store.ledger.archivePage === undefined ||
+    store.ledger.prune === undefined ||
+    store.checkpoints.archiveState === undefined
+  ) {
+    return;
+  }
+  assert.equal(await store.checkpoints.archiveState(), null);
+  const state = {
+    throughSeq: 5,
+    cursor: 3,
+    root: 'a'.repeat(64),
+    signature: 'b'.repeat(64),
+    checkpointId: 'chk_conf_arch',
+    at: 9,
+  };
+  const userId = freshUser();
+  await store.checkpoints.putArchiveBoundary!(state, [
+    { account: spendable(userId), head: 'c'.repeat(64), sum: -25n },
+  ]);
+  assert.deepEqual(await store.checkpoints.archiveState(), state);
+  const heads = await store.checkpoints.archiveHeads!();
+  const mine = heads.find((row) => row.account === spendable(userId));
+  assert.deepEqual(mine, {
+    account: spendable(userId),
+    head: 'c'.repeat(64),
+    sum: -25n,
+  });
+
+  const txns = [`txn_conf_arch_a_${userId}`, `txn_conf_arch_b_${userId}`];
+  await store.transaction(async (unit) => {
+    await fundSpendable(unit, userId, '1.00', txns[0]!);
+    await fundSpendable(unit, userId, '2.00', txns[1]!);
+  });
+  const page = await store.ledger.archivePage(null, 500);
+  const rows = page.postings.filter((posting) => txns.includes(posting.txnId));
+  assert.equal(rows.length, 2);
+  // Full content travels: legs with amounts, links with both hashes, the commit seq and time.
+  assert.equal(rows[0]!.legs.length, 2);
+  assert.equal(rows[0]!.links.length, 2);
+  assert.ok(rows[0]!.seq < rows[1]!.seq);
+  assert.ok(rows[0]!.links.every((link) => link.hash.length === 64));
+
+  await store.transaction((unit) => unit.ledger.prune!([txns[0]!]));
+  assert.equal(await store.ledger.posting(txns[0]!), null);
+  assert.notEqual(await store.ledger.posting(txns[1]!), null);
+  // Pruning removes history, never money state.
+  assert.deepEqual(
+    await store.ledger.balance(spendable(userId)),
+    toAmount('CREDIT', 300n),
+  );
+  const after = await store.ledger.archivePage(null, 500);
+  assert.equal(
+    after.postings.some((posting) => posting.txnId === txns[0]!),
+    false,
+  );
+}
+
 async function commitsDurablyAndRollsBack(store: Store): Promise<void> {
   const committedUser = freshUser();
   const thrownUser = freshUser();
@@ -1681,6 +1744,8 @@ export function runStoreConformance(
       withStore(t, journalEnumeratesSessions));
     test('keeps the reservation counter exact under concurrent adds', (t) =>
       withStore(t, reservationCounterIsExact));
+    test('round-trips the archival boundary and moves whole postings', (t) =>
+      withStore(t, archiveSurfacesRoundTrip));
     test('commits a transaction durably and leaves no trace when one throws', (t) =>
       withStore(t, commitsDurablyAndRollsBack));
     test('rolls a batch item back to its savepoint without touching its batch-mates', (t) =>

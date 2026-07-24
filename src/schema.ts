@@ -20,7 +20,7 @@
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/configuration/ Configuration}
  *   for schema versioning and drift guard.
  */
-export const SCHEMA_VERSION = '12';
+export const SCHEMA_VERSION = '17';
 
 /**
  * Throws unless `found` (the database's `schema_meta` value) matches this build's

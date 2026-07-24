@@ -22,6 +22,8 @@ import { ERROR_CODES, fault } from '#src/errors.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
 import type {
+  ArchiveHead,
+  ArchiveState,
   Checkpoint,
   CheckpointStore,
   Digest,
@@ -130,7 +132,12 @@ export async function advanceHeads(
  *   re-derivation this proves and what a break means.
  */
 export async function proveChain(
-  deps: { ledger: Ledger; digest: Digest },
+  deps: {
+    ledger: Ledger;
+    digest: Digest;
+    /** The verified archival boundary; absent or null means nothing has been archived. */
+    boundary?: ArchiveBoundary | null;
+  },
   options?: CallOptions,
 ): Promise<ChainReport> {
   const heads = [...(await collectHeadPairs(deps.ledger))].sort((a, b) =>
@@ -146,22 +153,43 @@ export async function proveChain(
   return { intact: true, firstBreak: null, count };
 }
 
-// `prev` is the head reached so far — the genesis value before the first posting.
+// `prev` is the head reached so far — the genesis value before the first posting. An account the
+// verified archival boundary names walks anchored instead: its remaining chain can start at the
+// signed archive head (the clean cut), at genesis (the crash window where the boundary postings
+// are signed but not yet deleted), or — after a crash between the boundary signature and the
+// delete — below the signed head, in which case the start floats and the signed head must appear
+// as a hash inside the walk. Content re-derivation applies to every link in every case; a named
+// account whose signed head never appears is truncated or tampered and reports broken.
 async function recomputeAccount(
-  deps: { ledger: Ledger; digest: Digest },
+  deps: {
+    ledger: Ledger;
+    digest: Digest;
+    boundary?: ArchiveBoundary | null;
+  },
   account: AccountRef,
   options?: CallOptions,
 ): Promise<ChainBreak | null> {
+  const anchor = deps.boundary?.anchors.get(account);
   let prev = GENESIS_HEX;
+  let anchorSeen = anchor === undefined;
+  let first = true;
   for await (const link of deps.ledger.lineage(account, options)) {
+    if (first && anchor !== undefined && link.prevHash === anchor) {
+      prev = anchor;
+      anchorSeen = true;
+    }
     if (link.prevHash !== prev) {
-      return {
-        account,
-        txnId: link.txnId,
-        reason: 'broken-link',
-        expected: prev,
-        actual: link.prevHash,
-      };
+      if (!first || anchor === undefined) {
+        return {
+          account,
+          txnId: link.txnId,
+          reason: 'broken-link',
+          expected: prev,
+          actual: link.prevHash,
+        };
+      }
+      // The crash-window float: the start is vouched only if the signed head shows up later.
+      prev = link.prevHash;
     }
     const recomputed = await recomputeLink(deps.digest, account, link);
     if (recomputed !== link.hash) {
@@ -174,6 +202,19 @@ async function recomputeAccount(
       };
     }
     prev = link.hash;
+    if (link.hash === anchor) {
+      anchorSeen = true;
+    }
+    first = false;
+  }
+  if (!anchorSeen && !first) {
+    return {
+      account,
+      txnId: '',
+      reason: 'broken-link',
+      expected: anchor!,
+      actual: prev,
+    };
   }
   return null;
 }
@@ -398,7 +439,14 @@ export async function recordCheckpoint(
   },
   options?: CallOptions,
 ): Promise<Checkpoint> {
-  const leaves = await collectHeadSums(deps.ledger, options);
+  // A pruned ledger's live sums miss the archived history; the verified boundary folds it back
+  // (mergeArchiveSums), so the sealed leaves always carry full-history sums and the root still
+  // nets to zero. A boundary that fails its signature faults here, before anything signs.
+  const boundary = await loadArchiveBoundary(deps.checkpoints, deps, options);
+  const leaves = mergeArchiveSums(
+    await collectHeadSums(deps.ledger, options),
+    boundary,
+  );
 
   // The incremental strategy: when the store carries an authenticated snapshot of the last
   // seal's leaves, only the accounts whose heads moved since then need their chain tails
@@ -411,7 +459,7 @@ export async function recordCheckpoint(
       ? await proveDirtyTails(deps, plan, options)
       : (
           await proveChain(
-            { ledger: deps.ledger, digest: deps.digest },
+            { ledger: deps.ledger, digest: deps.digest, boundary },
             options,
           )
         ).firstBreak;
@@ -719,7 +767,118 @@ function sumNodePreimage(
   return out;
 }
 
-function sumRootPayload(root: { hash: Uint8Array; sum: bigint }): Uint8Array {
+// --- The archival boundary --------------------------------------------------------
+
+/** Domain tag for archive-head signatures, so they can never pass as checkpoint signatures. */
+const ARCHIVE_DOMAIN = new TextEncoder().encode('economy-lab:archive-heads:v1');
+
+/** The archive-head signing payload: the domain tag then the v2 root encoding. */
+export function archivePayload(root: {
+  hash: Uint8Array;
+  sum: bigint;
+}): Uint8Array {
+  const body = sumRootPayload(root);
+  const out = new Uint8Array(ARCHIVE_DOMAIN.length + body.length);
+  out.set(ARCHIVE_DOMAIN, 0);
+  out.set(body, ARCHIVE_DOMAIN.length);
+  return out;
+}
+
+export async function verifyArchiveHeads(
+  deps: { digest: Digest; signer: Signer },
+  heads: ReadonlyArray<ArchiveHead>,
+  state: ArchiveState,
+): Promise<boolean> {
+  const root = await merkleSumRoot(
+    deps.digest,
+    heads.map((row) => [row.account, row.head, row.sum] as const),
+  );
+  if (toHex(root.hash) !== state.root) {
+    return false;
+  }
+  return deps.signer.verify(archivePayload(root), fromHex(state.signature));
+}
+
+/**
+ * The verified archival boundary the provers and the seal anchor on: per-account archived head
+ * hashes and raw leg sums, trusted only because their recomputed root matches the signed
+ * {@link ArchiveState}. Null when nothing has ever been archived.
+ */
+export type ArchiveBoundary = {
+  anchors: ReadonlyMap<AccountRef, string>;
+  rawSums: ReadonlyMap<AccountRef, bigint>;
+  state: ArchiveState;
+};
+
+/**
+ * Loads and authenticates the archival boundary. Faults CHAIN_BROKEN when the stored rows fail
+ * their signature — an unauthenticated boundary is an anchor an attacker can move, so every
+ * prover and seal refuses to proceed over one.
+ */
+export async function loadArchiveBoundary(
+  checkpoints: CheckpointStore,
+  deps: { digest: Digest; signer: Signer },
+  options?: CallOptions,
+): Promise<ArchiveBoundary | null> {
+  if (
+    checkpoints.archiveState === undefined ||
+    checkpoints.archiveHeads === undefined
+  ) {
+    return null;
+  }
+  const state = await checkpoints.archiveState(options);
+  if (state === null) {
+    return null;
+  }
+  const rows = await checkpoints.archiveHeads(options);
+  if (!(await verifyArchiveHeads(deps, rows, state))) {
+    throw fault(
+      ERROR_CODES.CHAIN_BROKEN,
+      'The archive heads failed authentication against their signed root; refusing to prove or seal over a tampered boundary.',
+      { retryable: false },
+    );
+  }
+  const anchors = new Map<AccountRef, string>();
+  const rawSums = new Map<AccountRef, bigint>();
+  for (const row of rows) {
+    anchors.set(row.account, row.head);
+    rawSums.set(row.account, row.sum);
+  }
+  return { anchors, rawSums, state };
+}
+
+// Folds the archived raw sums back into the live leaves, so a seal over a pruned ledger still
+// covers every account's full-history sum (and still nets to zero): live accounts gain their
+// archived portion; fully-pruned accounts re-enter with the archived head as their true head.
+function mergeArchiveSums(
+  live: ReadonlyArray<readonly [AccountRef, string, bigint]>,
+  boundary: ArchiveBoundary | null,
+): ReadonlyArray<readonly [AccountRef, string, bigint]> {
+  if (boundary === null) {
+    return live;
+  }
+  const seen = new Set<AccountRef>();
+  const merged: Array<readonly [AccountRef, string, bigint]> = live.map(
+    ([account, head, sum]) => {
+      seen.add(account);
+      const archived = boundary.rawSums.get(account) ?? 0n;
+      return [account, head, sum + archived] as const;
+    },
+  );
+  for (const [account, sum] of boundary.rawSums) {
+    if (!seen.has(account)) {
+      merged.push([account, boundary.anchors.get(account)!, sum] as const);
+    }
+  }
+  return merged;
+}
+
+/** The v2 signing payload: root hash then the 8-byte big-endian sum. Exported for the archival
+ * mover, whose archive-head signatures reuse this encoding under their own domain tag. */
+export function sumRootPayload(root: {
+  hash: Uint8Array;
+  sum: bigint;
+}): Uint8Array {
   const out = new Uint8Array(root.hash.length + 8);
   out.set(root.hash, 0);
   out.set(toInt64BE(root.sum), root.hash.length);

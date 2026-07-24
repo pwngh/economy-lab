@@ -9,7 +9,10 @@
  * @license MIT
  */
 
-import { proveChain } from '#src/chain.ts';
+import { loadArchiveBoundary, proveChain } from '#src/chain.ts';
+import { ERROR_CODES, fault } from '#src/errors.ts';
+
+import type { ArchiveBoundary } from '#src/chain.ts';
 import { convertFloor, toAmount } from '#src/money.ts';
 import {
   baseOf,
@@ -31,6 +34,7 @@ import type {
   CallOptions,
   Rate,
   Rates,
+  Signer,
   Store,
   StoredLink,
 } from '#src/ports.ts';
@@ -41,10 +45,17 @@ type Drift = { account: AccountRef; materialized: Amount; derived: Amount };
 
 /**
  * What the thorough prover needs — a narrow pick of the Ports bag, so a host passes the whole
- * bag or hand-builds three fields. `digest` is required because the tamper check always
- * recomputes entry hashes; no path trusts a stored hash.
+ * bag or hand-builds the fields. `digest` is required because the tamper check always
+ * recomputes entry hashes; no path trusts a stored hash. `signer` authenticates the archival
+ * boundary when one exists — proving an archived store without a signer faults rather than
+ * vouching for an unverifiable boundary.
  */
-export type ProvePorts = { store: Store; rates: Rates; digest: Digest };
+export type ProvePorts = {
+  store: Store;
+  rates: Rates;
+  digest: Digest;
+  signer?: Signer;
+};
 
 // The hash chain is not checked in this fold — `chain.ts` `proveChain` does that.
 type LedgerFold = {
@@ -72,13 +83,26 @@ type LedgerFold = {
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/the-proof/ The proof} for how the
  *   prover re-derives every invariant.
+ *
+ * @example
+ * const report = await proveEconomy({
+ *   store: ports.store, rates: ports.rates, digest: ports.digest, signer: ports.signer,
+ * });
+ * if (!allInvariantsHold(report)) {
+ *   throw new Error('ledger integrity check failed'); // report says which property broke
+ * }
  */
 export async function proveEconomy(
   ports: ProvePorts,
   options?: CallOptions,
 ): Promise<ProveReport> {
   const { store } = ports;
-  const fold = await foldLedger(store.ledger, options);
+  const boundary = await proveBoundary(ports, options);
+  const fold = await foldLedger(
+    store.ledger,
+    balanceBaselines(boundary),
+    options,
+  );
   const required = backingRequiredMinor(
     fold.custodialCreditMinor,
     ports.rates.par('CREDIT'),
@@ -87,7 +111,7 @@ export async function proveEconomy(
   const shortfallMinor = backingShortfallMinor(required, fold.trustCashMinor);
 
   const chain = await proveChain(
-    { ledger: store.ledger, digest: ports.digest },
+    { ledger: store.ledger, digest: ports.digest, boundary },
     options,
   );
 
@@ -104,11 +128,57 @@ export async function proveEconomy(
 
 // --- One pass over the ledger (foldLedger) -----------------------------------------
 
+async function proveBoundary(
+  ports: ProvePorts,
+  options?: CallOptions,
+): Promise<ArchiveBoundary | null> {
+  const checkpoints = ports.store.checkpoints;
+  if (ports.signer !== undefined) {
+    return loadArchiveBoundary(
+      checkpoints,
+      { digest: ports.digest, signer: ports.signer },
+      options,
+    );
+  }
+  const state =
+    checkpoints.archiveState === undefined
+      ? null
+      : await checkpoints.archiveState(options);
+  if (state !== null) {
+    throw fault(
+      ERROR_CODES.CONFIG_INVALID,
+      'This store has an archived prefix but the prover was built without a signer; the boundary cannot be authenticated.',
+      { retryable: false },
+    );
+  }
+  return null;
+}
+
+// The archived raw sums as balance-normal baselines: an account's derived balance is its
+// archived portion plus its remaining legs. Raw sums are debit-positive; balance-normal flips
+// the sign for credit-normal accounts, the same conversion accumulateLegs applies in reverse.
+function balanceBaselines(
+  boundary: ArchiveBoundary | null,
+): ReadonlyMap<AccountRef, bigint> {
+  const baselines = new Map<AccountRef, bigint>();
+  if (boundary === null) {
+    return baselines;
+  }
+  for (const [account, rawSum] of boundary.rawSums) {
+    baselines.set(account, rawSum * (isDebitNormal(account) ? 1n : -1n));
+  }
+  return baselines;
+}
+
 // The conservation total and the derived balances are built from the entries, not the stored
 // balances, so a mis-saved balance surfaces as drift instead of hiding a real imbalance. Backing
-// and overdraft read the stored balance directly — the figure they vouch for.
+// and overdraft read the stored balance directly — the figure they vouch for. The archival
+// baselines seed each account's derived balance with its verified archived portion; the
+// conservation total deliberately stays remaining-legs-only (whole postings net to zero, so any
+// remainder does too, and the mover proves the archived portion netted to zero when it signed).
 async function foldLedger(
   ledger: Ledger,
+  baselines: ReadonlyMap<AccountRef, bigint>,
   options?: CallOptions,
 ): Promise<LedgerFold> {
   const signedByCurrency = new Map<Currency, bigint>();
@@ -122,12 +192,9 @@ async function foldLedger(
 
   for await (const [account] of ledger.heads()) {
     seen.add(account);
-    const derivedMinor = await accumulateLegs(
-      ledger,
-      account,
-      signedByCurrency,
-      options,
-    );
+    const derivedMinor =
+      (baselines.get(account) ?? 0n) +
+      (await accumulateLegs(ledger, account, signedByCurrency, options));
 
     const balance = await ledger.balance(account, options);
     pushIfDrifted(account, balance, derivedMinor, drift);
@@ -138,13 +205,21 @@ async function foldLedger(
   }
   // R33: the `heads()` fold only visits accounts with at least one posting, so a phantom balance
   // row (a direct DB edit or half-applied write) is invisible to it. Enumerate every balance row
-  // and compare any unvisited account's stored balance against a derived 0.
+  // and compare any unvisited account's stored balance against its derived value — the archival
+  // baseline for a fully-archived account (all its postings moved cold), 0 otherwise. Backing
+  // and overdraft fold here too: a fully-archived account's balance is still real money.
   for await (const account of ledger.balanceAccounts(options)) {
     if (seen.has(account)) {
       continue;
     }
     const balance = await ledger.balance(account, options);
-    pushIfDrifted(account, balance, 0n, drift);
+    pushIfDrifted(account, balance, baselines.get(account) ?? 0n, drift);
+    if (baselines.has(account)) {
+      foldBackingAccount(backing, account, balance.minor);
+      if (isWalletAccount(account) && balance.minor < 0n) {
+        anyUserNegative = true;
+      }
+    }
   }
   return { signedByCurrency, ...backing, anyUserNegative, drift };
 }

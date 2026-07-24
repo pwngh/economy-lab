@@ -11,7 +11,7 @@ notes:
     href: 'https://patents.google.com/patent/US3886525'
 sourceRefs:
   [
-    'src/ports.ts#L1383-L1389 · SAGA_STATES',
+    'src/ports.ts#L1481-L1487 · SAGA_STATES',
     'src/operations/requestPayout.ts',
     'src/worker/payouts.ts',
   ]
@@ -41,7 +41,7 @@ The same shape covers anything that outlives one request. [Subscriptions](/econo
 
 ## The states
 
-`requestPayout` does not pay. It reserves the credits (`debit earned → credit payout_reserve`, two [`CREDIT` legs](/economy/concepts/accounts-and-double-entry/) that cancel out) and opens a `Saga`, a record whose `state` walks through `SagaState` (see <SourceLink to="src/ports.ts#L1383-L1389 · SAGA_STATES" />).
+`requestPayout` does not pay. It reserves the credits (`debit earned → credit payout_reserve`, two [`CREDIT` legs](/economy/concepts/accounts-and-double-entry/) that cancel out) and opens a `Saga`, a record whose `state` walks through `SagaState` (see <SourceLink to="src/ports.ts#L1481-L1487 · SAGA_STATES" />).
 
 The full enum declares `REQUESTED`, `RESERVED`, `SUBMITTED`, `SETTLED`, and `FAILED`. A live payout starts at `RESERVED`, because the credits were set aside in the same database transaction that opened the saga. Watch the row appear:
 
@@ -69,7 +69,7 @@ Failure arrives the same way, and promptly. The common real-world failure is asy
 Three guards let the worker retry a step without paying twice.
 
 - **The call to the rail is idempotent**, keyed by the saga id (`key: saga.id`), so a retried submit still pays once. The settlement webhook is deduped on the provider's event id, so a redelivered settlement settles once.
-- **Each state change is a compare-and-set.**<Cite n={2} /> `sagas.advance(id, from, to, patch)` moves a saga only if it is still in `from`, and returns `false` (changing nothing) otherwise, so two sweeps racing the same saga can't both advance it (see <SourceLink to="src/ports.ts#L894-L900 · SagaStore.advance" />).
+- **Each state change is a compare-and-set.**<Cite n={2} /> `sagas.advance(id, from, to, patch)` moves a saga only if it is still in `from`, and returns `false` (changing nothing) otherwise, so two sweeps racing the same saga can't both advance it (see <SourceLink to="src/ports.ts#L916-L922 · SagaStore.advance" />).
 - **A stuck payout is given up on.** Past `maxPayoutAttempts` failed attempts, or after `maxPayoutAgeMs` in `SUBMITTED` with no settlement webhook and no provider evidence to the contrary, the sweep force-fails it. It flips the saga to `FAILED` and, in the same transaction, posts the exact reverse of the reservation (`debit payout_reserve → credit earned`), returning the credits to the seller (see <SourceLink to="src/worker/payouts.ts#L114-L181 · deadLetter" />).
 
 <Callout type="warning">
@@ -98,7 +98,7 @@ A `RESERVED` payout pays at most once, and its reserve is released exactly once:
 
 The enforcement lives in three places, and you can verify each one in the source.
 
-- **The store's compare-and-set method.** `SagaStore.advance` is a conditional update that returns whether it changed a row, so the handler can detect and stand down on a lost race (see <SourceLink to="src/ports.ts#L894-L936 · SagaStore" />).
+- **The store's compare-and-set method.** `SagaStore.advance` is a conditional update that returns whether it changed a row, so the handler can detect and stand down on a lost race (see <SourceLink to="src/ports.ts#L916-L958 · SagaStore" />).
 - **One transaction per step.** Each forward step posts its ledger entry and advances its record inside `store.transaction`, so a partial step rolls back whole: a flipped state with no posting, or a posting with no flip, can't persist.
 - **Idempotent external calls and dedupe.** `processor.submitPayout` is keyed by the saga id (see <SourceLink to="src/ports.ts#L216-L232 · Processor" />), and inbound provider events are deduped by event id before they apply, so a redelivered webhook or a retried submit resolves to the same money move at most once.
 

@@ -59,7 +59,7 @@ import { assertSchemaCurrent } from '#src/schema.ts';
 
 import type { EngineOpenShape, Link } from '#src/engines/sql-shared.ts';
 
-import type { Amount } from '#src/money.ts';
+import type { Amount, Currency } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Operation, Transaction } from '#src/contract.ts';
 import type {
@@ -80,6 +80,7 @@ import type {
   Logger,
   MovementJournal,
   ReservationStore,
+  ArchivedPosting,
   Ledger,
   Lot,
   Meter,
@@ -363,6 +364,75 @@ async function insertPosting(
   return transaction;
 }
 
+async function archivePageOf(
+  exec: MysqlExecutor,
+  cursor: number | null,
+  limit: number,
+): Promise<{ postings: ArchivedPosting[]; cursor: number | null }> {
+  const page = await rows(
+    exec,
+    `SELECT id, seq, posted_at, meta FROM postings
+      WHERE seq > ? ORDER BY seq ASC LIMIT ?`,
+    [cursor ?? 0, limit],
+  );
+  if (page.length === 0) {
+    return { postings: [], cursor: null };
+  }
+  const ids = page.map((row) => row.id as string);
+  const marks = ids.map(() => '?').join(', ');
+  const legs = await rows(
+    exec,
+    `SELECT posting_id, account_id, currency, amount FROM legs
+      WHERE posting_id IN (${marks}) ORDER BY id`,
+    ids,
+  );
+  const links = await rows(
+    exec,
+    `SELECT posting_id, account_id, prev_hash, hash FROM chain_links
+      WHERE posting_id IN (${marks})`,
+    ids,
+  );
+  const legsBy = new Map<string, Leg[]>();
+  for (const row of legs) {
+    const list = legsBy.get(row.posting_id as string) ?? [];
+    list.push({
+      account: row.account_id as AccountRef,
+      amount: toAmount(row.currency as Currency, readMinor(row.amount)),
+    });
+    legsBy.set(row.posting_id as string, list);
+  }
+  const linksBy = new Map<
+    string,
+    Array<{ account: AccountRef; prevHash: string; hash: string }>
+  >();
+  for (const row of links) {
+    const list = linksBy.get(row.posting_id as string) ?? [];
+    list.push({
+      account: row.account_id as AccountRef,
+      prevHash: row.prev_hash as string,
+      hash: row.hash as string,
+    });
+    linksBy.set(row.posting_id as string, list);
+  }
+  const size = await rows(
+    exec,
+    'SELECT COALESCE(MAX(seq), 0) AS size FROM postings',
+  );
+  const newest = Number(size[0]!.size);
+  const last = page[page.length - 1]!;
+  return {
+    postings: page.map((row) => ({
+      txnId: row.id as string,
+      seq: Number(row.seq),
+      postedAt: Number(row.posted_at),
+      meta: parseJson(row.meta) as Record<string, unknown>,
+      legs: legsBy.get(row.id as string) ?? [],
+      links: linksBy.get(row.id as string) ?? [],
+    })),
+    cursor: Number(last.seq) >= newest ? null : Number(last.seq),
+  };
+}
+
 function mysqlQuery(exec: MysqlExecutor) {
   return async (sql: string, params: ReadonlyArray<unknown>) => ({
     rows: (await rows(exec, sql, params)) as ReadonlyArray<
@@ -564,8 +634,34 @@ function createLedgerStore(deps: ExecDeps): Ledger {
       return Number(found[0]!.size);
     },
 
+    // The mover's page read: whole postings in commit order with legs and links, grouped in
+    // process from three keyed queries. Legs come back in insert order (their auto-increment
+    // id), the same order the chain preimage hashed them in.
+    archivePage: async (cursor, limit) =>
+      archivePageOf(deps.exec, cursor, limit),
+
+    prune: (txnIds) => pruneWholePostings(deps.exec, txnIds),
+
     list: () => listPostingsOf(deps.exec),
   };
+}
+
+// The mover's delete half: children first (both reference postings), whole postings only.
+async function pruneWholePostings(
+  exec: MysqlExecutor,
+  txnIds: ReadonlyArray<string>,
+): Promise<void> {
+  if (txnIds.length === 0) {
+    return;
+  }
+  const marks = txnIds.map(() => '?').join(', ');
+  await rows(exec, `DELETE FROM chain_links WHERE posting_id IN (${marks})`, [
+    ...txnIds,
+  ]);
+  await rows(exec, `DELETE FROM legs WHERE posting_id IN (${marks})`, [
+    ...txnIds,
+  ]);
+  await rows(exec, `DELETE FROM postings WHERE id IN (${marks})`, [...txnIds]);
 }
 
 // Pages by postings.seq (the commit order), whole postings at a time, so a posting's links never
@@ -1910,7 +2006,9 @@ function createMovementJournal(pool: MysqlPool): MovementJournal {
       ]),
   };
 }
+
 // --- Reservation store ------------------------------------------------------------
+
 async function readTableSizes(pool: MysqlPool): Promise<TableSizes> {
   const found = await rows(
     pool,
@@ -1932,6 +2030,7 @@ async function readTableSizes(pool: MysqlPool): Promise<TableSizes> {
     accruals: Number(row.accruals),
   };
 }
+
 // The multi-node counter (see the reservations banner in db/postgresql-schema.sql). MySQL's
 // upsert cannot return the updated value, so the read is a second autocommitted statement: it
 // sees a total at-or-after our own add (a concurrent add is either already inside it or arrives
@@ -1989,6 +2088,84 @@ function createReservationStore(pool: MysqlPool): ReservationStore {
 }
 
 // --- Checkpoint store (used only by background workers) ---------------------------
+
+// The archival mover's boundary records: the signed archive state (single-row rewrite, like the
+// reproof state — a crash between delete and insert is repaired by the mover re-writing state
+// before its next prune) and the per-account archived heads/sums it authenticates.
+function archiveStateSurfaces(
+  pool: MysqlPool,
+): Pick<
+  CheckpointStore,
+  'archiveState' | 'archiveHeads' | 'putArchiveBoundary'
+> {
+  return {
+    archiveState: async () => {
+      const found = await rows(
+        pool,
+        `SELECT through_seq, cursor_seq, root, signature, checkpoint_id, at
+           FROM archive_state LIMIT 1`,
+      );
+      const row = found[0];
+      if (!row) {
+        return null;
+      }
+      return {
+        throughSeq: Number(row.through_seq),
+        cursor: row.cursor_seq === null ? null : Number(row.cursor_seq),
+        root: row.root as string,
+        signature: row.signature as string,
+        checkpointId: row.checkpoint_id as string,
+        at: Number(row.at),
+      };
+    },
+    archiveHeads: async () => {
+      const found = await rows(
+        pool,
+        'SELECT account_id, head, sum FROM archive_heads ORDER BY account_id',
+      );
+      return found.map((row) => ({
+        account: row.account_id as AccountRef,
+        head: row.head as string,
+        sum: readMinor(row.sum),
+      }));
+    },
+    // One transaction: the state's signature authenticates the head set, so the pair must land
+    // together or not at all.
+    putArchiveBoundary: async (state, heads) => {
+      const connection = await pool.getConnection();
+      try {
+        await connection.query('START TRANSACTION');
+        for (const row of heads) {
+          await connection.query(
+            `INSERT INTO archive_heads (account_id, head, sum) VALUES (?, ?, ?)
+               ON DUPLICATE KEY UPDATE head = VALUES(head), sum = VALUES(sum)`,
+            [row.account, row.head, row.sum.toString()],
+          );
+        }
+        await connection.query('DELETE FROM archive_state');
+        await connection.query(
+          `INSERT INTO archive_state (through_seq, cursor_seq, root, signature, checkpoint_id, at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            state.throughSeq,
+            state.cursor,
+            state.root,
+            state.signature,
+            state.checkpointId,
+            state.at,
+          ],
+        );
+        await connection.query('COMMIT');
+      } catch (error) {
+        await safeRollback(connection);
+        throw error;
+      } finally {
+        connection.release();
+      }
+    },
+  };
+}
+
 // The incremental seal's snapshot leaves. Writes are chunked so a full-mode rewrite stays under
 // max_allowed_packet; a crash between the replaceAll delete and the inserts leaves a partial
 // snapshot that fails the next seal's authentication and heals through another full replay.
@@ -2028,6 +2205,9 @@ function sealHeadSurfaces(
     },
   };
 }
+
+// Written on the pool, not in a money transaction, so a recorded checkpoint survives even if a
+// later money transaction rolls back.
 function createCheckpointStore(pool: MysqlPool): CheckpointStore {
   return {
     reproof: async () => {
@@ -2054,6 +2234,7 @@ function createCheckpointStore(pool: MysqlPool): CheckpointStore {
         [state.cursor, state.rotatedAt],
       );
     },
+    ...archiveStateSurfaces(pool),
     ...sealHeadSurfaces(pool),
     put: async (checkpoint) => {
       await rows(

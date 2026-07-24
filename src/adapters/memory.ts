@@ -25,6 +25,7 @@ import type {
   AccrualRow,
   AccrualRowKey,
   AccrualStore,
+  ArchivedPosting,
   Attempt,
   BatchSlot,
   Checkpoint,
@@ -43,6 +44,7 @@ import type {
   Movement,
   MovementJournal,
   ReservationStore,
+  ArchiveState,
   OutboxMessage,
   OutboxStore,
   Posting,
@@ -491,6 +493,11 @@ function createLedgerStore(deps: {
     historySize: async () =>
       state.log.length === 0 ? 0 : state.log[state.log.length - 1]!.seq,
 
+    archivePage: async (cursor, limit) =>
+      archivePageOf(state.log, cursor, limit),
+
+    prune: async (txnIds) => pruneFromLog(state, txnIds),
+
     list: () => listPostingsOf(state.log),
 
     __tamper: (txnId, mutate) => tamperPosting(state, txnId, mutate),
@@ -516,6 +523,29 @@ async function* headSumsOf(
     yield [account, head, raw.get(account) ?? 0n] as const;
   }
 }
+
+// The mover's page read: whole postings in commit order; the cursor is the last consumed
+// posting's seq, stable under archival pruning.
+function archivePageOf(
+  log: ReadonlyArray<StoredPosting>,
+  cursor: number | null,
+  limit: number,
+): { postings: ArchivedPosting[]; cursor: number | null } {
+  const eligible = log.filter((row) => cursor === null || row.seq > cursor);
+  const page = eligible.slice(0, limit);
+  return {
+    postings: page.map((row) => ({
+      txnId: row.txnId,
+      seq: row.seq,
+      postedAt: row.postedAt,
+      meta: row.meta,
+      legs: [...row.legs],
+      links: row.links.map((link) => ({ ...link })),
+    })),
+    cursor: page.length < eligible.length ? page[page.length - 1]!.seq : null,
+  };
+}
+
 // Whole postings per page so links never split; the cursor is the last consumed posting's seq.
 function linksPageOf(
   log: ReadonlyArray<StoredPosting>,
@@ -542,6 +572,44 @@ function linksPageOf(
     cursor: page.length < eligible.length ? page[page.length - 1]!.seq : null,
   };
 }
+
+// The mover's delete half: removes whole postings from the log and rebuilds every log-derived
+// structure — the index-coupled lot positions and the per-account delta columns — from the kept
+// rows, so `derivedBalances` and `timeline` see remaining history only, exactly as the SQL
+// engines' row deletes leave them. Journal-recorded, so a rolled-back transaction restores all
+// of it. Balances and chain heads stay — pruning removes history, never money state.
+function pruneFromLog(state: LedgerState, txnIds: ReadonlyArray<string>): void {
+  const doomed = new Set(txnIds);
+  const priorLog = state.log;
+  const priorLots = state.lotIndexByAccount;
+  const priorDeltas = state.deltaColumns;
+  const kept = priorLog.filter((row) => !doomed.has(row.txnId));
+  if (kept.length === priorLog.length) {
+    return;
+  }
+  const lots = new Map<AccountRef, number[]>();
+  kept.forEach((row, index) => {
+    for (const account of lottedAccounts(row.legs)) {
+      const positions = lots.get(account) ?? [];
+      positions.push(index);
+      lots.set(account, positions);
+    }
+  });
+  state.log = kept;
+  state.lotIndexByAccount = lots;
+  state.deltaColumns = new Map();
+  for (const row of kept) {
+    for (const leg of row.legs) {
+      appendDelta(state, leg.account, balanceDelta(leg));
+    }
+  }
+  state.journal.record(() => {
+    state.log = priorLog;
+    state.lotIndexByAccount = priorLots;
+    state.deltaColumns = priorDeltas;
+  });
+}
+
 // The chain heads in code-unit account order rather than Map insertion order, so every engine
 // lists accounts identically.
 function sortedHeads(
@@ -1643,7 +1711,9 @@ function createReservationStore(): ReservationStore {
 function createCheckpointStore(): CheckpointStore {
   const rows: Checkpoint[] = [];
   const heads = new Map<AccountRef, { head: string; sum: bigint }>();
+  const archiveHeadRows = new Map<AccountRef, { head: string; sum: bigint }>();
   let reproof: Reproof | null = null;
+  let archive: ArchiveState | null = null;
   return {
     reproof: async (_options?: CallOptions) =>
       reproof === null ? null : { ...reproof },
@@ -1667,6 +1737,20 @@ function createCheckpointStore(): CheckpointStore {
     },
     sealHeads: async (_options?: CallOptions) =>
       [...heads].map(([account, row]) => [account, row.head, row.sum] as const),
+    archiveState: async (_options?: CallOptions) =>
+      archive === null ? null : { ...archive },
+    archiveHeads: async (_options?: CallOptions) =>
+      [...archiveHeadRows].map(([account, row]) => ({
+        account,
+        head: row.head,
+        sum: row.sum,
+      })),
+    putArchiveBoundary: async (state, rows_, _options?: CallOptions) => {
+      archive = { ...state };
+      for (const row of rows_) {
+        archiveHeadRows.set(row.account, { head: row.head, sum: row.sum });
+      }
+    },
   };
 }
 
