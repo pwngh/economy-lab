@@ -44,6 +44,7 @@ import {
   walletKindOf,
 } from '#src/accounts.ts';
 import { GENESIS_HEX } from '#src/ledger.ts';
+import { partitionedSchemaSql } from '#src/engines/pg-partition.ts';
 import { assertMoneyConformant, assertSchemaCurrent } from '#src/schema.ts';
 import { installPostgres, provePostgres } from '#src/db.vendored.ts';
 import { vectors as moneyVectors } from '#src/money.vendored.ts';
@@ -2086,6 +2087,13 @@ export interface PostgresStoreOptions {
   schemaName?: string;
 
   /**
+   * Table layout the isolated schema is provisioned with: 'partitioned' hash-partitions the
+   * growth tables (a provisioning choice, runtime-identical). Only meaningful with `schemaName`;
+   * a database provisioned externally chooses its layout at migration time.
+   */
+  layout?: 'standard' | 'partitioned';
+
+  /**
    * Open-path schema policy: 'assert' (the default) requires the schema_meta stamp to match this
    * build; 'skip' is break-glass. Migration is an external job — never an open option.
    */
@@ -2137,7 +2145,7 @@ async function verifySchemaAndMoney(
   schema: string | null,
 ): Promise<void> {
   if (schema) {
-    await applyIsolatedSchema(pool, schema);
+    await applyIsolatedSchema(pool, schema, options.layout ?? 'standard');
   }
   // For an isolated test schema we just applied the current SQL, so this passes by construction.
   if (options.schema !== 'skip') {
@@ -2263,8 +2271,11 @@ export async function postgresStore(
 async function applyIsolatedSchema(
   pool: PgPool,
   schema: string,
+  layout: 'standard' | 'partitioned',
 ): Promise<void> {
-  const sql = await loadSchemaSql();
+  const canonical = await loadSchemaSql();
+  const sql =
+    layout === 'partitioned' ? partitionedSchemaSql(canonical) : canonical;
   const client = await pool.connect();
   try {
     await client.query(`drop schema if exists ${schema} cascade`);

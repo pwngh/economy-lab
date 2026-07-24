@@ -28,6 +28,16 @@ runStoreConformance('postgres', () =>
   postgresStore({ url, schemaName: freshName('el_conf') }),
 );
 
+// The partitioned layout (src/engines/pg-partition.ts) must be runtime-identical: the whole
+// conformance suite runs against it, so every port behavior is proven on either layout.
+runStoreConformance('postgres (partitioned layout)', () =>
+  postgresStore({
+    url,
+    schemaName: freshName('el_conf_part'),
+    layout: 'partitioned',
+  }),
+);
+
 // Regression: folding a balance with `insert ... on conflict do update` ran the
 // `user_account_non_negative` check against the to-be-inserted row (just the negative change),
 // rejecting a debit whose final balance was positive. The fix folds with a plain UPDATE first so

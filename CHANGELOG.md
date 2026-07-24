@@ -8,6 +8,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 
 - `@pwngh/economy-lab/engines/mysql-mariadb` opens the MySQL store over a `mariadb` pool
   (`createMariadbPool`; the dependency is an optional peer). `mysql2` stays the default engine.
+- `partitionedSchemaSql(canonical)` rewrites the PostgreSQL schema onto a hash-partitioned
+  layout; the store conformance suite covers it.
 
 ## 0.6.1 - 2026-07-23
 
