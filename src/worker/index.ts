@@ -22,6 +22,7 @@ import { reverifyCheckpoint, sealCheckpoint } from '#src/worker/checkpoint.ts';
 import { sweepExpiredPromos } from '#src/worker/promos.ts';
 import { relayOutbox } from '#src/worker/relay.ts';
 import { drainInbox } from '#src/worker/inbox.ts';
+import { drainAccruals } from '#src/worker/accrual.ts';
 import { reproveStoredChains } from '#src/worker/reproof.ts';
 import { reconcileDueWindows } from '#src/worker/reconcile.ts';
 
@@ -50,6 +51,7 @@ import type {
 import type { PromoExpirySummary } from '#src/worker/promos.ts';
 import type { RelaySummary } from '#src/worker/relay.ts';
 import type { InboxSummary } from '#src/worker/inbox.ts';
+import type { AccrualDrainSummary } from '#src/worker/accrual.ts';
 import type { ReproofSummary } from '#src/worker/reproof.ts';
 import type { ReconcileFeed, ReconcileSummary } from '#src/worker/reconcile.ts';
 
@@ -76,6 +78,7 @@ export const SWEEP_NAMES = [
   'drainInbox',
   'reconcile',
   'promos',
+  'accrualDrain',
   'reproof',
 ] as const;
 
@@ -162,6 +165,7 @@ export type SweepBatch = {
   drainInbox: SweepResult<InboxSummary>;
   reconcile: SweepResult<ReconcileSummary>;
   promos: SweepResult<PromoExpirySummary>;
+  accrualDrain: SweepResult<AccrualDrainSummary>;
   reproof: SweepResult<ReproofSummary>;
 };
 
@@ -263,6 +267,7 @@ const IDLE_SUMMARIES: { [K in SweepName]: SummaryOf<K> } = {
   drainInbox: { applied: [], failed: [], deadLettered: [] },
   reconcile: { reconciled: [], drifted: [], failed: [] },
   promos: { reversed: [], failed: [] },
+  accrualDrain: { drained: [], failed: [], skipped: true },
   reproof: { checked: 0, cursor: null, rotatedAt: null, skipped: true },
 };
 
@@ -351,6 +356,9 @@ async function runSweepJobs(
     ),
     promos: await gate('promos', () =>
       isolate(() => sweepExpiredPromos(store, ctx, { now, limit }, options)),
+    ),
+    accrualDrain: await gate('accrualDrain', () =>
+      isolate(() => drainAccruals(store, ctx, { now, limit })),
     ),
     reproof: await gate('reproof', () =>
       isolate(() => reproveStoredChains(store, ctx, { now, limit })),

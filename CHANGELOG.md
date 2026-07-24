@@ -9,6 +9,7 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - The accrual split parks seller shares on the `platform:settlement_accrual` shard at `spend`
   and `subscribe` (`ACCRUAL_DRAIN=1`, `Config.accrualDrain`), and rows land in `accrual_rows`
   until drained. Breaking: `Store.accruals` is required of custom stores.
+- The worker's accrual drain sweep moves parked shares to sellers' earned wallets in batches.
 
 ## 0.5.0 - 2026-07-23
 
