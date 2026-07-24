@@ -20,3 +20,6 @@ apps
 src/money.vendored.ts
 src/db.vendored.ts
 dist-site
+
+# docs/ is the gitignored generated API reference (wiped and rebuilt by every typedoc run).
+docs

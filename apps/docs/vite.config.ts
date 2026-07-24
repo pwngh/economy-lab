@@ -198,13 +198,15 @@ export default defineConfig({
     alias: { '~': fileURLToPath(new URL('./app', import.meta.url)) },
   },
   // One-origin dev: the docs own :4173 and proxy /console to the console app's own dev server
-  // (scripts/dev-site.mjs starts both), so cross-links and the journal handoff behave in dev
-  // exactly as on the composed site.
+  // and /api to dev-site.mjs's static server over the generated reference (scripts/dev-site.mjs
+  // starts all of them), so cross-links and the journal handoff behave in dev exactly as on the
+  // composed site.
   server: {
     port: 4173,
     strictPort: true,
     proxy: {
       '/console': { target: 'http://localhost:4174', ws: true },
+      '/api': { target: 'http://localhost:4175' },
     },
   },
   plugins: [

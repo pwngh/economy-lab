@@ -105,13 +105,15 @@ export default tseslint.config(
   // apps/ has its own build/lint tooling, so it stays outside this gate, including apps/support's
   // trivial browser-build shim stubs the apps alias to (bundled by vite, never imported by name).
   // The vendored @pwngh/money amalgamation is kept byte-identical to upstream; its embedded
-  // selfTest is the drift guard, not this config's rules.
+  // selfTest is the drift guard, not this config's rules. docs/ is the gitignored generated
+  // API reference (wiped and rebuilt by every typedoc run), outside the gate too.
   {
     ignores: [
       'node_modules/**',
       'dist-site/**',
       'dist/**',
       '.build-tmp/**',
+      'docs/**',
       'apps/**',
       'src/money.vendored.ts',
       'src/db.vendored.ts',

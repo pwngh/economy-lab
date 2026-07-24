@@ -86,7 +86,8 @@
   "homepage": "https://economy-lab-docs.pages.dev/economy/",
   "scripts": {
     "dev": "node --watch --env-file-if-exists=.env scripts/main.ts dev",
-    "site": "npm run build --prefix apps/docs && npm run build --prefix apps/console && node scripts/compose-site.mjs",
+    "docs:api": "typedoc",
+    "site": "npm run docs:api && npm run build --prefix apps/docs && npm run build --prefix apps/console && node scripts/compose-site.mjs",
     "site:dev": "node scripts/dev-site.mjs",
     "site:deploy": "npm run verify --prefix apps/docs && npm run verify --prefix apps/console && npm run check:ref --prefix apps/docs && npm run site && npm run check:csp --prefix apps/docs -- ../../dist-site && npm run check:static --prefix apps/docs && node apps/console/scripts/bundle-budget.mjs && apps/docs/node_modules/.bin/wrangler pages deploy --branch=production --commit-dirty=true",
     "start": "node --env-file-if-exists=.env scripts/main.ts serve",
@@ -139,6 +140,7 @@
     "mysql2": "^3.22.5",
     "pg": "^8.22.0",
     "prettier": "^3.3.3",
+    "typedoc": "0.28.20",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.0.0"
   },

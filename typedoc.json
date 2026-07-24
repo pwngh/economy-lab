@@ -1,0 +1,25 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": [
+    "src/index.ts",
+    "src/ports.ts",
+    "src/adapters/index.ts",
+    "src/adapters/redis.ts",
+    "src/adapters/sqs.ts",
+    "src/engines/postgres.ts",
+    "src/engines/mysql.ts",
+    "src/worker/index.ts",
+    "src/server.ts",
+    "src/netting.ts",
+    "src/ops/index.ts",
+    "src/store-kit.ts",
+    "test/conformance/index.ts"
+  ],
+  "out": "docs",
+  "readme": "none",
+  "logLevel": "Error",
+  "excludeExternals": true,
+  "excludeProtected": true,
+  "excludePrivate": true,
+  "navigationLinks": { "Docs": "/" }
+}

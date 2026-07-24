@@ -27,6 +27,7 @@ step "check"          npm run check
 step "prop"           npm run prop
 step "console:verify" npm run verify --prefix apps/console
 step "console:budget" npm run budget --prefix apps/console
+step "docs:api"       npm run docs:api
 step "docs:verify"    npm run verify --prefix apps/docs
 step "docs:check-ref" npm run check:ref --prefix apps/docs
 step "docs:build"     npm run build --prefix apps/docs

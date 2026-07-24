@@ -2,6 +2,14 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
+## Unreleased (0.4.4)
+
+### Added
+
+- The docs site serves the generated TypeDoc API reference at `/api`, one page per exported
+  symbol across every package entry point. `npm run docs:api` builds it; the site build and
+  deploy fold it in.
+
 ## 0.4.3 - 2026-07-23
 
 ### Added

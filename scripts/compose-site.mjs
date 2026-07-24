@@ -9,10 +9,12 @@
  * @license MIT
  */
 
-// Assembles the one static site from the two app builds: the docs at the root, the console under
-// /console/. Run after `npm run build` in apps/docs and apps/console (or via `npm run site`); the
-// result in dist-site/ is the whole deployable. Both apps use root-absolute URLs, so the site must
-// be served at a domain root (GitHub Pages needs a custom domain or a *.github.io user repo).
+// Assembles the one static site: the docs at the root, the console under /console/, and the
+// generated API reference (docs/, from `npm run docs:api`) under /api/. Run after the app builds
+// and the reference generation (`npm run site` runs all three); the result in dist-site/ is the
+// whole deployable. The apps use root-absolute URLs, so the site must be served at a domain root
+// (GitHub Pages needs a custom domain or a *.github.io user repo). /api/* is governed by the
+// docs' `/*` CSP rule, whose script-src pins the TypeDoc theme snippet's hash (public/_headers).
 import { createHash } from 'node:crypto';
 import {
   appendFileSync,
@@ -27,20 +29,25 @@ import { join } from 'node:path';
 
 const DOCS = 'apps/docs/build/client';
 const CONSOLE = 'apps/console/build/client';
+const API = 'docs';
 const OUT = 'dist-site';
 
 for (const [name, dir, marker] of [
   ['docs', DOCS, `${DOCS}/index.html`],
   ['console', CONSOLE, `${CONSOLE}/index.html`],
+  ['api reference', API, `${API}/index.html`],
 ]) {
   if (!existsSync(marker)) {
-    throw new Error(`${name} build missing (${dir}) — build both apps first.`);
+    throw new Error(
+      `${name} build missing (${dir}) — \`npm run site\` runs every input build.`,
+    );
   }
 }
 
 rmSync(OUT, { recursive: true, force: true });
 cpSync(DOCS, OUT, { recursive: true });
 cpSync(CONSOLE, `${OUT}/console`, { recursive: true });
+cpSync(API, `${OUT}/api`, { recursive: true });
 // Without this, GitHub Pages runs the artifact through Jekyll, which drops underscore-prefixed
 // files (_headers, _redirects) from the published site.
 writeFileSync(`${OUT}/.nojekyll`, '');
@@ -50,6 +57,7 @@ writeFileSync(`${OUT}/.nojekyll`, '');
 for (const file of [
   `${OUT}/index.html`,
   `${OUT}/console/index.html`,
+  `${OUT}/api/index.html`,
   `${OUT}/404.html`,
 ]) {
   if (!existsSync(file)) {
@@ -108,5 +116,5 @@ appendFileSync(
 );
 
 console.log(
-  `composed ${OUT}/: docs at /, console at /console/ (${consoleHashes.size} console script hashes pinned)`,
+  `composed ${OUT}/: docs at /, console at /console/, api reference at /api/ (${consoleHashes.size} console script hashes pinned)`,
 );

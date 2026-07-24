@@ -126,6 +126,18 @@ export function Layout({ children }: { children: ReactNode }) {
               </svg>
               <span className="sr-only">Console</span>
             </a>
+            <a className="icon-link" href="/api/">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 16 16"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path d="M4.72 3.22a.75.75 0 0 1 1.06 1.06L2.06 8l3.72 3.72a.75.75 0 1 1-1.06 1.06L.47 8.53a.75.75 0 0 1 0-1.06l4.25-4.25zm6.56 0a.75.75 0 1 0-1.06 1.06L13.94 8l-3.72 3.72a.75.75 0 1 0 1.06 1.06l4.25-4.25a.75.75 0 0 0 0-1.06l-4.25-4.25z" />
+              </svg>
+              <span className="sr-only">API reference</span>
+            </a>
             <a
               className="icon-link"
               href="https://github.com/pwngh/economy-lab"

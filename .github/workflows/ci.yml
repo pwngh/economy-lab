@@ -48,6 +48,8 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
+      # The docs suite's api-links test resolves into the generated /api reference.
+      - run: npm run docs:api
       - run: npm ci --prefix apps/console
       - run: npm run verify --prefix apps/console
       - run: npm run budget --prefix apps/console

@@ -13,6 +13,7 @@ apps/*/node_modules
 apps/*/build
 apps/*/.react-router
 
+/docs/
 backups/
 ops-audit/
 dist/
