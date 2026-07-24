@@ -47,6 +47,11 @@ import {
   tryProvision,
   urlFor,
 } from '#scripts/support/harness.ts';
+import {
+  backendService,
+  measureCanary,
+  snapshotContainer,
+} from '#scripts/support/rig.ts';
 
 import type {
   BenchMode,
@@ -55,6 +60,7 @@ import type {
   GatesMode,
   Provisioned,
 } from '#scripts/support/harness.ts';
+import type { CanaryResult, ContainerHealth } from '#scripts/support/rig.ts';
 import type { Amount, Economy, Operation } from '#src/index.ts';
 
 // The one capture of process.env, and the one parse: everything below reads cfg, never env.
@@ -471,6 +477,10 @@ type BackendResult = {
   kinds: KindRates[];
   netting: NettingResult;
   bitset: BitsetResult;
+  // Rig honesty, recorded per backend (scripts/support/rig.ts): the canary is a commit-latency
+  // probe the queue baselines round-to-round; container is null off compose (or inside bench-prod).
+  canary: CanaryResult | null;
+  container: ContainerHealth | null;
 };
 
 // Exit non-zero when any prove gate fails, a backend throws mid-run, or the roots disagree.
@@ -485,6 +495,19 @@ async function throughputFor(p: Provisioned): Promise<BackendResult> {
   console.warn(
     `    pool ${p.poolMax} conns (${p.connsPerOp}*${p.concurrency} concurrency + headroom) · mode ${p.mode} · gates ${p.gates}`,
   );
+  // Rig state before this backend's round: the canary (entitlement commits, no ledger rows, so the
+  // determinism root and integrity curve are untouched) plus a container health snapshot.
+  const canary = await measureCanary(p.store, cfg.canaryOps, tag);
+  const service = backendService(p.backend);
+  const container = service ? await snapshotContainer(service) : null;
+  if (canary) {
+    console.warn(
+      `      canary         ${rate(canary.opsPerSec)} ops/sec over ${canary.ops} isolated commits (${ms(canary.ms)} ms)` +
+        (container
+          ? ` · container ${container.service} ${container.health ?? container.status}, restarts ${container.restartCount}`
+          : ''),
+    );
+  }
   // Snapshot the root before the workload perturbs it, so every backend's root covers identical postings.
   await runDeterminismSequence(p.economy);
   const root = await determinismRoot(p);
@@ -523,6 +546,8 @@ async function throughputFor(p: Provisioned): Promise<BackendResult> {
     kinds,
     netting,
     bitset,
+    canary,
+    container,
   };
 }
 

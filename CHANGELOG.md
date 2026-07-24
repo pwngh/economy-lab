@@ -12,6 +12,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   layout; the store conformance suite covers it.
 - `WIRE_TRIAL` runs the store conformance suite over an alternative wire driver behind the pool
   seam; `BENCH_PG_DRIVER` and `BENCH_MYSQL_DRIVER` pick the drivers a bench run uses.
+- `npm run bench:queue` runs an unattended sequence of bench rounds with cool-downs and a
+  per-backend rig canary (`BENCH_QUEUE`, `BENCH_QUEUE_COOLDOWN_MS`, `BENCH_CANARY_OPS`).
 
 ## 0.6.1 - 2026-07-23
 

@@ -115,6 +115,7 @@
     "prop": "node --env-file-if-exists=.env --test --test-reporter=./test/support/numbered.reporter.mjs --test-reporter-destination=stdout \"test/propcheck.test.ts\" \"test/property-*.test.ts\"",
     "smoke": "node --env-file-if-exists=.env scripts/smoke.ts",
     "bench": "node --env-file-if-exists=.env scripts/bench.ts",
+    "bench:queue": "node --env-file-if-exists=.env scripts/bench-queue.ts",
     "scale": "node --env-file-if-exists=.env scripts/scale.ts",
     "trace": "node scripts/trace.ts",
     "trace:check": "node scripts/trace.ts --check",

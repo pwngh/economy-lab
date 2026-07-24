@@ -32,8 +32,15 @@ import { TASKQ_KEYS } from '#scripts/support/taskq-host.ts';
 import { OPS_KEYS } from '#scripts/support/ops-host.ts';
 
 // Names read by entry scripts that execute on import (so their lists can't live in the script):
-// DEMO_RESET is scripts/demo.ts's reset flag.
-const SCRIPT_KEYS = ['DEMO_RESET'] as const;
+// DEMO_RESET is scripts/demo.ts's reset flag; the two BENCH_QUEUE_* names are scripts/bench-queue.ts's
+// (mirrored by its exported BENCH_QUEUE_KEYS, which this test can't import without running the script);
+// BENCH_HOT_CONCURRENCY is scripts/bench-scale.ts's hot-seller depth sweep.
+const SCRIPT_KEYS = [
+  'DEMO_RESET',
+  'BENCH_QUEUE',
+  'BENCH_QUEUE_COOLDOWN_MS',
+  'BENCH_HOT_CONCURRENCY',
+] as const;
 
 // Names .env.example documents that the lab never parses itself: the AWS SDK reads these from the
 // environment directly (scripts/smoke.ts seeds them for LocalStack).

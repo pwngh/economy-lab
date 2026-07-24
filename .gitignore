@@ -16,6 +16,7 @@ apps/*/.react-router
 /docs/
 backups/
 ops-audit/
+bench-results/
 dist/
 .build-tmp/
 dist-site/

@@ -18,6 +18,7 @@ fuzz:       ; npm run fuzz
 prop:       ; npm run prop
 smoke:      ; npm run smoke
 bench:      ; npm run bench
+bench-queue: ; npm run bench:queue
 bench-prod: ; sh scripts/docker.sh run --rm bench
 scale:      ; npm run scale
 trace:      ; npm run trace

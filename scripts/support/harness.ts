@@ -100,6 +100,7 @@ export const BENCH_KEYS = [
   'BENCH_MYSQL_DRIVER',
   'BENCH_CURVE_USERS',
   'BENCH_CURVE_REPS',
+  'BENCH_CANARY_OPS',
   'SEGMENTS',
   'SEG',
 ] as const;
@@ -135,6 +136,9 @@ export type HarnessConfig = {
   curveUsers: number;
   curveSizes: number[];
   curveReps: number;
+  // Rig-canary size (scripts/support/rig.ts): isolated commits timed per backend before its round;
+  // 0 skips the canary.
+  canaryOps: number;
   // Scale-probe knobs (scripts/scale.ts): segment count and size for the history-growth curve.
   segments: number;
   segmentSize: number;
@@ -202,7 +206,7 @@ function buildBenchConfig(gates: GatesMode, shards: number): Config {
 // --- Config resolution ------------------------------------------------------------
 
 // Layering: hard defaults < named profile < explicit env var. Every knob requires >= 1 except
-// warmup and poolHeadroom, where zero means "none" and is honored.
+// warmup, poolHeadroom, and canaryOps, where zero means "none" and is honored.
 export function resolveConfig(env: EnvMap): HarnessConfig {
   const profileName = readEnum(env.BENCH_PROFILE, PROFILE_NAMES, 'default');
   const base = { ...PROFILES.default, ...PROFILES[profileName] };
@@ -261,6 +265,7 @@ export function resolveConfig(env: EnvMap): HarnessConfig {
     curveUsers: readInt(env.BENCH_CURVE_USERS, 20, one),
     curveSizes: base.curveSizes!,
     curveReps: readInt(env.BENCH_CURVE_REPS, 2, one),
+    canaryOps: readInt(env.BENCH_CANARY_OPS, 100),
     segments: readInt(env.SEGMENTS, base.segments!, one),
     segmentSize: readInt(env.SEG, base.segmentSize!, one),
   };
