@@ -9,6 +9,10 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - `read.capacity()` reports history size, verified-through and checkpoint ages, accrual backlog,
   and session and reservation footprints, with an advisory per gauge against the exported
   `CAPACITY_THRESHOLDS`. Breaking: custom `Economy` implementations must provide it.
+- `sweepRetention` prunes idempotency rows older than `idempotencyOlderThanMs`
+  (`IdempotencyStore.deleteOlderThan`) and settled sessions older than `sessionsOlderThanMs`; a
+  session is pruned only after its settle posting re-proves. The worker runs it as the
+  `retention` job.
 
 ## 0.6.3 - 2026-07-23
 

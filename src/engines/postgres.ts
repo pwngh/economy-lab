@@ -967,6 +967,18 @@ function createIdempotencyStore(q: Queryable): IdempotencyStore {
         [key, JSON.stringify(encodeTransaction(transaction))],
       );
     },
+    deleteOlderThan: async (cutoffMs, limit) => {
+      const result = await q.query(
+        `delete from idempotency
+          where key in (
+            select key from idempotency
+             where created_at < to_timestamp($1 / 1000.0)
+             order by created_at
+             limit $2)`,
+        [cutoffMs, limit],
+      );
+      return result.rowCount ?? 0;
+    },
   };
 }
 
@@ -1933,6 +1945,13 @@ function createMovementJournal(pool: PgPool): MovementJournal {
         }
         after = result.rows[result.rows.length - 1]!.session_id as string;
       }
+    },
+    pruneSession: async (sessionId) => {
+      const result = await pool.query(
+        `delete from instance_movements where session_id = $1`,
+        [sessionId],
+      );
+      return result.rowCount ?? 0;
     },
   };
 }

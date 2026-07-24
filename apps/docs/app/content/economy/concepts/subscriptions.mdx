@@ -6,7 +6,7 @@ order: 62
 status: stable
 sourceRefs:
   [
-    'src/ports.ts#L1415-L1416 · SUBSCRIPTION_STATES',
+    'src/ports.ts#L1436-L1437 · SUBSCRIPTION_STATES',
     'src/worker/subscriptions.ts',
   ]
 related:
@@ -49,7 +49,7 @@ The first period may draw on promo credit; renewals come only from `spendable`.
 
 ## The states
 
-A `Subscription` carries its own `SubscriptionState`: `ACTIVE`, `LAPSED`, `CANCELED` (see <SourceLink to="src/ports.ts#L1415-L1416 · SUBSCRIPTION_STATES" />).
+A `Subscription` carries its own `SubscriptionState`: `ACTIVE`, `LAPSED`, `CANCELED` (see <SourceLink to="src/ports.ts#L1436-L1437 · SUBSCRIPTION_STATES" />).
 
 <SubscriptionStates />
 
@@ -67,7 +67,7 @@ Every transition is a compare-and-set against the current state, so a step is ap
 
 ## How it's enforced
 
-- **The store's compare-and-set method.** `SubscriptionStore.markBilled` is a conditional update that returns whether it changed a row, so a racing sweep can detect and stand down on a lost claim (see <SourceLink to="src/ports.ts#L988-L1030 · SubscriptionStore" />).
+- **The store's compare-and-set method.** `SubscriptionStore.markBilled` is a conditional update that returns whether it changed a row, so a racing sweep can detect and stand down on a lost claim (see <SourceLink to="src/ports.ts#L1022-L1064 · SubscriptionStore" />).
 - **One transaction per step.** A renewal posts its charge and moves the due date inside `store.transaction`; a lapse flips the state, revokes the entitlement, and emits its event the same way. A partial step rolls back whole.
 - **The retry cap.** A subscription that can't pay doesn't retry forever: the attempt count is stored on the row, and the cap turns repeated failure into a single, terminal `LAPSED` transition.
 

@@ -763,6 +763,20 @@ function createIdempotencyStore(deps: {
         }
       });
     },
+
+    deleteOlderThan: async (cutoffMs, limit, _options?: CallOptions) => {
+      const due = [...at.entries()]
+        .filter(([, bornAt]) => bornAt < cutoffMs)
+        .sort((a, b) => a[1] - b[1])
+        .slice(0, limit);
+      for (const [key] of due) {
+        at.delete(key);
+        committed.delete(key);
+        pending.delete(key);
+      }
+      return due.length;
+    },
+
     size: () => at.size,
   };
 }
@@ -1583,6 +1597,20 @@ function createMovementJournal(): MovementJournal & { size(): number } {
         seen.add(row.sessionId);
       }
       yield* [...seen].sort();
+    },
+    pruneSession: async (sessionId) => {
+      let removed = 0;
+      for (let i = log.length - 1; i >= 0; i -= 1) {
+        const row = log[i]!;
+        if (row.sessionId !== sessionId) {
+          continue;
+        }
+        idemKeys.delete(row.idempotencyKey);
+        positions.delete(`${row.sessionId}::${row.seq}`);
+        log.splice(i, 1);
+        removed += 1;
+      }
+      return removed;
     },
     size: () => log.length,
   };

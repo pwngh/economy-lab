@@ -1527,6 +1527,48 @@ async function batchRollbackForgetsFirstUsedAccounts(
   );
 }
 
+// The retention surfaces (src/worker/retention.ts) are optional; engines without them skip.
+async function retentionDeletesOldIdempotencyRows(store: Store): Promise<void> {
+  const remove = store.idempotency.deleteOlderThan!.bind(store.idempotency);
+  const user = freshUser();
+  const txn = await store.transaction((unit) =>
+    fundSpendable(unit, user, '3.00', `txn_conf_ret_${user}`),
+  );
+  const keys = [`ret_${user}_a`, `ret_${user}_b`, `ret_${user}_c`];
+  for (const key of keys) {
+    assert.deepEqual(await store.idempotency.claim(key), { claimed: true });
+    await store.idempotency.record(key, txn);
+  }
+  // A recorded key replays; no row was born before epoch 0, so a zero cutoff deletes nothing.
+  assert.equal((await store.idempotency.claim(keys[0]!)).claimed, false);
+  assert.equal(await remove(0, 1000), 0);
+  // A future cutoff catches every row, oldest first, capped by the limit.
+  const cutoff = Date.now() + 600_000;
+  assert.equal(await remove(cutoff, 2), 2);
+  assert.ok((await remove(cutoff, 1000)) >= 1);
+  // The deleted keys are open again: a duplicate request would re-execute.
+  assert.deepEqual(await store.idempotency.claim(keys[0]!), { claimed: true });
+}
+
+async function retentionPrunesSessionJournalRows(store: Store): Promise<void> {
+  const prune = store.movements.pruneSession!.bind(store.movements);
+  const keep = `sess_conf_keep_${randomUUID()}`;
+  const drop = `sess_conf_drop_${randomUUID()}`;
+  await store.movements.append([
+    movementRow(keep, 0, `${keep}_m0`),
+    movementRow(drop, 0, `${drop}_m0`),
+    movementRow(drop, 1, `${drop}_m1`),
+  ]);
+  assert.equal(await prune(drop), 2);
+  assert.deepEqual(await collect(store.movements.bySession(drop)), []);
+  const ids = await collect(store.movements.sessionIds!());
+  assert.ok(!ids.includes(drop));
+  assert.ok(ids.includes(keep));
+  // The pruned rows' idempotency keys and (sessionId, seq) positions are free again.
+  await store.movements.append([movementRow(drop, 0, `${drop}_m0`)]);
+  assert.equal(await prune(drop), 1);
+}
+
 async function tableSizesGaugeTracksGrowth(store: Store): Promise<void> {
   const sizes = store.tableSizes!.bind(store);
   const before = await sizes();
@@ -1705,6 +1747,14 @@ export function runStoreConformance(
       withStore(t, listsPostingsNewestFirst));
     test('streams an account lineage in commit order (read.lineage)', (t) =>
       withStore(t, streamsAccountLineageInOrder));
+    test('deletes idempotency rows past the cutoff up to the limit', (t) =>
+      store?.idempotency.deleteOlderThan === undefined
+        ? t.skip('no idempotency retention surface')
+        : withStore(t, retentionDeletesOldIdempotencyRows));
+    test('prunes one session from the journal and frees its keys and positions', (t) =>
+      store?.movements.pruneSession === undefined
+        ? t.skip('no journal retention surface')
+        : withStore(t, retentionPrunesSessionJournalRows));
     test('gauges secondary-table sizes and tracks growth', (t) =>
       store?.tableSizes === undefined
         ? t.skip('no table-size gauge')

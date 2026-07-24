@@ -969,6 +969,16 @@ function createIdempotencyStore(exec: MysqlExecutor): IdempotencyStore {
         [key, encodeTransaction(transaction)],
       );
     },
+
+    deleteOlderThan: async (cutoffMs, limit) =>
+      execWrite(
+        exec,
+        `DELETE FROM idempotency
+          WHERE created_at < FROM_UNIXTIME(? / 1000)
+          ORDER BY created_at
+          LIMIT ?`,
+        [cutoffMs, limit],
+      ),
   };
 }
 
@@ -1894,6 +1904,10 @@ function createMovementJournal(pool: MysqlPool): MovementJournal {
         after = page[page.length - 1]!.session_id as string;
       }
     },
+    pruneSession: async (sessionId) =>
+      execWrite(pool, `DELETE FROM instance_movements WHERE session_id = ?`, [
+        sessionId,
+      ]),
   };
 }
 // --- Reservation store ------------------------------------------------------------

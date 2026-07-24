@@ -658,6 +658,18 @@ export interface IdempotencyStore {
     transaction: Transaction,
     options?: CallOptions,
   ): Promise<void>;
+
+  /**
+   * Retention (src/worker/retention.ts): deletes up to `limit` rows created before `cutoffMs`,
+   * oldest first, returning the count. A deleted key is open again — a duplicate request
+   * re-executes — so the caller's horizon must exceed every client retry window. Optional; a
+   * store without it skips the idempotency retention lane.
+   */
+  deleteOlderThan?(
+    cutoffMs: number,
+    limit: number,
+    options?: CallOptions,
+  ): Promise<number>;
 }
 
 /**
@@ -1209,6 +1221,15 @@ export interface MovementJournal {
    * orphan candidate. Optional; a store without it cannot host the sweep.
    */
   sessionIds?(options?: CallOptions): AsyncIterable<string>;
+
+  /**
+   * Retention (src/worker/retention.ts): deletes every one of the session's rows, returning the
+   * count, and frees their idempotency keys and (sessionId, seq) positions. Only for a session
+   * whose settlement evidence verified — the sweep checks before calling; pruned history is
+   * gone from reads and from `sessionIds`. Optional; a store without it skips the session
+   * retention lane.
+   */
+  pruneSession?(sessionId: string, options?: CallOptions): Promise<number>;
 }
 
 /**

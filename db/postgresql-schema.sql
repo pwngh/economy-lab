@@ -130,6 +130,8 @@ create table idempotency (
   created_at  timestamptz not null default now()
 );
 
+-- Oldest-first cutoff scan for the retention sweep (src/worker/retention.ts).
+create index idempotency_created_idx on idempotency (created_at);
 
 -- ============================================================================
 -- Webhook replay dedup, separate from `idempotency` so the two layers can't collide on a shared

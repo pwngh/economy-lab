@@ -176,7 +176,9 @@ CREATE TABLE idempotency (
      -- NULL while a row is claimed but not yet recorded: claim inserts a NULL placeholder to hold
      -- the row lock, then record fills it in.
      transaction JSON        NULL COMMENT 'Recorded result, replayed verbatim on a duplicate request.',
-     created_at  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
+     created_at  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     -- Oldest-first cutoff scan for the retention sweep (src/worker/retention.ts).
+     KEY idempotency_created_idx (created_at)
    ) COMMENT='Exactly-once guard recording each operation outcome by key.';
 
 -- Rationale in db/postgresql-schema.sql (seen_webhooks banner).

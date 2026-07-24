@@ -21,8 +21,10 @@ import {
 import { reverifyCheckpoint, sealCheckpoint } from '#src/worker/checkpoint.ts';
 import { sweepExpiredPromos } from '#src/worker/promos.ts';
 import { sweepOrphanSessions } from '#src/worker/orphans.ts';
+import { sweepRetention } from '#src/worker/retention.ts';
 
 import type { OrphanSweepSummary } from '#src/worker/orphans.ts';
+import type { RetentionSweepSummary } from '#src/worker/retention.ts';
 import type { Reservations } from '#src/netting.ts';
 import { relayOutbox } from '#src/worker/relay.ts';
 import { drainInbox } from '#src/worker/inbox.ts';
@@ -85,6 +87,7 @@ export const SWEEP_NAMES = [
   'accrualDrain',
   'reproof',
   'orphans',
+  'retention',
 ] as const;
 
 /** The name of one background job in the sweep cycle; {@link SWEEP_NAMES} fixes the run order. */
@@ -137,6 +140,13 @@ export type SweepRequest = {
    * enumerating and settling crashed epochs is the multi-node host's opt-in.
    */
   readonly orphans?: OrphanJobOptions;
+  /**
+   * Secondary-table retention (src/worker/retention.ts); absent, `retention` is skipped —
+   * deleting replay-guard rows and settled-session journal history is the host's opt-in, and
+   * each horizon is the host's to set.
+   */
+  readonly retention?: RetentionJobOptions;
+  /** Per-call options; an AbortSignal here cancels a running job. */
   readonly options?: CallOptions;
 };
 
@@ -155,6 +165,17 @@ export type OrphanJobOptions = {
 };
 
 /**
+ * What the retention job needs beyond the shared tick. Each horizon is an independent opt-in:
+ * a lane with no horizon set reports `skipped` and deletes nothing.
+ */
+export type RetentionJobOptions = {
+  /** Delete idempotency rows older than this; a deleted key re-executes on a duplicate. */
+  readonly idempotencyOlderThanMs?: number;
+  /** Prune settled sessions whose newest movement is older than this. */
+  readonly sessionsOlderThanMs?: number;
+};
+
+/**
  * Steady-state sweep arguments bound at {@link createWorker}; any {@link SweepRequest} field
  * overrides them per sweep.
  */
@@ -164,6 +185,7 @@ export type WorkerDefaults = {
   readonly feed?: ReconcileFeed;
   readonly windows?: ReadonlyArray<Range>;
   readonly orphans?: OrphanJobOptions;
+  readonly retention?: RetentionJobOptions;
   readonly only?: ReadonlyArray<SweepName>;
   /** Default DEFAULT_SWEEP_LIMIT when omitted. */
   readonly limit?: number;
@@ -193,6 +215,7 @@ export type SweepBatch = {
   accrualDrain: SweepResult<AccrualDrainSummary>;
   reproof: SweepResult<ReproofSummary>;
   orphans: SweepResult<OrphanSweepSummary>;
+  retention: SweepResult<RetentionSweepSummary>;
 };
 
 /**
@@ -303,6 +326,16 @@ const IDLE_SUMMARIES: { [K in SweepName]: SummaryOf<K> } = {
     failed: [],
     skipped: true,
   },
+  retention: {
+    idempotency: { deleted: 0, skipped: true },
+    sessions: {
+      scanned: 0,
+      pruned: [],
+      escrowRefunds: [],
+      failed: [],
+      skipped: true,
+    },
+  },
 };
 
 type ResolvedTick = { now: number; limit: number; options?: CallOptions };
@@ -389,6 +422,9 @@ async function runSweepJobs(
     orphans: await gate('orphans', () =>
       runOrphans(store, ctx, input, { now, limit }),
     ),
+    retention: await gate('retention', () =>
+      runRetention(store, ctx, input, { now, limit }),
+    ),
   };
 }
 
@@ -418,6 +454,18 @@ function runOrphans(
   return isolate(() =>
     sweepOrphanSessions(store, ctx, { ...tick, ...options }),
   );
+}
+function runRetention(
+  store: Store,
+  ctx: Ports,
+  input: SweepRequest,
+  tick: { now: number; limit: number },
+): Promise<SweepResult<RetentionSweepSummary>> {
+  if (input.retention === undefined) {
+    return Promise.resolve({ ok: true, summary: IDLE_SUMMARIES.retention });
+  }
+  const options = input.retention;
+  return isolate(() => sweepRetention(store, ctx, { ...tick, ...options }));
 }
 async function isolate<TSummary>(
   run: () => Promise<TSummary>,
@@ -466,6 +514,7 @@ export function createWorker(
     float: request.float ?? defaults.float,
     feed: request.feed ?? defaults.feed,
     windows: request.windows ?? defaults.windows,
+    retention: request.retention ?? defaults.retention,
     options: request.options,
   });
   let paused = false;
