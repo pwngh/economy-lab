@@ -2,7 +2,7 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
-## Unreleased (0.6.2)
+## 0.6.2 - 2026-07-23
 
 ### Added
 
