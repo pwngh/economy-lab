@@ -87,17 +87,29 @@ export function createReservations(): Reservations {
   };
 }
 
+/**
+ * The ports a session runs on: the store for the journal and the settlement postings, the
+ * digest for the session chain hash, the clock for `recordedAt` stamps. A structural subset of
+ * Ports, so an openPorts host passes its ports straight through.
+ */
 export interface SessionPorts {
   store: Store;
   digest: Digest;
   clock: Clock;
 }
 
+/**
+ * Session tuning. The batch and chunk defaults are sized to the engines' contention profile;
+ * the one option correctness rides on is `reservations` — every session in the process shares
+ * one registry, or its accept screens race each other.
+ */
 export interface SessionOptions {
   /** Accepted movements per journal batch; the batch commits as one insert. */
+  /** Accepted movements per journal batch; the batch commits as one insert. Default 64. */
   maxBatch?: number;
 
   /** Max participant accounts per settlement chunk (the lock-width bound). */
+  /** Max participant accounts per settlement chunk (the lock-width bound). Default 16. */
   chunkWidth?: number;
 
   /** The shared cross-session registry; a private one still guards within this session. */

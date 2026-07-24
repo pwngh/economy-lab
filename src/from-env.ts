@@ -48,12 +48,20 @@ export const DEV_RATES: RatesConfig = {
   payoutScale: 3,
 };
 
-/** The exact integer knobs `configuredRates` takes; accepted anywhere a Rates instance is. */
+/**
+ * The exact integer knobs `configuredRates` takes; accepted anywhere a Rates instance is (a
+ * PortsInit `rates` field, for one). Each pair states one CREDIT-to-USD rate as rate / 10^scale
+ * USD per credit — exact integers, never a float. Construction refuses a table whose buy rate
+ * sits below par, since every top-up would then book a loss.
+ */
 export type RatesConfig = {
+  /** What a buyer pays per credit: buyRate / 10^buyScale USD. */
   readonly buyRate: bigint;
   readonly buyScale: number;
+  /** The backing peg: the USD per credit the trust must hold against custodial balances. */
   readonly parRate: bigint;
   readonly parScale: number;
+  /** The cash-out rate: the USD per credit a payout settles at. */
   readonly payoutRate: bigint;
   readonly payoutScale: number;
 };

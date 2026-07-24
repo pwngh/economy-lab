@@ -66,6 +66,10 @@ const I64_MAX = 2n ** 63n - 1n;
  * Builds an `Amount` from a currency and a minor-unit count. Throws AMOUNT_OVERFLOW when
  * the count falls outside the signed 64-bit range the ledger's BIGINT columns store, so
  * an unstorable amount fails at construction rather than at the database.
+ *
+ * @example
+ * const price = toAmount('CREDIT', 1_500_000n); // 15,000 credits
+ * const cash = toAmount('USD', 10_000n); // $100.00
  */
 export function toAmount(currency: Currency, minor: bigint): Amount {
   if (minor < I64_MIN || minor > I64_MAX) {
@@ -78,6 +82,11 @@ export function toAmount(currency: Currency, minor: bigint): Amount {
   return { currency, minor, __brand: 'Amount' };
 }
 
+/**
+ * Type guard for the `Amount` brand: true only for an object carrying the brand with a `bigint`
+ * minor count — what `toAmount` and the decoders produce. Used where a value of unknown shape
+ * (a decoded JSON tree, an operation field) must prove it is money before arithmetic touches it.
+ */
 export function isAmount(value: unknown): value is Amount {
   return (
     typeof value === 'object' &&
@@ -87,10 +96,12 @@ export function isAmount(value: unknown): value is Amount {
   );
 }
 
+/** True at exactly zero minor units, in either currency. */
 export function isZero(amount: Amount): boolean {
   return amount.minor === 0n;
 }
 
+/** True strictly below zero; zero itself is not negative. */
 export function isNegative(amount: Amount): boolean {
   return amount.minor < 0n;
 }
@@ -104,11 +115,19 @@ export function add(a: Amount, b: Amount): Amount {
   return toAmount(a.currency, a.minor + b.minor);
 }
 
+/**
+ * Flips an amount's sign in the same currency. Negating the minimum 64-bit value throws
+ * AMOUNT_OVERFLOW, because its positive counterpart is one past the largest value the ledger
+ * stores.
+ */
 export function negate(amount: Amount): Amount {
   return toAmount(amount.currency, -amount.minor);
 }
 
-/** Throws CURRENCY_MISMATCH across currencies. */
+/**
+ * Orders two amounts of the same currency by minor units, so it drops straight into
+ * `Array.sort`. Throws CURRENCY_MISMATCH across currencies.
+ */
 export function compare(a: Amount, b: Amount): -1 | 0 | 1 {
   assertSameCurrency(a, b);
   if (a.minor < b.minor) {
@@ -120,6 +139,7 @@ export function compare(a: Amount, b: Amount): -1 | 0 | 1 {
   return 0;
 }
 
+/** The zero amount of `currency` — the seed for summing balances or legs with {@link add}. */
 export function zero(currency: Currency): Amount {
   return toAmount(currency, 0n);
 }
@@ -128,6 +148,10 @@ export function zero(currency: Currency): Amount {
  * Builds a CREDIT `Amount` from a whole number of credits: `credits(120)` is 12,000 minor
  * units. A fractional count throws INVALID_AMOUNT; sub-credit amounts take `toAmount` with
  * minor units. Distinct from the ledger's `credit()`, which builds a posting leg.
+ *
+ * @example
+ * credits(120); // equal to toAmount('CREDIT', 12_000n)
+ * credits(20_000); // a payout-scale balance
  */
 export function credits(whole: number | bigint): Amount {
   if (typeof whole === 'number' && !Number.isSafeInteger(whole)) {
@@ -152,15 +176,23 @@ export function encodeAmount(amount: Amount): string {
 }
 
 /**
- * Parses a decimal string such as `'12.34'` or `'-0.05'` into an `Amount`. A bad format,
- * more than two decimal places, digit grouping (the canonical wire is ungrouped), or a
- * value past the 64-bit range throws INVALID_AMOUNT rather than silently accepting it.
+ * Builds a USD amount from a decimal string, with the full strictness of `decodeAmount`: more
+ * than two decimal places, digit grouping, or a value past the 64-bit range throws
+ * INVALID_AMOUNT.
+ *
+ * @example
+ * const price = usd('9.99'); // 999n minor units
+ * const payoutValue = usd('100.00'); // what 20,000 credits cash out to at $0.005 per credit
  */
-/** Builds a USD amount from a two-decimal string, e.g. `usd('9.99')`. */
 export function usd(decimal: string): Amount {
   return decodeAmount(decimal, 'USD');
 }
 
+/**
+ * Parses a decimal string such as `'12.34'` or `'-0.05'` into an `Amount`. A bad format,
+ * more than two decimal places, digit grouping (the canonical wire is ungrouped), or a
+ * value past the 64-bit range throws INVALID_AMOUNT rather than silently accepting it.
+ */
 export function decodeAmount(decimal: string, currency: Currency): Amount {
   const minor = decimal.includes(',') ? null : parse(decimal, FRACTION_DIGITS);
   if (minor === null) {
@@ -223,7 +255,15 @@ export function rateGte(a: Rate, b: Rate): boolean {
  * Converts an amount to another currency at `rate`, rounding down. A rate is an integer scaled by
  * `10^scale`, so the result is `floor(minor * rate / 10^scale)` — a true floor for either sign,
  * named as the mode at the division. Use it where rounding down is the safe direction, such as
- * paying a seller out.
+ * paying a seller out: the sub-cent remainder stays with the platform instead of being minted.
+ * Throws AMOUNT_OVERFLOW when the result leaves the 64-bit range; the multiply itself runs
+ * through an unbounded intermediate, so it cannot overflow silently.
+ *
+ * @example
+ * // cash out at a $0.005-per-credit CREDIT-to-USD rate: 5/10^3 USD minor per CREDIT minor
+ * const rate = { rate: 5n, scale: 3, rateId: 'cashout-example' };
+ * convertFloor(toAmount('CREDIT', 2_000_100n), rate, 'USD');
+ * // 10_000n minor: the exact $100.005 floors to $100.00
  */
 export function convertFloor(amount: Amount, rate: Rate, to: Currency): Amount {
   return toAmount(to, convertMinor(amount.minor, rate, 'floor'));
@@ -232,7 +272,13 @@ export function convertFloor(amount: Amount, rate: Rate, to: Currency): Amount {
 /**
  * Converts an amount to another currency at `rate`, rounding up: `ceil(minor * rate / 10^scale)`,
  * a true ceiling for either sign. Use it where rounding down would under-cover, such as the USD a
- * top-up must hold in trust.
+ * top-up must hold in trust: the trust side rounds against the platform, never against the users
+ * it backs. Throws AMOUNT_OVERFLOW when the result leaves the 64-bit range.
+ *
+ * @example
+ * const rate = { rate: 5n, scale: 3, rateId: 'cashout-example' };
+ * convertCeil(toAmount('CREDIT', 2_000_100n), rate, 'USD');
+ * // 10_001n minor: the same $100.005 that convertFloor takes to $100.00 rounds up here
  */
 export function convertCeil(amount: Amount, rate: Rate, to: Currency): Amount {
   return toAmount(to, convertMinor(amount.minor, rate, 'ceil'));

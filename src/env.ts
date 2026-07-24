@@ -24,6 +24,11 @@
  * engine nothing names stays null, and each caller documents its own fallback.
  */
 
+/**
+ * The environment shape every construction entry point takes — a plain string map, in practice
+ * `process.env`. Always passed explicitly: no module reads the process environment itself, so a
+ * test or embedder controls exactly what the library sees.
+ */
 export type EnvMap = Record<string, string | undefined>;
 
 // --- Parse rules -------------------------------------------------------------------

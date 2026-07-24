@@ -147,6 +147,7 @@ async function execWrite(
 // must be surfaced. It is thrown as errno 1205 (the InnoDB lock-wait code) so isTransientConflict
 // classifies it and withTransientRetry re-runs it in a fresh transaction.
 async function takeGetLock(exec: MysqlExecutor, name: string): Promise<void> {
+  // 10s wait: comfortably past any healthy transaction, well under innodb_lock_wait_timeout's 50s.
   const result = await rows(exec, 'SELECT GET_LOCK(?, 10) AS acquired', [name]);
   if (Number(result[0]?.acquired) !== 1) {
     throw Object.assign(new Error(`GET_LOCK did not acquire: ${name}`), {
@@ -417,6 +418,7 @@ function createLedgerStore(deps: ExecDeps): Ledger {
 
 // MySQL caps lock names at 64 bytes, so a longer id becomes a fixed-length prefix plus the id's
 // full length; the appended length keeps two ids that share a prefix from colliding on one lock.
+// 56 leaves headroom under the cap for multi-byte ids.
 function lockName(account: AccountRef): string {
   return account.length <= 56
     ? account
@@ -1680,30 +1682,37 @@ function buildUnit(deps: ExecDeps, trust: TrustStore): Unit {
 // --- The assembled store ----------------------------------------------------------
 
 /**
- * Build the full MySQL-backed store on a `mysql2` connection pool the caller creates and owns.
  *
  * `transaction(work)` borrows one connection, wraps `work` in START TRANSACTION ... COMMIT, and
- * rolls back if `work` throws. On the way out it releases any named locks the connection acquired,
- * so a returned connection carries no leftover locks. Anything outside a transaction (plain
- * reads/writes, plus the trust and checkpoint stores) runs directly on the pool and commits on its
- * own.
  *
  * The hash service defaults to the deterministic web-standard SHA-256; the clock defaults to
- * wall-clock time. Pass a fixed clock when reproducible `postedAt` values matter.
+ * wall-clock time. Pass a fixed clock when reproducible `postedAt` values matter. The velocity
+ * window defaults to one hour.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage} for the store and outbox/inbox ports this backs.
  */
 export function mysqlStore(deps: {
   pool: MysqlPool;
+  /** Hash service for chain links; defaults to the deterministic web-standard SHA-256. */
   digest?: Digest;
+  /** Time source for `postedAt` and window math; defaults to wall-clock time. */
   clock?: Clock;
+  /**
+   * Rolling window (ms) the trust store applies when summing a subject's recent spend for the
+   * velocity check. Defaults to one hour; the composition passes config.velocityWindowMs.
+   */
   velocityWindowMs?: number;
-  // Open-path schema policy: 'assert' verifies the schema_meta stamp before the first operation
-  // of any kind; 'skip' (the default here) is for the staged open that already asserted on the
-  // pool. Migration is applyMysqlSchema or an external migrate job — never an open option.
+  /**
+   * Open-path schema policy: 'assert' verifies the schema_meta stamp before the first operation
+   * of any kind; 'skip' (the default here) is for the staged open that already asserted on the
+   * pool. Migration is {@link applyMysqlSchema} or an external migrate job — never an open
+   * option.
+   */
   schema?: 'assert' | 'skip';
-  // Optional runtime ports for the engine's own telemetry (transient-retry pressure, see
-  // retryTelemetry). The composition passes the runtime meter and logger; unset emits nothing.
+  /**
+   * Optional runtime ports for the engine's own telemetry (transient-retry pressure). The
+   * composition passes the runtime meter and logger; unset emits nothing.
+   */
   meter?: Meter;
   logger?: Logger;
 }): Store {
@@ -1973,6 +1982,9 @@ function splitSqlStatements(sql: string): string[] {
  * returns large integer columns (the money columns, stored as 64-bit integers) as strings, which
  * the engine then converts to bigint exactly.
  *
+ * The connection collation is pinned to the schema's utf8mb4 default so the strings the posting
+ * routine derives from JSON join the table columns without collation errors.
+ *
  * `connectionLimit` caps the pool. Each in-flight transaction holds one connection for its whole
  * BEGIN..COMMIT, so a caller driving N concurrent submits must size this to at least N. Left unset,
  * `mysql2`'s default of 10 applies, which is the historical behavior.
@@ -2004,4 +2016,10 @@ export async function createMysqlPool(
   });
 }
 
+/**
+ * The shared field vocabulary for opening a SQL engine, with the pool type bound to this
+ * driver's {@link MysqlPool}. The composition layer assembles these fields from configuration;
+ * {@link mysqlStore} implements the MySQL subset (it takes a pre-built `pool` rather than
+ * opening by `url`, and has no `schemaName` isolation).
+ */
 export type EngineOpenOptions = EngineOpenShape<MysqlPool>;

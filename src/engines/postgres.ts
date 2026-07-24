@@ -1618,37 +1618,57 @@ function buildUnit(
 
 // --- The assembled store ----------------------------------------------------------
 
+/**
+ * Configuration for {@link postgresStore}. Everything beyond `url` has a working default: `pg`'s
+ * pool size of 10, no connection timeout, the deterministic SHA-256 digest, the wall clock, a
+ * one-hour velocity window, and the 'assert' schema policy.
+ */
 export interface PostgresStoreOptions {
+  /** Connection URL the default `pg` pool connects with; unused when `pool` is supplied. */
   url: string;
 
-  // Optional dedicated Postgres schema name, created/loaded then dropped on close, so parallel
-  // test runs don't collide. Omit to use the schema the connection already points at.
+  /**
+   * Optional dedicated Postgres schema name, created/loaded then dropped on close, so parallel
+   * test runs don't collide. Omit to use the schema the connection already points at.
+   */
   schemaName?: string;
 
-  // Open-path schema policy: 'assert' (the default) requires the schema_meta stamp to match this
-  // build; 'skip' is break-glass. Migration is an external job — never an open option.
+  /**
+   * Open-path schema policy: 'assert' (the default) requires the schema_meta stamp to match this
+   * build; 'skip' is break-glass. Migration is an external job — never an open option.
+   */
   schema?: 'assert' | 'skip';
 
+  /** Hash service for chain links; defaults to the deterministic web-standard SHA-256. */
   digest?: Digest;
 
+  /** Time source for `postedAt` and window math; defaults to wall-clock time. */
   clock?: Clock;
 
-  // Rolling window (ms) the trust store applies when summing a subject's recent spend for the
-  // velocity check. Defaults to one hour; the composition passes config.velocityWindowMs.
+  /**
+   * Rolling window (ms) the trust store applies when summing a subject's recent spend for the
+   * velocity check. Defaults to one hour; the composition passes config.velocityWindowMs.
+   */
   velocityWindowMs?: number;
 
-  // Max connections in the pool. Each in-flight transaction holds one connection for its whole
-  // BEGIN..COMMIT, so this caps how many submits can run at once: a caller that drives N concurrent
-  // submits must size this to at least N or the extra ones block waiting for a connection. Left unset,
-  // `pg`'s default of 10 applies, which is the historical behavior.
+  /**
+   * Max connections in the pool. Each in-flight transaction holds one connection for its whole
+   * BEGIN..COMMIT, so this caps how many submits can run at once: a caller that drives N
+   * concurrent submits must size this to at least N or the extra ones block waiting for a
+   * connection. Left unset, `pg`'s default of 10 applies.
+   */
   poolMax?: number;
 
-  // Max time (ms) to wait for a connection before failing. `pg`'s default is no timeout, so a
-  // routable-but-stalled host would otherwise hang indefinitely.
+  /**
+   * Max time (ms) to wait for a connection before failing. `pg`'s default is no timeout, so a
+   * routable-but-stalled host would otherwise hang indefinitely.
+   */
   connectionTimeoutMillis?: number;
 
-  // Optional runtime ports for the engine's own telemetry (transient-retry pressure, see
-  // retryTelemetry). The composition passes the runtime meter and logger; unset emits nothing.
+  /**
+   * Optional runtime ports for the engine's own telemetry (transient-retry pressure). The
+   * composition passes the runtime meter and logger; unset emits nothing.
+   */
   meter?: Meter;
 
   logger?: Logger;
@@ -1657,11 +1677,31 @@ export interface PostgresStoreOptions {
 /**
  * Build a {@link Store} backed by Postgres, using real database transactions. The returned
  * `transaction(work)` checks out one connection, runs `work` between BEGIN and COMMIT, and rolls
- * back if `work` throws. The trust and checkpoint stores hang off the pool directly, not off a
- * transaction, so their writes are never rolled back. If `schemaName` is given, a fresh schema with
- * that name is created, loaded with db/postgresql-schema.sql, and used for all queries; `close()`
- * drops it. The hash dependency defaults to the deterministic SHA-256; the clock defaults to
- * wall-clock time. Pass a fixed clock when reproducible `postedAt` values matter.
+ * back if `work` throws. Transactions run at Postgres' default READ COMMITTED isolation, with
+ * correctness carried by explicit `FOR UPDATE` row locks rather than a snapshot; a transient
+ * abort — deadlock, serialization failure, or a stale-head chain fork — committed nothing, so the
+ * whole unit of work is re-run in a fresh connection and transaction and callers never see it as
+ * an error. Every posting appends to a per-account hash chain, and the schema's triggers enforce
+ * conservation and chain continuity on every write. The trust and checkpoint stores hang off the
+ * pool directly, not off a transaction, so their writes are never rolled back.
+ *
+ * Opening fails fast rather than serve a mismatched database: the schema_meta stamp must match
+ * this build (unless `schema: 'skip'`), and the vendored money routines are installed and proven
+ * against pinned vectors before any posting trusts their arithmetic. If `schemaName` is given, a
+ * fresh schema with that name is created, loaded with db/postgresql-schema.sql, and used for all
+ * queries; `close()` drops it and ends the pool. The hash dependency defaults to the
+ * deterministic SHA-256; the clock defaults to wall-clock time. Pass a fixed clock when
+ * reproducible `postedAt` values matter.
+ *
+ * @example
+ * const store = await postgresStore({
+ *   url: 'postgres://econ:secret@127.0.0.1:5432/economy',
+ *   poolMax: 32, // at least one connection per concurrent submit
+ *   connectionTimeoutMillis: 5_000,
+ * });
+ * const economy = createEconomy({ store, ...runtimePorts });
+ * // ... on shutdown:
+ * await store.close();
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage} for the port contracts this engine implements.
  */
@@ -1671,6 +1711,7 @@ export async function postgresStore(
   configureBigIntParsers();
   const digest = options.digest ?? defaultDigest();
   const clock = options.clock ?? systemClock();
+  // Default velocity window: one hour, matching the memory and MySQL stores.
   const velocityWindowMs = options.velocityWindowMs ?? 60 * 60_000;
   const schema = options.schemaName ? safeSchemaName(options.schemaName) : null;
 
@@ -1850,4 +1891,10 @@ function isTransientConflict(error: unknown): boolean {
   );
 }
 
+/**
+ * The shared field vocabulary for opening a SQL engine, with the pool type bound to this
+ * driver's {@link PgPool}. The composition layer assembles these fields from configuration;
+ * {@link postgresStore} implements the Postgres subset (it opens by `url` or takes a pre-built
+ * `pool`, and honors `schemaName` isolation).
+ */
 export type EngineOpenOptions = EngineOpenShape<PgPool>;

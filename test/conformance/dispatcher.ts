@@ -22,6 +22,11 @@ import type { Dispatcher, EconomyEvent } from '#src/ports.ts';
  * sent and the abort signals seen. Calling `failNext` makes the next dispatch throw a transport
  * error. The shared suite uses this to exercise the success, failure, and cancellation paths
  * uniformly across adapters.
+ *
+ * The contract a host's harness must uphold: `bodies` grows by the exact string the adapter handed
+ * the transport, one entry per dispatch; `signals` records the per-dispatch abort signal, with
+ * `undefined` recorded when the caller passed none; `failNext(error)` arms only the next dispatch,
+ * which must surface the failure as the transport error would.
  */
 export interface DispatcherHarness {
   dispatcher: Dispatcher;
@@ -52,6 +57,10 @@ function sampleEvent(): EconomyEvent {
  * SQS cannot silently diverge in what a receiver sees. The failure test pins the error contract the
  * relay worker depends on: a retryable `PROVIDER.FAILURE` so a failed delivery redelivers. The
  * signal test pins cancellation forwarding.
+ *
+ * A host wires its own adapter in by building a {@link DispatcherHarness} over a fake of its
+ * transport and calling this at the top level of a `node --test` file. The factory runs afresh
+ * inside each test, so each test sees an empty recording.
  */
 export function runDispatcherConformance(
   name: string,

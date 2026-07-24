@@ -116,6 +116,7 @@ export const ERROR_CODES = {
   /** A posting's debits and credits didn't add up to zero, so the books wouldn't balance. */
   LEDGER_UNBALANCED: 'LEDGER.UNBALANCED',
 
+  /** A posting named an account the ledger has no row for and won't create implicitly. */
   UNKNOWN_ACCOUNT: 'LEDGER.UNKNOWN_ACCOUNT',
 
   /** A single posting tried to combine two different currencies. */
@@ -177,7 +178,8 @@ export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
 
 /**
  * The thrown-error type for every fault, carrying one stable {@link ERROR_CODES} code that
- * outer layers use to pick an HTTP status and a retry decision.
+ * outer layers use to pick an HTTP status and a retry decision. `retryable` defaults to false:
+ * only a throw site that knows a retry is safe sets it.
  *
  * Only `message` is safe to show a caller; `detail` and `cause` are for logging only.
  */
@@ -206,6 +208,11 @@ export class EconomyError extends Error {
   }
 }
 
+/**
+ * Builds an {@link EconomyError} for the caller to throw — the constructor shorthand every throw
+ * site in the package uses. It returns the error rather than throwing, so a site can attach it
+ * to a dead-letter or reject a promise with it.
+ */
 export function fault(
   code: ErrorCode,
   message: string,
@@ -233,10 +240,19 @@ export function rejected<K extends RejectionCode>(
   };
 }
 
+/**
+ * True for `committed` and `duplicate` — both carry the committed transaction. A duplicate is
+ * a success replayed: an idempotent redelivery handed the original receipt, so a caller that
+ * only cares whether the money moved treats the two alike.
+ */
 export function isSuccess(outcome: Outcome): outcome is Success {
   return outcome.status === 'committed' || outcome.status === 'duplicate';
 }
 
+/**
+ * True for the `rejected` arm — an expected business "no", not a fault. The reason and its
+ * typed fields are on `outcome.detail`.
+ */
 export function isRejection(outcome: Outcome): outcome is Rejection {
   return outcome.status === 'rejected';
 }
@@ -245,6 +261,11 @@ export function isRejection(outcome: Outcome): outcome is Rejection {
  * Narrows to a success or throws a plain Error naming the rejection — for hosts and tests where
  * a decline is unexpected. Deliberately not an {@link EconomyError}: an assertion failure has no
  * fault code or retry policy.
+ *
+ * @example
+ * const outcome = await economy.submit(operation);
+ * const { transaction } = requireSuccess(outcome);
+ * // transaction.id names the posting whether the outcome was committed or a duplicate replay
  */
 export function requireSuccess(outcome: Outcome): Success {
   if (isSuccess(outcome)) {
@@ -259,6 +280,13 @@ export function requireSuccess(outcome: Outcome): Success {
  * failure as safe to retry. Anything else (a raw exception from a library, the storage layer,
  * etc.) is wrapped as a retryable STORE.FAILURE, with the original kept in `cause` for logs so
  * the caller never sees the raw error or its stack trace.
+ *
+ * @example
+ * try {
+ *   await store.transact(accounts, work);
+ * } catch (error) {
+ *   throw normalizeError(error); // an EconomyError either way; raw throws become STORE.FAILURE
+ * }
  */
 export function normalizeError(error: unknown): EconomyError {
   if (error instanceof EconomyError) {

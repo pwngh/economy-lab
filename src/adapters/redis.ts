@@ -46,6 +46,18 @@ function storeFault(operation: string, cause: unknown): never {
  * sentinel, cluster), which also lets a test substitute a fake; the returned `close()` releases
  * the connection.
  *
+ * `ttlMs` maps to Redis's `PX` flag, so expiry is enforced by Redis itself; a `set` with no TTL
+ * persists until invalidated. Keys live under the `economy:cache:` prefix, so they never collide
+ * with other data in the instance and an operator can find or delete them as a set. A failed call
+ * throws a retryable `STORE.FAILURE`; the cache is best-effort, so callers fall back to the store.
+ *
+ * @example
+ * import Redis from 'ioredis';
+ * const cache = redisCache(new Redis('redis://localhost:6379'));
+ * await cache.set('bal:usr_42:spendable', 'CREDIT:12.34', 60_000);
+ * await cache.get('bal:usr_42:spendable'); // 'CREDIT:12.34' | null past the TTL
+ * await cache.close();
+ *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage} for how the cache port backs hot reads.
  */
 export function redisCache(
@@ -100,6 +112,11 @@ const LIMIT_PREFIX = 'economy:ratelimit:';
  * the windowed key, `PEXPIRE` arms the window on its first hit, and a denial reports the key's
  * remaining `PTTL`. The caller creates and owns the client, same as {@link redisCache}; the
  * returned `close()` releases the connection.
+ *
+ * Each key gets `limit` calls per `windowMs`; because the counter lives in Redis, the limit holds
+ * across every process sharing the instance. A denial whose key has lost its TTL reports a full
+ * `windowMs` wait rather than a negative one. Keys live under the `economy:ratelimit:` prefix,
+ * and a failed call throws a retryable `STORE.FAILURE` rather than silently allowing.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for
  *   how the server keys and answers denials.

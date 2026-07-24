@@ -30,12 +30,20 @@ import type {
   StoredLink,
 } from '#src/ports.ts';
 
+/** What {@link parseExport} returns, for custom tooling over an export file. */
 export type ParsedExport = {
+  /** Each account's chain links in lineage order (oldest first), as the file carried them. */
   lineage: Map<AccountRef, StoredLink[]>;
+  /** The embedded signed checkpoint, or null when none had been sealed at export time. */
   checkpoint: Checkpoint | null;
 };
 
-/** Parses export lines into per-account lineage plus the embedded checkpoint, if any. */
+/**
+ * Parses `read.export` lines into per-account lineage plus the embedded checkpoint. Blank lines
+ * are skipped. Throws when the first line does not declare the {@link EXPORT_FORMAT} marker, on
+ * an unknown line type, and on empty input — a truncated or foreign file fails loudly instead
+ * of parsing to an empty ledger.
+ */
 export function parseExport(lines: Iterable<string>): ParsedExport {
   const lineage = new Map<AccountRef, StoredLink[]>();
   let checkpoint: Checkpoint | null = null;
@@ -133,16 +141,23 @@ function verifyOnlySigner(publicKeysHex: ReadonlyArray<string>): Signer {
   };
 }
 
+/** What {@link verifyExport} resolves to: the chain verdict, then the checkpoint check. */
 export type VerifyReport = {
+  /** True when every account's chain re-derives link by link from the file alone. */
   chainIntact: boolean;
+  /** The first failing link as the prover reports it; nothing when the chain is intact. */
   firstBreak: unknown;
+  /** How many account chains the file carried and the prover walked. */
   accounts: number;
   checkpoint: {
+    /** Whether the file embedded a checkpoint at all. */
     present: boolean;
     id?: string;
+    /** The key id the checkpoint was sealed under, when the seal recorded one. */
     kid?: string | null;
-    // False when no checkpoint is embedded or no public key was supplied.
+    /** False when no checkpoint is embedded or no public key was supplied. */
     signatureChecked: boolean;
+    /** Present only when `signatureChecked`; true when the seal verifies against a supplied key. */
     verified?: boolean;
   };
 };
@@ -152,6 +167,12 @@ export type VerifyReport = {
  * then check the embedded checkpoint's root and signature against the supplied public keys.
  * The checkpoint verifies against the exported tip, so a checkpoint sealed before the last
  * postings reports as unverified until the ledger is exported right after a seal.
+ *
+ * @example
+ * import { readFileSync } from 'node:fs';
+ * const lines = readFileSync('ledger-export.jsonl', 'utf8').split('\n');
+ * const report = await verifyExport(lines, [publishedSigningKeyHex]);
+ * if (!report.chainIntact) throw new Error('export chain broken');
  */
 export async function verifyExport(
   lines: Iterable<string>,

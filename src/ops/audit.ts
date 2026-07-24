@@ -14,6 +14,7 @@ import { toHex } from '#src/bytes.ts';
 
 import type { Digest } from '#src/ports.ts';
 
+/** The twelve incident signatures the supervisor detects; every audit record names one. */
 export type SignatureName =
   | 'deadlock-storm'
   | 'stuck-saga'
@@ -28,6 +29,12 @@ export type SignatureName =
   | 'checkpoint-seal-slow'
   | 'inbox-dead-letter';
 
+/**
+ * Where in an episode a record sits. Tier-1 episodes walk detected, decided, acted, verified;
+ * `decided` also records a suppressed action with its reason (cooldown, containment, prior
+ * escalation, no lever). `escalated` marks the hand-off to a human, and is the terminal phase
+ * a capped or tier-3 episode reaches.
+ */
 export type AuditPhase =
   | 'detected'
   | 'decided'
@@ -35,6 +42,12 @@ export type AuditPhase =
   | 'verified'
   | 'escalated';
 
+/**
+ * One audit entry. Tier 1 means a guarded lever exists for the signature; tier 3 means the
+ * supervisor only reports or escalates. `subject` narrows the record to one saga id or watched
+ * signal name, null when the episode is composition-wide. `detail` carries the evidence and
+ * can hold bigint amounts — the JSONL sinks encode those as `{"$bigint":"..."}`.
+ */
 export type AuditRecord = {
   at: number;
   signature: SignatureName;
@@ -44,6 +57,10 @@ export type AuditRecord = {
   detail: Record<string, unknown>;
 };
 
+/**
+ * The host-injected consumer of audit records, called synchronously with each record as the
+ * tick emits it. A thrown error propagates out of the tick.
+ */
 export type AuditSink = (record: AuditRecord) => void;
 
 // Prove reports carry bigint money fields JSON.stringify refuses; they encode as
@@ -51,6 +68,11 @@ export type AuditSink = (record: AuditRecord) => void;
 const replacer = (_key: string, value: unknown): unknown =>
   typeof value === 'bigint' ? { $bigint: value.toString() } : value;
 
+/**
+ * A sink writing one JSON line per record, bigints encoded as `{"$bigint":"..."}` — the same
+ * convention as the lab's operation journal, so one decoder reads both. `write` receives the
+ * line without a trailing newline; the caller owns line separation.
+ */
 export function jsonlAuditSink(write: (line: string) => void): AuditSink {
   return (record) => {
     write(JSON.stringify(record, replacer));
@@ -68,6 +90,15 @@ const HASH_SUFFIX = /^(\{.*),"hash":"([0-9a-f]{64})"\}$/s;
  * chain at that line for {@link verifyAuditChain}. The digest is async while the sink is not,
  * so records queue on an internal chain that computes and writes strictly in order; `flush`
  * awaits it (call before process exit).
+ *
+ * @example
+ * const lines: string[] = [];
+ * const audit = hashChainedAuditSink((line) => lines.push(line), ports.digest);
+ * const supervisor = createSupervisor({ ...supervisorPorts, audit });
+ * await supervisor.tick();
+ * await audit.flush();
+ * const report = await verifyAuditChain(lines, ports.digest);
+ * // report.intact === true; edit any line and firstBreak names it
  */
 export function hashChainedAuditSink(
   write: (line: string) => void,
@@ -113,7 +144,16 @@ export type AuditChainReport = {
  * Re-derives a {@link hashChainedAuditSink} trail: every line's `hash` must recompute over its
  * own bytes and its `prev` must name the prior line's hash. The preimage is the literal line
  * text minus its hash suffix, so verification needs no re-serialization to agree with the
- * writer.
+ * writer. Stops at the first break: `count` is how many records verified before it, and
+ * nothing after the break is checked. `make audit-verify FILE=<jsonl>` runs this over a trail
+ * file from the command line.
+ *
+ * @example
+ * const lines = trail.trimEnd().split('\n');
+ * const report = await verifyAuditChain(lines, ports.digest);
+ * if (!report.intact) {
+ *   // e.g. { intact: false, firstBreak: { line: 7, reason: 'tampered-hash' }, count: 6 }
+ * }
  */
 export async function verifyAuditChain(
   lines: ReadonlyArray<string>,

@@ -33,6 +33,12 @@ export function systemClock(): Clock {
 /**
  * Fake clock for tests. Frozen at `start` (epoch ms); only `advance(ms)` moves
  * it forward, returning the new time. Keeps test outcomes repeatable.
+ *
+ * @example
+ * const clock = fixedClock(Date.UTC(2026, 6, 1));
+ * // ...subscribe against an economy wired with this clock...
+ * clock.advance(31 * 24 * 60 * 60 * 1000); // a month passes; the renewal is due
+ * await worker.sweep(); // the sweep reads the advanced time
  */
 export function fixedClock(
   start = 0,
@@ -57,7 +63,13 @@ export function randomIds(): Ids {
 
 /**
  * Predictable id generator for tests. Counts up from `seed` (`prefix_1`,
- * `prefix_2`, ...), so a test produces the same ids every run.
+ * `prefix_2`, ...), so a test produces the same ids every run. The counter is
+ * shared across prefixes: it increments on every call, whatever the prefix.
+ *
+ * @example
+ * const ids = sequentialIds();
+ * ids.next('txn'); // 'txn_1'
+ * ids.next('evt'); // 'evt_2' — one counter, not one per prefix
  */
 export function sequentialIds(seed = 0): Ids {
   let n = seed;

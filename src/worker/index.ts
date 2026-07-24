@@ -75,34 +75,51 @@ export const SWEEP_NAMES = [
   'reconcile',
   'promos',
 ] as const;
+
+/** The name of one background job in the sweep cycle; {@link SWEEP_NAMES} fixes the run order. */
 export type SweepName = (typeof SWEEP_NAMES)[number];
 
 /** Default per-job batch cap when neither the sweep request nor {@link WorkerDefaults} sets one. */
 export const DEFAULT_SWEEP_LIMIT = 100;
 
-// Per-sweep arguments; every field optional, falling back to the worker's construction-time
-// defaults. `now` defaults to the clock; `limit` to WorkerDefaults.limit, then
-// DEFAULT_SWEEP_LIMIT. `options` may carry an AbortSignal that cancels a running job.
+/**
+ * Arguments for one sweep pass; every field optional, falling back to the worker's
+ * construction-time defaults. `now` defaults to the clock, `limit` to
+ * {@link WorkerDefaults.limit} and then {@link DEFAULT_SWEEP_LIMIT}.
+ */
 export type SweepRequest = {
+  /** Per-job cap on due items claimed this pass. */
   readonly limit?: number;
+  /** The tick every job sweeps at, in epoch milliseconds. */
   readonly now?: number;
-  // Narrows the run to just these jobs — the lever behind a supervisor's targeted re-drive
-  // (e.g. `only: ['relay']` to push a backlog without sealing a checkpoint). A job left out
-  // reports its idle summary, the same shape an absent optional dependency produces.
+  /**
+   * Narrows the run to just these jobs — the lever behind a supervisor's targeted re-drive
+   * (e.g. `only: ['relay']` to push a backlog without sealing a checkpoint). A job left out
+   * reports its idle summary, the same shape an absent optional dependency produces.
+   */
   readonly only?: ReadonlyArray<SweepName>;
-  // Transport the relay job delivers outgoing events through; absent, the relay job is skipped
-  // and pending outbox rows wait for a later run.
+  /**
+   * Transport the relay job delivers outgoing events through; absent, the relay job is skipped
+   * and pending outbox rows wait for a later run.
+   */
   readonly dispatcher?: Dispatcher;
-  // Economy the inbox-apply job submits each stored inbound Operation through, so the money move
-  // runs through the same invariants and idempotency a direct caller hits. createWorker binds
-  // one; absent both, `drainInbox` is skipped.
+  /**
+   * Economy the inbox-apply job submits each stored inbound Operation through, so the money move
+   * runs through the same invariants and idempotency a direct caller hits. createWorker binds
+   * one; absent both, `drainInbox` is skipped.
+   */
   readonly economy?: Pick<Economy, 'submit'>;
-  // External float source for the treasury tie-out's coverage half; absent, `floatCoverage` is
-  // skipped — the internal backing check in `treasury` runs regardless.
+  /**
+   * External float source for the treasury tie-out's coverage half; absent, `floatCoverage` is
+   * skipped — the internal backing check in `treasury` runs regardless.
+   */
   readonly float?: FloatFeed;
-  // Settlement-report source for the reconcile job; absent (or with no windows), `reconcile` is
-  // skipped — a host with no provider report has nothing to compare.
+  /**
+   * Settlement-report source for the reconcile job; absent (or with no windows), `reconcile` is
+   * skipped — a host with no provider report has nothing to compare.
+   */
   readonly feed?: ReconcileFeed;
+  /** The settlement windows the reconcile job compares, each reconciled independently. */
   readonly windows?: ReadonlyArray<Range>;
   readonly options?: CallOptions;
 };
@@ -121,13 +138,15 @@ export type WorkerDefaults = {
   readonly limit?: number;
 };
 
-// One job's outcome: its summary, or its caught error as data (code and retry flag). A job's
-// exception never escapes to the caller.
+/**
+ * One job's outcome: its summary, or its caught error as data (code and retry flag). A job's
+ * exception never escapes to the caller.
+ */
 export type SweepResult<TSummary> =
   | { ok: true; summary: TSummary }
   | { ok: false; code: string; retryable: boolean };
 
-// One entry per job, keyed by name. A failing job never hides the others.
+/** One entry per job, keyed by name. A failing job never hides the others. */
 export type SweepBatch = {
   payouts: SweepResult<PayoutSweepSummary>;
   subscriptions: SweepResult<SweepSummary>;
@@ -142,27 +161,40 @@ export type SweepBatch = {
   promos: SweepResult<PromoExpirySummary>;
 };
 
-// sweep's result: the batch plus the txn id of every posting the run minted, so a host can build
-// a feed without intercepting the id generator. A rolled-back job can mint an id that never
-// commits, so resolve each id via read.posting and skip a null.
+/**
+ * What {@link Worker.sweep} resolves to: the batch plus the txn id of every posting the run
+ * minted, so a host can build a feed without intercepting the id generator. A rolled-back job
+ * can mint an id that never commits, so resolve each id via `read.posting` and skip a null.
+ */
 export type SweepRun = { batch: SweepBatch; postings: ReadonlyArray<string> };
 
 /**
- * Handle the host program uses to drive the background jobs. `sweep` runs every job once.
- * `start` runs them on a timer (the Scheduler port when supplied, a built-in interval timer
- * otherwise) and returns a stop function; every tick reads `now` from the clock, which is why
- * its request cannot carry one.
- *
- * `pause` makes the scheduled runs no-ops until `resume`; the timer keeps ticking so stop stays
- * with whoever holds the stop function. An explicit `sweep` still runs while paused — a
- * supervisor or operator acting deliberately is not the loop being paused. `sweepsPaused` is
- * that flag, named apart from the economy's own `maintenanceActive`.
+ * Handle the host program uses to drive the background jobs: one-shot passes via
+ * {@link Worker.sweep}, a timer loop via {@link Worker.start}, and a maintenance gate via
+ * pause/resume.
  */
 export interface Worker {
+  /**
+   * Runs every job once at one resolved tick and returns the batch plus the txn id of every
+   * posting the run minted. Each job runs isolated, so one throw becomes that job's failed
+   * result and the rest still run; sweep itself never throws. An explicit sweep still runs
+   * while paused — a supervisor or operator acting deliberately is not the loop being paused.
+   */
   sweep(request?: SweepRequest): Promise<SweepRun>;
+  /**
+   * Runs the jobs every `everyMs` on a timer — the Scheduler port when the bag has one, a
+   * built-in interval timer otherwise — and returns a stop function. Every tick reads `now`
+   * from the clock, which is why its request cannot carry one.
+   */
   start(everyMs: number, request?: Omit<SweepRequest, 'now'>): () => void;
+  /**
+   * Makes the scheduled runs no-ops until {@link Worker.resume}; the timer keeps ticking, so
+   * stopping stays with whoever holds the stop function.
+   */
   pause(): void;
+  /** Lifts {@link Worker.pause}; the next scheduled tick sweeps again. */
   resume(): void;
+  /** The pause gate's state, named apart from the economy's own `maintenanceActive`. */
   readonly sweepsPaused: boolean;
 }
 
@@ -334,6 +366,13 @@ async function isolate<TSummary>(
  * of them per run. The dispatcher falls back to the bag's own, so an env-selected transport
  * relays without restating. `start` drives the loop through the bag's Scheduler when one is
  * present, else a built-in interval timer.
+ *
+ * @example
+ * const worker = createWorker(ports, economy, { dispatcher });
+ * const stop = worker.start(30_000); // full pass every 30s
+ * const run = await worker.sweep({ only: ['relay'] }); // targeted manual pass
+ * const failed = SWEEP_NAMES.filter((name) => !run.batch[name].ok);
+ * stop();
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background
  *   worker} for the sweep cycle, ordering, and isolation model.

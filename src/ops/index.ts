@@ -9,10 +9,14 @@
  * @license MIT
  */
 
-// The `./ops` entry point: an in-process supervisor over the lab's meter/logger
-// ports. The dependency runs one way — ops imports the core, the core never
-// imports ops (eslint enforces it) — and leaving the supervisor out of the
-// composition is the off switch.
+/**
+ * The `./ops` entry point: an in-process supervisor over the lab's meter/logger ports. The
+ * dependency runs one way — ops imports the core, the core never imports ops (eslint enforces
+ * it) — and leaving the supervisor out of the composition is the off switch.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ops/the-supervisor/ The supervisor}
+ *   for the tier model, the signal path, and the per-signature runbooks.
+ */
 
 export {
   hashChainedAuditSink,

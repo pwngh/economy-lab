@@ -196,9 +196,22 @@ function wrapEntitlements(
 }
 
 /**
- * Wraps a store so `entitlements.owns` is served from the bitmap when warm. Everything else on
- * the store passes through untouched; `transaction` is wrapped only to observe entitlement writes
- * so their users can be invalidated when the transaction ends.
+ * Wraps a store so `entitlements.owns` is served from the bitmap when warm: a warm hit is a
+ * synchronous bit test, a cold or stale user refills once from `list()` and then answers from the
+ * bitmap. Everything else on the store passes through untouched; `transaction` is wrapped only to
+ * observe entitlement writes so their users can be invalidated when the transaction ends.
+ *
+ * The bitmap is never the source of truth. Every `grant` and `revoke` through this store
+ * invalidates the written user (on commit and on rollback); a write from another process surfaces
+ * within `ttlMs` (default 30 seconds) when the user's bitmap expires and refills. Resident users
+ * are capped at `maxUsers` (default 10,000) with least-recently-used eviction. Single-process by
+ * design, and expiry decisions match the store only when both share one clock, so pass the store's
+ * `clock`.
+ *
+ * @example
+ * const store = cachedEntitlements(baseStore, { clock, ttlMs: 30_000 });
+ * await store.entitlements.owns('usr_42', 'sku_gold_trim'); // cold: fills from list()
+ * await store.entitlements.owns('usr_42', 'sku_gold_trim'); // warm: a bit test, no store call
  */
 export function cachedEntitlements(
   base: Store,

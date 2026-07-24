@@ -49,16 +49,16 @@ type WebhookBase = {
 export type PurchaseEvent = WebhookBase & {
   kind?: 'purchase';
 
-  // The end user whose spendable balance the purchase credits.
+  /** The end user whose spendable balance the purchase credits. */
   userId: string;
 
-  // How much to grant, in the platform's CREDIT currency.
+  /** How much to grant, in the platform's CREDIT currency. */
   amount: Amount;
 
-  // Where the money came from, recorded on the topUp (e.g. 'card', 'steam'). Free-form.
+  /** Where the money came from, recorded on the topUp (e.g. 'card', 'steam'). Free-form. */
   source: string;
 
-  // The product purchased, when the event is a product buy rather than a bare credit pack.
+  /** The product purchased, when the event is a product buy rather than a bare credit pack. */
   sku?: string;
 };
 
@@ -71,14 +71,16 @@ export type PurchaseEvent = WebhookBase & {
 export type PayoutSettledEvent = WebhookBase & {
   kind: 'payoutSettled';
 
-  // The payout saga (pay_<uuid>) this settlement clears.
+  /** The payout saga (pay_<uuid>) this settlement clears. */
   sagaId: string;
 
-  // The rail's own reference for this disbursement, recorded for the audit trail.
+  /** The rail's own reference for this disbursement, recorded for the audit trail. */
   providerRef: string;
 
-  // The USD the provider reported settling, when the callback carries one. Recorded for
-  // reconciliation only.
+  /**
+   * The USD the provider reported settling, when the callback carries one. Recorded for
+   * reconciliation only.
+   */
   providerAmount?: Amount;
 };
 
@@ -90,17 +92,19 @@ export type PayoutSettledEvent = WebhookBase & {
 export type PayoutFailedEvent = WebhookBase & {
   kind: 'payoutFailed';
 
-  // The payout saga (id of the form pay_<uuid>) whose disbursement the provider gave up on.
+  /** The payout saga (id of the form pay_<uuid>) whose disbursement the provider gave up on. */
   sagaId: string;
 
-  // The seller the payout belongs to. The submit pipeline locks accounts by this id, and
-  // `reversePayout` refuses the operation if it does not match the saga's own user.
+  /**
+   * The seller the payout belongs to. The submit pipeline locks accounts by this id, and
+   * `reversePayout` refuses the operation if it does not match the saga's own user.
+   */
   userId: string;
 
-  // The rail's own reference for the failed disbursement, recorded for the audit trail.
+  /** The rail's own reference for the failed disbursement, recorded for the audit trail. */
   providerRef?: string;
 
-  // The rail's failure reason (e.g. its status code or a human string), recorded on the reversal.
+  /** The rail's failure reason (e.g. its status code or a human string), recorded on the reversal. */
   reason?: string;
 };
 
@@ -112,16 +116,16 @@ export type PayoutFailedEvent = WebhookBase & {
 export type DisputeEvent = WebhookBase & {
   kind: 'dispute';
 
-  // The user whose credits the chargeback reclaims.
+  /** The user whose credits the chargeback reclaims. */
   userId: string;
 
-  // How much to reclaim, in the platform's CREDIT currency.
+  /** How much to reclaim, in the platform's CREDIT currency. */
   amount: Amount;
 
-  // The order the chargeback disputes, when the provider ties the dispute to one.
+  /** The order the chargeback disputes, when the provider ties the dispute to one. */
   orderId?: string;
 
-  // Free-form reason recorded on the clawback (e.g. the network's chargeback reason code).
+  /** Free-form reason recorded on the clawback (e.g. the network's chargeback reason code). */
   reason?: string;
 };
 
@@ -269,6 +273,16 @@ export type WebhookReceipt = {
  * to the inbox in one transaction, and returns. It does NOT post to the ledger inline; the apply
  * worker (`drainInbox`) submits the stored Operation later, so invariants and idempotency apply
  * there.
+ *
+ * @example
+ * const receipt = await handleWebhook(ports.store, ports, {
+ *   provider: 'steam',
+ *   eventId: 'evt_8123',
+ *   userId: 'u_42',
+ *   amount: toAmount('CREDIT', 12_000n), // a $100 credit pack
+ *   source: 'steam',
+ * });
+ * // receipt.status is 'accepted' now, 'duplicate' on any redelivery of evt_8123
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for
  *   the verification gate the edge runs first.

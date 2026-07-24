@@ -38,11 +38,13 @@ export type FetchLike = (
 }>;
 
 export interface HttpProcessorConfig {
+  /** The provider URL each payout submission is POSTed to. */
   endpoint: string;
 
   /** Sent in the Authorization header. Never written to logs or error details. */
   apiKey?: string;
 
+  /** Supplies the `fetch` implementation. Defaults to the global `fetch`; tests pass a stand-in. */
   fetch?: FetchLike;
 }
 

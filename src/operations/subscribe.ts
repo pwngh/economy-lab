@@ -255,6 +255,8 @@ function appendSpendableLegs(
   // `feeForPrice` (pricing.ts) owns the fee rounding rule. Spend, first-month subscribe, and
   // renewal all call it, so they all round identically.
   const feeMinor = feeForPrice(spendablePart.minor, ctx.config.platformFeeBps);
+  // Relies on feeForPrice never returning more than the price: a fee policy that did would make
+  // this net negative and the credit leg below invalid.
   const netMinor = spendablePart.minor - feeMinor;
   legs.push(debit(spendable(operation.userId), spendablePart));
   legs.push(credit(earned(operation.sellerId), toAmount('CREDIT', netMinor)));

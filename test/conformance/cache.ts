@@ -24,6 +24,11 @@ import type { Cache } from '#src/ports.ts';
  * The suite covers the cross-adapter contract: miss, round-trip, overwrite, invalidate, and
  * read-back before expiry. Backend-specific behavior stays in each adapter's own test. That
  * includes Redis key prefixing and a real `PX` expiry, plus the memory cache's clock-driven expiry.
+ *
+ * A host wires its own adapter in by calling this at the top level of a `node --test` file with a
+ * display name and a factory. The factory runs afresh inside each test, so every test starts from
+ * an empty cache and the implementation needs no cross-test cleanup. The expiry test only reads
+ * back before the ttl elapses — the suite never waits a ttl out, so no fake clock is required.
  */
 export function runCacheConformance(
   name: string,

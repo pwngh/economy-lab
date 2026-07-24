@@ -35,6 +35,7 @@ async function beginSession(
   backing: Store,
   sessions: Map<string, Session>,
 ): Promise<string> {
+  // size alone can repeat after deletes; the timestamp + random tail make the id unique.
   const id = `sess_${sessions.size}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   let settle!: (commit: boolean) => void;
   const gate = new Promise<void>((resolve, reject) => {
@@ -188,7 +189,9 @@ async function collect<T>(
 
 // Picks the unit for a request. Session id 'root' means a call outside any transaction. The
 // backing store exposes the same sub-stores a unit does, so it stands in directly. Any other id
-// uses the unit captured for that session.
+// uses the unit captured for that session. The `!` trusts the client (the paired httpStore) to
+// only send ids this server minted and hasn't settled; an unknown id throws a TypeError that
+// surfaces as a generic 500.
 function unitFor(
   backing: Store,
   sessions: Map<string, Session>,
@@ -533,6 +536,8 @@ async function txDispatch(
   }
   const session = segments[1]!;
   const tail = segments.slice(2);
+  // The `!` lookups below trust the client the same way unitFor does: an unknown or already
+  // settled session id throws and surfaces as a generic 500.
   if (tail[0] === 'commit') {
     await commitSession(sessions.get(session)!);
     sessions.delete(session);

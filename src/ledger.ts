@@ -36,16 +36,27 @@ export const GENESIS: Uint8Array = new Uint8Array(32);
 export const GENESIS_HEX = '0'.repeat(64);
 
 /**
- * Builds a debit leg for one account. The amount is stored positive. A debit lowers
- * credit-normal accounts, such as a user's spendable balance, and raises debit-normal ones.
+ * Builds a debit leg for one account. Pass the amount positive; it is stored positive. A debit
+ * lowers credit-normal accounts, such as a user's spendable balance, and raises debit-normal
+ * ones. Pairing a debit with a {@link credit} of the same amount yields stored amounts that sum
+ * to zero: a balanced posting.
+ *
+ * @example
+ * const price = toAmount('CREDIT', 70_000n);
+ * const legs = [
+ *   debit(spendable('usr_buyer'), price),  // stored +70_000: buyer's balance falls
+ *   credit(earned('usr_seller'), price),   // stored -70_000: seller's balance rises
+ * ]; // sums to zero, so the posting balances
  */
 export function debit(account: AccountRef, amount: Amount): Leg {
   return { account, amount };
 }
 
 /**
- * Builds a credit leg for one account. The amount is stored negated. A credit raises
- * credit-normal accounts, such as a user's spendable balance, and lowers debit-normal ones.
+ * Builds a credit leg for one account. Pass the amount positive; it is stored negated, following
+ * the ledger's debit-positive convention. A credit raises credit-normal accounts, such as a
+ * user's spendable balance, and lowers debit-normal ones. See {@link debit} for the balanced-pair
+ * example.
  */
 export function credit(account: AccountRef, amount: Amount): Leg {
   return { account, amount: toAmount(amount.currency, -amount.minor) };

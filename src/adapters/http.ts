@@ -619,6 +619,8 @@ async function runTransaction<T>(
     await call(transport, `/tx/${session}/commit`, {}, options);
     return result;
   } catch (error) {
+    // No options on purpose: an aborted rollback would leak the server-side transaction. Its own
+    // failure is swallowed so the original error propagates.
     await call(transport, `/tx/${session}/rollback`, {}).catch(() => {});
     throw error;
   }

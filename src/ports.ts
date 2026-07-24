@@ -20,6 +20,10 @@ import type { AccountRef } from '#src/accounts.ts';
 import type { Config, Secrets } from '#src/config.ts';
 
 export type CallOptions = {
+  /**
+   * Aborts the adapter's wait, not work already done: an adapter observes it on network and
+   * database waits, and a caller treats an aborted call's effects as unknown, never as undone.
+   */
   signal?: AbortSignal;
 
   /**
@@ -58,15 +62,30 @@ export type IdPrefix =
   | 'rec' // a record, e.g. reconciliation/receivable — reserved (not currently minted)
   | 'adj'; // an operator adjustment — reserved (not currently minted)
 
+/**
+ * The core's single time source: due times, expiries, maturity, and rate lookups all read it,
+ * so a fixed test clock makes every sweep deterministic. Store-side age gauges (e.g.
+ * {@link OutboxStore.stats}) deliberately use the store's own time base instead.
+ */
 export interface Clock {
   /** Milliseconds since the Unix epoch. */
   now(): number;
 }
 
+/**
+ * Mints unique identifiers, one namespace per entity kind (see {@link IdPrefix}). An id must
+ * never repeat within its prefix: minted ids become row keys, and `txn_` ids are hashed into
+ * the tamper-evident chain. The runtime default appends a `crypto.randomUUID()` to the prefix.
+ */
 export interface Ids {
   next(prefix: IdPrefix): string;
 }
 
+/**
+ * Content hashing for chain links, checkpoints, and session movements. The algorithm is part of
+ * the contract: provers recompute stored hashes from stored content, so anything other than
+ * SHA-256 makes every previously stored hash fail verification.
+ */
 export interface Digest {
   /** The SHA-256 hash of the input. */
   hash(bytes: Uint8Array): Promise<Uint8Array>;
@@ -79,6 +98,10 @@ export interface Digest {
  * the reference adapter, and key rotation.
  */
 export interface Signer {
+  /**
+   * Signs `bytes` with the current key — the one {@link Signer.kid} names; the reference
+   * adapter signs Ed25519 over the raw bytes.
+   */
   sign(bytes: Uint8Array): Promise<Uint8Array>;
 
   /** Accepts still-valid older keys, so a signature made before a key rotation keeps verifying. */
@@ -100,10 +123,24 @@ export interface Signer {
  * for the best-effort cache contract.
  */
 export interface Cache {
+  /**
+   * The cached string, or null on a miss or an expired entry; the core's read path treats a
+   * throwing get as a miss.
+   */
   get(key: string): Promise<string | null>;
 
+  /**
+   * Stores `value` whole, overwriting any previous entry. `ttlMs` bounds the entry's life;
+   * without it the entry lives until invalidated or evicted, and eviction at any time is legal —
+   * every read tolerates a miss.
+   */
   set(key: string, value: string, ttlMs?: number): Promise<void>;
 
+  /**
+   * Removes the key so the next get reads through; a missing key is a no-op. The core calls it
+   * after a commit changes a cached balance, and a failed invalidate only logs — give entries a
+   * lifetime if a pinned stale value is unacceptable.
+   */
   invalidate(key: string): Promise<void>;
 }
 
@@ -113,6 +150,18 @@ export interface Cache {
  * only ever asks for the verdict. A throwing limiter is treated as absent for that request —
  * the edge fails open, because a down limiter backend should degrade protection, not
  * availability.
+ *
+ * @example
+ * // A fixed-budget limiter: 100 requests per key, refilled by the adapter's own policy.
+ * const budgets = new Map<string, number>();
+ * const limiter: RateLimiter = {
+ *   async allow(key) {
+ *     const left = budgets.get(key) ?? 100;
+ *     if (left === 0) return { allowed: false, retryAfterMs: 1_000 };
+ *     budgets.set(key, left - 1);
+ *     return { allowed: true };
+ *   },
+ * };
  */
 export interface RateLimiter {
   allow(key: string): Promise<RateVerdict>;
@@ -130,7 +179,12 @@ export interface Scheduler {
   ): () => void;
 }
 
-/** Hands an outgoing event off for delivery (e.g. SQS or HTTP); the core doesn't know which. */
+/**
+ * Hands an outgoing event off for delivery (e.g. SQS or HTTP); the core doesn't know which. A
+ * resolved call means handed off, and delivery is at-least-once — consumers dedupe by event id.
+ * A rejection counts one failed attempt against the outbox row; the relay retries it until
+ * `config.maxOutboxAttempts` dead-letters it.
+ */
 export type Dispatcher = (
   event: EconomyEvent,
   options?: CallOptions,
@@ -143,7 +197,11 @@ export type Dispatcher = (
  * the Tilia adapter, and dispute webhooks.
  */
 export interface Processor {
-  /** `amount` is in real USD; `key` makes the request safe to retry without paying twice. */
+  /**
+   * Submits a USD transfer to the provider. `amount` is in real USD; `key` makes the request
+   * safe to retry without paying twice. The returned `providerRef` is the provider's own id for
+   * the transfer — webhooks and the `payoutStatus` probe join back to the saga through it.
+   */
   submitPayout(
     input: { key: string; userId: string; amount: Amount },
     options?: CallOptions,
@@ -165,10 +223,20 @@ export type PayoutProviderStatus = {
   state: 'SETTLED' | 'RETURNED' | 'FAILED' | 'PENDING' | 'UNKNOWN';
 };
 
+/**
+ * The host's payee-verification directory (KYC or tax status). requestPayout consults it when
+ * configured: any state other than CLEARED rejects with PAYEE_UNVERIFIED before any credits are
+ * reserved, and a throwing directory faults the request — the gate fails closed. Optional in
+ * {@link Ports}; absent, every payee passes.
+ */
 export interface PayeeDirectory {
   status(userId: string, options?: CallOptions): Promise<PayeeVerification>;
 }
 
+/**
+ * The answer to {@link PayeeDirectory.status}. Only CLEARED admits a payout; PENDING, BLOCKED,
+ * and NONE all reject the same way, so the distinction is for operators, not the core.
+ */
 export type PayeeVerification = {
   state: 'CLEARED' | 'PENDING' | 'BLOCKED' | 'NONE';
 };
@@ -205,6 +273,11 @@ export interface Rates {
  */
 export type Rate = { rate: bigint; scale: number; rateId: string };
 
+/**
+ * Structured logging. `log` is synchronous and called on hot paths, so it must not throw and
+ * should hand off rather than block. Call sites put policy facts and identifiers in `fields`,
+ * never secrets (credentials live in {@link Ports.secrets}, which is never logged).
+ */
 export interface Logger {
   log(
     level: 'debug' | 'info' | 'warn' | 'error',
@@ -213,6 +286,11 @@ export interface Logger {
   ): void;
 }
 
+/**
+ * Metrics. Both methods are called synchronously on the request path, so they must not throw or
+ * block — buffer and ship out of band. `count` accumulates; `observe` records one point-in-time
+ * sample (the core observes wall times in milliseconds and backlog gauges as row counts).
+ */
 export interface Meter {
   count(name: string, n: number, tags?: Record<string, string>): void;
 
@@ -227,6 +305,11 @@ export interface Meter {
  * for postings, legs, and the chart of accounts.
  */
 export interface Ledger {
+  /**
+   * Whether the ledger accepts postings against `account`: a registered platform account or any
+   * well-formed user wallet. The posting guard turns a false into an UNKNOWN_ACCOUNT fault, so a
+   * typo can never mint a new account and strand a balance on it.
+   */
   hasAccount(account: AccountRef, options?: CallOptions): Promise<boolean>;
 
   /** Takes a row lock on an account so concurrent operations can't race on its balance. */
@@ -241,11 +324,22 @@ export interface Ledger {
     options?: CallOptions,
   ): Promise<void>;
 
+  /**
+   * Commits one posting under the caller's `txnId`: stamps `postedAt`, assigns the next commit
+   * sequence, extends each leg account's hash chain, and folds each leg into the account's
+   * running balance — all atomic with the enclosing {@link Store.transaction}. Callers take the
+   * account locks first (`lock`/`lockMany`), so chain heads never fork.
+   */
   append(posting: Posting, options?: CallOptions): Promise<Transaction>;
 
   /** A maintained running total: one read, not a sum over the account's whole history. */
   balance(account: AccountRef, options?: CallOptions): Promise<Amount>;
 
+  /**
+   * The account's entries whose `postedAt` falls in the half-open `range`, in commit order.
+   * Each entry's amount is the leg's signed effect on the account's balance (`balanceDelta`),
+   * not the raw debit-positive leg.
+   */
   statement(
     account: AccountRef,
     range: Range,
@@ -333,6 +427,10 @@ export interface Store {
     options?: CallOptions,
   ): Promise<T>;
 
+  /**
+   * Releases the store's resources — the SQL engines end their connection pool. Terminal: no
+   * call on the store is valid after it.
+   */
   close(): Promise<void>;
 }
 
@@ -451,6 +549,10 @@ export interface ReplayStore {
 
 /** Stores the summary of each completed sale, keyed by order id (a separate key from the idempotency key). */
 export interface SaleStore {
+  /**
+   * Upserts by `sale.orderId`. Called inside the charge's transaction, so a rolled-back sale
+   * leaves no row.
+   */
   put(sale: Sale, options?: CallOptions): Promise<void>;
 
   get(orderId: string, options?: CallOptions): Promise<Sale | null>;
@@ -556,6 +658,10 @@ export interface InboxStore {
  * sweep picks up sagas that are due and pushes each one to its next state.
  */
 export interface SagaStore {
+  /**
+   * Upserts by `saga.id`. Called inside requestPayout's transaction with the reserve posting,
+   * so an open saga without its reserve never survives.
+   */
   open(saga: Saga, options?: CallOptions): Promise<void>;
 
   load(id: string, options?: CallOptions): Promise<Saga | null>;
@@ -575,7 +681,11 @@ export interface SagaStore {
     options?: CallOptions & { states?: readonly SagaState[] },
   ): AsyncIterable<Saga>;
 
-  /** Grabs up to `limit` due sagas, each locked so concurrent sweeps take different ones. */
+  /**
+   * Grabs up to `limit` due sagas, each locked so concurrent sweeps take different ones. Only
+   * RESERVED and SUBMITTED rows are candidates: a row still REQUESTED means its opening
+   * transaction crashed partway, and the sweep skips it on purpose.
+   */
   claimDue(
     now: number,
     limit: number,
@@ -594,7 +704,12 @@ export interface SagaStore {
     options?: CallOptions,
   ): Promise<boolean>;
 
-  /** Gives up on a saga that can't make progress, recording why. */
+  /**
+   * Sets the saga FAILED and records `reason`, whatever state it held — no compare-and-set, and
+   * no posting. This is the operator door (exposed over the HTTP store adapter); the payout
+   * sweep fails a saga via `advance` paired with the reserve-release posting in one transaction.
+   * An unknown id changes nothing.
+   */
   deadLetter(id: string, reason: string, options?: CallOptions): Promise<void>;
 
   /**
@@ -607,6 +722,11 @@ export interface SagaStore {
 
 /** Tracks which users own which items or features (entitlements), keyed by SKU (the product code). */
 export interface EntitlementStore {
+  /**
+   * Upserts (userId, sku): re-granting overwrites the attributes and clears an earlier revoke,
+   * so re-buying after a refund restores ownership. Called inside the charge's transaction, so a
+   * rolled-back purchase grants nothing.
+   */
   grant(
     userId: string,
     sku: string,
@@ -614,8 +734,17 @@ export interface EntitlementStore {
     options?: CallOptions,
   ): Promise<void>;
 
+  /**
+   * Marks the grant revoked: `owns` turns false and `list` stops streaming it. An unknown or
+   * already-revoked (userId, sku) changes nothing, and a later grant of the same sku restores
+   * ownership.
+   */
   revoke(userId: string, sku: string, options?: CallOptions): Promise<void>;
 
+  /**
+   * True while a non-revoked grant exists whose `expiresAt` is null or at/after the current
+   * clock (the expiry check is inclusive).
+   */
   owns(userId: string, sku: string, options?: CallOptions): Promise<boolean>;
 
   /**
@@ -635,6 +764,10 @@ export interface EntitlementGrant {
 
 /** Tracks recurring subscriptions and when each is next due to bill. */
 export interface SubscriptionStore {
+  /**
+   * Upserts by `sub.id`. Called inside subscribe's first-charge transaction, so an open
+   * subscription without its anchor posting never survives.
+   */
   open(sub: Subscription, options?: CallOptions): Promise<void>;
 
   load(id: string, options?: CallOptions): Promise<Subscription | null>;
@@ -650,6 +783,10 @@ export interface SubscriptionStore {
     options?: CallOptions,
   ): Promise<Subscription | null>;
 
+  /**
+   * Sets the row CANCELED whatever state it held; an unknown id changes nothing. Terminal: a
+   * canceled subscription never claims due again.
+   */
   cancel(id: string, options?: CallOptions): Promise<void>;
 
   /** Finds up to `limit` subscriptions whose next charge is due, for the renewal sweep. */
@@ -713,6 +850,11 @@ export interface PromoStore {
  * rolls back.
  */
 export interface TrustStore {
+  /**
+   * The subject's velocity over the trailing window ending now; attempts age out as the window
+   * slides, with no fixed reset boundary. A subject with no live attempts reads as zero spent
+   * and zero attempts, so new subjects need no seeding.
+   */
   read(subject: string, options?: CallOptions): Promise<Velocity>;
 
   /** Idempotent on `attempt.idempotencyKey`, so a genuine retry doesn't double-count. */
@@ -732,8 +874,13 @@ export interface TrustStore {
 
 /** Stores signed ledger snapshots. Written only by the background worker. */
 export interface CheckpointStore {
+  /**
+   * Appends a sealed checkpoint. Runs outside any money transaction, so no rollback can delete
+   * a recorded seal.
+   */
   put(checkpoint: Checkpoint, options?: CallOptions): Promise<void>;
 
+  /** The most recently written checkpoint, or null before the first seal. */
   latest(options?: CallOptions): Promise<Checkpoint | null>;
 }
 
@@ -907,6 +1054,7 @@ export const SAGA_STATES = [
   'SETTLED',
   'FAILED',
 ] as const;
+/** One of the payout saga's states, the union {@link SAGA_STATES} enumerates in lifecycle order. */
 export type SagaState = (typeof SAGA_STATES)[number];
 
 /** The stored state of one in-flight payout. */
@@ -945,9 +1093,19 @@ export interface Saga {
   payoutUsd: Amount | null;
 }
 
+/**
+ * The subscription lifecycle states. ACTIVE rows bill each period; CANCELED records a
+ * user-requested stop and LAPSED an unpayable renewal at the attempt cap — both terminal, and
+ * the renewal sweep claims neither.
+ */
 export const SUBSCRIPTION_STATES = ['ACTIVE', 'LAPSED', 'CANCELED'] as const;
+/** One of the subscription lifecycle states {@link SUBSCRIPTION_STATES} enumerates. */
 export type SubscriptionState = (typeof SUBSCRIPTION_STATES)[number];
 
+/**
+ * The stored state of one recurring subscription. The renewal sweep re-charges it every
+ * `periodMs` from `nextDueAt` until it cancels or lapses.
+ */
 export interface Subscription {
   id: string;
 
@@ -1014,9 +1172,12 @@ export interface Attempt {
   idempotencyKey: string;
   amount: Amount;
 
-  /** When the attempt happened, in epoch milliseconds. */
   at: number;
 
+  /**
+   * How the operation resolved. Rejected attempts are recorded too and their amounts count
+   * toward the window's `spent` — a burst of denials is itself a fraud signal.
+   */
   outcome: 'committed' | 'rejected';
 }
 
@@ -1074,6 +1235,10 @@ export interface Range {
 export interface Statement {
   account: AccountRef;
 
+  /**
+   * In commit order; each amount is the leg's signed effect on the account's balance
+   * (`balanceDelta`), not the raw debit-positive leg.
+   */
   entries: ReadonlyArray<{ txnId: string; amount: Amount; postedAt: number }>;
 
   /** Reserved. No read accepts a cursor and every engine returns null; page by the range. */

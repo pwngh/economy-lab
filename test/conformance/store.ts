@@ -1056,7 +1056,32 @@ async function markBilledIsCompareAndSet(store: Store): Promise<void> {
   assert.equal(reloaded!.nextDueAt, secondDue);
 }
 
-/** Registers the shared conformance tests every Store implementation must pass; each adapter calls this once with a factory. */
+/**
+ * Registers the shared conformance suite every {@link Store} implementation must pass — the same
+ * tests the built-in memory, Postgres, and MySQL stores run, with the memory adapter as the
+ * oracle — so a custom store cannot silently diverge from the ledger invariants. Written for
+ * `node --test`: called at the top level of a test file, it declares one `describe` block of 55
+ * tests covering posting appends and bigint balance round-trips, balances re-derived from legs,
+ * chain heads paired with raw leg sums and recomputed over the digest, checkpoints, entitlements,
+ * the session journal, reservation counting, archival, transaction commit and rollback, batch
+ * savepoint isolation, idempotency claim and replay, outbox and inbox once-delivery and
+ * dead-lettering, promo reversal, saga listing and claiming, accrual rows, chain-link paging,
+ * code-unit listing order, retention sweeps, and the table-size gauges. Tests for optional Store
+ * surfaces (idempotency retention, journal pruning, table sizes) skip when the store does not
+ * offer them.
+ *
+ * The factory runs once in a `before` hook. If it throws, every test skips and names the thrown
+ * reason instead of failing the suite — the connect-or-skip contract that lets the suite sit in
+ * CI jobs with no backend provisioned. A store the factory did produce is closed in the `after`
+ * hook.
+ *
+ * @example
+ * import { runStoreConformance } from '@pwngh/economy-lab/testing';
+ * import { myStore } from './my-store.js';
+ *
+ * runStoreConformance('my-store', () => myStore(process.env.DATABASE_URL!));
+ * // node --test runs the suite; passing proves the store upholds the built-ins' contract
+ */
 export function runStoreConformance(
   name: string,
   makeStore: () => Promise<Store> | Store,

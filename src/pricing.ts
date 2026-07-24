@@ -25,15 +25,23 @@ const BPS_TOTAL = 10_000;
 const BPS_TOTAL_BIG = 10_000n;
 
 /**
- * Fixed fee rate for every sale, taken from `input.feeBps` (the spend handler passes
- * `config.platformFeeBps`).
+ * The built-in {@link FeePolicy}: a fixed fee rate for every sale, taken from `input.feeBps`
+ * (the spend handler passes `config.platformFeeBps`).
+ *
+ * The policy returns the credit side of the sale only; the spend handler adds the buyer's
+ * matching debit, which zeroes the posting. The fee comes off the top, rounded up to a whole
+ * credit and capped at the price. The net divides among `recipients` by `shareBps`, each share
+ * rounded down, and the platform revenue credit takes the fee plus the rounding leftover, so
+ * the legs always sum to the full price and no minor unit of the sale is lost. Recipient
+ * shares must sum to 10000 basis points; any other total throws MALFORMED_OPERATION. An empty
+ * recipient list is allowed and sends the whole net to revenue.
  *
  * @example
- *   const policy = flatFee();
- *   const legs = policy({ price: toAmount('CREDIT', 1000n), feeBps: 3000,
- *     recipients: [{ sellerId: 'usr_seller', shareBps: 10000 }] });
- *   // Price 1000 with a 30% fee credits the seller 700 and revenue 300. Both are
- *   // credits, stored negative, so the lines sum to -1000, the full price.
+ * const policy = flatFee();
+ * const legs = policy({ price: toAmount('CREDIT', 1000n), feeBps: 3000,
+ *   recipients: [{ sellerId: 'usr_seller', shareBps: 10000 }] });
+ * // Price 1000 with a 30% fee credits the seller 700 and revenue 300. Both are
+ * // credits, stored negative, so the lines sum to -1000, the full price.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/pricing/ Pricing} for how fee
  *   policies split a sale into ledger lines.

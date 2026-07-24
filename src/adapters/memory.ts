@@ -1252,6 +1252,8 @@ function createTrustStore(
         window.sumMinor -= attempts[window.head]!.amount.minor;
         window.head += 1;
       }
+      // Compact at >= 50% consumed: the copy amortizes to O(1) per attempt and the array never
+      // holds more than 2x the live entries.
       if (window.head > 0 && window.head * 2 >= attempts.length) {
         window.attempts = attempts.slice(window.head);
         window.head = 0;
@@ -1365,6 +1367,10 @@ function createReplayStore(): ReplayStore {
  * function and clock default to deterministic versions, so a plain `memoryStore()` is
  * reproducible.
  *
+ * Overlapping `transaction` calls queue and run one at a time in arrival order, so the memory
+ * store never interleaves writers. `velocityWindowMs` sets the trust store's velocity window and
+ * defaults to one hour, matching the SQL stores.
+ *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage} for the store ports this adapter implements.
  */
 export function memoryStore(deps?: {
@@ -1375,6 +1381,7 @@ export function memoryStore(deps?: {
   const digest = deps?.digest ?? defaultDigest();
   const clock = deps?.clock ?? defaultClock();
 
+  // Default velocity window: one hour, matching the SQL stores.
   const velocityWindowMs = deps?.velocityWindowMs ?? 60 * 60_000;
 
   const ledger = createLedgerStore({ digest, clock });

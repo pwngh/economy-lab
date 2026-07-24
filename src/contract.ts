@@ -44,13 +44,27 @@ import type { Config } from '#src/config.ts';
 
 /** Optional details on an entitlement grant (a user owning an item or feature). */
 export type EntitlementAttributes = {
+  /** How many units the grant confers; a positive integer when present (validated at submit). */
   quantity?: number;
+
+  /** The grant's version, for hosts that version their item definitions. */
   version?: number;
+
+  /** When the entitlement lapses, in epoch milliseconds; null (or absent) means it never expires. */
   expiresAt?: number | null;
+
+  /** Where the grant came from (a promotion, a bundle), recorded on the grant for the audit trail. */
   source?: string;
 };
 
-/** Who is making a request, and what they are allowed to do. */
+/**
+ * Who is making a request, and what they are allowed to do. Three kinds: a `user` may act only
+ * on their own accounts; a `system` service is a trusted internal caller acting on the
+ * platform's behalf (its writes keep working through a maintenance pause); an `operator` is a
+ * human running a manual, fully-audited action — the only kind allowed to run `adjust` and
+ * `reverse`. Build one with `userActor`, `systemActor`, or `operatorActor` rather than
+ * hand-writing the tagged union.
+ */
 export type Principal =
   // An end user (id looks like usr_<uuid>). May only act on their own accounts.
   | { kind: 'user'; userId: string }
@@ -64,7 +78,12 @@ export type Principal =
  * `shareBps` is each recipient's basis points of the post-fee net (100 bps = 1%), and the shares
  * must sum to exactly 10,000 — the platform never keeps an unclaimed remainder.
  */
-export type Recipient = { sellerId: string; shareBps: number };
+export type Recipient = {
+  /** The seller this share belongs to; the sale credits their earned wallet. */
+  sellerId: string;
+  /** This recipient's basis points of the post-fee net (100 bps = 1%); all shares sum to 10,000. */
+  shareBps: number;
+};
 
 /**
  * Every request a caller can submit. Each variant is one action tagged by `kind`, carrying an
@@ -295,6 +314,7 @@ export type Outcome =
 /** The two outcomes that carry a committed transaction; `duplicate` is a success replayed. */
 export type Success = Extract<Outcome, { status: 'committed' | 'duplicate' }>;
 
+/** The outcome arm for a normal decline; its context rides in `detail`, discriminated by `detail.reason`. */
 export type Rejection = Extract<Outcome, { status: 'rejected' }>;
 
 /** A committed posting: the record of money that actually moved. */
@@ -413,9 +433,30 @@ export type EconomyStatus = {
  * submit/read/close surface and its construction.
  */
 export interface Economy {
+  /**
+   * Runs one operation through the full pipeline: validate, authorize, then one all-or-nothing
+   * transaction that claims the idempotency key, screens risk and funds, posts the legs, and
+   * queues the outbound event. Resolves `committed`, `duplicate` (the idempotency key was seen
+   * before — the original transaction returns unchanged, nothing posts twice), or `rejected` (a
+   * normal decline returned as data); a genuine fault throws an `EconomyError` instead. A
+   * rejected operation commits nothing and leaves its idempotency key unclaimed, so a corrected
+   * retry under the same key can still succeed.
+   */
   submit(operation: Operation, options?: CallOptions): Promise<Outcome>;
   read: {
+    /**
+     * The account's current balance in its own currency, from the maintained running total —
+     * one read, not a sum over history; an account never posted to reads as zero. When a cache
+     * port is present this is a read-through, and any cache failure logs and falls back to the
+     * ledger, so a degraded cache can never fail the read. A bare sharded platform account
+     * resolves to its logical balance: the sum over its shard rows.
+     */
     balance(account: AccountRef, options?: CallOptions): Promise<Amount>;
+    /**
+     * One page of the account's entries inside `range` (half-open, epoch milliseconds: `from`
+     * included, `to` not). Paging is by narrowing the range window by window; the returned
+     * cursor is reserved and always null.
+     */
     statement(
       account: AccountRef,
       range: Range,
@@ -497,6 +538,12 @@ export interface Economy {
      */
     health(options?: CallOptions): Promise<HealthReport>;
   };
+  /**
+   * Shuts the economy down by closing its store — the SQL engines close their connection
+   * pools; the memory store has nothing to release. The economy itself holds no other state.
+   * Call it once, after in-flight submits and the worker's sweeps have finished; a submit
+   * after close gets whatever the engine does on a closed pool.
+   */
   close(): Promise<void>;
 }
 

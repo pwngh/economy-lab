@@ -12,85 +12,125 @@
 import type { Saga } from '#src/ports.ts';
 import type { Signal, SignalFeed } from '#src/ops/runtime.ts';
 
+/** What {@link detectDeadlockStorm} found: summed retry volume over the window. */
 export type DeadlockStormFinding = {
   signature: 'deadlock-storm';
+  /** Retry count summed over the window — conflict pressure, not caller-visible failures. */
   retries: number;
   windowMs: number;
 };
 
+/** One stuck saga from {@link detectStuckSagas}; the poll emits one finding per saga. */
 export type StuckSagaFinding = {
   signature: 'stuck-saga';
+  /** The saga row as of the poll; the supervisor re-loads it after acting to verify progress. */
   saga: Saga;
+  /** Milliseconds since the saga's `updatedAt`. */
   ageMs: number;
 };
 
+/** One mismatch signal from {@link detectIntegrityMismatches}. */
 export type IntegrityMismatchFinding = {
   signature: 'integrity-mismatch';
+  /** The signal's capture time — the watermark the caller advances past this episode. */
   at: number;
+  /** Which side carried the evidence: the verify metric or the mismatch log event. */
   channel: 'meter' | 'log';
 };
 
+/** What {@link detectEngineStall} found: acquires started with no completion since. */
 export type EngineStallFinding = {
   signature: 'engine-stall';
+  /** Acquires recorded after the last completed acquire. */
   pending: number;
+  /** How long the oldest of them has been waiting. */
   oldestWaitMs: number;
 };
 
+/** What {@link detectTreasuryBreaches} found past the caller's watermark. */
 export type TreasuryBreachFinding = {
   signature: 'treasury-breach';
   breaches: number;
+  /** The distinct breach metric names seen: backing, float, or both. */
   channels: ReadonlyArray<string>;
+  /** The newest breach signal's capture time — the caller's next watermark. */
   newestAt: number;
 };
 
+/** What {@link detectVelocityAnomaly} found: RISK_DENIED rejection volume over the window. */
 export type VelocityAnomalyFinding = {
   signature: 'velocity-anomaly';
   rejections: number;
+  /** Rejections tallied per operation kind tag; untagged signals tally under `unknown`. */
   byKind: Readonly<Record<string, number>>;
+  /** The window's rejection count normalized to a per-minute rate, rounded. */
   ratePerMin: number;
   windowMs: number;
 };
 
+/** One quiet watchdog from {@link detectSilences}. */
 export type SilenceFinding = {
   signature: 'signal-silence';
+  /** The declared signal name that went quiet. */
   signal: string;
+  /** Time since the later of the last beat and when watching began. */
   silentForMs: number;
 };
 
+/** What {@link detectRetryExhaustion} found: exhausted retry budgets over the window. */
 export type RetryExhaustionFinding = {
   signature: 'retry-exhaustion';
+  /** Submits that failed to their callers after every retry. */
   exhausted: number;
+  /** Exhaustions tallied per engine tag; untagged signals tally under `unknown`. */
   byEngine: Readonly<Record<string, number>>;
   windowMs: number;
 };
 
+/** What {@link detectOutboxBacklog} found in the newest relay gauge pair. */
 export type OutboxBacklogFinding = {
   signature: 'outbox-backlog';
+  /** The newest backlog-age gauge reading. */
   ageMs: number;
+  /** The newest backlog-depth gauge reading, or 0 when no depth sample is buffered. */
   pending: number;
 };
 
+/** What {@link detectWebhookReplayStorm} found: dropped duplicate volume over the window. */
 export type WebhookReplayStormFinding = {
   signature: 'webhook-replay-storm';
   duplicates: number;
+  /** Duplicates tallied per provider tag; untagged signals tally under `unknown`. */
   byProvider: Readonly<Record<string, number>>;
+  /** Duplicates tallied per catching layer: an edge layer held, an inbox layer means leakage. */
   byLayer: Readonly<Record<string, number>>;
   windowMs: number;
 };
 
+/** What {@link detectSlowSeal} found: the slowest completed seal in the window. */
 export type SlowSealFinding = {
   signature: 'checkpoint-seal-slow';
+  /** The slowest completed seal's duration. */
   maxMs: number;
+  /** Completed seals observed in the window. */
   samples: number;
   windowMs: number;
 };
 
+/** What {@link detectInboxDeadLetters} found past the caller's watermark. */
 export type InboxDeadLetterFinding = {
   signature: 'inbox-dead-letter';
+  /** Dead-letter log signals counted; row ids are not buffered, so none are carried. */
   deadLettered: number;
+  /** The newest dead-letter signal's capture time — the caller's next watermark. */
   newestAt: number;
 };
 
+/**
+ * The union of every finding type, one per incident signature. Each carries the evidence its
+ * runbook starts from; the detectors are stateless, so dedupe and watermarks live with the
+ * caller (the supervisor).
+ */
 export type Finding =
   | DeadlockStormFinding
   | StuckSagaFinding
@@ -110,6 +150,12 @@ const TERMINAL_SAGA_STATES: ReadonlySet<Saga['state']> = new Set([
   'FAILED',
 ]);
 
+/**
+ * Sums the named retry metric's values over the trailing window and fires at or above the
+ * threshold, or returns null. Retries measure conflict pressure the retry budget is absorbing,
+ * not failures: callers still succeed while a storm is running, which is why nothing else
+ * surfaces it.
+ */
 export function detectDeadlockStorm(
   signals: SignalFeed,
   now: number,
@@ -127,6 +173,12 @@ export function detectDeadlockStorm(
   return { signature: 'deadlock-storm', retries, windowMs: options.windowMs };
 }
 
+/**
+ * Walks the saga listing and returns one finding per saga that is non-terminal (any state
+ * other than SETTLED or FAILED) and has not been updated for at least `ageMs`. Returns an
+ * empty array when nothing qualifies. Stateless: the same stuck saga is found again on every
+ * poll until it progresses.
+ */
 // SagaStore.list streams newest-updated first, so the stale sagas this detector wants
 // arrive last: every poll walks the full set. Acceptable at demo scale; revisit with a
 // state-filtered listing if a real host ever carries a deep saga history.
@@ -151,9 +203,12 @@ export async function detectStuckSagas(
 const ACQUIRE_METRIC = 'engine.pool.acquire';
 const ACQUIRE_DONE_METRIC = 'engine.pool.acquire_ms';
 
-// Acquires that started and never completed are the one signal a wedged engine still gives
-// off: a stalled pool emits nothing else, so the rule looks at the whole buffer rather than
-// a sliding window that the stall itself would age out of.
+/**
+ * Counts pool acquires recorded after the last completed acquire; fires when the oldest of
+ * them has waited past the grace period, else returns null. The rule scans the whole buffer,
+ * not a sliding window: a stalled pool emits nothing else, so a window would age the stall's
+ * own evidence out. Clears itself — once an acquire completes, the pending set restarts.
+ */
 export function detectEngineStall(
   signals: SignalFeed,
   now: number,
@@ -185,6 +240,12 @@ export function detectEngineStall(
 const MISMATCH_METRIC = 'worker.checkpoint.verify';
 const MISMATCH_LOG = 'worker.checkpoint.mismatch';
 
+/**
+ * Returns one finding per checkpoint-verify mismatch signal strictly newer than
+ * `sinceExclusive`, matching both channels: the verify metric with a mismatch outcome and the
+ * mismatch log event. No threshold — a single mismatch is an incident. The caller advances its
+ * watermark to the newest `at` so an episode is handled once.
+ */
 export function detectIntegrityMismatches(
   signals: SignalFeed,
   sinceExclusive: number,
@@ -204,6 +265,11 @@ const BREACH_METRICS: ReadonlySet<string> = new Set([
   'worker.treasury.float_breach',
 ]);
 
+/**
+ * Counts backing- and float-breach metrics strictly newer than `sinceExclusive`; any hit fires
+ * (there is no threshold to tune — a breached backing invariant is always an incident), none
+ * returns null. `newestAt` is the caller's next watermark.
+ */
 export function detectTreasuryBreaches(
   signals: SignalFeed,
   sinceExclusive: number,
@@ -224,6 +290,12 @@ export function detectTreasuryBreaches(
   };
 }
 
+/**
+ * Sums submit rejections whose reason is RISK_DENIED over the trailing window and fires at or
+ * above the threshold, or returns null. The finding tallies per operation kind and carries a
+ * rounded per-minute rate; a spike is read as a fraud signal (a cohort probing the velocity
+ * limits) before it is read as a tuning problem.
+ */
 export function detectVelocityAnomaly(
   signals: SignalFeed,
   now: number,
@@ -251,9 +323,12 @@ export function detectVelocityAnomaly(
   };
 }
 
-// Watches signals the host declares SHOULD beat on a cadence (a worker sweep, a checkpoint
-// verify). Silence is measured from the later of the last beat and when watching began, so a
-// worker that never started is caught too.
+/**
+ * Checks each declared watchdog — a signal the host says beats on a cadence, such as a worker
+ * sweep — and returns one finding per signal silent for more than twice its declared cadence.
+ * Silence is measured from the later of the last beat and `watchStartedAt`, so a worker that
+ * never started is caught too. Returns an empty array when every watchdog is beating.
+ */
 export function detectSilences(
   signals: SignalFeed,
   now: number,
@@ -279,6 +354,12 @@ export function detectSilences(
   });
 }
 
+/**
+ * Sums exhausted retry-budget signals over the trailing window and fires at or above the
+ * threshold, or returns null. Unlike a deadlock storm these are caller-visible failures: every
+ * exhaustion is a submit that errored back to its caller after the whole budget was spent. The
+ * finding tallies per engine.
+ */
 export function detectRetryExhaustion(
   signals: SignalFeed,
   now: number,
@@ -307,8 +388,12 @@ export function detectRetryExhaustion(
 const BACKLOG_AGE_METRIC = 'worker.relay.backlog_age_ms';
 const BACKLOG_DEPTH_METRIC = 'worker.relay.backlog';
 
-// The gauge pair rides each relay run, so only the newest sample matters: an old high reading
-// followed by a fresh low one means the backlog drained.
+/**
+ * Reads the newest relay backlog-age gauge sample and fires when it is at or past `ageMs`, or
+ * returns null when no sample is buffered or the newest is under the bound. Only the newest
+ * sample matters — the gauge pair rides each relay run, so an old high reading followed by a
+ * fresh low one means the backlog drained. `pending` comes from the newest depth gauge.
+ */
 export function detectOutboxBacklog(
   signals: SignalFeed,
   options: { ageMs: number },
@@ -326,6 +411,12 @@ export function detectOutboxBacklog(
   };
 }
 
+/**
+ * Sums webhook duplicate counts over the trailing window and fires at or above the threshold,
+ * or returns null. Every counted duplicate was already dropped — no money moved twice — so the
+ * finding measures wasted edge work and provider misbehavior, tallied per provider and per
+ * catching layer.
+ */
 export function detectWebhookReplayStorm(
   signals: SignalFeed,
   now: number,
@@ -351,8 +442,12 @@ export function detectWebhookReplayStorm(
   };
 }
 
-// Only completed seals carry a meaningful duration; a skip or retry says nothing about how the
-// re-derivation is scaling.
+/**
+ * Takes the slowest completed checkpoint seal in the trailing window and fires when it is at
+ * or past the threshold, or returns null when no seal completed or all were under it. Only
+ * sealed outcomes count — a skip or retry says nothing about how the re-derivation is scaling
+ * with table growth, which is what this trend watches.
+ */
 export function detectSlowSeal(
   signals: SignalFeed,
   now: number,
@@ -383,8 +478,12 @@ export function detectSlowSeal(
 
 const INBOX_DEAD_LOG = 'worker.inbox.dead_lettered';
 
-// Log fields are never buffered, so the dead rows' ids are invisible here; the store's own
-// reviveDead picks the oldest rows without needing them.
+/**
+ * Counts dead-letter inbox log signals strictly newer than `sinceExclusive` and fires at or
+ * above the threshold, or returns null. Log fields are never buffered, so the dead rows' ids
+ * are invisible here; the remediation lever (the store's reviveDead) picks the oldest dead
+ * rows without needing them. `newestAt` is the caller's next watermark.
+ */
 export function detectInboxDeadLetters(
   signals: SignalFeed,
   sinceExclusive: number,

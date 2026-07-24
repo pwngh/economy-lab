@@ -69,14 +69,19 @@ function assertRateOrder(config: RatesConfig): void {
  * Same-currency conversion returns 1:1. Only CREDIT and USD exist, so any other pair is a wiring bug
  * and throws.
  *
+ * Construction asserts buy >= par >= payout (each read as USD per credit across its own scale) and
+ * throws `CONFIG.INVALID` when the order fails: a credit that could cash out for more than it was
+ * bought or backed at would drain the platform, so a misconfigured deployment fails at wiring, not
+ * at the first cash out.
+ *
  * @example
  * // Example rates: buy at ~120 credits/USD ($0.00833), backed and cashed out at ~200/USD ($0.005),
- * a ~40% spread:
- *   const rates = configuredRates({
- *     buyRate: 8333n, buyScale: 6,
- *     parRate: 5n, parScale: 3,
- *     payoutRate: 5n, payoutScale: 3,
- *   });
+ * // a ~40% spread:
+ * const rates = configuredRates({
+ *   buyRate: 8333n, buyScale: 6,
+ *   parRate: 5n, parScale: 3,
+ *   payoutRate: 5n, payoutScale: 3,
+ * });
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/rates/ Rates} for the dual-rate
  *   credit economy this rate source feeds.

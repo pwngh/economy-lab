@@ -33,14 +33,25 @@ import type { EnvMap } from '#src/env.ts';
  *   for every tunable and its default.
  */
 export interface Config {
+  /** Max clock skew (ms) the HTTP service accepts on a signed webhook's timestamp; a request
+   *  dated outside the window is refused as a replay. Default 5 minutes. */
   replayWindowMs: number;
 
+  /** Retryable-failure cap on a payout saga: at this many attempts the worker stops
+   *  resubmitting, marks the saga FAILED, and returns the reserved credits to the seller's
+   *  earned account. Default 5. */
   maxPayoutAttempts: number;
 
+  /** Delivery-attempt cap per outbox event; the relay dead-letters the event when it is
+   *  reached. Default 10. */
   maxOutboxAttempts: number;
 
+  /** Processing-attempt cap per inbound webhook; the inbox sweep dead-letters the row when it
+   *  is reached or the failure is not retryable. Default 10. */
   maxInboxAttempts: number;
 
+  /** Failed-renewal cap per subscription; at this many attempts the sweep lapses the
+   *  subscription instead of re-billing it. Default 10. */
   maxSubscriptionAttempts: number;
 
   /** Force-fail deadline (ms) for a SUBMITTED payout — unlike `payoutSla.SUBMITTED`, which only
@@ -111,6 +122,7 @@ export interface Config {
    * Settlement (actor 'system'), operator fixes, and reads are never gated.
    */
   pauseStartMs: number | null;
+  /** The window's exclusive end (epoch ms); see `pauseStartMs` for the gate. */
   pauseEndMs: number | null;
 
   /**
@@ -377,6 +389,12 @@ function buildConfig(env: EnvMap): Config {
  * The default {@link Config} without an environment: the exact values {@link loadConfig} derives from
  * an empty env, with any knobs in `overrides` applied on top ({@link mergeConfig} semantics). For
  * tests and the in-memory quickstart that want a Config in hand without assembling an {@link EnvMap}.
+ *
+ * @example
+ * const config = defaultConfig({
+ *   platformFeeBps: 3000,
+ *   maturityHorizonMs: { card: 7 * 24 * 60 * 60_000 }, // the other rails keep their defaults
+ * });
  */
 export function defaultConfig(overrides: Partial<Config> = {}): Config {
   return mergeConfig(loadConfig({}), overrides);

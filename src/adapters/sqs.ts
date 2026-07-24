@@ -17,12 +17,19 @@ import type { Dispatcher, EconomyEvent, CallOptions } from '#src/ports.ts';
 // --- The @aws-sdk/client-sqs surface, typed structurally --------------------------
 
 /**
- * Structural shape of the one SQS client method this adapter calls, so the file compiles without
- * the optional `@aws-sdk/client-sqs` dependency installed. A real `SQSClient` satisfies it.
+ * Structural shape of the command object `SqsClient.send` takes: an object carrying its input
+ * fields, standing in for the SDK's `SendMessageCommand` so the file compiles without the
+ * optional `@aws-sdk/client-sqs` dependency installed.
  */
 export interface SqsCommand {
   readonly input: Record<string, unknown>;
 }
+
+/**
+ * Structural shape of the SQS client the adapter calls: just the `send` method, so a real
+ * `SQSClient` from `@aws-sdk/client-sqs` satisfies it and a test can pass a plain object. The
+ * adapter never imports the SDK; the caller creates and owns the client.
+ */
 export interface SqsClient {
   send(
     command: SqsCommand,
@@ -43,6 +50,10 @@ function sendMessageCommand(input: {
 // --- Outbound dispatcher ----------------------------------------------------------
 
 export interface SqsDispatcherOptions {
+  /**
+   * The full queue URL. A `.fifo` suffix switches on the FIFO-only parameters — dedup by event
+   * id, group by subject — which a standard queue rejects.
+   */
   queueUrl: string;
 
   /** The SQS client the caller created and owns (a real one, or a test stand-in). */
@@ -50,10 +61,23 @@ export interface SqsDispatcherOptions {
 }
 
 /**
- * Builds the dispatcher that publishes events to SQS as JSON messages.
+ * Builds the {@link Dispatcher} that publishes events to SQS as JSON messages, the body encoded
+ * by the shared `encodeEvent` (event-wire.ts). Delivery is at-least-once either way; what varies
+ * is who dedupes. On a FIFO queue (URL ends in `.fifo`) the event id becomes the
+ * `MessageDeduplicationId`, so a resend inside SQS's dedup window is dropped at the queue, and
+ * the event subject becomes the `MessageGroupId`, so one subject's events deliver in order. On a
+ * standard queue those parameters are omitted (SQS rejects them there) and the receiver dedupes
+ * by the event id carried in the body.
  *
  * On failure it throws a retryable `PROVIDER.FAILURE` so the caller's backoff wrapper retries.
- * The event id is attached so the receiver can drop duplicates, because SQS may deliver twice.
+ *
+ * @example
+ * import { SQSClient } from '@aws-sdk/client-sqs';
+ * const dispatch = sqsDispatcher({
+ *   queueUrl: 'https://sqs.us-east-1.amazonaws.com/123456789012/economy-events.fifo',
+ *   client: new SQSClient({ region: 'us-east-1' }),
+ * });
+ * await dispatch(event); // resolves once SQS accepts the message
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/messaging/ Messaging} for how dispatchers deliver events.
  */

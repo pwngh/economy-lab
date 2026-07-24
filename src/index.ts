@@ -276,14 +276,22 @@ export type PortsInit = {
   readonly scheduler?: Scheduler | false;
 };
 
+/** Everything {@link boot} accepts: the {@link PortsInit} overrides plus the worker switch. */
 export type BootInit = PortsInit & {
   /** Default true; false boots the API-process shape with `worker: null`. */
   readonly worker?: boolean;
 };
 
+/**
+ * One {@link preflight} finding. Severity 'error' is exactly what {@link openPorts} refuses;
+ * 'warning' is advisory and blocks nothing.
+ */
 export type PreflightIssue = {
+  /** Stable machine code, e.g. 'secret.missing' or 'port.absent'. */
   readonly code: string;
+  /** The env name or port slot at fault, e.g. 'DATABASE_URL' or 'dispatcher'. */
   readonly path: string;
+  /** Human-readable, states the fix. */
   readonly message: string;
   readonly severity: 'error' | 'warning';
 };
@@ -291,6 +299,11 @@ export type PreflightIssue = {
 /** The runtime quartet a production host wires from one signing key via {@link systemRuntime}. */
 export type Runtime = Pick<Ports, 'clock' | 'ids' | 'digest' | 'signer'>;
 
+/**
+ * What {@link describeEnv} returns: the concrete adapter each env knob selects — kind and URL —
+ * before any driver loads, plus secret presence (never values). 'declined' versus 'missing'
+ * mirrors the production absence policy on {@link preflight}.
+ */
 export type EnvDescription = {
   readonly production: boolean;
   readonly store: {
@@ -319,6 +332,10 @@ export type EnvDescription = {
   readonly velocityWindowMs: number | null;
 };
 
+/**
+ * What {@link boot} returns: the resolved ports, the economy assembled over them, and the worker
+ * bound to that same economy — null when the init declined it with `worker: false`.
+ */
 export type Boot = {
   readonly ports: Ports;
   readonly economy: Economy;
@@ -629,6 +646,13 @@ function describeSecrets(
  * the runtime and external ports with dev stand-ins outside production, opens the store the
  * `DATABASE_URL` scheme names, and applies the production absence policy. Everything
  * {@link preflight} flags as an error throws here as one CONFIG.INVALID.
+ *
+ * @example
+ * const ports = await openPorts(process.env, {
+ *   config: { platformFeeBps: 3000 },
+ *   dispatcher: false, // this deployment runs without outbox delivery, on purpose
+ * });
+ * const economy = createEconomy(ports);
  */
 export async function openPorts(
   env: EnvMap = {},
@@ -740,7 +764,16 @@ function countAbsence(
 
 /**
  * The day-one door: openPorts, createEconomy, and (unless `worker: false`) a worker bound to
- * that economy over the same bag.
+ * that economy over the same bag. Anything a bad env would make {@link openPorts} throw, boot
+ * throws too, so a misconfigured deploy dies at startup.
+ *
+ * @example
+ * const { economy, worker } = await boot(process.env);
+ * const stop = worker?.start(30_000); // payout, outbox, and checkpoint sweeps every 30s
+ * const outcome = await economy.submit(
+ *   topUp({ idempotencyKey: 'idem_1', actor: systemActor('store'), userId: 'usr_1',
+ *           amount: credits(1_200), source: 'card' }),
+ * );
  */
 export async function boot(
   env: EnvMap = {},

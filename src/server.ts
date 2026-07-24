@@ -60,9 +60,13 @@ export type ServerPorts = Pick<
 /** What {@link createServer} returns: a Fetch-native handler for any WinterCG runtime. */
 export type FetchHandler = (request: Request) => Promise<Response>;
 
-// Admission control for `/submit`: each request counts against a caller key and a denial
-// answers 429 with retry-after. The default key is the authenticated principal, else the
-// client address the Node bridge stamps; hosts on other runtimes supply keyFor.
+/**
+ * Admission control for `/submit`: each request counts against a caller key and a denial
+ * answers 429 with retry-after. The default key is the authenticated principal, else the
+ * client address the Node bridge stamps; hosts on other runtimes supply `keyFor`. A throwing
+ * limiter fails open — degraded protection, not degraded availability — and counts
+ * `economy.ratelimit.degraded`.
+ */
 export type RateLimitConfig = {
   limiter: RateLimiter;
   keyFor?: (request: Request, principal?: Principal) => string;
@@ -71,8 +75,10 @@ export type RateLimitConfig = {
 export interface ServerOptions {
   economy: Economy;
 
-  // The narrow pick the routes read: config for webhook policy, secrets for the webhook HMAC,
-  // clock for freshness, meter for the duplicate and degraded counters.
+  /**
+   * The narrow pick the routes read: config for webhook policy, secrets for the webhook HMAC,
+   * clock for freshness, meter for the duplicate and degraded counters.
+   */
   ports: ServerPorts;
 
   /**
@@ -82,26 +88,40 @@ export interface ServerOptions {
    */
   authenticate?: Authenticate | false;
 
+  /**
+   * Handler for verified provider callbacks on `POST /webhooks/:provider`; absent, the route
+   * answers 404.
+   */
   webhook?: WebhookHandler;
 
-  // `false` declares admission control off; absent means off too (infra silence is allowed
-  // here, unlike authentication).
+  /**
+   * `false` declares admission control off; absent means off too (infra silence is allowed
+   * here, unlike authentication).
+   */
   rateLimit?: RateLimitConfig | false;
 
-  // Dedup store for provider `eventId`s: a repeat delivery returns 200 without invoking the
-  // handler. When absent, the host dedups. The claim-last ordering lives at webhookRoute.
+  /**
+   * Dedup store for provider `eventId`s: a repeat delivery returns 200 without invoking the
+   * handler. When absent, the host dedups. The claim-last ordering lives at webhookRoute.
+   */
   replay?: ReplayStore;
 
-  // Browser origins allowed by CORS, matched exactly. Absent means no CORS headers at all, so
-  // cross-origin browser calls fail closed.
+  /**
+   * Browser origins allowed by CORS, matched exactly. Absent means no CORS headers at all, so
+   * cross-origin browser calls fail closed.
+   */
   cors?: { origins: ReadonlyArray<string> };
 
-  // Byte ceiling on request bodies; past it the reply is 413. Defaults to
-  // DEFAULT_MAX_BODY_BYTES, which every legitimate operation fits well under.
+  /**
+   * Byte ceiling on request bodies; past it the reply is 413. Defaults to
+   * {@link DEFAULT_MAX_BODY_BYTES}, which every legitimate operation fits well under.
+   */
   maxBodyBytes?: number;
 
-  // Deadline on reading a request body; past it the reply is 408, so a trickled body cannot
-  // hold the handler open. Defaults to DEFAULT_READ_TIMEOUT_MS.
+  /**
+   * Deadline on reading a request body; past it the reply is 408, so a trickled body cannot
+   * hold the handler open. Defaults to {@link DEFAULT_READ_TIMEOUT_MS}.
+   */
   readTimeoutMs?: number;
 }
 
@@ -894,8 +914,12 @@ function jsonResponse(status: number, payload: unknown): Response {
   });
 }
 
-// RFC 9457 problem details: `title` is the caller-safe message; `detail`/`cause`/stack stay
-// server-side. See https://www.rfc-editor.org/rfc/rfc9457 for the format.
+/**
+ * Builds an RFC 9457 problem+json response. `title` is the caller-safe message; when a fault is
+ * given, its stable `code` and `retryable` flag ride as extensions. `detail`, `cause`, and stack
+ * stay server-side and never reach the wire. See https://www.rfc-editor.org/rfc/rfc9457 for the
+ * format.
+ */
 export function problemResponse(
   status: number,
   title: string,

@@ -191,6 +191,13 @@ function toNumber(minor: bigint): number {
 
 // --- Float coverage: the external half of the treasury tie-out --------------------
 
+/**
+ * Host-implemented read of the USD actually held at the payout provider, for the float-coverage
+ * sweep. It exists because no processor port offers a balance read. The sweep compares the
+ * returned balance against the USD owed by every open payout saga (each valued at its stored
+ * quote) and raises a breach when the float does not cover the obligations. A throw is
+ * normalized as a provider fault and fails only the `floatCoverage` job.
+ */
 export type FloatFeed = {
   balance(options?: CallOptions): Promise<Amount>;
 };

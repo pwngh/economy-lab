@@ -10,6 +10,11 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   symbol across every package entry point. `npm run docs:api` builds it; the site build and
   deploy fold it in.
 
+### Documentation
+
+- TSDoc across the public surface feeds the `/api` reference; `@see` lines pair each symbol
+  with its handbook page.
+
 ## 0.4.3 - 2026-07-23
 
 ### Added

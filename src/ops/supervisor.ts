@@ -29,36 +29,73 @@ import type { AuditPhase, AuditRecord, AuditSink } from '#src/ops/audit.ts';
 import type { StuckSagaFinding } from '#src/ops/detect.ts';
 import type { OpsRuntime, SignalFeed } from '#src/ops/runtime.ts';
 
+/**
+ * The saga store slice the supervisor polls: `list` streams every saga for the stuck-saga
+ * detector's full walk, and `load` re-reads one saga after a sweep — the verify step that
+ * decides whether the action progressed it. A store's `sagas` handle satisfies this directly.
+ */
 export type SagaSource = {
   list(): AsyncIterable<Saga>;
   load(id: string): Promise<Saga | null>;
 };
 
+/**
+ * The tuning surface: per-signature thresholds and windows plus the shared guardrail knobs
+ * (`actionCooldownMs`, `maxActionAttempts`). Every duration is in milliseconds. Passed as a
+ * partial through {@link SupervisorPorts.config}; unset fields keep the
+ * {@link defaultSupervisorConfig} values.
+ */
 export type SupervisorConfig = {
+  /** A non-terminal saga counts as stuck once its last update is at least this old. */
   stuckSagaAgeMs: number;
+  /**
+   * Minimum spacing between two lever actions — tracked per saga for the stuck-saga pass, per
+   * signature for the outbox and inbox passes.
+   */
   actionCooldownMs: number;
+  /** Lever attempts (per the same tracking) before the pass escalates permanently instead of acting. */
   maxActionAttempts: number;
+  /** The meter name the deadlock-storm pass sums, `engine.retry` by default. */
   deadlockMetric: string;
+  /** The deadlock-storm window; also the minimum spacing between two storm reports. */
   deadlockWindowMs: number;
+  /** Retry volume in the window at or above which the storm pass reports. */
   deadlockThreshold: number;
+  /** How long the oldest unanswered pool acquire waits before the stall pass escalates. */
   stallGraceMs: number;
+  /** The velocity-anomaly window; also the minimum spacing between two anomaly reports. */
   anomalyWindowMs: number;
+  /** RISK_DENIED rejections in the window at or above which the velocity pass reports. */
   anomalyThreshold: number;
   /** At or above this many rejections in the window, the velocity pass escalates instead of advising. */
   anomalyEscalationThreshold: number;
+  /** The retry-exhaustion window; also the minimum spacing between two exhaustion reports. */
   retryExhaustionWindowMs: number;
+  /** Exhausted budgets in the window at or above which the exhaustion pass escalates. */
   retryExhaustionThreshold: number;
+  /** Backlog age at or past which the outbox pass re-drives the relay. */
   outboxBacklogAgeMs: number;
+  /** The replay-storm window; also the minimum spacing between two storm reports. */
   webhookReplayWindowMs: number;
+  /** Dropped duplicates in the window at or above which the replay pass reports. */
   webhookReplayThreshold: number;
+  /** A completed checkpoint seal at or past this duration counts as slow. */
   sealLatencyMs: number;
+  /** The slow-seal window; also the minimum spacing between two slow-seal reports. */
   sealLatencyWindowMs: number;
+  /** New dead-letter signals at or above which the inbox pass opens a revive episode. */
   inboxDeadLetterThreshold: number;
   /** Most dead inbox rows one revive episode flips back to pending. */
   inboxReviveLimit: number;
+  /** Signals the host declares as periodic; the silence pass escalates past twice each cadence. */
   watchdogs: ReadonlyArray<{ signal: string; everyMs: number }>;
 };
 
+/**
+ * The defaults every pass runs under when {@link SupervisorPorts.config} leaves a field unset.
+ * `watchdogs` defaults empty — the silence pass watches nothing until the host declares its
+ * periodic signals.
+ */
 export const defaultSupervisorConfig: SupervisorConfig = {
   stuckSagaAgeMs: 300_000,
   actionCooldownMs: 60_000,
@@ -82,13 +119,40 @@ export const defaultSupervisorConfig: SupervisorConfig = {
   watchdogs: [],
 };
 
+/**
+ * What the host injects into {@link createSupervisor}. The required ports cover observation
+ * (clock, signals, sagas), the one mandatory lever (`runSweep`), and the audit sink; the
+ * optional ones add levers and hooks the matching passes use when present and quietly skip
+ * when absent.
+ */
 export type SupervisorPorts = {
   clock: Clock;
+  /** The detector's input, normally an {@link OpsRuntime}'s `signals`. */
   signals: SignalFeed;
+  /** The saga store slice the stuck-saga pass polls and re-reads. */
   sagas: SagaSource;
+  /**
+   * The stuck-saga lever: one guarded worker sweep, typically
+   * `(now) => worker.sweep({ now, limit })`. One sweep serves every actionable saga; the pass
+   * verifies by re-loading each saga afterward. Also the outbox fallback when `runRelay` is
+   * absent.
+   */
   runSweep: (now: number) => Promise<unknown>;
+  /**
+   * Receives every audit record synchronously as the tick emits it, before the record is also
+   * returned from `tick()`. A throwing sink aborts the tick.
+   */
   audit: AuditSink;
+  /**
+   * Runs the integrity prover once when a mismatch episode is detected; its resolved value (or
+   * `{ proverFailed }` when it throws) rides the escalation record as evidence. Absent, the
+   * escalation carries a null proof.
+   */
   prove?: () => Promise<unknown>;
+  /**
+   * Called once per escalation with the same record already sent to `audit` — the pager hook.
+   * Absent, escalations still reach the audit trail.
+   */
   escalate?: (record: AuditRecord) => void;
   /**
    * Pauses the host worker's scheduled loop — the integrity pass's containment lever.
@@ -103,11 +167,23 @@ export type SupervisorPorts = {
   runRelay?: (now: number) => Promise<unknown>;
   /** Flips up to `limit` dead inbox rows back to pending, typically `store.inbox.reviveDead`. */
   reviveInbox?: (limit: number) => Promise<ReadonlyArray<{ id: string }>>;
+  /** Per-field overrides merged over {@link defaultSupervisorConfig}. */
   config?: Partial<SupervisorConfig>;
 };
 
+/** The handle {@link createSupervisor} returns. */
 export type Supervisor = {
+  /**
+   * Runs every detection pass once against the current clock and returns the audit records the
+   * tick emitted (each already delivered to the audit sink), empty when nothing fired. A tick
+   * that arrives while one is still running returns an empty array without running — overlap
+   * is skipped, not queued.
+   */
   tick(): Promise<ReadonlyArray<AuditRecord>>;
+  /**
+   * Ticks on the supplied Scheduler every `intervalMs` and returns the cancel function.
+   * Present only when {@link createSupervisor} was given a Scheduler.
+   */
   start?(intervalMs: number): () => void;
 };
 
@@ -188,6 +264,31 @@ export function createSupervisorFrom(
   return createSupervisor({ ...ports, signals: runtime.signals }, scheduler);
 }
 
+/**
+ * Builds the supervisor from its injected ports. Each tick runs the twelve incident passes
+ * once: tier-3 signatures report or escalate with an advisory and touch nothing, while the
+ * three tier-1 signatures (stuck-saga, outbox-backlog, inbox-dead-letter) call their lever
+ * under the shared guardrails — the cooldown spaces actions out, the attempt cap converts
+ * further action into a permanent escalation, and any integrity episode sets a containment
+ * latch that silences every lever until the supervisor is restarted. The integrity pass itself
+ * never fixes: it proves once, escalates, pauses the worker, and latches. All dedupe state is
+ * in-memory; a restart starts clean.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/ops/the-supervisor/ The supervisor}
+ * for the tier model and the per-signature runbooks.
+ *
+ * @example
+ * const ops = createOpsRuntime({ meter, logger, clock });
+ * // compose the economy and worker over ops.meter / ops.logger, then:
+ * const supervisor = createSupervisor({
+ *   clock,
+ *   signals: ops.signals,
+ *   sagas: ports.store.sagas,
+ *   runSweep: (now) => worker.sweep({ now, limit: 10 }),
+ *   audit: jsonlAuditSink((line) => trail.write(`${line}\n`)),
+ * });
+ * const records = await supervisor.tick();
+ */
 export function createSupervisor(
   deps: SupervisorPorts,
   scheduler?: Scheduler,

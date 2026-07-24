@@ -46,6 +46,9 @@ export function spendable(userId: string): AccountRef {
 
 /**
  * A user's earned account: revenue owed to them as a seller, which the platform must pay out.
+ * Cashing out goes through `requestPayout`, which moves earned money into the payout reserve;
+ * earned balances class as `excluded` in the backing check, so only the custodial spendable
+ * side raises the required trust cash.
  */
 export function earned(userId: string): AccountRef {
   return `${userId}:earned` as AccountRef;
@@ -53,6 +56,9 @@ export function earned(userId: string): AccountRef {
 
 /**
  * A user's promo account: a marketing grant that expires.
+ * A user's promo account: a marketing grant that expires. Its offsetting entry sits in
+ * `SYSTEM.PROMO_FLOAT`, and promo balances class as `excluded` in the backing check — granted
+ * credits are the platform's marketing spend, not user money held in trust.
  */
 export function promo(userId: string): AccountRef {
   return `${userId}:promo` as AccountRef;

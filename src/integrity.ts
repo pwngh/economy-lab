@@ -281,6 +281,11 @@ function everyCurrencyBalances(
 
 // --- The all-checks roll-up (imported by test/integrity.test.ts) -------------------
 
+/**
+ * Rolls a {@link ProveReport} into one verdict: true only when all five flags hold — conserved,
+ * backed, no overdraft, chain intact, and consistent. The one-line gate for CI and audit
+ * scripts that only need pass/fail; the report itself says which property broke.
+ */
 export function allInvariantsHold(report: ProveReport): boolean {
   return (
     report.conserved &&
