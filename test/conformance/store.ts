@@ -1527,6 +1527,25 @@ async function batchRollbackForgetsFirstUsedAccounts(
   );
 }
 
+async function tableSizesGaugeTracksGrowth(store: Store): Promise<void> {
+  const sizes = store.tableSizes!.bind(store);
+  const before = await sizes();
+  for (const value of Object.values(before)) {
+    assert.ok(value >= 0);
+  }
+  const session = `sess_conf_sizes_${randomUUID()}`;
+  await store.movements.append([
+    movementRow(session, 0, `${session}_m0`),
+    movementRow(session, 1, `${session}_m1`),
+    movementRow(session, 2, `${session}_m2`),
+  ]);
+  const key = `sizes_${randomUUID()}`;
+  assert.deepEqual(await store.idempotency.claim(key), { claimed: true });
+  const after = await sizes();
+  assert.equal(after.movements - before.movements, 3);
+  assert.equal(after.idempotency - before.idempotency, 1);
+}
+
 /**
  * Registers the shared conformance suite every {@link Store} implementation must pass — the same
  * tests the built-in memory, Postgres, and MySQL stores run, with the memory adapter as the
@@ -1686,5 +1705,9 @@ export function runStoreConformance(
       withStore(t, listsPostingsNewestFirst));
     test('streams an account lineage in commit order (read.lineage)', (t) =>
       withStore(t, streamsAccountLineageInOrder));
+    test('gauges secondary-table sizes and tracks growth', (t) =>
+      store?.tableSizes === undefined
+        ? t.skip('no table-size gauge')
+        : withStore(t, tableSizesGaugeTracksGrowth));
   });
 }

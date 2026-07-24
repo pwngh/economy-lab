@@ -443,6 +443,13 @@ export interface Ledger {
   ): Promise<LinkPage>;
 
   /**
+   * How many postings the ledger holds (the newest commit sequence) — the history-size gauge
+   * the capacity report reads, O(1) on the SQL engines via the seq index. Optional; a store
+   * without it reports the gauge as unknown, never as zero.
+   */
+  historySize?(options?: CallOptions): Promise<number>;
+
+  /**
    * Streams every committed posting with its full legs, newest first by commit sequence — a total
    * order, so ties never reorder a page.
    */
@@ -497,6 +504,12 @@ export interface Store {
    */
   reservations?: ReservationStore;
 
+  /**
+   * Row counts of the secondary tables the capacity report gauges — the growth surfaces
+   * retention governs. Optional; absent, those gauges read as unknown, never zero.
+   */
+  tableSizes?(options?: CallOptions): Promise<TableSizes>;
+
   /** Runs `work` in one database transaction: everything it writes commits together or not at all. */
   transaction<T>(
     work: (unit: Unit) => Promise<T>,
@@ -523,6 +536,16 @@ export interface Store {
    */
   close(): Promise<void>;
 }
+
+/** Row counts of the growing secondary tables (see {@link Store.tableSizes}). */
+export type TableSizes = {
+  movements: number;
+  idempotency: number;
+  sales: number;
+  outbox: number;
+  sagas: number;
+  accruals: number;
+};
 
 /**
  * One work item's slot in a {@link Store.batchTransaction}: its return value, or the error its

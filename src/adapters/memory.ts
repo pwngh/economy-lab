@@ -60,6 +60,7 @@ import type {
   StoredLink,
   Subscription,
   SubscriptionStore,
+  TableSizes,
   TrustStore,
   Unit,
   Velocity,
@@ -487,6 +488,9 @@ function createLedgerStore(deps: {
 
     linksPage: async (cursor, limit) => linksPageOf(state.log, cursor, limit),
 
+    historySize: async () =>
+      state.log.length === 0 ? 0 : state.log[state.log.length - 1]!.seq,
+
     list: () => listPostingsOf(state.log),
 
     __tamper: (txnId, mutate) => tamperPosting(state, txnId, mutate),
@@ -713,10 +717,14 @@ function tamperPosting(
 
 // A new key is marked pending through the journal, so a rollback returns it to unused and a
 // failed attempt never permanently consumes the key.
-function createIdempotencyStore(): IdempotencyStore & Participant {
+function createIdempotencyStore(deps: {
+  clock: Clock;
+}): IdempotencyStore & Participant & { size(): number } {
   const journal = createJournal();
   const committed = new Map<string, Transaction>();
   const pending = new Set<string>();
+  // Row birth time (claim or first record) — the SQL twins' created_at.
+  const at = new Map<string, number>();
 
   return {
     journal,
@@ -727,18 +735,35 @@ function createIdempotencyStore(): IdempotencyStore & Participant {
         return { claimed: false, transaction: prior };
       }
       pending.add(key);
-      journal.record(() => pending.delete(key));
+      const hadAt = at.has(key);
+      if (!hadAt) {
+        at.set(key, deps.clock.now());
+      }
+      journal.record(() => {
+        pending.delete(key);
+        if (!hadAt) {
+          at.delete(key);
+        }
+      });
       return { claimed: true };
     },
 
     record: async (key, transaction, _options?: CallOptions) => {
       committed.set(key, transaction);
       pending.delete(key);
+      const hadAt = at.has(key);
+      if (!hadAt) {
+        at.set(key, deps.clock.now());
+      }
       journal.record(() => {
         committed.delete(key);
         pending.add(key);
+        if (!hadAt) {
+          at.delete(key);
+        }
       });
     },
+    size: () => at.size,
   };
 }
 
@@ -746,11 +771,12 @@ function createIdempotencyStore(): IdempotencyStore & Participant {
 
 // Records each completed sale, keyed by order id (separate from the idempotency key), so a
 // later refund can reverse what the original purchase posted.
-function createSaleStore(): SaleStore & Participant {
+function createSaleStore(): SaleStore & Participant & { size(): number } {
   const journal = createJournal();
   const rows = new Map<string, Sale>();
   return {
     journal,
+    size: () => rows.size,
     put: async (sale, _options?: CallOptions) => {
       recordRowUndo(journal, rows, sale.orderId);
       rows.set(sale.orderId, sale);
@@ -763,7 +789,9 @@ function createSaleStore(): SaleStore & Participant {
 
 // Transactional outbox: events are saved in the money move's transaction and relayed later, at
 // least once. The clock stamps enqueue times so `stats` can age the backlog.
-function createOutboxStore(deps: { clock: Clock }): OutboxStore & Participant {
+function createOutboxStore(deps: {
+  clock: Clock;
+}): OutboxStore & Participant & { size(): number } {
   const journal = createJournal();
   const rows = new Map<string, OutboxMessage>();
   const order: string[] = [];
@@ -771,6 +799,7 @@ function createOutboxStore(deps: { clock: Clock }): OutboxStore & Participant {
 
   return {
     journal,
+    size: () => rows.size,
     enqueue: async (message, _options?: CallOptions) => {
       rows.set(message.id, message);
       order.push(message.id);
@@ -1001,7 +1030,7 @@ async function findSagaByRef(
 
 // `advance` changes a saga only if it is still in the expected `from` state, so two overlapping
 // background runs can't advance it twice.
-function createSagaStore(): SagaStore & Participant {
+function createSagaStore(): SagaStore & Participant & { size(): number } {
   const journal = createJournal();
   const rows = new Map<string, Saga>();
   // Max `updatedAt` per user, so `lastPayoutAt` needs no scan. `updatedAt` only increases, so the
@@ -1023,6 +1052,7 @@ function createSagaStore(): SagaStore & Participant {
 
   return {
     journal,
+    size: () => rows.size,
     open: async (saga, _options?: CallOptions) => {
       recordRowUndo(journal, rows, saga.id);
       rows.set(saga.id, { ...saga });
@@ -1515,7 +1545,7 @@ function accrualStatsOf(
 // Append-only and never part of a money transaction (see MovementJournal in ports.ts). The batch
 // is validated in full before any row lands, so a conflict rejects all of it — the in-process
 // mirror of the SQL engines' single-statement multi-row INSERT.
-function createMovementJournal(): MovementJournal {
+function createMovementJournal(): MovementJournal & { size(): number } {
   const log: Movement[] = [];
   const idemKeys = new Set<string>();
   const positions = new Set<string>();
@@ -1554,6 +1584,7 @@ function createMovementJournal(): MovementJournal {
       }
       yield* [...seen].sort();
     },
+    size: () => log.length,
   };
 }
 
@@ -1628,6 +1659,27 @@ function createReplayStore(): ReplayStore {
   };
 }
 
+// The store-level size gauge over the memory twins' collections.
+function tableSizesOf(
+  unit: {
+    idempotency: { size(): number };
+    sales: { size(): number };
+    outbox: { size(): number };
+    sagas: { size(): number };
+    accruals: { size(): number };
+  },
+  movements: { size(): number },
+): () => Promise<TableSizes> {
+  return async () => ({
+    movements: movements.size(),
+    idempotency: unit.idempotency.size(),
+    sales: unit.sales.size(),
+    outbox: unit.outbox.size(),
+    sagas: unit.sagas.size(),
+    accruals: unit.accruals.size(),
+  });
+}
+
 // --- Assembled store --------------------------------------------------------------
 
 /**
@@ -1656,7 +1708,7 @@ export function memoryStore(deps?: {
   const velocityWindowMs = deps?.velocityWindowMs ?? 60 * 60_000;
 
   const ledger = createLedgerStore({ digest, clock });
-  const idempotency = createIdempotencyStore();
+  const idempotency = createIdempotencyStore({ clock });
   const sales = createSaleStore();
   const outbox = createOutboxStore({ clock });
   const inbox = createInboxStore();
@@ -1697,6 +1749,7 @@ export function memoryStore(deps?: {
     movements,
     replay,
     reservations,
+    tableSizes: tableSizesOf(unit, movements),
     transaction: (work) => {
       const run = tail.then(async () => {
         let begun = 0;

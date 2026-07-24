@@ -434,6 +434,87 @@ export type EconomyStatus = {
 };
 
 /**
+ * The capacity gauges behind the scale knobs, read live from the store. Every `null` means the
+ * store does not offer that gauge — unknown, never zero. `advisories` are stated facts against
+ * {@link CAPACITY_THRESHOLDS} (documented, not configurable per call): the system informs, the
+ * host decides; no advisory ever changes behavior.
+ */
+export type CapacityReport = {
+  /** Total postings (newest commit sequence) — the partitioning/archival signal. */
+  readonly historySize: number | null;
+
+  /** Rolling re-proof: the verified-through watermark and its age; null before the first rotation. */
+  readonly reproof: {
+    readonly rotatedAt: number | null;
+    readonly ageMs: number | null;
+  };
+
+  /** Latest sealed checkpoint: when, how many account heads, and its age. */
+  readonly checkpoint: {
+    readonly at: number | null;
+    readonly count: number | null;
+    readonly ageMs: number | null;
+  };
+
+  /** Accrual drain backlog: pending total (minor units, encoded) and oldest row age. */
+  readonly accruals: {
+    readonly pendingMinor: string;
+    readonly oldestPendingAgeMs: number | null;
+  };
+
+  /** Netting journal footprint: distinct session ids, counted up to the cap (null = no gauge). */
+  readonly sessions: {
+    readonly count: number | null;
+    readonly capped: boolean;
+  };
+
+  /** Shared reservation counter footprint: accounts with a row (null = no shared counter). */
+  readonly reservations: {
+    readonly accounts: number | null;
+    readonly capped: boolean;
+  };
+
+  /**
+   * Secondary-table row counts (every value null when the store offers no size gauge): the
+   * unbounded growth surfaces the retention sweep and host policy govern.
+   */
+  readonly tables: {
+    readonly movements: number | null;
+    readonly idempotency: number | null;
+    readonly sales: number | null;
+    readonly outbox: number | null;
+    readonly sagas: number | null;
+    readonly accruals: number | null;
+  };
+
+  /** Stated facts (never actions) the thresholds below produced from the gauges. */
+  readonly advisories: ReadonlyArray<string>;
+};
+
+/**
+ * The documented crossover thresholds {@link CapacityReport.advisories} states facts against.
+ * Crossing one changes nothing by itself; it is the signal to activate the corresponding knob
+ * (partitioning DDL, archival mover, drain cadence, orphan sweep).
+ */
+export const CAPACITY_THRESHOLDS = {
+  /** History size where partitioned DDL / the archival mover earn their provisioning cost. */
+  historySizePostings: 10_000_000,
+  /** A re-proof watermark older than this means rotation lags the coverage story. */
+  reproofMaxAgeMs: 24 * 60 * 60_000,
+  /** A sealed checkpoint older than this means the seal cadence stalled. */
+  checkpointMaxAgeMs: 60 * 60_000,
+  /** An accrual row pending longer than this means the drain lags its backlog. */
+  accrualMaxPendingAgeMs: 60 * 60_000,
+  /**
+   * Secondary-table rows where growth needs a retention answer: the retention sweep's horizons
+   * where one exists, a host policy where none does.
+   */
+  tableRows: 10_000_000,
+  /** Gauge walks stop counting here; a capped count reports `>= cap`, never a made-up total. */
+  enumerationCap: 10_000,
+} as const;
+
+/**
  * Public surface of a running economy: submit operations that change money, read balances and
  * statements, run the integrity check, shut down. Built by `createEconomy` in `economy.ts`.
  *
@@ -513,6 +594,11 @@ export interface Economy {
      * clock, not stored, so it always reflects the live window.
      */
     status(): EconomyStatus;
+    /**
+     * The capacity gauges (see {@link CapacityReport}), with advisories as stated facts: the
+     * system measures, the host decides; nothing here flips any behavior.
+     */
+    capacity(options?: CallOptions): Promise<CapacityReport>;
     /**
      * Every account that has a balance row, streamed. A real ledger can hold many, so iterate and
      * stop when you've seen enough rather than collecting them all. Lets a reader enumerate accounts

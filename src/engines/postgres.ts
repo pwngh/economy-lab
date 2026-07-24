@@ -125,6 +125,7 @@ import type {
   Store,
   StoredLink,
   SubscriptionStore,
+  TableSizes,
   TimelineOptions,
   TrustStore,
   Unit,
@@ -482,6 +483,12 @@ function createLedgerStore(env: LedgerEnv): Ledger {
       }));
     },
     linksPage: (cursor, limit) => linksPageOf(q, cursor, limit),
+    historySize: async () => {
+      const result = await q.query(
+        `select coalesce(max(seq), 0) as size from postings`,
+      );
+      return Number(result.rows[0]!.size);
+    },
     list: () => listPostingsOf(q),
   };
 }
@@ -1930,6 +1937,27 @@ function createMovementJournal(pool: PgPool): MovementJournal {
   };
 }
 // --- Reservation store ------------------------------------------------------------
+// The six growth gauges in one statement; count(*) comes back as a string, converted explicitly.
+async function readTableSizes(pool: PgPool): Promise<TableSizes> {
+  const result = await pool.query(
+    `select
+       (select count(*) from instance_movements) as movements,
+       (select count(*) from idempotency)        as idempotency,
+       (select count(*) from sales)              as sales,
+       (select count(*) from outbox)             as outbox,
+       (select count(*) from payout_sagas)       as sagas,
+       (select count(*) from accrual_rows)       as accruals`,
+  );
+  const row = result.rows[0]!;
+  return {
+    movements: Number(row.movements),
+    idempotency: Number(row.idempotency),
+    sales: Number(row.sales),
+    outbox: Number(row.outbox),
+    sagas: Number(row.sagas),
+    accruals: Number(row.accruals),
+  };
+}
 // The multi-node counter (see the reservations banner in db/postgresql-schema.sql): the upsert
 // folds the delta and RETURNING carries the post-add total in the same atomic statement, so the
 // caller's add-then-check never reads a total that misses its own add.
@@ -2271,6 +2299,7 @@ export async function postgresStore(
     movements: createMovementJournal(pool),
     reservations: createReservationStore(pool),
     replay: createReplayStore(pool),
+    tableSizes: () => readTableSizes(pool),
     transaction: async (work) => runInTransaction(pool, txDeps, work),
     batchTransaction: async (works) => runBatchTransaction(pool, txDeps, works),
     close: async () => {

@@ -97,6 +97,7 @@ import type {
   Store,
   StoredLink,
   SubscriptionStore,
+  TableSizes,
   TimelineOptions,
   TrustStore,
   Unit,
@@ -554,6 +555,14 @@ function createLedgerStore(deps: ExecDeps): Ledger {
     },
 
     linksPage: (cursor, limit) => linksPageOf(deps.exec, cursor, limit),
+
+    historySize: async () => {
+      const found = await rows(
+        deps.exec,
+        'SELECT COALESCE(MAX(seq), 0) AS size FROM postings',
+      );
+      return Number(found[0]!.size);
+    },
 
     list: () => listPostingsOf(deps.exec),
   };
@@ -1888,6 +1897,27 @@ function createMovementJournal(pool: MysqlPool): MovementJournal {
   };
 }
 // --- Reservation store ------------------------------------------------------------
+async function readTableSizes(pool: MysqlPool): Promise<TableSizes> {
+  const found = await rows(
+    pool,
+    `SELECT
+       (SELECT COUNT(*) FROM instance_movements) AS movements,
+       (SELECT COUNT(*) FROM idempotency)        AS idempotency,
+       (SELECT COUNT(*) FROM sales)              AS sales,
+       (SELECT COUNT(*) FROM outbox)             AS outbox,
+       (SELECT COUNT(*) FROM payout_sagas)       AS sagas,
+       (SELECT COUNT(*) FROM accrual_rows)       AS accruals`,
+  );
+  const row = found[0]!;
+  return {
+    movements: Number(row.movements),
+    idempotency: Number(row.idempotency),
+    sales: Number(row.sales),
+    outbox: Number(row.outbox),
+    sagas: Number(row.sagas),
+    accruals: Number(row.accruals),
+  };
+}
 // The multi-node counter (see the reservations banner in db/postgresql-schema.sql). MySQL's
 // upsert cannot return the updated value, so the read is a second autocommitted statement: it
 // sees a total at-or-after our own add (a concurrent add is either already inside it or arrives
@@ -2265,6 +2295,7 @@ export function mysqlStore(deps: {
     movements: createMovementJournal(pool),
     reservations: createReservationStore(pool),
     replay: createReplayStore(pool),
+    tableSizes: () => readTableSizes(pool),
 
     // The whole unit of work lives in this one transaction, so a transient InnoDB abort (deadlock or
     // lock-wait timeout) committed nothing and withTransientRetry can re-run all of `work` in a fresh

@@ -2,6 +2,14 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
+## Unreleased (0.7.0)
+
+### Added
+
+- `read.capacity()` reports history size, verified-through and checkpoint ages, accrual backlog,
+  and session and reservation footprints, with an advisory per gauge against the exported
+  `CAPACITY_THRESHOLDS`. Breaking: custom `Economy` implementations must provide it.
+
 ## 0.6.3 - 2026-07-23
 
 ### Added

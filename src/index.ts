@@ -183,6 +183,7 @@ export type { ErrorCode, RejectionCode } from '#src/errors.ts';
 export type { Economy } from '#src/economy.ts';
 // The env-map shape every construction entry point takes; parsing rules live in src/env.ts.
 export type { EnvMap } from '#src/env.ts';
+export { CAPACITY_THRESHOLDS } from '#src/contract.ts';
 export type {
   Operation,
   Outcome,
@@ -198,6 +199,7 @@ export type {
   ProveReport,
   HealthReport,
   EconomyStatus,
+  CapacityReport,
 } from '#src/contract.ts';
 export type { Amount, Currency } from '#src/money.ts';
 export type { AccountRef } from '#src/accounts.ts';

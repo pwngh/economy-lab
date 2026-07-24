@@ -59,8 +59,10 @@ import type { AccountRef } from '#src/accounts.ts';
 import type { Config } from '#src/config.ts';
 import type { BackingTotals } from '#src/integrity.ts';
 import type { Amount, Currency } from '#src/money.ts';
+import { CAPACITY_THRESHOLDS } from '#src/contract.ts';
 import type {
   BatchOutcome,
+  CapacityReport,
   Ctx,
   Economy,
   EconomyStatus,
@@ -118,6 +120,7 @@ export function createEconomy(ports: Ports): Economy {
       entitled: (userId, sku, options) =>
         store.entitlements.owns(userId, sku, options),
       status: () => economyStatus(ctx),
+      capacity: (options) => capacityReport(store, ctx, options),
       accounts: (options) => store.ledger.balanceAccounts(options),
       payouts: (options) => store.sagas.list(options),
       postings: (options) => store.ledger.list(options),
@@ -958,6 +961,170 @@ async function emitEvents(
  * is an independent audit rather than the primary guard, how `backed` converts custodial credits to
  * USD, and how the two provers differ.
  */
+// Counts an async iterable up to the enumeration cap; a capped walk reports how far it got and
+// that it stopped, never a made-up total.
+async function countCapped(
+  iterable: AsyncIterable<unknown>,
+): Promise<{ count: number; capped: boolean }> {
+  let count = 0;
+  for await (const item of iterable) {
+    void item;
+    count += 1;
+    if (count >= CAPACITY_THRESHOLDS.enumerationCap) {
+      return { count, capped: true };
+    }
+  }
+  return { count, capped: false };
+}
+
+// The capacity gauges (see CapacityReport in contract.ts): read live, each independently, so a
+// store missing one surface still reports the rest. Advisories are stated facts against
+// CAPACITY_THRESHOLDS.
+async function capacityReport(
+  store: Store,
+  ctx: Ctx,
+  options?: CallOptions,
+): Promise<CapacityReport> {
+  const now = ctx.clock.now();
+  const historySize =
+    store.ledger.historySize === undefined
+      ? null
+      : await store.ledger.historySize(options);
+  const reproofState =
+    store.checkpoints.reproof === undefined
+      ? null
+      : await store.checkpoints.reproof(options);
+  const rotatedAt = reproofState?.rotatedAt ?? null;
+  const latest = await store.checkpoints.latest(options);
+  const accrualStats = await store.accruals.stats(options);
+  const sessions =
+    store.movements.sessionIds === undefined
+      ? { count: null, capped: false }
+      : await countCapped(store.movements.sessionIds(options));
+  const reservations =
+    store.reservations === undefined
+      ? { accounts: null, capped: false }
+      : await countCapped(store.reservations.entries(options)).then((c) => ({
+          accounts: c.count,
+          capped: c.capped,
+        }));
+  const tables = await tableGauges(store, options);
+
+  return {
+    historySize,
+    reproof: {
+      rotatedAt,
+      ageMs: rotatedAt === null ? null : now - rotatedAt,
+    },
+    checkpoint: {
+      at: latest?.at ?? null,
+      count: latest?.count ?? null,
+      ageMs: latest === null ? null : now - latest.at,
+    },
+    accruals: {
+      pendingMinor: accrualStats.pendingMinor.toString(),
+      oldestPendingAgeMs: accrualStats.oldestPendingAgeMs,
+    },
+    sessions,
+    reservations,
+    tables,
+    advisories: capacityAdvisories({
+      now,
+      historySize,
+      rotatedAt,
+      checkpointAt: latest?.at ?? null,
+      oldestPendingAgeMs: accrualStats.oldestPendingAgeMs,
+      tables,
+    }),
+  };
+}
+
+async function tableGauges(
+  store: Store,
+  options?: CallOptions,
+): Promise<CapacityReport['tables']> {
+  if (store.tableSizes === undefined) {
+    return {
+      movements: null,
+      idempotency: null,
+      sales: null,
+      outbox: null,
+      sagas: null,
+      accruals: null,
+    };
+  }
+  return store.tableSizes(options);
+}
+
+// The stated facts against CAPACITY_THRESHOLDS; each names the gauge, the threshold, and the
+// knob it signals — never an action.
+function capacityAdvisories(gauges: {
+  now: number;
+  historySize: number | null;
+  rotatedAt: number | null;
+  checkpointAt: number | null;
+  oldestPendingAgeMs: number | null;
+  tables: CapacityReport['tables'];
+}): string[] {
+  const { now } = gauges;
+  const advisories: string[] = [];
+  if (
+    gauges.historySize !== null &&
+    gauges.historySize >= CAPACITY_THRESHOLDS.historySizePostings
+  ) {
+    advisories.push(
+      `history holds ${gauges.historySize} postings (threshold ${CAPACITY_THRESHOLDS.historySizePostings}): the partitioning DDL variant and the archival mover now earn their provisioning cost`,
+    );
+  }
+  if (
+    gauges.rotatedAt !== null &&
+    now - gauges.rotatedAt > CAPACITY_THRESHOLDS.reproofMaxAgeMs
+  ) {
+    advisories.push(
+      `the re-proof watermark is ${now - gauges.rotatedAt}ms old (threshold ${CAPACITY_THRESHOLDS.reproofMaxAgeMs}): full-history rotation lags the coverage story`,
+    );
+  }
+  if (
+    gauges.checkpointAt !== null &&
+    now - gauges.checkpointAt > CAPACITY_THRESHOLDS.checkpointMaxAgeMs
+  ) {
+    advisories.push(
+      `the latest checkpoint is ${now - gauges.checkpointAt}ms old (threshold ${CAPACITY_THRESHOLDS.checkpointMaxAgeMs}): the seal cadence stalled`,
+    );
+  }
+  if (
+    gauges.oldestPendingAgeMs !== null &&
+    gauges.oldestPendingAgeMs > CAPACITY_THRESHOLDS.accrualMaxPendingAgeMs
+  ) {
+    advisories.push(
+      `the oldest accrual row has been pending ${gauges.oldestPendingAgeMs}ms (threshold ${CAPACITY_THRESHOLDS.accrualMaxPendingAgeMs}): the drain lags its backlog`,
+    );
+  }
+  const tableKnobs: ReadonlyArray<[keyof CapacityReport['tables'], string]> = [
+    ['movements', "the retention sweep's session horizon is its mover"],
+    ['idempotency', "the retention sweep's idempotency horizon is its mover"],
+    ['sales', 'no in-system mover exists; retention is a host policy decision'],
+    [
+      'outbox',
+      'no in-system mover exists; retention is a host policy decision',
+    ],
+    ['sagas', 'no in-system mover exists; retention is a host policy decision'],
+    [
+      'accruals',
+      'rows are the permanent refund share record, never pruned; growth tracks sales',
+    ],
+  ];
+  for (const [table, knob] of tableKnobs) {
+    const count = gauges.tables[table];
+    if (count !== null && count >= CAPACITY_THRESHOLDS.tableRows) {
+      advisories.push(
+        `\`${table}\` holds ${count} rows (threshold ${CAPACITY_THRESHOLDS.tableRows}): ${knob}`,
+      );
+    }
+  }
+  return advisories;
+}
+
 async function healthReport(
   store: Store,
   ctx: Ctx,
