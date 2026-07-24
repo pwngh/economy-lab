@@ -77,7 +77,7 @@ const SAMPLE: WebhookEvent = {
   provider: 'billing',
   eventId: 'evt_provider_1',
   userId: 'usr_buyer',
-  amount: credit('10.00'),
+  amount: credit('1000.00'),
   source: 'card',
   sku: 'sku_pack',
 };
@@ -179,7 +179,7 @@ describe('Webhooks handlePurchaseWebhook (Persist To Inbox, Apply Later)', () =>
     assert.deepEqual(summary.failed, []);
     assert.equal(
       encodeAmount(await economy.read.balance(spendable('usr_buyer'))),
-      'CREDIT:10.00',
+      'CREDIT:1000.00',
     );
   });
 
@@ -201,7 +201,7 @@ describe('Webhooks handlePurchaseWebhook (Persist To Inbox, Apply Later)', () =>
     assert.deepEqual(summary.applied, [first.entry.id]);
     assert.equal(
       encodeAmount(await economy.read.balance(spendable('usr_buyer'))),
-      'CREDIT:10.00',
+      'CREDIT:1000.00',
     );
   });
 
@@ -240,7 +240,7 @@ describe('Webhooks handlePurchaseWebhook (Persist To Inbox, Apply Later)', () =>
     assert.equal(ack.status, 'accepted');
     assert.equal(
       encodeAmount(await economy.read.balance(spendable('usr_buyer'))),
-      'CREDIT:10.00',
+      'CREDIT:1000.00',
     );
   });
 });
@@ -288,7 +288,7 @@ describe('createServer /webhooks Replay Dedup', () => {
     const body = purchaseBody({
       eventId: 'evt_dup',
       userId: 'usr_buyer',
-      amount: '10.00',
+      amount: '1000.00',
       sku: 'sku_pack',
     });
     const signature = await signHex(body, secret);
@@ -311,7 +311,7 @@ describe('createServer /webhooks Replay Dedup', () => {
     await drainOnce(store, economy);
     assert.equal(
       encodeAmount(await economy.read.balance(spendable('usr_buyer'))),
-      'CREDIT:10.00',
+      'CREDIT:1000.00',
     );
   });
 });
@@ -323,7 +323,7 @@ describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin I
     const body = purchaseBody({
       eventId: 'evt_forge',
       userId: 'usr_buyer',
-      amount: '10.00',
+      amount: '1000.00',
     });
 
     // The signature check runs before the replay store records the eventId, so a rejected forgery
@@ -353,7 +353,7 @@ describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin I
     await drainOnce(store, economy);
     assert.equal(
       encodeAmount(await economy.read.balance(spendable('usr_buyer'))),
-      'CREDIT:10.00',
+      'CREDIT:1000.00',
     );
   });
 
@@ -363,7 +363,7 @@ describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin I
     const body = purchaseBody({
       eventId: 'evt_prov',
       userId: 'usr_buyer',
-      amount: '25.00',
+      amount: '2500.00',
       sku: 'sku_hat',
     });
     const signature = await signHex(body, secret);
@@ -378,7 +378,7 @@ describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin I
     await drainOnce(store, economy);
     assert.equal(
       encodeAmount(await economy.read.balance(spendable('usr_buyer'))),
-      'CREDIT:25.00',
+      'CREDIT:2500.00',
     );
 
     // Origin details the posting should carry, built by the same `toTopUp` mapper the handler runs.
@@ -386,7 +386,7 @@ describe('createServer /webhooks Replay Dedup — eventId Consumption & Origin I
       provider: 'billing',
       eventId: 'evt_prov',
       userId: 'usr_buyer',
-      amount: credit('25.00'),
+      amount: credit('2500.00'),
       source: 'card',
       sku: 'sku_hat',
     }) as unknown as { meta?: Record<string, unknown> };
@@ -420,7 +420,7 @@ function payoutSettledEvent(o: {
     eventId: o.eventId,
     sagaId: o.sagaId,
     providerRef: `rail_${o.sagaId}`,
-    providerAmount: usd('0.02'),
+    providerAmount: usd('105.00'),
   };
 }
 
@@ -447,7 +447,7 @@ async function bookToSubmitted(
   await economy.submit(
     buildTopUp({
       userId: 'usr_buyer',
-      amount: credit('50.00'),
+      amount: credit('50000.00'),
       source: 'card',
     }),
   );
@@ -455,7 +455,7 @@ async function bookToSubmitted(
     buildSpend({
       buyerId: 'usr_buyer',
       sku: 'sku_item',
-      price: credit('20.00'),
+      price: credit('30000.00'),
       recipients: [{ sellerId: seller, shareBps: 10_000 }],
     }),
   );

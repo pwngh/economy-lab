@@ -110,7 +110,7 @@ function sagaRow(
   overrides: Partial<Saga> & { id: string; userId: string },
 ): Saga {
   return {
-    reserve: toAmount('CREDIT', 1_000n),
+    reserve: toAmount('CREDIT', 2_000_000n),
     rateId: 'rate_test',
     state: 'RESERVED',
     providerRef: null,
@@ -130,7 +130,7 @@ function subscriptionRow(
     userId: 'usr_sub',
     sellerId: 'usr_seller',
     sku: 'sku_test',
-    price: toAmount('CREDIT', 500n),
+    price: toAmount('CREDIT', 10_000n),
     periodMs: 30 * 24 * 60 * 60_000,
     state: 'ACTIVE',
     period: 1,

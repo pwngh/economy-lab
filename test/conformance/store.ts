@@ -780,7 +780,7 @@ function sagaRow(id: string, userId: string, overrides: Partial<Saga>): Saga {
   return {
     id,
     userId,
-    reserve: toAmount('CREDIT', 100n),
+    reserve: toAmount('CREDIT', 10_000n),
     rateId: 'rate_conf',
     state: 'SUBMITTED',
     providerRef: null,
@@ -921,7 +921,7 @@ async function persistsTerminalOutcomeOnTheSaga(store: Store): Promise<void> {
   assert.equal(inflight!.reason, null);
   assert.equal(inflight!.payoutUsd, null);
 
-  const paid = toAmount('USD', 2n);
+  const paid = toAmount('USD', 10_000n);
   const advanced = await store.transaction((unit) =>
     unit.sagas.advance(settling.id, 'SUBMITTED', 'SETTLED', {
       updatedAt: 1,
@@ -1036,7 +1036,7 @@ async function markBilledIsCompareAndSet(store: Store): Promise<void> {
       userId,
       sellerId: freshUser(),
       sku: `sku_conf_cas_${userId}`,
-      price: toAmount('CREDIT', 100n),
+      price: toAmount('CREDIT', 10_000n),
       periodMs: 1_000,
       state: 'ACTIVE',
       period: 0,

@@ -102,7 +102,7 @@ function run(store: Store, ctx: Ctx, operation: Operation): Promise<Outcome> {
 }
 
 const faultCases = [
-  { name: 'a non-CREDIT amount', amount: usd('10.00'), code: 'OP.MALFORMED' },
+  { name: 'a non-CREDIT amount', amount: usd('100.00'), code: 'OP.MALFORMED' },
   {
     name: 'a non-positive amount',
     amount: credit('0.00'),
@@ -112,65 +112,65 @@ const faultCases = [
 
 async function reservesEarnedCreditIntoPayoutReserve(): Promise<void> {
   const store = newStore();
-  await fundEarned(store, 'usr_seller', credit('30.00'));
+  await fundEarned(store, 'usr_seller', credit('50000.00'));
 
   const outcome = await run(
     store,
     makeCtx(),
-    buildRequestPayout({ userId: 'usr_seller', amount: credit('12.00') }),
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('20000.00') }),
   );
 
   assert.equal(outcome.status, 'committed');
   assert.deepEqual(
     await store.ledger.balance(earned('usr_seller')),
-    credit('18.00'),
+    credit('30000.00'),
   );
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
-    credit('12.00'),
+    credit('20000.00'),
   );
 }
 
 async function reservesFullEarnedBalanceIntoReserve(): Promise<void> {
   const store = newStore();
-  await fundEarned(store, 'usr_seller', credit('20.00'));
+  await fundEarned(store, 'usr_seller', credit('25000.00'));
 
   await run(
     store,
     makeCtx(),
-    buildRequestPayout({ userId: 'usr_seller', amount: credit('20.00') }),
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('25000.00') }),
   );
 
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
-    credit('20.00'),
+    credit('25000.00'),
   );
 }
 
 async function opensPayoutSagaInReservedPinningRate(): Promise<void> {
   const store = newStore();
-  await fundEarned(store, 'usr_seller', credit('10.00'));
+  await fundEarned(store, 'usr_seller', credit('20000.00'));
 
   await run(
     store,
     makeCtx(),
-    buildRequestPayout({ userId: 'usr_seller', amount: credit('10.00') }),
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('20000.00') }),
   );
 
   const saga = await store.sagas.load('pay_1');
   assert.equal(saga?.state, 'RESERVED');
-  assert.deepEqual(saga?.reserve, credit('10.00'));
+  assert.deepEqual(saga?.reserve, credit('20000.00'));
   assert.equal(saga?.rateId, 'payout:CREDIT->USD:5/3');
 }
 
 async function carriesTheSagaIdInTheTransactionMeta(): Promise<void> {
   const store = newStore();
-  await fundEarned(store, 'usr_seller', credit('10.00'));
+  await fundEarned(store, 'usr_seller', credit('20000.00'));
 
   const outcome = await run(
     store,
     makeCtx(),
-    buildRequestPayout({ userId: 'usr_seller', amount: credit('10.00') }),
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('20000.00') }),
   );
 
   assert.equal(outcome.status, 'committed');
@@ -183,12 +183,12 @@ async function carriesTheSagaIdInTheTransactionMeta(): Promise<void> {
 
 async function rejectsAndLeavesEarnedUntouchedWhenInsufficient(): Promise<void> {
   const store = newStore();
-  await fundEarned(store, 'usr_seller', credit('5.00'));
+  await fundEarned(store, 'usr_seller', credit('15000.00'));
 
   const outcome = await run(
     store,
     makeCtx(),
-    buildRequestPayout({ userId: 'usr_seller', amount: credit('8.00') }),
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('20000.00') }),
   );
 
   assert.equal(outcome.status, 'rejected');
@@ -197,13 +197,13 @@ async function rejectsAndLeavesEarnedUntouchedWhenInsufficient(): Promise<void> 
     {
       reason: 'INSUFFICIENT_FUNDS',
       account: earned('usr_seller'),
-      need: credit('8.00'),
-      have: credit('5.00'),
+      need: credit('20000.00'),
+      have: credit('15000.00'),
     },
   );
   assert.deepEqual(
     await store.ledger.balance(earned('usr_seller')),
-    credit('5.00'),
+    credit('15000.00'),
   );
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
@@ -213,7 +213,7 @@ async function rejectsAndLeavesEarnedUntouchedWhenInsufficient(): Promise<void> 
 
 async function rejectsPayoutBelowConfiguredEarnedMinimum(): Promise<void> {
   const store = newStore();
-  await fundEarned(store, 'usr_seller', credit('300.00'));
+  await fundEarned(store, 'usr_seller', credit('30000.00'));
   const ctx = makeCtx({
     config: { ...testConfig(), payoutMinimumEarnedMinor: 2_000_000n },
   });
@@ -221,7 +221,7 @@ async function rejectsPayoutBelowConfiguredEarnedMinimum(): Promise<void> {
   const outcome = await run(
     store,
     ctx,
-    buildRequestPayout({ userId: 'usr_seller', amount: credit('100.00') }),
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('15000.00') }),
   );
 
   assert.equal(outcome.status, 'rejected');
@@ -230,7 +230,7 @@ async function rejectsPayoutBelowConfiguredEarnedMinimum(): Promise<void> {
     {
       reason: 'BELOW_MINIMUM',
       minimum: credit('20000.00'),
-      amount: credit('100.00'),
+      amount: credit('15000.00'),
     },
   );
   assert.deepEqual(
@@ -242,13 +242,13 @@ async function rejectsPayoutBelowConfiguredEarnedMinimum(): Promise<void> {
 async function rejectsPayoutAgainstImmatureEarnedCredit(): Promise<void> {
   const clock = fixedClock(0);
   const store = memoryStore({ digest: seededDigest(1), clock });
-  await fundEarnedFromSource(store, 'usr_seller', credit('30.00'), 'card');
+  await fundEarnedFromSource(store, 'usr_seller', credit('50000.00'), 'card');
   const ctx = maturityCtx(clock, 60_000);
 
   const outcome = await run(
     store,
     ctx,
-    buildRequestPayout({ userId: 'usr_seller', amount: credit('10.00') }),
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('20000.00') }),
   );
 
   assert.equal(outcome.status, 'rejected');
@@ -265,7 +265,7 @@ async function rejectsPayoutAgainstImmatureEarnedCredit(): Promise<void> {
   );
   assert.deepEqual(
     await store.ledger.balance(earned('usr_seller')),
-    credit('30.00'),
+    credit('50000.00'),
   );
 }
 
@@ -273,27 +273,27 @@ async function rejectsPayoutAgainstImmatureEarnedCredit(): Promise<void> {
 async function allowsPayoutOnceEarnedCreditHasMatured(): Promise<void> {
   const clock = fixedClock(0);
   const store = memoryStore({ digest: seededDigest(1), clock });
-  await fundEarnedFromSource(store, 'usr_seller', credit('30.00'), 'card');
+  await fundEarnedFromSource(store, 'usr_seller', credit('50000.00'), 'card');
   const ctx = maturityCtx(clock, 60_000);
 
   clock.advance(60_000);
   const outcome = await run(
     store,
     ctx,
-    buildRequestPayout({ userId: 'usr_seller', amount: credit('10.00') }),
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('20000.00') }),
   );
 
   assert.equal(outcome.status, 'committed');
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
-    credit('10.00'),
+    credit('20000.00'),
   );
 }
 
 async function allowsPayoutUpToTheMaturedPortion(): Promise<void> {
   const clock = fixedClock(0);
   const store = memoryStore({ digest: seededDigest(1), clock });
-  await fundEarnedFromSource(store, 'usr_seller', credit('10.00'), 'card');
+  await fundEarnedFromSource(store, 'usr_seller', credit('20000.00'), 'card');
   const ctx = maturityCtx(clock, 60_000);
 
   clock.advance(30_000);
@@ -301,8 +301,8 @@ async function allowsPayoutUpToTheMaturedPortion(): Promise<void> {
     await unit.ledger.append({
       txnId: 'txn_seed_late',
       legs: [
-        debitLeg(SYSTEM.REVENUE, credit('10.00')),
-        creditLeg(earned('usr_seller'), credit('10.00')),
+        debitLeg(SYSTEM.REVENUE, credit('20000.00')),
+        creditLeg(earned('usr_seller'), credit('20000.00')),
       ],
       meta: { kind: 'seed', source: 'card' },
     });
@@ -313,14 +313,14 @@ async function allowsPayoutUpToTheMaturedPortion(): Promise<void> {
   const ok = await run(
     store,
     ctx,
-    buildRequestPayout({ userId: 'usr_seller', amount: credit('10.00') }),
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('20000.00') }),
   );
   assert.equal(ok.status, 'committed');
 }
 
 async function faultsOn(amount: Amount, code: string): Promise<void> {
   const store = newStore();
-  await fundEarned(store, 'usr_seller', credit('10.00'));
+  await fundEarned(store, 'usr_seller', credit('20000.00'));
 
   await assert.rejects(
     run(store, makeCtx(), buildRequestPayout({ userId: 'usr_seller', amount })),
@@ -343,13 +343,13 @@ function intervalCtx(
 async function rejectsSecondPayoutInsideTheMinimumInterval(): Promise<void> {
   const clock = fixedClock(0);
   const store = memoryStore({ digest: seededDigest(1), clock });
-  await fundEarned(store, 'usr_seller', credit('30.00'));
+  await fundEarned(store, 'usr_seller', credit('50000.00'));
   const ctx = intervalCtx(clock, 60_000);
 
   const first = await run(
     store,
     ctx,
-    buildRequestPayout({ userId: 'usr_seller', amount: credit('10.00') }),
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('20000.00') }),
   );
   assert.equal(first.status, 'committed');
 
@@ -357,7 +357,7 @@ async function rejectsSecondPayoutInsideTheMinimumInterval(): Promise<void> {
   const second = await run(
     store,
     ctx,
-    buildRequestPayout({ userId: 'usr_seller', amount: credit('10.00') }),
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('20000.00') }),
   );
 
   assert.equal(second.status, 'rejected');
@@ -368,20 +368,20 @@ async function rejectsSecondPayoutInsideTheMinimumInterval(): Promise<void> {
   });
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
-    credit('10.00'),
+    credit('20000.00'),
   );
 }
 
 async function allowsPayoutOnceTheIntervalHasElapsed(): Promise<void> {
   const clock = fixedClock(0);
   const store = memoryStore({ digest: seededDigest(1), clock });
-  await fundEarned(store, 'usr_seller', credit('30.00'));
+  await fundEarned(store, 'usr_seller', credit('50000.00'));
   const ctx = intervalCtx(clock, 60_000);
 
   const first = await run(
     store,
     ctx,
-    buildRequestPayout({ userId: 'usr_seller', amount: credit('10.00') }),
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('20000.00') }),
   );
   assert.equal(first.status, 'committed');
 
@@ -390,26 +390,26 @@ async function allowsPayoutOnceTheIntervalHasElapsed(): Promise<void> {
   const second = await run(
     store,
     ctx,
-    buildRequestPayout({ userId: 'usr_seller', amount: credit('10.00') }),
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('20000.00') }),
   );
 
   assert.equal(second.status, 'committed');
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
-    credit('20.00'),
+    credit('40000.00'),
   );
 }
 
 async function firstPayoutPassesWhenAnIntervalIsConfigured(): Promise<void> {
   const clock = fixedClock(0);
   const store = memoryStore({ digest: seededDigest(1), clock });
-  await fundEarned(store, 'usr_seller', credit('10.00'));
+  await fundEarned(store, 'usr_seller', credit('20000.00'));
   const ctx = intervalCtx(clock, 60_000);
 
   const outcome = await run(
     store,
     ctx,
-    buildRequestPayout({ userId: 'usr_seller', amount: credit('10.00') }),
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('20000.00') }),
   );
 
   assert.equal(outcome.status, 'committed');
@@ -417,7 +417,7 @@ async function firstPayoutPassesWhenAnIntervalIsConfigured(): Promise<void> {
 
 async function allowsAPayoutForAClearedPayee(): Promise<void> {
   const store = newStore();
-  await fundEarned(store, 'usr_seller', credit('30.00'));
+  await fundEarned(store, 'usr_seller', credit('50000.00'));
   const asked: string[] = [];
   const ctx = makeCtx({
     payees: {
@@ -431,21 +431,21 @@ async function allowsAPayoutForAClearedPayee(): Promise<void> {
   const outcome = await run(
     store,
     ctx,
-    buildRequestPayout({ userId: 'usr_seller', amount: credit('12.00') }),
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('20000.00') }),
   );
 
   assert.equal(outcome.status, 'committed');
   assert.deepEqual(asked, ['usr_seller']);
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
-    credit('12.00'),
+    credit('20000.00'),
   );
 }
 
 async function rejectsAPayoutForAnUnverifiedPayee(): Promise<void> {
   for (const state of ['PENDING', 'BLOCKED', 'NONE'] as const) {
     const store = newStore();
-    await fundEarned(store, 'usr_seller', credit('30.00'));
+    await fundEarned(store, 'usr_seller', credit('50000.00'));
     const ctx = makeCtx({
       payees: { status: async () => ({ state }) },
     });
@@ -453,7 +453,7 @@ async function rejectsAPayoutForAnUnverifiedPayee(): Promise<void> {
     const outcome = await run(
       store,
       ctx,
-      buildRequestPayout({ userId: 'usr_seller', amount: credit('12.00') }),
+      buildRequestPayout({ userId: 'usr_seller', amount: credit('20000.00') }),
     );
 
     assert.equal(outcome.status, 'rejected', state);
@@ -464,7 +464,7 @@ async function rejectsAPayoutForAnUnverifiedPayee(): Promise<void> {
     );
     assert.deepEqual(
       await store.ledger.balance(earned('usr_seller')),
-      credit('30.00'),
+      credit('50000.00'),
       state,
     );
     assert.deepEqual(
@@ -477,12 +477,12 @@ async function rejectsAPayoutForAnUnverifiedPayee(): Promise<void> {
 
 async function skipsThePayeeGateWhenNoDirectoryIsWired(): Promise<void> {
   const store = newStore();
-  await fundEarned(store, 'usr_seller', credit('30.00'));
+  await fundEarned(store, 'usr_seller', credit('50000.00'));
 
   const outcome = await run(
     store,
     makeCtx(),
-    buildRequestPayout({ userId: 'usr_seller', amount: credit('12.00') }),
+    buildRequestPayout({ userId: 'usr_seller', amount: credit('20000.00') }),
   );
 
   assert.equal(outcome.status, 'committed');
@@ -527,11 +527,11 @@ describe('requestPayout', () => {
 describe('requestPayout Pricing At Request', () => {
   test('stores the USD quote on the saga at the request-time rate', async () => {
     const store = newStore();
-    await fundEarned(store, 'usr_quote', credit('10.00'));
+    await fundEarned(store, 'usr_quote', credit('20000.00'));
 
     const outcome = await store.transaction((unit) =>
       requestPayout(
-        buildRequestPayout({ userId: 'usr_quote', amount: credit('10.00') }),
+        buildRequestPayout({ userId: 'usr_quote', amount: credit('20000.00') }),
         unit,
         makeCtx(),
       ),
@@ -542,13 +542,13 @@ describe('requestPayout Pricing At Request', () => {
       outcome as { transaction: { meta: Record<string, unknown> } }
     ).transaction.meta.sagaId as string;
     const saga = await store.sagas.load(sagaId);
-    // 10.00 CREDIT at the fixed payout rate 5/10^3, floored: $0.05.
-    assert.deepEqual(saga?.payoutUsd, usd('0.05'));
+    // 20000.00 CREDIT at the fixed payout rate 5/10^3, floored: $100.00.
+    assert.deepEqual(saga?.payoutUsd, usd('100.00'));
   });
 
   test('rejects a payout rate above par by name', async () => {
     const store = newStore();
-    await fundEarned(store, 'usr_over', credit('10.00'));
+    await fundEarned(store, 'usr_over', credit('20000.00'));
     const rates: Rates = {
       buy: () => ({ rate: 1n, scale: 2, rateId: 'r_buy' }),
       par: () => ({ rate: 5n, scale: 3, rateId: 'r_par' }),
@@ -558,7 +558,10 @@ describe('requestPayout Pricing At Request', () => {
     await assert.rejects(
       store.transaction((unit) =>
         requestPayout(
-          buildRequestPayout({ userId: 'usr_over', amount: credit('10.00') }),
+          buildRequestPayout({
+            userId: 'usr_over',
+            amount: credit('20000.00'),
+          }),
           unit,
           makeCtx({ rates }),
         ),

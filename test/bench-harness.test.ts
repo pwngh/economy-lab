@@ -514,19 +514,21 @@ describe('Bench harness: in-memory provisioning + determinism root', () => {
       assert.notEqual(p, null);
       after(async () => p!.teardown());
       await p!.economy.submit(
-        topUp({ userId: 'd_a', amount: credit('100.00') }),
+        topUp({ userId: 'd_a', amount: credit('30000.00') }),
       );
+      // At the bench config's 15.3% platform fee the seller earns 21,175.00 credits,
+      // enough to fund a minimum-scale 20,000.00-credit payout.
       await p!.economy.submit(
         spend({
           buyerId: 'd_a',
           sku: 'd_sku',
-          price: credit('10.00'),
+          price: credit('25000.00'),
           orderId: 'd_ord_0',
           recipients: [{ sellerId: 'd_c', shareBps: 10_000 }],
         }),
       );
       await p!.economy.submit(
-        requestPayout({ userId: 'd_c', amount: credit('1.00') }),
+        requestPayout({ userId: 'd_c', amount: credit('20000.00') }),
       );
       return determinismRoot(p!);
     };

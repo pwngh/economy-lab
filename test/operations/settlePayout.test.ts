@@ -74,7 +74,7 @@ async function openSubmittedSaga(
 ): Promise<Saga> {
   const row: Saga = {
     userId: 'usr_seller',
-    reserve: credit('4.00'),
+    reserve: credit('20000.00'),
     rateId: 'payout:CREDIT->USD:1',
     providerRef: 'prov_pay_1',
     reason: null,
@@ -143,21 +143,21 @@ describe('settlePayout', () => {
     );
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.REVENUE),
-      credit('4.00'),
+      credit('20000.00'),
     );
-    // TRUST_CASH is debit-normal, so cash leaving custody reads negative; the reserved 4.00 CREDIT
-    // converts at the payout rate to $0.02.
+    // TRUST_CASH is debit-normal, so cash leaving custody reads negative; the reserved 20000.00 CREDIT
+    // converts at the payout rate to $100.00.
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.TRUST_CASH),
-      usd('-0.02'),
+      usd('-100.00'),
     );
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.USD_CLEARING),
-      usd('0.02'),
+      usd('100.00'),
     );
     const settled = await store.sagas.load('pay_1');
     assert.equal(settled!.state, 'SETTLED');
-    assert.deepEqual(settled!.payoutUsd, usd('0.02'));
+    assert.deepEqual(settled!.payoutUsd, usd('100.00'));
     assert.equal(settled!.reason, null);
   });
 
@@ -180,7 +180,7 @@ describe('settlePayout', () => {
     assert.equal(event.audience, 'internal');
     assert.equal(event.subject, 'usr_seller');
     assert.equal(event.data.sagaId, 'pay_1');
-    assert.equal(event.data.usd, encodeAmount(usd('0.02')));
+    assert.equal(event.data.usd, encodeAmount(usd('100.00')));
   });
 
   test('answers duplicate on a lost race rather than double-paying', async () => {
@@ -198,7 +198,7 @@ describe('settlePayout', () => {
 
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
-      credit('4.00'),
+      credit('20000.00'),
     );
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.REVENUE),
@@ -269,7 +269,7 @@ describe('settlePayout', () => {
     assert.equal(await stateOf(store, 'pay_resv'), 'RESERVED');
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
-      credit('4.00'),
+      credit('20000.00'),
     );
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.REVENUE),
@@ -319,7 +319,7 @@ describe('settlePayout', () => {
     assert.equal(await stateOf(store, 'pay_1'), 'SUBMITTED');
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
-      credit('4.00'),
+      credit('20000.00'),
     );
   });
 });
@@ -330,7 +330,7 @@ describe('settlePayout Pricing At Request', () => {
     const row = await openSubmittedSaga(store, {
       id: 'pay_quote',
       state: 'SUBMITTED',
-      payoutUsd: usd('0.09'),
+      payoutUsd: usd('90.00'),
     });
 
     const outcome = await run(
@@ -340,11 +340,11 @@ describe('settlePayout Pricing At Request', () => {
     );
 
     assert.equal(outcome.status, 'committed');
-    // The current fixed rate would convert the 4.00 reserve to $0.02; the stored quote wins.
+    // The current fixed rate would convert the 20000.00 reserve to $100.00; the stored quote wins.
     const settled = await store.sagas.load('pay_quote');
-    assert.deepEqual(settled?.payoutUsd, usd('0.09'));
+    assert.deepEqual(settled?.payoutUsd, usd('90.00'));
     const trust = await store.ledger.balance(SYSTEM.TRUST_CASH);
-    assert.equal(trust.minor, -9n);
+    assert.equal(trust.minor, -9000n);
     assert.equal(
       (outcome as { transaction: { meta: Record<string, unknown> } })
         .transaction.meta.rateId,
@@ -364,6 +364,6 @@ describe('settlePayout Pricing At Request', () => {
 
     assert.equal(outcome.status, 'committed');
     const settled = await store.sagas.load('pay_legacy');
-    assert.deepEqual(settled?.payoutUsd, usd('0.02'));
+    assert.deepEqual(settled?.payoutUsd, usd('100.00'));
   });
 });

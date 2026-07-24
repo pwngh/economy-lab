@@ -42,7 +42,7 @@ async function storeWithSaga(): Promise<Store> {
   const row: Saga = {
     id: 'pay_1',
     userId: 'usr_seller',
-    reserve: credit('4.00'),
+    reserve: credit('20000.00'),
     rateId: 'payout:CREDIT->USD:1',
     state: 'SUBMITTED',
     providerRef: REF.id,
@@ -92,9 +92,9 @@ describe('edge-webhooks bridge', () => {
         settlement: {
           schemaVersion: 1,
           providerTxnId: 'ps-1',
-          gross: money('USD', 200n),
-          fee: money('USD', 0n),
-          net: money('USD', 200n),
+          gross: money('USD', 10_000n),
+          fee: money('USD', 150n),
+          net: money('USD', 9_850n),
           sourceRef: 'tilia:payout:ps-1',
         },
       }),
@@ -105,7 +105,7 @@ describe('edge-webhooks bridge', () => {
     assert.equal(mapped!.kind, 'payoutSettled');
     assert.deepEqual(
       mapped!.kind === 'payoutSettled' ? mapped!.providerAmount : undefined,
-      usd('2.00'),
+      usd('100.00'),
     );
   });
 

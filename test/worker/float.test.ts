@@ -29,7 +29,7 @@ async function openSaga(
   const row: Saga = {
     id,
     userId: 'usr_seller',
-    reserve: credit('4.00'),
+    reserve: credit('20000.00'),
     rateId: 'payout:CREDIT->USD:1',
     state,
     providerRef: null,
@@ -58,13 +58,13 @@ describe('sweepFloatCoverage', () => {
     const summary = await sweepFloatCoverage(
       store,
       makeWorkerCtx(),
-      feedOf(usd('0.04')),
+      feedOf(usd('200.00')),
       { now: 0 },
     );
 
     assert.deepEqual(summary.breaches, []);
     assert.equal(summary.position!.covered, true);
-    assert.deepEqual(summary.position!.obligations, usd('0.04'));
+    assert.deepEqual(summary.position!.obligations, usd('200.00'));
     assert.deepEqual(summary.position!.shortfall, usd('0.00'));
   });
 
@@ -75,13 +75,13 @@ describe('sweepFloatCoverage', () => {
     const summary = await sweepFloatCoverage(
       store,
       makeWorkerCtx(),
-      feedOf(usd('0.01')),
+      feedOf(usd('50.00')),
       { now: 0 },
     );
 
     assert.equal(summary.position!.covered, false);
     assert.deepEqual(summary.breaches, [
-      { shortfall: 'USD:0.01', obligations: 'USD:0.02', float: 'USD:0.01' },
+      { shortfall: 'USD:50.00', obligations: 'USD:100.00', float: 'USD:50.00' },
     ]);
   });
 

@@ -40,7 +40,7 @@ const WINDOW: Range = {
 
 describe('edge-reconcile feed', () => {
   test('maps both report directions into processor records and joins the host ledger side', async () => {
-    const scenario = tiliaScenario({ disbursed: '2.00' });
+    const scenario = tiliaScenario({ disbursed: '100.00' });
     const edge = compose({
       inbound: [
         fakeInbound({
@@ -70,7 +70,7 @@ describe('edge-reconcile feed', () => {
       {
         kind: 'payout',
         matchKey: payoutMatchKeyOf(scenario.ref.id),
-        amount: usd('2.00'),
+        amount: usd('100.00'),
         txnId: 'txn_lab_2',
         postedAt: WINDOW.from,
       },
@@ -104,13 +104,13 @@ describe('edge-reconcile feed', () => {
   });
 
   test('reconciles the settled-saga ledger side against the rail report end to end', async () => {
-    const scenario = tiliaScenario({ disbursed: '2.00' });
+    const scenario = tiliaScenario({ disbursed: '100.00' });
     const edge = compose({ outbound: [tilia(scenario.config)] });
     const store = memoryStore();
     const settled: Saga = {
       id: 'pay_1',
       userId: 'usr_seller',
-      reserve: credit('4.00'),
+      reserve: credit('20000.00'),
       rateId: 'payout:CREDIT->USD:1',
       state: 'SETTLED',
       providerRef: scenario.ref.id,
@@ -118,7 +118,7 @@ describe('edge-reconcile feed', () => {
       attempts: 1,
       dueAt: 0,
       updatedAt: WINDOW.from,
-      payoutUsd: usd('2.00'),
+      payoutUsd: usd('100.00'),
     };
     await store.transaction(async (unit) => {
       await unit.sagas.open(settled);
@@ -135,13 +135,13 @@ describe('edge-reconcile feed', () => {
   });
 
   test('surfaces an amount drift when the rail disbursed a different figure', async () => {
-    const scenario = tiliaScenario({ disbursed: '2.50' });
+    const scenario = tiliaScenario({ disbursed: '102.50' });
     const edge = compose({ outbound: [tilia(scenario.config)] });
     const ledgerSide: LedgerRecord[] = [
       {
         kind: 'payout',
         matchKey: payoutMatchKeyOf(scenario.ref.id),
-        amount: usd('2.00'),
+        amount: usd('100.00'),
         txnId: 'txn_lab_2',
         postedAt: WINDOW.from,
       },
@@ -152,7 +152,7 @@ describe('edge-reconcile feed', () => {
 
     assert.equal(report.reconciled, false);
     assert.equal(report.amountDrifts, 1);
-    assert.equal(report.discrepancies[0]!.processorAmount, 'USD:2.50');
-    assert.equal(report.discrepancies[0]!.ledgerAmount, 'USD:2.00');
+    assert.equal(report.discrepancies[0]!.processorAmount, 'USD:102.50');
+    assert.equal(report.discrepancies[0]!.ledgerAmount, 'USD:100.00');
   });
 });

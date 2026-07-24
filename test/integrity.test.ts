@@ -20,7 +20,7 @@ import { credit as creditLeg, debit, postEntry } from '#src/ledger.ts';
 import { spendable, earned, SYSTEM } from '#src/accounts.ts';
 import { fixedRates, seededDigest } from '#test/support/capabilities.ts';
 import { credit, usd } from '#test/support/builders.ts';
-import { zero } from '#src/money.ts';
+import { toAmount, zero } from '#src/money.ts';
 
 import type { MemoryLedger } from '#src/adapters/memory.ts';
 import type { AccountRef } from '#src/accounts.ts';
@@ -81,14 +81,17 @@ function recorder(): Recorder {
   };
 }
 
-// A real top-up's two linked transactions: the credits handed out, then the USD that backs them.
+// A real top-up's two linked transactions: the credits handed out, then the USD that backs them
+// at the file's $0.01-per-credit buy rate (credit minor / 100 = USD minor).
 async function topUp(
   rec: Recorder,
   userId: string,
-  dollars: string,
+  credits: string,
 ): Promise<void> {
-  const amount = credit(dollars);
-  const cash = usd(dollars);
+  const amount = credit(credits);
+  // Whole credits only: the division below would silently floor a fractional purchase's backing.
+  assert.equal(amount.minor % 100n, 0n);
+  const cash = toAmount('USD', amount.minor / 100n);
   await rec.post(
     [debit(SYSTEM.REVENUE, amount), creditLeg(spendable(userId), amount)],
     {
@@ -117,7 +120,7 @@ describe('proveEconomy', () => {
 
   test('reports conserved, backed, and no overdraft after a topUp', async () => {
     const rec = recorder();
-    await topUp(rec, 'usr_buyer', '10.00');
+    await topUp(rec, 'usr_buyer', '1000.00');
 
     const report = await proveEconomy(ctx(rec));
 
@@ -129,11 +132,11 @@ describe('proveEconomy', () => {
 
   test('conserves per currency across an N-way credit distribution', async () => {
     const rec = recorder();
-    await topUp(rec, 'usr_buyer', '12.00');
+    await topUp(rec, 'usr_buyer', '1200.00');
     await rec.post([
-      debit(spendable('usr_buyer'), credit('12.00')),
-      creditLeg(earned('usr_a'), credit('7.00')),
-      creditLeg(earned('usr_b'), credit('5.00')),
+      debit(spendable('usr_buyer'), credit('1200.00')),
+      creditLeg(earned('usr_a'), credit('700.00')),
+      creditLeg(earned('usr_b'), credit('500.00')),
     ]);
 
     const report = await proveEconomy(ctx(rec));
@@ -144,10 +147,10 @@ describe('proveEconomy', () => {
 
   test('sums the debit and credit lines, not just the stored balance', async () => {
     const rec = recorder();
-    await topUp(rec, 'usr_buyer', '4.00');
+    await topUp(rec, 'usr_buyer', '400.00');
     await rec.post([
-      debit(spendable('usr_buyer'), credit('4.00')),
-      creditLeg(earned('usr_seller'), credit('4.00')),
+      debit(spendable('usr_buyer'), credit('400.00')),
+      creditLeg(earned('usr_seller'), credit('400.00')),
     ]);
 
     const report = await proveEconomy(ctx(rec));
@@ -219,7 +222,7 @@ describe('proveEconomy On A Broken Book', () => {
 describe('proveEconomy Drift Detection', () => {
   test('reports consistent with empty drift on a clean book', async () => {
     const rec = recorder();
-    await topUp(rec, 'usr_buyer', '10.00');
+    await topUp(rec, 'usr_buyer', '1000.00');
 
     const report = await proveEconomy(ctx(rec));
 
@@ -230,9 +233,9 @@ describe('proveEconomy Drift Detection', () => {
 
   test('flags an account whose stored balance drifted from its debit and credit lines', async () => {
     const rec = recorder();
-    await topUp(rec, 'usr_buyer', '10.00'); // txn_1 credits the buyer's spendable
+    await topUp(rec, 'usr_buyer', '1000.00'); // txn_1 credits the buyer's spendable
     rec.tamper('txn_1', (legs: Leg[]) => {
-      legs[1] = creditLeg(spendable('usr_buyer'), credit('3.00'));
+      legs[1] = creditLeg(spendable('usr_buyer'), credit('300.00'));
     });
 
     const report = await proveEconomy(ctx(rec));
@@ -242,14 +245,14 @@ describe('proveEconomy Drift Detection', () => {
       (row) => row.account === spendable('usr_buyer'),
     );
     assert.ok(drifted, 'the buyer account is listed in drift');
-    assert.deepEqual(drifted!.materialized, credit('10.00'));
-    assert.deepEqual(drifted!.derived, credit('3.00'));
+    assert.deepEqual(drifted!.materialized, credit('1000.00'));
+    assert.deepEqual(drifted!.derived, credit('300.00'));
     assert.equal(allInvariantsHold(report), false);
   });
 
   test('flags a stored balance row with no posting behind it', async () => {
     const rec = recorder();
-    await topUp(rec, 'usr_buyer', '10.00');
+    await topUp(rec, 'usr_buyer', '1000.00');
     const phantom = earned('usr_ghost');
     rec.seedBalance(phantom, credit('5.00'));
 
@@ -265,7 +268,7 @@ describe('proveEconomy Drift Detection', () => {
 
   test('detects drift independently of conservation', async () => {
     const rec = recorder();
-    await topUp(rec, 'usr_buyer', '6.00');
+    await topUp(rec, 'usr_buyer', '600.00');
     rec.tamper('txn_1', (legs: Leg[]) => {
       legs[0] = {
         account: legs[0]!.account,
@@ -290,11 +293,11 @@ describe('proveEconomy Drift Detection', () => {
 describe('proveEconomy Chain Verification', () => {
   test('recomputes every account chain and reports a clean book intact', async () => {
     const rec = recorder();
-    await topUp(rec, 'usr_buyer', '6.00');
+    await topUp(rec, 'usr_buyer', '600.00');
     // A second posting so the recompute walks real chains, not single entries.
     await rec.post([
-      debit(spendable('usr_buyer'), credit('6.00')),
-      creditLeg(earned('usr_seller'), credit('6.00')),
+      debit(spendable('usr_buyer'), credit('600.00')),
+      creditLeg(earned('usr_seller'), credit('600.00')),
     ]);
 
     const report = await proveEconomy(ctx(rec));
@@ -304,7 +307,7 @@ describe('proveEconomy Chain Verification', () => {
 
   test('detects a tampered line on a committed posting', async () => {
     const rec = recorder();
-    await topUp(rec, 'usr_buyer', '6.00'); // txn_1 hands out the credits, txn_2 brings in the USD
+    await topUp(rec, 'usr_buyer', '600.00'); // txn_1 hands out the credits, txn_2 brings in the USD
     rec.tamper('txn_1', (legs: Leg[]) => {
       legs[1] = { account: legs[1]!.account, amount: credit('999.00') };
     });
@@ -316,7 +319,7 @@ describe('proveEconomy Chain Verification', () => {
 
   test('a tampered line fails the chain check while the books still balance', async () => {
     const rec = recorder();
-    await topUp(rec, 'usr_buyer', '6.00');
+    await topUp(rec, 'usr_buyer', '600.00');
     rec.tamper('txn_1', (legs: Leg[]) => {
       legs[0] = {
         account: legs[0]!.account,
@@ -346,7 +349,7 @@ function nudge(amount: Amount, delta: bigint): Amount {
 describe('The All-Checks Roll-Up', () => {
   test('allInvariantsHold is true exactly when every report field is', async () => {
     const rec = recorder();
-    await topUp(rec, 'usr_buyer', '3.00');
+    await topUp(rec, 'usr_buyer', '300.00');
 
     const report = await proveEconomy(ctx(rec));
 
@@ -381,7 +384,7 @@ describe('findByHash', () => {
 
   test('locates the link carrying a hash, case-insensitively', async () => {
     const rec = recorder();
-    await topUp(rec, 'usr_find', '10.00');
+    await topUp(rec, 'usr_find', '1000.00');
     const { link } = await firstLink(rec);
 
     const hit = await findByHash(readOf(rec), link.hash.toUpperCase());
@@ -393,8 +396,8 @@ describe('findByHash', () => {
 
   test('a chained prevHash resolves via the prior link that carries it as hash', async () => {
     const rec = recorder();
-    await topUp(rec, 'usr_find', '10.00');
-    await topUp(rec, 'usr_find', '5.00');
+    await topUp(rec, 'usr_find', '1000.00');
+    await topUp(rec, 'usr_find', '500.00');
     let second: string | null = null;
     for await (const link of rec.store.ledger.lineage(spendable('usr_find'))) {
       if (link.prevHash !== GENESIS_HEX) {
@@ -438,14 +441,14 @@ describe('findByHash', () => {
 
   test('the genesis prevHash never matches', async () => {
     const rec = recorder();
-    await topUp(rec, 'usr_find', '10.00');
+    await topUp(rec, 'usr_find', '1000.00');
 
     assert.equal(await findByHash(readOf(rec), GENESIS_HEX), null);
   });
 
   test('an unknown hash misses, and scanMax bounds the walk', async () => {
     const rec = recorder();
-    await topUp(rec, 'usr_find', '10.00');
+    await topUp(rec, 'usr_find', '1000.00');
     const { link } = await firstLink(rec);
 
     assert.equal(await findByHash(readOf(rec), 'f'.repeat(64)), null);

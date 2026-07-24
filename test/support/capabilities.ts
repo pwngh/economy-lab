@@ -176,12 +176,12 @@ export function testConfig(): Config {
     maxOutboxAttempts: 10,
     maxInboxAttempts: 10,
     maxSubscriptionAttempts: 3,
-    subscriptionPriceMinMinor: 10_000n,
+    subscriptionPriceMinMinor: 10_000n, // 100.00 to 10,000.00 credits: the bounds the subscribe tests probe
     subscriptionPriceMaxMinor: 1_000_000n,
     maxPayoutAgeMs: 24 * 60 * 60_000,
-    platformFeeBps: 3000,
+    platformFeeBps: 3000, // 30% — the "test fee" every suite's worked amounts derive from
     payoutFeeBps: 150,
-    velocityLimitMinor: 100_000_000n,
+    velocityLimitMinor: 100_000_000n, // 1M credits/hour: high enough that only the velocity tests hit it
     velocityWindowMs: 60 * 60_000,
     maturityHorizonMs: { card: 0, crypto: 0, default: 0 },
     payoutSla: { PENDING: 30_000, SUBMITTED: 120_000, DEFAULT: 60_000 },

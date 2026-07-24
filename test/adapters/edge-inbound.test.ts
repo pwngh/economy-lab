@@ -32,7 +32,7 @@ describe('edge-inbound (verify → topUp)', () => {
 
     const operation = edgePurchaseTopUp(purchase, {
       userId: 'usr_buyer',
-      amount: credit('12.00'),
+      amount: credit('1200.00'),
     }) as unknown as Record<string, unknown>;
 
     assert.equal(operation.kind, 'topUp');
@@ -63,7 +63,7 @@ describe('edge-inbound (verify → topUp)', () => {
     const purchase = verified.ok ? verified.value : samplePurchase();
     const operation = edgePurchaseTopUp(purchase, {
       userId: 'usr_buyer',
-      amount: credit('12.00'),
+      amount: credit('1200.00'),
     });
 
     const first = await economy.submit(operation);
@@ -73,7 +73,7 @@ describe('edge-inbound (verify → topUp)', () => {
     assert.equal(second.status, 'duplicate');
     assert.deepEqual(
       await store.ledger.balance(spendable('usr_buyer')),
-      credit('12.00'),
+      credit('1200.00'),
     );
   });
 });

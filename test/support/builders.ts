@@ -148,7 +148,7 @@ export const settlePayout = (o: {
     idempotencyKey: claim(),
     actor: system,
     providerRef: `prov_${o.sagaId}`,
-    providerAmount: usd('0.02'),
+    providerAmount: usd('100.00'),
     ...o,
   });
 

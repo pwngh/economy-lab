@@ -60,7 +60,7 @@ async function fund(
 function saga(overrides: Partial<Saga> & Pick<Saga, 'id' | 'state'>): Saga {
   return {
     userId: 'usr_seller',
-    reserve: credit('4.00'),
+    reserve: credit('20000.00'),
     rateId: 'payout:CREDIT->USD:1',
     providerRef: null,
     reason: null,
@@ -123,7 +123,7 @@ async function submitsAReservedSagaToTheProvider(store: Store): Promise<void> {
   };
   await openSaga(
     store,
-    saga({ id: 'pay_1', state: 'RESERVED', reserve: credit('4.00') }),
+    saga({ id: 'pay_1', state: 'RESERVED', reserve: credit('20000.00') }),
   );
 
   const summary = await advanceDuePayouts(store, makeWorkerCtx({ processor }), {
@@ -135,7 +135,7 @@ async function submitsAReservedSagaToTheProvider(store: Store): Promise<void> {
   // The provider is paid USD: the reserved credits at the payout rate, rounded down.
   assert.equal(recorded.length, 1);
   assert.equal(recorded[0]!.key, 'pay_1');
-  assert.deepEqual(recorded[0]!.amount, usd('0.02'));
+  assert.deepEqual(recorded[0]!.amount, usd('100.00'));
   // Submitting posts nothing; the credits moved into the reserve at request time.
   const advanced = await store.sagas.load('pay_1');
   assert.equal(advanced!.state, 'SUBMITTED');
@@ -149,7 +149,7 @@ async function leavesAWithinWindowSubmittedSagaForTheWebhook(
   // (src/operations/settlePayout.ts), so a within-window SUBMITTED saga is left untouched.
   await openSaga(
     store,
-    saga({ id: 'pay_1', state: 'SUBMITTED', reserve: credit('4.00') }),
+    saga({ id: 'pay_1', state: 'SUBMITTED', reserve: credit('20000.00') }),
   );
 
   const summary = await advanceDuePayouts(store, makeWorkerCtx(), {
@@ -162,7 +162,7 @@ async function leavesAWithinWindowSubmittedSagaForTheWebhook(
   assert.deepEqual(summary.retrying, []);
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
-    credit('4.00'),
+    credit('20000.00'),
   );
   assert.deepEqual(await store.ledger.balance(SYSTEM.REVENUE), credit('0.00'));
   assert.deepEqual(await store.ledger.balance(SYSTEM.TRUST_CASH), usd('0.00'));
@@ -185,7 +185,7 @@ async function forceFailsASubmittedSagaPastTheMaxAgeAndReturnsTheReserve(
     saga({
       id: 'pay_1',
       state: 'SUBMITTED',
-      reserve: credit('4.00'),
+      reserve: credit('20000.00'),
       updatedAt: 0,
       dueAt: 0,
     }),
@@ -213,7 +213,7 @@ async function forceFailsASubmittedSagaPastTheMaxAgeAndReturnsTheReserve(
   );
   assert.deepEqual(
     await store.ledger.balance(earned('usr_seller')),
-    credit('4.00'),
+    credit('20000.00'),
   );
   assert.deepEqual(await store.ledger.balance(SYSTEM.TRUST_CASH), usd('0.00'));
   assert.deepEqual(
@@ -241,7 +241,7 @@ async function metersTheAgeGaugeAndTheDeadLetterCounter(
     saga({
       id: 'pay_1',
       state: 'SUBMITTED',
-      reserve: credit('4.00'),
+      reserve: credit('20000.00'),
       updatedAt: 0,
       dueAt: 0,
     }),
@@ -277,7 +277,7 @@ async function deadLettersEvenWhenTheLoggerThrows(store: Store): Promise<void> {
     saga({
       id: 'pay_1',
       state: 'SUBMITTED',
-      reserve: credit('4.00'),
+      reserve: credit('20000.00'),
       updatedAt: 0,
       dueAt: 0,
     }),
@@ -300,7 +300,7 @@ async function deadLettersEvenWhenTheLoggerThrows(store: Store): Promise<void> {
   );
   assert.deepEqual(
     await store.ledger.balance(earned('usr_seller')),
-    credit('4.00'),
+    credit('20000.00'),
   );
 }
 
@@ -314,7 +314,7 @@ async function leavesASubmittedSagaAtTheAgeBoundaryForTheWebhook(
     saga({
       id: 'pay_1',
       state: 'SUBMITTED',
-      reserve: credit('4.00'),
+      reserve: credit('20000.00'),
       updatedAt: 0,
       dueAt: 0,
     }),
@@ -332,7 +332,7 @@ async function leavesASubmittedSagaAtTheAgeBoundaryForTheWebhook(
   assert.equal(stillSubmitted!.state, 'SUBMITTED');
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
-    credit('4.00'),
+    credit('20000.00'),
   );
   assert.deepEqual(await store.ledger.balance(SYSTEM.REVENUE), credit('0.00'));
 }
@@ -347,7 +347,7 @@ async function deadLettersAProviderFaultPastTheAttemptCeiling(
       id: 'pay_1',
       state: 'RESERVED',
       attempts: 0,
-      reserve: credit('4.00'),
+      reserve: credit('20000.00'),
     }),
   );
 
@@ -371,7 +371,7 @@ async function deadLettersAProviderFaultPastTheAttemptCeiling(
   );
   assert.deepEqual(
     await store.ledger.balance(earned('usr_seller')),
-    credit('4.00'),
+    credit('20000.00'),
   );
 }
 
@@ -427,7 +427,7 @@ async function climbsAttemptsEachRunThenDeadLettersAndReturnsTheReserve(
   );
   assert.deepEqual(
     await store.ledger.balance(earned('usr_seller')),
-    credit('4.00'),
+    credit('20000.00'),
   );
 }
 
@@ -475,7 +475,7 @@ async function deadLetteringEmitsOnePayoutReversedEvent(
       id: 'pay_1',
       state: 'RESERVED',
       attempts: 0,
-      reserve: credit('4.00'),
+      reserve: credit('20000.00'),
     }),
   );
 
@@ -509,7 +509,7 @@ async function reversesPromptlyWhenTheProviderReportsFailure(
     saga({
       id: 'pay_1',
       state: 'SUBMITTED',
-      reserve: credit('4.00'),
+      reserve: credit('20000.00'),
       providerRef: 'prov_pay_1',
       updatedAt: 1_000,
       dueAt: 0,
@@ -538,7 +538,7 @@ async function reversesPromptlyWhenTheProviderReportsFailure(
   );
   assert.deepEqual(
     await store.ledger.balance(earned('usr_seller')),
-    credit('4.00'),
+    credit('20000.00'),
   );
 }
 
@@ -552,7 +552,7 @@ async function reversesPromptlyWhenTheProviderReportsAReturn(
     saga({
       id: 'pay_1',
       state: 'SUBMITTED',
-      reserve: credit('4.00'),
+      reserve: credit('20000.00'),
       providerRef: 'prov_pay_1',
       updatedAt: 1_000,
       dueAt: 0,
@@ -575,7 +575,7 @@ async function reversesPromptlyWhenTheProviderReportsAReturn(
   assert.equal(failed!.reason, 'payout.provider_returned');
   assert.deepEqual(
     await store.ledger.balance(earned('usr_seller')),
-    credit('4.00'),
+    credit('20000.00'),
   );
 }
 
@@ -590,7 +590,7 @@ async function neverForceFailsAPayoutTheProviderReportsSettled(
     saga({
       id: 'pay_1',
       state: 'SUBMITTED',
-      reserve: credit('4.00'),
+      reserve: credit('20000.00'),
       providerRef: 'prov_pay_1',
       updatedAt: 0,
       dueAt: 0,
@@ -615,7 +615,7 @@ async function neverForceFailsAPayoutTheProviderReportsSettled(
   assert.equal(held!.updatedAt, 0);
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
-    credit('4.00'),
+    credit('20000.00'),
   );
   assert.deepEqual(
     await store.ledger.balance(earned('usr_seller')),
@@ -634,7 +634,7 @@ async function defersTheTimeoutWhileTheProviderReportsPending(
     saga({
       id: 'pay_1',
       state: 'SUBMITTED',
-      reserve: credit('4.00'),
+      reserve: credit('20000.00'),
       providerRef: 'prov_pay_1',
       updatedAt: 0,
       dueAt: 0,
@@ -658,7 +658,7 @@ async function defersTheTimeoutWhileTheProviderReportsPending(
   assert.equal(deferred!.dueAt, 120_000 + testConfig().payoutSla.SUBMITTED!);
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
-    credit('4.00'),
+    credit('20000.00'),
   );
 }
 
@@ -670,7 +670,7 @@ async function probesOnTheSlaCadenceWhilePendingWithinTheWindow(
     saga({
       id: 'pay_1',
       state: 'SUBMITTED',
-      reserve: credit('4.00'),
+      reserve: credit('20000.00'),
       providerRef: 'prov_pay_1',
       updatedAt: 1_000,
       dueAt: 0,
@@ -693,7 +693,7 @@ async function probesOnTheSlaCadenceWhilePendingWithinTheWindow(
   assert.equal(watched!.dueAt, 1_000 + testConfig().payoutSla.SUBMITTED!);
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
-    credit('4.00'),
+    credit('20000.00'),
   );
 }
 
@@ -708,7 +708,7 @@ async function fallsBackToTheTimeoutWhenTheProbeCannotAnswer(): Promise<void> {
       saga({
         id: 'pay_1',
         state: 'SUBMITTED',
-        reserve: credit('4.00'),
+        reserve: credit('20000.00'),
         providerRef: 'prov_pay_1',
         updatedAt: 0,
         dueAt: 0,
@@ -733,7 +733,7 @@ async function fallsBackToTheTimeoutWhenTheProbeCannotAnswer(): Promise<void> {
     assert.deepEqual(summary.retrying, [], `answer ${answer}`);
     assert.deepEqual(
       await scoped.ledger.balance(earned('usr_seller')),
-      credit('4.00'),
+      credit('20000.00'),
       `answer ${answer}`,
     );
   }
@@ -791,8 +791,8 @@ describe('advanceDuePayouts Pricing At Request', () => {
       saga({
         id: 'pay_quote',
         state: 'RESERVED',
-        reserve: credit('4.00'),
-        payoutUsd: usd('0.09'),
+        reserve: credit('20000.00'),
+        payoutUsd: usd('90.00'),
       }),
     );
 
@@ -801,7 +801,7 @@ describe('advanceDuePayouts Pricing At Request', () => {
       limit: 10,
     });
 
-    // The current rate would price the reserve at $0.02; the stored quote wins.
-    assert.deepEqual(recorded[0]!.amount, usd('0.09'));
+    // The current rate would price the reserve at $100.00; the stored quote wins.
+    assert.deepEqual(recorded[0]!.amount, usd('90.00'));
   });
 });

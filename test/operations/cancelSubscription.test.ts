@@ -39,7 +39,7 @@ function activeSubscription(
     userId: 'usr_subscriber',
     sellerId: 'usr_seller',
     sku: 'wrld_membership',
-    price: credit('5.00'),
+    price: credit('100.00'),
     periodMs: 30 * 24 * 60 * 60_000,
     state,
     period: 1,

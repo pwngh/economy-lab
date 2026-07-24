@@ -77,7 +77,7 @@ async function fund(
 function saga(overrides: Partial<Saga> & Pick<Saga, 'id' | 'state'>): Saga {
   return {
     userId: 'usr_seller',
-    reserve: credit('4.00'),
+    reserve: credit('20000.00'),
     rateId: 'payout:CREDIT->USD:1',
     providerRef: null,
     reason: null,
@@ -104,7 +104,7 @@ describe('edge-tilia shim (the compiled @pwngh/economy-edge package behind the l
     const result = await edgeTiliaProcessor(edge.outbound).submitPayout({
       key: 'pay_1',
       userId: 'usr_seller',
-      amount: usd('2.00'),
+      amount: usd('100.00'),
     });
 
     assert.deepEqual(result, { providerRef: scenario.ref.id });
@@ -122,7 +122,7 @@ describe('edge-tilia shim (the compiled @pwngh/economy-edge package behind the l
     ).submitPayout({
       key: 'pay_pin',
       userId: 'usr_seller',
-      amount: usd('2.00'),
+      amount: usd('100.00'),
     });
     const segments = providerRef.split('/');
     assert.equal(
@@ -213,7 +213,7 @@ describe('edge-tilia shim (the compiled @pwngh/economy-edge package behind the l
     assert.equal((await store.sagas.load('pay_1'))!.state, 'FAILED');
     assert.deepEqual(
       await store.ledger.balance(earned('usr_seller')),
-      credit('4.00'),
+      credit('20000.00'),
     );
   });
 
@@ -245,7 +245,7 @@ describe('edge-tilia shim (the compiled @pwngh/economy-edge package behind the l
     assert.equal((await store.sagas.load('pay_1'))!.state, 'SUBMITTED');
     assert.deepEqual(
       await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
-      credit('4.00'),
+      credit('20000.00'),
     );
   });
 
@@ -257,7 +257,7 @@ describe('edge-tilia shim (the compiled @pwngh/economy-edge package behind the l
     const result = await capabilities.processor.submitPayout({
       key: 'pay_1',
       userId: 'usr_seller',
-      amount: usd('2.00'),
+      amount: usd('100.00'),
     });
     assert.deepEqual(result, { providerRef: scenario.ref.id });
     assert.deepEqual(await capabilities.payees.status('usr_seller'), {
@@ -290,7 +290,7 @@ describe('edge-tilia shim (the compiled @pwngh/economy-edge package behind the l
         clock: fixedClock(0),
       });
       const edge = edgeFrom(tiliaScenario({ kyc }));
-      await fund(store, earned('usr_seller'), credit('30.00'), 'txn_seed');
+      await fund(store, earned('usr_seller'), credit('30000.00'), 'txn_seed');
       const ctx: Ctx = {
         clock: fixedClock(0),
         ids: sequentialIds(),
@@ -312,7 +312,7 @@ describe('edge-tilia shim (the compiled @pwngh/economy-edge package behind the l
             idempotencyKey: `idem_${kyc}`,
             actor: { kind: 'user', userId: 'usr_seller' },
             userId: 'usr_seller',
-            amount: credit('12.00'),
+            amount: credit('20000.00'),
           },
           unit,
           ctx,

@@ -164,7 +164,7 @@ describe('Submit Correlation', () => {
         actor: { kind: 'system', service: 'test' },
         userId: 'usr_corr',
         source: 'card',
-        amount: credit('1.00'),
+        amount: credit('600.00'),
       } as never,
       { correlationId: 'req_end_to_end' },
     );

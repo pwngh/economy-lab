@@ -73,7 +73,7 @@ async function openReservedSaga(
 ): Promise<Saga> {
   const row: Saga = {
     userId: 'usr_seller',
-    reserve: credit('4.00'),
+    reserve: credit('20000.00'),
     rateId: 'payout:CREDIT->USD:1',
     providerRef: null,
     reason: null,
@@ -154,7 +154,7 @@ describe('reversePayout', () => {
     assert.equal(outcome.status, 'committed');
     assert.equal(await stateOf(store, 'pay_1'), 'FAILED');
     const earnedBalance = await balanceOf(store, earned(saga.userId));
-    assert.deepEqual(earnedBalance, credit('4.00'));
+    assert.deepEqual(earnedBalance, credit('20000.00'));
     const reserveBalance = await balanceOf(store, SYSTEM.PAYOUT_RESERVE);
     assert.deepEqual(reserveBalance, credit('0.00'));
   });
@@ -180,7 +180,7 @@ describe('reversePayout', () => {
     assert.equal(await stateOf(store, 'pay_2'), 'FAILED');
     assert.deepEqual(
       await balanceOf(store, earned('usr_seller')),
-      credit('4.00'),
+      credit('20000.00'),
     );
   });
 
@@ -201,7 +201,7 @@ describe('reversePayout', () => {
     assert.equal(await stateOf(store, 'pay_live'), 'SUBMITTED');
     assert.deepEqual(
       await balanceOf(store, SYSTEM.PAYOUT_RESERVE),
-      credit('4.00'),
+      credit('20000.00'),
     );
     assert.deepEqual(
       await balanceOf(store, earned('usr_seller')),
@@ -233,7 +233,7 @@ describe('reversePayout', () => {
     assert.equal(await stateOf(store, 'pay_rail'), 'FAILED');
     assert.deepEqual(
       await balanceOf(store, earned('usr_seller')),
-      credit('4.00'),
+      credit('20000.00'),
     );
     assert.deepEqual(
       await balanceOf(store, SYSTEM.PAYOUT_RESERVE),
@@ -262,7 +262,7 @@ describe('reversePayout', () => {
     assert.equal(second.status, 'duplicate');
     const afterSecond = await balanceOf(store, earned('usr_seller'));
     assert.deepEqual(afterSecond, afterFirst);
-    assert.deepEqual(afterSecond, credit('4.00'));
+    assert.deepEqual(afterSecond, credit('20000.00'));
   });
 });
 
@@ -320,7 +320,7 @@ describe('reversePayout — Refusals & Validation', () => {
     assert.equal(await stateOf(store, 'pay_8'), 'RESERVED');
     assert.deepEqual(
       await balanceOf(store, SYSTEM.PAYOUT_RESERVE),
-      credit('4.00'),
+      credit('20000.00'),
     );
   });
 });
