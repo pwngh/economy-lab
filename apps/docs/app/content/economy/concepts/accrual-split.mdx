@@ -1,0 +1,43 @@
+---
+title: 'The accrual split'
+summary: "Concurrent buyers of one seller all credit that seller's earned row, and serialize on its lock. With ACCRUAL_DRAIN on, a charge parks the seller's share on a settlement-accrual shard and records an accrual row; the worker's drain sweep moves parked shares to earned in batches, one posting per seller."
+plain: "A tip jar. When the café is slammed, nobody stops mid-rush to hand each barista their cut of every sale — the money goes in the jar with a note of who earned it, and at a quiet moment the jar is counted out into pockets, notes and totals matching exactly."
+order: 97
+status: stable
+sourceRefs:
+  [
+    'src/operations/accrual.ts · parkEarnedLegs',
+    'src/worker/accrual.ts · drainAccruals',
+    'test/operations/accrual.test.ts',
+  ]
+related:
+  [
+    'economy/concepts/platform-sharding',
+    'economy/reference/background-worker',
+    'economy/reference/configuration',
+  ]
+---
+
+[Platform sharding](/economy/concepts/platform-sharding/) splits the house accounts every operation meets. It cannot touch the other hot row: a popular seller's <ApiLink to="functions/src.earned" /> account is a user account, and a hundred concurrent buyers of that seller's items all credit it — and wait in line on its one lock.
+
+The accrual split takes the seller's row off the purchase path. It is a host opt-in ([`ACCRUAL_DRAIN`](/economy/reference/configuration/#the-accrual-split)), meant to run with `PLATFORM_SHARDS` set to two or more so the parking spots themselves don't become the new line.
+
+## Parking the share
+
+<AccrualSplit />
+
+With the flag on, every charge that would credit a seller's `earned` account — [spend](/economy/reference/operations/spend/), [subscribe](/economy/reference/operations/subscribe/), and the renewal sweep, all through one rewrite — redirects that leg to a `SETTLEMENT_ACCRUAL` shard instead, routed by the operation's idempotency key like any sharded posting. Only the account changes, so the posting stays balanced, and the redirected amounts come back per seller: the charge records one accrual row per seller share, keyed by order, and the share map rides the sealed posting metadata — inside the chain-hash preimage — so what was parked for whom is itself tamper-evident.
+
+The buyer's experience is unchanged. What changes is when the seller's balance moves.
+
+## The drain sweep
+
+The worker's `accrualDrain` sweep claims pending rows and settles each seller in one posting per run: however many sales parked shares since the last drain, the seller's `earned` account takes one credit for the sum. Negative rows — refund recoveries — net first, repaying `RECEIVABLE` before anything reaches `earned`. A seller whose transaction throws rolls back whole; the rows stay pending for the next run.
+
+The backlog is observable: the sweep publishes the pending total and the oldest row's age, and `economy.capacity()` reports the same gauges with an advisory when the backlog ages past its threshold.
+
+## Refunds follow the rows
+
+A [refund](/economy/reference/operations/refund/) of an accrual-split sale doesn't guess where the money went — it claims the order's own accrual rows. A share still pending is clawed back out of the exact shard that holds it; a share already drained is recovered through `RECEIVABLE`, and the drain sweep's netting repays it. The path is data-driven: a sale that parked shares reverses this way even if `ACCRUAL_DRAIN` has since been turned off, because the rows say what happened.
+
+Accrual rows are never deleted — `pending` becomes `drained` or `refunded`, and the trail from every sale to every settlement stays whole.

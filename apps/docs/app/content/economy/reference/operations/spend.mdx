@@ -113,6 +113,13 @@ For the `spendable`-funded part, the injected [fee policy](/economy/ports/pricin
 
 The `promo`-funded part carries no fee, so it skips `splitLegs`: sellers are paid from `REVENUE` and the buyer's `promo` is spent down against `PROMO_FLOAT`.
 
+<Callout type="note">
+  With [the accrual split](/economy/concepts/accrual-split/) on (`ACCRUAL_DRAIN`), the seller
+  legs above park on a `SETTLEMENT_ACCRUAL` shard instead, and the worker's drain sweep credits
+  each seller's `earned` in batches. The buyer's side and the fee are unchanged; only when the
+  seller's balance moves changes.
+</Callout>
+
 ## Authorization
 
 `spend` is open to an end user: the buyer runs it on their own wallet. A `system` or `operator` [actor](/economy/concepts/actors-and-authorization/) may also call it.

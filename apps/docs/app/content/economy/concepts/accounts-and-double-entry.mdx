@@ -56,6 +56,8 @@ The platform's house accounts are the fixed <ApiLink to="variables/src.SYSTEM" /
 | `RECEIVABLE`     | `CREDIT` | A shortfall a user owes back (e.g. a clawback that went negative).                 |
 | `PROMO_FLOAT`    | `CREDIT` | The offsetting entry for credits granted as promos.                                |
 | `OPENING_EQUITY` | `CREDIT` | The offset used once, to seed balances on a cold start.                            |
+| `SETTLEMENT_ACCRUAL` | `CREDIT` | Sellers' shares parked between a charge and the drain sweep, under [the accrual split](/economy/concepts/accrual-split/). |
+| `NETTING_CLEARING` | `CREDIT` | The pass-through a [netting session](/economy/concepts/session-netting/)'s settle posts across; nets to zero within the posting. |
 
 One wrinkle on the table above: with [`PLATFORM_SHARDS`](/economy/reference/configuration/#platform-sharding) set past `1`, each hot `SYSTEM` account splits into shard rows, the bare id plus `platform:revenue#1` and so on. A shard row behaves like its parent in every way that matters here (identity checks strip the `#` suffix first, so currency, class, and normal side all come from the base account), and the logical balance is the sum over the rows. [Platform sharding](/economy/concepts/platform-sharding/) explains why the split exists and how a posting picks its shard.
 

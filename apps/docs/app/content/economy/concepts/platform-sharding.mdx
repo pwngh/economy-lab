@@ -16,6 +16,8 @@ Every top-up debits `STORED_VALUE` and every sale credits `REVENUE`, so a thousa
 
 [`PLATFORM_SHARDS`](/economy/reference/configuration/#platform-sharding) breaks up that line. Set to four, say, each hot platform account becomes four rows (the bare id plus `platform:revenue#1` through `#3`), and concurrent postings spread across them instead of queueing on one.
 
+<PlatformShards />
+
 The seven accounts that take this traffic shard: `REVENUE`, `STORED_VALUE`, `TRUST_CASH`, `USD_CLEARING`, `REVENUE_USD`, `PROMO_FLOAT`, and `PAYOUT_RESERVE`. `RECEIVABLE` and `OPENING_EQUITY` move rarely and stay single rows.
 
 A shard row behaves like any other account under the machinery on the concurrency page: it takes its own lock and extends its own [hash chain](/economy/concepts/integrity/). The point of the split is precisely that those are _different_ locks and _different_ chains.
@@ -50,3 +52,5 @@ A shard also inherits its parent's currency, class, and normal side (identity ch
 The default is `1`: the unsharded ledger, byte-identical to before the knob existed. And because shard 0 keeps the bare account id, an existing ledger's balances already live on shard 0, so turning sharding on later is safe.
 
 This is deliberately the one scale lever in a single-database design. It relieves contention on the hot rows _inside_ that database; cross-node partitioning of the ledger is [out of scope](/economy/scope-and-non-goals/).
+
+Sharding covers the platform's accounts. The other hot row — a popular seller's <ApiLink to="functions/src.earned" /> account — is a user account and can't shard; [the accrual split](/economy/concepts/accrual-split/) takes it off the purchase path instead, and is meant to run with `PLATFORM_SHARDS` at two or more.

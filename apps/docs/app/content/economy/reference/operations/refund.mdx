@@ -59,6 +59,8 @@ The payload is one `refund` variant of [`Operation`](/economy/reference/the-econ
 
 The reversal mirrors the sale's [double-entry posting](/economy/concepts/accounts-and-double-entry/) leg for leg, in three groups: the buyer's accounts raised in full, each seller's `earned` and `REVENUE` clawed back but capped at what that account still holds, and whatever couldn't be clawed back credited to `SYSTEM.RECEIVABLE` so debits and credits still cancel. If a seller already spent or paid out their cut, only the part still there comes back. The shortfall is always denominated in `CREDIT`, since a sale only moves `CREDIT`.
 
+A sale charged under [the accrual split](/economy/concepts/accrual-split/) reverses through its own accrual rows instead. The refund claims the order's rows: a share still pending is clawed back out of the exact `SETTLEMENT_ACCRUAL` shard that holds it, and a share already drained is recovered through `RECEIVABLE`, repaid by the drain sweep's netting. The path is data-driven — the rows say where the shares went — so it holds even when `ACCRUAL_DRAIN` has since been turned off.
+
 <Callout type="note">
   A refund never drives a user account negative. The ledger forbids that, which
   is why each seller clawback is capped at the balance on hand and the rest

@@ -32,4 +32,6 @@ one balanced transaction:
 Each seller's cut lands in their [`earned` balance](/economy/concepts/accounts-and-double-entry/),
 which is the balance [`requestPayout`](/economy/reference/operations/request-payout/) later pays
 out as real money. A [`refund`](/economy/reference/operations/refund/) of the order unwinds every
-share — both sellers and the fee — in one opposite posting.
+share — both sellers and the fee — in one opposite posting. (Under [the accrual
+split](/economy/concepts/accrual-split/), the cut parks first and the worker's drain sweep moves
+it to <ApiLink to="functions/src.earned" /> in batches; the shares and the refund path are the same.)

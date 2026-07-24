@@ -77,22 +77,38 @@ Here a user tops up their balance and the balance visibly moves; the result tell
 
 A `rejected` outcome is a normal "no" returned as data, not an error; a genuine fault throws instead. See [outcomes and reason codes](/economy/reference/outcomes-and-reason-codes/) for the full set.
 
-Every submit is also metered through the injected `Meter`: one count under `economy.submit`, tagged by operation kind and how it resolved (`committed`, `duplicate`, `rejected`, or `fault`), plus its duration under `economy.submit.ms` — request-path telemetry without wrapping `submit` yourself.
 Every submit is also metered through the injected <ApiLink to="interfaces/src_ports.Meter" />: one count under `economy.submit`, tagged by operation kind and how it resolved (`committed`, `duplicate`, `rejected`, or `fault`), plus its duration under `economy.submit.ms` — request-path telemetry without wrapping `submit` yourself.
 
 ### Caveats
 
 - A business "no" is a returned `rejected` outcome, never a throw. A throw means the request itself is broken (`OP.MALFORMED`, `AUTH.UNAUTHORIZED`) or infrastructure failed — a caller bug or an outage, not a decline.
-- Amounts are minor units as `bigint`: `toAmount('CREDIT', 12_000n)` is 120 credits, or `credits(120)` with the whole-unit shorthand. There is no float anywhere in the money path.
 - Amounts are minor units as `bigint`: <ApiLink to="functions/src.toAmount">toAmount('CREDIT', 12_000n)</ApiLink> is 120 credits, or <ApiLink to="functions/src.credits">credits(120)</ApiLink> with the whole-unit shorthand. There is no float anywhere in the money path.
 - A `duplicate` outcome carries the original transaction. Treat it as success — the work is done — not as an error.
 - A rejected request leaves its idempotency key unused, so the same key can retry after the condition clears.
+
+## Batches and bursts
+
+`submitBatch(operations)` runs several _independent_ operations through one database commit and returns a <ApiLink to="types/src.BatchOutcome" /> per slot, index-aligned with the input. Each operation keeps its own verdict: a slot can commit, reject, or fault without touching its neighbors — a slot that fails rolls back alone — and two slots carrying the same idempotency key fault the later one rather than double-run it. On a store without batch transactions the call degrades to sequential submits, same results, one commit each. Every batch counts once under the `economy.submit.batch` meter.
+
+Most hosts never call it directly. <ApiLink to="functions/src.createSubmitCoalescer" /> wraps it as a drop-in `submit` that gathers the concurrent calls of one event-loop turn into a single batch — a burst pays one commit instead of one each, and every caller still receives exactly what a direct `submit` would have produced:
+
+```ts
+import { createEconomy, createSubmitCoalescer } from '@pwngh/economy-lab';
+
+const economy = createEconomy(ports);
+const lane = createSubmitCoalescer(economy); // maxBatch 16, flushes per microtask
+
+// Concurrent requests share one commit; each still gets its own Outcome.
+const outcome = await lane.submit(operation);
+```
+
+A wider window is a host decision: pass `defer` with a short timer to trade a few milliseconds of latency for more batching. A call carrying per-call <ApiLink to="types/src_ports.CallOptions" /> bypasses the queue and submits directly.
 
 ## read
 
 `read` is the look-but-don't-change surface: balances, statements, a posting or saga by id, entitlement checks, the account, payout, and posting journals, the pause status, and the solvency proof.
 
-Reading one account's balance is a single call that returns an `Amount`:
+Reading one account's balance is a single call that returns an <ApiLink to="types/src.Amount" />:
 
 ```ts
 import { spendable } from '@pwngh/economy-lab';

@@ -42,6 +42,8 @@ Everything else hangs off the `Store` as a purpose-built sub-store, one per conc
 | `promos`        | Each promo grant, so the worker can reverse the unspent remainder at expiry.                           |
 | `trust`         | Each subject's recent spending, the input to the risk gate.                                            |
 | `checkpoints`   | Signed ledger snapshots, written only by the worker.                                                   |
+| `accruals`      | The [accrual split](/economy/concepts/accrual-split/)'s parked seller shares, claimed by the drain sweep and by refunds. |
+| `checkpoints`   | Signed ledger snapshots, written only by the worker — plus the re-proof cursor, seal heads, and the archive boundary. |
 | `replay`        | Raw inbound webhook ids, deduped separately from the domain idempotency keys.                          |
 
 The `outbox` and `inbox` rows are storage; what flows through them is [messaging](/economy/ports/messaging/).

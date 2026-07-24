@@ -114,6 +114,12 @@ The fee comes from [`feeForPrice`](/economy/ports/pricing/) at `platformFeeBps`,
 to a whole credit and capped at the charge — the same call `spend` and every renewal make, so
 the rounding is identical.
 
+<Callout type="note">
+  With [the accrual split](/economy/concepts/accrual-split/) on (`ACCRUAL_DRAIN`), the seller's
+  `earned` credits above park on a `SETTLEMENT_ACCRUAL` shard instead — for the first charge and
+  for every renewal the sweep posts — and the drain sweep moves them to `earned` in batches.
+</Callout>
+
 The handler grants the buyer the SKU in the same transaction, through the end of the period
 just billed. A rolled-back charge rolls back the grant too.
 

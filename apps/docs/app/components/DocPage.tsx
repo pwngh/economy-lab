@@ -17,6 +17,7 @@ import { Challenge } from '~/components/Challenge.tsx';
 import { Cite } from '~/components/Cite.tsx';
 import { Code } from '~/components/Code.tsx';
 import {
+  AccrualSplit,
   ChartOfAccounts,
   CreditMaturity,
   HashChain,
@@ -24,6 +25,7 @@ import {
   LockOrdering,
   OutboxRelay,
   PayoutSaga,
+  PlatformShards,
   RateLadder,
   SubmitPipeline,
   SubscriptionStates,
@@ -51,6 +53,8 @@ const MDX_COMPONENTS = {
   WorkerSweeps,
   CreditMaturity,
   IdempotentRetry,
+  AccrualSplit,
+  PlatformShards,
   LockOrdering,
   SystemShape,
   SourceLink,

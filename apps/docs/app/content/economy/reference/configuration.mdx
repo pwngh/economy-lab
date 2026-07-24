@@ -171,6 +171,14 @@ A hot platform account (`REVENUE`, `STORED_VALUE`, `TRUST_CASH`, ...) is one row
 
 Raising the count on a live ledger is safe: shard 0 keeps the bare account id, so existing balances already sit on shard 0 and new postings fan out from there. Lowering it is the careful direction. A smaller count reroutes every key, so rows that still hold balance can drop out of the rotation. Readers keep summing them and totals stay right, but nothing ever posts to them again, so drain before dropping the count back to `1`.
 
+## The accrual split
+
+Sharding relieves the platform accounts; a hot _seller's_ `earned` row needs [the accrual split](/economy/concepts/accrual-split/). With the flag on, spend and subscribe park seller shares on a `SETTLEMENT_ACCRUAL` shard and the worker's drain sweep moves them to `earned` in batches. Meant to run with `PLATFORM_SHARDS` at `2` or more, so the parking shards don't queue like the row they replace.
+
+| Variable        | Meaning                                                                                     | Default   |
+| --------------- | -------------------------------------------------------------------------------------------- | --------- |
+| `ACCRUAL_DRAIN` | `1` turns the split on; seller balances then move when the `accrualDrain` sweep runs.       | off       |
+
 ## Replay window and the maintenance pause
 
 `REPLAY_WINDOW_MS` bounds how stale a signed request may be before it's rejected as a possible

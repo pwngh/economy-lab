@@ -123,6 +123,7 @@ export function ChartOfAccounts() {
       <Acct x={320} y={152} w={130} name="REVENUE" note="CREDIT" />
       <Acct x={462} y={152} w={130} name="PAYOUT_RESERVE" note="CREDIT" />
       <Acct x={604} y={152} w={130} name="OPENING_EQUITY" note="CREDIT" />
+      <Acct x={320} y={208} w={200} name="SETTLEMENT_ACCRUAL" note="CREDIT, parked shares" />
 
       {/* the backing edge — the solvency invariant */}
       <line className="d-edge" x1={230} y1={62} x2={316} y2={62} markerEnd="url(#dgm-arrow)" />
@@ -806,6 +807,141 @@ export function IdempotentRetry() {
     </Diagram>
   );
 }
+/** The accrual split: a charge parks the seller's share, the drain sweep settles it; mirrors the accrual-split page, `src/operations/accrual.ts`, and `src/worker/accrual.ts`. */
+export function AccrualSplit() {
+  return (
+    <Diagram
+      viewBox="0 0 760 250"
+      label="The accrual split. A charge that would credit the seller's earned account redirects that leg to a settlement_accrual shard and records an accrual row naming the seller and amount. The worker's accrualDrain sweep later claims the pending rows and credits the seller's earned account once for their sum — one posting per seller per run. A refund claims the order's own rows and claws a pending share back out of the exact shard that holds it."
+      caption="The charge and the seller's credit decouple: buyers stop serializing on a hot seller's row, and the accrual rows carry every share from charge to drain. A refund follows the rows, so the path holds even for a sale parked before the flag was turned off."
+    >
+      <ArrowDefs />
+
+      <Pill x={30} y={48} w={148} name="charge" sub="spend · subscribe" />
+      <Pill x={306} y={48} w={168} name="SETTLEMENT_ACCRUAL" sub="shard, parked shares" />
+      <Pill x={582} y={48} w={148} name="earned" sub="the seller's row" variant="ok" />
+
+      {/* park */}
+      <line className="d-edge" x1={178} y1={70} x2={302} y2={70} markerEnd="url(#dgm-arrow)" />
+      <text className="d-elabel" x={240} y={56} textAnchor="middle">
+        parks the share
+      </text>
+      <text className="d-elabel" x={240} y={104} textAnchor="middle">
+        + one accrual row per seller
+      </text>
+
+      {/* drain */}
+      <line className="d-edge" x1={474} y1={70} x2={578} y2={70} markerEnd="url(#dgm-arrow)" />
+      <text className="d-elabel" x={526} y={56} textAnchor="middle">
+        drain sweep
+      </text>
+      <text className="d-elabel" x={526} y={104} textAnchor="middle">
+        one posting per seller
+      </text>
+
+      {/* refund claws back pending rows */}
+      <path
+        className="d-edge bad"
+        d="M330,92 C300,150 180,150 120,96"
+        fill="none"
+        markerEnd="url(#dgm-arrow)"
+      />
+      <text className="d-elabel" x={160} y={152} textAnchor="start">
+        refund claims the order's rows —
+      </text>
+      <text className="d-elabel" x={160} y={168} textAnchor="start">
+        pending shares claw back from their shard
+      </text>
+
+      <text className="d-note" x={30} y={218}>
+        Rows are never deleted: pending becomes drained or refunded, so the trail from every sale to
+        every settlement stays whole.
+      </text>
+      <text className="d-note" x={30} y={232}>
+        Refund recoveries net first, repaying RECEIVABLE.
+      </text>
+    </Diagram>
+  );
+}
+
+/** One hot platform account split into shard rows, routed by idempotency key, summed by readers; mirrors the platform-sharding page and `src/accounts.ts`. */
+export function PlatformShards() {
+  const ops = [
+    ['spend', 'idem key a7f2…', 76],
+    ['spend', 'idem key 03bc…', 20],
+    ['topUp', 'idem key e419…', 188],
+  ] as const;
+  const rows = [20, 76, 132, 188];
+  const shardNames = [
+    'platform:revenue',
+    'platform:revenue#1',
+    'platform:revenue#2',
+    'platform:revenue#3',
+  ];
+  return (
+    <Diagram
+      viewBox="0 0 760 268"
+      label="Platform sharding. Three concurrent operations — two spends and a top-up — each hash their idempotency key to pick a shard row of the platform revenue account: platform:revenue (shard 0, the bare id) plus #1 through #3. The operations land on different rows, so they take different locks instead of queueing on one. On the right, a reader sums the four rows into one logical balance."
+      caption="Concurrent postings spread across the shard rows instead of queueing on one lock. The routing hashes the operation's idempotency key, so a retry lands on the row the first attempt locked — and no reader cares which row holds what: the logical balance is the sum."
+    >
+      <ArrowDefs />
+
+      <text className="d-head" x={30} y={12} textAnchor="start">
+        OPERATIONS
+      </text>
+      {ops.map(([name, sub, target], i) => (
+        <g key={sub}>
+          <Pill x={30} y={20 + i * 56} w={140} name={name} sub={sub} />
+          <line
+            className="d-edge"
+            x1={170}
+            y1={42 + i * 56}
+            x2={356}
+            y2={target + 22}
+            markerEnd="url(#dgm-arrow)"
+          />
+        </g>
+      ))}
+      <text className="d-elabel" x={263} y={158} textAnchor="middle">
+        shard = hash(idempotency key)
+      </text>
+
+      <text className="d-head" x={360} y={12} textAnchor="start">
+        SHARD ROWS
+      </text>
+      {shardNames.map((name, i) => (
+        <g key={name}>
+          <Pill
+            x={360}
+            y={rows[i]}
+            w={190}
+            name={name}
+            sub={i === 0 ? 'shard 0 — the bare id' : 'its own lock and chain'}
+          />
+          <line
+            className="d-edge"
+            x1={550}
+            y1={rows[i] + 22}
+            x2={606}
+            y2={126}
+            markerEnd="url(#dgm-arrow)"
+          />
+        </g>
+      ))}
+
+      <Pill x={610} y={104} w={120} name="one balance" sub="readers sum" variant="ok" />
+
+      <text className="d-note" x={30} y={244}>
+        Shard 0 keeps the bare id, so an existing ledger's balances already sit on it and turning
+        sharding on later is safe.
+      </text>
+      <text className="d-note" x={30} y={258}>
+        PAYOUT_RESERVE routes by user id instead — both ends of a payout know it.
+      </text>
+    </Diagram>
+  );
+}
+
 /** The deadlock two lock orders produce and the one a global sort prevents; mirrors the concurrency page and `src/ledger.ts` lockAll. */
 export function LockOrdering() {
   return (
