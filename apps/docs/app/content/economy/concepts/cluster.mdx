@@ -1,0 +1,64 @@
+---
+title: 'Cluster nodes'
+summary: "A session is single-writer, so every caller must send a given scope to the same economy node for the scope's life. scopeRouter computes that assignment by rendezvous hashing, and openClusterNode binds it to a node identity with shared reservations, ownership-gated sessions, crash recovery, and the orphan sweep."
+plain: 'A coat check with several attendants. Your ticket number always points to the same attendant, so your coat never ends up split across two racks. When an attendant goes home, only their tickets move to someone else — and a floor manager sweeps up any coats left behind.'
+order: 110
+status: stable
+sourceRefs:
+  ['src/cluster.ts · openClusterNode', 'src/router.ts · scopeRouter', 'test/cluster.test.ts']
+apiRefs: ['modules/src_netting']
+related:
+  [
+    'economy/concepts/session-netting',
+    'economy/concepts/instance-economy',
+    'economy/reference/background-worker',
+    'economy/reference/outcomes-and-reason-codes',
+  ]
+notes:
+  [
+    {
+      text: 'David G. Thaler and Chinya V. Ravishankar, "Using name-based mappings to increase hit rates", IEEE/ACM Transactions on Networking 6(1), 1998 — the rendezvous (highest-random-weight) hashing construction.',
+      href: 'https://ieeexplore.ieee.org/document/663936',
+    },
+  ]
+---
+
+One economy node handles one [netting session](/economy/concepts/session-netting/) at a time — the session is a serialization object, and that is its point. Run several nodes and a new obligation appears: every caller must send a given scope key (a world instance, a region shard) to the same node for the scope's life, so exactly one lane ever accepts its movements.
+
+## The router
+
+<ClusterTopology />
+
+`scopeRouter(nodes)` returns that assignment as a pure function: each node's weight for a scope is a hash of the (node, scope) pair, and the scope belongs to the highest — rendezvous hashing.<Cite n={1} /> Every node computes the same answer from the same fixed list, with no ring state to coordinate, and a membership change reassigns only the departed node's scopes; everyone else's sessions stay sticky.
+
+The router decides where _new epochs_ open, nothing more. Live sessions on a moved scope finish through epoch rotation and the orphan sweep — assignment never strands money.
+
+## The cluster node
+
+`openClusterNode` is one construction for what a multi-node host would otherwise hand-wire: the router bound to this node's identity, the store-backed shared reservation registry (`sharedReservations`, so a buyer cannot promise the same credits to sessions on two nodes), ownership-gated session opening, crash recovery, and the orphan sweep.
+
+```ts
+import { openClusterNode } from '@pwngh/economy-lab/netting';
+
+const node = openClusterNode(ports, {
+  nodeId: 'econ-2',
+  nodes: ['econ-1', 'econ-2', 'econ-3'],
+  epochMaxAgeMs: 60_000,
+  sweep: { settleOlderThanMs: 180_000 },
+});
+
+node.owns(scope); // does this node hold the scope?
+const session = node.openSession(scope); // throws SESSION.MISROUTED if not
+```
+
+The ownership gate is what turns a routing mistake into a loud error instead of a forked session: `openSession` and `assertOwns` throw `SESSION.MISROUTED` when a scope's traffic reaches a node its assignment doesn't name, and the error's `detail.owner` names the node it belongs to, so the edge can redirect.
+
+## The epoch-age law
+
+Construction refuses a `sweep.settleOlderThanMs` under twice `epochMaxAgeMs`, with `CONFIG.INVALID`. The reasoning is mechanical: every epoch on a live node rotates within `epochMaxAgeMs`, and a due rotation is only observed a sweep cadence later — so below that bound, the sweep could settle an epoch a live node is still filling. At or above it, an unsettled session older than the bound can only belong to a dead node.
+
+## Crashed nodes
+
+A node that dies mid-epoch leaves sessions journaled but never settled. `sweepOrphans` (the worker runs it as the `orphans` sweep) enumerates them from the journal and reports each with its age. Settling an orphan moves money, so it happens only with `settleOlderThanMs` set — and the settle is the session's own idempotent finish, so racing a node that turns out to be alive never double-posts. `recover(sessionId)` is the targeted form: on failover, finish a specific crashed epoch's settle.
+
+One repair is deliberately manual: `reconcileReservations` rebuilds the shared registry's counters from the journal and runs only as an operator action on a quiesced cluster, because a live node's in-flight movements would race the rebuild.

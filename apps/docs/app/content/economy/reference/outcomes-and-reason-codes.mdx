@@ -163,11 +163,10 @@ They never overlap: the core decides up front which path a problem takes, so a g
 arrives either as a `RejectionCode` in the outcome or as a thrown exception, never as both.
 
 Thrown faults carry their own codes, kept deliberately separate from the rejection codes in
-`ERROR_CODES`. Four of them are the ones you'll meet when a request is malformed:
+<ApiLink to="variables/src.ERROR_CODES" />. Six of them are the ones you'll meet when a request is malformed or misdirected:
 
 | Thrown code               | Constant              | When it's thrown                                                                                         |
 | ------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------- |
-| `OP.MALFORMED`            | `MALFORMED_OPERATION` | The request was structurally wrong: a missing or invalid field.                                          |
 | `OP.MALFORMED`            | `MALFORMED_OPERATION` | The request was structurally wrong: a missing or invalid field, or a `topUp` amount outside the configured [purchase catalog](/economy/reference/operations/top-up/). |
 | `MONEY.INVALID_AMOUNT`    | `INVALID_AMOUNT`      | A money amount was invalid, such as negative or not a whole minor unit.                                  |
 | `AUTH.UNAUTHORIZED`       | `UNAUTHORIZED`        | The actor isn't permitted to perform this action.                                                        |

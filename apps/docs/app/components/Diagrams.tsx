@@ -868,6 +868,60 @@ export function SessionNetting() {
   );
 }
 
+/** Scopes assigned to nodes by rendezvous hashing, with the misroute refusal; mirrors the cluster page, `src/router.ts`, and `src/cluster.ts`. */
+export function ClusterTopology() {
+  return (
+    <Diagram
+      viewBox="0 0 760 250"
+      label="Three scopes routed across three economy nodes. scopeRouter assigns each scope to exactly one node by rendezvous hashing: world:1043 and world:9 to econ-1 and econ-3, world:207 to econ-2. A request for world:207 that reaches econ-3 is refused with SESSION.MISROUTED, and the error's detail.owner names econ-2, the owning node."
+      caption="Every caller sends a scope to the same node for the scope's life, so exactly one lane ever accepts its movements. A node refuses a scope it doesn't own — SESSION.MISROUTED, with the owner named — and a membership change reassigns only the departed node's scopes."
+    >
+      <ArrowDefs />
+
+      <text className="d-head" x={30} y={22} textAnchor="start">
+        SCOPES
+      </text>
+      <Pill x={30} y={34} w={148} name="world:1043" sub="scope key" />
+      <Pill x={306} y={34} w={148} name="world:207" sub="scope key" />
+      <Pill x={582} y={34} w={148} name="world:9" sub="scope key" />
+
+      <text className="d-head" x={30} y={152} textAnchor="start">
+        ECONOMY NODES
+      </text>
+      <Pill x={30} y={164} w={148} name="econ-1" sub="owns world:1043" variant="head" />
+      <Pill x={306} y={164} w={148} name="econ-2" sub="owns world:207" variant="head" />
+      <Pill x={582} y={164} w={148} name="econ-3" sub="owns world:9" variant="head" />
+
+      {/* rendezvous assignment */}
+      <line className="d-edge" x1={104} y1={78} x2={104} y2={160} markerEnd="url(#dgm-arrow)" />
+      <line className="d-edge" x1={380} y1={78} x2={380} y2={160} markerEnd="url(#dgm-arrow)" />
+      <line className="d-edge" x1={656} y1={78} x2={656} y2={160} markerEnd="url(#dgm-arrow)" />
+      <text className="d-elabel" x={116} y={122} textAnchor="start">
+        highest hash of (node, scope) wins
+      </text>
+
+      {/* the misroute refusal */}
+      <path
+        className="d-edge bad"
+        d="M454,64 C560,64 616,100 640,160"
+        fill="none"
+        markerEnd="url(#dgm-arrow)"
+      />
+      <text className="d-elabel" x={432} y={118} textAnchor="start">
+        wrong node: SESSION.MISROUTED,
+      </text>
+      <text className="d-elabel" x={432} y={134} textAnchor="start">
+        detail.owner names econ-2
+      </text>
+
+      <text className="d-note" x={30} y={236}>
+        The router only decides where new epochs open; live sessions on a moved scope finish via
+        epoch rotation and the orphan sweep.
+      </text>
+    </Diagram>
+  );
+}
+
 /** The accrual split: a charge parks the seller's share, the drain sweep settles it; mirrors the accrual-split page, `src/operations/accrual.ts`, and `src/worker/accrual.ts`. */
 export function AccrualSplit() {
   return (

@@ -19,6 +19,7 @@ import { Code } from '~/components/Code.tsx';
 import {
   AccrualSplit,
   ChartOfAccounts,
+  ClusterTopology,
   CreditMaturity,
   HashChain,
   IdempotentRetry,
@@ -56,6 +57,7 @@ const MDX_COMPONENTS = {
   CreditMaturity,
   IdempotentRetry,
   SessionNetting,
+  ClusterTopology,
   AccrualSplit,
   PlatformShards,
   LockOrdering,
