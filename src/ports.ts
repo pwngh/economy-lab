@@ -389,11 +389,48 @@ export interface Ledger {
   posting(txnId: string, options?: CallOptions): Promise<Posting | null>;
 
   /**
+   * The chain links the posting extended, one per touched account. `verifiedPosting`
+   * (src/chain.ts) recomputes each link's hash from the posting's stored content before any
+   * handler derives money from it — the read that makes an in-place edit of stored history fault
+   * instead of shaping a reversal. Empty on an unknown id.
+   */
+  links(
+    txnId: string,
+    options?: CallOptions,
+  ): Promise<ReadonlyArray<PostingLink>>;
+
+  /**
+   * One page of every stored chain link in commit order, with each link's posting content — the
+   * rolling re-proof's read (src/worker/reproof.ts). `limit` bounds the postings visited per
+   * page (a posting's links never split across pages). `cursor` is engine-internal ordering
+   * state: pass null to start from the oldest posting, then the returned cursor verbatim; a
+   * null returned cursor means the walk consumed the newest stored posting.
+   */
+  linksPage(
+    cursor: number | null,
+    limit: number,
+    options?: CallOptions,
+  ): Promise<LinkPage>;
+
+  /**
    * Streams every committed posting with its full legs, newest first by commit sequence — a total
    * order, so ties never reorder a page.
    */
   list(options?: CallOptions): AsyncIterable<Posting>;
 }
+
+/** One account's chain link on one posting, as {@link Ledger.links} returns it. */
+export type PostingLink = {
+  account: AccountRef;
+  prevHash: string;
+  hash: string;
+};
+
+/** One {@link Ledger.linksPage} page: links with their posting content, plus the resume cursor. */
+export type LinkPage = {
+  links: ReadonlyArray<{ account: AccountRef } & StoredLink>;
+  cursor: number | null;
+};
 
 /**
  * The full set of stores the system reads and writes.

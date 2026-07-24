@@ -2,6 +2,13 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
+## Unreleased (0.5.0)
+
+### Added
+
+- `Ledger.links` and `Ledger.linksPage` read an account's chain links in lineage order
+  (`StoredLink` rows). Breaking: custom ledger implementations must provide both.
+
 ## 0.4.4 - 2026-07-23
 
 ### Added

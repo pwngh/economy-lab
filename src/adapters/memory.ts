@@ -33,6 +33,7 @@ import type {
   InboxStore,
   Leg,
   Ledger,
+  LinkPage,
   Lot,
   CallOptions,
   Movement,
@@ -134,6 +135,10 @@ interface StoredPosting {
   legs: ReadonlyArray<Leg>;
   meta: Record<string, unknown>;
   postedAt: number;
+  // The stable commit sequence, the in-memory analogue of the SQL engines' postings.seq: page
+  // cursors key on it so archival pruning (which shifts log indices) never moves a cursor.
+  // Monotonic and never reused — a rolled-back append burns its value, exactly like a sequence.
+  seq: number;
   links: ReadonlyArray<{ account: AccountRef; prevHash: string; hash: string }>;
 }
 
@@ -147,6 +152,9 @@ interface LedgerState {
   journal: Journal;
 
   log: StoredPosting[];
+
+  /** The last assigned commit sequence; see StoredPosting.seq. */
+  seq: number;
 
   balances: Map<AccountRef, bigint>;
 
@@ -380,6 +388,7 @@ function createLedgerStore(deps: {
   const state: LedgerState = {
     journal: createJournal(),
     log: [],
+    seq: 0,
 
     balances: new Map(),
     heads: new Map(),
@@ -400,11 +409,13 @@ function createLedgerStore(deps: {
     append: async (posting) => {
       const postedAt = deps.clock.now();
       const links = await advanceChain(state, deps.digest, posting);
+      state.seq += 1;
       const stored: StoredPosting = {
         txnId: posting.txnId,
         legs: posting.legs,
         meta: posting.meta,
         postedAt,
+        seq: state.seq,
         links,
       };
       commitPosting(state, stored);
@@ -461,6 +472,13 @@ function createLedgerStore(deps: {
 
     posting: async (txnId) => postingOf(state.log, txnId),
 
+    links: async (txnId) => {
+      const row = state.log.find((entry) => entry.txnId === txnId);
+      return row === undefined ? [] : row.links.map((link) => ({ ...link }));
+    },
+
+    linksPage: async (cursor, limit) => linksPageOf(state.log, cursor, limit),
+
     list: () => listPostingsOf(state.log),
 
     __tamper: (txnId, mutate) => tamperPosting(state, txnId, mutate),
@@ -470,6 +488,32 @@ function createLedgerStore(deps: {
   };
 }
 
+// Whole postings per page so links never split; the cursor is the last consumed posting's seq.
+function linksPageOf(
+  log: ReadonlyArray<StoredPosting>,
+  cursor: number | null,
+  limit: number,
+): LinkPage {
+  const eligible = log.filter((row) => cursor === null || row.seq > cursor);
+  const page = eligible.slice(0, limit);
+  const links: Array<{ account: AccountRef } & StoredLink> = [];
+  for (const row of page) {
+    for (const link of row.links) {
+      links.push({
+        account: link.account,
+        txnId: row.txnId,
+        legs: row.legs,
+        meta: row.meta,
+        prevHash: link.prevHash,
+        hash: link.hash,
+      });
+    }
+  }
+  return {
+    links,
+    cursor: page.length < eligible.length ? page[page.length - 1]!.seq : null,
+  };
+}
 // The chain heads in code-unit account order rather than Map insertion order, so every engine
 // lists accounts identically.
 function sortedHeads(

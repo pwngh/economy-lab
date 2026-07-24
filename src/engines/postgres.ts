@@ -92,6 +92,7 @@ import type {
   IdempotencyStore,
   InboxStore,
   Leg,
+  LinkPage,
   Logger,
   MovementJournal,
   Ledger,
@@ -342,6 +343,18 @@ function createLedgerStore(q: Queryable, digest: Digest, clock: Clock): Ledger {
 
     posting: async (txnId) => postingOf(q, txnId),
 
+    links: async (txnId) => {
+      const result = await q.query(
+        `select account_id, prev_hash, hash from chain_links where posting_id = $1`,
+        [txnId],
+      );
+      return result.rows.map((row) => ({
+        account: row.account_id as AccountRef,
+        prevHash: row.prev_hash as string,
+        hash: row.hash as string,
+      }));
+    },
+    linksPage: (cursor, limit) => linksPageOf(q, cursor, limit),
     list: () => listPostingsOf(q),
   };
 }
@@ -613,6 +626,50 @@ async function* lineageOf(
 
 // A whole posting with all entry lines -- undoing a transaction needs every line to post the
 // opposite. Null when no posting has that id.
+// Pages by postings.seq (the commit order), whole postings at a time, so a posting's links never
+// split across pages; a null cursor from here means the newest stored posting was consumed.
+async function linksPageOf(
+  q: Queryable,
+  cursor: number | null,
+  limit: number,
+): Promise<LinkPage> {
+  const page = await q.query(
+    `select id, seq, meta from postings where seq > $1 order by seq asc limit $2`,
+    [cursor ?? -1, limit],
+  );
+  if (page.rows.length === 0) {
+    return { links: [], cursor: null };
+  }
+  const ids = page.rows.map((row) => row.id as string);
+  const legsByTxn = await legsByPosting(q, ids);
+  const linkRows = await q.query(
+    `select posting_id, account_id, prev_hash, hash from chain_links
+      where posting_id = any($1::text[])`,
+    [ids],
+  );
+  const metaByTxn = new Map(
+    page.rows.map((row) => [
+      row.id as string,
+      (row.meta ?? {}) as Record<string, unknown>,
+    ]),
+  );
+  const links = linkRows.rows.map((row) => ({
+    account: row.account_id as AccountRef,
+    txnId: row.posting_id as string,
+    legs: legsByTxn.get(row.posting_id as string) ?? [],
+    meta: metaByTxn.get(row.posting_id as string) ?? {},
+    prevHash: row.prev_hash as string,
+    hash: row.hash as string,
+  }));
+  return {
+    links,
+    cursor:
+      page.rows.length < limit
+        ? null
+        : Number(page.rows[page.rows.length - 1]!.seq),
+  };
+}
+
 async function postingOf(q: Queryable, txnId: string): Promise<Posting | null> {
   const result = await q.query(`select meta from postings where id = $1`, [
     txnId,

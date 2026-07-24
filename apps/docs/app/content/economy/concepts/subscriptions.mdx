@@ -6,7 +6,7 @@ order: 62
 status: stable
 sourceRefs:
   [
-    'src/ports.ts#L1103-L1104 · SUBSCRIPTION_STATES',
+    'src/ports.ts#L1140-L1141 · SUBSCRIPTION_STATES',
     'src/worker/subscriptions.ts',
   ]
 related:
@@ -43,13 +43,13 @@ const owned = await economy.read.entitled('usr_b2', 'sku_pro');
 
 Each period the sweep claims a one-charge-per-period key (so overlapping sweeps can't double-bill), debits the subscriber's <ApiLink to="functions/src.spendable" />, pays the seller, and moves the next due date forward.
 
-The renewal claim is a compare-and-set. `subscriptions.markBilled` sets the next period only if the row still shows the period the sweep claimed, so the loser of a race treats it as a no-op (see <SourceLink to="src/ports.ts#L766-L771 · SubscriptionStore.markBilled" />).
+The renewal claim is a compare-and-set. `subscriptions.markBilled` sets the next period only if the row still shows the period the sweep claimed, so the loser of a race treats it as a no-op (see <SourceLink to="src/ports.ts#L803-L808 · SubscriptionStore.markBilled" />).
 
 The first period may draw on promo credit; renewals come only from `spendable`.
 
 ## The states
 
-A `Subscription` carries its own `SubscriptionState`: `ACTIVE`, `LAPSED`, `CANCELED` (see <SourceLink to="src/ports.ts#L1103-L1104 · SUBSCRIPTION_STATES" />).
+A `Subscription` carries its own `SubscriptionState`: `ACTIVE`, `LAPSED`, `CANCELED` (see <SourceLink to="src/ports.ts#L1140-L1141 · SUBSCRIPTION_STATES" />).
 
 <SubscriptionStates />
 
@@ -67,7 +67,7 @@ Every transition is a compare-and-set against the current state, so a step is ap
 
 ## How it's enforced
 
-- **The store's compare-and-set method.** `SubscriptionStore.markBilled` is a conditional update that returns whether it changed a row, so a racing sweep can detect and stand down on a lost claim (see <SourceLink to="src/ports.ts#L1022-L1064 · SubscriptionStore" />).
+- **The store's compare-and-set method.** `SubscriptionStore.markBilled` is a conditional update that returns whether it changed a row, so a racing sweep can detect and stand down on a lost claim (see <SourceLink to="src/ports.ts#L803-L845 · SubscriptionStore" />).
 - **One transaction per step.** A renewal posts its charge and moves the due date inside `store.transaction`; a lapse flips the state, revokes the entitlement, and emits its event the same way. A partial step rolls back whole.
 - **The retry cap.** A subscription that can't pay doesn't retry forever: the attempt count is stored on the row, and the cap turns repeated failure into a single, terminal `LAPSED` transition.
 

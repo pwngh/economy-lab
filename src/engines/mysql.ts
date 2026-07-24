@@ -65,6 +65,7 @@ import type {
   InboxMessage,
   InboxStore,
   Leg,
+  LinkPage,
   Logger,
   MovementJournal,
   Ledger,
@@ -412,7 +413,64 @@ function createLedgerStore(deps: ExecDeps): Ledger {
 
     posting: (txnId) => postingOf(deps.exec, txnId),
 
+    links: async (txnId) => {
+      const result = await rows(
+        deps.exec,
+        'SELECT account_id, prev_hash, hash FROM chain_links WHERE posting_id = ?',
+        [txnId],
+      );
+      return result.map((row) => ({
+        account: row.account_id as AccountRef,
+        prevHash: row.prev_hash as string,
+        hash: row.hash as string,
+      }));
+    },
+
+    linksPage: (cursor, limit) => linksPageOf(deps.exec, cursor, limit),
+
     list: () => listPostingsOf(deps.exec),
+  };
+}
+
+// Pages by postings.seq (the commit order), whole postings at a time, so a posting's links never
+// split across pages; a null cursor from here means the newest stored posting was consumed.
+async function linksPageOf(
+  exec: MysqlExecutor,
+  cursor: number | null,
+  limit: number,
+): Promise<LinkPage> {
+  const page = await rows(
+    exec,
+    `SELECT id, seq, meta FROM postings WHERE seq > ? ORDER BY seq ASC LIMIT ?`,
+    [cursor ?? -1, limit],
+  );
+  if (page.length === 0) {
+    return { links: [], cursor: null };
+  }
+  const legsByTxn = await legsByPosting(
+    exec,
+    page.map((row) => row.id as string),
+  );
+  const linkRows = await rows(
+    exec,
+    `SELECT posting_id, account_id, prev_hash, hash FROM chain_links
+      WHERE posting_id IN (${page.map(() => '?').join(', ')})`,
+    page.map((row) => row.id as string),
+  );
+  const metaByTxn = new Map(
+    page.map((row) => [row.id as string, parseMeta(row.meta)]),
+  );
+  const links = linkRows.map((row) => ({
+    account: row.account_id as AccountRef,
+    txnId: row.posting_id as string,
+    legs: legsByTxn.get(row.posting_id as string) ?? [],
+    meta: metaByTxn.get(row.posting_id as string) ?? {},
+    prevHash: row.prev_hash as string,
+    hash: row.hash as string,
+  }));
+  return {
+    links,
+    cursor: page.length < limit ? null : Number(page[page.length - 1]!.seq),
   };
 }
 

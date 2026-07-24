@@ -1056,6 +1056,63 @@ async function markBilledIsCompareAndSet(store: Store): Promise<void> {
   assert.equal(reloaded!.nextDueAt, secondDue);
 }
 
+// links(txnId) answers one link per touched account, byte-identical to what lineage streams —
+// the verified-read path depends on this fidelity on every adapter.
+async function linksMatchLineage(store: Store): Promise<void> {
+  const userId = freshUser();
+  const txnId = `txn_conf_links_${userId}`;
+  await store.transaction((unit) => fundSpendable(unit, userId, '4.00', txnId));
+
+  const links = await store.ledger.links(txnId);
+  assert.equal(links.length, 2); // the funding contra account and the user's spendable
+  const own = links.find((link) => link.account === spendable(userId));
+  assert.notEqual(own, undefined);
+
+  const lineage = await collect(store.ledger.lineage(spendable(userId)));
+  const recorded = lineage.find((link) => link.txnId === txnId);
+  assert.equal(own!.hash, recorded!.hash);
+  assert.equal(own!.prevHash, recorded!.prevHash);
+  assert.deepEqual(await store.ledger.links(`txn_missing_${userId}`), []);
+}
+
+// linksPage walks the whole log in commit order on a resumable cursor, whole postings per page,
+// carrying each link's legs and metadata — the rolling re-proof's read.
+async function linksPageWalksTheLog(store: Store): Promise<void> {
+  const userId = freshUser();
+  const minted = [
+    `txn_conf_page_a_${userId}`,
+    `txn_conf_page_b_${userId}`,
+    `txn_conf_page_c_${userId}`,
+  ];
+  await store.transaction(async (unit) => {
+    for (const txnId of minted) {
+      await fundSpendable(unit, userId, '1.00', txnId);
+    }
+  });
+
+  const seen = new Set<string>();
+  let cursor: number | null = null;
+  for (;;) {
+    const page = await store.ledger.linksPage(cursor, 500);
+    for (const link of page.links) {
+      if (link.txnId === minted[0] && link.account === spendable(userId)) {
+        // Content rides the page: the legs and metadata the re-proof re-hashes.
+        assert.equal(link.legs.length, 2);
+        assert.equal(link.meta.source, 'card');
+      }
+      if (minted.includes(link.txnId)) {
+        seen.add(`${link.txnId}|${link.account}`);
+      }
+    }
+    if (page.cursor === null) {
+      break;
+    }
+    cursor = page.cursor;
+  }
+  // Every minted posting's links surfaced exactly once across the walk.
+  assert.equal(seen.size, minted.length * 2);
+}
+
 /**
  * Registers the shared conformance suite every {@link Store} implementation must pass — the same
  * tests the built-in memory, Postgres, and MySQL stores run, with the memory adapter as the
@@ -1127,6 +1184,10 @@ export function runStoreConformance(
       withStore(t, appliesExpiryAtReadTime));
     test('lists non-revoked entitlement grants sorted by sku', (t) =>
       withStore(t, listsNonRevokedGrantsSorted));
+    test("answers a posting's chain links byte-identical to its lineage", (t) =>
+      withStore(t, linksMatchLineage));
+    test('pages every stored chain link with content on a resumable cursor', (t) =>
+      withStore(t, linksPageWalksTheLog));
     test('appends movement batches and streams them back by session', (t) =>
       withStore(t, journalAppendsAndStreamsBySession));
     test('rejects a movement batch on a duplicate key or position', (t) =>

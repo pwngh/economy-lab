@@ -30,6 +30,7 @@ import type {
   OutboxMessage,
   OutboxStats,
   Posting,
+  PostingLink,
   StoredLink,
   Store,
   Unit,
@@ -160,6 +161,28 @@ function sessionLedger(transport: Transport, session: string): Ledger {
       streamBalanceAccounts(transport, session, options),
     lineage: (account, options) =>
       streamLineage(transport, account, session, options),
+    links: (txnId, options) =>
+      call(transport, at('links'), { txnId }, options) as Promise<
+        PostingLink[]
+      >,
+    linksPage: async (cursor, limit, options) => {
+      const page = (await call(
+        transport,
+        at('linksPage'),
+        { cursor, limit },
+        options,
+      )) as { links: unknown[]; cursor: number | null };
+      return {
+        links: page.links.map((row) => {
+          const link = decodeWire.storedLink(row);
+          return {
+            account: (row as { account: string }).account as AccountRef,
+            ...link,
+          };
+        }),
+        cursor: page.cursor,
+      };
+    },
     list: (options) => streamPostings(transport, session, options),
   };
 }
