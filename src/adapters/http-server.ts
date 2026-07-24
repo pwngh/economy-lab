@@ -13,7 +13,7 @@ import { decodeWire, encodeWire } from '#src/adapters/http-wire.ts';
 import { EconomyError, normalizeError } from '#src/errors.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
-import type { SagaState, Store, Unit } from '#src/ports.ts';
+import type { Reproof, SagaState, Store, Unit } from '#src/ports.ts';
 
 // Holds a db transaction open across several requests. The transaction body pauses on a promise
 // called the gate, so later requests run inside it before it commits or rolls back.
@@ -502,6 +502,13 @@ async function checkpointRoute(
     await backing.checkpoints.put(
       body.checkpoint as Parameters<typeof backing.checkpoints.put>[0],
     );
+    return null;
+  }
+  if (method === 'reproof') {
+    return (await backing.checkpoints.reproof?.()) ?? null;
+  }
+  if (method === 'putReproof') {
+    await backing.checkpoints.putReproof?.(body.state as Reproof);
     return null;
   }
   return backing.checkpoints.latest();

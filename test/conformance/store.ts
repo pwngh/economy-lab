@@ -1142,6 +1142,26 @@ async function linksPageWalksTheLog(store: Store): Promise<void> {
   assert.equal(seen.size, minted.length * 2);
 }
 
+// The reproof watermark round-trips; skipped by stores without the optional surface.
+async function reproofStateRoundTrips(store: Store): Promise<void> {
+  if (
+    store.checkpoints.reproof === undefined ||
+    store.checkpoints.putReproof === undefined
+  ) {
+    return;
+  }
+  await store.checkpoints.putReproof({ cursor: 42, rotatedAt: 7 });
+  assert.deepEqual(await store.checkpoints.reproof(), {
+    cursor: 42,
+    rotatedAt: 7,
+  });
+  await store.checkpoints.putReproof({ cursor: null, rotatedAt: 7 });
+  assert.deepEqual(await store.checkpoints.reproof(), {
+    cursor: null,
+    rotatedAt: 7,
+  });
+}
+
 /**
  * Registers the shared conformance suite every {@link Store} implementation must pass — the same
  * tests the built-in memory, Postgres, and MySQL stores run, with the memory adapter as the
@@ -1219,6 +1239,8 @@ export function runStoreConformance(
       withStore(t, linksMatchLineage));
     test('pages every stored chain link with content on a resumable cursor', (t) =>
       withStore(t, linksPageWalksTheLog));
+    test('round-trips the rolling re-proof watermark', (t) =>
+      withStore(t, reproofStateRoundTrips));
     test('appends movement batches and streams them back by session', (t) =>
       withStore(t, journalAppendsAndStreamsBySession));
     test('rejects a movement batch on a duplicate key or position', (t) =>

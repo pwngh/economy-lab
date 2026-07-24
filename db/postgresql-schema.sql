@@ -334,6 +334,17 @@ create table seal_heads (
   sum        bigint not null
 );
 -- ============================================================================
+-- Chain re-proof cursor: one row of rolling re-verification state. The worker's reproof sweep
+-- re-derives every stored chain link's hash from its own content in budget-bounded pages —
+-- cursor_seq is where the walk stands (null between rotations) and rotated_at is when the last
+-- complete pass finished — the verified-through watermark. Losing this row only restarts the
+-- walk from the oldest posting: over-verification, never a skipped link.
+-- ============================================================================
+create table chain_reproof (
+  cursor_seq bigint,
+  rotated_at bigint
+);
+-- ============================================================================
 -- Checkpoints: a signed snapshot of ledger state. Each row holds a Merkle root over every account's
 -- latest hash, signed with a key the ledger writer can't reach, so an insider who rewrites a history
 -- and recomputes its hashes is caught: the new root no longer matches the old signature. In production
@@ -524,7 +535,7 @@ create or replace trigger account_balances_integrity
 -- src/schema.ts together, whenever this file changes.
 -- ============================================================================
 create table schema_meta (version text not null);
-insert into schema_meta (version) values ('12');
+insert into schema_meta (version) values ('15');
 
 -- Deployed at-a-glance column docs (visible via \d+); the banners above carry the depth.
 comment on column accounts.id is 'Account id; platform:<name> or usr_<uuid>:<kind>.';
@@ -644,6 +655,7 @@ comment on table entitlements is 'What each user owns (SKU ownership), with vers
 comment on table subscriptions is 'Recurring charges: one row per subscription and its billing state.';
 comment on table trust_attempts is 'Per-key spend attempts feeding the velocity and risk check.';
 comment on table seal_heads is 'Latest checkpoint leaves per account; the incremental seal authenticates then diffs against it.';
+comment on table chain_reproof is 'Rolling re-proof cursor and last-rotation watermark; single row.';
 comment on table checkpoints is 'Signed Merkle checkpoints over the per-account hash chains.';
 comment on table seen_webhooks is 'Replay-dedup guard for inbound provider webhooks, by event id.';
 comment on table schema_meta is 'Single-row schema version stamp, checked at startup.';

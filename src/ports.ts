@@ -944,8 +944,28 @@ export interface CheckpointStore {
   ): Promise<void>;
   /** Every stored sealed head; empty before the first snapshotting seal. */
   sealHeads?(options?: CallOptions): Promise<ReadonlyArray<SealHead>>;
+  /**
+   * Optional rolling re-proof state (src/worker/reproof.ts): where the link walk stands and when
+   * the last full rotation completed — the verified-through watermark that makes "how much of
+   * stored history has been re-hashed, and how recently" a queryable fact instead of an
+   * assumption. Null before the first sweep. Absent (with `putReproof`), the sweep is a no-op.
+   */
+  reproof?(options?: CallOptions): Promise<Reproof | null>;
+  /** The write half of {@link CheckpointStore.reproof}: replaces the stored state whole. */
+  putReproof?(state: Reproof, options?: CallOptions): Promise<void>;
 }
 
+/**
+ * The rolling re-proof's persisted state. `cursor` is {@link Ledger.linksPage}'s resume token
+ * (null between rotations); `rotatedAt` is when the last complete pass over every stored link
+ * finished (null until the first completes). Every link recorded before `rotatedAt` has had its
+ * hash re-derived from stored content since then; younger links are vouched by seals and balance
+ * checks only — that boundary is the honest verification horizon.
+ */
+export type Reproof = {
+  cursor: number | null;
+  rotatedAt: number | null;
+};
 /**
  * Publishes a sealed checkpoint to a store outside the ledger's own database — an external log,
  * object store, or transparency service. The checkpoint table lives in the same database an

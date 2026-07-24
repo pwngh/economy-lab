@@ -1642,6 +1642,28 @@ function createMovementJournal(pool: PgPool): MovementJournal {
 
 function createCheckpointStore(pool: PgPool): CheckpointStore {
   return {
+    reproof: async () => {
+      const result = await pool.query(
+        `select cursor_seq, rotated_at from chain_reproof limit 1`,
+      );
+      const row = result.rows[0];
+      if (row === undefined) {
+        return null;
+      }
+      return {
+        cursor: row.cursor_seq === null ? null : Number(row.cursor_seq),
+        rotatedAt: row.rotated_at === null ? null : Number(row.rotated_at),
+      };
+    },
+    // Single-row rewrite; a crash between the two statements loses only the cursor, and the next
+    // sweep restarts from genesis — over-verification, never a skipped link.
+    putReproof: async (state) => {
+      await pool.query(`delete from chain_reproof`);
+      await pool.query(
+        `insert into chain_reproof (cursor_seq, rotated_at) values ($1, $2)`,
+        [state.cursor, state.rotatedAt],
+      );
+    },
     put: async (checkpoint) => {
       await pool.query(
         `insert into checkpoints (id, root, signature, count, at, v, sum, kid)

@@ -267,6 +267,31 @@ function assertZeroSum(posting: Posting): void {
 }
 
 /**
+ * Re-derives each link's hash from its stored content — the rolling re-proof's page check
+ * (src/worker/reproof.ts). Content only, on purpose: prevHash continuity across links is proven
+ * inductively by the seals (every tail was replayed while its account was dirty, anchored to a
+ * previously signed head), so the page order never matters and the walk stays resumable anywhere.
+ */
+export async function reproveLinks(
+  digest: Digest,
+  links: ReadonlyArray<{ account: AccountRef } & StoredLink>,
+): Promise<ChainBreak | null> {
+  for (const link of links) {
+    const recomputed = await recomputeLink(digest, link.account, link);
+    if (recomputed !== link.hash) {
+      return {
+        account: link.account,
+        txnId: link.txnId,
+        reason: 'tampered-hash',
+        expected: recomputed,
+        actual: link.hash,
+      };
+    }
+  }
+  return null;
+}
+
+/**
  * Reduces every account's head into one Merkle root, so signing the root (see `recordCheckpoint`)
  * covers every chain in one signature. The root changes if any head changes. The root is
  * reproducible across machines because leaves are sorted by account id, the RFC 6962 domain tags

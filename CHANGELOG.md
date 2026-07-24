@@ -15,6 +15,11 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   renewals and sweeps re-prove it before charging or granting.
 - The checkpoint seal re-proves only chains whose heads moved since the prior seal
   (`seal_heads`).
+- `reproveStoredChains` re-verifies sealed history in rolling pages and advances a
+  verified-through watermark; key rotation stamps `rotatedAt`, and the sweep re-proves
+  everything sealed before it.
+- The stamped SQL schema version is 15: `payout_sagas.txn_id`, `seal_heads`, and
+  `chain_reproof`.
 
 ### Changed
 

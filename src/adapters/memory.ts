@@ -45,6 +45,7 @@ import type {
   PromoStore,
   Range,
   ReplayStore,
+  Reproof,
   Saga,
   SaleStore,
   Sale,
@@ -1391,7 +1392,13 @@ function createMovementJournal(): MovementJournal {
 function createCheckpointStore(): CheckpointStore {
   const rows: Checkpoint[] = [];
   const heads = new Map<AccountRef, { head: string; sum: bigint }>();
+  let reproof: Reproof | null = null;
   return {
+    reproof: async (_options?: CallOptions) =>
+      reproof === null ? null : { ...reproof },
+    putReproof: async (state, _options?: CallOptions) => {
+      reproof = { ...state };
+    },
     put: async (checkpoint, _options?: CallOptions) => {
       rows.push({ ...checkpoint });
     },

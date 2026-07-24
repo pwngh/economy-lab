@@ -36,6 +36,7 @@ DROP TABLE IF EXISTS schema_meta;
 
 DROP TABLE IF EXISTS seen_webhooks;
 
+DROP TABLE IF EXISTS chain_reproof;
 DROP TABLE IF EXISTS seal_heads;
 DROP TABLE IF EXISTS checkpoints;
 
@@ -327,6 +328,11 @@ CREATE TABLE seal_heads (
      head       CHAR(64)    NOT NULL COMMENT 'Chain-head hash at the latest seal; lowercase hex.',
      sum        BIGINT      NOT NULL COMMENT 'Raw signed leg sum at the latest seal (debit positive).'
    ) COMMENT='The latest checkpoint\'s Merkle leaves, one row per account; authenticated against the signed root before the incremental seal trusts it.';
+-- Rationale in db/postgresql-schema.sql (chain_reproof banner).
+CREATE TABLE chain_reproof (
+     cursor_seq BIGINT NULL COMMENT 'Where the rolling re-proof walk stands; NULL between rotations.',
+     rotated_at BIGINT NULL COMMENT 'Epoch ms the last complete rotation finished; the verified-through watermark.'
+   ) COMMENT='Rolling re-proof cursor and last-rotation watermark; single row.';
 -- Rationale in db/postgresql-schema.sql (checkpoints banner).
 CREATE TABLE checkpoints (
      id         VARCHAR(64) PRIMARY KEY COMMENT 'Checkpoint id, chk_<uuid>; primary key.',
@@ -533,4 +539,4 @@ INSERT INTO account_balances (account_id, currency, balance, head_hash)
 CREATE TABLE schema_meta (
      version VARCHAR(32) NOT NULL COMMENT 'Schema version stamp; must match SCHEMA_VERSION at startup.'
    ) COMMENT='Single-row schema version stamp, checked at startup.';
-INSERT INTO schema_meta (version) VALUES ('12');
+INSERT INTO schema_meta (version) VALUES ('15');

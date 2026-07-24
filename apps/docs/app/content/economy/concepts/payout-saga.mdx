@@ -11,7 +11,7 @@ notes:
     href: 'https://patents.google.com/patent/US3886525'
 sourceRefs:
   [
-    'src/ports.ts#L1120-L1126 · SAGA_STATES',
+    'src/ports.ts#L1140-L1146 · SAGA_STATES',
     'src/operations/requestPayout.ts',
     'src/worker/payouts.ts',
   ]
@@ -41,7 +41,7 @@ The same shape covers anything that outlives one request. [Subscriptions](/econo
 
 ## The states
 
-`requestPayout` does not pay. It reserves the credits (`debit earned → credit payout_reserve`, two [`CREDIT` legs](/economy/concepts/accounts-and-double-entry/) that cancel out) and opens a `Saga`, a record whose `state` walks through `SagaState` (see <SourceLink to="src/ports.ts#L1120-L1126 · SAGA_STATES" />).
+`requestPayout` does not pay. It reserves the credits (`debit earned → credit payout_reserve`, two [`CREDIT` legs](/economy/concepts/accounts-and-double-entry/) that cancel out) and opens a `Saga`, a record whose `state` walks through `SagaState` (see <SourceLink to="src/ports.ts#L1140-L1146 · SAGA_STATES" />).
 
 The full enum declares `REQUESTED`, `RESERVED`, `SUBMITTED`, `SETTLED`, and `FAILED`. A live payout starts at `RESERVED`, because the credits were set aside in the same database transaction that opened the saga. Watch the row appear:
 

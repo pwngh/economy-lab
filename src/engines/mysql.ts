@@ -1635,6 +1635,30 @@ function sealHeadSurfaces(
 }
 function createCheckpointStore(pool: MysqlPool): CheckpointStore {
   return {
+    reproof: async () => {
+      const result = await rows(
+        pool,
+        'SELECT cursor_seq, rotated_at FROM chain_reproof LIMIT 1',
+      );
+      const row = result[0];
+      if (row === undefined) {
+        return null;
+      }
+      return {
+        cursor: row.cursor_seq === null ? null : Number(row.cursor_seq),
+        rotatedAt: row.rotated_at === null ? null : Number(row.rotated_at),
+      };
+    },
+    // Single-row rewrite; a crash between the two statements loses only the cursor, and the next
+    // sweep restarts from genesis — over-verification, never a skipped link.
+    putReproof: async (state) => {
+      await rows(pool, 'DELETE FROM chain_reproof');
+      await rows(
+        pool,
+        'INSERT INTO chain_reproof (cursor_seq, rotated_at) VALUES (?, ?)',
+        [state.cursor, state.rotatedAt],
+      );
+    },
     ...sealHeadSurfaces(pool),
     put: async (checkpoint) => {
       await rows(

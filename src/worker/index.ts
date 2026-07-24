@@ -22,6 +22,7 @@ import { reverifyCheckpoint, sealCheckpoint } from '#src/worker/checkpoint.ts';
 import { sweepExpiredPromos } from '#src/worker/promos.ts';
 import { relayOutbox } from '#src/worker/relay.ts';
 import { drainInbox } from '#src/worker/inbox.ts';
+import { reproveStoredChains } from '#src/worker/reproof.ts';
 import { reconcileDueWindows } from '#src/worker/reconcile.ts';
 
 import type { Economy } from '#src/contract.ts';
@@ -49,6 +50,7 @@ import type {
 import type { PromoExpirySummary } from '#src/worker/promos.ts';
 import type { RelaySummary } from '#src/worker/relay.ts';
 import type { InboxSummary } from '#src/worker/inbox.ts';
+import type { ReproofSummary } from '#src/worker/reproof.ts';
 import type { ReconcileFeed, ReconcileSummary } from '#src/worker/reconcile.ts';
 
 /**
@@ -74,6 +76,7 @@ export const SWEEP_NAMES = [
   'drainInbox',
   'reconcile',
   'promos',
+  'reproof',
 ] as const;
 
 /** The name of one background job in the sweep cycle; {@link SWEEP_NAMES} fixes the run order. */
@@ -159,6 +162,7 @@ export type SweepBatch = {
   drainInbox: SweepResult<InboxSummary>;
   reconcile: SweepResult<ReconcileSummary>;
   promos: SweepResult<PromoExpirySummary>;
+  reproof: SweepResult<ReproofSummary>;
 };
 
 /**
@@ -259,9 +263,21 @@ const IDLE_SUMMARIES: { [K in SweepName]: SummaryOf<K> } = {
   drainInbox: { applied: [], failed: [], deadLettered: [] },
   reconcile: { reconciled: [], drifted: [], failed: [] },
   promos: { reversed: [], failed: [] },
+  reproof: { checked: 0, cursor: null, rotatedAt: null, skipped: true },
 };
 
 type ResolvedTick = { now: number; limit: number; options?: CallOptions };
+
+// The `only` filter as a job wrapper: a left-out job resolves to its idle summary unrun.
+function gateOf(input: SweepRequest) {
+  return <K extends SweepName>(
+    name: K,
+    run: () => Promise<SweepResult<SummaryOf<K>>>,
+  ): Promise<SweepResult<SummaryOf<K>>> =>
+    input.only === undefined || input.only.includes(name)
+      ? run()
+      : Promise.resolve({ ok: true, summary: IDLE_SUMMARIES[name] });
+}
 
 async function runSweepJobs(
   store: Store,
@@ -269,13 +285,7 @@ async function runSweepJobs(
   input: SweepRequest,
   { now, limit, options }: ResolvedTick,
 ): Promise<SweepBatch> {
-  const gate = <K extends SweepName>(
-    name: K,
-    run: () => Promise<SweepResult<SummaryOf<K>>>,
-  ): Promise<SweepResult<SummaryOf<K>>> =>
-    input.only === undefined || input.only.includes(name)
-      ? run()
-      : Promise.resolve({ ok: true, summary: IDLE_SUMMARIES[name] });
+  const gate = gateOf(input);
   return {
     payouts: await gate('payouts', () =>
       isolate(() => advanceDuePayouts(store, ctx, { now, limit })),
@@ -341,6 +351,9 @@ async function runSweepJobs(
     ),
     promos: await gate('promos', () =>
       isolate(() => sweepExpiredPromos(store, ctx, { now, limit }, options)),
+    ),
+    reproof: await gate('reproof', () =>
+      isolate(() => reproveStoredChains(store, ctx, { now, limit })),
     ),
   };
 }

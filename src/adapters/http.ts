@@ -32,6 +32,7 @@ import type {
   OutboxStats,
   Posting,
   PostingLink,
+  Reproof,
   StoredLink,
   Store,
   Unit,
@@ -613,6 +614,11 @@ function rootCheckpoints(transport: Transport): CheckpointStore {
     latest: async (options) => {
       const row = await call(transport, at('latest'), {}, options);
       return row === null ? null : (row as Checkpoint);
+    },
+    reproof: async (options) =>
+      (await call(transport, at('reproof'), {}, options)) as Reproof | null,
+    putReproof: async (state, options) => {
+      await call(transport, at('putReproof'), { state }, options);
     },
   };
 }
