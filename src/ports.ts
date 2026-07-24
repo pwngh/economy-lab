@@ -1161,6 +1161,14 @@ export interface Subscription {
   /** What each renewal charges. */
   price: Amount;
 
+  /**
+   * The first-charge posting this subscription opened with, whose hashed metadata seals the
+   * subscription id, user, seller, and price — the renewal sweep re-proves the row against it
+   * before every charge, and a row that fails that proof faults instead of charging. Required,
+   * because a nullable anchor would be an anchor the attacker can remove.
+   */
+  txnId: string;
+
   periodMs: number;
 
   state: SubscriptionState;

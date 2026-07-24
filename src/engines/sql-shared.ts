@@ -339,6 +339,7 @@ export function rowToSubscription(row: Record<string, unknown>): Subscription {
     sellerId: row.seller_id as string,
     sku: row.sku as string,
     price: toAmount('CREDIT', readMinor(row.price)),
+    txnId: row.txn_id as string,
     periodMs: Number(row.period_ms),
     state: row.state as Subscription['state'],
     period: Number(row.period),

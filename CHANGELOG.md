@@ -11,6 +11,8 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - Breaking: `PayoutSagaRow.txnId` is required. Every saga names the reserve posting it opened
   with, and submit, settle, and reverse re-prove the saga against that posting's sealed
   metadata before acting.
+- Subscription, promo, and instance-movement rows carry `txnId` naming their creating posting;
+  renewals and sweeps re-prove it before charging or granting.
 
 ### Changed
 

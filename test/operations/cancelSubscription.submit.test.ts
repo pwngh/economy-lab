@@ -29,6 +29,7 @@ function activeSubscription(id: string, userId: string): Subscription {
     sellerId: 'usr_seller',
     sku: 'wrld_membership',
     price: credit('100.00'),
+    txnId: 'txn_anchor_cancel',
     periodMs: 30 * 24 * 60 * 60_000,
     state: 'ACTIVE',
     period: 1,

@@ -1038,6 +1038,7 @@ async function markBilledIsCompareAndSet(store: Store): Promise<void> {
       sellerId: freshUser(),
       sku: `sku_conf_cas_${userId}`,
       price: toAmount('CREDIT', 10_000n),
+      txnId: `txn_anchor_${userId}`,
       periodMs: 1_000,
       state: 'ACTIVE',
       period: 0,

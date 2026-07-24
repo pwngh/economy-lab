@@ -73,13 +73,15 @@ export async function subscribe(
     return shortfall;
   }
 
-  const transaction = await postCharge(operation, plan, unit, ctx);
-  const subscriptionId = await openSubscription(
-    operation,
-    transaction,
+  // Minted before the charge so the posting's sealed metadata can name the subscription it
+  // opens — the anchor the renewal sweep re-proves the unhashed row against before charging.
+  const subscriptionId = ctx.ids.next('sub');
+  const transaction = await postCharge(
+    { operation, plan, subscriptionId },
     unit,
     ctx,
   );
+  await openSubscription(operation, subscriptionId, transaction, unit);
 
   // Same transaction (`unit`) as the charge. A lapsed subscription's old grant row was marked
   // revoked rather than deleted; this grant clears that mark and reactivates ownership.
@@ -207,24 +209,35 @@ async function screenSpendable(
 // --- Posting ----------------------------------------------------------------------
 
 async function postCharge(
-  operation: Extract<Operation, { kind: 'subscribe' }>,
-  plan: SpendPlan,
+  charge: {
+    operation: Extract<Operation, { kind: 'subscribe' }>;
+    plan: SpendPlan;
+    subscriptionId: string;
+  },
   unit: Unit,
   ctx: Ctx,
 ): Promise<Transaction> {
+  const { operation, plan, subscriptionId } = charge;
   const legs: Leg[] = [];
   appendPromoLegs(legs, operation, plan.promoPart);
   appendSpendableLegs(legs, operation, plan.spendablePart, ctx);
 
-  return postEntry(unit.ledger, {
+  const transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs,
     meta: {
       kind: 'subscribe',
       sku: operation.sku,
       sellerId: operation.sellerId,
+      // Sealed into the chain hash: the subscription this charge opens and the per-period price
+      // and cadence, which the renewal sweep re-proves the unhashed row against; plus, under the
+      subscriptionId,
+      userId: operation.userId,
+      price: encodeAmount(operation.price),
+      periodMs: operation.periodMs,
     },
   });
+  return transaction;
 }
 
 // Promo credits are not the buyer's money, so the seller is paid real earnings from REVENUE while
@@ -267,17 +280,18 @@ function appendSpendableLegs(
 
 async function openSubscription(
   operation: Extract<Operation, { kind: 'subscribe' }>,
+  subscriptionId: string,
   transaction: Transaction,
   unit: Unit,
-  ctx: Ctx,
-): Promise<string> {
+): Promise<void> {
   const now = transaction.postedAt;
   const subscription: Subscription = {
-    id: ctx.ids.next('sub'),
+    id: subscriptionId,
     userId: operation.userId,
     sellerId: operation.sellerId,
     sku: operation.sku,
     price: operation.price,
+    txnId: transaction.id,
     periodMs: operation.periodMs,
     state: 'ACTIVE',
     period: 1,
@@ -286,5 +300,4 @@ async function openSubscription(
     updatedAt: now,
   };
   await unit.subscriptions.open(subscription);
-  return subscription.id;
 }

@@ -272,6 +272,10 @@ create table subscriptions (
   seller_id    text   not null,
   sku          text   not null,
   price        bigint not null check (price > 0),
+  -- The first-charge posting, whose sealed metadata the renewal sweep re-proves the row against
+  -- before every charge. Required: a nullable anchor would be an anchor an attacker can remove.
+  -- An upgrading deployment re-anchors live rows by posting one anchor entry per subscription.
+  txn_id       text   not null,
   period_ms    bigint not null check (period_ms > 0),
   state        text   not null check (state in ('ACTIVE', 'LAPSED', 'CANCELED')),
   period       int    not null default 1,

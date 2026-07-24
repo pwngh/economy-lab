@@ -257,3 +257,36 @@ export function sagaAnchor(saga: {
     },
   };
 }
+
+/**
+ * The first-charge posting a subscription anchors to, sealing what the renewal guard re-proves:
+ * the subscription id, user, seller, per-period price, and cadence. The guard reads only the
+ * sealed metadata, so the legs are a balance-neutral pair on the overdraft-exempt platform
+ * account — fixtures append this without disturbing the balances their test is about.
+ */
+export function subscriptionAnchor(sub: {
+  id: string;
+  userId: string;
+  sellerId: string;
+  sku: string;
+  price: Amount;
+  periodMs: number;
+  txnId: string;
+}): { txnId: string; legs: Leg[]; meta: Record<string, unknown> } {
+  return {
+    txnId: sub.txnId,
+    legs: [
+      debit(SYSTEM.STORED_VALUE, sub.price),
+      creditLeg(SYSTEM.STORED_VALUE, sub.price),
+    ],
+    meta: {
+      kind: 'subscribe',
+      sku: sub.sku,
+      sellerId: sub.sellerId,
+      subscriptionId: sub.id,
+      userId: sub.userId,
+      price: encodeAmount(sub.price),
+      periodMs: sub.periodMs,
+    },
+  };
+}

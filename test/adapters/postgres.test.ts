@@ -132,6 +132,7 @@ function subscriptionRow(
     sellerId: 'usr_seller',
     sku: 'sku_test',
     price: toAmount('CREDIT', 10_000n),
+    txnId: 'txn_anchor_pg_sub',
     periodMs: 30 * 24 * 60 * 60_000,
     state: 'ACTIVE',
     period: 1,

@@ -1285,8 +1285,8 @@ function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
       await rows(
         exec,
         `INSERT INTO subscriptions
-           (id, user_id, seller_id, sku, price, period_ms, state, period, attempts, next_due_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (id, user_id, seller_id, sku, price, txn_id, period_ms, state, period, attempts, next_due_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            state = VALUES(state), period = VALUES(period), attempts = VALUES(attempts),
            next_due_at = VALUES(next_due_at), updated_at = VALUES(updated_at)`,
@@ -1296,6 +1296,7 @@ function createSubscriptionStore(exec: MysqlExecutor): SubscriptionStore {
           sub.sellerId,
           sub.sku,
           sub.price.minor.toString(),
+          sub.txnId,
           sub.periodMs,
           sub.state,
           sub.period,

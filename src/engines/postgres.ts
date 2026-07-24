@@ -1324,8 +1324,8 @@ function createSubscriptionStore(q: Queryable): SubscriptionStore {
     open: async (sub) => {
       await q.query(
         `insert into subscriptions
-           (id, user_id, seller_id, sku, price, period_ms, state, period, attempts, next_due_at, updated_at)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           (id, user_id, seller_id, sku, price, txn_id, period_ms, state, period, attempts, next_due_at, updated_at)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            on conflict (id) do update set
              state = excluded.state, period = excluded.period,
              attempts = excluded.attempts, next_due_at = excluded.next_due_at,
@@ -1336,6 +1336,7 @@ function createSubscriptionStore(q: Queryable): SubscriptionStore {
           sub.sellerId,
           sub.sku,
           sub.price.minor,
+          sub.txnId,
           sub.periodMs,
           sub.state,
           sub.period,

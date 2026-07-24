@@ -122,6 +122,7 @@ function subscriptionRow(id: string, attempts: number): Subscription {
     sellerId: 'sel_http_sub',
     sku: 'sku_http',
     price: toAmount('CREDIT', 500n),
+    txnId: 'txn_anchor_http_sub',
     periodMs: 86_400_000,
     state: 'ACTIVE',
     period: 0,

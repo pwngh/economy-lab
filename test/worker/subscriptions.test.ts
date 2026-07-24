@@ -18,10 +18,11 @@ import { ERROR_CODES, fault } from '#src/errors.ts';
 import { credit as creditLeg, debit, postEntry } from '#src/ledger.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { spendable, earned, SYSTEM } from '#src/accounts.ts';
-import { credit } from '#test/support/builders.ts';
+import { credit, subscriptionAnchor } from '#test/support/builders.ts';
 import {
   fixedClock,
   makeWorkerCtx,
+  seededDigest,
   testConfig,
 } from '#test/support/capabilities.ts';
 
@@ -57,6 +58,7 @@ function subscription(
     sellerId: 'usr_seller',
     sku: 'club_pass',
     price: credit('100.00'),
+    txnId: `txn_anchor_${overrides.id}`,
     periodMs: 2_592_000_000,
     state: 'ACTIVE',
     period: 1,
@@ -75,6 +77,8 @@ async function openSub(
 ): Promise<void> {
   await store.transaction(async (unit) => {
     await unit.subscriptions.open(row);
+    // The anchor the renewal guard re-proves the row against, as subscribe seals it.
+    await unit.ledger.append(subscriptionAnchor(row));
     if (funded.minor > 0n) {
       await fund(unit, spendable(row.userId), funded);
     }
@@ -86,7 +90,7 @@ async function openSub(
 // Renewals honor the maturity gate: a wallet holding enough uncleared credit defers the
 // renewal (retrying, attempts capped) rather than lapsing, and bills once the funds clear.
 async function defersARenewalOnImmatureCreditUntilItClears(): Promise<void> {
-  const store = memoryStore();
+  const store = memoryStore({ digest: seededDigest(1) });
   const sub = subscription({
     id: 'sub_1',
     price: credit('100.00'),
@@ -212,7 +216,7 @@ async function leavesANotYetDueSubscriptionAlone(store: Store): Promise<void> {
 }
 
 async function billsAndLapsesAcrossOneBatchIndependently(): Promise<void> {
-  const store = memoryStore();
+  const store = memoryStore({ digest: seededDigest(1) });
   await openSub(store, subscription({ id: 'sub_funded' }), credit('100.00'));
   await openSub(store, subscription({ id: 'sub_broke' }), credit('0.00'));
 
@@ -228,7 +232,7 @@ async function billsAndLapsesAcrossOneBatchIndependently(): Promise<void> {
 }
 
 async function isolatesAPerItemFaultAndDeadLettersWhileTheBatchContinues(): Promise<void> {
-  const store = memoryStore();
+  const store = memoryStore({ digest: seededDigest(1) });
   // Different buyers, so the fault targets only one record's balance read.
   await openSub(
     store,
@@ -313,7 +317,7 @@ function retryableFaultOnBuyerBalance(store: Store, badUser: string): Store {
 }
 
 async function bumpsAttemptsAndKeepsRetryingBelowTheCap(): Promise<void> {
-  const store = memoryStore();
+  const store = memoryStore({ digest: seededDigest(1) });
   await openSub(store, subscription({ id: 'sub_flaky' }), credit('100.00'));
   const flaky = retryableFaultOnBuyerBalance(store, 'usr_buyer');
 
@@ -336,7 +340,7 @@ async function bumpsAttemptsAndKeepsRetryingBelowTheCap(): Promise<void> {
 }
 
 async function lapsesAPersistentlyFailingSubscriptionAtTheCap(): Promise<void> {
-  const store = memoryStore();
+  const store = memoryStore({ digest: seededDigest(1) });
   await openSub(store, subscription({ id: 'sub_flaky' }), credit('100.00'));
   const flaky = retryableFaultOnBuyerBalance(store, 'usr_buyer');
   const ctx = makeWorkerCtx(); // testConfig().maxSubscriptionAttempts === 3
@@ -385,7 +389,7 @@ async function lapsesAPersistentlyFailingSubscriptionAtTheCap(): Promise<void> {
 
 // The cap counts only consecutive failures: `markBilled` resets attempts on success.
 async function resetsAttemptsToZeroOnASuccessfulRenewal(): Promise<void> {
-  const store = memoryStore();
+  const store = memoryStore({ digest: seededDigest(1) });
   await openSub(store, subscription({ id: 'sub_flaky' }), credit('100.00'));
   const ctx = makeWorkerCtx();
 
@@ -421,7 +425,7 @@ function staleClaimDue(store: Store, snapshot: Subscription): Store {
 }
 
 async function billsExactlyOnceAcrossTwoOverlappingSweeps(): Promise<void> {
-  const store = memoryStore();
+  const store = memoryStore({ digest: seededDigest(1) });
   const sub = subscription({
     id: 'sub_1',
     price: credit('100.00'),
@@ -471,7 +475,7 @@ async function billsExactlyOnceAcrossTwoOverlappingSweeps(): Promise<void> {
 // The clock is injected so the test can step past the new expiry and watch the perk lapse.
 async function reGrantsThePerkWithAdvancedExpiryOnRenewal(): Promise<void> {
   const clock = fixedClock(0);
-  const store = memoryStore({ clock });
+  const store = memoryStore({ clock, digest: seededDigest(1) });
   const sub = subscription({
     id: 'sub_1',
     price: credit('100.00'),
@@ -500,7 +504,7 @@ async function reGrantsThePerkWithAdvancedExpiryOnRenewal(): Promise<void> {
 }
 
 async function lapseRevokesThePerkAndEmitsOneLapsedEvent(): Promise<void> {
-  const store = memoryStore();
+  const store = memoryStore({ digest: seededDigest(1) });
   const sub = subscription({
     id: 'sub_1',
     price: credit('100.00'),
@@ -540,13 +544,21 @@ describe('sweepDueSubscriptions', () => {
   test('defers a renewal on immature credit until it clears', () =>
     defersARenewalOnImmatureCreditUntilItClears());
   test('charges a funded renewal and advances the due time', () =>
-    chargesAFundedRenewalAndAdvancesTheDueTime(memoryStore()));
+    chargesAFundedRenewalAndAdvancesTheDueTime(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('rounds the renewal fee up to a whole credit toward the platform', () =>
-    roundsTheFeeUpToAWholeCreditTowardThePlatform(memoryStore()));
+    roundsTheFeeUpToAWholeCreditTowardThePlatform(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('lapses an underfunded renewal with no posting', () =>
-    lapsesAnUnderfundedRenewalWithNoPosting(memoryStore()));
+    lapsesAnUnderfundedRenewalWithNoPosting(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('leaves a not-yet-due subscription alone', () =>
-    leavesANotYetDueSubscriptionAlone(memoryStore()));
+    leavesANotYetDueSubscriptionAlone(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('bills and lapses across one batch independently', () =>
     billsAndLapsesAcrossOneBatchIndependently());
   test('isolates a per-item fault and dead-letters while the batch continues', () =>

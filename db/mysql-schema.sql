@@ -278,6 +278,7 @@ CREATE TABLE subscriptions (
      seller_id   VARCHAR(64) NOT NULL COMMENT 'Seller credited each billing period.',
      sku         VARCHAR(64) NOT NULL COMMENT 'Product identifier being subscribed to.',
      price       BIGINT      NOT NULL COMMENT 'Per-period charge in minor units; always positive.',
+     txn_id      VARCHAR(64) NOT NULL COMMENT 'First-charge posting anchor; the renewal sweep re-proves the row against it before every charge.',
      period_ms   BIGINT      NOT NULL COMMENT 'Billing interval length in milliseconds; always positive.',
      state       VARCHAR(16) NOT NULL COMMENT 'One of ACTIVE, LAPSED, CANCELED.',
      period      INT         NOT NULL DEFAULT 1 COMMENT 'Billing-cycle counter; renewal bills period plus one.',

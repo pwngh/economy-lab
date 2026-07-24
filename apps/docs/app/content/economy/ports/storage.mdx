@@ -8,7 +8,7 @@ sourceRefs:
     'src/ports.ts#L441 · Store',
     'src/ports.ts#L307 · Ledger',
     'src/adapters/memory.ts#L1421 · memoryStore',
-    'src/engines/postgres.ts#L1766 · postgresStore',
+    'src/engines/postgres.ts#L1767 · postgresStore',
   ]
 apiRefs: ['interfaces/src_ports.Store']
 related: ['economy/ports/messaging', 'economy/concepts/accounts-and-double-entry']
@@ -96,8 +96,8 @@ It's also the reference implementation. Its hash function and clock default to d
 
 Point `DATABASE_URL` at a `postgres://` or `mysql://` connection string (a DSN, in driver terms) and the system loads that engine instead, and only then loads its driver. The SQL engines live in `src/engines/postgres.ts` and `src/engines/mysql.ts`; both pass the same conformance suite as memory.
 
-The SQL engines do something the in-memory one can't: they enforce the invariants a second time, in the database. Every `CHECK` constraint in the schema is also a rule in the TypeScript code, so a user account can't go negative and a posting's legs can't fail to sum to zero, even if a raw `INSERT` tried to write around the application. The conservation half is a deferred constraint trigger that re-sums a posting's legs at commit (see <SourceLink to="db/postgresql-schema.sql#L470-L486 · legs_conserve" />):
-The SQL engines do something the in-memory one can't: they enforce the invariants a second time, in the database. Every `CHECK` constraint in the schema is also a rule in the TypeScript code, so a user account can't go negative and a posting's legs can't fail to sum to zero, even if a raw `INSERT` tried to write around the application. The conservation half is a deferred constraint trigger that re-sums a posting's legs at commit (see <SourceLink to="db/postgresql-schema.sql#L471-L487 · legs_conserve" />):
+The SQL engines do something the in-memory one can't: they enforce the invariants a second time, in the database. Every `CHECK` constraint in the schema is also a rule in the TypeScript code, so a user account can't go negative and a posting's legs can't fail to sum to zero, even if a raw `INSERT` tried to write around the application. The conservation half is a deferred constraint trigger that re-sums a posting's legs at commit (see <SourceLink to="db/postgresql-schema.sql#L474-L490 · legs_conserve" />):
+The SQL engines do something the in-memory one can't: they enforce the invariants a second time, in the database. Every `CHECK` constraint in the schema is also a rule in the TypeScript code, so a user account can't go negative and a posting's legs can't fail to sum to zero, even if a raw `INSERT` tried to write around the application. The conservation half is a deferred constraint trigger that re-sums a posting's legs at commit (see <SourceLink to="db/postgresql-schema.sql#L475-L491 · legs_conserve" />):
 
 ```sql
 create or replace function check_conservation() returns trigger as $$

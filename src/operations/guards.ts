@@ -16,7 +16,7 @@ import { encodeAmount } from '#src/money.ts';
 
 import type { Ctx, Operation, Transaction } from '#src/contract.ts';
 import type { Amount } from '#src/money.ts';
-import type { Digest, Ledger, Saga, Unit } from '#src/ports.ts';
+import type { Digest, Ledger, Saga, Subscription, Unit } from '#src/ports.ts';
 
 /**
  * Narrows `operation` to the expected `kind`. A mismatch means the dispatch is miswired, so it
@@ -156,4 +156,40 @@ export async function assertSagaAnchored(
     throw unanchored();
   }
   return saga.payoutUsd;
+}
+
+/**
+ * Re-proves a subscription against the first-charge posting it opened with, before a renewal
+ * charges by the unhashed row. A row whose id, user, seller, price, or period no longer matches
+ * the sealed metadata faults CHAIN_BROKEN instead of shaping the charge — and the anchor is
+ * required, because a nullable one would be an anchor the attacker can remove.
+ */
+export async function assertSubscriptionAnchored(
+  deps: { ledger: Ledger; digest: Digest },
+  sub: Subscription,
+): Promise<void> {
+  const unanchored = (): Error =>
+    fault(
+      ERROR_CODES.CHAIN_BROKEN,
+      'A subscription does not re-derive from its first-charge posting; refusing to renew from an unverifiable row.',
+      {
+        retryable: false,
+        detail: { subscriptionId: sub.id, txnId: sub.txnId },
+      },
+    );
+  const posting = await verifiedPosting(deps, sub.txnId);
+  if (posting === null) {
+    throw unanchored();
+  }
+  const meta = posting.meta;
+  if (
+    meta.kind !== 'subscribe' ||
+    meta.subscriptionId !== sub.id ||
+    meta.userId !== sub.userId ||
+    meta.sellerId !== sub.sellerId ||
+    meta.price !== encodeAmount(sub.price) ||
+    meta.periodMs !== sub.periodMs
+  ) {
+    throw unanchored();
+  }
 }
