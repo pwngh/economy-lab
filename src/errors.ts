@@ -145,6 +145,13 @@ export const ERROR_CODES = {
    */
   SESSION_SETTLED: 'SESSION.SETTLED',
 
+  /**
+   * A scope's traffic reached a node its router assignment doesn't name. Accepting it would
+   * fork the scope's single-writer lane, so the node refuses; the caller re-sends to the owner
+   * named in `detail.owner`.
+   */
+  SESSION_MISROUTED: 'SESSION.MISROUTED',
+
   UNAUTHORIZED: 'AUTH.UNAUTHORIZED',
 
   /**

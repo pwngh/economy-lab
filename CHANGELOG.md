@@ -2,6 +2,14 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
+## Unreleased (0.6.3)
+
+### Added
+
+- `openClusterNode` composes a multi-node economy behind a rendezvous-hashed `scopeRouter`: each
+  session scope routes to one node, a call landing on the wrong node is refused with
+  `SESSION.MISROUTED`, and the orphan sweep takes over scopes whose node died.
+
 ## 0.6.2 - 2026-07-23
 
 ### Added

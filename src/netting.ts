@@ -806,6 +806,12 @@ export type { Movement, Leg, Amount, Currency };
 // Multi-node companions, re-exported so the published `./netting` subpath carries the whole
 // multi-node story.
 export { scopeRouter } from '#src/router.ts';
+export { openClusterNode } from '#src/cluster.ts';
+export type {
+  ClusterNode,
+  ClusterNodeDeps,
+  ClusterNodeOptions,
+} from '#src/cluster.ts';
 export {
   sweepOrphanSessions,
   reconcileReservations,
