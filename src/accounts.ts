@@ -103,6 +103,7 @@ export const SYSTEM = {
   // The offsetting entry used when seeding starting balances on a fresh (cold-start) system.
   OPENING_EQUITY: 'platform:opening_equity' as AccountRef,
 
+  // The pass-through counterparty a session settlement clears its chunks against (see
   // src/netting.ts): each chunk posts a bounded set of participant legs against this account, and
   // the final chunk returns it to zero, so it holds money only mid-settlement. Credit-normal.
   NETTING_CLEARING: 'platform:netting_clearing' as AccountRef,

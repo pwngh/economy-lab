@@ -467,6 +467,7 @@ export interface Store {
   replay: ReplayStore;
 
   /**
+   * The session-netting journal; it commits outside money transactions, so an accepted movement
    * is durable regardless of any ledger posting's fate.
    */
   movements: MovementJournal;
@@ -1120,9 +1121,11 @@ export interface Anchor {
 }
 
 /**
- * One accepted in-instance movement: a balanced set of legs not yet posted to the ledger, made
- * ledger-final at settle. `prevHash`/`hash` chain the session's movements and the settlement
- * posting anchors the final head, so tamper-evidence extends to every movement.
+ * One accepted session movement: a balanced set of legs not yet posted to the ledger, made
+ * ledger-final at settle. Sessions are economy-tier objects keyed by an opaque scope (a
+ * game-world instance is one natural key; see src/netting.ts for the tier boundary).
+ * `prevHash`/`hash` chain the session's movements and the settlement posting anchors the final
+ * head, so tamper-evidence extends to every movement.
  */
 export interface Movement {
   sessionId: string;
@@ -1146,7 +1149,7 @@ export interface Movement {
 }
 
 /**
- * The append-only instance-netting journal. A batch commits in one transaction (one fsync for N
+ * The append-only session-netting journal. A batch commits in one transaction (one fsync for N
  * movements), and journal rows carry no locks, chain links, or balance updates. A duplicate
  * idempotency key or (sessionId, seq) rejects the batch; the session splits and retries around
  * the poison row.

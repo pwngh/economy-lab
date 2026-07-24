@@ -138,6 +138,13 @@ export const ERROR_CODES = {
 
   INVALID_TRANSITION: 'SAGA.INVALID_TRANSITION',
 
+  /**
+   * A netting session that already settled was asked to take another movement. Settlement txn
+   * ids derive from the session id, so a settled session can never safely settle again; the
+   * caller rotates to a new session id (epoch) instead.
+   */
+  SESSION_SETTLED: 'SESSION.SETTLED',
+
   UNAUTHORIZED: 'AUTH.UNAUTHORIZED',
 
   /**

@@ -56,10 +56,11 @@ async function fund(store: Store, userId: string, minor: bigint) {
   );
 }
 
-// One viewer-tips-creator movement: the viewer's spendable drops, the creator's earned rises.
-function tip(viewer: string, creator: string, minor: bigint): Leg[] {
+// Fee-less on purpose: these tests exercise the netting mechanics, and the fee split is the
+// caller's leg-building concern (see the module example).
+function purchase(buyer: string, creator: string, minor: bigint): Leg[] {
   const amount = toAmount('CREDIT', minor);
-  return [debit(spendable(viewer), amount), credit(earned(creator), amount)];
+  return [debit(spendable(buyer), amount), credit(earned(creator), amount)];
 }
 
 async function balanceOf(
@@ -76,25 +77,25 @@ describe('Instance netting', () => {
     const session = openInstanceSession(deps, 'sess_a', { maxBatch: 2 });
 
     const first = await session.record({
-      idempotencyKey: 'tip_1',
-      legs: tip('usr_v1', 'usr_c1', 100n),
+      idempotencyKey: 'buy_1',
+      legs: purchase('usr_v1', 'usr_c1', 100n),
     });
     assert.deepEqual(first, { status: 'accepted', seq: 0 });
     assert.deepEqual(
       await session.record({
-        idempotencyKey: 'tip_1',
-        legs: tip('usr_v1', 'usr_c1', 100n),
+        idempotencyKey: 'buy_1',
+        legs: purchase('usr_v1', 'usr_c1', 100n),
       }),
       { status: 'accepted', seq: 0 },
     );
     await session.record({
-      idempotencyKey: 'tip_2',
-      legs: tip('usr_v1', 'usr_c1', 50n),
+      idempotencyKey: 'buy_2',
+      legs: purchase('usr_v1', 'usr_c1', 50n),
     });
     // maxBatch=2 flushed the first two; the third waits for flush().
     await session.record({
-      idempotencyKey: 'tip_3',
-      legs: tip('usr_v1', 'usr_c1', 25n),
+      idempotencyKey: 'buy_3',
+      legs: purchase('usr_v1', 'usr_c1', 25n),
     });
     await session.flush();
 
@@ -105,9 +106,9 @@ describe('Instance netting', () => {
     assert.deepEqual(
       rows.map((row) => [row.seq, row.idempotencyKey]),
       [
-        [0, 'tip_1'],
-        [1, 'tip_2'],
-        [2, 'tip_3'],
+        [0, 'buy_1'],
+        [1, 'buy_2'],
+        [2, 'buy_3'],
       ],
     );
     assert.equal(rows[1]!.prevHash, rows[0]!.hash);
@@ -120,8 +121,8 @@ describe('Instance netting', () => {
     const session = openInstanceSession(deps, 'sess_b');
     for (let i = 0; i < 10; i++) {
       await session.record({
-        idempotencyKey: `tip_b_${i}`,
-        legs: tip('usr_v1', 'usr_c1', 10n),
+        idempotencyKey: `buy_b_${i}`,
+        legs: purchase('usr_v1', 'usr_c1', 10n),
       });
     }
 
@@ -152,8 +153,8 @@ describe('Instance netting', () => {
     const session = openInstanceSession(deps, 'sess_c', { chunkWidth: 3 });
     for (let i = 0; i < 7; i++) {
       await session.record({
-        idempotencyKey: `tip_c_${i}`,
-        legs: tip('usr_v1', `usr_cr_${i}`, 10n),
+        idempotencyKey: `buy_c_${i}`,
+        legs: purchase('usr_v1', `usr_cr_${i}`, 10n),
       });
     }
 
@@ -175,11 +176,11 @@ describe('Instance netting', () => {
 
     await session.record({
       idempotencyKey: 'd_1',
-      legs: tip('usr_v2', 'usr_c1', 80n),
+      legs: purchase('usr_v2', 'usr_c1', 80n),
     });
     const over = await session.record({
       idempotencyKey: 'd_2',
-      legs: tip('usr_v2', 'usr_c1', 30n), // 80 pending + 30 > 100
+      legs: purchase('usr_v2', 'usr_c1', 30n), // 80 pending + 30 > 100
     });
 
     assert.deepEqual(over, {
@@ -223,7 +224,7 @@ describe('Instance netting', () => {
       (
         await one.record({
           idempotencyKey: 'e_1',
-          legs: tip('usr_v3', 'usr_c1', 400n),
+          legs: purchase('usr_v3', 'usr_c1', 400n),
         })
       ).status,
       'accepted',
@@ -231,7 +232,7 @@ describe('Instance netting', () => {
     assert.deepEqual(
       await two.record({
         idempotencyKey: 'e_2',
-        legs: tip('usr_v3', 'usr_c2', 400n),
+        legs: purchase('usr_v3', 'usr_c2', 400n),
       }),
       { status: 'rejected', reason: 'INSUFFICIENT_FUNDS' },
     );
@@ -241,7 +242,7 @@ describe('Instance netting', () => {
       (
         await two.record({
           idempotencyKey: 'e_3',
-          legs: tip('usr_v3', 'usr_c2', 100n),
+          legs: purchase('usr_v3', 'usr_c2', 100n),
         })
       ).status,
       'accepted',
@@ -256,11 +257,11 @@ describe('Instance netting', () => {
     const session = openInstanceSession(deps, 'sess_f', { chunkWidth: 2 });
     await session.record({
       idempotencyKey: 'f_1',
-      legs: tip('usr_v4', 'usr_c1', 300n),
+      legs: purchase('usr_v4', 'usr_c1', 300n),
     });
     await session.record({
       idempotencyKey: 'f_2',
-      legs: tip('usr_v5', 'usr_c2', 300n),
+      legs: purchase('usr_v5', 'usr_c2', 300n),
     });
 
     // The race the session cannot see: usr_v5's funds leave through a DIFFERENT path (no shared
@@ -298,11 +299,11 @@ describe('Instance netting', () => {
     const session = openInstanceSession(deps, 'sess_g');
     await session.record({
       idempotencyKey: 'g_1',
-      legs: tip('usr_v6', 'usr_c1', 100n),
+      legs: purchase('usr_v6', 'usr_c1', 100n),
     });
     await session.record({
       idempotencyKey: 'g_2',
-      legs: tip('usr_v6', 'usr_c1', 50n),
+      legs: purchase('usr_v6', 'usr_c1', 50n),
     });
     await session.flush();
     // The process dies here; a new one rebuilds the session from the journal alone.
@@ -311,7 +312,7 @@ describe('Instance netting', () => {
     assert.deepEqual(
       await recovered.record({
         idempotencyKey: 'g_1',
-        legs: tip('usr_v6', 'usr_c1', 100n),
+        legs: purchase('usr_v6', 'usr_c1', 100n),
       }),
       { status: 'accepted', seq: 0 },
     );
@@ -329,7 +330,7 @@ describe('Instance netting', () => {
     const session = openInstanceSession(deps, 'sess_h');
     await session.record({
       idempotencyKey: 'h_1',
-      legs: tip('usr_v7', 'usr_c1', 100n),
+      legs: purchase('usr_v7', 'usr_c1', 100n),
     });
     await session.flush();
 

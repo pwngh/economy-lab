@@ -2,6 +2,17 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
+## Unreleased (0.6.1)
+
+### Added
+
+- `openInstanceSession` sessions net purchases by product kind: `instant` stays in the session
+  journal, `permanent` and `temporary` grant at the call and settle later. A session settles
+  once — a record after settle is refused with `SESSION.SETTLED` — and long-lived scopes rotate
+  by epoch (`epochMinter`).
+- `sharedReservations` keeps the reservation counter in the store, so it holds across processes
+  and nodes; `createReservations` stays the in-process default.
+
 ## 0.6.0 - 2026-07-23
 
 ### Added
