@@ -88,6 +88,11 @@ A second worker job, `checkpointVerify`, runs <SourceLink to="src/worker/checkpo
   signal.
 </Callout>
 
+### The rolling re-proof
+
+Seals and verified reads cover the history a handler touches; the `reproof` sweep covers everything else. Each run re-derives a bounded page of stored chain links from their own content and advances a persistent cursor, wrapping around forever — so a cold account's old rows, metadata included, get re-hashed on an explicit cadence instead of never. That cadence bounds how long an in-place edit of old rows can sit unnoticed: `rotatedAt`, the moment the last complete pass finished, is the verified-through watermark, and `economy.capacity()` reports its age. A link that no longer re-derives throws a non-retryable `CHAIN.BROKEN` and leaves the cursor in place, so every later tick re-reports the same break until an operator intervenes.
+
+
 ## Two provers
 
 Two provers re-check the chain, and [the proof](/economy/concepts/the-proof/) covers how the light `read.health()` and the thorough `make prove` replay divide the work. Of the proof's five flags, integrity supplies `chainIntact`; <SourceLink to="src/integrity.ts#L280">allInvariantsHold</SourceLink> rolls all five into a single boolean.

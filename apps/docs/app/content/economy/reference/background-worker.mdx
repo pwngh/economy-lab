@@ -47,6 +47,7 @@ Here is what each sweep does:
 | `drainInbox`       | Apply received provider events, deduping by event id.                                            |
 | `reconcile`        | Compare the provider's settled records against the ledger. With no feed configured, it reports an empty successful run. |
 | `promos`           | Claw back the unspent part of an expired promo grant.                                            |
+| `reproof`          | Re-derive a page of stored chain links on a rolling cursor ([integrity](/economy/concepts/integrity/)). |
 
 Two pairs are deliberately adjacent. `feeSweep` runs right after `treasury`: treasury only measures the surplus, then `feeSweep` moves it. And `checkpointVerify` runs before `checkpoint`, so the old snapshot is checked against the ledger before a fresh one overwrites it.
 

@@ -184,8 +184,8 @@ export function PayoutSaga() {
   return (
     <Diagram
       viewBox="0 0 760 250"
-      label="The payout saga state machine. A live payout starts RESERVED. The payouts sweep converts the reserve to USD, calls the rail, and advances it to SUBMITTED. The provider's settlement webhook advances SUBMITTED to SETTLED, a terminal state. From RESERVED or SUBMITTED a timeout, exhausted attempts, or an operator reversal force-fail the saga to FAILED, returning the reserve to the seller's earned account. SagaState also declares REQUESTED, but a live payout opens already RESERVED."
-      caption="The payout saga. Each transition is a compare-and-set that posts its money in the same transaction, so a re-driven step pays at most once. SETTLED and FAILED are terminal; the reserve is released exactly once."
+      label="The payout saga state machine. A live payout starts RESERVED. The payouts sweep submits the saga's stored USD quote to the rail and advances it to SUBMITTED. The provider's settlement webhook advances SUBMITTED to SETTLED, a terminal state. From RESERVED or SUBMITTED a timeout, exhausted attempts, or an operator reversal force-fail the saga to FAILED, returning the reserve to the seller's earned account. SagaState also declares REQUESTED, but a live payout opens already RESERVED."
+      caption="The payout saga. Each transition is a compare-and-set, and the transitions that move money post it in the same transaction, so a re-driven step pays at most once. SETTLED and FAILED are terminal; the reserve is released exactly once."
     >
       <ArrowDefs />
 
@@ -200,7 +200,7 @@ export function PayoutSaga() {
         payouts sweep
       </text>
       <text className="d-elabel" x={256} y={92} textAnchor="middle">
-        reserve → USD
+        submits USD quote
       </text>
 
       <line className="d-edge" x1={446} y1={70} x2={554} y2={70} markerEnd="url(#dgm-arrow)" />
@@ -214,7 +214,7 @@ export function PayoutSaga() {
       {/* force-fail branch */}
       <path
         className="d-edge bad"
-        d="M136,92 C136,150 250,150 318,168"
+        d="M136,92 C136,150 250,150 310,168"
         fill="none"
         markerEnd="url(#dgm-arrow)"
       />
@@ -239,8 +239,8 @@ export function SubscriptionStates() {
   return (
     <Diagram
       viewBox="0 0 760 250"
-      label="The subscription state machine. A subscription starts ACTIVE and renews in place each period; a successful renewal resets its failure count. When a renewal keeps failing and the attempt count reaches the cap, the sweep moves it to LAPSED, revoking the SKU entitlement in the same step. The user or an operator can move it to CANCELED at any time; the current period is not refunded. LAPSED and CANCELED are terminal."
-      caption="A subscription only moves forward: it renews in place until a cap of failed charges lapses it or a cancel ends it. Both ends are terminal, and a lapse revokes the SKU entitlement in the same transaction."
+      label="The subscription state machine. A subscription starts ACTIVE and renews in place each period; a successful renewal resets its failure count. When a charge cannot succeed — unaffordable, a permanent billing failure, or the attempt cap — the sweep moves it to LAPSED, revoking the SKU entitlement in the same step. The user or an operator can move it to CANCELED at any time; the current period is not refunded. LAPSED and CANCELED are terminal."
+      caption="A subscription only moves forward: it renews in place until a charge that will never succeed lapses it or a cancel ends it. Both ends are terminal, and a lapse revokes the SKU entitlement in the same transaction."
     >
       <ArrowDefs />
 
@@ -262,7 +262,7 @@ export function SubscriptionStates() {
       {/* involuntary exit */}
       <line className="d-edge bad" x1={202} y1={100} x2={516} y2={62} markerEnd="url(#dgm-arrow)" />
       <text className="d-elabel" x={359} y={44} textAnchor="middle">
-        renewals keep failing (cap)
+        charges fail — cap or permanent
       </text>
       <text className="d-elabel" x={359} y={60} textAnchor="middle">
         → entitlement revoked, same step
@@ -350,7 +350,8 @@ export function HashChain() {
       <line className="d-edge" x1={220} y1={131} x2={258} y2={131} markerEnd="url(#dgm-arrow)" />
 
       <text className="d-note" x={40} y={178}>
-        each link = hash(account's legs + prior head); the first starts from genesis (64 zeros)
+        each link = hash(account's legs + metadata + prior head); the first starts from genesis (64
+        zeros)
       </text>
 
       {/* heads fold into the Merkle root */}
@@ -515,19 +516,18 @@ export function SubmitPipeline() {
   );
 }
 
-/** The background worker, one `Scheduler` driving the ten sweeps of `SWEEP_NAMES`; mirrors the background-worker page and `src/worker`. */
 /** The life of one outbox row; mirrors the messaging page and `src/worker/relay.ts`. */
 export function OutboxRelay() {
   return (
     <Diagram
       viewBox="0 0 760 250"
-      label="The outbox row lifecycle. A row is written PENDING in the same database transaction as the money move it announces. The relay sweep sends it through the Dispatcher and marks it DONE, a terminal state. A send that throws leaves the row pending with its attempt count bumped, retried on the next run; when attempts hit the configured cap the row is dead-lettered to the terminal DEAD state, so one poison event cannot wedge the queue behind it."
+      label="The outbox row lifecycle. A row is written PENDING in the same database transaction as the money move it announces. The relay sweep sends it through the Dispatcher and marks it RELAYED, a terminal state. A send that throws leaves the row pending with its attempt count bumped, retried on the next run; when attempts hit the configured cap the row is dead-lettered to the terminal DEAD state, so one poison event cannot wedge the queue behind it."
       caption="One outbox row. The write shares the posting's transaction, so an event is never sent for a rolled-back move nor lost for a committed one. Delivery is at-least-once: the far side dedupes by event id."
     >
       <ArrowDefs />
 
       <State x={70} y={48} name="PENDING" sub="written with the commit" />
-      <State x={558} y={48} name="DONE" sub="terminal" variant="ok" />
+      <State x={558} y={48} name="RELAYED" sub="terminal" variant="ok" />
       <State x={314} y={158} name="DEAD" sub="terminal" variant="bad" />
 
       {/* forward path */}
@@ -710,7 +710,7 @@ export function CreditMaturity() {
   );
 }
 
-/** The idempotency model, a first call claiming the key and a retry replaying the recorded outcome; mirrors the idempotency page and `src/economy.ts` (runOnion). */
+/** The idempotency model, a first call claiming the key and a retry replaying the recorded outcome; mirrors the idempotency page and `src/economy.ts` (runClaimed). */
 export function IdempotentRetry() {
   const col = { claim: 150, run: 290, record: 430, end: 570 };
   const w = 126;
@@ -802,6 +802,125 @@ export function IdempotentRetry() {
       />
       <text className="d-elabel" x={recCx + 8} y={(y1 + 44 + y2) / 2 + 4} textAnchor="start">
         reused
+      </text>
+    </Diagram>
+  );
+}
+/** The deadlock two lock orders produce and the one a global sort prevents; mirrors the concurrency page and `src/ledger.ts` lockAll. */
+export function LockOrdering() {
+  return (
+    <Diagram
+      viewBox="0 0 760 280"
+      label="Two transactions locking accounts A and B. Left, arbitrary order: transaction 1 holds A and waits for B while transaction 2 holds B and waits for A — a circular wait, deadlock. Right, one global order: both transactions acquire A first, then B; transaction 2 simply waits its turn at A and proceeds when transaction 1 commits. Below, the database backstop: a unique index on (account id, previous hash) refuses a second posting at the same chain head."
+      caption="A shared total order — a plain sort of the account ids — removes the circular wait: both takers acquire A before B, so one waits and neither deadlocks. Beneath the locks, the unique index on (account_id, prev_hash) refuses a forked chain head outright; the loser retries against the new head."
+    >
+      <ArrowDefs />
+
+      <text className="d-head" x={30} y={22} textAnchor="start">
+        ARBITRARY ORDER
+      </text>
+      <Pill x={30} y={44} w={110} name="txn 1" sub="holds A" />
+      <Pill x={30} y={144} w={110} name="txn 2" sub="holds B" />
+      <Pill x={230} y={44} w={90} name="A" />
+      <Pill x={230} y={144} w={90} name="B" />
+      <line className="d-edge" x1={140} y1={66} x2={226} y2={66} />
+      <line className="d-edge" x1={140} y1={166} x2={226} y2={166} />
+      <line className="d-edge bad" x1={140} y1={80} x2={226} y2={156} markerEnd="url(#dgm-arrow)" />
+      <line className="d-edge bad" x1={140} y1={152} x2={226} y2={76} markerEnd="url(#dgm-arrow)" />
+      <text className="d-elabel" x={183} y={178} textAnchor="middle">
+        each waits
+      </text>
+      <text className="d-elabel" x={183} y={244} textAnchor="middle">
+        circular wait — deadlock
+      </text>
+
+      <text className="d-head" x={430} y={22} textAnchor="start">
+        ONE GLOBAL ORDER
+      </text>
+      <Pill x={430} y={44} w={110} name="txn 1" sub="A, then B" />
+      <Pill x={430} y={144} w={110} name="txn 2" sub="A, then B" />
+      <Pill x={630} y={44} w={90} name="A" />
+      <Pill x={630} y={144} w={90} name="B" />
+      <line className="d-edge" x1={540} y1={66} x2={626} y2={66} markerEnd="url(#dgm-arrow)" />
+      <line className="d-edge" x1={675} y1={88} x2={675} y2={140} markerEnd="url(#dgm-arrow)" />
+      <line className="d-edge" x1={540} y1={158} x2={626} y2={80} markerEnd="url(#dgm-arrow)" />
+      <text className="d-elabel" x={452} y={122} textAnchor="start">
+        waits its turn at A
+      </text>
+      <text className="d-elabel" x={583} y={244} textAnchor="middle">
+        both acquire A before B — no cycle
+      </text>
+
+      <text className="d-note" x={30} y={272}>
+        The database backstop below the locks: the unique index on (account_id, prev_hash) refuses a
+        forked chain head; the loser retries.
+      </text>
+    </Diagram>
+  );
+}
+
+/** The shape of the whole system: submit commits the posting and its event together, the worker runs off-path; mirrors the overview page and `src/economy.ts`. */
+export function SystemShape() {
+  return (
+    <Diagram
+      viewBox="0 0 760 300"
+      label="The shape of the system. Your service calls submit, which validates and authorizes, then commits inside one transaction: a balanced posting to the append-only hash-chained ledger and the matching event to the outbox, together or not at all. Reads fold balances back from the postings. Off the request path, the background worker drains the outbox to the dispatcher and runs the recurring sweeps; verified provider webhooks enter through the inbox and apply through the same submit."
+      caption="One synchronous path and one deferred path. A submit commits its posting and its event in one transaction, reads fold from the postings, and everything that outlives a request — relaying events, payouts, renewals, checkpoints — runs on the worker, off the request path."
+    >
+      <ArrowDefs />
+
+      <Pill x={30} y={80} w={140} name="your service" sub="submit · read" />
+
+      <Pill x={240} y={80} w={130} name="submit" sub="validate · authorize" />
+      <line className="d-edge" x1={170} y1={102} x2={236} y2={102} markerEnd="url(#dgm-arrow)" />
+
+      <rect className="d-box ghost" x={420} y={40} width={310} height={150} rx={8} />
+      <text className="d-head" x={575} y={60} textAnchor="middle">
+        ONE TRANSACTION
+      </text>
+      <Pill x={440} y={72} w={270} name="ledger" sub="append-only · hash-chained" />
+      <Pill x={440} y={132} w={270} name="outbox" sub="the matching event" />
+      <line className="d-edge" x1={370} y1={102} x2={436} y2={102} markerEnd="url(#dgm-arrow)" />
+      <text className="d-elabel" x={403} y={88} textAnchor="middle">
+        post
+      </text>
+
+      {/* the read path folds from postings */}
+      <path
+        className="d-edge"
+        strokeDasharray="4 3"
+        d="M100,80 C100,20 440,20 500,68"
+        fill="none"
+        markerEnd="url(#dgm-arrow)"
+      />
+      <text className="d-elabel" x={280} y={32} textAnchor="middle">
+        read — balances fold from the postings
+      </text>
+
+      {/* the worker, off the request path */}
+      <Pill x={240} y={230} w={130} name="worker" sub="off the request path" />
+      <line
+        className="d-edge"
+        strokeDasharray="4 3"
+        x1={305}
+        y1={226}
+        x2={305}
+        y2={128}
+        markerEnd="url(#dgm-arrow)"
+      />
+      <text className="d-elabel" x={313} y={180} textAnchor="start">
+        applies inbound
+      </text>
+      <line className="d-edge" x1={370} y1={244} x2={480} y2={180} markerEnd="url(#dgm-arrow)" />
+      <text className="d-elabel" x={442} y={232} textAnchor="start">
+        drains the outbox, runs the sweeps
+      </text>
+
+      <Pill x={30} y={230} w={140} name="webhooks" sub="verified inbound" />
+      <line className="d-edge" x1={170} y1={252} x2={236} y2={252} markerEnd="url(#dgm-arrow)" />
+      <text className="d-note" x={30} y={292}>
+        A verified provider callback lands in the inbox and applies through the same submit a direct
+        caller hits.
       </text>
     </Diagram>
   );

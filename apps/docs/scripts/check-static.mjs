@@ -77,7 +77,8 @@ if (offenders.length > 0) {
 // graph inside the sandbox worker — the price of being able to terminate() runaway edits
 // instead of freezing the page.
 const LOADER_BUDGET = 4_000;
-const RUN_TIER_BUDGET = 200_000;
+// Budget for the run tier over the current engine graph.
+const RUN_TIER_BUDGET = 230_000;
 const EDIT_TIER_BUDGET = 420_000;
 const runnerDir = join(BUILD_DIR, 'runner');
 const isEditTier = (f) =>

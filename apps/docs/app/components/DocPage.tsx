@@ -21,11 +21,13 @@ import {
   CreditMaturity,
   HashChain,
   IdempotentRetry,
+  LockOrdering,
   OutboxRelay,
   PayoutSaga,
   RateLadder,
   SubmitPipeline,
   SubscriptionStates,
+  SystemShape,
   WorkerSweeps,
 } from '~/components/Diagrams.tsx';
 import { Runnable } from '~/components/Runnable.tsx';
@@ -49,6 +51,8 @@ const MDX_COMPONENTS = {
   WorkerSweeps,
   CreditMaturity,
   IdempotentRetry,
+  LockOrdering,
+  SystemShape,
   SourceLink,
   ApiLink,
   Runnable,

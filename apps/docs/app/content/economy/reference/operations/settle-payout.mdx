@@ -54,7 +54,7 @@ The payload fields, beyond the `kind` tag, are:
 | `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`; a `user` is refused.                                                                                                   |
 | `sagaId`         | `string`                                                   | (required) | The payout to settle. The operation names no account directly. The saga record holds the seller and the reserved amount.                                              |
 | `providerRef`    | `string`                                                   | (required) | The rail's own id for the disbursement. Carried on the operation from the inbound webhook for the audit trail.                                                        |
-| `providerAmount` | [`Amount`](/economy/concepts/money-model/)                 | (required) | The USD the provider reported settling. Recorded for reconciliation, but never used as a posted figure (see [Preconditions](#preconditions-and-invariants)).          |
+| `providerAmount` | [`Amount`](/economy/concepts/money-model/)                 | (absent)   | The USD the provider reported settling, when its callback carries a figure. Recorded for reconciliation, but never used as a posted figure (see [Preconditions](#preconditions-and-invariants)). |
 
 ## Returns
 
