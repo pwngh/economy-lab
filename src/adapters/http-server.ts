@@ -13,7 +13,13 @@ import { decodeWire, encodeWire } from '#src/adapters/http-wire.ts';
 import { EconomyError, normalizeError } from '#src/errors.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
-import type { Reproof, SagaState, Store, Unit } from '#src/ports.ts';
+import type {
+  AccrualRow,
+  Reproof,
+  SagaState,
+  Store,
+  Unit,
+} from '#src/ports.ts';
 
 // Holds a db transaction open across several requests. The transaction body pauses on a promise
 // called the gate, so later requests run inside it before it commits or rolls back.
@@ -425,7 +431,61 @@ const SUBSTORE_ROUTES: Record<string, SubHandler> = {
     await unit.promos.markReversed(body.id as string);
     return null;
   },
+  'accruals/put': async (unit, body) => {
+    await unit.accruals.put(
+      (body.rows as unknown[]).map((row) => decodeAccrualRow(row)),
+    );
+    return null;
+  },
+  'accruals/claimByOrder': async (unit, body) =>
+    (await unit.accruals.claimByOrder(body.orderId as string)).map(
+      encodeAccrualRow,
+    ),
+  'accruals/pendingSellers': (unit, body) =>
+    unit.accruals.pendingSellers(body.limit as number),
+  'accruals/claimPendingBySeller': async (unit, body) =>
+    (
+      await unit.accruals.claimPendingBySeller(
+        body.sellerId as string,
+        body.limit as number,
+      )
+    ).map(encodeAccrualRow),
+  'accruals/markDrained': async (unit, body) => {
+    await unit.accruals.markDrained(
+      body.keys as Parameters<Unit['accruals']['markDrained']>[0],
+      body.txnId as string,
+    );
+    return null;
+  },
+  'accruals/markRefunded': async (unit, body) => {
+    await unit.accruals.markRefunded(
+      body.keys as Parameters<Unit['accruals']['markRefunded']>[0],
+      body.txnId as string,
+    );
+    return null;
+  },
+  'accruals/stats': async (unit) => {
+    const stats = await unit.accruals.stats();
+    // bigint can't ride JSON; the client decodes the string back.
+    return { ...stats, pendingMinor: stats.pendingMinor.toString() };
+  },
+  'accruals/netPending': async (unit, body) =>
+    (await unit.accruals.netPending(body.sellerId as string)).toString(),
 };
+
+// The amount is the row's only Amount-typed field; everything else is JSON-safe as is. Must stay
+// wire-compatible with the client copies in http.ts.
+function encodeAccrualRow(row: AccrualRow): Record<string, unknown> {
+  return { ...row, amount: encodeWire.amount(row.amount) };
+}
+
+function decodeAccrualRow(wire: unknown): AccrualRow {
+  const row = wire as Record<string, unknown>;
+  return {
+    ...(row as unknown as AccrualRow),
+    amount: decodeWire.amount(row.amount),
+  };
+}
 
 function decodeSagaPatch(
   patch: unknown,
@@ -514,6 +574,28 @@ async function checkpointRoute(
   return backing.checkpoints.latest();
 }
 
+// The out-of-transaction accrual reads the drain sweep starts from (work list and backlog
+// gauge); the claims and marks stay session-scoped.
+async function accrualRoute(
+  backing: Store,
+  method: string,
+  body: Record<string, unknown>,
+): Promise<unknown> {
+  if (method === 'pendingSellers') {
+    return backing.accruals.pendingSellers(body.limit as number);
+  }
+  if (method === 'stats') {
+    const stats = await backing.accruals.stats();
+    return { ...stats, pendingMinor: stats.pendingMinor.toString() };
+  }
+  if (method === 'netPending') {
+    return (
+      await backing.accruals.netPending(body.sellerId as string)
+    ).toString();
+  }
+  throw new Error(`unknown route accruals/${method}`);
+}
+
 async function replayRoute(
   backing: Store,
   method: string,
@@ -548,6 +630,9 @@ async function dispatch(
   }
   if (segments[0] === 'replay') {
     return replayRoute(backing, segments[1]!, body);
+  }
+  if (segments[0] === 'accruals') {
+    return accrualRoute(backing, segments[1]!, body);
   }
   if (segments[0] === 'close') {
     await backing.close();

@@ -2,6 +2,14 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
+## Unreleased (0.6.0)
+
+### Added
+
+- The accrual split parks seller shares on the `platform:settlement_accrual` shard at `spend`
+  and `subscribe` (`ACCRUAL_DRAIN=1`, `Config.accrualDrain`), and rows land in `accrual_rows`
+  until drained. Breaking: `Store.accruals` is required of custom stores.
+
 ## 0.5.0 - 2026-07-23
 
 ### Added

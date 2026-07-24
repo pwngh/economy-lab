@@ -23,6 +23,8 @@ import { createStoreServer } from '#src/adapters/http-server.ts';
 import type { ErrorCode } from '#src/errors.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type {
+  AccrualRow,
+  AccrualStore,
   Checkpoint,
   LineageOptions,
   Lot,
@@ -553,6 +555,120 @@ function sessionPromos(transport: Transport, session: string): PromoStore {
   };
 }
 
+// The claim/mark surface rides the session (it must share the money transaction); the drain's
+// out-of-transaction reads ride the root endpoints below.
+function sessionAccruals(transport: Transport, session: string): AccrualStore {
+  const at = (method: string): string => `/tx/${session}/accruals/${method}`;
+  return {
+    put: async (rows, options) => {
+      await call(
+        transport,
+        at('put'),
+        { rows: rows.map(encodeAccrualRow) },
+        options,
+      );
+    },
+    claimByOrder: async (orderId, options) =>
+      (
+        (await call(
+          transport,
+          at('claimByOrder'),
+          { orderId },
+          options,
+        )) as unknown[]
+      ).map(decodeAccrualRow),
+    pendingSellers: (limit, options) =>
+      call(transport, at('pendingSellers'), { limit }, options) as Promise<
+        string[]
+      >,
+    claimPendingBySeller: async (sellerId, limit, options) =>
+      (
+        (await call(
+          transport,
+          at('claimPendingBySeller'),
+          { sellerId, limit },
+          options,
+        )) as unknown[]
+      ).map(decodeAccrualRow),
+    markDrained: async (keys, txnId, options) => {
+      await call(transport, at('markDrained'), { keys, txnId }, options);
+    },
+    markRefunded: async (keys, txnId, options) => {
+      await call(transport, at('markRefunded'), { keys, txnId }, options);
+    },
+    stats: async (options) =>
+      decodeAccrualStats(await call(transport, at('stats'), {}, options)),
+    netPending: async (sellerId, options) =>
+      BigInt(
+        (await call(
+          transport,
+          at('netPending'),
+          { sellerId },
+          options,
+        )) as string,
+      ),
+  };
+}
+
+// Root accrual reads commit nothing, so they skip the session the way trust reads do; the
+// write methods throw, steering every claim or mark through a transaction.
+function rootAccruals(transport: Transport): AccrualStore {
+  const at = (method: string): string => `/accruals/${method}`;
+  const inTransactionOnly = (): never => {
+    throw new Error('accrual writes must run inside store.transaction');
+  };
+  return {
+    put: async () => inTransactionOnly(),
+    claimByOrder: async () => inTransactionOnly(),
+    claimPendingBySeller: async () => inTransactionOnly(),
+    markDrained: async () => inTransactionOnly(),
+    markRefunded: async () => inTransactionOnly(),
+    pendingSellers: (limit, options) =>
+      call(transport, at('pendingSellers'), { limit }, options) as Promise<
+        string[]
+      >,
+    stats: async (options) =>
+      decodeAccrualStats(await call(transport, at('stats'), {}, options)),
+    netPending: async (sellerId, options) =>
+      BigInt(
+        (await call(
+          transport,
+          at('netPending'),
+          { sellerId },
+          options,
+        )) as string,
+      ),
+  };
+}
+
+// These accrual codecs must stay wire-compatible with their copies in http-server.ts; drift
+// between the two is a silent wire bug.
+function encodeAccrualRow(row: AccrualRow): Record<string, unknown> {
+  return { ...row, amount: encodeWire.amount(row.amount) };
+}
+
+function decodeAccrualRow(wire: unknown): AccrualRow {
+  const row = wire as Record<string, unknown>;
+  return {
+    ...(row as unknown as AccrualRow),
+    amount: decodeWire.amount(row.amount),
+  };
+}
+
+function decodeAccrualStats(wire: unknown): {
+  pendingMinor: bigint;
+  oldestPendingAgeMs: number | null;
+} {
+  const stats = wire as {
+    pendingMinor: string;
+    oldestPendingAgeMs: number | null;
+  };
+  return {
+    pendingMinor: BigInt(stats.pendingMinor),
+    oldestPendingAgeMs: stats.oldestPendingAgeMs,
+  };
+}
+
 function rootTrust(transport: Transport): TrustStore {
   const at = (method: string): string => `/trust/${method}`;
   return {
@@ -670,6 +786,7 @@ function sessionUnit(transport: Transport, session: string): Unit {
     // The root endpoints, not session-scoped ones: a trust write commits on the server by
     // itself, so it survives a session rollback.
     trust: rootTrust(transport),
+    accruals: sessionAccruals(transport, session),
   };
 }
 
@@ -694,6 +811,7 @@ export function httpStore(options?: HttpStoreOptions): Store {
     checkpoints: rootCheckpoints(transport),
     movements: rootMovements(transport),
     replay: rootReplay(transport),
+    accruals: rootAccruals(transport),
     transaction: (work, txOptions) =>
       runTransaction(transport, work, txOptions),
     close: async (closeOptions?: CallOptions) => {

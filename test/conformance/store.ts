@@ -15,6 +15,7 @@
 import { describe, test, before, after } from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { decodeAmount, toAmount } from '#src/money.ts';
@@ -1058,6 +1059,104 @@ async function markBilledIsCompareAndSet(store: Store): Promise<void> {
   assert.equal(reloaded!.nextDueAt, secondDue);
 }
 
+// The accrual store's whole lifecycle in one pass. Ids are run-unique because the SQL backends
+// persist rows across runs.
+async function accrualRowsLifecycle(store: Store): Promise<void> {
+  const orderId = `ord_${randomUUID()}`;
+  const sellerId = freshUser();
+  const share = decodeAmount('7.00', 'CREDIT');
+  const debt = decodeAmount('-3.00', 'CREDIT');
+  const shard = SYSTEM.SETTLEMENT_ACCRUAL;
+
+  await store.transaction((unit) =>
+    unit.accruals.put([
+      {
+        orderId,
+        sellerId,
+        seq: 0,
+        amount: share,
+        shard,
+        status: 'pending',
+        txnId: `txn_${orderId}`,
+        settledTxnId: null,
+        recordedAt: 5,
+      },
+      {
+        orderId,
+        sellerId,
+        seq: 1,
+        amount: debt,
+        shard,
+        status: 'pending',
+        txnId: `txn_${orderId}`,
+        settledTxnId: null,
+        recordedAt: 5,
+      },
+    ]),
+  );
+
+  const byOrder = await store.transaction((unit) =>
+    unit.accruals.claimByOrder(orderId),
+  );
+  assert.equal(byOrder.length, 2);
+  assert.deepEqual(byOrder[0]!.amount, share);
+  assert.equal(byOrder[1]!.amount.minor, debt.minor);
+
+  const sellers = await store.transaction((unit) =>
+    unit.accruals.pendingSellers(1_000),
+  );
+  assert.equal(sellers.includes(sellerId), true);
+  assert.equal(
+    await store.accruals.netPending(sellerId),
+    share.minor + debt.minor,
+  );
+
+  await store.transaction(async (unit) => {
+    const pending = await unit.accruals.claimPendingBySeller(sellerId, 10);
+    assert.equal(pending.length, 2);
+    await unit.accruals.markDrained(
+      pending.map(({ orderId: o, sellerId: s, seq }) => ({
+        orderId: o,
+        sellerId: s,
+        seq,
+      })),
+      'txn_drain',
+    );
+  });
+
+  // Terminal rows survive as the share record but leave every pending view.
+  const after = await store.transaction((unit) =>
+    unit.accruals.claimByOrder(orderId),
+  );
+  assert.equal(
+    after.every((row) => row.status === 'drained'),
+    true,
+  );
+  // The creator posting stays on the row; the settling posting lands beside it.
+  assert.equal(
+    after.every((row) => row.txnId === `txn_${orderId}`),
+    true,
+  );
+  assert.equal(
+    after.every((row) => row.settledTxnId === 'txn_drain'),
+    true,
+  );
+  assert.equal(await store.accruals.netPending(sellerId), 0n);
+  const drained = await store.transaction((unit) =>
+    unit.accruals.claimPendingBySeller(sellerId, 10),
+  );
+  assert.equal(drained.length, 0);
+
+  // A second mark is a no-op: the status guard keeps a terminal row terminal.
+  await store.transaction((unit) =>
+    unit.accruals.markRefunded([{ orderId, sellerId, seq: 0 }], 'txn_other'),
+  );
+  const still = await store.transaction((unit) =>
+    unit.accruals.claimByOrder(orderId),
+  );
+  assert.equal(still[0]!.status, 'drained');
+}
+
 // lineage with `sinceHash` streams only the links recorded after the named head — the
 // incremental seal's tail read — and an unknown hash streams nothing rather than everything.
 async function lineageSinceStreamsTheTail(store: Store): Promise<void> {
@@ -1083,6 +1182,62 @@ async function lineageSinceStreamsTheTail(store: Store): Promise<void> {
     store.ledger.lineage(spendable(userId), { sinceHash: 'f'.repeat(64) }),
   );
   assert.equal(none.length, 0);
+}
+
+// Positive shares must claim ahead of recovery rows whatever their age, so a deep recovery
+// backlog can never crowd every share out of the claim window and stall the seller's drain.
+async function accrualClaimsPositivesFirst(store: Store): Promise<void> {
+  const orderId = `ord_${randomUUID()}`;
+  const sellerId = freshUser();
+  const row = (seq: number, minor: bigint, recordedAt: number) => ({
+    orderId,
+    sellerId,
+    seq,
+    amount: toAmount('CREDIT', minor),
+    shard: SYSTEM.SETTLEMENT_ACCRUAL,
+    status: 'pending' as const,
+    txnId: `txn_${orderId}`,
+    settledTxnId: null,
+    recordedAt,
+  });
+  await store.transaction((unit) =>
+    // Two older recovery rows, one newer share.
+    unit.accruals.put([row(0, -100n, 1), row(1, -100n, 2), row(2, 500n, 9)]),
+  );
+  const claimed = await store.transaction((unit) =>
+    unit.accruals.claimPendingBySeller(sellerId, 2),
+  );
+  assert.equal(claimed.length, 2);
+  assert.equal(claimed[0]!.amount.minor, 500n);
+  assert.equal(claimed[1]!.amount.minor, -100n);
+}
+
+// A rolled-back transaction leaves no accrual rows behind, like every other sub-store.
+async function accrualPutRollsBack(store: Store): Promise<void> {
+  const orderId = `ord_${randomUUID()}`;
+  const sellerId = freshUser();
+  await assert.rejects(
+    store.transaction(async (unit) => {
+      await unit.accruals.put([
+        {
+          orderId,
+          sellerId,
+          seq: 0,
+          amount: decodeAmount('1.00', 'CREDIT'),
+          shard: SYSTEM.SETTLEMENT_ACCRUAL,
+          status: 'pending',
+          txnId: 'txn_rollback',
+          settledTxnId: null,
+          recordedAt: 0,
+        },
+      ]);
+      throw new Error('boom');
+    }),
+  );
+  const rows = await store.transaction((unit) =>
+    unit.accruals.claimByOrder(orderId),
+  );
+  assert.equal(rows.length, 0);
 }
 
 // links(txnId) answers one link per touched account, byte-identical to what lineage streams —
@@ -1233,6 +1388,10 @@ export function runStoreConformance(
       withStore(t, appliesExpiryAtReadTime));
     test('lists non-revoked entitlement grants sorted by sku', (t) =>
       withStore(t, listsNonRevokedGrantsSorted));
+    test('walks accrual rows through put, claims, terminal marks, and the net', (t) =>
+      withStore(t, accrualRowsLifecycle));
+    test('claims positive accrual shares ahead of older recovery rows', (t) =>
+      withStore(t, accrualClaimsPositivesFirst));
     test('streams a lineage tail from sinceHash and nothing from an unknown hash', (t) =>
       withStore(t, lineageSinceStreamsTheTail));
     test("answers a posting's chain links byte-identical to its lineage", (t) =>
@@ -1241,6 +1400,8 @@ export function runStoreConformance(
       withStore(t, linksPageWalksTheLog));
     test('round-trips the rolling re-proof watermark', (t) =>
       withStore(t, reproofStateRoundTrips));
+    test('drops accrual rows when their putting transaction rolls back', (t) =>
+      withStore(t, accrualPutRollsBack));
     test('appends movement batches and streams them back by session', (t) =>
       withStore(t, journalAppendsAndStreamsBySession));
     test('rejects a movement batch on a duplicate key or position', (t) =>

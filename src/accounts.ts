@@ -103,10 +103,14 @@ export const SYSTEM = {
   // The offsetting entry used when seeding starting balances on a fresh (cold-start) system.
   OPENING_EQUITY: 'platform:opening_equity' as AccountRef,
 
-  // The pass-through counterparty an instance settlement clears its chunks against (see
   // src/netting.ts): each chunk posts a bounded set of participant legs against this account, and
   // the final chunk returns it to zero, so it holds money only mid-settlement. Credit-normal.
   NETTING_CLEARING: 'platform:netting_clearing' as AccountRef,
+
+  // Sellers' sale shares parked between a spend and the accrual drain (config.accrualDrain): the
+  // spend credits a shard here instead of each seller's earned row, and the drain sweep moves the
+  // pooled shares on. Holds exactly the pending accrual rows' total. Credit-normal.
+  SETTLEMENT_ACCRUAL: 'platform:settlement_accrual' as AccountRef,
 } as const;
 
 // --- Platform-account sharding ------------------------------------------------------
@@ -124,6 +128,7 @@ const SHARDED: ReadonlySet<AccountRef> = new Set([
   SYSTEM.USD_CLEARING,
   SYSTEM.REVENUE_USD,
   SYSTEM.PAYOUT_RESERVE,
+  SYSTEM.SETTLEMENT_ACCRUAL,
 ]);
 
 /**
@@ -272,11 +277,16 @@ const SYSTEM_TRAITS = new Map<
     SYSTEM.PAYOUT_RESERVE,
     { currency: 'CREDIT', debitNormal: false, class: 'excluded' },
   ],
+  // Excluded like PAYOUT_RESERVE: parked seller shares are not custodial money, and the
+  // overdraft guard covers it, so a short drain fails loudly instead of going negative.
+  [
+    SYSTEM.SETTLEMENT_ACCRUAL,
+    { currency: 'CREDIT', debitNormal: false, class: 'excluded' },
+  ],
 ]);
 
 /** Everything is denominated in CREDIT except the USD accounts (see SYSTEM_TRAITS). */
 export function currency(ref: AccountRef): Currency {
-  // a shard is denominated like its parent
   return SYSTEM_TRAITS.get(baseOf(ref))?.currency ?? 'CREDIT';
 }
 
@@ -314,7 +324,11 @@ export function isDebitNormal(ref: AccountRef): boolean {
  * `refund` and `reverse` return only the system accounts they always touch; the handler loads the
  * original transaction and adds its accounts before posting.
  */
-export function accountsOf(operation: Operation, shards = 1): AccountRef[] {
+export function accountsOf(
+  operation: Operation,
+  shards = 1,
+  accrual = false,
+): AccountRef[] {
   // TypeScript can't see that each LOCK_SETS builder reads only the fields valid for its own kind,
   // so widen the looked-up builder to a plain function via this cast. The LOCK_SETS type still
   // requires an entry per operation kind, so a forgotten kind is a compile error, not an empty
@@ -322,8 +336,9 @@ export function accountsOf(operation: Operation, shards = 1): AccountRef[] {
   const touched = LOCK_SETS[operation.kind] as (
     operation: Operation,
     shards: number,
+    accrual: boolean,
   ) => AccountRef[];
-  return touched(operation, shards);
+  return touched(operation, shards, accrual);
 }
 
 const REVERSAL_CONTRAS: AccountRef[] = [
@@ -333,11 +348,14 @@ const REVERSAL_CONTRAS: AccountRef[] = [
 ];
 
 // Per-kind lock sets. Hot kinds route shards with the same key their handler routes the legs with,
-// so the lock covers the shard the posting will hit.
+// so the lock covers the shard the posting will hit. `accrual` mirrors config.accrualDrain: under
+// the accrual split, spend and subscribe park seller shares on a SETTLEMENT_ACCRUAL shard instead
+// of locking each seller's earned row.
 const LOCK_SETS: {
   [K in Operation['kind']]: (
     operation: Extract<Operation, { kind: K }>,
     shards: number,
+    accrual: boolean,
   ) => AccountRef[];
 } = {
   topUp: (o, s) => [
@@ -348,12 +366,14 @@ const LOCK_SETS: {
     // locking also plants its first-use shard row
     platformShard(SYSTEM.REVENUE_USD, o.idempotencyKey, s),
   ],
-  spend: (o, s) => [
+  spend: (o, s, accrual) => [
     promo(o.buyerId),
     spendable(o.buyerId),
     platformShard(SYSTEM.PROMO_FLOAT, o.idempotencyKey, s),
     platformShard(SYSTEM.REVENUE, o.idempotencyKey, s),
-    ...(o.recipients ?? []).map((r) => earned(r.sellerId)),
+    ...(accrual
+      ? [platformShard(SYSTEM.SETTLEMENT_ACCRUAL, o.idempotencyKey, s)]
+      : (o.recipients ?? []).map((r) => earned(r.sellerId))),
   ],
   refund: () => [...REVERSAL_CONTRAS],
   clawback: (o) => [
@@ -367,13 +387,24 @@ const LOCK_SETS: {
     earned(o.userId),
     platformShard(SYSTEM.PAYOUT_RESERVE, o.userId, s),
   ],
-  subscribe: (o) => [
-    promo(o.userId),
-    spendable(o.userId),
-    SYSTEM.PROMO_FLOAT,
-    SYSTEM.REVENUE,
-    earned(o.sellerId),
-  ],
+  // Accrual mode also shard-routes subscribe's platform rows: without routing, every
+  // subscription serializes on the two bare rows at any shard count.
+  subscribe: (o, s, accrual) =>
+    accrual
+      ? [
+          promo(o.userId),
+          spendable(o.userId),
+          platformShard(SYSTEM.PROMO_FLOAT, o.idempotencyKey, s),
+          platformShard(SYSTEM.REVENUE, o.idempotencyKey, s),
+          platformShard(SYSTEM.SETTLEMENT_ACCRUAL, o.idempotencyKey, s),
+        ]
+      : [
+          promo(o.userId),
+          spendable(o.userId),
+          SYSTEM.PROMO_FLOAT,
+          SYSTEM.REVENUE,
+          earned(o.sellerId),
+        ],
   // These operations only change subscription or entitlement state. They post no money, so they
   // lock no accounts.
   cancelSubscription: () => [],

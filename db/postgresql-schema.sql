@@ -233,6 +233,28 @@ create index payout_sagas_provider_ref_idx on payout_sagas (provider_ref)
   where provider_ref is not null;
 
 -- ============================================================================
+-- Accrual rows: parked seller shares under the accrual split (config.accrualDrain). A spend
+-- credits a SETTLEMENT_ACCRUAL shard instead of each seller's earned row and records one row per
+-- seller share here — the drain sweep moves pending shares to earned in batches, and a refund
+-- claims an order's rows instead of reading seller accounts off the sale's legs. A negative row
+-- is refund-recovery debt the drain nets against the seller's future shares. Rows are never
+-- deleted: terminal rows are the permanent per-order share record.
+-- ============================================================================
+create table accrual_rows (
+  order_id    text   not null,
+  seller_id   text   not null,
+  seq         int    not null,
+  amount      bigint not null check (amount <> 0),
+  shard       text   not null,
+  status      text   not null check (status in ('pending', 'drained', 'refunded')),
+  txn_id      text   not null,
+  settled_txn_id text,
+  recorded_at bigint not null,
+  primary key (order_id, seller_id, seq)
+);
+create index accrual_rows_pending_idx on accrual_rows (seller_id) where status = 'pending';
+
+-- ============================================================================
 -- Promo grants: one row per promotional credit handed out. Shares the id of the posting that
 -- granted it, so re-running the grant is harmless. The expiry sweep reverses whatever the user
 -- didn't spend, then sets `reversed` so each grant reverses at most once.
@@ -651,6 +673,7 @@ comment on table outbox is 'Pending outbound events awaiting relay to the dispat
 comment on table inbox is 'Verified inbound provider events awaiting apply by the worker.';
 comment on table payout_sagas is 'Payout state machine: one row per seller cash-out.';
 comment on table promo_grants is 'Promotional credit grants with their expiry and reversal state.';
+comment on table accrual_rows is 'Parked seller shares under the accrual split; rows are never deleted.';
 comment on table entitlements is 'What each user owns (SKU ownership), with version and expiry.';
 comment on table subscriptions is 'Recurring charges: one row per subscription and its billing state.';
 comment on table trust_attempts is 'Per-key spend attempts feeding the velocity and risk check.';

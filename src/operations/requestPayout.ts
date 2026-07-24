@@ -70,11 +70,12 @@ export async function requestPayout(
   }
 
   const available = await unit.ledger.balance(earned(operation.userId));
-  if (compare(available, amount) < 0) {
+  const payable = await payableEarned(unit, operation.userId, available);
+  if (compare(payable, amount) < 0) {
     return rejected('INSUFFICIENT_FUNDS', {
       account: earned(operation.userId),
       need: amount,
-      have: available,
+      have: payable,
     });
   }
 
@@ -151,6 +152,19 @@ async function reserveAndOpen(
   const opened = { id: sagaId, reserve: amount, rateId, payoutUsd, txnId };
   await unit.sagas.open(sagaOf(operation, opened, ctx));
   return transaction;
+}
+
+// A seller carrying negative pending accrual rows (refund debt the accrual drain has not yet
+// recovered) cannot race a payout past that debt: payable credit is the earned balance less the
+// debt, so the reserve can never take money RECEIVABLE is owed. Checked whatever the accrual
+// flag says — recorded debt binds even after the split is turned off.
+async function payableEarned(
+  unit: Unit,
+  userId: string,
+  available: Amount,
+): Promise<Amount> {
+  const net = await unit.accruals.netPending(userId);
+  return net < 0n ? toAmount('CREDIT', available.minor + net) : available;
 }
 
 // Prices the payout once: this quote is the USD the worker submits to the rail and settle posts

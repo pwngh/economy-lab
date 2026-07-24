@@ -84,6 +84,9 @@ import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Operation, Transaction } from '#src/contract.ts';
 import type {
+  AccrualRow,
+  AccrualRowKey,
+  AccrualStore,
   Attempt,
   CheckpointStore,
   Clock,
@@ -1464,6 +1467,129 @@ function createPromoStore(q: Queryable): PromoStore {
   };
 }
 
+// --- Accrual store ----------------------------------------------------------------
+
+// Parked seller shares under the accrual split. The claim reads take `for update` row locks with
+// commit release, so a refund and a drain can't both consume one row; marks are guarded on
+// status = 'pending' so a terminal row never flips twice.
+async function putAccrualRows(
+  q: Queryable,
+  batch: ReadonlyArray<AccrualRow>,
+): Promise<void> {
+  if (batch.length === 0) {
+    return;
+  }
+  // One multi-row insert; amounts ride as strings to avoid loss past 2^53.
+  const rows = batch.map((row) => ({
+    order_id: row.orderId,
+    seller_id: row.sellerId,
+    seq: row.seq,
+    amount: row.amount.minor.toString(),
+    shard: row.shard,
+    status: row.status,
+    txn_id: row.txnId,
+    settled_txn_id: row.settledTxnId,
+    recorded_at: row.recordedAt,
+  }));
+  await q.query(
+    `insert into accrual_rows
+       (order_id, seller_id, seq, amount, shard, status, txn_id, settled_txn_id, recorded_at)
+     select r.order_id, r.seller_id, r.seq, r.amount, r.shard, r.status,
+            r.txn_id, r.settled_txn_id, r.recorded_at
+       from jsonb_to_recordset($1::jsonb) as r(
+         order_id text, seller_id text, seq int, amount bigint, shard text,
+         status text, txn_id text, settled_txn_id text, recorded_at bigint)`,
+    [JSON.stringify(rows)],
+  );
+}
+
+function createAccrualStore(q: Queryable, clock: Clock): AccrualStore {
+  return {
+    put: (batch) => putAccrualRows(q, batch),
+    claimByOrder: async (orderId) => {
+      const result = await q.query(
+        `select * from accrual_rows where order_id = $1
+           order by seller_id, seq for update`,
+        [orderId],
+      );
+      return result.rows.map(rowToAccrual);
+    },
+    pendingSellers: async (limit) => {
+      const result = await q.query(
+        `select distinct seller_id from accrual_rows
+           where status = 'pending' order by seller_id limit $1`,
+        [limit],
+      );
+      return result.rows.map((row) => row.seller_id as string);
+    },
+    // `amount < 0` sorts positives (false) ahead of recovery rows (true); see AccrualStore.
+    claimPendingBySeller: async (sellerId, limit) => {
+      const result = await q.query(
+        `select * from accrual_rows
+           where seller_id = $1 and status = 'pending'
+           order by (amount < 0), recorded_at, order_id, seq
+           limit $2 for update`,
+        [sellerId, limit],
+      );
+      return result.rows.map(rowToAccrual);
+    },
+    markDrained: (keys, txnId) => markAccruals(q, keys, 'drained', txnId),
+    markRefunded: (keys, txnId) => markAccruals(q, keys, 'refunded', txnId),
+    stats: async () => {
+      const result = await q.query(
+        `select coalesce(sum(amount) filter (where amount > 0), 0) as pending,
+                min(recorded_at) as oldest
+           from accrual_rows where status = 'pending'`,
+      );
+      const row = result.rows[0]!;
+      return {
+        pendingMinor: readMinor(row.pending),
+        oldestPendingAgeMs:
+          row.oldest === null || row.oldest === undefined
+            ? null
+            : Math.max(0, clock.now() - Number(row.oldest)),
+      };
+    },
+    netPending: async (sellerId) => {
+      const result = await q.query(
+        `select coalesce(sum(amount), 0) as net from accrual_rows
+           where seller_id = $1 and status = 'pending'`,
+        [sellerId],
+      );
+      return readMinor(result.rows[0]!.net);
+    },
+  };
+}
+
+async function markAccruals(
+  q: Queryable,
+  keys: ReadonlyArray<AccrualRowKey>,
+  status: 'drained' | 'refunded',
+  settledTxnId: string,
+): Promise<void> {
+  for (const key of keys) {
+    await q.query(
+      `update accrual_rows set status = $1, settled_txn_id = $2
+         where order_id = $3 and seller_id = $4 and seq = $5 and status = 'pending'`,
+      [status, settledTxnId, key.orderId, key.sellerId, key.seq],
+    );
+  }
+}
+
+function rowToAccrual(row: Record<string, unknown>): AccrualRow {
+  return {
+    orderId: row.order_id as string,
+    sellerId: row.seller_id as string,
+    seq: Number(row.seq),
+    amount: toAmount('CREDIT', readMinor(row.amount)),
+    shard: row.shard as AccountRef,
+    status: row.status as AccrualRow['status'],
+    txnId: row.txn_id as string,
+    settledTxnId: (row.settled_txn_id as string | null) ?? null,
+    recordedAt: Number(row.recorded_at),
+  };
+}
+
 // --- Trust store -------------------------------------------------------------------
 
 // Two views: this pool-backed store commits on its own, the Unit view (createUnitTrustStore)
@@ -1737,6 +1863,7 @@ function buildUnit(
     subscriptions: createSubscriptionStore(q),
     promos: createPromoStore(q),
     trust: createUnitTrustStore(q, clock, velocityWindowMs),
+    accruals: createAccrualStore(q, clock),
   };
 }
 
@@ -1900,6 +2027,7 @@ export async function postgresStore(
     subscriptions: createSubscriptionStore(pool),
     promos: createPromoStore(pool),
     trust: createTrustStore(pool, clock, velocityWindowMs),
+    accruals: createAccrualStore(pool, clock),
     checkpoints: createCheckpointStore(pool),
     movements: createMovementJournal(pool),
     replay: createReplayStore(pool),

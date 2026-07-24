@@ -14,7 +14,18 @@ import { assertKind } from '#src/operations/guards.ts';
 import { planSpend } from '#src/operations/spend.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { compare, encodeAmount, toAmount } from '#src/money.ts';
-import { promo, spendable, earned, SYSTEM } from '#src/accounts.ts';
+import {
+  promo,
+  spendable,
+  earned,
+  routePlatformLegs,
+  SYSTEM,
+} from '#src/accounts.ts';
+import {
+  accrualRowsOf,
+  parkEarnedLegs,
+  sharesMeta,
+} from '#src/operations/accrual.ts';
 import { maturedAtLeast, maturityBlocker } from '#src/maturity.ts';
 import { feeForPrice } from '#src/pricing.ts';
 
@@ -218,9 +229,22 @@ async function postCharge(
   ctx: Ctx,
 ): Promise<Transaction> {
   const { operation, plan, subscriptionId } = charge;
-  const legs: Leg[] = [];
-  appendPromoLegs(legs, operation, plan.promoPart);
-  appendSpendableLegs(legs, operation, plan.spendablePart, ctx);
+  const built: Leg[] = [];
+  appendPromoLegs(built, operation, plan.promoPart);
+  appendSpendableLegs(built, operation, plan.spendablePart, ctx);
+
+  // Under the accrual split, the seller's credit parks on SETTLEMENT_ACCRUAL and the platform
+  // legs shard-route by the idempotency key like spend's — without routing, every subscription
+  // serializes on the two bare platform rows. Off, the legs stay byte-identical to today's.
+  const parked = ctx.config.accrualDrain ? parkEarnedLegs(built) : null;
+  const legs =
+    parked === null
+      ? built
+      : routePlatformLegs(
+          parked.legs,
+          operation.idempotencyKey,
+          ctx.config.platformShards,
+        );
 
   const transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
@@ -231,12 +255,28 @@ async function postCharge(
       sellerId: operation.sellerId,
       // Sealed into the chain hash: the subscription this charge opens and the per-period price
       // and cadence, which the renewal sweep re-proves the unhashed row against; plus, under the
+      // split, the share map the accrual rows below must match.
       subscriptionId,
       userId: operation.userId,
       price: encodeAmount(operation.price),
       periodMs: operation.periodMs,
+      ...(parked === null ? {} : { shares: sharesMeta(parked.shares) }),
     },
   });
+  if (parked !== null) {
+    // Subscriptions have no orderId, and refund never targets them, so the posting id keys the
+    // rows; the drain only needs uniqueness.
+    await unit.accruals.put(
+      accrualRowsOf({
+        orderId: transaction.id,
+        shares: parked.shares,
+        routeKey: operation.idempotencyKey,
+        shards: ctx.config.platformShards,
+        txnId: transaction.id,
+        recordedAt: transaction.postedAt,
+      }),
+    );
+  }
   return transaction;
 }
 

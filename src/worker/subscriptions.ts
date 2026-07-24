@@ -14,7 +14,13 @@ import { credit, debit, postEntry } from '#src/ledger.ts';
 import { compare, toAmount } from '#src/money.ts';
 import { pendingOutbox } from '#src/outbox.ts';
 import { maturedAtLeast } from '#src/maturity.ts';
-import { spendable, earned, SYSTEM } from '#src/accounts.ts';
+import { spendable, earned, routePlatformLegs, SYSTEM } from '#src/accounts.ts';
+import {
+  accrualRowsOf,
+  parkEarnedLegs,
+  sharesMeta,
+} from '#src/operations/accrual.ts';
+import { assertSubscriptionAnchored } from '#src/operations/guards.ts';
 import { feeForPrice } from '#src/pricing.ts';
 
 import type { Transaction, WorkerCtx } from '#src/contract.ts';
@@ -240,7 +246,13 @@ async function renew(
       return;
     }
 
-    const transaction = await postRenewal(unit, ctx, sub);
+    // The row about to be charged by is unhashed: re-prove it against the first-charge posting
+    // its txnId anchors before a leg derives from it.
+    await assertSubscriptionAnchored(
+      { ledger: unit.ledger, digest: ctx.digest },
+      sub,
+    );
+    const transaction = await postRenewal(unit, ctx, sub, key);
     await unit.idempotency.record(key, transaction);
 
     // Re-grant the perk through the new period end (clears any earlier revoke) and emit the
@@ -304,17 +316,27 @@ async function postRenewal(
   unit: Unit,
   ctx: WorkerCtx,
   sub: Subscription,
+  billingKey: string,
 ): Promise<Transaction> {
   // `feeForPrice` (pricing.ts) owns the fee rounding rule. Spend, the first month
   // (operations/subscribe.ts), and every renewal call it, so the fee is identical.
   const feeMinor = feeForPrice(sub.price.minor, ctx.config.platformFeeBps);
   const netMinor = sub.price.minor - feeMinor;
-  const legs: Leg[] = [
+  const built: Leg[] = [
     debit(spendable(sub.userId), sub.price),
     credit(earned(sub.sellerId), toAmount('CREDIT', netMinor)),
     credit(SYSTEM.REVENUE, toAmount('CREDIT', feeMinor)),
   ];
-  return postEntry(unit.ledger, {
+
+  // Renewals charge through the same accrual redirect as subscribe, keyed by the billing period's
+  // idempotency key, so the drain stays the earned rows' only writer across the whole surface.
+  const parked = ctx.config.accrualDrain ? parkEarnedLegs(built) : null;
+  const legs =
+    parked === null
+      ? built
+      : routePlatformLegs(parked.legs, billingKey, ctx.config.platformShards);
+
+  const transaction = await postEntry(unit.ledger, {
     txnId: ctx.ids.next('txn'),
     legs,
     meta: {
@@ -322,6 +344,21 @@ async function postRenewal(
       subscriptionId: sub.id,
       sku: sub.sku,
       sellerId: sub.sellerId,
+      // Sealed into the chain hash: the share map the accrual rows below must match.
+      ...(parked === null ? {} : { shares: sharesMeta(parked.shares) }),
     },
   });
+  if (parked !== null) {
+    await unit.accruals.put(
+      accrualRowsOf({
+        orderId: transaction.id,
+        shares: parked.shares,
+        routeKey: billingKey,
+        shards: ctx.config.platformShards,
+        txnId: transaction.id,
+        recordedAt: transaction.postedAt,
+      }),
+    );
+  }
+  return transaction;
 }

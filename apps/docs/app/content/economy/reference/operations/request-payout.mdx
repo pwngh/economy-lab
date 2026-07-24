@@ -8,7 +8,7 @@ sourceRefs:
     'src/operations/requestPayout.ts#L38 · requestPayout',
     "src/contract.ts#L110 · kind 'requestPayout'",
     'src/operations/registry.ts#L62 · REGISTRY',
-    'src/ports.ts#L1140-L1146 · SAGA_STATES',
+    'src/ports.ts#L1241-L1247 · SAGA_STATES',
   ]
 apiRefs: ['variables/src.requestPayout']
 related:
@@ -75,13 +75,13 @@ The commit posts one balanced [double-entry](/economy/concepts/accounts-and-doub
 
 This moves the credits out of the seller's reach and into `PAYOUT_RESERVE`, which holds credits owed out as a payout. The USD side posts later, when the worker settles the saga. See [the payout saga](/economy/concepts/payout-saga/).
 
-The same transaction opens a <ApiLink to="interfaces/src_ports.Saga" /> in state `RESERVED` (see <SourceLink to="src/ports.ts#L1140-L1146 · SAGA_STATES" />). The saga also stores the USD quote itself — the reserve converted at the request-time [`payout`](/economy/concepts/money-model/) rate, floored — alongside the rate's id. The worker submits exactly that quote to the rail and settlement posts it unchanged, so the amount can never drift between quoting, paying, and recording. A payout rate above `par` is refused here with `CONFIG_INVALID`, at the one place the payout is priced.
+The same transaction opens a <ApiLink to="interfaces/src_ports.Saga" /> in state `RESERVED` (see <SourceLink to="src/ports.ts#L1241-L1247 · SAGA_STATES" />). The saga also stores the USD quote itself — the reserve converted at the request-time [`payout`](/economy/concepts/money-model/) rate, floored — alongside the rate's id. The worker submits exactly that quote to the rail and settlement posts it unchanged, so the amount can never drift between quoting, paying, and recording. A payout rate above `par` is refused here with `CONFIG_INVALID`, at the one place the payout is priced.
 
 The committed transaction's `meta.sagaId` names the saga it opened, so a caller can follow the payout with `read.saga(sagaId)` instead of scanning `read.payouts()` for its own request.
 
 ## Authorization
 
-`requestPayout` is not a privileged operation, so an end `user` can run it, but only for their own account. The ownership check requires the caller to own the `earned` account being debited; a `user` requesting another seller's payout is refused with `AUTH.UNAUTHORIZED` (see <SourceLink to="src/economy.ts#L950 · debitedUserAccounts" />).
+`requestPayout` is not a privileged operation, so an end `user` can run it, but only for their own account. The ownership check requires the caller to own the `earned` account being debited; a `user` requesting another seller's payout is refused with `AUTH.UNAUTHORIZED` (see <SourceLink to="src/economy.ts#L964 · debitedUserAccounts" />).
 
 A `system` service or a human `operator` may also request a payout on a seller's behalf. See [actors and authorization](/economy/concepts/actors-and-authorization/) for the full rule.
 
@@ -119,7 +119,7 @@ A malformed request throws instead:
 | Code                   | When                                                                                                                        |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `OP.MALFORMED`         | The `amount` isn't `CREDIT`.                                                                                                |
-| `MONEY.INVALID_AMOUNT` | The `amount` is zero or negative (see <SourceLink to="src/operations/requestPayout.ts#L220 · payableCredit" />).             |
+| `MONEY.INVALID_AMOUNT` | The `amount` is zero or negative (see <SourceLink to="src/operations/requestPayout.ts#L234 · payableCredit" />).             |
 
 Both are programming errors.
 

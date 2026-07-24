@@ -44,6 +44,7 @@ DROP TABLE IF EXISTS instance_movements;
 
 DROP TABLE IF EXISTS trust_attempts;
 
+DROP TABLE IF EXISTS accrual_rows;
 DROP TABLE IF EXISTS promo_grants;
 
 DROP TABLE IF EXISTS subscriptions;
@@ -245,6 +246,23 @@ CREATE TABLE payout_sagas (
      -- Inbound provider callbacks look up the saga by provider_ref.
      KEY payout_sagas_provider_ref_idx (provider_ref)
    ) COMMENT='Payout state machine: one row per seller cash-out.';
+
+-- Rationale in db/postgresql-schema.sql (accrual_rows banner).
+CREATE TABLE accrual_rows (
+     order_id    VARCHAR(128) NOT NULL COMMENT 'Order (or charge posting id) the share came from; part of primary key.',
+     seller_id   VARCHAR(64)  NOT NULL COMMENT 'Seller the share belongs to; part of primary key.',
+     seq         INT          NOT NULL COMMENT '0 for the sale share, higher for refund-recovery rows; part of primary key.',
+     amount      BIGINT       NOT NULL COMMENT 'Share in minor units; negative on a refund-recovery row, never zero.',
+     shard       VARCHAR(96)  NOT NULL COMMENT 'SETTLEMENT_ACCRUAL shard the spend credited; the drain debits the same row.',
+     status      VARCHAR(16)  NOT NULL,
+     txn_id      VARCHAR(64)  NOT NULL COMMENT 'Posting that created the row; immutable.',
+     settled_txn_id VARCHAR(64) NULL COMMENT 'Drain or refund posting that settled the row; NULL while pending.',
+     recorded_at BIGINT       NOT NULL COMMENT 'Epoch ms the row was written.',
+     PRIMARY KEY (order_id, seller_id, seq),
+     CHECK (status IN ('pending', 'drained', 'refunded')),
+     CHECK (amount <> 0),
+     KEY accrual_rows_pending_idx (status, seller_id)
+   ) COMMENT='Parked seller shares under the accrual split; rows are never deleted.';
 
 -- Rationale in db/postgresql-schema.sql (promo_grants banner).
 CREATE TABLE promo_grants (

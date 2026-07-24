@@ -22,6 +22,9 @@ import type { Amount, Currency } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Transaction } from '#src/contract.ts';
 import type {
+  AccrualRow,
+  AccrualRowKey,
+  AccrualStore,
   Attempt,
   Checkpoint,
   CheckpointStore,
@@ -1344,6 +1347,153 @@ function createTrustStore(
   };
 }
 
+// --- Accrual store ----------------------------------------------------------------
+
+// Parked seller shares under the accrual split. Single-threaded, so the SQL engines' row locks
+// reduce to the store's one-writer transaction queue; the journal undoes puts and marks the way
+// it undoes every other row write.
+function createAccrualStore(deps: {
+  clock: Clock;
+}): AccrualStore & Participant & { size(): number } {
+  const journal = createJournal();
+  const rows = new Map<string, AccrualRow>();
+  const order: string[] = [];
+  const keyOf = (key: AccrualRowKey): string =>
+    `${key.orderId}::${key.sellerId}::${key.seq}`;
+
+  const mark = (
+    keys: ReadonlyArray<AccrualRowKey>,
+    status: 'drained' | 'refunded',
+    settledTxnId: string,
+  ): void => {
+    for (const key of keys) {
+      const id = keyOf(key);
+      const row = rows.get(id);
+      if (!row || row.status !== 'pending') {
+        continue;
+      }
+      recordRowUndo(journal, rows, id);
+      rows.set(id, { ...row, status, settledTxnId });
+    }
+  };
+
+  return {
+    journal,
+    size: () => rows.size,
+    put: async (batch, _options?: CallOptions) => {
+      for (const row of batch) {
+        const id = keyOf(row);
+        if (rows.has(id)) {
+          throw new Error(`duplicate accrual row: ${id}`);
+        }
+        rows.set(id, { ...row });
+        order.push(id);
+        journal.record(() => {
+          rows.delete(id);
+          order.pop();
+        });
+      }
+    },
+    claimByOrder: async (orderId, _options?: CallOptions) =>
+      selectAccruals(rows, order, (row) => row.orderId === orderId),
+    pendingSellers: async (limit, _options?: CallOptions) => {
+      const sellers: string[] = [];
+      for (const id of order) {
+        const row = rows.get(id);
+        if (
+          row &&
+          row.status === 'pending' &&
+          !sellers.includes(row.sellerId)
+        ) {
+          sellers.push(row.sellerId);
+          if (sellers.length >= limit) {
+            break;
+          }
+        }
+      }
+      return sellers;
+    },
+    claimPendingBySeller: async (sellerId, limit, _options?: CallOptions) =>
+      claimSellerPending(rows, order, sellerId, limit),
+    markDrained: async (keys, txnId, _options?: CallOptions) =>
+      mark(keys, 'drained', txnId),
+    markRefunded: async (keys, txnId, _options?: CallOptions) =>
+      mark(keys, 'refunded', txnId),
+    stats: async (_options?: CallOptions) => accrualStatsOf(rows, deps.clock),
+    netPending: async (sellerId, _options?: CallOptions) => {
+      let net = 0n;
+      for (const row of rows.values()) {
+        if (row.sellerId === sellerId && row.status === 'pending') {
+          net += row.amount.minor;
+        }
+      }
+      return net;
+    },
+  };
+}
+
+// Positive shares claim before recovery rows (see AccrualStore), each in insertion order.
+function claimSellerPending(
+  rows: ReadonlyMap<string, AccrualRow>,
+  order: ReadonlyArray<string>,
+  sellerId: string,
+  limit: number,
+): AccrualRow[] {
+  const pending = selectAccruals(
+    rows,
+    order,
+    (row) => row.sellerId === sellerId && row.status === 'pending',
+  );
+  return [
+    ...pending.filter((row) => row.amount.minor > 0n),
+    ...pending.filter((row) => row.amount.minor < 0n),
+  ].slice(0, limit);
+}
+
+// Rows matching `want`, in insertion order, copied so a caller can't mutate stored state.
+function selectAccruals(
+  rows: ReadonlyMap<string, AccrualRow>,
+  order: ReadonlyArray<string>,
+  want: (row: AccrualRow) => boolean,
+  limit = Infinity,
+): AccrualRow[] {
+  const selected: AccrualRow[] = [];
+  for (const id of order) {
+    if (selected.length >= limit) {
+      break;
+    }
+    const row = rows.get(id);
+    if (row && want(row)) {
+      selected.push({ ...row });
+    }
+  }
+  return selected;
+}
+
+// The drain's backlog gauge pair: positive pending total plus the oldest pending row's age.
+function accrualStatsOf(
+  rows: ReadonlyMap<string, AccrualRow>,
+  clock: Clock,
+): { pendingMinor: bigint; oldestPendingAgeMs: number | null } {
+  let pendingMinor = 0n;
+  let oldestAt: number | null = null;
+  for (const row of rows.values()) {
+    if (row.status !== 'pending') {
+      continue;
+    }
+    if (row.amount.minor > 0n) {
+      pendingMinor += row.amount.minor;
+    }
+    if (oldestAt === null || row.recordedAt < oldestAt) {
+      oldestAt = row.recordedAt;
+    }
+  }
+  return {
+    pendingMinor,
+    oldestPendingAgeMs: oldestAt === null ? null : clock.now() - oldestAt,
+  };
+}
+
 // --- Movement journal ---------------------------------------------------------------
 
 // Append-only and never part of a money transaction (see MovementJournal in ports.ts). The batch
@@ -1473,6 +1623,7 @@ export function memoryStore(deps?: {
   const subscriptions = createSubscriptionStore();
   const promos = createPromoStore();
   const trust = createTrustStore(clock, velocityWindowMs);
+  const accruals = createAccrualStore({ clock });
   const checkpoints = createCheckpointStore();
   const movements = createMovementJournal();
   const replay = createReplayStore();
@@ -1488,6 +1639,7 @@ export function memoryStore(deps?: {
     subscriptions,
     promos,
     trust,
+    accruals,
   };
   const participants: Participant[] = Object.values(unit);
 

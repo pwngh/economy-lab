@@ -56,6 +56,7 @@ import { economyPaused } from '#src/config.ts';
 import { encodeWire } from '#src/adapters/http-wire.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
+import type { Config } from '#src/config.ts';
 import type { BackingTotals } from '#src/integrity.ts';
 import type { Amount, Currency } from '#src/money.ts';
 import type {
@@ -314,7 +315,7 @@ async function submit(
   operation: Operation,
   options?: CallOptions,
 ): Promise<Outcome> {
-  validateOperation(operation, pipeline.ctx.config.platformShards);
+  validateOperation(operation, pipeline.ctx.config);
   authorize(operation);
 
   // Maintenance window. Refuse only an end user's discretionary write, never a 'system' settlement
@@ -398,9 +399,12 @@ async function rejectionsRollBack(step: Step): Promise<Outcome> {
 // caller.
 const MAX_OP_AMOUNT_MINOR = 1_000_000_000_000_000n;
 
-// Checked once here rather than per handler. The shard count is passed so every accountsOf caller
-// agrees.
-function validateOperation(operation: Operation, shards: number): void {
+// Checked once here rather than per handler. The shard and accrual knobs are passed so every
+// accountsOf caller agrees.
+function validateOperation(
+  operation: Operation,
+  config: Pick<Config, 'platformShards' | 'accrualDrain'>,
+): void {
   if (!(operation.kind in REGISTRY)) {
     throw fault(
       ERROR_CODES.MALFORMED_OPERATION,
@@ -420,7 +424,11 @@ function validateOperation(operation: Operation, shards: number): void {
     );
   }
 
-  for (const account of accountsOf(operation, shards)) {
+  for (const account of accountsOf(
+    operation,
+    config.platformShards,
+    config.accrualDrain,
+  )) {
     if (isWalletAccount(account) && ownerOf(account).trim() === '') {
       throw fault(
         ERROR_CODES.MALFORMED_OPERATION,
@@ -486,8 +494,10 @@ async function invalidateCache(
   if (!cache || outcome.status !== 'committed') {
     return;
   }
-  const shards = pipeline.ctx.config.platformShards;
-  for (const account of new Set(accountsOf(operation, shards))) {
+  const { platformShards, accrualDrain } = pipeline.ctx.config;
+  for (const account of new Set(
+    accountsOf(operation, platformShards, accrualDrain),
+  )) {
     await bestEffortCache<void>(
       pipeline.ctx,
       'invalidate',
@@ -679,8 +689,12 @@ async function screenRisk(step: Step): Promise<Outcome | null> {
 // See https://economy-lab-docs.pages.dev/economy/concepts/integrity/ for the locking/isolation split.
 async function lockAccounts(step: Step): Promise<void> {
   const { unit, operation, options } = step;
-  const shards = step.pipeline.ctx.config.platformShards;
-  await lockAll(unit.ledger, accountsOf(operation, shards), options);
+  const { platformShards, accrualDrain } = step.pipeline.ctx.config;
+  await lockAll(
+    unit.ledger,
+    accountsOf(operation, platformShards, accrualDrain),
+    options,
+  );
 }
 
 // The event enqueues in the posting's own transaction, so it ships only if the posting committed.

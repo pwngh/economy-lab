@@ -283,8 +283,9 @@ async function assertNoOverdraft(
   }
 }
 
-// The accounts that may not go negative: user wallets and the payout-reserve escrow. Platform
-// asset/liability accounts may swing either way, so they are skipped.
+// The accounts this guard keeps non-negative: user wallets plus the `excluded`-class escrows
+// (payout reserve, settlement accrual). Platform asset/liability accounts swing either way,
+// so they are skipped.
 function isUserGuarded(account: AccountRef): boolean {
   const kind = classify(account);
   return (kind === 'custodial' || kind === 'excluded') && account.includes(':');

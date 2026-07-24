@@ -137,6 +137,14 @@ export interface Config {
    * count later is safe; only ever lower it back to 1.
    */
   platformShards: number;
+
+  /**
+   * The accrual split (`ACCRUAL_DRAIN=1`): spend and subscribe park seller shares on a
+   * SETTLEMENT_ACCRUAL shard and the worker's drain sweep moves them to `earned` in batches, so
+   * concurrent buyers of one seller stop serializing on that seller's row. Off (the default)
+   * posts exactly today's legs. Meant to run with `platformShards >= 2`.
+   */
+  accrualDrain: boolean;
 }
 
 // The per-class velocity limits stay absent unless their env var parses, so the single-knob
@@ -217,6 +225,7 @@ export const CONFIG_KEYS = [
   'ECONOMY_PAUSE_START_MS',
   'ECONOMY_PAUSE_END_MS',
   'PLATFORM_SHARDS',
+  'ACCRUAL_DRAIN',
   'DB_POOL_MAX',
 ] as const;
 
@@ -382,6 +391,7 @@ function buildConfig(env: EnvMap): Config {
     pauseEndMs: readIntOrNull(env.ECONOMY_PAUSE_END_MS),
     dbPoolMax: readIntOrNull(env.DB_POOL_MAX),
     platformShards: readInt(env.PLATFORM_SHARDS, 1, { min: 1 }),
+    accrualDrain: env.ACCRUAL_DRAIN === '1' || env.ACCRUAL_DRAIN === 'true',
   };
 }
 

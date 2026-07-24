@@ -183,6 +183,7 @@ export function testConfig(): Config {
     payoutFeeBps: 150,
     velocityLimitMinor: 100_000_000n, // 1M credits/hour: high enough that only the velocity tests hit it
     velocityWindowMs: 60 * 60_000,
+    accrualDrain: false,
     maturityHorizonMs: { card: 0, crypto: 0, default: 0 },
     payoutSla: { PENDING: 30_000, SUBMITTED: 120_000, DEFAULT: 60_000 },
     payoutMinimumEarnedMinor: 0n, // this fixture sets no minimum; the minimum-payout test supplies its own

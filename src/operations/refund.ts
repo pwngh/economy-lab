@@ -11,14 +11,15 @@
 
 import { fault, rejected, ERROR_CODES } from '#src/errors.ts';
 import { balanceDelta, lockAll, postEntry } from '#src/ledger.ts';
+import { verifiedPosting } from '#src/chain.ts';
 import { toAmount } from '#src/money.ts';
 import { assertKind, reversalKey } from '#src/operations/guards.ts';
-import { SYSTEM, isDebitNormal } from '#src/accounts.ts';
+import { SYSTEM, baseOf, isDebitNormal } from '#src/accounts.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { AccountRef } from '#src/accounts.ts';
-import type { Leg, Sale, Unit } from '#src/ports.ts';
+import type { AccrualRow, Leg, Posting, Sale, Unit } from '#src/ports.ts';
 
 /**
  * Undo a past sale, making the buyer whole even when a seller already spent their cut.
@@ -49,7 +50,27 @@ export async function refund(
     return rejected('UNKNOWN_ORDER', { orderId: operation.orderId });
   }
 
-  await extendLocks(unit, sale);
+  // Re-prove the sale's posting against its chain links (verifiedPosting) before any leg derives
+  // from it. The sales row is an unhashed convenience copy, cross-checked against the verified
+  // posting and never trusted alone, so an in-place edit of either faults here instead of shaping
+  // the reversal.
+  const posting = await verifiedPosting(
+    { ledger: unit.ledger, digest: ctx.digest },
+    sale.txnId,
+  );
+  if (posting === null) {
+    throw fault(
+      ERROR_CODES.CHAIN_BROKEN,
+      'A sales row names a posting the ledger does not hold; refusing to reverse unverifiable history.',
+      {
+        retryable: false,
+        detail: { orderId: sale.orderId, txnId: sale.txnId },
+      },
+    );
+  }
+  assertSaleMatchesPosting(sale, posting);
+
+  await extendLocks(unit, posting.legs);
 
   const claimKey = reversalKey(operation.orderId);
   const claim = await unit.idempotency.claim(claimKey);
@@ -57,12 +78,32 @@ export async function refund(
     return { status: 'duplicate', transaction: claim.transaction };
   }
 
-  const legs = reversalLegs(await coverageOf(unit, sale));
+  // Path choice is driven by the data, not the accrual flag: a sale that parked shares under the
+  // split must reverse through its accrual rows even if the flag has since been turned off —
+  // the legacy fold would claw the pooled shard without voiding the rows, and the drain would
+  // later pay the seller for the refunded order out of other orders' shares. Rows are matched to
+  // the sale by its posting id, so a hostile orderId colliding with another charge's row key can
+  // never pull that charge's rows into this reversal. The txn id is minted first so the terminal
+  // row marks can carry it.
+  const txnId = ctx.ids.next('txn');
+  const claimed = await unit.accruals.claimByOrder(sale.orderId);
+  const saleRows = claimed.filter((row) => row.txnId === sale.txnId);
+  const reversal =
+    saleRows.length > 0
+      ? await accrualReversalLegs(unit, ctx, posting, {
+          claimed,
+          saleRows,
+          txnId,
+        })
+      : {
+          legs: reversalLegs(await coverageOf(unit, posting.legs)),
+          recovered: null,
+        };
 
   const transaction = await postEntry(unit.ledger, {
-    txnId: ctx.ids.next('txn'),
-    legs,
-    meta: refundMeta(operation, sale),
+    txnId,
+    legs: reversal.legs,
+    meta: refundMeta(operation, sale, reversal.recovered),
   });
 
   // Same database transaction as the reversal: if the refund rolls back, the claim does too and
@@ -78,14 +119,39 @@ export async function refund(
 }
 
 // The request names only an order id, so the framework locked just the fixed system accounts
-// (RECEIVABLE included). This locks every account in the recorded sale's lines too, so no other
-// writer moves a balance between the clawback read and the posting. `lockAll` applies the same
-// deadlock-free global lock order as every other lock-set.
-async function extendLocks(unit: Unit, sale: Sale): Promise<void> {
+// (RECEIVABLE included). This locks every account in the verified posting's lines too, so no
+// other writer moves a balance between the clawback read and the posting. `lockAll` applies the
+// same deadlock-free global lock order as every other lock-set.
+async function extendLocks(
+  unit: Unit,
+  legs: ReadonlyArray<Leg>,
+): Promise<void> {
   await lockAll(
     unit.ledger,
-    sale.legs.map((leg) => leg.account),
+    legs.map((leg) => leg.account),
   );
+}
+
+// The sales row must carry exactly the legs its verified posting holds — compared as multisets,
+// since neither side's order is contractual. A mismatch means the unhashed copy was edited.
+function assertSaleMatchesPosting(sale: Sale, posting: Posting): void {
+  const keyOf = (leg: Leg): string =>
+    `${leg.account}|${leg.amount.currency}|${leg.amount.minor}`;
+  const expected = [...posting.legs].map(keyOf).sort();
+  const recorded = [...sale.legs].map(keyOf).sort();
+  if (
+    expected.length !== recorded.length ||
+    expected.some((key, i) => key !== recorded[i])
+  ) {
+    throw fault(
+      ERROR_CODES.CHAIN_BROKEN,
+      'A sales row no longer matches its verified posting; refusing to reverse tampered history.',
+      {
+        retryable: false,
+        detail: { orderId: sale.orderId, txnId: sale.txnId },
+      },
+    );
+  }
 }
 
 // The net balance change the sale made to one account, where positive means the balance went up.
@@ -113,8 +179,11 @@ type Coverage = {
   shortfall: bigint;
 };
 
-async function coverageOf(unit: Unit, sale: Sale): Promise<Coverage> {
-  const deltas = foldDeltas(sale.legs);
+async function coverageOf(
+  unit: Unit,
+  legs: ReadonlyArray<Leg>,
+): Promise<Coverage> {
+  const deltas = foldDeltas(legs);
 
   const uncapped: AccountDelta[] = [];
   const capped: Coverage['capped'] = [];
@@ -142,6 +211,156 @@ async function coverageOf(unit: Unit, sale: Sale): Promise<Coverage> {
   }
 
   return { uncapped, capped, shortfall };
+}
+
+// The accrual-mode reversal. The buyer's restoration still comes from the uncapped raises of the
+// sale's own legs; what changes is the seller side. The order's accrual rows are claimed under
+// lock and split by status: a pending share is clawed out of its exact ACCRUAL shard and marked
+// refunded, while a drained share (the seller already got the money) is balanced by raising
+// RECEIVABLE and appending a negative row the drain nets against the seller's future shares.
+// Every other clawback (REVENUE's fee legs; earned rows on sales recorded before the split) keeps
+// the capped-with-shortfall treatment — a mixed-history order reverses correctly either way.
+async function accrualReversalLegs(
+  unit: Unit,
+  ctx: Ctx,
+  posting: Posting,
+  work: {
+    // Every row claimed under the order's key, foreign and recovery rows included — only used to
+    // sequence new recovery rows past every existing key.
+    claimed: ReadonlyArray<AccrualRow>;
+    // The rows this sale's posting created, the only ones this reversal settles.
+    saleRows: ReadonlyArray<AccrualRow>;
+    txnId: string;
+  },
+): Promise<{ legs: Leg[]; recovered: ReadonlyMap<string, bigint> | null }> {
+  const { claimed, saleRows, txnId } = work;
+  // The rows are an unhashed side table; each must match the share map sealed inside the
+  // verified posting's hashed metadata, or an edited amount would shape the claw.
+  assertRowsMatchShares(saleRows, posting);
+  const pending = saleRows.filter(
+    (row) => row.status === 'pending' && row.amount.minor > 0n,
+  );
+  const drained = saleRows.filter(
+    (row) => row.status === 'drained' && row.amount.minor > 0n,
+  );
+
+  const legs: Leg[] = [];
+  let shortfall = 0n;
+  for (const d of foldDeltas(posting.legs)) {
+    if (d.delta === 0n) {
+      continue;
+    }
+    if (d.delta < 0n) {
+      legs.push(raiseLeg(d.account, toAmount(d.currency, -d.delta)));
+      continue;
+    }
+    // The ACCRUAL shards' clawback is decided per row below, not by folded delta.
+    if (baseOf(d.account) === SYSTEM.SETTLEMENT_ACCRUAL) {
+      continue;
+    }
+    const want = d.delta;
+    const onHand = await balanceUp(unit, d.account);
+    const covered = onHand < want ? (onHand > 0n ? onHand : 0n) : want;
+    if (covered > 0n) {
+      legs.push(lowerLeg(d.account, toAmount(d.currency, covered)));
+    }
+    shortfall += want - covered;
+  }
+
+  // Pending shares are provably parked on their shard, so the claw is exact and uncapped.
+  for (const row of pending) {
+    legs.push(lowerLeg(row.shard, row.amount));
+  }
+  let drainedMinor = 0n;
+  for (const row of drained) {
+    drainedMinor += row.amount.minor;
+  }
+  if (drainedMinor > 0n) {
+    legs.push(raiseLeg(SYSTEM.RECEIVABLE, toAmount('CREDIT', drainedMinor)));
+  }
+  if (shortfall > 0n) {
+    legs.push(raiseLeg(SYSTEM.RECEIVABLE, toAmount('CREDIT', shortfall)));
+  }
+
+  await unit.accruals.markRefunded(
+    pending.map(({ orderId, sellerId, seq }) => ({ orderId, sellerId, seq })),
+    txnId,
+  );
+  // The recovery amounts also ride the refund posting's hashed metadata, so the drain can prove
+  // each negative row against the posting that created it.
+  const recovered = new Map<string, bigint>();
+  for (const row of drained) {
+    recovered.set(row.sellerId, row.amount.minor);
+  }
+  if (drained.length > 0) {
+    await unit.accruals.put(recoveryRowsOf(claimed, drained, txnId, ctx));
+  }
+  return { legs, recovered: recovered.size > 0 ? recovered : null };
+}
+
+// Every accrual row a charge posting created is the original share row: seq 0, positive, and
+// byte-equal to that seller's entry in the posting's sealed `shares` map. Anything else is an
+// edited or fabricated row, and no leg derives from it.
+function assertRowsMatchShares(
+  rows: ReadonlyArray<AccrualRow>,
+  posting: Posting,
+): void {
+  const shares = (posting.meta.shares ?? null) as Record<string, string> | null;
+  for (const row of rows) {
+    const expected = shares?.[row.sellerId];
+    if (
+      row.seq !== 0 ||
+      expected === undefined ||
+      BigInt(expected) !== row.amount.minor
+    ) {
+      throw fault(
+        ERROR_CODES.CHAIN_BROKEN,
+        'An accrual row does not match the share map sealed in its posting; refusing to reverse tampered history.',
+        {
+          retryable: false,
+          detail: {
+            orderId: row.orderId,
+            sellerId: row.sellerId,
+            seq: row.seq,
+            txnId: posting.txnId,
+          },
+        },
+      );
+    }
+  }
+}
+
+// One negative row per drained share, sequenced past the order's existing rows so the key stays
+// unique. The drain recovers these against the seller's future shares before crediting earned.
+function recoveryRowsOf(
+  all: ReadonlyArray<AccrualRow>,
+  drained: ReadonlyArray<AccrualRow>,
+  txnId: string,
+  ctx: Ctx,
+): AccrualRow[] {
+  const nextSeq = new Map<string, number>();
+  for (const row of all) {
+    const key = `${row.orderId}::${row.sellerId}`;
+    nextSeq.set(key, Math.max(nextSeq.get(key) ?? 0, row.seq + 1));
+  }
+  // One shared stamp, so every recovery row of this refund sorts as one batch in claim order.
+  const now = ctx.clock.now();
+  return drained.map((row) => {
+    const key = `${row.orderId}::${row.sellerId}`;
+    const seq = nextSeq.get(key)!;
+    nextSeq.set(key, seq + 1);
+    return {
+      orderId: row.orderId,
+      sellerId: row.sellerId,
+      seq,
+      amount: toAmount('CREDIT', -row.amount.minor),
+      shard: row.shard,
+      status: 'pending',
+      txnId,
+      settledTxnId: null,
+      recordedAt: now,
+    };
+  });
 }
 
 function reversalLegs(coverage: Coverage): Leg[] {
@@ -205,6 +424,7 @@ async function balanceUp(unit: Unit, account: AccountRef): Promise<bigint> {
 function refundMeta(
   operation: Extract<Operation, { kind: 'refund' }>,
   sale: Sale,
+  recovered: ReadonlyMap<string, bigint> | null,
 ): Record<string, unknown> {
   const meta: Record<string, unknown> = {
     kind: 'refund',
@@ -213,6 +433,15 @@ function refundMeta(
   };
   if (operation.reason !== undefined) {
     meta.reason = operation.reason;
+  }
+  // Sealed into this posting's chain hash: the per-seller amounts whose recovery rows carry this
+  // txn id, so the drain can prove each negative row against the posting that created it.
+  if (recovered !== null) {
+    const map: Record<string, string> = {};
+    for (const [sellerId, minor] of recovered) {
+      map[sellerId] = minor.toString();
+    }
+    meta.recovered = map;
   }
   return meta;
 }

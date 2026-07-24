@@ -23,6 +23,11 @@ import {
   spendable,
 } from '#src/accounts.ts';
 import { maturedAtLeast, maturityBlocker } from '#src/maturity.ts';
+import {
+  accrualRowsOf,
+  parkEarnedLegs,
+  sharesMeta,
+} from '#src/operations/accrual.ts';
 import { revenueForSplit } from '#src/pricing.ts';
 
 import type { Amount } from '#src/money.ts';
@@ -130,17 +135,53 @@ export async function spend(
     );
   }
 
+  // Under the accrual split, seller credits park on SETTLEMENT_ACCRUAL instead of each earned
+  // row; the drain sweep moves them on, and the accrual rows written below are refund's per-order
+  // share record.
+  const built = buildSpendLegs(operation, plan, ctx);
+  const parked = ctx.config.accrualDrain ? parkEarnedLegs(built) : null;
+
   // Route the finished legs' platform accounts (PROMO_FLOAT and REVENUE, including the REVENUE
   // credits the injected fee policy built) to a shard by the idempotency key, the same key the
   // lock set routed by. Routing after the build is what spares the policy knowing about shards.
   const legs = routePlatformLegs(
-    buildSpendLegs(operation, plan, ctx),
+    parked?.legs ?? built,
     operation.idempotencyKey,
     ctx.config.platformShards,
   );
 
-  // The ledger doesn't block on age; the external payments/identity provider does. The flag on
-  // the immutable posting is only an audit trail.
+  const transaction = await postEntry(unit.ledger, {
+    txnId: ctx.ids.next('txn'),
+    legs,
+    meta: spendMeta(operation, recipientId, parked),
+  });
+  await unit.sales.put(
+    saleOf(operation, plan, transaction, ctx.config.platformFeeBps),
+  );
+  if (parked !== null) {
+    await recordAccruals(unit, ctx, operation, {
+      shares: parked.shares,
+      transaction,
+    });
+  }
+
+  // Same transaction as the charge, so a rolled-back charge grants nothing. grant also clears any
+  // prior revoked mark, so re-buying after a refund reactivates ownership.
+  await unit.entitlements.grant(recipientId, operation.sku, {
+    source: 'sale:' + operation.orderId,
+  });
+
+  return { status: 'committed', transaction };
+}
+
+// The ledger doesn't block on age; the external payments/identity provider does — the flag on
+// the immutable posting is only an audit trail. The share map, when the split parked seller
+// credits, is sealed into the chain hash so refund and the drain can prove rows against it.
+function spendMeta(
+  operation: Extract<Operation, { kind: 'spend' }>,
+  recipientId: string,
+  parked: ReturnType<typeof parkEarnedLegs> | null,
+): Record<string, unknown> {
   const meta: Record<string, unknown> = {
     kind: 'spend',
     orderId: operation.orderId,
@@ -152,23 +193,30 @@ export async function spend(
     meta.isGift = true;
     meta.giftTo = recipientId;
   }
+  if (parked !== null) {
+    meta.shares = sharesMeta(parked.shares);
+  }
+  return meta;
+}
 
-  const transaction = await postEntry(unit.ledger, {
-    txnId: ctx.ids.next('txn'),
-    legs,
-    meta,
-  });
-  await unit.sales.put(
-    saleOf(operation, plan, transaction, ctx.config.platformFeeBps),
+// The accrual split's per-order share record, written with the posting so refund can claim the
+// rows instead of reading seller accounts off the sale's legs.
+async function recordAccruals(
+  unit: Unit,
+  ctx: Ctx,
+  operation: Extract<Operation, { kind: 'spend' }>,
+  charged: { shares: ReadonlyMap<string, bigint>; transaction: Transaction },
+): Promise<void> {
+  await unit.accruals.put(
+    accrualRowsOf({
+      orderId: operation.orderId,
+      shares: charged.shares,
+      routeKey: operation.idempotencyKey,
+      shards: ctx.config.platformShards,
+      txnId: charged.transaction.id,
+      recordedAt: charged.transaction.postedAt,
+    }),
   );
-
-  // Same transaction as the charge, so a rolled-back charge grants nothing. grant also clears any
-  // prior revoked mark, so re-buying after a refund reactivates ownership.
-  await unit.entitlements.grant(recipientId, operation.sku, {
-    source: 'sale:' + operation.orderId,
-  });
-
-  return { status: 'committed', transaction };
 }
 
 /**

@@ -451,6 +451,7 @@ export interface Store {
   subscriptions: SubscriptionStore;
   promos: PromoStore;
   trust: TrustStore;
+  accruals: AccrualStore;
   checkpoints: CheckpointStore;
   replay: ReplayStore;
 
@@ -552,6 +553,7 @@ export interface Unit {
   subscriptions: SubscriptionStore;
   promos: PromoStore;
   trust: TrustStore;
+  accruals: AccrualStore;
   /** Cached so the funds screen and handler share one read; unset outside the pipeline. */
   balances?: Map<string, Amount>;
 }
@@ -584,6 +586,105 @@ export interface IdempotencyStore {
 export interface ReplayStore {
   /** Atomically inserts `eventId` if absent; `claimed` is true only on the first sighting. */
   claim(eventId: string, options?: CallOptions): Promise<{ claimed: boolean }>;
+}
+
+/**
+ * One seller share parked on a SETTLEMENT_ACCRUAL shard by a spend or subscribe under the accrual
+ * split (config.accrualDrain). A positive row is a share awaiting the drain; a negative row is
+ * refund-recovery debt appended when a refund reverses an already-drained share. Rows are never
+ * deleted: terminal rows are the permanent per-order share record refund reads instead of the
+ * sale's legs.
+ */
+export interface AccrualRow {
+  /** The order (or, for subscription charges, the posting id) the share came from. */
+  orderId: string;
+
+  sellerId: string;
+
+  /** Distinguishes rows of one (orderId, sellerId): 0 for the sale share, higher for recovery rows. */
+  seq: number;
+
+  /** The share in CREDIT; negative on a refund-recovery row. */
+  amount: Amount;
+
+  /** The SETTLEMENT_ACCRUAL shard the spend credited; the drain debits the same row. */
+  shard: AccountRef;
+
+  status: 'pending' | 'drained' | 'refunded';
+
+  /**
+   * The posting that created the row, immutable — refund matches an order's rows to its sale
+   * posting by it, so a hostile orderId that collides with another charge's key can never pull
+   * that charge's rows into a reversal.
+   */
+  txnId: string;
+
+  /** The drain or refund posting that settled the row; null while pending. */
+  settledTxnId: string | null;
+
+  /** Epoch ms the row was written; the drain-lag gauge ages pending rows by it. */
+  recordedAt: number;
+}
+
+/** Names one {@link AccrualRow} for the drain's and refund's terminal marks. */
+export type AccrualRowKey = { orderId: string; sellerId: string; seq: number };
+
+/**
+ * The parked-share ledger behind the accrual split. `put` joins the operation's transaction; the
+ * claim methods take row locks with commit-release semantics, so a row is claimed by exactly one
+ * of a refund and a drain and whichever commits first flips the status the other respects.
+ */
+export interface AccrualStore {
+  /**
+   * Joins the operation's transaction. A duplicate (orderId, sellerId, seq) is a fault, never
+   * an overwrite — recovery rows take fresh seqs instead.
+   */
+  put(rows: ReadonlyArray<AccrualRow>, options?: CallOptions): Promise<void>;
+
+  /** Locks and returns every row of an order, any status; the refund path partitions them. */
+  claimByOrder(orderId: string, options?: CallOptions): Promise<AccrualRow[]>;
+
+  /** Distinct sellers with pending rows, up to `limit` — the drain's work list. */
+  pendingSellers(limit: number, options?: CallOptions): Promise<string[]>;
+
+  /**
+   * Locks and returns up to `limit` of one seller's pending rows — positive shares first, then
+   * recovery rows, each oldest first. Positives lead so a deep recovery backlog can never crowd
+   * every share out of the claim window and stall the seller's drain.
+   */
+  claimPendingBySeller(
+    sellerId: string,
+    limit: number,
+    options?: CallOptions,
+  ): Promise<AccrualRow[]>;
+
+  /** Flips pending rows terminal, recording the settling posting as `settledTxnId`. */
+  markDrained(
+    keys: ReadonlyArray<AccrualRowKey>,
+    settledTxnId: string,
+    options?: CallOptions,
+  ): Promise<void>;
+
+  /** Flips pending rows terminal, recording the settling posting as `settledTxnId`. */
+  markRefunded(
+    keys: ReadonlyArray<AccrualRowKey>,
+    settledTxnId: string,
+    options?: CallOptions,
+  ): Promise<void>;
+
+  /**
+   * The pending backlog: the positive pending rows' total (equal to the ACCRUAL shards' summed
+   * balance at any quiescent point — the prover check) and the oldest pending row's age.
+   */
+  stats(
+    options?: CallOptions,
+  ): Promise<{ pendingMinor: bigint; oldestPendingAgeMs: number | null }>;
+
+  /**
+   * The seller's pending rows summed, negatives included. Negative means refund debt the drain
+   * has not yet recovered; payout admission subtracts it from payable earned credit.
+   */
+  netPending(sellerId: string, options?: CallOptions): Promise<bigint>;
 }
 
 /** Stores the summary of each completed sale, keyed by order id (a separate key from the idempotency key). */

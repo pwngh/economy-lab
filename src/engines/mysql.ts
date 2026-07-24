@@ -56,6 +56,9 @@ import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Operation, Transaction } from '#src/contract.ts';
 import type {
+  AccrualRow,
+  AccrualRowKey,
+  AccrualStore,
   Attempt,
   CheckpointStore,
   Clock,
@@ -1430,6 +1433,132 @@ function createPromoStore(exec: MysqlExecutor): PromoStore {
   };
 }
 
+// --- Accrual store ----------------------------------------------------------------
+
+// Parked seller shares under the accrual split. The claim reads take FOR UPDATE row locks with
+// commit release, so a refund and a drain can't both consume one row; marks are guarded on
+// status = 'pending' so a terminal row never flips twice.
+function createAccrualStore(deps: ExecDeps): AccrualStore {
+  const exec = deps.exec;
+  return {
+    put: (batch) => putAccrualRows(exec, batch),
+    claimByOrder: async (orderId) => {
+      const result = await rows(
+        exec,
+        `SELECT * FROM accrual_rows WHERE order_id = ?
+          ORDER BY seller_id, seq FOR UPDATE`,
+        [orderId],
+      );
+      return result.map(rowToAccrual);
+    },
+    pendingSellers: async (limit) => {
+      const result = await rows(
+        exec,
+        `SELECT DISTINCT seller_id FROM accrual_rows
+          WHERE status = 'pending' ORDER BY seller_id LIMIT ?`,
+        [limit],
+      );
+      return result.map((row) => row.seller_id as string);
+    },
+    // `amount < 0` sorts positives (0) ahead of recovery rows (1); see AccrualStore.
+    claimPendingBySeller: async (sellerId, limit) => {
+      const result = await rows(
+        exec,
+        `SELECT * FROM accrual_rows
+          WHERE seller_id = ? AND status = 'pending'
+          ORDER BY (amount < 0), recorded_at, order_id, seq
+          LIMIT ? FOR UPDATE`,
+        [sellerId, limit],
+      );
+      return result.map(rowToAccrual);
+    },
+    markDrained: (keys, txnId) => markAccruals(exec, keys, 'drained', txnId),
+    markRefunded: (keys, txnId) => markAccruals(exec, keys, 'refunded', txnId),
+    stats: async () => {
+      const result = await rows(
+        exec,
+        `SELECT COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS pending,
+                MIN(recorded_at) AS oldest
+           FROM accrual_rows WHERE status = 'pending'`,
+      );
+      const row = result[0]!;
+      return {
+        pendingMinor: readMinor(row.pending),
+        oldestPendingAgeMs:
+          row.oldest === null || row.oldest === undefined
+            ? null
+            : Math.max(0, deps.clock.now() - Number(row.oldest)),
+      };
+    },
+    netPending: async (sellerId) => {
+      const result = await rows(
+        exec,
+        `SELECT COALESCE(SUM(amount), 0) AS net FROM accrual_rows
+          WHERE seller_id = ? AND status = 'pending'`,
+        [sellerId],
+      );
+      return readMinor(result[0]!.net);
+    },
+  };
+}
+
+async function putAccrualRows(
+  exec: MysqlExecutor,
+  batch: ReadonlyArray<AccrualRow>,
+): Promise<void> {
+  if (batch.length === 0) {
+    return;
+  }
+  const marks = batch.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+  await rows(
+    exec,
+    `INSERT INTO accrual_rows
+       (order_id, seller_id, seq, amount, shard, status, txn_id, settled_txn_id, recorded_at)
+     VALUES ${marks}`,
+    batch.flatMap((row) => [
+      row.orderId,
+      row.sellerId,
+      row.seq,
+      row.amount.minor.toString(),
+      row.shard,
+      row.status,
+      row.txnId,
+      row.settledTxnId,
+      row.recordedAt,
+    ]),
+  );
+}
+
+async function markAccruals(
+  exec: MysqlExecutor,
+  keys: ReadonlyArray<AccrualRowKey>,
+  status: 'drained' | 'refunded',
+  settledTxnId: string,
+): Promise<void> {
+  for (const key of keys) {
+    await rows(
+      exec,
+      `UPDATE accrual_rows SET status = ?, settled_txn_id = ?
+        WHERE order_id = ? AND seller_id = ? AND seq = ? AND status = 'pending'`,
+      [status, settledTxnId, key.orderId, key.sellerId, key.seq],
+    );
+  }
+}
+
+function rowToAccrual(row: Row): AccrualRow {
+  return {
+    orderId: row.order_id as string,
+    sellerId: row.seller_id as string,
+    seq: Number(row.seq),
+    amount: toAmount('CREDIT', readMinor(row.amount)),
+    shard: row.shard as AccountRef,
+    status: row.status as AccrualRow['status'],
+    txnId: row.txn_id as string,
+    settledTxnId: (row.settled_txn_id as string | null) ?? null,
+    recordedAt: Number(row.recorded_at),
+  };
+}
+
 // --- Trust store -------------------------------------------------------------------
 
 // Two views share the helpers below: the pool-backed store commits on its own, the Unit view
@@ -1818,6 +1947,7 @@ function buildUnit(deps: ExecDeps, trust: TrustStore): Unit {
     subscriptions: createSubscriptionStore(deps.exec),
     promos: createPromoStore(deps.exec),
     trust,
+    accruals: createAccrualStore(deps),
   };
 }
 
@@ -1893,6 +2023,7 @@ export function mysqlStore(deps: {
     subscriptions: auto.subscriptions,
     promos: auto.promos,
     trust,
+    accruals: auto.accruals,
     checkpoints: createCheckpointStore(pool),
     movements: createMovementJournal(pool),
     replay: createReplayStore(pool),
