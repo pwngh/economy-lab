@@ -15,6 +15,7 @@ import { earned, routePlatformLegs, SYSTEM } from '#src/accounts.ts';
 import {
   assertKind,
   assertReason,
+  assertSagaAnchored,
   loadSaga,
   noopTransaction,
 } from '#src/operations/guards.ts';
@@ -67,6 +68,10 @@ export async function reversePayout(
   if (!advanced) {
     return { status: 'duplicate', transaction: noopTransaction() };
   }
+
+  // The reserve returned is re-proved against the saga's anchor posting first: an edited row
+  // must not shape the undo any more than it shapes a disbursement.
+  await assertSagaAnchored({ ledger: unit.ledger, digest: ctx.digest }, saga);
 
   // The same undo the worker posts, committed in the same transaction as the state change above so
   // the two cannot come apart. The reserve debit routes by the user id — the same key the request

@@ -11,18 +11,19 @@
 
 import { normalizeError } from '#src/errors.ts';
 import { credit, debit, lockAll, postEntry } from '#src/ledger.ts';
-import { convertFloor, encodeAmount } from '#src/money.ts';
+import { encodeAmount } from '#src/money.ts';
 import { pendingOutbox } from '#src/outbox.ts';
+import { assertSagaAnchored } from '#src/operations/guards.ts';
 import { earned, platformShard, SYSTEM } from '#src/accounts.ts';
 
 import type { WorkerCtx } from '#src/contract.ts';
-import type { Amount } from '#src/money.ts';
 import type { PayoutProviderStatus, Saga, Store } from '#src/ports.ts';
 
 /**
  * Reports which payouts moved this run, bucketed by outcome. `deadLettered` holds payouts that can
  * never succeed, including a timed-out submit; `retrying` holds temporary failures that get
- * another go next run. Settlement arrives via the provider's webhook (see
+ * another go next run, plus wedged sagas (anchor check refused, code CHAIN_BROKEN) that every
+ * sweep re-reports until an operator acts. Settlement arrives via the provider's webhook (see
  * src/operations/settlePayout.ts), not this sweep.
  */
 export type PayoutSweepSummary = {
@@ -94,8 +95,17 @@ async function advanceOne(
       tally.retrying.push({ id: saga.id, code: normalized.code });
       return;
     }
-    if (await deadLetter(store, ctx, saga, normalized.code)) {
-      tally.deadLettered.push({ id: saga.id, reason: normalized.code });
+    try {
+      if (await deadLetter(store, ctx, saga, normalized.code)) {
+        tally.deadLettered.push({ id: saga.id, reason: normalized.code });
+      }
+    } catch (refused) {
+      // The dead-letter itself refused — an unverifiable saga must not even return its reserve,
+      // because that amount too would derive from the edited row. The saga wedges where it
+      // stands, moving nothing, and every sweep re-reports it until an operator acts.
+      const code = normalizeError(refused).code;
+      ctx.logger.log('error', 'worker.payouts.wedged', { id: saga.id, code });
+      tally.retrying.push({ id: saga.id, code });
     }
   }
 }
@@ -126,6 +136,9 @@ async function deadLetter(
   reason: string,
 ): Promise<boolean> {
   const failed = await store.transaction(async (unit) => {
+    // The reserve returned is re-proved against the saga's anchor posting first — the undo must
+    // not derive from an edited row any more than a disbursement may.
+    await assertSagaAnchored({ ledger: unit.ledger, digest: ctx.digest }, saga);
     // The reserve routes by the saga's user, the same key requestPayout credited by, so the
     // routed shard, not the bare row, is what this locks and debits.
     const reserveRef = platformShard(
@@ -320,18 +333,21 @@ async function recheckLater(
   });
 }
 
-// Steps 'RESERVED' -> 'SUBMITTED' by handing the disbursement to the external payment provider. The
-// seller's earned credits were reserved at request time. Here we convert the reserve to USD at the
-// current rate, ask the provider to pay it out, record the provider's reference, and set when to
-// next check on it. No ledger entry posts at this step, because the money already moved into the
-// reserve at request time. A failed provider call is treated as temporary, so advanceOne can retry
-// it.
+// Steps 'RESERVED' -> 'SUBMITTED' by handing the disbursement to the external payment provider.
+// The seller's earned credits were reserved at request time, and the USD submitted is the quote
+// sealed in the reserve posting's hashed metadata — the saga row is re-proved against that
+// anchor first, so an edited row cannot wire USD out. No ledger entry posts at this step,
+// because the money already moved into the reserve at request time. A failed provider call is
+// treated as temporary, so advanceOne can retry it.
 async function submitToProvider(
   store: Store,
   ctx: WorkerCtx,
   saga: Saga,
 ): Promise<void> {
-  const usd = await quotedUsd(ctx, saga);
+  const usd = await assertSagaAnchored(
+    { ledger: store.ledger, digest: ctx.digest },
+    saga,
+  );
 
   const { providerRef } = await ctx.processor.submitPayout({
     key: saga.id,
@@ -346,17 +362,6 @@ async function submitToProvider(
     dueAt: now + submittedSlaMs(ctx),
     updatedAt: now,
   });
-}
-
-// The USD a payout disburses: the quote requestPayout priced and stored. Rows opened before
-// pricing-at-request carry no quote, and fall back to the old behavior of converting at the
-// current rate.
-async function quotedUsd(ctx: WorkerCtx, saga: Saga): Promise<Amount> {
-  if (saga.payoutUsd !== null) {
-    return saga.payoutUsd;
-  }
-  const rate = await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now());
-  return convertFloor(saga.reserve, rate, 'USD');
 }
 
 // Milliseconds before the sweep next checks a submitted payout. The sweep re-examines it on this

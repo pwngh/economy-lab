@@ -782,6 +782,7 @@ function sagaRow(id: string, userId: string, overrides: Partial<Saga>): Saga {
     userId,
     reserve: toAmount('CREDIT', 10_000n),
     rateId: 'rate_conf',
+    txnId: 'txn_anchor_conf',
     state: 'SUBMITTED',
     providerRef: null,
     reason: null,

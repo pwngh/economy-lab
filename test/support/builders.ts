@@ -11,7 +11,15 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { decodeAmount, usd, zero, type Amount } from '#src/money.ts';
+import {
+  decodeAmount,
+  encodeAmount,
+  usd,
+  zero,
+  type Amount,
+} from '#src/money.ts';
+import { credit as creditLeg, debit } from '#src/ledger.ts';
+import { earned, SYSTEM } from '#src/accounts.ts';
 import { userActor } from '#src/actor.ts';
 // The PUBLIC operation constructors, aliased so the test builders below can default the boilerplate
 // and delegate to them. This routes the whole suite through the shipped constructors, so a drift in
@@ -40,7 +48,7 @@ import type {
   Recipient,
 } from '#src/contract.ts';
 import type { AccountRef } from '#src/accounts.ts';
-import type { Velocity } from '#src/ports.ts';
+import type { Leg, Velocity } from '#src/ports.ts';
 
 // Fresh idempotency key per call; a test acts like a retry only by deliberate reuse. The prefix
 // is run-unique because the SQL backends persist idempotency rows across runs — a bare counter
@@ -218,3 +226,34 @@ export const reversePayout = (o: {
     reason: 'reversal',
     ...o,
   });
+
+// --- Saga anchoring -----------------------------------------------------------------
+
+/**
+ * The reserve posting a payout saga anchors to, byte-for-byte as requestPayout seals it: the
+ * earned debit carries the reserve and the metadata carries the saga id, rate, and quote. Money
+ * fixtures post this (funding `earned` first so the debit clears) before opening the row, because
+ * every money-moving payout step re-proves the row against this anchor.
+ */
+export function sagaAnchor(saga: {
+  id: string;
+  userId: string;
+  reserve: Amount;
+  rateId: string;
+  txnId: string;
+  payoutUsd: Amount | null;
+}): { txnId: string; legs: Leg[]; meta: Record<string, unknown> } {
+  return {
+    txnId: saga.txnId,
+    legs: [
+      debit(earned(saga.userId), saga.reserve),
+      creditLeg(SYSTEM.PAYOUT_RESERVE, saga.reserve),
+    ],
+    meta: {
+      kind: 'requestPayout',
+      rateId: saga.rateId,
+      sagaId: saga.id,
+      payoutUsd: encodeAmount(saga.payoutUsd ?? usd('0.00')),
+    },
+  };
+}

@@ -32,7 +32,7 @@ import { memoryStore } from '#src/adapters/memory.ts';
 import { runProcessorConformance } from '#test/conformance/processor.ts';
 import { credit as creditLeg, debit as debitLeg } from '#src/ledger.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
-import { credit, usd } from '#test/support/builders.ts';
+import { credit, sagaAnchor, usd } from '#test/support/builders.ts';
 import {
   defaultPricing,
   fixedClock,
@@ -79,12 +79,13 @@ function saga(overrides: Partial<Saga> & Pick<Saga, 'id' | 'state'>): Saga {
     userId: 'usr_seller',
     reserve: credit('20000.00'),
     rateId: 'payout:CREDIT->USD:1',
+    txnId: `txn_anchor_${overrides.id}`,
     providerRef: null,
     reason: null,
     attempts: 0,
     dueAt: 0,
     updatedAt: 0,
-    payoutUsd: null,
+    payoutUsd: usd('100.00'),
     ...overrides,
   };
 }
@@ -93,7 +94,12 @@ async function openSaga(store: Store, row: Saga): Promise<void> {
   await store.transaction(async (unit) => {
     await unit.sagas.open(row);
   });
-  await fund(store, SYSTEM.PAYOUT_RESERVE, row.reserve, `txn_seed_${row.id}`);
+  // Fund earned, then post the row's anchor (see sagaAnchor); the worker's money steps
+  // re-prove the row against it.
+  await fund(store, earned(row.userId), row.reserve, `txn_seed_${row.id}`);
+  await store.transaction(async (unit) => {
+    await unit.ledger.append(sagaAnchor(row));
+  });
 }
 
 describe('edge-tilia shim (the compiled @pwngh/economy-edge package behind the lab ports)', () => {
@@ -158,7 +164,7 @@ describe('edge-tilia shim (the compiled @pwngh/economy-edge package behind the l
   });
 
   test('the worker sweep submits a reserved saga through the edge package', async () => {
-    const store = memoryStore();
+    const store = memoryStore({ digest: seededDigest(1) });
     const scenario = tiliaScenario();
     const edge = edgeFrom(scenario);
     await openSaga(store, saga({ id: 'pay_1', state: 'RESERVED' }));
@@ -182,7 +188,7 @@ describe('edge-tilia shim (the compiled @pwngh/economy-edge package behind the l
   });
 
   test('the sweep reverses promptly when the rail reports the payout failed', async () => {
-    const store = memoryStore();
+    const store = memoryStore({ digest: seededDigest(1) });
     const scenario = tiliaScenario({ status: 'FAILED' });
     const edge = edgeFrom(scenario);
     await openSaga(
@@ -218,7 +224,7 @@ describe('edge-tilia shim (the compiled @pwngh/economy-edge package behind the l
   });
 
   test('the sweep holds a payout the rail reports settled instead of force-failing it', async () => {
-    const store = memoryStore();
+    const store = memoryStore({ digest: seededDigest(1) });
     const scenario = tiliaScenario({ status: 'SETTLED' });
     const edge = edgeFrom(scenario);
     await openSaga(

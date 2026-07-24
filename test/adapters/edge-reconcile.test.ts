@@ -112,6 +112,7 @@ describe('edge-reconcile feed', () => {
       userId: 'usr_seller',
       reserve: credit('20000.00'),
       rateId: 'payout:CREDIT->USD:1',
+      txnId: 'txn_anchor_edge_rec',
       state: 'SETTLED',
       providerRef: scenario.ref.id,
       reason: null,

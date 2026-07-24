@@ -114,7 +114,7 @@ A settle is driven by a verified webhook or an operator. So a settle that can't 
 
 A settle posts only against a payout in the `SUBMITTED` state: the one state with a disbursement the rail has reported settled. Each other state resolves by what it means: `SETTLED` answers `duplicate` (the work is already done), a pre-submit state refuses retryably (the webhook arrived before the sweep submitted), and `FAILED` — whose reserve was already returned — throws a hard fault for an operator, because a rail claiming a failed payout settled is a real money conflict. No path posts a second settle's worth of entries.
 
-The `SUBMITTED → SETTLED` move is a compare-and-set against the saga's current state. If two settles race the same saga, only the first wins. The loser's compare-and-set fails, which rolls back its two postings and its queued event, so the seller is never paid twice (see <SourceLink to="src/operations/settlePayout.ts#L185-L193 · assertAdvanced" />); its retry finds the payout settled and answers `duplicate`.
+The `SUBMITTED → SETTLED` move is a compare-and-set against the saga's current state. If two settles race the same saga, only the first wins. The loser's compare-and-set fails, which rolls back its two postings and its queued event, so the seller is never paid twice (see <SourceLink to="src/operations/settlePayout.ts#L184-L192 · assertAdvanced" />); its retry finds the payout settled and answers `duplicate`.
 
 <Callout type="warning">
   The posted figures come from the saga's reserve, not from `providerAmount`:

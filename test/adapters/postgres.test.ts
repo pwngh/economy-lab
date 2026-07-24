@@ -112,6 +112,7 @@ function sagaRow(
   return {
     reserve: toAmount('CREDIT', 2_000_000n),
     rateId: 'rate_test',
+    txnId: 'txn_anchor_pg',
     state: 'RESERVED',
     providerRef: null,
     reason: null,

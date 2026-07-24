@@ -148,6 +148,7 @@ function sagaRow(id: string): Saga {
     userId: `usr_claim_${id}`,
     reserve: toAmount('CREDIT', 100n),
     rateId: 'payout:CREDIT->USD:5/3',
+    txnId: 'txn_anchor_claim',
     state: 'SUBMITTED',
     providerRef: 'prov_claim',
     reason: null,

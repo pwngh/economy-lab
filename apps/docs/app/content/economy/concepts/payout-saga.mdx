@@ -58,7 +58,7 @@ The full enum declares `REQUESTED`, `RESERVED`, `SUBMITTED`, `SETTLED`, and `FAI
 
 ## The two triggers
 
-The two forward steps run on different triggers. The worker's `payouts` sweep handles only the first. It claims due `RESERVED` sagas, submits the saga's stored USD quote — priced once at request — via `processor.submitPayout`, records the `providerRef`, and advances `RESERVED → SUBMITTED` (see <SourceLink to="src/worker/payouts.ts#L329-L350 · submitToProvider" />).
+The two forward steps run on different triggers. The worker's `payouts` sweep handles only the first. It claims due `RESERVED` sagas, submits the saga's stored USD quote — priced once at request — via `processor.submitPayout`, records the `providerRef`, and advances `RESERVED → SUBMITTED` (see <SourceLink to="src/worker/payouts.ts#L342-L363 · submitToProvider" />).
 
 It does not settle itself. Settlement arrives on the provider's verified "payout settled" webhook. That webhook maps to a [`settlePayout`](/economy/reference/operations/settle-payout/) operation, which the worker's inbox drain applies off the request path. That operation runs the `SUBMITTED → SETTLED` step.
 

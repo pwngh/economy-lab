@@ -102,6 +102,7 @@ function sagaRow(id: string, userId: string, updatedAt: number): Saga {
     userId,
     reserve: toAmount('CREDIT', 100n),
     rateId: 'rate_http',
+    txnId: 'txn_anchor_http',
     state: 'RESERVED',
     providerRef: null,
     reason: null,

@@ -31,6 +31,7 @@ async function openSaga(
     userId: 'usr_seller',
     reserve: credit('20000.00'),
     rateId: 'payout:CREDIT->USD:1',
+    txnId: 'txn_anchor_float',
     state,
     providerRef: null,
     reason: null,

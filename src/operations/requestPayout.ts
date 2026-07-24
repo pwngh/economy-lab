@@ -23,7 +23,7 @@ import { earned, routePlatformLegs, SYSTEM } from '#src/accounts.ts';
 import { maturedAtLeast, maturityBlocker } from '#src/maturity.ts';
 
 import type { Amount } from '#src/money.ts';
-import type { Ctx, Operation, Outcome } from '#src/contract.ts';
+import type { Ctx, Operation, Outcome, Transaction } from '#src/contract.ts';
 import type { Saga, Unit } from '#src/ports.ts';
 
 /**
@@ -103,13 +103,36 @@ export async function requestPayout(
     );
   }
 
-  const { rateId, payoutUsd } = await priceQuote(ctx, amount);
-  // Minted before the posting so the transaction meta can name the saga it opens.
+  const quote = await priceQuote(ctx, amount);
+  const transaction = await reserveAndOpen(unit, ctx, {
+    operation,
+    amount,
+    quote,
+  });
+
+  return { status: 'committed', transaction };
+}
+
+// Posts the reserve and opens the saga anchored to it. The saga id is minted before the posting
+// so the metadata can name the saga it opens; the reserve credit routes by the user id (settle
+// and reverse know only the saga, which knows the user); and everything the worker will trust
+// from the unhashed saga row — quote included — is sealed into this posting, so every later step
+// re-proves the row against it.
+async function reserveAndOpen(
+  unit: Unit,
+  ctx: Ctx,
+  input: {
+    operation: Extract<Operation, { kind: 'requestPayout' }>;
+    amount: Amount;
+    quote: { rateId: string; payoutUsd: Amount };
+  },
+): Promise<Transaction> {
+  const { operation, amount } = input;
+  const { rateId, payoutUsd } = input.quote;
   const sagaId = ctx.ids.next('pay');
-  // The reserve credit routes by the user id, not the idempotency key: settle and reverse know
-  // only the saga, and the saga knows the user, so this is the shard their later debit finds.
+  const txnId = ctx.ids.next('txn');
   const transaction = await postEntry(unit.ledger, {
-    txnId: ctx.ids.next('txn'),
+    txnId,
     legs: routePlatformLegs(
       [
         debit(earned(operation.userId), amount),
@@ -118,12 +141,16 @@ export async function requestPayout(
       operation.userId,
       ctx.config.platformShards,
     ),
-    meta: { kind: 'requestPayout', rateId, sagaId },
+    meta: {
+      kind: 'requestPayout',
+      rateId,
+      sagaId,
+      payoutUsd: encodeAmount(payoutUsd),
+    },
   });
-  const opened = { id: sagaId, reserve: amount, rateId, payoutUsd };
+  const opened = { id: sagaId, reserve: amount, rateId, payoutUsd, txnId };
   await unit.sagas.open(sagaOf(operation, opened, ctx));
-
-  return { status: 'committed', transaction };
+  return transaction;
 }
 
 // Prices the payout once: this quote is the USD the worker submits to the rail and settle posts
@@ -155,7 +182,13 @@ async function priceQuote(
 // https://economy-lab-docs.pages.dev/economy/concepts/payout-saga/ for the saga states.
 function sagaOf(
   operation: Extract<Operation, { kind: 'requestPayout' }>,
-  opened: { id: string; reserve: Amount; rateId: string; payoutUsd: Amount },
+  opened: {
+    id: string;
+    reserve: Amount;
+    rateId: string;
+    payoutUsd: Amount;
+    txnId: string;
+  },
   ctx: Ctx,
 ): Saga {
   const now = ctx.clock.now();
@@ -164,6 +197,7 @@ function sagaOf(
     userId: operation.userId,
     reserve: opened.reserve,
     rateId: opened.rateId,
+    txnId: opened.txnId,
     state: 'RESERVED',
     providerRef: null,
 

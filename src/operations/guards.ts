@@ -10,9 +10,13 @@
  */
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
+import { verifiedPosting } from '#src/chain.ts';
+import { earned } from '#src/accounts.ts';
+import { encodeAmount } from '#src/money.ts';
 
 import type { Ctx, Operation, Transaction } from '#src/contract.ts';
-import type { Saga, Unit } from '#src/ports.ts';
+import type { Amount } from '#src/money.ts';
+import type { Digest, Ledger, Saga, Unit } from '#src/ports.ts';
 
 /**
  * Narrows `operation` to the expected `kind`. A mismatch means the dispatch is miswired, so it
@@ -111,4 +115,45 @@ export function lifecycleMarker(ctx: Ctx): Transaction {
  */
 export function noopTransaction(): Transaction {
   return { id: '', postedAt: 0, legs: [], links: [], meta: {} };
+}
+
+/**
+ * Re-proves a payout saga against the reserve posting it opened with, before any step trusts the
+ * unhashed row: the posting itself re-derives (verifiedPosting), its sealed metadata must name
+ * this saga, rate, and USD quote exactly, and its earned-debit leg must carry the reserve. Every
+ * money-moving step — the worker's submit, settle, reverse — calls this first, so an edited or
+ * fabricated saga row faults CHAIN_BROKEN instead of wiring USD out.
+ */
+export async function assertSagaAnchored(
+  deps: { ledger: Ledger; digest: Digest },
+  saga: Saga,
+): Promise<Amount> {
+  const unanchored = (): Error =>
+    fault(
+      ERROR_CODES.CHAIN_BROKEN,
+      'A payout saga does not re-derive from its reserve posting; refusing to move money for an unverifiable saga.',
+      {
+        retryable: false,
+        detail: { sagaId: saga.id, txnId: saga.txnId, userId: saga.userId },
+      },
+    );
+  const posting = await verifiedPosting(deps, saga.txnId);
+  if (posting === null || saga.payoutUsd === null) {
+    throw unanchored();
+  }
+  const meta = posting.meta;
+  const reserveLeg = posting.legs.find(
+    (leg) => leg.account === earned(saga.userId),
+  );
+  if (
+    meta.kind !== 'requestPayout' ||
+    meta.sagaId !== saga.id ||
+    meta.rateId !== saga.rateId ||
+    meta.payoutUsd !== encodeAmount(saga.payoutUsd) ||
+    reserveLeg === undefined ||
+    reserveLeg.amount.minor !== saga.reserve.minor
+  ) {
+    throw unanchored();
+  }
+  return saga.payoutUsd;
 }

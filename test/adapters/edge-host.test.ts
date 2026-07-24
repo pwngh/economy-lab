@@ -36,6 +36,7 @@ async function storeWithSubmittedSaga(providerRef: string): Promise<Store> {
     userId: 'usr_seller',
     reserve: credit('4.00'),
     rateId: 'payout:CREDIT->USD:1',
+    txnId: 'txn_anchor_edge_host',
     state: 'SUBMITTED',
     providerRef,
     reason: null,

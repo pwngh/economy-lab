@@ -8,6 +8,9 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 
 - `Ledger.links` and `Ledger.linksPage` read an account's chain links in lineage order
   (`StoredLink` rows). Breaking: custom ledger implementations must provide both.
+- Breaking: `PayoutSagaRow.txnId` is required. Every saga names the reserve posting it opened
+  with, and submit, settle, and reverse re-prove the saga against that posting's sealed
+  metadata before acting.
 
 ### Changed
 

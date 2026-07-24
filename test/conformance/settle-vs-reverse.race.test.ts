@@ -61,9 +61,11 @@ import { makeEconomy } from '#test/support/economy.ts';
 import {
   credit,
   usd,
+  sagaAnchor,
   settlePayout as buildSettlePayout,
 } from '#test/support/builders.ts';
 import { credit as creditLeg, debit as debitLeg } from '#src/ledger.ts';
+import { convertFloor } from '#src/money.ts';
 import { reversePayout as makeReversePayout } from '#src/operation.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
 import {
@@ -153,18 +155,22 @@ async function seedSubmittedSaga(
     attempts: 1,
     dueAt: 0,
     updatedAt: stale,
-    payoutUsd: null,
+    payoutUsd: convertFloor(RESERVE, fixedRates().par('CREDIT'), 'USD'),
+    txnId: `txn_anchor_${id}`,
   };
   await store.transaction(async (unit) => {
     await unit.sagas.open(row);
+    // Fund earned, then post the row's anchor (see sagaAnchor); both racers re-prove the
+    // row against it.
     await unit.ledger.append({
       txnId: `txn_seed_${id}`,
       legs: [
-        creditLeg(SYSTEM.PAYOUT_RESERVE, RESERVE),
+        creditLeg(earned(userId), RESERVE),
         debitLeg(SYSTEM.STORED_VALUE, RESERVE),
       ],
       meta: { kind: 'seed' },
     });
+    await unit.ledger.append(sagaAnchor(row));
   });
 }
 

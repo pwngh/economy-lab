@@ -28,7 +28,7 @@ import { credit as creditLeg, debit as debitLeg } from '#src/ledger.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
-import { credit } from '#test/support/builders.ts';
+import { credit, sagaAnchor, usd } from '#test/support/builders.ts';
 import { reversePayout as makeReversePayout } from '#src/operation.ts';
 import {
   fixedClock,
@@ -80,21 +80,24 @@ async function openReservedSaga(
     attempts: 0,
     dueAt: 0,
     updatedAt: 0,
-    payoutUsd: null,
+    payoutUsd: usd('100.00'),
+    txnId: `txn_anchor_${overrides.id}`,
     ...overrides,
   };
   await store.transaction(async (unit) => {
     await unit.sagas.open(row);
     if (row.state !== 'FAILED') {
-      // Balanced against STORED_VALUE, a platform account exempt from the overdraft rule.
+      // Fund earned, then post the row's anchor (see sagaAnchor); the reverse guard re-proves
+      // the row against it.
       await unit.ledger.append({
         txnId: `txn_seed_${row.id}`,
         legs: [
-          creditLeg(SYSTEM.PAYOUT_RESERVE, row.reserve),
+          creditLeg(earned(row.userId), row.reserve),
           debitLeg(SYSTEM.STORED_VALUE, row.reserve),
         ],
         meta: { kind: 'seed' },
       });
+      await unit.ledger.append(sagaAnchor(row));
     }
   });
   return row;

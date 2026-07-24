@@ -204,12 +204,17 @@ create table payout_sagas (
   user_id            text   not null,
   reserve            bigint not null check (reserve > 0),
   rate_id            text   not null,
+  -- The reserve posting this saga opened with. The saga row is unhashed and drives real USD out,
+  -- so every money-moving step re-proves the row against this posting's sealed metadata and legs
+  -- before acting. Required: a saga without its anchor cannot move money.
+  txn_id             text   not null,
   state              text   not null
                        check (state in ('REQUESTED', 'RESERVED', 'SUBMITTED', 'SETTLED', 'FAILED')),
   provider_ref       text,
   attempts           int    not null default 0,
-  -- Terminal outcome, stored on the saga so a reader never re-derives it from posting meta.
-  -- Both null until the saga reaches its terminal state.
+  -- `reason` is the terminal failure outcome, null until FAILED. `payout_usd` is the USD quote
+  -- priced at request (also sealed in the anchor posting's metadata). The settle patch re-records
+  -- the disbursed gross on it.
   reason             text,
   payout_usd         bigint,
   due_at             bigint not null,

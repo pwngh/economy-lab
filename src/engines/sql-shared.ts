@@ -318,6 +318,7 @@ export function rowToSaga(row: Record<string, unknown>): Saga {
     userId: row.user_id as string,
     reserve: toAmount('CREDIT', readMinor(row.reserve)),
     rateId: row.rate_id as string,
+    txnId: row.txn_id as string,
     state: row.state as SagaState,
     providerRef: (row.provider_ref as string | null) ?? null,
     reason: (row.reason as string | null) ?? null,

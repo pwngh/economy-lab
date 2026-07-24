@@ -11,9 +11,10 @@
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { credit, debit, lockAll, postEntry } from '#src/ledger.ts';
-import { convertFloor, encodeAmount, mulDiv, toAmount } from '#src/money.ts';
+import { encodeAmount, mulDiv, toAmount } from '#src/money.ts';
 import {
   assertKind,
+  assertSagaAnchored,
   loadSaga,
   noopTransaction,
 } from '#src/operations/guards.ts';
@@ -54,15 +55,13 @@ export async function settlePayout(
   }
   refuseNotSubmitted(saga);
 
-  // The quote requestPayout priced and stored — the same USD the worker submitted to the rail.
-  // Rows opened before pricing-at-request carry no quote and fall back to the current rate.
-  const usd =
-    saga.payoutUsd ??
-    convertFloor(
-      saga.reserve,
-      await ctx.rates.payout('CREDIT', 'USD', ctx.clock.now()),
-      'USD',
-    );
+  // The quote requestPayout priced and sealed into the reserve posting's hashed metadata — the
+  // same USD the worker submitted to the rail. The saga row is re-proved against that anchor
+  // first, so an edited row cannot settle a different amount out of trust.
+  const usd = await assertSagaAnchored(
+    { ledger: unit.ledger, digest: ctx.digest },
+    saga,
+  );
   // The payout-rail fee (config.payoutFeeBps) is the rail's cut, not platform revenue. The gross
   // `usd` leaves trust, the rail keeps `fee`, and the seller gets `net`. The split happens at the
   // external rail downstream of USD_CLEARING, so `fee` and `net` are recorded for audit rather than

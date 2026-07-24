@@ -1154,14 +1154,15 @@ async function findSagaByRef(
 async function openSagaRow(q: Queryable, saga: Saga): Promise<void> {
   await q.query(
     `insert into payout_sagas
-       (id, user_id, reserve, rate_id, state, provider_ref, attempts, payout_usd, due_at, updated_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       (id, user_id, reserve, rate_id, txn_id, state, provider_ref, attempts, payout_usd, due_at, updated_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        on conflict (id) do nothing`,
     [
       saga.id,
       saga.userId,
       saga.reserve.minor,
       saga.rateId,
+      saga.txnId,
       saga.state,
       saga.providerRef,
       saga.attempts,

@@ -1001,6 +1001,8 @@ function createSagaStore(): SagaStore & Participant {
     findByProviderRef: (providerRef, _options?: CallOptions) =>
       findSagaByRef(rows, providerRef),
     list: (options) => listSagasOf(rows, options?.states),
+    // Only RESERVED and SUBMITTED, matching the SQL engines' claim queries: a row still in
+    // REQUESTED means its opening step crashed partway and is skipped on purpose.
     claimDue: async (now, limit, _options?: CallOptions) => {
       const due: Saga[] = [];
       for (const saga of rows.values()) {
@@ -1009,8 +1011,7 @@ function createSagaStore(): SagaStore & Participant {
         }
         if (
           saga.dueAt <= now &&
-          saga.state !== 'SETTLED' &&
-          saga.state !== 'FAILED'
+          (saga.state === 'RESERVED' || saga.state === 'SUBMITTED')
         ) {
           due.push({ ...saga });
         }

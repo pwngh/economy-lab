@@ -18,12 +18,13 @@ import { ERROR_CODES, fault } from '#src/errors.ts';
 import { credit as creditLeg, debit, postEntry } from '#src/ledger.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
-import { credit, usd } from '#test/support/builders.ts';
+import { credit, sagaAnchor, usd } from '#test/support/builders.ts';
 import {
   fixedClock,
   makeWorkerCtx,
   testConfig,
 } from '#test/support/capabilities.ts';
+import { seededDigest } from '#test/support/capabilities.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
 import type { Amount } from '#src/money.ts';
@@ -57,28 +58,31 @@ async function fund(
 }
 
 // A payout record as the request handler leaves it; defaults fill what a case doesn't state.
+// The default quote is the fixed payout rate's pricing of the 20000.00 reserve.
 function saga(overrides: Partial<Saga> & Pick<Saga, 'id' | 'state'>): Saga {
   return {
     userId: 'usr_seller',
     reserve: credit('20000.00'),
     rateId: 'payout:CREDIT->USD:1',
+    txnId: `txn_anchor_${overrides.id}`,
     providerRef: null,
     reason: null,
     attempts: 0,
     dueAt: 0,
     updatedAt: 0,
-    payoutUsd: null,
+    payoutUsd: usd('100.00'),
     ...overrides,
   };
 }
 
-// From RESERVED onward, seeds PAYOUT_RESERVE as requestPayout would, so a settle or
-// dead-letter step can debit it without overdrawing the guarded reserve.
+// From RESERVED onward, funds earned and posts the row's anchor (see sagaAnchor); every
+// money-moving step re-proves the row against it before acting.
 async function openSaga(store: Store, row: Saga): Promise<void> {
   await store.transaction(async (unit) => {
     await unit.sagas.open(row);
     if (row.state === 'RESERVED' || row.state === 'SUBMITTED') {
-      await fund(unit, SYSTEM.PAYOUT_RESERVE, row.reserve);
+      await fund(unit, earned(row.userId), row.reserve);
+      await unit.ledger.append(sagaAnchor(row));
     }
   });
 }
@@ -204,7 +208,7 @@ async function forceFailsASubmittedSagaPastTheMaxAgeAndReturnsTheReserve(
   assert.equal(failed!.state, 'FAILED');
   // The terminal reason persists on the saga row itself, where the console reads it.
   assert.equal(failed!.reason, 'payout.timeout');
-  assert.equal(failed!.payoutUsd, null);
+  assert.deepEqual(failed!.payoutUsd, usd('100.00'));
   // The reversal posts in the same transaction as the FAILED flip, so a timed-out payout never
   // strands the escrowed reserve.
   assert.deepEqual(
@@ -364,7 +368,7 @@ async function deadLettersAProviderFaultPastTheAttemptCeiling(
   const failed = await store.sagas.load('pay_1');
   assert.equal(failed!.state, 'FAILED');
   assert.equal(failed!.reason, 'PROVIDER.FAILURE');
-  assert.equal(failed!.payoutUsd, null);
+  assert.deepEqual(failed!.payoutUsd, usd('100.00'));
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
     credit('0.00'),
@@ -432,7 +436,7 @@ async function climbsAttemptsEachRunThenDeadLettersAndReturnsTheReserve(
 }
 
 async function isolatesAPerItemFaultAndContinuesTheBatch(): Promise<void> {
-  const store = memoryStore();
+  const store = memoryStore({ digest: seededDigest(1) });
   const config: Config = { ...testConfig(), maxPayoutAttempts: 1 };
   await openSaga(store, saga({ id: 'pay_bad', state: 'RESERVED' }));
   await openSaga(store, saga({ id: 'pay_good', state: 'RESERVED' }));
@@ -702,7 +706,7 @@ async function fallsBackToTheTimeoutWhenTheProbeCannotAnswer(): Promise<void> {
   // probe, and the fault is not counted against the saga.
   const config: Config = { ...testConfig(), maxPayoutAgeMs: 60_000 };
   for (const answer of ['UNKNOWN', 'throw'] as const) {
-    const scoped = memoryStore();
+    const scoped = memoryStore({ digest: seededDigest(1) });
     await openSaga(
       scoped,
       saga({
@@ -741,44 +745,74 @@ async function fallsBackToTheTimeoutWhenTheProbeCannotAnswer(): Promise<void> {
 
 describe('advanceDuePayouts', () => {
   test('submits a reserved saga to the provider as USD with no ledger posting', () =>
-    submitsAReservedSagaToTheProvider(memoryStore()));
+    submitsAReservedSagaToTheProvider(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('leaves a within-window submitted saga untouched for the settlement webhook', () =>
-    leavesAWithinWindowSubmittedSagaForTheWebhook(memoryStore()));
+    leavesAWithinWindowSubmittedSagaForTheWebhook(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('force-fails a submitted saga past the max age and returns the reserve', () =>
-    forceFailsASubmittedSagaPastTheMaxAgeAndReturnsTheReserve(memoryStore()));
+    forceFailsASubmittedSagaPastTheMaxAgeAndReturnsTheReserve(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('dead-letters a timed-out payout even when the logger throws', () =>
-    deadLettersEvenWhenTheLoggerThrows(memoryStore()));
+    deadLettersEvenWhenTheLoggerThrows(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('meters the saga-age gauge and the dead-letter counter', () =>
-    metersTheAgeGaugeAndTheDeadLetterCounter(memoryStore()));
+    metersTheAgeGaugeAndTheDeadLetterCounter(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('leaves a submitted saga at the age boundary untouched for the settlement webhook', () =>
-    leavesASubmittedSagaAtTheAgeBoundaryForTheWebhook(memoryStore()));
+    leavesASubmittedSagaAtTheAgeBoundaryForTheWebhook(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('dead-letters a provider fault past the attempt limit', () =>
-    deadLettersAProviderFaultPastTheAttemptCeiling(memoryStore()));
+    deadLettersAProviderFaultPastTheAttemptCeiling(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('leaves a retryable fault under the limit for the next run', () =>
-    leavesARetryableFaultUnderTheCeilingForTheNextSweep(memoryStore()));
+    leavesARetryableFaultUnderTheCeilingForTheNextSweep(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('climbs the attempt count each run, then dead-letters a stuck payout and returns the reserve', () =>
-    climbsAttemptsEachRunThenDeadLettersAndReturnsTheReserve(memoryStore()));
+    climbsAttemptsEachRunThenDeadLettersAndReturnsTheReserve(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('isolates a per-item fault and continues the batch', () =>
     isolatesAPerItemFaultAndContinuesTheBatch());
   test('a dead-lettered payout holds one economy.payout.reversed event with the reason', () =>
-    deadLetteringEmitsOnePayoutReversedEvent(memoryStore()));
+    deadLetteringEmitsOnePayoutReversedEvent(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('reverses promptly when the provider reports a submitted payout failed', () =>
-    reversesPromptlyWhenTheProviderReportsFailure(memoryStore()));
+    reversesPromptlyWhenTheProviderReportsFailure(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('reverses promptly under its own reason when the provider reports a return', () =>
-    reversesPromptlyWhenTheProviderReportsAReturn(memoryStore()));
+    reversesPromptlyWhenTheProviderReportsAReturn(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('never force-fails a payout the provider reports settled, even past the max age', () =>
-    neverForceFailsAPayoutTheProviderReportsSettled(memoryStore()));
+    neverForceFailsAPayoutTheProviderReportsSettled(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('defers the timeout while the provider still reports the payout pending', () =>
-    defersTheTimeoutWhileTheProviderReportsPending(memoryStore()));
+    defersTheTimeoutWhileTheProviderReportsPending(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('probes on the SLA cadence while the provider reports pending within the window', () =>
-    probesOnTheSlaCadenceWhilePendingWithinTheWindow(memoryStore()));
+    probesOnTheSlaCadenceWhilePendingWithinTheWindow(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
   test('falls back to the timeout when the probe answers unknown or fails', () =>
     fallsBackToTheTimeoutWhenTheProbeCannotAnswer());
 });
 
 describe('advanceDuePayouts Pricing At Request', () => {
   test('submits the stored quote, not a re-fetched rate', async () => {
-    const store = memoryStore();
+    const store = memoryStore({ digest: seededDigest(1) });
     const recorded: Array<{ key: string; userId: string; amount: Amount }> = [];
     const processor: Processor = {
       submitPayout: async (input) => {

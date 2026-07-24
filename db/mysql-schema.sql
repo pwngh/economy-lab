@@ -227,11 +227,12 @@ CREATE TABLE payout_sagas (
      reserve            BIGINT      NOT NULL COMMENT 'Earned credits set aside; always positive.',
      rate_id            VARCHAR(64) NOT NULL COMMENT 'Pinned CREDIT-to-USD rate for this settlement.',
      state              VARCHAR(16) NOT NULL COMMENT 'One of REQUESTED, RESERVED, SUBMITTED, SETTLED, FAILED.',
+     txn_id             VARCHAR(64) NOT NULL COMMENT 'Reserve posting anchor; every money step re-proves the row against it.',
      provider_ref       VARCHAR(128) COMMENT 'Payout provider reference; null until submitted.',
      attempts           INT         NOT NULL DEFAULT 0 COMMENT 'Consecutive worker attempt count.',
      -- Terminal outcome, stored on the saga. Rationale in db/postgresql-schema.sql (payout_sagas).
      reason             VARCHAR(255) COMMENT 'Failure reason set when dead-lettered; null otherwise.',
-     payout_usd         BIGINT COMMENT 'Gross USD disbursed; null until SETTLED.',
+     payout_usd         BIGINT COMMENT 'USD quote sealed at request; the settle patch re-records the disbursed gross.',
      due_at             BIGINT      NOT NULL COMMENT 'Epoch ms when the worker may next advance it.',
      updated_at         BIGINT      NOT NULL COMMENT 'Epoch ms the row was last updated.',
      CHECK (reserve > 0),

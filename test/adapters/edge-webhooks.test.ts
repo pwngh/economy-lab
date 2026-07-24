@@ -44,6 +44,7 @@ async function storeWithSaga(): Promise<Store> {
     userId: 'usr_seller',
     reserve: credit('20000.00'),
     rateId: 'payout:CREDIT->USD:1',
+    txnId: 'txn_anchor_edge_wh',
     state: 'SUBMITTED',
     providerRef: REF.id,
     reason: null,

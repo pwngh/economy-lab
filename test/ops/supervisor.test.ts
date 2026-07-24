@@ -28,6 +28,7 @@ function stuckSaga(id: string): Saga {
     userId: 'usr_seller',
     reserve: credits(40),
     rateId: 'rate_test',
+    txnId: 'txn_anchor_ops',
     state: 'RESERVED',
     providerRef: null,
     reason: null,

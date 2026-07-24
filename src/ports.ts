@@ -1106,6 +1106,14 @@ export interface Saga {
   /** Names the exact CREDIT-to-USD rate this payout is locked to. */
   rateId: string;
 
+  /**
+   * The reserve posting this saga opened with — the anchor every money-moving step re-proves
+   * before trusting a byte of this row: the posting's hashed metadata seals the saga id, rate,
+   * and USD quote, and its earned-debit leg seals the reserve. Required, because the saga row is
+   * unhashed and drives real USD out of the platform.
+   */
+  txnId: string;
+
   state: SagaState;
 
   /** The payment provider's reference once submitted, null before then. */

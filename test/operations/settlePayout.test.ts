@@ -24,12 +24,13 @@ import { settlePayout } from '#src/operations/settlePayout.ts';
 import { makeEconomy } from '#test/support/economy.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { credit as creditLeg, debit as debitLeg } from '#src/ledger.ts';
-import { SYSTEM } from '#src/accounts.ts';
+import { earned, SYSTEM } from '#src/accounts.ts';
 import { encodeAmount } from '#src/money.ts';
 import {
   credit,
   usd,
   settlePayout as buildSettlePayout,
+  sagaAnchor,
 } from '#test/support/builders.ts';
 import {
   fixedClock,
@@ -81,19 +82,23 @@ async function openSubmittedSaga(
     attempts: 1,
     dueAt: 0,
     updatedAt: 0,
-    payoutUsd: null,
+    payoutUsd: usd('100.00'),
+    txnId: `txn_anchor_${overrides.id}`,
     ...overrides,
   };
   await store.transaction(async (unit) => {
     await unit.sagas.open(row);
+    // Fund earned, then post the row's anchor (see sagaAnchor); the guards re-prove the row
+    // against it.
     await unit.ledger.append({
       txnId: `txn_seed_${row.id}`,
       legs: [
-        creditLeg(SYSTEM.PAYOUT_RESERVE, row.reserve),
+        creditLeg(earned(row.userId), row.reserve),
         debitLeg(SYSTEM.STORED_VALUE, row.reserve),
       ],
       meta: { kind: 'seed' },
     });
+    await unit.ledger.append(sagaAnchor(row));
   });
   return row;
 }
@@ -352,18 +357,17 @@ describe('settlePayout Pricing At Request', () => {
     );
   });
 
-  test('a row opened before pricing-at-request settles at the current rate', async () => {
+  test('a row without a sealed quote refuses to settle as CHAIN.BROKEN', async () => {
     const store = newStore();
-    await openSubmittedSaga(store, { id: 'pay_legacy', state: 'SUBMITTED' });
+    await openSubmittedSaga(store, {
+      id: 'pay_unquoted',
+      state: 'SUBMITTED',
+      payoutUsd: null,
+    });
 
-    const outcome = await run(
-      store,
-      newCtx(),
-      buildSettlePayout({ sagaId: 'pay_legacy' }),
+    await assert.rejects(
+      run(store, newCtx(), buildSettlePayout({ sagaId: 'pay_unquoted' })),
+      hasCode('CHAIN.BROKEN'),
     );
-
-    assert.equal(outcome.status, 'committed');
-    const settled = await store.sagas.load('pay_legacy');
-    assert.deepEqual(settled?.payoutUsd, usd('100.00'));
   });
 });
