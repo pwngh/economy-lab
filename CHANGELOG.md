@@ -2,6 +2,14 @@
 
 Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dates.
 
+## Unreleased (0.4.3)
+
+### Added
+
+- `TOP_UP_BUNDLES_MINOR` lists the purchasable top-up amounts as CREDIT minor units
+  (`Config.topUpBundlesMinor`); a `topUp` for an amount off the list is refused with
+  `OP.MALFORMED`. Unset accepts any positive amount.
+
 ## 0.4.2 - 2026-07-23
 
 ### Fixed

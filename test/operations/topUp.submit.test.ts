@@ -49,6 +49,36 @@ describe('topUp authorization through economy.submit', () => {
     );
   });
 
+  test('rejects an off-catalog amount through the full submit path', async () => {
+    const { economy, store } = economyWithStore(1, {
+      topUpBundlesMinor: [60_000n, 120_000n],
+    });
+
+    await assert.rejects(
+      economy.submit(
+        buildTopUp({ userId: 'usr_buyer', amount: credit('1199.00') }),
+      ),
+      hasCode('OP.MALFORMED'),
+    );
+
+    assert.deepEqual(
+      await store.ledger.balance(spendable('usr_buyer')),
+      credit('0.00'),
+    );
+  });
+
+  test('commits a catalog amount through the full submit path', async () => {
+    const { economy } = economyWithStore(1, {
+      topUpBundlesMinor: [60_000n, 120_000n],
+    });
+
+    const outcome = await economy.submit(
+      buildTopUp({ userId: 'usr_buyer', amount: credit('600.00') }),
+    );
+
+    assert.equal(outcome.status, 'committed');
+  });
+
   test('still commits a topUp run by a trusted system actor', async () => {
     const { economy, store } = economyWithStore();
 

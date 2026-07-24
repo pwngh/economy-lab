@@ -11,10 +11,16 @@
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
-import { convertCeil, requirePositiveCredit, toAmount } from '#src/money.ts';
+import {
+  convertCeil,
+  encodeAmount,
+  requirePositiveCredit,
+  toAmount,
+} from '#src/money.ts';
 import { SYSTEM, routePlatformLegs, spendable } from '#src/accounts.ts';
 import { assertKind } from '#src/operations/guards.ts';
 
+import type { Amount } from '#src/money.ts';
 import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Unit } from '#src/ports.ts';
 
@@ -35,6 +41,7 @@ export async function topUp(
   assertKind(operation, 'topUp');
   requireSource(operation.source);
   const amount = requirePositiveCredit(operation.amount, 'topUp.amount');
+  requireBundleAmount(amount, ctx.config.topUpBundlesMinor);
 
   // Both conversions round up. The backing rounds up because the solvency check values the whole
   // spendable balance at par and floors it once. Flooring each top-up's backing separately would
@@ -92,6 +99,30 @@ export async function topUp(
   });
 
   return { status: 'committed', transaction: issuance };
+  return { status: 'committed', transaction: issuance! };
+}
+
+// When the deployment lists a purchase catalog, only those bundle amounts exist to buy; any
+// other amount is a mispriced grant, not a purchase.
+function requireBundleAmount(
+  amount: Amount,
+  bundles: readonly bigint[] | undefined,
+): void {
+  if (bundles === undefined || bundles.includes(amount.minor)) {
+    return;
+  }
+  throw fault(
+    ERROR_CODES.MALFORMED_OPERATION,
+    'topUp.amount is not in the configured purchase catalog.',
+    {
+      detail: {
+        amount: encodeAmount(amount),
+        bundles: bundles.map((bundle) =>
+          encodeAmount(toAmount('CREDIT', bundle)),
+        ),
+      },
+    },
+  );
 }
 
 // The source selects the credits' maturity horizon, so a blank value is malformed input.

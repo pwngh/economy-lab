@@ -5,7 +5,7 @@ order: 20
 status: stable
 sourceRefs:
   [
-    'src/contract.ts#L290 · Outcome',
+    'src/contract.ts#L298 · Outcome',
     'src/errors.ts#L27 · RejectionCode',
     'src/errors.ts#L103 · ERROR_CODES',
   ]
@@ -168,6 +168,7 @@ Thrown faults carry their own codes, kept deliberately separate from the rejecti
 | Thrown code               | Constant              | When it's thrown                                                                                         |
 | ------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------- |
 | `OP.MALFORMED`            | `MALFORMED_OPERATION` | The request was structurally wrong: a missing or invalid field.                                          |
+| `OP.MALFORMED`            | `MALFORMED_OPERATION` | The request was structurally wrong: a missing or invalid field, or a `topUp` amount outside the configured [purchase catalog](/economy/reference/operations/top-up/). |
 | `MONEY.INVALID_AMOUNT`    | `INVALID_AMOUNT`      | A money amount was invalid, such as negative or not a whole minor unit.                                  |
 | `AUTH.UNAUTHORIZED`       | `UNAUTHORIZED`        | The actor isn't permitted to perform this action.                                                        |
 | `SAGA.INVALID_TRANSITION` | `INVALID_TRANSITION`  | A [saga](/economy/concepts/payout-saga/) was told to move to a state it can't reach from its current one. |

@@ -5,7 +5,8 @@ order: 10
 status: stable
 sourceRefs:
   [
-    'src/operations/topUp.ts#L30 · topUp',
+    'src/operations/topUp.ts#L36 · topUp',
+    'src/operations/topUp.ts#L36 · topUp',
     'src/operations/registry.ts#L58 · REGISTRY',
     "src/contract.ts#L68 · kind 'topUp'",
     'src/webhooks.ts#L154 · toTopUp',
@@ -55,12 +56,20 @@ The payload fields, beyond the `kind` tag, are:
 | `idempotencyKey` | `string`                                               | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/idempotency/).                        |
 | `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`.                                                                                |
 | `userId`         | `string`                                               | (required) | The user whose `spendable` balance is credited.                                                                               |
-| `amount`         | [`Amount`](/economy/concepts/money-model/)             | (required) | The credit to issue. Must be `CREDIT` and strictly positive.                                                                  |
+| `amount`         | [`Amount`](/economy/concepts/money-model/)             | (required) | The credit to issue. Must be `CREDIT` and strictly positive — and on the purchase catalog when one is configured (below).     |
 | `source`         | `string`                                               | (required) | The funding rail (`card`, `steam`, …). Selects the credits' maturity horizon and must be non-empty after trimming whitespace. |
 
 The `source` sets how long the new credits are held before they can be
 spent or cashed out, see [maturity](/economy/concepts/credit-maturity/). An unrecognized `source` falls
 back to the long default horizon, never a fast one.
+
+### The purchase catalog
+
+With [`TOP_UP_BUNDLES_MINOR`](/economy/reference/configuration/#the-purchase-catalog) set, the
+platform sells fixed bundles and `amount` must be one of them; any other amount faults
+`OP.MALFORMED`, because a store client offering an off-catalog amount is miswired, not a user
+declining. Unset — the default, and how the examples on this page run — any positive amount is
+accepted.
 
 ## Returns
 
@@ -135,7 +144,7 @@ A malformed request throws instead:
 
 | Code                   | When                                        |
 | ---------------------- | ------------------------------------------- |
-| `OP.MALFORMED`         | A blank `source` or a non-`CREDIT` amount.  |
+| `OP.MALFORMED`         | A blank `source`, a non-`CREDIT` amount, or an amount off the configured purchase catalog. |
 | `MONEY.INVALID_AMOUNT` | A zero or negative amount.                  |
 
 ## Preconditions and invariants

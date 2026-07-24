@@ -13,7 +13,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { topUp } from '#src/operations/topUp.ts';
-import { makeCtx, hasCode } from '#test/support/capabilities.ts';
+import { makeCtx, hasCode, testConfig } from '#test/support/capabilities.ts';
 import { seededStore as makeStore } from '#test/support/economy.ts';
 import { topUp as topUpOp, credit, usd } from '#test/support/builders.ts';
 import { spendable, SYSTEM } from '#src/accounts.ts';
@@ -140,6 +140,49 @@ describe('topUp Validation', () => {
       ),
       hasCode('MONEY.INVALID_AMOUNT'),
     );
+  });
+
+  test('accepts a catalog amount when a purchase catalog is configured', async () => {
+    const store = makeStore();
+    const ctx = makeCtx({
+      config: { ...testConfig(), topUpBundlesMinor: [60_000n, 120_000n] },
+    });
+
+    const outcome = await applyTopUp(
+      store,
+      ctx,
+      topUpOp({ userId: 'usr_buyer', amount: credit('1200.00') }),
+    );
+
+    assert.equal(outcome.status, 'committed');
+  });
+
+  test('throws OP.MALFORMED for an off-catalog amount', async () => {
+    const store = makeStore();
+    const ctx = makeCtx({
+      config: { ...testConfig(), topUpBundlesMinor: [60_000n, 120_000n] },
+    });
+
+    await assert.rejects(
+      applyTopUp(
+        store,
+        ctx,
+        topUpOp({ userId: 'usr_buyer', amount: credit('1199.00') }),
+      ),
+      hasCode('OP.MALFORMED'),
+    );
+  });
+
+  test('accepts any positive amount when no catalog is configured', async () => {
+    const { store, ctx } = fixture();
+
+    const outcome = await applyTopUp(
+      store,
+      ctx,
+      topUpOp({ userId: 'usr_buyer', amount: credit('7.37') }),
+    );
+
+    assert.equal(outcome.status, 'committed');
   });
 
   test('rounds a sub-cent purchase up so the issued credits are always backed', async () => {

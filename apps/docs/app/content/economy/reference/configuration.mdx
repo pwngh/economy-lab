@@ -5,7 +5,10 @@ order: 40
 status: stable
 sourceRefs:
   [
-    'src/config.ts#L240-L255 · loadConfig',
+    'src/config.ts#L282-L297 · loadConfig',
+    'src/index.ts#L633 · openPorts',
+    'src/from-env.ts#L137 · resolveExternals',
+    'src/config.ts#L282-L297 · loadConfig',
     'src/index.ts#L633 · openPorts',
     'src/from-env.ts#L137 · resolveExternals',
     '.env.example',
@@ -151,6 +154,14 @@ silently bind a buyer to it. A price outside the band is refused at
 | ------------------------------ | ---------------------------------------------------- | ------------------------ |
 | `SUBSCRIPTION_PRICE_MIN_MINOR` | Smallest subscription price, in CREDIT minor units.  | `10000` (100.00)         |
 | `SUBSCRIPTION_PRICE_MAX_MINOR` | Largest subscription price, in CREDIT minor units.   | `1000000` (10,000.00)    |
+
+## The purchase catalog
+
+Unset, [top-up](/economy/reference/operations/top-up/) accepts any positive CREDIT amount. Set, `TOP_UP_BUNDLES_MINOR` names the only amounts a top-up may carry — the platform's purchase bundles — and any other amount faults `OP.MALFORMED`, since a store client that offers an off-catalog amount is miswired.
+
+| Variable               | Meaning                                                                                                        | Default          |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------- | ---------------- |
+| `TOP_UP_BUNDLES_MINOR` | Comma-separated catalog of permitted top-up amounts, in CREDIT minor units (e.g. `60000,120000,240000`). | unset (any amount) |
 
 ## Platform sharding
 

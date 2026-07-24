@@ -77,6 +77,11 @@ export interface Config {
   /** Largest subscription price, in CREDIT minor units. */
   subscriptionPriceMaxMinor: bigint;
 
+  /** The purchase catalog: the only top-up amounts accepted, in CREDIT minor units. Stores sell
+   *  credits in fixed bundles, so a deployment that mirrors its store sets the same list and a
+   *  mispriced grant fails at submit. Unset means any positive amount. */
+  topUpBundlesMinor?: readonly bigint[];
+
   /**
    * How long (ms) topped-up funds must wait before they can be spent or paid out, keyed by
    * funding source ("card", "crypto", "steam", "meta"); unlisted sources use "default".
@@ -124,6 +129,42 @@ export interface Config {
 
 // The per-class velocity limits stay absent unless their env var parses, so the single-knob
 // fallback keeps working after a later velocityLimitMinor override.
+// The submit pipeline's per-operation amount ceiling; a bundle above it could never be bought.
+const MAX_BUNDLE_MINOR = 1_000_000_000_000_000n;
+
+// A comma-separated list of positive minor-unit counts. A malformed entry throws rather than
+// defaulting: the silent fallback here would be an unenforced catalog, not a safe value. Deduped,
+// sorted, and frozen so the stored catalog reads in bundle order and cannot be mutated later.
+function bigIntListIfSet(
+  key: 'topUpBundlesMinor',
+  value: string | undefined,
+): Partial<Config> {
+  if (value === undefined || value.trim() === '') {
+    return {};
+  }
+  const entries = value.split(',').map((entry) => entry.trim());
+  const valid = entries.every((entry) => {
+    if (!/^\d+$/.test(entry)) {
+      return false;
+    }
+    const minor = BigInt(entry);
+    return minor > 0n && minor <= MAX_BUNDLE_MINOR;
+  });
+  if (!valid) {
+    throw fault(
+      ERROR_CODES.CONFIG_INVALID,
+      'TOP_UP_BUNDLES_MINOR must be a comma-separated list of positive minor-unit counts.',
+      { detail: { value }, retryable: false },
+    );
+  }
+  const bundles = Object.freeze(
+    [...new Set(entries.map(BigInt))].sort((a, b) =>
+      a < b ? -1 : a > b ? 1 : 0,
+    ),
+  );
+  return { [key]: bundles };
+}
+
 function bigIntIfSet(
   key: 'velocityInflowLimitMinor' | 'velocityOutflowLimitMinor',
   value: string | undefined,
@@ -150,6 +191,7 @@ export const CONFIG_KEYS = [
   'VELOCITY_WINDOW_MS',
   'SUBSCRIPTION_PRICE_MIN_MINOR',
   'SUBSCRIPTION_PRICE_MAX_MINOR',
+  'TOP_UP_BUNDLES_MINOR',
   'MATURITY_HORIZON_CARD_MS',
   'MATURITY_HORIZON_CRYPTO_MS',
   'MATURITY_HORIZON_STEAM_MS',
@@ -302,6 +344,7 @@ function buildConfig(env: EnvMap): Config {
       env.SUBSCRIPTION_PRICE_MAX_MINOR,
       1_000_000n,
     ),
+    ...bigIntListIfSet('topUpBundlesMinor', env.TOP_UP_BUNDLES_MINOR),
     velocityWindowMs: readInt(env.VELOCITY_WINDOW_MS, 60 * 60_000, { min: 1 }),
     maturityHorizonMs: {
       card: cardHorizonMs,
