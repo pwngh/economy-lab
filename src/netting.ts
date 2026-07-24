@@ -803,6 +803,9 @@ export class InstanceSession {
 // Type-only re-exports so hosts can speak the session's language without reaching into ports.
 export type { Movement, Leg, Amount, Currency };
 
+// Multi-node companions, re-exported so the published `./netting` subpath carries the whole
+// multi-node story.
+export { scopeRouter } from '#src/router.ts';
 export {
   sweepOrphanSessions,
   reconcileReservations,
