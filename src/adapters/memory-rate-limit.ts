@@ -27,8 +27,8 @@ interface Window {
  * next seen, so the map retains every key it has ever counted.
  *
  * @example
- *   const limiter = memoryRateLimiter({ limit: 100, windowMs: 60_000 });
- *   await limiter.allow('user:usr_42'); // { allowed: true }
+ * const limiter = memoryRateLimiter({ limit: 100, windowMs: 60_000 });
+ * await limiter.allow('user:usr_42'); // { allowed: true }
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/http-service/ HTTP service} for
  *   how the server keys and answers denials.

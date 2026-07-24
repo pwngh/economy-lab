@@ -29,12 +29,12 @@ import type { Unit } from '#src/ports.ts';
  * An outer layer enforces that only `system` and `operator` callers may grant.
  *
  * @example
- *   const outcome = await grantEntitlement(
- *     { kind: 'grantEntitlement', idempotencyKey: 'idem_0',
- *       actor: { kind: 'system', service: 'fulfillment' }, userId: 'usr_owner', sku: 'wrld_pass' },
- *     unit, ctx,
- *   );
- *   // outcome.status === 'committed'; unit.entitlements.owns('usr_owner', 'wrld_pass') === true.
+ * const outcome = await grantEntitlement(
+ *   { kind: 'grantEntitlement', idempotencyKey: 'idem_0',
+ *     actor: { kind: 'system', service: 'fulfillment' }, userId: 'usr_owner', sku: 'wrld_pass' },
+ *   unit, ctx,
+ * );
+ * // outcome.status === 'committed'; unit.entitlements.owns('usr_owner', 'wrld_pass') === true.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/grant-entitlement/
  *   Grant entitlement} for ownership records and grant attributes.

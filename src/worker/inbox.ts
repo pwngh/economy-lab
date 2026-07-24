@@ -40,7 +40,7 @@ type Applier = Pick<Economy, 'submit'>;
 
 /**
  * Applies a batch of pending inbox events — verified inbound provider events already mapped to
- * the {@link Operation} they apply.
+ * the `Operation` they apply.
  *
  * Never gated on the economy pause: settlements must keep flowing through a maintenance window.
  * An apply can run more than once (submit committed but `markApplied` did not); exactly-once

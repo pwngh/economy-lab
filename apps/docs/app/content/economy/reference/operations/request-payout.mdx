@@ -81,7 +81,7 @@ The committed transaction's `meta.sagaId` names the saga it opened, so a caller 
 
 ## Authorization
 
-`requestPayout` is not a privileged operation, so an end `user` can run it, but only for their own account. The ownership check requires the caller to own the `earned` account being debited; a `user` requesting another seller's payout is refused with `AUTH.UNAUTHORIZED` (see <SourceLink to="src/economy.ts#L807 · debitedUserAccounts" />).
+`requestPayout` is not a privileged operation, so an end `user` can run it, but only for their own account. The ownership check requires the caller to own the `earned` account being debited; a `user` requesting another seller's payout is refused with `AUTH.UNAUTHORIZED` (see <SourceLink to="src/economy.ts#L808 · debitedUserAccounts" />).
 
 A `system` service or a human `operator` may also request a payout on a seller's behalf. See [actors and authorization](/economy/concepts/actors-and-authorization/) for the full rule.
 

@@ -16,7 +16,8 @@
 
 -- Pin the database default collation FIRST so every table inherits it: JSON_TABLE inside
 -- post_entry produces utf8mb4_0900_ai_ci strings, and matching table collations avoid an
--- "Illegal mix of collations" error on its joins.
+-- "Illegal mix of collations" error on its joins. Applying by hand: this mutates the current
+-- database's default, so USE the target database first. The collation needs MySQL 8.0+.
 ALTER DATABASE CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
 
 -- Drop stored routines first: unlike DROP TABLE they have no IF-EXISTS-on-CREATE form, so re-apply
@@ -83,9 +84,9 @@ DROP TABLE IF EXISTS accounts;
 -- Rationale in db/postgresql-schema.sql (accounts banner).
 CREATE TABLE accounts (
      id         VARCHAR(96)  PRIMARY KEY COMMENT 'Account id; platform:<name> or usr_<uuid>:<kind>.',
-     kind       VARCHAR(16)  NOT NULL COMMENT 'One of spendable, earned, promo, system.',
-     currency   VARCHAR(8)   NOT NULL COMMENT 'One of CREDIT or USD.',
-     created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.',
+     kind       VARCHAR(16)  NOT NULL,
+     currency   VARCHAR(8)   NOT NULL,
+     created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
      CHECK (kind IN ('spendable', 'earned', 'promo', 'escrow', 'system')),
      CHECK (currency IN ('CREDIT', 'USD')),
      -- Lets legs carry a composite FK to (id, currency), so a leg's currency must match its account's.
@@ -111,7 +112,7 @@ CREATE TABLE postings (
      meta       JSON        NOT NULL COMMENT 'JSON metadata bag for the posting.',
      posted_at  BIGINT      NOT NULL COMMENT 'Commit time in epoch milliseconds.',
      seq        BIGINT      AUTO_INCREMENT UNIQUE COMMENT 'Auto-increment sequence giving postings a total order.',
-     created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
+     created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP
    ) COMMENT='Append-only record of every posting; one balanced set of legs each.';
 
 -- post_entry is the sole writer of this table. Rationale in db/postgresql-schema.sql (legs comment).
@@ -119,7 +120,7 @@ CREATE TABLE legs (
      id         BIGINT       AUTO_INCREMENT PRIMARY KEY COMMENT 'Auto-increment leg id in commit order.',
      posting_id VARCHAR(64)  NOT NULL COMMENT 'Parent posting id; FK to postings.',
      account_id VARCHAR(96)  NOT NULL COMMENT 'Account this leg debits or credits.',
-     currency   VARCHAR(8)   NOT NULL COMMENT 'One of CREDIT or USD; must match account.',
+     currency   VARCHAR(8)   NOT NULL COMMENT 'Must match the account''s currency.',
      amount     BIGINT       NOT NULL COMMENT 'Signed minor units: debit positive, credit negative; never zero.',
      CHECK (amount <> 0),
      CHECK (currency IN ('CREDIT', 'USD')),
@@ -212,11 +213,11 @@ CREATE TABLE sales (
 CREATE TABLE outbox (
      id                 VARCHAR(64) PRIMARY KEY COMMENT 'Outbox row id; primary key, obx_<uuid>.',
      event              JSON        NOT NULL COMMENT 'JSON event payload to publish.',
-     status             VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'One of pending, relayed, dead.',
+     status             VARCHAR(16) NOT NULL DEFAULT 'pending',
      attempts           INT         NOT NULL DEFAULT 0 COMMENT 'Number of publish attempts so far.',
      dead_letter_reason TEXT        NULL COMMENT 'Last error code if dead; else null.',
      correlation_id     VARCHAR(128) NULL COMMENT 'Id of the request that enqueued this event; null for worker-born events.',
-     created_at         TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC time the row was inserted.',
+     created_at         TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
      CHECK (status IN ('pending', 'relayed', 'dead')),
      KEY outbox_pending_idx (status, created_at)
    ) COMMENT='Pending outbound events awaiting relay to the dispatcher.';
@@ -226,11 +227,11 @@ CREATE TABLE inbox (
      id                 VARCHAR(64) PRIMARY KEY COMMENT 'Inbox row id; primary key, ibx_<uuid>.',
      `key`              VARCHAR(255) NOT NULL UNIQUE COMMENT 'Provider event id; unique, dedupes redelivery.',
      operation          JSON         NOT NULL COMMENT 'Serialized Operation to submit, as JSON.',
-     status             VARCHAR(16)  NOT NULL DEFAULT 'pending' COMMENT 'One of pending, applied, dead.',
+     status             VARCHAR(16)  NOT NULL DEFAULT 'pending',
      attempts           INT          NOT NULL DEFAULT 0 COMMENT 'Number of apply attempts so far.',
      dead_letter_reason TEXT         NULL COMMENT 'Last error code if dead; else null.',
      received_at        BIGINT       NOT NULL COMMENT 'When the event was enqueued, epoch ms.',
-     created_at         TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC time the row was inserted.',
+     created_at         TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
      CHECK (status IN ('pending', 'applied', 'dead')),
      KEY inbox_pending_idx (status, received_at)
    ) COMMENT='Verified inbound provider events awaiting apply by the worker.';
@@ -241,8 +242,8 @@ CREATE TABLE payout_sagas (
      user_id            VARCHAR(64) NOT NULL COMMENT 'Seller the payout belongs to.',
      reserve            BIGINT      NOT NULL COMMENT 'Earned credits set aside; always positive.',
      rate_id            VARCHAR(64) NOT NULL COMMENT 'Pinned CREDIT-to-USD rate for this settlement.',
-     state              VARCHAR(16) NOT NULL COMMENT 'One of REQUESTED, RESERVED, SUBMITTED, SETTLED, FAILED.',
      txn_id             VARCHAR(64) NOT NULL COMMENT 'Reserve posting anchor; every money step re-proves the row against it.',
+     state              VARCHAR(16) NOT NULL,
      provider_ref       VARCHAR(128) COMMENT 'Payout provider reference; null until submitted.',
      attempts           INT         NOT NULL DEFAULT 0 COMMENT 'Consecutive worker attempt count.',
      -- Terminal outcome, stored on the saga. Rationale in db/postgresql-schema.sql (payout_sagas).
@@ -312,7 +313,7 @@ CREATE TABLE subscriptions (
      price       BIGINT      NOT NULL COMMENT 'Per-period charge in minor units; always positive.',
      txn_id      VARCHAR(64) NOT NULL COMMENT 'First-charge posting anchor; the renewal sweep re-proves the row against it before every charge.',
      period_ms   BIGINT      NOT NULL COMMENT 'Billing interval length in milliseconds; always positive.',
-     state       VARCHAR(16) NOT NULL COMMENT 'One of ACTIVE, LAPSED, CANCELED.',
+     state       VARCHAR(16) NOT NULL,
      period      INT         NOT NULL DEFAULT 1 COMMENT 'Billing-cycle counter; renewal bills period plus one.',
      attempts    INT         NOT NULL DEFAULT 0 COMMENT 'Consecutive failed charges; reset to 0 on success.',
      next_due_at BIGINT      NOT NULL COMMENT 'Epoch ms when the next charge is due.',
@@ -330,7 +331,7 @@ CREATE TABLE trust_attempts (
      idempotency_key VARCHAR(255) PRIMARY KEY COMMENT 'Attempt idempotency key; primary key, dedupes retries.',
      subject         VARCHAR(64)  NOT NULL COMMENT 'Identity whose spend velocity is summed.',
      amount          BIGINT       NOT NULL COMMENT 'Attempted spend in minor units.',
-     outcome         VARCHAR(16)  NOT NULL COMMENT 'One of committed, rejected.',
+     outcome         VARCHAR(16)  NOT NULL,
      at              BIGINT       NOT NULL COMMENT 'Epoch ms the attempt was recorded.',
      CHECK (outcome IN ('committed', 'rejected')),
      KEY trust_attempts_subject_at_idx (subject, at)
@@ -398,7 +399,7 @@ CREATE TABLE checkpoints (
      sum        VARCHAR(32) NULL COMMENT 'Signed decimal minor-unit sum under a v2 root (zero when honestly sealed); null on v1 rows.',
      kid        VARCHAR(64) NULL COMMENT 'Id of the signing key that sealed the row; null before kid stamping.',
      seq        BIGINT      AUTO_INCREMENT UNIQUE COMMENT 'Monotonic sequence number; unique, auto-assigned.',
-     created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'UTC time the row was inserted.'
+     created_at TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP
    ) COMMENT='Signed Merkle checkpoints over the per-account hash chains.';
 
 -- ============================================================================

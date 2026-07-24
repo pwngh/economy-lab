@@ -477,7 +477,7 @@ export function RateLadder() {
         y={142}
         w={446}
         name="par = payout = $0.005 / credit"
-        sub="backing and creator settlement (≈200 per $1)"
+        sub="backing and creator settlement (≈200 credits per $1)"
         mono={false}
       />
     </Diagram>

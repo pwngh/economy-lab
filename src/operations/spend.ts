@@ -10,7 +10,7 @@
  */
 
 import { ERROR_CODES, fault, rejected } from '#src/errors.ts';
-import { assertKind } from '#src/operations/guards.ts';
+import { assertKind, assertRecipientShares } from '#src/operations/guards.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { mulDiv, requirePositiveCredit, toAmount } from '#src/money.ts';
 import {
@@ -47,21 +47,6 @@ import type { Leg, Sale, Unit } from '#src/ports.ts';
 export type SpendPlan = { promoPart: Amount; spendablePart: Amount };
 
 /**
- * Run a marketplace purchase: charge the buyer and pay the sellers as one balanced
- * ledger posting. Buyer pays from promo (marketing-grant) balance first, then spendable. A sale
- * summary is saved under `orderId` so a later refund can reverse exactly what posted, and the SKU
- * entitlement is granted in the same transaction so paying always confers ownership (to the buyer,
- * or to `giftTo` when present). A second request reusing an `orderId` already on file is refused
- * with `DUPLICATE_ORDER` so the buyer is never double-charged for one order.
- *
- * The submit pipeline has already authorized, deduplicated, checked affordability, and locked the
- * accounts; this only validates its own inputs and posts. Malformed input (bad price, shares that
- * don't sum) throws a fault, not a refusal.
- *
- * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/spend/ Spend} for the
- * purchase flow, balance draw order, and split accounting this handler posts.
- */
-/**
  * The pipeline's pre-claim probe, run before any lock or screen: a committed sale row is final
  * (sales are never deleted), so a replayed orderId rejects here without paying for the locks it
  * will never need. A miss falls through to the authoritative under-lock check in the handler.
@@ -77,6 +62,21 @@ export async function spendPreClaim(
     : rejected('DUPLICATE_ORDER', { orderId: operation.orderId });
 }
 
+/**
+ * Run a marketplace purchase: charge the buyer and pay the sellers as one balanced
+ * ledger posting. Buyer pays from promo (marketing-grant) balance first, then spendable. A sale
+ * summary is saved under `orderId` so a later refund can reverse exactly what posted, and the SKU
+ * entitlement is granted in the same transaction so paying always confers ownership (to the buyer,
+ * or to `giftTo` when present). A second request reusing an `orderId` already on file is refused
+ * with `DUPLICATE_ORDER` so the buyer is never double-charged for one order.
+ *
+ * The submit pipeline has already authorized, deduplicated, checked affordability, and locked the
+ * accounts; this only validates its own inputs and posts. Malformed input (bad price, shares that
+ * don't sum) throws a fault, not a refusal.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/spend/ Spend} for the
+ * purchase flow, balance draw order, and split accounting this handler posts.
+ */
 export async function spend(
   operation: Operation,
   unit: Unit,
@@ -85,8 +85,15 @@ export async function spend(
   assertKind(operation, 'spend');
   assertSpendShape(operation);
   const price = requirePositiveCredit(operation.price, 'spend.price');
-  assertShares(operation);
-  assertNoSelfDealing(operation);
+  assertRecipientShares(
+    operation.recipients ?? [],
+    operation.buyerId,
+    'spend',
+    {
+      kind: operation.kind,
+      orderId: operation.orderId,
+    },
+  );
   const recipientId = entitlementRecipient(operation);
 
   // The authoritative duplicate-order check: the accounts are locked, so reading the stored sale
@@ -415,70 +422,6 @@ function assertSpendShape(
             orderId: operation.orderId,
             sellerId: recipient.sellerId,
           },
-        },
-      );
-    }
-  }
-}
-
-// Require at least one recipient, and require recipient shares to sum to exactly 10000 basis
-// points (100%), so a miswired split can't leave part of the price stuck with nobody or quietly
-// route the whole net to the platform.
-//
-// The sum check alone isn't enough: shares like [-5000, 15000] still sum to 10000, but a negative
-// share is a hidden debit and a >100% share pays out more of the part than exists. So each share
-// must also be strictly positive and at most 10000 bps on its own.
-function assertShares(operation: Extract<Operation, { kind: 'spend' }>): void {
-  // The type requires the field, but a hostile caller can still omit it; coalesce so the
-  // omission lands on the typed refusal below, not a TypeError.
-  const recipients = operation.recipients ?? [];
-  if (recipients.length === 0) {
-    throw fault(
-      ERROR_CODES.MALFORMED_OPERATION,
-      'A spend names at least one recipient.',
-      { detail: { orderId: operation.orderId } },
-    );
-  }
-  for (const recipient of recipients) {
-    if (recipient.shareBps <= 0 || recipient.shareBps > 10_000) {
-      throw fault(
-        ERROR_CODES.MALFORMED_OPERATION,
-        'Each recipient share must be > 0 and <= 10000 basis points.',
-        {
-          detail: {
-            kind: operation.kind,
-            sellerId: recipient.sellerId,
-            shareBps: recipient.shareBps,
-          },
-        },
-      );
-    }
-  }
-  const total = recipients.reduce(
-    (sum, recipient) => sum + recipient.shareBps,
-    0,
-  );
-  if (total !== 10_000) {
-    throw fault(
-      ERROR_CODES.MALFORMED_OPERATION,
-      'Recipient shareBps must sum to 10000.',
-      { detail: { kind: operation.kind, total } },
-    );
-  }
-}
-
-// A buyer who is also a recipient would convert their own non-payable spendable/promo credit into
-// payable EARNED credit funded by the house — laundering — so it's a fault, not a business "no".
-function assertNoSelfDealing(
-  operation: Extract<Operation, { kind: 'spend' }>,
-): void {
-  for (const recipient of operation.recipients) {
-    if (recipient.sellerId === operation.buyerId) {
-      throw fault(
-        ERROR_CODES.MALFORMED_OPERATION,
-        'A spend recipient may not be the buyer (self-dealing).',
-        {
-          detail: { kind: operation.kind, buyerId: operation.buyerId },
         },
       );
     }

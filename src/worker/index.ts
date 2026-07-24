@@ -10,6 +10,7 @@
  */
 
 import { normalizeError } from '#src/errors.ts';
+import { intervalScheduler } from '#src/runtime.ts';
 import { encodeAmount, toAmount } from '#src/money.ts';
 import { advanceDuePayouts } from '#src/worker/payouts.ts';
 import { sweepDueSubscriptions } from '#src/worker/subscriptions.ts';
@@ -41,7 +42,6 @@ import type {
   CallOptions,
   Ports,
   Range,
-  Scheduler,
   ArchiveSink,
   Store,
 } from '#src/ports.ts';
@@ -610,24 +610,6 @@ export function createWorker(
     },
     get sweepsPaused() {
       return paused;
-    },
-  };
-}
-
-function intervalScheduler(): Scheduler {
-  return {
-    every: (ms, task) => {
-      // The one sanctioned raw timer: this IS the fallback Scheduler the restriction elsewhere
-      // points to. runSweeps never throws, so the fire-and-forget tick cannot leak a rejection.
-      // eslint-disable-next-line no-restricted-globals
-      const timer = setInterval(() => void task(), ms);
-      // Node's interval holds the event loop open; unref (absent on web runtimes) lets an
-      // embedding host exit without calling the stop handle.
-      const handle = timer as { unref?: () => void };
-      if (typeof handle.unref === 'function') {
-        handle.unref();
-      }
-      return () => clearInterval(timer);
     },
   };
 }

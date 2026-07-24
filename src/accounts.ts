@@ -195,7 +195,7 @@ export function isShardedBase(ref: AccountRef): boolean {
  * Picks a posting's shard: hash the key, mod the count. Outside the sharded set, or shards < 2,
  * the bare id passes through. Ops key on their idempotency key (same shard on retry);
  * PAYOUT_RESERVE keys on the user id, so a settle or reverse — which only knows the saga — drains
- * the shard the request credited (the reserve may not go negative per row).
+ * the shard the request credited (the overdraft guard keeps every reserve row non-negative).
  */
 export function platformShard(
   ref: AccountRef,
@@ -317,6 +317,7 @@ const SYSTEM_TRAITS = new Map<
 
 /** Everything is denominated in CREDIT except the USD accounts (see SYSTEM_TRAITS). */
 export function currency(ref: AccountRef): Currency {
+  // Looking up via baseOf means a shard inherits all its parent's traits, here and below.
   return SYSTEM_TRAITS.get(baseOf(ref))?.currency ?? 'CREDIT';
 }
 
@@ -331,7 +332,7 @@ export function currency(ref: AccountRef): Currency {
 export function classify(
   ref: AccountRef,
 ): 'custodial' | 'excluded' | 'house-asset' | 'house-liability' {
-  const traits = SYSTEM_TRAITS.get(baseOf(ref)); // a shard is classed like its parent
+  const traits = SYSTEM_TRAITS.get(baseOf(ref));
   if (traits) {
     return traits.class;
   }
@@ -346,7 +347,6 @@ export function classify(
  * to sign a posted line; the no-negative-balance check uses it to read each balance right-way-up.
  */
 export function isDebitNormal(ref: AccountRef): boolean {
-  // a shard keeps its parent's normal side
   return SYSTEM_TRAITS.get(baseOf(ref))?.debitNormal ?? false;
 }
 

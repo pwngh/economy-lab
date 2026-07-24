@@ -2754,8 +2754,10 @@ async function releaseLocks(connection: MysqlConnection): Promise<void> {
 
 /**
  * Reads the database's stamped schema version from `schema_meta`, or `null` when that table is
- * absent (an un-migrated or pre-versioning database). The composition layer (selectStore) passes the
- * result to {@link assertSchemaCurrent} to fail fast on a schema that has drifted from this code.
+ * absent (an un-migrated or pre-versioning database). Any query failure also reads as `null`, so
+ * an unreachable or unauthorized database looks un-migrated rather than throwing here. The
+ * composition layer passes the result to its schema assert to fail fast on a schema that has
+ * drifted from this code.
  */
 export async function readSchemaVersion(
   pool: MysqlPool,

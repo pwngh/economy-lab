@@ -111,8 +111,8 @@ export interface Config {
   payoutMinimumEarnedMinor: bigint;
 
   /**
-   * Min time (ms) between payout requests. The default is 24h to match the live docs. The legal
-   * requirement is 14 days (1_209_600_000).
+   * Min time (ms) between payout requests. The default is 24h to match the live docs; a
+   * deployment bound by the 14-day legal requirement must set 1_209_600_000.
    */
   payoutMinIntervalMs: number;
 
@@ -229,7 +229,7 @@ export const CONFIG_KEYS = [
   'DB_POOL_MAX',
 ] as const;
 
-/** Every name {@link loadSecrets} reads. Kept apart from {@link CONFIG_KEYS} so the log-safe
+/** Every name `loadSecrets` reads. Kept apart from {@link CONFIG_KEYS} so the log-safe
  * policy list can never grow a credential. */
 export const SECRET_KEYS = [
   'WEBHOOK_SECRET',

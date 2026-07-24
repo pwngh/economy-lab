@@ -1234,7 +1234,6 @@ function createEntitlementStore(deps: {
     },
     list: async function* (userId, _options?: CallOptions) {
       const prefix = `${userId}::`;
-      // noinspection JSMismatchedCollectionQueryUpdate
       const grants: Array<{ sku: string; expiresAt: number | null }> = [];
       for (const [key, row] of rows) {
         if (!key.startsWith(prefix) || row.revoked) {

@@ -143,7 +143,7 @@ export type WebhookEvent =
 /**
  * Dedup key for a webhook-driven operation, derived from the provider `eventId` and namespaced
  * with `whk:` so it can't collide with a caller-supplied key. Second guard behind the replay
- * store: a claim may not be visible yet to a concurrent redelivery, and this key catches that
+ * store: a claim can still be invisible to a concurrent redelivery, and this key catches that
  * duplicate at the ledger.
  */
 export function webhookIdempotencyKey(eventId: string): string {

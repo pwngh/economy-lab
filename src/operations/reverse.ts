@@ -31,13 +31,13 @@ import type { Leg, Posting, Unit } from '#src/ports.ts';
  * a reversal is refused with `OP.MALFORMED`, as it would just loop the money back out and in.
  *
  * @example
- *   const outcome = await reverse(
- *     { kind: 'reverse', idempotencyKey: 'idem_0',
- *       actor: { kind: 'operator', operatorId: 'op_1' },
- *       txnId: 'txn_1', reason: 'reconciliation: duplicate posting' },
- *     unit, ctx,
- *   );
- *   // outcome.status === 'committed'; every leg of txn_1 posted with its sign flipped.
+ * const outcome = await reverse(
+ *   { kind: 'reverse', idempotencyKey: 'idem_0',
+ *     actor: { kind: 'operator', operatorId: 'op_1' },
+ *     txnId: 'txn_1', reason: 'reconciliation: duplicate posting' },
+ *   unit, ctx,
+ * );
+ * // outcome.status === 'committed'; every leg of txn_1 posted with its sign flipped.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/reverse/ Reverse} for
  *   the operator-only undo-by-inverse correction flow.

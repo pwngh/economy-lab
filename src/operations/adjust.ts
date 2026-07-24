@@ -34,14 +34,14 @@ import type { Leg, Unit } from '#src/ports.ts';
  * CREDIT, reason non-empty.
  *
  * @example
- *   const outcome = await adjust(
- *     { kind: 'adjust', idempotencyKey: 'idem_0',
- *       actor: { kind: 'operator', operatorId: 'op_1' },
- *       account: spendable('usr_alice'), amount: toAmount('CREDIT', 250n),
- *       reason: 'reconciliation: missing genesis lot' },
- *     unit, ctx,
- *   );
- *   // outcome.status === 'committed'; spendable(usr_alice) rose by 250, balanced to OPENING_EQUITY.
+ * const outcome = await adjust(
+ *   { kind: 'adjust', idempotencyKey: 'idem_0',
+ *     actor: { kind: 'operator', operatorId: 'op_1' },
+ *     account: spendable('usr_alice'), amount: toAmount('CREDIT', 250n),
+ *     reason: 'reconciliation: missing genesis lot' },
+ *   unit, ctx,
+ * );
+ * // outcome.status === 'committed'; spendable(usr_alice) rose by 250, balanced to OPENING_EQUITY.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/adjust/ Adjust} for
  *   when and how operators book manual corrections.

@@ -642,23 +642,18 @@ create or replace trigger account_balances_integrity
 -- src/schema.ts together, whenever this file changes.
 -- ============================================================================
 create table schema_meta (version text not null);
-insert into schema_meta (version) values ('12');
 insert into schema_meta (version) values ('17');
 
 -- Deployed at-a-glance column docs (visible via \d+); the banners above carry the depth.
 comment on column accounts.id is 'Account id; platform:<name> or usr_<uuid>:<kind>.';
-comment on column accounts.kind is 'One of spendable, earned, promo, system.';
-comment on column accounts.currency is 'One of CREDIT or USD.';
-comment on column accounts.created_at is 'UTC time the row was inserted.';
 comment on column postings.id is 'Transaction id, like txn_<uuid>.';
 comment on column postings.meta is 'JSON metadata bag for the posting.';
 comment on column postings.posted_at is 'Commit time in epoch milliseconds.';
 comment on column postings.seq is 'Auto-increment sequence giving postings a total order.';
-comment on column postings.created_at is 'UTC time the row was inserted.';
 comment on column legs.id is 'Auto-increment leg id in commit order.';
 comment on column legs.posting_id is 'Parent posting id; FK to postings.';
 comment on column legs.account_id is 'Account this leg debits or credits.';
-comment on column legs.currency is 'One of CREDIT or USD; must match account.';
+comment on column legs.currency is 'Must match the account''s currency.';
 comment on column legs.amount is 'Signed minor units: debit positive, credit negative; never zero.';
 comment on column chain_links.posting_id is 'Posting that advanced this account chain; FK to postings.';
 comment on column chain_links.account_id is 'Account whose hash chain this link extends; FK to accounts.';
@@ -671,7 +666,6 @@ comment on column account_balances.balance is 'Cached signed balance in minor un
 comment on column account_balances.head_hash is 'Hash of this account''s latest chain_links row; defaults to genesis zeros.';
 comment on column idempotency."key" is 'Idempotency key; PK that blocks duplicate request execution.';
 comment on column idempotency.transaction is 'Recorded result, replayed verbatim on a duplicate request.';
-comment on column idempotency.created_at is 'UTC time the row was inserted.';
 comment on column sales.order_id is 'Order id; primary key, distinct from idempotency key.';
 comment on column sales.buyer_id is 'Account that paid for the purchase.';
 comment on column sales.recipient_id is 'Account receiving the item; null if buyer.';
@@ -683,23 +677,18 @@ comment on column sales.txn_id is 'Posting transaction id; references postings.i
 comment on column sales.posted_at is 'When the sale posted, epoch ms.';
 comment on column outbox.id is 'Outbox row id; primary key, obx_<uuid>.';
 comment on column outbox.event is 'JSON event payload to publish.';
-comment on column outbox.status is 'One of pending, relayed, dead.';
 comment on column outbox.attempts is 'Number of publish attempts so far.';
 comment on column outbox.dead_letter_reason is 'Last error code if dead; else null.';
-comment on column outbox.created_at is 'UTC time the row was inserted.';
 comment on column inbox.id is 'Inbox row id; primary key, ibx_<uuid>.';
 comment on column inbox."key" is 'Provider event id; unique, dedupes redelivery.';
 comment on column inbox.operation is 'Serialized Operation to submit, as JSON.';
-comment on column inbox.status is 'One of pending, applied, dead.';
 comment on column inbox.attempts is 'Number of apply attempts so far.';
 comment on column inbox.dead_letter_reason is 'Last error code if dead; else null.';
 comment on column inbox.received_at is 'When the event was enqueued, epoch ms.';
-comment on column inbox.created_at is 'UTC time the row was inserted.';
 comment on column payout_sagas.id is 'Saga primary key, pay_ prefixed uuid.';
-comment on column payout_sagas.user_id is 'Creator the payout belongs to.';
+comment on column payout_sagas.user_id is 'Seller the payout belongs to.';
 comment on column payout_sagas.reserve is 'Earned credits set aside; always positive.';
 comment on column payout_sagas.rate_id is 'Pinned CREDIT-to-USD rate for this settlement.';
-comment on column payout_sagas.state is 'One of REQUESTED, RESERVED, SUBMITTED, SETTLED, FAILED.';
 comment on column payout_sagas.provider_ref is 'Payout provider reference; null until submitted.';
 comment on column payout_sagas.attempts is 'Consecutive worker attempt count.';
 comment on column payout_sagas.reason is 'Failure reason set when dead-lettered; null otherwise.';
@@ -726,7 +715,6 @@ comment on column subscriptions.seller_id is 'Seller credited each billing perio
 comment on column subscriptions.sku is 'Product identifier being subscribed to.';
 comment on column subscriptions.price is 'Per-period charge in minor units; always positive.';
 comment on column subscriptions.period_ms is 'Billing interval length in milliseconds; always positive.';
-comment on column subscriptions.state is 'One of ACTIVE, LAPSED, CANCELED.';
 comment on column subscriptions.period is 'Billing-cycle counter; renewal bills period plus one.';
 comment on column subscriptions.attempts is 'Consecutive failed charges; reset to 0 on success.';
 comment on column subscriptions.next_due_at is 'Epoch ms when the next charge is due.';
@@ -734,16 +722,14 @@ comment on column subscriptions.updated_at is 'Epoch ms of the last update.';
 comment on column trust_attempts.idempotency_key is 'Attempt idempotency key; primary key, dedupes retries.';
 comment on column trust_attempts.subject is 'Identity whose spend velocity is summed.';
 comment on column trust_attempts.amount is 'Attempted spend in minor units.';
-comment on column trust_attempts.outcome is 'One of committed, rejected.';
 comment on column trust_attempts.at is 'Epoch ms the attempt was recorded.';
 comment on column checkpoints.id is 'Checkpoint id, chk_<uuid>; primary key.';
-comment on column checkpoints.root is 'Merkle root over account hashes; lowercase hex.';
-comment on column checkpoints.signature is 'Signature over the root; lowercase hex.';
+comment on column checkpoints.root is 'Merkle root; lowercase hex (v2: over hashes and sums).';
+comment on column checkpoints.signature is 'Signature; lowercase hex (v1: over the root; v2: over root and sum).';
 comment on column checkpoints.count is 'How many account hashes this root covers.';
 comment on column checkpoints.at is 'Epoch ms the checkpoint was taken.';
 comment on column checkpoints.kid is 'Id of the signing key that sealed the row; null before kid stamping.';
 comment on column checkpoints.seq is 'Monotonic sequence number; unique, auto-assigned.';
-comment on column checkpoints.created_at is 'UTC time the row was inserted.';
 comment on column seen_webhooks.event_id is 'Provider stable event id; primary key for replay dedup.';
 comment on column seen_webhooks.seen_at is 'UTC time this event id was first claimed.';
 comment on column schema_meta.version is 'Schema version stamp; must match SCHEMA_VERSION at startup.';

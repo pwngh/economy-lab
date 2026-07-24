@@ -27,9 +27,9 @@ interface Entry {
  * Values are opaque strings, and this never parses them.
  *
  * @example
- *   const cache = memoryCache();
- *   await cache.set('bal:usr_42:spendable', 'CREDIT:12.34', 60_000);
- *   await cache.get('bal:usr_42:spendable'); // 'CREDIT:12.34' | null
+ * const cache = memoryCache();
+ * await cache.set('bal:usr_42:spendable', 'CREDIT:12.34', 60_000);
+ * await cache.get('bal:usr_42:spendable'); // 'CREDIT:12.34' | null
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage} for the cache and store port contracts.
  */

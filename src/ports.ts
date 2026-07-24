@@ -268,7 +268,7 @@ export type PayeeVerification = {
  * configured adapter.
  */
 export interface Rates {
-  /** The settlement rate at time `at`; on CREDIT-to-USD payout it equals `par`. */
+  /** The payout rate at time `at`, which a cash-out converts credits at; at or below `par`, never above. */
   payout(
     from: Currency,
     to: Currency,
@@ -1370,7 +1370,8 @@ export interface ReservationStore {
 
 // --- Record types -----------------------------------------------------------------
 // The data shapes the stores above pass around: plain JSON-friendly objects. An owner may add
-// fields, but must not change the store methods declared above.
+// fields, but must not change the store methods declared above. Every timestamp field is epoch
+// milliseconds.
 
 /**
  * The fixed shape of every event the system emits. An `audience: 'client'` event is pushed out
@@ -1385,7 +1386,6 @@ export interface EconomyEvent {
   /** Schema version of this event's shape, currently 1. */
   version: number;
 
-  /** When the event happened, in epoch milliseconds. */
   occurredAt: number;
 
   /** What the event is about: a user id (usr_...) or transaction id (txn_...). */
@@ -1437,7 +1437,7 @@ export interface InboxMessage {
   /** Apply attempts so far; at the configured cap the worker dead-letters the row. */
   attempts: number;
 
-  /** When the verified event was enqueued, in epoch milliseconds. */
+  /** When the verified event was enqueued. */
   receivedAt: number;
 
   /** Why the worker gave up, set when the row goes 'dead'; null otherwise. */
@@ -1519,7 +1519,7 @@ export interface Saga {
   /** How many times the worker has tried to advance this saga. */
   attempts: number;
 
-  /** When the worker should next act on it, in epoch milliseconds. */
+  /** When the worker next acts on it. */
   dueAt: number;
 
   updatedAt: number;
@@ -1577,7 +1577,6 @@ export interface Subscription {
    */
   attempts: number;
 
-  /** When the next renewal is due, in epoch milliseconds. */
   nextDueAt: number;
 
   updatedAt: number;
@@ -1593,7 +1592,6 @@ export interface PromoGrant {
   /** The full grant, in CREDIT; the sweep reverses only what the user hasn't already spent. */
   amount: Amount;
 
-  /** When the grant expires, in epoch milliseconds. */
   expiresAt: number;
 
   /** Set true once the unspent remainder is reversed; `claimDue` skips it thereafter. */
@@ -1604,7 +1602,7 @@ export interface PromoGrant {
 export interface Velocity {
   subject: string;
 
-  /** When the current window began, in epoch milliseconds. */
+  /** Epoch ms of the oldest attempt still inside the window; 0 when none are live. */
   windowStart: number;
 
   /** Total spent so far in this window. */
@@ -1650,7 +1648,7 @@ export interface Checkpoint {
   /** How many account heads the root covers. */
   count: number;
 
-  /** When the snapshot was taken, in epoch milliseconds. */
+  /** When the snapshot was taken. */
   at: number;
 
   /** Preimage construction this row was sealed under. Rows from before versioning decode as 1. */
@@ -1703,9 +1701,7 @@ export interface Lot {
   /** Where the funds came from. */
   source: string;
 
-  /** When the lot was topped up, in epoch milliseconds. */
   toppedUpAt: number;
 
-  /** When the lot matures, in epoch milliseconds. */
   maturesAt: number;
 }

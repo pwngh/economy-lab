@@ -765,8 +765,9 @@ async function lotPage(
   return result.rows as Record<string, unknown>[];
 }
 
-// Null when the leg lowered the balance (a spend): the credit/debit sign is a domain rule, so the
-// filter lives in code, not SQL. Absent meta defaults to a mature-now 'unknown' source.
+// Null when the leg lowered the balance (a spend). The SQL sign filter in lotPage already excludes
+// those rows; this re-check only guards a drifted schema. Absent meta defaults to a mature-now
+// 'unknown' source.
 function rowToLot(
   account: AccountRef,
   row: Record<string, unknown>,

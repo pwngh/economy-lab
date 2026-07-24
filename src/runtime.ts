@@ -83,7 +83,7 @@ export function sequentialIds(seed = 0): Ids {
 }
 
 /**
- * Production hasher. Returns the shared SHA-256 {@link Digest} ({@link sha256Digest}): a synchronous
+ * Production hasher. Returns the shared SHA-256 {@link Digest} (`sha256Digest`): a synchronous
  * node:crypto hash where the runtime offers one, else Web Crypto. The same bytes hash to the same
  * value on every runtime, so a signed checkpoint re-derives wherever it is verified.
  */

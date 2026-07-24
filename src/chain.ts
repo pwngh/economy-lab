@@ -367,13 +367,9 @@ export async function merkleRoot(
  * root hash fixes every head AND every sum at once, and the root sum is as tamper-evident as the
  * root hash. `sum` per leaf is the account's raw signed leg total (debit positive), which is why
  * a consistent ledger's root sums to zero: legs net to zero per currency, so they net to zero in
- * total. Reproducible across machines the same way `merkleRoot` is: leaves sorted by account id,
- * versioned domain tags, left-then-right hashing, and the sum encoded as fixed-width big-endian
- * bytes (`toInt64BE`), never as formatted text. With no accounts the root is the genesis value of
- * 32 zero bytes and a zero sum.
- *
- * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for how the
- *   root anchors the whole ledger under one signature.
+ * total. Reproducible across machines the same way `merkleRoot` is, with versioned domain tags and
+ * the sum encoded as fixed-width big-endian bytes (`toInt64BE`), never as formatted text. With no
+ * accounts the root is the genesis value of 32 zero bytes and a zero sum.
  */
 export async function merkleSumRoot(
   digest: Digest,
@@ -395,7 +391,7 @@ export async function merkleSumRoot(
     for (let i = 0; i < level.length; i += 2) {
       const left = level[i]!;
       const right = level[i + 1];
-      // On an odd count the last unpaired node carries up unchanged, sum included.
+      // Odd count: the last unpaired node carries up unchanged (same rule as combineLevel), sum included.
       next.push(
         right
           ? {

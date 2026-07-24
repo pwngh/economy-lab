@@ -328,6 +328,7 @@ export type Rejection = Extract<Outcome, { status: 'rejected' }>;
 
 /** A committed posting: the record of money that actually moved. */
 export interface Transaction {
+  /** Of the form txn_<uuid>. */
   id: string;
 
   /** When it committed, in epoch milliseconds. */

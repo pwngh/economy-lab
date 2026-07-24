@@ -221,7 +221,7 @@ const APP_DML_TABLES = [
  * schema, so post_entry's DEFINER is privileged and stays the sole writer of `legs`. The store and
  * raw pools then connect as the restricted role, and the database is dropped on close. Both pools
  * point at it, so a raw INSERT lands in the very table post_entry writes, except `legs`, which the
- * restricted role may not write directly.
+ * restricted role cannot write directly.
  */
 export async function adversarialMysql(
   env: EnvMap,

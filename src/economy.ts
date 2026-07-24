@@ -625,7 +625,8 @@ async function rejectionsRollBack(step: Step): Promise<Outcome> {
 }
 
 // High enough for any legitimate operation; blocks overflow-scale values from a typo or a hostile
-// caller.
+// caller. 10^15 sits ~9000x under the signed 64-bit bound the BIGINT columns enforce
+// (AMOUNT_OVERFLOW), so no run of legal operations lands near the column limit.
 const MAX_OP_AMOUNT_MINOR = 1_000_000_000_000_000n;
 
 // Checked once here rather than per handler. The shard and accrual knobs are passed so every
@@ -1498,7 +1499,8 @@ function userSubject(operation: Operation): string {
 
 // --- Ledger export (the offline-verification file) --------------------------------
 
-/** First-line marker of a ledger export; scripts/ledger-verify.ts refuses files without it. */
+/** First-line marker a ledger export's header declares; `parseExport` (and so `verifyExport`
+ *  and scripts/ledger-verify.ts) refuses a file without it. */
 export const EXPORT_FORMAT = 'economy-lab/ledger-export';
 
 // Link lines carry the full posting (legs, meta, both hashes), so the file alone re-proves

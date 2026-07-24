@@ -47,7 +47,7 @@ export function assertSchemaCurrent(
  * Throws unless the live database passed the money conformance vectors at boot. `failures` is
  * the output of the vendored db carrier's provePostgres/proveMysql, run right after its
  * idempotent install — so a non-empty list means the engine's own arithmetic disagrees with
- * src/money.vendored.ts, and no posting should be trusted to it.
+ * src/money.vendored.ts, and no posting is safe to trust to it.
  */
 export function assertMoneyConformant(
   failures: readonly string[],

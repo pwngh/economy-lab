@@ -141,7 +141,7 @@ async function postSettlementEntries(
   const { saga, usd, fee, net, rateId } = entry;
   // The lock set only knew the sagaId, so it locked the bare reserve; the reserve actually sits on
   // the shard routed by the saga's user — lock that one too before debiting it. The other platform
-  // legs stay bare: worker cadence, and unlike the reserve they may go negative safely.
+  // legs stay bare: worker cadence, and unlike the reserve they can go negative safely.
   const reserveRef = platformShard(
     SYSTEM.PAYOUT_RESERVE,
     saga.userId,
