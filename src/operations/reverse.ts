@@ -11,6 +11,7 @@
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { lockAll, postEntry } from '#src/ledger.ts';
+import { verifiedPosting } from '#src/chain.ts';
 import { negate } from '#src/money.ts';
 import {
   assertKind,
@@ -50,7 +51,7 @@ export async function reverse(
   assertOperator(operation);
   assertReason(operation);
 
-  const original = await loadPosting(unit, operation.txnId);
+  const original = await loadPosting(unit, ctx, operation.txnId);
   assertNotReversal(operation, original);
   await extendLocks(unit, original.legs);
 
@@ -73,10 +74,19 @@ export async function reverse(
   return { status: 'committed', transaction };
 }
 
-// Loads the transaction to undo. The operator typed this id, so an unknown one is operator error
-// and throws a fault. Compare `refund`, where an unknown order id is an everyday caller decline.
-async function loadPosting(unit: Unit, txnId: string): Promise<Posting> {
-  const posting = await unit.ledger.posting(txnId);
+// Loads the transaction to undo, re-proved against its own chain links (verifiedPosting) —
+// the flipped legs derive money directly, so an in-place edit must fault before it shapes them.
+// The operator typed this id, so an unknown one is operator error and throws a fault. Compare
+// `refund`, where an unknown order id is an everyday caller decline.
+async function loadPosting(
+  unit: Unit,
+  ctx: Ctx,
+  txnId: string,
+): Promise<Posting> {
+  const posting = await verifiedPosting(
+    { ledger: unit.ledger, digest: ctx.digest },
+    txnId,
+  );
   if (posting === null) {
     throw fault(
       ERROR_CODES.MALFORMED_OPERATION,

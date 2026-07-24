@@ -9,8 +9,9 @@
  * @license MIT
  */
 
-import { normalizeError } from '#src/errors.ts';
+import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
+import { verifiedPosting } from '#src/chain.ts';
 import { toAmount } from '#src/money.ts';
 import { promo, SYSTEM } from '#src/accounts.ts';
 
@@ -90,6 +91,28 @@ async function settle(args: {
 }): Promise<Amount> {
   const { store, ctx, grant, options } = args;
   return store.transaction(async (unit) => {
+    // The grant row is unhashed but shares its id with the granting posting: re-prove that
+    // posting and match the row's amount and expiry against the sealed leg and metadata before
+    // clawing by it — an edited expiry would otherwise reclaim unspent promo off schedule.
+    const posting = await verifiedPosting(
+      { ledger: unit.ledger, digest: ctx.digest },
+      grant.id,
+    );
+    const promoLeg = posting?.legs.find(
+      (leg) => leg.account === promo(grant.userId),
+    );
+    if (
+      posting === null ||
+      promoLeg === undefined ||
+      -promoLeg.amount.minor !== grant.amount.minor ||
+      posting.meta.expiresAt !== grant.expiresAt
+    ) {
+      throw fault(
+        ERROR_CODES.CHAIN_BROKEN,
+        'A promo grant does not re-derive from its granting posting; refusing to reverse by an unverifiable row.',
+        { retryable: false, detail: { id: grant.id, userId: grant.userId } },
+      );
+    }
     await unit.ledger.lock(promo(grant.userId), options);
     const bal = await unit.ledger.balance(promo(grant.userId), options);
     const reverseMinor =

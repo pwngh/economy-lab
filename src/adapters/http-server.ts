@@ -109,6 +109,25 @@ async function ledgerRoute(
     const posting = await ledger.posting(body.txnId as string);
     return posting === null ? null : encodeWire.posting(posting);
   }
+  if (method === 'links') {
+    return ledger.links(body.txnId as string);
+  }
+  if (method === 'linksPage') {
+    const page = await ledger.linksPage(
+      body.cursor as number | null,
+      body.limit as number,
+    );
+    return {
+      cursor: page.cursor,
+      links: page.links.map((link) => ({
+        ...link,
+        legs: link.legs.map((leg) => ({
+          account: leg.account,
+          amount: encodeWire.amount(leg.amount),
+        })),
+      })),
+    };
+  }
   return ledgerReadRoute(ledger, method, body);
 }
 

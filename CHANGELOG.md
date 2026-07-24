@@ -9,6 +9,11 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
 - `Ledger.links` and `Ledger.linksPage` read an account's chain links in lineage order
   (`StoredLink` rows). Breaking: custom ledger implementations must provide both.
 
+### Changed
+
+- Money-deriving reads re-prove the stored posting's chain link before acting: saga settle and
+  reverse, subscription renewal, the promo sweep, refund, and reversal.
+
 ## 0.4.4 - 2026-07-23
 
 ### Added

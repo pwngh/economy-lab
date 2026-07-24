@@ -192,6 +192,80 @@ function recomputeLink(
 }
 
 /**
+ * Loads a posting and proves its stored content against its own chain links before returning it —
+ * the read every handler that derives money from history must use. Each touched account's link
+ * hash is recomputed from the stored legs and metadata (both inside the preimage), so an in-place
+ * edit faults CHAIN_BROKEN here instead of shaping a reversal; the zero-sum check catches a leg
+ * deleted together with its link. What this deliberately does not prove: an attacker who
+ * re-derives an account's whole chain moves its head, which the next seal flags as dirty and
+ * breaks on — that variant is bounded by seal cadence, and restoring the head exactly requires a
+ * hash collision. Null on an unknown id, exactly like {@link Ledger.posting}.
+ */
+export async function verifiedPosting(
+  deps: { ledger: Ledger; digest: Digest },
+  txnId: string,
+  options?: CallOptions,
+): Promise<Posting | null> {
+  const posting = await deps.ledger.posting(txnId, options);
+  if (posting === null) {
+    return null;
+  }
+  const links = new Map(
+    (await deps.ledger.links(txnId, options)).map((link) => [
+      link.account,
+      link,
+    ]),
+  );
+  for (const account of new Set(posting.legs.map((leg) => leg.account))) {
+    const link = links.get(account);
+    const recomputed =
+      link === undefined
+        ? null
+        : await chainHash(deps.digest, {
+            accountPrevHash: fromHex(link.prevHash),
+            txnId,
+            account,
+            legs: posting.legs,
+            meta: posting.meta,
+          });
+    if (recomputed === null || recomputed !== link!.hash) {
+      throw fault(
+        ERROR_CODES.CHAIN_BROKEN,
+        'A stored posting failed to re-derive against its chain links; refusing to derive money from tampered history.',
+        { retryable: false, detail: { txnId, account } },
+      );
+    }
+  }
+  assertZeroSum(posting);
+  return posting;
+}
+
+// Every honestly posted entry nets to zero per currency, so a nonzero total here means a leg was
+// removed together with its account's link — the one in-place edit the per-link recompute alone
+// cannot see.
+function assertZeroSum(posting: Posting): void {
+  const sums = new Map<string, bigint>();
+  for (const leg of posting.legs) {
+    sums.set(
+      leg.amount.currency,
+      (sums.get(leg.amount.currency) ?? 0n) + leg.amount.minor,
+    );
+  }
+  for (const [currency, sum] of sums) {
+    if (sum !== 0n) {
+      throw fault(
+        ERROR_CODES.CHAIN_BROKEN,
+        'A stored posting no longer nets to zero; refusing to derive money from tampered history.',
+        {
+          retryable: false,
+          detail: { txnId: posting.txnId, currency, sum: sum.toString() },
+        },
+      );
+    }
+  }
+}
+
+/**
  * Reduces every account's head into one Merkle root, so signing the root (see `recordCheckpoint`)
  * covers every chain in one signature. The root changes if any head changes. The root is
  * reproducible across machines because leaves are sorted by account id, the RFC 6962 domain tags
