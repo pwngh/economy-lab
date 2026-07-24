@@ -20,6 +20,7 @@ import {
   walletKindOf,
 } from '#src/accounts.ts';
 import { byCodeUnit } from '#src/bytes.ts';
+import { GENESIS_HEX } from '#src/ledger.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { systemClock } from '#src/runtime.ts';
 import {
@@ -27,6 +28,8 @@ import {
   callFunction,
   postEntryArgs,
 } from '#src/engines/sql-routines.ts';
+
+import type { PostEntryArgs } from '#src/engines/sql-routines.ts';
 import {
   defaultDigest,
   CHAIN_FORK_INDEX,
@@ -46,6 +49,10 @@ import {
   withTransientRetry,
   retryTelemetry,
   isSeededSystemAccount,
+  KnownAccounts,
+  StagedAccounts,
+  TxHeads,
+  advanceCapturedHeads,
 } from '#src/engines/sql-shared.ts';
 import { metaString, metaNumber } from '#src/meta.ts';
 import { assertSchemaCurrent } from '#src/schema.ts';
@@ -124,6 +131,15 @@ interface ExecDeps {
   // The store's pool, for statements that must commit outside `exec`'s transaction; in the
   // non-transactional unit, `exec` is the pool itself.
   pool: MysqlPool;
+  // Store-wide cache of accounts whose rows exist as committed data; lets the hot path skip
+  // first-use probes and plants (see KnownAccounts in sql-shared).
+  known: KnownAccounts;
+  // Where this transaction's plants wait for commit-promotion into `known`. Absent on the
+  // non-transactional pool unit, whose plants simply stay uncached until a later probe sees them.
+  staged?: StagedAccounts;
+  // Chain heads captured at lock time (the locking FOR UPDATE returns them in the same
+  // statement) and advanced by this transaction's own appends; absent outside a transaction.
+  heads?: TxHeads;
 }
 
 async function rows(
@@ -188,16 +204,27 @@ async function isKnownAccount(
 // stale head would fork the chain on chain_links_account_prev_uq (errno 1062) and cost a retry.
 // lockAccounts already holds these rows, so the lock is free here.
 async function headsForAccounts(
-  exec: MysqlExecutor,
+  deps: ExecDeps,
   accounts: ReadonlyArray<AccountRef>,
 ): Promise<Map<string, string>> {
   const heads = new Map<string, string>();
   if (accounts.length === 0) {
     return heads;
   }
+  // Full coverage from the lock-time capture skips the query; the locks held since capture
+  // guarantee the heads are exact. Partial coverage (an unlocked append, e.g. conformance
+  // driving the ledger directly) falls through to the query and does not populate the capture —
+  // an unlocked head can move under us, and the chain-fork index plus retry covers that.
+  const captured = deps.heads;
+  if (captured !== undefined && accounts.every((a) => captured.has(a))) {
+    for (const account of accounts) {
+      heads.set(account, captured.get(account)!);
+    }
+    return heads;
+  }
   const marks = accounts.map(() => '?').join(', ');
   const found = await rows(
-    exec,
+    deps.exec,
     `SELECT account_id, head_hash FROM account_balances
       WHERE account_id IN (${marks})
       ORDER BY account_id
@@ -214,11 +241,80 @@ async function advanceChain(
   deps: ExecDeps,
   posting: Posting,
 ): Promise<ReadonlyArray<Link>> {
-  const heads = await headsForAccounts(
-    deps.exec,
-    distinctAccounts(posting.legs),
-  );
+  const heads = await headsForAccounts(deps, distinctAccounts(posting.legs));
   return chainLinksFor(deps.digest, posting, heads);
+}
+
+// One head read over the union and one post_entries CALL for the whole set — the fused
+// pair-posting write. Heads thread forward app-side, so a later posting chains onto an earlier
+// one's new head exactly as sequential appends would; the union head read takes the same sorted
+// FOR UPDATE locks a sequential pair would, just once.
+async function appendPostings(
+  deps: ExecDeps,
+  postings: ReadonlyArray<Posting>,
+): Promise<Transaction[]> {
+  const postedAt = deps.clock.now();
+  const heads = await headsForAccounts(
+    deps,
+    distinctAccounts(postings.flatMap((posting) => posting.legs)),
+  );
+  const transactions: Transaction[] = [];
+  const entries: Array<Record<string, unknown>> = [];
+  for (const posting of postings) {
+    const links = await chainLinksFor(deps.digest, posting, heads);
+    for (const link of links) {
+      heads.set(link.account, link.hash);
+    }
+    const args = postEntryArgs(posting, links);
+    screenNewAccounts(deps, posting, args);
+    entries.push({
+      txn: posting.txnId,
+      postedAt,
+      meta: posting.meta,
+      legs: args.legs,
+      links: args.links,
+      balances: args.balances,
+      newAccounts: args.newAccounts,
+    });
+    transactions.push({
+      id: posting.txnId,
+      postedAt,
+      legs: posting.legs,
+      links,
+      meta: posting.meta,
+    });
+  }
+  await callProcedure(mysqlQuery(deps.exec), 'mysql', 'post_entries', [
+    JSON.stringify(entries),
+  ]);
+  advanceCapturedHeads(deps.heads, transactions);
+  return transactions;
+}
+
+// postEntryArgs collects only user accounts. A platform shard (`platform:revenue#3`) is also
+// created on first use — the schema seeds just the bare ids — so add each one with kind `system`.
+// Then drop every account the known-set can vouch for and stage the rest for commit-promotion:
+// steady-state the proc receives an empty list and its first-use INSERT IGNORE scans nothing.
+// post_entry's balance fold creates the account_balances row for every account it touches, so a
+// committed posting is complete evidence for both rows.
+function screenNewAccounts(
+  deps: ExecDeps,
+  posting: Posting,
+  args: PostEntryArgs,
+): void {
+  for (const account of distinctAccounts(posting.legs)) {
+    if (baseOf(account) !== account && isSeededSystemAccount(account)) {
+      args.newAccounts.push({
+        id: account,
+        kind: 'system',
+        currency: currency(account),
+      });
+    }
+  }
+  args.newAccounts = args.newAccounts.filter((row) => !deps.known.has(row.id));
+  for (const row of args.newAccounts) {
+    deps.staged?.add(row.id);
+  }
 }
 
 // Legs are stored one row per leg (lineageOf re-derives the hash from the full leg set); chain
@@ -233,18 +329,7 @@ async function insertPosting(
 
   // The JSON arrays carry the bigint amounts as strings to keep values past 2^53.
   const args = postEntryArgs(posting, links);
-  // postEntryArgs collects only first-use user accounts. A platform shard (`platform:revenue#3`)
-  // is also created on first use — the schema seeds just the bare ids — so add each one with kind
-  // `system`; post_entry's INSERT IGNORE makes repeats free.
-  for (const account of distinctAccounts(posting.legs)) {
-    if (baseOf(account) !== account && isSeededSystemAccount(account)) {
-      args.newAccounts.push({
-        id: account,
-        kind: 'system',
-        currency: currency(account),
-      });
-    }
-  }
+  screenNewAccounts(deps, posting, args);
   await callProcedure(mysqlQuery(deps.exec), 'mysql', 'post_entry', [
     posting.txnId,
     postedAt,
@@ -254,13 +339,15 @@ async function insertPosting(
     JSON.stringify(args.balances),
     JSON.stringify(args.newAccounts),
   ]);
-  return {
+  const transaction = {
     id: posting.txnId,
     postedAt,
     legs: posting.legs,
     links,
     meta: posting.meta,
   };
+  advanceCapturedHeads(deps.heads, [transaction]);
+  return transaction;
 }
 
 function mysqlQuery(exec: MysqlExecutor) {
@@ -305,42 +392,64 @@ async function plantAndLock(
   if (accounts.length === 0) {
     return;
   }
-  const marks = accounts.map(() => '?').join(', ');
-  const found = await rows(
-    deps.exec,
-    `SELECT account_id FROM account_balances
-      WHERE account_id IN (${marks})`,
-    [...accounts],
-  );
-  const have = new Set(found.map((row) => row.account_id as string));
-  // Sorted so concurrent plants insert in the same order and can't deadlock each other.
-  const missing = accounts
-    .filter((account) => !have.has(account))
-    .sort(byCodeUnit);
-  if (missing.length > 0) {
-    // INSERT IGNORE, so losing a plant race is fine: the row is there either way.
-    await execWrite(
+  // The probe covers only accounts the known-set can't vouch for; steady-state that is nobody
+  // and the whole call is the single FOR UPDATE below. Inside a transaction a probe hit can be
+  // this transaction's own uncommitted plant, so hits stage for commit-promotion like plants;
+  // on the pool unit they enter the known-set directly.
+  const unknown = accounts.filter((account) => !deps.known.has(account));
+  if (unknown.length > 0) {
+    const found = await rows(
       deps.exec,
-      `INSERT IGNORE INTO accounts (id, kind, currency)
-        VALUES ${missing.map(() => '(?, ?, ?)').join(', ')}`,
-      missing.flatMap((a) => [a, rowKind(a), currency(a)]),
+      `SELECT account_id FROM account_balances
+        WHERE account_id IN (${unknown.map(() => '?').join(', ')})`,
+      [...unknown],
     );
-    await execWrite(
-      deps.exec,
-      `INSERT IGNORE INTO account_balances (account_id, currency, balance, head_hash)
-        VALUES ${missing.map(() => `(?, ?, 0, REPEAT('0', 64))`).join(', ')}`,
-      missing.flatMap((a) => [a, currency(a)]),
-    );
+    const have = new Set(found.map((row) => row.account_id as string));
+    for (const account of have) {
+      (deps.staged ?? deps.known).add(account);
+    }
+    // Sorted so concurrent plants insert in the same order and can't deadlock each other.
+    const missing = unknown
+      .filter((account) => !have.has(account))
+      .sort(byCodeUnit);
+    if (missing.length > 0) {
+      // INSERT IGNORE, so losing a plant race is fine: the row is there either way.
+      await execWrite(
+        deps.exec,
+        `INSERT IGNORE INTO accounts (id, kind, currency)
+          VALUES ${missing.map(() => '(?, ?, ?)').join(', ')}`,
+        missing.flatMap((a) => [a, rowKind(a), currency(a)]),
+      );
+      await execWrite(
+        deps.exec,
+        `INSERT IGNORE INTO account_balances (account_id, currency, balance, head_hash)
+          VALUES ${missing.map(() => `(?, ?, 0, REPEAT('0', 64))`).join(', ')}`,
+        missing.flatMap((a) => [a, currency(a)]),
+      );
+      for (const account of missing) {
+        deps.staged?.add(account);
+      }
+    }
   }
-  // Every row exists now, so this takes plain record locks, in account_id order.
-  await rows(
+  // Every row exists now, so this takes plain record locks, in account_id order. The statement
+  // returns each row's head in the same round trip, feeding the transaction's head capture: a
+  // head read under a lock held to commit stays exact.
+  const locked = await rows(
     deps.exec,
-    `SELECT account_id FROM account_balances
-      WHERE account_id IN (${marks})
+    `SELECT account_id, head_hash FROM account_balances
+      WHERE account_id IN (${accounts.map(() => '?').join(', ')})
       ORDER BY account_id
         FOR UPDATE`,
     [...accounts],
   );
+  if (deps.heads !== undefined) {
+    const found = new Map(
+      locked.map((row) => [row.account_id as string, row.head_hash as string]),
+    );
+    for (const account of accounts) {
+      deps.heads.set(account, found.get(account) ?? GENESIS_HEX);
+    }
+  }
 }
 
 // The tip of every account's chain, as the JOIN fragment both head reads share. MySQL has no
@@ -365,6 +474,8 @@ function createLedgerStore(deps: ExecDeps): Ledger {
     lockMany: (accounts) => plantAndLock(deps, accounts),
 
     append: async (posting) => insertPosting(deps, posting),
+
+    appendAll: async (postings) => appendPostings(deps, postings),
 
     balance: async (account) => {
       const raw = await callFunction(
@@ -1591,6 +1702,43 @@ async function measureVelocity(
   } satisfies Velocity;
 }
 
+// A CALL whose procedure returns rows: mysql2 wraps the result set in an extra array ahead of
+// the OK packet, so the rows are the first element.
+async function callRows(
+  exec: MysqlExecutor,
+  sql: string,
+  params: ReadonlyArray<unknown>,
+): Promise<Row[]> {
+  const [results] = await exec.query(sql, params);
+  const first = (results as unknown[])[0];
+  return (Array.isArray(first) ? first : []) as Row[];
+}
+
+// The one-round-trip trust_record procedure call both trust stores share; the proc takes the
+// subject lock, inserts, and measures server-side (see db/mysql-schema.sql).
+async function recordViaProcedure(
+  exec: MysqlExecutor,
+  subject: string,
+  attempt: Attempt,
+  cutoff: number,
+): Promise<Velocity> {
+  const found = await callRows(exec, 'CALL trust_record(?, ?, ?, ?, ?, ?)', [
+    attempt.idempotencyKey,
+    subject,
+    attempt.amount.minor.toString(),
+    attempt.outcome,
+    attempt.at,
+    cutoff,
+  ]);
+  const row = found[0]!;
+  return {
+    subject,
+    windowStart: Number(row.window_start),
+    spent: toAmount('CREDIT', readMinor(row.spent)),
+    attempts: Number(row.attempts),
+  } satisfies Velocity;
+}
+
 async function insertAttempt(
   exec: MysqlExecutor,
   subject: string,
@@ -1619,15 +1767,14 @@ function createTrustStore(
     read: async (subject) =>
       measureVelocity(pool, subject, clock.now() - windowMs),
     bump: async (subject, attempt) => insertAttempt(pool, subject, attempt),
-    // A per-subject named lock serializes the insert and the SUM — the atomicity `TrustStore.record`
-    // requires (ports.ts). The lock is released in `finally`, so a later borrower never inherits it.
+    // The proc's per-subject named lock serializes the insert and the SUM — the atomicity
+    // `TrustStore.record` requires (ports.ts). The lock attaches to the borrowed connection, so
+    // it is released in `finally` and a later borrower never inherits it.
     record: async (subject, attempt) => {
       const cutoff = clock.now() - windowMs;
       const connection = await pool.getConnection();
       try {
-        await takeGetLock(connection, subjectLockName(subject));
-        await insertAttempt(connection, subject, attempt);
-        return await measureVelocity(connection, subject, cutoff);
+        return await recordViaProcedure(connection, subject, attempt, cutoff);
       } finally {
         await releaseLocks(connection);
         connection.release();
@@ -1637,8 +1784,9 @@ function createTrustStore(
 }
 
 // The transaction-scoped trust view a Unit carries: `record` runs on the money transaction's own
-// connection, so the inserted attempt commits with the money, and the named lock holds until
-// `transaction()` releases it after commit or rollback.
+// connection, so the inserted attempt commits with the money, and the proc's named lock holds
+// until `transaction()` releases it after commit or rollback. The proc derives the lock name
+// itself (`trust:` tag, 56-byte cap).
 function createUnitTrustStore(
   exec: MysqlExecutor,
   clock: Clock,
@@ -1648,27 +1796,11 @@ function createUnitTrustStore(
     read: async (subject) =>
       measureVelocity(exec, subject, clock.now() - windowMs),
     bump: async (subject, attempt) => insertAttempt(exec, subject, attempt),
-    record: async (subject, attempt) => {
-      await takeGetLock(exec, subjectLockName(subject));
-      await insertAttempt(exec, subject, attempt);
-      return measureVelocity(exec, subject, clock.now() - windowMs);
-    },
+    record: async (subject, attempt) =>
+      recordViaProcedure(exec, subject, attempt, clock.now() - windowMs),
   };
 }
 
-// Same 64-byte cap and prefix#length scheme as `lockName`; the `trust:` tag keeps a subject lock
-// from colliding with an account lock of the same string.
-function subjectLockName(subject: string): string {
-  const tagged = `trust:${subject}`;
-  return tagged.length <= 56
-    ? tagged
-    : `${tagged.slice(0, 48)}#${tagged.length}`;
-}
-
-// --- Checkpoint store (used only by background workers) ---------------------------
-
-// Written on the pool, not in a money transaction, so a recorded checkpoint survives even if a later
-// money transaction rolls back.
 // --- Movement journal ---------------------------------------------------------------
 
 // Append-only and never part of a money transaction (see MovementJournal in ports.ts). The whole
@@ -1956,6 +2088,16 @@ function buildUnit(deps: ExecDeps, trust: TrustStore): Unit {
 /**
  *
  * `transaction(work)` borrows one connection, wraps `work` in START TRANSACTION ... COMMIT, and
+ * rolls back if `work` throws. Money transactions run at READ COMMITTED (set once per pooled
+ * connection); correctness comes from explicit `FOR UPDATE` row locks plus a `GET_LOCK` named
+ * lock per account. A transient InnoDB abort — deadlock, lock-wait timeout, named-lock deadlock,
+ * or a stale-head chain fork — committed nothing, so the whole unit of work is re-run in a fresh
+ * connection and transaction and callers never see it as an error. Every posting appends to a
+ * per-account hash chain, and the schema's triggers enforce conservation and chain continuity on
+ * every write. On the way out of a transaction every named lock the connection acquired is
+ * released, so a returned connection carries no leftover locks. Anything outside a transaction
+ * (plain reads/writes, plus the trust and checkpoint stores) runs directly on the pool and
+ * commits on its own.
  *
  * The hash service defaults to the deterministic web-standard SHA-256; the clock defaults to
  * wall-clock time. Pass a fixed clock when reproducible `postedAt` values matter. The velocity
@@ -2007,7 +2149,8 @@ export function mysqlStore(deps: {
     });
     return connection;
   };
-  const poolDeps: ExecDeps = { exec: pool, digest, clock, pool };
+  const known = new KnownAccounts();
+  const poolDeps: ExecDeps = { exec: pool, digest, clock, pool, known };
 
   const trust = createTrustStore(pool, clock, velocityWindowMs);
   const auto = buildUnit(poolDeps, trust);
@@ -2037,34 +2180,11 @@ export function mysqlStore(deps: {
     transaction: async (work) => {
       await ensureSchemaAsserted();
       return withTransientRetry(
-        async () => {
-          const connection = await acquireTimed();
-          try {
-            // Run the money transaction at READ COMMITTED, like Postgres. Correctness comes from
-            // the explicit FOR UPDATE locks, which behave the same at either level. REPEATABLE
-            // READ only ever hurt here: its pinned snapshot served stale mid-transaction reads,
-            // and its gap locks deadlocked concurrent first-use inserts. The reads the schema's
-            // own triggers make take those gap locks too. The SET covers just the next
-            // transaction, so the connection returns to the pool unchanged.
-            await connection.query(
-              'SET TRANSACTION ISOLATION LEVEL READ COMMITTED',
-            );
-            await connection.query('START TRANSACTION');
-            const unit = buildUnit(
-              { exec: connection, digest, clock, pool },
-              createUnitTrustStore(connection, clock, velocityWindowMs),
-            );
-            const result = await work(unit);
-            await connection.query('COMMIT');
-            return result;
-          } catch (error) {
-            await safeRollback(connection);
-            throw error;
-          } finally {
-            await releaseLocks(connection);
-            connection.release();
-          }
-        },
+        () =>
+          transactionAttempt(
+            { acquireTimed, digest, clock, pool, velocityWindowMs, known },
+            work,
+          ),
         isTransientConflict,
         { observer: retryObserver },
       );
@@ -2076,6 +2196,78 @@ export function mysqlStore(deps: {
   };
 }
 
+type AttemptEnv = {
+  acquireTimed: () => Promise<MysqlConnection>;
+  digest: Digest;
+  clock: Clock;
+  pool: MysqlPool;
+  velocityWindowMs: number;
+  known: KnownAccounts;
+};
+
+// Money transactions run at READ COMMITTED, like Postgres: correctness comes from the explicit
+// FOR UPDATE locks, which behave the same at either level, while REPEATABLE READ's pinned
+// snapshot served stale mid-transaction reads and its gap locks deadlocked concurrent first-use
+// inserts. The level is set once per pooled connection at the session level — every transaction
+// on the connection wants it, and a single-statement autocommit read observes the same latest
+// committed state at either level, so the returned connection serves reads unchanged.
+const readCommittedSet = new WeakSet<object>();
+async function ensureReadCommitted(connection: MysqlConnection): Promise<void> {
+  // mysql2's promise pool hands out a fresh wrapper per borrow; the stable identity is the
+  // underlying core connection it exposes as `.connection`. An absent field falls back to the
+  // wrapper, which only costs a repeated (idempotent) SET.
+  const key = (connection as { connection?: object }).connection ?? connection;
+  if (readCommittedSet.has(key)) {
+    return;
+  }
+  await connection.query(
+    'SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED',
+  );
+  readCommittedSet.add(key);
+}
+// The per-transaction scratch state the savepoint walk needs to roll back alongside the data:
+// staged plants and captured heads.
+type TxScratch = { staged: StagedAccounts; heads: TxHeads };
+
+async function transactionAttempt<T>(
+  env: AttemptEnv,
+  work: (
+    unit: Unit,
+    connection: MysqlConnection,
+    scratch: TxScratch,
+  ) => Promise<T>,
+): Promise<T> {
+  const connection = await env.acquireTimed();
+  const staged = new StagedAccounts();
+  const heads = new TxHeads();
+  try {
+    await ensureReadCommitted(connection);
+    await connection.query('START TRANSACTION');
+    const unit = buildUnit(
+      {
+        exec: connection,
+        digest: env.digest,
+        clock: env.clock,
+        pool: env.pool,
+        known: env.known,
+        staged,
+        heads,
+      },
+      createUnitTrustStore(connection, env.clock, env.velocityWindowMs),
+    );
+    const result = await work(unit, connection, { staged, heads });
+    await connection.query('COMMIT');
+    // Only now are this transaction's plants committed data; a rollback promotes nothing.
+    staged.promoteInto(env.known);
+    return result;
+  } catch (error) {
+    await safeRollback(connection);
+    throw error;
+  } finally {
+    await releaseLocks(connection);
+    connection.release();
+  }
+}
 // The store factory is sync, so an 'assert' schema policy runs lazily before the first operation
 // of any kind — reads through the gated pool, transactions directly — rather than at open.
 // Concurrent first calls share one in-flight check; once verified it never re-checks. A failed
@@ -2199,7 +2391,7 @@ export async function readSchemaVersion(
  * during setup (operations tooling or CI), never automatically at app startup.
  *
  * mysql2 sends one statement per `query`, so the file is split into individual statements first
- * (see {@link splitSqlStatements}), then each is run in order.
+ * (honoring the mysql CLI's `DELIMITER` directive for routine bodies), then each is run in order.
  */
 export async function applyMysqlSchema(pool: MysqlPool): Promise<void> {
   const path = fileURLToPath(
@@ -2245,6 +2437,13 @@ function splitSqlStatements(sql: string): string[] {
       }
       buffer = '';
     }
+  }
+  // A nonempty tail means a statement never met its delimiter — a same-line trailing comment
+  // after the `;`, or a missing terminator. Fail loud instead of silently dropping it.
+  if (buffer.trim() !== '') {
+    throw new Error(
+      `mysql schema: unterminated trailing statement: ${buffer.trim().slice(0, 80)}`,
+    );
   }
   return statements;
 }

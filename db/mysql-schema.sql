@@ -24,6 +24,9 @@ ALTER DATABASE CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
 -- DROP TABLEs.)
 DROP PROCEDURE IF EXISTS post_entry;
 
+DROP PROCEDURE IF EXISTS post_entries;
+DROP PROCEDURE IF EXISTS trust_record;
+
 DROP FUNCTION IF EXISTS account_balance;
 
 DROP TRIGGER IF EXISTS chain_links_continuity;
@@ -489,6 +492,40 @@ BEGIN
                             head_hash = VALUES(head_hash);
 END$$
 
+-- TrustStore.record's atomic record-then-measure in one round trip: the subject-scoped named
+-- lock serializes same-subject callers until the caller's transaction releases it, the insert
+-- dedupes on the attempt key, and the window read runs after the insert so the returned velocity
+-- already includes this attempt. The proc derives the lock name itself: the trust: tag keeps a
+-- subject lock from colliding with an account lock, capped like lockName in src/engines/mysql.ts.
+-- A non-acquire signals errno 1205 so the transient retry classifies it like any lock wait,
+-- matching the client-side GET_LOCK path this replaces.
+CREATE PROCEDURE trust_record(
+  IN p_key     VARCHAR(255),
+  IN p_subject VARCHAR(64),
+  IN p_amount  BIGINT,
+  IN p_outcome VARCHAR(16),
+  IN p_at      BIGINT,
+  IN p_cutoff  BIGINT
+)
+BEGIN
+  DECLARE v_name VARCHAR(80) DEFAULT CONCAT('trust:', p_subject);
+  IF CHAR_LENGTH(v_name) > 56 THEN
+    SET v_name = CONCAT(LEFT(v_name, 48), '#', CHAR_LENGTH(v_name));
+  END IF;
+  -- COALESCE: GET_LOCK returns NULL on error or kill, which must fail the acquire, not skip it.
+  IF COALESCE((SELECT GET_LOCK(v_name, 10)), 0) <> 1 THEN
+    SIGNAL SQLSTATE 'HY000'
+      SET MYSQL_ERRNO = 1205, MESSAGE_TEXT = 'trust_record: GET_LOCK did not acquire';
+  END IF;
+  INSERT IGNORE INTO trust_attempts (idempotency_key, subject, amount, outcome, at)
+    VALUES (p_key, p_subject, p_amount, p_outcome, p_at);
+  SELECT COALESCE(MIN(at), 0) AS window_start,
+         COALESCE(SUM(amount), 0) AS spent,
+         COUNT(*) AS attempts
+    FROM trust_attempts
+   WHERE subject = p_subject AND at > p_cutoff;
+END$$
+
 -- Returns one account's cached balance, 0 when it has no row yet.
 CREATE FUNCTION account_balance(p_account VARCHAR(96))
 RETURNS BIGINT
@@ -528,6 +565,27 @@ BEGIN
   IF NEW.balance <> expected THEN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'balance integrity: cached balance <> chain head balance';
   END IF;
+END$$
+
+-- The fused variant: several postings in one round trip, looped server-side through post_entry
+-- so the semantics are byte-identical to calling it per posting — a later element sees the
+-- balances and heads an earlier one wrote. Rationale in db/postgresql-schema.sql (post_entries).
+CREATE PROCEDURE post_entries(IN p_entries JSON)
+BEGIN
+  DECLARE i INT DEFAULT 0;
+  DECLARE n INT DEFAULT JSON_LENGTH(p_entries);
+  WHILE i < n DO
+    CALL post_entry(
+      JSON_UNQUOTE(JSON_EXTRACT(p_entries, CONCAT('$[', i, '].txn'))),
+      CAST(JSON_UNQUOTE(JSON_EXTRACT(p_entries, CONCAT('$[', i, '].postedAt'))) AS UNSIGNED),
+      JSON_EXTRACT(p_entries, CONCAT('$[', i, '].meta')),
+      JSON_EXTRACT(p_entries, CONCAT('$[', i, '].legs')),
+      JSON_EXTRACT(p_entries, CONCAT('$[', i, '].links')),
+      JSON_EXTRACT(p_entries, CONCAT('$[', i, '].balances')),
+      JSON_EXTRACT(p_entries, CONCAT('$[', i, '].newAccounts'))
+    );
+    SET i = i + 1;
+  END WHILE;
 END$$
 
 CREATE TRIGGER account_balances_integrity_upd BEFORE UPDATE ON account_balances

@@ -332,6 +332,17 @@ export interface Ledger {
    */
   append(posting: Posting, options?: CallOptions): Promise<Transaction>;
 
+  /**
+   * Appends several postings in one engine round trip, exactly as if `append` ran per posting
+   * in order — a later posting chains onto an earlier one's new head when they share an
+   * account. Optional: the hot operations that post entry pairs (topUp, settlePayout) fuse
+   * through it where the engine offers it; absent, callers loop `append`.
+   */
+  appendAll?(
+    postings: ReadonlyArray<Posting>,
+    options?: CallOptions,
+  ): Promise<Transaction[]>;
+
   /** A maintained running total: one read, not a sum over the account's whole history. */
   balance(account: AccountRef, options?: CallOptions): Promise<Amount>;
 

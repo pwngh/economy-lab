@@ -43,6 +43,7 @@ import {
   isDebitNormal,
   walletKindOf,
 } from '#src/accounts.ts';
+import { GENESIS_HEX } from '#src/ledger.ts';
 import { assertMoneyConformant, assertSchemaCurrent } from '#src/schema.ts';
 import { installPostgres, provePostgres } from '#src/db.vendored.ts';
 import { vectors as moneyVectors } from '#src/money.vendored.ts';
@@ -52,6 +53,9 @@ import {
   callFunction,
   postEntryArgs,
 } from '#src/engines/sql-routines.ts';
+
+import type { PostEntryArgs } from '#src/engines/sql-routines.ts';
+
 import {
   defaultDigest,
   CHAIN_FORK_INDEX,
@@ -71,6 +75,10 @@ import {
   retryTelemetry,
   installMoneyRetrying,
   isSeededSystemAccount,
+  KnownAccounts,
+  StagedAccounts,
+  TxHeads,
+  advanceCapturedHeads,
 } from '#src/engines/sql-shared.ts';
 import { metaString, metaNumber } from '#src/meta.ts';
 
@@ -126,6 +134,9 @@ interface PgClient {
 }
 interface PgResult {
   rows: Array<Record<string, unknown>>;
+  // Rows written by an INSERT/UPDATE/DELETE; the idempotency claim reads it. pg always sets it
+  // (null only for commands with no row count), so the optionality is just wire caution.
+  rowCount?: number | null;
 }
 export interface PgPool {
   connect(): Promise<PgClient>;
@@ -136,6 +147,21 @@ export interface PgPool {
 // Anything queryable, either the pool (for queries outside a transaction) or a checked-out client
 // (for queries inside one). Sub-stores target this so the same code works either way.
 type Queryable = Pick<PgPool, 'query'>;
+
+// What the ledger sub-store needs: the queryable plus the hashing and clock ports, and the shared
+// known-accounts machinery. `known` here vouches for the accounts row only — balance rows are
+// post_entry's job, and a first-use account locking nothing is the tolerated cold-start race.
+// `staged` is absent outside a transaction, where inserts simply stay uncached until re-seen.
+interface LedgerEnv {
+  q: Queryable;
+  digest: Digest;
+  clock: Clock;
+  known: KnownAccounts;
+  staged?: StagedAccounts;
+  // Chain heads captured at lock time (the locking FOR UPDATE returns them in the same
+  // statement) and advanced by this transaction's own appends; absent outside a transaction.
+  heads?: TxHeads;
+}
 
 // Return Postgres BIGINT and NUMERIC columns as JS BigInt instead of pg's default strings.
 // Balances can exceed 2^53 (largest integer a JS Number holds exactly), which Number would
@@ -187,10 +213,22 @@ function isKnownSuffix(account: AccountRef): boolean {
 // advances in the same transaction it writes chain_links. A missing row means genesis; chain_links
 // stays the source of truth (prove() re-walks it), so a drifted pointer surfaces there.
 async function headsForAccounts(
-  q: Queryable,
+  env: LedgerEnv,
   accounts: ReadonlyArray<AccountRef>,
 ): Promise<Map<string, string>> {
   const heads = new Map<string, string>();
+  // Full coverage from the lock-time capture skips the query; the locks held since capture
+  // guarantee the heads are exact. Partial coverage (an unlocked append, e.g. conformance
+  // driving the ledger directly) falls through to the query and does not populate the capture —
+  // an unlocked head can move under us, and the chain-fork index plus retry covers that.
+  const captured = env.heads;
+  if (captured !== undefined && accounts.every((a) => captured.has(a))) {
+    for (const account of accounts) {
+      heads.set(account, captured.get(account)!);
+    }
+    return heads;
+  }
+  const q = env.q;
   if (accounts.length === 0) {
     return heads;
   }
@@ -207,12 +245,11 @@ async function headsForAccounts(
 }
 
 async function advanceChain(
-  q: Queryable,
-  digest: Digest,
+  env: LedgerEnv,
   posting: Posting,
 ): Promise<ReadonlyArray<Link>> {
-  const heads = await headsForAccounts(q, distinctAccounts(posting.legs));
-  return chainLinksFor(digest, posting, heads);
+  const heads = await headsForAccounts(env, distinctAccounts(posting.legs));
+  return chainLinksFor(env.digest, posting, heads);
 }
 
 // A shard of a schema-seeded platform account (`platform:revenue#3`). Bare ids are seeded; a
@@ -228,36 +265,50 @@ function accountRow(account: AccountRef) {
 }
 
 // Only user accounts and platform shards are created here; bare platform ids are schema-seeded.
-async function ensureAccount(q: Queryable, account: AccountRef): Promise<void> {
+// The known-set screens the insert away steady-state: an ensured account is staged and promoted
+// once its transaction commits, after which repeats skip the statement entirely.
+async function ensureAccount(
+  env: LedgerEnv,
+  account: AccountRef,
+): Promise<void> {
   if (!isKnownSuffix(account) && !isPlatformShard(account)) {
     return;
   }
+  if (env.known.has(account)) {
+    return;
+  }
   const row = accountRow(account);
-  await q.query(
+  await env.q.query(
     `insert into accounts (id, kind, currency) values ($1, $2, $3)
        on conflict (id) do nothing`,
     [row.id, row.kind, row.currency],
   );
+  env.staged?.add(account);
 }
 
 async function ensureAccounts(
-  q: Queryable,
+  env: LedgerEnv,
   accounts: ReadonlyArray<AccountRef>,
 ): Promise<void> {
   const firstUse = accounts.filter(
-    (account) => isKnownSuffix(account) || isPlatformShard(account),
+    (account) =>
+      (isKnownSuffix(account) || isPlatformShard(account)) &&
+      !env.known.has(account),
   );
   if (firstUse.length === 0) {
     return;
   }
   const newRows = firstUse.map(accountRow);
-  await q.query(
+  await env.q.query(
     `insert into accounts (id, kind, currency)
        select a.id, a.kind, a.currency
          from jsonb_to_recordset($1::jsonb) as a(id text, kind text, currency text)
        on conflict (id) do nothing`,
     [JSON.stringify(newRows)],
   );
+  for (const account of firstUse) {
+    env.staged?.add(account);
+  }
 }
 
 // NOTE: the per-account balance fold (UPDATE before INSERT, so the non-negative CHECK runs against
@@ -271,15 +322,16 @@ async function ensureAccounts(
 // to the in-memory adapter.
 // @see https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/
 async function writePosting(
-  q: Queryable,
+  env: LedgerEnv,
   posting: Posting,
   postedAt: number,
   links: ReadonlyArray<Link>,
 ): Promise<void> {
   // JSON arrays carry the bigint amounts as strings to avoid loss past 2^53.
   const query = (sql: string, params: ReadonlyArray<unknown>) =>
-    q.query(sql, params);
+    env.q.query(sql, params);
   const args = postEntryArgs(posting, links);
+  screenNewAccounts(env, args);
   await callProcedure(query, 'postgres', 'post_entry', [
     posting.txnId,
     postedAt,
@@ -291,7 +343,66 @@ async function writePosting(
   ]);
 }
 
-function createLedgerStore(q: Queryable, digest: Digest, clock: Clock): Ledger {
+// Drops accounts the known-set can vouch for from the proc's first-use inserts and stages the
+// rest for commit-promotion; steady-state the proc receives an empty list.
+function screenNewAccounts(env: LedgerEnv, args: PostEntryArgs): void {
+  args.newAccounts = args.newAccounts.filter((row) => !env.known.has(row.id));
+  for (const row of args.newAccounts) {
+    env.staged?.add(row.id);
+  }
+}
+
+// One head read over the union and one post_entries CALL for the whole set: the per-CALL round
+// trip dominates a hot operation, and the pair-posting operations pay it twice. Heads thread
+// forward app-side, so a later posting chains onto an earlier one's new head exactly as
+// sequential appends would.
+async function appendPostings(
+  env: LedgerEnv,
+  postings: ReadonlyArray<Posting>,
+): Promise<Transaction[]> {
+  const postedAt = env.clock.now();
+  const heads = await headsForAccounts(
+    env,
+    distinctAccounts(postings.flatMap((posting) => posting.legs)),
+  );
+  const transactions: Transaction[] = [];
+  const entries: Array<Record<string, unknown>> = [];
+  for (const posting of postings) {
+    const links = await chainLinksFor(env.digest, posting, heads);
+    for (const link of links) {
+      heads.set(link.account, link.hash);
+    }
+    const args = postEntryArgs(posting, links);
+    screenNewAccounts(env, args);
+    entries.push({
+      txn: posting.txnId,
+      postedAt,
+      meta: posting.meta,
+      legs: args.legs,
+      links: args.links,
+      balances: args.balances,
+      newAccounts: args.newAccounts,
+    });
+    transactions.push({
+      id: posting.txnId,
+      postedAt,
+      legs: posting.legs,
+      links,
+      meta: posting.meta,
+    });
+  }
+  await callProcedure(
+    (sql, params) => env.q.query(sql, params),
+    'postgres',
+    'post_entries',
+    [JSON.stringify(entries)],
+  );
+  advanceCapturedHeads(env.heads, transactions);
+  return transactions;
+}
+
+function createLedgerStore(env: LedgerEnv): Ledger {
+  const { q, clock } = env;
   return {
     hasAccount: async (account) => {
       if (isKnownSuffix(account) || isSeededSystemAccount(account)) {
@@ -309,16 +420,20 @@ function createLedgerStore(q: Queryable, digest: Digest, clock: Clock): Ledger {
 
     append: async (posting) => {
       const postedAt = clock.now();
-      const links = await advanceChain(q, digest, posting);
-      await writePosting(q, posting, postedAt, links);
-      return {
+      const links = await advanceChain(env, posting);
+      await writePosting(env, posting, postedAt, links);
+      const transaction = {
         id: posting.txnId,
         postedAt,
         legs: posting.legs,
         links,
         meta: posting.meta,
       };
+      advanceCapturedHeads(env.heads, [transaction]);
+      return transaction;
     },
+
+    appendAll: async (postings) => appendPostings(env, postings),
 
     balance: async (account) => {
       const raw = await callFunction(
@@ -366,30 +481,52 @@ function createLedgerStore(q: Queryable, digest: Digest, clock: Clock): Ledger {
 // balance row (`for update`), so two transactions writing the same account take turns instead
 // of interleaving. Changes no data and advances no hash chain. Only used on a transaction
 // client, where the lock releases at commit.
-function lockingLedger(q: Queryable, digest: Digest, clock: Clock): Ledger {
-  const base = createLedgerStore(q, digest, clock);
+function lockingLedger(env: LedgerEnv): Ledger {
+  const base = createLedgerStore(env);
+  const q = env.q;
+  // The locking statement returns each row's head in the same round trip, feeding the
+  // transaction's head capture: a head read under a lock held to commit stays exact. A first-use
+  // account has no balance row, locks nothing, and captures as genesis — if a competitor plants
+  // and posts it first, the chain-fork index plus withTransientRetry cover that cold-start race
+  // exactly as they did when the head was read later.
+  const capture = (
+    requested: ReadonlyArray<AccountRef>,
+    rows: Array<Record<string, unknown>>,
+  ): void => {
+    if (env.heads === undefined) {
+      return;
+    }
+    const found = new Map(
+      rows.map((row) => [row.account_id as string, row.head_hash as string]),
+    );
+    for (const account of requested) {
+      env.heads.set(account, found.get(account) ?? GENESIS_HEX);
+    }
+  };
   return {
     ...base,
     lock: async (account) => {
-      await ensureAccount(q, account);
-      await q.query(
-        `select 1 from account_balances where account_id = $1 for update`,
+      await ensureAccount(env, account);
+      const result = await q.query(
+        `select account_id, head_hash from account_balances
+          where account_id = $1
+            for update`,
         [account],
       );
+      capture([account], result.rows);
     },
     lockMany: async (accounts) => {
       // Batched twin of `lock`: `order by account_id` takes the locks in one global order, so
-      // operations sharing accounts serialize instead of deadlocking, in a single round trip. A
-      // first-use account has no balance row yet and locks nothing, exactly like `lock`; the
-      // chain-fork index plus withTransientRetry cover that cold-start race.
-      await ensureAccounts(q, accounts);
-      await q.query(
-        `select 1 from account_balances
+      // operations sharing accounts serialize instead of deadlocking, in a single round trip.
+      await ensureAccounts(env, accounts);
+      const result = await q.query(
+        `select account_id, head_hash from account_balances
           where account_id = any($1::text[])
           order by account_id
             for update`,
         [[...accounts]],
       );
+      capture(accounts, result.rows);
     },
   };
 }
@@ -774,48 +911,43 @@ async function legsByPosting(
 
 // --- Idempotency store ------------------------------------------------------------
 
-// `claim` replays the stored result if a row exists; otherwise it takes a key-scoped
-// pg_advisory_xact_lock and rechecks, so a second same-key caller waits out the first's
-// transaction, then replays (committed) or does the work (rolled back). `record` writes in the
-// same transaction as the posting, so a rollback frees the key for a real retry.
+// The claim is a single atomic placeholder insert, the same shape as the MySQL store: the
+// primary key decides. Inserted means the claim is won; a conflict means the key's holder
+// committed — an in-flight holder blocks the speculative insert until its transaction ends, a
+// rolled-back one frees the key — so the loser replays the recorded result. One statement on the
+// common path where three ran before (select, advisory lock, recheck). `record` fills the
+// placeholder in the same transaction as the posting, so a rollback frees the key for a retry.
 // @see https://economy-lab-docs.pages.dev/economy/concepts/idempotency/
 function createIdempotencyStore(q: Queryable): IdempotencyStore {
   return {
     claim: async (key) => {
+      const inserted = await q.query(
+        `insert into idempotency (key, transaction) values ($1, null)
+           on conflict (key) do nothing`,
+        [key],
+      );
+      if ((inserted.rowCount ?? 0) > 0) {
+        return { claimed: true };
+      }
       const existing = await q.query(
         `select transaction from idempotency where key = $1`,
         [key],
       );
-      const prior = existing.rows[0];
-      if (prior) {
+      const recorded = existing.rows[0]?.transaction ?? null;
+      if (recorded !== null) {
         return {
           claimed: false,
-          transaction: decodeTransaction(
-            prior.transaction as EncodedTransaction,
-          ),
+          transaction: decodeTransaction(recorded as EncodedTransaction),
         };
       }
-      await q.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [
-        key,
-      ]);
-      const recheck = await q.query(
-        `select transaction from idempotency where key = $1`,
-        [key],
-      );
-      const recorded = recheck.rows[0];
-      if (recorded) {
-        return {
-          claimed: false,
-          transaction: decodeTransaction(
-            recorded.transaction as EncodedTransaction,
-          ),
-        };
-      }
+      // The row exists with no recorded result: a placeholder this caller is re-claiming. Treat
+      // it as ours, matching the in-memory reference.
       return { claimed: true };
     },
     record: async (key, transaction) => {
       await q.query(
-        `insert into idempotency (key, transaction) values ($1, $2::jsonb)`,
+        `insert into idempotency (key, transaction) values ($1, $2::jsonb)
+           on conflict (key) do update set transaction = excluded.transaction`,
         [key, JSON.stringify(encodeTransaction(transaction))],
       );
     },
@@ -1655,9 +1787,37 @@ async function bumpVelocity(
   );
 }
 
+// The one-round-trip trust_record function call both trust stores share; it takes the
+// subject-scoped advisory lock, inserts, and measures server-side (see db/postgresql-schema.sql).
+async function recordViaFunction(
+  q: Queryable,
+  subject: string,
+  attempt: Attempt,
+  cutoff: number,
+): Promise<Velocity> {
+  const result = await q.query(
+    `select * from trust_record($1, $2, $3, $4, $5, $6)`,
+    [
+      attempt.idempotencyKey,
+      subject,
+      attempt.amount.minor,
+      attempt.outcome,
+      attempt.at,
+      cutoff,
+    ],
+  );
+  const row = result.rows[0]!;
+  return {
+    subject,
+    windowStart: Number(row.window_start),
+    spent: toAmount('CREDIT', readMinor(row.spent)),
+    attempts: Number(row.attempts),
+  };
+}
+
 // The transaction-scoped trust view a Unit carries: `record` runs on the money transaction's own
-// connection, so the inserted attempt commits with the money, and the advisory lock holds until
-// that transaction commits or rolls back.
+// connection, so the inserted attempt commits with the money, and the advisory lock the function
+// takes holds until that transaction commits or rolls back.
 function createUnitTrustStore(
   q: Queryable,
   clock: Clock,
@@ -1666,48 +1826,23 @@ function createUnitTrustStore(
   return {
     read: async (subject) => readVelocity(q, subject, clock.now() - windowMs),
     bump: async (subject, attempt) => bumpVelocity(q, subject, attempt),
-    record: async (subject, attempt) => {
-      await q.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [
-        subject,
-      ]);
-      await bumpVelocity(q, subject, attempt);
-      return readVelocity(q, subject, clock.now() - windowMs);
-    },
+    record: async (subject, attempt) =>
+      recordViaFunction(q, subject, attempt, clock.now() - windowMs),
   };
 }
 
-// The atomic record-then-measure behind `record`: a transaction-scoped advisory lock keyed on the
-// subject serializes same-subject calls (auto-released at COMMIT or ROLLBACK), and the SUM runs
-// after the insert, so the returned Velocity already includes this attempt.
+// The atomic record-then-measure behind the pool-level `record`: one statement is one implicit
+// transaction, so the function's advisory lock serializes same-subject calls for exactly the
+// duration of the insert-and-measure and releases at statement end.
 async function recordVelocity(
   pool: PgPool,
   subject: string,
   attempt: Attempt,
   cutoff: number,
 ): Promise<Velocity> {
-  const client = await pool.connect();
-  try {
-    await client.query('begin');
-    await client.query(
-      `select pg_advisory_xact_lock(hashtextextended($1, 0))`,
-      [subject],
-    );
-    await bumpVelocity(client, subject, attempt);
-    const velocity = await readVelocity(client, subject, cutoff);
-    await client.query('commit');
-    return velocity;
-  } catch (error) {
-    await client.query('rollback').catch(() => {});
-    throw error;
-  } finally {
-    client.release();
-  }
+  return recordViaFunction(pool, subject, attempt, cutoff);
 }
 
-// --- Checkpoint store -------------------------------------------------------------
-
-// Append-only, written through the pool rather than a transaction, so a money transaction rolling
-// back can't erase a snapshot already taken.
 // --- Movement journal ---------------------------------------------------------------
 
 // Append-only and never part of a money transaction (see MovementJournal in ports.ts). The whole
@@ -1846,14 +1981,10 @@ function createCheckpointStore(pool: PgPool): CheckpointStore {
 
 // The checkpoint store is left out: only the worker writes it, outside transactions. Trust rides
 // the transaction; see createUnitTrustStore.
-function buildUnit(
-  q: Queryable,
-  digest: Digest,
-  clock: Clock,
-  velocityWindowMs: number,
-): Unit {
+function buildUnit(env: LedgerEnv, velocityWindowMs: number): Unit {
+  const { q, clock } = env;
   return {
-    ledger: lockingLedger(q, digest, clock),
+    ledger: lockingLedger(env),
     idempotency: createIdempotencyStore(q),
     sales: createSaleStore(q),
     outbox: createOutboxStore(q),
@@ -2009,12 +2140,21 @@ export async function postgresStore(
     throw error;
   }
 
-  const ledger = createLedgerStore(pool, digest, clock);
+  const known = new KnownAccounts();
+  const ledger = createLedgerStore({ q: pool, digest, clock, known });
   const retryObserver = retryTelemetry(
     { meter: options.meter, logger: options.logger },
     'postgres',
   );
   const meter = options.meter;
+  const txDeps: TxDeps = {
+    digest,
+    clock,
+    velocityWindowMs,
+    known,
+    retryObserver,
+    meter,
+  };
 
   return {
     ledger,
@@ -2031,12 +2171,7 @@ export async function postgresStore(
     checkpoints: createCheckpointStore(pool),
     movements: createMovementJournal(pool),
     replay: createReplayStore(pool),
-    transaction: async (work) =>
-      runInTransaction(
-        pool,
-        { digest, clock, velocityWindowMs, retryObserver, meter },
-        work,
-      ),
+    transaction: async (work) => runInTransaction(pool, txDeps, work),
     close: async () => {
       if (schema) {
         await pool
@@ -2066,6 +2201,15 @@ async function applyIsolatedSchema(
   }
 }
 
+type TxDeps = {
+  digest: Digest;
+  clock: Clock;
+  velocityWindowMs: number;
+  known: KnownAccounts;
+  retryObserver?: RetryObserver;
+  meter?: Meter;
+};
+
 // Run `work` inside a single database transaction (one connection, BEGIN/COMMIT, rollback + rethrow
 // on a throw), so every sub-store write commits or rolls back as one. Because the whole unit of work
 // is in this one transaction, a transient lock conflict committed nothing, so withTransientRetry can
@@ -2075,13 +2219,7 @@ async function applyIsolatedSchema(
 // @see https://economy-lab-docs.pages.dev/economy/ports/messaging/
 async function runInTransaction<T>(
   pool: PgPool,
-  deps: {
-    digest: Digest;
-    clock: Clock;
-    velocityWindowMs: number;
-    retryObserver?: RetryObserver;
-    meter?: Meter;
-  },
+  deps: TxDeps,
   work: (unit: Unit) => Promise<T>,
 ): Promise<T> {
   return withTransientRetry(
@@ -2094,16 +2232,24 @@ async function runInTransaction<T>(
         deps.clock.now() - acquireStarted,
         { engine: 'postgres' },
       );
+      const staged = new StagedAccounts();
       try {
         await client.query('begin');
         const unit = buildUnit(
-          client,
-          deps.digest,
-          deps.clock,
+          {
+            q: client,
+            digest: deps.digest,
+            clock: deps.clock,
+            known: deps.known,
+            staged,
+            heads: new TxHeads(),
+          },
           deps.velocityWindowMs,
         );
         const result = await work(unit);
         await client.query('commit');
+        // Only now are this transaction's inserts committed data; a rollback promotes nothing.
+        staged.promoteInto(deps.known);
         return result;
       } catch (error) {
         await client.query('rollback').catch(() => {});

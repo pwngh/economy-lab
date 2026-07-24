@@ -123,11 +123,12 @@ insert into account_balances (account_id, currency, balance, head_hash)
 -- ============================================================================
 create table idempotency (
   key         text        primary key,
-  -- NOT NULL because PG claims via an advisory lock (pg_advisory_xact_lock), so the row is only
-  -- ever written with a result, never a placeholder.
-  transaction jsonb       not null,
+  -- NULL while a row is claimed but not yet recorded: claim inserts a NULL placeholder to hold
+  -- the row lock, then record fills it in.
+  transaction jsonb       null,
   created_at  timestamptz not null default now()
 );
+
 
 -- ============================================================================
 -- Webhook replay dedup, separate from `idempotency` so the two layers can't collide on a shared
@@ -455,6 +456,51 @@ begin
     on conflict (account_id)
       do update set balance = account_balances.balance + excluded.balance,
                     head_hash = excluded.head_hash;
+end;
+$$;
+
+-- The fused variant: several postings in one round trip, looped server-side through post_entry
+-- so the semantics are byte-identical to calling it per posting — a later element sees the
+-- balances and heads an earlier one wrote. One CALL per operation instead of one per posting —
+-- the per-CALL round trip dominates the hot path.
+create procedure post_entries(p_entries jsonb)
+language plpgsql
+as $$
+declare
+  e jsonb;
+begin
+  for e in select * from jsonb_array_elements(p_entries) loop
+    call post_entry(
+      e->>'txn',
+      (e->>'postedAt')::bigint,
+      e->'meta',
+      e->'legs',
+      e->'links',
+      e->'balances',
+      e->'newAccounts');
+  end loop;
+end;
+$$;
+
+-- TrustStore.record's atomic record-then-measure in one round trip: the subject-scoped advisory
+-- lock serializes same-subject callers, the insert dedupes on the attempt key, and the window
+-- read runs after the insert so the returned velocity already includes this attempt. The same
+-- statements the client used to send, fused server-side.
+create function trust_record(
+  p_key text, p_subject text, p_amount bigint, p_outcome text, p_at bigint, p_cutoff bigint
+)
+returns table(window_start bigint, spent bigint, attempts int)
+language plpgsql
+as $$
+begin
+  perform pg_advisory_xact_lock(hashtextextended(p_subject, 0));
+  insert into trust_attempts (idempotency_key, subject, amount, outcome, at)
+    values (p_key, p_subject, p_amount, p_outcome, p_at)
+    on conflict (idempotency_key) do nothing;
+  return query
+    select coalesce(min(t.at), 0), coalesce(sum(t.amount), 0)::bigint, count(*)::int
+      from trust_attempts t
+     where t.subject = p_subject and t.at > p_cutoff;
 end;
 $$;
 

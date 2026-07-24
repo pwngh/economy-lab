@@ -17,7 +17,7 @@ import { SYSTEM, baseOf } from '#src/accounts.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
-import type { Operation } from '#src/contract.ts';
+import type { Operation, Transaction } from '#src/contract.ts';
 import type {
   Checkpoint,
   Digest,
@@ -164,6 +164,123 @@ export function isSeededSystemAccount(account: AccountRef): boolean {
     SEEDED_SYSTEM_ACCOUNTS.has(account) ||
     SEEDED_SYSTEM_ACCOUNTS.has(baseOf(account))
   );
+}
+
+// --- Known-accounts cache ---------------------------------------------------------
+
+// Accounts whose `accounts` and `account_balances` rows are known to exist as committed data, so
+// the hot path can skip first-use probes and plants. An entry is added only from committed
+// evidence — a probe that saw the row, or a plant promoted after its transaction committed — and
+// account rows are never deleted, so an entry can never turn false. A deployment that resets its
+// database must recreate the store (tests provision a fresh store per run). Bounded FIFO:
+// eviction only costs the evicted account a re-probe.
+export class KnownAccounts {
+  private readonly entries = new Set<string>();
+  private readonly capacity: number;
+
+  constructor(capacity: number = 65_536) {
+    this.capacity = capacity;
+  }
+
+  has(account: string): boolean {
+    return this.entries.has(account);
+  }
+
+  add(account: string): void {
+    if (this.entries.has(account)) {
+      return;
+    }
+    if (this.entries.size >= this.capacity) {
+      const oldest = this.entries.values().next().value;
+      if (oldest !== undefined) {
+        this.entries.delete(oldest);
+      }
+    }
+    this.entries.add(account);
+  }
+}
+
+// The plants a transaction has made but not yet committed. Promotion into KnownAccounts happens
+// only after COMMIT succeeds; `mark`/`rollbackTo` mirror savepoints, so a partial rollback
+// un-stages exactly the plants it undid.
+export class StagedAccounts {
+  private accounts: string[] = [];
+
+  add(account: string): void {
+    this.accounts.push(account);
+  }
+
+  mark(): number {
+    return this.accounts.length;
+  }
+
+  rollbackTo(mark: number): void {
+    this.accounts.length = mark;
+  }
+
+  promoteInto(known: KnownAccounts): void {
+    for (const account of this.accounts) {
+      known.add(account);
+    }
+    this.accounts = [];
+  }
+}
+
+// The chain heads a transaction has already observed or advanced, captured at lock time: the
+// FOR UPDATE that locks a balance row returns its head in the same statement, and the lock is
+// held until commit, so the captured head stays exact for the transaction's lifetime. Writes
+// journal their overwrites so a savepoint rollback can restore exactly the heads it undid — a
+// stale forward head would fork the chain on the next append.
+export class TxHeads {
+  private readonly map = new Map<string, string>();
+  private journal: Array<[string, string | undefined]> = [];
+
+  get(account: string): string | undefined {
+    return this.map.get(account);
+  }
+
+  has(account: string): boolean {
+    return this.map.has(account);
+  }
+
+  set(account: string, hash: string): void {
+    this.journal.push([account, this.map.get(account)]);
+    this.map.set(account, hash);
+  }
+
+  mark(): number {
+    return this.journal.length;
+  }
+
+  rollbackTo(mark: number): void {
+    for (let i = this.journal.length - 1; i >= mark; i -= 1) {
+      const [account, prior] = this.journal[i]!;
+      if (prior === undefined) {
+        this.map.delete(account);
+      } else {
+        this.map.set(account, prior);
+      }
+    }
+    this.journal.length = mark;
+  }
+}
+
+// After a successful write, the new link hashes are the accounts' heads; recording them keeps
+// the lock-time capture exact for this transaction's next append. Once an account has an
+// uncommitted link, a competing extension blocks on the chain-fork unique index until this
+// transaction ends, so the forward head cannot go stale mid-transaction.
+export function advanceCapturedHeads(
+  heads: TxHeads | undefined,
+  transactions: ReadonlyArray<Transaction>,
+): void {
+  if (heads === undefined) {
+    return;
+  }
+  for (const transaction of transactions) {
+    for (const link of transaction.links) {
+      heads.set(link.account, link.hash);
+    }
+  }
 }
 
 // --- Transient-conflict retry -----------------------------------------------------

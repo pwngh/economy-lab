@@ -122,6 +122,55 @@ export async function postEntry(
   return ledger.append(cleaned, options);
 }
 
+/**
+ * Posts several entries with `postEntry`'s exact checks each, fused into one engine round trip
+ * when the ledger offers `appendAll` and the postings share no account. Overlapping postings
+ * keep the sequential path, so every overdraft check sees its predecessor's effect; the fused
+ * path's checks are independent by construction.
+ */
+export async function postEntries(
+  ledger: Ledger,
+  postings: ReadonlyArray<Posting>,
+  options?: CallOptions,
+): Promise<Transaction[]> {
+  if (ledger.appendAll === undefined) {
+    return postSequentially(ledger, postings, options);
+  }
+  const cleaned = postings.map(dropZeroLegs);
+  const seen = new Set<AccountRef>();
+  let disjoint = true;
+  for (const posting of cleaned) {
+    for (const account of new Set(posting.legs.map((leg) => leg.account))) {
+      if (seen.has(account)) {
+        disjoint = false;
+      }
+      seen.add(account);
+    }
+  }
+  if (!disjoint) {
+    return postSequentially(ledger, postings, options);
+  }
+  for (const posting of cleaned) {
+    assertSingleCurrencyPerLeg(posting);
+    assertBalanced(posting);
+    await assertKnownAccounts(ledger, posting, options);
+    await assertNoOverdraft(ledger, posting, options);
+  }
+  return ledger.appendAll(cleaned, options);
+}
+
+async function postSequentially(
+  ledger: Ledger,
+  postings: ReadonlyArray<Posting>,
+  options?: CallOptions,
+): Promise<Transaction[]> {
+  const out: Transaction[] = [];
+  for (const posting of postings) {
+    out.push(await postEntry(ledger, posting, options));
+  }
+  return out;
+}
+
 // Safe to drop: a zero leg adds nothing to any currency total, so removing it can't unbalance the
 // posting.
 function dropZeroLegs(posting: Posting): Posting {
@@ -256,21 +305,23 @@ async function assertNoOverdraft(
   posting: Posting,
   options?: CallOptions,
 ): Promise<void> {
-  const resulting = new Map<AccountRef, Amount>();
+  // Fold each guarded account's legs into one net delta first; only a net debit can take the
+  // balance below zero (committed balances are already non-negative, enforced by the database
+  // CHECK and the in-memory fold), so only those accounts pay a balance read.
+  const deltas = new Map<AccountRef, bigint>();
   for (const leg of posting.legs) {
     if (!isUserGuarded(leg.account)) {
       continue;
     }
-    const current =
-      resulting.get(leg.account) ??
-      (await ledger.balance(leg.account, options));
-    const delta = balanceDelta(leg);
-    resulting.set(
-      leg.account,
-      toAmount(current.currency, current.minor + delta.minor),
-    );
+    const prior = deltas.get(leg.account) ?? 0n;
+    deltas.set(leg.account, prior + balanceDelta(leg).minor);
   }
-  for (const [account, projected] of resulting) {
+  for (const [account, delta] of deltas) {
+    if (delta >= 0n) {
+      continue;
+    }
+    const current = await ledger.balance(account, options);
+    const projected = toAmount(current.currency, current.minor + delta);
     if (projected.minor < 0n) {
       throw fault(
         ERROR_CODES.OVERDRAFT,

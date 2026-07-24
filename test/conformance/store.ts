@@ -1317,6 +1317,43 @@ async function reproofStateRoundTrips(store: Store): Promise<void> {
   });
 }
 
+// appendAll (optional): several postings in one round trip must behave exactly like sequential
+// appends — including chain threading when the postings share an account, the case the fused
+// operations avoid but the engine must still get right.
+async function appendAllThreadsChains(store: Store): Promise<void> {
+  if (store.ledger.appendAll === undefined) {
+    return;
+  }
+  const userId = freshUser();
+  const amountOf = (dollars: string) => decodeAmount(dollars, 'CREDIT');
+  const posting = (txnId: string, dollars: string) => ({
+    txnId,
+    legs: [
+      credit(spendable(userId), amountOf(dollars)),
+      debit(SYSTEM.REVENUE, amountOf(dollars)),
+    ],
+    meta: { source: 'card' },
+  });
+  const [first, second] = await store.ledger.appendAll([
+    posting(`txn_conf_all_a_${userId}`, '1.00'),
+    posting(`txn_conf_all_b_${userId}`, '2.00'),
+  ]);
+
+  assert.deepEqual(
+    await store.ledger.balance(spendable(userId)),
+    toAmount('CREDIT', 300n),
+  );
+  const lineage = await collect(store.ledger.lineage(spendable(userId)));
+  assert.deepEqual(
+    lineage.map((link) => link.txnId),
+    [first!.id, second!.id],
+  );
+  // The second posting chained onto the first's new head, exactly as sequential appends would.
+  assert.equal(lineage[1]!.prevHash, lineage[0]!.hash);
+  const heads = new Map(await collect(store.ledger.heads()));
+  assert.equal(heads.get(spendable(userId)), lineage[1]!.hash);
+}
+
 /**
  * Registers the shared conformance suite every {@link Store} implementation must pass — the same
  * tests the built-in memory, Postgres, and MySQL stores run, with the memory adapter as the
@@ -1408,6 +1445,8 @@ export function runStoreConformance(
       withStore(t, journalRejectsDuplicateBatches));
     test('commits a transaction durably and leaves no trace when one throws', (t) =>
       withStore(t, commitsDurablyAndRollsBack));
+    test('appendAll threads chains exactly like sequential appends', (t) =>
+      withStore(t, appendAllThreadsChains));
     test('claims an idempotency key once and replays the recorded transaction', (t) =>
       withStore(t, claimsOnceAndReplays));
     test('frees an idempotency key when its claiming transaction rolls back', (t) =>

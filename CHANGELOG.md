@@ -10,6 +10,9 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   and `subscribe` (`ACCRUAL_DRAIN=1`, `Config.accrualDrain`), and rows land in `accrual_rows`
   until drained. Breaking: `Store.accruals` is required of custom stores.
 - The worker's accrual drain sweep moves parked shares to sellers' earned wallets in batches.
+- `post_entries` fuses each posting's writes into one stored-procedure call on both SQL
+  engines, and the engines answer account existence from a cache whose entries are added only
+  at commit.
 
 ## 0.5.0 - 2026-07-23
 
