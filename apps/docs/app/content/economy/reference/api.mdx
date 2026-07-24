@@ -23,11 +23,28 @@ import type { Store } from '@pwngh/economy-lab/ports';
 
 Each import path links to its complete rendered surface — every export, with its signature, contract, and examples — on the [generated reference](/api/).
 
+| Import                                                                    | What it holds                                                                        |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| [`@pwngh/economy-lab`](/api/modules/src.html)                             | Construction, operations, money, the ledger, outcomes, and the principal types.      |
+| [`@pwngh/economy-lab/ports`](/api/modules/src_ports.html)                 | The port interfaces you implement to plug in your own infrastructure.                |
+| [`@pwngh/economy-lab/adapters`](/api/modules/src_adapters.html)           | The bundled in-memory and HTTP adapters, plus the runtime services.                  |
+| [`@pwngh/economy-lab/adapters/redis`](/api/modules/src_adapters_redis.html) | The Redis-backed `Cache` and `RateLimiter`; adapts an `ioredis` client you connect. |
+| [`@pwngh/economy-lab/adapters/sqs`](/api/modules/src_adapters_sqs.html)   | The SQS-backed `Dispatcher`; adapts an SQS client you connect.                       |
+| [`@pwngh/economy-lab/engines/postgres`](/api/modules/src_engines_postgres.html) | The Postgres `Store` (carries `pg`).                                           |
+| [`@pwngh/economy-lab/engines/mysql`](/api/modules/src_engines_mysql.html) | The MySQL `Store` and schema helpers (carries `mysql2`).                             |
+| [`@pwngh/economy-lab/engines/mysql-mariadb`](/api/modules/src_engines_mysql-mariadb.html) | The pipelining-capable MySQL pool (carries `mariadb`); an opt-in behind the same store. |
+| [`@pwngh/economy-lab/worker`](/api/modules/src_worker.html)               | The full background-worker surface: the sweeps, the relay and drain, and the feeds.  |
+| [`@pwngh/economy-lab/server`](/api/modules/src_server.html)               | The full HTTP surface: the server internals and the webhook intake.                  |
+| [`@pwngh/economy-lab/netting`](/api/modules/src_netting.html)             | The in-instance netting session.                                                     |
+| [`@pwngh/economy-lab/ops`](/api/modules/src_ops.html)                     | The in-process operations supervisor: signal capture, incident detectors, guarded remediations, and the audit trail. |
+| [`@pwngh/economy-lab/store-kit`](/api/modules/src_store-kit.html)         | The primitives a custom `Store` implementation computes with.                        |
+| [`@pwngh/economy-lab/testing`](/api/modules/test_conformance.html)        | The conformance harness for testing your own adapters.                               |
 
 ## How the surface is split
 
 The principal **ports** types are also re-exported from the main package; everything else lives only on its subpath. The **driver-carrying** entry points load a database driver, so they are imported only where that driver is installed: the engines carry `pg`, `mysql2`, and `mariadb`. The Redis and SQS adapters instead adapt an already-connected client you pass in, so they load with nothing installed.
 
+The MariaDB entry point is an opt-in behind the same `MysqlPool` seam the MySQL store rides — same store, same schema, same SQL; only the wire protocol changes. See [the storage port](/economy/ports/storage/).
 
 The **worker** and **server** constructors and their types are re-exported from the main entry; their subpaths add the internals — the sweep names and batch shapes, the wire codec and webhook intake.
 

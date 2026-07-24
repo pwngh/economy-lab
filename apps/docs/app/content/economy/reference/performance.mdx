@@ -189,6 +189,8 @@ BENCH_OPS=5000 make bench
 BENCH_SHARDS=4 make bench
 ```
 
+The SQL drivers are swappable behind the store's pool seam, so a driver trial is one env change: `BENCH_MYSQL_DRIVER=mariadb` runs the MySQL rows over the pipelining-capable `mariadb` pool (the same pool a host opts into with [`createMariadbPool`](/economy/ports/storage/)), and `BENCH_PG_DRIVER` selects the Postgres wire driver. `npm run bench:queue` runs a manifest of rounds back to back with a cool-down between them — one fsync device means rounds must not overlap — and a rig canary (`BENCH_CANARY_OPS`) baselines each backend round to round.
+
 ## The scale probe
 
 `make scale` asks a different question of the same backends: does per-op cost stay flat as one subject's history grows? It drives repeated `spend`s against a single buyer and repeated `requestPayout`s against a single seller, in fixed-size segments, and prints ops/sec per segment. A per-op cost that grows with that account's accumulated history shows up as the segments slowing from left to right.

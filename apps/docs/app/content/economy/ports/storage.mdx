@@ -99,7 +99,16 @@ It's also the reference implementation. Its hash function and clock default to d
 
 Point `DATABASE_URL` at a `postgres://` or `mysql://` connection string (a DSN, in driver terms) and the system loads that engine instead, and only then loads its driver. The SQL engines live in `src/engines/postgres.ts` and `src/engines/mysql.ts`; both pass the same conformance suite as memory.
 
-The SQL engines do something the in-memory one can't: they enforce the invariants a second time, in the database. Every `CHECK` constraint in the schema is also a rule in the TypeScript code, so a user account can't go negative and a posting's legs can't fail to sum to zero, even if a raw `INSERT` tried to write around the application. The conservation half is a deferred constraint trigger that re-sums a posting's legs at commit (see <SourceLink to="db/postgresql-schema.sql#L576-L592 · legs_conserve" />):
+The MySQL engine's driver is swappable behind its pool seam. `createMariadbPool` (the `@pwngh/economy-lab/engines/mysql-mariadb` subpath, carrying the optional `mariadb` driver) builds a pipelining-capable pool shaped to the same `MysqlPool` interface, and `mysqlStore` rides it unchanged — same store, same schema, same SQL. A host opts in by constructing the pool itself and passing it to `mysqlStore`:
+
+```ts
+import { mysqlStore } from '@pwngh/economy-lab/engines/mysql';
+import { createMariadbPool } from '@pwngh/economy-lab/engines/mysql-mariadb';
+
+const pool = await createMariadbPool(process.env.DATABASE_URL!);
+const store = mysqlStore({ pool, schema: 'assert' });
+```
+
 The SQL engines do something the in-memory one can't: they enforce the invariants a second time, in the database. Every `CHECK` constraint in the schema is also a rule in the TypeScript code, so a user account can't go negative and a posting's legs can't fail to sum to zero, even if a raw `INSERT` tried to write around the application. The conservation half is a deferred constraint trigger that re-sums a posting's legs at commit (see <SourceLink to="db/postgresql-schema.sql#L577-L593 · legs_conserve" />):
 
 ```sql
@@ -145,4 +154,4 @@ Two adapters back it. `memoryCache` is an in-process `Map`: the zero-infrastruct
 
 These ports define the seam; the infrastructure behind them is the host's. The store and cache adapters are economy-lab's own and live in this repo: the in-memory reference, the Postgres and MySQL engines, the Redis and HTTP adapters, and the conformance suite that holds them all to one contract. A fair amount of the work here is making each driver fit that contract cleanly. What the host owns is the live infrastructure on the far side of each port: it creates and tunes the database pool, opens the Redis connection, and applies the schema. economy-lab loads a driver only when a DSN selects it, and never reaches for a connection the host didn't ask for.
 
-The drivers themselves ([`pg`](https://node-postgres.com), [`mysql2`](https://github.com/sidorares/node-mysql2), and [`ioredis`](https://github.com/redis/ioredis)) are peer dependencies, so the host pins the versions it runs. Each adapter types its driver's surface structurally, so the file compiles and unit-tests without the package installed; the real client is constructed only when the matching env var is set.
+The drivers themselves ([`pg`](https://node-postgres.com), [`mysql2`](https://github.com/sidorares/node-mysql2), [`mariadb`](https://github.com/mariadb-corporation/mariadb-connector-nodejs), and [`ioredis`](https://github.com/redis/ioredis)) are peer dependencies, so the host pins the versions it runs. Each adapter types its driver's surface structurally, so the file compiles and unit-tests without the package installed; the real client is constructed only when the matching env var is set.
