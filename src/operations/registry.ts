@@ -29,15 +29,19 @@ import { settlePayout } from '#src/operations/settlePayout.ts';
 import type { Handler, Operation, Outcome } from '#src/contract.ts';
 import type { Unit } from '#src/ports.ts';
 
-/** A kind's early duplicate probe: a non-null outcome ends the request before locks or screens. */
+/**
+ * The early duplicate probe for a kind. A non-null outcome ends the request before locks or
+ * screens.
+ */
 export type PreClaim = (
   operation: Operation,
   unit: Unit,
 ) => Promise<Outcome | null>;
 
 /**
- * Kinds whose domain-level duplicate is decidable before any lock (the deciding row is final once
- * written). The submit path runs the probe right after the idempotency claim, so a replay costs
+ * Lists the kinds whose domain-level duplicate is decidable before any lock (the deciding row is
+ * final once written). The submit path runs the probe right after the idempotency claim, so a
+ * replay costs
  * two reads instead of the full lock-and-screen prologue.
  */
 export const PRE_CLAIMS: Partial<Record<Operation['kind'], PreClaim>> = {

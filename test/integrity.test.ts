@@ -19,13 +19,16 @@ import { memoryStore } from '#src/adapters/memory.ts';
 import { credit as creditLeg, debit, postEntry } from '#src/ledger.ts';
 import { spendable, earned, SYSTEM } from '#src/accounts.ts';
 import { fixedRates, seededDigest } from '#test/support/capabilities.ts';
+import { makeEconomy } from '#test/support/economy.ts';
+import { recutLeg } from '#test/support/tamper.ts';
 import { credit, usd } from '#test/support/builders.ts';
 import { toAmount, zero } from '#src/money.ts';
 
 import type { MemoryLedger } from '#src/adapters/memory.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { Amount } from '#src/money.ts';
-import type { Digest, Leg, Posting, Store } from '#src/ports.ts';
+import type { ProveReport } from '#src/contract.ts';
+import type { Digest, Leg, Posting, StoredLink, Store } from '#src/ports.ts';
 
 // --- Fixtures ---------------------------------------------------------------------
 
@@ -104,6 +107,12 @@ async function topUp(
       kind: 'topUp.cash',
     },
   );
+}
+
+// Re-cuts the REVENUE debit of a recorded topUp. The construction and why it breaks the chain
+// and nothing else live in `recutLeg`; test/prove.test.ts breaks its book the same way.
+function recutHouseLeg(rec: Recorder, txnId: string): void {
+  recutLeg(rec.store.ledger as MemoryLedger, txnId, SYSTEM.REVENUE);
 }
 
 // --- proveEconomy: the healthy book ------------------------------------------------
@@ -346,22 +355,300 @@ function nudge(amount: Amount, delta: bigint): Amount {
 
 // --- The all-checks roll-up --------------------------------------------------------
 
+// The five properties the roll-up folds, as a roster this file owns. The last test holds it
+// against the booleans a live report carries, so a sixth property added to ProveReport lands
+// here as a decision rather than as a silently unfolded flag.
+const CONJUNCTS = [
+  'conserved',
+  'backed',
+  'noOverdraft',
+  'chainIntact',
+  'consistent',
+] as const;
+
+type Conjunct = (typeof CONJUNCTS)[number];
+
+const ALL_HOLD: Record<Conjunct, boolean> = {
+  conserved: true,
+  backed: true,
+  noOverdraft: true,
+  chainIntact: true,
+  consistent: true,
+};
+
+// Every boolean-valued key a report carries, sorted. `flagsOf` projects a fixed five, so a sixth
+// flag on either prover is invisible to it; this is what keeps that projection honest.
+function booleanKeys(report: ProveReport): string[] {
+  return Object.entries(report)
+    .filter(([, value]) => typeof value === 'boolean')
+    .map(([name]) => name)
+    .sort();
+}
+
+function flagsOf(report: ProveReport): Record<Conjunct, boolean> {
+  return {
+    conserved: report.conserved,
+    backed: report.backed,
+    noOverdraft: report.noOverdraft,
+    chainIntact: report.chainIntact,
+    consistent: report.consistent,
+  };
+}
+
+// One book per property, each broken so that exactly that property fails and the other four
+// still hold. The expected verdict below is written as a literal from ALL_HOLD; it is never
+// re-derived from the roll-up, because a roll-up compared to a copy of its own body passes
+// however many conjuncts are deleted from it.
+const BREAKS: ReadonlyArray<{
+  property: Conjunct;
+  book: string;
+  build: (rec: Recorder) => Promise<void>;
+}> = [
+  {
+    property: 'conserved',
+    book: 'a posting whose debit and credit lines do not cancel',
+    // Both accounts are house accounts, so nothing here is custodial, no wallet can go
+    // negative, and the raw sums miss zero by 2.00 credits.
+    build: (rec) =>
+      rec.appendRaw([
+        debit(SYSTEM.STORED_VALUE, credit('5.00')),
+        creditLeg(SYSTEM.REVENUE, credit('3.00')),
+      ]),
+  },
+  {
+    property: 'backed',
+    book: 'credits handed to a user with no USD brought in behind them',
+    // At the $0.005 par rate 8.00 credits need $0.04 of trust cash, and none was posted.
+    build: (rec) =>
+      rec.post([
+        debit(SYSTEM.REVENUE, credit('8.00')),
+        creditLeg(spendable('usr_buyer'), credit('8.00')),
+      ]),
+  },
+  {
+    property: 'noOverdraft',
+    book: 'a wallet spent below zero',
+    // Raw, so the ledger's own overdraft guard never sees it. The pair still cancels, and a
+    // negative custodial balance lowers the backing requirement rather than raising it.
+    build: (rec) =>
+      rec.appendRaw([
+        debit(spendable('usr_buyer'), credit('5.00')),
+        creditLeg(SYSTEM.REVENUE, credit('5.00')),
+      ]),
+  },
+  {
+    property: 'chainIntact',
+    book: 'a stored posting whose lines were re-cut after it was recorded',
+    // One house leg split into two that add to the same figure: every balance, every derived
+    // sum and the conservation total are untouched, and only the link preimage differs.
+    build: async (rec) => {
+      await topUp(rec, 'usr_buyer', '300.00');
+      recutHouseLeg(rec, 'txn_1');
+    },
+  },
+  {
+    property: 'consistent',
+    book: 'a cached balance row with no posting behind it',
+    // An earned account, so it is outside the backing requirement and its positive balance is
+    // no overdraft; it has no chain and no legs, so conservation and the chain never see it.
+    build: async (rec) => {
+      await topUp(rec, 'usr_buyer', '300.00');
+      rec.seedBalance(earned('usr_ghost'), credit('5.00'));
+    },
+  },
+];
+
 describe('The All-Checks Roll-Up', () => {
-  test('allInvariantsHold is true exactly when every report field is', async () => {
+  // The positive control. Without it "every conjunct fires" is satisfiable by an auditor that
+  // reports nothing holding.
+  test('a healthy book reports all five properties holding', async () => {
     const rec = recorder();
     await topUp(rec, 'usr_buyer', '300.00');
 
     const report = await proveEconomy(ctx(rec));
 
-    assert.equal(
-      allInvariantsHold(report),
-      report.conserved &&
-        report.backed &&
-        report.noOverdraft &&
-        report.chainIntact &&
-        report.consistent,
-    );
+    assert.deepEqual(flagsOf(report), ALL_HOLD);
+    assert.equal(allInvariantsHold(report), true);
   });
+
+  for (const broken of BREAKS) {
+    test(`${broken.book} fails ${broken.property} alone, and the roll-up with it`, async () => {
+      const rec = recorder();
+      await broken.build(rec);
+
+      const report = await proveEconomy(ctx(rec));
+
+      assert.deepEqual(flagsOf(report), {
+        ...ALL_HOLD,
+        [broken.property]: false,
+      });
+      assert.equal(
+        allInvariantsHold(report),
+        false,
+        `${broken.property} is not folded into allInvariantsHold`,
+      );
+    });
+  }
+
+  test('every boolean the report carries is one of the five, and each has a book', async () => {
+    const rec = recorder();
+    await topUp(rec, 'usr_buyer', '300.00');
+
+    const report = await proveEconomy(ctx(rec));
+
+    const carried = booleanKeys(report);
+    assert.deepEqual(carried, [...CONJUNCTS].sort());
+    assert.deepEqual(BREAKS.map((row) => row.property).sort(), carried);
+    assert.equal(BREAKS.length, 5);
+  });
+});
+
+// --- The two provers, on one book --------------------------------------------------
+
+// `read.health()` and `proveEconomy` derive four of the five flags the same way. The fifth is not:
+// the full prover re-hashes every link, while `read.health()` only checks that each account's
+// latest head is 64 lowercase hex characters. The book below is the smallest one that tells them
+// apart, so the boundary between them is gated rather than described in a comment that goes stale.
+// `test/support/harness.ts` `proveGate` prints a verdict off the light prover, and this is the
+// difference its label has to name.
+describe('read.health Against proveEconomy', () => {
+  // One account's chain as the store holds it, oldest first. Read before an edit, it is the
+  // independent source for what the prover's break has to name.
+  async function linksOf(
+    rec: Recorder,
+    account: AccountRef,
+  ): Promise<StoredLink[]> {
+    const links: StoredLink[] = [];
+    for await (const link of rec.store.ledger.lineage(account)) {
+      links.push(link);
+    }
+    return links;
+  }
+
+  // Every key a ChainBreak carries, so one added to it arrives here as a decision rather than as
+  // a field nothing below pins.
+  const BREAK_KEYS = ['account', 'actual', 'expected', 'reason', 'txnId'];
+
+  // The economy reads the same store the recorder wrote, under the same seeded digest.
+  const lightProver = (rec: Recorder): Promise<ProveReport> =>
+    makeEconomy(1, rec.store).read.health();
+
+  test('both provers carry the same five booleans', async () => {
+    const rec = recorder();
+    await topUp(rec, 'usr_buyer', '300.00');
+
+    const full = await proveEconomy(ctx(rec));
+    const light = await lightProver(rec);
+
+    assert.deepEqual(booleanKeys(full), [...CONJUNCTS].sort());
+    assert.deepEqual(booleanKeys(light), [...CONJUNCTS].sort());
+  });
+
+  // The positive control. Without it the differential below is satisfiable by a light prover that
+  // reports a broken chain on every book. A healthy book must also name NO link, which is what
+  // stops the field being satisfiable by a prover that always points somewhere.
+  test('a healthy book reports all five holding on both provers, and names no link', async () => {
+    const rec = recorder();
+    await topUp(rec, 'usr_buyer', '300.00');
+    await topUp(rec, 'usr_buyer', '300.00');
+
+    const full = await proveEconomy(ctx(rec));
+    const light = await lightProver(rec);
+
+    assert.deepEqual(flagsOf(full), ALL_HOLD);
+    assert.deepEqual(flagsOf(light), ALL_HOLD);
+    assert.equal(full.firstBreak, null);
+    assert.equal(light.firstBreak, null);
+  });
+
+  test('an edit behind an account head is caught by the full prover alone', async () => {
+    const rec = recorder();
+    await topUp(rec, 'usr_buyer', '300.00');
+    await topUp(rec, 'usr_buyer', '300.00');
+    // Two links, and the one about to be edited is the older. With a single link the edit would
+    // land on the head and the two provers would part for a different reason than this test names.
+    const links = await linksOf(rec, SYSTEM.REVENUE);
+    assert.deepEqual(
+      links.map((link) => link.txnId),
+      ['txn_1', 'txn_3'],
+    );
+
+    recutHouseLeg(rec, 'txn_1');
+
+    const full = await proveEconomy(ctx(rec));
+    const light = await lightProver(rec);
+
+    assert.deepEqual(flagsOf(full), { ...ALL_HOLD, chainIntact: false });
+    // Not an oversight being pinned as correct: `read.health()` is the cheap read, and its
+    // `chainIntact` is the one flag that answers a weaker question than the same-named flag on the
+    // full prover. Anything printing this report has to say so.
+    assert.deepEqual(flagsOf(light), ALL_HOLD);
+
+    // Each report names the prover that filled it, so a copy of it in an audit trail, a trace or a
+    // bench artifact carries the answer to "which chainIntact is this?" with it.
+    assert.deepEqual(
+      [full.prover, light.prover],
+      ['proveEconomy', 'read.health'],
+    );
+
+    // The light prover opens no link, so it has none to name however its `chainIntact` reads.
+    // That is the half of the differential the type states and this asserts on a live report.
+    assert.equal(light.firstBreak, null);
+
+    // The roll-up `test/support/harness.ts` `proveGate` prints. Running the audit is what makes a
+    // green gate mean the chain was replayed; the light read passes this book.
+    assert.equal(allInvariantsHold(full), false);
+    assert.equal(allInvariantsHold(light), true);
+  });
+
+  // Which link the report names has to follow the edit. A `firstBreak` wired to the chain's
+  // oldest link, or to its newest, passes one row here and fails the other — so the pair is what
+  // makes this an assertion about the named link rather than about a name being present.
+  for (const at of [0, 1] as const) {
+    test(`the report names the ${at === 0 ? 'older' : 'newer'} link when that is the one edited`, async () => {
+      const rec = recorder();
+      await topUp(rec, 'usr_buyer', '300.00');
+      await topUp(rec, 'usr_buyer', '300.00');
+      const links = await linksOf(rec, SYSTEM.REVENUE);
+      assert.deepEqual(
+        links.map((link) => link.txnId),
+        ['txn_1', 'txn_3'],
+      );
+      const edited = links[at]!;
+
+      recutHouseLeg(rec, edited.txnId);
+      const report = await proveEconomy(ctx(rec));
+      const broken = report.firstBreak;
+
+      // The chain broke and nothing else, so the break below is this edit's and not a second
+      // property's wreckage.
+      assert.deepEqual(flagsOf(report), { ...ALL_HOLD, chainIntact: false });
+      if (broken === null) {
+        assert.fail('the chain broke and the report named no link');
+      }
+      assert.deepEqual(Object.keys(broken).sort(), BREAK_KEYS);
+      assert.deepEqual(
+        {
+          account: broken.account,
+          txnId: broken.txnId,
+          reason: broken.reason,
+          actual: broken.actual,
+        },
+        {
+          account: SYSTEM.REVENUE,
+          txnId: edited.txnId,
+          reason: 'tampered-hash',
+          actual: edited.hash,
+        },
+        'the named link is not the one the edit landed on',
+      );
+      // The recomputed hash is the one figure no literal can pin: it is the hash of content that
+      // did not exist until the edit. What it must not be is the hash the store still holds,
+      // because that is the whole disagreement.
+      assert.match(broken.expected, /^[0-9a-f]{64}$/);
+      assert.notEqual(broken.expected, edited.hash);
+    });
+  }
 });
 
 // The forensic lookup over the public read surface: exact match, genesis excluded, scan bounded.

@@ -18,6 +18,8 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { reproveStoredChains } from '#src/worker/reproof.ts';
+import { archiveSealedPrefix } from '#src/worker/archive.ts';
+import { sealCheckpoint } from '#src/worker/checkpoint.ts';
 import { postEntry, debit, credit } from '#src/ledger.ts';
 import { toAmount } from '#src/money.ts';
 import { SYSTEM, spendable } from '#src/accounts.ts';
@@ -117,6 +119,97 @@ describe('reproveStoredChains', () => {
     await assert.rejects(() =>
       reproveStoredChains(store, workerCtx, { now: 20, limit: 100 }),
     );
+  });
+
+  test('a link deleted from the middle of a chain fails the sweep', async () => {
+    const { store, workerCtx } = setup();
+    for (let i = 1; i <= 4; i += 1) {
+      await post(store, `txn_gap_${i}`, 'usr_gap');
+    }
+    // Whole-posting delete, the one destructive write the Ledger offers. Every surviving link
+    // still re-derives from its own content, so a per-link content check sees a clean page.
+    await store.ledger.prune!(['txn_gap_2']);
+
+    await assert.rejects(
+      () => reproveStoredChains(store, workerCtx, { now: 10, limit: 100 }),
+      (error: unknown) =>
+        (error as { code?: string }).code === 'CHAIN.BROKEN' &&
+        (error as { detail: { reason?: string } }).detail.reason ===
+          'broken-link',
+    );
+  });
+
+  test('the same gap fails when its neighbours land in different pages', async () => {
+    const { store, workerCtx } = setup();
+    for (let i = 1; i <= 4; i += 1) {
+      await post(store, `txn_split_${i}`, 'usr_split');
+    }
+    await store.ledger.prune!(['txn_split_2']);
+
+    // One posting per page, so the link before the gap and the link after it are never in the
+    // same page and no in-page comparison can span them.
+    const first = await reproveStoredChains(store, workerCtx, {
+      now: 10,
+      limit: 1,
+    });
+    assert.equal(first.checked, 2);
+    await assert.rejects(
+      () => reproveStoredChains(store, workerCtx, { now: 20, limit: 1 }),
+      (error: unknown) =>
+        (error as { code?: string }).code === 'CHAIN.BROKEN' &&
+        (error as { detail: { reason?: string } }).detail.reason ===
+          'broken-link',
+    );
+  });
+
+  test('one account walked a page at a time stays clean to the end', async () => {
+    const { store, workerCtx } = setup();
+    for (let i = 1; i <= 4; i += 1) {
+      await post(store, `txn_ok_${i}`, 'usr_ok');
+    }
+
+    // The positive control for the page-straddling check: every page after the first opens on a
+    // link whose predecessor is in an earlier page, and none of them is a break.
+    let cursor: number | null = null;
+    let checked = 0;
+    for (let tick = 0; tick < 4; tick += 1) {
+      const summary = await reproveStoredChains(store, workerCtx, {
+        now: 10 * tick,
+        limit: 1,
+      });
+      checked += summary.checked;
+      cursor = summary.cursor;
+    }
+    assert.equal(checked, 8); // 4 postings x 2 links
+    assert.equal(cursor, null);
+  });
+
+  test('an archived prefix leaves its live tail sweepable', async () => {
+    const digest = seededDigest(1);
+    const clock = fixedClock(0);
+    const store = memoryStore({ digest, clock });
+    const workerCtx = makeWorkerCtx({ clock, digest, config: testConfig() });
+    for (let i = 1; i <= 3; i += 1) {
+      await post(store, `txn_arch_${i}`, 'usr_arch');
+    }
+    await sealCheckpoint(store, workerCtx);
+    const moved = await archiveSealedPrefix(store, workerCtx, {
+      sink: { put: async () => {} },
+      checkpointOlderThanMs: 1_000,
+      limit: 10,
+      now: 10_000,
+    });
+    assert.equal(moved.moved, 3);
+    await post(store, 'txn_arch_4', 'usr_arch');
+
+    // The live tail's first link names a hash the archival prune deleted. That is the signed
+    // boundary anchor, not a gap, and the sweep has to tell them apart.
+    const summary = await reproveStoredChains(store, workerCtx, {
+      now: 20_000,
+      limit: 100,
+    });
+    assert.equal(summary.checked, 2);
+    assert.equal(summary.cursor, null);
   });
 
   test('reports itself skipped on a store without reproof state', async () => {

@@ -10,10 +10,10 @@
  */
 
 /**
- * The accrual split's shared leg rewrite (config.accrualDrain): every earned-credit leg a charge
- * builds is redirected to SETTLEMENT_ACCRUAL, and the redirected shares come back per seller so
- * the caller can record one accrual row each. Spend, subscribe, and the renewal sweep all charge
- * through this, so the redirect rule lives once.
+ * This module holds the shared leg rewrite for the accrual split (config.accrualDrain). It
+ * redirects every earned-credit leg a charge builds to SETTLEMENT_ACCRUAL. It returns the
+ * redirected shares per seller so the caller can record one accrual row each. Spend, subscribe,
+ * and the renewal sweep all charge through this, so the redirect rule lives once.
  */
 
 import { toAmount } from '#src/money.ts';
@@ -24,7 +24,7 @@ import type { AccrualRow, Leg } from '#src/ports.ts';
 
 /**
  * Replaces each credit to a user's earned account with the same credit to SETTLEMENT_ACCRUAL and
- * sums the redirected amount per seller. Non-earned legs pass through untouched; the posting
+ * sums the redirected amount per seller. Non-earned legs pass through untouched. The posting
  * stays balanced because only the account changes.
  */
 export function parkEarnedLegs(legs: ReadonlyArray<Leg>): {
@@ -44,9 +44,9 @@ export function parkEarnedLegs(legs: ReadonlyArray<Leg>): {
 }
 
 /**
- * The share map as sealed posting metadata, `{sellerId: minorString}` — the entries mirror the
- * rows {@link accrualRowsOf} writes, and metadata rides the chain-hash preimage, so refund and
- * the drain can prove every unhashed accrual row against the posting that created it.
+ * Encodes the share map as sealed posting metadata, shaped `{sellerId: minorString}`. The entries
+ * mirror the rows {@link accrualRowsOf} writes. Metadata rides the chain-hash preimage, so refund
+ * and the drain can prove every unhashed accrual row against the posting that created it.
  */
 export function sharesMeta(
   shares: ReadonlyMap<string, bigint>,
@@ -61,9 +61,9 @@ export function sharesMeta(
 }
 
 /**
- * The pending rows a charge writes alongside its posting: one per seller share, on the ACCRUAL
- * shard the routing key resolves to — the same key the legs were routed with, so the drain debits
- * the row the posting credited.
+ * Builds the pending rows a charge writes alongside its posting, one per seller share. Each row
+ * lands on the ACCRUAL shard the routing key resolves to — the same key the legs were routed
+ * with, so the drain debits the row the posting credited.
  */
 export function accrualRowsOf(input: {
   orderId: string;
@@ -86,8 +86,8 @@ export function accrualRowsOf(input: {
     rows.push({
       orderId: input.orderId,
       sellerId,
-      // First row per (orderId, sellerId); writers that add follow-up rows for the same pair
-      // (refund recovery, drain residuals) allocate the next seq themselves.
+      // This is the first row per (orderId, sellerId). Writers that add follow-up rows for the
+      // same pair (refund recovery, drain residuals) allocate the next seq themselves.
       seq: 0,
       amount: toAmount('CREDIT', minor),
       shard,

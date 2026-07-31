@@ -9,24 +9,15 @@
  * @license MIT
  */
 
-/**
- * Money for the ledger, implemented on the vendored @pwngh/money amalgamation
- * (money.vendored.ts). This file owns what is the lab's to own — the `Currency`
- * union, the `Amount` brand, the fault codes, and the strict canonical wire — and
- * delegates the semantics underneath: i64 range checks, strict decimal parsing,
- * locale-free formatting, and mode-named rounded division. The vendored copy is
- * pinned against drift by its embedded selfTest in test/money.vendored.test.ts.
- */
-
 import { ERROR_CODES, fault } from '#src/errors.ts';
-import { format, mulDiv, parse } from '#src/money.vendored.ts';
+import { format, mulDiv, parse } from '#src/money-arithmetic.ts';
 
 import type { Rate } from '#src/ports.ts';
 
 // Re-exported so call sites that divide raw minor units (fee bps, rate math) name their
 // rounding mode from the one pinned implementation instead of hand-rolling `/`.
-export { mulDiv } from '#src/money.vendored.ts';
-export type { Rounding } from '#src/money.vendored.ts';
+export { mulDiv } from '#src/money-arithmetic.ts';
+export type { Rounding } from '#src/money-arithmetic.ts';
 
 /** The currencies the system handles: in-app CREDIT and real-world USD. */
 export type Currency = 'CREDIT' | 'USD';
@@ -37,7 +28,7 @@ export type Currency = 'CREDIT' | 'USD';
  * the point where `number` loses precision.
  *
  * `__brand` makes a plain `{ currency, minor }` unassignable to `Amount`. That forces
- * every amount through `toAmount` or `decodeAmount`, so the rules here cannot be bypassed.
+ * every amount through `toAmount` or `decodeAmount`, so no caller can bypass the rules here.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/money-model/ The money model} for
  *   the exact-integer minor-unit design.
@@ -56,16 +47,16 @@ const FRACTION_DIGITS = 2;
  */
 export const SCALE = 100n; // 10 ** FRACTION_DIGITS
 
-// The i64 bounds every stored amount must fit (db/mysql-schema.sql declares the legs
-// column BIGINT). The bounds come with the vendored arithmetic; this pair exists only
+// The i64 bounds every stored amount must fit (packages/mysql/db/mysql-schema.sql declares
+// legs.amount BIGINT). The bounds come with the arithmetic. This pair exists only
 // for the fault below.
 const I64_MIN = -(2n ** 63n);
 const I64_MAX = 2n ** 63n - 1n;
 
 /**
  * Builds an `Amount` from a currency and a minor-unit count. Throws AMOUNT_OVERFLOW when
- * the count falls outside the signed 64-bit range the ledger's BIGINT columns store, so
- * an unstorable amount fails at construction rather than at the database.
+ * the count falls outside the signed 64-bit range the ledger's BIGINT columns store — an
+ * unstorable amount fails at construction, not at the database.
  *
  * @example
  * const price = toAmount('CREDIT', 1_500_000n); // 15,000 credits
@@ -83,9 +74,11 @@ export function toAmount(currency: Currency, minor: bigint): Amount {
 }
 
 /**
- * Type guard for the `Amount` brand: true only for an object carrying the brand with a `bigint`
- * minor count — what `toAmount` and the decoders produce. Used where a value of unknown shape
- * (a decoded JSON tree, an operation field) must prove it is money before arithmetic touches it.
+ * Type guard for the `Amount` brand. It is true only for an object carrying the brand with a
+ * `bigint` minor count — what `toAmount` and the decoders produce.
+ *
+ * Call it where a value of unknown shape (a decoded JSON tree, an operation field) must prove
+ * it is money before arithmetic touches it.
  */
 export function isAmount(value: unknown): value is Amount {
   return (
@@ -146,7 +139,7 @@ export function zero(currency: Currency): Amount {
 
 /**
  * Builds a CREDIT `Amount` from a whole number of credits: `credits(120)` is 12,000 minor
- * units. A fractional count throws INVALID_AMOUNT; sub-credit amounts take `toAmount` with
+ * units. A fractional count throws INVALID_AMOUNT. Sub-credit amounts take `toAmount` with
  * minor units. Distinct from the ledger's `credit()`, which builds a posting leg.
  *
  * @example
@@ -166,10 +159,13 @@ export function credits(whole: number | bigint): Amount {
 
 /**
  * Encodes an amount as text, such as `'CREDIT:12.34'`, for anywhere it leaves the program
- * (JSON, events, traces, HTTP). The result is a string because `JSON.stringify` cannot
- * serialize the `bigint`. It uses a fixed two decimals so the same amount always renders
- * identically; posting metadata uses this form so the bytes hashed into the tamper-evident
- * chain stay stable across replays.
+ * (JSON, events, traces, HTTP).
+ *
+ * The result is a string because `JSON.stringify` cannot serialize the `bigint`. It uses a
+ * fixed two decimals so the same amount always renders identically.
+ *
+ * Posting metadata uses this form so the bytes hashed into the tamper-evident chain stay
+ * stable across replays.
  */
 export function encodeAmount(amount: Amount): string {
   return `${amount.currency}:${format(amount.minor, FRACTION_DIGITS, { group: '' })}`;
@@ -225,11 +221,14 @@ export function requirePositiveCredit(amount: Amount, label: string): Amount {
 }
 
 /**
- * Parses a wire amount such as `'CREDIT:12.34'` back into an `Amount`. The currency is the part
- * before the colon and must be one this system handles; anything else throws INVALID_AMOUNT, so a
- * string that merely contains a colon can never build an amount with a nonsense currency. This is
- * the inverse of `encodeAmount`, shared by every layer that stores or receives an amount as text:
- * the cache, the HTTP wire, and the SQL engines.
+ * Parses a wire amount such as `'CREDIT:12.34'` back into an `Amount`.
+ *
+ * The currency is the part before the colon and must be one this system handles. Anything else
+ * throws INVALID_AMOUNT. A string that merely contains a colon can never build an amount with
+ * a nonsense currency.
+ *
+ * This is the inverse of `encodeAmount`, shared by every layer that stores or receives an
+ * amount as text: the cache, the HTTP wire, and the SQL engines.
  */
 export function decodeAmountWire(encoded: string): Amount {
   const colon = encoded.indexOf(':');
@@ -246,6 +245,35 @@ export function decodeAmountWire(encoded: string): Amount {
   return decodeAmount(encoded.slice(colon + 1), currency);
 }
 
+/**
+ * Parses a wire amount and refuses any spelling {@link encodeAmount} would not have written.
+ *
+ * This is what reads text back wherever the writer was this system: a SQL JSON column, the store
+ * wire, the balance cache. `CREDIT:60000` is sixty thousand credits, and is also what an older
+ * engine emit meant by six hundred; re-encoding separates them, because only the canonical text
+ * is its own encoding. `decodeAmountWire` stays wider for text this system did not write, such as
+ * a payment provider's callback body.
+ *
+ * `label` names the boundary in the refusal, such as `'Cached balance'`. The refusal offers no
+ * replacement value: what the text decodes to is the misreading, so printing it would name a
+ * value a hundred times the one that was written.
+ */
+export function decodeCanonicalAmount(wire: string, label: string): Amount {
+  return assertCanonical(decodeAmountWire(wire), wire, label);
+}
+
+function assertCanonical(amount: Amount, wire: string, label: string): Amount {
+  if (encodeAmount(amount) !== wire) {
+    throw fault(
+      ERROR_CODES.INVALID_AMOUNT,
+      `${label} is not canonical: ${wire}. Amounts are written as CURRENCY:major with two ` +
+        `decimals; text carrying minor units names a different amount.`,
+      { detail: { stored: wire } },
+    );
+  }
+  return amount;
+}
+
 /** `a >= b` as rates, compared across scales without division. */
 export function rateGte(a: Rate, b: Rate): boolean {
   return a.rate * 10n ** BigInt(b.scale) >= b.rate * 10n ** BigInt(a.scale);
@@ -254,9 +282,12 @@ export function rateGte(a: Rate, b: Rate): boolean {
 /**
  * Converts an amount to another currency at `rate`, rounding down. A rate is an integer scaled by
  * `10^scale`, so the result is `floor(minor * rate / 10^scale)` — a true floor for either sign,
- * named as the mode at the division. Use it where rounding down is the safe direction, such as
- * paying a seller out: the sub-cent remainder stays with the platform instead of being minted.
- * Throws AMOUNT_OVERFLOW when the result leaves the 64-bit range; the multiply itself runs
+ * named as the mode at the division.
+ *
+ * Use it where rounding down is the safe direction, such as paying a seller out: the sub-cent
+ * remainder stays with the platform instead of being minted.
+ *
+ * Throws AMOUNT_OVERFLOW when the result leaves the 64-bit range. The multiply itself runs
  * through an unbounded intermediate, so it cannot overflow silently.
  *
  * @example
@@ -271,9 +302,12 @@ export function convertFloor(amount: Amount, rate: Rate, to: Currency): Amount {
 
 /**
  * Converts an amount to another currency at `rate`, rounding up: `ceil(minor * rate / 10^scale)`,
- * a true ceiling for either sign. Use it where rounding down would under-cover, such as the USD a
- * top-up must hold in trust: the trust side rounds against the platform, never against the users
- * it backs. Throws AMOUNT_OVERFLOW when the result leaves the 64-bit range.
+ * a true ceiling for either sign.
+ *
+ * Use it where rounding down would under-cover, such as the USD a top-up must hold in trust:
+ * the trust side rounds against the platform, never against the users it backs.
+ *
+ * Throws AMOUNT_OVERFLOW when the result leaves the 64-bit range.
  *
  * @example
  * const rate = { rate: 5n, scale: 3, rateId: 'cashout-example' };
@@ -284,9 +318,9 @@ export function convertCeil(amount: Amount, rate: Rate, to: Currency): Amount {
   return toAmount(to, convertMinor(amount.minor, rate, 'ceil'));
 }
 
-// The one place conversion touches the vendored divider: minor * rate through an unbounded
-// intermediate, one rounding of the named mode, result checked into i64 (re-thrown as the
-// lab's overflow fault).
+// This is the one place conversion touches the arithmetic divider. It runs minor * rate through
+// an unbounded intermediate, applies one rounding of the named mode, and checks the result into
+// i64. An out-of-range result re-throws as the lab's overflow fault.
 function convertMinor(
   minor: bigint,
   rate: Rate,
@@ -320,15 +354,18 @@ function assertSameCurrency(a: Amount, b: Amount): void {
 
 /**
  * Walks any JSON-shaped value and swaps every branded {@link Amount} for its `CREDIT:12.34` wire
- * string. The one Amount-brand walk: the SQL engines use it to store an Operation in a JSON
- * column, and the HTTP store adapter uses it for the same Operation on the wire. A per-kind
- * branch would drift as the Operation union grows; the walk cannot.
+ * string.
+ *
+ * This is the one Amount-brand walk. The SQL engines use it to store an Operation in a JSON
+ * column, and the HTTP store adapter uses it for the same Operation on the wire.
+ *
+ * A per-kind branch would drift as the Operation union grows. The walk cannot.
  */
 export function encodeAmounts(value: unknown): unknown {
   if (isAmount(value)) {
     return encodeAmount(value);
   }
-  // A bare bigint (e.g. a minor-unit limit) rides as its decimal string; JSON has no bigint.
+  // A bare bigint (e.g. a minor-unit limit) rides as its decimal string. JSON has no bigint.
   if (typeof value === 'bigint') {
     return value.toString();
   }
@@ -346,9 +383,13 @@ export function encodeAmounts(value: unknown): unknown {
 }
 
 /**
- * Reverse of {@link encodeAmounts}: every string that parses as `CURRENCY:decimal` becomes an
- * Amount again; any other string (an idempotencyKey, a sku, a source, ...) passes through
+ * The reverse of {@link encodeAmounts}. Every string that parses as `CURRENCY:decimal` becomes an
+ * Amount again. Any other string (an idempotencyKey, a sku, a source, ...) passes through
  * unchanged. A string is an encoded amount only when the whole `decodeAmountWire` parse succeeds.
+ *
+ * A string that parses but is not the canonical spelling throws INVALID_AMOUNT rather than
+ * passing through as text: what this walk reads is what {@link encodeAmounts} wrote, so another
+ * spelling names a different number. See {@link decodeCanonicalAmount}.
  */
 export function decodeAmounts(value: unknown): unknown {
   if (typeof value === 'string') {
@@ -371,9 +412,13 @@ function tryDecodeAmountString(wire: string): Amount | null {
   if (wire.indexOf(':') < 0) {
     return null;
   }
+  let amount: Amount;
   try {
-    return decodeAmountWire(wire);
+    amount = decodeAmountWire(wire);
   } catch {
     return null;
   }
+  // The parse succeeded, so this string is an encoded amount rather than a passer-by. Handing a
+  // non-canonical spelling of one back as text would hide it, so it is refused here instead.
+  return assertCanonical(amount, wire, 'Encoded amount');
 }

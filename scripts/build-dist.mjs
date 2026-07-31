@@ -10,9 +10,9 @@
  */
 
 // Builds the publishable dist/. tsc emits `#src/*` specifiers verbatim, which would send
-// consumers into the shipped TypeScript sources, so this compiles a copy of the source
-// with those specifiers rewritten to relative paths, copies db/ in beside the compiled
-// engines, and fails if any package-import or .ts specifier survives in the output.
+// consumers into the shipped TypeScript sources. So this script compiles a copy of the source
+// with those specifiers rewritten to relative paths. It compiles the tree beside the compiled
+// engines. It fails if any package-import or .ts specifier survives in the output.
 
 import {
   cpSync,
@@ -66,12 +66,8 @@ execFileSync('npx', ['tsc', '-p', 'tsconfig.build.json'], {
   stdio: 'inherit',
 });
 
-// The engines read ../../db/*-schema.sql relative to their own module URL; from
-// dist/src/engines/ that lands on dist/db/.
-cpSync(join(ROOT, 'db'), join(DIST, 'db'), { recursive: true });
-
 // tsc rewrites relative .ts specifiers in the .js emit but leaves them as written in
-// declaration files; point those at .js too (which declaration resolution maps to .d.ts).
+// declaration files. So point those at .js too, which declaration resolution maps to .d.ts.
 for (const path of walk(DIST)) {
   if (!path.endsWith('.d.ts')) continue;
   const text = readFileSync(path, 'utf8');
@@ -112,6 +108,4 @@ if (problems.length > 0) {
     `build-dist: verification failed (${problems.length} problems)`,
   );
 }
-console.log(
-  'build-dist: dist/ compiled, db/ copied, specifiers clean, exports resolve.',
-);
+console.log('build-dist: dist/ compiled, specifiers clean, exports resolve.');

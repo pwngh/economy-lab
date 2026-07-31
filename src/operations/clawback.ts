@@ -20,16 +20,17 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Leg, Unit } from '#src/ports.ts';
 
 /**
- * Reclaim credits after a bank chargeback. The USD movement happens outside this ledger; this books
- * only the credit side of the loss.
+ * Reclaims credits after a bank chargeback. The USD movement happens outside this ledger. This
+ * operation books only the credit side of the loss.
  *
- * Pulls `amount` from spendable, capped at what the user holds, with the rest a debt in RECEIVABLE.
- * The full amount credits STORED_VALUE so the loss un-issues the credits rather than booking REVENUE
- * the platform never earned; the two debits sum to that credit, so the all-CREDIT posting nets zero.
+ * It pulls `amount` from spendable, capped at what the user holds, with the rest a debt in
+ * RECEIVABLE. The full amount credits STORED_VALUE, so the loss un-issues the credits rather than
+ * booking REVENUE the platform never earned. The two debits sum to that credit; the all-CREDIT
+ * posting nets zero.
  *
- * A present `orderId` shares the `reversed:${orderId}` key to stay mutually exclusive with a refund
- * of the same order; a lost claim returns that reversal's transaction as `duplicate`. Returns
- * `committed` or `duplicate`. A bad amount throws a fault.
+ * A present `orderId` shares the `reversed:${orderId}` key to stay mutually exclusive with a
+ * refund of the same order. A lost claim returns that reversal's transaction as `duplicate`.
+ * Returns `committed` or `duplicate`. A bad amount throws a fault.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/clawback/ Clawback}
  *   for the chargeback reversal and split accounting.

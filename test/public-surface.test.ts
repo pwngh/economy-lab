@@ -26,6 +26,7 @@ import {
   describeEnv,
   DEV_RATES,
   EXPORT_FORMAT,
+  feeForPrice,
   findByHash,
   idempotencyKey,
   inspectConfig,
@@ -34,15 +35,19 @@ import {
   maintenanceWindow,
   memoryPorts,
   mergeConfig,
+  mulDiv,
   openPorts,
   paginate,
   parseExport,
   preflight,
+  rateGte,
   REJECTION_CODES,
   REJECTION_SPEC,
   requireSuccess,
+  revenueForSplit,
   SECRET_KEYS,
   systemRuntime,
+  toAmount,
   usd,
   verifyExport,
 } from '#src/index.ts';
@@ -65,6 +70,9 @@ import type {
   Outcome,
   Posting,
   ParsedExport,
+  Rate,
+  Recipient,
+  Rounding,
   Saga,
   ServerOptions,
   Statement,
@@ -116,6 +124,16 @@ export type PublicSurfaceGuards = [
   Expect<Exact<SweepName, (typeof SWEEP_NAMES)[number]>>,
   Expect<Exact<ReturnType<typeof parseExport>, ParsedExport>>,
   Expect<Exact<Awaited<ReturnType<typeof verifyExport>>, VerifyReport>>,
+  // The pricing and rounding helpers name their own inputs off the same entry.
+  Expect<Exact<Parameters<typeof mulDiv>[3], Rounding>>,
+  Expect<Exact<Parameters<typeof rateGte>[0], Rate>>,
+  Expect<
+    Exact<Parameters<typeof revenueForSplit>[1], ReadonlyArray<Recipient>>
+  >,
+  // The fee takes the priced Amount, not a bare minor count: whole-credit rounding is a rule
+  // about credits and the currency is what lets it refuse a price it cannot round.
+  Expect<Exact<Parameters<typeof feeForPrice>[0], Amount>>,
+  Expect<Exact<Parameters<typeof revenueForSplit>[0], Amount>>,
 ];
 
 test('public entry names every Economy.read and Worker I/O type (enforced at typecheck)', () => {});
@@ -163,6 +181,31 @@ test('the promoted values are live on the public entry', () => {
   assert.equal(typeof EXPORT_FORMAT, 'string');
   assert.equal(typeof verifyExport, 'function');
   assert.equal(DEV_RATES.parRate, 5n);
+});
+
+test('the fee and rounding helpers are live on the public entry', () => {
+  // A host that quotes a fee or compares a rate must reach the functions the posting itself
+  // uses; re-deriving either off-entry is how a quote and a posting come apart.
+  assert.equal(mulDiv(7n, 1n, 2n, 'ceil'), 4n);
+  assert.equal(mulDiv(7n, 1n, 2n, 'floor'), 3n);
+  const par = { rate: 1n, scale: 0, rateId: 'par' };
+  assert.equal(rateGte(par, { rate: 100n, scale: 2, rateId: 'same' }), true);
+  assert.equal(rateGte(par, { rate: 101n, scale: 2, rateId: 'above' }), false);
+  // 15.3% of CREDIT:1000.00 is 153.00 exactly, and the fee rounds up to a whole credit.
+  assert.equal(feeForPrice(toAmount('CREDIT', 100_000n), 1_530), 15_300n);
+  assert.equal(feeForPrice(toAmount('CREDIT', 100_050n), 1_530), 15_400n);
+  // Two uneven shares leave a one-unit residual, and revenue keeps it on top of the fee.
+  assert.equal(
+    revenueForSplit(
+      toAmount('CREDIT', 100_000n),
+      [
+        { sellerId: 'usr_a', shareBps: 3_333 },
+        { sellerId: 'usr_b', shareBps: 6_667 },
+      ],
+      1_530,
+    ),
+    15_301n,
+  );
 });
 
 test('the worker facet promotes the sweep registry', () => {

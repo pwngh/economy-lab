@@ -65,7 +65,11 @@ function saga(overrides: Partial<Saga> & Pick<Saga, 'id' | 'state'>): Saga {
     reserve: credit('20000.00'),
     rateId: 'payout:CREDIT->USD:1',
     txnId: `txn_anchor_${overrides.id}`,
-    providerRef: null,
+    // A payout reaches SUBMITTED only by being handed to the rail, and the rail answers with its
+    // own reference, so that is the state a row carries one in. A SUBMITTED row without one is
+    // the hand-off whose answer was lost, and the sweep treats it as unfinished.
+    providerRef:
+      overrides.state === 'SUBMITTED' ? `prov_${overrides.id}` : null,
     reason: null,
     attempts: 0,
     dueAt: 0,
@@ -341,9 +345,10 @@ async function leavesASubmittedSagaAtTheAgeBoundaryForTheWebhook(
   assert.deepEqual(await store.ledger.balance(SYSTEM.REVENUE), credit('0.00'));
 }
 
-async function deadLettersAProviderFaultPastTheAttemptCeiling(
-  store: Store,
-): Promise<void> {
+// The attempt ceiling used to end a payout here, returning the reserve on the strength of a
+// thrown submit — which says nothing about whether the rail moved the money. Reaching the ceiling
+// now only stops the sweep re-asking; the settlement window is what ends the payout.
+async function keepsTheReserveAtTheAttemptCeiling(store: Store): Promise<void> {
   const config: Config = { ...testConfig(), maxPayoutAttempts: 1 };
   await openSaga(
     store,
@@ -357,29 +362,35 @@ async function deadLettersAProviderFaultPastTheAttemptCeiling(
 
   const summary = await advanceDuePayouts(
     store,
-    makeWorkerCtx({ processor: failingProcessor(), config }),
+    makeWorkerCtx({
+      processor: failingProcessor(),
+      config,
+      clock: fixedClock(1_000),
+    }),
     { now: 1_000, limit: 10 },
   );
 
   assert.deepEqual(summary.submitted, []);
-  assert.equal(summary.deadLettered.length, 1);
-  assert.equal(summary.deadLettered[0]!.id, 'pay_1');
-  assert.equal(summary.deadLettered[0]!.reason, 'PROVIDER.FAILURE');
-  const failed = await store.sagas.load('pay_1');
-  assert.equal(failed!.state, 'FAILED');
-  assert.equal(failed!.reason, 'PROVIDER.FAILURE');
-  assert.deepEqual(failed!.payoutUsd, usd('100.00'));
+  assert.deepEqual(summary.deadLettered, []);
+  assert.deepEqual(summary.retrying, [
+    { id: 'pay_1', code: 'PROVIDER.FAILURE' },
+  ]);
+  const held = await store.sagas.load('pay_1');
+  assert.equal(held!.state, 'SUBMITTED');
+  assert.equal(held!.attempts, 1);
+  assert.equal(held!.providerRef, null);
+  assert.deepEqual(held!.payoutUsd, usd('100.00'));
   assert.deepEqual(
     await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
-    credit('0.00'),
+    credit('20000.00'),
   );
   assert.deepEqual(
     await store.ledger.balance(earned('usr_seller')),
-    credit('20000.00'),
+    credit('0.00'),
   );
 }
 
-async function leavesARetryableFaultUnderTheCeilingForTheNextSweep(
+async function leavesARetryableFaultForTheNextSweep(
   store: Store,
 ): Promise<void> {
   const config: Config = { ...testConfig(), maxPayoutAttempts: 5 };
@@ -387,7 +398,11 @@ async function leavesARetryableFaultUnderTheCeilingForTheNextSweep(
 
   const summary = await advanceDuePayouts(
     store,
-    makeWorkerCtx({ processor: failingProcessor(), config }),
+    makeWorkerCtx({
+      processor: failingProcessor(),
+      config,
+      clock: fixedClock(1_000),
+    }),
     { now: 1_000, limit: 10 },
   );
 
@@ -396,32 +411,49 @@ async function leavesARetryableFaultUnderTheCeilingForTheNextSweep(
   assert.equal(summary.retrying[0]!.id, 'pay_1');
   assert.equal(summary.retrying[0]!.code, 'PROVIDER.FAILURE');
   const pending = await store.sagas.load('pay_1');
-  assert.equal(pending!.state, 'RESERVED');
+  assert.equal(pending!.state, 'SUBMITTED');
   assert.equal(pending!.attempts, 1);
 }
 
 // Regression: a failed submit once never raised the attempt count, so a downed provider
-// retried forever and stranded the seller's reserve.
-async function climbsAttemptsEachRunThenDeadLettersAndReturnsTheReserve(
+// retried forever and stranded the seller's reserve. The count still climbs, and the reserve
+// still comes back — now on the settlement window rather than the count.
+async function climbsAttemptsEachRunThenTimesOutAndReturnsTheReserve(
   store: Store,
 ): Promise<void> {
-  const config: Config = { ...testConfig(), maxPayoutAttempts: 3 };
-  const ctx = makeWorkerCtx({ processor: failingProcessor(), config });
+  // Three SLA ticks of 120s fit inside a 300s window; the fourth is past it.
+  const config: Config = { ...testConfig(), maxPayoutAgeMs: 300_000 };
+  const ctx = (at: number) =>
+    makeWorkerCtx({
+      processor: failingProcessor(),
+      config,
+      clock: fixedClock(at),
+    });
   await openSaga(store, saga({ id: 'pay_1', state: 'RESERVED', attempts: 0 }));
+  const sla = testConfig().payoutSla.SUBMITTED!;
 
-  // dueAt is unchanged, so every run re-selects the saga.
-  const run1 = await advanceDuePayouts(store, ctx, { now: 1_000, limit: 10 });
-  assert.equal(run1.retrying.length, 1);
-  assert.equal((await store.sagas.load('pay_1'))!.attempts, 1);
+  // Each failed hand-off reschedules one SLA ahead, so the sweeps step on that cadence.
+  const climbed: number[] = [];
+  for (const step of [0, 1, 2]) {
+    const at = 1_000 + step * sla;
+    const run = await advanceDuePayouts(store, ctx(at), { now: at, limit: 10 });
+    assert.equal(run.retrying.length, 1, `sweep ${step}`);
+    assert.deepEqual(run.deadLettered, [], `sweep ${step}`);
+    climbed.push((await store.sagas.load('pay_1'))!.attempts);
+    // The reserve is untouched while the outcome is unknown.
+    assert.deepEqual(
+      await store.ledger.balance(earned('usr_seller')),
+      credit('0.00'),
+      `sweep ${step}`,
+    );
+  }
+  assert.deepEqual(climbed, [1, 2, 3]);
 
-  const run2 = await advanceDuePayouts(store, ctx, { now: 1_000, limit: 10 });
-  assert.equal(run2.retrying.length, 1);
-  assert.equal((await store.sagas.load('pay_1'))!.attempts, 2);
-
-  const run3 = await advanceDuePayouts(store, ctx, { now: 1_000, limit: 10 });
-  assert.deepEqual(run3.retrying, []);
-  assert.equal(run3.deadLettered.length, 1);
-  assert.equal(run3.deadLettered[0]!.id, 'pay_1');
+  const at = 1_000 + 3 * sla;
+  const timed = await advanceDuePayouts(store, ctx(at), { now: at, limit: 10 });
+  assert.deepEqual(timed.deadLettered, [
+    { id: 'pay_1', reason: 'payout.timeout' },
+  ]);
 
   const failed = await store.sagas.load('pay_1');
   assert.equal(failed!.state, 'FAILED');
@@ -463,30 +495,34 @@ async function isolatesAPerItemFaultAndContinuesTheBatch(): Promise<void> {
 
   assert.deepEqual(summary.submitted, ['pay_good']);
   assert.deepEqual(
-    summary.deadLettered.map((d) => d.id),
+    summary.retrying.map((r) => r.id),
     ['pay_bad'],
   );
+  assert.deepEqual(summary.deadLettered, []);
   await store.close();
 }
 
 async function deadLetteringEmitsOnePayoutReversedEvent(
   store: Store,
 ): Promise<void> {
-  const config: Config = { ...testConfig(), maxPayoutAttempts: 1 };
+  // Driven through the timeout, which is the path that ends a payout the rail never settled.
+  const config: Config = { ...testConfig(), maxPayoutAgeMs: 60_000 };
   await openSaga(
     store,
     saga({
       id: 'pay_1',
-      state: 'RESERVED',
+      state: 'SUBMITTED',
       attempts: 0,
       reserve: credit('20000.00'),
+      updatedAt: 0,
+      dueAt: 0,
     }),
   );
 
   await advanceDuePayouts(
     store,
-    makeWorkerCtx({ processor: failingProcessor(), config }),
-    { now: 1_000, limit: 10 },
+    makeWorkerCtx({ config, clock: fixedClock(120_000) }),
+    { now: 120_000, limit: 10 },
   );
 
   // The reversed event is enqueued in the same transaction as the reversal entry.
@@ -499,7 +535,7 @@ async function deadLetteringEmitsOnePayoutReversedEvent(
   assert.equal(event.audience, 'internal');
   assert.equal(event.subject, 'usr_seller');
   assert.equal(event.data.sagaId, 'pay_1');
-  assert.equal(event.data.reason, 'PROVIDER.FAILURE');
+  assert.equal(event.data.reason, 'payout.timeout');
 }
 
 async function reversesPromptlyWhenTheProviderReportsFailure(
@@ -768,16 +804,16 @@ describe('advanceDuePayouts', () => {
     leavesASubmittedSagaAtTheAgeBoundaryForTheWebhook(
       memoryStore({ digest: seededDigest(1) }),
     ));
-  test('dead-letters a provider fault past the attempt limit', () =>
-    deadLettersAProviderFaultPastTheAttemptCeiling(
+  test('keeps the reserve at the attempt ceiling, where a thrown submit proves nothing', () =>
+    keepsTheReserveAtTheAttemptCeiling(
       memoryStore({ digest: seededDigest(1) }),
     ));
-  test('leaves a retryable fault under the limit for the next run', () =>
-    leavesARetryableFaultUnderTheCeilingForTheNextSweep(
+  test('leaves a retryable fault for the next run', () =>
+    leavesARetryableFaultForTheNextSweep(
       memoryStore({ digest: seededDigest(1) }),
     ));
-  test('climbs the attempt count each run, then dead-letters a stuck payout and returns the reserve', () =>
-    climbsAttemptsEachRunThenDeadLettersAndReturnsTheReserve(
+  test('climbs the attempt count each run, then times out a stuck payout and returns the reserve', () =>
+    climbsAttemptsEachRunThenTimesOutAndReturnsTheReserve(
       memoryStore({ digest: seededDigest(1) }),
     ));
   test('isolates a per-item fault and continues the batch', () =>
@@ -808,6 +844,402 @@ describe('advanceDuePayouts', () => {
     ));
   test('falls back to the timeout when the probe answers unknown or fails', () =>
     fallsBackToTheTimeoutWhenTheProbeCannotAnswer());
+});
+
+// A rail that disburses before it answers, then loses the response on its first call. The USD is
+// gone and the caller learns nothing, which is the one case a thrown error cannot distinguish from
+// "nothing happened". A second call under the same idempotency key is the retry the port documents
+// as safe: it reports the same reference and disburses nothing further.
+function railThatLosesItsFirstResponse(
+  disbursed: string[],
+  asked: string[],
+  answer: PayoutProviderStatus['state'] = 'SETTLED',
+): Processor {
+  let calls = 0;
+  return {
+    submitPayout: async (input) => {
+      calls += 1;
+      if (!disbursed.includes(input.key)) {
+        disbursed.push(input.key);
+      }
+      if (calls === 1) {
+        throw fault(ERROR_CODES.PROVIDER_FAILURE, 'response lost', {
+          retryable: true,
+        });
+      }
+      return { providerRef: `prov_${input.key}` };
+    },
+    payoutStatus: async (input) => {
+      asked.push(input.providerRef);
+      return { state: answer };
+    },
+  };
+}
+
+async function keepsTheReserveWhenTheSubmitResponseIsLost(
+  store: Store,
+): Promise<void> {
+  const disbursed: string[] = [];
+  const asked: string[] = [];
+  const config: Config = { ...testConfig(), maxPayoutAttempts: 1 };
+  await openSaga(store, saga({ id: 'pay_1', state: 'RESERVED', attempts: 0 }));
+
+  const summary = await advanceDuePayouts(
+    store,
+    makeWorkerCtx({
+      processor: railThatLosesItsFirstResponse(disbursed, asked),
+      config,
+      clock: fixedClock(1_000),
+    }),
+    { now: 1_000, limit: 10 },
+  );
+
+  // The USD left the platform, so returning the reserve now pays the seller twice.
+  assert.deepEqual(disbursed, ['pay_1']);
+  assert.deepEqual(summary.deadLettered, []);
+  const held = await store.sagas.load('pay_1');
+  assert.equal(held!.state, 'SUBMITTED');
+  assert.deepEqual(
+    await store.ledger.balance(earned('usr_seller')),
+    credit('0.00'),
+  );
+  assert.deepEqual(
+    await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
+    credit('20000.00'),
+  );
+}
+
+async function recoversTheProviderRefUnderTheSameKey(
+  store: Store,
+): Promise<void> {
+  const disbursed: string[] = [];
+  const asked: string[] = [];
+  const processor = railThatLosesItsFirstResponse(disbursed, asked);
+  await openSaga(store, saga({ id: 'pay_1', state: 'RESERVED', attempts: 0 }));
+  const sla = testConfig().payoutSla.SUBMITTED!;
+
+  const run1 = await advanceDuePayouts(
+    store,
+    makeWorkerCtx({ processor, clock: fixedClock(1_000) }),
+    { now: 1_000, limit: 10 },
+  );
+  assert.deepEqual(run1.retrying, [{ id: 'pay_1', code: 'PROVIDER.FAILURE' }]);
+  assert.equal((await store.sagas.load('pay_1'))!.providerRef, null);
+
+  // The lost reference is what the probe joins on, so recovering it is what makes the evidence
+  // path reachable at all.
+  const run2 = await advanceDuePayouts(
+    store,
+    makeWorkerCtx({ processor, clock: fixedClock(1_000 + sla) }),
+    { now: 1_000 + sla, limit: 10 },
+  );
+  assert.deepEqual(run2.submitted, ['pay_1']);
+  assert.equal((await store.sagas.load('pay_1'))!.providerRef, 'prov_pay_1');
+
+  const run3 = await advanceDuePayouts(
+    store,
+    makeWorkerCtx({ processor, clock: fixedClock(1_000 + 2 * sla) }),
+    { now: 1_000 + 2 * sla, limit: 10 },
+  );
+  assert.deepEqual(run3.deadLettered, []);
+
+  assert.deepEqual(disbursed, ['pay_1']);
+  assert.deepEqual(asked, ['prov_pay_1']);
+  const held = await store.sagas.load('pay_1');
+  assert.equal(held!.state, 'SUBMITTED');
+  // The age clock still runs from the hand-off, so a rail that never settles still times out.
+  assert.equal(held!.updatedAt, 1_000);
+  assert.deepEqual(
+    await store.ledger.balance(earned('usr_seller')),
+    credit('0.00'),
+  );
+}
+
+async function stillReturnsTheReserveAtTheTimeout(store: Store): Promise<void> {
+  const config: Config = { ...testConfig(), maxPayoutAgeMs: 60_000 };
+  const ctx = (at: number) =>
+    makeWorkerCtx({
+      processor: failingProcessor(),
+      config,
+      clock: fixedClock(at),
+    });
+  await openSaga(store, saga({ id: 'pay_1', state: 'RESERVED', attempts: 0 }));
+  const sla = testConfig().payoutSla.SUBMITTED!;
+
+  await advanceDuePayouts(store, ctx(1_000), { now: 1_000, limit: 10 });
+  const later = 1_000 + sla;
+  const timed = await advanceDuePayouts(store, ctx(later), {
+    now: later,
+    limit: 10,
+  });
+
+  // A rail that never answers must not strand the reserve: the settlement window bounds it.
+  assert.deepEqual(timed.deadLettered, [
+    { id: 'pay_1', reason: 'payout.timeout' },
+  ]);
+  assert.equal((await store.sagas.load('pay_1'))!.state, 'FAILED');
+  assert.deepEqual(
+    await store.ledger.balance(earned('usr_seller')),
+    credit('20000.00'),
+  );
+  assert.deepEqual(
+    await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
+    credit('0.00'),
+  );
+}
+
+describe('advanceDuePayouts Lost Submit Response', () => {
+  test('keeps the reserve when the submit response is lost after the rail disbursed', () =>
+    keepsTheReserveWhenTheSubmitResponseIsLost(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
+  test('recovers the provider reference on a later sweep under the same key', () =>
+    recoversTheProviderRefUnderTheSameKey(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
+  test('still returns the reserve at the timeout when the rail never answers', () =>
+    stillReturnsTheReserveAtTheTimeout(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
+});
+
+// The fault shape @pwngh/economy-edge throws — a namespaced code and a retry verdict assigned
+// onto a plain Error — built by hand so this file stays free of the edge package. A verdict of
+// false is the rail refusing outright: this disbursement is never going to happen.
+function railRefusal(code: string, retryable: boolean): Error {
+  return Object.assign(new Error(`the rail refused: ${code}`), {
+    code,
+    retryable,
+    detail: {},
+  });
+}
+
+async function failsANonRetryableRefusalOnTheFirstHandOff(
+  store: Store,
+): Promise<void> {
+  let railCalls = 0;
+  const processor: Processor = {
+    submitPayout: async () => {
+      railCalls += 1;
+      throw railRefusal('TILIA.AUTH_REJECTED', false);
+    },
+  };
+  await openSaga(store, saga({ id: 'pay_1', state: 'RESERVED', attempts: 0 }));
+
+  const summary = await advanceDuePayouts(
+    store,
+    makeWorkerCtx({ processor, clock: fixedClock(1_000) }),
+    { now: 1_000, limit: 10 },
+  );
+
+  // One call, one answer: the refusal ends the payout this sweep, not five calls and a
+  // settlement window later.
+  assert.equal(railCalls, 1);
+  assert.deepEqual(summary.deadLettered, [
+    { id: 'pay_1', reason: 'PROVIDER.FAILURE' },
+  ]);
+  assert.deepEqual(summary.retrying, []);
+  assert.deepEqual(summary.submitted, []);
+  const failed = await store.sagas.load('pay_1');
+  assert.equal(failed!.state, 'FAILED');
+  assert.equal(failed!.reason, 'PROVIDER.FAILURE');
+  assert.deepEqual(
+    await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
+    credit('0.00'),
+  );
+  assert.deepEqual(
+    await store.ledger.balance(earned('usr_seller')),
+    credit('20000.00'),
+  );
+
+  // Dead is dead: the next sweep neither re-claims the saga nor calls the rail again.
+  const sla = testConfig().payoutSla.SUBMITTED!;
+  const next = await advanceDuePayouts(
+    store,
+    makeWorkerCtx({ processor, clock: fixedClock(1_000 + sla) }),
+    { now: 1_000 + sla, limit: 10 },
+  );
+  assert.equal(railCalls, 1);
+  assert.deepEqual(next.deadLettered, []);
+}
+
+async function failsARefusalTheAdapterClassifiedItself(
+  store: Store,
+): Promise<void> {
+  // The shape edgeTiliaProcessor throws for a resolved rejection: an EconomyError whose
+  // retryable defaulted to false. It passes through normalization unchanged, so the verdict
+  // arrives here whichever side classified it.
+  const processor: Processor = {
+    submitPayout: async () => {
+      throw fault(
+        ERROR_CODES.PROVIDER_FAILURE,
+        'The payout rail rejected the submit.',
+      );
+    },
+  };
+  await openSaga(store, saga({ id: 'pay_1', state: 'RESERVED', attempts: 0 }));
+
+  const summary = await advanceDuePayouts(
+    store,
+    makeWorkerCtx({ processor, clock: fixedClock(1_000) }),
+    { now: 1_000, limit: 10 },
+  );
+
+  assert.deepEqual(summary.deadLettered, [
+    { id: 'pay_1', reason: 'PROVIDER.FAILURE' },
+  ]);
+  assert.deepEqual(summary.retrying, []);
+  assert.equal((await store.sagas.load('pay_1'))!.state, 'FAILED');
+  assert.deepEqual(
+    await store.ledger.balance(earned('usr_seller')),
+    credit('20000.00'),
+  );
+}
+
+async function retriesARetryableRefusalTheFullAttemptBudget(
+  store: Store,
+): Promise<void> {
+  // The direction that loses money if over-corrected: a retryable refusal (rate limit, brief
+  // outage) keeps every attempt the budget grants, and the reserve stays put throughout.
+  let railCalls = 0;
+  const processor: Processor = {
+    submitPayout: async () => {
+      railCalls += 1;
+      throw railRefusal('TILIA.RATE_LIMITED', true);
+    },
+  };
+  const config: Config = { ...testConfig(), maxPayoutAttempts: 5 };
+  await openSaga(store, saga({ id: 'pay_1', state: 'RESERVED', attempts: 0 }));
+  const sla = testConfig().payoutSla.SUBMITTED!;
+
+  for (const step of [0, 1, 2, 3, 4]) {
+    const at = 1_000 + step * sla;
+    const run = await advanceDuePayouts(
+      store,
+      makeWorkerCtx({ processor, config, clock: fixedClock(at) }),
+      { now: at, limit: 10 },
+    );
+    assert.deepEqual(run.deadLettered, [], `sweep ${step}`);
+    assert.deepEqual(
+      run.retrying,
+      [{ id: 'pay_1', code: 'PROVIDER.FAILURE' }],
+      `sweep ${step}`,
+    );
+  }
+  assert.equal(railCalls, 5);
+
+  // Past the budget the sweep stops asking; the settlement window owns the payout from here.
+  const at = 1_000 + 5 * sla;
+  const run = await advanceDuePayouts(
+    store,
+    makeWorkerCtx({ processor, config, clock: fixedClock(at) }),
+    { now: at, limit: 10 },
+  );
+  assert.equal(railCalls, 5);
+  assert.deepEqual(run.deadLettered, []);
+  const held = await store.sagas.load('pay_1');
+  assert.equal(held!.state, 'SUBMITTED');
+  assert.equal(held!.attempts, 5);
+  assert.deepEqual(
+    await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
+    credit('20000.00'),
+  );
+  assert.deepEqual(
+    await store.ledger.balance(earned('usr_seller')),
+    credit('0.00'),
+  );
+}
+
+async function keepsTheSubmittedProtocolForAThrowCarryingNoVerdict(
+  store: Store,
+): Promise<void> {
+  // A dropped connection mid-call: the transfer may have happened, so the refusal path must not
+  // fire — the SUBMITTED protocol (probe, webhook, timeout) owns the outcome.
+  const processor: Processor = {
+    submitPayout: async () => {
+      throw new Error('connection reset mid-call');
+    },
+  };
+  await openSaga(store, saga({ id: 'pay_1', state: 'RESERVED', attempts: 0 }));
+
+  const summary = await advanceDuePayouts(
+    store,
+    makeWorkerCtx({ processor, clock: fixedClock(1_000) }),
+    { now: 1_000, limit: 10 },
+  );
+
+  assert.deepEqual(summary.deadLettered, []);
+  assert.deepEqual(summary.retrying, [
+    { id: 'pay_1', code: 'PROVIDER.FAILURE' },
+  ]);
+  const held = await store.sagas.load('pay_1');
+  assert.equal(held!.state, 'SUBMITTED');
+  assert.deepEqual(
+    await store.ledger.balance(SYSTEM.PAYOUT_RESERVE),
+    credit('20000.00'),
+  );
+  assert.deepEqual(
+    await store.ledger.balance(earned('usr_seller')),
+    credit('0.00'),
+  );
+}
+
+async function logsTheHandOffFailureUnderTheRailsCode(
+  store: Store,
+): Promise<void> {
+  // The rail failed, so the line an operator greps must page the rail's owner: PROVIDER.FAILURE,
+  // never the STORE.FAILURE that sends them to a healthy database.
+  const lines: Array<{ message: string; fields: Record<string, unknown> }> = [];
+  const logger = {
+    log: (
+      _level: string,
+      message: string,
+      fields?: Record<string, unknown>,
+    ) => {
+      lines.push({ message, fields: fields ?? {} });
+    },
+  };
+  const processor: Processor = {
+    submitPayout: async () => {
+      throw new Error('connection reset mid-call');
+    },
+  };
+  await openSaga(store, saga({ id: 'pay_1', state: 'RESERVED', attempts: 0 }));
+
+  await advanceDuePayouts(
+    store,
+    makeWorkerCtx({ processor, logger, clock: fixedClock(1_000) }),
+    { now: 1_000, limit: 10 },
+  );
+
+  const unresolved = lines.filter(
+    (line) => line.message === 'worker.payouts.handoff_unresolved',
+  );
+  assert.equal(unresolved.length, 1);
+  assert.equal(unresolved[0]!.fields.code, 'PROVIDER.FAILURE');
+}
+
+describe('advanceDuePayouts Classified Rail Refusal', () => {
+  test('fails a non-retryable rail refusal on the first hand-off and returns the reserve', () =>
+    failsANonRetryableRefusalOnTheFirstHandOff(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
+  test('fails a refusal the adapter classified itself as a non-retryable fault', () =>
+    failsARefusalTheAdapterClassifiedItself(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
+  test('retries a retryable refusal for the full attempt budget and keeps the reserve', () =>
+    retriesARetryableRefusalTheFullAttemptBudget(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
+  test('keeps the submitted protocol for a throw carrying no verdict', () =>
+    keepsTheSubmittedProtocolForAThrowCarryingNoVerdict(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
+  test('logs a hand-off failure under the rail-facing code, not the store one', () =>
+    logsTheHandOffFailureUnderTheRailsCode(
+      memoryStore({ digest: seededDigest(1) }),
+    ));
 });
 
 describe('advanceDuePayouts Pricing At Request', () => {

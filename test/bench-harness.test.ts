@@ -10,11 +10,13 @@
  * @license MIT
  */
 
-// Unit tests for scripts/support/harness.ts — the bench is only trustworthy if its own logic is.
+// Unit tests for test/support/harness.ts — the bench is only trustworthy if its own logic is.
 // DB-touching paths run in-memory only.
 
 import { describe, test, after } from 'node:test';
 import assert from 'node:assert/strict';
+
+import '#test/support/dist-guard.ts';
 
 import { topUp, spend, requestPayout, credit } from '#test/support/builders.ts';
 import {
@@ -25,11 +27,13 @@ import {
   determinismRoot,
   latencyDist,
   poolSizeFor,
+  proveEconomyOrReport,
+  proveGate,
   requiredPoolSize,
   resolveConfig,
   resolveUrls,
   tryProvision,
-} from '#scripts/support/harness.ts';
+} from '#test/support/harness.ts';
 import {
   CHAIN_CONTINUITY_MARKER,
   CHAIN_FORK_INDEX,
@@ -38,7 +42,7 @@ import {
   withTransientRetry,
 } from '#src/engines/sql-shared.ts';
 
-import type { HarnessConfig } from '#scripts/support/harness.ts';
+import type { HarnessConfig } from '#test/support/harness.ts';
 import type { RetryEvent, RetryObserver } from '#src/engines/sql-shared.ts';
 
 // An Error carrying engine-specific fields, so classifyThrow sees the same shape the drivers raise
@@ -66,20 +70,20 @@ describe('Bench harness: resolveConfig', () => {
   test('a named profile sets a coherent batch of defaults', () => {
     const fast = resolveConfig({ BENCH_PROFILE: 'fast' });
     assert.equal(fast.profile, 'fast');
-    assert.equal(fast.ops, 100);
+    assert.equal(fast.opCount, 100);
     assert.equal(fast.concurrency, 16);
   });
 
   test('an explicit env var overrides the profile it belongs to', () => {
     const cfg = resolveConfig({ BENCH_PROFILE: 'thorough', BENCH_OPS: '300' });
     assert.equal(cfg.profile, 'thorough');
-    assert.equal(cfg.ops, 300);
+    assert.equal(cfg.opCount, 300);
   });
 
   test('an unknown profile name falls back to default', () => {
     const cfg = resolveConfig({ BENCH_PROFILE: 'bogus' });
     assert.equal(cfg.profile, 'default');
-    assert.equal(cfg.ops, 500);
+    assert.equal(cfg.opCount, 500);
   });
 
   test('BENCH_BACKENDS is parsed and unknown names are dropped', () => {
@@ -536,5 +540,45 @@ describe('Bench harness: in-memory provisioning + determinism root', () => {
     const second = await run();
     assert.equal(first, second);
     assert.match(first, /^[0-9a-f]{64}$/);
+  });
+});
+
+// The one-line verdict the bench and the scale probe print. Which prover fills it decides what a
+// green run means: the full replay of every chain link, or a shape check on each account's head
+// that re-hashes nothing. `test/integrity.test.ts` holds the two apart on one book.
+describe('Bench harness: proveGate', () => {
+  test('the gate runs the full audit and its verdict names the prover that answered', async () => {
+    const cfg = resolveConfig({ BENCH_BACKENDS: 'in-memory' });
+    const p = await tryProvision('in-memory', cfg);
+    assert.notEqual(p, null);
+    try {
+      await p!.economy.submit(
+        topUp({ userId: 'usr_gate', amount: credit('300.00') }),
+      );
+
+      const { ok, report } = await proveEconomyOrReport(p!);
+      assert.equal(report.prover, 'proveEconomy');
+      assert.equal(ok, true);
+
+      // The verdict line reads the prover off the report, so it cannot drift from the prover the
+      // gate actually ran.
+      const lines: string[] = [];
+      const warn = console.warn;
+      console.warn = (line: string): void => {
+        lines.push(String(line));
+      };
+      let passed: boolean;
+      try {
+        passed = await proveGate(p!, 'gate: ');
+      } finally {
+        console.warn = warn;
+      }
+      assert.equal(passed, true);
+      assert.equal(lines.length, 1);
+      assert.match(lines[0]!, /^gate: PASS/);
+      assert.match(lines[0]!, /proveEconomy/);
+    } finally {
+      await p!.teardown();
+    }
   });
 });

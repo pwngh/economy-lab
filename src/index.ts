@@ -9,13 +9,22 @@
  * @license MIT
  */
 
+/**
+ * The main entry point. It exports construction, operations, money, the ledger, outcomes, and
+ * the principal types.
+ *
+ * @module economy-lab
+ */
+
 import { createEconomy } from '#src/economy.ts';
 import {
+  configIssues,
   defaultConfig,
   inspectConfig,
   loadSecrets,
   missingPolicyAnchors,
   missingSecretFields,
+  retiredConfigKeys,
 } from '#src/config.ts';
 import {
   isMysqlUrl,
@@ -26,14 +35,11 @@ import {
   readUrl,
   serviceUrls,
 } from '#src/env.ts';
-import { assertMoneyConformant, assertSchemaCurrent } from '#src/schema.ts';
-import { installMoneyRetrying } from '#src/engines/sql-shared.ts';
-import { installMysql, proveMysql } from '#src/db.vendored.ts';
-import { vectors as moneyVectors } from '#src/money.vendored.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import {
   DEV_RATES,
   missingExternals,
+  rateTableFault,
   requireCallable,
   resolveExternals,
   signerFromSecrets,
@@ -46,7 +52,8 @@ import {
   systemClock,
 } from '#src/runtime.ts';
 import { sha256Digest } from '#src/digest.ts';
-import { fault, ERROR_CODES } from '#src/errors.ts';
+import { EconomyError, fault, ERROR_CODES } from '#src/errors.ts';
+
 import { configuredRates } from '#src/adapters/rates.ts';
 import { flatFee } from '#src/pricing.ts';
 import { memoryProcessor } from '#src/adapters/processor.ts';
@@ -77,9 +84,9 @@ import type {
 
 // --- Public surface (re-exports only) ---------------------------------------------
 
-// Construction: the three altitudes are boot, openPorts + create*, and memoryPorts or a
-// hand-built structural Ports. createEconomy is sync over a finished bag; openPorts is the sole
-// env-to-bag path, sharing every decision with preflight and describeEnv (defined below).
+// Three ways to construct: boot, openPorts + create*, and memoryPorts or a hand-built structural
+// Ports. createEconomy is sync over a finished bag. openPorts is the sole env-to-bag path, and it
+// shares every decision with preflight and describeEnv (defined below).
 export { createEconomy } from '#src/economy.ts';
 export { createSubmitCoalescer } from '#src/batching.ts';
 export type { CoalescerOptions, SubmitCoalescer } from '#src/batching.ts';
@@ -106,9 +113,9 @@ export {
   isWalletAccount,
 } from '#src/accounts.ts';
 
-// Money: build and inspect the branded Amount. encode/decode are the wire pair; the value vocabulary
-// ships too, since the brand blocks reassembling an Amount from raw minor units, so a reader that
-// sums legs or compares a balance to a price needs these.
+// These build and inspect the branded Amount. encode/decode are the wire pair. The value
+// vocabulary ships too, because the brand blocks reassembling an Amount from raw minor units.
+// A reader that sums legs or compares a balance to a price needs these.
 export {
   toAmount,
   credits,
@@ -125,13 +132,19 @@ export {
   isAmount,
   convertFloor,
   convertCeil,
+  mulDiv,
+  rateGte,
   SCALE,
 } from '#src/money.ts';
+export type { Rounding } from '#src/money.ts';
+// The fee arithmetic every charge runs through. A host quoting a fee before it posts, or
+// showing a seller what a split leaves, calls these rather than re-deriving the rounding.
+export { feeForPrice, revenueForSplit } from '#src/pricing.ts';
 export { credit, debit } from '#src/ledger.ts';
 export type { Leg } from '#src/ports.ts';
 
-// Operation constructors: one typed builder per kind, so a caller writes topUp({ ... }) instead of
-// hand-assembling the tagged union. Each returns the exact Operation that submit() takes.
+// The operation constructors give one typed builder per kind, so a caller writes topUp({ ... })
+// instead of hand-assembling the tagged union. Each returns the exact Operation that submit() takes.
 export {
   topUp,
   spend,
@@ -150,10 +163,10 @@ export {
   idempotencyKey,
 } from '#src/operation.ts';
 
-// Actor constructors: build the `actor` every operation carries, e.g. userActor('usr_1').
+// The actor constructors build the `actor` every operation carries, e.g. userActor('usr_1').
 export { userActor, systemActor, operatorActor } from '#src/actor.ts';
 
-// Config is policy only and safe to log; Secrets is the credential bag. The key registries are
+// Config is policy only and safe to log. Secrets is the credential bag. The key registries are
 // the enumerable env surface: policy, secrets, and the production decline flags.
 export {
   defaultConfig,
@@ -170,6 +183,9 @@ export type { Config, Secrets } from '#src/config.ts';
 export {
   EconomyError,
   ERROR_CODES,
+  // The one constructor for a coded fault. A backend the core classifies — retryable or not,
+  // degrade or fail — has to speak this vocabulary rather than throw its driver's own error.
+  fault,
   normalizeError,
   statusForError,
   REJECTION_CODES,
@@ -181,8 +197,18 @@ export {
 export type { ErrorCode, RejectionCode } from '#src/errors.ts';
 
 export type { Economy } from '#src/economy.ts';
-// The env-map shape every construction entry point takes; parsing rules live in src/env.ts.
+// The env-map shape every construction entry point takes. The parsing rules live in src/env.ts.
 export type { EnvMap } from '#src/env.ts';
+/**
+ * The one rule for reading an integer knob out of the environment, so a host's knobs and the
+ * lab's are read the same way. Digits with an optional sign, parsed base 10, refused unless it
+ * is a safe integer inside `bounds`. Anything else — a float, `0x1f`, `1e4`, a value past the
+ * bounds — takes the fallback rather than becoming a number nobody meant. `readIntOrNull` is the
+ * same rule for a knob where unset means off, and `withinIntBounds` is the same rule for a value
+ * somebody already parsed.
+ */
+export { readInt, readIntOrNull, withinIntBounds } from '#src/env.ts';
+export type { IntBounds } from '#src/env.ts';
 export { CAPACITY_THRESHOLDS } from '#src/contract.ts';
 export type {
   Operation,
@@ -204,8 +230,8 @@ export type {
 export type { Amount, Currency } from '#src/money.ts';
 export type { AccountRef } from '#src/accounts.ts';
 export type { BitsetOptions } from '#src/adapters/entitlement-bitset.ts';
-// Read-side return types: the checkpoint read.checkpoint hands back, the chain link read.lineage
-// streams, and the CREDIT-to-USD rate convertFloor/convertCeil take.
+// These are the read-side return types: the checkpoint read.checkpoint hands back, the chain link
+// read.lineage streams, and the CREDIT-to-USD rate convertFloor/convertCeil take.
 export type {
   CallOptions,
   Range,
@@ -215,17 +241,24 @@ export type {
   Rate,
 } from '#src/ports.ts';
 
-// The thorough prover for CI and audits; read.health() is the light in-process snapshot.
+// This is the thorough prover for CI and audits. read.health() is the light in-process snapshot.
 export { allInvariantsHold, proveEconomy, findByHash } from '#src/integrity.ts';
 export type { ProvePorts } from '#src/integrity.ts';
+// The link a replay stopped at. Both reports carry one in `firstBreak`, so a caller narrows the
+// field instead of casting it.
+export type { ChainBreak } from '#src/chain.ts';
 export { paginate } from '#src/paginate.ts';
 
-// Offline verification of a read.export file: the same provers, no store access.
+// These verify a read.export file offline. They run the same provers with no store access.
 export { parseExport, verifyExport } from '#src/verify-export.ts';
-export type { ParsedExport, VerifyReport } from '#src/verify-export.ts';
+export type {
+  BoundaryBreak,
+  ParsedExport,
+  VerifyReport,
+} from '#src/verify-export.ts';
 export { EXPORT_FORMAT } from '#src/economy.ts';
 
-// Port types, so a host can name every port it supplies or receives. The remaining sub-store
+// These port types let a host name every port it supplies or receives. The remaining sub-store
 // contracts are at the '/ports' subpath and the built-in adapters at '/adapters'.
 export type {
   Signer,
@@ -245,21 +278,22 @@ export type {
   Scheduler,
 } from '#src/ports.ts';
 
-// Domain records the read side hands back: a payout saga, a ledger posting, an outbound event, and
-// the economy's maintenance status.
-export type { Saga, Posting, EconomyEvent } from '#src/ports.ts';
+// The read side hands back these domain records: a payout saga, a ledger posting, an outbound
+// event, and the economy's maintenance status.
+export { EVENT_TYPES, EVENT_VERSION } from '#src/ports.ts';
+export type { Saga, Posting, EconomyEvent, EventType } from '#src/ports.ts';
 
 // --- Construction from env ---------------------------------------------------------
 //
-// src/engines/ are the systems of record that enforce ledger invariants natively (Postgres, MySQL),
-// and src/adapters/ are everything pluggable that does not. See
+// packages/postgres and packages/mysql are the systems of record: they enforce the ledger's
+// invariants a second time, in the database. src/engines/ is the SQL kit those two share, and
+// src/adapters/ is everything that does not; every adapter meets the one contract. See
 // https://economy-lab-docs.pages.dev/economy/ports/storage/
-// for how every adapter meets one contract and the SQL engines also enforce it in the database.
 
 /**
  * Overrides for {@link openPorts} — every field optional. A port field set to `false` is an
- * explicit decline, which production accepts where a bare omission is an error (see the absence
- * policy on {@link preflight}). `rates` takes a live source or the exact integer knobs.
+ * explicit decline. Production accepts a decline where a bare omission is an error (see the
+ * absence policy on {@link preflight}). `rates` takes a live source or the exact integer knobs.
  */
 export type PortsInit = {
   readonly store?: Store;
@@ -281,14 +315,14 @@ export type PortsInit = {
   readonly scheduler?: Scheduler | false;
 };
 
-/** Everything {@link boot} accepts: the {@link PortsInit} overrides plus the worker switch. */
+/** {@link boot} accepts the {@link PortsInit} overrides plus the worker switch. */
 export type BootInit = PortsInit & {
-  /** Default true; false boots the API-process shape with `worker: null`. */
+  /** Default true. False boots the API-process shape with `worker: null`. */
   readonly worker?: boolean;
 };
 
 /**
- * One {@link preflight} finding. Severity 'error' is exactly what {@link openPorts} refuses;
+ * One {@link preflight} finding. Severity 'error' is exactly what {@link openPorts} refuses.
  * 'warning' is advisory and blocks nothing.
  */
 export type PreflightIssue = {
@@ -296,7 +330,7 @@ export type PreflightIssue = {
   readonly code: string;
   /** The env name or port slot at fault, e.g. 'DATABASE_URL' or 'dispatcher'. */
   readonly path: string;
-  /** Human-readable, states the fix. */
+  /** A human-readable message that states the fix. */
   readonly message: string;
   readonly severity: 'error' | 'warning';
 };
@@ -305,18 +339,23 @@ export type PreflightIssue = {
 export type Runtime = Pick<Ports, 'clock' | 'ids' | 'digest' | 'signer'>;
 
 /**
- * What {@link describeEnv} returns: the concrete adapter each env knob selects — kind and URL —
- * before any driver loads, plus secret presence (never values). 'declined' versus 'missing'
- * mirrors the production absence policy on {@link preflight}.
+ * {@link describeEnv} returns this shape. It names the adapter each slot resolves to — kind and
+ * URL — before any driver loads. It also reports secret presence, never values. 'declined' versus
+ * 'missing' mirrors the production absence policy on {@link preflight}.
+ *
+ * Two readings meet in every adapter row, and each field carries one of them: `kind` is what the
+ * bag {@link openPorts} builds will hold, and `url` is the connection string the environment names
+ * whether or not anything opens it. So a port the init supplies reads `supplied` beside the
+ * `DATABASE_URL` it overrides, and neither reading is dropped for the other.
  */
 export type EnvDescription = {
   readonly production: boolean;
   readonly store: {
-    readonly kind: 'memory' | 'postgres' | 'mysql' | 'unsupported';
+    readonly kind: 'memory' | 'postgres' | 'mysql' | 'unsupported' | 'supplied';
     readonly url: string | null;
   };
   readonly cache: {
-    readonly kind: 'none' | 'redis';
+    readonly kind: 'none' | 'redis' | 'supplied' | 'declined';
     readonly url: string | null;
   };
   readonly dispatcher: {
@@ -324,7 +363,7 @@ export type EnvDescription = {
     readonly url: string | null;
   };
   readonly processor: {
-    readonly kind: 'memory' | 'http';
+    readonly kind: 'memory' | 'http' | 'supplied';
     readonly url: string | null;
   };
   readonly payees: 'set' | 'declined' | 'missing';
@@ -338,8 +377,8 @@ export type EnvDescription = {
 };
 
 /**
- * What {@link boot} returns: the resolved ports, the economy assembled over them, and the worker
- * bound to that same economy — null when the init declined it with `worker: false`.
+ * {@link boot} returns the resolved ports, the economy assembled over them, and the worker
+ * bound to that same economy. The worker is null when the init declined it with `worker: false`.
  */
 export type Boot = {
   readonly ports: Ports;
@@ -347,9 +386,9 @@ export type Boot = {
   readonly worker: Worker | null;
 };
 
-// Which concrete adapter each env knob picks, before any driver loads. This is the ONE reading of
-// the selection: the selectors below consume it to do the wiring, and describeEnv reports it, so
-// a displayed selection can never diverge from the wired one.
+// Names which concrete adapter each env knob picks, before any driver loads. This is the ONE
+// reading of the selection. The selectors below consume it to do the wiring, and describeEnv
+// reports it, so a displayed selection can never diverge from the wired one.
 type EnvSelection = {
   store:
     | { kind: 'memory'; url: null }
@@ -361,8 +400,8 @@ type EnvSelection = {
 };
 
 // DATABASE_URL picks the store by scheme (unset = in-memory, postgres://|mysql:// = that engine,
-// anything else = 'unsupported', which selectStore rejects); REDIS_URL adds the cache;
-// SQS_QUEUE_URL beats DISPATCHER_URL for delivery. All through the shared resolver rules (env.ts).
+// anything else = 'unsupported', which selectStore rejects). REDIS_URL adds the cache.
+// SQS_QUEUE_URL beats DISPATCHER_URL for delivery. All go through the shared resolver rules (env.ts).
 function envSelection(env: EnvMap): EnvSelection {
   const db = readUrl(env.DATABASE_URL);
   const services = serviceUrls(env);
@@ -391,7 +430,7 @@ function envSelection(env: EnvMap): EnvSelection {
   };
 }
 
-// The three optional ports production refuses to lose silently, with each one's decline flag.
+// Lists the three optional ports production refuses to lose silently, with each one's decline flag.
 const ABSENCE_SLOTS = [
   { slot: 'dispatcher', flag: 'DISPATCHER_DECLINED' },
   { slot: 'payees', flag: 'PAYEES_DECLINED' },
@@ -402,7 +441,8 @@ type AbsenceSlot = (typeof ABSENCE_SLOTS)[number]['slot'];
 
 type SlotState = 'set' | 'declined' | 'missing';
 
-// One reading of set/declined/missing per slot, shared by preflight, describeEnv, and openPorts.
+// Resolves each slot to set/declined/missing. preflight, describeEnv, and openPorts share this
+// one reading.
 function slotStates(
   env: EnvMap,
   init: PortsInit,
@@ -430,27 +470,42 @@ function slotStates(
 }
 
 /**
- * Validates `env` plus `init` without constructing anything: every issue here with severity
- * 'error' is exactly what {@link openPorts} would throw on. Run it at deploy time so a bad
- * config fails on a health check, not on the first request. Outside production only the store
- * scheme and the shape of init-supplied ports are checked, since the dev defaults fill
- * everything else.
+ * Validates `env` plus `init` without constructing anything. Every issue here with severity
+ * 'error' is exactly what {@link openPorts} would throw on.
+ *
+ * Run it at deploy time — a bad config then fails on a health check, not on the first request.
+ *
+ * Outside production it checks the store scheme, the backends the environment names but nothing
+ * supplies, the shape of every port the init supplies, every policy knob the init supplies or the
+ * environment names, and any retired env name still set; the dev defaults fill everything else.
+ * The named-backend, port-shape and policy-knob rows are checked in both postures because
+ * `openPorts` refuses them in both, and the retired-name row in both because no posture reads the
+ * name.
  */
 export function preflight(
   env: EnvMap = {},
   init: PortsInit = {},
 ): readonly PreflightIssue[] {
   if (!isProduction(env)) {
-    return [...storeIssues(env, init), ...declinablePortIssues(init)];
+    return [
+      ...storeIssues(env, init),
+      ...unsuppliedBackendIssues(env, init),
+      ...portShapeIssues(env, init),
+      ...policyKnobIssues(env, init),
+      ...retiredConfigIssues(env),
+    ];
   }
   return [
     ...storeIssues(env, init),
+    ...unsuppliedBackendIssues(env, init),
     ...secretIssues(env, init),
     ...policyAnchorIssues(env, init),
     ...externalIssues(env, init),
     ...absenceIssues(env, init),
-    ...declinablePortIssues(init),
+    ...portShapeIssues(env, init),
+    ...policyKnobIssues(env, init),
     ...declineConflictIssues(env, init),
+    ...retiredConfigIssues(env),
   ];
 }
 
@@ -477,6 +532,39 @@ function storeIssues(env: EnvMap, init: PortsInit): PreflightIssue[] {
       'DATABASE_URL is not a postgres:// or mysql:// connection string.',
     ),
   ];
+}
+
+/**
+ * The slots whose env knob names a backend the init supplied nothing for — exactly the branches
+ * {@link openSelected} takes into a selector that cannot open one. The path is the knob because the
+ * knob is what the operator edits; the message is the selector's own, so the deploy-time row and
+ * the boot-time refusal are one sentence.
+ */
+function unsuppliedBackendIssues(
+  env: EnvMap,
+  init: PortsInit,
+): PreflightIssue[] {
+  const selection = envSelection(env);
+  const named: UnsuppliedBackend[] = [];
+  if (
+    init.store === undefined &&
+    (selection.store.kind === 'postgres' || selection.store.kind === 'mysql')
+  ) {
+    named.push(UNSUPPLIED_BACKENDS[selection.store.kind]);
+  }
+  if (init.cache === undefined && selection.cache.kind === 'redis') {
+    named.push(UNSUPPLIED_BACKENDS.redis);
+  }
+  if (
+    init.dispatcher === undefined &&
+    selection.dispatcher.kind === 'sqs' &&
+    slotStates(env, init).dispatcher === 'set'
+  ) {
+    named.push(UNSUPPLIED_BACKENDS.sqs);
+  }
+  return named.map((backend) =>
+    issue('port.unsupplied', backend.variable, unsuppliedMessage(backend)),
+  );
 }
 
 function secretIssues(env: EnvMap, init: PortsInit): PreflightIssue[] {
@@ -525,47 +613,49 @@ function absenceIssues(env: EnvMap, init: PortsInit): PreflightIssue[] {
   );
 }
 
-// The wiring-time shape probes for the declinable ports, so a malformed init fails preflight
-// exactly as it fails openPorts.
-function declinablePortIssues(init: PortsInit): PreflightIssue[] {
+/**
+ * Runs the wiring-time shape probe for every port the init supplies, plus the construction of the
+ * env-derived rate table. A `false` is a decline, not a shape, and the type admits one only where
+ * the slot is declinable.
+ *
+ * {@link openPorts} refuses through {@link assertPreflight}, so these rows are the boot's refusal
+ * as well as the deploy-time report — one probe, not two readings that can drift.
+ */
+function portShapeIssues(env: EnvMap, init: PortsInit): PreflightIssue[] {
   const issues: PreflightIssue[] = [];
-  const malformed = (slot: AbsenceSlot, probe: () => void): void => {
-    try {
-      probe();
-    } catch (error) {
-      issues.push(
-        issue(
-          'port.malformed',
-          slot,
-          error instanceof Error ? error.message : String(error),
-        ),
-      );
+  for (const slot of Object.keys(PORT_SHAPES) as PortSlot[]) {
+    const supplied = init[slot];
+    if (supplied === undefined || supplied === false) {
+      continue;
     }
-  };
-  if (
-    init.dispatcher !== undefined &&
-    init.dispatcher !== false &&
-    typeof init.dispatcher !== 'function'
-  ) {
-    issues.push(
-      issue(
-        'port.malformed',
-        'dispatcher',
-        'dispatcher is not a function; pass the dispatch function itself, not an object carrying one.',
-      ),
-    );
+    const found = portShapeFault(slot, supplied);
+    if (found !== null) {
+      issues.push(issue('port.malformed', slot, found));
+    }
   }
-  if (init.payees !== undefined && init.payees !== false) {
-    malformed('payees', () =>
-      requireCallable('payees', init.payees, ['status']),
-    );
-  }
-  if (init.anchor !== undefined && init.anchor !== false) {
-    malformed('anchor', () =>
-      requireCallable('anchor', init.anchor, ['publish']),
-    );
-  }
-  return issues;
+  const rates = rateTableFault(env, init);
+  return rates === null
+    ? issues
+    : [...issues, issue('port.malformed', 'rates', rates)];
+}
+
+/**
+ * The policy bag's rows: a knob the init supplies outside the bounds the env resolver applies to
+ * the same knob, an env knob the resolver would throw on, and an env knob it silently discards.
+ *
+ * This is {@link portShapeIssues}' argument one layer over. `config` and `secrets` are not ports
+ * and are not in {@link PORT_SHAPES}, so the policy bag needs its own reading — and it had none:
+ * an out-of-range fee supplied here was clean at every reading and mis-posted every sale.
+ */
+function policyKnobIssues(env: EnvMap, init: PortsInit): PreflightIssue[] {
+  return configIssues(env, init.config ?? {}).map((found) =>
+    issue(
+      found.severity === 'error' ? 'config.invalid' : 'config.ignored',
+      found.path,
+      found.message,
+      found.severity,
+    ),
+  );
 }
 
 // An explicit decline beats a configured source, so the shadowed source surfaces as a warning.
@@ -590,9 +680,30 @@ function declineConflictIssues(env: EnvMap, init: PortsInit): PreflightIssue[] {
   );
 }
 
+// A renamed env name is the one config mistake nothing else can surface: no family reads it, so the
+// value is ignored and the deploy runs on the default. A warning, in both postures, because the
+// deployment is servable and openPorts does not throw on it.
+function retiredConfigIssues(env: EnvMap): PreflightIssue[] {
+  return retiredConfigKeys(env).map(([name, replacement]) =>
+    issue(
+      'config.retired',
+      name,
+      `${name} is retired and read by nothing; set ${replacement} instead.`,
+      'warning',
+    ),
+  );
+}
+
 /**
- * Reports what a given env and init would wire, presence only — no secret values, no
- * connections. `declined` versus `missing` mirrors the production absence policy.
+ * Reports what a given env and init would wire. It reports presence only — no secret values,
+ * no connections. `declined` versus `missing` mirrors the production absence policy.
+ *
+ * Every row resolves the init before the environment's selection, because the init is what
+ * {@link openPorts} resolves first. `store`, `cache` and `processor` read the environment alone
+ * and named the adapter a deployment had replaced: a module wiring its own payout rail was
+ * reported `processor memory`, and a `cache: false` was reported as the redis `REDIS_URL` names.
+ * The url stays the environment's in every branch, so the knob a supplied port overrides is still
+ * on the report rather than traded away for the kind.
  */
 export function describeEnv(
   env: EnvMap = {},
@@ -603,18 +714,29 @@ export function describeEnv(
   const processorUrl = serviceUrls(env).processor;
   return {
     production: isProduction(env),
-    store: selection.store,
-    cache: selection.cache,
+    store:
+      init.store === undefined
+        ? selection.store
+        : { kind: 'supplied', url: selection.store.url },
+    cache:
+      init.cache === undefined
+        ? selection.cache
+        : {
+            kind: init.cache === false ? 'declined' : 'supplied',
+            url: selection.cache.url,
+          },
     dispatcher:
       states.dispatcher === 'declined'
-        ? { kind: 'declined', url: null }
+        ? { kind: 'declined', url: selection.dispatcher.url }
         : typeof init.dispatcher === 'function'
-          ? { kind: 'in-process', url: null }
+          ? { kind: 'in-process', url: selection.dispatcher.url }
           : selection.dispatcher,
     processor:
-      processorUrl === null
-        ? { kind: 'memory', url: null }
-        : { kind: 'http', url: processorUrl },
+      init.processor !== undefined
+        ? { kind: 'supplied', url: processorUrl }
+        : processorUrl === null
+          ? { kind: 'memory', url: null }
+          : { kind: 'http', url: processorUrl },
     payees: states.payees,
     anchor: states.anchor,
     secrets: describeSecrets(env, init),
@@ -647,15 +769,45 @@ function describeSecrets(
 }
 
 /**
- * The sole env-to-bag path: loads Config and Secrets (init wins per field, both frozen), builds
- * the runtime and external ports with dev stand-ins outside production, opens the store the
- * `DATABASE_URL` scheme names, and applies the production absence policy. Everything
- * {@link preflight} flags as an error throws here as one CONFIG.INVALID.
+ * The sole env-to-bag path. It returns the finished {@link Ports} bag that
+ * {@link createEconomy} takes.
+ *
+ * It loads Config and Secrets — init wins per field, and both come back frozen.
+ *
+ * It builds the runtime and external ports with dev stand-ins outside production, and opens the
+ * store the `DATABASE_URL` scheme names.
+ *
+ * It applies the production absence policy: each declinable port must be set or explicitly
+ * declined (`false` in init, or its env decline flag). Everything {@link preflight} flags as an
+ * error throws here as one CONFIG.INVALID.
  *
  * @example
  * const ports = await openPorts(process.env, {
- *   config: { platformFeeBps: 3000 },
- *   dispatcher: false, // this deployment runs without outbox delivery, on purpose
+ *   // Storage and delivery
+ *   store: myStore, // optional: beats the DATABASE_URL selection
+ *   cache: myCache, // optional: false declines it
+ *   dispatcher: false, // optional: explicit decline; this deployment runs without outbox delivery
+ *   scheduler: myScheduler, // optional: false declines it
+ *   // Runtime services
+ *   clock: myClock, // optional
+ *   ids: myIds, // optional
+ *   digest: myDigest, // optional
+ *   logger: myLogger, // optional
+ *   meter: myMeter, // optional
+ *   // Externals
+ *   signer: mySigner, // optional
+ *   processor: myProcessor, // optional
+ *   payees: myPayeeDirectory, // optional: false declines it
+ *   anchor: myAnchor, // optional: false declines it
+ *   rates: { // optional: a live Rates source or these exact integer knobs
+ *     buyRate: 8_333n, buyScale: 6, // ~120 credits per dollar bought
+ *     parRate: 5n, parScale: 3, // $0.005/credit backing peg
+ *     payoutRate: 5n, payoutScale: 3, // $0.005/credit cash-out rate
+ *   },
+ *   pricing: myFeePolicy, // optional
+ *   // Policy
+ *   config: { platformFeeBps: 3000 }, // optional
+ *   secrets: { signingSecret: mySigningSecret }, // optional: env supplies these otherwise
  * });
  * const economy = createEconomy(ports);
  */
@@ -675,8 +827,9 @@ export async function openPorts(
     ...runtime,
     config,
   });
-  const payees = init.payees === false ? undefined : init.payees;
-  const anchor = init.anchor === false ? undefined : init.anchor;
+  const payees = wired(init.payees, states.payees);
+  const anchor = wired(init.anchor, states.anchor);
+  // The scheduler has no env decline flag, so `false` in the init is the whole of its decline.
   const scheduler = init.scheduler === false ? undefined : init.scheduler;
   countAbsence(runtime.meter, states);
 
@@ -699,6 +852,22 @@ export async function openPorts(
   };
 }
 
+/**
+ * A declinable slot's port, or undefined when the slot did not resolve 'set'.
+ *
+ * The state is the reading {@link slotStates} already made, so `PAYEES_DECLINED=1` beats a
+ * supplied directory here exactly as {@link declineConflictIssues}' warning and
+ * {@link describeEnv}'s report both say it does. `dispatcher` reached the same reading through
+ * {@link openSelected}; these two read the init alone, so an operator who declined payee
+ * verification got it anyway while three readings reported it off.
+ */
+function wired<T>(
+  supplied: T | false | undefined,
+  state: SlotState,
+): T | undefined {
+  return state === 'set' && supplied !== false ? supplied : undefined;
+}
+
 function assertPreflight(env: EnvMap, init: PortsInit): void {
   const problems = preflight(env, init).filter(
     (found) => found.severity === 'error',
@@ -716,8 +885,8 @@ function assertPreflight(env: EnvMap, init: PortsInit): void {
   );
 }
 
-// The store the env selects (or the init supplies), the optional cache, and the dispatcher when
-// the slot resolved 'set' — an init-supplied instance or the env-selected transport.
+// Opens the store the env selects (or the init supplies), the optional cache, and the dispatcher
+// when the slot resolved 'set' — an init-supplied instance or the env-selected transport.
 function openSelected(
   env: EnvMap,
   init: PortsInit,
@@ -735,6 +904,7 @@ function openSelected(
         clock: deps.clock,
         velocityWindowMs: config.velocityWindowMs,
         poolMax: config.dbPoolMax,
+        connectTimeoutMs: config.dbConnectTimeoutMs,
         meter: deps.meter,
         logger: deps.logger,
       }),
@@ -749,8 +919,8 @@ function openSelected(
   ]);
 }
 
-// The absence telemetry: how each optional slot resolved, so a fleet dashboard can spot a
-// deployment quietly running without its dispatcher.
+// Emits the absence telemetry. It counts how each optional slot resolved, so a fleet dashboard
+// can spot a deployment quietly running without its dispatcher.
 function countAbsence(
   meter: Meter,
   states: Record<AbsenceSlot, SlotState>,
@@ -768,17 +938,30 @@ function countAbsence(
 }
 
 /**
- * The day-one door: openPorts, createEconomy, and (unless `worker: false`) a worker bound to
- * that economy over the same bag. Anything a bad env would make {@link openPorts} throw, boot
- * throws too, so a misconfigured deploy dies at startup.
+ * The day-one door. It runs openPorts, createEconomy, and (unless `worker: false`) a worker
+ * bound to that economy over the same bag.
+ *
+ * Anything a bad env would make {@link openPorts} throw, boot throws too; a misconfigured
+ * deploy dies at startup.
+ *
+ * The init takes every {@link PortsInit} override (see the {@link openPorts} example for the
+ * full wiring) plus the worker switch.
  *
  * @example
- * const { economy, worker } = await boot(process.env);
+ * const { economy, worker } = await boot(process.env, {
+ *   worker: true, // optional: false boots the API-process shape with worker: null
+ * });
  * const stop = worker?.start(30_000); // payout, outbox, and checkpoint sweeps every 30s
  * const outcome = await economy.submit(
- *   topUp({ idempotencyKey: 'idem_1', actor: systemActor('store'), userId: 'usr_1',
- *           amount: credits(1_200), source: 'card' }),
+ *   topUp({
+ *     idempotencyKey: idempotencyKey('purchase', 'evt_9001'),
+ *     actor: systemActor('store'),
+ *     userId: 'usr_1',
+ *     amount: credits(1_200), // a 1,200-credit bundle (~$10 at the 120/$ buy rate)
+ *     source: 'card',
+ *   }),
  * );
+ * const { transaction } = requireSuccess(outcome);
  */
 export async function boot(
   env: EnvMap = {},
@@ -792,8 +975,18 @@ export async function boot(
 }
 
 /**
- * A finished in-memory Ports bag for tests and quickstarts: memory store, dev rates and fees,
- * in-memory processor, and a real Ed25519 signer seeded from `signingKey`. Sync, no env.
+ * Builds a finished in-memory Ports bag for tests and quickstarts. It wires the memory store,
+ * dev rates and fees, the in-memory processor, and a real Ed25519 signer seeded from
+ * `signingKey`. It is sync and reads no env.
+ *
+ * @example
+ * const ports = memoryPorts({
+ *   signingKey: 'dev-signing-key',
+ *   config: { platformFeeBps: 3000 }, // optional
+ *   secrets: { webhookSecret: 'dev-webhook-secret' }, // optional
+ *   store: myStore, // optional: defaults to a fresh in-memory store
+ * });
+ * const economy = createEconomy(ports);
  */
 export function memoryPorts(options: {
   readonly signingKey: string;
@@ -839,6 +1032,243 @@ export function memoryPorts(options: {
 
 // --- The wiring (drivers import here, only when selected) ---------------------------
 
+/**
+ * Every {@link PortsInit} field that carries a port. `config` and `secrets` are policy bags with
+ * their own rows, so they are not here. {@link PORT_SHAPES} is keyed by this, so a sixteenth port
+ * added to `PortsInit` leaves the table short a key and fails the typecheck.
+ */
+type PortSlot = Exclude<keyof PortsInit, 'config' | 'secrets'>;
+
+/** The shape a supplied port must have, and the clause telling a caller what to pass instead. */
+interface PortShape {
+  /** Members the value must carry as functions. */
+  readonly methods: readonly string[];
+  /** Members it must carry as objects — a store's sub-stores. */
+  readonly parts?: readonly string[];
+  /** Set when the port IS the function; the clause names what to pass instead. */
+  readonly whole?: string;
+  /** Set when plain data is accepted too, told apart by `methods[0]` being absent. */
+  readonly data?: PortDataShape;
+}
+
+/** The plain-data alternative a port accepts, named by the constructor that reads it. */
+interface PortDataShape {
+  /** The construction the boot performs. Its refusal is this row's refusal. */
+  readonly build: (value: object) => unknown;
+  readonly instead: string;
+}
+
+/**
+ * Every port an init can supply, and the shape it must have. One row per slot, read twice:
+ * {@link preflight} raises `port.malformed` off it, and {@link openPorts} refuses through
+ * {@link assertPreflight} — so the deploy-time row and the boot-time refusal are one sentence and
+ * neither can drift from the other. Its sibling {@link UNSUPPLIED_BACKENDS} does the same for the
+ * backends the environment names.
+ *
+ * Every probe here is the one the wiring itself performs. `rates` accepts a live source or the
+ * exact integer knobs, so its row names the constructor rather than a field list: a rate table in
+ * an order that would drain the platform is refused for the constructor's own reason.
+ */
+const PORT_SHAPES: Readonly<Record<PortSlot, PortShape>> = {
+  store: {
+    methods: ['transaction', 'close'],
+    parts: [
+      'ledger',
+      'idempotency',
+      'sales',
+      'outbox',
+      'inbox',
+      'sagas',
+      'entitlements',
+      'subscriptions',
+      'promos',
+      'trust',
+      'accruals',
+      'checkpoints',
+      'replay',
+      'movements',
+    ],
+  },
+  clock: { methods: ['now'] },
+  ids: { methods: ['next'] },
+  digest: { methods: ['hash'] },
+  signer: { methods: ['sign', 'verify'] },
+  processor: { methods: ['submitPayout'] },
+  rates: {
+    methods: ['payout', 'par', 'buy'],
+    data: {
+      build: (value) => configuredRates(value as RatesConfig),
+      instead:
+        'pass a live Rates source with payout(), par() and buy(), or the exact integer knobs { buyRate, buyScale, parRate, parScale, payoutRate, payoutScale }.',
+    },
+  },
+  pricing: {
+    methods: [],
+    whole: 'pass the fee policy function itself, not an object carrying one.',
+  },
+  logger: { methods: ['log'] },
+  meter: { methods: ['count', 'observe'] },
+  cache: { methods: ['get', 'set', 'invalidate'] },
+  dispatcher: {
+    methods: [],
+    whole: 'pass the dispatch function itself, not an object carrying one.',
+  },
+  payees: { methods: ['status'] },
+  anchor: { methods: ['publish'] },
+  scheduler: { methods: ['every'] },
+};
+
+// The fault a supplied port's shape has, or null.
+function portShapeFault(slot: PortSlot, value: object): string | null {
+  const shape = PORT_SHAPES[slot];
+  if (shape.whole !== undefined) {
+    return typeof value === 'function'
+      ? null
+      : `${slot} is not a function; ${shape.whole}`;
+  }
+  if (shape.data !== undefined && !carriesFunction(value, shape.methods[0]!)) {
+    return dataShapeFault(slot, value, shape.data);
+  }
+  const absent = (shape.parts ?? []).find(
+    (part) => !carriesObject(value, part),
+  );
+  if (absent !== undefined) {
+    return `${slot}.${absent} is missing; a supplied ${slot} must carry every member its port declares.`;
+  }
+  return faultOf(() => requireCallable(slot, value, shape.methods));
+}
+
+// A value that is not the live port is read as the plain data instead, by the boot's own
+// constructor. Its CONFIG.INVALID is the refusal; anything else means the value is neither shape,
+// and the raw TypeError of a knob read as a BigInt says nothing a caller can act on.
+function dataShapeFault(
+  slot: PortSlot,
+  value: object,
+  data: PortDataShape,
+): string | null {
+  try {
+    data.build(value);
+    return null;
+  } catch (error) {
+    return EconomyError.is(error)
+      ? error.message
+      : `${slot} is malformed: ${data.instead}`;
+  }
+}
+
+function carriesFunction(value: object, member: string): boolean {
+  return typeof (value as Record<string, unknown>)[member] === 'function';
+}
+
+function carriesObject(value: object, member: string): boolean {
+  const part = (value as Record<string, unknown>)[member];
+  return typeof part === 'object' && part !== null;
+}
+
+// The message a probe refused with, or null when it accepted.
+function faultOf(probe: () => void): string | null {
+  try {
+    probe();
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+/** A backend an env knob names and this module does not open, with the line that supplies it. */
+interface UnsuppliedBackend {
+  /** How the message names it, e.g. 'a postgres:// database'. */
+  readonly names: string;
+  readonly pkg: string;
+  /** The same factory through the @pwngh/economy umbrella, which a scaffolded module has. */
+  readonly door: string;
+  readonly factory: string;
+  /** The factory call, written exactly as a caller types it. */
+  readonly call: string;
+  readonly variable: string;
+  readonly slot: 'store' | 'cache' | 'dispatcher';
+}
+
+/**
+ * Every backend the environment can name and this module cannot open. Each is its own package now,
+ * so it arrives through `init`; what the lab owns is the refusal and the line that fixes it.
+ *
+ * One row per scheme, read twice: {@link preflight} raises it at deploy time and the selectors
+ * below throw it at open time, off this table and this sentence. That is what keeps a `check` from
+ * calling an environment clean that the boot then refuses.
+ */
+const UNSUPPLIED_BACKENDS: Readonly<
+  Record<'postgres' | 'mysql' | 'redis' | 'sqs', UnsuppliedBackend>
+> = {
+  postgres: {
+    names: 'a postgres:// database',
+    pkg: '@pwngh/economy-postgres',
+    door: '@pwngh/economy/postgres',
+    factory: 'postgres',
+    call: 'postgres(process.env.DATABASE_URL)',
+    variable: 'DATABASE_URL',
+    slot: 'store',
+  },
+  mysql: {
+    names: 'a mysql:// database',
+    pkg: '@pwngh/economy-mysql',
+    door: '@pwngh/economy/mysql',
+    factory: 'mysql',
+    call: 'mysql(process.env.DATABASE_URL)',
+    variable: 'DATABASE_URL',
+    slot: 'store',
+  },
+  redis: {
+    names: 'a redis:// instance',
+    pkg: '@pwngh/economy-redis',
+    door: '@pwngh/economy/redis',
+    factory: 'redisCache',
+    call: 'redisCache(process.env.REDIS_URL)',
+    variable: 'REDIS_URL',
+    slot: 'cache',
+  },
+  sqs: {
+    names: 'an SQS queue',
+    pkg: '@pwngh/economy-sqs',
+    door: '@pwngh/economy/sqs',
+    factory: 'sqs',
+    call: 'sqs({ queueUrl: process.env.SQS_QUEUE_URL })',
+    variable: 'SQS_QUEUE_URL',
+    slot: 'dispatcher',
+  },
+};
+
+// One message, two audiences: a module file already has the umbrella and cannot call
+// openPorts, and a lab host has neither the umbrella nor the engine. Each reads its own form.
+function unsuppliedMessage(named: UnsuppliedBackend): string {
+  return (
+    `${named.variable} names ${named.names}, but no ${named.slot} was supplied.\n` +
+    `In a module file, export the ${named.slot} through the door the scaffold ships:\n\n` +
+    `  import { ${named.factory} } from '${named.door}';\n\n` +
+    `  export const ports = {\n` +
+    `    ${named.slot}: await ${named.call},\n` +
+    `  };\n\n` +
+    `Install ${named.pkg} and pass it when calling the lab directly:\n\n` +
+    `  import { ${named.factory} } from '${named.pkg}';\n\n` +
+    `  const ports = await openPorts(process.env, {\n` +
+    `    ${named.slot}: await ${named.call},\n` +
+    `  });\n`
+  );
+}
+
+/**
+ * The error a named backend with no port supplied raises, carrying the code that fixes it.
+ *
+ * The environment still names the backend and {@link describeEnv} and {@link preflight} still
+ * report it.
+ */
+function missingBackend(named: UnsuppliedBackend): EconomyError {
+  return fault(ERROR_CODES.CONFIG_INVALID, unsuppliedMessage(named), {
+    detail: { package: named.pkg, variable: named.variable },
+    retryable: false,
+  });
+}
+
 async function selectStore(
   selection: EnvSelection['store'],
   deps: {
@@ -846,6 +1276,7 @@ async function selectStore(
     clock: Clock;
     velocityWindowMs: number;
     poolMax?: number | null;
+    connectTimeoutMs?: number | null;
     meter?: Meter;
     logger?: Logger;
   },
@@ -853,20 +1284,8 @@ async function selectStore(
   if (selection.kind === 'memory') {
     return memoryStore(deps);
   }
-  if (selection.kind === 'postgres') {
-    const { postgresStore } = await import('#src/engines/postgres.ts');
-    return postgresStore({
-      url: selection.url,
-      digest: deps.digest,
-      clock: deps.clock,
-      velocityWindowMs: deps.velocityWindowMs,
-      ...(deps.poolMax ? { poolMax: deps.poolMax } : {}),
-      meter: deps.meter,
-      logger: deps.logger,
-    });
-  }
-  if (selection.kind === 'mysql') {
-    return provenMysqlStore(selection.url, deps);
+  if (selection.kind === 'postgres' || selection.kind === 'mysql') {
+    throw missingBackend(UNSUPPLIED_BACKENDS[selection.kind]);
   }
   throw fault(
     ERROR_CODES.CONFIG_INVALID,
@@ -875,74 +1294,13 @@ async function selectStore(
   );
 }
 
-// MySQL startup: pool, schema-version gate, then install-and-prove the vendored money functions
-// before any posting trusts the engine's arithmetic.
-async function provenMysqlStore(
-  url: string,
-  deps: {
-    digest: Digest;
-    clock: Clock;
-    velocityWindowMs: number;
-    poolMax?: number | null;
-    meter?: Meter;
-    logger?: Logger;
-  },
-): Promise<Store> {
-  const { createMysqlPool, mysqlStore, readSchemaVersion } =
-    await import('#src/engines/mysql.ts');
-  const pool = await createMysqlPool(
-    url,
-    deps.poolMax ? { connectionLimit: deps.poolMax } : {},
-  );
-  assertSchemaCurrent(await readSchemaVersion(pool), 'MySQL');
-  const runner = {
-    run: (sql: string, params?: readonly unknown[]) =>
-      pool
-        .query(sql, params ? [...params] : undefined)
-        .then(([rows]) => rows as Record<string, unknown>[]),
-  };
-  // Retried: concurrent boots race the shared money functions (see installMoneyRetrying).
-  await installMoneyRetrying(() => installMysql(runner));
-  assertMoneyConformant(await proveMysql(runner, moneyVectors), 'MySQL');
-  return mysqlStore({
-    pool,
-    digest: deps.digest,
-    clock: deps.clock,
-    velocityWindowMs: deps.velocityWindowMs,
-    meter: deps.meter,
-    logger: deps.logger,
-  });
-}
-
-// Turns a missing optional peer dependency into a clear config error naming the package to install,
-// rather than a raw module-resolution failure surfacing from deep in the wiring.
-async function loadPeer<T>(pkg: string, load: () => Promise<T>): Promise<T> {
-  try {
-    return await load();
-  } catch (cause) {
-    throw fault(
-      ERROR_CODES.CONFIG_INVALID,
-      `Could not load the "${pkg}" driver. Install the optional peer dependency: npm install ${pkg}`,
-      { cause, retryable: false },
-    );
-  }
-}
-
 async function selectCache(
   selection: EnvSelection['cache'],
 ): Promise<Cache | undefined> {
   if (selection.kind === 'none') {
     return undefined;
   }
-  const url = selection.url;
-  const { redisCache } = await import('#src/adapters/redis.ts');
-  // ioredis' default export is the client constructor at runtime; the cast pins it to the
-  // adapter's minimal RedisClient surface (its module types don't expose the construct signature).
-  const Redis = (await loadPeer('ioredis', () => import('ioredis')))
-    .default as unknown as {
-    new (connection: string): Parameters<typeof redisCache>[0];
-  };
-  return redisCache(new Redis(url));
+  throw missingBackend(UNSUPPLIED_BACKENDS.redis);
 }
 
 async function selectDispatcher(
@@ -952,32 +1310,7 @@ async function selectDispatcher(
     return undefined;
   }
   if (selection.kind === 'sqs') {
-    const queueUrl = selection.url;
-    const { SQSClient, SendMessageCommand } = await loadPeer(
-      '@aws-sdk/client-sqs',
-      () => import('@aws-sdk/client-sqs'),
-    );
-    const { sqsDispatcher } = await import('#src/adapters/sqs.ts');
-    const raw = new SQSClient({});
-    // The adapter speaks an SDK-free `{ input }` command so it stays testable without
-    // @aws-sdk/client-sqs; translate it into a real `SendMessageCommand` here, the one place that
-    // imports the SDK.
-    return sqsDispatcher({
-      queueUrl,
-      client: {
-        send: async (command, options) => {
-          await raw.send(
-            new SendMessageCommand(
-              command.input as unknown as ConstructorParameters<
-                typeof SendMessageCommand
-              >[0],
-            ),
-            options,
-          );
-          return {};
-        },
-      },
-    });
+    throw missingBackend(UNSUPPLIED_BACKENDS.sqs);
   }
   const { httpDispatcher } = await import('#src/adapters/http-dispatcher.ts');
   return httpDispatcher({ url: selection.url });
@@ -985,21 +1318,16 @@ async function selectDispatcher(
 
 // --- Default runtime services -----------------------------------------------------
 
+// A malformed override is refused upstream by PORT_SHAPES, before any driver loads, so the
+// fallbacks are the only values reaching here unexamined and they are this module's own.
 function runtimeFrom(
   init: PortsInit,
 ): Pick<Ports, 'clock' | 'ids' | 'digest' | 'logger' | 'meter'> {
-  const runtime = {
+  return {
     clock: init.clock ?? systemClock(),
     ids: init.ids ?? randomIds(),
     digest: init.digest ?? sha256Digest(),
     logger: init.logger ?? jsonlLogger(),
     meter: init.meter ?? silentMeter(),
   };
-  // A malformed override fails here, at wiring, not deep inside a request or sweep.
-  requireCallable('clock', runtime.clock, ['now']);
-  requireCallable('ids', runtime.ids, ['next']);
-  requireCallable('digest', runtime.digest, ['hash']);
-  requireCallable('logger', runtime.logger, ['log']);
-  requireCallable('meter', runtime.meter, ['count', 'observe']);
-  return runtime;
 }

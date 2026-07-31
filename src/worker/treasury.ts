@@ -24,6 +24,7 @@ import {
 } from '#src/integrity.ts';
 import { maturedBalance } from '#src/maturity.ts';
 import { pendingOutbox } from '#src/outbox.ts';
+import { EVENT_VERSION } from '#src/ports.ts';
 import { SYSTEM, shardsOf } from '#src/accounts.ts';
 
 import type { Amount } from '#src/money.ts';
@@ -36,14 +37,14 @@ import type { Leg, CallOptions, Rate, Store, Unit } from '#src/ports.ts';
  * trust at the fixed CREDIT-to-USD "par" rate.
  */
 export type BackingPosition = {
-  // Every user's spendable balance — excludes earned revenue, promo grants, and payout
+  // Every user's spendable balance. It excludes earned revenue, promo grants, and payout
   // reserves, none of which a user can spend.
   custodialCredit: Amount;
 
-  // USD to back `custodialCredit`: converted at par, rounded down.
+  // USD needed to back `custodialCredit`, converted at par and rounded down.
   required: Amount;
 
-  // USD held in trust right now: the TRUST_CASH balance, summed over its shard rows.
+  // USD held in trust right now. This is the TRUST_CASH balance, summed over its shard rows.
   trustCash: Amount;
 
   // USD short. This is `required - trustCash` when cash is underheld, otherwise zero.
@@ -79,9 +80,9 @@ type TreasuryTally = {
 };
 
 /**
- * Check that held USD backs every spendable credit. Measure only: a shortfall is logged and
- * counted, nothing is posted. Errors are caught into the summary rather than propagated, so
- * one bad run can't crash the worker loop.
+ * Check that held USD backs every spendable credit. This sweep only measures. A shortfall is
+ * logged and counted, and nothing is posted. Errors are caught into the summary rather than
+ * propagated, so one bad run can't crash the worker loop.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background
  *   worker} for how the treasury sweep checks backing on a schedule.
@@ -140,7 +141,7 @@ async function measureBacking(
   };
 }
 
-// Logs at `debug`: a normal run is not an incident. A shortfall is logged at `error` by
+// Logs at `debug` because a normal run is not an incident. A shortfall is logged at `error` by
 // `raiseBreach`.
 function record(ctx: WorkerCtx, position: BackingPosition, now: number): void {
   ctx.meter.observe(
@@ -161,7 +162,7 @@ function record(ctx: WorkerCtx, position: BackingPosition, now: number): void {
   });
 }
 
-// Nothing is posted to fix the gap; it is settled elsewhere, from platform revenue, and
+// Nothing is posted to fix the gap. The gap is settled elsewhere, from platform revenue, and
 // operators act on this signal.
 function raiseBreach(
   ctx: WorkerCtx,
@@ -194,8 +195,8 @@ function toNumber(minor: bigint): number {
 /**
  * Host-implemented read of the USD actually held at the payout provider, for the float-coverage
  * sweep. It exists because no processor port offers a balance read. The sweep compares the
- * returned balance against the USD owed by every open payout saga (each valued at its stored
- * quote) and raises a breach when the float does not cover the obligations. A throw is
+ * returned balance against the USD owed by every open payout saga, each valued at its stored
+ * quote. It raises a breach when the float does not cover the obligations. A throw is
  * normalized as a provider fault and fails only the `floatCoverage` job.
  */
 export type FloatFeed = {
@@ -278,14 +279,14 @@ async function measureFloat(
   let obligationsMinor = 0n;
   for await (const saga of store.sagas.list()) {
     if (saga.state === 'RESERVED' || saga.state === 'SUBMITTED') {
-      // The stored quote is the USD this payout will actually disburse; only rows opened
+      // The stored quote is the USD this payout will actually disburse. Only rows opened
       // before pricing-at-request are valued at the current rate instead.
       obligationsMinor += (
         saga.payoutUsd ?? convertFloor(saga.reserve, rate, 'USD')
       ).minor;
     }
   }
-  // The feed is the injected port; the store and rate reads around it keep their own codes.
+  // The feed is the injected port. The store and rate reads around it keep their own codes.
   const float = await feed.balance().catch((error) => {
     throw normalizePortError(error);
   });
@@ -303,7 +304,7 @@ async function measureFloat(
 
 /**
  * Outcome of one fee sweep. A duplicate (an earlier run claimed the key) posts nothing and
- * reports `swept` as zero; a fresh run reports the CREDIT realized and the posting that did it.
+ * reports `swept` as zero. A fresh run reports the CREDIT realized and the posting that did it.
  */
 export type FeeSweepResult =
   | { duplicate: true; swept: Amount }
@@ -337,8 +338,9 @@ function assertWithinSweepable(amount: Amount, sweepable: bigint): void {
  *
  * The surplus check, refund-window cap, and idempotency claim all run inside one DB transaction
  * with the touched accounts locked, so a concurrent sweep can't move the numbers between check and
- * post (TOCTOU). REVENUE is CREDIT and trust-cash is USD, and one entry can't mix currencies, so
- * the move splits into two coupled entries that share a rate id, the same as a payout settle.
+ * post (TOCTOU). REVENUE is CREDIT and trust-cash is USD, and one entry can't mix currencies.
+ * The move therefore splits into two coupled entries that share a rate id, the same as a payout
+ * settle.
  *
  * @throws {EconomyError} INVALID_AMOUNT for a non-positive `amount`; COMMINGLING when the
  *   draw would exceed the surplus the platform is allowed to take.
@@ -371,7 +373,7 @@ export async function sweepFees(
     // Lock every account the surplus check reads and the posting writes, so a concurrent
     // sweep, payout settle, or top-up can't move the numbers between check and post. Every
     // REVENUE shard is in the set, since the drain may debit any shard. `lockAll` keeps the
-    // deadlock-free global order the submit paths use; a hand-rolled order would deadlock.
+    // deadlock-free global order the submit paths use. A hand-rolled order would deadlock.
     await lockAll(unit.ledger, [
       SYSTEM.TRUST_CASH,
       SYSTEM.USD_CLEARING,
@@ -381,13 +383,13 @@ export async function sweepFees(
 
     assertWithinSweepable(amount, await sweepableCredit(store, ctx, unit));
 
-    // Use par, not the payout rate: par is the peg trust-cash is held against, so the cash and
+    // Use par, not the payout rate. Par is the peg trust-cash is held against, so the cash and
     // credit sides stay reconciled. Keep the rate so the two entries below match as one move.
     const rate = ctx.rates.par('CREDIT');
     const usd = convertFloor(amount, rate, 'USD');
 
     // The drain debits per REVENUE shard, since each shard holds only its own matured balance.
-    // The offsetting STORED_VALUE credit and the cash posting below stay on the bare rows: the
+    // The offsetting STORED_VALUE credit and the cash posting below stay on the bare rows. The
     // sweep runs at worker cadence, so those rows see no contention worth spreading.
     const transaction = await postEntry(unit.ledger, {
       txnId: ctx.ids.next('txn'),
@@ -412,20 +414,20 @@ export async function sweepFees(
     });
 
     // Record the claim against the posting so a replay resolves to a no-op. Recorded inside the
-    // unit, so it takes effect only if the postings commit; a rolled-back sweep never burns its
+    // unit, it takes effect only if the postings commit. A rolled-back sweep never burns its
     // key.
     if (key !== undefined) {
       await unit.idempotency.record(`sweep:${key}`, transaction);
     }
 
-    // Enqueued in this same transaction, so event, postings, and idempotency record commit
+    // Enqueued in this same transaction: event, postings, and idempotency record commit
     // together or not at all. Subject is the CREDIT posting's txn id so a reader can tie the
     // event back to its ledger entry.
     await unit.outbox.enqueue(
       pendingOutbox(ctx.ids, {
         id: ctx.ids.next('evt'),
         type: 'economy.fees.swept',
-        version: 1,
+        version: EVENT_VERSION,
         occurredAt: ctx.clock.now(),
         subject: transaction.id,
         audience: 'internal',
@@ -543,8 +545,8 @@ async function revenueDrainLegs(
   return legs;
 }
 
-// Surplus in CREDIT: trust cash at par minus what is owed to users, counting the same custodial
-// accounts as the backing check above.
+// Surplus in CREDIT is trust cash at par minus what is owed to users, counting the same
+// custodial accounts as the backing check above.
 // See https://economy-lab-docs.pages.dev/economy/concepts/solvency/ for what surplus is and which
 // credits count toward the backing total.
 async function surplusCredit(
@@ -552,7 +554,7 @@ async function surplusCredit(
   ctx: WorkerCtx,
   unit: Unit,
 ): Promise<bigint> {
-  // Balances read through the unit, so the sums see this transaction's view under its locks.
+  // Balances are read through the unit, so the sums see this transaction's view under its locks.
   const { custodialCreditMinor, trustCashMinor } = await backingTotals(
     store.ledger.heads(),
     (account) => unit.ledger.balance(account),

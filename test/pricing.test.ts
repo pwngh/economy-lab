@@ -14,7 +14,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { hasCode } from '#test/support/capabilities.ts';
 
-import { flatFee } from '#src/pricing.ts';
+import { feeForPrice, flatFee, revenueForSplit } from '#src/pricing.ts';
 import { credit } from '#test/support/builders.ts';
 import { toAmount } from '#src/money.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
@@ -167,6 +167,35 @@ describe('Pricing', () => {
 
     assert.equal(legs.length, 1);
     assert.deepEqual(creditedTo(legs, SYSTEM.REVENUE), credit('4.00'));
+  });
+
+  test('refuses a price in a currency the whole-credit rounding cannot fit', () => {
+    // 15.3% of USD:1.07 is 16.371 cents, and rounding that up to a whole unit takes USD:1.00 —
+    // 93% of the price. The fee-exceeds-price cap cannot catch it either, because 100 is below
+    // 107. The rounding unit is one whole credit, so a price that is not CREDIT is refused.
+    const price = toAmount('USD', 107n);
+
+    assert.throws(() => feeForPrice(price, 1_530), hasCode('OP.MALFORMED'));
+    assert.throws(
+      () => revenueForSplit(price, soloSeller, 1_530),
+      hasCode('OP.MALFORMED'),
+    );
+    assert.throws(
+      () => flatFee()({ price, recipients: soloSeller, feeBps: 1_530 }),
+      hasCode('OP.MALFORMED'),
+    );
+  });
+
+  test('charges CREDIT at the same fee the refusal was added around', () => {
+    // The two rules the refusal must leave alone: the fee rounds up to the whole credit, and it
+    // is capped at the price when the rounded fee would exceed it.
+    assert.equal(feeForPrice(credit('1000.00'), 1_530), 15_300n);
+    assert.equal(feeForPrice(credit('1000.50'), 1_530), 15_400n);
+    assert.equal(feeForPrice(credit('0.50'), 1_530), 50n);
+    assert.equal(
+      revenueForSplit(credit('1000.00'), soloSeller, 1_530),
+      15_300n,
+    );
   });
 
   test('rejects a split whose shareBps do not sum to 10000', () => {

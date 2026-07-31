@@ -69,7 +69,7 @@ export async function topUp(
 
   // The issuance posts first, so the returned transaction is the buyer's credits going up. Both
   // postings route platform legs by the idempotency key — the key the lock set routed by — so
-  // the rows locked are the rows posted. The spread leg is added only when positive, so a
+  // the rows locked are the rows posted. The spread leg is added only when positive; a
   // purchase at exactly par has just two legs. The CREDIT and USD sides share no account, so
   // postEntries can fuse the pair.
   const cashLegs = [debit(SYSTEM.TRUST_CASH, backingUsd)];
@@ -104,7 +104,7 @@ export async function topUp(
   return { status: 'committed', transaction: issuance! };
 }
 
-// When the deployment lists a purchase catalog, only those bundle amounts exist to buy; any
+// When the deployment lists a purchase catalog, only those bundle amounts exist to buy. Any
 // other amount is a mispriced grant, not a purchase.
 function requireBundleAmount(
   amount: Amount,

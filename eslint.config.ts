@@ -79,34 +79,29 @@ const NON_SHIPPED_IMPORTS = [
   },
 ];
 
-// Layering invariant 2: the optional drivers load via dynamic import() from the composition
-// root, so an unused peer dependency never loads. no-restricted-imports ignores dynamic
-// import(), so those legitimate sites stay valid while static imports are refused.
-const OPTIONAL_DRIVER_IMPORTS = [
-  '#src/engines/postgres.ts',
-  '#src/engines/mysql.ts',
-  '#src/adapters/redis.ts',
-  '#src/adapters/sqs.ts',
-].map((name) => ({
-  name,
+// Layering invariant 2: the backends are their own packages, so the lab must not name one. A
+// static or dynamic import of any of them is the cycle the split exists to prevent.
+const BACKEND_PACKAGES = {
+  regex: '^@pwngh/economy-(postgres|mysql|redis|sqs)',
   message:
-    'Load optional drivers via dynamic import() so an unused peer dependency never loads.',
-}));
+    'The lab must not import a backend package; the backend arrives through Ports.',
+};
 
 // Layering invariant 3: the supervisor observes the core through its ports; the core never
-// knows it is observed. Leaving src/ops out of the composition is the off switch.
-const OPS_BOUNDARY = {
-  regex: '^#src/ops/',
+// knows it is observed. Leaving src/supervisor out of the composition is the off switch.
+const SUPERVISOR_BOUNDARY = {
+  regex: '^#src/supervisor/',
   message:
-    'The core must not import src/ops; the supervisor is opt-in host composition.',
+    'The core must not import src/supervisor; the supervisor is opt-in host composition.',
 };
 
 export default tseslint.config(
   // apps/ has its own build/lint tooling, so it stays outside this gate, including apps/support's
   // trivial browser-build shim stubs the apps alias to (bundled by vite, never imported by name).
-  // The vendored @pwngh/money amalgamation is kept byte-identical to upstream; its embedded
-  // selfTest is the drift guard, not this config's rules. docs/ is the gitignored generated
-  // API reference (wiped and rebuilt by every typedoc run), outside the gate too.
+  // docs/ holds the generated API reference. Typedoc wipes and rebuilds it on every run, so it
+  // stays out as well. Only compiled output is skipped under packages/; their sources and tests
+  // are governed here. Every entry here is generated output or another tool's territory: no
+  // authored file under src/ or test/ is ignored, and test/toolchain-shape.test.ts holds that.
   {
     ignores: [
       'node_modules/**',
@@ -115,8 +110,7 @@ export default tseslint.config(
       '.build-tmp/**',
       'docs/**',
       'apps/**',
-      'src/money.vendored.ts',
-      'src/db.vendored.ts',
+      'packages/*/dist/**',
     ],
   },
 
@@ -124,8 +118,11 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   n.configs['flat/recommended-module'],
 
+  // `.tsx` is named alongside `.ts` in every block below. `packages/ui/src/lib/react.tsx` is the
+  // only one in the tree, and a `**/*.ts` glob skips it in silence — `eslint .` reported the whole
+  // repo clean while never opening a file on a published door.
   {
-    files: ['**/*.ts'],
+    files: ['**/*.ts', '**/*.tsx'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
@@ -137,9 +134,11 @@ export default tseslint.config(
       'no-console': ['error', { allow: ['warn', 'error'] }],
       'prefer-const': 'error',
       'no-var': 'error',
+      // ignoreRestSiblings keeps the `const { dropped: _x, ...rest } = obj` idiom, which has to
+      // name a property in order to leave it out of the rest object.
       '@typescript-eslint/no-unused-vars': [
         'error',
-        { argsIgnorePattern: '^_' },
+        { argsIgnorePattern: '^_', ignoreRestSiblings: true },
       ],
       // eslint-plugin-n can't resolve `.ts`-extension imports and reports them as missing. TS handles
       // resolution (allowImportingTsExtensions), so turn off the plugin's import-resolution rules.
@@ -149,13 +148,10 @@ export default tseslint.config(
       // False positive: the rule treats the cross-runtime `crypto` global, used on purpose, as
       // Node's experimental node:crypto and warns it may be unsupported.
       'n/no-unsupported-features/node-builtins': 'off',
-      // Keep functions small enough to read top to bottom on one screen.
+      // Branch count, nesting and arity, measured directly. There is deliberately no
+      // line-count rule: length is a proxy for these, and Remix ships a 1037-line file.
       complexity: ['error', 15],
       'max-depth': ['error', 4],
-      'max-lines-per-function': [
-        'error',
-        { max: 80, skipBlankLines: true, skipComments: true },
-      ],
       'max-params': ['error', 4],
       'max-nested-callbacks': ['error', 3],
     },
@@ -165,17 +161,18 @@ export default tseslint.config(
   // here. Both layering invariants apply.
   {
     files: ['src/**/*.ts'],
-    ignores: ['src/adapters/**', 'src/engines/**', 'src/ops/**'],
+    ignores: ['src/adapters/**', 'src/engines/**', 'src/supervisor/**'],
     rules: {
       'no-restricted-globals': ['error', ...BANNED_GLOBALS],
       'no-restricted-imports': [
         'error',
         {
-          paths: [...BANNED_IMPORTS.paths, ...OPTIONAL_DRIVER_IMPORTS],
+          paths: BANNED_IMPORTS.paths,
           patterns: [
             ...BANNED_IMPORTS.patterns,
             ...NON_SHIPPED_IMPORTS,
-            OPS_BOUNDARY,
+            SUPERVISOR_BOUNDARY,
+            BACKEND_PACKAGES,
           ],
         },
       ],
@@ -183,43 +180,118 @@ export default tseslint.config(
   },
 
   // The adapter/engine layers wrap Node APIs, so the node:* and Node-global bans lift here.
-  // They are still shipped code, so both layering invariants remain, and so does the ops boundary.
+  // They are still shipped code, so both layering invariants remain, and so does the boundary.
   {
     files: ['src/adapters/**/*.ts', 'src/engines/**/*.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
         {
-          paths: OPTIONAL_DRIVER_IMPORTS,
-          patterns: [...NON_SHIPPED_IMPORTS, OPS_BOUNDARY],
+          patterns: [
+            ...NON_SHIPPED_IMPORTS,
+            SUPERVISOR_BOUNDARY,
+            BACKEND_PACKAGES,
+          ],
         },
       ],
     },
   },
 
-  // src/ops is shipped code on the WinterCG surface like the core; only the ops boundary lifts,
-  // so the supervisor may import its own modules.
+  // src/supervisor is shipped code on the WinterCG surface like the core; only its own boundary
+  // lifts, so the supervisor may import its own modules.
   {
-    files: ['src/ops/**/*.ts'],
+    files: ['src/supervisor/**/*.ts'],
     rules: {
       'no-restricted-globals': ['error', ...BANNED_GLOBALS],
       'no-restricted-imports': [
         'error',
         {
-          paths: [...BANNED_IMPORTS.paths, ...OPTIONAL_DRIVER_IMPORTS],
-          patterns: [...BANNED_IMPORTS.patterns, ...NON_SHIPPED_IMPORTS],
+          paths: BANNED_IMPORTS.paths,
+          patterns: [
+            ...BANNED_IMPORTS.patterns,
+            ...NON_SHIPPED_IMPORTS,
+            BACKEND_PACKAGES,
+          ],
         },
       ],
     },
   },
 
-  // Tests run long (AAA narratives) and nest deep (adapter-matrix suites), so relax only the
-  // function-size and nesting limits. Every other rule still applies.
+  // Adapter-matrix suites nest deep, so relax only nesting. Every other rule still applies.
   {
-    files: ['test/**/*.ts'],
+    files: [
+      'test/**/*.ts',
+      'packages/*/test/**/*.ts',
+      'packages/*/test/**/*.tsx',
+    ],
     rules: {
-      'max-lines-per-function': 'off',
       'max-nested-callbacks': 'off',
+    },
+  },
+
+  // A package's `bin` names compiled output (dist/*.js), so n/hashbang cannot see that a
+  // src/*.ts file becomes that bin, and reports its shebang as unnecessary. tsc copies the
+  // shebang from source into dist, so deleting it would break the published executable.
+  // convertPath maps src back to dist, which makes the rule resolve the real bin and stay on:
+  // a shebang on a non-bin source file is still an error.
+  {
+    files: ['packages/*/src/**/*.ts', 'packages/*/src/**/*.tsx'],
+    rules: {
+      'n/hashbang': [
+        'error',
+        { convertPath: { 'src/**/*.ts': ['^src/(.+)\\.ts$', 'dist/$1.js'] } },
+      ],
+    },
+  },
+
+  // The register's two naming clauses, as a rule rather than a habit: a rename with nothing
+  // behind it comes back with the next package. Root `src/` is deliberately outside the scope —
+  // its four `noOverdraft` sites are a ledger domain flag in a different tree.
+  {
+    files: ['packages/*/src/**/*.ts', 'packages/*/src/**/*.tsx'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "Identifier[name='opts']",
+          message: 'Call it `options`, and give its type a name.',
+        },
+        {
+          selector: 'Identifier[name=/^no[A-Z]/]',
+          message:
+            'Booleans are bare adjectives: `worker`, not `noWorker` — a negated name reads backwards at every call site.',
+        },
+      ],
+    },
+  },
+
+  // Process entry points: a bin, a bin fixture the suite spawns and reads an exit code from,
+  // and the dev scripts. n/no-process-exit exists to stop library code taking the exit
+  // decision away from its caller, and the library layer honours it — runEconomy documents
+  // that it never exits so a host can drive the CLI in-process. At the top of a process there
+  // is no caller to defer to, and exiting is the contract. process.exitCode is not a
+  // substitute here: the worker verb parks the event loop on a timer, so any handle left open
+  // would hang the command instead of ending it.
+  {
+    files: [
+      'packages/*/src/bin.ts',
+      'packages/*/src/cli-entry.ts',
+      'packages/*/test/support/entry.ts',
+      'packages/*/test/support/dist-entry.js',
+      'packages/*/scripts/**/*.ts',
+    ],
+    rules: {
+      'n/no-process-exit': 'off',
+    },
+  },
+
+  // Sample code a developer reads and copies: the example app and the scaffolder templates.
+  // console.log is the idiom a reader expects there, and process.stdout.write would teach the
+  // wrong thing. House code keeps the ban.
+  {
+    files: ['packages/*/example/**/*.ts', 'packages/*/templates/**/*.ts'],
+    rules: {
+      'no-console': 'off',
     },
   },
 );

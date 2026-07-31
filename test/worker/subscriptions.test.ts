@@ -512,10 +512,11 @@ async function lapseRevokesThePerkAndEmitsOneLapsedEvent(): Promise<void> {
   });
   await openSub(store, sub, credit('50.00'));
   // Pre-grant the perk so the lapse has something to revoke (mirrors a prior funded period).
+  // The source is the one subscribe stamps, which is what the lapse revokes by name.
   await store.transaction(async (unit) => {
     await unit.entitlements.grant('usr_buyer', 'club_pass', {
       expiresAt: null,
-      source: 'sub_1',
+      source: 'subscription:sub_1',
     });
   });
   assert.equal(await store.entitlements.owns('usr_buyer', 'club_pass'), true);

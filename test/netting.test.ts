@@ -23,14 +23,16 @@ import {
   createReservations,
   openInstanceSession,
   recoverSession,
+  refundEscrowRemainder,
 } from '#src/netting.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { proveChain } from '#src/chain.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { toAmount } from '#src/money.ts';
-import { earned, spendable, SYSTEM } from '#src/accounts.ts';
+import { earned, sessionEscrow, spendable, SYSTEM } from '#src/accounts.ts';
 import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
 
+import type { Reservations } from '#src/netting.ts';
 import type { Digest, Leg, Store } from '#src/ports.ts';
 
 function harness(): { store: Store; digest: Digest; deps: never } {
@@ -68,6 +70,35 @@ async function balanceOf(
   account: Parameters<Store['ledger']['balance']>[0],
 ) {
   return (await store.ledger.balance(account)).minor;
+}
+
+// A registry whose release leg fails, standing in for the counter going unreachable between the
+// replay's last posting and its release. `settle` throws from there, after the replay is done.
+function trappedReservations(): {
+  reservations: Reservations;
+  arm(): void;
+  disarm(): void;
+} {
+  const inner = createReservations();
+  let armed = false;
+  return {
+    reservations: {
+      scope: 'process',
+      pending: (account) => inner.pending(account),
+      add: (account, naturalDelta) => {
+        if (armed) {
+          throw new Error('reservation registry unreachable');
+        }
+        return inner.add(account, naturalDelta);
+      },
+    },
+    arm: () => {
+      armed = true;
+    },
+    disarm: () => {
+      armed = false;
+    },
+  };
 }
 
 describe('Instance netting', () => {
@@ -436,6 +467,183 @@ describe('Instance netting', () => {
       digest: deps['digest'],
     });
     assert.equal(chain.intact, true);
+  });
+
+  test('a retry after the failover path throws still ends every movement ledger-final exactly once', async () => {
+    const { store, digest } = harness();
+    const trap = trappedReservations();
+    const deps = {
+      store,
+      digest,
+      clock: fixedClock(0),
+    } as never;
+    // usr_q5a is funded well above its one movement, so a second charge would clear the
+    // overdraft guard rather than being caught by it.
+    await fund(store, 'usr_q5a', 1_000n);
+    await fund(store, 'usr_q5b', 500n);
+    const session = openInstanceSession(deps, 'sess_q5', {
+      chunkWidth: 4, // one chunk holds all four positions, so the whole net stands or falls together
+      reservations: trap.reservations,
+    });
+    await session.record({
+      idempotencyKey: 'q5_1',
+      legs: purchase('usr_q5a', 'usr_c1', 300n),
+    });
+    await session.record({
+      idempotencyKey: 'q5_2',
+      legs: purchase('usr_q5b', 'usr_c2', 300n),
+    });
+
+    // usr_q5b's funds leave through another path, so the netted chunk no longer clears.
+    await store.transaction((unit) =>
+      postEntry(unit.ledger, {
+        txnId: 'txn_drain_q5b',
+        legs: [
+          debit(spendable('usr_q5b'), toAmount('CREDIT', 400n)),
+          credit(SYSTEM.REVENUE, toAmount('CREDIT', 400n)),
+        ],
+        meta: { source: 'drain' },
+      }),
+    );
+    // The registry goes unreachable, so the failover replay posts what it can and then throws
+    // out of its release. The caller sees a failed settle over a session that already moved money.
+    trap.arm();
+    await assert.rejects(() => session.settle(), /registry unreachable/);
+    assert.equal(await balanceOf(store, spendable('usr_q5a')), 700n);
+    assert.equal(await balanceOf(store, earned('usr_c1')), 300n);
+    trap.disarm();
+
+    // The drain is reversed and the caller retries the same session, exactly as a retryable
+    // failure invites. The first attempt's per-movement postings are already ledger-final, so a
+    // second attempt must finish down that same path and never re-net over them.
+    await store.transaction((unit) =>
+      postEntry(unit.ledger, {
+        txnId: 'txn_restore_q5b',
+        legs: [
+          credit(spendable('usr_q5b'), toAmount('CREDIT', 400n)),
+          debit(SYSTEM.REVENUE, toAmount('CREDIT', 400n)),
+        ],
+        meta: { source: 'restore' },
+      }),
+    );
+    const retry = await session.settle();
+
+    // usr_c1 was paid by the replay. Re-netting over that posting pays it a second time.
+    assert.equal(await balanceOf(store, earned('usr_c1')), 300n);
+    assert.equal(await balanceOf(store, spendable('usr_q5a')), 700n);
+    assert.equal(retry.mode, 'replayed');
+    assert.equal(await balanceOf(store, spendable('usr_q5b')), 200n);
+    assert.equal(await balanceOf(store, earned('usr_c2')), 300n);
+    assert.equal(await balanceOf(store, SYSTEM.NETTING_CLEARING), 0n);
+    assert.equal(
+      (await proveChain({ ledger: store.ledger, digest })).intact,
+      true,
+    );
+  });
+
+  test('a settle that stopped between chunks reports unfinished and finishes on the next settle', async () => {
+    const { store, deps } = harness();
+    await fund(store, 'usr_q6', 1_000n);
+    const session = openInstanceSession(deps, 'sess_q6', { chunkWidth: 2 });
+    await session.record({
+      idempotencyKey: 'q6_1',
+      legs: purchase('usr_q6', 'usr_c1', 100n),
+    });
+    await session.record({
+      idempotencyKey: 'q6_2',
+      legs: purchase('usr_q6', 'usr_c2', 60n),
+    });
+    await session.flush();
+
+    // The process dies between chunk 0 and chunk 1 of 2. Chunk 0 is exactly what postChunk mints:
+    // the first two net positions plus the clearing leg that balances them.
+    await store.transaction((unit) =>
+      postEntry(unit.ledger, {
+        txnId: 'net_sess_q6_c0',
+        legs: [
+          debit(spendable('usr_q6'), toAmount('CREDIT', 160n)),
+          credit(earned('usr_c1'), toAmount('CREDIT', 100n)),
+          credit(SYSTEM.NETTING_CLEARING, toAmount('CREDIT', 60n)),
+        ],
+        meta: {
+          kind: 'instance_settlement',
+          sessionId: 'sess_q6',
+          netted: 2,
+          chunk: '1/2',
+        },
+      }),
+    );
+
+    // Recovery reads the chunk width off chunk 0's own legs, so it holds even though this
+    // recovery was given no chunkWidth at all.
+    const recovered = await recoverSession(deps, 'sess_q6');
+    assert.equal(recovered.wasSettled(), false);
+    // Unfinished is not unsealed: the chunk ids are already minted, so no new movement may join.
+    await assert.rejects(
+      () =>
+        recovered.record({
+          idempotencyKey: 'q6_3',
+          legs: purchase('usr_q6', 'usr_c1', 10n),
+        }),
+      (error: unknown) =>
+        (error as { code?: string }).code === 'SESSION.SETTLED',
+    );
+
+    const report = await recovered.settle();
+
+    assert.equal(report.mode, 'netted');
+    assert.equal(recovered.wasSettled(), true);
+    assert.equal(await balanceOf(store, spendable('usr_q6')), 840n);
+    assert.equal(await balanceOf(store, earned('usr_c1')), 100n);
+    assert.equal(await balanceOf(store, earned('usr_c2')), 60n);
+    assert.equal(await balanceOf(store, SYSTEM.NETTING_CLEARING), 0n);
+  });
+
+  test('an escrow refund reads its remainder inside the transaction that spends it', async () => {
+    const { store } = harness();
+    await fund(store, 'usr_q6e', 1_000n);
+    const escrow = sessionEscrow('usr_q6e', 'sess_q6e');
+    await store.transaction((unit) =>
+      postEntry(unit.ledger, {
+        txnId: 'esc_fund_sess_q6e_usr_q6e',
+        legs: [
+          debit(spendable('usr_q6e'), toAmount('CREDIT', 500n)),
+          credit(escrow, toAmount('CREDIT', 500n)),
+        ],
+        meta: { kind: 'prefund', sessionId: 'sess_q6e', userId: 'usr_q6e' },
+      }),
+    );
+
+    // The lane spends 200 of the escrow after the refund reads the balance and before it posts.
+    // The refund must not carry the stale 500 into its own transaction.
+    let raced = false;
+    const racing: Store = {
+      ...store,
+      transaction: (work, options) => {
+        if (raced) {
+          return store.transaction(work, options);
+        }
+        raced = true;
+        return store
+          .transaction((unit) =>
+            postEntry(unit.ledger, {
+              txnId: 'net_sess_q6e_c0',
+              legs: [
+                debit(escrow, toAmount('CREDIT', 200n)),
+                credit(earned('usr_c1'), toAmount('CREDIT', 200n)),
+              ],
+              meta: { kind: 'instance_settlement', sessionId: 'sess_q6e' },
+            }),
+          )
+          .then(() => store.transaction(work, options));
+      },
+    };
+
+    const refunded = await refundEscrowRemainder(racing, 'sess_q6e', 'usr_q6e');
+
+    assert.equal(refunded, 300n);
+    assert.equal(await balanceOf(store, escrow), 0n);
+    assert.equal(await balanceOf(store, spendable('usr_q6e')), 800n);
   });
 
   test('refuses to settle over a tampered journal', async () => {

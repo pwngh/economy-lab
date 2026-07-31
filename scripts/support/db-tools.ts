@@ -9,9 +9,9 @@
  * @license MIT
  */
 
-// Shared plumbing for the backup/restore tooling: spawn a database client tool with piped
-// files, and name/locate dump files. Connection details travel as argument arrays and env
-// vars, never through a shell.
+// The backup/restore tooling shares this plumbing. It spawns a database client tool with piped
+// files, and it names and locates dump files. Connection details travel as argument arrays and
+// env vars, never through a shell.
 
 import { spawn } from 'node:child_process';
 import { createReadStream, createWriteStream } from 'node:fs';
@@ -27,7 +27,7 @@ export function dumpStamp(): string {
 
 /**
  * Runs a client tool to completion, optionally piping a file in and/or out. A missing binary
- * reports itself by name instead of a bare ENOENT; a nonzero exit rejects (stderr is inherited,
+ * reports itself by name instead of a bare ENOENT. A nonzero exit rejects (stderr is inherited,
  * so the tool's own message is already on screen).
  */
 export function runTool(
@@ -71,7 +71,7 @@ export function runTool(
   });
 }
 
-/** The mysql/mysqldump connection arguments for a mysql:// URL; the password rides MYSQL_PWD. */
+/** The mysql/mysqldump connection arguments for a mysql:// URL. The password rides MYSQL_PWD. */
 export function mysqlClientArgs(url: string): {
   args: string[];
   database: string;

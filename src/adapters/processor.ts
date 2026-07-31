@@ -20,8 +20,8 @@ import type {
 } from '#src/ports.ts';
 
 /**
- * Structural `fetch` shape rather than the built-in type, so tests can inject a stand-in and the
- * file typechecks on any runtime.
+ * This type describes a structural `fetch` shape rather than the built-in type. Tests can inject a
+ * stand-in, and the file typechecks on any runtime.
  */
 export type FetchLike = (
   input: string,
@@ -44,19 +44,20 @@ export interface HttpProcessorConfig {
   /** Sent in the Authorization header. Never written to logs or error details. */
   apiKey?: string;
 
-  /** Supplies the `fetch` implementation. Defaults to the global `fetch`; tests pass a stand-in. */
+  /** Supplies the `fetch` implementation. Defaults to the global `fetch`. Tests pass a stand-in. */
   fetch?: FetchLike;
 }
 
 /**
  * Build a {@link Processor} that pays sellers via an external provider over HTTP. It asks the
- * provider to send money; it does not touch our ledger.
+ * provider to send money. It does not touch our ledger.
  *
- * `submitPayout` POSTs `{ key, userId, amount }`: the idempotency key (a resend pays out only
- * once), an opaque recipient token (no personal information), and the USD to pay as a decimal
- * string. It reads back the provider's reference id. A failed send or non-2xx status is
- * retryable. A 2xx with no reference id is non-retryable: the money may already have been sent,
- * so retrying could pay twice; reconciliation resolves the ambiguity.
+ * `submitPayout` POSTs `{ key, userId, amount }`. `key` is the idempotency key, so a resend pays
+ * out only once. `userId` is an opaque recipient token with no personal information. `amount` is
+ * the USD to pay as a decimal string. The call reads back the provider's reference id. A failed
+ * send or non-2xx status is retryable. A 2xx with no reference id is non-retryable, because the
+ * money may already have been sent and retrying could pay twice. Reconciliation resolves the
+ * ambiguity.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/processor/ Processor} for how the
  *   payout port plugs into the ledger.
@@ -71,11 +72,11 @@ export function httpProcessor(config: HttpProcessorConfig): Processor {
 }
 
 /**
- * An in-memory {@link Processor} for demos and tests: it accepts every payout, records it under a
- * deterministic `providerRef`, and answers a resend of the same idempotency key with the same ref,
+ * An in-memory {@link Processor} for demos and tests. It accepts every payout and records it under
+ * a deterministic `providerRef`. It answers a resend of the same idempotency key with the same ref,
  * so the retry-safety contract holds without a real provider. Pass `status` to make the optional
- * probe report a fixed state (e.g. `'SETTLED'` so a demo sweep settles without a webhook); omitted,
- * there is no probe, matching a real provider that reports only by webhook.
+ * probe report a fixed state (e.g. `'SETTLED'` so a demo sweep settles without a webhook). When
+ * `status` is omitted there is no probe, matching a real provider that reports only by webhook.
  */
 export function memoryProcessor(
   options: { status?: PayoutProviderStatus['state'] } = {},

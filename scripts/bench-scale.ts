@@ -9,18 +9,18 @@
  * @license MIT
  */
 
-// Scale benches, kept separate from scripts/bench.ts so the published tables stay untouched:
-// a hot-seller curve with the accrual split off vs on, and submit micro-batching weighed
-// against one operation per transaction.
+// These scale benches stay separate from scripts/bench.ts so the published tables stay
+// untouched. They run a hot-seller curve with the accrual split off vs on, and they weigh
+// submit micro-batching against one operation per transaction.
 //
 //   node scripts/bench-scale.ts                          # in-memory + any reachable DB
 //   BENCH_HOT_CONCURRENCY=8,32,64 node scripts/bench-scale.ts
-//   sh scripts/docker.sh run --rm bench scripts/bench-scale.ts   # production-parity fsync
+//   sh rigs/docker.sh run --rm bench scripts/bench-scale.ts   # production-parity fsync
 //
-// The usual BENCH_* knobs apply (see scripts/support/harness.ts); BENCH_SHARDS below 2 is raised
-// to 2 for the hot-seller pairs so the baseline is not itself bounded by bare platform rows.
-// Every backend line prints its durability probe: a rate over commits that skip a real disk
-// flush (macOS fsync) is shape, not capacity.
+// The usual BENCH_* knobs apply (see test/support/harness.ts). BENCH_SHARDS below 2 is
+// raised to 2 for the hot-seller pairs so the baseline is not itself bounded by bare platform
+// rows. Every backend line prints its durability probe. A rate over commits that skip a real
+// disk flush (macOS fsync) is shape, not capacity.
 
 import { createEconomy } from '#src/economy.ts';
 import { openInstanceEconomy } from '#src/instance.ts';
@@ -28,7 +28,7 @@ import { createReservations } from '#src/netting.ts';
 import { proveChain } from '#src/chain.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
 import { toAmount } from '#src/money.ts';
-import { loadConfig } from '#src/config.ts';
+import { checkedConfig, loadConfig } from '#src/config.ts';
 import { sha256Digest } from '#src/digest.ts';
 import { drainAccruals } from '#src/worker/accrual.ts';
 import { readList } from '#src/env.ts';
@@ -47,15 +47,16 @@ import {
 import {
   measureConcurrent,
   measureSequential,
+  missingRequired,
   resolveConfig,
   tryProvision,
-} from '#scripts/support/harness.ts';
+} from '#test/support/harness.ts';
 
 import type {
   BackendName,
   HarnessConfig,
   Provisioned,
-} from '#scripts/support/harness.ts';
+} from '#test/support/harness.ts';
 import type { Economy, WorkerCtx } from '#src/contract.ts';
 import type { Ports, Store } from '#src/ports.ts';
 
@@ -76,8 +77,8 @@ const out = (line: string): void => {
   process.stdout.write(line + '\n');
 };
 
-// The same policy the shared harness benches under (gates off), with the two knobs this script
-// varies: the shard count and the accrual flag.
+// This builds the same policy the shared harness benches under (gates off). It adds the two
+// knobs this script varies, the shard count and the accrual flag.
 function scaleEconomy(
   store: Store,
   opts: { accrual: boolean; shards: number },
@@ -116,7 +117,7 @@ function scaleEconomy(
     rates: ports.rates,
     logger: ports.logger,
     meter: ports.meter,
-    config,
+    config: checkedConfig(config),
   };
   return { economy: createEconomy(ports), workerCtx };
 }
@@ -140,14 +141,14 @@ async function hotSellerOnce(
     shards: Math.max(2, runCfg.shards),
   });
   const seller = `usr_hot_seller_${tag}`;
-  // A buyer pool at least the in-flight depth, so concurrent ops touch disjoint buyer rows and
-  // the seller-side row is the only per-sale shared row under test.
+  // The buyer pool is at least the in-flight depth, so concurrent ops touch disjoint buyer
+  // rows and the seller-side row is the only per-sale shared row under test.
   const buyers = Array.from(
     { length: Math.max(runCfg.concurrency, 16) },
     (_, i) => `usr_hot_${tag}_${accrual ? 'on' : 'off'}_${i}`,
   );
-  const planned = runCfg.reps * runCfg.ops + runCfg.warmup + buyers.length;
-  // +50 whole-credit headroom so warmup drift can't starve a buyer mid-run.
+  const planned = runCfg.reps * runCfg.opCount + runCfg.warmup + buyers.length;
+  // The +50 whole credits are headroom so warmup drift can't starve a buyer mid-run.
   const perBuyer = Math.ceil(planned / buyers.length) + 50;
   for (const buyer of buyers) {
     await economy.submit(
@@ -177,8 +178,8 @@ async function hotSellerOnce(
     provisioned.counters,
   );
 
-  // The split's full cost includes moving the parked shares on; time the drain over everything
-  // the sample parked, and refuse a result that left money in the pool.
+  // The split's full cost includes moving the parked shares on. So time the drain over
+  // everything the sample parked, and refuse a result that left money in the pool.
   let drainMs: number | null = null;
   if (accrual) {
     const t0 = performance.now();
@@ -202,8 +203,8 @@ async function hotSellerOnce(
   };
 }
 
-// One (depth, flag) sample on its own fresh store and pool, so depths never share warm caches
-// or leftover contention state and the off/on pair stays symmetric.
+// Each (depth, flag) sample runs on its own fresh store and pool. Depths therefore never share
+// warm caches or leftover contention state, and the off/on pair stays symmetric.
 async function hotSellerAt(
   backend: BackendName,
   concurrency: number,
@@ -224,11 +225,11 @@ async function hotSellerAt(
   return { off: results[0]!, on: results[1]! };
 }
 
-async function hotSellerCurve(backend: BackendName): Promise<void> {
+async function hotSellerCurve(backend: BackendName): Promise<boolean> {
   for (const concurrency of HOT_CONCURRENCIES) {
     const pair = await hotSellerAt(backend, concurrency);
     if (pair === null) {
-      return;
+      return false;
     }
     const { off, on } = pair;
     const gain = off.rate > 0 ? on.rate / off.rate : 0;
@@ -241,24 +242,26 @@ async function hotSellerCurve(backend: BackendName): Promise<void> {
           : ''),
     );
   }
+  return true;
 }
 
 // --- Batched vs unbatched submits --------------------------------------------------
 
-// 16: deep enough that fsync coalescing shows, shallow enough to be a realistic request burst.
+// 16 is deep enough that fsync coalescing shows, yet shallow enough to be a realistic request burst.
 const BATCH_SIZE = 16;
 
 async function measureBatched(
   economy: Economy,
   freshTopUp: () => ReturnType<typeof topUp>,
 ): Promise<number> {
-  // Timed the way measureSequential times: best rep over committed ops, budget-bounded.
+  // This times the way measureSequential times. It takes the best rep over committed ops,
+  // bounded by the budget.
   let bestPerOp = Infinity;
   for (let r = 0; r < cfg.reps; r += 1) {
     const t0 = performance.now();
     let done = 0;
-    for (let i = 0; i < cfg.ops; i += BATCH_SIZE) {
-      const size = Math.min(BATCH_SIZE, cfg.ops - i);
+    for (let i = 0; i < cfg.opCount; i += BATCH_SIZE) {
+      const size = Math.min(BATCH_SIZE, cfg.opCount - i);
       const slots = await economy.submitBatch(
         Array.from({ length: size }, freshTopUp),
       );
@@ -276,10 +279,10 @@ async function measureBatched(
   return bestPerOp === Infinity ? 0 : 1000 / bestPerOp;
 }
 
-async function batching(backend: BackendName): Promise<void> {
+async function batching(backend: BackendName): Promise<boolean> {
   const provisioned = await tryProvision(backend, cfg);
   if (provisioned === null) {
-    return;
+    return false;
   }
   try {
     out(`    durability: ${provisioned.durability}`);
@@ -305,21 +308,23 @@ async function batching(backend: BackendName): Promise<void> {
   } finally {
     await provisioned.teardown();
   }
+  return true;
 }
 
 // --- The fast lane: session purchases at journal speed -----------------------------
 //
-// Per-session `instant` rate (no SQL amortized), per-session `permanent` rate (one grant upsert
-// each), and M concurrent sessions against one database whose aggregate scales ~linearly in M.
+// This section measures the per-session `instant` rate (no SQL amortized), the per-session
+// `permanent` rate (one grant upsert each), and M concurrent sessions against one database
+// whose aggregate scales ~linearly in M.
 // Every phase settles and then refuses its numbers unless the ledger proves exact seller/buyer
 // balances, clearing at zero, chains intact, and the registry released.
 
 const LANE_OPS = 4_000;
 const LANE_BUYERS = 8;
-// A product-real price: 600 credits for an in-world product. The production fee rounds up to
-// whole credit units — 92.00 at the default 15.3% — so the seller nets exactly 508.00 = 50_800
-// minor per purchase. Tiny prices are dishonest bench inputs: below ~7 credits the whole price
-// rounds into the fee.
+// The price is a product-real 600 credits for an in-world product. The production fee rounds
+// up to whole credit units — 92.00 at the default 15.3% — so the seller nets exactly 508.00 =
+// 50_800 minor per purchase. Tiny prices are dishonest bench inputs, because below ~7 credits
+// the whole price rounds into the fee.
 const LANE_PRICE = toAmount('CREDIT', 60_000n);
 
 type LaneDeps =
@@ -349,15 +354,16 @@ function laneDeps(
 }
 
 // Funds one session's buyer pool through the main lane (a handful of slow-lane ops). The caller
-// passes one funding economy per store: a fresh one per call would restart the txn id sequence
-// and collide with its own earlier postings.
+// passes one funding economy per store, because a fresh one per call would restart the txn id
+// sequence and collide with its own earlier postings.
 async function fundLaneBuyers(
   economy: Economy,
   session: string,
   ops: number,
 ): Promise<string[]> {
-  // Total spend is ops x LANE_PRICE (60_000 minor); / 100 converts minor units to the whole
-  // credits `credit()` takes, and +1_000 credits is headroom so no buyer runs dry mid-lane.
+  // Total spend is ops x LANE_PRICE (60_000 minor). The / 100 converts minor units to the
+  // whole credits `credit()` takes. The +1_000 credits is headroom so no buyer runs dry
+  // mid-lane.
   const perBuyer = Math.ceil((ops * 60_000) / (LANE_BUYERS * 100)) + 1_000;
   const buyers = Array.from(
     { length: LANE_BUYERS },
@@ -371,9 +377,10 @@ async function fundLaneBuyers(
   return buyers;
 }
 
-// One session's purchase storm, issued one at a time — the lane serializes concurrent callers
-// itself, and sequential issue keeps the rate an honest per-purchase cost. Returns the
-// wall-clock rate over accepted purchases; any rejection fails the phase (funding covers all).
+// Runs one session's purchase storm, issued one at a time. The lane serializes concurrent
+// callers itself, and sequential issue keeps the rate an honest per-purchase cost. Returns the
+// wall-clock rate over accepted purchases. Any rejection fails the phase, since funding covers
+// every purchase.
 async function laneStorm(
   deps: LaneDeps,
   input: {
@@ -448,13 +455,14 @@ async function proveLane(
 async function fastLaneSingle(
   backend: BackendName,
   kind: 'instant' | 'permanent',
-): Promise<void> {
+): Promise<boolean> {
   const provisioned = await tryProvision(backend, cfg);
   if (provisioned === null) {
-    return;
+    return false;
   }
   try {
-    // One id sequence per store: the funder and the lane must never re-mint each other's ids.
+    // One id sequence serves the store, because the funder and the lane must never re-mint
+    // each other's ids.
     const ids = sequentialIds(cfg.seed);
     const deps = laneDeps(provisioned, ids);
     const funder = scaleEconomy(
@@ -476,7 +484,8 @@ async function fastLaneSingle(
     });
     await proveLane(provisioned, deps, {
       seller,
-      // 50_800 = seller's net per purchase at LANE_PRICE under the test fee; rots if either changes.
+      // 50_800 is the seller's net per purchase at LANE_PRICE under the test fee. The figure
+      // rots if either changes.
       earnedMinor: BigInt(ops) * 50_800n,
     });
     out(
@@ -485,17 +494,19 @@ async function fastLaneSingle(
   } finally {
     await provisioned.teardown();
   }
+  return true;
 }
 
-// M sessions on one database, one shared seller (the settle-time worst case on purpose): the
-// aggregate should scale ~linearly because sessions share nothing until their settles.
+// Runs M sessions on one database with one shared seller, the settle-time worst case on
+// purpose. The aggregate should scale ~linearly because sessions share nothing until their
+// settles.
 async function fastLaneAggregate(
   backend: BackendName,
   m: number,
-): Promise<void> {
+): Promise<boolean> {
   const provisioned = await tryProvision(backend, cfg);
   if (provisioned === null) {
-    return;
+    return false;
   }
   try {
     const ids = sequentialIds(cfg.seed);
@@ -544,28 +555,37 @@ async function fastLaneAggregate(
   } finally {
     await provisioned.teardown();
   }
+  return true;
 }
 
 // --- Main --------------------------------------------------------------------------
 
 async function main(): Promise<void> {
   out(
-    `bench-scale: profile=${cfg.profile} ops=${cfg.ops} reps=${cfg.reps} shards>=${Math.max(2, cfg.shards)} ` +
+    `bench-scale: profile=${cfg.profile} ops=${cfg.opCount} reps=${cfg.reps} shards>=${Math.max(2, cfg.shards)} ` +
       `hot-concurrency=[${HOT_CONCURRENCIES.join(',')}] batch=${BATCH_SIZE}`,
   );
+  const completed: BackendName[] = [];
   for (const backend of cfg.backends) {
     out(`  ${backend}`);
     // The batching pass prints the backend's durability probe first, so every number below it
-    // reads against the rig's real commit cost.
-    await batching(backend);
-    if (backend !== 'in-memory') {
-      await hotSellerCurve(backend);
-    }
-    await fastLaneSingle(backend, 'instant');
-    await fastLaneSingle(backend, 'permanent');
-    for (const m of [4, 16]) {
-      await fastLaneAggregate(backend, m);
-    }
+    // reads against the rig's real commit cost. A section that could not provision ends the
+    // backend's block — the later sections would only re-dial the same dead database.
+    const ran =
+      (await batching(backend)) &&
+      (backend === 'in-memory' || (await hotSellerCurve(backend))) &&
+      (await fastLaneSingle(backend, 'instant')) &&
+      (await fastLaneSingle(backend, 'permanent')) &&
+      (await fastLaneAggregate(backend, 4)) &&
+      (await fastLaneAggregate(backend, 16));
+    if (ran) completed.push(backend);
+  }
+  const missing = missingRequired(cfg, completed);
+  if (missing.length > 0) {
+    out(
+      `FAIL: required backend(s) did not complete: ${missing.join(', ')} (BENCH_REQUIRE=${cfg.required.join(',')})`,
+    );
+    process.exitCode = 1;
   }
 }
 

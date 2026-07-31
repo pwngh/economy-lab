@@ -10,11 +10,12 @@
  */
 
 // Moves the oldest postings to a host-provided cold store (the ArchiveSink) and deletes them
-// from hot storage without weakening a proof: the mover signs its own progress — per-account
+// from hot storage without weakening a proof. The mover signs its own progress — per-account
 // archive heads sealed under a Merkle sum-root — so the pruned edge stays verifiable at every
 // instant, including after a crash mid-page. Only history a signed checkpoint already covers
-// moves, gated by `checkpointOlderThanMs`: a strict prefix in commit order, re-derived from
-// stored content and checked against the signed heads before anything is copied or deleted.
+// moves, gated by `checkpointOlderThanMs`. That history is a strict prefix in commit order,
+// re-derived from stored content and checked against the signed heads before anything is copied
+// or deleted.
 
 import {
   archivePayload,
@@ -46,8 +47,8 @@ export interface ArchiveSweepInput {
   /** The cold store pages are copied into before any delete. */
   sink: ArchiveSink;
   /**
-   * Only history sealed by a checkpoint at least this old moves. Must exceed every refund and
-   * dispute window the deployment honors: archived history reads as absent, and money paths
+   * Only history sealed by a checkpoint at least this old moves. Set it above every refund and
+   * dispute window the deployment honors. Archived history reads as absent, and money paths
    * that need it reject rather than move.
    */
   checkpointOlderThanMs: number;
@@ -59,7 +60,7 @@ export interface ArchiveSweepInput {
 export interface ArchiveSummary {
   /** Postings moved this run. */
   moved: number;
-  /** The watermark after this run; null when nothing has ever been archived. */
+  /** The watermark after this run. Null when nothing has ever been archived. */
   throughSeq: number | null;
   /** True when the run consumed the whole eligible prefix. */
   finished: boolean;
@@ -100,9 +101,9 @@ function surfacesOf(store: Store): ArchiveSurfaces | null {
   };
 }
 
-// Authenticates the seal-head snapshot against the signed checkpoint, exactly as the
-// incremental seal does: recompute the sum-root over the snapshot and verify the signature.
-// The snapshot lives in the same database an attacker who can rewrite the ledger controls, so
+// Authenticates the seal-head snapshot against the signed checkpoint, exactly as the incremental
+// seal does. It recomputes the sum-root over the snapshot and verifies the signature. The
+// snapshot lives in the same database an attacker who can rewrite the ledger controls, so
 // nothing here is trusted until the signature says so.
 async function authenticateSeal(
   ctx: Pick<WorkerCtx, 'digest' | 'signer'>,
@@ -129,8 +130,9 @@ async function authenticateSeal(
 }
 
 /**
- * One archival run: verify, copy, delete, in pages, resumable. Returns a summary of what moved
- * and why it stopped; refuses loudly (CHAIN_BROKEN) rather than move anything unverified.
+ * Runs one archival pass: verify, copy, delete, in pages, resumable. It returns a summary of
+ * what moved and why it stopped. It refuses loudly (CHAIN_BROKEN) rather than move anything
+ * unverified.
  */
 export async function archiveSealedPrefix(
   store: Store,
@@ -171,7 +173,7 @@ export async function archiveSealedPrefix(
     }
 
     await verifyPage(ctx, eligible, heads);
-    // Copy before delete; the sink's idempotency absorbs a crashed re-send.
+    // Copy before delete. The sink's idempotency absorbs a crashed re-send.
     await input.sink.put(eligible, options);
     const partial =
       page.cursor === null || eligible.length < page.postings.length;
@@ -218,7 +220,7 @@ function sealedPrefix(
   return eligible;
 }
 
-// The retention gate: only a v2 sum-carrying checkpoint older than retention authorizes a run.
+// The retention gate. Only a v2 sum-carrying checkpoint older than retention authorizes a run.
 async function eligibleCheckpoint(
   store: Store,
   input: ArchiveSweepInput,
@@ -249,9 +251,9 @@ async function eligibleCheckpoint(
   return { checkpoint };
 }
 
-// Resume state: the signed archive heads are the continuity baseline, so they authenticate
-// before anything trusts them — an unauthenticated boundary row is an anchor an attacker can
-// move.
+// Loads the resume state. The signed archive heads are the continuity baseline, so they
+// authenticate before anything trusts them — an unauthenticated boundary row is an anchor an
+// attacker can move.
 async function resumeBoundary(
   ctx: WorkerCtx,
   surfaces: ArchiveSurfaces,
@@ -278,9 +280,9 @@ async function resumeBoundary(
   return { prior, heads };
 }
 
-// The load-bearing verify: every link re-derives from stored content and chains onto the
-// signed archive head (or genesis) in strict order — an edit, a gap, or a moved boundary
-// refuses here, before anything is copied or deleted. Advances `heads` in place.
+// The load-bearing verify. Every link must re-derive from stored content and chain onto the
+// signed archive head (or genesis) in strict order. An edit, a gap, or a moved boundary refuses
+// here, before anything is copied or deleted. Advances `heads` in place.
 async function verifyPage(
   ctx: WorkerCtx,
   eligible: ReadonlyArray<ArchivedPosting>,
@@ -325,7 +327,7 @@ async function verifyPage(
   }
 }
 
-// Sign the advanced boundary, persist it, then prune — in that order: a crash between the two
+// Signs the advanced boundary, persists it, then prunes, in that order. A crash between the two
 // leaves the boundary postings present but already vouched by the new signature, which the
 // prover accepts (the signed head appears inside the remaining walk's prefix). The reverse
 // order would leave deleted history with an unsigned boundary.
@@ -349,8 +351,8 @@ async function sealAndPrune(
     ctx.digest,
     headRows.map((row) => [row.account, row.head, row.sum] as const),
   );
-  // Whole postings net to zero, so the archived prefix must too — a nonzero sum means the
-  // mover itself is broken, and nothing gets deleted under a broken mover.
+  // Whole postings net to zero, so the archived prefix must too. A nonzero sum means the mover
+  // itself is broken, and nothing gets deleted under a broken mover.
   if (root.sum !== 0n) {
     throw fault(
       ERROR_CODES.LEDGER_UNBALANCED,

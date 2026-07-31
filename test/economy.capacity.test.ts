@@ -53,6 +53,7 @@ describe('Capacity report', () => {
       outbox: 1,
       sagas: 0,
       accruals: 0,
+      entitlements: 0,
     });
     assert.deepEqual(report.advisories, []);
   });
@@ -87,6 +88,7 @@ describe('Capacity report', () => {
       outbox: null,
       sagas: null,
       accruals: null,
+      entitlements: null,
     });
     assert.deepEqual(unknown.advisories, []);
 
@@ -99,6 +101,7 @@ describe('Capacity report', () => {
         outbox: 0,
         sagas: 0,
         accruals: 0,
+        entitlements: 0,
       }),
     };
     const economy = createEconomy(makePorts(big));
@@ -107,5 +110,44 @@ describe('Capacity report', () => {
     assert.equal(report.advisories.length, 1);
     assert.match(report.advisories[0]!, /`idempotency` holds/);
     assert.match(report.advisories[0]!, /retention sweep/);
+  });
+
+  test('gauges the entitlement table and names it a host policy decision', async () => {
+    const store = memoryStore({
+      digest: seededDigest(1),
+      clock: fixedClock(0),
+    });
+    // Two purchases of one sku, then a refund of the first. Rows are keyed by granting source,
+    // so this is three rows' worth of growth in a table whose gauge has to see revoked rows too.
+    await store.transaction(async (unit) => {
+      await unit.entitlements.grant('usr_cap2', 'sku_cap', {
+        source: 'sale:ord_1',
+      });
+      await unit.entitlements.grant('usr_cap2', 'sku_cap', {
+        source: 'sale:ord_2',
+      });
+      await unit.entitlements.grant('usr_cap2', 'sku_other', {
+        source: 'sale:ord_3',
+      });
+    });
+    await store.transaction((unit) =>
+      unit.entitlements.revoke('usr_cap2', 'sku_cap', { source: 'sale:ord_1' }),
+    );
+    const economy = createEconomy(makePorts(store, { clock: fixedClock(0) }));
+    const report = await economy.read.capacity();
+    assert.equal(report.tables.entitlements, 3);
+
+    const big = {
+      ...store,
+      tableSizes: async () => ({
+        ...(await store.tableSizes!()),
+        entitlements: CAPACITY_THRESHOLDS.tableRows,
+      }),
+    };
+    const crossed = await createEconomy(makePorts(big)).read.capacity();
+    assert.equal(crossed.advisories.length, 1);
+    assert.match(crossed.advisories[0]!, /`entitlements` holds/);
+    assert.match(crossed.advisories[0]!, /one row per purchase/);
+    assert.match(crossed.advisories[0]!, /host policy decision/);
   });
 });

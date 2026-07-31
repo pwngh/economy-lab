@@ -14,6 +14,9 @@ apps/*/node_modules
 apps/*/build
 apps/*/.react-router
 
+# workspace packages — npm may nest deps under the package
+packages/*/node_modules
+
 /docs/
 backups/
 ops-audit/

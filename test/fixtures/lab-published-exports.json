@@ -1,0 +1,63 @@
+{
+  "version": "0.7.0",
+  "capturedOn": "2026-07-28",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./ports": {
+      "types": "./dist/src/ports.d.ts",
+      "default": "./dist/src/ports.js"
+    },
+    "./adapters": {
+      "types": "./dist/src/adapters/index.d.ts",
+      "default": "./dist/src/adapters/index.js"
+    },
+    "./adapters/redis": {
+      "types": "./dist/src/adapters/redis.d.ts",
+      "default": "./dist/src/adapters/redis.js"
+    },
+    "./adapters/sqs": {
+      "types": "./dist/src/adapters/sqs.d.ts",
+      "default": "./dist/src/adapters/sqs.js"
+    },
+    "./engines/postgres": {
+      "types": "./dist/src/engines/postgres.d.ts",
+      "default": "./dist/src/engines/postgres.js"
+    },
+    "./engines/mysql": {
+      "types": "./dist/src/engines/mysql.d.ts",
+      "default": "./dist/src/engines/mysql.js"
+    },
+    "./engines/mysql-mariadb": {
+      "types": "./dist/src/engines/mysql-mariadb.d.ts",
+      "default": "./dist/src/engines/mysql-mariadb.js"
+    },
+    "./worker": {
+      "types": "./dist/src/worker/index.d.ts",
+      "default": "./dist/src/worker/index.js"
+    },
+    "./server": {
+      "types": "./dist/src/server.d.ts",
+      "default": "./dist/src/server.js"
+    },
+    "./netting": {
+      "types": "./dist/src/netting.d.ts",
+      "default": "./dist/src/netting.js"
+    },
+    "./ops": {
+      "types": "./dist/src/ops/index.d.ts",
+      "default": "./dist/src/ops/index.js"
+    },
+    "./store-kit": {
+      "types": "./dist/src/store-kit.d.ts",
+      "default": "./dist/src/store-kit.js"
+    },
+    "./testing": {
+      "types": "./dist/test/conformance/index.d.ts",
+      "default": "./dist/test/conformance/index.js"
+    },
+    "./package.json": "./package.json"
+  }
+}

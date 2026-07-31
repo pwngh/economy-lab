@@ -15,7 +15,9 @@
     "conserved": true,
     "consistent": true,
     "drift": [],
+    "firstBreak": null,
     "noOverdraft": true,
+    "prover": "read.health",
     "shortfall": "USD:0.00"
   },
   "scenario": "canonical",

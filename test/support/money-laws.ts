@@ -30,7 +30,7 @@ const PLATFORM: Principal = { kind: 'system', service: 'money-laws' };
 
 // ---- split conservation -------------------------------------------------------------------
 
-/** A sale: a whole-credit price and up to four positive weights that become the bps split. */
+/** A sale: a whole-credit price and up to three positive weights that become the bps split. */
 export type SplitCase = { priceMag: number; weights: number[] };
 
 export const arbSplit: Arbitrary<SplitCase> = record<SplitCase>({

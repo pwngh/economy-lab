@@ -10,8 +10,8 @@
  */
 
 /**
- * Reads typed fields from a posting's free-form `meta`. Kept free of SQL and store specifics so a
- * non-SQL store never imports engine code for a plain JSON lookup.
+ * Reads typed fields from a posting's free-form `meta`. These helpers stay free of SQL and store
+ * specifics, so a non-SQL store never imports engine code for a plain JSON lookup.
  */
 
 export function metaString(

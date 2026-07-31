@@ -10,28 +10,29 @@
  */
 
 /**
- * Session netting: accept thousands of small balanced movements (in-world product purchases —
- * permanent, temporary, or instant) into a durable journal and settle the net against the ledger
- * on the economy service's own schedule. The journal is the source of truth, never session
- * memory — rows are hash-chained per session and the settlement posting anchors the final head,
- * so tamper-evidence extends from the proved ledger to every movement.
+ * Session netting accepts thousands of small balanced movements into a durable journal and
+ * settles the net against the ledger on the economy service's own schedule. The movements are
+ * in-world product purchases: permanent, temporary, or instant. The journal is the source of
+ * truth, never session memory. Rows are hash-chained per session, and the settlement posting
+ * anchors the final head, so tamper-evidence extends from the proved ledger to every movement.
  *
  * A session is an economy-tier serialization object with an opaque scope key. A game-world
- * instance is one natural key and lifecycle signal for a session; it is never the owner: game
- * servers are unprivileged callers that request movements, and the economy service — the process
- * holding the store, the journal, and the reservation registry — screens, journals, and settles.
- * Settle timing is this tier's policy (cadence, backlog, timeout, or scope close), never a
- * correctness dependency of the scope's lifetime.
+ * instance is one natural key and lifecycle signal for a session. It is never the owner. Game
+ * servers are unprivileged callers that request movements. The economy service holds the store,
+ * the journal, and the reservation registry, and it screens, journals, and settles.
+ * Settle timing is this tier's policy (cadence, backlog, timeout, or scope close). It is never
+ * a correctness dependency of the scope's lifetime.
  *
- * A session settles once: its settlement txn ids derive from the session id, so a re-settled
+ * A session settles once. Its settlement txn ids derive from the session id, so a re-settled
  * session would collide with its own chunks and silently strand later movements. `record` on a
- * settled session therefore throws. Long-lived scopes rotate epochs instead — settle
+ * settled session therefore throws. Long-lived scopes rotate epochs instead: settle
  * `sess:<scope>:<n>` while `sess:<scope>:<n+1>` records.
  *
- * Opt-in, on purpose: per-movement enforcement moves to the session (DB-final at settle) and
- * movements bypass the submit pipeline's maturity gate — callers that need that gate screen
- * before building legs (see maturedBalance in src/maturity.ts).
+ * Session netting is opt-in on purpose. Per-movement enforcement moves to the session, and the
+ * database enforces it at settle. Movements also bypass the submit pipeline's maturity gate.
+ * Callers that need that gate screen balances before building legs.
  *
+ * @module netting
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for the
  *   chain-and-anchor construction the journal reuses.
  */
@@ -56,7 +57,15 @@ import { ERROR_CODES, fault, normalizeError } from '#src/errors.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { ErrorCode, RejectionCode } from '#src/errors.ts';
 import type { Amount, Currency } from '#src/money.ts';
-import type { Clock, Digest, Ids, Leg, Movement, Store } from '#src/ports.ts';
+import type {
+  Clock,
+  Digest,
+  Ids,
+  Leg,
+  Movement,
+  Posting,
+  Store,
+} from '#src/ports.ts';
 
 const ENCODER = new TextEncoder();
 
@@ -92,16 +101,18 @@ export interface SettleReport {
 }
 
 /**
- * The cross-session reservation registry: one shared per-user-account pending total, bumped at
- * accept time, released at settle. `add` returns the post-add total, so accept screens are
- * add-then-check — two concurrent debits can never both read the same headroom, in one process
- * or across nodes. Share one registry across every session in the process
- * ({@link createReservations}), or across every node ({@link sharedReservations}, backed by the
- * store's counter). The settle replay path remains the backstop for crash-recovery windows
- * either way.
+ * The cross-session reservation registry. It keeps one shared pending total per user account,
+ * bumped at accept time and released at settle.
  *
- * `scope` decides crash-recovery behavior: a `process` registry dies with its process, so
- * {@link recoverSession} re-applies the journaled reservations; a `shared` counter survives the
+ * `add` returns the post-add total, so accept screens are add-then-check. Two concurrent debits
+ * can never both read the same headroom, in one process or across nodes.
+ *
+ * Share one registry across every session in the process ({@link createReservations}), or
+ * across every node ({@link sharedReservations}, backed by the store's counter). The settle
+ * replay path remains the backstop for crash-recovery windows either way.
+ *
+ * `scope` decides crash-recovery behavior. A `process` registry dies with its process, so
+ * {@link recoverSession} re-applies the journaled reservations. A `shared` counter survives the
  * crash already holding them, so recovery must not re-apply — it would double-count.
  */
 export interface Reservations {
@@ -114,7 +125,7 @@ export interface Reservations {
  * Creates a process-local registry: a plain in-memory map, no store round-trips. Right for a
  * single-node deployment, shared by every session in the process. Its totals die with the
  * process, so {@link recoverSession} re-applies journaled reservations on recovery (see
- * `scope` on {@link Reservations}); a multi-node deployment uses {@link sharedReservations}
+ * `scope` on {@link Reservations}). A multi-node deployment uses {@link sharedReservations}
  * instead.
  */
 export function createReservations(): Reservations {
@@ -132,14 +143,15 @@ export function createReservations(): Reservations {
 
 /**
  * A registry every node shares, backed by the store's `ReservationStore` counter — the
- * multi-node accept screen. Fail-closed by construction: an unreachable counter throws out of
- * `add`, and `record` refuses the movement rather than accepting blind.
+ * multi-node accept screen. It fails closed by construction: an unreachable counter throws out
+ * of `add`, and `record` refuses the movement rather than accepting blind.
  *
- * Crash accounting: a dead node's journaled reservations release precisely when the orphan
- * sweep settles its sessions (release is journal-derived). Movements accepted but not yet
- * flushed die with the process while their reservations remain — a leak bounded by `maxBatch`
- * per crashed session that only ever refuses movements (conservative), never accepts wrongly;
- * `reconcileReservations` (src/worker/orphans.ts) is the quiesced-maintenance repair.
+ * A dead node's journaled reservations release precisely when the orphan
+ * sweep settles its sessions, because release is journal-derived. Movements accepted but not
+ * yet flushed die with the process while their reservations remain. That leak is bounded by
+ * `maxBatch` per crashed session, and it only ever refuses movements, never accepts wrongly.
+ * `reconcileReservations` repairs it during maintenance windows when no node is accepting
+ * movements.
  */
 export function sharedReservations(store: Store): Reservations {
   const counter = store.reservations;
@@ -158,8 +170,8 @@ export function sharedReservations(store: Store): Reservations {
 }
 
 /**
- * Mints epoch session ids, `sess:<scope>:<nonce>-<n>`, counting epochs per scope. The nonce —
- * the uuid tail of a fresh id, which keeps it injectable and deterministic in tests — brands
+ * Mints epoch session ids, `sess:<scope>:<nonce>-<n>`, counting epochs per scope. The nonce is
+ * the uuid tail of a fresh id, which keeps it injectable and deterministic in tests. It brands
  * every id this process instance mints, so a restarted process can never reuse a session id an
  * earlier process already settled (the settle-once collision, resurrected across restarts).
  */
@@ -175,8 +187,8 @@ export function epochMinter(ids: Ids): (scope: string) => string {
 
 /**
  * The ports a session runs on: the store for the journal and the settlement postings, the
- * digest for the session chain hash, the clock for `recordedAt` stamps. A structural subset of
- * Ports, so an openPorts host passes its ports straight through.
+ * digest for the session chain hash, the clock for `recordedAt` stamps. This is a structural
+ * subset of Ports, so an openPorts host passes its ports straight through.
  */
 export interface SessionPorts {
   store: Store;
@@ -185,26 +197,26 @@ export interface SessionPorts {
 }
 
 /**
- * Session tuning. The batch and chunk defaults are sized to the engines' contention profile;
- * the one option correctness rides on is `reservations` — every session in the process shares
+ * Session tuning. The batch and chunk defaults are sized to the engines' contention profile.
+ * The one option correctness rides on is `reservations`: every session in the process shares
  * one registry, or its accept screens race each other.
  */
 export interface SessionOptions {
-  /** Accepted movements per journal batch; the batch commits as one insert. Default 64. */
+  /** Accepted movements per journal batch. The batch commits as one insert. Default 64. */
   maxBatch?: number;
 
   /** Max participant accounts per settlement chunk (the lock-width bound). Default 16. */
   chunkWidth?: number;
 
-  /** The shared cross-session registry; a private one still guards within this session. */
+  /** The shared cross-session registry. A private one still guards within this session. */
   reservations?: Reservations;
 }
 
 /**
- * Opens a netting session. `record` accepts or rejects movements (idempotent per key, affordable
- * per the reservation registry, durable per journal batch); `flush` forces the pending batch out;
+ * Opens a netting session. `record` accepts or rejects movements: idempotent per key, affordable
+ * per the reservation registry, durable per journal batch. `flush` forces the pending batch out.
  * `settle` derives the net from the journal, verifies the chain, and posts it in clearing
- * chunks — once per session id; rotate epochs to keep a long-lived scope settling on cadence.
+ * chunks — once per session id. Rotate epochs to keep a long-lived scope settling on cadence.
  *
  * `deps` is a structural subset of `Ports`, so a host composed via
  * `openPorts` passes its ports straight through. Share ONE `reservations`
@@ -216,10 +228,14 @@ export interface SessionOptions {
  * // seller's net credit, REVENUE's fee credit.
  * const ports = await openPorts(process.env, init);
  * const reservations = createReservations(); // one per process
- * const session = openInstanceSession(ports, `sess:${worldInstanceId}:0`, { reservations });
- * const price = decodeAmount('5.00', 'CREDIT');
- * const fee = decodeAmount('1.50', 'CREDIT');
- * await session.record({
+ * const session = openInstanceSession(ports, `sess:${worldInstanceId}:0`, {
+ *   reservations,
+ *   maxBatch: 64, // optional: accepted movements per journal batch
+ *   chunkWidth: 16, // optional: max participant accounts per settlement chunk
+ * });
+ * const price = credits(400); // a mid-catalog in-world listing
+ * const fee = credits(120); // the platform's 30% cut
+ * const outcome = await session.record({
  *   idempotencyKey: orderId,
  *   legs: [
  *     debit(spendable(buyerId), price),
@@ -227,6 +243,9 @@ export interface SessionOptions {
  *     credit(SYSTEM.REVENUE, fee),
  *   ],
  * });
+ * if (outcome.status === 'rejected') {
+ *   deny(outcome.reason); // e.g. 'INSUFFICIENT_FUNDS' against balance minus everything pending
+ * }
  * await session.settle(); // this tier's schedule: cadence, backlog, timeout, or scope close
  */
 export function openInstanceSession(
@@ -239,11 +258,15 @@ export function openInstanceSession(
 
 /**
  * Rebuilds a session from its journal — the crash-recovery path. Outcomes, the running net, and
- * the chain head all re-derive from the journal rows; a rebuilt session can keep recording (if
- * it never settled) or go straight to settle, and settle keying each chunk on its posting's
- * existence makes a half-settled session finish rather than double-post. Recovery probes for a
- * prior settlement posting: a session that already settled refuses further movements the same
- * way a live one does, so recovery can finish a settle but never reopen a settled epoch.
+ * the chain head all re-derive from the journal rows.
+ *
+ * A rebuilt session can keep recording (if it never settled) or go straight to settle. Settle
+ * keys each chunk on its posting's existence, so a half-settled session finishes rather than
+ * double-posts.
+ *
+ * Recovery probes for a prior settlement posting: a session that already settled refuses
+ * further movements the same way a live one does. Recovery can therefore finish a settle but
+ * never reopen a settled epoch.
  */
 export async function recoverSession(
   deps: SessionPorts,
@@ -256,11 +279,13 @@ export async function recoverSession(
 }
 
 /**
- * Refunds one prefund escrow's remainder to its owner's spendable balance, by the deterministic
- * `esc_refund_` txn id every repair path shares: the lane's own close, the orphan sweep, and the
- * retention sweep post this identical entry, so whichever runs first wins and the rest no-op on
- * the existing posting. Returns the refunded minor amount, or null when the escrow is empty or
- * already refunded.
+ * Refunds one prefund escrow's remainder to its owner's spendable balance.
+ *
+ * It posts by the deterministic `esc_refund_` txn id every repair path shares: the lane's own
+ * close, the orphan sweep, and the retention sweep post this identical entry. Whichever runs
+ * first wins, and the rest no-op on the existing posting.
+ *
+ * Returns the refunded minor amount, or null when the escrow is empty or already refunded.
  */
 export async function refundEscrowRemainder(
   store: Store,
@@ -268,46 +293,57 @@ export async function refundEscrowRemainder(
   userId: string,
 ): Promise<bigint | null> {
   const escrow = sessionEscrow(userId, sessionId);
-  const remainder = await store.ledger.balance(escrow);
-  if (remainder.minor <= 0n) {
-    return null;
-  }
   const txnId = `esc_refund_${sessionId}_${userId}`;
-  if ((await store.ledger.posting(txnId)) !== null) {
-    return null;
-  }
-  await store.transaction((unit) =>
-    postEntry(unit.ledger, {
+  // The remainder is read under the escrow lock, inside the transaction that spends it. A settle
+  // chunk landing between a read outside and the posting would refund an amount the escrow no
+  // longer holds, and the refund would overdraw the account it is repairing.
+  return store.transaction(async (unit) => {
+    await unit.ledger.lock(escrow);
+    const remainder = await unit.ledger.balance(escrow);
+    if (remainder.minor <= 0n) {
+      return null;
+    }
+    if ((await unit.ledger.posting(txnId)) !== null) {
+      return null;
+    }
+    await postEntry(unit.ledger, {
       txnId,
       legs: [debit(escrow, remainder), credit(spendable(userId), remainder)],
       meta: { kind: 'prefund_refund', sessionId, userId },
-    }),
-  );
-  return remainder.minor;
+    });
+    return remainder.minor;
+  });
 }
 
 /**
- * A durable journal session: `record` accepts movements (idempotent per key, screened against
- * the reservation registry), `flush` commits the pending batch, `settle` re-derives the net
- * from the journal, re-verifies the hash chain, and posts it in clearing chunks — once per
- * session id, epochs rotate after that. Construct through {@link openInstanceSession}, or
- * {@link recoverSession} after a crash. A session is a single-writer object: interleaved
- * concurrent `record` calls can fork the chain on one seq, so a concurrent edge serializes on
- * top (as {@link InstanceEconomy} does).
+ * A durable journal session. `record` accepts movements, idempotent per key and screened
+ * against the reservation registry. `flush` commits the pending batch. `settle` re-derives the
+ * net from the journal, re-verifies the hash chain, and posts it in clearing chunks — once per
+ * session id, epochs rotate after that.
+ *
+ * Construct through {@link openInstanceSession}, or {@link recoverSession} after a crash.
+ *
+ * A session is a single-writer object: interleaved concurrent `record` calls can fork the
+ * chain on one seq, so a concurrent edge serializes on top (as {@link InstanceEconomy} does).
  */
 export class InstanceSession {
   private readonly deps: SessionPorts;
   private readonly sessionId: string;
   private readonly maxBatch: number;
-  private readonly chunkWidth: number;
+  // Not readonly: recovery re-derives it from the settlement evidence, which is the only durable
+  // record of the partition a crashed settle used.
+  private chunkWidth: number;
   private readonly reservations: Reservations;
 
   private readonly outcomes = new Map<string, MovementOutcome>();
-  private settled = false; // set by a non-empty settle; a settled session takes no new movements
-  // Recovery found replay or compensation postings: this settle must go straight to the replay
-  // path, whose per-movement txn ids are idempotent. The netted path would mis-read a
-  // compensated chunk as posted (skipping its money) or re-post movements the replay already
-  // made ledger-final.
+  // Sealed means settlement txn ids are minted for this session, so it takes no new movements.
+  // Complete means the settlement finished. They differ for a settle that stopped partway: its
+  // ids are spoken for, and it still owes money.
+  private sealed = false;
+  private complete = false;
+  // This settle must go straight to the replay path, whose per-movement txn ids are idempotent.
+  // The netted path would mis-read a compensated chunk as posted (skipping its money) or re-post
+  // movements the replay already made ledger-final.
   private replayForced = false;
   private readonly accepted: Movement[] = []; // every accepted movement, in seq order
   private pending: Movement[] = []; //           accepted but not yet journaled
@@ -318,21 +354,21 @@ export class InstanceSession {
   constructor(deps: SessionPorts, sessionId: string, options?: SessionOptions) {
     this.deps = deps;
     this.sessionId = sessionId;
-    // 64 default: at or under the Postgres cached-subxid cliff (see runBatchTransaction in
-    // src/engines/postgres.ts); 16 keeps a settle chunk's lock set narrow.
+    // The 64 default sits at or under the Postgres cached-subxid cliff (see runBatchTransaction
+    // in the postgres engine). The 16 default keeps a settle chunk's lock set narrow.
     this.maxBatch = options?.maxBatch ?? 64;
     this.chunkWidth = options?.chunkWidth ?? 16;
     this.reservations = options?.reservations ?? createReservations();
   }
 
   /**
-   * Accepts or rejects one movement. Acceptance means: affordable against (first-touch balance +
-   * everything pending across sessions sharing the registry) and queued for the next journal
-   * batch. Unbalanced or non-CREDIT legs throw. A repeat of a seen key replays its recorded
-   * outcome.
+   * Accepts or rejects one movement. An accepted movement is affordable against the first-touch
+   * balance plus everything pending across sessions sharing the registry, and it queues for the
+   * next journal batch. Unbalanced or non-CREDIT legs throw. A repeat of a seen key replays its
+   * recorded outcome.
    */
   async record(request: MovementRequest): Promise<MovementOutcome> {
-    if (this.settled) {
+    if (this.sealed) {
       throw fault(
         ERROR_CODES.SESSION_SETTLED,
         'A settled session refuses further movements; rotate to a new session id (epoch).',
@@ -386,19 +422,22 @@ export class InstanceSession {
   }
 
   /**
-   * Whether this session's settle already ran — on a recovered session, what the stored
-   * settlement evidence proved. The orphan sweep (src/worker/orphans.ts) reads this to tell a
+   * Whether this session's settle finished. On a recovered session, this reports what the
+   * stored settlement evidence proved. The orphan sweep reads this to tell a
    * finished epoch from one that still needs settling.
+   *
+   * A settle that stopped between chunks reads false here and still refuses new movements: it
+   * owes the money its remaining chunks hold, and the sweeps have to be able to see that as work.
    */
   wasSettled(): boolean {
-    return this.settled;
+    return this.complete;
   }
 
   /**
-   * Settles the whole session: flush, re-derive the net from the JOURNAL (never from memory),
-   * re-verify the session chain, then post the net in clearing chunks. On a refused chunk,
-   * compensate what posted and replay movement-by-movement, so every accepted movement ends in
-   * exactly one ledger-final outcome either way.
+   * Settles the whole session. It flushes, re-derives the net from the JOURNAL (never from
+   * memory), re-verifies the session chain, then posts the net in clearing chunks. On a refused
+   * chunk it compensates what posted and replays movement-by-movement, so every accepted
+   * movement ends in exactly one ledger-final outcome either way.
    */
   async settle(): Promise<SettleReport> {
     await this.flush();
@@ -414,17 +453,13 @@ export class InstanceSession {
     }
     const head = movements[movements.length - 1]!.hash;
     if (this.replayForced) {
-      this.settled = true;
-      return this.replay(movements, head);
+      this.sealed = true;
+      const report = await this.replay(movements, head);
+      this.complete = true;
+      return report;
     }
 
-    const net = new Map<AccountRef, bigint>();
-    for (const movement of movements) {
-      for (const leg of movement.legs) {
-        net.set(leg.account, (net.get(leg.account) ?? 0n) + leg.amount.minor);
-      }
-    }
-    const positions = [...net].filter(([, minor]) => minor !== 0n);
+    const positions = positionsOf(movements);
     const chunks: Array<Array<[AccountRef, bigint]>> = [];
     for (let i = 0; i < positions.length; i += this.chunkWidth) {
       chunks.push(positions.slice(i, i + this.chunkWidth));
@@ -442,18 +477,25 @@ export class InstanceSession {
         posted.push(i);
       }
     } catch {
-      // A chunk was refused (the cross-instance race, or funds spent since accept). Undo what
-      // posted — the compensations return clearing to zero — then replay each movement
-      // individually.
+      // A chunk was refused (the cross-instance race, or funds spent since accept). The settle
+      // undoes what posted — the compensations return clearing to zero — then replays each
+      // movement individually.
       for (const i of posted.reverse()) {
         await this.postChunk(chunks[i]!, { index: i, ...shape }, true);
       }
-      this.settled = true;
-      return this.replay(movements, head);
+      // Set before the replay runs, so a replay that throws partway still leaves a retry on the
+      // idempotent path. A second netted pass would re-post whatever the replay already made
+      // ledger-final.
+      this.sealed = true;
+      this.replayForced = true;
+      const report = await this.replay(movements, head);
+      this.complete = true;
+      return report;
     }
 
     await this.releaseReservations();
-    this.settled = true;
+    this.sealed = true;
+    this.complete = true;
     return {
       mode: 'netted',
       postings: chunks.length,
@@ -465,15 +507,15 @@ export class InstanceSession {
 
   // --- Internals --------------------------------------------------------------------
 
-  // Structural wrongness throws (the host builds these legs, so a bad set is a bug); the only
-  // expected "no" is INSUFFICIENT_FUNDS against first-touch balance + all pending.
+  // Structural wrongness throws, because the host builds these legs and a bad set is a bug.
+  // The only expected "no" is INSUFFICIENT_FUNDS against first-touch balance + all pending.
   //
-  // Reservation is add-then-check per guarded leg: the post-add total `add` returns already
-  // includes every other session's — and node's — pending, so two concurrent debits can never
-  // both read the same headroom, and several debit legs to one account in one movement check
-  // cumulatively. A failed check or a registry error backs out this movement's applied legs;
-  // an unreachable shared registry therefore refuses the movement (fail-closed), never accepts
-  // blind.
+  // Reservation is add-then-check per guarded leg. The post-add total `add` returns already
+  // includes every other session's — and node's — pending. Two concurrent debits can therefore
+  // never both read the same headroom, and several debit legs to one account in one movement
+  // check cumulatively. A failed check or a registry error backs out this movement's applied
+  // legs. An unreachable shared registry therefore refuses the movement (fail-closed), never
+  // accepts blind.
   private async reserve(
     legs: ReadonlyArray<Leg>,
   ): Promise<RejectionCode | null> {
@@ -512,16 +554,16 @@ export class InstanceSession {
         }
       }
     } catch (error) {
-      // The original error keeps propagating; a failed backout only leaves pending high (see unwind).
+      // The original error keeps propagating. A failed backout only leaves pending high (see unwind).
       await this.unwind(applied).catch(() => {});
       throw error;
     }
     return null;
   }
 
-  // Backs out the legs `reserve` applied, newest first. Best effort on the error path: if the
-  // registry is down the backout fails too, leaving the pending total high — which only refuses
-  // movements, the conservative direction.
+  // Backs out the legs `reserve` applied, newest first. On the error path this is best effort:
+  // if the registry is down the backout fails too, leaving the pending total high. A high
+  // pending total only refuses movements, the conservative direction.
   private async unwind(
     applied: ReadonlyArray<[AccountRef, bigint]>,
   ): Promise<void> {
@@ -544,15 +586,15 @@ export class InstanceSession {
 
   // Idempotent on purpose: a re-settled session (recovery, or a caller retrying) must not drive
   // the shared registry negative by releasing the same reservations twice. Release is derived
-  // from `accepted` — after recovery that is exactly the journaled movements, so a shared
+  // from `accepted`. After recovery that is exactly the journaled movements, so a shared
   // counter releases precisely what the journal proves was reserved.
   //
-  // For a shared counter the in-memory flag cannot carry that idempotence across processes: a
+  // For a shared counter the in-memory flag cannot carry that idempotence across processes. A
   // node that crashed after releasing would be released again by whoever recovers the session,
   // driving the counter negative — over-granting headroom, the one non-conservative direction.
   // So shared-scope release is gated by a durable idempotency claim on the session id: exactly
   // one process ever runs it. A crash after the claim commits but mid-release leaves pending
-  // high, which only refuses movements; reconcileReservations (src/worker/orphans.ts) is the
+  // high, which only refuses movements. reconcileReservations (src/worker/orphans.ts) is the
   // quiesced repair.
   private async releaseReservations(): Promise<void> {
     if (this.released) {
@@ -596,9 +638,9 @@ export class InstanceSession {
     return outcome;
   }
 
-  // The session chain hash: the previous head, the movement's key, and its legs in canonical
-  // text, through the injected digest. The settlement posting anchors the final head, which is
-  // what makes every journal row tamper-evident through the proved ledger.
+  // The session chain hash covers the previous head, the movement's key, and its legs in
+  // canonical text, through the injected digest. The settlement posting anchors the final head.
+  // That anchor is what makes every journal row tamper-evident through the proved ledger.
   private async chain(
     prevHash: string,
     request: MovementRequest,
@@ -613,7 +655,7 @@ export class InstanceSession {
     );
   }
 
-  // Reads the session's journal — the source of truth — and refuses to settle over a journal
+  // Reads the session's journal — the source of truth. It refuses to settle over a journal
   // whose chain no longer re-derives: a tampered row must never reach a settlement posting.
   private async journal(): Promise<Movement[]> {
     const movements: Movement[] = [];
@@ -640,8 +682,9 @@ export class InstanceSession {
     return movements;
   }
 
-  // One settlement chunk (or its exact compensation): the chunk's positions against clearing,
-  // idempotent on the chunk txn id so a recovered settle finishes instead of double-posting.
+  // Posts one settlement chunk (or its exact compensation): the chunk's positions against
+  // clearing. It is idempotent on the chunk txn id, so a recovered settle finishes instead of
+  // double-posting.
   private async postChunk(
     chunk: ReadonlyArray<[AccountRef, bigint]>,
     at: { index: number; of: number; netted: number; journalHead: string },
@@ -683,7 +726,7 @@ export class InstanceSession {
     });
   }
 
-  // The fallback: every accepted movement becomes its own posting with its own outcome. A
+  // In the fallback, every accepted movement becomes its own posting with its own outcome. A
   // movement the ledger refuses (funds gone since accept) is recorded as rejected — never
   // silently dropped, never partially applied.
   private async replay(
@@ -736,7 +779,7 @@ export class InstanceSession {
     for (const movement of movements) {
       this.accepted.push(movement);
       // A process-scoped registry died with the crashed process, so its reservations are
-      // rebuilt here; a shared counter survived the crash already holding them, and re-adding
+      // rebuilt here. A shared counter survived the crash already holding them, and re-adding
       // would double-count (see Reservations.scope).
       if (this.reservations.scope === 'process') {
         for (const leg of movement.legs) {
@@ -754,50 +797,95 @@ export class InstanceSession {
     }
     // Probe for settlement evidence, so a recovered session refuses new movements like a live
     // settled one, and so a later settle() finishes down the correct path. Compensation or
-    // replayed-movement postings mean the netted attempt already failed over: only the replay
-    // path (idempotent per-movement txn ids) can finish without double-posting or mis-reading a
-    // compensated chunk as posted. A bare first-chunk posting with no compensation means a
-    // netted settle completed or crashed mid-chunks; the netted path finishes that idempotently.
-    const posting = (txnId: string): Promise<unknown> =>
+    // replayed-movement postings mean the netted attempt already failed over. Only the replay
+    // path (idempotent per-movement txn ids) can then finish without double-posting or
+    // mis-reading a compensated chunk as posted.
+    const posting = (txnId: string): Promise<Posting | null> =>
       this.deps.store.ledger.posting(txnId);
+    // Chunk ids are minted from chunkWidth, a construction option this process need not have
+    // been given. Chunk 0's legs are the durable record of the partition the settle actually
+    // used, so the width comes back off them before any chunk id is derived.
+    const first = await posting(`net_${this.sessionId}_c0`);
+    if (first !== null) {
+      const width = widthOf(first, positionsOf(this.accepted));
+      if (width > 0) {
+        this.chunkWidth = width;
+      }
+    }
+    const chunks = this.chunkCount();
     // Compensations post in reverse chunk order, so a crash mid-compensation can leave any
-    // suffix of them; probe every chunk index (recomputable from the append-only journal).
-    for (let i = 0; i < this.chunkCount(); i += 1) {
+    // suffix of them.
+    for (let i = 0; i < chunks; i += 1) {
       if ((await posting(`net_${this.sessionId}_c${i}_comp`)) !== null) {
-        this.settled = true;
+        this.sealed = true;
         this.replayForced = true;
         return;
       }
     }
     for (const movement of this.accepted) {
       if ((await posting(`mv_${this.sessionId}_${movement.seq}`)) !== null) {
-        this.settled = true;
+        this.sealed = true;
         this.replayForced = true;
         return;
       }
     }
-    if ((await posting(`net_${this.sessionId}_c0`)) !== null) {
-      this.settled = true;
+    if (first === null) {
+      return;
     }
+    // The epoch is closed to new movements from the first chunk onward, because its ids are
+    // spoken for. It is FINISHED only once every chunk posted. A settle that stopped partway
+    // left its remaining positions parked in clearing, and the sweeps have to keep seeing it as
+    // work: the netted path finishes it idempotently, and pruning its journal first would
+    // destroy the only record of what the remaining chunks owe.
+    this.sealed = true;
+    for (let i = 1; i < chunks; i += 1) {
+      if ((await posting(`net_${this.sessionId}_c${i}`)) === null) {
+        return;
+      }
+    }
+    this.complete = true;
   }
 
-  // How many clearing chunks this session's net splits into — the same derivation settle uses,
-  // over the same append-only journal, so recovery probes the exact ids a settle would mint.
+  // How many clearing chunks this session's net splits into, over the same append-only journal
+  // settle derives from, so recovery probes the exact ids a settle would mint.
   private chunkCount(): number {
-    const net = new Map<AccountRef, bigint>();
-    for (const movement of this.accepted) {
-      for (const leg of movement.legs) {
-        net.set(leg.account, (net.get(leg.account) ?? 0n) + leg.amount.minor);
-      }
-    }
-    let positions = 0;
-    for (const minor of net.values()) {
-      if (minor !== 0n) {
-        positions += 1;
-      }
-    }
-    return Math.ceil(positions / this.chunkWidth);
+    return Math.ceil(positionsOf(this.accepted).length / this.chunkWidth);
   }
+}
+
+// The net of a session's movements, as the nonzero positions a settle splits into chunks. Map
+// insertion order makes it deterministic, which is what lets recovery line a stored chunk up
+// against it.
+function positionsOf(
+  movements: ReadonlyArray<Movement>,
+): Array<[AccountRef, bigint]> {
+  const net = new Map<AccountRef, bigint>();
+  for (const movement of movements) {
+    for (const leg of movement.legs) {
+      net.set(leg.account, (net.get(leg.account) ?? 0n) + leg.amount.minor);
+    }
+  }
+  return [...net].filter(([, minor]) => minor !== 0n);
+}
+
+// The chunk width a stored chunk 0 was minted at. Its legs are the first `width` positions in
+// order, followed by at most one clearing leg, so walking both together until they diverge
+// gives the width back. Zero means the posting does not line up with this journal at all, and
+// the caller keeps its own width rather than deriving chunk ids from evidence it cannot read.
+function widthOf(
+  chunk: Posting,
+  positions: ReadonlyArray<[AccountRef, bigint]>,
+): number {
+  let width = 0;
+  while (width < chunk.legs.length && width < positions.length) {
+    const leg = chunk.legs[width]!;
+    const position = positions[width]!;
+    if (leg.account !== position[0] || leg.amount.minor !== position[1]) {
+      break;
+    }
+    width += 1;
+  }
+  return width;
 }
 
 // Type-only re-exports so hosts can speak the session's language without reaching into ports.

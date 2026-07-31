@@ -32,7 +32,7 @@ import { scopeRouter } from '#src/router.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { toAmount } from '#src/money.ts';
-import { earned, spendable, SYSTEM } from '#src/accounts.ts';
+import { earned, sessionEscrow, spendable, SYSTEM } from '#src/accounts.ts';
 import {
   fixedClock,
   makeWorkerCtx,
@@ -195,6 +195,115 @@ describe('Shared reservations (multi-node netting)', () => {
     assert.equal(finished.settled.length, 1);
     assert.equal((await store.ledger.balance(earned('usr_c4'))).minor, 30n);
     assert.equal(await store.reservations!.pending(spendable('usr_n4')), 0n);
+  });
+
+  test('the orphan sweep finishes an epoch that stopped between chunks', async () => {
+    const { store, deps } = harness();
+    await fund(store, 'usr_n6', 1_000n);
+    const session = openInstanceSession(deps, 'sess_n6', { chunkWidth: 2 });
+    await session.record({
+      idempotencyKey: 'n6_buy_1',
+      legs: purchase('usr_n6', 'usr_c6a', 100n),
+    });
+    await session.record({
+      idempotencyKey: 'n6_buy_2',
+      legs: purchase('usr_n6', 'usr_c6b', 60n),
+    });
+    await session.flush();
+    // The node dies between chunk 0 and chunk 1 of 2, leaving 60 parked in clearing.
+    await store.transaction((unit) =>
+      postEntry(unit.ledger, {
+        txnId: 'net_sess_n6_c0',
+        legs: [
+          debit(spendable('usr_n6'), toAmount('CREDIT', 160n)),
+          credit(earned('usr_c6a'), toAmount('CREDIT', 100n)),
+          credit(SYSTEM.NETTING_CLEARING, toAmount('CREDIT', 60n)),
+        ],
+        meta: {
+          kind: 'instance_settlement',
+          sessionId: 'sess_n6',
+          netted: 2,
+          chunk: '1/2',
+        },
+      }),
+    );
+
+    const ctx = makeWorkerCtx();
+    const report = await sweepOrphanSessions(store, ctx, {
+      now: 10_000,
+      limit: 100,
+    });
+    assert.deepEqual(report.orphans, [{ sessionId: 'sess_n6', ageMs: 10_000 }]);
+
+    const finished = await sweepOrphanSessions(store, ctx, {
+      now: 10_000,
+      limit: 100,
+      settleOlderThanMs: 5_000,
+    });
+    assert.deepEqual(finished.failed, []);
+    assert.equal(finished.settled.length, 1);
+    assert.equal(
+      (await store.ledger.balance(SYSTEM.NETTING_CLEARING)).minor,
+      0n,
+    );
+    assert.equal((await store.ledger.balance(earned('usr_c6b'))).minor, 60n);
+  });
+
+  test('the orphan sweep holds an escrow refund behind the same age bound as the settle', async () => {
+    const { store, deps } = harness();
+    await fund(store, 'usr_n7', 1_000n);
+    const escrow = sessionEscrow('usr_n7', 'sess_n7');
+    await store.transaction((unit) =>
+      postEntry(unit.ledger, {
+        txnId: 'esc_fund_sess_n7_usr_n7',
+        legs: [
+          debit(spendable('usr_n7'), toAmount('CREDIT', 500n)),
+          credit(escrow, toAmount('CREDIT', 500n)),
+        ],
+        meta: { kind: 'prefund', sessionId: 'sess_n7', userId: 'usr_n7' },
+      }),
+    );
+    const session = openInstanceSession(deps, 'sess_n7');
+    await session.record({
+      idempotencyKey: 'n7_buy',
+      legs: [
+        debit(escrow, toAmount('CREDIT', 200n)),
+        credit(earned('usr_c7'), toAmount('CREDIT', 200n)),
+      ],
+    });
+    await session.settle();
+    assert.equal((await store.ledger.balance(escrow)).minor, 300n);
+
+    const ctx = makeWorkerCtx();
+    // Report-only is the default because settling moves money, and refunding an escrow moves
+    // money too. A live lane is about to post this refund itself.
+    const reported = await sweepOrphanSessions(store, ctx, {
+      now: 1_000,
+      limit: 100,
+    });
+    assert.deepEqual(reported.escrowRefunds, []);
+    assert.equal((await store.ledger.balance(escrow)).minor, 300n);
+
+    // Opted in, but the session is 1_000ms old against a one-day bound: still not the sweep's.
+    const early = await sweepOrphanSessions(store, ctx, {
+      now: 1_000,
+      limit: 100,
+      settleOlderThanMs: 86_400_000,
+    });
+    assert.deepEqual(early.escrowRefunds, []);
+    assert.equal((await store.ledger.balance(escrow)).minor, 300n);
+
+    // Past the bound, the lane is provably gone and the remainder goes home.
+    const late = await sweepOrphanSessions(store, ctx, {
+      now: 86_400_001,
+      limit: 100,
+      settleOlderThanMs: 86_400_000,
+    });
+    assert.deepEqual(late.escrowRefunds, [
+      { sessionId: 'sess_n7', userId: 'usr_n7', minor: '300' },
+    ]);
+    assert.equal((await store.ledger.balance(escrow)).minor, 0n);
+    assert.equal((await store.ledger.balance(spendable('usr_n7'))).minor, 800n);
   });
 
   test('reconcileReservations repairs a leaked counter to the journal-derived truth', async () => {

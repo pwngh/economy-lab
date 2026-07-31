@@ -217,6 +217,88 @@ describe('drainInbox — Retryable Failure', () => {
   });
 });
 
+describe('drainInbox — a port fault that classified itself', () => {
+  // The fault shape @pwngh/economy-edge throws — a namespaced code and a retry verdict assigned
+  // onto a plain Error — built by hand so this file stays free of the edge package. An applier
+  // that fronts a provider surfaces these when the provider itself answers.
+  function railFault(code: string, retryable: boolean): Error {
+    return Object.assign(new Error(`the provider refused: ${code}`), {
+      code,
+      retryable,
+      detail: {},
+    });
+  }
+
+  test('dead-letters a non-retryable provider fault on its first failure instead of re-driving it', async () => {
+    const store = memoryStore();
+    await enqueue(store, 'auth');
+    // Bad credentials fail identically on every attempt, and the fault says so.
+    const economy = scriptedEconomy(() => {
+      throw railFault('TILIA.AUTH_REJECTED', false);
+    });
+
+    const first = await sweep(store, economy);
+
+    assert.deepEqual(first.failed, []);
+    assert.deepEqual(first.deadLettered, [
+      { id: 'ibx_auth', reason: 'PROVIDER.FAILURE' },
+    ]);
+    assert.equal(economy.submitted.length, 1);
+
+    // Dead is dead: the next run neither re-claims the row nor calls the provider again.
+    const second = await sweep(store, economy);
+    assert.deepEqual(second.deadLettered, []);
+    assert.equal(economy.submitted.length, 1);
+    await store.close();
+  });
+
+  test('a provider fault that says retryable is retried, not dead-lettered', async () => {
+    const store = memoryStore();
+    await enqueue(store, 'limit');
+    let calls = 0;
+    const economy = scriptedEconomy(() => {
+      calls += 1;
+      if (calls === 1) {
+        throw railFault('TILIA.RATE_LIMITED', true);
+      }
+      return committed();
+    });
+
+    const first = await sweep(store, economy);
+    assert.deepEqual(first.failed, [
+      { id: 'ibx_limit', code: 'PROVIDER.FAILURE', retryable: true },
+    ]);
+    assert.deepEqual(first.deadLettered, []);
+
+    const second = await sweep(store, economy);
+    assert.deepEqual(second.applied, ['ibx_limit']);
+    await store.close();
+  });
+
+  test('a throw carrying no verdict still defaults to retryable and is retried', async () => {
+    const store = memoryStore();
+    await enqueue(store, 'blip');
+    let calls = 0;
+    const economy = scriptedEconomy(() => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error('connection reset mid-call');
+      }
+      return committed();
+    });
+
+    const first = await sweep(store, economy);
+    assert.deepEqual(first.failed, [
+      { id: 'ibx_blip', code: 'PROVIDER.FAILURE', retryable: true },
+    ]);
+    assert.deepEqual(first.deadLettered, []);
+
+    const second = await sweep(store, economy);
+    assert.deepEqual(second.applied, ['ibx_blip']);
+    await store.close();
+  });
+});
+
 describe('drainInbox — Dead-Letter', () => {
   test('dead-letters a poison row once attempts reach the cap and stops re-claiming it', async () => {
     const store = memoryStore();

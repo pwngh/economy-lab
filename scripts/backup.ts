@@ -9,10 +9,11 @@
  * @license MIT
  */
 
-// Dumps each engine's ledger data into backups/, data-only on purpose: DDL comes from the
-// repo's canonical db/*.sql at restore time, so the restore drill also proves the dump still
-// matches the current schema (schema_meta rides in the data). An engine the env names that
-// fails to dump fails the run — a backup that silently skips is a hope, not a backup.
+// This script dumps each engine's ledger data into backups/. The dumps are data-only on
+// purpose. DDL comes from the repo's canonical db/*.sql at restore time, so the restore drill
+// also proves the dump still matches the current schema (schema_meta rides in the data). When
+// an engine the env names fails to dump, the run fails — a backup that silently skips is a
+// hope, not a backup.
 //
 //   npm run backup          # dump every engine the env names (DATABASE_URL / PG_URL / MYSQL_TEST_URL)
 //   make restore-drill      # prove the newest dumps restore (scripts/restore-drill.ts)
@@ -42,7 +43,7 @@ async function schemaTables(path: string): Promise<string[]> {
   );
 }
 
-// Named engines fail loudly; the compose-local postgres fallback is best-effort like db-clean.
+// Named engines fail loudly. The compose-local postgres fallback is best-effort, like db-clean.
 async function dump(
   engine: string,
   named: boolean,
@@ -65,8 +66,8 @@ async function dump(
   }
 }
 
-// --schema=public scopes the dump to the ledger's own schema (a shared server may carry
-// unrelated schemas), and --disable-triggers lets the load bypass the conservation triggers,
+// --schema=public scopes the dump to the ledger's own schema, because a shared server may
+// carry unrelated schemas. --disable-triggers lets the load bypass the conservation triggers,
 // which assume rows arrive through the posting procedure, not a bulk COPY. The prover re-checks
 // every invariant the triggers enforce, so nothing is trusted to the bypass.
 const pgFile = join(BACKUP_DIR, `pg-${stamp}.sql`);
@@ -90,10 +91,10 @@ if (urls.mysql === null) {
   const { args, database, env } = mysqlClientArgs(urls.mysql);
   const mysqlFile = join(BACKUP_DIR, `mysql-${stamp}.sql`);
   // The explicit table list scopes the dump to the canonical schema — a shared database may
-  // carry unrelated tables the drill's scratch cannot receive. --replace lets the dump
-  // overwrite the platform rows db/mysql-schema.sql seeds at restore; --skip-triggers keeps
-  // trigger DDL out of a data dump (db/mysql-schema.sql owns the DDL).
-  const tables = await schemaTables('db/mysql-schema.sql');
+  // carry unrelated tables that the drill's scratch cannot receive. --replace lets the dump
+  // overwrite the platform rows the mysql schema seeds at restore. --skip-triggers keeps
+  // trigger DDL out of a data dump, because that schema file owns the DDL.
+  const tables = await schemaTables('packages/mysql/db/mysql-schema.sql');
   await dump('mysql', true, mysqlFile, () =>
     runTool(
       'mysqldump',

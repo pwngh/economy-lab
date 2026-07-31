@@ -140,7 +140,7 @@ describe('Processor Conformance: http', () => {
       .submitPayout(payout({ key: 'idem_payout_4' }))
       .catch((caught: unknown) => caught);
 
-    assert.ok(error instanceof EconomyError);
+    assert.ok(EconomyError.is(error));
     assert.equal(error.code, 'PROVIDER.FAILURE');
     assert.equal(error.retryable, true);
   });
@@ -156,7 +156,7 @@ describe('Processor Conformance: http', () => {
       .submitPayout(payout({ key: 'idem_payout_5' }))
       .catch((caught: unknown) => caught);
 
-    assert.ok(error instanceof EconomyError);
+    assert.ok(EconomyError.is(error));
     assert.equal(error.code, 'PROVIDER.FAILURE');
     assert.equal(error.retryable, true);
     assert.equal((error.cause as EconomyError).cause, underlying);
@@ -177,7 +177,7 @@ describe('Processor Conformance: http', () => {
       .submitPayout(payout({ key: 'idem_payout_6' }))
       .catch((caught: unknown) => caught);
 
-    assert.ok(error instanceof EconomyError);
+    assert.ok(EconomyError.is(error));
     assert.equal(error.code, 'PROVIDER.FAILURE');
     assert.equal(error.retryable, false);
   });

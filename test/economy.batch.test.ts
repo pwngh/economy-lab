@@ -39,6 +39,12 @@ function outcomeOf(slot: BatchOutcome): Extract<BatchOutcome, { ok: true }> {
   return slot as Extract<BatchOutcome, { ok: true }>;
 }
 
+// A slot's answer as one word — the three outcome statuses plus the fault a slot carries as
+// data. Reading it this way makes a disagreement between two paths a difference in text.
+function verdictOf(slot: BatchOutcome): string {
+  return slot.ok ? slot.outcome.status : 'fault';
+}
+
 const buyPlan = (buyerId: string, orderId: string): Operation =>
   spendOf({
     buyerId,
@@ -121,21 +127,109 @@ describe("submitBatch: one slot's failure stays its own", () => {
   });
 });
 
+// A key repeated inside one batch means what it means everywhere else: the second arrival
+// replays the first's transaction. The two batch paths are written out separately, each opening
+// its own store and calling submitBatch itself, because one driver fed two stores would only
+// prove the paths agree with themselves. Each leg names the capability it is there to exercise,
+// so a fixture that silently gained or lost `batchTransaction` fails instead of passing quietly.
 describe('submitBatch: idempotency keys', () => {
-  test('refuses the same key twice in one batch; the first slot stands', async () => {
-    const economy = economyOf();
+  const twinKeyed = (): [Operation, Operation] => {
     const first = topUpOf({ userId: 'usr_a', amount: creditOf('10.00') });
-    const twin = {
-      ...topUpOf({ userId: 'usr_a', amount: creditOf('99.00') }),
-      idempotencyKey: first.idempotencyKey,
-    } as Operation;
+    return [
+      first,
+      {
+        ...topUpOf({ userId: 'usr_a', amount: creditOf('99.00') }),
+        idempotencyKey: first.idempotencyKey,
+      } as Operation,
+    ];
+  };
+
+  test('a repeated key replays the first slot, with store batch support', async () => {
+    const store = memoryStore();
+    assert.notEqual(
+      store.batchTransaction,
+      undefined,
+      'this leg covers the shared-transaction path and needs a store that has one',
+    );
+    const economy = createEconomy(makePorts(store));
+    const [first, twin] = twinKeyed();
+
     const slots = await economy.submitBatch([first, twin]);
-    assert.equal(outcomeOf(slots[0]!).outcome.status, 'committed');
-    assert.equal(slots[1]!.ok, false);
+
+    assert.equal(verdictOf(slots[0]!), 'committed');
+    assert.equal(verdictOf(slots[1]!), 'duplicate');
+    const original = outcomeOf(slots[0]!).outcome;
+    const replay = outcomeOf(slots[1]!).outcome;
+    assert.ok(original.status === 'committed' && replay.status === 'duplicate');
+    assert.equal(replay.transaction.id, original.transaction.id);
     assert.equal(
       (await economy.read.balance(spendable('usr_a'))).minor,
       1_000n,
     );
+  });
+
+  test('a repeated key replays the first slot, without store batch support', async () => {
+    const store = httpStore();
+    assert.equal(
+      store.batchTransaction,
+      undefined,
+      'this leg covers the degraded path and needs a store that has no batch transaction',
+    );
+    const economy = createEconomy(makePorts(store));
+    const [first, twin] = twinKeyed();
+
+    const slots = await economy.submitBatch([first, twin]);
+
+    assert.equal(verdictOf(slots[0]!), 'committed');
+    assert.equal(verdictOf(slots[1]!), 'duplicate');
+    const original = outcomeOf(slots[0]!).outcome;
+    const replay = outcomeOf(slots[1]!).outcome;
+    assert.ok(original.status === 'committed' && replay.status === 'duplicate');
+    assert.equal(replay.transaction.id, original.transaction.id);
+    assert.equal(
+      (await economy.read.balance(spendable('usr_a'))).minor,
+      1_000n,
+    );
+    await economy.close();
+  });
+
+  // The control on the two legs above: distinct keys must still both commit, or "a repeat
+  // replays" is satisfied by an economy that replays everything.
+  test('two distinct keys both commit, with store batch support', async () => {
+    const store = memoryStore();
+    assert.notEqual(store.batchTransaction, undefined);
+    const economy = createEconomy(makePorts(store));
+
+    const slots = await economy.submitBatch([
+      topUpOf({ userId: 'usr_a', amount: creditOf('10.00') }),
+      topUpOf({ userId: 'usr_a', amount: creditOf('99.00') }),
+    ]);
+
+    assert.equal(verdictOf(slots[0]!), 'committed');
+    assert.equal(verdictOf(slots[1]!), 'committed');
+    assert.equal(
+      (await economy.read.balance(spendable('usr_a'))).minor,
+      10_900n,
+    );
+  });
+
+  test('two distinct keys both commit, without store batch support', async () => {
+    const store = httpStore();
+    assert.equal(store.batchTransaction, undefined);
+    const economy = createEconomy(makePorts(store));
+
+    const slots = await economy.submitBatch([
+      topUpOf({ userId: 'usr_a', amount: creditOf('10.00') }),
+      topUpOf({ userId: 'usr_a', amount: creditOf('99.00') }),
+    ]);
+
+    assert.equal(verdictOf(slots[0]!), 'committed');
+    assert.equal(verdictOf(slots[1]!), 'committed');
+    assert.equal(
+      (await economy.read.balance(spendable('usr_a'))).minor,
+      10_900n,
+    );
+    await economy.close();
   });
 
   test('replays a key already committed before the batch as duplicate', async () => {

@@ -13,8 +13,11 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import '#test/support/dist-guard.ts';
+
 import { runStoreConformance } from '#test/conformance/store.ts';
 import { httpStore, createStoreServer } from '#src/adapters/http.ts';
+import { ERROR_CODES, EconomyError } from '#src/errors.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { toAmount } from '#src/money.ts';
 
@@ -133,18 +136,16 @@ function subscriptionRow(id: string, attempts: number): Subscription {
 }
 
 describe('http Outbox Failure Handling Forwards Over HTTP', () => {
-  test('recordFailure bumps attempts and leaves the row claimable', async () => {
+  test('bumpAttempt returns the count it wrote and leaves the row claimable', async () => {
     const store = httpStore();
     await store.outbox.enqueue(outboxRow('msg_http_fail'));
 
-    await store.outbox.recordFailure('msg_http_fail');
+    // The count crosses the wire as a number, not as the null every void route returns.
+    assert.equal(await store.outbox.bumpAttempt('msg_http_fail'), 1);
 
     const claimed = await store.outbox.claimBatch(10);
     const row = claimed.find((m) => m.id === 'msg_http_fail');
-    assert.ok(
-      row,
-      'recordFailure must leave the message pending and claimable',
-    );
+    assert.ok(row, 'bumpAttempt must leave the message pending and claimable');
     assert.equal(row.status, 'pending');
     assert.equal(row.attempts, 1);
 
@@ -348,5 +349,70 @@ describe('http Promo Grants Round-Trip Over HTTP', () => {
     assert.deepEqual(await store.promos.claimDue(1_000, 10), []);
 
     await store.close();
+  });
+});
+
+// A client that reaches a route its server does not have is what a version skew between the two
+// halves looks like from inside the caller's `catch`. These assert on the code, never the message:
+// a caller decides whether to retry from the code and the flag, and only a human reads the text.
+describe('http Store Refusals Reach the Client as Permanent Faults', () => {
+  // Sends every request one segment off, which is a server missing the route the client asks for.
+  function skewed(handler: FetchLike): FetchLike {
+    return async (request) => {
+      const url = new URL(request.url);
+      return handler(
+        new Request(new URL(`${url.pathname}Q84Missing`, url), {
+          method: 'POST',
+          headers: request.headers,
+          body: await request.text(),
+        }),
+      );
+    };
+  }
+
+  test('a route the server does not have is not retryable and names the route', async () => {
+    const backing = memoryStore();
+    const store = httpStore({ fetch: skewed(createStoreServer(backing)) });
+
+    const error = await store.trust
+      .read('usr_skew')
+      .then(() => null)
+      .catch((thrown: unknown) => thrown);
+
+    assert.ok(EconomyError.is(error));
+    assert.equal(error.code, ERROR_CODES.UNKNOWN_ROUTE);
+    assert.equal(error.retryable, false);
+    assert.equal(error.message, 'unknown route trust/readQ84Missing');
+
+    await backing.close();
+  });
+
+  test('a code this client cannot type keeps the server’s retry verdict', async () => {
+    // A newer server can send a code this client has no constant for. Rewriting the code is right
+    // — the client cannot type it — but overriding a server that said `retryable: false` turns a
+    // permanent failure back into an infinite retry, which is the defect one release later.
+    const server: FetchLike = async () =>
+      new Response(
+        JSON.stringify({
+          ok: false,
+          error: {
+            code: 'STORE.FROM_THE_FUTURE',
+            message: 'a fault this client has no constant for',
+            retryable: false,
+          },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    const store = httpStore({ fetch: server });
+
+    const error = await store.trust
+      .read('usr_future')
+      .then(() => null)
+      .catch((thrown: unknown) => thrown);
+
+    assert.ok(EconomyError.is(error));
+    assert.equal(error.code, ERROR_CODES.STORE_FAILURE);
+    assert.equal(error.retryable, false);
+    assert.equal(error.message, 'a fault this client has no constant for');
   });
 });

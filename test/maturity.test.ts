@@ -13,6 +13,8 @@
 import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
+import '#test/support/dist-guard.ts';
+
 import {
   immatureBalance,
   isMatured,
@@ -39,7 +41,8 @@ import {
 import { credit as creditLeg, debit, postEntry } from '#src/ledger.ts';
 import { SYSTEM, spendable } from '#src/accounts.ts';
 
-import type { Config } from '#src/config.ts';
+import { checkedConfig } from '#src/config.ts';
+import type { CheckedConfig } from '#src/config.ts';
 import { toAmount } from '#src/money.ts';
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
@@ -48,11 +51,11 @@ import type { Clock, Ledger, Lot, Store } from '#src/ports.ts';
 const DAY = 24 * 60 * 60_000;
 
 // Distinct waits per source, so a test can tell which one was applied.
-function horizonConfig(): Config {
-  return {
+function horizonConfig(): CheckedConfig {
+  return checkedConfig({
     ...testConfig(),
     maturityHorizonMs: { card: 7 * DAY, crypto: 1 * DAY, default: 7 * DAY },
-  };
+  });
 }
 
 // One posted lot: the source in the meta picks the maturity wait, and the posting time becomes
@@ -283,7 +286,8 @@ describe('maturedBalance FIFO Consumption', () => {
     const clock = fixedClock(0);
     const store = memoryStore({ clock });
     await topUpLot(store.ledger, 'usr_a', credit('10.00'), 'card');
-    const options: MaturityOptions = { config: testConfig() }; // every source's wait is 0
+    // Every source's wait is 0.
+    const options: MaturityOptions = { config: checkedConfig(testConfig()) };
 
     const matured = await maturedBalance(
       store.ledger,
@@ -499,7 +503,7 @@ describe('maturity bounded reads vs full-scan oracle', () => {
         }
       });
 
-      const config: Config = {
+      const config: CheckedConfig = checkedConfig({
         ...testConfig(),
         maturityHorizonMs: {
           instant: 0,
@@ -507,7 +511,7 @@ describe('maturity bounded reads vs full-scan oracle', () => {
           card: 7 * DAY,
           default: 7 * DAY,
         },
-      };
+      });
       const options: MaturityOptions = { config };
 
       test('accumulate-heavy timeline (long open tail) agrees exactly', async (t) => {

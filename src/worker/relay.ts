@@ -10,6 +10,9 @@
  */
 
 import { normalizePortError, normalizeError } from '#src/errors.ts';
+import { ATTEMPTS_ABANDONED } from '#src/ports.ts';
+
+import { checkedPorts } from '#src/contract.ts';
 
 import type { WorkerCtx } from '#src/contract.ts';
 import type {
@@ -23,10 +26,12 @@ import type {
 /**
  * Outcome of one relay run.
  * - `relayed`: delivered and marked done.
- * - `failed`: threw under the attempt cap; row stays 'pending' with `attempts` bumped, retried
- *   next run.
- * - `deadLettered`: hit the attempt cap. Row set to 'dead' and never re-claimed, so a poison
- *   event cannot block the events behind it.
+ * - `failed`: delivery threw a retryable or unclassified fault under the attempt cap. The row
+ *   stays 'pending' and is retried next run.
+ * - `deadLettered`: delivery threw a fault classified non-retryable, or the event spent its
+ *   attempt budget — by failing at the cap or by swallowing every attempt without ever coming
+ *   back. The row is set to 'dead' and never re-claimed, so a poison event cannot block the
+ *   events behind it for more than `maxOutboxAttempts` runs.
  */
 export type RelaySummary = {
   relayed: ReadonlyArray<string>;
@@ -44,8 +49,13 @@ type RelayTally = {
  * Delivers a batch of pending outbox events — each written in the same DB transaction as the
  * money move it describes.
  *
- * Delivery can happen more than once (delivery succeeded but marking done did not), so the
- * receiver must drop duplicates by event id.
+ * Delivery can happen more than once — delivery succeeded but marking done did not, or a second
+ * relay running alongside was handed the same message, which the claim does not prevent because it
+ * runs on the store rather than in a transaction — so the receiver must drop duplicates by event
+ * id.
+ *
+ * Each of those deliveries is counted before it starts, so the cap counts deliveries rather than
+ * failures and a row cannot be retried past it however a delivery ends.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/background-worker/ Background
  *   worker} for outbox relay run semantics and retries.
@@ -56,26 +66,27 @@ export async function relayOutbox(
   input: { dispatcher: Dispatcher; limit: number },
   options?: CallOptions,
 ): Promise<RelaySummary> {
-  await observeBacklog(store, ports, options);
+  const ctx = checkedPorts(ports);
+  await observeBacklog(store, ctx, options);
   const pending = await store.outbox.claimBatch(input.limit, options);
   const tally: RelayTally = { relayed: [], failed: [], deadLettered: [] };
 
   for (const message of pending) {
     await dispatchOne(
       store,
-      ports,
+      ctx,
       { dispatcher: input.dispatcher, message, options },
       tally,
     );
   }
 
-  await markRelayed(store, ports, tally.relayed, options);
+  await markRelayed(store, ctx, tally.relayed, options);
 
   return tally;
 }
 
-// Telemetry only: a stats failure never blocks delivery. The gauge pair is what the ops
-// backlog detector reads — a growing age means the relay is down or the events are poisoned.
+// This is telemetry only, so a stats failure never blocks delivery. The ops backlog detector
+// reads this gauge pair. A growing age means the relay is down or the events are poisoned.
 async function observeBacklog(
   store: Store,
   ctx: WorkerCtx,
@@ -95,8 +106,11 @@ async function observeBacklog(
   }
 }
 
-// The cap test is `>=`, so the default `maxOutboxAttempts` of 10 dead-letters on the 10th
-// failure, the one that takes `attempts` to 10.
+// The attempt is counted before the delivery, so `maxOutboxAttempts` bounds deliveries started
+// rather than failures seen. A dispatcher that throws needs none of this: the count is already
+// durable when it does. The half this ordering exists for is a dispatcher that never returns —
+// killed, hung, or OOM-killed — which leaves nothing to catch and no chance to write anything
+// afterwards. Counting first is what stops such a row being retried forever.
 async function dispatchOne(
   store: Store,
   ctx: WorkerCtx,
@@ -108,19 +122,39 @@ async function dispatchOne(
   tally: RelayTally,
 ): Promise<void> {
   const { dispatcher, message, options } = work;
+  const attempt = await store.outbox.bumpAttempt(message.id, options);
+  if (attempt === 0) {
+    // Another relay marked it relayed or dead between the claim and here.
+    return;
+  }
+  if (attempt > ctx.config.maxOutboxAttempts) {
+    // Every attempt the budget allowed was started and none of them came back.
+    ctx.logger.log('error', 'worker.relay.dead_lettered', {
+      messageId: message.id,
+      correlationId: message.correlationId,
+      code: ATTEMPTS_ABANDONED,
+      attempts: attempt,
+    });
+    await store.outbox.deadLetter(message.id, ATTEMPTS_ABANDONED, options);
+    tally.deadLettered.push({ id: message.id, reason: ATTEMPTS_ABANDONED });
+    return;
+  }
   try {
     await dispatcher(message.event, options);
     tally.relayed.push(message.id);
   } catch (error) {
-    // The dispatcher is the injected port: its raw throw is a provider fault, not storage.
+    // The dispatcher is the injected port. Its raw throw is a provider fault, not storage.
     const normalized = normalizePortError(error);
-    const next = message.attempts + 1;
-    if (next >= ctx.config.maxOutboxAttempts) {
+    // A fault classified non-retryable fails identically on every redelivery, so burning the
+    // remaining attempts only delays the dead-letter an operator needs to see. Every shipped
+    // dispatcher wraps its throws retryable — the Dispatcher conformance suite pins that — so
+    // this verdict exists only where a host's thrower asserted it.
+    if (!normalized.retryable || attempt >= ctx.config.maxOutboxAttempts) {
       ctx.logger.log('error', 'worker.relay.dead_lettered', {
         messageId: message.id,
         correlationId: message.correlationId,
         code: normalized.code,
-        attempts: next,
+        attempts: attempt,
       });
       await store.outbox.deadLetter(message.id, normalized.code, options);
       tally.deadLettered.push({ id: message.id, reason: normalized.code });
@@ -131,9 +165,8 @@ async function dispatchOne(
       correlationId: message.correlationId,
       code: normalized.code,
       retryable: normalized.retryable,
-      attempts: next,
+      attempts: attempt,
     });
-    await store.outbox.recordFailure(message.id, options);
     tally.failed.push({
       id: message.id,
       code: normalized.code,
@@ -142,7 +175,7 @@ async function dispatchOne(
   }
 }
 
-// If the write fails, the events are re-delivered next run; the receiver drops duplicates, so
+// If the write fails, the events are re-delivered next run. The receiver drops duplicates, so
 // the failure is metered and logged rather than thrown.
 async function markRelayed(
   store: Store,

@@ -9,13 +9,6 @@
  * @license MIT
  */
 
-/**
- * Per-account hash chains and the signed Merkle checkpoint over their heads. `advanceHeads`
- * computes new links on the write path, `proveChain` re-derives every chain from genesis, and
- * `recordCheckpoint`/`verifyCheckpoint` sign and re-check the root. Tampering with stored history
- * is detectable.
- */
-
 import { GENESIS, GENESIS_HEX, chainHash } from '#src/ledger.ts';
 import { toHex, fromHex, byCodeUnit, toInt64BE } from '#src/bytes.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
@@ -38,8 +31,8 @@ import type {
 } from '#src/ports.ts';
 
 /**
- * One step in an account's hash chain: the new head after a posting and the head it followed.
- * Each account has its own chain, and its latest head summarizes its whole history.
+ * One step in an account's hash chain. It holds the new head after a posting and the head it
+ * followed. Each account has its own chain, and its latest head summarizes its whole history.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for the
  * tamper-evidence construction these links and checkpoints implement.
@@ -58,8 +51,8 @@ export type ChainLink = {
 };
 
 /**
- * The first broken link the prover finds in an account's chain. Returned instead of a bare
- * boolean so a caller can see which posting failed and how.
+ * The first broken link the prover finds in an account's chain. The prover returns this instead
+ * of a bare boolean so a caller can see which posting failed and how.
  */
 export type ChainBreak = {
   account: AccountRef;
@@ -97,8 +90,8 @@ export type ChainReport = {
  * Computes the new head for each distinct account a posting touches, in first-appearance order. It
  * produces one link per account, not one per leg, so a posting that names an account in several legs
  * still advances that account's chain a single step. Each account hashes only its own legs onto its
- * own prior head, so chains never cross. `prevHeadOf` returns an account's current head; an undefined
- * result or the genesis value starts a fresh chain.
+ * own prior head, so chains never cross. `prevHeadOf` returns an account's current head. An
+ * undefined result or the genesis value starts a fresh chain.
  */
 export async function advanceHeads(
   digest: Digest,
@@ -124,7 +117,7 @@ export async function advanceHeads(
 
 /**
  * Re-checks every account's chain. It walks each account's postings from genesis, recomputes each
- * head with the write path's hash function, and stops at the first mismatch. Accounts are checked in
+ * head with the write path's hash function, and stops at the first mismatch. It checks accounts in
  * a fixed order, sorted by id char by char, so a break is reported identically whatever order a
  * runtime or database returns accounts in.
  *
@@ -135,7 +128,7 @@ export async function proveChain(
   deps: {
     ledger: Ledger;
     digest: Digest;
-    /** The verified archival boundary; absent or null means nothing has been archived. */
+    /** The verified archival boundary. Absent or null means nothing has been archived. */
     boundary?: ArchiveBoundary | null;
   },
   options?: CallOptions,
@@ -153,13 +146,14 @@ export async function proveChain(
   return { intact: true, firstBreak: null, count };
 }
 
-// `prev` is the head reached so far — the genesis value before the first posting. An account the
-// verified archival boundary names walks anchored instead: its remaining chain can start at the
-// signed archive head (the clean cut), at genesis (the crash window where the boundary postings
-// are signed but not yet deleted), or — after a crash between the boundary signature and the
-// delete — below the signed head, in which case the start floats and the signed head must appear
-// as a hash inside the walk. Content re-derivation applies to every link in every case; a named
-// account whose signed head never appears is truncated or tampered and reports broken.
+// `prev` is the head reached so far — the genesis value before the first posting. An account named by the
+// verified archival boundary walks anchored instead. Its remaining chain can start at the
+// signed archive head, which is the clean cut. It can start at genesis, the crash window where
+// the boundary postings are signed but not yet deleted. After a crash between the boundary
+// signature and the delete, it can start below the signed head. In that case the start floats,
+// and the signed head must appear as a hash inside the walk. Content re-derivation applies to
+// every link in every case. A named account whose signed head never appears is truncated or
+// tampered and reports broken.
 async function recomputeAccount(
   deps: {
     ledger: Ledger;
@@ -188,7 +182,7 @@ async function recomputeAccount(
           actual: link.prevHash,
         };
       }
-      // The crash-window float: the start is vouched only if the signed head shows up later.
+      // This is the crash-window float. The walk vouches for the start only if the signed head shows up later.
       prev = link.prevHash;
     }
     const recomputed = await recomputeLink(deps.digest, account, link);
@@ -234,14 +228,14 @@ function recomputeLink(
 }
 
 /**
- * Loads a posting and proves its stored content against its own chain links before returning it —
- * the read every handler that derives money from history must use. Each touched account's link
- * hash is recomputed from the stored legs and metadata (both inside the preimage), so an in-place
- * edit faults CHAIN_BROKEN here instead of shaping a reversal; the zero-sum check catches a leg
- * deleted together with its link. What this deliberately does not prove: an attacker who
- * re-derives an account's whole chain moves its head, which the next seal flags as dirty and
- * breaks on — that variant is bounded by seal cadence, and restoring the head exactly requires a
- * hash collision. Null on an unknown id, exactly like {@link Ledger.posting}.
+ * Loads a posting and proves its stored content against its own chain links before returning it.
+ * This is the read every handler that derives money from history must use. It recomputes each
+ * touched account's link hash from the stored legs and metadata, both inside the preimage. An
+ * in-place edit therefore faults CHAIN_BROKEN here instead of shaping a reversal. The zero-sum
+ * check catches a leg deleted together with its link. One thing is deliberately left unproven:
+ * an attacker who re-derives an account's whole chain moves its head. The next seal flags that
+ * head as dirty and breaks on it, so that variant is bounded by seal cadence. Restoring the head
+ * exactly requires a hash collision. Null on an unknown id, exactly like {@link Ledger.posting}.
  */
 export async function verifiedPosting(
   deps: { ledger: Ledger; digest: Digest },
@@ -282,9 +276,9 @@ export async function verifiedPosting(
   return posting;
 }
 
-// Every honestly posted entry nets to zero per currency, so a nonzero total here means a leg was
-// removed together with its account's link — the one in-place edit the per-link recompute alone
-// cannot see.
+// Every honestly posted entry nets to zero per currency. A nonzero total here means a leg was
+// removed together with its account's link. That is the one in-place edit the per-link recompute
+// alone cannot see.
 function assertZeroSum(posting: Posting): void {
   const sums = new Map<string, bigint>();
   for (const leg of posting.legs) {
@@ -308,16 +302,51 @@ function assertZeroSum(posting: Posting): void {
 }
 
 /**
- * Re-derives each link's hash from its stored content — the rolling re-proof's page check
- * (src/worker/reproof.ts). Content only, on purpose: prevHash continuity across links is proven
- * inductively by the seals (every tail was replayed while its account was dirty, anchored to a
- * previously signed head), so the page order never matters and the walk stays resumable anywhere.
+ * Re-derives each link's hash from its stored content and checks that the links given chain —
+ * the page check both the rolling re-proof and the archival mover run.
+ *
+ * Content and continuity are different failures and a page needs both: re-deriving a hash
+ * catches an edit, and only continuity catches a deletion, because every link either side of a
+ * deleted one still re-derives perfectly from its own content. Links arrive in commit order, so
+ * consecutive links of one account must join, and that comparison is free. The first link of an
+ * account in the page has its predecessor outside the page, and `resolvePrev` is what answers
+ * for it: true when the named predecessor is this link's own, either in the live rows or as the
+ * archive anchor a signed boundary cut the chain at. A caller that has already held those links
+ * against its own anchor, as `worker/archive.ts` does, passes nothing and keeps the check in-page.
  */
 export async function reproveLinks(
   digest: Digest,
   links: ReadonlyArray<{ account: AccountRef } & StoredLink>,
+  resolvePrev?: (
+    link: { account: AccountRef } & StoredLink,
+  ) => Promise<boolean>,
 ): Promise<ChainBreak | null> {
+  const tail = new Map<AccountRef, string>();
   for (const link of links) {
+    const prev = tail.get(link.account);
+    if (prev === undefined) {
+      if (
+        link.prevHash !== GENESIS_HEX &&
+        resolvePrev !== undefined &&
+        !(await resolvePrev(link))
+      ) {
+        return {
+          account: link.account,
+          txnId: link.txnId,
+          reason: 'broken-link',
+          expected: link.prevHash,
+          actual: '',
+        };
+      }
+    } else if (link.prevHash !== prev) {
+      return {
+        account: link.account,
+        txnId: link.txnId,
+        reason: 'broken-link',
+        expected: prev,
+        actual: link.prevHash,
+      };
+    }
     const recomputed = await recomputeLink(digest, link.account, link);
     if (recomputed !== link.hash) {
       return {
@@ -328,6 +357,7 @@ export async function reproveLinks(
         actual: link.hash,
       };
     }
+    tail.set(link.account, link.hash);
   }
   return null;
 }
@@ -335,8 +365,8 @@ export async function reproveLinks(
 /**
  * Reduces every account's head into one Merkle root, so signing the root (see `recordCheckpoint`)
  * covers every chain in one signature. The root changes if any head changes. The root is
- * reproducible across machines because leaves are sorted by account id, the RFC 6962 domain tags
- * (`MERKLE_LEAF` and `MERKLE_NODE`) are applied, and each pair is hashed left then right so order
+ * reproducible across machines. The leaves sort by account id, each level applies the RFC 6962
+ * domain tags (`MERKLE_LEAF` and `MERKLE_NODE`), and each pair hashes left then right, so order
  * matters. With no accounts the root is the genesis value of 32 zero bytes, so a fresh ledger still
  * has a stable root to sign.
  *
@@ -362,13 +392,14 @@ export async function merkleRoot(
 }
 
 /**
- * Reduces every account's (head, sum) pair into one sum-carrying Merkle root: each node holds its
- * subtree's balance sum, and each node's hash commits to (both child hashes + that sum), so the
- * root hash fixes every head AND every sum at once, and the root sum is as tamper-evident as the
- * root hash. `sum` per leaf is the account's raw signed leg total (debit positive), which is why
- * a consistent ledger's root sums to zero: legs net to zero per currency, so they net to zero in
- * total. Reproducible across machines the same way `merkleRoot` is, with versioned domain tags and
- * the sum encoded as fixed-width big-endian bytes (`toInt64BE`), never as formatted text. With no
+ * Reduces every account's (head, sum) pair into one sum-carrying Merkle root. Each node holds its
+ * subtree's balance sum, and each node's hash commits to both child hashes plus that sum. The
+ * root hash therefore fixes every head and every sum at once, and the root sum is as
+ * tamper-evident as the root hash. `sum` per leaf is the account's raw signed leg total (debit
+ * positive). That is why a consistent ledger's root sums to zero: legs net to zero per currency,
+ * so they net to zero in total. The root is reproducible across machines the same way
+ * `merkleRoot` is, with versioned domain tags and the sum encoded as fixed-width big-endian
+ * bytes (`toInt64BE`), never as formatted text. With no
  * accounts the root is the genesis value of 32 zero bytes and a zero sum.
  */
 export async function merkleSumRoot(
@@ -391,7 +422,7 @@ export async function merkleSumRoot(
     for (let i = 0; i < level.length; i += 2) {
       const left = level[i]!;
       const right = level[i + 1];
-      // Odd count: the last unpaired node carries up unchanged (same rule as combineLevel), sum included.
+      // On an odd count the last unpaired node carries up unchanged (same rule as combineLevel), sum included.
       next.push(
         right
           ? {
@@ -407,17 +438,27 @@ export async function merkleSumRoot(
 }
 
 /**
- * Takes a tamper-evident snapshot, called a "checkpoint". It first proves the chain re-derives —
- * from genesis, or, when the store carries the previous seal's authenticated leaves, only the
- * dirty tails since that seal — then signs the sum-carrying Merkle root (v2) over every head and
- * saves it. On a break this throws a
- * non-retryable CHAIN_BROKEN fault and persists nothing, so a signed root never attests to a
- * tampered ledger, and the caller sets the job aside for an operator rather than retrying. It also
- * refuses to sign when the collected sums do not net to zero (a non-retryable LEDGER_UNBALANCED
- * fault): the chain hashes cover every leg, so an edit breaks CHAIN_BROKEN first — a nonzero total
- * with intact chains means the write path itself recorded unbalanced money, which is exactly the
- * enforcement bug this last-resort check exists to catch. The signature covers the root hash and
- * the root sum together, so neither stored field can be edited under a valid signature. The save
+ * Takes a tamper-evident snapshot, called a "checkpoint". It first proves the chain re-derives,
+ * then signs the sum-carrying Merkle root (v2) over every head and saves it. The proof runs from
+ * genesis, or covers only the dirty tails since the previous seal when the store carries that
+ * seal's authenticated leaves. On a break this throws a
+ * non-retryable CHAIN_BROKEN fault and persists nothing, and the caller sets the job aside for
+ * an operator rather than retrying.
+ *
+ * What a signed root attests to on the incremental path is bounded, and this is the bound: the
+ * previous signature covers each account's head and leg sum together, so the seal re-proves
+ * every account whose head or sum has moved since — including one with no traffic at all, whose
+ * sum can only have moved through an edit. An edit that moves neither, such as one to a
+ * posting's metadata or a pair of leg edits cancelling inside one account, is not visible here
+ * and is caught by the rolling re-proof (`worker/reproof.ts`) within one rotation. A full replay
+ * from genesis, which every seal on a store without authenticated seal heads runs, has no such
+ * bound.
+ * It also refuses to sign when the collected sums do not net to zero, with a non-retryable
+ * LEDGER_UNBALANCED fault. The chain hashes cover every leg, so an edit breaks CHAIN_BROKEN
+ * first. A nonzero total with intact chains means the write path itself recorded unbalanced
+ * money — exactly the enforcement bug this last-resort check exists to catch. The signature
+ * covers the root hash and the root sum together, so no one can edit either stored field under
+ * a valid signature. The save
  * goes through the checkpoint store, outside the money transaction, so a rolled-back operation
  * cannot undo an already-recorded checkpoint.
  *
@@ -435,7 +476,7 @@ export async function recordCheckpoint(
   },
   options?: CallOptions,
 ): Promise<Checkpoint> {
-  // A pruned ledger's live sums miss the archived history; the verified boundary folds it back
+  // A pruned ledger's live sums miss the archived history. The verified boundary folds it back
   // (mergeArchiveSums), so the sealed leaves always carry full-history sums and the root still
   // nets to zero. A boundary that fails its signature faults here, before anything signs.
   const boundary = await loadArchiveBoundary(deps.checkpoints, deps, options);
@@ -444,15 +485,19 @@ export async function recordCheckpoint(
     boundary,
   );
 
-  // The incremental strategy: when the store carries an authenticated snapshot of the last
-  // seal's leaves, only the accounts whose heads moved since then need their chain tails
-  // re-proved — the previous signature already vouches for everything else. Any doubt about the
-  // snapshot falls back to the full from-genesis replay, so the seal is never weaker for having
-  // the fast path.
+  // The incremental strategy works like this. When the store carries an authenticated snapshot
+  // of the last seal's leaves, only the accounts whose heads moved since then need their chain
+  // tails re-proved. The previous signature already vouches for everything else. Any doubt about
+  // the snapshot falls back to the full from-genesis replay, so the seal is never weaker for
+  // having the fast path.
   const plan = await planSeal(deps, leaves, options);
   const broken =
     plan.mode === 'incremental'
-      ? await proveDirtyTails(deps, plan, options)
+      ? await proveDirtyTails(
+          { ledger: deps.ledger, digest: deps.digest, boundary },
+          plan,
+          options,
+        )
       : (
           await proveChain(
             { ledger: deps.ledger, digest: deps.digest, boundary },
@@ -486,10 +531,10 @@ export async function recordCheckpoint(
     kid: (await deps.signer.kid?.()) ?? null,
   };
   await deps.checkpoints.put(checkpoint, options);
-  // After the checkpoint, so a crash between the two leaves a stale snapshot that fails next
-  // seal's authentication and heals through the full-replay path. Incremental upserts only the
-  // dirty leaves; the full path replaces the whole table, purging any stray row a corruption
-  // left behind.
+  // This write runs after the checkpoint. A crash between the two then leaves a stale snapshot,
+  // which fails the next seal's authentication and heals through the full-replay path. The
+  // incremental path upserts only the dirty leaves. The full path replaces the whole table,
+  // purging any stray row a corruption left behind.
   if (deps.checkpoints.putSealHeads !== undefined) {
     await deps.checkpoints.putSealHeads(
       plan.mode === 'incremental' ? plan.dirty : leaves,
@@ -499,20 +544,21 @@ export async function recordCheckpoint(
   return checkpoint;
 }
 
-// What planSeal decided: which leaves changed since the authenticated snapshot, and the sealed
-// head each dirty account's tail replay starts from (absent for an account new since the seal).
+// This records what planSeal decided: which leaves changed since the authenticated snapshot, and
+// the sealed (head, sum) pair each dirty account's replay is held against. The pair is absent
+// for an account new since the seal.
 type SealPlan =
   | { mode: 'full' }
   | {
       mode: 'incremental';
       dirty: ReadonlyArray<SealHead>;
-      since: ReadonlyMap<AccountRef, string>;
+      since: ReadonlyMap<AccountRef, { head: string; sum: bigint }>;
     };
 
 // Chooses the seal strategy. The snapshot lives in the same database an attacker who can rewrite
-// the ledger controls, so nothing in it is trusted until its recomputed Merkle root and sum match
-// the latest checkpoint and that checkpoint's signature verifies. A snapshot account missing from
-// the live leaves is truncation and fails the seal loudly rather than falling back.
+// the ledger controls. So the seal trusts nothing in it until its recomputed Merkle root and sum
+// match the latest checkpoint and that checkpoint's signature verifies. A snapshot account
+// missing from the live leaves is truncation and fails the seal loudly rather than falling back.
 async function planSeal(
   deps: {
     checkpoints: CheckpointStore;
@@ -547,9 +593,9 @@ async function planSeal(
     return { mode: 'full' };
   }
 
-  const since = new Map<AccountRef, string>();
-  for (const [account, head] of snapshot) {
-    since.set(account, head);
+  const since = new Map<AccountRef, { head: string; sum: bigint }>();
+  for (const [account, head, sum] of snapshot) {
+    since.set(account, { head, sum });
   }
   const live = new Set(liveLeaves.map(([account]) => account));
   for (const account of since.keys()) {
@@ -561,75 +607,162 @@ async function planSeal(
       );
     }
   }
+  // The previous signature covers each account's head and its leg sum together, so both have to
+  // still hold for the account to count as vouched for. Diffing heads alone leaves an edit that
+  // moved money on an account with no traffic since the seal looking clean.
   return {
     mode: 'incremental',
-    dirty: liveLeaves.filter(([account, head]) => since.get(account) !== head),
+    dirty: liveLeaves.filter(([account, head, sum]) => {
+      const sealed = since.get(account);
+      return sealed === undefined || sealed.head !== head || sealed.sum !== sum;
+    }),
     since,
   };
 }
 
 // Replays each dirty account's chain from its sealed head instead of genesis. The walk must pass
-// through the head the leaves were read at: reaching it proves the tail links continuously from
-// sealed history to the head being signed, and links appended by concurrent postings beyond it
-// are simply verified too. A walk that never reaches it means the tail is broken or truncated.
+// through the head the leaves were read at. Reaching it proves the tail links continuously from
+// sealed history to the head being signed. Links appended by concurrent postings beyond it are
+// simply verified too. A walk that never reaches it means the tail is broken or truncated.
 async function proveDirtyTails(
-  deps: { ledger: Ledger; digest: Digest },
+  deps: { ledger: Ledger; digest: Digest; boundary?: ArchiveBoundary | null },
   plan: Extract<SealPlan, { mode: 'incremental' }>,
   options?: CallOptions,
 ): Promise<ChainBreak | null> {
   for (const [account, liveHead] of plan.dirty) {
-    const sinceHash = plan.since.get(account);
-    let prev = sinceHash ?? GENESIS_HEX;
-    let reached = false;
-    for await (const link of deps.ledger.lineage(account, {
-      ...options,
-      ...(sinceHash === undefined ? {} : { sinceHash }),
-    })) {
-      if (link.prevHash !== prev) {
-        return {
-          account,
-          txnId: link.txnId,
-          reason: 'broken-link',
-          expected: prev,
-          actual: link.prevHash,
-        };
+    const sealed = plan.since.get(account);
+    // A leaf dirtied with its head still where the last seal left it: the stored legs moved
+    // under a fixed head, which appending cannot do. There is no tail to walk, so this replays
+    // the whole chain the way the full prover walks it — archive anchor, crash window and all —
+    // and the break it returns names the edited link rather than the missing tail.
+    if (sealed !== undefined && sealed.head === liveHead) {
+      const broken = await recomputeAccount(deps, account, options);
+      if (broken !== null) {
+        return broken;
       }
-      const recomputed = await recomputeLink(deps.digest, account, link);
-      if (recomputed !== link.hash) {
-        return {
-          account,
-          txnId: link.txnId,
-          reason: 'tampered-hash',
-          expected: recomputed,
-          actual: link.hash,
-        };
-      }
-      prev = link.hash;
-      if (prev === liveHead) {
-        reached = true;
+      continue;
+    }
+    const sinceHash = sealed?.head;
+    let walk = await walkTail(deps, {
+      account,
+      start: sinceHash ?? GENESIS_HEX,
+      liveHead,
+      links: deps.ledger.lineage(account, {
+        ...options,
+        ...(sinceHash === undefined ? {} : { sinceHash }),
+      }),
+    });
+    if (walk.broken !== null) {
+      return walk.broken;
+    }
+    if (!walk.reached && !walk.yielded && sinceHash !== undefined) {
+      // The anchor row was archived away. Archival prunes a strict prefix, so the live
+      // remainder must chain directly from the anchor hash; walk it from the start and
+      // require exactly that.
+      walk = await walkTail(deps, {
+        account,
+        start: sinceHash,
+        liveHead,
+        links: deps.ledger.lineage(account, options),
+      });
+      if (walk.broken !== null) {
+        return walk.broken;
       }
     }
-    if (!reached) {
+    if (!walk.reached) {
       return {
         account,
         txnId: '',
         reason: 'broken-link',
         expected: liveHead,
-        actual: prev,
+        actual: walk.prev,
       };
     }
   }
   return null;
 }
 
+// One dirty-tail walk: every link must chain from `prev` and re-derive its hash; `reached`
+// records whether the walk arrived at the live head. `delta` sums the account's legs as far as
+// that head and no further, so a posting landing mid-walk cannot inflate it past the head sum it
+// will be held against.
+async function walkTail(
+  deps: { ledger: Ledger; digest: Digest },
+  tail: {
+    account: AccountRef;
+    start: string;
+    liveHead: string;
+    links: AsyncIterable<StoredLink>;
+  },
+): Promise<{
+  broken: ChainBreak | null;
+  prev: string;
+  reached: boolean;
+  yielded: boolean;
+  delta: bigint;
+}> {
+  const { account, start, liveHead, links } = tail;
+  let prev = start;
+  let reached = false;
+  let yielded = false;
+  let delta = 0n;
+  for await (const link of links) {
+    yielded = true;
+    if (link.prevHash !== prev) {
+      return {
+        broken: {
+          account,
+          txnId: link.txnId,
+          reason: 'broken-link',
+          expected: prev,
+          actual: link.prevHash,
+        },
+        prev,
+        reached,
+        yielded,
+        delta,
+      };
+    }
+    const recomputed = await recomputeLink(deps.digest, account, link);
+    if (recomputed !== link.hash) {
+      return {
+        broken: {
+          account,
+          txnId: link.txnId,
+          reason: 'tampered-hash',
+          expected: recomputed,
+          actual: link.hash,
+        },
+        prev,
+        reached,
+        yielded,
+        delta,
+      };
+    }
+    if (!reached) {
+      for (const leg of link.legs) {
+        if (leg.account === account) {
+          delta += leg.amount.minor;
+        }
+      }
+    }
+    prev = link.hash;
+    if (prev === liveHead) {
+      reached = true;
+    }
+  }
+  return { broken: null, prev, reached, yielded, delta };
+}
+
 /**
- * Checks a saved checkpoint against the current ledger: recomputes the root the same way the
- * checkpoint's version sealed it (v1: hash-only over heads; v2: sum-carrying over heads and
- * sums), compares it to the stored root, then verifies the signature (accepting still-valid
- * rotated-out keys, so a checkpoint signed before a rotation keeps verifying). Rows from before
- * versioning verify forever down the v1 path, byte for byte. Returns false on a normal mismatch;
- * a live head count below the recorded one is one such mismatch, since deleting accounts to
- * shrink the root's coverage is itself tampering, and on v2 an edited stored sum is another,
+ * Checks a saved checkpoint against the current ledger. It recomputes the root the same way the
+ * checkpoint's version sealed it (hash-only over heads for v1, sum-carrying over heads and sums
+ * for v2), compares it to the stored root, then verifies the signature. The signature check
+ * accepts still-valid rotated-out keys, so a checkpoint signed before a rotation keeps
+ * verifying. Rows from before
+ * versioning verify forever down the v1 path, byte for byte. Returns false on a normal mismatch.
+ * A live head count below the recorded one is one such mismatch, since deleting accounts to
+ * shrink the root's coverage is itself tampering. On v2 an edited stored sum is another,
  * since the signature covers the sum. Throws only on malformed stored hex, which is a corrupt
  * row, not a failed verification.
  *
@@ -637,11 +770,20 @@ async function proveDirtyTails(
  * heads than recorded is itself a tamper signal.
  */
 export async function verifyCheckpoint(
-  deps: { ledger: Ledger; digest: Digest; signer: Signer },
+  deps: {
+    ledger: Ledger;
+    digest: Digest;
+    signer: Signer;
+    /** The verified archival boundary; a seal over an archived prefix covers merged sums. */
+    boundary?: ArchiveBoundary | null;
+  },
   checkpoint: Checkpoint,
 ): Promise<boolean> {
   if (checkpoint.v === 2) {
-    const leaves = await collectHeadSums(deps.ledger);
+    const leaves = mergeArchiveSums(
+      await collectHeadSums(deps.ledger),
+      deps.boundary ?? null,
+    );
     if (leaves.length < checkpoint.count) {
       return false;
     }
@@ -673,6 +815,145 @@ export async function verifyCheckpoint(
   );
 }
 
+/** What a sealed-history audit concluded. See {@link verifySealedHistory}. */
+export type SealedVerdict = 'agrees' | 'diverged' | 'unverifiable';
+
+/**
+ * Audits stored history against a sealed checkpoint, tolerating growth. {@link verifyCheckpoint}
+ * asks whether the ledger reproduces the sealed root *right now*, which is true only of a ledger
+ * that has not moved since the seal; this asks the auditor's question instead — has anything the
+ * seal already covered changed. Postings appended since are expected and read clean.
+ *
+ * The evidence is the sealed-head snapshot the incremental seal maintains. Every sealed account
+ * must still be there, its chain must still run from the sealed head to the live one with each
+ * tail link re-deriving its hash, and its sealed sum plus that tail's legs must equal its live
+ * sum — which is what catches an in-place edit that leaves the recorded hashes alone.
+ *
+ * `unverifiable` is not a clean bill of health: it means the evidence to answer is absent — no
+ * snapshot on this store, a row sealed under v1, or a snapshot left stale by a crash between the
+ * two writes a seal makes. A caller that reports it as agreement has a silent auditor.
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for the
+ * hash chain these leaves anchor.
+ */
+export async function verifySealedHistory(
+  deps: {
+    ledger: Ledger;
+    checkpoints: CheckpointStore;
+    digest: Digest;
+    signer: Signer;
+  },
+  checkpoint: Checkpoint,
+  options?: CallOptions,
+): Promise<SealedVerdict> {
+  if (checkpoint.v !== 2 || checkpoint.sum === null) {
+    return 'unverifiable';
+  }
+  // The row is authenticated on its own first, so an edited checkpoint reads as tamper rather
+  // than as the stale snapshot it would otherwise look like below.
+  const signed = await deps.signer.verify(
+    sumRootPayload({
+      hash: fromHex(checkpoint.root),
+      sum: BigInt(checkpoint.sum),
+    }),
+    fromHex(checkpoint.signature),
+  );
+  if (!signed) {
+    return 'diverged';
+  }
+  if (deps.checkpoints.sealHeads === undefined) {
+    return 'unverifiable';
+  }
+  const sealed = await deps.checkpoints.sealHeads(options);
+  if (sealed.length === 0) {
+    return 'unverifiable';
+  }
+  const root = await merkleSumRoot(deps.digest, sealed);
+  // The snapshot is written after the checkpoint, so a crash between the two leaves it holding
+  // the previous seal's leaves. It cannot answer for this row; the next seal rewrites it.
+  if (
+    toHex(root.hash) !== checkpoint.root ||
+    root.sum !== BigInt(checkpoint.sum)
+  ) {
+    return 'unverifiable';
+  }
+  return reconcileSealedLeaves(deps, sealed, options);
+}
+
+// Holds every sealed leaf against the live ledger. The sealed sums already carry archived
+// history (the seal merges the boundary before signing), so the live side merges it too.
+async function reconcileSealedLeaves(
+  deps: {
+    ledger: Ledger;
+    checkpoints: CheckpointStore;
+    digest: Digest;
+    signer: Signer;
+  },
+  sealed: ReadonlyArray<SealHead>,
+  options?: CallOptions,
+): Promise<SealedVerdict> {
+  const boundary = await loadArchiveBoundary(deps.checkpoints, deps, options);
+  const live = new Map<AccountRef, readonly [string, bigint]>();
+  for (const [account, head, sum] of mergeArchiveSums(
+    await collectHeadSums(deps.ledger, options),
+    boundary,
+  )) {
+    live.set(account, [head, sum]);
+  }
+
+  for (const [account, sealedHead, sealedSum] of sealed) {
+    const now = live.get(account);
+    // Deleting a sealed account shrinks what the root covers, which is itself tampering.
+    if (now === undefined) {
+      return 'diverged';
+    }
+    const [liveHead, liveSum] = now;
+    if (liveHead === sealedHead) {
+      // A still head cannot have moved its own sum; an edit under the seal is the only way.
+      if (liveSum !== sealedSum) {
+        return 'diverged';
+      }
+      continue;
+    }
+    const appended = await walkFromSealedHead(
+      deps,
+      { account, sealedHead, liveHead },
+      options,
+    );
+    if (appended === null || sealedSum + appended !== liveSum) {
+      return 'diverged';
+    }
+  }
+  return 'agrees';
+}
+
+// The account's leg delta from the sealed head to the live one, or null when that tail is
+// broken, truncated, or never arrives at the head it should.
+async function walkFromSealedHead(
+  deps: { ledger: Ledger; digest: Digest },
+  tail: { account: AccountRef; sealedHead: string; liveHead: string },
+  options?: CallOptions,
+): Promise<bigint | null> {
+  const { account, sealedHead, liveHead } = tail;
+  let walk = await walkTail(deps, {
+    account,
+    start: sealedHead,
+    liveHead,
+    links: deps.ledger.lineage(account, { ...options, sinceHash: sealedHead }),
+  });
+  if (walk.broken === null && !walk.reached && !walk.yielded) {
+    // The anchor row was archived away, so the live remainder must chain straight from it —
+    // the same fallback the incremental seal takes.
+    walk = await walkTail(deps, {
+      account,
+      start: sealedHead,
+      liveHead,
+      links: deps.ledger.lineage(account, options),
+    });
+  }
+  return walk.broken === null && walk.reached ? walk.delta : null;
+}
+
 // --- Internals --------------------------------------------------------------------
 
 function distinctAccounts(posting: Posting): AccountRef[] {
@@ -687,9 +968,9 @@ function distinctAccounts(posting: Posting): AccountRef[] {
   return order;
 }
 
-// RFC 6962 domain tags (https://datatracker.ietf.org/doc/rfc6962/): a one-byte prefix keeps a leaf's
-// preimage out of the internal-node domain, so no leaf can be reinterpreted as an interior pair —
-// the second-preimage defense.
+// These are the RFC 6962 domain tags (https://datatracker.ietf.org/doc/rfc6962/). A one-byte
+// prefix keeps a leaf's preimage out of the internal-node domain, so no leaf can be
+// reinterpreted as an interior pair. That is the second-preimage defense.
 const MERKLE_LEAF = 0x00;
 const MERKLE_NODE = 0x01;
 
@@ -717,8 +998,8 @@ async function combineLevel(
   return next;
 }
 
-// The 0x01 tag, then the child hashes left then right. Both children are the same fixed length, so
-// the split needs no separator.
+// The preimage is the 0x01 tag, then the child hashes left then right. Both children are the same
+// fixed length, so the split needs no separator.
 function nodePreimage(left: Uint8Array, right: Uint8Array): Uint8Array {
   const out = new Uint8Array(1 + left.length + right.length);
   out[0] = MERKLE_NODE;
@@ -727,14 +1008,15 @@ function nodePreimage(left: Uint8Array, right: Uint8Array): Uint8Array {
   return out;
 }
 
-// The v2 domain tags. New values rather than reusing 0x00/0x01, so a v2 preimage can never
-// collide with a v1 preimage of the same account and head: the two constructions hash into
-// disjoint domains, and old checkpoints keep verifying under the old tags forever.
+// These are the v2 domain tags. They take new values rather than reusing 0x00/0x01, so a v2
+// preimage can never collide with a v1 preimage of the same account and head. The two
+// constructions hash into disjoint domains, and old checkpoints keep verifying under the old
+// tags forever.
 const MERKLE_SUM_LEAF = 0x02;
 const MERKLE_SUM_NODE = 0x03;
 
-// The 0x02 tag, "account:head:" as UTF-8, then the sum as 8 big-endian bytes — fixed-width binary,
-// not decimal text, so the same sum is the same bytes on every runtime.
+// The preimage is the 0x02 tag, "account:head:" as UTF-8, then the sum as 8 big-endian bytes.
+// Fixed-width binary, not decimal text, keeps the same sum the same bytes on every runtime.
 function sumLeafPreimage(
   account: AccountRef,
   head: string,
@@ -796,8 +1078,9 @@ export async function verifyArchiveHeads(
 }
 
 /**
- * The verified archival boundary the provers and the seal anchor on: per-account archived head
- * hashes and raw leg sums, trusted only because their recomputed root matches the signed
+ * The verified archival boundary the provers and the seal anchor on. It holds per-account
+ * archived head hashes and raw leg sums. They are trusted only because their recomputed root
+ * matches the signed
  * {@link ArchiveState}. Null when nothing has ever been archived.
  */
 export type ArchiveBoundary = {
@@ -808,7 +1091,7 @@ export type ArchiveBoundary = {
 
 /**
  * Loads and authenticates the archival boundary. Faults CHAIN_BROKEN when the stored rows fail
- * their signature — an unauthenticated boundary is an anchor an attacker can move, so every
+ * their signature. An unauthenticated boundary is an anchor an attacker can move, so every
  * prover and seal refuses to proceed over one.
  */
 export async function loadArchiveBoundary(
@@ -844,8 +1127,8 @@ export async function loadArchiveBoundary(
 }
 
 // Folds the archived raw sums back into the live leaves, so a seal over a pruned ledger still
-// covers every account's full-history sum (and still nets to zero): live accounts gain their
-// archived portion; fully-pruned accounts re-enter with the archived head as their true head.
+// covers every account's full-history sum (and still nets to zero). Live accounts gain their
+// archived portion. Fully-pruned accounts re-enter with the archived head as their true head.
 function mergeArchiveSums(
   live: ReadonlyArray<readonly [AccountRef, string, bigint]>,
   boundary: ArchiveBoundary | null,

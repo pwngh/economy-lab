@@ -12,8 +12,14 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { defaultConfig, loadConfig, loadSecrets } from '#src/config.ts';
+import {
+  CONFIG_KEYS,
+  defaultConfig,
+  loadConfig,
+  loadSecrets,
+} from '#src/config.ts';
 import { ERROR_CODES } from '#src/errors.ts';
+import { preflight } from '#src/index.ts';
 
 const CARD_HORIZON_MS = 7 * 24 * 60 * 60_000;
 
@@ -215,6 +221,27 @@ describe('loadSecrets startup check', () => {
   });
 });
 
+describe('loadConfig database connect bound', () => {
+  test('DB_CONNECT_TIMEOUT_MS is read, and unset leaves the engine default', () => {
+    assert.equal(
+      loadConfig({ DB_CONNECT_TIMEOUT_MS: '250' }).dbConnectTimeoutMs,
+      250,
+    );
+    assert.equal(loadConfig({}).dbConnectTimeoutMs, null);
+  });
+
+  test('a zero or malformed bound falls back rather than disabling the timeout', () => {
+    assert.equal(
+      loadConfig({ DB_CONNECT_TIMEOUT_MS: '0' }).dbConnectTimeoutMs,
+      null,
+    );
+    assert.equal(
+      loadConfig({ DB_CONNECT_TIMEOUT_MS: 'soon' }).dbConnectTimeoutMs,
+      null,
+    );
+  });
+});
+
 describe('mergeConfig record-valued knobs', () => {
   test('overriding one funding source keeps the default fallback', () => {
     const config = defaultConfig({ maturityHorizonMs: { card: 1_000 } });
@@ -237,5 +264,59 @@ describe('mergeConfig record-valued knobs', () => {
     const config = defaultConfig({ platformShards: 4 });
 
     assert.equal(config.platformShards, 4);
+  });
+});
+
+/**
+ * The webhook timestamp bound was called `replayWindowMs` / `REPLAY_WINDOW_MS`, and the timestamp
+ * it bounds rides in a header no signature covers, so the window never bounded replay. The name is
+ * now `freshnessWindowMs` / `FRESHNESS_WINDOW_MS`, matching `@pwngh/economy-webhook`.
+ *
+ * Renaming an env name is the half a compiler cannot see: a deploy that still sets the old name
+ * gets the default and no word about it. So the retired name is read by nothing and reported by
+ * `preflight`, the same shape a decline flag shadowing a configured source already has.
+ */
+describe('the webhook freshness window', () => {
+  const DEFAULT_MS = 5 * 60_000;
+
+  test('FRESHNESS_WINDOW_MS is the name loadConfig reads', () => {
+    assert.equal(loadConfig({}).freshnessWindowMs, DEFAULT_MS);
+    assert.equal(
+      loadConfig({ FRESHNESS_WINDOW_MS: '90000' }).freshnessWindowMs,
+      90_000,
+    );
+    assert.ok(CONFIG_KEYS.includes('FRESHNESS_WINDOW_MS'));
+  });
+
+  test('the retired name is read by nothing and named in a preflight warning', () => {
+    // Not a second name for the knob: the value set here reaches no field.
+    assert.equal(
+      loadConfig({ REPLAY_WINDOW_MS: '90000' }).freshnessWindowMs,
+      DEFAULT_MS,
+    );
+    assert.equal(
+      (CONFIG_KEYS as readonly string[]).includes('REPLAY_WINDOW_MS'),
+      false,
+    );
+
+    const reported = preflight({ REPLAY_WINDOW_MS: '90000' }).filter(
+      (found) => found.path === 'REPLAY_WINDOW_MS',
+    );
+    assert.equal(reported.length, 1);
+    assert.equal(reported[0]!.severity, 'warning');
+    assert.ok(reported[0]!.message.includes('FRESHNESS_WINDOW_MS'));
+    // A warning, not an error: `openPorts` boots, and `preflight`'s errors stay exactly what it
+    // throws on.
+    assert.deepEqual(
+      preflight({ REPLAY_WINDOW_MS: '90000' }).filter(
+        (found) => found.severity === 'error',
+      ),
+      [],
+    );
+    // The control: an env that does not set it produces no such row.
+    assert.deepEqual(
+      preflight({}).filter((found) => found.path === 'REPLAY_WINDOW_MS'),
+      [],
+    );
   });
 });

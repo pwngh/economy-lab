@@ -22,6 +22,8 @@ import { eventsOf } from '#test/support/economy.ts';
 import { hasCode } from '#test/support/capabilities.ts';
 
 import { reversePayout } from '#src/operations/reversePayout.ts';
+import { advanceDuePayouts } from '#src/worker/payouts.ts';
+import { ERROR_CODES, fault } from '#src/errors.ts';
 import { makeEconomy } from '#test/support/economy.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { credit as creditLeg, debit as debitLeg } from '#src/ledger.ts';
@@ -40,12 +42,25 @@ import {
   silentMeter,
   fakeProcessor,
   defaultPricing,
+  makeWorkerCtx,
   testConfig,
 } from '#test/support/capabilities.ts';
+import { checkedConfig } from '#src/config.ts';
 
 import type { Ctx, Economy, Operation, Outcome } from '#src/contract.ts';
 import type { Amount } from '#src/money.ts';
-import type { Saga, SagaState, Store, Unit } from '#src/ports.ts';
+import type { Processor, Saga, SagaState, Store, Unit } from '#src/ports.ts';
+
+// A rail that never answers, so one sweep exhausts the attempt budget and dead-letters.
+function failingProcessor(): Processor {
+  return {
+    submitPayout: async () => {
+      throw fault(ERROR_CODES.PROVIDER_FAILURE, 'provider down', {
+        retryable: true,
+      });
+    },
+  };
+}
 
 function newStore(): Store {
   return memoryStore({ digest: seededDigest(1), clock: fixedClock(0) });
@@ -58,7 +73,7 @@ function newCtx(): Ctx {
     digest: seededDigest(1),
     signer: seededSigner(1),
     processor: fakeProcessor(),
-    config: testConfig(),
+    config: checkedConfig(testConfig()),
     pricing: defaultPricing(),
     rates: fixedRates(),
     logger: testLogger(),
@@ -349,8 +364,59 @@ describe('reversePayout Through Submit', () => {
     assert.equal(reversed[0]!.subject, 'usr_seller');
     assert.deepEqual(reversed[0]!.data, {
       sagaId: 'pay_6',
+      userId: 'usr_seller',
+      reserve: 'CREDIT:20000.00',
       reason: 'chargeback',
     });
+  });
+
+  test('the operator reversal carries the same fields as the worker reversal', async () => {
+    // One event type, one shape. A consumer that reads `userId` and `reserve` off the worker's
+    // reversal must find them on an operator's too.
+    const manualStore = memoryStore({
+      digest: seededDigest(1),
+      clock: fixedClock(0),
+    });
+    await openReservedSaga(manualStore, {
+      id: 'pay_manual',
+      state: 'RESERVED',
+    });
+    await makeEconomy(1, manualStore).submit(
+      buildReversePayout({ sagaId: 'pay_manual', reason: 'chargeback' }),
+    );
+
+    // The worker's automatic path: a payout handed to the rail that nothing ever settled, swept
+    // past its settlement window. That timeout is what reverses a payout on the worker side — a
+    // thrown submit cannot, because it does not say whether the rail moved the money.
+    const workerStore = memoryStore({
+      digest: seededDigest(1),
+      clock: fixedClock(0),
+    });
+    await openReservedSaga(workerStore, {
+      id: 'pay_auto',
+      state: 'SUBMITTED',
+      providerRef: 'prov_pay_auto',
+    });
+    await advanceDuePayouts(
+      workerStore,
+      makeWorkerCtx({
+        processor: failingProcessor(),
+        config: { ...testConfig(), maxPayoutAgeMs: 60_000 },
+        clock: fixedClock(120_000),
+      }),
+      { now: 120_000, limit: 10 },
+    );
+
+    const reversedData = async (store: Store) => {
+      const events = await eventsOf(store);
+      return events.find((e) => e.type === 'economy.payout.reversed')!.data;
+    };
+    const manual = await reversedData(manualStore);
+    const automatic = await reversedData(workerStore);
+
+    assert.deepEqual(Object.keys(manual).sort(), Object.keys(automatic).sort());
+    assert.equal(manual.userId, automatic.userId);
+    assert.equal(manual.reserve, automatic.reserve);
   });
 
   test('a non-privileged user actor is UNAUTHORIZED', async () => {

@@ -10,16 +10,11 @@
  * @license MIT
  */
 
-/**
- * The composed cluster node: construction laws (membership, the epoch-age bound, the counter
- * requirement), ownership gating, the shared accept screen across nodes, crash recovery, and
- * orphan settling through one handle.
- */
-
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { openClusterNode } from '#src/cluster.ts';
+import { faultResponse } from '#src/server.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { toAmount } from '#src/money.ts';
@@ -126,6 +121,37 @@ describe('Cluster node', () => {
         return true;
       },
     );
+  });
+
+  test('a misroute answers 421 and the problem body names the node to try', async () => {
+    // The refusal's whole content is which node owns the scope. Answering a status without it
+    // tells a caller to go somewhere it cannot name, which is why the two land together.
+    const { deps } = harness();
+    const a = openClusterNode(deps, { nodeId: 'node-a', nodes: NODES });
+    const b = openClusterNode(deps, { nodeId: 'node-b', nodes: NODES });
+    const scope = scopeOwnedBy(a, 'wrld_421');
+    let refusal: unknown = null;
+    try {
+      b.assertOwns(scope);
+      assert.fail('the node that does not own the scope accepted it');
+    } catch (error) {
+      refusal = error;
+    }
+    const response = faultResponse(refusal);
+    const body = (await response.json()) as Record<string, unknown>;
+    assert.equal(response.status, 421);
+    assert.equal(body.code, 'SESSION.MISROUTED');
+    assert.equal(body.retryable, false);
+    assert.equal(body.owner, 'node-a', 'the caller cannot name where to retry');
+    // The rest of `detail` stays server-side: the allowlist is per field, not per error.
+    assert.deepEqual(Object.keys(body).sort(), [
+      'code',
+      'owner',
+      'retryable',
+      'status',
+      'title',
+      'type',
+    ]);
   });
 
   test('two nodes over one store cannot double-spend one balance', async () => {

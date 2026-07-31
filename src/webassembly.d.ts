@@ -11,7 +11,7 @@
 
 // The WebAssembly global exists on every runtime the lab targets, but its types live in the `dom`
 // lib, which this project leaves out to keep its ambient surface to `esnext` alone. Only
-// `fold.vendored.ts` and `fold-column.ts` touch WebAssembly, so declare just the slice they use
+// `fold.ts` and `fold-column.ts` touch WebAssembly, so declare just the slice they use
 // rather than pull in `dom`.
 declare namespace WebAssembly {
   class Module {

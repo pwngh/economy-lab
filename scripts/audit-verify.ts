@@ -9,15 +9,16 @@
  * @license MIT
  */
 
-// Verifies a hash-chained ops audit trail (JSONL written by `hashChainedAuditSink`): re-derives
-// the chain and reports the first break. The observer must be as tamper-evident as the observed.
+// This script verifies a hash-chained ops audit trail (JSONL written by `hashChainedAuditSink`).
+// It re-derives the chain and reports the first break. The observer must be as tamper-evident
+// as the observed.
 //
 //   npm run audit:verify -- ops-audit/<segment>.jsonl
 //   make audit-verify FILE=ops-audit/<segment>.jsonl
 
 import { readFile } from 'node:fs/promises';
 
-import { verifyAuditChain } from '#src/ops/index.ts';
+import { verifyAuditChain } from '#src/supervisor/index.ts';
 import { systemDigest } from '#src/runtime.ts';
 
 const file = process.argv[2];

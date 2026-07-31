@@ -36,6 +36,7 @@ import {
 } from '#test/support/builders.ts';
 import {
   fixedClock,
+  fixedRates,
   makePorts,
   makeWorkerCtx,
   sequentialIds,
@@ -273,6 +274,7 @@ function gatedServer(secret: string): {
       clock,
       meter: silentMeter(),
       logger: testLogger(),
+      rates: fixedRates(),
     },
     authenticate: false,
     webhook,

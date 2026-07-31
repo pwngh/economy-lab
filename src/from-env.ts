@@ -117,6 +117,24 @@ export function missingExternals(
 }
 
 /**
+ * The fault the env-derived rate table has, or null. It runs the construction
+ * {@link resolveExternals} performs, so `preflight` reports the order violation `openPorts`
+ * throws on. An init-supplied table belongs to the init's own shape row, and absent knobs to
+ * {@link missingExternals}, so both hand back null here.
+ */
+export function rateTableFault(env: EnvMap, init: ExternalInit): string | null {
+  if (init.rates !== undefined || missingExternals(env, init).length > 0) {
+    return null;
+  }
+  try {
+    resolveRates(env, undefined);
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+/**
  * Refuses a malformed port at wiring time, so the deploy fails at startup rather than deep
  * inside a request or sweep. The classic slip is passing a factory (`silentLogger`) where its
  * product (`silentLogger()`) belongs.
@@ -141,6 +159,9 @@ export function requireCallable(
  * Resolves the external ports from `env` and `secrets`, letting the init win over anything
  * derived. Dev fills sane defaults; production requires the real values for the ports not
  * overridden and throws `CONFIG.INVALID` listing every missing knob at once.
+ *
+ * An init-supplied port's shape is refused upstream, off the one table `preflight` reads, so
+ * nothing here re-decides what a well-formed signer or rate table is.
  */
 export function resolveExternals(
   env: EnvMap,
@@ -156,17 +177,12 @@ export function resolveExternals(
       { detail: { missing }, retryable: false },
     );
   }
-  const externals: Externals = {
+  return {
     signer: init.signer ?? signerFromSecrets(secrets),
     rates: resolveRates(env, init.rates),
     processor: init.processor ?? processorFor(env),
     pricing: init.pricing ?? flatFee(),
   };
-  requireCallable('signer', externals.signer, ['sign', 'verify']);
-  requireCallable('rates', externals.rates, ['payout']);
-  requireCallable('processor', externals.processor, ['submitPayout']);
-  requireCallable('externals', externals, ['pricing']);
-  return externals;
 }
 
 /**

@@ -19,6 +19,8 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import '#test/support/dist-guard.ts';
+
 import { makeEconomy } from '#test/support/economy.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { realizeFees } from '#src/worker/treasury.ts';
@@ -58,7 +60,8 @@ import {
   testConfig,
   testLogger,
 } from '#test/support/capabilities.ts';
-import { resolveConfig } from '#scripts/support/harness.ts';
+import { resolveConfig } from '#test/support/harness.ts';
+import { checkedConfig } from '#src/config.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
 import type { Economy, Operation, Outcome, WorkerCtx } from '#src/contract.ts';
@@ -518,7 +521,7 @@ describe('Sharding: Fee Sweep', () => {
       rates: fixedRates(),
       logger: testLogger(),
       meter: silentMeter(),
-      config: { ...testConfig(), platformShards: SHARDS },
+      config: checkedConfig({ ...testConfig(), platformShards: SHARDS }),
     };
     const summary = await realizeFees(store, ctx, { now: 1_000 });
 

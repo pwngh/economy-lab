@@ -11,10 +11,10 @@
 
 import type { Digest } from '#src/ports.ts';
 
-// The system SHA-256 shared by every default {@link Digest} factory.
+// Every default {@link Digest} factory shares this system SHA-256.
 
-// A synchronous SHA-256, resolved once from node:crypto on the first hash. Stays null on a
-// runtime without node:crypto (e.g. Cloudflare Workers), where the Web Crypto fallback is used.
+// The synchronous SHA-256 is resolved once from node:crypto on the first hash. It stays null on a
+// runtime without node:crypto (e.g. Cloudflare Workers), and the Web Crypto fallback runs instead.
 type SyncHash = (bytes: Uint8Array) => Uint8Array;
 
 let syncHash: SyncHash | null = null;
@@ -32,20 +32,20 @@ async function probeSyncHash(): Promise<void> {
   }
 }
 
-// Web Crypto SHA-256, available on every JS runtime; the fallback when node:crypto is absent.
+// Web Crypto SHA-256 exists on every JS runtime. It is the fallback when node:crypto is absent.
 async function subtleHash(bytes: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
 }
 
 /**
- * The system SHA-256 {@link Digest}: prefers node:crypto's synchronous hash (faster for the small
- * per-posting preimages) and falls back to Web Crypto. Both compute the same bytes, so a hash
- * written on one runtime still re-derives on another.
+ * Builds the system SHA-256 {@link Digest}. It prefers node:crypto's synchronous hash (faster for
+ * the small per-posting preimages) and falls back to Web Crypto. Both compute the same bytes, so
+ * a hash written on one runtime still re-derives on another.
  */
 export function sha256Digest(): Digest {
   return {
     hash: async (bytes) => {
-      // Probe once on the first call; every later caller awaits that same probe. Reading into a
+      // The first call starts the probe. Every later caller awaits that same probe. Reading into a
       // local keeps the hasher callable after the null check, since the probe mutates module state.
       let hasher = syncHash;
       if (hasher === null) {

@@ -9,7 +9,7 @@
  * @license MIT
  */
 
-import { recordCheckpoint, verifyCheckpoint } from '#src/chain.ts';
+import { recordCheckpoint, verifySealedHistory } from '#src/chain.ts';
 import { normalizeError } from '#src/errors.ts';
 
 import type { WorkerCtx } from '#src/contract.ts';
@@ -38,8 +38,8 @@ type CheckpointTally = {
 
 /**
  * Folds every account's chain head into one signed Merkle root and stores it as a checkpoint.
- * Errors are caught so one bad run cannot stop future runs; an empty ledger is skipped rather
- * than sealed.
+ * The sweep catches errors so one bad run cannot stop future runs. An empty ledger is skipped
+ * rather than sealed.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for how the
  *   signed Merkle root anchors the ledger and proves it is unaltered.
@@ -68,7 +68,7 @@ export async function sealCheckpoint(
       tally.deadLettered.push({ reason: normalized.code });
     }
   }
-  // The seal re-derives every chain head, so its duration grows with the table: a rising trend
+  // The seal re-derives every chain head, so its duration grows with the table. A rising trend
   // here is the early warning that the ledger is outgrowing the sweep.
   ctx.meter.observe('worker.checkpoint.seal_ms', ctx.clock.now() - started, {
     outcome: sealOutcome(tally),
@@ -110,8 +110,8 @@ async function driveSeal(
   await publishAnchor(ctx, tally.sealed);
 }
 
-// Best-effort by design: the anchor is an external service, and a down anchor must not stop the
-// seal. The failure log and counter are the operator's signal to re-anchor by hand.
+// Publishing is best-effort by design. The anchor is an external service, and a down anchor
+// must not stop the seal. The failure log and counter tell the operator to re-anchor by hand.
 async function publishAnchor(
   ctx: WorkerCtx,
   sealed: Checkpoint,
@@ -148,7 +148,11 @@ export type CheckpointVerifySummary = {
   // True when the audit found tampering — an operator signal, not a thrown error.
   mismatch: boolean;
 
-  // Thrown failures that are not retried; a normal "does not match" sets `mismatch` instead.
+  // True when the store could not answer for the sealed leaves, so nothing was checked. A
+  // clean `mismatch` alongside this one means "not asked", never "asked and fine".
+  unverified: boolean;
+
+  // Thrown failures that are not retried. A normal "does not match" sets `mismatch` instead.
   deadLettered: ReadonlyArray<{ reason: string }>;
 
   // Retried by the next run.
@@ -159,20 +163,22 @@ type VerifyTally = {
   verified: string | null;
   skipped: boolean;
   mismatch: boolean;
+  unverified: boolean;
   deadLettered: Array<{ reason: string }>;
   retrying: Array<{ code: string }>;
 };
 
 /**
- * Re-checks the most recent checkpoint against the current ledger, as a scheduled audit separate
- * from sealing. Delegates to `verifyCheckpoint` (chain.ts), which also checks the live head count
- * has not dropped below the sealed count, catching truncation a root check alone would miss. A
- * `false` result is a normal mismatch: recorded on the summary and logged at error level, not
- * thrown. Only a thrown error (corrupt row, unavailable storage) goes through the retry and
- * dead-letter split as sealing does. Skipped when no checkpoint exists yet.
+ * Re-checks the most recent checkpoint against stored history, as a scheduled audit separate from
+ * sealing. Delegates to `verifySealedHistory` (chain.ts), which holds the ledger against the
+ * sealed leaves rather than against a root recomputed from live heads — so ordinary traffic reads
+ * clean and only a change to history the seal already covered flags. A divergence is recorded on
+ * the summary and logged at error level, and does not throw. Only a thrown error (corrupt row,
+ * unavailable storage) goes through the retry and dead-letter split as sealing does. Skipped when
+ * no checkpoint exists yet.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for why a
- *   head-count drop is itself a tamper signal and why a mismatch is logged, not thrown.
+ *   vanished account is itself a tamper signal and why a mismatch is logged, not thrown.
  */
 export async function reverifyCheckpoint(
   store: Store,
@@ -182,6 +188,7 @@ export async function reverifyCheckpoint(
     verified: null,
     skipped: false,
     mismatch: false,
+    unverified: false,
     deadLettered: [],
     retrying: [],
   };
@@ -211,19 +218,32 @@ async function driveVerify(
     return;
   }
 
-  const ok = await verifyCheckpoint(
-    { ledger: store.ledger, digest: ctx.digest, signer: ctx.signer },
+  const verdict = await verifySealedHistory(
+    {
+      ledger: store.ledger,
+      checkpoints: store.checkpoints,
+      digest: ctx.digest,
+      signer: ctx.signer,
+    },
     latest,
   );
   tally.verified = latest.id;
-  tally.mismatch = !ok;
-  if (!ok) {
+  tally.mismatch = verdict === 'diverged';
+  tally.unverified = verdict === 'unverifiable';
+  if (verdict === 'diverged') {
     ctx.logger.log('error', 'worker.checkpoint.mismatch', { id: latest.id });
     ctx.meter.count('worker.checkpoint.verify', 1, {
       outcome: 'mismatch',
     });
     return;
   }
-  // The clean verify beats too: a silent auditor and a healthy one must not look alike.
+  // A store that cannot answer for its sealed leaves says so on its own channel. Counting it as
+  // a pass is how an auditor that checks nothing comes to look healthy.
+  if (verdict === 'unverifiable') {
+    ctx.logger.log('warn', 'worker.checkpoint.unverified', { id: latest.id });
+    ctx.meter.count('worker.checkpoint.verify', 1, { outcome: 'unverified' });
+    return;
+  }
+  // The passing path also emits a heartbeat, so a silent auditor never looks like a healthy one.
   ctx.meter.count('worker.checkpoint.verify', 1, { outcome: 'ok' });
 }

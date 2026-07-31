@@ -49,8 +49,8 @@ postgres* | postgresql*)
   psql "$url" -v ON_ERROR_STOP=1 -q \
     -c 'set client_min_messages=warning; drop schema public cascade; create schema public;'
   psql "$url" -v ON_ERROR_STOP=1 -q \
-    -c 'set client_min_messages=warning' -f db/postgresql-schema.sql
-  echo "migrated postgres — public schema reset and db/postgresql-schema.sql applied"
+    -c 'set client_min_messages=warning' -f packages/postgres/db/postgresql-schema.sql
+  echo "migrated postgres — public schema reset and the postgres schema applied"
   ;;
 mysql*)
   command -v mysql >/dev/null 2>&1 ||
@@ -71,8 +71,8 @@ mysql*)
   case "$hostport" in *:*) port="${hostport#*:}" ;; *) port="3306" ;; esac
   # MYSQL_PWD keeps the password off the process list and out of the insecure-on-CLI warning.
   MYSQL_PWD="$pass" mysql --host="$host" --port="$port" --user="$user" \
-    --default-character-set=utf8mb4 "$database" <db/mysql-schema.sql
-  echo "migrated mysql — db/mysql-schema.sql applied"
+    --default-character-set=utf8mb4 "$database" <packages/mysql/db/mysql-schema.sql
+  echo "migrated mysql — the mysql schema applied"
   ;;
 "")
   echo "no DATABASE_URL set — the in-memory store needs no schema; nothing to migrate."

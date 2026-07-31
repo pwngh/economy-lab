@@ -35,7 +35,10 @@ function accountIdInListIds(relativePath: string): string[] {
 }
 
 describe('Schema does not hand-copy the debit-normal set', () => {
-  for (const schema of ['db/postgresql-schema.sql', 'db/mysql-schema.sql']) {
+  for (const schema of [
+    'packages/postgres/db/postgresql-schema.sql',
+    'packages/mysql/db/mysql-schema.sql',
+  ]) {
     test(`${schema} has no hand-copied debit-normal account_id IN (...) list`, () => {
       assert.deepEqual(
         accountIdInListIds(schema),

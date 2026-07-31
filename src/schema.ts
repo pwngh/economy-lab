@@ -10,22 +10,22 @@
  */
 
 /**
- * The stamped schema version. Both SQL schema files seed a `schema_meta` row with this value;
- * startup reads it back and fails fast on a mismatch (see {@link assertSchemaCurrent}).
+ * The stamped schema version. Both SQL schema files seed a `schema_meta` row with this value.
+ * Startup reads it back and fails fast on a mismatch (see {@link assertSchemaCurrent}).
  *
  * Bump this AND the matching `insert into schema_meta` in BOTH schema files
- * (db/postgresql-schema.sql, db/mysql-schema.sql) in the same change, whenever a running database
- * would need re-migrating to pick up the edit.
+ * (packages/postgres/db/postgresql-schema.sql, packages/mysql/db/mysql-schema.sql) in the same
+ * change, whenever a running database would need re-migrating to pick up the edit.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/configuration/ Configuration}
  *   for schema versioning and drift guard.
  */
-export const SCHEMA_VERSION = '17';
+export const SCHEMA_VERSION = '18';
 
 /**
  * Throws unless `found` (the database's `schema_meta` value) matches this build's
- * {@link SCHEMA_VERSION}. `found` is null when the table is absent: an un-migrated or
- * pre-versioning database.
+ * {@link SCHEMA_VERSION}. `found` is null when the table is absent, which means an un-migrated
+ * or pre-versioning database.
  */
 export function assertSchemaCurrent(
   found: string | null,
@@ -44,10 +44,24 @@ export function assertSchemaCurrent(
 }
 
 /**
+ * The error a failed `schema_meta` read raises when the failure is not a missing table. Only a
+ * missing table means un-migrated, so every other failure must say so plainly: re-applying a
+ * schema against a database that cannot be reached is advice that can cost data.
+ */
+export function unreachableDatabase(backend: string, cause: unknown): Error {
+  return new Error(
+    `economy-lab: could not read the ${backend} database's schema_meta stamp. The database is ` +
+      'unreachable, or it refused the read. This is not an un-migrated schema, so re-applying ' +
+      'the schema fixes nothing. Restore the connection first.',
+    { cause },
+  );
+}
+
+/**
  * Throws unless the live database passed the money conformance vectors at boot. `failures` is
- * the output of the vendored db carrier's provePostgres/proveMysql, run right after its
- * idempotent install — so a non-empty list means the engine's own arithmetic disagrees with
- * src/money.vendored.ts, and no posting is safe to trust to it.
+ * the output of provePostgres/proveMysql, run right after their
+ * idempotent install. A non-empty list therefore means the engine's own arithmetic disagrees
+ * with src/money-arithmetic.ts. No posting is safe to trust to such an engine.
  */
 export function assertMoneyConformant(
   failures: readonly string[],

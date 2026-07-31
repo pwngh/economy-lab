@@ -28,6 +28,7 @@ import {
 } from '#src/operations/accrual.ts';
 import { maturedAtLeast, maturityBlocker } from '#src/maturity.ts';
 import { feeForPrice } from '#src/pricing.ts';
+import { subscriptionSource } from '#src/entitlements.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { Config } from '#src/config.ts';
@@ -42,10 +43,11 @@ import type { Leg, Subscription, Unit } from '#src/ports.ts';
 const MAX_PERIOD_MS = 10 * 365 * 24 * 60 * 60_000; // 315,360,000,000 ms
 
 /**
- * Charge the first month of a subscription and create its record: validate the price, post the
- * charge (seller earns, platform takes its fee), then save the `Subscription` the background
- * worker renews each later month. Returns `committed`, or a `rejected` outcome for a duplicate
- * active subscription (`ALREADY_SUBSCRIBED`) or a short spendable balance (`INSUFFICIENT_FUNDS`).
+ * Charges the first period of a subscription and creates its record. It validates the price,
+ * posts the charge (seller earns, platform takes its fee), then saves the `Subscription` the
+ * background worker renews each later period. Returns `committed`, or a `rejected` outcome for a
+ * duplicate active subscription (`ALREADY_SUBSCRIBED`) or a short spendable balance
+ * (`INSUFFICIENT_FUNDS`).
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/subscribe/ Subscribe}
  *   for the first-month charge and renewal handoff.
@@ -75,7 +77,7 @@ export async function subscribe(
     });
   }
 
-  // Promo draws first; planSpend (spend.ts) is the one implementation of the split rule.
+  // Promo draws first. planSpend (spend.ts) is the one implementation of the split rule.
   const promoBalance = await unit.ledger.balance(promo(operation.userId));
   const plan = planSpend(price, promoBalance);
 
@@ -84,8 +86,9 @@ export async function subscribe(
     return shortfall;
   }
 
-  // Minted before the charge so the posting's sealed metadata can name the subscription it
-  // opens — the anchor the renewal sweep re-proves the unhashed row against before charging.
+  // The id is minted before the charge so the posting's sealed metadata can name the
+  // subscription it opens — the anchor the renewal sweep re-proves the unhashed row against
+  // before charging.
   const subscriptionId = ctx.ids.next('sub');
   const transaction = await postCharge(
     { operation, plan, subscriptionId },
@@ -94,13 +97,15 @@ export async function subscribe(
   );
   await openSubscription(operation, subscriptionId, transaction, unit);
 
-  // Same transaction (`unit`) as the charge. A lapsed subscription's old grant row was marked
-  // revoked rather than deleted; this grant clears that mark and reactivates ownership.
+  // The grant runs in the same transaction (`unit`) as the charge. A lapsed subscription's old
+  // grant row was marked revoked rather than deleted. This grant clears that mark and
+  // reactivates ownership. The source is this subscription's, so another seller's subscription to
+  // the same sku is a grant beside it rather than an overwrite.
   // See https://economy-lab-docs.pages.dev/economy/reference/operations/subscribe/ for the
   // same-transaction grant and renewal handoff.
   await unit.entitlements.grant(operation.userId, operation.sku, {
     expiresAt: transaction.postedAt + operation.periodMs,
-    source: 'subscription:' + subscriptionId,
+    source: subscriptionSource(subscriptionId),
   });
 
   return { status: 'committed', transaction };
@@ -124,7 +129,7 @@ function rejectSelfSubscription(
 
 // Op-specific guards the central validateOperation can't cover. A NaN, fractional, non-positive,
 // or over-ceiling `periodMs` corrupts the billing math, and a blank `sku` would key an entitlement
-// grant to nothing; both are wiring errors, so throw a fault.
+// grant to nothing. Both are wiring errors, so this throws a fault.
 function validateFields(
   operation: Extract<Operation, { kind: 'subscribe' }>,
 ): void {
@@ -149,7 +154,8 @@ function validateFields(
   }
 }
 
-// A wrong currency or out-of-band price is a wiring error, so throw a fault rather than decline.
+// A wrong currency or out-of-band price is a wiring error, so this throws a fault rather than
+// declining.
 // The band is config (SUBSCRIPTION_PRICE_MIN/MAX_MINOR), defaulting to 100 to 10,000 credits.
 function validatedPrice(price: Amount, config: Config): Amount {
   if (price.currency !== 'CREDIT') {
@@ -180,7 +186,7 @@ function validatedPrice(price: Amount, config: Config): Amount {
 // --- The funds plan ---------------------------------------------------------------
 
 // The submit pipeline's funds check (screenFunds) only runs for `spend`, so subscribe checks here.
-// A pre-check only: the database's per-user non-negative CHECK is what blocks overdrafts.
+// This is a pre-check only. The database's per-user non-negative CHECK is what blocks overdrafts.
 async function screenSpendable(
   unit: Unit,
   ctx: Ctx,
@@ -195,8 +201,8 @@ async function screenSpendable(
       have,
     });
   }
-  // The same maturity gate spend runs: the spendable-funded part must be covered by cleared
-  // funds, so a first-period charge cannot draw on card credits still inside the chargeback
+  // This is the same maturity gate spend runs. The spendable-funded part must be covered by
+  // cleared funds, so a first-period charge cannot draw on card credits still inside the chargeback
   // window. Promo draws first and is not gated.
   const cleared = await maturedAtLeast(
     unit.ledger,
@@ -234,8 +240,9 @@ async function postCharge(
   appendSpendableLegs(built, operation, plan.spendablePart, ctx);
 
   // Under the accrual split, the seller's credit parks on SETTLEMENT_ACCRUAL and the platform
-  // legs shard-route by the idempotency key like spend's — without routing, every subscription
-  // serializes on the two bare platform rows. Off, the legs stay byte-identical to today's.
+  // legs shard-route by the idempotency key like spend's. Without routing, every subscription
+  // serializes on the two bare platform rows. With the flag off, the legs are byte-identical to
+  // the unsplit form.
   const parked = ctx.config.accrualDrain ? parkEarnedLegs(built) : null;
   const legs =
     parked === null
@@ -253,9 +260,9 @@ async function postCharge(
       kind: 'subscribe',
       sku: operation.sku,
       sellerId: operation.sellerId,
-      // Sealed into the chain hash: the subscription this charge opens and the per-period price
-      // and cadence, which the renewal sweep re-proves the unhashed row against; plus, under the
-      // split, the share map the accrual rows below must match.
+      // These fields are sealed into the chain hash: the subscription this charge opens and the
+      // per-period price and cadence, which the renewal sweep re-proves the unhashed row
+      // against. Under the split, the share map the accrual rows below must match is sealed too.
       subscriptionId,
       userId: operation.userId,
       price: encodeAmount(operation.price),
@@ -265,7 +272,7 @@ async function postCharge(
   });
   if (parked !== null) {
     // Subscriptions have no orderId, and refund never targets them, so the posting id keys the
-    // rows; the drain only needs uniqueness.
+    // rows. The drain only needs uniqueness.
     await unit.accruals.put(
       accrualRowsOf({
         orderId: transaction.id,
@@ -281,7 +288,7 @@ async function postCharge(
 }
 
 // Promo credits are not the buyer's money, so the seller is paid real earnings from REVENUE while
-// PROMO_FLOAT offsets the drawn-down grant. No fee on the promo part, as in `spend`.
+// PROMO_FLOAT offsets the drawn-down grant. The promo part carries no fee, as in `spend`.
 function appendPromoLegs(
   legs: Leg[],
   operation: Extract<Operation, { kind: 'subscribe' }>,
@@ -307,7 +314,7 @@ function appendSpendableLegs(
   }
   // `feeForPrice` (pricing.ts) owns the fee rounding rule. Spend, first-month subscribe, and
   // renewal all call it, so they all round identically.
-  const feeMinor = feeForPrice(spendablePart.minor, ctx.config.platformFeeBps);
+  const feeMinor = feeForPrice(spendablePart, ctx.config.platformFeeBps);
   // Relies on feeForPrice never returning more than the price: a fee policy that did would make
   // this net negative and the credit leg below invalid.
   const netMinor = spendablePart.minor - feeMinor;

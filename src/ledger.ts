@@ -297,8 +297,8 @@ async function assertKnownAccounts(
   }
 }
 
-// `screenFunds` should already have rejected anyone short, so this backstop normally never trips;
-// if it does, something earlier went wrong — typically a missing lock let two ops race — so it
+// `screenFunds` rejects anyone short before this point, so this backstop normally never trips.
+// If it does, something earlier went wrong — typically a missing lock let two ops race — so it
 // throws a distinct OVERDRAFT fault rather than quietly rejecting.
 async function assertNoOverdraft(
   ledger: Ledger,

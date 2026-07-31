@@ -10,24 +10,24 @@
  */
 
 /**
- * The single environment module: every entry point reads the environment once at its edge and
+ * The single environment module. Every entry point reads the environment once at its edge and
  * parses it through these functions, so one rule governs the whole lab.
  *
- * The integer rule: a value must be a plain decimal integer; anything malformed or outside the
- * caller's bounds falls back to the caller's documented default, so a bad override never
+ * The integer rule: a value must be a plain decimal integer. Anything malformed or outside the
+ * caller's bounds falls back to the caller's documented default. A bad override therefore never
  * misparses ("5m" is not 5) and never propagates NaN.
  *
  * The URL rule: blank is unset. `REDIS_URL=` disables the cache exactly like deleting the line.
  *
- * The store-URL rule: DATABASE_URL is canonical and wins for the engine its scheme names; PG_URL
+ * The store-URL rule: DATABASE_URL is canonical and wins for the engine its scheme names. PG_URL
  * and MYSQL_TEST_URL supply an engine's URL only when DATABASE_URL doesn't name that engine. An
  * engine nothing names stays null, and each caller documents its own fallback.
  */
 
 /**
  * The environment shape every construction entry point takes — a plain string map, in practice
- * `process.env`. Always passed explicitly: no module reads the process environment itself, so a
- * test or embedder controls exactly what the library sees.
+ * `process.env`. Callers always pass it explicitly. No module reads the process environment
+ * itself, so a test or embedder controls exactly what the library sees.
  */
 export type EnvMap = Record<string, string | undefined>;
 
@@ -40,7 +40,7 @@ export interface IntBounds {
   max?: number;
 }
 
-/** Parses one env integer under the module rule above; `bounds` default to `min: 0`. */
+/** Parses one env integer under the module rule above. `bounds` default to `min: 0`. */
 export function readInt(
   value: string | undefined,
   fallback: number,
@@ -58,15 +58,25 @@ export function readIntOrNull(
     return null;
   }
   const parsed = Number.parseInt(value, 10);
-  if (!Number.isSafeInteger(parsed)) {
-    return null;
-  }
-  const min = bounds?.min ?? 0;
-  const max = bounds?.max ?? Number.MAX_SAFE_INTEGER;
-  return parsed >= min && parsed <= max ? parsed : null;
+  return withinIntBounds(parsed, bounds) ? parsed : null;
 }
 
-/** Parses a bigint for minor-unit amounts that can exceed 2^53; digits only, else the fallback. */
+/**
+ * Whether a number is an integer a knob admits. Unset bounds are `min: 0` and the largest safe
+ * integer.
+ *
+ * This is the one statement of the rule, so a knob's bound reads the same whether the value came
+ * out of the environment or was handed in already parsed.
+ */
+export function withinIntBounds(value: number, bounds?: IntBounds): boolean {
+  return (
+    Number.isSafeInteger(value) &&
+    value >= (bounds?.min ?? 0) &&
+    value <= (bounds?.max ?? Number.MAX_SAFE_INTEGER)
+  );
+}
+
+/** Parses a bigint for minor-unit amounts that can exceed 2^53. Digits only, else the fallback. */
 export function readBigInt(
   value: string | undefined,
   fallback: bigint,
@@ -87,8 +97,9 @@ export function readUrl(value: string | undefined): string | null {
   return value === undefined || value === '' ? null : value;
 }
 
-/** Parses a word knob: the value must match one of `allowed` exactly, else the fallback — the
- * integer rule's shape for words, so "BENCH_MODE=Contention" never half-selects a mode. */
+/** Parses a word knob. The value must match one of `allowed` exactly, else the fallback applies.
+ * This is the integer rule's shape for words, so "BENCH_MODE=Contention" never half-selects a
+ * mode. */
 export function readEnum<T extends string>(
   value: string | undefined,
   allowed: readonly T[],
@@ -97,7 +108,7 @@ export function readEnum<T extends string>(
   return allowed.includes(value as T) ? (value as T) : fallback;
 }
 
-/** Split on commas, trim, drop blanks; membership stays the caller's rule. */
+/** Splits on commas, trims, and drops blanks. Membership stays the caller's rule. */
 export function readList(value: string | undefined): string[] {
   return (value ?? '')
     .split(',')
@@ -105,13 +116,14 @@ export function readList(value: string | undefined): string[] {
     .filter((s) => s !== '');
 }
 
-/** Parses an opt-in flag: exactly "1" or "true" is on; anything else, blank included, is off. */
+/** Parses an opt-in flag. Exactly "1" or "true" is on. Anything else, blank included, is off. */
 export function readFlag(value: string | undefined): boolean {
   return value === '1' || value === 'true';
 }
 
 /** True in production (NODE_ENV=production), where a required value must fail fast rather than
- * fall back to a dev stand-in. The one definition, so every gate agrees on what production is. */
+ * fall back to a dev stand-in. This is the one definition, so every gate agrees on what
+ * production is. */
 export function isProduction(env: EnvMap): boolean {
   return env.NODE_ENV === 'production';
 }
@@ -148,7 +160,7 @@ export function storeUrls(env: EnvMap): StoreUrls {
 /**
  * The databases docker-compose.yml ships, as connection URLs. The bench and the Postgres test
  * suites fall back to these, so the lab's own tooling reaches the compose stack with no env at
- * all; a reachability probe turns their absence into a skip, never a hang or a false pass.
+ * all. A reachability probe turns their absence into a skip, never a hang or a false pass.
  */
 export const LOCAL_POSTGRES_URL =
   'postgres://economy:economy@localhost:55432/economy_lab';
@@ -177,13 +189,15 @@ export interface ServiceUrls {
   dispatcher: string | null;
   /** PROCESSOR_URL — the payout provider's HTTP endpoint; required in production. */
   processor: string | null;
-  /** TASKQ_DATABASE_URL — the Postgres the optional @pwngh/taskq bridge enqueues into. */
+  /** TASKQ_DATABASE_URL — the postgres:// or mysql:// database the optional @pwngh/taskq
+   * bridge enqueues into. */
   taskq: string | null;
   /** TILIA_PAYEE_DATABASE_URL — the Postgres holding the durable Tilia payee table. */
   tiliaPayees: string | null;
 }
 
-/** The one service-URL resolver: the names in one place, the blank-is-unset rule on each. */
+/** The one service-URL resolver. It keeps the names in one place and applies the blank-is-unset
+ * rule to each. */
 export function serviceUrls(env: EnvMap): ServiceUrls {
   return {
     redis: readUrl(env.REDIS_URL),
@@ -198,10 +212,10 @@ export function serviceUrls(env: EnvMap): ServiceUrls {
 // --- Required secrets ----------------------------------------------------------------
 
 /**
- * The secrets a deployed process cannot run without. The one policy, expressed once: the entry
- * point (scripts/main.ts) refuses a blank in ANY NODE_ENV, and loadConfig additionally enforces
- * it in production — both through {@link missingSecrets}, so the two checks can never disagree
- * on the list or on what counts as blank.
+ * The secrets a deployed process cannot run without. The entry point refuses a blank in any
+ * NODE_ENV, and loadConfig additionally enforces it in production. Both go through
+ * {@link missingSecrets}, so the two checks can never disagree on the list or on what counts
+ * as blank.
  */
 export const REQUIRED_SECRETS = ['WEBHOOK_SECRET', 'SIGNING_SECRET'] as const;
 

@@ -9,10 +9,7 @@
  * @license MIT
  */
 
-// The durable Tilia payee directory: one row per lab user carrying the
-// routing ids Tilia's hosted onboarding minted. Production resolves payees
-// here instead of the TILIA_PAYEE_MAP env JSON, which stays as the dev-shaped
-// fallback. psql is the admin UI:
+// psql is the admin UI:
 //
 //   insert into tilia_payees
 //     (user_id, account_id, source_payment_method_id, destination_payment_method_id)
@@ -24,10 +21,14 @@
 //         updated_at = now();
 
 import type { TiliaPayee } from '@pwngh/economy-edge/providers/outbound/tilia';
-import type { PgPoolLike } from '#src/engines/pg-driver.ts';
 
-/** The one query method the store needs; a pg pool or client (pg-driver.ts) satisfies it. */
-export type PayeeDb = Pick<PgPoolLike, 'query'>;
+/** The one query method the store needs. A `pg` pool or client satisfies it structurally. */
+export type PayeeDb = {
+  query(
+    text: string,
+    values?: readonly unknown[],
+  ): Promise<{ rows: Record<string, unknown>[]; rowCount: number | null }>;
+};
 
 export interface TiliaPayeeStore {
   ensureSchema(): Promise<void>;

@@ -38,7 +38,7 @@ describe('toInt64BE', () => {
       assert.throws(
         () => toInt64BE(value),
         (error: unknown) =>
-          error instanceof EconomyError && error.code === 'MONEY.OVERFLOW',
+          EconomyError.is(error) && error.code === 'MONEY.OVERFLOW',
       );
     }
   });

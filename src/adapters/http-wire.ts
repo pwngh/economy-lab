@@ -9,20 +9,16 @@
  * @license MIT
  */
 
-// Wire (de)serialization for the HTTP store adapter. `JSON.stringify` can't serialize the
+// This file holds the wire (de)serialization for the HTTP store adapter. `JSON.stringify` can't serialize the
 // `bigint` an amount is stored as, so amounts travel as decimal strings (e.g. `'CREDIT:12.34'`)
 // and parse back on arrival. Client and server both import this file, so the format stays in sync.
 
-import {
-  decodeAmountWire,
-  decodeAmounts,
-  encodeAmount,
-  encodeAmounts,
-} from '#src/money.ts';
+import { decodeCanonicalAmount, encodeAmount } from '#src/money.ts';
+import { decodeStoredOperation, encodeOperation } from '#src/wire-contract.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
-import type { Operation, Transaction } from '#src/contract.ts';
+import type { Transaction } from '#src/contract.ts';
 import type {
   Attempt,
   InboxMessage,
@@ -53,12 +49,16 @@ function decodeLeg(wire: unknown): Leg {
   return { account: row.account as AccountRef, amount: amountFrom(row.amount) };
 }
 
+// The peer wrote every one of these with `encodeAmount`, so any other spelling is a foreign or
+// stale writer naming a different number, not a loose one naming the same number.
 function amountFrom(wire: string): Amount {
-  return decodeAmountWire(wire);
+  return decodeCanonicalAmount(wire, 'Wire amount');
 }
 
-// An inbox row carries a whole Operation whose money fields differ by `kind`; the generic
-// Amount-brand walk (encodeAmounts/decodeAmounts) codes them all with no per-kind branch to drift.
+// An inbox row carries a whole Operation whose money fields differ by `kind`. Both halves are the
+// wire contract's, shared with the SQL engines so one column has one spelling: the write is the
+// Amount-brand walk, which needs no per-kind branch, and the read takes the kind's field table,
+// because a walk cannot tell an amount from a string field spelled like one.
 
 /**
  * Encoders to the JSON wire shape, one per record type the adapter sends.
@@ -139,13 +139,13 @@ export const encodeWire = {
 
   inboxMessage: (entry: InboxMessage): unknown => ({
     ...entry,
-    operation: encodeAmounts(entry.operation),
+    operation: encodeOperation(entry.operation),
   }),
 };
 
 /**
  * Decoders back to typed domain records, one per record type the adapter receives (reverse of
- * `encodeWire`). Plain wire strings that are branded id types in the domain are cast back here.
+ * `encodeWire`). The decoders cast plain wire strings back to the branded id types the domain uses.
  */
 export const decodeWire = {
   amount: (wire: unknown): Amount => amountFrom(wire as string),
@@ -185,8 +185,8 @@ export const decodeWire = {
     };
   },
 
-  // Wire result of an idempotency-key claim: `claimed: true` means do the work; `claimed: false`
-  // carries the transaction the earlier request recorded.
+  // Decodes the wire result of an idempotency-key claim. `claimed: true` means do the work.
+  // `claimed: false` carries the transaction the earlier request recorded.
   claim: (
     wire: unknown,
   ): { claimed: true } | { claimed: false; transaction: Transaction } => {
@@ -230,7 +230,7 @@ export const decodeWire = {
 
   inboxMessage: (wire: unknown): InboxMessage => {
     const row = wire as InboxMessage & { operation: unknown };
-    return { ...row, operation: decodeAmounts(row.operation) as Operation };
+    return { ...row, operation: decodeStoredOperation(row.operation) };
   },
 
   velocity: (wire: unknown): Velocity => {

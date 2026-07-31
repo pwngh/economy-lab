@@ -9,12 +9,6 @@
  * @license MIT
  */
 
-/**
- * Client half of the HTTP storage backend: a Store whose every call becomes an HTTP request
- * answered by a server handler (http-server.ts). Amounts cross the wire as decimal strings
- * because JSON cannot carry a bigint.
- */
-
 import { ERROR_CODES, EconomyError } from '#src/errors.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { decodeWire, encodeWire } from '#src/adapters/http-wire.ts';
@@ -39,6 +33,7 @@ import type {
   Store,
   Unit,
   CheckpointStore,
+  EntitlementGrant,
   EntitlementStore,
   IdempotencyStore,
   InboxStore,
@@ -63,14 +58,17 @@ export type HttpStoreOptions = {
 
 type Transport = { fetch: FetchLike; baseUrl: string };
 
-// Every response body: a result, or a failure the client rebuilds into an equivalent
-// EconomyError — same stable code, same retryable verdict — so it fails like an in-process call.
+// Every response body carries either a result or a failure. The client rebuilds a failure
+// into an equivalent EconomyError — same stable code, same retryable verdict. The call then
+// fails the same way an in-process call would.
 type WireResult =
   | { ok: true; body: unknown }
   | { ok: false; error: { code: string; message: string; retryable: boolean } };
 
-// An unknown code (a newer or older server) degrades to a retryable STORE.FAILURE rather than
-// being trusted verbatim.
+// A newer or older server can send a code this client does not know. The client rewrites an
+// unknown code to STORE.FAILURE rather than trusting it verbatim. The retry verdict is kept
+// either way: the server knows whether its own failure was permanent, and overriding it to
+// retryable turns a fault that will never clear into an infinite retry.
 const KNOWN_CODES = new Set<string>(Object.values(ERROR_CODES));
 
 function rebuildError(wire: {
@@ -84,7 +82,7 @@ function rebuildError(wire: {
     });
   }
   return new EconomyError(ERROR_CODES.STORE_FAILURE, wire.message, {
-    retryable: true,
+    retryable: wire.retryable,
   });
 }
 
@@ -112,8 +110,8 @@ async function call(
 
 // --- The ledger, scoped to one transaction ----------------------------------------
 
-// A transaction lives on the server as a "session"; every request path carries its id. The id
-// 'root' means "not in a transaction": each such call runs on its own.
+// A transaction lives on the server as a "session". Every request path carries the session id.
+// The id 'root' means the call is not in a transaction, so each such call runs on its own.
 function sessionLedger(transport: Transport, session: string): Ledger {
   const at = (method: string): string => `/tx/${session}/ledger/${method}`;
   return {
@@ -339,9 +337,8 @@ function sessionOutbox(transport: Transport, session: string): OutboxStore {
     markRelayed: async (ids, options) => {
       await call(transport, at('markRelayed'), { ids }, options);
     },
-    recordFailure: async (id, options) => {
-      await call(transport, at('recordFailure'), { id }, options);
-    },
+    bumpAttempt: (id, options) =>
+      call(transport, at('bumpAttempt'), { id }, options) as Promise<number>,
     deadLetter: async (id, reason, options) => {
       await call(transport, at('deadLetter'), { id, reason }, options);
     },
@@ -369,9 +366,8 @@ function sessionInbox(transport: Transport, session: string): InboxStore {
     markApplied: async (id, options) => {
       await call(transport, at('markApplied'), { id }, options);
     },
-    bumpAttempt: async (id, options) => {
-      await call(transport, at('bumpAttempt'), { id }, options);
-    },
+    bumpAttempt: (id, options) =>
+      call(transport, at('bumpAttempt'), { id }, options) as Promise<number>,
     deadLetter: async (id, reason, options) => {
       await call(transport, at('deadLetter'), { id, reason }, options);
     },
@@ -415,7 +411,12 @@ function sessionSagas(transport: Transport, session: string): SagaStore {
       const rows = (await call(
         transport,
         at('list'),
-        options?.states === undefined ? {} : { states: [...options.states] },
+        {
+          ...(options?.states === undefined
+            ? {}
+            : { states: [...options.states] }),
+          ...(options?.userId === undefined ? {} : { userId: options.userId }),
+        },
         options,
       )) as unknown[];
       for (const row of rows) {
@@ -431,14 +432,26 @@ function sessionSagas(transport: Transport, session: string): SagaStore {
       )) as unknown[];
       return rows.map(decodeWire.saga);
     },
-    // Omits the optional `options`: a caller's cancellation signal is silently dropped here.
-    advance: (id, from, to, patch) =>
-      call(transport, at('advance'), {
-        id,
-        from,
-        to,
-        patch: encodeWire.sagaPatch(patch),
-      }) as Promise<boolean>,
+    // The five parameters of SagaStore.advance arrive as a tuple: naming them all would trip the
+    // repo's four-parameter cap. `expectAttempts` is a predicate the server applies, so it rides
+    // the request body; the rest of `options` stays client-side.
+    advance: (...args) => {
+      const [id, from, to, patch, options] = args;
+      return call(
+        transport,
+        at('advance'),
+        {
+          id,
+          from,
+          to,
+          patch: encodeWire.sagaPatch(patch),
+          ...(options?.expectAttempts === undefined
+            ? {}
+            : { expectAttempts: options.expectAttempts }),
+        },
+        options,
+      ) as Promise<boolean>;
+    },
     deadLetter: async (id, reason, options) => {
       await call(transport, at('deadLetter'), { id, reason }, options);
     },
@@ -460,7 +473,12 @@ function sessionEntitlements(
       await call(transport, at('grant'), { userId, sku, attrs }, options);
     },
     revoke: async (userId, sku, options) => {
-      await call(transport, at('revoke'), { userId, sku }, options);
+      await call(
+        transport,
+        at('revoke'),
+        { userId, sku, source: options?.source },
+        options,
+      );
     },
     owns: (userId, sku, options) =>
       call(transport, at('owns'), { userId, sku }, options) as Promise<boolean>,
@@ -470,7 +488,7 @@ function sessionEntitlements(
         at('list'),
         { userId },
         options,
-      )) as Array<{ sku: string; expiresAt: number | null }>;
+      )) as Array<EntitlementGrant>;
       yield* grants;
     },
   };
@@ -503,6 +521,17 @@ function sessionSubscriptions(
         options,
       );
       return row === null ? null : decodeWire.subscription(row);
+    },
+    listFor: async function* (userId, options) {
+      const rows = (await call(
+        transport,
+        at('listFor'),
+        { userId },
+        options,
+      )) as unknown[];
+      for (const row of rows) {
+        yield decodeWire.subscription(row);
+      }
     },
     cancel: async (id, options) => {
       await call(transport, at('cancel'), { id }, options);
@@ -549,14 +578,40 @@ function sessionPromos(transport: Transport, session: string): PromoStore {
       )) as unknown[];
       return rows.map(decodeWire.promoGrant);
     },
+    liveFor: async (userId, options) => {
+      const rows = (await call(
+        transport,
+        at('liveFor'),
+        { userId },
+        options,
+      )) as unknown[];
+      return rows.map(decodeWire.promoGrant);
+    },
+    holders: (options) => streamPromoHolders(transport, session, options),
     markReversed: async (id, options) => {
       await call(transport, at('markReversed'), { id }, options);
     },
   };
 }
 
-// The claim/mark surface rides the session (it must share the money transaction); the drain's
-// out-of-transaction reads ride the root endpoints below.
+async function* streamPromoHolders(
+  transport: Transport,
+  session: string,
+  options?: CallOptions,
+): AsyncIterable<string> {
+  const rows = (await call(
+    transport,
+    `/tx/${session}/promos/holders`,
+    {},
+    options,
+  )) as string[];
+  for (const userId of rows) {
+    yield userId;
+  }
+}
+
+// The claim/mark surface rides the session because it must share the money transaction. The
+// drain's out-of-transaction reads ride the root endpoints below.
 function sessionAccruals(transport: Transport, session: string): AccrualStore {
   const at = (method: string): string => `/tx/${session}/accruals/${method}`;
   return {
@@ -610,8 +665,8 @@ function sessionAccruals(transport: Transport, session: string): AccrualStore {
   };
 }
 
-// Root accrual reads commit nothing, so they skip the session the way trust reads do; the
-// write methods throw, steering every claim or mark through a transaction.
+// Root accrual reads commit nothing, so they skip the session the way trust reads do. The
+// write methods throw, which steers every claim or mark through a transaction.
 function rootAccruals(transport: Transport): AccrualStore {
   const at = (method: string): string => `/accruals/${method}`;
   const inTransactionOnly = (): never => {
@@ -641,8 +696,8 @@ function rootAccruals(transport: Transport): AccrualStore {
   };
 }
 
-// These accrual codecs must stay wire-compatible with their copies in http-server.ts; drift
-// between the two is a silent wire bug.
+// These accrual codecs must stay wire-compatible with their copies in http-server.ts. If the
+// two drift apart, the wire breaks silently.
 function encodeAccrualRow(row: AccrualRow): Record<string, unknown> {
   return { ...row, amount: encodeWire.amount(row.amount) };
 }
@@ -765,8 +820,9 @@ async function runTransaction<T>(
     await call(transport, `/tx/${session}/commit`, {}, options);
     return result;
   } catch (error) {
-    // No options on purpose: an aborted rollback would leak the server-side transaction. Its own
-    // failure is swallowed so the original error propagates.
+    // This call passes no options on purpose, because an aborted rollback would leak the
+    // server-side transaction. The catch swallows the rollback's own failure so the original
+    // error propagates.
     await call(transport, `/tx/${session}/rollback`, {}).catch(() => {});
     throw error;
   }
@@ -783,8 +839,8 @@ function sessionUnit(transport: Transport, session: string): Unit {
     entitlements: sessionEntitlements(transport, session),
     subscriptions: sessionSubscriptions(transport, session),
     promos: sessionPromos(transport, session),
-    // The root endpoints, not session-scoped ones: a trust write commits on the server by
-    // itself, so it survives a session rollback.
+    // Trust uses the root endpoints, not session-scoped ones. A trust write commits on the
+    // server by itself, so it survives a session rollback.
     trust: rootTrust(transport),
     accruals: sessionAccruals(transport, session),
   };
@@ -795,8 +851,8 @@ function sessionUnit(transport: Transport, session: string): Unit {
 /**
  * Build a {@link Store} that does all its work over HTTP requests. Without a `fetch`, it
  * creates an in-process server ({@link createStoreServer}) over a fresh in-memory store
- * and points the client at it, so a bare `httpStore()` is a complete, working Store that
- * needs no running service or network.
+ * and points the client at it. A bare `httpStore()` is therefore a complete, working Store
+ * that needs no running service or network.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/ports/storage/ Storage} for how this HTTP backend implements the storage port.
  */
@@ -820,5 +876,5 @@ export function httpStore(options?: HttpStoreOptions): Store {
   };
 }
 
-// Re-exported so a host can attach the server side to a real HTTP listener.
+// This re-export lets a host attach the server side to a real HTTP listener.
 export { createStoreServer } from '#src/adapters/http-server.ts';

@@ -10,20 +10,26 @@
  */
 
 /**
- * The submit pipeline: validate, authorize, then one all-or-nothing transaction that claims the
- * idempotency key, screens risk and funds, runs the handler, and queues the event. `createEconomy`
- * builds the public Economy (submit + read + close); the handlers live in src/operations/.
+ * The submit pipeline. It validates and authorizes, then runs one all-or-nothing transaction
+ * that claims the idempotency key, screens risk and funds, runs the handler, and queues the
+ * event.
+ *
+ * `createEconomy` builds the public Economy (submit + read + close) from one handler per
+ * operation.
  */
 
 import { fault, rejected, ERROR_CODES } from '#src/errors.ts';
+import { catalogMismatch } from '#src/catalog.ts';
 import { lockAll } from '#src/ledger.ts';
 import {
   compare,
-  decodeAmountWire,
+  decodeCanonicalAmount,
   encodeAmount,
   isNegative,
+  negate,
   rateGte,
   toAmount,
+  zero,
 } from '#src/money.ts';
 import {
   currency,
@@ -52,8 +58,11 @@ import {
   riskSubject,
   VELOCITY_CURRENCY,
 } from '#src/trust.ts';
-import { economyPaused } from '#src/config.ts';
+import { checkedConfig, economyPaused } from '#src/config.ts';
+import { assertOperationShape } from '#src/wire-contract.ts';
 import { loadArchiveBoundary } from '#src/chain.ts';
+import { maturedBalance } from '#src/maturity.ts';
+import { EVENT_VERSION } from '#src/ports.ts';
 
 import type { ArchiveBoundary } from '#src/chain.ts';
 import { encodeWire } from '#src/adapters/http-wire.ts';
@@ -71,14 +80,15 @@ import type {
   Economy,
   EconomyStatus,
   Handler,
+  HealthReport,
   Operation,
   Outcome,
-  ProveReport,
 } from '#src/contract.ts';
 import type {
   Attempt,
   Ports,
   EconomyEvent,
+  EventType,
   Ledger,
   CallOptions,
   Rates,
@@ -91,22 +101,37 @@ export type { Economy } from '#src/contract.ts';
 type Registry = Partial<Record<Operation['kind'], Handler>>;
 
 /**
- * The one door to an {@link Economy}: sync, over a finished {@link Ports} bag — `openPorts`,
- * `memoryPorts`, or a hand-built structural object.
+ * The one door to an {@link Economy}. It is sync and takes a finished {@link Ports} bag —
+ * `openPorts`, `memoryPorts`, or a hand-built one, whose config it holds to the knob bounds.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/the-economy/ The Economy} for the
  * construction, the submit/read surface, and the request path.
+ *
+ * @example
+ * const economy = createEconomy(await openPorts(process.env));
+ * const outcome = await economy.submit(topUp({
+ *   idempotencyKey: idempotencyKey('purchase', 'evt_5521'),
+ *   actor: systemActor('payments'),
+ *   userId: 'usr_buyer',
+ *   amount: toAmount('CREDIT', 60_000n), // 600 credits (~$5 at the 120/$ buy rate)
+ *   source: 'card',
+ * }));
+ * if (outcome.status === 'rejected') {
+ *   // e.g. RISK_DENIED: outcome.detail.reason names the window and limit
+ *   console.warn(outcome.detail.reason, outcome.detail);
+ * }
  */
 export function createEconomy(ports: Ports): Economy {
   const store = ports.store;
-  // A runtime config mutation would half-apply: most knobs are read per submit, but
-  // velocityWindowMs is captured at store construction. Frozen, a mutation throws instead;
-  // change a knob by rebuilding over the same store.
+  // Before the freeze below, so a refused bag goes back to the caller as it arrived.
+  const ctx = contextOf(ports);
+  // A runtime config mutation would half-apply: submit reads most knobs per call, but the store
+  // captures velocityWindowMs at construction. Freezing makes a mutation throw instead.
+  // Change a knob by rebuilding over the same store.
   Object.freeze(ports.config);
   Object.freeze(ports.config.maturityHorizonMs);
   Object.freeze(ports.config.payoutSla);
   assertBuyCoversPar(ports.rates);
-  const ctx = contextOf(ports);
   const registry = REGISTRY;
 
   return {
@@ -123,6 +148,22 @@ export function createEconomy(ports: Ports): Economy {
       saga: (id, options) => store.sagas.load(id, options),
       entitled: (userId, sku, options) =>
         store.entitlements.owns(userId, sku, options),
+      wallet: async (userId, options) => {
+        const [spend, earn, promoBal, payableNow] = await Promise.all([
+          cachedBalance(ctx, store.ledger, spendable(userId), options),
+          cachedBalance(ctx, store.ledger, earned(userId), options),
+          cachedBalance(ctx, store.ledger, promo(userId), options),
+          maturedBalance(store.ledger, earned(userId), ctx.clock.now(), {
+            config: ctx.config,
+            ...(options?.signal ? { signal: options.signal } : {}),
+          }),
+        ]);
+        return { spendable: spend, earned: earn, promo: promoBal, payableNow };
+      },
+      entitlements: (userId, options) =>
+        store.entitlements.list(userId, options),
+      subscriptions: (userId, options) =>
+        store.subscriptions.listFor(userId, options),
       status: () => economyStatus(ctx),
       capacity: (options) => capacityReport(store, ctx, options),
       accounts: (options) => store.ledger.balanceAccounts(options),
@@ -133,15 +174,68 @@ export function createEconomy(ports: Ports): Economy {
       checkpoint: (options) => store.checkpoints.latest(options),
       health: (options) => healthReport(store, ctx, options),
     },
-    close: () => store.close(),
+    close: closer(ports),
   };
+}
+
+// The ports that can hold a resource, in the order close() releases them. The store goes last so
+// a dispatcher or cache flushing on the way out still has one.
+const CLOSABLE = [
+  'cache',
+  'dispatcher',
+  'payees',
+  'scheduler',
+  'anchor',
+] as const;
+
+// Memoizes the first close so a second call cannot double-close a pool, and settles every port
+// before reporting: one refusal must not strand the connections behind it.
+function closer(ports: Ports): () => Promise<void> {
+  let closing: Promise<void> | null = null;
+  return () => (closing ??= closeAll(ports));
+}
+
+async function closeAll(ports: Ports): Promise<void> {
+  const named: Array<[string, () => Promise<void>]> = [];
+  for (const name of CLOSABLE) {
+    const port = ports[name] as { close?: () => Promise<void> } | undefined;
+    if (typeof port?.close === 'function') {
+      named.push([name, () => port.close!()]);
+    }
+  }
+  named.push(['store', () => ports.store.close()]);
+
+  const settled = await Promise.allSettled(named.map(([, run]) => run()));
+  const failed = settled.flatMap((result, index) =>
+    result.status === 'rejected'
+      ? [{ port: named[index]![0], reason: result.reason as unknown }]
+      : [],
+  );
+  if (failed.length === 0) {
+    return;
+  }
+  const names = failed.map(({ port }) => port);
+  throw fault(
+    ERROR_CODES.PROVIDER_FAILURE,
+    `These ports failed to close: ${names.join(', ')}.`,
+    {
+      retryable: false,
+      detail: { ports: names },
+      cause:
+        failed.length === 1
+          ? failed[0]!.reason
+          : new AggregateError(
+              failed.map(({ reason }) => reason),
+              'Several ports failed to close.',
+            ),
+    },
+  );
 }
 
 // Refuses a misordered rate source at construction, the same way a bad signing key fails at
 // startup rather than deep inside a request. Only `buy >= par` is checkable here: both are
-// synchronous constants, while `payout` is asked per settlement time and guarded at
-// requestPayout. A source whose answers change after construction is caught again by topUp's
-// own guard.
+// synchronous constants. `payout` is asked per settlement time and guarded at requestPayout.
+// topUp's own guard catches a source whose answers change after construction.
 function assertBuyCoversPar(rates: Rates): void {
   const buy = rates.buy('CREDIT');
   const par = rates.par('CREDIT');
@@ -159,18 +253,32 @@ function assertBuyCoversPar(rates: Rates): void {
 
 type Pipeline = { store: Store; registry: Registry; ctx: Ctx };
 
+declare const screened: unique symbol;
+
+// Proof that an operation cleared `screenOperation`. Only that function mints one and `Step`
+// accepts nothing else, so a new way into the economy that skips the screen fails to compile
+// rather than quietly posting at the caller's price.
+type ScreenedOperation = Operation & { readonly [screened]: true };
+
+type Screen =
+  | { admitted: true; operation: ScreenedOperation }
+  | { admitted: false; outcome: Outcome };
+
 type Step = {
   pipeline: Pipeline;
   unit: Unit;
-  operation: Operation;
+  operation: ScreenedOperation;
   options?: CallOptions;
-  // Called by screenRisk with the velocity attempt it is about to record inside the transaction,
-  // so `submit` can re-record the attempt if that transaction rolls back.
+  // screenRisk calls this with the velocity attempt it is about to record inside the
+  // transaction. `submit` can then re-record the attempt if that transaction rolls back.
   staged?: (subject: string, attempt: Attempt) => void;
 };
 
-// Every port except the store (handlers get a per-transaction view), the scheduler, dispatcher,
-// and anchor (worker concerns), and the secrets bag, which the submit path never reads.
+// Builds the context from every port except a few. The store stays out because handlers get a
+// per-transaction view. The scheduler, dispatcher, and anchor stay out as worker concerns.
+// The secrets bag stays out because the submit path never reads it.
+// Ports.config is a structural field a caller fills in by hand, so this is where it meets the
+// bounds: Ctx.config takes nothing the check has not minted.
 function contextOf(ports: Ports): Ctx {
   return {
     clock: ports.clock,
@@ -178,13 +286,14 @@ function contextOf(ports: Ports): Ctx {
     digest: ports.digest,
     signer: ports.signer,
     processor: ports.processor,
-    config: ports.config,
+    config: checkedConfig(ports.config),
     pricing: ports.pricing,
     rates: ports.rates,
     logger: ports.logger,
     meter: ports.meter,
     cache: ports.cache,
     payees: ports.payees,
+    catalog: ports.catalog,
   };
 }
 
@@ -229,10 +338,10 @@ async function bestEffortCache<T>(
 }
 
 // The value is cached as its `encodeAmount` string, so the exact bigint minor-unit value survives a
-// string-only cache. Only the public `read.balance` routes through here; reads inside a write
+// string-only cache. Only the public `read.balance` routes through here. Reads inside a write
 // transaction stay direct, so a transaction never sees a stale cached value.
-// A bare sharded platform account reads as its logical balance: the sum over its shard rows,
-// each row cached (and invalidated) under its own key.
+// A bare sharded platform account reads as its logical balance: the sum over its shard rows.
+// Each shard row is cached (and invalidated) under its own key.
 async function cachedBalance(
   ctx: Ctx,
   ledger: Ledger,
@@ -267,8 +376,11 @@ async function cachedRow(
     () => cache.get(key),
     null,
   );
+  // The set below writes `encodeAmount`, so an entry in any other spelling came from a foreign or
+  // stale writer and names a different number. A cache outage degrades to the ledger; a cache
+  // holding text this system did not write is refused instead.
   if (hit !== null) {
-    return decodeAmountWire(hit);
+    return decodeCanonicalAmount(hit, 'Cached balance');
   }
   const fresh = await ledger.balance(account, options);
   await bestEffortCache<void>(
@@ -282,8 +394,8 @@ async function cachedRow(
 
 // --- Request-processing pipeline ---------------------------------------------------
 
-// Authorize first, so a forbidden request is rejected before any work; then do the money work in one
-// all-or-nothing transaction. The risk-velocity attempt records inside that transaction and is
+// Authorize first, so a forbidden request is rejected before any work. Then do the money work in
+// one all-or-nothing transaction. The risk-velocity attempt records inside that transaction and is
 // re-recorded below if it rolls back (see `screenRisk` for the TOCTOU reasoning).
 // Counts every submit by kind and how it resolved, and observes its wall time, so an operator
 // has request-path telemetry without wrapping submit themselves. Metering runs after the
@@ -320,19 +432,19 @@ async function meteredSubmit(
   }
 }
 
-// One operation's place in a batch while it runs: its input position, plus the velocity attempt
-// its risk screen staged (re-recorded if the operation's savepoint rolls back, exactly as
-// `submit` re-records after a transaction rollback).
+// Tracks one operation's place in a batch while it runs: its input position, plus the velocity
+// attempt its risk screen staged. The attempt is re-recorded if the operation's savepoint rolls
+// back, exactly as `submit` re-records after a transaction rollback.
 type BatchEntry = {
   index: number;
-  operation: Operation;
+  operation: ScreenedOperation;
   staged: { subject: string; attempt: Attempt } | null;
 };
 
-// Economy.submitBatch. The pre-transaction phase (validation, authorization, the pause gate, and
-// the distinct-key guard) decides what enters the shared transaction; each entrant then runs the
-// same claimed pipeline as `submit` under its own savepoint. Without store batch support the
-// batch degrades to sequential submits with faults captured per slot.
+// Economy.submitBatch. The pre-transaction phase — the same `screenOperation` a lone submit runs
+// — decides what enters the shared transaction. Each entrant then runs the same claimed pipeline
+// as `submit` under its own savepoint. Without store batch support the batch degrades to
+// sequential submits with faults captured per slot.
 async function submitBatch(
   pipeline: Pipeline,
   operations: ReadonlyArray<Operation>,
@@ -342,9 +454,9 @@ async function submitBatch(
     return sequentialBatch(pipeline, operations, options);
   }
   const slots: Array<BatchOutcome | null> = operations.map(() => null);
-  const entries = screenBatch(pipeline, operations, slots);
+  const entries = await screenBatch(pipeline, operations, slots);
   if (entries.length === 0) {
-    // Everything was decided pre-transaction; don't pay for an empty BEGIN/COMMIT.
+    // Everything was decided pre-transaction. Don't pay for an empty BEGIN/COMMIT.
     await finishBatch(pipeline, operations, slots);
     return slots as BatchOutcome[];
   }
@@ -367,8 +479,8 @@ async function submitBatch(
     )
     .catch(async (error: unknown) => {
       // The shared transaction itself failed, erasing every entrant's in-transaction velocity
-      // attempt; re-record them best-effort (`bump` dedupes on the attempt key), as submit does
-      // when its transaction dies, then let the batch's error reach the caller.
+      // attempt. Re-record them best-effort (`bump` dedupes on the attempt key), as submit does
+      // when its transaction dies. Then let the batch's error reach the caller.
       for (const entry of entries) {
         if (entry.staged) {
           await pipeline.store.trust
@@ -407,7 +519,7 @@ async function sequentialBatch(
       slots.push({ ok: false, error });
     }
   }
-  // meteredSubmit already counted each operation; the batch counter still fires so batch rate
+  // meteredSubmit already counted each operation. The batch counter still fires so batch rate
   // stays visible on stores without batch support.
   try {
     pipeline.ctx.meter.count('economy.submit.batch', 1, {
@@ -419,53 +531,36 @@ async function sequentialBatch(
   return slots;
 }
 
-// The pre-transaction screens, per operation: a failure fills the slot and keeps the operation
-// out of the shared transaction. Duplicate idempotency keys are refused up front — inside one
-// transaction the second claim would see the first's uncommitted placeholder as its own and run
-// the operation twice, the very double-run the key exists to prevent.
-function screenBatch(
+// Runs the shared screen per operation and collects what enters the transaction. A repeated
+// idempotency key is not screened out here: the entrants run sequentially and each sees the ones
+// before it (see Store.batchTransaction), so the second arrival claims the key the first already
+// recorded and replays it, exactly as a lone submit does. Deciding it here instead would make a
+// store capability change the answer.
+async function screenBatch(
   pipeline: Pipeline,
   operations: ReadonlyArray<Operation>,
   slots: Array<BatchOutcome | null>,
-): BatchEntry[] {
-  const ctx = pipeline.ctx;
+): Promise<BatchEntry[]> {
   const entries: BatchEntry[] = [];
-  const seen = new Set<string>();
-  operations.forEach((operation, index) => {
+  for (const [index, operation] of operations.entries()) {
     try {
-      validateOperation(operation, ctx.config);
-      authorize(operation);
-      if (seen.has(operation.idempotencyKey)) {
-        throw fault(
-          ERROR_CODES.MALFORMED_OPERATION,
-          'A submitBatch may not carry the same idempotencyKey twice.',
-          { detail: { kind: operation.kind } },
-        );
+      const screen = await screenOperation(pipeline.ctx, operation);
+      if (!screen.admitted) {
+        slots[index] = { ok: true, outcome: screen.outcome };
+        continue;
       }
-      seen.add(operation.idempotencyKey);
-      if (
-        operation.actor.kind === 'user' &&
-        economyPaused(ctx.clock.now(), ctx.config)
-      ) {
-        slots[index] = {
-          ok: true,
-          outcome: rejected('ECONOMY_PAUSED', {
-            resumesAt: ctx.config.pauseEndMs,
-          }),
-        };
-        return;
-      }
-      entries.push({ index, operation, staged: null });
+      entries.push({ index, operation: screen.operation, staged: null });
     } catch (error) {
       slots[index] = { ok: false, error };
     }
-  });
+  }
   return entries;
 }
 
-// One savepoint result to one slot, with `submit`'s post-rollback bookkeeping: a rejected
-// operation's velocity attempt is re-recorded (its savepoint erased it), and a failed re-record
-// turns the slot into a fault rather than silently letting the caller probe the limit for free.
+// Maps one savepoint result to one slot with `submit`'s post-rollback bookkeeping. A rejected
+// operation's velocity attempt is re-recorded, because its savepoint erased it. A failed
+// re-record turns the slot into a fault rather than silently letting the caller probe the limit
+// for free.
 async function settleBatchSlot(
   pipeline: Pipeline,
   entry: BatchEntry,
@@ -497,7 +592,7 @@ async function settleBatchSlot(
   return { ok: false, error: result.error };
 }
 
-// The per-operation aftercare `submit` does outside its transaction: cache invalidation for
+// Does the per-operation aftercare `submit` does outside its transaction: cache invalidation for
 // committed slots and the submit counter, plus one batch counter. Metering is guarded like
 // meteredSubmit's: a throwing meter must not fail outcomes already decided.
 async function finishBatch(
@@ -539,35 +634,67 @@ async function finishBatch(
   }
 }
 
+// Everything the economy decides before a transaction can open, in one place. `submit` and
+// `submitBatch` both run it, and it is the only mint of a ScreenedOperation, so a way in that
+// skips it cannot reach the claimed pipeline. Validation and authorization throw a fault; the
+// maintenance window and the price check answer with a rejection.
+async function screenOperation(
+  ctx: Ctx,
+  operation: Operation,
+): Promise<Screen> {
+  validateOperation(operation, ctx.config);
+  authorize(operation);
+
+  // This gate enforces the maintenance window. Refuse only an end user's discretionary write, never a 'system' settlement
+  // webhook or operator fix. The gate sits before the transaction opens, so a paused user op records
+  // no velocity attempt and touches no ledger.
+  // See https://economy-lab-docs.pages.dev/economy/concepts/actors-and-authorization/ for why the
+  // pause tells actors apart by kind.
+  if (
+    operation.actor.kind === 'user' &&
+    economyPaused(ctx.clock.now(), ctx.config)
+  ) {
+    return {
+      admitted: false,
+      outcome: rejected('ECONOMY_PAUSED', { resumesAt: ctx.config.pauseEndMs }),
+    };
+  }
+
+  // The price a spend carries is the caller's claim, and every caller is a door: the HTTP route, a
+  // module route, the inbox drain, an in-process call, a batch of any of them. Checking it on the
+  // one path all of them take is what makes "a door cannot name its own price" a property of the
+  // economy rather than of one handler.
+  if (ctx.catalog !== undefined && operation.kind === 'spend') {
+    const mismatch = await catalogMismatch(ctx.catalog, operation);
+    if (mismatch !== null) {
+      return {
+        admitted: false,
+        outcome: { status: 'rejected', detail: mismatch },
+      };
+    }
+  }
+
+  return { admitted: true, operation: operation as ScreenedOperation };
+}
+
 async function submit(
   pipeline: Pipeline,
   operation: Operation,
   options?: CallOptions,
 ): Promise<Outcome> {
-  validateOperation(operation, pipeline.ctx.config);
-  authorize(operation);
-
-  // Maintenance window. Refuse only an end user's discretionary write, never a 'system' settlement
-  // webhook or operator fix. The gate sits before the transaction opens, so a paused user op records
-  // no velocity attempt and touches no ledger.
-  // See https://economy-lab-docs.pages.dev/economy/concepts/actors-and-authorization/ for why the
-  // pause tells actors apart by kind.
-  const ctx = pipeline.ctx;
-  if (
-    operation.actor.kind === 'user' &&
-    economyPaused(ctx.clock.now(), ctx.config)
-  ) {
-    return rejected('ECONOMY_PAUSED', { resumesAt: ctx.config.pauseEndMs });
+  const screen = await screenOperation(pipeline.ctx, operation);
+  if (!screen.admitted) {
+    return screen.outcome;
   }
 
-  // A rejected outcome must roll back, not commit, so the idempotency key stays unused for a retry;
-  // committing would persist MySQL's claim placeholder while Postgres inserts nothing, and the
-  // engines would diverge. Throw the RejectedRollback sentinel to roll back like a fault, then
+  // A rejected outcome must roll back, not commit, so the idempotency key stays unused for a
+  // retry. Committing would persist MySQL's claim placeholder while Postgres inserts nothing, and
+  // the engines would diverge. Throw the RejectedRollback sentinel to roll back like a fault, then
   // recover the outcome outside the transaction.
   //
   // Re-record the velocity attempt the rollback erased (`bump` dedupes on the attempt's key). On a
-  // rejection a failed re-record propagates — silently losing it would let a caller probe the limit
-  // for free; on a genuine fault the original error wins.
+  // rejection a failed re-record propagates, because silently losing it would let a caller probe
+  // the limit for free. On a genuine fault the original error wins.
   let staged: { subject: string; attempt: Attempt } | null = null;
   const outcome = await pipeline.store
     .transaction(
@@ -575,7 +702,7 @@ async function submit(
         rejectionsRollBack({
           pipeline,
           unit,
-          operation,
+          operation: screen.operation,
           options,
           staged: (subject, attempt) => {
             staged = { subject, attempt };
@@ -606,8 +733,8 @@ async function submit(
   return outcome;
 }
 
-// Thrown to roll back a transaction whose outcome is `rejected` while still surfacing that outcome;
-// a rejection is not an error to the caller.
+// Thrown to roll back a transaction whose outcome is `rejected` while still surfacing that
+// outcome. A rejection is not an error to the caller.
 class RejectedRollback extends Error {
   outcome: Outcome;
   constructor(outcome: Outcome) {
@@ -624,13 +751,13 @@ async function rejectionsRollBack(step: Step): Promise<Outcome> {
   return outcome;
 }
 
-// High enough for any legitimate operation; blocks overflow-scale values from a typo or a hostile
-// caller. 10^15 sits ~9000x under the signed 64-bit bound the BIGINT columns enforce
+// High enough for any legitimate operation. It blocks overflow-scale values from a typo or a
+// hostile caller. 10^15 sits ~9000x under the signed 64-bit bound the BIGINT columns enforce
 // (AMOUNT_OVERFLOW), so no run of legal operations lands near the column limit.
 const MAX_OP_AMOUNT_MINOR = 1_000_000_000_000_000n;
 
-// Checked once here rather than per handler. The shard and accrual knobs are passed so every
-// accountsOf caller agrees.
+// Validation runs once here rather than per handler. The caller passes the shard and accrual
+// knobs so every accountsOf caller agrees.
 function validateOperation(
   operation: Operation,
   config: Pick<Config, 'platformShards' | 'accrualDrain'>,
@@ -653,6 +780,10 @@ function validateOperation(
       { detail: { kind: operation.kind } },
     );
   }
+
+  // Ahead of accountsOf, which builds an account id by interpolating a field: a wrongly-typed one
+  // reaches it as `[object Object]:spendable` and posts there.
+  assertOperationShape(operation);
 
   for (const account of accountsOf(
     operation,
@@ -737,9 +868,9 @@ async function invalidateCache(
   }
 }
 
-// Claim the idempotency key, run the checks and the posting, record the outcome under the key on
-// commit; a repeat replays the recorded result, a rejection or fault rolls back and leaves the key
-// unused.
+// Claim the idempotency key, run the checks and the posting, and record the outcome under the
+// key on commit. A repeat replays the recorded result. A rejection or fault rolls back and
+// leaves the key unused.
 // See https://economy-lab-docs.pages.dev/economy/concepts/idempotency/ for the claim/record model.
 async function runClaimed(step: Step): Promise<Outcome> {
   const { unit, operation, options } = step;
@@ -748,8 +879,8 @@ async function runClaimed(step: Step): Promise<Outcome> {
     return { status: 'duplicate', transaction: claim.transaction };
   }
 
-  // A domain-level duplicate (a replayed orderId) is final before any lock, so it exits here —
-  // like a key replay, it records no velocity attempt.
+  // A domain-level duplicate (a replayed orderId) is final before any lock, so it exits here.
+  // Like a key replay, it records no velocity attempt.
   const preClaim = PRE_CLAIMS[operation.kind];
   if (preClaim) {
     const duplicate = await preClaim(operation, unit);
@@ -758,15 +889,15 @@ async function runClaimed(step: Step): Promise<Outcome> {
     }
   }
 
-  // Risk runs before funds so a burst of unaffordable spends still counts toward the limit, and a
-  // velocity-exceeded request is denied whether or not it could pay.
+  // Risk runs before funds so a burst of unaffordable spends still counts toward the limit.
+  // A velocity-exceeded request is denied whether or not it could pay.
   const risk = await screenRisk(step);
   if (risk) {
     return risk;
   }
 
-  // Screen funds after the lock so the read is current; balances are cached in `unit.balances` so the
-  // screen and handler share one read.
+  // Screen funds after the lock so the read is current. Balances are cached in `unit.balances`
+  // so the screen and handler share one read.
   await lockAccounts(step);
   unit.balances = new Map();
   const funds = await screenFunds(step);
@@ -795,8 +926,8 @@ function authorize(operation: Operation): void {
     return;
   }
   if (actor.kind === 'system') {
-    // The lab models one trust domain; a deployment running several services scopes them here, at
-    // the one authorization seam.
+    // The lab models one trust domain. A deployment running several services scopes them here,
+    // at the one authorization seam.
     return;
   }
   if (RESTRICTED_TO_PRIVILEGED.has(operation.kind)) {
@@ -812,8 +943,8 @@ function authorize(operation: Operation): void {
   }
 }
 
-// The user accounts this operation debits — the only ones the ownership check cares about, since
-// only a drained account has to belong to the caller.
+// Lists the user accounts this operation debits. The ownership check cares only about these,
+// since only a drained account has to belong to the caller.
 function debitedUserAccounts(operation: Operation): AccountRef[] {
   if (operation.kind === 'spend') {
     return [promo(operation.buyerId), spendable(operation.buyerId)];
@@ -827,7 +958,7 @@ function debitedUserAccounts(operation: Operation): AccountRef[] {
   return [];
 }
 
-// The database's no-overdraft CHECK is the enforcer; this up-front screen exists so an overspend
+// The database's no-overdraft CHECK is the enforcer. This up-front screen exists so an overspend
 // returns a clean rejection rather than a constraint violation.
 async function screenFunds(step: Step): Promise<Outcome | null> {
   const { unit, operation, options } = step;
@@ -866,8 +997,8 @@ async function fundsNeeded(
   ];
 }
 
-// Reads a balance once per operation via `unit.balances`; a unit built outside the pipeline reads
-// through to the ledger.
+// Reads a balance once per operation via `unit.balances`. A unit built outside the pipeline
+// reads through to the ledger.
 async function readCachedBalance(
   unit: Unit,
   account: AccountRef,
@@ -892,8 +1023,8 @@ async function screenRisk(step: Step): Promise<Outcome | null> {
     return null;
   }
   // The outcome tag is write-only — the limit sums every attempt regardless of tag — so a fixed
-  // `committed` tag at check time is faithful. The returned velocity already includes this attempt;
-  // re-adding its amount would double-count.
+  // `committed` tag at check time is faithful. The returned velocity already includes this
+  // attempt. Re-adding its amount would double-count.
   const attempt: Attempt = {
     idempotencyKey: operation.idempotencyKey,
     amount: toAmount(VELOCITY_CURRENCY, attemptMinor(operation)),
@@ -943,7 +1074,7 @@ async function emitEvents(
   const event: EconomyEvent = {
     id: ctx.ids.next('evt'),
     type: descriptor.type,
-    version: 1,
+    version: EVENT_VERSION,
     occurredAt: outcome.transaction.postedAt,
     subject: descriptor.subject(operation, outcome),
     data: descriptor.data(operation, outcome),
@@ -957,16 +1088,7 @@ async function emitEvents(
 
 // --- Integrity check ---------------------------------------------------------------
 
-/**
- * The lighter in-process prover behind `read.health()`: its `chainIntact` is only a shape check
- * on each account's latest hash, while the full replay that re-verifies every posting lives in
- * integrity.ts (`proveEconomy`).
- *
- * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/the-proof/ The proof} for why this
- * is an independent audit rather than the primary guard, how `backed` converts custodial credits to
- * USD, and how the two provers differ.
- */
-// Counts an async iterable up to the enumeration cap; a capped walk reports how far it got and
+// Counts an async iterable up to the enumeration cap. A capped walk reports how far it got and
 // that it stopped, never a made-up total.
 async function countCapped(
   iterable: AsyncIterable<unknown>,
@@ -982,9 +1104,9 @@ async function countCapped(
   return { count, capped: false };
 }
 
-// The capacity gauges (see CapacityReport in contract.ts): read live, each independently, so a
-// store missing one surface still reports the rest. Advisories are stated facts against
-// CAPACITY_THRESHOLDS.
+// Reads the capacity gauges live (see CapacityReport in contract.ts). Each gauge reads
+// independently, so a store missing one surface still reports the rest. Advisories are stated
+// facts against CAPACITY_THRESHOLDS.
 async function capacityReport(
   store: Store,
   ctx: Ctx,
@@ -1056,13 +1178,14 @@ async function tableGauges(
       outbox: null,
       sagas: null,
       accruals: null,
+      entitlements: null,
     };
   }
   return store.tableSizes(options);
 }
 
-// The stated facts against CAPACITY_THRESHOLDS; each names the gauge, the threshold, and the
-// knob it signals — never an action.
+// Builds the stated facts against CAPACITY_THRESHOLDS. Each names the gauge, the threshold, and
+// the knob it signals — never an action.
 function capacityAdvisories(gauges: {
   now: number;
   historySize: number | null;
@@ -1118,6 +1241,10 @@ function capacityAdvisories(gauges: {
       'accruals',
       'rows are the permanent refund share record, never pruned; growth tracks sales',
     ],
+    [
+      'entitlements',
+      'one row per purchase, revoked ones kept as the refund record; no in-system mover exists, so retention is a host policy decision',
+    ],
   ];
   for (const [table, knob] of tableKnobs) {
     const count = gauges.tables[table];
@@ -1130,14 +1257,23 @@ function capacityAdvisories(gauges: {
   return advisories;
 }
 
+/**
+ * The lighter in-process prover behind `read.health()`. Its `chainIntact` is only a shape check
+ * on each account's latest hash. The full replay that re-verifies every posting lives in
+ * integrity.ts (`proveEconomy`).
+ *
+ * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/the-proof/ The proof} for why this
+ * is an independent audit rather than the primary guard, how `backed` converts custodial credits to
+ * USD, and how the two provers differ.
+ */
 async function healthReport(
   store: Store,
   ctx: Ctx,
   options?: CallOptions,
-): Promise<ProveReport> {
-  // The verified archival boundary, when one exists: each account's derived balance is its
-  // signed archived portion plus its remaining legs. Fails loud on a boundary that does not
-  // verify — health never vouches over an anchor an attacker could have moved.
+): Promise<HealthReport> {
+  // Loads the verified archival boundary, when one exists. Each account's derived balance is its
+  // signed archived portion plus its remaining legs. A boundary that does not verify fails loud,
+  // because health never vouches over an anchor an attacker could have moved.
   const boundary = await loadArchiveBoundary(
     store.checkpoints,
     { digest: ctx.digest, signer: ctx.signer },
@@ -1151,10 +1287,14 @@ async function healthReport(
   const shortfallMinor = backingShortfallMinor(required, fold.trustCashMinor);
 
   return {
+    prover: 'read.health',
     conserved: [...fold.signedByCurrency.values()].every((sum) => sum === 0n),
     backed: shortfallMinor === 0n,
     noOverdraft: !fold.anyUserNegative,
     chainIntact: fold.chainIntact,
+    // A shape test over the newest head opens no link, so there is never one to name here. The
+    // full prover fills this field; `prover` above is what tells the two reports apart.
+    firstBreak: null,
     consistent: fold.drift.length === 0,
     drift: fold.drift,
     shortfall: toAmount('USD', shortfallMinor),
@@ -1177,8 +1317,8 @@ type LedgerFold = {
 };
 
 // The lighter twin of integrity.ts foldLedger — keep the two in sync. One pass over the hash-chain
-// heads recomputes each balance from the recorded entries and folds it into a per-currency sum; a
-// cached balance that disagrees is reported as drift instead of folded in.
+// heads recomputes each balance from the recorded entries and folds it into a per-currency sum.
+// A cached balance that disagrees is reported as drift instead of folded in.
 // See https://economy-lab-docs.pages.dev/economy/concepts/the-proof/ for what each figure proves.
 async function foldLedger(
   store: Store,
@@ -1200,8 +1340,8 @@ async function foldLedger(
     return raw === undefined ? 0n : raw * (isDebitNormal(account) ? 1n : -1n);
   };
 
-  // One account's contribution, shared by the heads walk and the archived-account sweep so the
-  // two can never drift apart. Backing sums read the stored balance; `foldBackingAccount`
+  // Folds one account's contribution. The heads walk and the archived-account sweep share it,
+  // so the two can never drift apart. Backing sums read the stored balance. `foldBackingAccount`
   // (integrity.ts) owns what counts.
   const foldAccount = (
     account: AccountRef,
@@ -1237,9 +1377,9 @@ async function foldLedger(
       chainIntact = false;
     }
   }
-  // A fully-archived account has no remaining postings, so heads() skips it — but its balance is
+  // A fully-archived account has no remaining postings, so heads() skips it. Its balance is
   // still real money the backing requirement must count. The signed boundary names every such
-  // account; fold each one the heads walk missed.
+  // account, so fold each one the heads walk missed.
   if (boundary !== null) {
     for (const account of boundary.rawSums.keys()) {
       if (seen.has(account)) {
@@ -1249,9 +1389,9 @@ async function foldLedger(
       foldAccount(account, bal, baselineOf(account));
     }
   }
-  // heads() only visits posted-to accounts, so a balance row with no backing posting slips past this
-  // prover. The thorough prover closes that gap (integrity.ts foldLedger, R33); read.health() trades
-  // it for speed on purpose.
+  // heads() only visits posted-to accounts, so a balance row with no backing posting slips past
+  // this prover. The thorough prover closes that gap (integrity.ts foldLedger).
+  // read.health() trades it for speed on purpose.
   return { signedByCurrency, ...backing, anyUserNegative, chainIntact, drift };
 }
 
@@ -1270,7 +1410,7 @@ async function deriveBalanceMinor(
   return derivedMinor;
 }
 
-// Covers every entry ever recorded; `from` is inclusive, `to` exclusive.
+// Covers every entry ever recorded. `from` is inclusive, `to` exclusive.
 const FULL_RANGE = {
   from: Number.MIN_SAFE_INTEGER,
   to: Number.MAX_SAFE_INTEGER,
@@ -1294,7 +1434,7 @@ function ownedBy(account: AccountRef, userId: string): boolean {
   return account.startsWith(`${userId}:`);
 }
 
-// A shape check only — 64 lowercase hex chars; it does not verify the hash matches the entry it
+// A shape check only — 64 lowercase hex chars. It does not verify the hash matches the entry it
 // covers.
 function isWellFormedHead(head: string): boolean {
   return /^[0-9a-f]{64}$/.test(head);
@@ -1306,8 +1446,8 @@ function unauthorized(operation: Operation, message: string) {
   });
 }
 
-// Operations gated to a system or operator principal; several reclaim or mint money in accounts the
-// ownership check below cannot catch.
+// These operations are gated to a system or operator principal. Several reclaim or mint money in
+// accounts the ownership check below cannot catch.
 // See https://economy-lab-docs.pages.dev/economy/concepts/actors-and-authorization/ for the per-kind
 // reason each operation is barred to a user.
 const RESTRICTED_TO_PRIVILEGED = new Set<Operation['kind']>([
@@ -1328,12 +1468,12 @@ const RESTRICTED_TO_PRIVILEGED = new Set<Operation['kind']>([
 type Committed = Extract<Outcome, { status: 'committed' }>;
 
 // Client events carry only an allow-listed, PII-free summary — the default is deny, each field
-// opted in; internal events may carry richer detail.
+// opted in. Internal events may carry richer detail.
 const EVENTS: Partial<
   Record<
     Operation['kind'],
     {
-      type: string;
+      type: EventType;
       audience: 'internal' | 'client';
       subject: (operation: Operation, outcome: Committed) => string;
       data: (
@@ -1402,8 +1542,8 @@ const EVENTS: Partial<
       };
     },
   },
-  // Fires once at subscribe; later lifecycle events (renewed, lapsed) come from the billing worker.
-  // Period 1 is the first billed period.
+  // Fires once at subscribe. Later lifecycle events (renewed, lapsed) come from the billing worker.
+  // Period 1 is the first billed period, and the charge sealed the subscriptionId those join on.
   subscribe: {
     type: 'economy.subscription.started',
     audience: 'client',
@@ -1412,6 +1552,7 @@ const EVENTS: Partial<
       const op = opOf<'subscribe'>(operation);
       return {
         txnId: outcome.transaction.id,
+        subscriptionId: outcome.transaction.meta.subscriptionId,
         userId: op.userId,
         sku: op.sku,
         period: 1,
@@ -1429,15 +1570,20 @@ const EVENTS: Partial<
       subscriptionId: opOf<'cancelSubscription'>(operation).subscriptionId,
     }),
   },
-  // An operator's manual reversal, internal-only. It shares the event shape of the worker's automatic
+  // This is an operator's manual reversal, internal-only. It shares the event shape of the worker's automatic
   // reversal, so a consumer sees one consistent event either way.
   reversePayout: {
     type: 'economy.payout.reversed',
     audience: 'internal',
     subject: (operation) => opOf<'reversePayout'>(operation).userId,
-    data: (operation) => {
+    data: (operation, outcome) => {
       const op = opOf<'reversePayout'>(operation);
-      return { sagaId: op.sagaId, reason: op.reason };
+      return {
+        sagaId: op.sagaId,
+        userId: op.userId,
+        reserve: encodeAmount(reversedReserve(operation, outcome)),
+        reason: op.reason,
+      };
     },
   },
 };
@@ -1464,7 +1610,7 @@ function spendData(
   return base;
 }
 
-// Narrows the operation union to one kind; the pipeline only calls a descriptor whose key equals
+// Narrows the operation union to one kind. The pipeline only calls a descriptor whose key equals
 // `operation.kind`, so the cast is safe.
 function opOf<K extends Operation['kind']>(
   operation: Operation,
@@ -1473,7 +1619,7 @@ function opOf<K extends Operation['kind']>(
 }
 
 // The buyer is the user behind the single spendable-or-promo wallet entry in the reversing
-// transaction; read the userId off that entry's account id, since the operation carries no buyerId.
+// transaction. Read the userId off that entry's account id, since the operation carries no buyerId.
 function refundBuyer(outcome: Committed): string {
   for (const leg of outcome.transaction.legs) {
     if (!isWalletAccount(leg.account)) {
@@ -1485,6 +1631,14 @@ function refundBuyer(outcome: Committed): string {
     }
   }
   return 'unknown';
+}
+
+// The reserve returned, read off the credit the undo posted to the seller's earned account: the
+// operation names no amount. A committed reversePayout always posts that leg.
+function reversedReserve(operation: Operation, outcome: Committed): Amount {
+  const account = earned(opOf<'reversePayout'>(operation).userId);
+  const leg = outcome.transaction.legs.find((l) => l.account === account);
+  return leg ? negate(leg.amount) : zero('CREDIT');
 }
 
 function userSubject(operation: Operation): string {
@@ -1499,18 +1653,41 @@ function userSubject(operation: Operation): string {
 
 // --- Ledger export (the offline-verification file) --------------------------------
 
-/** First-line marker a ledger export's header declares; `parseExport` (and so `verifyExport`
- *  and scripts/ledger-verify.ts) refuses a file without it. */
+/** The first-line marker a ledger export's header declares. `parseExport` (and so
+ *  `verifyExport`) refuses a file without it. */
 export const EXPORT_FORMAT = 'economy-lab/ledger-export';
 
-// Link lines carry the full posting (legs, meta, both hashes), so the file alone re-proves
-// every chain and re-derives the Merkle root the checkpoint signed. Field order comes from the
-// wire codec and never changes: the file is canonical, byte-for-byte stable for the same data.
+// Link lines carry the full posting (legs, meta, both hashes). The file alone therefore
+// re-proves every chain and re-derives the Merkle root the checkpoint signed. Field order comes
+// from the wire codec and never changes: the file is canonical, byte-for-byte stable for the
+// same data.
 async function* exportLedger(
   store: Store,
   options?: CallOptions,
 ): AsyncIterable<string> {
   yield JSON.stringify({ format: EXPORT_FORMAT, v: 1 });
+  // The signed archive boundary rides the file raw; verifyExport authenticates it offline
+  // exactly as the live prover does. Without it, an archived prefix would leave every later
+  // export starting its chains mid-air.
+  const checkpoints = store.checkpoints;
+  if (
+    checkpoints.archiveState !== undefined &&
+    checkpoints.archiveHeads !== undefined
+  ) {
+    const state = await checkpoints.archiveState(options);
+    if (state !== null) {
+      const rows = await checkpoints.archiveHeads(options);
+      yield JSON.stringify({
+        type: 'boundary',
+        state,
+        rows: rows.map((row) => ({
+          account: row.account,
+          head: row.head,
+          sum: row.sum.toString(),
+        })),
+      });
+    }
+  }
   const accounts: AccountRef[] = [];
   for await (const [account] of store.ledger.heads()) {
     accounts.push(account);

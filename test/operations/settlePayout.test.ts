@@ -44,6 +44,7 @@ import {
   defaultPricing,
   testConfig,
 } from '#test/support/capabilities.ts';
+import { checkedConfig } from '#src/config.ts';
 
 import type { Ctx, Economy, Operation, Outcome } from '#src/contract.ts';
 import type { Saga, SagaState, Store, Unit } from '#src/ports.ts';
@@ -59,7 +60,7 @@ function newCtx(): Ctx {
     digest: seededDigest(1),
     signer: seededSigner(1),
     processor: fakeProcessor(),
-    config: testConfig(),
+    config: checkedConfig(testConfig()),
     pricing: defaultPricing(),
     rates: fixedRates(),
     logger: testLogger(),

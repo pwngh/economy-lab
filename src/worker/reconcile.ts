@@ -18,7 +18,7 @@ import type { CallOptions, Range } from '#src/ports.ts';
 
 /**
  * Host-implemented feed that supplies both sides of one window: the processor's settled records
- * and our ledger's records of the same events. It exists because neither the processor port nor
+ * and the ledger's records of the same events. It exists because neither the processor port nor
  * the ledger store offers a "list everything settled in this window" read.
  */
 export type ReconcileFeed = {
@@ -28,7 +28,8 @@ export type ReconcileFeed = {
 /**
  * Outcome of one sweep; each window lands in exactly one bucket.
  * - `reconciled`: the two sides matched.
- * - `drifted`: discrepancies found — a normal result that carries data, not a failure.
+ * - `drifted`: the comparison found discrepancies. That is a normal result carrying data, not a
+ *   failure.
  * - `failed`: the feed pull threw, so the comparison never ran.
  */
 export type ReconcileSummary = {
@@ -74,7 +75,7 @@ async function reconcileOne(
   tally: ReconcileTally,
 ): Promise<void> {
   try {
-    // The feed is the injected port; its raw throw is a provider fault, not storage.
+    // The feed is the injected port. Its raw throw is a provider fault, not storage.
     const inputs = await sweep.feed
       .pull(window, sweep.options)
       .catch((error) => {

@@ -11,7 +11,7 @@
  */
 
 /**
- * Adversarial conformance harness.
+ * This file is the adversarial conformance harness.
  *
  * The thesis is that the SQL database is the system of record and must enforce the ledger
  * invariants natively. The only way to prove that is to attempt each violation directly. Each
@@ -35,13 +35,13 @@
  *     with a `t.todo(...)` that names what memory leaves to the SQL engines. A todo keeps the
  *     suite green while naming what the reference store cannot enforce.
  *
- * What is still pending:
+ * These cases are still pending:
  *   conservation, memory          oracle only: no engine enforcement is planned
  *   overdraft, memory             oracle only: no engine enforcement is planned
  *   chain continuity, memory      oracle only: append auto-computes prev_hash, so no fork path
  *   balance integrity, memory     oracle only: no engine enforcement is planned
  *
- * Already in the engine and asserted hard today:
+ * These are already in the engine and asserted hard today:
  *   conservation (PG): deferred constraint trigger on legs (sum=0 per currency).
  *   conservation (MySQL): assert inside post_entry + REVOKE direct DML on legs.
  *   chain continuity (PG): constraint trigger ties prev_hash to the account's current head.
@@ -123,7 +123,7 @@ function rawInsertIdempotency(engineName: string, key: string): string {
 }
 
 // Reads the head hash an account currently chains from. A continuous next link must carry this
-// value as its prev_hash; returns genesis when the account has no link yet.
+// value as its prev_hash. The helper returns genesis when the account has no link yet.
 async function currentHead(store: Store, account: AccountRef): Promise<string> {
   for await (const [acct, head] of store.ledger.heads()) {
     if (acct === account) {
@@ -134,7 +134,7 @@ async function currentHead(store: Store, account: AccountRef): Promise<string> {
 }
 
 // ============================================================================
-// The SQL matrix. Each engine is provisioned once. An unreachable engine yields null, and every
+// This section is the SQL matrix. Each engine is provisioned once. An unreachable engine yields null, and every
 // case then skips rather than fails. This is the same contract the existing adapter suites use.
 // ============================================================================
 type SqlProvisioner = () => Promise<AdversarialEngine | null>;
@@ -206,7 +206,7 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
       );
     });
 
-    // --- overdraft: a negative USER balance must be rejected; a system one is exempt ----------
+    // --- overdraft: a negative USER balance must be rejected. A system one is exempt ----------
     // The user_account_non_negative CHECK already rejects this on both engines, so the assertion
     // is hard.
     test('overdraft: a raw negative user balance is refused', async (t: TestContext) => {
@@ -221,7 +221,7 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
         `txn_adv_i2_setup_${userId}`,
       );
 
-      // Drive the user's cached balance below zero around the app. The CHECK is the database's
+      // This update drives the user's cached balance below zero around the app. The CHECK is the database's
       // half of the overdraft guard and must decline it regardless of how the row is written.
       await assertRawRejected(
         live,
@@ -301,7 +301,7 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
       );
 
       const head = await currentHead(live.store, account);
-      // A prev_hash that equals neither the current head nor any prior one, so the link is discontinuous.
+      // This prev_hash equals neither the current head nor any prior one, so the link is discontinuous.
       const bogusPrev = 'a'.repeat(64);
       assert.notEqual(bogusPrev, head);
 
@@ -322,7 +322,7 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
       const live = engine;
       const key = `idem_adv_${seq()}`;
       const userId = `usr_adv_i4_${seq()}`;
-      // Claim and record through the app so a committed primary-key row exists. On Postgres, claim
+      // The test claims and records through the app so a committed primary-key row exists. On Postgres, claim
       // alone does not insert, because only record writes the row. The duplicate must therefore
       // collide with a recorded key, which is the genuine exactly-once scenario.
       await live.store.transaction(async (unit: Unit) => {
@@ -351,7 +351,7 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
       if (!engine) return t.skip(`${name} unreachable`);
       const live = engine;
       const eventId = `evt_adv_${seq()}`;
-      // Record the first sighting through the app's replay store, which inserts the primary-key row.
+      // This records the first sighting through the app's replay store, which inserts the primary-key row.
       const first = await live.store.replay.claim(eventId);
       assert.equal(first.claimed, true);
 
@@ -374,7 +374,7 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
       const account = spendable(userId);
       await fundSpendable(live.store, userId, '5.00', `txn_adv_i5_${userId}`);
 
-      // Inflate the cached balance to a value the legs do not sum to (500 to 999), staying
+      // This update inflates the cached balance to a value the legs do not sum to (500 to 999), staying
       // non-negative so the overdraft CHECK cannot be what rejects it. The balance-integrity
       // trigger is what must refuse this hand-edit.
       await assertRawRejected(
@@ -388,13 +388,13 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
       if (!engine) return t.skip(`${name} unreachable`);
       const live = engine;
       const id = `obx_adv_dead_${name}`;
-      // A poison message that is enqueued, then given up on. Dead-lettering sets its status to 'dead'.
+      // This enqueues a poison message, then gives up on it. Dead-lettering sets its status to 'dead'.
       await live.store.transaction((unit: Unit) =>
         unit.outbox.enqueue({
           id,
           event: {
             id: `evt_${id}`,
-            type: 'economy.test.dead',
+            type: 'economy.sale.completed', // any rostered type; the poison is the payload, not the name
             version: 1,
             occurredAt: 0,
             subject: 'usr_adv',
@@ -411,7 +411,7 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
 
       // A stale resend marks the row relayed. With markRelayed's `status = 'pending'` guard this is
       // a no-op. Without that guard the dead row is silently flipped to 'relayed' and the poison
-      // event looks delivered. claimBatch never returns a terminal row, so read the status directly.
+      // event looks delivered. claimBatch never returns a terminal row, so the test reads the status directly.
       await live.store.outbox.markRelayed([id]);
       const observed = (await live.raw(
         `select status from outbox where id = '${id}'`,
@@ -428,11 +428,11 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
       const live = engine;
       const economy = makeEconomy(1, live.store);
       const key = `idem_adv_reject_${name}`;
-      // A refund of an order that does not exist. The pipeline claims the key, then the handler
+      // This submits a refund of an order that does not exist. The pipeline claims the key, then the handler
       // returns rejected(UNKNOWN_ORDER) with nothing posted. A rejected outcome rolls the
       // transaction back, so the key is left unused. MySQL's claim placeholder must not survive.
-      // It once did, which diverged from Postgres, which holds a transaction advisory lock and
-      // inserts no row at all.
+      // A surviving placeholder would diverge from Postgres, which holds a transaction advisory
+      // lock and inserts no row at all.
       const outcome = await economy.submit({
         kind: 'refund',
         idempotencyKey: key,
@@ -442,7 +442,7 @@ function runSqlAdversarial(name: string, provision: SqlProvisioner): void {
       });
       assert.equal(outcome.status, 'rejected');
 
-      // `key` is a reserved word on MySQL, so quote the column per engine.
+      // `key` is a reserved word on MySQL, so the column is quoted per engine.
       const keyCol = name === 'mysql' ? '`key`' : 'key';
       const counted = (await live.raw(
         `select count(*) as n from idempotency where ${keyCol} = '${key}'`,
@@ -485,7 +485,7 @@ describe('Adversarial: memory (oracle)', () => {
 
     const accepted = await oracle.store
       .transaction((unit: Unit) =>
-        // One leg only, so the sum is not zero. postEntry would throw, but append does not check.
+        // There is one leg only, so the sum is not zero. postEntry would throw, but append does not check.
         unit.ledger.append({
           txnId: `txn_mem_i1_${userId}`,
           legs: [{ account, amount: toAmount('CREDIT', -amount.minor) }],
@@ -533,7 +533,7 @@ describe('Adversarial: memory (oracle)', () => {
     const account = spendable(userId);
     const amount = toAmount('CREDIT', 500n);
 
-    // Append a balanced posting. The store forces the link's prev_hash to GENESIS, not the caller.
+    // This appends a balanced posting. The store forces the link's prev_hash to GENESIS, not the caller.
     const txn = await oracle.store.transaction((unit: Unit) =>
       unit.ledger.append({
         txnId: `txn_mem_i3_${userId}`,
@@ -546,7 +546,7 @@ describe('Adversarial: memory (oracle)', () => {
     );
     const link = txn.links.find((candidate) => candidate.account === account);
     assert.notEqual(link, undefined);
-    // The store computed prev_hash itself (GENESIS for a first link); the caller never supplied it.
+    // The store computed prev_hash itself (GENESIS for a first link). The caller never supplied it.
     assert.equal(link!.prevHash, GENESIS_HEX);
     t.todo(
       'not enforced on memory: oracle only, append auto-computes prev_hash',
@@ -601,7 +601,7 @@ describe('Adversarial: memory (oracle)', () => {
     const account = spendable(userId);
     await fundSpendable(oracle.store, userId, '5.00', `txn_mem_i5_${userId}`);
 
-    // Inflate the cached balance away from SUM(legs) (500 to 999), staying non-negative.
+    // This inflates the cached balance away from SUM(legs) (500 to 999), staying non-negative.
     oracle.ledger.__seedBalance(account, toAmount('CREDIT', 999n));
     const stored = await oracle.store.ledger.balance(account);
 

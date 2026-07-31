@@ -10,11 +10,12 @@
  */
 
 /**
- * In-process ownership read model: each SKU is interned to a dense int id and each user gets a
- * bitset, so a warm `owns()` check is a bit test instead of a store round trip. Never the source
- * of truth — rebuilt from `list()`, invalidated on every write through this store, and expired
- * after `ttlMs` so writes from other processes surface as bounded staleness. Expiry is encoded
- * per slot with the same inclusive `now <= expiresAt` rule `owns()` applies in SQL.
+ * In-process ownership read model. The cache interns each SKU to a dense int id and gives each
+ * user a bitset, so a warm `owns()` check is a bit test instead of a store round trip. The cache
+ * is never the source of truth. It rebuilds from `list()`, invalidates on every write through
+ * this store, and expires after `ttlMs`, so writes from other processes surface as bounded
+ * staleness. Expiry is encoded per slot with the same inclusive `now <= expiresAt` rule `owns()`
+ * applies in SQL.
  *
  * Pass the same `clock` the store uses, or expiry decisions here and in SQL will disagree.
  * Single-process by design.
@@ -31,7 +32,7 @@ import type {
   Unit,
 } from '#src/ports.ts';
 
-/** Tuning knobs. Defaults: 30s TTL, 10,000 resident users. */
+/** Tuning knobs. The TTL defaults to 30s and the resident-user cap to 10,000. */
 export interface BitsetOptions {
   clock?: Clock;
 
@@ -44,7 +45,7 @@ export interface BitsetOptions {
 
 /** Test-only probe (`__` prefix marks it as not part of the real interface). */
 export interface BitsetProbe {
-  /** The synchronous warm path, exposed so tests can pin its zero-allocation property. */
+  /** The synchronous warm path. Tests use this handle to pin its zero-allocation property. */
   check(userId: string, sku: string, now: number): boolean | null;
 
   residentUsers(): number;
@@ -55,8 +56,8 @@ export interface BitsetProbe {
 interface UserBitmap {
   bits: Uint32Array;
 
-  // Epoch-ms deadline per SKU slot, 0 for perpetual; null when every held grant is perpetual, so
-  // the common case pays no second array.
+  // Epoch-ms deadline per SKU slot, 0 for perpetual. Null when every held grant is perpetual,
+  // so the common case allocates no second array.
   deadlines: Float64Array | null;
 
   loadedAt: number;
@@ -132,7 +133,7 @@ class BitsetCache {
     this.users.delete(userId);
   }
 
-  // An LRU touch without invalidating: re-insert the existing entry.
+  // Re-inserting the existing entry gives an LRU touch without invalidating.
   touch(userId: string): void {
     const entry = this.users.get(userId);
     if (entry !== undefined) {
@@ -196,16 +197,16 @@ function wrapEntitlements(
 }
 
 /**
- * Wraps a store so `entitlements.owns` is served from the bitmap when warm: a warm hit is a
- * synchronous bit test, a cold or stale user refills once from `list()` and then answers from the
- * bitmap. Everything else on the store passes through untouched; `transaction` is wrapped only to
- * observe entitlement writes so their users can be invalidated when the transaction ends.
+ * Wraps a store so the bitmap serves `entitlements.owns` when warm. A warm hit is a synchronous
+ * bit test. A cold or stale user refills once from `list()` and then answers from the bitmap.
+ * Everything else on the store passes through untouched. `transaction` is wrapped only to observe
+ * entitlement writes so their users can be invalidated when the transaction ends.
  *
  * The bitmap is never the source of truth. Every `grant` and `revoke` through this store
- * invalidates the written user (on commit and on rollback); a write from another process surfaces
+ * invalidates the written user, on commit and on rollback. A write from another process surfaces
  * within `ttlMs` (default 30 seconds) when the user's bitmap expires and refills. Resident users
  * are capped at `maxUsers` (default 10,000) with least-recently-used eviction. Single-process by
- * design, and expiry decisions match the store only when both share one clock, so pass the store's
+ * design. Expiry decisions match the store only when both share one clock, so pass the store's
  * `clock`.
  *
  * @example
@@ -248,8 +249,9 @@ export function cachedEntitlements(
           txOptions,
         );
       } finally {
-        // On commit AND on rollback: a concurrent miss may have refilled mid-transaction from
-        // state this outcome contradicts (pre-commit rows on SQL, uncommitted rows on memory).
+        // Invalidate on commit AND on rollback. A concurrent miss may have refilled
+        // mid-transaction from state this outcome contradicts (pre-commit rows on SQL,
+        // uncommitted rows on memory).
         for (const userId of touched) {
           cache.invalidate(userId);
         }

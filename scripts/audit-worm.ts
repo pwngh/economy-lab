@@ -9,26 +9,26 @@
  * @license MIT
  */
 
-// A worked example of shipping the ops audit trail toward write-once (WORM) storage. The
-// chained sink appends to a segment file opened O_APPEND — the OS lands every write at the
-// end, even across processes — and sealing renames it *.sealed.jsonl, after which nothing
-// appends again. The last line's `hash` is the segment's fingerprint: record it off-host, ship
-// the sealed file to an object-lock target (S3 Object Lock, GCS retention), and
-// `make audit-verify` can then hold both copies to the same chain. The shipping step itself is
-// the host's job; a daemon does not belong here.
+// This script is a worked example of shipping the ops audit trail toward write-once (WORM)
+// storage. The chained sink appends to a segment file opened O_APPEND, so the OS lands every
+// write at the end, even across processes. Sealing renames the file *.sealed.jsonl, and after
+// that nothing appends again. The last line's `hash` fingerprints the segment. Record that hash
+// off-host and ship the sealed file to an object-lock target (S3 Object Lock, GCS retention).
+// `make audit-verify` can then hold both copies to the same chain. The host owns the shipping
+// step itself. A daemon does not belong here.
 //
 //   node scripts/audit-worm.ts     # writes a sample segment, seals it, prints next steps
 
 import { appendFileSync, mkdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { hashChainedAuditSink } from '#src/ops/index.ts';
+import { hashChainedAuditSink } from '#src/supervisor/index.ts';
 import { systemDigest } from '#src/runtime.ts';
 import { dumpStamp } from '#scripts/support/db-tools.ts';
 
 const DIR = 'ops-audit';
 mkdirSync(DIR, { recursive: true });
-// A real host names segments by day and seals at rollover; the stamp keeps the example
+// A real host names segments by day and seals at rollover. The stamp keeps the example
 // re-runnable.
 const segment = join(DIR, `ops-audit-${dumpStamp()}.jsonl`);
 

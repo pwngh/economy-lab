@@ -9,19 +9,21 @@
  * @license MIT
  */
 
-import { normalizeError } from '#src/errors.ts';
+import { normalizePortError, normalizeError } from '#src/errors.ts';
 import { credit, debit, lockAll, postEntry } from '#src/ledger.ts';
 import { encodeAmount } from '#src/money.ts';
 import { pendingOutbox } from '#src/outbox.ts';
+import { EVENT_VERSION } from '#src/ports.ts';
 import { assertSagaAnchored } from '#src/operations/guards.ts';
 import { earned, platformShard, SYSTEM } from '#src/accounts.ts';
 
+import type { Amount } from '#src/money.ts';
 import type { WorkerCtx } from '#src/contract.ts';
 import type { PayoutProviderStatus, Saga, Store } from '#src/ports.ts';
 
 /**
  * Reports which payouts moved this run, bucketed by outcome. `deadLettered` holds payouts that can
- * never succeed, including a timed-out submit; `retrying` holds temporary failures that get
+ * never succeed: a refused or timed-out submit. `retrying` holds temporary failures that get
  * another go next run, plus wedged sagas (anchor check refused, code CHAIN_BROKEN) that every
  * sweep re-reports until an operator acts. Settlement arrives via the provider's webhook (see
  * src/operations/settlePayout.ts), not this sweep.
@@ -60,8 +62,9 @@ export async function advanceDuePayouts(
   };
 
   for (const saga of due) {
-    // Time in the current state, not since the request: `updatedAt` refreshes on every
-    // transition, so this gauge is exactly the "stuck" age a supervisor alerts on.
+    // This gauge measures time in the current state, not since the request. `updatedAt`
+    // refreshes on every transition, so the gauge is exactly the "stuck" age a supervisor
+    // alerts on.
     ctx.meter.observe(
       'worker.payouts.saga_age_ms',
       input.now - saga.updatedAt,
@@ -100,7 +103,7 @@ async function advanceOne(
         tally.deadLettered.push({ id: saga.id, reason: normalized.code });
       }
     } catch (refused) {
-      // The dead-letter itself refused — an unverifiable saga must not even return its reserve,
+      // The dead-letter itself refused. An unverifiable saga must not even return its reserve,
       // because that amount too would derive from the edited row. The saga wedges where it
       // stands, moving nothing, and every sweep re-reports it until an operator acts.
       const code = normalizeError(refused).code;
@@ -110,17 +113,28 @@ async function advanceOne(
   }
 }
 
-// Re-asserts the current step with attempts+1: `advance` is a compare-and-set, so the count rises
-// only if no other worker moved the saga meanwhile.
+// Re-asserts the current step with attempts+1. The state is unchanged here, so the state
+// predicate holds for every sweep at once; `expectAttempts` is what makes this advance exclusive.
+// Without it a sweep still holding an older snapshot writes its own count over a higher one, and a
+// count that can fall keeps a permanently failing payout under maxPayoutAttempts, so its reserve
+// is never returned. A false return means another sweep already counted this attempt, or the saga
+// moved on: the row is at least as far along as this call wanted either way, and the sweep still
+// reports the payout as retrying.
 async function bumpAttempt(
   store: Store,
   ctx: WorkerCtx,
   saga: Saga,
 ): Promise<void> {
-  await store.sagas.advance(saga.id, saga.state, saga.state, {
-    attempts: saga.attempts + 1,
-    updatedAt: ctx.clock.now(),
-  });
+  await store.sagas.advance(
+    saga.id,
+    saga.state,
+    saga.state,
+    {
+      attempts: saga.attempts + 1,
+      updatedAt: ctx.clock.now(),
+    },
+    { expectAttempts: saga.attempts },
+  );
 }
 
 // Gives up on a payout and, unless another actor already finished it, returns its reserved
@@ -128,7 +142,8 @@ async function bumpAttempt(
 // compare-and-set with the reversal, so the reserve is never returned twice on a lost race.
 // See https://economy-lab-docs.pages.dev/economy/concepts/payout-saga/ for the saga states.
 // Locking PAYOUT_RESERVE and the seller's earned account in the global sorted order serializes
-// this with the pipeline ops on the shared reserve; without it, a late settle could double-pay.
+// this with the pipeline ops on the shared reserve. Without that order, a late settle could
+// double-pay.
 async function deadLetter(
   store: Store,
   ctx: WorkerCtx,
@@ -169,7 +184,7 @@ async function deadLetter(
       pendingOutbox(ctx.ids, {
         id: ctx.ids.next('evt'),
         type: 'economy.payout.reversed',
-        version: 1,
+        version: EVENT_VERSION,
         occurredAt: ctx.clock.now(),
         subject: saga.userId,
         data: {
@@ -183,10 +198,10 @@ async function deadLetter(
     );
     return true;
   });
-  // Error-level like the inbox/outbox dead-letters, so an operator tailing logs sees the
-  // abandoned cash-out without unpacking the sweep summary. Logged after the commit: inside
-  // the transaction, a rollback would leave the line claiming a reversal that never happened,
-  // and a throwing logger would abort the reversal itself.
+  // This logs at error level like the inbox/outbox dead-letters, so an operator tailing logs
+  // sees the abandoned cash-out without unpacking the sweep summary. It logs after the commit.
+  // Inside the transaction, a rollback would leave the line claiming a reversal that never
+  // happened, and a throwing logger would abort the reversal itself.
   if (failed) {
     try {
       ctx.logger.log('error', 'worker.payouts.dead_lettered', {
@@ -203,7 +218,7 @@ async function deadLetter(
 }
 
 // Stable reason string (not a thrown-fault code) for a payout that sat in SUBMITTED past
-// `maxPayoutAgeMs`: nothing rejected the disbursement, the provider just never reported back.
+// `maxPayoutAgeMs`. Nothing rejected the disbursement. The provider just never reported back.
 const PAYOUT_TIMEOUT_REASON = 'payout.timeout';
 
 // Stable reasons for a provider-reported failure or return, surfaced by the optional
@@ -222,8 +237,7 @@ async function driveTransition(
   tally: PayoutSweepTally,
 ): Promise<void> {
   if (saga.state === 'RESERVED') {
-    await submitToProvider(store, ctx, saga);
-    tally.submitted.push(saga.id);
+    await submitToProvider(store, ctx, saga, tally);
     return;
   }
   if (saga.state === 'SUBMITTED') {
@@ -232,16 +246,18 @@ async function driveTransition(
 }
 
 // Watches one SUBMITTED payout. The webhook settles it (src/operations/settlePayout.ts); the sweep
-// steps in on the strength of what it can learn. When the processor offers the `payoutStatus`
-// probe, its answer is acted on first:
-// - FAILED / RETURNED: the rail gave up on the disbursement, so the reserve is released now rather
-//   than after the timeout — the prompt failure path.
+// steps in on the strength of what it can learn. A payout still carrying no provider reference is
+// re-handed to the rail first (see resumeHandOff), because without one there is no evidence to
+// gather. Otherwise, when the processor offers the `payoutStatus` probe, its answer is acted on
+// first:
+// - FAILED / RETURNED: the rail gave up on the disbursement; the reserve comes back now rather
+//   than after the timeout. This is the prompt failure path.
 // - SETTLED: the money moved but the settlement webhook has not landed. Force-failing here would
 //   return the reserve on top of the disbursed USD (a double-pay), so the sweep only reschedules
-//   and raises an error log for the operator; the webhook (or an operator settle) completes it.
-// - PENDING past the timeout: the rail says it is still working, so the timeout is deferred by
-//   refreshing `updatedAt` — force-failing a live disbursement risks the same double-pay. The
-//   deferral is logged each time so a payout pinned in PENDING stays visible.
+//   and raises an error log for the operator. The webhook (or an operator settle) completes it.
+// - PENDING past the timeout: the rail says it is still working, so the sweep defers the timeout
+//   by refreshing `updatedAt`. Force-failing a live disbursement risks the same double-pay. The
+//   deferral is logged each time, which keeps a payout pinned in PENDING visible.
 // - UNKNOWN, no probe, or a probe error: the timeout protocol stands unchanged — past
 //   `maxPayoutAgeMs` (measured from `updatedAt`, set on entry to SUBMITTED) the payout is
 //   force-failed, and deadLetter posts the compensating reversal in the same transaction.
@@ -251,6 +267,14 @@ async function checkSubmitted(
   saga: Saga,
   tally: PayoutSweepTally,
 ): Promise<void> {
+  const aged = ctx.clock.now() - saga.updatedAt > ctx.config.maxPayoutAgeMs;
+  // No provider reference means the hand-off never came back, so there is nothing to probe with
+  // and asking the rail again is this sweep's whole step. Past the settlement window the timeout
+  // below owns the payout instead, and asking again would only push the reserve further away.
+  if (saga.providerRef === null && !aged) {
+    await resumeHandOff(store, ctx, saga, tally);
+    return;
+  }
   const verdict = await providerVerdict(ctx, saga);
   if (verdict === 'FAILED' || verdict === 'RETURNED') {
     const reason =
@@ -271,7 +295,6 @@ async function checkSubmitted(
     await recheckLater(store, ctx, saga, {});
     return;
   }
-  const aged = ctx.clock.now() - saga.updatedAt > ctx.config.maxPayoutAgeMs;
   if (verdict === 'PENDING') {
     if (aged) {
       ctx.logger.log('warn', 'worker.payouts.pending_past_timeout', {
@@ -293,8 +316,8 @@ async function checkSubmitted(
 
 // Asks the processor where a submitted payout stands, when it can be asked at all. Returns null
 // when the processor offers no probe, the saga has no provider reference to look up, or the probe
-// itself failed — every case where the sweep has no evidence and must fall back to the timeout
-// protocol. A probe fault is logged and swallowed here on purpose: it must not bump the saga's
+// itself failed. In every such case the sweep has no evidence and must fall back to the timeout
+// protocol. A probe fault is logged and swallowed here on purpose. It must not bump the saga's
 // attempt count or dead-letter it via the sweep's error boundary, because the payout itself did
 // nothing wrong.
 async function providerVerdict(
@@ -312,7 +335,7 @@ async function providerVerdict(
   } catch (error) {
     ctx.logger.log('warn', 'worker.payouts.status_probe_failed', {
       sagaId: saga.id,
-      code: normalizeError(error).code,
+      code: normalizePortError(error).code,
     });
     return null;
   }
@@ -335,33 +358,146 @@ async function recheckLater(
 
 // Steps 'RESERVED' -> 'SUBMITTED' by handing the disbursement to the external payment provider.
 // The seller's earned credits were reserved at request time, and the USD submitted is the quote
-// sealed in the reserve posting's hashed metadata — the saga row is re-proved against that
+// sealed in the reserve posting's hashed metadata. The saga row is re-proved against that
 // anchor first, so an edited row cannot wire USD out. No ledger entry posts at this step,
-// because the money already moved into the reserve at request time. A failed provider call is
-// treated as temporary, so advanceOne can retry it.
+// because the money already moved into the reserve at request time.
+//
+// The state advances BEFORE the rail is called. A thrown submit cannot say whether the transfer
+// happened, and 'RESERVED' is the one state whose failure path returns the reserve — so failing
+// there pays the seller their credits back on top of USD the provider may already have sent.
+// 'SUBMITTED' is where the unknown outcome belongs: probe, then webhook, then the timeout.
 async function submitToProvider(
   store: Store,
   ctx: WorkerCtx,
   saga: Saga,
+  tally: PayoutSweepTally,
 ): Promise<void> {
   const usd = await assertSagaAnchored(
     { ledger: store.ledger, digest: ctx.digest },
     saga,
   );
 
-  const { providerRef } = await ctx.processor.submitPayout({
-    key: saga.id,
-    userId: saga.userId,
-    amount: usd,
-  });
-
   const now = ctx.clock.now();
-  await store.sagas.advance(saga.id, 'RESERVED', 'SUBMITTED', {
-    providerRef,
+  const entered = await store.sagas.advance(saga.id, 'RESERVED', 'SUBMITTED', {
     attempts: saga.attempts + 1,
     dueAt: now + submittedSlaMs(ctx),
     updatedAt: now,
   });
+  // A false return means a settle or reverse took the saga first, and nothing has been handed to
+  // the rail. Leave it to that actor.
+  if (!entered) {
+    return;
+  }
+  await handOff(
+    store,
+    ctx,
+    // The copy handed on mirrors the row the advance just wrote — state included, so a refusal's
+    // dead-letter compare-and-sets from 'SUBMITTED', the state the row is actually in.
+    {
+      ...saga,
+      state: 'SUBMITTED',
+      attempts: saga.attempts + 1,
+      updatedAt: now,
+    },
+    { usd, tally },
+  );
+}
+
+// Calls the rail and records what came back. The saga is already 'SUBMITTED' here, so a throw is
+// not something this sweep can undo — and what it means depends on the verdict it carries. A
+// throw with no verdict, or one that says retryable, is an answer lost in transit: the transfer
+// may have gone through, so it is logged and left to the SUBMITTED protocol, which is the only
+// path that can tell the two apart. A throw that classified itself non-retryable is the rail
+// refusing outright: no transfer to wait on, and re-driving a call the rail already answered can
+// never succeed, so the payout fails through deadLetter now — returning the reserve — rather than
+// burning the attempt budget and then wedging until the settlement window expires. Acting on the
+// verdict is safe because every wrapper defaults the other way: a throw carrying no signal stays
+// retryable (see normalizePortError).
+async function handOff(
+  store: Store,
+  ctx: WorkerCtx,
+  saga: Saga,
+  hand: { usd: Amount; tally: PayoutSweepTally },
+): Promise<void> {
+  const { usd, tally } = hand;
+  let providerRef: string;
+  try {
+    ({ providerRef } = await ctx.processor.submitPayout({
+      key: saga.id,
+      userId: saga.userId,
+      amount: usd,
+    }));
+  } catch (error) {
+    const normalized = normalizePortError(error);
+    if (!normalized.retryable) {
+      // A false return means a concurrent settle or reverse finished the payout first; the
+      // refusal is moot and the books belong to that actor.
+      if (await deadLetter(store, ctx, saga, normalized.code)) {
+        tally.deadLettered.push({ id: saga.id, reason: normalized.code });
+      }
+      return;
+    }
+    ctx.logger.log('error', 'worker.payouts.handoff_unresolved', {
+      sagaId: saga.id,
+      code: normalized.code,
+    });
+    ctx.meter.count('worker.payouts.handoff_unresolved', 1, {
+      code: normalized.code,
+    });
+    // `updatedAt` is deliberately untouched: the timeout measures from the hand-off, and
+    // refreshing it here would keep a silent payout out of the timeout forever.
+    await recheckLater(store, ctx, saga, {});
+    tally.retrying.push({ id: saga.id, code: normalized.code });
+    return;
+  }
+  await store.sagas.advance(saga.id, 'SUBMITTED', 'SUBMITTED', {
+    providerRef,
+    dueAt: ctx.clock.now() + submittedSlaMs(ctx),
+  });
+  tally.submitted.push(saga.id);
+}
+
+// Asks the rail again for a payout whose hand-off never came back. `key` is what makes this safe
+// to repeat — the provider settles one transfer per key — and the reference it returns is what
+// both the status probe and the settlement webhook join on, so recovering it is what puts the
+// payout back on the evidence path.
+//
+// The attempt count is claimed first. This is a same-state advance writing an absolute value, so
+// `expectAttempts` is what makes it exclusive; without it two concurrent sweeps would both call
+// the rail for the same payout. A false return means another sweep took this attempt.
+async function resumeHandOff(
+  store: Store,
+  ctx: WorkerCtx,
+  saga: Saga,
+  tally: PayoutSweepTally,
+): Promise<void> {
+  // `maxPayoutAttempts` bounds how often the rail is asked, and nothing more. Past it the
+  // settlement window is the whole remaining protocol, and re-calling a rail that is not
+  // answering only adds traffic — it can no longer decide whether the reserve comes back.
+  if (saga.attempts >= ctx.config.maxPayoutAttempts) {
+    await recheckLater(store, ctx, saga, {});
+    return;
+  }
+  const usd = await assertSagaAnchored(
+    { ledger: store.ledger, digest: ctx.digest },
+    saga,
+  );
+  const claimed = await store.sagas.advance(
+    saga.id,
+    'SUBMITTED',
+    'SUBMITTED',
+    { attempts: saga.attempts + 1 },
+    { expectAttempts: saga.attempts },
+  );
+  if (!claimed) {
+    return;
+  }
+  await handOff(
+    store,
+    ctx,
+    { ...saga, attempts: saga.attempts + 1 },
+    { usd, tally },
+  );
 }
 
 // Milliseconds before the sweep next checks a submitted payout. The sweep re-examines it on this

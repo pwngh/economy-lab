@@ -9,7 +9,7 @@
  * @license MIT
  */
 
-// The seeded operation generator scripts/prove.ts and scripts/fuzz.ts share. A seed builds one
+// The seeded operation generator test/prove.test.ts and test/fuzz.test.ts share. A seed builds one
 // fixed sequence of valid operations, and every id derives only from the step number and the
 // caller's identity — so a replay produces byte-identical operations on every adapter and every
 // JS runtime.

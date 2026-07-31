@@ -13,7 +13,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { I64Column, foldColumn } from '#src/fold-column.ts';
-import { I64_MAX } from '#src/fold.vendored.ts';
+import { I64_MAX } from '#src/fold.ts';
 import { ERROR_CODES } from '#src/errors.ts';
 import { seededDeltas } from '#test/support/seeded-deltas.ts';
 

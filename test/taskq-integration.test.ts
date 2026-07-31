@@ -113,7 +113,7 @@ async function taskqDatabase(): Promise<{
   drop(): Promise<void>;
 }> {
   // @ts-expect-error -- `pg` ships no types; typed at the binding via PgModule, the same pattern
-  // src/engines/postgres.ts uses for its static import.
+  // @pwngh/economy-postgres uses for its static import.
   const { default: pg } = (await import('pg')) as unknown as PgModule;
   const admin = new pg.Pool({ connectionString: DB_URL, max: 1 });
   admin.on('error', () => undefined);

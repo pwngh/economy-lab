@@ -19,6 +19,11 @@
  *   WIRE_TRIAL=postgresjs node --test test/adapters/wire-trial.test.ts
  */
 
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import '#test/support/dist-guard.ts';
+
 import { runStoreConformance } from '#test/conformance/store.ts';
 import {
   makeIsolatedPostgresStore,
@@ -32,6 +37,21 @@ const trials = new Set(
     .map((name) => name.trim())
     .filter((name) => name !== ''),
 );
+
+/** The drivers this file can run. WIRE_TRIAL naming anything else registers nothing. */
+const KNOWN = new Set(['postgresjs']);
+
+// The one test that always registers, and it is not a formality. A file that registers nothing is
+// counted by `node:test` as ONE PASSING TEST — so `WIRE_TRIAL=postgres-js`, a typo, used to run no
+// conformance at all and report a green with no way to tell. This gate is that green's only
+// reader, and it costs the file nothing when the variable is unset.
+test('WIRE_TRIAL names a driver this file can run', () => {
+  assert.deepEqual(
+    [...trials].filter((name) => !KNOWN.has(name)),
+    [],
+    `WIRE_TRIAL names a driver this file cannot run, so it registers nothing and reports a green — it knows ${[...KNOWN].join(', ')}`,
+  );
+});
 
 if (trials.has('postgresjs')) {
   runStoreConformance('postgres (postgres.js wire)', () =>

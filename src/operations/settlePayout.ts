@@ -19,6 +19,7 @@ import {
   noopTransaction,
 } from '#src/operations/guards.ts';
 import { pendingOutbox } from '#src/outbox.ts';
+import { EVENT_VERSION } from '#src/ports.ts';
 import { platformShard, SYSTEM } from '#src/accounts.ts';
 
 import type { Amount } from '#src/money.ts';
@@ -28,10 +29,11 @@ import type { Saga, SagaState, Unit } from '#src/ports.ts';
 /**
  * Settles a submitted payout (SUBMITTED to SETTLED), driven by the provider's settlement report.
  *
- * A system-actor operation, so the provider's inbound webhook can trigger it. The worker sweep
- * never settles; it only re-drives and force-fails stale payouts (src/worker/payouts.ts).
- * Restricted to system or operator (RESTRICTED_TO_PRIVILEGED in economy.ts): an end
- * user must never settle their own payout. Losing the SUBMITTED to SETTLED CAS rolls back the two
+ * This is a system-actor operation, so the provider's inbound webhook can trigger it. The worker
+ * sweep never settles. It only re-drives and force-fails stale payouts (src/worker/payouts.ts).
+ * The operation is restricted to system or operator (RESTRICTED_TO_PRIVILEGED in economy.ts),
+ * because an end user must never settle their own payout. Losing the SUBMITTED to SETTLED CAS
+ * rolls back the two
  * postings and the event, so the seller is never paid twice.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/settle-payout/ Settle
@@ -47,16 +49,17 @@ export async function settlePayout(
   assertKind(operation, 'settlePayout');
 
   const saga = await loadSaga(unit, operation);
-  // A raced or redelivered settle: the disbursement is already recorded, so answer duplicate
-  // the way reversePayout answers for an already-failed saga. An at-least-once rail re-sends
-  // settlements under fresh event ids; that is normal traffic, not a fault.
+  // This is a raced or redelivered settle. The disbursement is already recorded, so it answers
+  // duplicate the way reversePayout answers for an already-failed saga. An at-least-once rail
+  // re-sends settlements under fresh event ids. That is normal traffic, not a fault.
   if (saga.state === 'SETTLED') {
     return { status: 'duplicate', transaction: noopTransaction() };
   }
   refuseNotSubmitted(saga);
 
-  // The quote requestPayout priced and sealed into the reserve posting's hashed metadata — the
-  // same USD the worker submitted to the rail. The saga row is re-proved against that anchor
+  // This is the quote requestPayout priced and sealed into the reserve posting's hashed
+  // metadata — the same USD the worker submitted to the rail. The saga row is re-proved against
+  // that anchor
   // first, so an edited row cannot settle a different amount out of trust.
   const usd = await assertSagaAnchored(
     { ledger: unit.ledger, digest: ctx.digest },
@@ -91,7 +94,7 @@ export async function settlePayout(
     pendingOutbox(ctx.ids, {
       id: ctx.ids.next('evt'),
       type: 'economy.payout.settled',
-      version: 1,
+      version: EVENT_VERSION,
       occurredAt: ctx.clock.now(),
       subject: saga.userId,
       data: {
@@ -139,9 +142,10 @@ async function postSettlementEntries(
   entry: { saga: Saga; usd: Amount; fee: Amount; net: Amount; rateId: string },
 ): Promise<Transaction> {
   const { saga, usd, fee, net, rateId } = entry;
-  // The lock set only knew the sagaId, so it locked the bare reserve; the reserve actually sits on
-  // the shard routed by the saga's user — lock that one too before debiting it. The other platform
-  // legs stay bare: worker cadence, and unlike the reserve they can go negative safely.
+  // The lock set only knew the sagaId, so it locked the bare reserve. The reserve actually sits
+  // on the shard routed by the saga's user, so this locks that shard too before debiting it. The
+  // other platform legs stay bare, matching worker cadence, and unlike the reserve they can go
+  // negative safely.
   const reserveRef = platformShard(
     SYSTEM.PAYOUT_RESERVE,
     saga.userId,
@@ -175,12 +179,13 @@ async function postSettlementEntries(
   return transaction!;
 }
 
-// Rail fee on the gross USD disbursement, rounded down. `feeBps` is basis points (150 = 1.5%).
+// Computes the rail fee on the gross USD disbursement, rounded down. `feeBps` is basis points
+// (150 = 1.5%).
 function payoutFee(gross: Amount, feeBps: number): Amount {
   return toAmount('USD', mulDiv(gross.minor, BigInt(feeBps), 10_000n, 'floor'));
 }
 
-// A lost CAS throws, rolling back the two entries and the queued event. Safe to retry: a
+// A lost CAS throws, rolling back the two entries and the queued event. A retry is safe: a
 // redelivered settle finds the saga no longer SUBMITTED and is refused before posting anything.
 // See https://economy-lab-docs.pages.dev/economy/concepts/payout-saga/ for how a compare-and-set
 // posts its money in the same transaction, so a re-driven step takes effect at most once.

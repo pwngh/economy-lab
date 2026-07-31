@@ -42,8 +42,8 @@ type WebhookBase = {
 
 /**
  * A verified inbound purchase event from a billing provider (Steam / Meta / Apple / Google, or
- * any payment processor): the user paid real money and their spendable balance should be
- * credited. `kind` is optional and defaults to `'purchase'` so a bare purchase object is a valid
+ * any payment processor): the user paid real money, and the mapped `topUp` credits their
+ * spendable balance. `kind` is optional and defaults to `'purchase'` so a bare purchase object is a valid
  * `WebhookEvent`.
  */
 export type PurchaseEvent = WebhookBase & {
@@ -194,8 +194,9 @@ export function toSettlePayout(event: PayoutSettledEvent): Operation {
 
 /**
  * Builds the `reversePayout` that promptly returns a failed payout's reserve from a verified
- * {@link PayoutFailedEvent}. `providerReported` is set here and only here: it waives the
- * still-live SUBMITTED refusal on the rail's own report, and the saga-state compare-and-set still
+ * {@link PayoutFailedEvent}. `providerReported` is set here and only here — the wire contract does
+ * not carry it, so no caller can reach it: it waives the still-live SUBMITTED refusal on the rail's
+ * own report, and the saga-state compare-and-set still
  * stands down if a settle callback won the race. The reason defaults to the stable
  * `payout.provider_failed` marker when the rail gave none. The actor is `system`, which the
  * privileged-only gate requires.
@@ -279,7 +280,7 @@ export type WebhookReceipt = {
  *   provider: 'steam',
  *   eventId: 'evt_8123',
  *   userId: 'u_42',
- *   amount: toAmount('CREDIT', 12_000n), // a $100 credit pack
+ *   amount: toAmount('CREDIT', 1_200_000n), // 12,000 credits, a $100 pack at 120 credits per dollar
  *   source: 'steam',
  * });
  * // receipt.status is 'accepted' now, 'duplicate' on any redelivery of evt_8123

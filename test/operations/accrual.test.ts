@@ -9,9 +9,8 @@
  * @license MIT
  */
 
-// The accrual split (config.accrualDrain): parked shares (I2), drain settlement and idempotent
-// replay (I3), refund exactness on both row paths (I4), and the payout reserve coupling (I8).
-// Flag-off exactness is covered by the rest of the suite running with the flag off.
+// The accrual split (config.accrualDrain). Flag-off exactness is covered by the rest of the
+// suite running with the flag off.
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -132,7 +131,7 @@ async function sell(fx: Fixture, orderId: string): Promise<void> {
   committed(outcome);
 }
 
-describe('accrual split: spend parks shares (I2)', () => {
+describe('accrual split: spend parks shares', () => {
   test('the seller credit lands on an ACCRUAL shard, not earned, with a pending row', async () => {
     const fx = setup();
     await sell(fx, 'ord_1');
@@ -148,7 +147,6 @@ describe('accrual split: spend parks shares (I2)', () => {
     assert.equal(rows[0]!.status, 'pending');
     assert.equal(rows[0]!.amount.minor, SHARE.minor);
 
-    // I2 as the prover will check it: parked balance equals the positive pending total.
     const stats = await fx.store.accruals.stats();
     assert.equal(stats.pendingMinor, await fx.accrualBalanceMinor());
   });
@@ -172,7 +170,7 @@ describe('accrual split: spend parks shares (I2)', () => {
   });
 });
 
-describe('accrual split: the drain (I3)', () => {
+describe('accrual split: the drain', () => {
   test('moves parked shares to earned in one posting and empties the pool', async () => {
     const fx = setup();
     await sell(fx, 'ord_1');
@@ -216,7 +214,7 @@ describe('accrual split: the drain (I3)', () => {
   });
 });
 
-describe('accrual split: refund before the drain (I4, pending path)', () => {
+describe('accrual split: refund before the drain, pending path', () => {
   test('restores the buyer in full, claws the exact share from the pool, and voids the row', async () => {
     const fx = setup();
     await sell(fx, 'ord_1');
@@ -242,7 +240,7 @@ describe('accrual split: refund before the drain (I4, pending path)', () => {
   });
 });
 
-describe('accrual split: refund after the drain (I4, drained path)', () => {
+describe('accrual split: refund after the drain, drained path', () => {
   test('books the share to RECEIVABLE, leaves earned alone, and appends a negative row', async () => {
     const fx = setup();
     await sell(fx, 'ord_1');
@@ -317,7 +315,7 @@ describe('accrual split: refund after the drain (I4, drained path)', () => {
   });
 });
 
-describe('accrual split: payout admission (I8)', () => {
+describe('accrual split: payout admission', () => {
   test('refund debt caps payable earned credit until the drain recovers it', async () => {
     const fx = setup();
     await sell(fx, 'ord_1');

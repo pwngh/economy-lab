@@ -21,8 +21,9 @@ const HEX = (() => {
 })();
 
 /**
- * Lowercase hex, hand-written because neither `Buffer` nor `Uint8Array.prototype.toHex` exists on
- * every target runtime, and the result feeds cross-runtime hashes.
+ * Encodes bytes as lowercase hex. The loop is hand-written because neither `Buffer` nor
+ * `Uint8Array.prototype.toHex` exists on every target runtime, and the result feeds
+ * cross-runtime hashes.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/integrity/ Integrity} for the
  * hash chain these hex helpers feed.
@@ -61,12 +62,63 @@ export function fromHex(hex: string): Uint8Array {
 }
 
 /**
+ * Encodes bytes as base64url without padding (RFC 4648 section 5).
+ *
+ * The output travels in a URL, a path segment, or a JWS segment without further escaping.
+ *
+ * @see {@link https://www.rfc-editor.org/rfc/rfc4648#section-5 RFC 4648 section 5}
+ */
+export function toBase64Url(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+/**
+ * Decodes base64url back into bytes, accepting the one canonical spelling and nothing else.
+ *
+ * `atob` also takes the standard `+/` alphabet, padding, embedded whitespace, and trailing bits
+ * the value does not use, so the same bytes have unboundedly many spellings that all decode.
+ * Where the encoded text is the identity — a signature segment, a signed receipt — that is a
+ * forgery surface, so the bytes are re-encoded and the result must match what arrived.
+ *
+ * Throws a MALFORMED_OPERATION coded fault on any other input.
+ */
+export function fromBase64Url(text: string): Uint8Array {
+  let binary: string;
+  try {
+    binary = atob(text.replace(/-/g, '+').replace(/_/g, '/'));
+  } catch {
+    throw fault(ERROR_CODES.MALFORMED_OPERATION, 'Text is not base64url.', {
+      detail: { length: text.length },
+    });
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  if (toBase64Url(bytes) !== text) {
+    throw fault(
+      ERROR_CODES.MALFORMED_OPERATION,
+      'Text is not canonical base64url.',
+      { detail: { length: text.length } },
+    );
+  }
+  return bytes;
+}
+
+/**
  * Encodes a signed bigint as 8 bytes, big-endian two's complement.
  *
  * The sum-carrying checkpoint preimages (see chain.ts) hash balance sums, and a hash needs the
  * same bytes on every runtime: fixed width, fixed byte order, no decimal formatting. Throws when
  * the value falls outside the signed 64-bit range, the same bound the schema's BIGINT columns
- * declare — `DataView.setBigInt64` would silently wrap, and a wrapped sum must never reach a hash.
+ * declare. `DataView.setBigInt64` would silently wrap, and a wrapped sum must never reach a hash.
  */
 export function toInt64BE(value: bigint): Uint8Array {
   if (value < -(2n ** 63n) || value >= 2n ** 63n) {

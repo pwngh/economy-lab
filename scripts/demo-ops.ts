@@ -15,7 +15,7 @@
 //   scripts/demo-ops.ts integrity   # ledger tamper: prove and escalate, fix nothing
 //   scripts/demo-ops.ts deadlock    # retry-pressure storm on a real engine ($DATABASE_URL)
 //
-// Each wires the supervisor exactly as a host would: createOpsRuntime wraps the
+// Each wires the supervisor exactly as a host would: createSupervisorRuntime wraps the
 // composition's meter/logger, and audit records stream to stdout as JSONL.
 
 import {
@@ -23,6 +23,7 @@ import {
   credits,
   createEconomy,
   openPorts,
+  proveEconomy,
   requestPayout,
   spend,
   systemActor,
@@ -34,12 +35,12 @@ import { silentLogger, silentMeter } from '#src/runtime.ts';
 import {
   createSupervisor,
   jsonlAuditSink,
-  createOpsRuntime,
-} from '#src/ops/index.ts';
+  createSupervisorRuntime,
+} from '#src/supervisor/index.ts';
 
 import type { Clock, Processor, Store } from '#src/ports.ts';
 import type { Economy } from '#src/contract.ts';
-import type { OpsRuntime } from '#src/ops/index.ts';
+import type { SupervisorRuntime } from '#src/supervisor/index.ts';
 
 const say = (line: string): void => console.warn(line);
 
@@ -64,7 +65,7 @@ async function runStuckSaga(): Promise<void> {
   say('');
 
   const clock = manualClock(Date.parse('2026-07-16T12:00:00Z'));
-  const runtime = createOpsRuntime({
+  const runtime = createSupervisorRuntime({
     meter: silentMeter(),
     logger: silentLogger(),
     clock,
@@ -139,7 +140,7 @@ async function runStuckSaga(): Promise<void> {
 
   const report = await economy.read.health();
   say(
-    `prove: conserved=${report.conserved} chainIntact=${report.chainIntact} ` +
+    `${report.prover}: conserved=${report.conserved} chainIntact=${report.chainIntact} ` +
       `noOverdraft=${report.noOverdraft} — the supervisor wrote no ledger state.`,
   );
 }
@@ -157,7 +158,7 @@ async function runIntegrity(): Promise<void> {
   say('');
 
   const clock = manualClock(Date.parse('2026-07-16T12:00:00Z'));
-  const runtime = createOpsRuntime({
+  const runtime = createSupervisorRuntime({
     meter: silentMeter(),
     logger: silentLogger(),
     clock,
@@ -199,7 +200,9 @@ async function runIntegrity(): Promise<void> {
       throw new Error('integrity findings must never trigger the sweep');
     },
     audit: stdoutAudit,
-    prove: () => economy.read.health(),
+    // The full audit, not `read.health()`: this evidence is read after containment has pulled, and
+    // only the replay can say whether a posting behind a head was edited.
+    prove: () => proveEconomy(caps),
     pauseWorker: () => worker.pause(),
     escalate: sayEscalation,
   });
@@ -219,9 +222,10 @@ async function runIntegrity(): Promise<void> {
   say('tick (audit records on stdout):');
   await supervisor.tick();
 
-  const report = await economy.read.health();
+  const report = await proveEconomy(caps);
   say(
-    `prove now says conserved=${report.conserved} — the evidence is attached, ` +
+    `${report.prover} now says conserved=${report.conserved} ` +
+      `chainIntact=${report.chainIntact} — the evidence is attached, ` +
       'the response is human. No automated action touched the ledger.',
   );
   say(
@@ -237,7 +241,8 @@ function sayEscalation(record: { detail: Record<string, unknown> }): void {
   };
   say(
     `ESCALATED to a human: conserved=${proof.conserved}, ` +
-      `${proof.drift.length} drifted account(s) in the attached report.`,
+      `${proof.drift.length} drifted account(s) in the report attached by ` +
+      `${String(record.detail.prover)}.`,
   );
 }
 
@@ -307,10 +312,10 @@ function fireStorm(
   );
 }
 
-// Prints the storm's outcome and retry pressure; returns the retry count for the
+// Prints the storm's outcome and retry pressure. Returns the retry count for the
 // no-advisory explanation.
 function sayStormPressure(
-  runtime: OpsRuntime,
+  runtime: SupervisorRuntime,
   started: number,
   outcomes: ReadonlyArray<string>,
 ): number {
@@ -353,7 +358,7 @@ async function runDeadlock(): Promise<void> {
   say('');
 
   const clock: Clock = { now: () => Date.now() };
-  const runtime = createOpsRuntime({
+  const runtime = createSupervisorRuntime({
     meter: silentMeter(),
     logger: silentLogger(),
     clock,
@@ -409,7 +414,7 @@ async function runDeadlock(): Promise<void> {
 
   const report = await economy.read.health();
   say(
-    `prove: conserved=${report.conserved} chainIntact=${report.chainIntact} — ` +
+    `${report.prover}: conserved=${report.conserved} chainIntact=${report.chainIntact} — ` +
       'every retried conflict committed nothing; the pressure was real, the money never wrong.',
   );
   say(

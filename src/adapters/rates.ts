@@ -37,8 +37,8 @@ function identityRate(from: Currency, to: Currency): Rate {
 }
 
 // The economy stays solvent only if a credit never cashes out for more than it was bought or backed
-// at: buy >= par >= payout, each read as USD per credit across its own scale. A misconfigured
-// deployment fails here at construction, not silently at the first payout.
+// at. That means buy >= par >= payout, each read as USD per credit across its own scale. A
+// misconfigured deployment fails here at construction, not silently at the first payout.
 function assertRateOrder(config: RatesConfig): void {
   const gte = (ra: bigint, sa: number, rb: bigint, sb: number): boolean =>
     ra * 10n ** BigInt(sb) >= rb * 10n ** BigInt(sa);
@@ -70,7 +70,7 @@ function assertRateOrder(config: RatesConfig): void {
  * and throws.
  *
  * Construction asserts buy >= par >= payout (each read as USD per credit across its own scale) and
- * throws `CONFIG.INVALID` when the order fails: a credit that could cash out for more than it was
+ * throws `CONFIG.INVALID` when the order fails. A credit that could cash out for more than it was
  * bought or backed at would drain the platform, so a misconfigured deployment fails at wiring, not
  * at the first cash out.
  *

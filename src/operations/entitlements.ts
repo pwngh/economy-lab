@@ -22,19 +22,13 @@ import type { Unit } from '#src/ports.ts';
 
 /**
  * Records that a user owns an item or feature, named by `sku`, a product code such as
- * `'wrld_pass'`. This tracks ownership only. No money moves and the ledger is untouched. The
- * grant always succeeds. It overwrites any previous record for that user and sku, and it has
- * no prerequisite.
+ * `'wrld_pass'`. This tracks ownership only. No money moves and the ledger is untouched. It
+ * overwrites any previous record for that user, sku and `attrs.source` — a purchase's own grant
+ * stands beside it — and it has no business prerequisite: the user need not own anything first. It
+ * still refuses a blank `userId` or `sku`, and a non-finite `expiresAt`, with
+ * `MALFORMED_OPERATION`.
  *
  * An outer layer enforces that only `system` and `operator` callers may grant.
- *
- * @example
- * const outcome = await grantEntitlement(
- *   { kind: 'grantEntitlement', idempotencyKey: 'idem_0',
- *     actor: { kind: 'system', service: 'fulfillment' }, userId: 'usr_owner', sku: 'wrld_pass' },
- *   unit, ctx,
- * );
- * // outcome.status === 'committed'; unit.entitlements.owns('usr_owner', 'wrld_pass') === true.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/grant-entitlement/
  *   Grant entitlement} for ownership records and grant attributes.
@@ -60,8 +54,9 @@ export async function grantEntitlement(
 
 /**
  * Removes a user's ownership of an item or feature, named by `sku`. If the user does not own
- * it, this returns a `NOT_ENTITLED` rejection rather than throwing. Otherwise it drops the
- * ownership record. No money moves either way, because ownership has no balance.
+ * it, this returns a `NOT_ENTITLED` rejection rather than throwing. Otherwise it drops every
+ * ownership record on the sku, whatever granted them — this is the operator door, and it names no
+ * source. No money moves either way, because ownership has no balance.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/revoke-entitlement/
  *   Revoke entitlement} for the revoke flow and the `NOT_ENTITLED` rejection.
@@ -89,7 +84,7 @@ export async function revokeEntitlement(
 }
 
 // Entitlements post to no accounts, so the central blank-owner guard (which only inspects wallet
-// accounts) never sees these fields; they are checked here.
+// accounts) never sees these fields. This function checks them instead.
 function assertIdentified(userId: string, sku: string): void {
   if (userId.trim() === '') {
     throw fault(
@@ -107,8 +102,9 @@ function assertIdentified(userId: string, sku: string): void {
   }
 }
 
-// Wire input: a number field can arrive as NaN, Infinity, or a fraction. `expiresAt` must be
-// finite when present (null means "never expires"); `quantity` a positive integer when present.
+// These fields arrive over the wire, so a number can be NaN, Infinity, or a fraction.
+// `expiresAt` must be finite when present (null means "never expires"). `quantity` must be a
+// positive integer when present.
 function assertAttrs(attrs: EntitlementAttributes | undefined): void {
   if (attrs === undefined) {
     return;

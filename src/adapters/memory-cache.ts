@@ -23,8 +23,8 @@ interface Entry {
  * reference for the Store. It also serves as a usable single-process cache when no Redis is wired.
  *
  * It honors `ttlMs` against the injected `clock`. An entry past its expiry reads as a miss, the same
- * way Redis's `PX` flag expires a key, so the conformance suite can drive expiry with a fake clock.
- * Values are opaque strings, and this never parses them.
+ * way Redis's `PX` flag expires a key. The conformance suite can therefore drive expiry with a fake
+ * clock. Values are opaque strings. The cache never parses them.
  *
  * @example
  * const cache = memoryCache();

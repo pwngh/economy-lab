@@ -11,10 +11,8 @@
  */
 
 /**
- * The instance economy fast lane (src/instance.ts). The load-bearing invariants: ownership is
- * globally durable the moment a purchase is accepted and never survives a purchase whose money
- * failed; every accepted movement is ledger-final exactly once at settle; the lane keeps the
- * maturity gate and the cap it would otherwise bypass; and every path leaves the ledger provable.
+ * The instance economy fast lane (src/instance.ts). Every accepted movement is ledger-final
+ * exactly once at settle, and ownership never survives a purchase whose money failed.
  */
 
 import { describe, test } from 'node:test';
@@ -203,8 +201,17 @@ describe('Instance economy', () => {
         lane.purchase({ ...buy('usr_b7', 'instant'), orderId: 'ord_main_1' }),
       (error: unknown) => (error as { code?: string }).code === 'OP.MALFORMED',
     );
+    // Another session's own well-formed id is just as foreign here.
+    await assert.rejects(
+      () =>
+        lane.purchase({
+          ...buy('usr_b7', 'instant'),
+          orderId: 'sess:w8:0:custom_1',
+        }),
+      (error: unknown) => (error as { code?: string }).code === 'OP.MALFORMED',
+    );
 
-    const orderId = 'sess:sess:w7:0:custom_1';
+    const orderId = 'sess:w7:0:custom_1';
     const first = await lane.purchase({ ...buy('usr_b7', 'instant'), orderId });
     const repeat = await lane.purchase({
       ...buy('usr_b7', 'instant'),
@@ -213,6 +220,26 @@ describe('Instance economy', () => {
     assert.deepEqual(repeat, first);
     // The replayed repeat charged nothing extra.
     assert.equal(lane.spentOf('usr_b7').minor, 10_000n);
+  });
+
+  test('a minted orderId carries the session marker exactly once', async () => {
+    const { store, deps } = harness();
+    await fund(store, 'usr_b14', 100_000n);
+    const minted = openInstanceEconomy(deps, 'sess:w14:0');
+    const bare = openInstanceEconomy(deps, 'w15:0');
+
+    const first = await minted.purchase(buy('usr_b14', 'instant'));
+    const second = await minted.purchase(buy('usr_b14', 'instant'));
+    const other = await bare.purchase(buy('usr_b14', 'instant'));
+
+    assert.deepEqual(
+      [first, second, other].map((outcome) => outcome.orderId),
+      ['sess:w14:0:0', 'sess:w14:0:1', 'sess:w15:0:0'],
+    );
+    // A lane opened on a scope that already carries the marker never doubles it.
+    for (const outcome of [first, second, other]) {
+      assert.equal(outcome.orderId.includes('sess:sess:'), false);
+    }
   });
 
   test('the cross-lane backstop: funds drained after accept revoke at settle, exactly once', async () => {
@@ -630,6 +657,46 @@ describe('Instance economy', () => {
       assert.equal(response.status, 400);
       const payload = (await response.json()) as { code: string };
       assert.equal(payload.code, 'OP.MALFORMED');
+    }
+  });
+
+  // The lane posts without passing validateOperation — a purchase is not an Operation — so the
+  // HTTP edge was the only place a wrongly-typed id was refused. An in-process caller reached the
+  // ledger, where an id becomes an account by interpolation: an object buyerId debited
+  // `[object Object]:spendable` and an object sellerId credited `[object Object]:earned`, both
+  // committed. See test/economy.validation.test.ts for the Operation half of the same seam.
+  test('an in-process purchase with a wrongly-typed id posts to no coerced account', async () => {
+    const coerced = '[object Object]';
+    for (const [field, purchase] of [
+      ['buyerId', { ...buy('usr_bad', 'instant'), buyerId: {} }],
+      [
+        'recipients',
+        {
+          ...buy('usr_bad', 'instant'),
+          recipients: [{ sellerId: {}, shareBps: 10_000 }],
+        },
+      ],
+      [
+        'product.sku',
+        { ...buy('usr_bad', 'instant'), product: { sku: 7, kind: 'instant' } },
+      ],
+      ['price', { ...buy('usr_bad', 'instant'), price: 'CREDIT:100.00' }],
+    ] as ReadonlyArray<[string, unknown]>) {
+      const { store, deps } = harness();
+      await fund(store, coerced, 50_000n);
+      await fund(store, 'usr_bad', 50_000n);
+      const lane = openInstanceEconomy(deps, `sess:q77_${field}:0`);
+      await assert.rejects(
+        lane.purchase(purchase as Parameters<typeof lane.purchase>[0]),
+        (error: unknown) =>
+          (error as { code?: string }).code === 'OP.MALFORMED' &&
+          (error as Error).message ===
+            `A session purchase's ${field} has the wrong shape.`,
+        `${field} was not refused by name`,
+      );
+      await lane.settle();
+      assert.equal(await balanceOf(store, spendable(coerced)), 50_000n);
+      assert.equal(await balanceOf(store, earned(coerced)), 0n);
     }
   });
 

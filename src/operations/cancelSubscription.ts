@@ -16,13 +16,14 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Subscription, Unit } from '#src/ports.ts';
 
 /**
- * Cancels an active subscription. A status change only, moving no money (cancel forfeits the rest
- * of the paid period with no refund), so it posts a placeholder {@link lifecycleMarker}, marks the
- * record `CANCELED`, and returns `committed`.
+ * Cancels an active subscription. The cancel changes status only and moves no money, because
+ * cancel forfeits the rest of the paid period with no refund. It posts a placeholder
+ * {@link lifecycleMarker}, marks the record `CANCELED`, and returns `committed`.
  *
  * A missing or already-canceled subscription returns a `rejected` `UNKNOWN_SUBSCRIPTION` rather
- * than throwing. The ownership check runs only after the record is confirmed cancelable, so a
- * missing or canceled id gets that same answer for every caller and never leaks whether it exists.
+ * than throwing. The ownership check runs only after the record is confirmed cancelable. A
+ * missing or canceled id therefore gets that same answer for every caller and never leaks whether
+ * it exists.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/cancel-subscription/
  *   Cancel subscription} for the cancel flow and ownership rules.
@@ -50,7 +51,7 @@ export async function cancelSubscription(
   return { status: 'committed', transaction: lifecycleMarker(ctx) };
 }
 
-// A blank id is malformed client input, so it throws up front; a non-blank id with no matching
+// A blank id is malformed client input, so it throws up front. A non-blank id with no matching
 // record still flows to the UNKNOWN_SUBSCRIPTION rejection below.
 function assertSubscriptionId(subscriptionId: string): void {
   if (subscriptionId.trim() === '') {
@@ -62,8 +63,8 @@ function assertSubscriptionId(subscriptionId: string): void {
   }
 }
 
-// The central authorize() can't catch this because cancel debits no user account, so the
-// ownership check lives here against the loaded record; without it any caller could cancel any
+// The central authorize() can't catch this because cancel debits no user account, so this
+// function checks ownership against the loaded record. Without it any caller could cancel any
 // named id. See
 // https://economy-lab-docs.pages.dev/economy/reference/operations/cancel-subscription/ for the
 // ownership rules.

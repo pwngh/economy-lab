@@ -67,9 +67,10 @@ export function assertReason(
 }
 
 /**
- * The recipient-share law, shared by spend and the instance lane's purchase: at least one
- * recipient, no recipient who is the buyer, no sellerId twice, each share in (0, 10000] basis
- * points, and shares summing to exactly 10000. The sum check alone is not enough — shares like
+ * Enforces the recipient-share law, shared by spend and the instance lane's purchase. It requires
+ * at least one recipient, no recipient who is the buyer, no sellerId twice, each share in
+ * (0, 10000] basis points, and shares summing to exactly 10000. The sum check alone is not
+ * enough — shares like
  * [-5000, 15000] still sum to 10000, but a negative share is a hidden debit and a >100% share
  * pays out more of the part than exists. A buyer who is also a recipient would convert their own
  * non-payable credit into payable earned credit funded by the house, so it is a fault, not a
@@ -152,16 +153,16 @@ export async function loadSaga(
 
 /**
  * Builds the `reversed:<id>` idempotency key that marks an order or transaction as undone. Refund
- * and clawback stake it per orderId, which keeps the two reversal paths mutually exclusive, and
- * reverse stakes it per txnId; one builder keeps the key family identical across all three.
+ * and clawback stake it per orderId, which keeps the two reversal paths mutually exclusive.
+ * Reverse stakes it per txnId. One builder keeps the key family identical across all three.
  */
 export function reversalKey(id: string): string {
   return `reversed:${id}`;
 }
 
 /**
- * Receipt for an operation that changes state but moves no money: a committed result must carry a
- * Transaction, so this returns one with empty legs and links.
+ * Builds the receipt for an operation that changes state but moves no money. A committed result
+ * must carry a Transaction, so this returns one with empty legs and links.
  */
 export function lifecycleMarker(ctx: Ctx): Transaction {
   return {
@@ -174,8 +175,9 @@ export function lifecycleMarker(ctx: Ctx): Transaction {
 }
 
 /**
- * Receipt for the already-handled path: nothing posted this run and the original receipt is not
- * at hand, so return an empty marker rather than mint a fresh id for money that did not move.
+ * Builds the receipt for the already-handled path. Nothing posted this run and the original
+ * receipt is not at hand, so this returns an empty marker rather than mint a fresh id for money
+ * that did not move.
  */
 export function noopTransaction(): Transaction {
   return { id: '', postedAt: 0, legs: [], links: [], meta: {} };
@@ -183,8 +185,9 @@ export function noopTransaction(): Transaction {
 
 /**
  * Re-proves a payout saga against the reserve posting it opened with, before any step trusts the
- * unhashed row: the posting itself re-derives (verifiedPosting), its sealed metadata must name
- * this saga, rate, and USD quote exactly, and its earned-debit leg must carry the reserve. Every
+ * unhashed row. The posting itself must re-derive (verifiedPosting). Its sealed metadata must
+ * name this saga, rate, and USD quote exactly, and its earned-debit leg must carry the reserve.
+ * Every
  * money-moving step — the worker's submit, settle, reverse — calls this first, so an edited or
  * fabricated saga row faults CHAIN_BROKEN instead of wiring USD out.
  */
@@ -225,8 +228,8 @@ export async function assertSagaAnchored(
 /**
  * Re-proves a subscription against the first-charge posting it opened with, before a renewal
  * charges by the unhashed row. A row whose id, user, seller, price, or period no longer matches
- * the sealed metadata faults CHAIN_BROKEN instead of shaping the charge — and the anchor is
- * required, because a nullable one would be an anchor the attacker can remove.
+ * the sealed metadata faults CHAIN_BROKEN instead of shaping the charge. The anchor is required,
+ * because a nullable one would be an anchor the attacker can remove.
  */
 export async function assertSubscriptionAnchored(
   deps: { ledger: Ledger; digest: Digest },

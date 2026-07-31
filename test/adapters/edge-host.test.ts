@@ -13,11 +13,13 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 
+import '#test/support/dist-guard.ts';
+
 import {
   tiliaPayoutWebhookBody,
   tiliaScenario,
 } from '@pwngh/economy-edge/testing';
-import { maybeEdgeTilia, tiliaWebhook } from '#scripts/support/edge-host.ts';
+import { maybeEdgeTilia, tiliaWebhook } from '#economy/lib/edge-host.ts';
 import { edgeTiliaCapabilities } from '#src/adapters/edge-tilia.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { credit } from '#test/support/builders.ts';

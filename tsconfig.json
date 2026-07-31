@@ -16,5 +16,11 @@
     "erasableSyntaxOnly": true,
     "isolatedModules": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "scripts/**/*.ts",
+    "economy/**/*.ts",
+    "rigs/**/*.ts"
+  ]
 }

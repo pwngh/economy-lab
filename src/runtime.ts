@@ -32,7 +32,7 @@ export function systemClock(): Clock {
 }
 
 /**
- * Fake clock for tests. Frozen at `start` (epoch ms); only `advance(ms)` moves
+ * Fake clock for tests. It is frozen at `start` (epoch ms). Only `advance(ms)` moves
  * it forward, returning the new time. Keeps test outcomes repeatable.
  *
  * @example
@@ -63,9 +63,9 @@ export function randomIds(): Ids {
 }
 
 /**
- * Predictable id generator for tests. Counts up from `seed` (`prefix_1`,
+ * Predictable id generator for tests. It counts up from `seed` (`prefix_1`,
  * `prefix_2`, ...), so a test produces the same ids every run. The counter is
- * shared across prefixes: it increments on every call, whatever the prefix.
+ * shared across prefixes. It increments on every call, whatever the prefix.
  *
  * @example
  * const ids = sequentialIds();
@@ -83,9 +83,10 @@ export function sequentialIds(seed = 0): Ids {
 }
 
 /**
- * Production hasher. Returns the shared SHA-256 {@link Digest} (`sha256Digest`): a synchronous
- * node:crypto hash where the runtime offers one, else Web Crypto. The same bytes hash to the same
- * value on every runtime, so a signed checkpoint re-derives wherever it is verified.
+ * Production hasher. Returns the shared SHA-256 {@link Digest} (`sha256Digest`). That digest
+ * uses a synchronous node:crypto hash where the runtime offers one, else Web Crypto. The same
+ * bytes hash to the same value on every runtime, so a signed checkpoint re-derives wherever it
+ * is verified.
  */
 export function systemDigest(): Digest {
   return sha256Digest();
@@ -100,8 +101,8 @@ const ED25519_PKCS8_HEADER = new Uint8Array([
 ]);
 
 // Derives a deterministic Ed25519 key pair from secret key material. The secret may be any
-// length; it is hashed with SHA-256 to a 32-byte seed for the private key, and the public key is
-// recovered from the private key's JWK. The same secret always yields the same pair. This lets
+// length. SHA-256 hashes it to a 32-byte seed for the private key, and the private key's JWK
+// yields the public key. The same secret always yields the same pair. This lets
 // checkpoints verify reproducibly and lets the public key be published for an external auditor.
 async function ed25519KeyPair(
   secret: string,
@@ -220,12 +221,12 @@ export function systemRuntime(options: {
  * Structured logger for production hosts. Each call writes one JSONL object,
  * shaped `{ts, level, service, event, ...fields}`, for log collectors to parse
  * line by line. By default every level writes to stderr (info, debug, and warn
- * via `console.warn`; error via `console.error`); supply `out` and `err` to
- * route the two separately. Implements the same `Logger` interface as the
+ * via `console.warn`, error via `console.error`). Supply `out` and `err` to
+ * route the two separately. It implements the same `Logger` interface as the
  * no-op default, so a host can swap it in directly.
  *
  * Supply `now` (epoch ms) so a test can freeze the timestamp and check the exact
- * line; it defaults to wall-clock time. `service` names the emitting process and
+ * line. It defaults to wall-clock time. `service` names the emitting process and
  * appears on every line.
  */
 export function jsonlLogger(
@@ -248,14 +249,14 @@ export function jsonlLogger(
   };
 }
 
-/** A Logger that discards every line: the silent default for a host that wants no log output. */
+/** A Logger that discards every line. It is the silent default for a host that wants no log output. */
 export function silentLogger(): Logger {
   return { log: () => {} };
 }
 
 /**
- * The built-in fallback {@link Scheduler} for hosts that inject none: a plain interval timer.
- * The worker's `start` and the instance-economy manager's `start` both fall back to it.
+ * The built-in fallback {@link Scheduler} for hosts that inject none. It is a plain interval
+ * timer. The worker's `start` and the instance-economy manager's `start` both fall back to it.
  */
 export function intervalScheduler(): Scheduler {
   return {
@@ -276,7 +277,7 @@ export function intervalScheduler(): Scheduler {
   };
 }
 
-/** A Meter that discards every count and observation: the default when a host collects no metrics. */
+/** A Meter that discards every count and observation. It is the default when a host collects no metrics. */
 export function silentMeter(): Meter {
   return { count: () => {}, observe: () => {} };
 }

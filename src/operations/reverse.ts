@@ -24,20 +24,12 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Leg, Posting, Unit } from '#src/ports.ts';
 
 /**
- * Undoes an earlier transaction by posting its exact opposite: an operator-only manual correction
- * that posts the original's legs with every amount's sign flipped, locking each account it touched
- * first. A transaction is reversed at most once via the shared `reversed:${txnId}` key (the pattern
- * refund and clawback use); a second reverse returns the first reversal as a `duplicate`. Reversing
+ * Undoes an earlier transaction by posting its exact opposite. This operator-only manual
+ * correction posts the original's legs with every amount's sign flipped, locking each account it
+ * touched first. A transaction is reversed at most once via the shared `reversed:${txnId}` key
+ * (the pattern refund and clawback use). A second reverse returns the first reversal as a
+ * `duplicate`. Reversing
  * a reversal is refused with `OP.MALFORMED`, as it would just loop the money back out and in.
- *
- * @example
- * const outcome = await reverse(
- *   { kind: 'reverse', idempotencyKey: 'idem_0',
- *     actor: { kind: 'operator', operatorId: 'op_1' },
- *     txnId: 'txn_1', reason: 'reconciliation: duplicate posting' },
- *   unit, ctx,
- * );
- * // outcome.status === 'committed'; every leg of txn_1 posted with its sign flipped.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/reverse/ Reverse} for
  *   the operator-only undo-by-inverse correction flow.
@@ -53,6 +45,7 @@ export async function reverse(
 
   const original = await loadPosting(unit, ctx, operation.txnId);
   assertNotReversal(operation, original);
+  assertNotTracked(operation, original);
   await extendLocks(unit, original.legs);
 
   // The claim lives inside this posting's db transaction, so a rollback releases it and a retry
@@ -97,6 +90,32 @@ async function loadPosting(
   return posting;
 }
 
+// Which door owns the undo, keyed on the row a posting names outside the ledger.
+const TRACKED_ROW: Record<string, string> = {
+  sagaId: 'reversePayout',
+  orderId: 'refund',
+  subscriptionId: 'cancelSubscription',
+};
+
+// A leg-for-leg inverse moves money and nothing else. Where a row outside the ledger tracks that
+// money — a payout saga, an order's `reversed:<orderId>` claim, a subscription — the row survives
+// the inverse, and the door that owns it then returns the same money a second time out of a pooled
+// account, taking it from whoever else's reserve is in there.
+function assertNotTracked(
+  operation: Extract<Operation, { kind: 'reverse' }>,
+  original: Posting,
+): void {
+  for (const [field, door] of Object.entries(TRACKED_ROW)) {
+    const id = original.meta[field];
+    if (typeof id !== 'string') continue;
+    throw fault(
+      ERROR_CODES.MALFORMED_OPERATION,
+      `reverse cannot undo a ${String(original.meta.kind)} posting — ${door} owns that reversal.`,
+      { detail: { kind: 'reverse', txnId: operation.txnId, [field]: id } },
+    );
+  }
+}
+
 // A reversal must never be reversed: chaining reversals would let an operator adjust a balance
 // by an arbitrary amount. A reversal is any posting whose metadata records `kind: 'reverse'`.
 function assertNotReversal(
@@ -125,8 +144,8 @@ async function extendLocks(
   );
 }
 
-// Same account, sign flipped. The original's legs sum to zero per currency, so the flipped set
-// does too.
+// Each leg keeps its account and flips its sign. The original's legs sum to zero per currency,
+// so the flipped set does too.
 function reverseLegs(legs: ReadonlyArray<Leg>): Leg[] {
   return legs.map((leg) => ({
     account: leg.account,

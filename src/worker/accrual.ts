@@ -28,11 +28,11 @@ import type {
 } from '#src/ports.ts';
 
 /**
- * Result of one accrual-drain run (config.accrualDrain; the sweep is a no-op with the flag off).
- * - `drained`: one entry per seller whose claimed rows settled — how much reached `earned` and
- *   how much repaid RECEIVABLE, in minor units.
- * - `failed`: that seller's transaction threw and rolled back; the rows stay pending for the
- *   next run.
+ * Result of one accrual-drain run. The sweep is a no-op when config.accrualDrain is off.
+ * - `drained` holds one entry per seller whose claimed rows settled. Each entry states how much
+ *   reached `earned` and how much repaid RECEIVABLE, in minor units.
+ * - `failed` means that seller's transaction threw and rolled back. The rows stay pending for
+ *   the next run.
  */
 export type AccrualDrainSummary = {
   drained: ReadonlyArray<{
@@ -57,18 +57,17 @@ type DrainTally = {
 };
 
 /**
- * Move parked seller shares from the SETTLEMENT_ACCRUAL shards to each seller's earned balance,
- * one posting per seller per run — the batching that makes the drain, not each purchase, the only
+ * Moves parked seller shares from the SETTLEMENT_ACCRUAL shards to each seller's earned balance,
+ * one posting per seller per run. That batching makes the drain, not each purchase, the only
  * writer of earned rows. Negative rows (refund-recovery debt) net against the seller's positive
- * shares first: RECEIVABLE is repaid before new money reaches `earned`. Each seller drains in its
- * own transaction, so one poisoned group dead-ends alone and the rest still settle. `limit`
- * bounds both dimensions — sellers per run and rows per seller — so one run touches at most
- * limit-squared rows.
+ * shares first, so RECEIVABLE is repaid before new money reaches `earned`. Each seller drains in
+ * its own transaction; one poisoned group dead-ends alone and the rest still settle. `limit`
+ * bounds both sellers per run and rows per seller — at most limit-squared rows per run.
  *
  * The posting id derives from the claimed row set, so a crash between post and mark re-runs to
- * the same outcome: the replay finds the posting already committed and only re-applies the marks.
- * A drain can deadlock a concurrent refund of the same rows (opposite row/account lock order);
- * the engines classify that as transient and retry, and the loser re-reads the rows' new status.
+ * the same outcome. The replay finds the posting already committed and only re-applies the marks.
+ * A drain can deadlock a concurrent refund of the same rows (opposite row/account lock order).
+ * The engines classify that as transient and retry, and the loser re-reads the rows' new status.
  */
 export async function drainAccruals(
   store: Store,
@@ -102,9 +101,9 @@ export async function drainAccruals(
   return tally;
 }
 
-// The drain-lag gauges, the accrual mirror of the relay's backlog pair: a pending age that only
-// grows means the drain is down or a seller group is poisoned. Telemetry only — a stats failure
-// never blocks the drain.
+// Emits the drain-lag gauges, the accrual mirror of the relay's backlog pair. A pending age that
+// only grows means the drain is down or a seller group is poisoned. This is telemetry only — a
+// stats failure never blocks the drain.
 async function observeBacklog(store: Store, ctx: WorkerCtx): Promise<void> {
   try {
     const stats = await store.accruals.stats();
@@ -130,7 +129,7 @@ async function drainSeller(
   await assertRowsProvable(unit, ctx, rows);
   const positives = rows.filter((row) => row.amount.minor > 0n);
   if (positives.length === 0) {
-    // Only recovery debt is pending; nothing funds it this cycle.
+    // Only recovery debt is pending. Nothing funds it this cycle.
     return null;
   }
   const negatives = rows.filter((row) => row.amount.minor < 0n);
@@ -170,7 +169,7 @@ async function drainSeller(
         kind: 'accrual_drain',
         sellerId,
         orders: [...new Set(rows.map((row) => row.orderId))].sort(),
-        // Sealed into the chain hash so the residual row written below is provable next cycle.
+        // The residual is sealed into the chain hash, so the row written below is provable next cycle.
         ...(recovery.residual === null
           ? {}
           : {
@@ -193,8 +192,9 @@ async function drainSeller(
   );
   await unit.accruals.markDrained(settled, txnId);
   if (recovery.residual !== null) {
-    // Stamped `now`, not the consumed row's original time: the residual is new debt state, so it
-    // sorts last in claimPendingBySeller's recorded_at order rather than inheriting the old slot.
+    // The residual is stamped `now`, not the consumed row's original time. It is new debt state,
+    // so it sorts last in claimPendingBySeller's recorded_at order rather than inheriting the old
+    // slot.
     await unit.accruals.put([
       { ...recovery.residual, txnId, recordedAt: input.now },
     ]);
@@ -208,10 +208,10 @@ async function drainSeller(
   };
 }
 
-// Every claimed row must re-derive from the posting its txnId names: that posting is re-proved
-// against its own chain links (verifiedPosting), and the row's amount must match the entry sealed
-// in the posting's hashed metadata — `shares` on a charge, `recovered` on a refund, `residual` on
-// a prior drain. The rows are an unhashed side table and money moves by their amounts, so an
+// Every claimed row must re-derive from the posting its txnId names. That posting is re-proved
+// against its own chain links (verifiedPosting). The row's amount must match the entry sealed in
+// the posting's hashed metadata — `shares` on a charge, `recovered` on a refund, `residual` on a
+// prior drain. The rows are an unhashed side table and money moves by their amounts, so an
 // edited or fabricated row dead-ends this seller's drain loudly instead of redirecting shares.
 async function assertRowsProvable(
   unit: Unit,
@@ -238,7 +238,7 @@ async function assertRowsProvable(
   }
 }
 
-// A positive row is a charge's original share (seq 0, matched against `shares`); a negative row
+// A positive row is a charge's original share (seq 0, matched against `shares`). A negative row
 // is refund recovery (matched against `recovered`) or a prior drain's boundary split (matched
 // against `residual`, seller included). Anything else proves nothing and fails.
 function rowMatchesMeta(
@@ -290,10 +290,10 @@ function rowFault(row: AccrualRow): Error {
   );
 }
 
-// How much refund debt this cycle's parked total can repay. Negative rows are consumed whole in
-// claim order; a boundary row bigger than what remains is split — it drains, and a smaller
-// negative row (the next seq of its order) carries the rest — so recovery is exact with no
-// partially-consumed row.
+// Computes how much refund debt this cycle's parked total can repay. Negative rows are consumed
+// whole in claim order. A boundary row bigger than what remains is split: it drains, and a
+// smaller negative row (the next seq of its order) carries the rest. Recovery is therefore exact
+// with no partially-consumed row.
 function consumeRecovery(
   negatives: ReadonlyArray<AccrualRow>,
   parkedMinor: bigint,
@@ -334,8 +334,9 @@ function consumeRecovery(
   return { recoveredMinor, consumed, residual };
 }
 
-// Deterministic posting id from the claimed row set: the same pending rows always drain under
-// the same id, which is what makes the crash replay converge instead of double-posting.
+// Derives a deterministic posting id from the claimed row set. The same pending rows always
+// drain under the same id, which is what makes the crash replay converge instead of
+// double-posting.
 async function drainTxnId(
   ctx: WorkerCtx,
   rows: ReadonlyArray<AccrualRow>,
@@ -345,7 +346,7 @@ async function drainTxnId(
     .sort()
     .join('\n');
   const digest = await ctx.digest.hash(new TextEncoder().encode(keys));
-  // 32 hex chars = 128 bits: collision odds are negligible at any real drain volume, and the id
-  // stays inside the 64-char posting-id column.
+  // 32 hex chars carry 128 bits. Collision odds are negligible at any real drain volume, and the
+  // id stays inside the 64-char posting-id column.
   return `acc_${toHex(digest).slice(0, 32)}`;
 }

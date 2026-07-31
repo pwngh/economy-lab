@@ -9,14 +9,9 @@
  * @license MIT
  */
 
-/**
- * The shared types between callers and the engine: the Operation union (every request a caller
- * can submit), the Outcome it resolves to, and the Economy interface. economy.ts implements what
- * this file declares.
- */
-
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
+import type { ChainBreak } from '#src/chain.ts';
 import type {
   Anchor,
   Cache,
@@ -28,7 +23,9 @@ import type {
   Logger,
   Meter,
   CallOptions,
+  EntitlementGrant,
   PayeeDirectory,
+  CatalogPort,
   Posting,
   Processor,
   Range,
@@ -38,13 +35,17 @@ import type {
   Signer,
   Statement,
   StoredLink,
+  Subscription,
   Unit,
+  Ports,
 } from '#src/ports.ts';
-import type { Config } from '#src/config.ts';
+import { checkedConfig } from '#src/config.ts';
+
+import type { CheckedConfig } from '#src/config.ts';
 
 /** Optional details on an entitlement grant (a user owning an item or feature). */
 export type EntitlementAttributes = {
-  /** How many units the grant confers; a positive integer when present (validated at submit). */
+  /** How many units the grant confers. When present it is a positive integer, validated at submit. */
   quantity?: number;
 
   /** The grant's version, for hosts that version their item definitions. */
@@ -58,12 +59,15 @@ export type EntitlementAttributes = {
 };
 
 /**
- * Who is making a request, and what they are allowed to do. Three kinds: a `user` may act only
- * on their own accounts; a `system` service is a trusted internal caller acting on the
- * platform's behalf (its writes keep working through a maintenance pause); an `operator` is a
- * human running a manual, fully-audited action — the only kind allowed to run `adjust` and
- * `reverse`. Build one with `userActor`, `systemActor`, or `operatorActor` rather than
- * hand-writing the tagged union.
+ * Who is making a request, and what they are allowed to do.
+ *
+ * There are three kinds. A `user` may act only on their own accounts. A `system` service is a
+ * trusted internal caller acting on the platform's behalf, and its writes keep working through a
+ * maintenance pause. An `operator` is a human running a manual, fully-audited action — the only
+ * kind allowed to run `adjust` and `reverse`.
+ *
+ * Build one with `userActor`, `systemActor`, or `operatorActor` rather than hand-writing the
+ * tagged union.
  */
 export type Principal =
   // An end user (id looks like usr_<uuid>). May only act on their own accounts.
@@ -74,7 +78,7 @@ export type Principal =
   | { kind: 'operator'; operatorId: string };
 
 /**
- * One party who gets a cut of a sale. The platform's fee comes off the top (`platformFeeBps`);
+ * One party who gets a cut of a sale. The platform's fee comes off the top (`platformFeeBps`).
  * `shareBps` is each recipient's basis points of the post-fee net (100 bps = 1%), and the shares
  * must sum to exactly 10,000 — the platform never keeps an unclaimed remainder.
  */
@@ -109,9 +113,9 @@ export type Operation =
       recipients: Recipient[];
       ageRestricted?: boolean;
       /**
-       * A gift: the buyer pays and is screened as usual, but the SKU is granted to this user id,
-       * with no wallet-to-wallet credit or ownership transfer. Omitted (or equal to `buyerId`) for
-       * a self-purchase.
+       * This marks a gift. The buyer pays and is screened as usual, but the SKU is granted to
+       * this user id. No wallet-to-wallet credit or ownership transfer happens. Omitted (or equal
+       * to `buyerId`) for a self-purchase.
        */
       giftTo?: string;
     }
@@ -203,11 +207,12 @@ export type Operation =
       txnId: string;
       reason: string;
     }
-  // Privileged correction to undo a not-yet-paid payout: an operator's manual undo, or the
-  // verified payout-failed webhook's prompt reversal. Marks the saga FAILED and returns the
-  // set-aside credits to the seller's earned account, but only if it is still pre-paid, so two
-  // attempts can't both undo it; a payout that already disbursed real USD is refused. `userId`
-  // names the seller (which account to lock); the operation is otherwise identified only by sagaId.
+  // A privileged correction that undoes a not-yet-paid payout: an operator's manual undo, or the
+  // verified payout-failed webhook's prompt reversal. It marks the saga FAILED and returns the
+  // set-aside credits to the seller's earned account, but only if the payout is still pre-paid,
+  // so two attempts can't both undo it. A payout that already disbursed real USD is refused.
+  // `userId` names the seller (which account to lock). The operation is otherwise identified
+  // only by sagaId.
   | {
       kind: 'reversePayout';
       idempotencyKey: string;
@@ -216,18 +221,18 @@ export type Operation =
       sagaId: string;
       reason: string;
       /**
-       * True when the payout rail itself reported the disbursement failed (a verified payoutFailed
-       * webhook). It waives the still-live SUBMITTED refusal: the provider has said it will not
-       * settle this payout, so returning the reserve promptly cannot double-pay. An operator's
-       * manual reverse leaves this unset and stays gated until the payout ages past
-       * `maxPayoutAgeMs`.
+       * Server-set, and the wire contract does not carry it: a request body naming it answers
+       * `OP.MALFORMED`. Only the verified payoutFailed webhook sets it, waiving the still-live
+       * SUBMITTED refusal — the rail has said it will not settle, so returning the reserve
+       * promptly cannot double-pay. An operator's manual reverse leaves it unset and stays gated
+       * until the payout ages past `maxPayoutAgeMs`.
        */
       providerReported?: boolean;
     }
-  // System- or operator-only (RESTRICTED_TO_PRIVILEGED in economy.ts): the SUBMITTED -> SETTLED
-  // step that empties the seller's reserve into REVENUE and moves gross USD out of trust. An end
-  // user must never settle their own payout. Named only by `sagaId`; postings touch platform
-  // accounts only.
+  // System- or operator-only (RESTRICTED_TO_PRIVILEGED in economy.ts). This is the SUBMITTED ->
+  // SETTLED step that empties the seller's reserve into REVENUE and moves gross USD out of
+  // trust. An end user must never settle their own payout. The operation is named only by
+  // `sagaId`, and its postings touch platform accounts only.
   | {
       kind: 'settlePayout';
       idempotencyKey: string;
@@ -240,11 +245,11 @@ export type Operation =
        */
       providerRef: string;
       /**
-       * The USD amount the provider reported settling. Recorded for audit/reconciliation only: the
-       * figures actually posted are the rate-derived ones settlePayout computes (gross USD from
-       * the reserve at the payout rate, less the rail fee), so the provider's report never sets
-       * the posted amount. Absent when the rail's callback carries no figure (Tilia's does not);
-       * the reconcile feed still checks amounts against the rail's settlement report.
+       * The USD amount the provider reported settling. It is recorded for audit/reconciliation
+       * only. The figures actually posted are the rate-derived ones settlePayout computes (gross
+       * USD from the reserve at the payout rate, less the rail fee), so the provider's report
+       * never sets the posted amount. Absent when the rail's callback carries no figure (Tilia's
+       * does not). The reconcile feed still checks amounts against the rail's settlement report.
        */
       providerAmount?: Amount;
     };
@@ -298,13 +303,21 @@ export type RejectionDetail =
   | {
       readonly reason: 'ECONOMY_PAUSED';
       readonly resumesAt: number | null;
+    }
+  | {
+      readonly reason: 'CATALOG_MISMATCH';
+      readonly sku: string;
+      /** Which part of the spend disagreed with the host catalog's offer. */
+      readonly field: 'sku' | 'price' | 'recipients';
     };
 
 /**
  * The result of submitting an operation: `committed`, `duplicate` (a repeat, earlier result
- * returned unchanged), or `rejected`. A rejection is a normal "no" returned as data; a genuine
- * fault is thrown instead. The rejected arm's sole discriminant is `detail.reason`; the HTTP
- * wire additionally carries a derived top-level `reason` for client stability.
+ * returned unchanged), or `rejected`.
+ *
+ * A rejection is a normal "no" returned as data; a genuine fault is thrown instead. The rejected
+ * arm's sole discriminant is `detail.reason`. The HTTP wire additionally carries a derived
+ * top-level `reason` for client stability.
  */
 export type Outcome =
   | { readonly status: 'committed'; readonly transaction: Transaction }
@@ -313,8 +326,8 @@ export type Outcome =
 
 /**
  * One operation's slot in a {@link Economy.submitBatch} result, index-aligned with the input.
- * `ok: true` carries what `submit` would have returned; `ok: false` carries what `submit` would
- * have thrown — a fault never poisons its batch-mates, so it comes back as data.
+ * `ok: true` carries what `submit` would have returned. `ok: false` carries what `submit` would
+ * have thrown. A fault never poisons its batch-mates; it comes back as data.
  */
 export type BatchOutcome =
   | { readonly ok: true; readonly outcome: Outcome }
@@ -335,11 +348,14 @@ export interface Transaction {
   postedAt: number;
 
   /**
-   * The individual debit and credit lines that posted. A refund reverses exactly these. Amounts
-   * are debit-positive — the ledger's sign, not the account holder's, so a top-up's wallet leg
-   * is negative; `balanceDelta` (from `/store-kit`) converts a leg to the signed change in that
-   * account's balance. May be empty: a committed lifecycle operation (e.g. `cancelSubscription`)
-   * posts a marker that moves no money.
+   * The individual debit and credit lines that posted. A refund reverses exactly these.
+   *
+   * Amounts are debit-positive — the ledger's sign, not the account holder's, so a top-up's
+   * wallet leg is negative. `balanceDelta` (from `/store-kit`) converts a leg to the signed
+   * change in that account's balance.
+   *
+   * The array may be empty: a committed lifecycle operation (e.g. `cancelSubscription`) posts a
+   * marker that moves no money.
    */
   legs: ReadonlyArray<{ account: AccountRef; amount: Amount }>;
 
@@ -351,7 +367,7 @@ export interface Transaction {
 
   /**
    * The posting's metadata, as the handler recorded it: the operation `kind` plus kind-specific
-   * fields — a `requestPayout` carries the opened saga's `sagaId`, so the caller can follow its
+   * fields. A `requestPayout` carries the opened saga's `sagaId`, so the caller can follow its
    * payout without scanning `read.payouts()`. Empty for a lifecycle marker that posted nothing.
    */
   meta: Record<string, unknown>;
@@ -364,17 +380,24 @@ export type Ctx = {
   digest: Digest;
   signer: Signer;
   processor: Processor;
-  config: Config;
+  /** Bounds-checked: only `checkedConfig` mints one, so no door can hand a handler an unchecked
+   *  knob. */
+  config: CheckedConfig;
   pricing: FeePolicy;
   rates: Rates;
   logger: Logger;
   meter: Meter;
   /**
-   * Optional read-through balance cache. Present only when a cache capability was injected;
-   * when absent, every balance read goes straight to the ledger.
+   * Optional read-through balance cache. Present only when a cache capability was injected.
+   * When absent, every balance read goes straight to the ledger.
    */
   cache?: Cache;
   payees?: PayeeDirectory;
+  /**
+   * The host's listing store. Present makes a spend's price and split answerable against the
+   * offer; absent leaves pricing the host's own concern.
+   */
+  catalog?: CatalogPort;
 };
 
 /**
@@ -391,11 +414,26 @@ export type WorkerCtx = {
   rates: Rates;
   logger: Logger;
   meter: Meter;
-  config: Config;
+  /** Bounds-checked, as {@link Ctx.config} is: the sweeps post too. */
+  config: CheckedConfig;
 
   /** When present, every sealed checkpoint is also published to this external anchor. */
   anchor?: Anchor;
 };
+
+/**
+ * A {@link Ports} whose config has cleared the bounds check, so it also satisfies
+ * {@link WorkerCtx}. The worker's entry points take a plain `Ports` from the host and hand this
+ * down, so one check at the door covers every job behind it.
+ */
+export type CheckedPorts = Omit<Ports, 'config'> & {
+  readonly config: CheckedConfig;
+};
+
+/** Checks a host's `Ports` bag on the way into a worker entry point. */
+export function checkedPorts(ports: Ports): CheckedPorts {
+  return { ...ports, config: checkedConfig(ports.config) };
+}
 
 /** A function that processes one operation, given an open transaction and its capabilities. */
 export type Handler = (
@@ -420,12 +458,15 @@ export type FeePolicy = (input: {
 }) => ReadonlyArray<Leg>;
 
 /**
- * The economy's pause state at a moment in time, derived from the configured maintenance window and
- * the clock. `maintenanceActive` is true only inside the window — distinct from the worker's own
+ * The economy's pause state at a moment in time, derived from the configured maintenance window
+ * and the clock.
+ *
+ * `maintenanceActive` is true only inside the window — distinct from the worker's own
  * `sweepsPaused`. `pauseStart` and `pauseEnd` are the configured bounds in epoch ms, or null when
- * no window is set. `resumesAt` is `pauseEnd` while paused, else null. This is the readable side of
- * the ECONOMY_PAUSED gate: a UI reads it to show a banner without inferring the state from a
- * declined write.
+ * no window is set. `resumesAt` is `pauseEnd` while paused, else null.
+ *
+ * This is the readable side of the ECONOMY_PAUSED gate: a UI reads it to show a banner without
+ * inferring the state from a declined write.
  */
 export type EconomyStatus = {
   readonly maintenanceActive: boolean;
@@ -436,15 +477,15 @@ export type EconomyStatus = {
 
 /**
  * The capacity gauges behind the scale knobs, read live from the store. Every `null` means the
- * store does not offer that gauge — unknown, never zero. `advisories` are stated facts against
+ * store does not offer that gauge. `advisories` are stated facts against
  * {@link CAPACITY_THRESHOLDS} (documented, not configurable per call): the system informs, the
- * host decides; no advisory ever changes behavior.
+ * host decides. No advisory ever changes behavior.
  */
 export type CapacityReport = {
   /** Total postings (newest commit sequence) — the partitioning/archival signal. */
   readonly historySize: number | null;
 
-  /** Rolling re-proof: the verified-through watermark and its age; null before the first rotation. */
+  /** Rolling re-proof: the verified-through watermark and its age. Null before the first rotation. */
   readonly reproof: {
     readonly rotatedAt: number | null;
     readonly ageMs: number | null;
@@ -476,8 +517,8 @@ export type CapacityReport = {
   };
 
   /**
-   * Secondary-table row counts (every value null when the store offers no size gauge): the
-   * unbounded growth surfaces the retention sweep and host policy govern.
+   * Secondary-table row counts. Every value is null when the store offers no size gauge. These
+   * are the unbounded growth surfaces the retention sweep and host policy govern.
    */
   readonly tables: {
     readonly movements: number | null;
@@ -486,6 +527,7 @@ export type CapacityReport = {
     readonly outbox: number | null;
     readonly sagas: number | null;
     readonly accruals: number | null;
+    readonly entitlements: number | null;
   };
 
   /** Stated facts (never actions) the thresholds below produced from the gauges. */
@@ -494,7 +536,7 @@ export type CapacityReport = {
 
 /**
  * The documented crossover thresholds {@link CapacityReport.advisories} states facts against.
- * Crossing one changes nothing by itself; it is the signal to activate the corresponding knob
+ * Crossing one changes nothing by itself. It is the signal to activate the corresponding knob
  * (partitioning DDL, archival mover, drain cadence, orphan sweep).
  */
 export const CAPACITY_THRESHOLDS = {
@@ -526,21 +568,45 @@ export interface Economy {
   /**
    * Runs one operation through the full pipeline: validate, authorize, then one all-or-nothing
    * transaction that claims the idempotency key, screens risk and funds, posts the legs, and
-   * queues the outbound event. Resolves `committed`, `duplicate` (the idempotency key was seen
-   * before — the original transaction returns unchanged, nothing posts twice), or `rejected` (a
-   * normal decline returned as data); a genuine fault throws an `EconomyError` instead. A
-   * rejected operation commits nothing and leaves its idempotency key unclaimed, so a corrected
-   * retry under the same key can still succeed.
+   * queues the outbound event.
+   *
+   * Resolves `committed`, `duplicate` (the idempotency key was seen before — the original
+   * transaction returns unchanged, nothing posts twice), or `rejected` (a normal decline
+   * returned as data). A genuine fault throws an `EconomyError` instead.
+   *
+   * A rejected operation commits nothing and leaves its idempotency key unclaimed — a
+   * corrected retry under the same key can still succeed.
+   *
+   * @example
+   * const outcome = await economy.submit(spend({
+   *   idempotencyKey: idempotencyKey('order', 'ord_8821'),
+   *   actor: userActor('usr_buyer'),
+   *   orderId: 'ord_8821',
+   *   buyerId: 'usr_buyer',
+   *   sku: 'wrld_pass',
+   *   price: toAmount('CREDIT', 40_000n), // 400 credits
+   *   recipients: [{ sellerId: 'usr_creator', shareBps: 10_000 }],
+   * }));
+   * if (outcome.status === 'rejected') {
+   *   if (outcome.detail.reason === 'INSUFFICIENT_FUNDS') {
+   *     // typed fields: which account fell short, and by how much
+   *     const { account, need, have } = outcome.detail;
+   *   }
+   * }
    */
   submit(operation: Operation, options?: CallOptions): Promise<Outcome>;
   /**
    * Submits several independent operations through the full pipeline for one database commit
-   * (one fsync) on the clean path — the aggregate-throughput lever — while each operation keeps
-   * exactly `submit`'s semantics: a rejection or fault rolls back that operation alone, and its
-   * batch-mates still commit. The isolation strategy is the store engine's own (see
-   * {@link Store.batchTransaction}). Slots are index-aligned with the input. Operations in one
-   * batch must carry distinct idempotency keys; a duplicate key's slot faults. On a store
-   * without batch support, this degrades to sequential submits.
+   * (one fsync) on the clean path — the aggregate-throughput lever.
+   *
+   * Each operation keeps exactly `submit`'s semantics: a rejection or fault rolls back that
+   * operation alone, and its batch-mates still commit. The isolation strategy is the store
+   * engine's own (see {@link Store.batchTransaction}). On a store without batch support, this
+   * degrades to sequential submits.
+   *
+   * Slots in the result are index-aligned with the input.
+   *
+   * A key repeated inside one batch replays: the later slot comes back `duplicate`.
    */
   submitBatch(
     operations: ReadonlyArray<Operation>,
@@ -548,16 +614,19 @@ export interface Economy {
   ): Promise<ReadonlyArray<BatchOutcome>>;
   /**
    * The read surface: balances, statements, postings, sagas, entitlements, status, capacity,
-   * the streamed enumerations, and the export. Reads never mutate; `balance` alone consults the
-   * optional cache, every other reader goes to the store.
+   * the streamed enumerations, and the export. Reads never mutate. `balance` alone consults the
+   * optional cache, and every other reader goes to the store.
    */
   read: {
     /**
      * The account's current balance in its own currency, from the maintained running total —
-     * one read, not a sum over history; an account never posted to reads as zero. When a cache
-     * port is present this is a read-through, and any cache failure logs and falls back to the
-     * ledger, so a degraded cache can never fail the read. A bare sharded platform account
-     * resolves to its logical balance: the sum over its shard rows.
+     * one read, not a sum over history. An account never posted to reads as zero.
+     *
+     * When a cache port is present this is a read-through, and any cache failure logs and falls
+     * back to the ledger, so a degraded cache can never fail the read.
+     *
+     * A bare sharded platform account resolves to its logical balance: the sum over its shard
+     * rows.
      */
     balance(account: AccountRef, options?: CallOptions): Promise<Amount>;
     /**
@@ -581,6 +650,28 @@ export interface Economy {
      */
     saga(id: string, options?: CallOptions): Promise<Saga | null>;
     /**
+     * The user's three wallet balances plus `payableNow` — the earned portion whose maturity
+     * horizon has passed, the amount a payout request could draw this instant. Zeros for a
+     * user who never transacted; a wallet read never fails as unknown.
+     */
+    wallet(userId: string, options?: CallOptions): Promise<Wallet>;
+    /**
+     * The user's non-revoked entitlement grants, expired included, sorted by sku. Delegates
+     * to `EntitlementStore.list`.
+     */
+    entitlements(
+      userId: string,
+      options?: CallOptions,
+    ): AsyncIterable<EntitlementGrant>;
+    /**
+     * Every subscription the user holds, newest first, all states — canceled and lapsed rows
+     * render too. Delegates to `SubscriptionStore.listFor`.
+     */
+    subscriptions(
+      userId: string,
+      options?: CallOptions,
+    ): AsyncIterable<Subscription>;
+    /**
      * Whether a user currently owns an entitlement (a SKU: an item or feature), true or false.
      * Ownership is a record, not a balance, so it has its own reader. This is the readable side of
      * `grantEntitlement`/`revokeEntitlement` that a UI gates access on.
@@ -596,8 +687,8 @@ export interface Economy {
      */
     status(): EconomyStatus;
     /**
-     * The capacity gauges (see {@link CapacityReport}), with advisories as stated facts: the
-     * system measures, the host decides; nothing here flips any behavior.
+     * The capacity gauges (see {@link CapacityReport}), with advisories as stated facts.
+     * Nothing here flips any behavior.
      */
     capacity(options?: CallOptions): Promise<CapacityReport>;
     /**
@@ -612,7 +703,10 @@ export interface Economy {
      * render payout status without tracking minted payout ids itself. Delegates to `SagaStore.list`.
      */
     payouts(
-      options?: CallOptions & { states?: readonly SagaState[] },
+      options?: CallOptions & {
+        states?: readonly SagaState[];
+        userId?: string;
+      },
     ): AsyncIterable<Saga>;
     /**
      * Every committed posting, newest first, streamed (a busy ledger can have many). Includes user
@@ -652,19 +746,54 @@ export interface Economy {
     health(options?: CallOptions): Promise<HealthReport>;
   };
   /**
-   * Shuts the economy down by closing its store — the SQL engines close their connection
-   * pools; the memory store has nothing to release. The economy itself holds no other state.
+   * Shuts the economy down by releasing every port in its bag that declares a `close` — the SQL
+   * engines end their connection pools, a Redis cache drops its client. The optional ports go
+   * first, the store last, so a port flushing on the way out still has one. A port with no
+   * `close` is left alone, and an in-memory bag has nothing to release.
+   *
+   * Every port is closed even if an earlier one refuses; the refusals then surface together as
+   * one PROVIDER.FAILURE naming them in `detail.ports`. Calling it again is safe and closes
+   * nothing twice.
+   *
    * Call it once, after in-flight submits and the worker's sweeps have finished; a submit
    * after close gets whatever the engine does on a closed pool.
+   *
+   * Ownership follows creation: this closes the bag handed to `createEconomy`. A port you built
+   * yourself and mean to keep past the economy belongs to you — hand it to `createApp` as
+   * `portsBag`, which never closes what it did not open.
    */
   close(): Promise<void>;
 }
 
-/** What `read.health()` reports — the same shape the thorough prover fills. */
-export type HealthReport = ProveReport;
+/** What `read.wallet()` reports: the three balances plus the matured, payable-now portion. */
+export type Wallet = {
+  spendable: Amount;
+  earned: Amount;
+  promo: Amount;
+  /** The earned portion past its maturity horizon — what a payout request could draw now. */
+  payableNow: Amount;
+};
+
+/**
+ * What `read.health()` reports — the thorough prover's shape, narrowed to the light prover. Its
+ * `firstBreak` is `null` in the type as well as in the value: the light chain check reads each
+ * account's newest head and never opens a link, so it has no link to name even when it answers
+ * `chainIntact: false`.
+ */
+export type HealthReport = ProveReport & {
+  prover: 'read.health';
+  firstBreak: null;
+};
 
 /** The result of the integrity check: each flag is one property the ledger is supposed to hold. */
 export interface ProveReport {
+  /**
+   * Which prover filled this report. The two answer `chainIntact` differently, so a report copied
+   * into an audit trail, a trace or a bench artifact carries the answer with it rather than
+   * depending on the reader knowing which call produced it.
+   */
+  prover: 'proveEconomy' | 'read.health';
+
   /**
    * True when debits and credits cancel out within each currency, so no money was created or lost.
    */
@@ -681,14 +810,28 @@ export interface ProveReport {
   noOverdraft: boolean;
 
   /**
-   * True when every account's hash chain recomputes to its recorded value, proving no posting
-   * was tampered with after the fact.
+   * True when no posting was altered after it was recorded. `proveEconomy` answers that by
+   * recomputing every account's hash chain. `read.health()` answers a weaker question — whether
+   * each account's latest head is well-formed — so an edit behind a head leaves it true there.
    */
   chainIntact: boolean;
 
   /**
+   * Which link broke, when one did: the account, the transaction that wrote it, whether the
+   * contents were changed or the chain no longer joins, and the two hashes that disagree. Null
+   * when `chainIntact` is true, and null on a `read.health()` report whatever `chainIntact` says
+   * there — that prover checks the newest head's shape and opens no link, so it has nothing to
+   * name. `prover` says which of the two filled the report.
+   *
+   * An operator reads this after an escalation has already latched containment, so a verdict that
+   * carried only the boolean sent them to search the whole ledger for the posting the prover had
+   * already found.
+   */
+  firstBreak: ChainBreak | null;
+
+  /**
    * True when, for every account, the cached running balance matches the balance re-added from its
-   * debit and credit lines (i.e. `drift` is empty). The lines are the source of truth; the cached
+   * debit and credit lines (i.e. `drift` is empty). The lines are the source of truth. The cached
    * figure can be wrong. A diverged cached balance (mis-saved or directly-edited row) shows up here
    * even when the books still balance.
    */

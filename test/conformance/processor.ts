@@ -10,17 +10,18 @@
  * @license MIT
  */
 
-import { describe, test } from 'node:test';
+import { describe, test as nodeTest } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { countedCases } from '#test/conformance/cases.ts';
 import { decodeAmount } from '#src/money.ts';
 
 import type { PayoutProviderStatus, Processor } from '#src/ports.ts';
 
 /**
- * What a Processor conformance run needs from the host: factories that produce a processor
- * arranged to exhibit each outcome. Only `accepted` is required; each optional member unlocks its
- * matching test, so a provider whose fake cannot stage a failure mode simply omits it. `status`
+ * A Processor conformance run needs these factories from the host. Each factory produces a
+ * processor arranged to exhibit one outcome. Only `accepted` is required. Each optional member
+ * unlocks its matching test, so a provider whose fake cannot stage a failure mode simply omits it. `status`
  * returns a processor plus the `providerRef` to query, staged so `payoutStatus` for that ref
  * reports the given canonical state.
  */
@@ -52,11 +53,11 @@ function payout() {
 
 /**
  * Registers the shared {@link Processor} contract the payout saga depends on, for `node --test`.
- * It proves: an accepted submit resolves to a non-empty `providerRef`, the handle every later
- * settle and status poll keys on; an indeterminate submit throws a retryable coded fault, so the
- * worker resubmits under the same payout key instead of treating an unknown outcome as terminal;
- * a terminal rejection throws a non-retryable coded fault, so the saga stops retrying and
- * unwinds; and `payoutStatus` reports each of the five canonical states — SETTLED, RETURNED,
+ * It proves four things. An accepted submit resolves to a non-empty `providerRef`, the handle
+ * every later settle and status poll keys on. An indeterminate submit throws a retryable coded
+ * fault, so the worker resubmits under the same payout key instead of treating an unknown outcome
+ * as terminal. A terminal rejection throws a non-retryable coded fault, so the saga stops retrying
+ * and unwinds. `payoutStatus` reports each of the five canonical states — SETTLED, RETURNED,
  * FAILED, PENDING, UNKNOWN — faithfully. Tests for the optional harness members register only
  * when the {@link ProcessorHarness} supplies them, so the required surface is a single accepted
  * path.
@@ -66,6 +67,18 @@ export function runProcessorConformance(
   harness: ProcessorHarness,
 ): void {
   describe(`Processor Contract: ${name}`, () => {
+    // Each optional half of the harness registers a case, so what this suite adds to a driver's
+    // total depends on what the caller supplied. Two are unconditional: the accepted path and the
+    // count itself.
+    const test = countedCases(
+      'runProcessorConformance',
+      2 +
+        (harness.indeterminate === undefined ? 0 : 1) +
+        (harness.rejected === undefined ? 0 : 1) +
+        (harness.status === undefined ? 0 : 1),
+      (name, body) => nodeTest(name, body),
+    );
+
     test('an accepted submit resolves to a non-empty providerRef', async () => {
       const result = await harness.accepted().submitPayout(payout());
 

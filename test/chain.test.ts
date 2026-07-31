@@ -297,7 +297,7 @@ describe('Chain', () => {
           ids: sequentialIds(),
         }),
       (error: unknown) =>
-        error instanceof EconomyError && error.code === 'CHAIN.BROKEN',
+        EconomyError.is(error) && error.code === 'CHAIN.BROKEN',
     );
     assert.equal(checkpoints.rows(), 0);
   });
@@ -506,7 +506,7 @@ describe('Chain', () => {
           ids: sequentialIds(),
         }),
       (error: unknown) =>
-        error instanceof EconomyError && error.code === 'LEDGER.UNBALANCED',
+        EconomyError.is(error) && error.code === 'LEDGER.UNBALANCED',
     );
     assert.equal(checkpoints.rows(), 0);
   });

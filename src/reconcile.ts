@@ -86,7 +86,7 @@ export interface Discrepancy {
 
 /**
  * Holds the result of reconciling one window. `discrepancies` lists every mismatch in
- * stable sorted order, so the same inputs always produce an identical report, and the count
+ * stable sorted order, so the same inputs always produce an identical report. The count
  * fields summarize that list. `reconciled` is true when no mismatch was found.
  */
 export interface ReconcileReport {
@@ -117,7 +117,7 @@ export interface ReconcileInputs {
 
 /**
  * Compares processor records against ledger records for one window and reports mismatches. The
- * caller may over-supply; only records inside the half-open window count (a record exactly on `to`
+ * caller may over-supply. Only records inside the half-open window count (a record exactly on `to`
  * belongs to the next window). Two records match on the same kind and matchKey. Every record must be
  * accounted for exactly once and the reconciler must not drop one, so `report` self-checks
  * that the counts reconstruct both sides.
@@ -219,9 +219,9 @@ function report(
   };
 }
 
-// A match or drift consumes one record from BOTH sides; an orphan is one unpaired record, so
-// matched + drifts + orphans must reconstruct each side's count. A failure means the matcher
-// dropped or double-counted a record; throwing beats returning a wrong reconciliation.
+// A match or drift consumes one record from BOTH sides, and an orphan is one unpaired record.
+// So matched + drifts + orphans must reconstruct each side's count. A failure means the matcher
+// dropped or double-counted a record. Throwing beats returning a wrong reconciliation.
 function assertAccountedFor(counts: {
   matched: number;
   amountDrifts: number;
@@ -248,8 +248,8 @@ function assertAccountedFor(counts: {
 
 // --- Matching primitives ----------------------------------------------------------
 
-// Half-open window: `from` is in, `to` is out and belongs to the next window, so adjacent windows
-// never both claim a record.
+// The window is half-open: `from` is in, `to` is out and belongs to the next window. Adjacent
+// windows therefore never both claim a record.
 function withinWindow<T>(
   records: ReadonlyArray<T>,
   window: Range,
@@ -283,8 +283,8 @@ function keyOf(kind: ReconcileKind, matchKey: string): string {
   return `${kind}:${matchKey}`;
 }
 
-// Exact equality, no tolerance. Currency is checked first because `compare` throws on mismatched
-// currencies; checking here reports a mismatch as drift instead of crashing.
+// Amounts must be exactly equal, with no tolerance. Currency is checked first because `compare`
+// throws on mismatched currencies. Checking here reports a mismatch as drift instead of crashing.
 function sameAmount(a: Amount, b: Amount): boolean {
   if (a.currency !== b.currency) {
     return false;

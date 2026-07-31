@@ -5,10 +5,14 @@
     "access": "public"
   },
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "imports": {
     "#src/*": "./src/*",
     "#test/*": "./test/*",
-    "#scripts/*": "./scripts/*"
+    "#scripts/*": "./scripts/*",
+    "#economy/*": "./economy/*"
   },
   "exports": {
     ".": {
@@ -23,26 +27,6 @@
       "types": "./dist/src/adapters/index.d.ts",
       "default": "./dist/src/adapters/index.js"
     },
-    "./adapters/redis": {
-      "types": "./dist/src/adapters/redis.d.ts",
-      "default": "./dist/src/adapters/redis.js"
-    },
-    "./adapters/sqs": {
-      "types": "./dist/src/adapters/sqs.d.ts",
-      "default": "./dist/src/adapters/sqs.js"
-    },
-    "./engines/postgres": {
-      "types": "./dist/src/engines/postgres.d.ts",
-      "default": "./dist/src/engines/postgres.js"
-    },
-    "./engines/mysql": {
-      "types": "./dist/src/engines/mysql.d.ts",
-      "default": "./dist/src/engines/mysql.js"
-    },
-    "./engines/mysql-mariadb": {
-      "types": "./dist/src/engines/mysql-mariadb.d.ts",
-      "default": "./dist/src/engines/mysql-mariadb.js"
-    },
     "./worker": {
       "types": "./dist/src/worker/index.d.ts",
       "default": "./dist/src/worker/index.js"
@@ -51,17 +35,29 @@
       "types": "./dist/src/server.d.ts",
       "default": "./dist/src/server.js"
     },
+    "./client": {
+      "types": "./dist/src/client.d.ts",
+      "default": "./dist/src/client.js"
+    },
+    "./contract": {
+      "types": "./dist/src/wire-contract.d.ts",
+      "default": "./dist/src/wire-contract.js"
+    },
     "./netting": {
       "types": "./dist/src/netting.d.ts",
       "default": "./dist/src/netting.js"
     },
-    "./ops": {
-      "types": "./dist/src/ops/index.d.ts",
-      "default": "./dist/src/ops/index.js"
+    "./supervisor": {
+      "types": "./dist/src/supervisor/index.d.ts",
+      "default": "./dist/src/supervisor/index.js"
     },
     "./store-kit": {
       "types": "./dist/src/store-kit.d.ts",
       "default": "./dist/src/store-kit.js"
+    },
+    "./sql-kit": {
+      "types": "./dist/src/sql-kit.d.ts",
+      "default": "./dist/src/sql-kit.js"
     },
     "./testing": {
       "types": "./dist/test/conformance/index.d.ts",
@@ -72,7 +68,6 @@
   "sideEffects": false,
   "files": [
     "dist",
-    "db",
     "README.md",
     "CHANGELOG.md",
     "LICENSE.md"
@@ -89,48 +84,56 @@
   },
   "homepage": "https://economy-lab-docs.pages.dev/economy/",
   "scripts": {
-    "dev": "node --watch --env-file-if-exists=.env scripts/main.ts dev",
+    "dev": "economy dev",
     "docs:api": "typedoc",
-    "site": "npm run docs:api && npm run build --prefix apps/docs && npm run build --prefix apps/console && node scripts/compose-site.mjs",
-    "site:dev": "node scripts/dev-site.mjs",
+    "site": "npm run docs:api && npm run build --prefix apps/docs && npm run build --prefix apps/console && node site/src/compose.mjs",
+    "site:dev": "node site/src/dev.mjs",
     "site:deploy": "npm run verify --prefix apps/docs && npm run verify --prefix apps/console && npm run check:ref --prefix apps/docs && npm run site && npm run check:csp --prefix apps/docs -- ../../dist-site && npm run check:static --prefix apps/docs && node apps/console/scripts/bundle-budget.mjs && apps/docs/node_modules/.bin/wrangler pages deploy --branch=production --commit-dirty=true",
-    "start": "node --env-file-if-exists=.env scripts/main.ts serve",
-    "worker": "node --env-file-if-exists=.env scripts/main.ts worker",
-    "test": "node --env-file-if-exists=.env --test --test-reporter=./test/support/numbered.reporter.mjs --test-reporter-destination=stdout \"test/**/*.test.ts\"",
-    "coverage": "node --env-file-if-exists=.env --test --experimental-test-coverage \"test/**/*.test.ts\"",
+    "start": "node --env-file-if-exists=.env node_modules/@pwngh/economy/dist/cli-entry.js serve",
+    "worker": "node --env-file-if-exists=.env node_modules/@pwngh/economy/dist/cli-entry.js worker",
+    "test": "node --env-file-if-exists=.env --test-timeout=600000 --test --test-reporter=./test/support/numbered.reporter.mjs --test-reporter-destination=stdout --test-reporter=./scripts/support/counted.reporter.mjs --test-reporter-destination=stderr \"test/**/*.test.ts\"",
+    "test:packages": "node --env-file-if-exists=.env scripts/test-packages.mjs",
+    "coverage": "node --env-file-if-exists=.env --test-timeout=600000 --test --experimental-test-coverage \"test/**/*.test.ts\"",
     "build": "node scripts/build-dist.mjs",
-    "prepublishOnly": "npm run check && npm run build",
-    "check": "npm run typecheck && npm run lint && npm run format:check && npm run test && npm run trace:check && npm run check:samples && npm run check:browser",
+    "prepublishOnly": "npm run build && npm run build:packages && npm run check",
+    "check": "node scripts/check.ts",
+    "build:packages": "node scripts/build-packages.mjs",
+    "publish:preflight": "node scripts/publish-packages.mjs --preflight-only",
+    "publish:packages": "node scripts/publish-packages.mjs",
     "check:samples": "node scripts/check-samples.mjs",
     "check:browser": "node scripts/check-browser.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format:check": "prettier -c .",
     "format:write": "prettier -w .",
-    "docker": "sh scripts/docker.sh",
+    "docker": "sh rigs/docker.sh",
     "db:migrate": "sh scripts/migrate.sh",
-    "db:clean": "node --env-file-if-exists=.env scripts/db-clean.ts",
-    "prove": "node --env-file-if-exists=.env scripts/prove.ts",
-    "fuzz": "node --env-file-if-exists=.env scripts/fuzz.ts",
-    "prop": "node --env-file-if-exists=.env --test --test-reporter=./test/support/numbered.reporter.mjs --test-reporter-destination=stdout \"test/propcheck.test.ts\" \"test/property-*.test.ts\"",
-    "smoke": "node --env-file-if-exists=.env scripts/smoke.ts",
+    "db:clean": "node --env-file-if-exists=.env rigs/db-clean.ts",
+    "prove": "node scripts/check.ts prove",
+    "fuzz": "node scripts/check.ts fuzz",
+    "prop": "node scripts/check.ts property",
+    "smoke": "node scripts/check.ts smoke",
     "bench": "node --env-file-if-exists=.env scripts/bench.ts",
     "bench:queue": "node --env-file-if-exists=.env scripts/bench-queue.ts",
+    "bench:scale": "node --env-file-if-exists=.env scripts/bench-scale.ts",
+    "bench:multinode": "node --env-file-if-exists=.env scripts/bench-multinode.ts",
+    "bench:wire": "node --env-file-if-exists=.env scripts/bench-wire.ts",
+    "bench:profile": "node --env-file-if-exists=.env scripts/profile-statements.ts",
     "scale": "node --env-file-if-exists=.env scripts/scale.ts",
     "trace": "node scripts/trace.ts",
     "trace:check": "node scripts/trace.ts --check",
-    "demo": "node --env-file-if-exists=.env scripts/demo.ts",
+    "demo": "economy dev --demo",
     "demo:ops": "node --env-file-if-exists=.env scripts/demo-ops.ts",
     "backup": "node --env-file-if-exists=.env scripts/backup.ts",
     "restore:drill": "node --env-file-if-exists=.env scripts/restore-drill.ts",
     "audit:verify": "node scripts/audit-verify.ts",
-    "ledger:verify": "node scripts/ledger-verify.ts"
+    "ledger:verify": "node scripts/ledger-verify.ts",
+    "suite": "node scripts/suite.mjs"
   },
   "devDependencies": {
-    "@aws-sdk/client-sqs": "^3.1073.0",
     "@eslint/js": "^9.13.0",
     "@pwngh/economy-edge": "^0.1.0",
-    "@pwngh/money": "0.3.0",
+    "@pwngh/economy-lab": "file:.",
     "@pwngh/taskq": "0.1.0",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
@@ -139,46 +142,22 @@
     "esbuild": "^0.27.7",
     "eslint": "^9.13.0",
     "eslint-plugin-n": "^17.0.0",
-    "ioredis": "^5.11.1",
     "jiti": "^2.0.0",
     "jsdom": "^29.1.1",
-    "mariadb": "^3.5.3",
-    "mysql2": "^3.22.5",
-    "pg": "^8.22.0",
     "prettier": "^3.3.3",
     "typedoc": "0.28.20",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.0.0"
   },
   "peerDependencies": {
-    "@aws-sdk/client-sqs": "^3.0.0",
     "@pwngh/economy-edge": "^0.1.0",
-    "@pwngh/taskq": "^0.1.0",
-    "ioredis": "^5.0.0",
-    "mariadb": "^3.0.0",
-    "mysql2": "^3.0.0",
-    "pg": "^8.22.0"
+    "@pwngh/taskq": "^0.1.0"
   },
   "peerDependenciesMeta": {
-    "@aws-sdk/client-sqs": {
-      "optional": true
-    },
     "@pwngh/economy-edge": {
       "optional": true
     },
     "@pwngh/taskq": {
-      "optional": true
-    },
-    "ioredis": {
-      "optional": true
-    },
-    "mariadb": {
-      "optional": true
-    },
-    "mysql2": {
-      "optional": true
-    },
-    "pg": {
       "optional": true
     }
   },

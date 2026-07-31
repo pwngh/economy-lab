@@ -13,13 +13,19 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createServer } from '#src/server.ts';
+import {
+  createServer,
+  principalKey,
+  problemResponse,
+  readBounded,
+} from '#src/server.ts';
 import { encodeAmount } from '#src/money.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { makeEconomy } from '#test/support/economy.ts';
 import { credit } from '#test/support/builders.ts';
 import {
   fixedClock,
+  fixedRates,
   hasCode,
   silentMeter,
   testConfig,
@@ -29,13 +35,18 @@ import {
 import { signHex, webhookRequest } from '#test/support/http-sign.ts';
 
 import type { Economy } from '#src/contract.ts';
-import type { Secrets } from '#src/config.ts';
+import type { Config, Secrets } from '#src/config.ts';
+import type { ReplayStore } from '#src/ports.ts';
 import type {
   FetchHandler,
   ServerOptions,
   ServerPorts,
   WebhookHandler,
 } from '#src/server.ts';
+
+// The refusal has to name the knob and its range, not report that "config is invalid".
+const WINDOW_FRAGMENT =
+  'config.freshnessWindowMs must be a whole number from 0 to 86400000';
 
 // The narrow bag the routes read, from the deterministic test doubles; any slot overridable.
 function testPorts(
@@ -49,6 +60,7 @@ function testPorts(
     clock: overrides.clock ?? fixedClock(0),
     meter: overrides.meter ?? silentMeter(),
     logger: overrides.logger ?? testLogger(),
+    rates: overrides.rates ?? fixedRates(),
   };
 }
 
@@ -270,7 +282,13 @@ describe('createServer /submit', () => {
       submit: async () => {
         throw fault(ERROR_CODES.STORE_FAILURE, 'A storage layer failed.', {
           retryable: true,
-          detail: { sql: 'SELECT secret', accountId: 'usr_secret' },
+          // `owner` is the one detail field any code publishes, and this code is not that code:
+          // the allowlist is keyed on the error, so a field name alone opens nothing.
+          detail: {
+            sql: 'SELECT secret',
+            accountId: 'usr_secret',
+            owner: 'node-a',
+          },
           cause: new Error('connection refused at 10.0.0.5:5432'),
         });
       },
@@ -308,6 +326,36 @@ describe('createServer /submit', () => {
     assert.equal('detail' in payload, false);
     assert.equal('cause' in payload, false);
     assert.equal('stack' in payload, false);
+    assert.equal('owner' in payload, false);
+  });
+
+  test('a problem extension cannot overwrite the members the response states', async () => {
+    // Extensions carry a field the caller acts on, and RFC 9457 puts them beside `title`, `status`
+    // and `type` rather than under them. A name collision therefore has to lose, or an allowlisted
+    // field would be able to rewrite the status the mapping just decided.
+    const response = problemResponse(
+      421,
+      'This node does not own the scope.',
+      { code: ERROR_CODES.SESSION_MISROUTED, retryable: false },
+      {
+        owner: 'node-a',
+        title: 'overwritten',
+        status: 200,
+        type: 'about:blank',
+        code: 'OP.MALFORMED',
+        retryable: true,
+      } as never,
+    );
+    const payload = (await response.json()) as Record<string, unknown>;
+    assert.equal(response.status, 421);
+    assert.deepEqual(payload, {
+      type: 'https://economy-lab-docs.pages.dev/economy/reference/outcomes-and-reason-codes/',
+      title: 'This node does not own the scope.',
+      status: 421,
+      code: 'SESSION.MISROUTED',
+      retryable: false,
+      owner: 'node-a',
+    });
   });
 });
 
@@ -417,7 +465,7 @@ describe('createServer /webhooks Freshness', () => {
     const body = JSON.stringify({ eventId: 'evt_4', amount: '10.00' });
     const signature = await signHex(body, secret);
     // Clock is at 0; send a timestamp older than the window so it is out of range.
-    const staleTimestamp = -(testConfig().replayWindowMs + 1);
+    const staleTimestamp = -(testConfig().freshnessWindowMs + 1);
 
     let invoked = false;
     const webhook: WebhookHandler = async () => {
@@ -497,6 +545,148 @@ describe('createServer /webhooks Freshness', () => {
     assert.equal(response.status, 200);
     assert.equal(invoked, true);
   });
+
+  // The knob is a bound, so the verdict has to turn over at the value it names. Sending the
+  // clock's own time proves the gate is reachable and nothing about where it stops.
+  test('the window is inclusive of its own value, and one millisecond past it is not', async () => {
+    const secret = 'sek_test';
+    const window = testConfig().freshnessWindowMs;
+
+    const deliver = async (skewMs: number): Promise<boolean> => {
+      const body = JSON.stringify({ eventId: `evt_edge_${skewMs}` });
+      let invoked = false;
+      const server = makeServer({
+        webhook: async () => {
+          invoked = true;
+          return new Response(null, { status: 200 });
+        },
+        ports: testPorts({ secrets: { webhookSecret: secret } }),
+      });
+      const response = await server(
+        webhookRequest('billing', body, {
+          'x-signature': await signHex(body, secret),
+          'x-timestamp': String(-skewMs),
+        }),
+      );
+      assert.equal(response.status, 200);
+      return invoked;
+    };
+
+    assert.equal(await deliver(window), true);
+    assert.equal(await deliver(window + 1), false);
+  });
+});
+
+/**
+ * `ServerPorts` is a `Pick<Ports, …>`, so a host builds one by hand and it reaches the routes
+ * without meeting the bounds check every economy door runs. The knob it decides is the webhook
+ * skew window, and a window outside the bound closes the rail while every delivery still answers
+ * 200: the status code a correct duplicate also carries. So the assertion below is whether the
+ * handler ran, never the status.
+ */
+describe('createServer webhook window bounds', () => {
+  const secret = 'sek_test';
+
+  // The shape decodeWebhookEvent accepts, so the delivery reaches the replay gate and the
+  // handler rather than stopping at the codec.
+  const eventBody = (eventId: string): string =>
+    JSON.stringify({
+      eventId,
+      userId: 'usr_buyer',
+      amount: encodeAmount(credit('10.00')),
+      source: 'card',
+    });
+
+  // A rail built on one window. `invoked` is what the assertions read: 200 is what a stale
+  // delivery, a replayed delivery and an accepted one all answer.
+  function railOn(
+    config: Config,
+    replay?: ReplayStore,
+  ): {
+    invoked: () => boolean;
+    deliverFresh: (eventId: string) => Promise<string>;
+  } {
+    let seen = false;
+    const server = createServer({
+      economy: makeEconomy(),
+      authenticate: false,
+      webhook: async () => {
+        seen = true;
+        return new Response(JSON.stringify({ status: 'accepted' }), {
+          status: 200,
+        });
+      },
+      ports: testPorts({ config, secrets: { webhookSecret: secret } }),
+      ...(replay === undefined ? {} : { replay }),
+    });
+    return {
+      invoked: () => seen,
+      deliverFresh: async (eventId) => {
+        const body = eventBody(eventId);
+        // The clock is fixed at 0 and so is the timestamp: zero skew, inside any sane window.
+        const response = await server(
+          webhookRequest('billing', body, {
+            'x-signature': await signHex(body, secret),
+            'x-timestamp': '0',
+          }),
+        );
+        assert.equal(response.status, 200);
+        return ((await response.json()) as { status?: string }).status ?? '';
+      },
+    };
+  }
+
+  test('a window outside the bound cannot serve, because every delivery under it answers 200 duplicate', async () => {
+    const config: Config = { ...testConfig(), freshnessWindowMs: -1 };
+    let served: ReturnType<typeof railOn> | undefined;
+    let refusal: Error | undefined;
+    try {
+      served = railOn(config);
+    } catch (error) {
+      refusal = error as Error;
+    }
+
+    if (served !== undefined) {
+      // Reached only while the door still constructs. A negative window makes `Math.abs(now -
+      // timestamp) > window` true for every timestamp, so a delivery with no skew at all reads as
+      // stale and is acknowledged; the provider stops redelivering and the rail goes quiet.
+      const status = await served.deliverFresh('evt_bad_window');
+      assert.deepEqual(
+        { status, invoked: served.invoked() },
+        { status: 'accepted', invoked: true },
+        'createServer served on freshnessWindowMs: -1 and the fresh delivery never reached the handler',
+      );
+    }
+
+    assert.ok(refusal, 'createServer served on freshnessWindowMs: -1');
+    assert.equal(
+      (refusal as { code?: string }).code,
+      'CONFIG.INVALID',
+      `the refusal carries the config fault code; it said "${refusal.message}"`,
+    );
+    assert.ok(
+      refusal.message.includes(WINDOW_FRAGMENT),
+      `the refusal has to hand over "${WINDOW_FRAGMENT}"; it said "${refusal.message}"`,
+    );
+  });
+
+  // Without this, "a bad window is refused" is satisfied by a server that refuses every window,
+  // and "the handler ran" is satisfied by a rail that stopped dedupping.
+  test('a window inside the bound still takes a fresh delivery and still answers duplicate to a real replay', async () => {
+    const seen = new Set<string>();
+    const rail = railOn({ ...testConfig(), freshnessWindowMs: 30_000 }, {
+      claim: async (eventId: string) => {
+        const claimed = !seen.has(eventId);
+        seen.add(eventId);
+        return { claimed };
+      },
+    } satisfies ReplayStore);
+
+    assert.equal(await rail.deliverFresh('evt_good_window'), 'accepted');
+    assert.equal(rail.invoked(), true);
+    // The same event id a second time: this is the 200 duplicate that is supposed to happen.
+    assert.equal(await rail.deliverFresh('evt_good_window'), 'duplicate');
+  });
 });
 
 describe('createServer /webhooks Duplicate Metering', () => {
@@ -558,7 +748,7 @@ describe('createServer /webhooks Duplicate Metering', () => {
     );
 
     // A stale timestamp never reaches the replay gate; freshness catches it first.
-    const stale = String(-(testConfig().replayWindowMs + 1));
+    const stale = String(-(testConfig().freshnessWindowMs + 1));
     await deliver(stale);
     assert.equal(counts.length, 2);
     assert.deepEqual(counts[1]?.tags, { provider: 'billing', layer: 'stale' });
@@ -741,6 +931,46 @@ describe('createServer Body Limits', () => {
 
     assert.equal(response.status, 413);
   });
+
+  // The reader is exported because a package that has to bound a read before it authenticates
+  // cannot reach a module-private one. It answers a verdict rather than throwing, so the lab's
+  // routes keep their 413/408 and a caller that refuses differently keeps its own shape.
+  test('readBounded answers a verdict for each of the three outcomes', async () => {
+    const bodied = (body: string) =>
+      new Request('https://economy.test/submit', { method: 'POST', body });
+
+    assert.deepEqual(await readBounded(bodied('hello')), {
+      status: 'read',
+      bytes: new TextEncoder().encode('hello'),
+    });
+
+    assert.deepEqual(await readBounded(bodied('hello'), { maxBytes: 2 }), {
+      status: 'oversize',
+    });
+
+    const stalled = new Request('https://economy.test/submit', {
+      method: 'POST',
+      body: new ReadableStream<Uint8Array>({ start() {} }),
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' });
+    const keepalive = setTimeout(() => {}, 5_000);
+    assert.deepEqual(await readBounded(stalled, { timeoutMs: 20 }), {
+      status: 'timeout',
+    });
+    clearTimeout(keepalive);
+  });
+
+  test('readBounded refuses a lying content-length by counting', async () => {
+    const request = new Request('https://economy.test/submit', {
+      method: 'POST',
+      headers: { 'content-length': '2' },
+      body: 'x'.repeat(256),
+    });
+
+    assert.deepEqual(await readBounded(request, { maxBytes: 8 }), {
+      status: 'oversize',
+    });
+  });
 });
 
 describe('createServer CORS', () => {
@@ -921,6 +1151,179 @@ describe('createServer Rate Limiting', () => {
     assert.equal(response.status, 200);
     assert.equal(payload.status, 'committed');
     assert.equal(counted.includes('economy.ratelimit.degraded'), true);
+  });
+
+  // A key that cannot tell two callers apart is not admission control. Behind a proxy the
+  // peer address is the proxy on every request, so the default pools; the caller's own
+  // address is on the request the whole time, in a header only the host knows how to read.
+  // Nothing here trusts that header — it is read as evidence that the deployment is proxied
+  // and counted, never keyed on.
+
+  // Records every count with its tags, so a test can name the reason and not just the event.
+  function countingServer(options: Partial<ServerOptions> = {}): {
+    handler: FetchHandler;
+    counted: { name: string; tags?: Record<string, string> }[];
+    keys: string[];
+  } {
+    const counted: { name: string; tags?: Record<string, string> }[] = [];
+    const keys: string[] = [];
+    const handler = makeServer({
+      ports: testPorts({
+        meter: {
+          count: (name, _n, tags) => {
+            counted.push({ name, tags });
+          },
+          observe: () => {},
+        },
+      }),
+      rateLimit: {
+        limiter: {
+          allow: async (key) => {
+            keys.push(key);
+            return { allowed: true };
+          },
+        },
+      },
+      ...options,
+    });
+    return { handler, counted, keys };
+  }
+
+  const pooled = (
+    counted: { name: string; tags?: Record<string, string> }[],
+  ): (string | undefined)[] =>
+    counted
+      .filter((c) => c.name === 'economy.ratelimit.pooled')
+      .map((c) => c.tags?.reason);
+
+  function ipRequest(headers: Record<string, string>): Request {
+    return new Request('https://economy.test/submit', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(topUpBody('usr_pool', '1.00')),
+    });
+  }
+
+  test('principalKey tells two callers of one kind apart', () => {
+    assert.notEqual(
+      principalKey({ kind: 'user', userId: 'usr_alice' }),
+      principalKey({ kind: 'user', userId: 'usr_bob' }),
+    );
+    assert.deepEqual(
+      [
+        principalKey({ kind: 'user', userId: 'usr_alice' }),
+        principalKey({ kind: 'system', service: 'checkout' }),
+        principalKey({ kind: 'operator', operatorId: 'op_7' }),
+      ],
+      ['user:usr_alice', 'system:checkout', 'operator:op_7'],
+    );
+  });
+
+  test('a proxied request counts pooled and still keys on the peer', async () => {
+    const { handler, counted, keys } = countingServer();
+
+    await handler(
+      ipRequest({
+        'x-forwarded-for': '203.0.113.7, 10.0.0.1',
+        'x-economy-client-ip': '10.0.0.1',
+      }),
+    );
+
+    assert.deepEqual(pooled(counted), ['forwarded']);
+    assert.deepEqual(keys, ['ip:10.0.0.1']);
+  });
+
+  test('every forwarding header in the roster is evidence, and only those', async () => {
+    const roster = [
+      'forwarded',
+      'x-forwarded-for',
+      'x-real-ip',
+      'cf-connecting-ip',
+      'true-client-ip',
+    ];
+    const seen: string[] = [];
+    for (const header of roster) {
+      const { handler, counted } = countingServer();
+      await handler(
+        ipRequest({
+          [header]: '203.0.113.7',
+          'x-economy-client-ip': '10.0.0.1',
+        }),
+      );
+      if (pooled(counted).length === 1) seen.push(header);
+    }
+    assert.deepEqual(seen, roster);
+
+    // A header that says nothing about a hop is not evidence of one.
+    const plain = countingServer();
+    await plain.handler(
+      ipRequest({ 'x-request-id': 'req_1', 'x-economy-client-ip': '10.0.0.1' }),
+    );
+    assert.deepEqual(pooled(plain.counted), []);
+  });
+
+  test('an unstamped request counts pooled as unstamped', async () => {
+    const { handler, counted, keys } = countingServer();
+
+    await handler(ipRequest({}));
+
+    assert.deepEqual(pooled(counted), ['unstamped']);
+    assert.deepEqual(keys, ['ip:unknown']);
+  });
+
+  test('a directly connected caller counts nothing', async () => {
+    const { handler, counted, keys } = countingServer();
+
+    await handler(ipRequest({ 'x-economy-client-ip': '203.0.113.7' }));
+
+    assert.deepEqual(pooled(counted), []);
+    assert.deepEqual(keys, ['ip:203.0.113.7']);
+  });
+
+  test('an authenticated caller behind a proxy counts nothing', async () => {
+    const { handler, counted, keys } = countingServer({
+      authenticate: async () => ({ kind: 'user', userId: 'usr_keyed' }),
+    });
+
+    await handler(
+      ipRequest({
+        'x-forwarded-for': '203.0.113.7',
+        'x-economy-client-ip': '10.0.0.1',
+      }),
+    );
+
+    assert.deepEqual(pooled(counted), []);
+    assert.deepEqual(keys, ['user:usr_keyed']);
+  });
+
+  // The recipe the TSDoc prints, and the reason principalKey is exported: a host keying on
+  // its own forwarded address must not have to re-derive the principal half to do it.
+  test('a host that supplied keyFor keys on the caller and counts nothing', async () => {
+    const own: string[] = [];
+    const { handler, counted } = countingServer({
+      rateLimit: {
+        limiter: {
+          allow: async (key) => {
+            own.push(key);
+            return { allowed: true };
+          },
+        },
+        keyFor: (request, principal) =>
+          principal === undefined
+            ? `ip:${request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown'}`
+            : principalKey(principal),
+      },
+    });
+
+    await handler(
+      ipRequest({
+        'x-forwarded-for': '203.0.113.7, 10.0.0.1',
+        'x-economy-client-ip': '10.0.0.1',
+      }),
+    );
+
+    assert.deepEqual(own, ['ip:203.0.113.7']);
+    assert.deepEqual(pooled(counted), []);
   });
 });
 

@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 
 import { relayOutbox, type RelaySummary } from '#src/worker/relay.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
+import { ERROR_CODES, fault } from '#src/errors.ts';
 import { makePorts, testConfig } from '#test/support/capabilities.ts';
 
 import type { Dispatcher, EconomyEvent, Store } from '#src/ports.ts';
@@ -276,6 +277,107 @@ describe('relayOutbox — Retry Cap', () => {
     );
     assert.deepEqual(summary.failed, []);
     assert.deepEqual(await store.outbox.claimBatch(10), []);
+    await store.close();
+  });
+});
+
+describe('relayOutbox — Classified Refusal', () => {
+  // The { code, retryable } pair normalizePortError trusts, assigned onto a plain Error the way
+  // an edge fault carries it. No shipped dispatcher throws one — transportFault wraps every
+  // throw retryable — so this stands in for a host dispatcher that classified its own refusal.
+  function refusal(retryable: boolean): Error {
+    const error = new Error('the receiver refused this event');
+    Object.assign(error, { code: 'QUEUE.REJECTED', retryable });
+    return error;
+  }
+
+  test('dead-letters a refusal classified non-retryable on the first delivery', async () => {
+    const store = memoryStore();
+    await enqueue(store, 'refused');
+    let calls = 0;
+    const dispatcher: Dispatcher = async () => {
+      calls += 1;
+      throw refusal(false);
+    };
+
+    const first = await sweep(store, dispatcher);
+    const second = await sweep(store, dispatcher);
+
+    assert.deepEqual(first.failed, []);
+    assert.deepEqual(first.deadLettered, [
+      { id: 'obx_refused', reason: 'PROVIDER.FAILURE' },
+    ]);
+    assert.deepEqual(second.deadLettered, []);
+    assert.equal(calls, 1);
+    assert.deepEqual(await store.outbox.claimBatch(10), []);
+    await store.close();
+  });
+
+  test('a refusal the thrower classified itself dead-letters under its own code', async () => {
+    const store = memoryStore();
+    await enqueue(store, 'config');
+    const dispatcher: Dispatcher = async () => {
+      throw fault(ERROR_CODES.CONFIG_INVALID, 'The queue is gone.', {
+        retryable: false,
+      });
+    };
+
+    const summary = await sweep(store, dispatcher);
+
+    assert.deepEqual(summary.failed, []);
+    assert.deepEqual(summary.deadLettered, [
+      { id: 'obx_config', reason: ERROR_CODES.CONFIG_INVALID },
+    ]);
+    await store.close();
+  });
+
+  test('retries a refusal classified retryable for the full attempt budget', async () => {
+    const store = memoryStore();
+    await enqueue(store, 'flaky');
+    let calls = 0;
+    const dispatcher: Dispatcher = async () => {
+      calls += 1;
+      throw refusal(true);
+    };
+
+    const s1 = await sweep(store, dispatcher, 10, 3);
+    const s2 = await sweep(store, dispatcher, 10, 3);
+    const s3 = await sweep(store, dispatcher, 10, 3);
+
+    assert.deepEqual(s1.deadLettered, []);
+    assert.deepEqual(s2.deadLettered, []);
+    assert.deepEqual(s3.deadLettered, [
+      { id: 'obx_flaky', reason: 'PROVIDER.FAILURE' },
+    ]);
+    assert.equal(calls, 3);
+    await store.close();
+  });
+
+  test('logs the first-refusal dead-letter under the fault code with one attempt spent', async () => {
+    const store = memoryStore();
+    await enqueue(store, 'refused');
+    const lines: Array<{
+      level: string;
+      event: string;
+      fields: Record<string, unknown>;
+    }> = [];
+    const ports = makePorts(store, {
+      logger: {
+        log: (level, event, fields) =>
+          void lines.push({ level, event, fields }),
+      },
+    });
+    const dispatcher: Dispatcher = async () => {
+      throw refusal(false);
+    };
+
+    await relayOutbox(store, ports, { dispatcher, limit: 10 });
+
+    const dead = lines.filter((l) => l.event === 'worker.relay.dead_lettered');
+    assert.equal(dead.length, 1);
+    assert.equal(dead[0]?.level, 'error');
+    assert.equal(dead[0]?.fields.code, 'PROVIDER.FAILURE');
+    assert.equal(dead[0]?.fields.attempts, 1);
     await store.close();
   });
 });

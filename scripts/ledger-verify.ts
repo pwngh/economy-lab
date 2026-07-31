@@ -10,15 +10,15 @@
  */
 
 /**
- * Standalone verification of an exported ledger — no store, no economy boot; the file is the
- * only input. Re-proves every account's hash chain from the export's links, then checks the
+ * This script verifies an exported ledger standalone — no store, no economy boot. The file is
+ * the only input. It re-proves every account's hash chain from the export's links, then checks the
  * embedded checkpoint's Merkle root and Ed25519 signature against the supplied public keys.
  *
  *   node scripts/ledger-verify.ts export.jsonl --key <hex Ed25519 public key> [--key <older key>]...
  *   make ledger-verify FILE=export.jsonl KEY=<hex public key>
  *
  * Produce the file with `economy.read.export()`; publish the key with `signingPublicKeyHex`.
- * Prints a JSON report; exits 0 when everything asked of it verified, 1 otherwise.
+ * Prints a JSON report. Exits 0 when everything asked of it verified, 1 otherwise.
  */
 
 import { readFileSync } from 'node:fs';

@@ -129,7 +129,7 @@ test('openPorts in production fails fast when the real externals are missing', a
       SIGNING_SECRET: 'y',
     }),
     (error: unknown) =>
-      error instanceof EconomyError &&
+      EconomyError.is(error) &&
       error.code === ERROR_CODES.CONFIG_INVALID &&
       error.message.startsWith('Preflight failed:'),
   );
@@ -147,7 +147,6 @@ test('configuredRates rejects a config where payout exceeds par', () => {
         payoutScale: 2,
       }),
     (error: unknown) =>
-      error instanceof EconomyError &&
-      error.code === ERROR_CODES.CONFIG_INVALID,
+      EconomyError.is(error) && error.code === ERROR_CODES.CONFIG_INVALID,
   );
 });

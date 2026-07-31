@@ -26,6 +26,8 @@ import type {
 import type { Amount } from '#src/money.ts';
 import type { Ctx, FeePolicy, Recipient, WorkerCtx } from '#src/contract.ts';
 import type { Leg } from '#src/ports.ts';
+import { checkedConfig } from '#src/config.ts';
+
 import type { Config, Secrets } from '#src/config.ts';
 
 // --- Clock & ids ------------------------------------------------------------------
@@ -135,7 +137,7 @@ function splitLegs(
   recipients: ReadonlyArray<Recipient>,
   feeBps: number,
 ): Leg[] {
-  const fee = feeForPrice(price.minor, feeBps);
+  const fee = feeForPrice(price, feeBps);
   const net = price.minor - fee;
   const legs: Leg[] = [];
   let distributed = 0n;
@@ -171,7 +173,8 @@ export function testSecrets(): Secrets {
 export function testConfig(): Config {
   return {
     dbPoolMax: null,
-    replayWindowMs: 5 * 60_000,
+    dbConnectTimeoutMs: null,
+    freshnessWindowMs: 5 * 60_000,
     maxPayoutAttempts: 5,
     maxOutboxAttempts: 10,
     maxInboxAttempts: 10,
@@ -198,28 +201,37 @@ export function testConfig(): Config {
 
 // --- Ctx --------------------------------------------------------------------------
 
+// A caller overrides `config` with a plain Config; the builders mint the checked one, so a
+// fixture config outside the knob bounds is refused here rather than reaching a handler.
+type CtxOverrides = Partial<Omit<Ctx, 'config'>> & { config?: Config };
+type WorkerCtxOverrides = Partial<Omit<WorkerCtx, 'config'>> & {
+  config?: Config;
+};
+
 /**
  * The Ctx a handler reads, wired from the deterministic doubles above; a test calls the handler
  * directly instead of routing through `submit`.
  */
-export function makeCtx(overrides: Partial<Ctx> = {}): Ctx {
+export function makeCtx(overrides: CtxOverrides = {}): Ctx {
+  const { config, ...rest } = overrides;
   return {
     clock: fixedClock(0),
     ids: sequentialIds(),
     digest: seededDigest(1),
     signer: seededSigner(1),
     processor: fakeProcessor(),
-    config: testConfig(),
     pricing: defaultPricing(),
     rates: fixedRates(),
     logger: testLogger(),
     meter: silentMeter(),
-    ...overrides,
+    ...rest,
+    config: checkedConfig(config ?? testConfig()),
   };
 }
 
 /** The background worker's context (no pricing), the WorkerCtx counterpart to {@link makeCtx}. */
-export function makeWorkerCtx(overrides: Partial<WorkerCtx> = {}): WorkerCtx {
+export function makeWorkerCtx(overrides: WorkerCtxOverrides = {}): WorkerCtx {
+  const { config, ...rest } = overrides;
   return {
     clock: fixedClock(0),
     ids: sequentialIds(),
@@ -229,8 +241,8 @@ export function makeWorkerCtx(overrides: Partial<WorkerCtx> = {}): WorkerCtx {
     rates: fixedRates(),
     logger: testLogger(),
     meter: silentMeter(),
-    config: testConfig(),
-    ...overrides,
+    ...rest,
+    config: checkedConfig(config ?? testConfig()),
   };
 }
 

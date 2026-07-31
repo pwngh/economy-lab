@@ -25,23 +25,13 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Leg, Unit } from '#src/ports.ts';
 
 /**
- * Operator-only manual correction, for cases no ordinary operation covers (e.g. closing a gap
- * found during reconciliation). Moves `operation.account` by the signed `operation.amount`
- * (negative corrects downward) and books the opposite entry to platform opening-equity so the two
- * cancel and the books stay balanced. Returns a `committed` Outcome.
+ * Books an operator-only manual correction, for cases no ordinary operation covers (e.g. closing
+ * a gap found during reconciliation). It moves `operation.account` by the signed
+ * `operation.amount` (negative corrects downward). It books the opposite entry to platform
+ * opening-equity, so the two cancel and the books stay balanced. Returns a `committed` Outcome.
  *
- * Bad input throws a fault, not a `rejected` Outcome: actor must be operator, amount a non-zero
- * CREDIT, reason non-empty.
- *
- * @example
- * const outcome = await adjust(
- *   { kind: 'adjust', idempotencyKey: 'idem_0',
- *     actor: { kind: 'operator', operatorId: 'op_1' },
- *     account: spendable('usr_alice'), amount: toAmount('CREDIT', 250n),
- *     reason: 'reconciliation: missing genesis lot' },
- *   unit, ctx,
- * );
- * // outcome.status === 'committed'; spendable(usr_alice) rose by 250, balanced to OPENING_EQUITY.
+ * Bad input throws a fault, not a `rejected` Outcome. The actor must be an operator, the amount a
+ * non-zero CREDIT, and the reason non-empty.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/adjust/ Adjust} for
  *   when and how operators book manual corrections.
@@ -69,7 +59,7 @@ export async function adjust(
 // grows on a debit or on a credit.
 function buildAdjustLegs(account: AccountRef, amount: Amount): Leg[] {
   // Legs are stored debit-positive, so the stored sign equals the balance change only for a
-  // debit-normal account; a credit-normal account needs the sign flipped.
+  // debit-normal account. A credit-normal account needs the sign flipped.
   const accountMinor = isDebitNormal(account) ? amount.minor : -amount.minor;
   return [
     { account, amount: toAmount(amount.currency, accountMinor) },
@@ -91,8 +81,9 @@ function adjustMeta(
   };
 }
 
-// Must be CREDIT because the opening-equity account it balances against is CREDIT, and non-zero.
-// The amount is signed: a negative value is a valid downward correction.
+// The amount must be CREDIT because the opening-equity account it balances against is CREDIT.
+// It must also be non-zero. The amount is signed: a negative value is a valid downward
+// correction.
 function creditDelta(amount: Amount, label: string): Amount {
   if (amount.currency !== 'CREDIT') {
     throw fault(ERROR_CODES.MALFORMED_OPERATION, `${label} must be CREDIT.`, {

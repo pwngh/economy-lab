@@ -12,9 +12,8 @@
 
 /**
  * Prefund mode (src/instance.ts): the per-(user, session) escrow that makes the fast lane's
- * accept screen session-local. Funding is a real matured-only posting, movements debit the
- * escrow, settle refunds the remainder, and the orphan sweep repairs a refund a crashed lane
- * never posted — the account key is the attribution, never session memory.
+ * accept screen session-local. The account key is the attribution, never session memory — that
+ * is what lets the orphan sweep repair a refund a crashed lane never posted.
  */
 
 import { describe, test } from 'node:test';

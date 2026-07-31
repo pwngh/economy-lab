@@ -9,9 +9,6 @@
  * @license MIT
  */
 
-// The multi-node construction (documented on openClusterNode and ClusterNodeOptions). The
-// pieces stay individually exported; single-node hosts need none of this.
-
 import { scopeRouter } from '#src/router.ts';
 import {
   epochMinter,
@@ -32,7 +29,7 @@ import type {
 import type { OrphanSweepSummary } from '#src/worker/orphans.ts';
 import type { Clock, Digest, Ids, Logger, Meter, Store } from '#src/ports.ts';
 
-/** The structural subset of Ports a cluster node needs; an openPorts host passes through. */
+/** The structural subset of Ports a cluster node needs. A host composed via openPorts passes its bag straight in. */
 export interface ClusterNodeDeps {
   store: Store;
   digest: Digest;
@@ -43,9 +40,11 @@ export interface ClusterNodeDeps {
 }
 
 /**
- * The node's identity and peers, plus the two bounds the epoch-age law binds together: every
- * epoch on this node rotates within `epochMaxAgeMs`, and a due rotation is only observed a
+ * The node's identity and peers, plus the two bounds the epoch-age law binds together.
+ *
+ * Every epoch on this node rotates within `epochMaxAgeMs`. A due rotation is only observed a
  * sweep cadence later, so the orphan sweep settles nothing younger than twice that bound.
+ *
  * Construction throws CONFIG_INVALID on a `settleOlderThanMs` under `2 * epochMaxAgeMs` — a
  * lower bound would let the sweep settle an epoch a live node could still be filling.
  */
@@ -57,20 +56,20 @@ export interface ClusterNodeOptions {
   nodes: ReadonlyArray<string>;
 
   /**
-   * The rotation bound every epoch on this node lives under — the lane manager's
-   * `epochMaxAgeMs` when lanes run here (see `laneOptions`), the host's own rotation cadence
-   * for raw sessions. Default 60_000 ms.
+   * The rotation bound every epoch on this node lives under. When lanes run here, it is the
+   * lane manager's `epochMaxAgeMs` (see `laneOptions`). For raw sessions, it is the host's own
+   * rotation cadence. Default 60_000 ms.
    */
   epochMaxAgeMs?: number;
 
   /**
-   * Orphan settling opt-in (settling moves money). Absent, `sweepOrphans` still reports
-   * crashed epochs; it settles nothing.
+   * Orphan settling opt-in — settling moves money, so it is never on by default. When absent,
+   * `sweepOrphans` still reports crashed epochs but settles nothing.
    */
   sweep?: {
     /**
-     * The sweep settles sessions at least this old (ms). Held to the epoch-age law: at least
-     * `2 * epochMaxAgeMs`, enforced at construction.
+     * The sweep settles sessions at least this old (ms). The epoch-age law holds it to at
+     * least `2 * epochMaxAgeMs`, enforced at construction.
      */
     settleOlderThanMs: number;
 
@@ -80,18 +79,24 @@ export interface ClusterNodeOptions {
 }
 
 /**
- * Opens this process's node of a multi-node deployment — one construction for what every
- * multi-node host was hand-wiring: the scope router bound to this node's identity, the
- * store-backed shared reservation registry, ownership-gated session opening, crash recovery,
- * and the orphan sweep. Every node constructs from the same `nodes` list over the same shared
- * database, and the store must offer the reservation counter (the SQL engines and the memory
- * adapter all do).
+ * Opens this process's node of a multi-node deployment.
+ *
+ * One construction covers what every multi-node host was hand-wiring: the scope router bound to
+ * this node's identity, the store-backed shared reservation registry, ownership-gated session
+ * opening, crash recovery, and the orphan sweep.
+ *
+ * Every node constructs from the same `nodes` list over the same shared database. The store
+ * must offer the reservation counter (the SQL engines and the memory adapter all do).
  *
  * @example
  * const node = openClusterNode(ports, {
  *   nodeId: 'economy-a',
  *   nodes: ['economy-a', 'economy-b', 'economy-c'],
- *   sweep: { settleOlderThanMs: 120_000 },
+ *   epochMaxAgeMs: 60_000, // optional: the rotation bound every epoch here lives under
+ *   sweep: { // optional: settling opt-in; absent means the sweep reports but settles nothing
+ *     settleOlderThanMs: 120_000, // at least 2 * epochMaxAgeMs, enforced at construction
+ *     limit: 100, // optional: max sessions inspected per sweep run
+ *   },
  * });
  * const lanes = openInstanceEconomies(ports, { ...node.laneOptions() });
  *
@@ -110,9 +115,9 @@ export function openClusterNode(
 }
 
 /**
- * One node's handle. `ownerOf`/`owns`/`assertOwns` answer the shared rendezvous assignment;
- * `openSession` opens ownership-gated epochs; `recover` finishes a crashed node's session;
- * `laneOptions` spreads into the lane manager; `sweepOrphans` runs the shared-journal sweep.
+ * One node's handle. `ownerOf`/`owns`/`assertOwns` answer the shared rendezvous assignment.
+ * `openSession` opens ownership-gated epochs. `recover` finishes a crashed node's session.
+ * `laneOptions` spreads into the lane manager. `sweepOrphans` runs the shared-journal sweep.
  * Construct through {@link openClusterNode}.
  */
 export class ClusterNode {
@@ -121,7 +126,7 @@ export class ClusterNode {
   /**
    * The store-backed registry every session on this node screens against. Pass it wherever a
    * registry is asked for (the worker's orphans job, a lane manager not built from
-   * `laneOptions`); never build a second one per node.
+   * `laneOptions`). Never build a second one per node.
    */
   readonly reservations: Reservations;
 
@@ -172,7 +177,7 @@ export class ClusterNode {
     return this.route(scope);
   }
 
-  /** Whether the assignment routes the scope here; the boolean form of {@link ClusterNode.ownerOf}. */
+  /** Whether the assignment routes the scope here. This is the boolean form of {@link ClusterNode.ownerOf}. */
   owns(scope: string): boolean {
     return this.route(scope) === this.nodeId;
   }
@@ -193,10 +198,10 @@ export class ClusterNode {
   }
 
   /**
-   * Opens the scope's next raw netting epoch: ownership-gated, screened by the shared
-   * registry, session id minted as `sess:<scope>:<nonce>-<n>`. The caller owes the epoch
-   * discipline — settle within `epochMaxAgeMs`, then open the next epoch (the lane manager
-   * does both on cadence; see `laneOptions`).
+   * Opens the scope's next raw netting epoch. The open is ownership-gated and screened by the
+   * shared registry, and the session id is minted as `sess:<scope>:<nonce>-<n>`. The caller
+   * owes the epoch discipline: settle within `epochMaxAgeMs`, then open the next epoch. The
+   * lane manager does both on cadence (see `laneOptions`).
    */
   openSession(
     scope: string,
@@ -232,10 +237,10 @@ export class ClusterNode {
   }
 
   /**
-   * One orphan-sweep pass over the shared journal: reports crashed epochs, settles the ones
-   * older than the validated bound when the `sweep` opt-in is set, and releases their
-   * reservations. Schedule it like any worker sweep; more than one node running it is safe
-   * (settling is idempotent against stored evidence).
+   * Runs one orphan-sweep pass over the shared journal. The pass reports crashed epochs. When
+   * the `sweep` opt-in is set, it also settles the ones older than the validated bound and
+   * releases their reservations. Schedule it like any worker sweep. More than one node running
+   * it is safe, because settling is idempotent against stored evidence.
    */
   sweepOrphans(input?: {
     now?: number;

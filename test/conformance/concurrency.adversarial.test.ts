@@ -28,7 +28,7 @@
  * proves the engine is linearizable. Every spend it commits under concurrency must also commit when
  * the committed set is replayed serially on a fresh in-memory store, the executable model, and the
  * resulting balances must match the model exactly. The in-memory store is the model, so the check
- * can't drift from the logic it checks. (See docs/the-next-step.md, item 3.)
+ * can't drift from the logic it checks.
  */
 
 import { describe, test, before, after } from 'node:test';
@@ -85,8 +85,9 @@ function batch(
     buyer: buyers[Math.floor(rng() * buyers.length)]!,
     price: 1 + Math.floor(rng() * 3),
   }));
-  // Guarantee oversubscription: make total demand exceed total funding so at least one wallet must
-  // turn a spend away. Bumping a single price keeps the seed reproducible and the workload varied.
+  // This bump guarantees oversubscription. Total demand then exceeds total funding, so at least one
+  // wallet must turn a spend away. Bumping a single price keeps the seed reproducible and the
+  // workload varied.
   const totalFunding = funding.reduce((sum, f) => sum + f, 0);
   const totalDemand = plan.reduce((sum, p) => sum + p.price, 0);
   if (totalDemand <= totalFunding) {
@@ -203,7 +204,7 @@ function runConcurrency(
       const economy = makeEconomy(1, engine.store);
       const buyer = `usr_conc_${name}_${(seq += 1)}`;
 
-      // Fire 4 parallel 1.00 spends against a 2.00 wallet, so at most 2 are affordable. Parallelism is
+      // The test fires 4 parallel 1.00 spends against a 2.00 wallet, so at most 2 are affordable. Parallelism is
       // kept under half the connection pool on purpose. Each in-flight spend holds its transaction
       // connection and may briefly borrow a second one, to plant first-use rows or to re-record a
       // rejected attempt after its rollback. Pushing parallelism to the full pool size starves those

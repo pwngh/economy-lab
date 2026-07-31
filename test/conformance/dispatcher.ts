@@ -10,9 +10,10 @@
  * @license MIT
  */
 
-import { describe, test } from 'node:test';
+import { describe, test as nodeTest } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { countedCases } from '#test/conformance/cases.ts';
 import { encodeEvent } from '#src/adapters/event-wire.ts';
 
 import type { Dispatcher, EconomyEvent } from '#src/ports.ts';
@@ -23,9 +24,9 @@ import type { Dispatcher, EconomyEvent } from '#src/ports.ts';
  * error. The shared suite uses this to exercise the success, failure, and cancellation paths
  * uniformly across adapters.
  *
- * The contract a host's harness must uphold: `bodies` grows by the exact string the adapter handed
- * the transport, one entry per dispatch; `signals` records the per-dispatch abort signal, with
- * `undefined` recorded when the caller passed none; `failNext(error)` arms only the next dispatch,
+ * A host's harness must uphold this contract. `bodies` grows by the exact string the adapter handed
+ * the transport, one entry per dispatch. `signals` records the per-dispatch abort signal, with
+ * `undefined` recorded when the caller passed none. `failNext(error)` arms only the next dispatch,
  * which must surface the failure as the transport error would.
  */
 export interface DispatcherHarness {
@@ -50,8 +51,7 @@ function sampleEvent(): EconomyEvent {
 
 /**
  * Runs the shared {@link Dispatcher} contract that every adapter must satisfy. It runs against the
- * HTTP and SQS adapters over fake transports, following the same pattern as
- * `test/conformance/store.ts`.
+ * HTTP and SQS adapters over fake transports.
  *
  * The encoding test pins both transports to one byte-for-byte body from `encodeEvent`, so HTTP and
  * SQS cannot silently diverge in what a receiver sees. The failure test pins the error contract the
@@ -67,6 +67,10 @@ export function runDispatcherConformance(
   makeHarness: () => DispatcherHarness,
 ): void {
   describe(`Dispatcher Conformance: ${name}`, () => {
+    const test = countedCases('runDispatcherConformance', 4, (name, body) =>
+      nodeTest(name, body),
+    );
+
     test('sends the event as the one canonical encoded body', async () => {
       const h = makeHarness();
       await h.dispatcher(sampleEvent());

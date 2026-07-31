@@ -12,7 +12,7 @@
 /**
  * A denied attempt must still count toward the velocity window after a real rollback.
  *
- * The velocity attempt rides the money transaction, so a rejection's rollback erases it; what
+ * The velocity attempt rides the money transaction, so a rejection's rollback erases it. What
  * keeps the count is `submit` re-recording the attempt on the store's own connection. The
  * in-memory suite covers that logic. This one drives it through Postgres's and MySQL's actual
  * ROLLBACK, where a lost attempt would let the limit be probed for free. Both denial paths run:
@@ -97,7 +97,7 @@ describe('velocity attempts survive a real rollback', () => {
           topUp({ userId: buyer, amount: credit('5.00') }),
         );
         assert.equal(funded.status, 'committed');
-        // The spends below fill the buyer's outflow window; the topUp landed in `in:` and
+        // The spends below fill the buyer's outflow window. The topUp landed in `in:` and
         // is irrelevant to these deltas.
         const afterTopUp = await store.trust.read(`out:${buyer}`);
 

@@ -9,15 +9,15 @@
  * @license MIT
  */
 
-// The provided tool behind the documented host boundary (see openInstanceEconomies,
-// src/instance.ts): every caller must send a given scope key (world instance, region shard) to
-// the same economy node for the scope's life, so exactly one lane ever accepts its movements.
-// The rendezvous construction itself is documented on scopeRouter.
+// This is the provided tool behind the documented host boundary (see openInstanceEconomies,
+// src/instance.ts). Every caller must send a given scope key (world instance, region shard) to
+// the same economy node for the scope's life. That way exactly one lane ever accepts its
+// movements. The rendezvous construction itself is documented on scopeRouter.
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 
-// FNV-1a, 64-bit: deterministic across processes and platforms (no seed, pure integer math),
-// which is the property the router needs — every node computes the same assignment.
+// FNV-1a, 64-bit. It is deterministic across processes and platforms (no seed, pure integer
+// math), which is the property the router needs: every node computes the same assignment.
 const FNV_OFFSET = 0xcbf29ce484222325n;
 const FNV_PRIME = 0x100000001b3n;
 const MASK_64 = (1n << 64n) - 1n;
@@ -46,12 +46,12 @@ function mix64(input: bigint): bigint {
 
 /**
  * Builds the assignment function over a fixed node list, by rendezvous (highest-random-weight)
- * hashing: each node's weight for a scope is a deterministic hash of (node, scope) and the
- * scope belongs to the highest, so every node computes the same owner with no ring state to
- * coordinate, and a membership change reassigns only the departed or arrived node's scopes.
- * Every process in the deployment must construct it from the same list (order does not matter;
- * the hash does not depend on position) for the assignments to agree. Throws CONFIG_INVALID on
- * an empty or duplicate-bearing node list.
+ * hashing. Each node's weight for a scope is a deterministic hash of (node, scope), and the
+ * scope belongs to the highest. Every node therefore computes the same owner with no ring state
+ * to coordinate. A membership change reassigns only the departed or arrived node's scopes.
+ * Every process in the deployment must construct it from the same list for the assignments to
+ * agree. Order does not matter, because the hash does not depend on position. Throws
+ * CONFIG_INVALID on an empty or duplicate-bearing node list.
  *
  * The router only decides where new epochs open: live sessions on a moved scope finish via
  * epoch rotation and the orphan sweep (src/worker/orphans.ts).

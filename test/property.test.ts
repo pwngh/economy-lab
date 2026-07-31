@@ -28,7 +28,7 @@ import { creditMinor } from '#test/support/seeded-program.ts';
 
 import type { Economy, Operation, ProveReport } from '#src/contract.ts';
 
-// The 0x9e00 base keeps these seeds distinct from the ranges scripts/fuzz.ts and scripts/prove.ts use.
+// The 0x9e00 base keeps these seeds distinct from the ranges test/fuzz.test.ts and test/prove.test.ts use.
 const SEEDS = Array.from({ length: 24 }, (_, i) => 0x9e00 + i);
 
 // Long enough to interleave every operation kind across the users; short enough the suite stays fast.

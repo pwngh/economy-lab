@@ -9,15 +9,9 @@
  * @license MIT
  */
 
-/**
- * The sole source of account ids: user wallets (`usr_...:spendable|earned|promo`), the platform's
- * SYSTEM accounts, and the shard routing that splits hot platform accounts across rows. Also owns
- * account classification (custodial vs house) and the per-operation lock sets.
- */
-
 import type { Currency } from '#src/money.ts';
-// Type-only, so the mutual reference with contract.ts is erased at compile time — no runtime
-// circular import.
+// Type-only, so the mutual reference with contract.ts is erased at compile time and never
+// becomes a runtime circular import.
 import type { Operation } from '#src/contract.ts';
 
 /**
@@ -45,19 +39,19 @@ export function spendable(userId: string): AccountRef {
 }
 
 /**
- * A session escrow account: the prefund lane's crash-safe attribution. The account key is the
- * (user, session) pair, so recovery derives the unspent remainder from durable postings plus
- * the journal — no session-memory truth anywhere. Funded from `spendable` at session first
- * touch, drained by the session settlement, remainder refunded to `spendable` at close (see
- * src/instance.ts prefund).
+ * A session escrow account. The prefund lane uses it for crash-safe attribution. The account
+ * key is the (user, session) pair, so recovery derives the unspent remainder from durable
+ * postings plus the journal — no session-memory truth anywhere. The session's first touch funds
+ * it from `spendable`. The session settlement drains it, and the close refunds the remainder to
+ * `spendable` (see src/instance.ts prefund).
  */
 export function sessionEscrow(userId: string, sessionId: string): AccountRef {
   return `${userId}:${sessionId}:escrow` as AccountRef;
 }
 
 /**
- * Parses a session-escrow id back into its (user, session) pair, or null for any other account —
- * what the orphan-escrow sweep uses to find each remainder's owner.
+ * Parses a session-escrow id back into its (user, session) pair, or returns null for any other
+ * account. The orphan-escrow sweep uses it to find each remainder's owner.
  */
 export function escrowPartsOf(
   ref: AccountRef,
@@ -75,8 +69,8 @@ export function escrowPartsOf(
 
 /**
  * A user's earned account: revenue owed to them as a seller, which the platform must pay out.
- * Cashing out goes through `requestPayout`, which moves earned money into the payout reserve;
- * earned balances class as `excluded` in the backing check, so only the custodial spendable
+ * Cashing out goes through `requestPayout`, which moves earned money into the payout reserve.
+ * Earned balances class as `excluded` in the backing check, so only the custodial spendable
  * side raises the required trust cash.
  */
 export function earned(userId: string): AccountRef {
@@ -132,11 +126,11 @@ export const SYSTEM = {
   OPENING_EQUITY: 'platform:opening_equity' as AccountRef,
 
   // The pass-through counterparty a session settlement clears its chunks against (see
-  // src/netting.ts): each chunk posts a bounded set of participant legs against this account, and
+  // src/netting.ts). Each chunk posts a bounded set of participant legs against this account, and
   // the final chunk returns it to zero, so it holds money only mid-settlement. Credit-normal.
   NETTING_CLEARING: 'platform:netting_clearing' as AccountRef,
 
-  // Sellers' sale shares parked between a spend and the accrual drain (config.accrualDrain): the
+  // Sellers' sale shares parked between a spend and the accrual drain (config.accrualDrain). The
   // spend credits a shard here instead of each seller's earned row, and the drain sweep moves the
   // pooled shares on. Holds exactly the pending accrual rows' total. Credit-normal.
   SETTLEMENT_ACCRUAL: 'platform:settlement_accrual' as AccountRef,
@@ -145,7 +139,7 @@ export const SYSTEM = {
 // --- Platform-account sharding ------------------------------------------------------
 //
 // Splitting each hot account into `platformShards` rows (bare id + `id#1`...`id#S-1`) lets
-// concurrent postings run in parallel; readers sum the shards. Shard 0 keeps the bare id, so
+// concurrent postings run in parallel. Readers sum the shards. Shard 0 keeps the bare id, so
 // shards=1 (the default) changes nothing.
 
 // The accounts worth sharding. RECEIVABLE and OPENING_EQUITY move too rarely to matter.
@@ -193,9 +187,10 @@ export function isShardedBase(ref: AccountRef): boolean {
 
 /**
  * Picks a posting's shard: hash the key, mod the count. Outside the sharded set, or shards < 2,
- * the bare id passes through. Ops key on their idempotency key (same shard on retry);
- * PAYOUT_RESERVE keys on the user id, so a settle or reverse — which only knows the saga — drains
- * the shard the request credited (the overdraft guard keeps every reserve row non-negative).
+ * the bare id passes through. Ops key on their idempotency key, so a retry hits the same shard.
+ * PAYOUT_RESERVE keys on the user id, so a settle or reverse — which only knows the saga —
+ * drains the shard the request credited. The overdraft guard keeps every reserve row
+ * non-negative.
  */
 export function platformShard(
   ref: AccountRef,
@@ -226,7 +221,7 @@ export function routePlatformLegs<T extends { account: AccountRef }>(
   });
 }
 
-// FNV-1a 32-bit: tiny, deterministic, spreads keys evenly. Routing only, not crypto.
+// FNV-1a 32-bit is tiny, deterministic, and spreads keys evenly. It is for routing only, not crypto.
 function fnv1a(key: string): number {
   let hash = 0x811c9dc5;
   for (let i = 0; i < key.length; i += 1) {
@@ -248,7 +243,7 @@ export function isWalletAccount(ref: AccountRef): boolean {
 
 /**
  * The user id a wallet account belongs to: the part before its `:kind` suffix. For
- * `usr_alice:spendable` this is `usr_alice`; for a malformed `:spendable` (empty user id) it's the
+ * `usr_alice:spendable` this is `usr_alice`. For a malformed `:spendable` (empty user id) it's the
  * empty string, which the submit pipeline rejects. Only meaningful for the wallet accounts
  * {@link isWalletAccount} identifies. For a session escrow account this returns the
  * `<userId>:<sessionId>` prefix, not a user id; use `escrowPartsOf` for those.
@@ -258,8 +253,8 @@ export function ownerOf(ref: AccountRef): string {
   return colon < 0 ? ref : ref.slice(0, colon);
 }
 
-// Every SYSTEM account's identity in one row — its denomination, its normal side, and its class
-// in the backing check. The three predicates below read this table, so reclassifying an account
+// This table holds every SYSTEM account's identity in one row: its denomination, its normal
+// side, and its class in the backing check. The three predicates below read this table, so reclassifying an account
 // is a one-row edit that can never leave them disagreeing. PAYOUT_RESERVE is `excluded`, not
 // `house-liability`, so it never raises the USD the platform must hold. An account absent here
 // (every user wallet) is CREDIT, credit-normal, and classed by its wallet kind.
@@ -351,8 +346,8 @@ export function isDebitNormal(ref: AccountRef): boolean {
 }
 
 /**
- * The accounts an operation might touch, locked before posting. A superset on purpose: extra locks
- * are harmless, too few would let operations interleave.
+ * The accounts an operation might touch, locked before posting. It deliberately returns a
+ * superset. Extra locks are harmless, but too few would let operations interleave.
  *
  * `refund` and `reverse` return only the system accounts they always touch; the handler loads the
  * original transaction and adds its accounts before posting.
@@ -466,8 +461,8 @@ const LOCK_SETS: {
 
 /**
  * Pulls the wallet kind out of an id like `usr_123:spendable`. Returns null if there's no `:kind`
- * suffix or it isn't a known kind — the one parser for the shape, shared with the store adapters'
- * isKnownAccount checks.
+ * suffix or it isn't a known kind. This is the one parser for the shape, shared with the store
+ * adapters' isKnownAccount checks.
  */
 export function walletKindOf(ref: AccountRef): AccountKind | null {
   const colon = ref.lastIndexOf(':');

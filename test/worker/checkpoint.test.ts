@@ -19,6 +19,7 @@ import { runSweeps } from '#src/worker/index.ts';
 import { verifyCheckpoint } from '#src/chain.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
+import type { MemoryLedger } from '#src/adapters/memory.ts';
 import { toAmount } from '#src/money.ts';
 import { fault } from '#src/errors.ts';
 import { spendable, earned, SYSTEM } from '#src/accounts.ts';
@@ -187,6 +188,30 @@ async function mutateLedger(store: Store, user: string): Promise<void> {
   );
 }
 
+// Moves the two accounts the seed sealed, so re-verification has to walk a tail and reconcile a
+// sum rather than pass by finding those heads untouched.
+async function spendFromSealedAccounts(
+  store: Store,
+  user: string,
+): Promise<void> {
+  const amount = toAmount('CREDIT', 25n);
+  await store.transaction((unit) =>
+    postEntry(unit.ledger, {
+      txnId: `txn_spend_${user}`,
+      legs: [debit(spendable(user), amount), credit(SYSTEM.REVENUE, amount)],
+      meta: { kind: 'test.spend' },
+    }),
+  );
+}
+
+// Edits a posting the checkpoint already covers and leaves its recorded hash alone — the shape
+// of an in-place rewrite of sealed history, and the thing a checkpoint audit exists to catch.
+function tamperSealedHistory(store: Store, txnId: string): void {
+  (store.ledger as MemoryLedger).__tamper(txnId, (legs) => {
+    legs[0].amount = toAmount('CREDIT', legs[0].amount.minor + 1n);
+  });
+}
+
 // Reports only the first `keep` heads — from both `heads` and `headSums`, as a deleted account
 // would vanish from both. The root matches its own shrunken input; only the count check
 // (live >= sealed) catches the deletion.
@@ -239,11 +264,55 @@ async function reportsAHealthyMatchOnAnUnchangedLedger(): Promise<void> {
   assert.deepEqual(summary.retrying, []);
 }
 
-async function flagsAMismatchAfterTheLedgerChanges(): Promise<void> {
+async function staysCleanAcrossOrdinaryTraffic(): Promise<void> {
   const { store, digest } = await populatedStore();
   const ctx = makeWorkerCtx({ digest });
   const sealed = await sealCheckpoint(store, ctx);
+  // Both shapes of ordinary growth: accounts that are new since the seal, and a posting that
+  // moves the heads the seal actually covers.
   await mutateLedger(store, 'usr_a');
+  await mutateLedger(store, 'usr_b');
+  await spendFromSealedAccounts(store, 'usr_a');
+
+  const summary = await reverifyCheckpoint(store, ctx);
+
+  assert.equal(summary.verified, sealed.sealed!.id);
+  assert.equal(summary.mismatch, false);
+  assert.deepEqual(summary.deadLettered, []);
+  assert.deepEqual(summary.retrying, []);
+}
+
+async function reportsUnverifiedWhenTheStoreKeepsNoSealedHeads(): Promise<void> {
+  const { store, digest } = await populatedStore();
+  const counted: Array<{ name: string; tags?: unknown }> = [];
+  const meter = {
+    count: (name: string, _value: number, tags?: Record<string, string>) =>
+      counted.push({ name, tags }),
+    observe: () => {},
+  };
+  const ctx = makeWorkerCtx({ digest, meter });
+  const sealed = await sealCheckpoint(store, ctx);
+  // The HTTP store is the live instance of this: it carries no sealed-head snapshot at all.
+  const { sealHeads: _absent, ...blindCheckpoints } = store.checkpoints;
+  const blind: Store = { ...store, checkpoints: blindCheckpoints };
+
+  const summary = await reverifyCheckpoint(blind, ctx);
+
+  assert.equal(summary.verified, sealed.sealed!.id);
+  assert.equal(summary.mismatch, false);
+  assert.equal(summary.unverified, true);
+  // The operator channel has to carry it too: a summary nobody reads is not a signal.
+  assert.deepEqual(
+    counted.filter((signal) => signal.name === 'worker.checkpoint.verify'),
+    [{ name: 'worker.checkpoint.verify', tags: { outcome: 'unverified' } }],
+  );
+}
+
+async function flagsAMismatchWhenSealedHistoryIsEdited(): Promise<void> {
+  const { store, digest } = await populatedStore();
+  const ctx = makeWorkerCtx({ digest });
+  const sealed = await sealCheckpoint(store, ctx);
+  tamperSealedHistory(store, 'txn_seed');
 
   const summary = await reverifyCheckpoint(store, ctx);
 
@@ -254,13 +323,27 @@ async function flagsAMismatchAfterTheLedgerChanges(): Promise<void> {
   assert.deepEqual(summary.retrying, []);
 }
 
+async function flagsAnEditHiddenBehindLaterPostings(): Promise<void> {
+  const { store, digest } = await populatedStore();
+  const ctx = makeWorkerCtx({ digest });
+  await sealCheckpoint(store, ctx);
+  // Traffic first, so the tampered account's head has moved on and the edit sits behind a tail
+  // the audit has to walk before it can say anything.
+  await mutateLedger(store, 'usr_a');
+  tamperSealedHistory(store, 'txn_seed');
+
+  const summary = await reverifyCheckpoint(store, ctx);
+
+  assert.equal(summary.mismatch, true);
+}
+
 async function verifiesThePriorCheckpointBeforeSealingAFreshOne(): Promise<void> {
   // A checkpoint sealed this cycle would match by construction, so mismatch=true from a single
   // runSweeps call proves the verify ran against the prior checkpoint, before the fresh seal.
   const { store, digest } = await populatedStore();
   const ctx = makeWorkerCtx({ digest });
   await sealCheckpoint(store, ctx);
-  await mutateLedger(store, 'usr_a');
+  tamperSealedHistory(store, 'txn_seed');
 
   const batch = await runSweeps(
     store,
@@ -303,7 +386,7 @@ async function flagsAMismatchWhenHeadsAreTruncated(): Promise<void> {
   const pinned: Store = {
     ...truncated,
     checkpoints: {
-      put: store.checkpoints.put,
+      ...store.checkpoints,
       latest: async () => real,
     },
   };
@@ -326,7 +409,7 @@ async function verifiesWhenTheHeadSetGrewSinceSealing(): Promise<void> {
   const grown: Store = {
     ...store,
     checkpoints: {
-      put: store.checkpoints.put,
+      ...store.checkpoints,
       latest: async () => ({ ...sealed.sealed!, count: 1 }),
     },
   };
@@ -349,7 +432,7 @@ async function deadLettersACorruptCheckpointRow(): Promise<void> {
   const corrupt: Store = {
     ...store,
     checkpoints: {
-      put: store.checkpoints.put,
+      ...store.checkpoints,
       latest: async () => ({ ...real!, signature: 'zzz' }),
     },
   };
@@ -385,8 +468,14 @@ describe('Checkpoint Sweep', () => {
     skipsWhenNoCheckpointHasBeenSealed());
   test('re-verify reports a healthy match on an unchanged ledger', () =>
     reportsAHealthyMatchOnAnUnchangedLedger());
-  test('re-verify flags a mismatch after the ledger changes', () =>
-    flagsAMismatchAfterTheLedgerChanges());
+  test('re-verify stays clean across ordinary traffic', () =>
+    staysCleanAcrossOrdinaryTraffic());
+  test('re-verify reports unverified when the store keeps no sealed heads', () =>
+    reportsUnverifiedWhenTheStoreKeepsNoSealedHeads());
+  test('re-verify flags a mismatch when sealed history is edited', () =>
+    flagsAMismatchWhenSealedHistoryIsEdited());
+  test('re-verify flags an edit hidden behind later postings', () =>
+    flagsAnEditHiddenBehindLaterPostings());
   test('re-verify flags a mismatch when an account goes missing', () =>
     flagsAMismatchWhenHeadsAreTruncated());
   test('re-verify still verifies when accounts were added since sealing', () =>

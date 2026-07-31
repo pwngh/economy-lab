@@ -13,7 +13,7 @@
  * A hand-rolled property-based testing core, not fast-check: seeded `Arbitrary` generators that
  * compose, and a multi-axis `minimize` that reduces a failing value to its smallest still-failing
  * form. Seeds are always explicit, so a failing run reproduces byte-identically. This is the shrinker
- * the seeded programs in `scripts/prove.ts` never had — that one only trims the tail.
+ * the seeded programs in `test/prove.test.ts` never had — that one only trims the tail.
  */
 
 /** Uniform in [0, 1). */

@@ -12,13 +12,15 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import '#test/support/dist-guard.ts';
+
 import { tiliaPayeeStore } from '#src/adapters/tilia-payees.ts';
-import { maybeEdgeTilia } from '#scripts/support/edge-host.ts';
-import { openPgPool } from '#src/engines/pg-driver.ts';
+import { maybeEdgeTilia } from '#economy/lib/edge-host.ts';
+import { openPgPool } from '@pwngh/economy-postgres/driver';
 import { isPostgresUrl } from '#src/env.ts';
 import { testLogger } from '#test/support/capabilities.ts';
 
-import type { PgPoolLike } from '#src/engines/pg-driver.ts';
+import type { PgPoolLike } from '@pwngh/economy-postgres/driver';
 
 const DB_URL = process.env.DATABASE_URL ?? '';
 const SKIP = isPostgresUrl(DB_URL)

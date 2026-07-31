@@ -11,7 +11,7 @@
  */
 
 /**
- * Settle-vs-reverse race. This is the gap the per-operation suites never cover. settlePayout moves a
+ * This suite runs the settle-vs-reverse race. This is the gap the per-operation suites never cover. settlePayout moves a
  * saga from SUBMITTED to SETTLED. reversePayout moves a reversible payout to FAILED and returns the
  * reserve to the seller. Both move one saga out of SUBMITTED, but each moves money in an opposite,
  * irreversible direction. Settle empties the reserve into REVENUE and moves USD out of trust, so the
@@ -34,14 +34,14 @@
  *    reverse are fired together via Promise.all and truly interleave on the engine's row/account
  *    locks. This is the same harness concurrency.adversarial uses. Memory is deliberately excluded
  *    there because its store queues overlapping transactions behind one writer, so a Promise.all
- *    race never truly interleaves. 50 iterations, both firing orders each iteration.
+ *    race never truly interleaves. It runs 50 iterations, with both firing orders each iteration.
  *
  *  - Memory runs a deterministic interleaving instead, mirroring settlePayout.test.ts's
  *    `raceSettleOnce`. It pre-empts the saga into the winner's terminal state by committing the
  *    winner's money first, then runs the loser and asserts the loser is refused with the real
  *    SAGA.INVALID_TRANSITION and posts nothing. This pins the loser-refusal and money-moves-once
- *    contract on memory without needing the interleaving memory doesn't provide. 50 iterations,
- *    both winners (settle-wins, reverse-wins) each iteration.
+ *    contract on memory without needing the interleaving memory doesn't provide. It runs 50
+ *    iterations, with both winners (settle-wins, reverse-wins) each iteration.
  *
  * Every iteration on every backend asserts the same contract. Exactly one outcome commits. The loser
  * is rejected with SAGA.INVALID_TRANSITION. The reserve moved exactly once in the winner's direction
@@ -85,6 +85,7 @@ import {
   adversarialMysql,
 } from '#test/conformance/adversarial-engines.ts';
 import { advanceDuePayouts } from '#src/worker/payouts.ts';
+import { checkedConfig } from '#src/config.ts';
 
 import type { AdversarialEngine } from '#test/conformance/adversarial-engines.ts';
 import type { PayoutSweepSummary } from '#src/worker/payouts.ts';
@@ -121,12 +122,12 @@ const INVALID = 'SAGA.INVALID_TRANSITION';
 const ITERATIONS = 50;
 const WORKER_ITERATIONS = 15;
 
-// How a refused loser must surface on every backend: the clean domain fault. Whoever takes the
+// A refused loser must surface on every backend as the clean domain fault. Whoever takes the
 // PAYOUT_RESERVE lock first transitions the saga. The loser reloads a no-longer-SUBMITTED saga and
 // throws SAGA.INVALID_TRANSITION at its state guard before posting anything. Under genuine
 // concurrency the engine's own lock manager may break the tie first by aborting one transaction with
 // a deadlock or serialization conflict (InnoDB ER_LOCK_DEADLOCK, Postgres 40P01/40001). But the SQL
-// engines now retry those transient aborts inside their transaction wrappers. The aborted side rolls
+// engines retry those transient aborts inside their transaction wrappers. The aborted side rolls
 // back and re-runs the whole transaction, which reloads the terminal saga and is refused with the
 // same SAGA.INVALID_TRANSITION. So no raw DB lock error escapes to the caller, and the loser is the
 // clean domain refusal on memory, Postgres, and MySQL alike.
@@ -160,7 +161,7 @@ async function seedSubmittedSaga(
   };
   await store.transaction(async (unit) => {
     await unit.sagas.open(row);
-    // Fund earned, then post the row's anchor (see sagaAnchor); both racers re-prove the
+    // This funds earned, then posts the row's anchor (see sagaAnchor). Both racers re-prove the
     // row against it.
     await unit.ledger.append({
       txnId: `txn_seed_${id}`,
@@ -313,7 +314,7 @@ async function oneConcurrentRace(
   const reverse = () =>
     settleOf(engine.submit(reversePayoutOp(sagaId, seller)));
 
-  // Fire both against the engine's lock barrier. The order handed to Promise.all is the firing order
+  // This fires both against the engine's lock barrier. The order handed to Promise.all is the firing order
   // under test. Each result is tagged so the winner is known regardless of order.
   const [a, b] = settleFirst
     ? await Promise.all([settle(), reverse()])
@@ -327,7 +328,7 @@ async function oneConcurrentRace(
   const settleWon = settleResult.kind === 'committed';
   const reverseWon = reverseResult.kind === 'committed';
 
-  // Exactly one committed: never both (double-pay), never neither (lost work).
+  // Exactly one op committed, never both (double-pay) and never neither (lost work).
   assert.ok(
     settleWon !== reverseWon,
     `${tag} (settleFirst=${settleFirst}): both ops resolved the same — ` +
@@ -441,15 +442,14 @@ async function runDeterministicRaces(
 
 // The background sweep force-fails a SUBMITTED payout aged past maxPayoutAgeMs, returning its reserve
 // to the seller (deadLetter), at the same moment the provider's late settlement webhook settles it.
-// Both move the same reserve in opposite, irreversible directions. The sweep now locks PAYOUT_RESERVE
+// Both move the same reserve in opposite, irreversible directions. The sweep locks PAYOUT_RESERVE
 // and CAS-flips the saga before posting, identical to the pipeline ops, so exactly one wins. Either
 // settle pays the seller (SETTLED, reserve to REVENUE) or the sweep returns the reserve (FAILED),
-// never both. Before the fix the sweep posted the reversal first and flipped state unconditionally,
-// so a settle that won the chain race let the sweep's reversal re-post on retry and double-pay the
-// seller.
+// never both. A sweep that posted the reversal first and flipped state unconditionally would let a
+// settle that won the chain race re-post the sweep's reversal on retry and double-pay the seller.
 
-// The sweep posts its reversal with its own id stream. Prefix it so the sweep's txn, obx, and evt
-// ids never collide with the economy's over the shared store, since both otherwise count from zero.
+// The sweep posts its reversal with its own id stream. The prefix keeps the sweep's txn, obx, and evt
+// ids from colliding with the economy's over the shared store, since both otherwise count from zero.
 function prefixedIds(prefix: string): WorkerCtx['ids'] {
   const base = sequentialIds();
   return { next: (kind) => `${prefix}-${base.next(kind)}` };
@@ -469,12 +469,12 @@ function raceWorkerCtx(): WorkerCtx {
     rates: fixedRates(),
     logger: testLogger(),
     meter: silentMeter(),
-    config: testConfig(),
+    config: checkedConfig(testConfig()),
   };
 }
 
 // Runs one worker-timeout-vs-settle race on a fresh aged SUBMITTED saga, fired truly concurrently.
-// The sweep returns a summary and does not throw on a lost compare-and-set; a losing settle rejects
+// The sweep returns a summary and does not throw on a lost compare-and-set. A losing settle rejects
 // with INVALID_TRANSITION.
 async function oneWorkerVsSettleRace(
   fixtures: { engine: Economy; store: Store; worker: WorkerCtx },
@@ -506,7 +506,7 @@ async function oneWorkerVsSettleRace(
   const after = await snapshot(store, earned(seller));
   const failedByWorker = sweepSummary.deadLettered.some((d) => d.id === sagaId);
 
-  // Exactly one terminal outcome: SETTLED (settle won) or FAILED (the sweep won), never neither.
+  // The saga must reach exactly one terminal outcome: SETTLED (settle won) or FAILED (the sweep won), never neither.
   const settleWon = saga?.state === 'SETTLED';
   const workerWon = saga?.state === 'FAILED';
   assert.ok(
@@ -585,7 +585,7 @@ function runSqlRace(
 
     test('settle/reverse and worker-timeout/settle: exactly one wins each concurrent race; money moves once, the loser is INVALID_TRANSITION, prove() holds', async (t: TestContext) => {
       if (!provisioned) return t.skip(`${name} unreachable`);
-      // Use a single economy across all iterations so its seeded txn-id counter stays unique. The
+      // This uses a single economy across all iterations so its seeded txn-id counter stays unique. The
       // engine's store is shared, and each iteration carries its own saga and seller namespace. The
       // store is closed by `provisioned.close()` in `after`, so the economy is not closed here, which
       // would double-close. Both race suites run on the one economy. The worker sweep uses its own

@@ -16,9 +16,13 @@ Dockerfile
 # the browser-build shim stubs both apps alias to (never imported by name). Mirrors the eslint ignore.
 apps
 
-# vendored @pwngh/money: byte-identical to upstream; selfTest is the drift guard
-src/money.vendored.ts
-src/db.vendored.ts
+# notes/ is private planning text, never committed and not format-governed.
+notes
+
+# Byte-pinned generated artifacts; reformatting one breaks its snapshot test. Named by extension,
+# not by directory: the generator that writes them lives here too, and a whole-directory ignore
+# took it out of format:check silently.
+test/fixtures/*.json
 dist-site
 
 # docs/ is the gitignored generated API reference (wiped and rebuilt by every typedoc run).

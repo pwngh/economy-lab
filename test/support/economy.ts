@@ -30,15 +30,17 @@ import {
 /**
  * A fresh in-memory economy driven only by `seed`: same result on any runtime, no shared state.
  * A passed `store` must use the same seeded digest and fixed clock, or the hashes diverge.
- * `config` overrides individual fields of the test default.
+ * `config` overrides individual fields of the test default. `nowMs` moves the frozen clock, for a
+ * test that needs a config window to sit behind it — epoch bounds cannot go negative.
  */
 export function makeEconomy(
   seed = 1,
   store?: Store,
   config?: Partial<Config>,
+  nowMs = 0,
 ): Economy {
   const digest = seededDigest(seed);
-  const clock = fixedClock(0);
+  const clock = fixedClock(nowMs);
   return createEconomy({
     store: store ?? memoryStore({ digest, clock }),
     clock,

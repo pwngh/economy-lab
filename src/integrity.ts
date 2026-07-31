@@ -59,8 +59,8 @@ export type ProvePorts = {
 
 // The hash chain is not checked in this fold — `chain.ts` `proveChain` does that.
 type LedgerFold = {
-  // Running total per currency. Debits are added and credits are subtracted, so it should
-  // reach zero.
+  // Running total per currency. Debits are added and credits are subtracted, so a conserved
+  // ledger sums to zero.
   signedByCurrency: Map<Currency, bigint>;
 
   // Total credits the platform owes users and must hold real USD against.
@@ -89,7 +89,7 @@ type LedgerFold = {
  *   store: ports.store, rates: ports.rates, digest: ports.digest, signer: ports.signer,
  * });
  * if (!allInvariantsHold(report)) {
- *   throw new Error('ledger integrity check failed'); // report says which property broke
+ *   throw new Error('ledger integrity check failed'); // report names the property, firstBreak the link
  * }
  */
 export async function proveEconomy(
@@ -116,10 +116,12 @@ export async function proveEconomy(
   );
 
   return {
+    prover: 'proveEconomy',
     conserved: everyCurrencyBalances(fold.signedByCurrency),
     backed: shortfallMinor === 0n,
     noOverdraft: !fold.anyUserNegative,
     chainIntact: chain.intact,
+    firstBreak: chain.firstBreak,
     consistent: fold.drift.length === 0,
     drift: fold.drift,
     shortfall: toAmount('USD', shortfallMinor),
@@ -203,7 +205,7 @@ async function foldLedger(
       anyUserNegative = true;
     }
   }
-  // R33: the `heads()` fold only visits accounts with at least one posting, so a phantom balance
+  // The `heads()` fold only visits accounts with at least one posting, so a phantom balance
   // row (a direct DB edit or half-applied write) is invisible to it. Enumerate every balance row
   // and compare any unvisited account's stored balance against its derived value — the archival
   // baseline for a fully-archived account (all its postings moved cold), 0 otherwise. Backing
@@ -244,9 +246,9 @@ async function accumulateLegs(
   return derivedMinor;
 }
 
-// Shared by both drift checks: a materialized total that diverged from its legs (R32) and a
-// phantom balance row with no backing posting, which derives to 0 (R33). Legs are the source of
-// truth; the materialized figure is the cache.
+// Shared by both drift checks: a materialized total that diverged from its legs, and a phantom
+// balance row with no backing posting, which derives to 0. Legs are the source of truth; the
+// materialized figure is the cache.
 function pushIfDrifted(
   account: AccountRef,
   materialized: Amount,

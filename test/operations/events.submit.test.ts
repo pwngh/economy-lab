@@ -142,7 +142,7 @@ describe('Submit-Path Domain Events (Payouts & Subscriptions)', () => {
     assert.equal(event.data.amount, 'CREDIT:20.00');
   });
 
-  test('subscribe emits economy.subscription.started with {userId,sku,period}', async () => {
+  test('subscribe emits economy.subscription.started naming the row it opened', async () => {
     const { economy, store } = economyWithStore(1);
     await fund(economy, 'usr_buyer', '100.00');
     await eventsOf(store);
@@ -164,6 +164,12 @@ describe('Submit-Path Domain Events (Payouts & Subscriptions)', () => {
     assert.equal(event.data.userId, 'usr_buyer');
     assert.equal(event.data.sku, 'sub_pro');
     assert.equal(event.data.period, 1);
+    // The id comes off the stored row, not the posting metadata the emitter reads it from, so
+    // this is the two sides of the subscription agreeing rather than one of them restated.
+    assert.equal(
+      event.data.subscriptionId,
+      await onlySubscriptionId(store, 'usr_buyer'),
+    );
   });
 
   test('cancelSubscription emits economy.subscription.canceled even though it records no debit/credit lines', async () => {

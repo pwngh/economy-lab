@@ -64,6 +64,33 @@ test('statusForError maps codes to the canonical HTTP status', () => {
   assert.equal(status(ERROR_CODES.INVALID_AMOUNT), 400);
   assert.equal(status(ERROR_CODES.STORE_FAILURE, true), 503);
   assert.equal(status(ERROR_CODES.STORE_FAILURE, false), 500);
+  // A state refusal a caller can act on: wait out the payout settlement window, rotate to a new
+  // session epoch. Both arms of the saga code are pinned, because it carries two — the retryable
+  // one is the settle sweep's race and keeps 503.
+  assert.equal(status(ERROR_CODES.INVALID_TRANSITION), 409);
+  assert.equal(status(ERROR_CODES.INVALID_TRANSITION, true), 503);
+  assert.equal(status(ERROR_CODES.SESSION_SETTLED), 409);
+  // Not a state conflict but a routing answer: the request reached a node that does not own the
+  // scope, so the instruction is "send it elsewhere", not "resolve it and re-send here".
+  assert.equal(status(ERROR_CODES.SESSION_MISROUTED), 421);
+  // The controls. A genuine server fault still answers 5xx, or "the caller can act on it" would
+  // be satisfiable by answering 4xx to everything.
+  assert.equal(status(ERROR_CODES.CHAIN_BROKEN), 500);
+  assert.equal(status(ERROR_CODES.LEDGER_UNBALANCED), 500);
+  assert.equal(status(ERROR_CODES.PROVIDER_FAILURE, true), 503);
+  // And the roster is exact: a third code answering 409 is a decision, and it fails here first.
+  // The expected list is typed out rather than recomputed — a test that re-ran the mapping's own
+  // membership check would agree with any list at all.
+  assert.deepEqual(
+    Object.values(ERROR_CODES).filter((code) => status(code) === 409),
+    ['SAGA.INVALID_TRANSITION', 'SESSION.SETTLED'],
+  );
+  // 421 is one code by design. It is the answer only when the node that was asked is not the node
+  // that owns the work, and a second code reaching for it is a decision that fails here first.
+  assert.deepEqual(
+    Object.values(ERROR_CODES).filter((code) => status(code) === 421),
+    ['SESSION.MISROUTED'],
+  );
 });
 
 test('preflight has no errors for a complete env and lists every problem otherwise', () => {
@@ -75,8 +102,9 @@ test('preflight has no errors for a complete env and lists every problem otherwi
       (issue) => issue.path === 'DATABASE_URL',
     ),
   );
-  // Production with nothing set: secrets + rates + provider all reported at once.
-  assert.ok(errors({ NODE_ENV: 'production' }).length >= 3);
+  // Production with nothing set: secrets, rates and provider are all reported at once rather than
+  // one per boot. Fourteen issues across those three causes — exact, so a cause going quiet fails.
+  assert.equal(errors({ NODE_ENV: 'production' }).length, 14);
   // Production, fully configured, each absent optional port declined: no problems.
   assert.deepEqual(
     errors({

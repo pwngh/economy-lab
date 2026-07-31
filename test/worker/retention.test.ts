@@ -11,9 +11,8 @@
  */
 
 /**
- * The retention sweep: horizon-gated idempotency deletion (a deleted key re-executes),
- * verify-then-prune of settled sessions' journal rows, the untouched cases (live sessions,
- * young rows), and the worker job's opt-in gate through request and defaults.
+ * The retention sweep, both lanes opt-in. Every case asserts what stayed as well as what was
+ * deleted.
  */
 
 import { describe, test } from 'node:test';
@@ -155,6 +154,55 @@ describe('Retention sweep', () => {
       ids.push(id);
     }
     assert.deepEqual(ids, ['sess_ret_open']);
+  });
+
+  test('sessions lane keeps the journal of a settle that stopped between chunks', async () => {
+    const { store, deps } = harness();
+    await fund(store, 'usr_ret4', 1_000n);
+    const session = openInstanceSession(deps, 'sess_ret_partial', {
+      chunkWidth: 2,
+    });
+    await session.record({
+      idempotencyKey: 'ret4_a',
+      legs: purchase('usr_ret4', 'usr_c4a', 100n),
+    });
+    await session.record({
+      idempotencyKey: 'ret4_b',
+      legs: purchase('usr_ret4', 'usr_c4b', 60n),
+    });
+    await session.flush();
+    // The node dies between chunk 0 and chunk 1 of 2. The journal is the only record of what
+    // chunk 1 still owes, so pruning it would strand the 60 parked in clearing forever.
+    await store.transaction((unit) =>
+      postEntry(unit.ledger, {
+        txnId: 'net_sess_ret_partial_c0',
+        legs: [
+          debit(spendable('usr_ret4'), toAmount('CREDIT', 160n)),
+          credit(earned('usr_c4a'), toAmount('CREDIT', 100n)),
+          credit(SYSTEM.NETTING_CLEARING, toAmount('CREDIT', 60n)),
+        ],
+        meta: {
+          kind: 'instance_settlement',
+          sessionId: 'sess_ret_partial',
+          netted: 2,
+          chunk: '1/2',
+        },
+      }),
+    );
+
+    const swept = await sweepRetention(store, makeWorkerCtx(), {
+      now: 200_000,
+      limit: 100,
+      sessionsOlderThanMs: HORIZON,
+    });
+
+    assert.deepEqual(swept.sessions.pruned, []);
+    assert.deepEqual(swept.sessions.failed, []);
+    const rows = [];
+    for await (const row of store.movements.bySession('sess_ret_partial')) {
+      rows.push(row);
+    }
+    assert.equal(rows.length, 2);
   });
 
   test('the worker job idles without the opt-in and runs under bound defaults', async () => {

@@ -11,17 +11,17 @@
 
 // Restores the newest dump into a scratch namespace, runs the full prover against the restored
 // ledger, and drops the scratch. A backup that isn't provably restorable is a hope, not a
-// backup; the drill turns the hope into a report.
+// backup. The drill turns the hope into a report.
 //
 //   npm run backup && npm run restore:drill
 //
-// Each engine restores into a scratch el_drill_* DATABASE: db/*.sql provides the DDL, then the
+// Each engine restores into a scratch el_drill_* DATABASE. db/*.sql provides the DDL, then the
 // data-only dump applies verbatim (postgres dumps and scratches both live in `public`).
-// Scratches drop in a `finally`; a killed run leaves an el_drill_* name that `make db-clean`
+// Scratches drop in a `finally`. A killed run leaves an el_drill_* name that `make db-clean`
 // sweeps.
 
 import { createEconomy } from '#src/economy.ts';
-import { openPorts } from '#src/index.ts';
+import { allInvariantsHold, openPorts, proveEconomy } from '#src/index.ts';
 import { LOCAL_POSTGRES_URL, storeUrls } from '#src/env.ts';
 import {
   freshName,
@@ -36,8 +36,9 @@ import {
 
 const say = (line: string): void => console.warn(line);
 
-// The prover re-derives every invariant from the restored rows alone; a dump missing rows or
-// restored out of shape cannot pass it.
+// The full audit re-derives every invariant from the restored rows alone and replays every hash
+// chain, so a dump missing rows or restored out of shape cannot pass it. `read.health()` would not
+// do: its chain check is a shape test on each head and re-hashes nothing.
 async function proveRestored(scratchUrl: string): Promise<boolean> {
   const caps = await openPorts(
     { DATABASE_URL: scratchUrl },
@@ -45,19 +46,13 @@ async function proveRestored(scratchUrl: string): Promise<boolean> {
   );
   const economy = createEconomy(caps);
   try {
-    const report = await economy.read.health();
+    const report = await proveEconomy(caps);
     say(
-      `  prove: conserved=${report.conserved} backed=${report.backed} ` +
+      `  ${report.prover}: conserved=${report.conserved} backed=${report.backed} ` +
         `noOverdraft=${report.noOverdraft} chainIntact=${report.chainIntact} ` +
         `consistent=${report.consistent} drift=${report.drift.length}`,
     );
-    return (
-      report.conserved &&
-      report.backed &&
-      report.noOverdraft &&
-      report.chainIntact &&
-      report.consistent
-    );
+    return allInvariantsHold(report);
   } finally {
     await economy.close();
   }
@@ -88,9 +83,9 @@ async function drillPostgres(): Promise<boolean | null> {
       'ON_ERROR_STOP=1',
       '-q',
       '-f',
-      'db/postgresql-schema.sql',
+      'packages/postgres/db/postgresql-schema.sql',
     ]);
-    // The schema seeds the platform rows the dump also carries; clear them so the dump's COPY
+    // The schema seeds the platform rows the dump also carries. Clear them so the dump's COPY
     // (which has no on-conflict path) restores the backed-up values, not the seeds.
     await runTool('psql', [
       scratchUrl,
@@ -140,7 +135,7 @@ async function drillMysql(): Promise<boolean | null> {
   });
   try {
     await runTool('mysql', [...args, scratch], {
-      stdinFrom: 'db/mysql-schema.sql',
+      stdinFrom: 'packages/mysql/db/mysql-schema.sql',
       env,
     });
     await runTool('mysql', [...args, scratch], { stdinFrom: dump, env });

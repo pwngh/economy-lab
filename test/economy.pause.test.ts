@@ -21,7 +21,10 @@ import { spendable } from '#src/accounts.ts';
 describe('economy pause window', () => {
   // This window brackets the fixed clock's `now` (0), so the economy is paused.
   const ACTIVE = { pauseStartMs: 0, pauseEndMs: 60 * 60_000 };
-  const PAST = { pauseStartMs: -2 * 60 * 60_000, pauseEndMs: -60 * 60_000 };
+  // The same window read from a clock past its end. Both bounds are epoch ms and the config
+  // bounds refuse a negative one, so a window in the past is made by moving the clock forward
+  // rather than by moving the window below zero.
+  const AFTER_MS = 2 * 60 * 60_000;
 
   test('a user spend during the window is rejected with ECONOMY_PAUSED', async () => {
     const economy = makeEconomy(1, undefined, ACTIVE);
@@ -128,7 +131,7 @@ describe('economy pause window', () => {
   });
 
   test('outside the window a user op commits and status.maintenanceActive is false', async () => {
-    const economy = makeEconomy(1, undefined, PAST);
+    const economy = makeEconomy(1, undefined, ACTIVE, AFTER_MS);
     try {
       const funded = await economy.submit(
         adjust({
@@ -158,10 +161,10 @@ describe('economy pause window', () => {
       assert.equal(status.resumesAt, null, 'resumesAt is null when not paused');
       assert.equal(
         status.pauseStart,
-        PAST.pauseStartMs,
+        ACTIVE.pauseStartMs,
         'bounds still reported',
       );
-      assert.equal(status.pauseEnd, PAST.pauseEndMs);
+      assert.equal(status.pauseEnd, ACTIVE.pauseEndMs);
     } finally {
       await economy.close();
     }

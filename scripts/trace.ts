@@ -22,8 +22,8 @@ import { spendable, promo, earned, SYSTEM } from '#src/accounts.ts';
 import type { Economy, Operation, Outcome } from '#src/contract.ts';
 import type { AccountRef } from '#src/accounts.ts';
 
-// Golden-trace runner: replays the canonical scenario and renders it to a stable text form.
-// NOTE: with no flag this WRITES test/golden/canonical.trace; `--check` (what CI runs, via
+// This runner replays the canonical scenario and renders it to a stable text form.
+// NOTE: with no flag this WRITES test/golden/canonical.trace. `--check` (what CI runs, via
 // `npm run trace:check`) compares against the golden without writing. `--update` also overwrites.
 const SCENARIO = 'canonical';
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -63,7 +63,7 @@ function render(value: unknown): string {
 
 // --- The canonical scenario -----------------------------------------------------------
 
-// Stable across runs: the test economy issues ids in a fixed sequence and uses a frozen clock.
+// The output stays stable across runs. The test economy issues ids in a fixed sequence and uses a frozen clock.
 function recordStep(kind: string, outcome: Outcome): Record<string, unknown> {
   if (outcome.status === 'rejected') {
     return { kind, status: outcome.status, reason: outcome.detail.reason };

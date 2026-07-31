@@ -33,17 +33,27 @@ export type SqlQuery = (
   params: ReadonlyArray<unknown>,
 ) => Promise<{ rows: ReadonlyArray<Record<string, unknown>> }>;
 
-// A routine name is interpolated into the SQL because a bound param cannot name a routine. Restrict
-// it to a plain SQL identifier to block injection. Every call site passes a hard-coded constant, so
-// this never fires today. It is a backstop against a future caller that builds a name from input.
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 
-function safeName(name: string): string {
+/**
+ * Returns `name` if it is a plain lowercase SQL identifier, and throws otherwise.
+ *
+ * Some things a statement names cannot be bound as a parameter — a stored routine, a schema —
+ * so they are pasted into the SQL text, and pasted text is where injection lives. `subject`
+ * names what is being guarded so the refusal says which one it was.
+ *
+ * Every call site in this tree passes a hard-coded constant, so it never fires today. It is the
+ * backstop for the first caller that builds one of those names out of input.
+ */
+export function safeSqlIdentifier(subject: string, name: string): string {
   if (!IDENTIFIER.test(name)) {
-    throw new Error(`Unsafe SQL routine name: ${JSON.stringify(name)}.`);
+    throw new Error(`Unsafe ${subject}: ${JSON.stringify(name)}.`);
   }
   return name;
 }
+
+const safeName = (name: string): string =>
+  safeSqlIdentifier('SQL routine name', name);
 
 function placeholders(dialect: SqlDialect, count: number): string {
   return Array.from({ length: count }, (_, i) =>
@@ -114,8 +124,8 @@ export function postEntryArgs(
   }));
 
   // A posting can touch one account in several legs (a promo-funded spend credits a seller twice),
-  // so sum each account's `balanceDelta` into one figure — the same total the per-leg `foldBalance`
-  // would reach.
+  // so sum each account's `balanceDelta` into one figure. The sum equals the total the per-leg
+  // `foldBalance` would reach.
   const deltaByAccount = new Map<string, bigint>();
   const currencyByAccount = new Map<string, string>();
   for (const leg of posting.legs) {
@@ -130,7 +140,7 @@ export function postEntryArgs(
   }));
 
   // Collect the user accounts to create on first use, distinct and in first-seen order. A platform
-  // account reads as null (no `:kind` suffix): the schema seeds it, so this code never creates it.
+  // account reads as null (no `:kind` suffix). The schema seeds it, so this code never creates it.
   const newAccounts: PostEntryArgs['newAccounts'] = [];
   const seen = new Set<string>();
   for (const leg of posting.legs) {

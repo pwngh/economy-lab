@@ -13,8 +13,23 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import '#test/support/dist-guard.ts';
+
 import { memoryRateLimiter } from '#src/adapters/memory-rate-limit.ts';
+import { runRateLimiterConformance } from '#test/conformance/rate-limit.ts';
 import { fixedClock } from '#test/support/capabilities.ts';
+
+// One clock behind every limiter the run builds, so `elapse` moves the window of whichever limiter
+// the current case is holding. Each `make` still gets its own empty key map.
+runRateLimiterConformance('memory', () => {
+  const clock = fixedClock(1_000_000);
+  return {
+    make: (policy) => memoryRateLimiter(policy, clock),
+    elapse: async (ms) => {
+      clock.advance(ms);
+    },
+  };
+});
 
 describe('memoryRateLimiter', () => {
   test('allows up to the limit inside one window', async () => {

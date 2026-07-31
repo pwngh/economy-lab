@@ -15,8 +15,8 @@ import type { Anchor, Checkpoint, CallOptions } from '#src/ports.ts';
 
 export interface HttpAnchorConfig {
   /**
-   * The external log or store each sealed checkpoint is POSTed to. It must live outside the
-   * ledger's database, or the anchor proves nothing.
+   * The anchor POSTs each sealed checkpoint to this external log or store. It must live outside
+   * the ledger's database, or the anchor proves nothing.
    */
   url: string;
 
@@ -28,10 +28,10 @@ export interface HttpAnchorConfig {
 }
 
 /**
- * Builds the {@link Anchor} that POSTs one sealed checkpoint to an external endpoint over HTTP,
- * the row as plain JSON. A network error or a non-2xx response throws a retryable
- * `PROVIDER.FAILURE`; the seal logs it and moves on, and the checkpoint id rides an
- * `Idempotency-Key` header so a later re-anchor of the same row dedupes at the receiver.
+ * Builds the {@link Anchor} that POSTs one sealed checkpoint to an external endpoint over HTTP.
+ * The row travels as plain JSON. A network error or a non-2xx response throws a retryable
+ * `PROVIDER.FAILURE`, and the seal logs it and moves on. The checkpoint id rides an
+ * `Idempotency-Key` header, so a later re-anchor of the same row dedupes at the receiver.
  */
 export function httpAnchor(config: HttpAnchorConfig): Anchor {
   const send = config.fetch ?? fetch;

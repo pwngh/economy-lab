@@ -19,7 +19,7 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Unit } from '#src/ports.ts';
 
 /**
- * Issue marketing promo credits to a user.
+ * Issues marketing promo credits to a user.
  *
  * Promo credits need no USD backing (unlike topped-up money), so a grant can't increase the cash
  * held in trust. They are spendable but never cashed out, because only earned credits pay out.
@@ -53,8 +53,9 @@ export async function grantPromo(
     meta: { kind: 'grantPromo', expiresAt },
   });
 
-  // Same unit of work, so the record commits or rolls back with the credit. It reuses the
-  // posting's id, and `open` is idempotent on that id, so a retried grant never duplicates the row.
+  // This runs in the same unit of work, so the record commits or rolls back with the credit. It
+  // reuses the posting's id, and `open` is idempotent on that id — a retried grant never
+  // duplicates the row.
   await unit.promos.open({
     id: transaction.id,
     userId: operation.userId,
@@ -66,7 +67,7 @@ export async function grantPromo(
   return { status: 'committed', transaction };
 }
 
-// Every grant must expire so the sweep can reclaim unspent credit; the ceiling stops a caller
+// Every grant must expire so the sweep can reclaim unspent credit. The ceiling stops a caller
 // from minting an effectively never-expiring grant.
 const MAX_EXPIRY_AHEAD_MS = 5 * 365 * 24 * 60 * 60_000;
 

@@ -9,14 +9,14 @@
  * @license MIT
  */
 
-// The two lifetime-growth surfaces with a correctness-safe deletion horizon, each its own host
-// opt-in (an absent horizon leaves that surface untouched). Idempotency rows: a deleted key is
-// open again — a duplicate request after deletion re-executes — so `idempotencyOlderThanMs`
-// must exceed every window in which a caller could still retry. Settled sessions' journal
-// rows: pruning removes a session from the orphan sweep's enumeration, and verify-then-prune
-// deletes rows only for a session whose settlement evidence checks out and whose escrow
-// remainders were refunded, only past `sessionsOlderThanMs`; pruned history is gone from
-// reads, so the horizon must exceed the refund/dispute window.
+// The two lifetime-growth surfaces with a correctness-safe deletion horizon. Each is its own
+// host opt-in, and an absent horizon leaves that surface untouched. For idempotency rows, a
+// deleted key is open again, so a duplicate request after deletion re-executes.
+// `idempotencyOlderThanMs` must therefore exceed every window in which a caller could still
+// retry. For settled sessions' journal rows, pruning removes a session from the orphan sweep's
+// enumeration. Verify-then-prune deletes rows only for a session whose settlement evidence
+// checks out and whose escrow remainders were refunded, and only past `sessionsOlderThanMs`.
+// Pruned history is gone from reads, so the horizon must exceed the refund/dispute window.
 
 import { recoverSession } from '#src/netting.ts';
 import { newestMovementAt, refundSessionEscrows } from '#src/worker/orphans.ts';
@@ -39,7 +39,7 @@ export interface RetentionSweepInput {
 }
 
 export interface RetentionSweepSummary {
-  /** `skipped` when the lane's horizon is unset or the store offers no delete surface. */
+  /** `skipped` is set when the lane's horizon is unset or the store offers no delete surface. */
   idempotency: { deleted: number; skipped?: true };
   sessions: {
     /** Session ids inspected this run (bounded by `limit`). */
@@ -52,7 +52,7 @@ export interface RetentionSweepSummary {
   };
 }
 
-/** One retention pass; each lane runs only under its horizon opt-in. */
+/** One retention pass. Each lane runs only under its horizon opt-in. */
 export async function sweepRetention(
   store: Store,
   ctx: OrphanSweepCtx,
@@ -108,10 +108,12 @@ async function pruneSettledSessions(
     }
     lane.scanned += 1;
     try {
-      // Verification only: a throwaway process registry, so recovery touches no shared counter.
+      // This recovery is for verification only. It uses a throwaway process registry, so it
+      // touches no shared counter.
       const session = await recoverSession(deps, sessionId, {});
       if (!session.wasSettled()) {
-        // Live or orphaned — the orphan sweep's business, never retention's.
+        // The session is live or orphaned. That is the orphan sweep's business, never
+        // retention's.
         continue;
       }
       const ageMs = input.now - (await newestMovementAt(store, sessionId));

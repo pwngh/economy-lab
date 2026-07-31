@@ -30,8 +30,8 @@ export type RiskDecision =
   | { allow: false; reason: RejectionCode };
 
 /**
- * Sums a subject's spending in the sliding window ending at `now` (`at > now - windowMs`);
- * attempts age out as the window slides, with no fixed reset boundary.
+ * Sums a subject's spending in the sliding window ending at `now` (`at > now - windowMs`).
+ * Attempts age out as the window slides, with no fixed reset boundary.
  *
  * This is the in-memory twin of the SQL stores' windowed `SUM(amount) WHERE at > cutoff`, so
  * every backend enforces the same rolling limit. The store deduplicates attempts before they
@@ -97,7 +97,7 @@ export function assessRisk(
  * Builds the attempt record to add to a subject's running total after an operation finishes.
  * Returns null for an untracked subject or a duplicate already counted. The record carries
  * `idempotencyKey` so the store will not count a genuine retry twice. This is the pure reference
- * twin; the live pipeline records the equivalent through `store.trust.record` (see economy.ts
+ * twin. The live pipeline records the equivalent through `store.trust.record` (see economy.ts
  * screenRisk), not this.
  *
  * A `rejected` outcome is still recorded, because denied attempts count toward the limit and a
@@ -120,13 +120,13 @@ export function riskAttempt(
   };
 }
 
-/** Which velocity window an attempt fills: value flowing into the wallet, or out of it. */
+/** Names which velocity window an attempt fills: value flowing into the wallet, or out of it. */
 export type RiskClass = 'in' | 'out';
 
 /**
  * Returns the trust-store subject and window class this operation counts against, or null when
  * it is not risk-checked. Inflow and outflow are different threat models (card testing fills one,
- * a drained wallet the other), so each class keeps its own window: the recorded subject is
+ * a drained wallet the other), so each class keeps its own window. The recorded subject is
  * `<class>:<userId>`.
  *
  * This is the single source of the subject rule. The live pipeline check (economy.ts screenRisk)
@@ -153,9 +153,9 @@ export function riskSubject(
 }
 
 /**
- * The limit (CREDIT minor units) governing one window class. Each class falls back to the
- * single-knob `velocityLimitMinor` unless its own limit is set, so one figure still configures
- * both windows and a deployment that needs different in/out ceilings sets them apart.
+ * Returns the limit (CREDIT minor units) governing one window class. Each class falls back to
+ * the single-knob `velocityLimitMinor` unless its own limit is set, so one figure still
+ * configures both windows. A deployment that needs different in/out ceilings sets them apart.
  */
 export function classLimitMinor(config: Config, cls: RiskClass): bigint {
   const own =

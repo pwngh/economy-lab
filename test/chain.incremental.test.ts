@@ -138,7 +138,7 @@ describe('incremental checkpoints', () => {
     await assert.rejects(
       () => fx.seal(),
       (error: unknown) =>
-        error instanceof EconomyError && error.code === 'CHAIN.BROKEN',
+        EconomyError.is(error) && error.code === 'CHAIN.BROKEN',
     );
   });
 
@@ -170,6 +170,45 @@ describe('incremental checkpoints', () => {
       assert.equal(heads.get(account), head);
     }
     assert.equal(heads.size, live);
+  });
+
+  test('an edit on an account quiet since the last seal refuses to seal', async () => {
+    const fx = setup();
+    await fx.post('txn_x1', 'usr_x');
+    await fx.post('txn_y1', 'usr_y');
+    await fx.seal();
+
+    // usr_y posts again and usr_x does not, so usr_x's head is exactly where the first seal
+    // left it and the previous signature is the only thing vouching for it.
+    await fx.post('txn_y2', 'usr_y');
+
+    // Both legs of usr_x's old posting doubled. The posting still nets to zero, so the root
+    // sum stays 0 and nothing raises LEDGER_UNBALANCED; what moves is usr_x's own leaf sum,
+    // behind a head that never moved.
+    (fx.store.ledger as MemoryLedger).__tamper('txn_x1', (legs: Leg[]) => {
+      legs[0] = {
+        account: legs[0]!.account,
+        amount: toAmount('CREDIT', legs[0]!.amount.minor * 2n),
+      };
+      legs[1] = {
+        account: legs[1]!.account,
+        amount: toAmount('CREDIT', legs[1]!.amount.minor * 2n),
+      };
+    });
+
+    await assert.rejects(
+      () => fx.seal(),
+      (error: unknown) =>
+        EconomyError.is(error) &&
+        error.code === 'CHAIN.BROKEN' &&
+        (error.detail.firstBreak as { account: string; reason: string })
+          .account === spendable('usr_x') &&
+        (error.detail.firstBreak as { account: string; reason: string })
+          .reason === 'tampered-hash',
+    );
+    // Nothing was signed over it: the checkpoint the first seal wrote is still the latest.
+    const latest = await fx.store.checkpoints.latest();
+    assert.equal(latest!.id, 'chk_1');
   });
 
   test("a sum-preserving edit behind an unchanged head is the full prover's to catch", async () => {

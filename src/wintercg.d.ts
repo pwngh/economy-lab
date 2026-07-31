@@ -13,7 +13,7 @@
 
 /**
  * Globals the core library may use. The build pulls in no DOM and no Node types, so these must
- * be declared, and only the subset present on every modern runtime (Node 22+, Bun, Deno,
+ * be declared, and only the subset present on all four targeted runtimes (Node 22+, Bun, Deno,
  * Cloudflare Workers) is declared — keeping Node-only globals out of the core. Adapters that
  * need a Node API import from `node:*`, which lint permits only there.
  */

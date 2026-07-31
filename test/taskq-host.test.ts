@@ -17,7 +17,9 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
-import { describeTaskq, maybeTaskqHost } from '#scripts/support/taskq-host.ts';
+import '#test/support/dist-guard.ts';
+
+import { describeTaskq, maybeTaskqHost } from '#economy/lib/taskq-host.ts';
 import { storeUrls } from '#src/env.ts';
 
 import type { EconomyEvent, Logger } from '#src/ports.ts';

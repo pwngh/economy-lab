@@ -9,9 +9,10 @@
  * @license MIT
  */
 
-// Scale probe: does per-op cost stay flat as one subject's history grows? One buyer (spend) and one
-// seller (payout) are hammered in SEG-sized segments — a flat ops/sec row is O(1) in that subject's
-// history, a falling row is O(history). Runs over the shared harness backends (scripts/support/harness.ts).
+// This probe asks whether per-op cost stays flat as one subject's history grows. One buyer
+// (spend) and one seller (payout) are hammered in SEG-sized segments. A flat ops/sec row is
+// O(1) in that subject's history, and a falling row is O(history). Runs over the shared
+// harness backends (test/support/harness.ts).
 //
 //   node scripts/scale.ts                                  # in-memory + any reachable DB
 //   SEG=1000 SEGMENTS=12 node scripts/scale.ts             # bigger curve
@@ -23,11 +24,11 @@ import {
   resolveConfig,
   tryProvision,
   urlFor,
-} from '#scripts/support/harness.ts';
+} from '#test/support/harness.ts';
 
 import type { Economy } from '#src/index.ts';
 
-// The one capture of process.env, and the one parse: everything below reads cfg, never env.
+// This is the one capture of process.env and the one parse. Everything below reads cfg, never env.
 const cfg = resolveConfig(process.env);
 const SEG = cfg.segmentSize;
 const SEGMENTS = cfg.segments;
@@ -39,7 +40,7 @@ async function curve(
   name: string,
   op: (k: number) => Promise<unknown>,
 ): Promise<number[]> {
-  // A slow backend runs a curve for minutes; the header keeps that from reading as a hang.
+  // A slow backend runs a curve for minutes. The header keeps that from reading as a hang.
   console.warn(
     `\n  ${name}: ops/sec per ${SEG}-op segment (history grows left->right)`,
   );
@@ -117,7 +118,8 @@ console.warn(
   `=== scale probe: ${SEGMENTS} segments * ${SEG} ops, Node ${process.version} ===`,
 );
 
-// A failed prove gate exits non-zero: never report a scaling curve over a ledger that fails its invariants.
+// A failed prove gate exits non-zero. A scaling curve must never be reported over a ledger
+// that fails its invariants.
 let anyProveFailed = false;
 
 for (const backend of cfg.backends) {

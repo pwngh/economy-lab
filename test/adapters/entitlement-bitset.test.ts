@@ -19,6 +19,8 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import '#test/support/dist-guard.ts';
+
 import { runStoreConformance } from '#test/conformance/store.ts';
 import { cachedEntitlements } from '#src/adapters/entitlement-bitset.ts';
 import { memoryStore } from '#src/adapters/memory.ts';

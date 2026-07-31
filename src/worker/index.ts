@@ -9,6 +9,12 @@
  * @license MIT
  */
 
+/**
+ * The background-worker surface: the sweeps, the relay and drain, and the feeds.
+ *
+ * @module worker
+ */
+
 import { normalizeError } from '#src/errors.ts';
 import { intervalScheduler } from '#src/runtime.ts';
 import { encodeAmount, toAmount } from '#src/money.ts';
@@ -35,7 +41,9 @@ import { drainAccruals } from '#src/worker/accrual.ts';
 import { reproveStoredChains } from '#src/worker/reproof.ts';
 import { reconcileDueWindows } from '#src/worker/reconcile.ts';
 
-import type { Economy } from '#src/contract.ts';
+import { checkedPorts } from '#src/contract.ts';
+
+import type { CheckedPorts, Economy } from '#src/contract.ts';
 import type {
   Dispatcher,
   Ids,
@@ -66,12 +74,11 @@ import type { ReconcileFeed, ReconcileSummary } from '#src/worker/reconcile.ts';
 
 /**
  * Names of the background jobs run each cycle, and the sole definition `SweepName` is derived from.
- * `as const` (not an enum) freezes the array and keeps the literal types.
  *
  * Array order is both run order and result order, and the order matters. `feeSweep` follows
- * `treasury` because one measures the surplus and the next moves it, so keep the pair adjacent.
+ * `treasury` because one measures the surplus and the next moves it.
  * `checkpointVerify` runs before `checkpoint` so it re-checks the old sealed snapshot before a fresh
- * one overwrites it; a just-taken snapshot always passes. `drainInbox` sits next to its outbound
+ * one overwrites it. A just-taken snapshot always passes. `drainInbox` sits next to its outbound
  * mirror `relay` and is never gated on the pause, so settlements keep flowing during a maintenance
  * window.
  */
@@ -101,7 +108,7 @@ export type SweepName = (typeof SWEEP_NAMES)[number];
 export const DEFAULT_SWEEP_LIMIT = 100;
 
 /**
- * Arguments for one sweep pass; every field optional, falling back to the worker's
+ * Arguments for one sweep pass. Every field is optional and falls back to the worker's
  * construction-time defaults. `now` defaults to the clock, `limit` to
  * {@link WorkerDefaults.limit} and then {@link DEFAULT_SWEEP_LIMIT}.
  */
@@ -111,13 +118,13 @@ export type SweepRequest = {
   /** The tick every job sweeps at, in epoch milliseconds. */
   readonly now?: number;
   /**
-   * Narrows the run to just these jobs — the lever behind a supervisor's targeted re-drive
+   * Narrows the run to just these jobs. A supervisor uses this for a targeted re-drive
    * (e.g. `only: ['relay']` to push a backlog without sealing a checkpoint). A job left out
    * reports its idle summary, the same shape an absent optional dependency produces.
    */
   readonly only?: ReadonlyArray<SweepName>;
   /**
-   * Transport the relay job delivers outgoing events through; absent, the relay job is skipped
+   * Transport the relay job delivers outgoing events through. Absent, the relay job is skipped
    * and pending outbox rows wait for a later run.
    */
   readonly dispatcher?: Dispatcher;
@@ -140,22 +147,22 @@ export type SweepRequest = {
   /** The settlement windows the reconcile job compares, each reconciled independently. */
   readonly windows?: ReadonlyArray<Range>;
   /**
-   * Multi-node orphan-session sweep (src/worker/orphans.ts); absent, `orphans` is skipped —
+   * Multi-node orphan-session sweep; absent, `orphans` is skipped —
    * enumerating and settling crashed epochs is the multi-node host's opt-in.
    */
   readonly orphans?: OrphanJobOptions;
   /**
-   * Archival mover (src/worker/archive.ts); absent, `archive` is skipped — moving history to
-   * cold storage is the host's opt-in, and the sink plus checkpoint-age bound are the host's to set.
+   * Archival mover; absent, `archive` is skipped — the host opts into moving history to
+   * cold storage, and chooses both the sink and the checkpoint-age bound.
    */
   readonly archive?: ArchiveJobOptions;
   /**
-   * Secondary-table retention (src/worker/retention.ts); absent, `retention` is skipped —
-   * deleting replay-guard rows and settled-session journal history is the host's opt-in, and
-   * each horizon is the host's to set.
+   * Secondary-table retention; absent, `retention` is skipped —
+   * the host opts into deleting replay-guard rows and settled-session journal history, and
+   * sets each retention horizon.
    */
   readonly retention?: RetentionJobOptions;
-  /** Per-call options; an AbortSignal here cancels a running job. */
+  /** Per-call options. An AbortSignal here cancels a running job. */
   readonly options?: CallOptions;
 };
 
@@ -164,8 +171,8 @@ export type ArchiveJobOptions = {
   /** The cold store pages are copied into before any delete. */
   readonly sink: ArchiveSink;
   /**
-   * Only history sealed by a checkpoint at least this old moves. Must exceed every refund and
-   * dispute window the deployment honors: archived history reads as absent, and money paths
+   * Only history sealed by a checkpoint at least this old moves. Set it above every refund and
+   * dispute window the deployment honors. Archived history reads as absent, and money paths
    * that need it reject rather than move.
    */
   readonly checkpointOlderThanMs: number;
@@ -186,8 +193,8 @@ export type OrphanJobOptions = {
 };
 
 /**
- * What the retention job needs beyond the shared tick. Each horizon is an independent opt-in:
- * a lane with no horizon set reports `skipped` and deletes nothing.
+ * What the retention job needs beyond the shared tick. Each horizon is an independent opt-in.
+ * A lane with no horizon set reports `skipped` and deletes nothing.
  */
 export type RetentionJobOptions = {
   /** Delete idempotency rows older than this; a deleted key re-executes on a duplicate. */
@@ -214,8 +221,8 @@ export type WorkerDefaults = {
 };
 
 /**
- * One job's outcome: its summary, or its caught error as data (code and retry flag). A job's
- * exception never escapes to the caller.
+ * One job's outcome holds its summary, or its caught error as data (code and retry flag). A
+ * job's exception never escapes to the caller.
  */
 export type SweepResult<TSummary> =
   | { ok: true; summary: TSummary }
@@ -268,11 +275,11 @@ export interface Worker {
    */
   start(everyMs: number, request?: Omit<SweepRequest, 'now'>): () => void;
   /**
-   * Makes the scheduled runs no-ops until {@link Worker.resume}; the timer keeps ticking, so
+   * Makes the scheduled runs no-ops until {@link Worker.resume}. The timer keeps ticking, so
    * stopping stays with whoever holds the stop function.
    */
   pause(): void;
-  /** Lifts {@link Worker.pause}; the next scheduled tick sweeps again. */
+  /** Lifts {@link Worker.pause}. The next scheduled tick sweeps again. */
   resume(): void;
   /** The pause gate's state, named apart from the economy's own `maintenanceActive`. */
   readonly sweepsPaused: boolean;
@@ -280,7 +287,7 @@ export interface Worker {
 
 /**
  * Run every background job once over the same shared context and input. Each job runs inside its
- * own try/catch (see `isolate`), so a throw is recorded against just that job and the rest still
+ * own try/catch, so a throw is recorded against just that job and the rest still
  * run. Returns one combined result keyed by job name. Never throws.
  */
 export async function runSweeps(
@@ -288,24 +295,25 @@ export async function runSweeps(
   ports: Ports,
   input: SweepRequest = {},
 ): Promise<SweepBatch> {
-  const now = input.now ?? ports.clock.now();
+  const ctx = checkedPorts(ports);
+  const now = input.now ?? ctx.clock.now();
   const limit = input.limit ?? DEFAULT_SWEEP_LIMIT;
   const options = input.options;
-  const batch = await runSweepJobs(store, ports, input, {
+  const batch = await runSweepJobs(store, ctx, input, {
     now,
     limit,
     options,
   });
-  // The batch heartbeat: a supervisor watching for this count going silent learns the worker
+  // This count is the batch heartbeat. A supervisor watching it go silent learns the worker
   // died faster than any downstream symptom can say so.
   try {
-    ports.meter.count('worker.sweep', 1, {
+    ctx.meter.count('worker.sweep', 1, {
       failed: String(
         Object.values(batch).filter((result) => !result.ok).length,
       ),
     });
   } catch {
-    // Telemetry only; the batch is already decided.
+    // Telemetry only. The batch is already decided.
   }
   return batch;
 }
@@ -331,6 +339,7 @@ const IDLE_SUMMARIES: { [K in SweepName]: SummaryOf<K> } = {
     verified: null,
     skipped: true,
     mismatch: false,
+    unverified: false,
     deadLettered: [],
     retrying: [],
   },
@@ -338,7 +347,11 @@ const IDLE_SUMMARIES: { [K in SweepName]: SummaryOf<K> } = {
   relay: { relayed: [], failed: [], deadLettered: [] },
   drainInbox: { applied: [], failed: [], deadLettered: [] },
   reconcile: { reconciled: [], drifted: [], failed: [] },
-  promos: { reversed: [], failed: [] },
+  promos: {
+    reversed: [],
+    failed: [],
+    surplus: { scanned: 0, burned: [], failed: [] },
+  },
   accrualDrain: { drained: [], failed: [], skipped: true },
   reproof: { checked: 0, cursor: null, rotatedAt: null, skipped: true },
   orphans: {
@@ -364,7 +377,7 @@ const IDLE_SUMMARIES: { [K in SweepName]: SummaryOf<K> } = {
 
 type ResolvedTick = { now: number; limit: number; options?: CallOptions };
 
-// The `only` filter as a job wrapper: a left-out job resolves to its idle summary unrun.
+// Wraps each job with the `only` filter. A left-out job resolves to its idle summary unrun.
 function gateOf(input: SweepRequest) {
   return <K extends SweepName>(
     name: K,
@@ -377,7 +390,7 @@ function gateOf(input: SweepRequest) {
 
 async function runSweepJobs(
   store: Store,
-  ctx: Ports,
+  ctx: CheckedPorts,
   input: SweepRequest,
   { now, limit, options }: ResolvedTick,
 ): Promise<SweepBatch> {
@@ -400,7 +413,7 @@ async function runSweepJobs(
         ? Promise.resolve({ ok: true, summary: IDLE_SUMMARIES.floatCoverage })
         : isolate(() => sweepFloatCoverage(store, ctx, input.float!, { now })),
     ),
-    // A verify mismatch is recorded on the summary, not thrown; only a corrupt row or storage
+    // A verify mismatch is recorded on the summary, not thrown. Only a corrupt row or storage
     // failure becomes a failed result.
     checkpointVerify: await gate('checkpointVerify', () =>
       isolate(() => reverifyCheckpoint(store, ctx)),
@@ -408,7 +421,7 @@ async function runSweepJobs(
     checkpoint: await gate('checkpoint', () =>
       isolate(() => sealCheckpoint(store, ctx)),
     ),
-    // The optional dispatcher is handled only here; relayOutbox itself always requires one.
+    // The optional dispatcher is handled only here. relayOutbox itself always requires one.
     relay: await gate('relay', () =>
       input.dispatcher === undefined
         ? Promise.resolve({ ok: true, summary: IDLE_SUMMARIES.relay })
@@ -457,7 +470,7 @@ async function runSweepJobs(
 
 function runArchive(
   store: Store,
-  ctx: Ports,
+  ctx: CheckedPorts,
   input: SweepRequest,
   tick: ResolvedTick,
 ): Promise<SweepResult<ArchiveSummary>> {
@@ -476,7 +489,7 @@ function runArchive(
 }
 
 function runReconcile(
-  ctx: Ports,
+  ctx: CheckedPorts,
   input: SweepRequest,
   options?: CallOptions,
 ): Promise<SweepResult<ReconcileSummary>> {
@@ -491,7 +504,7 @@ function runReconcile(
 
 function runOrphans(
   store: Store,
-  ctx: Ports,
+  ctx: CheckedPorts,
   input: SweepRequest,
   tick: { now: number; limit: number },
 ): Promise<SweepResult<OrphanSweepSummary>> {
@@ -506,7 +519,7 @@ function runOrphans(
 
 function runRetention(
   store: Store,
-  ctx: Ports,
+  ctx: CheckedPorts,
   input: SweepRequest,
   tick: { now: number; limit: number },
 ): Promise<SweepResult<RetentionSweepSummary>> {
@@ -534,14 +547,39 @@ async function isolate<TSummary>(
 
 /**
  * Build the worker over an open Ports bag and the economy its inbox job submits through.
+ *
  * `defaults` binds the steady-state feeds, dispatcher, and limit; a sweep request overrides any
  * of them per run. The dispatcher falls back to the bag's own, so an env-selected transport
- * relays without restating. `start` drives the loop through the bag's Scheduler when one is
- * present, else a built-in interval timer.
+ * relays without restating.
+ *
+ * `start` drives the loop through the bag's Scheduler when one is present, else a built-in
+ * interval timer.
  *
  * @example
- * const worker = createWorker(ports, economy, { dispatcher });
- * const stop = worker.start(30_000); // full pass every 30s
+ * const worker = createWorker(ports, economy, {
+ *   // transports and feeds
+ *   dispatcher, // optional: falls back to ports.dispatcher
+ *   float: processorFloatFeed, // optional: external float source for floatCoverage
+ *   feed: settlementReportFeed, // optional: provider reports for reconcile
+ *   windows: [{ from: dayStartMs, to: dayEndMs }], // optional: the windows reconcile compares
+ *   // opt-in jobs
+ *   orphans: { // optional: multi-node orphan-session sweep
+ *     settleOlderThanMs: 3_600_000, // optional: absent, the sweep is report-only
+ *     reservations, // optional: the shared registry recovered sessions release into
+ *   },
+ *   archive: { // optional: mover to cold storage
+ *     sink: coldStore,
+ *     checkpointOlderThanMs: 90 * 86_400_000,
+ *   },
+ *   retention: { // optional: secondary-table retention
+ *     idempotencyOlderThanMs: 30 * 86_400_000, // optional
+ *     sessionsOlderThanMs: 90 * 86_400_000, // optional
+ *   },
+ *   // run shape
+ *   only: ['payouts', 'subscriptions', 'relay'], // optional: narrow every run to these jobs
+ *   limit: 250, // optional: per-job batch cap, default DEFAULT_SWEEP_LIMIT
+ * });
+ * const stop = worker.start(30_000); // sweep every 30s
  * const run = await worker.sweep({ only: ['relay'] }); // targeted manual pass
  * const failed = SWEEP_NAMES.filter((name) => !run.batch[name].ok);
  * stop();
@@ -555,11 +593,14 @@ export function createWorker(
   defaults: WorkerDefaults = {},
 ): Worker {
   const store = ports.store;
+  // At construction, not at the first sweep: a worker built on an out-of-bounds knob must not
+  // exist to be started.
+  const ctx = checkedPorts(ports);
   const resolve = (request: SweepRequest): SweepRequest => ({
-    now: request.now ?? ports.clock.now(),
+    now: request.now ?? ctx.clock.now(),
     limit: request.limit ?? defaults.limit ?? DEFAULT_SWEEP_LIMIT,
     only: request.only ?? defaults.only,
-    dispatcher: request.dispatcher ?? defaults.dispatcher ?? ports.dispatcher,
+    dispatcher: request.dispatcher ?? defaults.dispatcher ?? ctx.dispatcher,
     economy: request.economy ?? economy,
     float: request.float ?? defaults.float,
     feed: request.feed ?? defaults.feed,
@@ -570,17 +611,17 @@ export function createWorker(
     options: request.options,
   });
   let paused = false;
-  const scheduler = ports.scheduler ?? intervalScheduler();
+  const scheduler = ctx.scheduler ?? intervalScheduler();
 
   const sweep = async (request: SweepRequest = {}): Promise<SweepRun> => {
     // A wrapped id generator records the run's txn ids (see SweepRun). `start` below does not need
     // this, so it stays on the bare runSweeps.
     const postings: string[] = [];
-    const recordingPorts: Ports = {
-      ...ports,
+    const recordingPorts: CheckedPorts = {
+      ...ctx,
       ids: {
         next: (prefix) => {
-          const id = ports.ids.next(prefix);
+          const id = ctx.ids.next(prefix);
           if (prefix === 'txn') postings.push(id);
           return id;
         },
@@ -598,7 +639,7 @@ export function createWorker(
         async () => {
           if (paused) return;
           // resolve() reads the clock here, so every tick sweeps at its own moment.
-          await runSweeps(store, ports, resolve(request));
+          await runSweeps(store, ctx, resolve(request));
         },
         request.options,
       ),
@@ -614,7 +655,7 @@ export function createWorker(
   };
 }
 
-// The rest of the /worker facet: the two directly-drivable jobs and the host-implemented feeds.
+// The rest of the /worker facet is the two directly-drivable jobs and the host-implemented feeds.
 export { drainInbox } from '#src/worker/inbox.ts';
 export { relayOutbox } from '#src/worker/relay.ts';
 export type { FloatFeed } from '#src/worker/treasury.ts';

@@ -11,7 +11,7 @@
 
 import type { EconomyEvent, Ids, OutboxMessage } from '#src/ports.ts';
 
-/** The envelope every outbox enqueue starts from; the relay owns every later change to its fields. */
+/** Builds the envelope every outbox enqueue starts from. The relay owns every later change to its fields. */
 export function pendingOutbox(
   ids: Ids,
   event: EconomyEvent,

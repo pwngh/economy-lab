@@ -27,10 +27,11 @@ import type { Ctx, Operation, Outcome, Transaction } from '#src/contract.ts';
 import type { Saga, Unit } from '#src/ports.ts';
 
 /**
- * Starts a payout for a seller: reserves `amount` of earned credits into PAYOUT_RESERVE and opens
- * the saga in RESERVED for a worker to finish in USD. The two lines posted here are both CREDIT and
- * cancel out; the worker posts the USD side later. Only earned credit is payable. Insufficient
- * earned credit returns a `rejected` result; a malformed amount (not CREDIT, or not positive) throws.
+ * Starts a payout for a seller. It reserves `amount` of earned credits into PAYOUT_RESERVE and
+ * opens the saga in RESERVED for a worker to finish in USD. The two lines posted here are both
+ * CREDIT and cancel out. The worker posts the USD side later. Only earned credit is payable.
+ * Insufficient earned credit returns a `rejected` result. A malformed amount (not CREDIT, or not
+ * positive) throws.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/request-payout/
  *   Request payout} for the full payout request lifecycle.
@@ -49,9 +50,9 @@ export async function requestPayout(
       amount,
     });
   }
-  // Minimum gap between a user's payout requests. `lastPayoutAt` is the max `updatedAt` over
-  // their sagas; strict `<`, so a request exactly the interval later passes. Rejection, not
-  // throw, so the caller can surface `retryAt`.
+  // This enforces the minimum gap between a user's payout requests. `lastPayoutAt` is the max
+  // `updatedAt` over their sagas. The comparison is strict `<`, so a request exactly the interval
+  // later passes. It rejects rather than throws — the caller can surface `retryAt`.
   const last = await unit.sagas.lastPayoutAt(operation.userId);
   if (
     last !== null &&
@@ -79,8 +80,8 @@ export async function requestPayout(
     });
   }
 
-  // Stricter than the raw balance: only earned credit past its settlement wait is payable.
-  // Rejection, not throw. See
+  // This check is stricter than the raw balance, because only earned credit past its settlement
+  // wait is payable. It rejects rather than throws. See
   // https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/ for the maturity rule.
   const cleared = await maturedAtLeast(
     unit.ledger,
@@ -115,8 +116,8 @@ export async function requestPayout(
 }
 
 // Posts the reserve and opens the saga anchored to it. The saga id is minted before the posting
-// so the metadata can name the saga it opens; the reserve credit routes by the user id (settle
-// and reverse know only the saga, which knows the user); and everything the worker will trust
+// so the metadata can name the saga it opens. The reserve credit routes by the user id, because
+// settle and reverse know only the saga, which knows the user. Everything the worker will trust
 // from the unhashed saga row — quote included — is sealed into this posting, so every later step
 // re-proves the row against it.
 async function reserveAndOpen(
@@ -156,8 +157,8 @@ async function reserveAndOpen(
 
 // A seller carrying negative pending accrual rows (refund debt the accrual drain has not yet
 // recovered) cannot race a payout past that debt: payable credit is the earned balance less the
-// debt, so the reserve can never take money RECEIVABLE is owed. Checked whatever the accrual
-// flag says — recorded debt binds even after the split is turned off.
+// debt, so the reserve can never take money RECEIVABLE is owed. The check runs whatever the
+// accrual flag says — recorded debt binds even after the split is turned off.
 async function payableEarned(
   unit: Unit,
   userId: string,
@@ -167,10 +168,11 @@ async function payableEarned(
   return net < 0n ? toAmount('CREDIT', available.minor + net) : available;
 }
 
-// Prices the payout once: this quote is the USD the worker submits to the rail and settle posts
-// out of trust; neither re-fetches a rate. A payout rate above par would disburse more USD per
+// Prices the payout once. This quote is the USD the worker submits to the rail and settle posts
+// out of trust. Neither re-fetches a rate. A payout rate above par would disburse more USD per
 // credit than was ever collected for it, and the loss would only surface later as aggregate
-// solvency drift — refuse it by name at the one place the payout is priced.
+// solvency drift. This function therefore refuses it by name at the one place the payout is
+// priced.
 async function priceQuote(
   ctx: Ctx,
   amount: Amount,
@@ -191,7 +193,7 @@ async function priceQuote(
 }
 
 // Opens in RESERVED because the credits were set aside in the same DB transaction. `payoutUsd`
-// is the quote priced above, and `rateId` names the rate that priced it; `dueAt` is the
+// is the quote priced above, and `rateId` names the rate that priced it. `dueAt` is the
 // worker's first submit attempt. See
 // https://economy-lab-docs.pages.dev/economy/concepts/payout-saga/ for the saga states.
 function sagaOf(

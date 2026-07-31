@@ -11,7 +11,7 @@
 
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { credit } from '#src/ledger.ts';
-import { mulDiv, toAmount, SCALE } from '#src/money.ts';
+import { encodeAmount, mulDiv, toAmount, SCALE } from '#src/money.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
 
 import type { Amount } from '#src/money.ts';
@@ -33,8 +33,9 @@ const BPS_TOTAL_BIG = 10_000n;
  * credit and capped at the price. The net divides among `recipients` by `shareBps`, each share
  * rounded down, and the platform revenue credit takes the fee plus the rounding leftover, so
  * the legs always sum to the full price and no minor unit of the sale is lost. Recipient
- * shares must sum to 10000 basis points; any other total throws MALFORMED_OPERATION. An empty
- * recipient list is allowed and sends the whole net to revenue.
+ * shares must sum to 10000 basis points; any other total throws MALFORMED_OPERATION, and so
+ * does a price that is not CREDIT. An empty recipient list is allowed and sends the whole net
+ * to revenue.
  *
  * @example
  * const policy = flatFee();
@@ -50,20 +51,15 @@ export function flatFee(): FeePolicy {
   return (input) => splitLegs(input.price, input.recipients, input.feeBps);
 }
 
-// Splits a sale's price into ledger lines for the fee policy above. See
-// https://economy-lab-docs.pages.dev/economy/ports/pricing/ for how the fee comes off the top, the
-// net divides by share, and the rounding leftover joins revenue so no unit of price is lost.
-//
-// These are the credit lines only. Credits are stored negative, so the lines sum
-// to -price. The spend handler adds the matching debit against the buyer's balance, which zeroes the
-// posting.
+// Credits are stored negative, so these lines sum to -price; the buyer's matching debit is the
+// spend handler's, not this function's.
 function splitLegs(
   price: Amount,
   recipients: ReadonlyArray<Recipient>,
   feeBps: number,
 ): Leg[] {
   assertShareSum(recipients);
-  const net = price.minor - feeForPrice(price.minor, feeBps);
+  const net = price.minor - feeForPrice(price, feeBps);
 
   const legs: Leg[] = [];
   for (const recipient of recipients) {
@@ -75,8 +71,6 @@ function splitLegs(
     );
   }
 
-  // Revenue gets the fee plus the leftover from rounding each share down, so shares and revenue
-  // always sum to the full price; `revenueForSplit` computes exactly that amount.
   legs.push(
     credit(
       SYSTEM.REVENUE,
@@ -92,14 +86,16 @@ function splitLegs(
  * exactly the amount splitLegs credits to REVENUE. spend.ts records this as `Sale.fee` rather
  * than the bare `feeForPrice`, so the recorded fee equals what REVENUE actually kept even on an
  * uneven split, where the residual is non-zero. On an even split the residual is zero, so the
- * result is just the fee and the simple case is unchanged.
+ * result is just the fee.
+ *
+ * A price that is not CREDIT throws MALFORMED_OPERATION, the refusal feeForPrice makes.
  */
 export function revenueForSplit(
   price: Amount,
   recipients: ReadonlyArray<Recipient>,
   feeBps: number,
 ): bigint {
-  const fee = feeForPrice(price.minor, feeBps);
+  const fee = feeForPrice(price, feeBps);
   const net = price.minor - fee;
   let distributed = 0n;
   for (const recipient of recipients) {
@@ -120,14 +116,26 @@ function applyBps(minor: bigint, bps: number): bigint {
  * the price so the fee never exceeds what was paid (the cap only matters below one whole credit). The
  * leftover line in splitLegs absorbs the difference between the exact and rounded fee.
  *
+ * Rounding up to a whole credit is a rule about credits, so a price in any other currency throws
+ * MALFORMED_OPERATION. Every currency here shares one 100-minor-unit scale, so the rounding cannot
+ * read a different whole unit off a dollar: it would round a dollar fee up to a whole dollar, and
+ * the price cap only fires above the price.
+ *
  * This is the single source for the transaction fee, called by every charge that takes one (sale,
- * subscription first month, renewal), so no caller re-derives a floor that would disagree when the
+ * subscription first period, renewal), so no caller re-derives a floor that would disagree when the
  * raw fee is not a whole credit.
  */
-export function feeForPrice(minor: bigint, bps: number): bigint {
-  const units = mulDiv(minor, BigInt(bps), BPS_TOTAL_BIG * SCALE, 'ceil');
+export function feeForPrice(price: Amount, bps: number): bigint {
+  if (price.currency !== 'CREDIT') {
+    throw fault(
+      ERROR_CODES.MALFORMED_OPERATION,
+      'feeForPrice.price must be CREDIT.',
+      { detail: { amount: encodeAmount(price) } },
+    );
+  }
+  const units = mulDiv(price.minor, BigInt(bps), BPS_TOTAL_BIG * SCALE, 'ceil');
   const fee = units * SCALE;
-  return fee > minor ? minor : fee;
+  return fee > price.minor ? price.minor : fee;
 }
 
 // Throws unless the recipient shares sum to 100% (10000 bps). The spend handler already checks

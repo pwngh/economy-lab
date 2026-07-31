@@ -1,0 +1,1127 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "@pwngh/economy-lab reference host",
+    "version": "1",
+    "description": "Generated from the wire contract (FIELDS + REJECTION_SPEC + ROUTES). Amounts are currency-tagged decimal strings; a business \"no\" is a 200 rejected outcome, never an error status."
+  },
+  "paths": {
+    "/healthz": {
+      "get": {
+        "summary": "Liveness; touches no storage.",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "summary": "Readiness via one cheap store-touching read.",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/submit": {
+      "post": {
+        "summary": "Run one operation; a rejection is a 200 with the decline.",
+        "responses": {
+          "200": {
+            "description": "An Outcome envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Outcome"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Op_topUp"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Op_spend"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Op_refund"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Op_clawback"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Op_requestPayout"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Op_subscribe"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Op_cancelSubscription"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Op_grantEntitlement"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Op_revokeEntitlement"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Op_grantPromo"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Op_adjust"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Op_reverse"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Op_reversePayout"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Op_settlePayout"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks/{provider}": {
+      "post": {
+        "summary": "Verified provider callback into the inbox.",
+        "description": "Mounted only when the host configures `webhook`; otherwise 404.",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/instances/{scope}/purchase": {
+      "post": {
+        "summary": "One in-world purchase on the scope’s fast lane.",
+        "description": "Mounted only when the host configures `instances`; otherwise 404.",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/v1/wallet": {
+      "get": {
+        "summary": "The three balances plus payableNow; zeros never 404.",
+        "description": "Mounted unless the host sets `reads: false`; then 404.",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The subject. A user token reads only itself; system and operator tokens name any user."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/v1/entitlements": {
+      "get": {
+        "summary": "Non-revoked grants, expired included, by sku; ?cursor= resumes.",
+        "description": "Mounted unless the host sets `reads: false`; then 404.",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The subject. A user token reads only itself; system and operator tokens name any user."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Page size. A bad or missing value collapses to the default (50); an oversized ask caps at the ceiling (200)."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The previous page's `cursor`, resuming after its last row. Opaque: pass it back unread. Absent starts at the top of the list, and a token from another list answers 400."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/v1/subscriptions": {
+      "get": {
+        "summary": "Every subscription, newest first; ?state= filters, ?cursor= resumes.",
+        "description": "Mounted unless the host sets `reads: false`; then 404.",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The subject. A user token reads only itself; system and operator tokens name any user."
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ACTIVE",
+                "LAPSED",
+                "CANCELED"
+              ]
+            },
+            "description": "Narrows the list to one state; an unknown value answers 400."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Page size. A bad or missing value collapses to the default (50); an oversized ask caps at the ceiling (200)."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The previous page's `cursor`, resuming after its last row. Opaque: pass it back unread. Absent starts at the top of the list, and a token from another list answers 400."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/v1/payouts": {
+      "get": {
+        "summary": "Payout sagas, newest first; ?state= filters, ?cursor= resumes.",
+        "description": "Mounted unless the host sets `reads: false`; then 404.",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The subject. A user token reads only itself; system and operator tokens name any user."
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "REQUESTED",
+                "RESERVED",
+                "SUBMITTED",
+                "SETTLED",
+                "FAILED"
+              ]
+            },
+            "description": "Narrows the list to one state; an unknown value answers 400."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Page size. A bad or missing value collapses to the default (50); an oversized ask caps at the ceiling (200)."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The previous page's `cursor`, resuming after its last row. Opaque: pass it back unread. Absent starts at the top of the list, and a token from another list answers 400."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/v1/rates": {
+      "get": {
+        "summary": "The buy, par, and payout rates in force.",
+        "description": "Mounted unless the host sets `reads: false`; then 404.",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/v1/catalog": {
+      "get": {
+        "summary": "The top-up bundles; skus stay host-owned and dynamic.",
+        "description": "Mounted unless the host sets `reads: false`; then 404.",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/v1/posting/{txnId}": {
+      "get": {
+        "summary": "One committed posting; a user sees it only if touched.",
+        "description": "Mounted unless the host sets `reads: false`; then 404.",
+        "parameters": [
+          {
+            "name": "txnId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Amount": {
+        "type": "string",
+        "pattern": "^(CREDIT|USD):-?\\d+\\.\\d{2}$",
+        "description": "A currency-tagged decimal string."
+      },
+      "Principal": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "userId"
+            ],
+            "properties": {
+              "kind": {
+                "const": "user"
+              },
+              "userId": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "service"
+            ],
+            "properties": {
+              "kind": {
+                "const": "system"
+              },
+              "service": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "operatorId"
+            ],
+            "properties": {
+              "kind": {
+                "const": "operator"
+              },
+              "operatorId": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "RejectionDetail": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "reason",
+              "account",
+              "need",
+              "have"
+            ],
+            "properties": {
+              "reason": {
+                "const": "INSUFFICIENT_FUNDS"
+              },
+              "account": {},
+              "need": {},
+              "have": {}
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "reason",
+              "window",
+              "limitMinor"
+            ],
+            "properties": {
+              "reason": {
+                "const": "RISK_DENIED"
+              },
+              "window": {},
+              "limitMinor": {}
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "reason",
+              "source",
+              "availableAt"
+            ],
+            "properties": {
+              "reason": {
+                "const": "FUNDS_IMMATURE"
+              },
+              "source": {},
+              "availableAt": {}
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "reason",
+              "userId",
+              "sku"
+            ],
+            "properties": {
+              "reason": {
+                "const": "NOT_ENTITLED"
+              },
+              "userId": {},
+              "sku": {}
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "reason",
+              "orderId"
+            ],
+            "properties": {
+              "reason": {
+                "const": "UNKNOWN_ORDER"
+              },
+              "orderId": {}
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "reason",
+              "orderId"
+            ],
+            "properties": {
+              "reason": {
+                "const": "DUPLICATE_ORDER"
+              },
+              "orderId": {}
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "reason",
+              "subscriptionId"
+            ],
+            "properties": {
+              "reason": {
+                "const": "UNKNOWN_SUBSCRIPTION"
+              },
+              "subscriptionId": {}
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "reason",
+              "userId",
+              "sku"
+            ],
+            "properties": {
+              "reason": {
+                "const": "ALREADY_SUBSCRIBED"
+              },
+              "userId": {},
+              "sku": {}
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "reason",
+              "minimum",
+              "amount"
+            ],
+            "properties": {
+              "reason": {
+                "const": "BELOW_MINIMUM"
+              },
+              "minimum": {},
+              "amount": {}
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "reason",
+              "retryAt"
+            ],
+            "properties": {
+              "reason": {
+                "const": "PAYOUT_TOO_SOON"
+              },
+              "retryAt": {}
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "reason",
+              "userId"
+            ],
+            "properties": {
+              "reason": {
+                "const": "PAYEE_UNVERIFIED"
+              },
+              "userId": {}
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "reason",
+              "resumesAt"
+            ],
+            "properties": {
+              "reason": {
+                "const": "ECONOMY_PAUSED"
+              },
+              "resumesAt": {}
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "reason",
+              "sku",
+              "field"
+            ],
+            "properties": {
+              "reason": {
+                "const": "CATALOG_MISMATCH"
+              },
+              "sku": {},
+              "field": {}
+            }
+          }
+        ]
+      },
+      "Outcome": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "status",
+              "transaction"
+            ],
+            "properties": {
+              "status": {
+                "enum": [
+                  "committed",
+                  "duplicate"
+                ]
+              },
+              "transaction": {
+                "type": "object"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "status",
+              "reason",
+              "detail"
+            ],
+            "properties": {
+              "status": {
+                "const": "rejected"
+              },
+              "reason": {
+                "enum": [
+                  "INSUFFICIENT_FUNDS",
+                  "RISK_DENIED",
+                  "FUNDS_IMMATURE",
+                  "NOT_ENTITLED",
+                  "UNKNOWN_ORDER",
+                  "DUPLICATE_ORDER",
+                  "UNKNOWN_SUBSCRIPTION",
+                  "ALREADY_SUBSCRIBED",
+                  "BELOW_MINIMUM",
+                  "PAYOUT_TOO_SOON",
+                  "PAYEE_UNVERIFIED",
+                  "ECONOMY_PAUSED",
+                  "CATALOG_MISMATCH"
+                ]
+              },
+              "detail": {
+                "$ref": "#/components/schemas/RejectionDetail"
+              }
+            }
+          }
+        ]
+      },
+      "Op_topUp": {
+        "type": "object",
+        "required": [
+          "kind",
+          "idempotencyKey",
+          "userId",
+          "amount",
+          "source"
+        ],
+        "properties": {
+          "kind": {
+            "const": "topUp"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^(CREDIT|USD):-?\\d+\\.\\d{2}$",
+            "description": "A currency-tagged decimal string."
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "description": "With an authenticate function configured, the server stamps `actor` from the bearer and refuses a body that carries its own."
+      },
+      "Op_spend": {
+        "type": "object",
+        "required": [
+          "kind",
+          "idempotencyKey",
+          "orderId",
+          "buyerId",
+          "sku",
+          "price",
+          "recipients"
+        ],
+        "properties": {
+          "kind": {
+            "const": "spend"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "buyerId": {
+            "type": "string"
+          },
+          "sku": {
+            "type": "string"
+          },
+          "price": {
+            "type": "string",
+            "pattern": "^(CREDIT|USD):-?\\d+\\.\\d{2}$",
+            "description": "A currency-tagged decimal string."
+          },
+          "recipients": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "sellerId",
+                "shareBps"
+              ],
+              "properties": {
+                "sellerId": {
+                  "type": "string"
+                },
+                "shareBps": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "ageRestricted": {
+            "type": "boolean"
+          },
+          "giftTo": {
+            "type": "string"
+          }
+        },
+        "description": "With an authenticate function configured, the server stamps `actor` from the bearer and refuses a body that carries its own."
+      },
+      "Op_refund": {
+        "type": "object",
+        "required": [
+          "kind",
+          "idempotencyKey",
+          "orderId"
+        ],
+        "properties": {
+          "kind": {
+            "const": "refund"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "description": "With an authenticate function configured, the server stamps `actor` from the bearer and refuses a body that carries its own."
+      },
+      "Op_clawback": {
+        "type": "object",
+        "required": [
+          "kind",
+          "idempotencyKey",
+          "userId",
+          "amount"
+        ],
+        "properties": {
+          "kind": {
+            "const": "clawback"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^(CREDIT|USD):-?\\d+\\.\\d{2}$",
+            "description": "A currency-tagged decimal string."
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "description": "With an authenticate function configured, the server stamps `actor` from the bearer and refuses a body that carries its own."
+      },
+      "Op_requestPayout": {
+        "type": "object",
+        "required": [
+          "kind",
+          "idempotencyKey",
+          "userId",
+          "amount"
+        ],
+        "properties": {
+          "kind": {
+            "const": "requestPayout"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^(CREDIT|USD):-?\\d+\\.\\d{2}$",
+            "description": "A currency-tagged decimal string."
+          }
+        },
+        "description": "With an authenticate function configured, the server stamps `actor` from the bearer and refuses a body that carries its own."
+      },
+      "Op_subscribe": {
+        "type": "object",
+        "required": [
+          "kind",
+          "idempotencyKey",
+          "userId",
+          "sellerId",
+          "sku",
+          "price",
+          "periodMs"
+        ],
+        "properties": {
+          "kind": {
+            "const": "subscribe"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "sellerId": {
+            "type": "string"
+          },
+          "sku": {
+            "type": "string"
+          },
+          "price": {
+            "type": "string",
+            "pattern": "^(CREDIT|USD):-?\\d+\\.\\d{2}$",
+            "description": "A currency-tagged decimal string."
+          },
+          "periodMs": {
+            "type": "integer"
+          }
+        },
+        "description": "With an authenticate function configured, the server stamps `actor` from the bearer and refuses a body that carries its own."
+      },
+      "Op_cancelSubscription": {
+        "type": "object",
+        "required": [
+          "kind",
+          "idempotencyKey",
+          "subscriptionId"
+        ],
+        "properties": {
+          "kind": {
+            "const": "cancelSubscription"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "subscriptionId": {
+            "type": "string"
+          }
+        },
+        "description": "With an authenticate function configured, the server stamps `actor` from the bearer and refuses a body that carries its own."
+      },
+      "Op_grantEntitlement": {
+        "type": "object",
+        "required": [
+          "kind",
+          "idempotencyKey",
+          "userId",
+          "sku"
+        ],
+        "properties": {
+          "kind": {
+            "const": "grantEntitlement"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "sku": {
+            "type": "string"
+          },
+          "attrs": {
+            "type": "object"
+          }
+        },
+        "description": "With an authenticate function configured, the server stamps `actor` from the bearer and refuses a body that carries its own."
+      },
+      "Op_revokeEntitlement": {
+        "type": "object",
+        "required": [
+          "kind",
+          "idempotencyKey",
+          "userId",
+          "sku"
+        ],
+        "properties": {
+          "kind": {
+            "const": "revokeEntitlement"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "sku": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "description": "With an authenticate function configured, the server stamps `actor` from the bearer and refuses a body that carries its own."
+      },
+      "Op_grantPromo": {
+        "type": "object",
+        "required": [
+          "kind",
+          "idempotencyKey",
+          "userId",
+          "amount",
+          "expiresAt"
+        ],
+        "properties": {
+          "kind": {
+            "const": "grantPromo"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^(CREDIT|USD):-?\\d+\\.\\d{2}$",
+            "description": "A currency-tagged decimal string."
+          },
+          "expiresAt": {
+            "type": "integer"
+          }
+        },
+        "description": "With an authenticate function configured, the server stamps `actor` from the bearer and refuses a body that carries its own."
+      },
+      "Op_adjust": {
+        "type": "object",
+        "required": [
+          "kind",
+          "idempotencyKey",
+          "account",
+          "amount",
+          "reason"
+        ],
+        "properties": {
+          "kind": {
+            "const": "adjust"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "account": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^(CREDIT|USD):-?\\d+\\.\\d{2}$",
+            "description": "A currency-tagged decimal string."
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "description": "With an authenticate function configured, the server stamps `actor` from the bearer and refuses a body that carries its own."
+      },
+      "Op_reverse": {
+        "type": "object",
+        "required": [
+          "kind",
+          "idempotencyKey",
+          "txnId",
+          "reason"
+        ],
+        "properties": {
+          "kind": {
+            "const": "reverse"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "txnId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "description": "With an authenticate function configured, the server stamps `actor` from the bearer and refuses a body that carries its own."
+      },
+      "Op_reversePayout": {
+        "type": "object",
+        "required": [
+          "kind",
+          "idempotencyKey",
+          "userId",
+          "sagaId",
+          "reason"
+        ],
+        "properties": {
+          "kind": {
+            "const": "reversePayout"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "sagaId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "description": "With an authenticate function configured, the server stamps `actor` from the bearer and refuses a body that carries its own."
+      },
+      "Op_settlePayout": {
+        "type": "object",
+        "required": [
+          "kind",
+          "idempotencyKey",
+          "sagaId",
+          "providerRef"
+        ],
+        "properties": {
+          "kind": {
+            "const": "settlePayout"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "sagaId": {
+            "type": "string"
+          },
+          "providerRef": {
+            "type": "string"
+          },
+          "providerAmount": {
+            "type": "string",
+            "pattern": "^(CREDIT|USD):-?\\d+\\.\\d{2}$",
+            "description": "A currency-tagged decimal string."
+          }
+        },
+        "description": "With an authenticate function configured, the server stamps `actor` from the bearer and refuses a body that carries its own."
+      }
+    }
+  }
+}

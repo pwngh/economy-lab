@@ -24,17 +24,19 @@ import type { Ctx, Operation, Outcome } from '#src/contract.ts';
 import type { Saga, Unit } from '#src/ports.ts';
 
 /**
- * Undoes an in-flight payout: the manual version of the worker's give-up undo, and the operation a
- * verified payout-failed webhook applies. The move to FAILED (so the worker never pays it) and the
- * undo posting (reserve back to the seller's earned account) commit together: the credits return
+ * Undoes an in-flight payout. This is the manual version of the worker's give-up undo, and the
+ * operation a verified payout-failed webhook applies. The move to FAILED (so the worker never
+ * pays it) and the undo posting (reserve back to the seller's earned account) commit together:
+ * the credits return
  * only if the saga also stops. This is why it does not use the generic `reverse`, which leaves
  * saga state alone, so a reversed-but-still-RESERVED saga would be paid out anyway.
  *
  * RESERVED, or SUBMITTED aged past `config.maxPayoutAgeMs`, moves to FAILED and posts the undo.
  * SETTLED and still-live SUBMITTED both throw `INVALID_TRANSITION`: returning a reserve already
- * disbursed, or one the provider may still settle, risks a double-pay. One exception: an operation
- * carrying `providerReported` (set only by the payout-failed webhook mapper) may reverse a
- * still-live SUBMITTED payout, because the rail itself has said it will not settle it.
+ * disbursed, or one the provider may still settle, risks a double-pay. There is one exception.
+ * An operation carrying `providerReported` may reverse a still-live SUBMITTED payout, because the
+ * rail itself has said it will not settle it. Only the payout-failed webhook mapper sets that
+ * field; the wire contract does not carry it, so a caller cannot waive this gate.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/reference/operations/reverse-payout/
  *   Reverse payout} for manually unwinding an in-flight payout saga.
@@ -90,7 +92,8 @@ export async function reversePayout(
       kind: 'reversePayout',
       sagaId: saga.id,
       reason: operation.reason,
-      // Which undo path posted this: a provider callback rather than an operator's judgment.
+      // This records which undo path posted it: a provider callback rather than an operator's
+      // judgment.
       ...(operation.providerReported === true
         ? { providerReported: true }
         : {}),
@@ -114,8 +117,9 @@ function assertUserMatchesSaga(userId: string, saga: Saga): void {
   }
 }
 
-// A settled payout already disbursed real money; its reserve was consumed into REVENUE, leaving
-// nothing to return. Reversing would credit the seller twice, so throw rather than return "no".
+// A settled payout already disbursed real money. Its reserve was consumed into REVENUE, leaving
+// nothing to return. Reversing would credit the seller twice, so this throws rather than return
+// "no".
 function refuseSettled(saga: Saga): void {
   if (saga.state === 'SETTLED') {
     throw fault(
@@ -126,10 +130,11 @@ function refuseSettled(saga: Saga): void {
   }
 }
 
-// Mirrors the worker's force-fail cutoff: the same `now - updatedAt` vs `maxPayoutAgeMs` check,
-// measured from entering SUBMITTED, so a manual reverse is rejected until then. RESERVED is not
-// gated; it was never handed to the provider. `providerReported` waives the gate — the rail said
-// it will not settle — and the saga-state compare-and-set still guards a late settle callback.
+// Mirrors the worker's force-fail cutoff. It applies the same `now - updatedAt` vs
+// `maxPayoutAgeMs` check, measured from entering SUBMITTED, so a manual reverse is rejected
+// until then. RESERVED is not gated, because it was never handed to the provider.
+// `providerReported` waives the gate — the rail said it will not settle — and the saga-state
+// compare-and-set still guards a late settle callback.
 // See https://economy-lab-docs.pages.dev/economy/reference/operations/reverse-payout/ for why
 // reversing a still-settling payout risks a double-pay and how the timeout cutoff opens the window.
 function refuseLiveSubmitted(

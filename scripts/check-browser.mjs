@@ -9,10 +9,10 @@
  * @license MIT
  */
 
-// Browser-cleanliness gate: the main entry must bundle for the browser with no aliases or
-// stubs, so "the in-memory economy runs in your browser" is a package property. Only specifiers
-// already confined behind runtime guards may stay external; anything else node:-flavored is a
-// leak this gate exists to stop.
+// This gate checks browser cleanliness. The main entry must bundle for the browser with no
+// aliases or stubs, so "the in-memory economy runs in your browser" is a package property.
+// Only specifiers already confined behind runtime guards may stay external. Anything else
+// node:-flavored is a leak this gate exists to stop.
 
 import { build } from 'esbuild';
 import { join } from 'node:path';
@@ -23,12 +23,7 @@ const ROOT = join(import.meta.dirname, '..');
 // store/cache/dispatcher imports). Growing this list is a boundary decision, not a fix.
 const GUARDED_EXTERNALS = [
   'node:crypto', // digest.ts probes it and falls back to Web Crypto
-  'node:fs/promises', // engines read their schema files; engines load only when selected
   'node:url',
-  'pg',
-  'mysql2',
-  'ioredis',
-  '@aws-sdk/client-sqs',
 ];
 
 let result = null;
@@ -55,7 +50,7 @@ try {
 }
 
 if (result !== null) {
-  // A new `node:` import normally fails the build above; this catches one smuggled in through
+  // A new `node:` import normally fails the build above. This catches one smuggled in through
   // an externalized package or a future esbuild behavior change.
   const output = result.outputFiles[0].text;
   const found = new Set(

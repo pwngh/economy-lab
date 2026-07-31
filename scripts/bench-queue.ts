@@ -9,12 +9,12 @@
  * @license MIT
  */
 
-// Sequential bench session runner: one unattended command that runs an ordered list of bench
-// invocations strictly one at a time — the only honest cadence on a machine with a single fsync
-// device — with a cool-down between rounds, writing every round's JSON into one stamped
-// bench-results/ directory. It baselines the per-backend rig canary on the first round and, when a
-// later round's honesty checks trip, prints whether the rig moved under the run (rerun) or the code
-// regressed (investigate).
+// This script runs a bench session sequentially. One unattended command runs an ordered list
+// of bench invocations strictly one at a time, with a cool-down between rounds. Strictly one
+// at a time is the only honest cadence on a machine with a single fsync device. Every round's
+// JSON lands in one stamped bench-results/ directory. The first round baselines the
+// per-backend rig canary. When a later round's honesty checks trip, the summary prints whether
+// the rig moved under the run (rerun) or the code regressed (investigate).
 //
 //   npm run bench:queue                                  # the default session (throughput, then contention)
 //   BENCH_QUEUE=session.json npm run bench:queue         # a custom ordered manifest
@@ -28,12 +28,12 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { readInt } from '#src/env.ts';
-import { canaryVerdict } from '#scripts/support/rig.ts';
+import { canaryVerdict } from '#test/support/rig.ts';
 
-import type { CanaryResult, ContainerHealth } from '#scripts/support/rig.ts';
+import type { CanaryResult, ContainerHealth } from '#test/support/rig.ts';
 
-// bench-queue's own env knobs. Entry scripts execute on import, so the env-surface test lists these
-// by hand rather than importing this module; keep the two lists in step.
+// bench-queue's own env knobs. Entry scripts execute on import, so the env-surface test lists
+// these by hand rather than importing this module. Keep the two lists in step.
 export const BENCH_QUEUE_KEYS = [
   'BENCH_QUEUE',
   'BENCH_QUEUE_COOLDOWN_MS',
@@ -58,7 +58,7 @@ const DEFAULT_QUEUE: Round[] = [
   },
 ];
 
-// One JSON round result, as much of the bench payload as the summary reads.
+// One JSON round result. It carries as much of the bench payload as the summary reads.
 type RoundJson = {
   provable?: boolean;
   crossEngineDeterministic?: boolean | null;
@@ -83,9 +83,10 @@ type RoundRun = {
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
-// A round is one child running scripts/<script> on this same node binary, its output inherited so
-// an attended tail still sees the tables. The overrides win over the forwarded environment, so
-// BENCH_JSON_PATH lands the JSON where the session expects it regardless of any .env value.
+// A round is one child running scripts/<script> on this same node binary. The child inherits
+// stdio, so an attended tail still sees the tables. The overrides win over the forwarded
+// environment, so BENCH_JSON_PATH lands the JSON where the session expects it regardless of
+// any .env value.
 function runRound(round: Round, jsonPath: string): Promise<number> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [`scripts/${round.script}`], {
@@ -136,8 +137,8 @@ async function readRoundJson(path: string): Promise<RoundJson | null> {
   }
 }
 
-// A round's own verdict on itself: a non-zero exit, an unprovable ledger, or a cross-engine
-// disagreement all mean a printed number is not to be trusted as-is.
+// This is the round's own verdict on itself. A non-zero exit, an unprovable ledger, or a
+// cross-engine disagreement all mean a printed number is not to be trusted as-is.
 function honestyTripped(r: RoundRun): boolean {
   return (
     r.exitCode !== 0 ||
@@ -160,7 +161,7 @@ const cooldownMs = readInt(process.env.BENCH_QUEUE_COOLDOWN_MS, 15000, {
 });
 const queue = await loadQueue(process.env.BENCH_QUEUE);
 
-// Node forbids ':' in path components on some hosts; keep the stamp filesystem-clean.
+// Node forbids ':' in path components on some hosts, so keep the stamp filesystem-clean.
 const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 const relDir = `bench-results/${stamp}`;
 const absDir = join(REPO_ROOT, relDir);
@@ -204,7 +205,7 @@ for (let i = 0; i < queue.length; i++) {
   }
 }
 
-// Baseline the canary and container per backend on the first round: the compare is against this
+// The first round baselines the canary and container per backend. The compare is against this
 // session only, so cross-day noise never enters it.
 const baseCanary = new Map<string, CanaryResult | null>();
 const baseContainer = new Map<string, ContainerHealth | null>();
@@ -276,6 +277,6 @@ await writeFile(
 console.warn(`\nwrote ${queue.length} round(s) + session.json to ${relDir}/`);
 
 const failed = runs.some((r) => r.exitCode !== 0);
-// Exit explicitly: any lingering child handles would otherwise keep the loop alive.
+// Exit explicitly, because any lingering child handles would otherwise keep the loop alive.
 // eslint-disable-next-line n/no-process-exit
 process.exit(failed ? 1 : 0);

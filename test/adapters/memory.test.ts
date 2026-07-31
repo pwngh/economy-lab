@@ -10,7 +10,14 @@
  * @license MIT
  */
 
+import '#test/support/dist-guard.ts';
+
 import { runStoreConformance } from '#test/conformance/store.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 
-runStoreConformance('memory', () => memoryStore());
+// The reference adapter is a single writer, so it needs neither batched locking nor a fused
+// multi-posting append. Declaring both absences holds that: teaching memory either one without
+// teaching the suite to exercise it fails here.
+runStoreConformance('memory', () => memoryStore(), {
+  capabilities: { lockMany: false, appendAll: false },
+});
