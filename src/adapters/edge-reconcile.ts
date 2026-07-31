@@ -56,10 +56,10 @@ export function settledPayoutLedgerRecords(
 }
 
 /**
- * A settlement the feed filtered out rather than matched. Drops are legitimate —
- * sku-day aggregates have no per-transaction match key, and a foreign-currency
- * settlement cannot match a CREDIT/USD ledger — but a reconciliation feed must
- * never discard silently, so every drop is reported through `onDrop` with the
+ * A settlement the feed filtered out rather than matched. Drops are legitimate.
+ * A sku-day aggregate has no per-transaction match key, and a foreign-currency
+ * settlement cannot match a CREDIT/USD ledger. A reconciliation feed must never
+ * discard silently, so the feed reports every drop through `onDrop` with the
  * reason and enough identity to chase it in the provider's console.
  */
 export type ReconcileDrop = {

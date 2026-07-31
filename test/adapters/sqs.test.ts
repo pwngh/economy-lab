@@ -13,10 +13,13 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { sqsDispatcher } from '#src/adapters/sqs.ts';
+import '#test/support/dist-guard.ts';
+
+import { sqs, sqsDispatcher } from '@pwngh/economy-sqs';
 import { runDispatcherConformance } from '#test/conformance/dispatcher.ts';
 
-import type { SqsClient, SqsCommand } from '#src/adapters/sqs.ts';
+import type { SqsClient, SqsCommand } from '@pwngh/economy-sqs';
+import type { EconomyError } from '#src/errors.ts';
 import type { EconomyEvent } from '#src/ports.ts';
 import type { DispatcherHarness } from '#test/conformance/dispatcher.ts';
 
@@ -101,3 +104,36 @@ function sqsHarness(): DispatcherHarness {
 }
 
 runDispatcherConformance('sqs', sqsHarness);
+
+// The client-opening form is the default path: one import, one call, no `new SQSClient(...)` at
+// the call site. It reaches a queue that does not exist, so the proof is that the AWS SDK loaded,
+// built a real command, and the failure came back as the adapter's own transport fault.
+describe('sqs(options): the client is opened inside', () => {
+  test('opens the SDK client and surfaces a send failure as PROVIDER.FAILURE', async () => {
+    const dispatch = await sqs({
+      queueUrl: 'https://sqs.us-east-1.amazonaws.com/000000000000/economy-none',
+      region: 'us-east-1',
+    });
+    await assert.rejects(dispatch(sampleEvent()), (error: unknown) => {
+      assert.equal((error as EconomyError).code, 'PROVIDER.FAILURE');
+      return true;
+    });
+    await dispatch.close();
+  });
+
+  test('closes the client it opened, and never one it was handed', async () => {
+    const opened = await sqs({
+      queueUrl: 'https://sqs.us-east-1.amazonaws.com/000000000000/economy-none',
+      region: 'us-east-1',
+    });
+    // Ownership follows creation: the URL form opened the client, so it releases it.
+    assert.equal(typeof opened.close, 'function');
+    await opened.close();
+
+    const handed = sqsDispatcher({
+      queueUrl: 'https://sqs.us-east-1.amazonaws.com/000000000000/economy-none',
+      client: { send: async () => ({}) },
+    });
+    assert.equal(handed.close, undefined);
+  });
+});

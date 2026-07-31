@@ -17,6 +17,10 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+import '#test/support/dist-guard.ts';
 
 // @ts-expect-error -- deleted in 0.4.0 (renamed Ports)
 import type { Capabilities as _T1 } from '#src/index.ts';
@@ -47,10 +51,11 @@ import type { InboxEntry as _T13 } from '#src/ports.ts';
 // @ts-expect-error -- deleted in 0.4.0 (renamed SessionPorts)
 import type { SessionDeps as _T14 } from '#src/netting.ts';
 // @ts-expect-error -- deleted in 0.4.0 (renamed SupervisorPorts)
-import type { SupervisorDeps as _T15 } from '#src/ops/index.ts';
+import type { SupervisorDeps as _T15 } from '#src/supervisor/index.ts';
 // @ts-expect-error -- deleted in 0.4.0 (renamed SqsDispatcherOptions)
-import type { SqsDispatcherConfig as _T16 } from '#src/adapters/sqs.ts';
+import type { SqsDispatcherConfig as _T16 } from '@pwngh/economy-sqs';
 
+import { DRIVERS } from '#test/support/package-suites.ts';
 import { createEconomy } from '#src/index.ts';
 import type { Ports } from '#src/index.ts';
 
@@ -80,23 +85,34 @@ const REMOVED_VALUES = [
   'loadPorts',
 ] as const;
 
+// None of the drivers a backend package owns may reappear in the lab's own manifest. The list
+// is the fan-out's, which holds it live against what the packages actually declare.
+
+// Every engine and adapter factory that left the lab in the backend split.
+const MOVED_VALUES = [
+  'postgresStore',
+  'mysqlStore',
+  'createMysqlPool',
+  'createMariadbPool',
+  'applyMysqlSchema',
+  'redisCache',
+  'redisRateLimiter',
+  'sqsDispatcher',
+] as const;
+
 const ENTRIES: Record<string, () => Promise<object>> = {
   '.': () => import('#src/index.ts'),
   './ports': () => import('#src/ports.ts'),
   './adapters': () => import('#src/adapters/index.ts'),
-  './adapters/redis': () => import('#src/adapters/redis.ts'),
-  './adapters/sqs': () => import('#src/adapters/sqs.ts'),
-  './engines/postgres': () => import('#src/engines/postgres.ts'),
-  './engines/mysql': () => import('#src/engines/mysql.ts'),
+  '@pwngh/economy-redis': () => import('@pwngh/economy-redis'),
+  '@pwngh/economy-sqs': () => import('@pwngh/economy-sqs'),
+  '@pwngh/economy-postgres': () => import('@pwngh/economy-postgres'),
+  '@pwngh/economy-mysql': () => import('@pwngh/economy-mysql'),
   './worker': () => import('#src/worker/index.ts'),
   './server': () => import('#src/server.ts'),
   './netting': () => import('#src/netting.ts'),
-  './ops': () => import('#src/ops/index.ts'),
+  './supervisor': () => import('#src/supervisor/index.ts'),
   './store-kit': () => import('#src/store-kit.ts'),
-  // Not a package entry: the browser-sandbox stand-in the apps' vite configs alias over the DB,
-  // cache, and queue modules. A removed name lingering here would resurface in the sandbox bundle.
-  'apps/support/engine-browser': () =>
-    import('../apps/support/engine-browser/unavailable.ts'),
 };
 
 describe('no compatibility shims exist', () => {
@@ -113,6 +129,97 @@ describe('no compatibility shims exist', () => {
     });
   }
 
+  // `./ops` became `./supervisor` in 0.8.0, and two of its names moved with it. The migration a
+  // consumer is told to make is one import path plus those two names, so the promise is that
+  // every other name answers unchanged on the other side of it. The roster is the shipped 0.7.0
+  // tarball's, resolved from its .d.ts files; it is written out rather than derived, because a
+  // roster generated from this tree would agree with this tree by construction and could never
+  // catch a symbol dropped in the move.
+  const SHIPPED_ON_OPS_AT_0_7_0 = [
+    'AuditChainReport',
+    'AuditPhase',
+    'AuditRecord',
+    'AuditSink',
+    'DeadlockStormFinding',
+    'EngineStallFinding',
+    'Finding',
+    'InboxDeadLetterFinding',
+    'IntegrityMismatchFinding',
+    'OpsRuntime',
+    'OutboxBacklogFinding',
+    'RetryExhaustionFinding',
+    'SagaSource',
+    'Signal',
+    'SignalFeed',
+    'SignatureName',
+    'SilenceFinding',
+    'SlowSealFinding',
+    'StuckSagaFinding',
+    'Supervisor',
+    'SupervisorConfig',
+    'SupervisorPorts',
+    'TreasuryBreachFinding',
+    'VelocityAnomalyFinding',
+    'WebhookReplayStormFinding',
+    'createOpsRuntime',
+    'createSupervisor',
+    'createSupervisorFrom',
+    'defaultSupervisorConfig',
+    'detectDeadlockStorm',
+    'detectEngineStall',
+    'detectInboxDeadLetters',
+    'detectIntegrityMismatches',
+    'detectOutboxBacklog',
+    'detectRetryExhaustion',
+    'detectSilences',
+    'detectSlowSeal',
+    'detectStuckSagas',
+    'detectTreasuryBreaches',
+    'detectVelocityAnomaly',
+    'detectWebhookReplayStorm',
+    'hashChainedAuditSink',
+    'jsonlAuditSink',
+    'verifyAuditChain',
+  ] as const;
+
+  /**
+   * The two names renamed in the same major, 0.7.0's spelling to 0.8.0's.
+   *
+   * Held apart from the roster above rather than edited into it: the roster records what the
+   * registry answers and must stay the registry's, so a rename is applied to it here and never
+   * written into it. Six siblings already said supervisor, which is what made these two worth
+   * moving while a major was open.
+   */
+  const RENAMED_ON_THE_MOVE = new Map([
+    ['OpsRuntime', 'SupervisorRuntime'],
+    ['createOpsRuntime', 'createSupervisorRuntime'],
+  ]);
+
+  test('./supervisor answers every name ./ops shipped, and no other', () => {
+    const surface = JSON.parse(
+      readFileSync(
+        fileURLToPath(new URL('./fixtures/lab-surface.json', import.meta.url)),
+        'utf8',
+      ),
+    ) as Record<string, Record<string, string>>;
+    // A rename recorded for a name the release never shipped renames nothing, and would let the
+    // roster drift out from under the map that is applied to it.
+    for (const old of RENAMED_ON_THE_MOVE.keys()) {
+      assert.ok(
+        (SHIPPED_ON_OPS_AT_0_7_0 as readonly string[]).includes(old),
+        `${old} is recorded as renamed and ./ops never shipped it`,
+      );
+    }
+    assert.deepEqual(
+      Object.keys(surface['./supervisor'] ?? {}).sort(),
+      SHIPPED_ON_OPS_AT_0_7_0.map(
+        (name) => RENAMED_ON_THE_MOVE.get(name) ?? name,
+      ).sort(),
+    );
+    assert.equal(SHIPPED_ON_OPS_AT_0_7_0.length, 44);
+    assert.equal(RENAMED_ON_THE_MOVE.size, 2);
+  });
+
   test('the worker handle carries no legacy members', async () => {
     const { createWorker } = await import('#src/worker/index.ts');
     const { memoryPorts, createEconomy } = await import('#src/index.ts');
@@ -124,24 +231,41 @@ describe('no compatibility shims exist', () => {
     assert.equal(typeof (worker as { paused?: unknown }).paused, 'undefined');
   });
 
-  test('the browser stub exports no name the aliased modules lack', async () => {
-    const stub = await import('../apps/support/engine-browser/unavailable.ts');
-    const real = {
-      ...(await import('#src/engines/postgres.ts')),
-      ...(await import('#src/engines/mysql.ts')),
-      ...(await import('#src/adapters/redis.ts')),
-      ...(await import('#src/adapters/sqs.ts')),
+  // The browser stub this used to guard is gone, because the reason for it is: the lab's main
+  // entry reaches no driver at all now. That is what is guarded instead. A re-added driver would
+  // put the stub, its two vite alias blocks, and four check-browser externals back.
+  test('the lab declares no database, cache, or queue driver', async () => {
+    const manifest = JSON.parse(
+      readFileSync(
+        fileURLToPath(new URL('../package.json', import.meta.url)),
+        'utf8',
+      ),
+    ) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+      peerDependencies?: Record<string, string>;
     };
-    // These stand in for the bare driver packages (ioredis, @aws-sdk/client-sqs), not our modules.
-    const driverNames = ['default', 'SQSClient', 'SendMessageCommand'];
-    for (const name of Object.keys(stub)) {
-      if (driverNames.includes(name)) {
-        continue;
-      }
+    const declared = new Set([
+      ...Object.keys(manifest.dependencies ?? {}),
+      ...Object.keys(manifest.devDependencies ?? {}),
+      ...Object.keys(manifest.peerDependencies ?? {}),
+    ]);
+    for (const driver of DRIVERS) {
       assert.equal(
-        name in real,
-        true,
-        `apps/support/engine-browser stub exports stale name "${name}"`,
+        declared.has(driver),
+        false,
+        `the lab still declares "${driver}"; it belongs to a backend package now`,
+      );
+    }
+  });
+
+  test('no lab export names a moved backend', async () => {
+    const namespace = await import('#src/index.ts');
+    for (const name of MOVED_VALUES) {
+      assert.equal(
+        name in namespace,
+        false,
+        `the lab still exports "${name}", which moved to its own package`,
       );
     }
   });

@@ -27,8 +27,9 @@ export function sagaByProviderRef(store: Store): SagaLookup {
 }
 
 // Tilia documents no webhook event id, so the dedupe key is the (provider, ref, transition)
-// triple: any redelivery of the same status transition lands on the same inbox key, however the
-// rail re-serializes the callback. Null when the event names no payout, which the host skips.
+// triple. Any redelivery of the same status transition lands on the same inbox key, however the
+// rail re-serializes the callback. Returns null when the event names no payout, and the host
+// skips such events.
 export function payoutEventIdOf(event: CanonicalPayoutEvent): string | null {
   if (event.ref === undefined) {
     return null;

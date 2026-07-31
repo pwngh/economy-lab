@@ -15,7 +15,7 @@
 // resolution, so the repo builds without the package and only a process that selects the trial
 // driver loads it.
 
-import type { PgPool } from '#src/engines/postgres.ts';
+import type { PgPool } from '@pwngh/economy-postgres';
 
 // Only the slice of postgres.js the shim calls. `unsafe` runs parameterized text ($n
 // placeholders) and, without parameters, whole multi-statement scripts; `reserve` checks out one

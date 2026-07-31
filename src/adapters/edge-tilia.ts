@@ -67,7 +67,7 @@ export function edgeTiliaFloat(outbound: EdgeOutbound): FloatFeed {
   return {
     balance: async () => {
       const balance = await outbound.balance();
-      // The float sweep compares this against USD trust maths; a balance in any other
+      // The float sweep compares this against USD trust maths. A balance in any other
       // currency must fail here, not be silently relabeled as dollars.
       if (balance.currency !== 'USD') {
         throw fault(

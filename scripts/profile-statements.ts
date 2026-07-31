@@ -9,18 +9,18 @@
  * @license MIT
  */
 
-// Per-statement wall-time profiler for the hot pipeline: wraps each provisioned pool at the
-// engines' driver seam (PostgresStoreOptions.pool / mysqlStore's MysqlPool), buckets time by
-// statement prefix, and prints solo-vs-batched per-op cost tables. One tap covers every driver,
-// incumbent or trial.
+// This profiler measures per-statement wall time on the hot pipeline. It wraps each
+// provisioned pool at the engines' driver seam (PostgresStoreOptions.pool / mysqlStore's
+// MysqlPool), buckets time by statement prefix, and prints solo-vs-batched per-op cost tables.
+// One tap covers every driver, incumbent or trial.
 //
 //   node scripts/profile-statements.ts                                # any reachable backend
 //   BENCH_BACKENDS=postgres node scripts/profile-statements.ts
-//   sh scripts/docker.sh run --rm bench scripts/profile-statements.ts # production-parity rig
+//   sh rigs/docker.sh run --rm bench scripts/profile-statements.ts # production-parity rig
 //
-// The usual BENCH_* knobs apply. Rig honesty: an in-VM database answers round trips far faster
-// than a production network, so round-trip savings measured here understate production gains;
-// per-statement server-side costs are rig-independent.
+// The usual BENCH_* knobs apply. The rig-honesty caveat is that an in-VM database answers
+// round trips far faster than a production network, so round-trip savings measured here
+// understate production gains. Per-statement server-side costs are rig-independent.
 
 import { createEconomy } from '#src/economy.ts';
 import { loadConfig } from '#src/config.ts';
@@ -37,12 +37,16 @@ import {
   testLogger,
   testSecrets,
 } from '#test/support/capabilities.ts';
-import { resolveConfig, tryProvision } from '#scripts/support/harness.ts';
+import {
+  missingRequired,
+  resolveConfig,
+  tryProvision,
+} from '#test/support/harness.ts';
 
-import type { BackendName } from '#scripts/support/harness.ts';
+import type { BackendName } from '#test/support/harness.ts';
 import type { Economy } from '#src/contract.ts';
-import type { MysqlPool } from '#src/engines/mysql.ts';
-import type { PgPool } from '#src/engines/postgres.ts';
+import type { MysqlPool } from '@pwngh/economy-mysql';
+import type { PgPool } from '@pwngh/economy-postgres';
 import type { Ports, Store } from '#src/ports.ts';
 
 const cfg = resolveConfig(process.env);
@@ -94,8 +98,8 @@ function tappedMysqlPool(pool: MysqlPool): MysqlPool {
     query: (sql, params) => observed(sql, () => pool.query(sql, params)),
     getConnection: async () => {
       const conn = await pool.getConnection();
-      // `connection` is the engine's per-connection identity key (one-time session setup);
-      // pass the borrowed wrapper's own through so the tap never changes that identity.
+      // `connection` is the engine's per-connection identity key (one-time session setup).
+      // Pass the borrowed wrapper's own through so the tap never changes that identity.
       const core = (conn as { connection?: object }).connection;
       const borrowed = {
         query: (sql: string, params?: ReadonlyArray<unknown>) =>
@@ -146,20 +150,20 @@ function report(label: string, bucket: Bucket, ops: number): void {
   }
 }
 
-async function profile(backend: BackendName): Promise<void> {
+async function profile(backend: BackendName): Promise<boolean> {
   const provisioned = await tryProvision(backend, cfg, {
     pg: tappedPgPool,
     mysql: tappedMysqlPool,
   });
   if (provisioned === null) {
     process.stdout.write(`${backend}: unavailable\n`);
-    return;
+    return false;
   }
   try {
     process.stdout.write(`${backend}  durability: ${provisioned.durability}\n`);
     const economy = economyOf(provisioned.store);
     let n = 0;
-    // Fresh users measure the first-use path (probes, plants); repeat users measure steady
+    // Fresh users measure the first-use path (probes, plants). Repeat users measure steady
     // state, where the known-accounts cache has emptied the first-use statements.
     const repeatPool = Array.from(
       { length: BATCH_SIZE },
@@ -215,10 +219,21 @@ async function profile(backend: BackendName): Promise<void> {
   } finally {
     await provisioned.teardown();
   }
+  return true;
 }
 
+// The statement tap needs a wire, so in-memory is structurally out of scope here — and a
+// BENCH_REQUIRE naming it therefore fails, honestly: this profiler cannot cover it.
+const completed: string[] = [];
 for (const backend of cfg.backends) {
   if (backend !== 'in-memory') {
-    await profile(backend);
+    if (await profile(backend)) completed.push(backend);
   }
+}
+const missing = missingRequired(cfg, completed);
+if (missing.length > 0) {
+  process.stdout.write(
+    `FAIL: required backend(s) did not complete: ${missing.join(', ')} (BENCH_REQUIRE=${cfg.required.join(',')})\n`,
+  );
+  process.exitCode = 1;
 }

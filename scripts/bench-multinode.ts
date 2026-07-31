@@ -9,31 +9,32 @@
  * @license MIT
  */
 
-// The multi-node netting shape bench: N separate Node processes over one shared database, each
-// wired through openClusterNode; the parent reports the aggregate accept rate per node count.
+// This bench measures the multi-node netting shape. N separate Node processes run over one
+// shared database, each wired through openClusterNode. The parent reports the aggregate accept
+// rate per node count.
 //
-//   sh scripts/docker.sh run --rm -e BENCH_BACKENDS=postgres,mysql bench scripts/bench-multinode.ts
+//   sh rigs/docker.sh run --rm -e BENCH_BACKENDS=postgres,mysql bench scripts/bench-multinode.ts
 //
-// One machine, one fsync device: past the point it saturates the aggregate goes flat where real
-// hardware would keep scaling, so the number is a shape, not a ceiling.
+// One machine has one fsync device. Past the point it saturates, the aggregate goes flat where
+// real hardware would keep scaling. The number is a shape, not a ceiling.
 
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { postgresStore } from '#src/engines/postgres.ts';
+import { postgresStore } from '@pwngh/economy-postgres';
 import {
   mysqlStore,
   createMysqlPool,
   applyMysqlSchema,
-} from '#src/engines/mysql.ts';
-import { createMariadbPool } from '#src/engines/mysql-mariadb.ts';
+} from '@pwngh/economy-mysql';
+import { createMariadbPool } from '@pwngh/economy-mysql/mariadb';
 import { sha256Digest } from '#src/digest.ts';
 import { randomIds, systemClock } from '#src/runtime.ts';
 import { openClusterNode } from '#src/netting.ts';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { toAmount } from '#src/money.ts';
 import { earned, spendable, SYSTEM } from '#src/accounts.ts';
-import { resolveConfig } from '#scripts/support/harness.ts';
+import { resolveConfig } from '#test/support/harness.ts';
 import { freshName, withDatabase } from '#test/support/adapters.ts';
 
 import type { Leg, Store } from '#src/ports.ts';
@@ -58,7 +59,8 @@ async function openChildStore(): Promise<Store> {
   const digest = sha256Digest();
   const clock = systemClock();
   if (process.env.MULTI_BACKEND === 'postgres') {
-    // Attach to the parent-applied schema: search_path via URL options, no re-apply.
+    // The child attaches to the parent-applied schema. It sets search_path via URL options
+    // and never re-applies the schema.
     const url = new URL(cfg.urls.postgres);
     url.searchParams.set(
       'options',
@@ -73,7 +75,16 @@ async function openChildStore(): Promise<Store> {
     cfg.mysqlDriver === 'mariadb'
       ? await createMariadbPool(childUrl)
       : await createMysqlPool(childUrl);
-  return mysqlStore({ pool, digest, clock, schema: 'assert' });
+  // The pool was opened here, so it is ended here. mysqlStore leaves a pool it was handed alone,
+  // and a child that never ends its pool never exits.
+  const store = mysqlStore({ pool, digest, clock, schema: 'assert' });
+  return {
+    ...store,
+    close: async () => {
+      await store.close();
+      await pool.end();
+    },
+  };
 }
 
 function purchase(buyer: string, seller: string, minor: bigint): Leg[] {
@@ -105,8 +116,8 @@ async function runChild(): Promise<void> {
         }),
       );
     }
-    // This node's sessions are the scopes the shared assignment hands it — the router's
-    // contract, not hand-disjoint naming.
+    // This node's sessions are the scopes the shared assignment hands it. The router's
+    // contract picks them, not hand-disjoint naming.
     const scopes: string[] = [];
     for (let k = 0; scopes.length < SESSIONS_PER_NODE; k += 1) {
       if (k >= 10_000) {
@@ -119,8 +130,9 @@ async function runChild(): Promise<void> {
     }
     const sessions = scopes.map((scope) => node.openSession(scope));
 
-    // Signal ready and wait for the shared start signal, so the measured window is record and settle
-    // only — child startup contends on the money-install catalog and must not pollute the number.
+    // Signal ready and wait for the shared start signal, so the measured window is record and
+    // settle only. Child startup contends on the money-install catalog and must not pollute
+    // the number.
     process.send!({ ready: true });
     await new Promise<void>((resolve) => {
       process.once('message', () => resolve());
@@ -166,8 +178,8 @@ async function provision(backend: string): Promise<{
   const clock = systemClock();
   if (backend === 'postgres') {
     const name = freshName('el_multi');
-    // Opening with schemaName applies the schema, which postgresStore drops on close; this store
-    // stays open until teardown to keep it alive for the children.
+    // Opening with schemaName applies the schema, and postgresStore drops it on close. This
+    // store stays open until teardown to keep the schema alive for the children.
     const store = await postgresStore({
       url: cfg.urls.postgres,
       schemaName: name,
@@ -213,8 +225,8 @@ function spawnNode(input: {
       MULTI_ROLE: 'node',
       MULTI_BACKEND: input.backend,
       MULTI_SCHEMA: input.schema,
-      // Unique across the whole run: rounds share one database, so a reused node id would
-      // collide on its funding txn ids.
+      // The node id is unique across the whole run. Rounds share one database, so a reused
+      // node id would collide on its funding txn ids.
       MULTI_NODE_ID: input.nodeId,
       MULTI_NODES: input.nodeIds.join(','),
       MULTI_ROUND: input.round,

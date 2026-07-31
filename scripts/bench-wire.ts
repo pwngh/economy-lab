@@ -9,10 +9,10 @@
  * @license MIT
  */
 
-// Wire-level pipelining instrument: what firing a connection's statements without awaiting each
-// response reclaims, per statement and per hot-shape transaction. The incumbents can't pipeline
-// (pg and mysql2 hold one command in flight); the trial drivers can. Each engine section reports
-// the same three modes:
+// This instrument measures wire-level pipelining. It shows what firing a connection's
+// statements without awaiting each response reclaims, per statement and per hot-shape
+// transaction. The incumbents can't pipeline, because pg and mysql2 hold one command in
+// flight. The trial drivers can. Each engine section reports the same three modes:
 //
 //   serial     one await per statement — the incumbents' wire discipline, on the trial driver
 //   pipelined  the whole group fired before any response is read, one connection
@@ -23,12 +23,16 @@
 // the number isolates wire cost, not fsync.
 //
 //   npm i --no-save postgres                               # the postgres.js trial driver (mariadb ships as a devDependency)
-//   sh scripts/docker.sh run --rm bench scripts/bench-wire.ts
+//   sh rigs/docker.sh run --rm bench scripts/bench-wire.ts
 //   BENCH_BACKENDS=postgres node scripts/bench-wire.ts
 
-import { openPgPool } from '#src/engines/pg-driver.ts';
-import { createMysqlPool } from '#src/engines/mysql.ts';
-import { resolveConfig, resolveUrls } from '#scripts/support/harness.ts';
+import { openPgPool } from '@pwngh/economy-postgres/driver';
+import { createMysqlPool } from '@pwngh/economy-mysql';
+import {
+  missingRequired,
+  resolveConfig,
+  resolveUrls,
+} from '#test/support/harness.ts';
 
 const cfg = resolveConfig(process.env);
 const urls = resolveUrls(process.env);
@@ -50,8 +54,9 @@ function report(label: string, totalMs: number, n: number, unit: string): void {
   );
 }
 
-// Serial: the awaited loop every current engine statement takes. Pipelined: the same statements
-// all in flight before the first response is read — on a single connection, so ordering holds.
+// Serial mode runs the awaited loop every current engine statement takes. Pipelined mode puts
+// the same statements all in flight before the first response is read. Both use a single
+// connection, so ordering holds.
 async function floor(conn: OneShot, pipelined: boolean): Promise<number> {
   const t0 = performance.now();
   if (pipelined) {
@@ -68,7 +73,7 @@ async function floor(conn: OneShot, pipelined: boolean): Promise<number> {
   return ms(t0);
 }
 
-// The five-statement hot shape. Pipelined mode sends all five before reading any response; the
+// The five-statement hot shape. Pipelined mode sends all five before reading any response. The
 // single connection serializes them server-side, so begin/commit still bracket the group.
 async function hotShape(
   conn: OneShot,
@@ -258,29 +263,46 @@ process.stdout.write(
   `bench-wire: ${FLOOR_STATEMENTS} floor statements, ${TXNS} hot-shape txns (temp table — wire cost, no durable write)\n` +
     `  rig honesty: in-VM RTT ~0.05ms; every reclaimed round trip is worth ~10x more on a production network\n`,
 );
+// An engine completes when its reference driver measured; an absent trial driver is the
+// documented reference-only degradation, not a miss. The conns are opened inside the guard, so
+// an unreachable database is a SKIP for that engine rather than an unhandled death.
+const completed: string[] = [];
 for (const backend of cfg.backends) {
   if (backend === 'postgres') {
-    const trial = await postgresTrialConn();
-    await engineSection({
-      name: 'postgres',
-      trial: trial === null ? null : { label: 'pgjs', conn: trial },
-      reference: { label: 'pg', conn: await postgresReferenceConn() },
-      setup: pgSetup,
-      statements: pgStatements,
-    }).catch((error) => {
+    try {
+      const trial = await postgresTrialConn();
+      await engineSection({
+        name: 'postgres',
+        trial: trial === null ? null : { label: 'pgjs', conn: trial },
+        reference: { label: 'pg', conn: await postgresReferenceConn() },
+        setup: pgSetup,
+        statements: pgStatements,
+      });
+      completed.push(backend);
+    } catch (error) {
       process.stdout.write(`    SKIP postgres: ${String(error)}\n`);
-    });
+    }
   }
   if (backend === 'mysql') {
-    const trial = await mysqlTrialConn();
-    await engineSection({
-      name: 'mysql',
-      trial: trial === null ? null : { label: 'mariadb', conn: trial },
-      reference: { label: 'mysql2', conn: await mysqlReferenceConn() },
-      setup: mysqlSetup,
-      statements: mysqlStatements,
-    }).catch((error) => {
+    try {
+      const trial = await mysqlTrialConn();
+      await engineSection({
+        name: 'mysql',
+        trial: trial === null ? null : { label: 'mariadb', conn: trial },
+        reference: { label: 'mysql2', conn: await mysqlReferenceConn() },
+        setup: mysqlSetup,
+        statements: mysqlStatements,
+      });
+      completed.push(backend);
+    } catch (error) {
       process.stdout.write(`    SKIP mysql: ${String(error)}\n`);
-    });
+    }
   }
+}
+const missing = missingRequired(cfg, completed);
+if (missing.length > 0) {
+  process.stdout.write(
+    `FAIL: required backend(s) did not complete: ${missing.join(', ')} (BENCH_REQUIRE=${cfg.required.join(',')})\n`,
+  );
+  process.exitCode = 1;
 }

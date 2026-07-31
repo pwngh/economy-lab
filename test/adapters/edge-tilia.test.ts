@@ -45,6 +45,7 @@ import {
   testConfig,
   testLogger,
 } from '#test/support/capabilities.ts';
+import { checkedConfig } from '#src/config.ts';
 
 import type { Edge } from '@pwngh/economy-edge';
 import type {
@@ -303,7 +304,7 @@ describe('edge-tilia shim (the compiled @pwngh/economy-edge package behind the l
         digest: seededDigest(1),
         signer: seededSigner(1),
         processor: edgeTiliaProcessor(edge.outbound),
-        config: testConfig(),
+        config: checkedConfig(testConfig()),
         pricing: defaultPricing(),
         rates: fixedRates(),
         logger: testLogger(),

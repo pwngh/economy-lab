@@ -26,23 +26,24 @@
  * Memory's lowest write door is `append` or `__seedBalance`. See the invariants.adversarial.test.ts
  * header for why memory stays unenforced.
  *
- * Reachability is probed, not assumed. A SQL engine that cannot be reached yields `null`, and the
+ * The provisioners probe reachability rather than assume it. A SQL engine that cannot be reached yields `null`, and the
  * caller skips those cases rather than failing them. This is the same contract as the existing
  * adapter suites.
  */
 
 // `pg` ships no types and this project disables auto-loaded @types, so its default import is
-// untyped. Re-typed as PgModule at the binding below (mirrors src/engines/postgres.ts).
+// untyped. Re-typed as PgModule at the binding below (mirrors the postgres engine).
 // @ts-expect-error -- untyped default import; typed at the binding via PgModule.
 import pgUntyped from 'pg';
 
 import { memoryStore } from '#src/adapters/memory.ts';
-import { postgresStore } from '#src/engines/postgres.ts';
+import { postgresStore } from '@pwngh/economy-postgres';
 import {
   applyMysqlSchema,
   createMysqlPool,
   mysqlStore,
-} from '#src/engines/mysql.ts';
+} from '@pwngh/economy-mysql';
+import { installMysql } from '#src/money-sql.ts';
 import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
 import {
   freshName,
@@ -56,7 +57,7 @@ import {
 import type { EnvMap } from '#src/env.ts';
 import type { Store } from '#src/ports.ts';
 import type { MemoryLedger } from '#src/adapters/memory.ts';
-import type { MysqlPool } from '#src/engines/mysql.ts';
+import type { MysqlPool } from '@pwngh/economy-mysql';
 
 // The `pg` driver ships no types; the file annotates the few members it uses.
 interface PgPoolLike {
@@ -80,8 +81,9 @@ const pg = pgUntyped as PgModule;
 export interface AdversarialEngine {
   name: string;
   store: Store;
-  // Issues raw SQL against the very tables the store uses, bypassing post_entry entirely. Throws
-  // when the engine rejects the write, which is exactly the rejection an adversarial case asserts.
+  // Issues raw SQL against the very tables the store uses, bypassing post_entry entirely. It
+  // throws when the engine rejects the write, which is exactly the rejection an adversarial case
+  // asserts.
   raw(sql: string, params?: unknown[]): Promise<unknown[]>;
   close(): Promise<void>;
 }
@@ -98,7 +100,7 @@ export interface AdversarialMemory {
 }
 
 // URLs, throwaway names, and the MySQL URL/name helpers come from the shared test-suite policy
-// (test/support/adapters.ts); the provisioners take env explicitly, and each test file passes
+// (test/support/adapters.ts). The provisioners take env explicitly, and each test file passes
 // process.env once at its own edge.
 
 /**
@@ -116,9 +118,9 @@ export function adversarialMemory(): AdversarialMemory {
   };
 }
 
-// Says WHY provisioning failed, once per engine: "server unreachable" and "reachable but the
-// restricted-role setup was refused" both land in the same null, and the second is a coverage
-// loss a silent skip would disguise as the first.
+// This warning says why provisioning failed, once per engine. "Server unreachable" and "reachable
+// but the restricted-role setup was refused" both land in the same null. The second is a coverage
+// loss that a silent skip would disguise as the first.
 const announcedSkips = new Set<string>();
 function announceSkip(engine: string, error: unknown): null {
   if (!announcedSkips.has(engine)) {
@@ -185,11 +187,12 @@ function withUserAndDatabase(
   return parsed.toString();
 }
 
-// The restricted role that conservation relies on (see adversarialMysql). It may write every ledger
+// This is the restricted role that conservation relies on (see adversarialMysql). It may write every ledger
 // table directly except `legs`. Only post_entry may write `legs`, a SECURITY DEFINER routine owned
 // by the admin, so a raw unbalanced-leg insert is refused. The other tables keep direct DML so the
 // chain continuity, balance integrity, overdraft, and exactly-once raw cases still reach their own
 // engine mechanisms rather than a blanket privilege denial.
+
 const APP_USER = 'el_adv_app';
 const APP_PASSWORD = 'el_adv_app';
 const APP_DML_TABLES = [
@@ -208,6 +211,7 @@ const APP_DML_TABLES = [
   'subscriptions',
   'trust_attempts',
   'checkpoints',
+  'money_meta',
 ];
 
 /**
@@ -217,9 +221,8 @@ const APP_DML_TABLES = [
  * Each call gets a throwaway database, the MySQL analogue of Postgres's throwaway schema. This
  * serves two purposes. First, it isolates this run from test/adapters/mysql.test.ts, which shares
  * the same server. Second, because conservation is enforced by a restricted role that lacks `legs`
- * DML, it gives that role a database of its own to be GRANTed on. The admin connection applies the
- * schema, so post_entry's DEFINER is privileged and stays the sole writer of `legs`. The store and
- * raw pools then connect as the restricted role, and the database is dropped on close. Both pools
+ * DML, it gives that role a database of its own to be GRANTed on. The store and raw pools
+ * connect as the restricted role, and the database is dropped on close. Both pools
  * point at it, so a raw INSERT lands in the very table post_entry writes, except `legs`, which the
  * restricted role cannot write directly.
  */
@@ -232,9 +235,9 @@ export async function adversarialMysql(
   }
   await maybeSweep('mysql', url);
   const database = safeDatabaseName(freshName('el_adv_my'));
-  // Every pool opened so far, so the catch below can end them all: a "skip this engine" null
-  // return must not leak an open connection, or it pins the test process's event loop and the
-  // run never exits.
+  // This list holds every pool opened so far, so the catch below can end them all. A "skip this
+  // engine" null return must not leak an open connection. A leaked connection pins the test
+  // process's event loop, and the run never exits.
   const opened: MysqlPool[] = [];
   let admin: MysqlPool;
   let schemaPool: MysqlPool;
@@ -251,6 +254,16 @@ export async function adversarialMysql(
     schemaPool = await createMysqlPool(withDatabase(url, database));
     opened.push(schemaPool);
     await applyMysqlSchema(schemaPool);
+    // The admin installs the money routines, so the restricted role below needs no DDL at all: the
+    // store proves before it installs, finds them already correct, and issues nothing. This is the
+    // deployment shape too — routines are migration state, and an application role that only calls
+    // them cannot drop them.
+    await installMysql({
+      run: (sql, params) =>
+        schemaPool
+          .query(sql, params ? [...params] : undefined)
+          .then(([rows]) => rows as Record<string, unknown>[]),
+    });
     await schemaPool.end().catch(() => {});
 
     // The privilege model that enforces conservation on MySQL. The restricted role may write every
@@ -294,9 +307,12 @@ export async function adversarialMysql(
       const [result] = await rawPool.query(sql, params);
       return Array.isArray(result) ? (result as unknown[]) : [];
     },
+    // Every pool here was opened here, so every pool here is ended here. The store ends only a
+    // pool it opened itself, which is none of these.
     close: async () => {
       await rawPool.end().catch(() => {});
       await store.close();
+      await storePool.end().catch(() => {});
       await admin
         .query(`DROP DATABASE IF EXISTS \`${database}\``)
         .catch(() => {});

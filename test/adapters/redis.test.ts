@@ -12,10 +12,42 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { setTimeout as sleep } from 'node:timers/promises';
 
-import { redisCache, redisRateLimiter } from '#src/adapters/redis.ts';
+import '#test/support/dist-guard.ts';
+
+import { redisCache, redisRateLimiter } from '@pwngh/economy-redis';
 import { EconomyError } from '#src/errors.ts';
 import { runCacheConformance } from '#test/conformance/cache.ts';
+import { runRateLimiterConformance } from '#test/conformance/rate-limit.ts';
+
+import type { RateLimiter } from '#src/ports.ts';
+
+// The limiter half of this adapter, against the live rig. A fake client cannot stand in: every
+// recovery case asks a window to pass, and the expiry that reopens it is Redis's own. With no
+// REDIS_URL the harness factory throws and each case skips naming the reason.
+runRateLimiterConformance('economy-redis', () => {
+  const url = process.env.REDIS_URL;
+  if (!url) {
+    throw new Error('REDIS_URL unset');
+  }
+  const opened: Array<RateLimiter & { close(): Promise<void> }> = [];
+  return {
+    make: async (policy) => {
+      const limiter = await redisRateLimiter(url, policy);
+      opened.push(limiter);
+      return limiter;
+    },
+    // A 25ms cushion over the wait Redis reported: PTTL is truncated to whole milliseconds and the
+    // round trip that reads it spends some of them.
+    elapse: (ms) => sleep(ms + 25),
+    close: async () => {
+      for (const limiter of opened) {
+        await limiter.close();
+      }
+    },
+  };
+});
 
 interface FakeRedis {
   get(key: string): Promise<string | null>;
@@ -164,57 +196,53 @@ describe('redisCache', () => {
     );
   });
 
-  test('closes by quitting the underlying client', async () => {
-    const client = fakeRedis();
+  test('never ends a connection the caller opened', async () => {
     let quit = false;
-    const cache = redisCache({
-      ...client,
+    const client: FakeRedis = {
+      ...fakeRedis(),
       quit: async () => {
         quit = true;
         return 'OK';
       },
-    });
+    };
 
-    await cache.close();
+    const cache = redisCache(client);
 
-    assert.equal(quit, true);
+    // Ownership follows creation. A handed-in client comes back with no close at all, so the
+    // package cannot end a connection it did not open, by accident or otherwise.
+    assert.equal((cache as { close?: unknown }).close, undefined);
+    assert.equal(quit, false);
   });
 });
 
 runCacheConformance('redis', () => redisCache(fakeRedis()));
 
 interface FakeCounter {
-  incr(key: string): Promise<number>;
-  pexpire(key: string, ttlMs: number): Promise<unknown>;
-  pttl(key: string): Promise<number>;
+  eval(
+    script: string,
+    numKeys: number,
+    ...args: Array<string | number>
+  ): Promise<unknown>;
   quit(): Promise<unknown>;
-  counts: Map<string, number>;
-  expiries: ReadonlyArray<ReadonlyArray<unknown>>;
+  calls: ReadonlyArray<ReadonlyArray<unknown>>;
 }
 
-function fakeCounter(remainingTtl = 500): FakeCounter {
-  const counts = new Map<string, number>();
-  const expiries: unknown[][] = [];
+// The limiter counts and arms in a single script, so a fake is the reply it hands back.
+function fakeCounter(reply: unknown = [1, 500]): FakeCounter {
+  const calls: unknown[][] = [];
   return {
-    counts,
-    expiries,
-    incr: async (key) => {
-      const next = (counts.get(key) ?? 0) + 1;
-      counts.set(key, next);
-      return next;
+    calls,
+    eval: async (script, numKeys, ...args) => {
+      calls.push([script, numKeys, ...args]);
+      return reply;
     },
-    pexpire: async (key, ttlMs) => {
-      expiries.push([key, ttlMs]);
-      return 1;
-    },
-    pttl: async () => remainingTtl,
     quit: async () => 'OK',
   };
 }
 
 describe('redisRateLimiter', () => {
-  test('allows under the limit and arms the window on the first hit', async () => {
-    const client = fakeCounter();
+  test('counts and arms the window in one round trip', async () => {
+    const client = fakeCounter([1, 1_000]);
     const limiter = redisRateLimiter(client, {
       limit: 2,
       windowMs: 1_000,
@@ -223,17 +251,22 @@ describe('redisRateLimiter', () => {
     assert.deepEqual(await limiter.allow('k'), { allowed: true });
     assert.deepEqual(await limiter.allow('k'), { allowed: true });
 
-    // PEXPIRE ran once, on the count that created the key, under the namespaced form.
-    assert.deepEqual(client.expiries, [['economy:ratelimit:k', 1_000]]);
+    // Two calls, two round trips, each carrying the namespaced key and the window. Arming is
+    // inside the script rather than a second command, so a lost round trip cannot strand a
+    // counting key with no expiry.
+    assert.equal(client.calls.length, 2);
+    assert.deepEqual(client.calls[0]?.slice(1), [
+      1,
+      'economy:ratelimit:k',
+      1_000,
+    ]);
   });
 
   test('denies past the limit with the remaining window as retryAfterMs', async () => {
-    const limiter = redisRateLimiter(fakeCounter(500), {
+    const limiter = redisRateLimiter(fakeCounter([2, 500]), {
       limit: 1,
       windowMs: 1_000,
     });
-
-    await limiter.allow('k');
 
     assert.deepEqual(await limiter.allow('k'), {
       allowed: false,
@@ -241,51 +274,88 @@ describe('redisRateLimiter', () => {
     });
   });
 
-  test('a non-positive PTTL falls back to the full window', async () => {
-    const limiter = redisRateLimiter(fakeCounter(-1), {
+  test('a TTL of -2 is a window already gone, so it does not deny', async () => {
+    const limiter = redisRateLimiter(fakeCounter([2, -2]), {
       limit: 1,
       windowMs: 1_000,
     });
 
-    await limiter.allow('k');
-
-    assert.deepEqual(await limiter.allow('k'), {
-      allowed: false,
-      retryAfterMs: 1_000,
-    });
+    // -2 is "no such key", and there is no wait that clears a window nothing is counting. -1,
+    // the key that exists without an expiry, never gets here: the script arms it.
+    assert.deepEqual(await limiter.allow('k'), { allowed: true });
   });
 
   test('a redis failure surfaces as a retryable fault', async () => {
     const limiter = redisRateLimiter(
       {
         ...fakeCounter(),
-        incr: async () => Promise.reject(new Error('down')),
+        eval: async () => Promise.reject(new Error('down')),
       },
       { limit: 1, windowMs: 1_000 },
     );
 
+    // The limiter lives in its own package and throws from the lab's built copy, while this file
+    // holds the source copy. `instanceof` is false across that boundary; the brand is not.
     await assert.rejects(limiter.allow('k'), (error: unknown) => {
-      assert.equal(error instanceof EconomyError, true);
+      assert.equal(error instanceof EconomyError, false);
+      assert.equal(EconomyError.is(error), true);
+      assert.equal((error as EconomyError).code, 'STORE.FAILURE');
       assert.equal((error as EconomyError).retryable, true);
       return true;
     });
   });
 
-  test('closes by quitting the underlying client', async () => {
+  test('never ends a connection the caller opened', async () => {
     let quit = false;
-    const limiter = redisRateLimiter(
-      {
-        ...fakeCounter(),
-        quit: async () => {
-          quit = true;
-          return 'OK';
-        },
+    const client: FakeCounter = {
+      ...fakeCounter(),
+      quit: async () => {
+        quit = true;
+        return 'OK';
       },
-      { limit: 1, windowMs: 1_000 },
-    );
+    };
 
-    await limiter.close();
+    const limiter = redisRateLimiter(client, { limit: 1, windowMs: 1_000 });
 
-    assert.equal(quit, true);
+    assert.equal((limiter as { close?: unknown }).close, undefined);
+    assert.equal(quit, false);
+  });
+});
+
+// The URL form is the default path: one import, one call, no `new Redis(...)` at the call site.
+// It runs only against a live Redis, since opening is the whole point of the overload.
+describe('redisCache(url) and redisRateLimiter(url): the connection is opened inside', () => {
+  const url = process.env.REDIS_URL;
+
+  test('a URL-opened cache round-trips a value and closes its own connection', async (t) => {
+    if (!url) {
+      t.skip('REDIS_URL unset');
+      return;
+    }
+    const cache = await redisCache(url);
+    try {
+      const key = `open_${crypto.randomUUID().slice(0, 8)}`;
+      await cache.set(key, 'CREDIT:12.34');
+      assert.equal(await cache.get(key), 'CREDIT:12.34');
+      await cache.invalidate(key);
+      assert.equal(await cache.get(key), null);
+    } finally {
+      await cache.close();
+    }
+  });
+
+  test('a URL-opened limiter denies past its limit', async (t) => {
+    if (!url) {
+      t.skip('REDIS_URL unset');
+      return;
+    }
+    const limiter = await redisRateLimiter(url, { limit: 1, windowMs: 60_000 });
+    try {
+      const key = `open_${crypto.randomUUID().slice(0, 8)}`;
+      assert.equal((await limiter.allow(key)).allowed, true);
+      assert.equal((await limiter.allow(key)).allowed, false);
+    } finally {
+      await limiter.close();
+    }
   });
 });

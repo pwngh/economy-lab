@@ -10,23 +10,36 @@
  * @license MIT
  */
 
+// The engine stores here come from `@pwngh/economy-postgres` and `@pwngh/economy-mysql`, which
+// resolve through their exports maps into `dist`. So a suite that takes a store from this file
+// runs against the last build of `src/`, however many `#src/*` specifiers its own import list
+// carries. Both runners refuse such a file while the emit is behind its source; the classifier
+// is scripts/support/dist-reach.ts.
+
 import { memoryStore } from '#src/adapters/memory.ts';
-import { postgresStore } from '#src/engines/postgres.ts';
+import { postgresStore } from '@pwngh/economy-postgres';
 import {
   applyMysqlSchema,
   createMysqlPool,
   mysqlStore,
-} from '#src/engines/mysql.ts';
+} from '@pwngh/economy-mysql';
 import { httpStore, createStoreServer } from '#src/adapters/http.ts';
-import { createMariadbPool } from '#src/engines/mysql-mariadb.ts';
-import { loadPg, openPgPool } from '#src/engines/pg-driver.ts';
+import { createMariadbPool } from '@pwngh/economy-mysql/mariadb';
+import { loadPg, openPgPool } from '@pwngh/economy-postgres/driver';
 import { LOCAL_POSTGRES_URL, storeUrls } from '#src/env.ts';
 import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
 import { postgresJsPool } from '#test/support/wire-trial.ts';
+import {
+  THROWAWAY_NAME,
+  freshName,
+  onThrowawayDatabase,
+  safeDatabaseName,
+  withDatabase,
+} from '#test/support/throwaway-database.ts';
 
 import type { EnvMap } from '#src/env.ts';
-import type { MysqlPool } from '#src/engines/mysql.ts';
-import type { PgPool } from '#src/engines/postgres.ts';
+import type { MysqlPool } from '@pwngh/economy-mysql';
+import type { PgPool } from '@pwngh/economy-postgres';
 import type { Clock, Digest, Store } from '#src/ports.ts';
 
 /** One matrix adapter: a test-title name and a factory returning a fresh, isolated store. */
@@ -52,37 +65,27 @@ export function testMysqlUrl(env: EnvMap): string | null {
 
 // --- Throwaway names ------------------------------------------------------------------
 
-// `<prefix>_<pid>_<base36 ms stamp>_<counter>`: unique per call, and the stale-namespace sweep
-// below parses the pid and stamp back out to spot orphans.
-let run = 0;
-export function freshName(prefix: string): string {
-  run += 1;
-  const stamp = Date.now().toString(36);
-  return `${prefix}_${process.pid}_${stamp}_${run}`;
-}
+// How a throwaway namespace is named, checked and lifecycled lives in one dependency-free file,
+// because packages/mysql's own suite reads it too. Re-exported here so a rig that already knows
+// this module keeps its one import.
+export { freshName, safeDatabaseName, withDatabase };
 
-// A database name cannot be a bound parameter in CREATE/DROP DATABASE, so it is pasted into the
-// SQL text; rejecting non-identifier names keeps that paste injection-safe.
-export function safeDatabaseName(name: string): string {
-  if (!/^[a-z_][a-z0-9_]*$/.test(name)) {
-    throw new Error(`Unsafe MySQL database name: ${JSON.stringify(name)}`);
-  }
-  return name;
-}
-
-// null strips the database entirely — the admin pool needs a connection with no default database.
-export function withDatabase(url: string, database: string | null): string {
-  const parsed = new URL(url);
-  parsed.pathname = database ? `/${database}` : '/';
-  return parsed.toString();
+/** {@link onThrowawayDatabase} bound to the driver the lab's rigs take from the built package. */
+export function onThrowawayMysqlDatabase<T>(
+  serverUrl: string,
+  work: (pool: MysqlPool) => Promise<T>,
+): Promise<T> {
+  return onThrowawayDatabase(
+    { serverUrl, database: freshName('el_tmp'), openPool: createMysqlPool },
+    work,
+  );
 }
 
 // --- Stale-namespace sweep ---------------------------------------------------------
 
 // A killed run never drops its throwaway namespace, so el_* leftovers accumulate. The sweep
-// drops a namespace whose creating pid is gone and whose stamp is old; scripts/db-clean.ts runs
+// drops a namespace whose creating pid is gone and whose stamp is old; rigs/db-clean.ts runs
 // it on demand (--all drops every match), the store factories below run it once per process.
-const THROWAWAY = /^el_[a-z_]+?_(\d+)_([0-9a-z]+)_\d+$/;
 
 // Whole databases two integration suites create, named by pid alone (no stamp): stale exactly
 // when their pid is gone.
@@ -104,7 +107,7 @@ const SWEEP_ABANDONED_MS = 24 * 60 * 60_000;
 
 // Applies the orphan rule to one namespace name; non-matching names are never touched.
 export function isStaleThrowaway(name: string, all = false): boolean {
-  const throwaway = THROWAWAY.exec(name);
+  const throwaway = THROWAWAY_NAME.exec(name);
   if (throwaway) {
     if (all) {
       return true;
@@ -243,6 +246,9 @@ export async function maybeSweep(
  * option does all of that). Shared by the conformance matrix and the bench harness, which
  * differ only in digest/clock and pool sizing. `driver: 'postgresjs'` mounts the wire-trial
  * postgres.js pool behind the store's driver seam instead of pg.
+ *
+ * When a pool is built here it is ended here, after the store's own close() has dropped the
+ * schema. The store ends only pools it opened itself.
  */
 export async function makeIsolatedPostgresStore(opts: {
   url: string;
@@ -257,7 +263,7 @@ export async function makeIsolatedPostgresStore(opts: {
   await maybeSweep('postgres', opts.url);
   const schemaName = freshName('el_iso');
   const pool = await isolatedPgPool(opts, schemaName);
-  return postgresStore({
+  const store = await postgresStore({
     url: opts.url,
     schemaName,
     digest: opts.digest,
@@ -268,6 +274,16 @@ export async function makeIsolatedPostgresStore(opts: {
       : {}),
     ...(pool ? { pool } : {}),
   });
+  if (pool === null) {
+    return store;
+  }
+  return {
+    ...store,
+    close: async () => {
+      await store.close();
+      await pool.end();
+    },
+  };
 }
 
 // The pool behind the seam, when one must be built here: the postgres.js trial wire, or the
@@ -323,7 +339,7 @@ export async function makeIsolatedMysqlStore(opts: {
   digest: Digest;
   clock: Clock;
   connectionLimit?: number;
-  // 'mariadb' mounts the pipelining mariadb pool (src/engines/mysql-mariadb.ts) behind
+  // 'mariadb' mounts the pipelining mariadb pool (@pwngh/economy-mysql/mariadb) behind
   // mysqlStore's pool seam instead of mysql2; administrative work (database create/drop) stays
   // on mysql2 either way.
   driver?: 'mysql2' | 'mariadb';
@@ -385,7 +401,10 @@ export async function makeIsolatedMysqlStore(opts: {
   return {
     ...store,
     close: async () => {
+      // The pool was built here, so it is ended here: mysqlStore leaves a pool it was handed
+      // alone, and a pool nobody ends keeps this test process's event loop alive.
       await store.close();
+      await pool.end();
       // Under CI the engine dies with the job, so the drop is pure DDL fsync tax; leave the
       // database for the sweeper (maybeSweep / db:clean), whose live path this also exercises.
       if (process.env.CI !== undefined) {

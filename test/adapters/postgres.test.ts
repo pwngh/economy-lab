@@ -13,22 +13,30 @@
 import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
+import '#test/support/dist-guard.ts';
+
 import { runStoreConformance } from '#test/conformance/store.ts';
-import { postgresStore } from '#src/engines/postgres.ts';
+import { postgresStore } from '@pwngh/economy-postgres';
 import { credit, debit, postEntry } from '#src/ledger.ts';
 import { decodeAmount, toAmount } from '#src/money.ts';
 import { spendable, SYSTEM } from '#src/accounts.ts';
 import { freshName, testPostgresUrl } from '#test/support/adapters.ts';
 
 import type { OutboxMessage, Saga, Store, Subscription } from '#src/ports.ts';
+import type { Operation } from '#src/contract.ts';
 
 const url = testPostgresUrl(process.env);
 
-runStoreConformance('postgres', () =>
-  postgresStore({ url, schemaName: freshName('el_conf') }),
+// `lockMany` resolves true only because capabilities are read off the transaction unit. Postgres
+// carries it there and not on `store.ledger`, so this declaration fails the moment that
+// resolution moves back to the store.
+runStoreConformance(
+  'postgres',
+  () => postgresStore({ url, schemaName: freshName('el_conf') }),
+  { capabilities: { lockMany: true, appendAll: true } },
 );
 
-// The partitioned layout (src/engines/pg-partition.ts) must be runtime-identical: the whole
+// The partitioned layout (packages/postgres/src/pg-partition.ts) must be runtime-identical: the whole
 // conformance suite runs against it, so every port behavior is proven on either layout.
 runStoreConformance('postgres (partitioned layout)', () =>
   postgresStore({
@@ -169,7 +177,7 @@ describe('Store Conformance: postgres (Outbox)', () => {
     }
   });
 
-  test('outbox.recordFailure bumps attempts by one and keeps the row claimable', async (t) => {
+  test('outbox.bumpAttempt returns each count it writes and keeps the row claimable', async (t) => {
     if (!store) {
       t.skip('Postgres unreachable');
       return;
@@ -178,8 +186,9 @@ describe('Store Conformance: postgres (Outbox)', () => {
     const id = 'obx_record_failure';
     await live.outbox.enqueue(outboxMessage(id));
 
-    await live.outbox.recordFailure(id);
-    await live.outbox.recordFailure(id);
+    // The count comes out of the same statement that wrote it, so it cannot lag a concurrent bump.
+    assert.equal(await live.outbox.bumpAttempt(id), 1);
+    assert.equal(await live.outbox.bumpAttempt(id), 2);
 
     const batch = await live.outbox.claimBatch(10);
     const row = batch.find((message) => message.id === id);
@@ -188,18 +197,18 @@ describe('Store Conformance: postgres (Outbox)', () => {
     assert.equal(row!.status, 'pending');
   });
 
-  test('outbox.recordFailure is a no-op on a missing or already-terminal row', async (t) => {
+  test('outbox.bumpAttempt counts nothing and returns 0 on a missing or terminal row', async (t) => {
     if (!store) {
       t.skip('Postgres unreachable');
       return;
     }
     const live = store;
-    await live.outbox.recordFailure('obx_does_not_exist');
+    assert.equal(await live.outbox.bumpAttempt('obx_does_not_exist'), 0);
 
     const id = 'obx_record_failure_terminal';
     await live.outbox.enqueue(outboxMessage(id));
     await live.outbox.deadLetter(id, 'DISPATCH.FAILURE');
-    await live.outbox.recordFailure(id);
+    assert.equal(await live.outbox.bumpAttempt(id), 0);
 
     // Assert by exhaustion: a pending claim cannot see a dead row.
     const batch = await live.outbox.claimBatch(100);
@@ -229,6 +238,127 @@ describe('Store Conformance: postgres (Outbox)', () => {
 
     // A second deadLetter on the now-terminal row is a no-op (and must not throw).
     await live.outbox.deadLetter(poison, 'DISPATCH.OTHER');
+  });
+});
+
+// Regression: the claims ordered by a timestamp column and nothing else. `created_at` defaults to
+// now(), which Postgres fixes at transaction start, so all six rows one submit enqueues carry the
+// identical stamp — measured 1 distinct value of 6, where MySQL's statement-time default gives 6 of
+// 6. With `limit` under the tie count and no tiebreak, each sweep was free to return a different
+// arbitrary subset and a tied row could be passed over indefinitely.
+describe('Store Conformance: postgres (Tied Claims)', () => {
+  let store: Store | null = null;
+
+  before(async () => {
+    try {
+      store = await postgresStore({ url, schemaName: freshName('el_tie') });
+    } catch {
+      store = null;
+    }
+  });
+  after(async () => {
+    if (store) {
+      await store.close();
+    }
+  });
+
+  test('claims a created_at tie in primary-key order, so every claim size is a prefix of one order', async (t) => {
+    if (!store) {
+      t.skip('Postgres unreachable');
+      return;
+    }
+    const live = store;
+    // Enqueued in the reverse of their id order and inside one transaction, so `created_at` cannot
+    // separate them and insertion order is not the answer.
+    const enqueued = [
+      'obx_tie_f',
+      'obx_tie_e',
+      'obx_tie_d',
+      'obx_tie_c',
+      'obx_tie_b',
+      'obx_tie_a',
+    ];
+    await live.transaction(async (unit) => {
+      for (const id of enqueued) {
+        await unit.outbox.enqueue(outboxMessage(id));
+      }
+    });
+    const byId = [...enqueued].sort();
+
+    // Nothing marks these relayed, so the pending set is the same for every claim below: each one
+    // must resolve to the same head of the same order.
+    let claimsCompared = 0;
+    for (const limit of [1, 2, 3, 6]) {
+      const batch = await live.outbox.claimBatch(limit);
+      assert.deepEqual(
+        batch.map((message) => message.id),
+        byId.slice(0, limit),
+        `claimBatch(${limit})`,
+      );
+      claimsCompared += 1;
+    }
+    assert.equal(claimsCompared, 4);
+  });
+
+  test('claims and revives a receivedAt tie in primary-key order', async (t) => {
+    if (!store) {
+      t.skip('Postgres unreachable');
+      return;
+    }
+    const live = store;
+    // One millisecond holds any number of inbound events, so `received_at` ties on a burst. Ids
+    // again run against insertion order.
+    const enqueued = ['ibx_tie_d', 'ibx_tie_c', 'ibx_tie_b', 'ibx_tie_a'];
+    for (const id of enqueued) {
+      await live.inbox.enqueueInbound({
+        id,
+        key: `evt_${id}`,
+        operation: {
+          kind: 'topUp',
+          idempotencyKey: `evt_${id}`,
+          actor: { kind: 'system', service: 'webhook:billing' },
+          userId: 'usr_tie',
+          amount: toAmount('CREDIT', 1_000n),
+          source: 'card',
+        } as Operation,
+        status: 'pending',
+        attempts: 0,
+        receivedAt: 7_000,
+        reason: null,
+      });
+    }
+    const byId = [...enqueued].sort();
+
+    let claimsCompared = 0;
+    for (const limit of [1, 2, 4]) {
+      const batch = await live.inbox.claimInbound({ now: 0, limit });
+      assert.deepEqual(
+        batch.map((message) => message.id),
+        byId.slice(0, limit),
+        `claimInbound(${limit})`,
+      );
+      claimsCompared += 1;
+    }
+    assert.equal(claimsCompared, 3);
+
+    // reviveDead reads the same tie through the same clause, but it revives under an UPDATE whose
+    // RETURNING is unordered (MySQL re-reads by id list, equally unordered), so the clause fixes
+    // WHICH rows revive and not the order they come back in — which is all the contract promises.
+    // It consumes rows, so the two halves of the order are taken one after the other.
+    for (const id of enqueued) {
+      await live.inbox.deadLetter(id, 'APPLY.FAILURE');
+    }
+    assert.deepEqual(
+      (await live.inbox.reviveDead(2)).map((message) => message.id).sort(),
+      byId.slice(0, 2),
+    );
+    for (const id of byId.slice(0, 2)) {
+      await live.inbox.markApplied(id);
+    }
+    assert.deepEqual(
+      (await live.inbox.reviveDead(2)).map((message) => message.id).sort(),
+      byId.slice(2),
+    );
   });
 });
 
