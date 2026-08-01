@@ -57,8 +57,70 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
+      # The bench reaches its engines through @pwngh/economy-postgres and @pwngh/economy-mysql,
+      # whose exports point at dist/, and those packages import @pwngh/economy-lab, whose exports
+      # point at dist/ too. Both emits are gitignored and no manifest carries a prepare script, so
+      # a checkout plus npm ci has neither: without these two the bench dies on its first import.
+      - run: npm run build
+      - run: npm run build:packages
       - run: npm run db:migrate
       # The funded mix first, then the oversubscribed one; the prove gate runs inside both.
       - run: npm run bench
       - run: BENCH_MODE=contention npm run bench
       - run: npm run db:clean
+
+  # The four standalone instruments, at the fast profile: this job answers "does each one still
+  # run, end to end, against real engines" — the numbers run is the bench job above. A separate
+  # job so a ceiling breach here cannot take the soak's thorough rounds with it. BENCH_REQUIRE
+  # plus each entry point's missing-required check turns a dead service container into a failed
+  # job rather than a run that measured nothing.
+  instruments:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: economy
+          POSTGRES_PASSWORD: economy
+          POSTGRES_DB: economy_lab
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U economy -d economy_lab"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: economy
+          MYSQL_DATABASE: economy_lab
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -peconomy"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://economy:economy@localhost:5432/economy_lab
+      MYSQL_TEST_URL: mysql://root:economy@localhost:3306/economy_lab
+      BENCH_REQUIRE: postgres,mysql
+      BENCH_PROFILE: fast
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      # Same emit story as the bench job: both dists are gitignored, so a checkout has neither.
+      - run: npm run build
+      - run: npm run build:packages
+      # No db:migrate and no db:clean here: every instrument provisions throwaway namespaces of
+      # its own, and the service containers end with the job.
+      - run: npm run bench:wire
+      - run: npm run bench:profile
+      - run: npm run bench:multinode
+      - run: npm run bench:scale

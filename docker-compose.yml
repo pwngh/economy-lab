@@ -17,7 +17,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # SQS for the outbox worker's dispatcher (see src/adapters/sqs.ts).
+  # SQS for the outbox worker's dispatcher (see packages/sqs).
   localstack:
     # Pinned by index digest; refresh: `docker manifest inspect localstack/localstack:3`.
     image: localstack/localstack:3@sha256:b279c01f4cfb8f985a482e4014cabc1e2697b9d7a6c8c8db2e40f4d9f93687c7
@@ -50,7 +50,7 @@ services:
       timeout: 5s
       retries: 20
 
-  # Redis for the read-through cache adapter (src/adapters/redis.ts).
+  # Redis for the read-through cache adapter (packages/redis).
   redis:
     image: redis:7-alpine
     ports:

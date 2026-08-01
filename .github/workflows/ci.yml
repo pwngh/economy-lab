@@ -13,12 +13,16 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# `scripts/check.ts` holds the gate list. Every job below runs tiers of it and nothing else, so a
+# gate cannot be added here without being added to the table; the only other `run:` steps are
+# installs, the two gitignored emits and the rig schema. `test/check-gate.test.ts` holds both ends,
+# and the four tiers between them cover the whole table.
 jobs:
-  # `npm run check` gates identically to local `make check`. The pg/mysql conformance tests skip
-  # themselves when no backend is reachable, so this job stays green without services.
+  # The rig-backed suites skip the engines they cannot reach, so this job stays green with no
+  # services and answers a pull request in the time the static tier takes to fail.
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,19 +30,20 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
-      - run: npm run check
-      # The property suites run inside `npm test` too; alone, a broken ledger law fails with
-      # the shrunk counterexample and its seed as the step's whole output.
-      - run: npm run prop
+      # dist/ and packages/*/dist are gitignored, so a fresh checkout carries neither. The static
+      # tier reports a stale emit rather than rebuilding one, which is why the build is here.
+      - run: npm run build
+      - run: npm run build:packages
+      - run: npm run check static
+      - run: npm run check unit
 
-  # The two React Router apps live outside the root lint/typecheck gate (their own toolchains).
-  # Each runs its full verify suite; the docs add the two source-of-truth gates, so a stale
-  # anchor or an undocumented export fails the pull request, not the deploy.
+  # The two React Router apps live outside the root lint/typecheck gate (their own toolchains),
+  # and the acceptance tier names their gates without moving them out of apps/*/scripts/.
   apps:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
-      # Full history: check:ref resolves the docs' pinned REPO_REF commit, which a shallow
+      # Full history: the docs' check:ref resolves the pinned REPO_REF commit, which a shallow
       # checkout would not have.
       - uses: actions/checkout@v4
         with:
@@ -48,27 +53,22 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
-      # The docs suite's api-links test resolves into the generated /api reference.
-      - run: npm run docs:api
       - run: npm ci --prefix apps/console
-      - run: npm run verify --prefix apps/console
-      - run: npm run budget --prefix apps/console
       - run: npm ci --prefix apps/docs
-      - run: npm run verify --prefix apps/docs
-      - run: npm run check:ref --prefix apps/docs
-      # The workbench's gates need the built site: the CSP check proves the sandbox's eval grant
-      # stays confined to its one path rule, and the static check holds the no-hydration line and
-      # the runner's per-tier byte budgets.
-      - run: npm run build --prefix apps/docs
-      - run: npm run check:csp --prefix apps/docs
-      - run: npm run check:static --prefix apps/docs
+      - run: npm run build
+      - run: npm run build:packages
+      # Every <ApiLink> the docs carry resolves into the generated reference, gitignored like the
+      # rest of the emit.
+      - run: npm run docs:api
+      - run: npm run check acceptance
 
-  # The differential matrix: memory, postgres, mysql, and http proven byte-identical in CI.
-  # timeout-minutes bounds a deadlock or stuck connection to a clean failure instead of the
-  # default six-hour ceiling.
+  # The differential matrix: memory, postgres, mysql and http proven byte-identical in CI. It runs
+  # the unit tier as well, so the root suite and the package fan-out meet live engines rather than
+  # skipping past them. timeout-minutes bounds a deadlock or stuck connection to a clean failure
+  # instead of the default six-hour ceiling.
   matrix:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:16-alpine
@@ -109,12 +109,87 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
+      - run: npm run build
+      - run: npm run build:packages
       # Applies the Postgres schema via scripts/migrate.sh (psql is preinstalled on the runner) and
       # so doubles as a smoke test of the migrate tooling; the suites self-apply their own schemas.
       - run: npm run db:migrate
-      - run: npm test
-      - run: npm run prove
-      - run: npm run fuzz
+      - run: npm run check unit
+      - run: npm run check integration
       # Sweeps the throwaway namespaces the runs above created and orphaned (if any), so the
       # sweeper's live-database path is exercised on both engines every CI run.
       - run: npm run db:clean
+
+  # The two steps whose subject is a running service rather than a file, named one at a time
+  # rather than by tier: no tier means "needs a service container", and inventing one would move
+  # rows out of the tiers their real preconditions put them in.
+  #
+  # Without this job both prove less than they read as. `smoke` runs where there is no redis and
+  # no localstack, so two of its three legs skip and it reports green having exercised the HTTP
+  # dispatcher alone — the only leg that brings its own receiver. `image` boots the repository's
+  # own economy on the in-memory store, which is the app booting, not the deployment.
+  #
+  # A job of its own with its own ceiling, and that is the whole reason it is not two more service
+  # containers on `matrix`: localstack is a gigabyte-scale image, an unhealthy service container
+  # fails the job it is attached to, and a breach here must not be able to take the differential
+  # matrix or the app gates down with it.
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: economy
+          POSTGRES_PASSWORD: economy
+          POSTGRES_DB: economy_lab
+        ports:
+          - 5432:5432
+        options: >-
+          --tmpfs /var/lib/postgresql/data
+          --health-cmd "pg_isready -U economy -d economy_lab"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      localstack:
+        image: localstack/localstack:3
+        env:
+          SERVICES: sqs
+        ports:
+          - 4566:4566
+        # Slower and more retries than the engines above on purpose: this image boots a Python
+        # service stack, and a health gate too tight for it is a flake rather than a finding.
+        options: >-
+          --health-cmd "curl -sf http://localhost:4566/_localstack/health"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://economy:economy@localhost:5432/economy_lab
+      REDIS_URL: redis://localhost:6379
+      AWS_ENDPOINT_URL: http://localhost:4566
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run build:packages
+      # The image boots `economy serve` against this Postgres, and the image never migrates.
+      - run: npm run db:migrate
+      - run: npm run check smoke
+      # DATABASE_URL above is what makes this the deployment posture rather than the boot: the
+      # step refuses a DATABASE_URL it cannot reach instead of falling back to memory, so a dead
+      # service container fails this job rather than quietly reducing it to the `apps` job's run.
+      - run: npm run check image

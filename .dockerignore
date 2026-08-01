@@ -1,7 +1,13 @@
-node_modules
+**/node_modules
 coverage
 test
 docs
+dist-site
+apps
+bench-results
+backups
+.build-tmp
+.wrangler
 .git
 .github
 *.md

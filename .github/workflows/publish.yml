@@ -28,9 +28,13 @@ jobs:
           cache: npm
           registry-url: https://registry.npmjs.org
       - run: npm ci
+      # prepublishOnly runs the whole check table, whose acceptance tier names the two apps' own
+      # gates, and those need each app's node_modules.
+      - run: npm ci --prefix apps/console
+      - run: npm ci --prefix apps/docs
       # Refuse to publish a commit that does not carry its own version tag.
       - run: git tag --points-at HEAD | grep -qx "v$(node -p "require('./package.json').version")"
-      # prepublishOnly runs the whole check gate and the dist build before anything uploads.
+      # prepublishOnly builds both emits and then runs the whole gate against them.
       - run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

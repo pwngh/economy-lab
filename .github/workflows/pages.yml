@@ -17,12 +17,12 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      # Full history: check:ref resolves the docs' pinned REPO_REF commit, which a shallow
+      # Full history: the docs' check:ref resolves the pinned REPO_REF commit, which a shallow
       # checkout would not have.
       - uses: actions/checkout@v4
         with:
@@ -34,16 +34,21 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix apps/docs
       - run: npm ci --prefix apps/console
-      - run: npm run verify --prefix apps/docs
-      - run: npm run verify --prefix apps/console
-      # The same one-command build a local `npm run site` produces, then the same post-build gates
-      # `npm run site:deploy` runs.
-      - run: npm run check:ref --prefix apps/docs
+      - run: npm run build
+      - run: npm run build:packages
+      - run: npm run docs:api
+      # The same one-command build a local `npm run site` produces. It runs before the gates
+      # rather than after so that every input the table's `site` step needs is on disk: that step
+      # skips when they are not, and a skipped compose here would upload whatever dist-site/ the
+      # runner happened to have.
       - run: npm run site
-      - run: npm run check:csp --prefix apps/docs -- ../../dist-site
-      - run: npm run check:static --prefix apps/docs
-      - run: node apps/console/scripts/bundle-budget.mjs
-      - run: test -f dist-site/.nojekyll
+      # The apps' gates run through the table, not a list of this workflow's own: the six it used
+      # to name by hand had already drifted from ci.yml, and none of them had a build in front.
+      # The tier ends with `site`, which re-composes dist-site/ from the builds the two steps
+      # before it just made and checks the composed artifact — the CSP over a different _headers
+      # from the docs app's own, and the .nojekyll without which Pages drops that file. Those were
+      # two inline steps here, which is a gate list outside the one definition of green.
+      - run: npm run check acceptance
       # _headers / _redirects are Cloudflare Pages rules; GitHub Pages ignores them, so drop them
       # from this artifact. Their CSP was already validated by check:csp above (it governs the
       # Cloudflare deploy, where the rules are honored).
