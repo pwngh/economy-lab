@@ -12,9 +12,13 @@
 // Demo wiring for the console: the simulation clock and the env the demo feeds the engine. Kept
 // apart from economy.ts (the live engine + facade) and views.ts (the render shapes).
 
-import type { Clock } from '#src/ports.ts';
+import type { Clock } from '~/lab-gap';
 
 export const DAY_MS = 86_400_000;
+
+// The demo's webhook HMAC secret (never a real one). Named here because both sides read it: the
+// engine verifies with it, and the console signs its own synthetic delivery with it.
+export const WEBHOOK_SECRET = 'console';
 
 // A clock the simulation controls. Time only advances when the topbar advances it; the economy,
 // store, and worker all share this one clock object.
@@ -43,9 +47,9 @@ export function demoEnv(
   maxAttempts: number,
 ): Record<string, string> {
   return {
-    WEBHOOK_SECRET: 'console',
+    WEBHOOK_SECRET,
     SIGNING_SECRET: 'console',
-    REPLAY_WINDOW_MS: String(5 * 60_000),
+    FRESHNESS_WINDOW_MS: String(5 * 60_000),
     MAX_PAYOUT_ATTEMPTS: String(maxAttempts),
     PLATFORM_FEE_BPS: '1530', // ~15.3%, an example marketplace transaction fee
     VELOCITY_LIMIT_MINOR: String(100_000_000),

@@ -7,8 +7,8 @@
  * LICENSE.md file in the root directory of this source tree.
  *
  * The engine's own HTTP service, mounted in the console: a submission here carries one operation
- * as its JSON body, runs it through this tab's ledger via the same createServer (src/server.ts)
- * the engine exposes when run standalone, and returns the wire response. The Developers page's
+ * as its JSON body, runs it through this tab's ledger via the same handler the front door hands
+ * back when run standalone, and returns the wire response. The Developers page's
  * runner posts here, so a wire operation and the UI drive the one ledger.
  */
 

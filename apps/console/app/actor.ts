@@ -10,7 +10,7 @@
  * An unknown value defaults to the platform system actor, the console's own operator view.
  */
 
-import type { Principal } from '#src/index.ts';
+import type { Principal } from '@pwngh/economy/auth';
 
 export function principal(actor: string): Principal {
   if (actor === 'operator') {

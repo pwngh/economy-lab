@@ -112,7 +112,7 @@ function WireRunner() {
       </div>
       <p className="card-sub">
         The engine also runs as an HTTP service — the same{' '}
-        <span className="mono">createServer</span> it exposes standalone, here
+        <span className="mono">handler</span> the front door hands back, here
         bound to your tab&apos;s economy. Run this operation through it and the
         wire response comes back verbatim; the tickers, Ledger, and the X-ray
         above revalidate on commit. Edit the JSON — a reused{' '}
@@ -228,8 +228,11 @@ export default function Developers({ loaderData }: Route.ComponentProps) {
           returns simple read models — a <span className="mono">Balance</span>,
           a <span className="mono">ProductPurchase</span>, a{' '}
           <span className="mono">License</span>. This console is the layer
-          underneath: the proven double-entry ledger that produces those read
-          models and guarantees they&apos;re correct.
+          underneath: the double-entry ledger those read models are derived
+          from. The database enforces the money invariants, and the prover
+          independently recomputes every balance from the entries and reports
+          any drift from what was stored. Ownership records carry no balance, so
+          that check covers the number, not the licence.
         </p>
         <ul>
           <li>
@@ -252,9 +255,11 @@ export default function Developers({ loaderData }: Route.ComponentProps) {
         <p>
           The ledger records money movement. It does not move real-world money
           itself — it hands off at its edges: payouts to sellers and card
-          deposits go through a payment partner (Tilia), and KYC, tax, and AML
-          live in that money-transmitter partner by design, not here. The
-          Pipeline page watches the events cross that edge.
+          deposits go through a payment partner (Tilia), and know-your-customer
+          verification, tax, and anti-money-laundering monitoring live in that{' '}
+          <a href="/economy/scope-and-non-goals/">money-transmitter partner</a>{' '}
+          by design, not here. The Pipeline page watches the events cross that
+          edge.
         </p>
       </div>
 

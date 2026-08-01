@@ -41,21 +41,20 @@ export default defineConfig({
       // The engine's optional DB/cache/queue modules, stubbed: the tab sandbox never selects
       // them, and their node-only drivers must not reach the browser bundle. Listed before the
       // `#` catch-all so these exact specifiers win.
-      {
-        find: /^#src\/(engines\/postgres|engines\/mysql|adapters\/redis|adapters\/sqs)\.ts$/,
-        replacement: `${engineBrowser}unavailable.ts`,
-      },
       // Bare driver packages src/index.ts dynamic-imports directly; unstubbed, ioredis ships
       // as an unreachable chunk.
-      {
-        find: /^(ioredis|@aws-sdk\/client-sqs)$/,
-        replacement: `${engineBrowser}unavailable.ts`,
-      },
       // Rejects the digest's guarded probe so it falls back to Web Crypto; Vite's own shim would
       // import cleanly and fail only at the first hash.
       {
         find: /^node:crypto$/,
         replacement: `${engineBrowser}no-node-crypto.ts`,
+      },
+      // @pwngh/economy-core's Node bridge imports node:http at the top of host.js, which
+      // App.listen() dynamic-imports. The console never binds, but the bundler follows the import
+      // anyway, so the front door does not reach the browser without this.
+      {
+        find: /^node:http$/,
+        replacement: `${engineBrowser}no-node-http.ts`,
       },
       { find: /^#(.*)$/, replacement: `${repoRoot}$1` },
       { find: /^~\/(.*)$/, replacement: `${appDir}$1` },
@@ -67,7 +66,7 @@ export default defineConfig({
     noExternal: [/economy-lab[\\/]src[\\/]/],
   },
   server: {
-    // The fixed port the docs dev server proxies /console to (scripts/dev-site.mjs).
+    // The fixed port the docs dev server proxies /console to (site/src/dev.mjs).
     port: 4174,
     strictPort: true,
     fs: {

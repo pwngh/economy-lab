@@ -21,9 +21,9 @@ it('reprices only when quiesced, within bounds, and pauses then resumes', async 
   expect(board0.locked).toBe(true);
   // The seed leaves payouts in flight, so repricing is blocked.
   expect(board0.inFlightPayouts).toBeGreaterThan(0);
-  expect(eco.setRates({ buyPerThousand: 10, parPerThousand: 5 }).ok).toBe(
-    false,
-  );
+  expect(
+    (await eco.setRates({ buyPerThousand: 10, parPerThousand: 5 })).ok,
+  ).toBe(false);
   expect((await eco.unlockRates()).ok).toBe(false);
 
   // Quiesce: settle the submitted payouts and reverse the reserved ones.
@@ -46,18 +46,20 @@ it('reprices only when quiesced, within bounds, and pauses then resumes', async 
   expect(open.maintenanceActive).toBe(true);
 
   // Bounds: buy below par, spread over the cap, and par over the ceiling are all refused.
-  expect(eco.setRates({ buyPerThousand: 4, parPerThousand: 5 }).ok).toBe(false);
-  expect(eco.setRates({ buyPerThousand: 25, parPerThousand: 5 }).ok).toBe(
-    false,
-  );
-  expect(eco.setRates({ buyPerThousand: 200, parPerThousand: 100 }).ok).toBe(
-    false,
-  );
+  expect(
+    (await eco.setRates({ buyPerThousand: 4, parPerThousand: 5 })).ok,
+  ).toBe(false);
+  expect(
+    (await eco.setRates({ buyPerThousand: 25, parPerThousand: 5 })).ok,
+  ).toBe(false);
+  expect(
+    (await eco.setRates({ buyPerThousand: 200, parPerThousand: 100 })).ok,
+  ).toBe(false);
 
   // In-band: accepted, and the board reflects it.
-  expect(eco.setRates({ buyPerThousand: 20, parPerThousand: 10 }).ok).toBe(
-    true,
-  );
+  expect(
+    (await eco.setRates({ buyPerThousand: 20, parPerThousand: 10 })).ok,
+  ).toBe(true);
   const set = await eco.rateBoard();
   expect(set.buyPerThousand).toBeCloseTo(20, 2);
   expect(set.parPerThousand).toBeCloseTo(10, 2);

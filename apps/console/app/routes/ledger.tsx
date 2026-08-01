@@ -65,6 +65,7 @@ const KIND_TONE: Record<string, 'blue' | 'green' | 'amber' | 'red'> = {
   payoutCash: 'green',
   payoutReversed: 'red',
   promoExpiry: 'amber',
+  promoSurplus: 'amber',
 };
 
 // A truncated hash for display: first 8 and last 6 of a 64/128-hex value.

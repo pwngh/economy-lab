@@ -11,8 +11,8 @@
 
 import { expect, it } from 'vitest';
 
+import { toAmount } from '~/lab-gap';
 import { creditsDisplay } from '~/views';
-import { toAmount } from '#src/money.ts';
 
 it('renders a balance past 2^53 minor units exactly, where Number would round', () => {
   // 2^53 + 1 minor: the first integer a float cannot represent.

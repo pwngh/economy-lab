@@ -10,7 +10,7 @@
  */
 
 import { beforeEach, expect, it } from 'vitest';
-import { toAmount } from '#src/money.ts';
+import { toAmount } from '~/lab-gap';
 
 import { buildEngine } from '~/economy.ts';
 import {

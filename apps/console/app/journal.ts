@@ -17,8 +17,8 @@
  * across pages.
  */
 
+import type { Operation } from '@pwngh/economy/ops';
 import type { ConsoleEngine } from '~/economy';
-import type { Operation } from '#src/contract.ts';
 
 const JOURNAL_KEY = 'elab_journal';
 

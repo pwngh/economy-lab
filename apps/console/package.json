@@ -17,7 +17,8 @@
   "dependencies": {
     "react": "19.2.0",
     "react-dom": "19.2.0",
-    "react-router": "7.18.0"
+    "react-router": "7.18.0",
+    "@pwngh/economy": "file:../../packages/economy"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

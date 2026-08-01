@@ -9,8 +9,8 @@
  * @license MIT
  */
 
+import type { Economy } from '@pwngh/economy/ops';
 import type { ConsoleEngine } from '~/economy';
-import type { Economy } from '#src/economy.ts';
 
 // The compiler owns the docs handoff contract: the engine must expose the real Economy the docs
 // snippets submit through, so dropping or narrowing the handle breaks at this app's typecheck,

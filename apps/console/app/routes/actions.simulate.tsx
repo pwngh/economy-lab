@@ -101,7 +101,7 @@ export async function clientAction({ request }: Route.ClientActionArgs) {
         );
       }
       case 'setRates': {
-        const r = eco.setRates({
+        const r = await eco.setRates({
           buyPerThousand: Number(form.get('buy') ?? 0),
           parPerThousand: Number(form.get('par') ?? 0),
         });

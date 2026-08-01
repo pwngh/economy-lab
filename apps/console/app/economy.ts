@@ -15,25 +15,14 @@
  * server behind it. The DB engines exist for the bench and conformance suites, not here.
  */
 
-import { currency, isWalletAccount, ownerOf } from '#src/accounts.ts';
-import type { AccountRef } from '#src/accounts.ts';
-import type { MemoryLedger } from '#src/adapters/memory.ts';
-import { configuredRates } from '#src/adapters/rates.ts';
-import { mergeConfig } from '#src/config.ts';
-import { ERROR_CODES, fault } from '#src/errors.ts';
+import { createApp } from '@pwngh/economy/app';
+import type { App } from '@pwngh/economy/app';
+import type { Principal } from '@pwngh/economy/auth';
+import type { EconomyEvent } from '@pwngh/economy/events';
+import { credits } from '@pwngh/economy/money';
 import {
-  DEV_RATES,
-  SYSTEM,
   cancelSubscription,
-  createEconomy,
-  createWorker,
-  credits,
-  earned,
-  findByHash,
   grantPromo,
-  openPorts,
-  paginate,
-  promo,
   requestPayout,
   reversePayout,
   settlePayout,
@@ -41,45 +30,60 @@ import {
   spendable,
   subscribe,
   topUp,
-} from '#src/index.ts';
-import { proveEconomy } from '#src/integrity.ts';
-import { add, convertFloor, toAmount } from '#src/money.ts';
-import { flatFee } from '#src/pricing.ts';
+} from '@pwngh/economy/ops';
+import type { Economy, Operation, Outcome } from '@pwngh/economy/ops';
 import {
+  SIGNATURE_HEADER,
+  TIMESTAMP_HEADER,
+  signBody,
+} from '@pwngh/economy/webhook';
+
+// Everything below has no door. One import, one file, one register entry each — see lab-gap.ts.
+import {
+  DEV_RATES,
+  ERROR_CODES,
+  GENESIS_HEX,
+  SYSTEM,
+  add,
+  configuredRates,
+  convertFloor,
+  currency,
+  earned,
+  fault,
+  findByHash,
+  flatFee,
+  isWalletAccount,
   jsonlLogger,
+  mergeConfig,
+  ownerOf,
+  paginate,
+  promo,
+  proveEconomy,
   silentMeter,
   systemDigest,
   systemSigner,
-} from '#src/runtime.ts';
-import { createServer } from '#src/server.ts';
-import { GENESIS_HEX } from '#src/store-kit.ts';
-import { handleWebhook } from '#src/webhooks.ts';
-
+  toAmount,
+} from '~/lab-gap';
 import type {
-  Config,
-  Economy,
-  Operation,
-  Outcome,
-  Ports,
-  Principal,
-  ProveReport,
-  RatesConfig,
-} from '#src/index.ts';
-import type {
+  AccountRef,
   Clock,
+  Config,
   Digest,
   Dispatcher,
-  EconomyEvent,
   Ids,
   Leg,
+  MemoryLedger,
+  Ports,
   Posting,
+  ProveReport,
+  PurchaseEvent,
+  RatesConfig,
   Saga,
   Store,
-} from '#src/ports.ts';
-import type { PurchaseEvent } from '#src/webhooks.ts';
-import type { Worker } from '#src/worker/index.ts';
+  Worker,
+} from '~/lab-gap';
 
-import { DAY_MS, demoEnv, makeClock } from '~/demo';
+import { DAY_MS, WEBHOOK_SECRET, demoEnv, makeClock } from '~/demo';
 import {
   LABELS,
   PLATFORM_ACCOUNTS,
@@ -399,8 +403,8 @@ export interface ConsoleEngine {
     credits: number;
   }): Promise<WebhookResult>;
 
-  // The engine's own HTTP service (src/server.ts createServer), bound to this tab's economy, so
-  // POST /submit runs a wire operation through the same ledger the UI drives.
+  // The handler the front door hands back, bound to this tab's economy, so POST /submit runs a
+  // wire operation through the same ledger the UI drives.
   httpFetch(request: Request): Promise<Response>;
 
   advanceTime(ms: number): void;
@@ -410,8 +414,8 @@ export interface ConsoleEngine {
   setFault(on: boolean): void;
   setMaturityDays(days: number): Promise<void>;
   setMaxAttempts(n: number): Promise<void>;
-  // Gate knobs: arm the four gates the demo relaxes by default. Each mutates the shared config in
-  // place, the same way setMaturityDays does, so the next submit sees it without a rebuild.
+  // Gate knobs: arm the four gates the demo relaxes by default. Each lands the same way
+  // setMaturityDays does, so the next submit sees the new value.
   setVelocityLimit(credits: number): Promise<void>;
   setMaintenance(on: boolean): Promise<void>;
   setPayoutMinimum(credits: number): Promise<void>;
@@ -422,10 +426,12 @@ export interface ConsoleEngine {
   // re-locks and resumes.
   rateBoard(): Promise<RateBoard>;
   unlockRates(): Promise<{ ok: boolean; message: string }>;
-  setRates(input: { buyPerThousand: number; parPerThousand: number }): {
+  // Async because rebuilding the economy is: createApp is the only construction path and it only
+  // comes in an async spelling, so a live rate change cannot be answered synchronously.
+  setRates(input: { buyPerThousand: number; parPerThousand: number }): Promise<{
     ok: boolean;
     message: string;
-  };
+  }>;
   lockRates(): Promise<{ ok: boolean; message: string }>;
 
   reset(): Promise<void>; // rebuild engine + re-seed the demo (re-seeds the configured store)
@@ -532,6 +538,62 @@ export async function buildEngine(): Promise<ConsoleEngine> {
   // Build (or rebuild) the engine + worker over one env-selected store — two separate selections
   // would leave the worker blind to the economy's in-memory state.
   let ports: Ports;
+  let app: App;
+
+  // What this console is, stated as a module: its nine port overrides, and no HTTP authenticate
+  // posture because the whole engine runs in the visitor's tab. The rates port is rebuilt from
+  // ratesConfig on every call, so a repricing rides the next boot.
+  const consoleModule = () =>
+    ({
+      authenticate: false,
+      ports: {
+        signer,
+        processor,
+        rates: configuredRates(ratesConfig),
+        pricing: flatFee(),
+        clock,
+        ids,
+        digest,
+        logger,
+        meter,
+      },
+      // Mounts POST /webhooks/console. The wire form carries credits as a number because JSON has
+      // no bigint; the Amount is rebuilt here, on the engine's side of the boundary.
+      providers: {
+        console: (raw: unknown): PurchaseEvent => {
+          const body = raw as {
+            eventId: string;
+            userId: string;
+            credits: number;
+          };
+          return {
+            provider: 'console',
+            eventId: body.eventId,
+            kind: 'purchase',
+            userId: body.userId,
+            amount: credits(body.credits),
+            source: 'card',
+          };
+        },
+      },
+    }) as const;
+
+  // The worker is constructed and deliberately never started: the demo advances its own clock and
+  // drives each sweep by hand, so a background timer would move money the visitor did not ask for.
+  // createApp builds it without starting it — startWorker() is the separate, explicit call.
+  function adopt(next: App): void {
+    if (next.worker === null) {
+      throw new Error(
+        'createApp returned no worker; the console drives sweeps itself',
+      );
+    }
+    app = next;
+    ports = next.ports;
+    economy = next.economy;
+    workerRef = next.worker;
+    store = next.ports.store;
+  }
+
   async function rebuild(): Promise<void> {
     idSeq = 0;
     clock.set(0);
@@ -540,34 +602,30 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     ratesConfig = { ...DEV_RATES };
     ratesUnlocked = false;
 
-    ports = await openPorts(demoEnv(maturityDays, maxAttempts), {
-      signer,
-      processor,
-      rates: configuredRates(ratesConfig),
-      pricing: flatFee(),
-      clock,
-      ids,
-      digest,
-      logger,
-      meter,
-    });
-    applyPorts();
+    adopt(
+      await createApp(consoleModule(), {
+        env: demoEnv(maturityDays, maxAttempts),
+      }),
+    );
     deliveredEvents = [];
     subIds = [];
   }
 
-  function applyPorts(): void {
-    economy = createEconomy(ports);
-    workerRef = createWorker(ports, economy);
-    store = ports.store;
-  }
-
   // The engine freezes its config, so a knob change rebuilds the economy and worker over the
   // same store. State lives in the store and the clock and id sequence continue, so nothing
-  // visible resets — reset() minus the store.
-  function reconfigure(patch: Partial<Config>): void {
-    ports = { ...ports, config: mergeConfig(ports.config, patch) };
-    applyPorts();
+  // visible resets.
+  //
+  // createApp resolves config once at boot, so a live knob has to re-enter through the
+  // portsBag door with a patched bag. The bag already carries the module's port overrides, which
+  // is why it is passed instead of the module — portsBag wins wholesale and applies neither
+  // `ports` nor `policy` again. It also means this app never owns the store, so close() below
+  // releases it by hand.
+  async function reconfigure(patch: Partial<Config>): Promise<void> {
+    adopt(
+      await createApp(consoleModule(), {
+        portsBag: { ...ports, config: mergeConfig(ports.config, patch) },
+      }),
+    );
   }
 
   // Summed in bigint minor units and rendered exactly; a wallet total can cross 2^53 minor,
@@ -604,7 +662,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     return p + m;
   }
 
-  // Posting legs -> render-ready leg views. Debit is the positive-minor side.
+  // Debit is the positive-minor side.
   function toLegViews(legs: ReadonlyArray<Leg>): LegView[] {
     return legs.map((leg: Leg): LegView => {
       const value = toCredits(leg.amount);
@@ -787,6 +845,20 @@ export async function buildEngine(): Promise<ConsoleEngine> {
         note: `${cr} of expired promotional credits was reclaimed from ${user}.`,
       };
     }
+    // The surplus burn answers to no grant: pooled promo credit above the user's live grant
+    // faces, swept back to the platform. The arrow points at the platform, the receiver.
+    if (metaKind === 'promos.surplus') {
+      return {
+        ...base,
+        kind: 'promoSurplus',
+        label: LABELS.promoSurplus,
+        listing: 'Surplus promo reclaimed',
+        paymentType: 'Promotion',
+        buyer: user,
+        seller: 'Platform',
+        note: `${cr} of promotional credits sat pooled on ${user}'s promo balance with no live grant to claim it (a refund can restore promo credit after its grant has expired), so it was returned to the platform's promotional float.`,
+      };
+    }
     // Any other worker posting: surfaced with a humanized title and a system-side note, since these
     // move platform money between platform accounts.
     const title = humanizeKind(metaKind);
@@ -899,26 +971,30 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     await api.runJobs();
     await api.settleSubmitted();
 
-    // A payout left in flight at SUBMITTED, awaiting its settlement report.
-    await api.requestPayout({
-      userId: 'usr_pixel',
-      credits: await fraction('usr_pixel', 0.6),
-    });
-    api.advanceTime(DAY_MS);
-    await api.runJobs();
-
-    // A payout that fails: provider down, retry cap 1, so the next run abandons it and reverses the
-    // reserve back to nova's earned balance.
+    // A payout the gateway never answers for. The outage switch takes Tilia off the air, so the
+    // hand-off leaves the saga SUBMITTED with no provider reference — nothing declined it, and no
+    // retry cap can end it, because a throw cannot say whether the money moved. The settlement
+    // window is what ends it. The jump needs a run on either side: the window is measured from the
+    // hand-off, and a rescheduled payout is swept only once its dueAt comes round.
     api.setFault(true);
-    await api.setMaxAttempts(1);
     await api.requestPayout({
       userId: 'usr_nova',
       credits: await fraction('usr_nova', 0.3),
     });
     api.advanceTime(DAY_MS);
     await api.runJobs();
+    api.advanceTime(ports.config.maxPayoutAgeMs + DAY_MS);
+    await api.runJobs();
     api.setFault(false);
-    await api.setMaxAttempts(5);
+
+    // A payout left in flight at SUBMITTED, awaiting its settlement report. It is requested after
+    // the timeout above so the jump past the settlement window cannot age this one out too.
+    await api.requestPayout({
+      userId: 'usr_pixel',
+      credits: await fraction('usr_pixel', 0.6),
+    });
+    api.advanceTime(DAY_MS);
+    await api.runJobs();
 
     // One more left mid-flight (RESERVED) so the board isn't all terminal.
     await api.requestPayout({
@@ -1132,9 +1208,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
       return { rows, total: page.total, offset, limit };
     },
 
-    // Newest first, streamed from the saga list; views are built only for the page window. The
-    // terminal captions (failure reason / USD paid) come from the saga's own terminal-outcome
-    // fields, not a posting-meta side channel.
+    // Newest first, streamed from the saga list; views are built only for the page window.
     payouts: async (req) => {
       const eco = economy;
       const { offset, limit } = clampPage(req);
@@ -1396,7 +1470,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
       return p ? viewFromPosting(eco, txnId, p) : null;
     },
 
-    // An account's postings and its live balance. The wide range covers the whole demo history.
+    // The wide range covers the whole demo history.
     statement: async (account) => {
       const eco = economy;
       const ref = account as AccountRef;
@@ -1417,7 +1491,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
       };
     },
 
-    // The account's tamper-evident chain, each link carrying this account's net movement.
+    // Each link carries this account's net movement.
     lineage: async (account) => {
       const eco = economy;
       const links: LineageLink[] = [];
@@ -1558,20 +1632,31 @@ export async function buildEngine(): Promise<ConsoleEngine> {
         };
       }),
 
-    // A verified inbound provider event: handleWebhook enqueues it (deduped on the event id), then
+    // A verified inbound provider event, delivered over the mounted /webhooks/console route the
+    // module's `providers` seam opens: the intake enqueues it (deduped on the event id), then
     // draining the inbox applies it. A redelivery of the same event id is a duplicate that applies
     // nothing, so the top-up posts exactly once.
     postWebhook: ({ eventId, userId, credits: creditsAmount }) =>
       mutate(async () => {
-        const event: PurchaseEvent = {
-          provider: 'console',
-          eventId,
-          kind: 'purchase',
-          userId,
-          amount: credits(creditsAmount),
-          source: 'card',
+        // Delivered the way a provider delivers one: signed, over the mounted route, so the demo
+        // exercises the same intake a real integration hits — HMAC, replay window and all.
+        const body = new TextEncoder().encode(
+          JSON.stringify({ eventId, userId, credits: creditsAmount }),
+        );
+        const response = await app.handler(
+          new Request('http://console/webhooks/console', {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              [SIGNATURE_HEADER]: await signBody(body, WEBHOOK_SECRET),
+              [TIMESTAMP_HEADER]: String(clock.now()),
+            },
+            body,
+          }),
+        );
+        const ack = (await response.json()) as {
+          status: WebhookResult['status'];
         };
-        const ack = await handleWebhook(store, { ids, clock }, event);
         const run = await workerRef.sweep({
           only: ['drainInbox'],
           limit: 100,
@@ -1591,11 +1676,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
         // The app mounts at /console/, but the engine's server routes from the path root.
         const url = new URL(request.url);
         url.pathname = url.pathname.replace(/^\/console/, '');
-        const response = await createServer({
-          economy,
-          ports,
-          authenticate: false,
-        })(new Request(url, request));
+        const response = await app.handler(new Request(url, request));
         invalidateReadCaches();
         return response;
       }),
@@ -1636,11 +1717,10 @@ export async function buildEngine(): Promise<ConsoleEngine> {
       faultMode = on;
     },
 
-    // createEconomy snapshots config at construction, but the engine and worker hold the config
     setMaturityDays: (days) =>
       mutate(async () => {
         maturityDays = Math.max(0, Math.round(days));
-        reconfigure({
+        await reconfigure({
           maturityHorizonMs: { default: maturityDays * DAY_MS },
         });
       }),
@@ -1648,21 +1728,20 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     setMaxAttempts: (n) =>
       mutate(async () => {
         maxAttempts = Math.max(1, Math.round(n));
-        reconfigure({ maxPayoutAttempts: maxAttempts });
+        await reconfigure({ maxPayoutAttempts: maxAttempts });
       }),
 
     // Velocity ceiling in credits; the gate compares against minor units.
     setVelocityLimit: (creditsAmount) =>
       mutate(async () => {
-        reconfigure({
+        await reconfigure({
           velocityLimitMinor: BigInt(
             Math.max(0, Math.round(creditsAmount * 100)),
           ),
         });
       }),
 
-    // The rate desk, read live. `inFlightPayouts` is what must reach zero before a change is safe:
-    // settlement prices reserved credits at the live rate, so a payout mid-flight would settle wrong.
+    // The rate desk, read live.
     rateBoard: async () => {
       const eco = economy;
       const buyPerThousand = rateToPerThousand(ports.rates.buy('CREDIT'));
@@ -1694,7 +1773,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
             message: `Cannot reprice with ${inFlight} payout${inFlight === 1 ? '' : 's'} in flight — settle or reverse them first, so none settles at the new rate.`,
           };
         }
-        reconfigure({
+        await reconfigure({
           pauseStartMs: clock.now(),
           pauseEndMs: clock.now() + DAY_MS,
         });
@@ -1707,9 +1786,9 @@ export async function buildEngine(): Promise<ConsoleEngine> {
         };
       }),
 
-    // Apply bounded buy/par (payout follows par) while the desk is open. Par changes re-value backing
-    // at the new peg, so the solvency cache is dropped. A fresh value-embedded rateId is minted.
-    setRates: ({ buyPerThousand, parPerThousand }) => {
+    // Par changes re-value backing at the new peg, so the solvency cache is dropped. A fresh
+    // value-embedded rateId is minted.
+    setRates: async ({ buyPerThousand, parPerThousand }) => {
       if (!ratesUnlocked) {
         return {
           ok: false,
@@ -1753,8 +1832,11 @@ export async function buildEngine(): Promise<ConsoleEngine> {
         payoutRate: par.rate,
         payoutScale: par.scale,
       };
-      ports = { ...ports, rates: configuredRates(ratesConfig) };
-      applyPorts();
+      adopt(
+        await createApp(consoleModule(), {
+          portsBag: { ...ports, rates: configuredRates(ratesConfig) },
+        }),
+      );
       invalidateReadCaches();
       return {
         ok: true,
@@ -1762,11 +1844,10 @@ export async function buildEngine(): Promise<ConsoleEngine> {
       };
     },
 
-    // Re-lock the desk and resume everyday writes.
     lockRates: () =>
       mutate(async () => {
         ratesUnlocked = false;
-        reconfigure({ pauseStartMs: null, pauseEndMs: null });
+        await reconfigure({ pauseStartMs: null, pauseEndMs: null });
         return {
           ok: true,
           message: 'Rate desk locked and everyday writes resumed.',
@@ -1777,7 +1858,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
     // same way advancing past the maturity horizon clears FUNDS_IMMATURE.
     setMaintenance: (on) =>
       mutate(async () => {
-        reconfigure({
+        await reconfigure({
           pauseStartMs: on ? clock.now() : null,
           pauseEndMs: on ? clock.now() + DAY_MS : null,
         });
@@ -1785,7 +1866,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
 
     setPayoutMinimum: (creditsAmount) =>
       mutate(async () => {
-        reconfigure({
+        await reconfigure({
           payoutMinimumEarnedMinor: BigInt(
             Math.max(0, Math.round(creditsAmount * 100)),
           ),
@@ -1794,7 +1875,7 @@ export async function buildEngine(): Promise<ConsoleEngine> {
 
     setPayoutIntervalDays: (days) =>
       mutate(async () => {
-        reconfigure({
+        await reconfigure({
           payoutMinIntervalMs: Math.max(0, Math.round(days)) * DAY_MS,
         });
       }),

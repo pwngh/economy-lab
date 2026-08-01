@@ -15,7 +15,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
 
-import { GENESIS_HEX } from '#src/store-kit.ts';
+import { GENESIS_HEX } from '~/lab-gap';
 
 import { getEngine } from '~/engine';
 import {

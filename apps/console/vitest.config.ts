@@ -30,6 +30,9 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['test/**/*.test.{ts,tsx}'],
+    // Dates the built packages this app loads against their sources, and refuses the run rather
+    // than report on the previous build.
+    globalSetup: ['./test/freshness.setup.ts'],
     // Keep react-router and testing-library in the vite pipeline so they share the test files'
     // React instance; loaded natively they bind a second copy and hooks explode.
     server: { deps: { inline: [/react-router/, /@testing-library/] } },

@@ -17,11 +17,11 @@
 
 import { redirect } from 'react-router';
 
+import { EconomyError } from '@pwngh/economy/ops';
+import type { Amount } from '@pwngh/economy/ops';
 import { DAY_MS } from '~/demo';
+import { encodeAmount } from '~/lab-gap';
 import { fmtAmount } from '~/ui';
-import { EconomyError } from '#src/errors.ts';
-import { encodeAmount } from '#src/money.ts';
-import type { Amount } from '#src/money.ts';
 
 export interface FlashFigure {
   label: string;
@@ -50,8 +50,8 @@ export type Flash =
       form?: string;
     };
 
-// Plain-English line for each engine verdict, shown beside the code (which renders verbatim). An
-// unmapped code falls back to a tidied form of itself.
+// The plain-English line for each engine verdict; an unmapped code falls back to a tidied form
+// of itself.
 const REASON_TEXT: Record<string, string> = {
   INSUFFICIENT_FUNDS: 'The account is short of what this operation needs.',
   FUNDS_IMMATURE:
@@ -164,7 +164,7 @@ export function outcomeFlash(
 // A thrown fault (the authorization gate, a malformed operation) becomes an outcome flash too, so
 // its code renders the same way a rejection's does.
 export function faultFlash(err: unknown, form?: string): Flash {
-  const code = err instanceof EconomyError ? err.code : 'ERROR';
+  const code = EconomyError.is(err) ? err.code : 'ERROR';
   const message =
     REASON_TEXT[code] ??
     (err instanceof Error ? err.message : 'The operation failed.');

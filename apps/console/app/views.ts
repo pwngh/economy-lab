@@ -13,19 +13,16 @@
 // functions that map raw ledger/engine data into them. No engine state lives here — economy.ts
 // holds the live economy and calls into these.
 
-import { SYSTEM } from '#src/accounts.ts';
-import { ERROR_CODES } from '#src/errors.ts';
-import { encodeAmount, toAmount } from '#src/money.ts';
+import type { Amount } from '@pwngh/economy/ops';
 
-import type { AccountRef } from '#src/accounts.ts';
-import type { Amount } from '#src/money.ts';
-import type { Saga } from '#src/ports.ts';
+import { ERROR_CODES, SYSTEM, encodeAmount, toAmount } from '~/lab-gap';
+import type { AccountRef, Saga } from '~/lab-gap';
 
 // --- Public view types: render-ready shapes the pages receive ---
 
 // Everything the ledger feed can show. The first four are user operations; the rest are postings
-// the background worker makes (payout settled/reversed, cash leg, fee sweep, promo expiry). `other`
-// is the catch-all for any future worker posting.
+// the background worker makes (payout settled/reversed, cash leg, fee sweep, promo expiry and
+// surplus). `other` is the catch-all for any future worker posting.
 export type TxnKind =
   | 'topUp'
   | 'spend'
@@ -36,9 +33,9 @@ export type TxnKind =
   | 'payoutCash'
   | 'feeSweep'
   | 'promoExpiry'
+  | 'promoSurplus'
   | 'other';
 
-// One leg of a posting, ready to render.
 export interface LegView {
   account: string;
   label: string;
@@ -47,7 +44,6 @@ export interface LegView {
   currency: string;
 }
 
-// One recorded transaction, ready for the ledger feed.
 export interface TxnView {
   id: string;
   at: number;
@@ -70,10 +66,7 @@ export interface TxnView {
   balancedTo: number;
 }
 
-// One user's three credit balances, plus their total. "Purchased" credits were bought with cash;
-// "earned" credits are a seller's revenue from sales; "promotional" credits are marketing grants.
-// The figures are exact display strings (creditsDisplay): summed in bigint minor units, never
-// through Number.
+// Exact display strings (creditsDisplay): summed in bigint minor units, never through Number.
 export interface WalletView {
   userId: string;
   purchased: string;
@@ -82,7 +75,6 @@ export interface WalletView {
   total: string;
 }
 
-// Result of the engine's integrity check ("prove"): which properties currently hold.
 export interface ProveView {
   conserved: boolean;
   backed: boolean;
@@ -96,9 +88,7 @@ export interface ProveView {
   allGreen: boolean;
 }
 
-// Whether real cash on hand covers what the platform owes users. Trust cash is the USD held in
-// reserve to back spendable credits. Money figures are exact display strings (creditsDisplay);
-// these ledger-wide sums are the first to outgrow Number.
+// Exact display strings (creditsDisplay): these ledger-wide sums are the first to outgrow Number.
 export interface SolvencyView {
   userCredits: string;
   backed: boolean;
@@ -111,7 +101,6 @@ export interface SolvencyView {
   promotional: string;
 }
 
-// One of the platform's own "house" ledger accounts, for the Overview's platform balances.
 export interface PlatformAccountView {
   key: string;
   label: string;
@@ -120,12 +109,9 @@ export interface PlatformAccountView {
   currency: 'CREDIT' | 'USD';
 }
 
-// One payout, as a card on the board. A payout runs as a "saga": one request tracked across several
-// steps over time (reserve the credits, hand them to the payment provider, then settle, or give up).
 export interface PayoutView {
   id: string;
   userId: string;
-  // Seller's credits set aside when the payout was requested.
   reserveCredits: number;
   state: Saga['state'];
   providerRef: string | null;
@@ -139,9 +125,8 @@ export interface PayoutView {
   payoutUsd: number | null;
 }
 
-// The current state of the simulation controls, for the topbar clock, Controls page, and the market page's
-// gate controls to render. The gate knobs are read live from the engine config, so they never
-// drift from what the next submit will see.
+// The gate knobs are read live from the engine config, so they never drift from what the next
+// submit will see.
 export interface SimSettings {
   faultMode: boolean;
   maturityHorizonDays: number;
@@ -153,9 +138,8 @@ export interface SimSettings {
   now: number;
 }
 
-// The treasury's rate desk: the live rates (USD per 1,000 credits) plus the state that governs a
-// change. Repricing is a locked operation — you unlock only when the economy is quiesced (no payout
-// in flight), which pauses everyday writes; the new rates are bounded; re-locking resumes.
+// Rates are USD per 1,000 credits. Unlocking requires a quiesced economy and pauses everyday
+// writes, so the board also carries what currently blocks a change.
 export interface RateBoard {
   buyPerThousand: number;
   parPerThousand: number;
@@ -171,7 +155,7 @@ export interface RateBoard {
   maxSpreadMultiple: number;
 }
 
-// The economy's live pause state, for the maintenance banner. Times are simulated-clock epochs.
+// Times are simulated-clock epochs.
 export interface StatusView {
   maintenanceActive: boolean;
   pauseStart: number | null;
@@ -179,8 +163,6 @@ export interface StatusView {
   resumesAt: number | null;
 }
 
-// The tally of a try-to-break-it burst: how many of `attempts` concurrent spends committed, how
-// many the ledger refused as duplicates or short of funds, and how far the balance actually moved.
 export interface RaceResult {
   attempts: number;
   committed: number;
@@ -194,14 +176,12 @@ export interface RaceResult {
 
 // --- Ledger explorer drill: statement -> posting -> hash chain -> checkpoint ---
 
-// One entry of an account's statement: the posting that touched it and by how much.
 export interface StatementEntry {
   txnId: string;
   credits: number;
   at: number;
 }
 
-// An account, its current balance, its label, and the postings that touched it.
 export interface StatementView {
   account: string;
   label: string;
@@ -210,8 +190,7 @@ export interface StatementView {
   entries: StatementEntry[];
 }
 
-// One link of an account's tamper-evident hash chain: the posting, the head hash before and after,
-// and this account's net movement in it. `prevHash` of the first is the fixed genesis.
+// `prevHash` of the first link is the fixed genesis.
 export interface LineageLink {
   txnId: string;
   prevHash: string;
@@ -219,8 +198,7 @@ export interface LineageLink {
   credits: number;
 }
 
-// The latest signed checkpoint: the Merkle root over every account head, its signature, and the
-// count of heads it covers.
+// `count` is how many account heads the root covers.
 export interface CheckpointView {
   root: string;
   signature: string;
@@ -241,8 +219,7 @@ export type FindHit =
       checkpoint: CheckpointView;
     };
 
-// One subscription this tab opened, re-read live from the store, so the renewal sweep shows up
-// as state and next-due changes.
+// Re-read live from the store, so the renewal sweep shows up as state and next-due changes.
 export interface SubscriptionView {
   id: string;
   userId: string;
@@ -255,7 +232,6 @@ export interface SubscriptionView {
   nextDueAt: number;
 }
 
-// One payout saga drilled open: the card and every ledger posting that carries its saga id.
 export interface SagaDetail {
   saga: PayoutView;
   postings: TxnView[];
@@ -267,7 +243,7 @@ export interface SagaDetail {
 
 // --- Event pipeline: outbox -> relay -> inbox ---
 
-// One event the relay delivered through the console's capture dispatcher.
+// The relay delivers these through the console's own capture dispatcher, never over a wire.
 export interface PipelineEvent {
   id: string;
   type: string;
@@ -277,20 +253,17 @@ export interface PipelineEvent {
   audience: 'internal' | 'client';
 }
 
-// The pipeline page state: the events the relay has delivered so far in this tab.
 export interface PipelineView {
   delivered: PipelineEvent[];
 }
 
-// The result of a relay run: how many outbox rows it delivered, failed, or dead-lettered.
 export interface RelayResult {
   relayed: number;
   failed: number;
   deadLettered: number;
 }
 
-// The result of an inbound webhook: whether the provider event was newly accepted or a duplicate,
-// and whether draining the inbox applied a posting (a duplicate applies nothing).
+// `applied` is what draining the inbox posted; a duplicate applies nothing.
 export interface WebhookResult {
   status: 'accepted' | 'duplicate';
   applied: boolean;
@@ -298,8 +271,7 @@ export interface WebhookResult {
 
 // --- Mapping helpers ---------------------------------------------------------------
 
-// Amounts are stored as whole "minor units" to stay exact (no floating-point rounding). One credit
-// is 100 minor units, the same way one dollar is 100 cents.
+// Minor units per credit.
 const SCALE = 100;
 
 export const LABELS: Record<TxnKind, string> = {
@@ -312,6 +284,7 @@ export const LABELS: Record<TxnKind, string> = {
   payoutCash: 'Payout cash-out',
   feeSweep: 'Fee sweep',
   promoExpiry: 'Promo expired',
+  promoSurplus: 'Promo surplus',
   other: 'Ledger posting',
 };
 
