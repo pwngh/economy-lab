@@ -1,0 +1,52 @@
+{
+  "name": "@pwngh/economy-cli",
+  "version": "0.1.0",
+  "description": "Run and inspect an Economy app",
+  "license": "MIT",
+  "author": "Preston Neal",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pwngh/economy-lab.git",
+    "directory": "packages/cli"
+  },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "dist",
+    "src",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "pretest": "tsc -p . --noEmit",
+    "test": "node ../../scripts/check-package-fresh.ts && node --import tsx --test-timeout=600000 --test test/*.test.ts",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "dependencies": {
+    "@pwngh/economy-core": "^0.1.0",
+    "@pwngh/economy-auth": "^0.1.0",
+    "@pwngh/economy-lab": "^0.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@pwngh/economy-test": "^0.1.0",
+    "tsx": "^4.19.0",
+    "typescript": "^6.0.3"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://github.com/pwngh/economy-lab/tree/main/packages/cli#readme"
+}

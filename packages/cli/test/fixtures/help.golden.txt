@@ -1,0 +1,87 @@
+=== economy --help ===
+economy — run an economy module, and answer what it is
+
+usage: economy <verb> [flags]
+
+  dev     run the module locally: memory store, dev tokens, reload on change
+  serve   run the module in production; every dev stand-in refuses before the bind
+  worker  run the worker role alone — background sweeps, no socket
+  check   compile the module and the environment, and print what they resolve to
+  routes  print the auth posture and the table the module mounts
+
+  --help, -h       this roster; `economy <verb> --help` opens one verb
+  --version, -v    the version of this package
+
+no module file at all is a complete dev module: dev, worker, check, and routes run on
+defaults. serve still refuses to bind without an auth posture.
+=== economy dev --help ===
+economy dev — run the module locally: memory store, dev tokens, reload on change
+
+usage: economy dev [--app file] [--demo] [--watch] [--no-worker] [--host h] [--port n]
+                   [--interval ms] [--batch n]
+
+flags:
+  --app file     the module to run (default: economy.app.* or economy/ beside you)
+  --demo         seed a top-up, a spend, and a rejection at boot (default: no seed)
+  --watch        restart through the runtime's own watcher (default: the module file, in place)
+  --no-worker    bind the socket without the background half (default: the worker runs too)
+  --host h       the interface to bind (default: 127.0.0.1 on dev, every interface on serve)
+  --port n       the port to bind (default: 3000)
+  --interval ms  how often the worker sweeps (default: 60000)
+  --batch n      how many jobs one sweep takes (default: 100)
+
+example:
+  economy dev --demo --port 4000   # seeded, on 127.0.0.1:4000
+=== economy serve --help ===
+economy serve — run the module in production; every dev stand-in refuses before the bind
+
+usage: economy serve [--app file] [--no-worker] [--host h] [--port n] [--interval ms]
+                     [--batch n]
+
+flags:
+  --app file     the module to run (default: economy.app.* or economy/ beside you)
+  --no-worker    bind the socket without the background half (default: the worker runs too)
+  --host h       the interface to bind (default: 127.0.0.1 on dev, every interface on serve)
+  --port n       the port to bind (default: 3000)
+  --interval ms  how often the worker sweeps (default: 60000)
+  --batch n      how many jobs one sweep takes (default: 100)
+
+example:
+  NODE_ENV=production economy serve --port 8080   # binds every interface
+=== economy worker --help ===
+economy worker — run the worker role alone — background sweeps, no socket
+
+usage: economy worker [--app file] [--demo] [--interval ms] [--batch n]
+
+flags:
+  --app file     the module to run (default: economy.app.* or economy/ beside you)
+  --demo         seed a top-up, a spend, and a rejection at boot (default: no seed)
+  --interval ms  how often the worker sweeps (default: 60000)
+  --batch n      how many jobs one sweep takes (default: 100)
+
+example:
+  economy worker --interval 5000   # sweeps every 5 seconds
+=== economy check --help ===
+economy check — compile the module and the environment, and print what they resolve to
+
+usage: economy check [--app file] [--json] [--desugar] [--quiet-lints]
+
+flags:
+  --app file     the module to run (default: economy.app.* or economy/ beside you)
+  --json         print the report canonical, for tooling (default: the human table)
+  --desugar      print the floor calls the module compiles to (default: the human table)
+  --quiet-lints  stop a lint from setting exit 1 (default: a lint exits 1)
+
+example:
+  economy check --json   # the same report, canonical, for CI
+=== economy routes --help ===
+economy routes — print the auth posture and the table the module mounts
+
+usage: economy routes [--app file] [--json]
+
+flags:
+  --app file  the module to run (default: economy.app.* or economy/ beside you)
+  --json      print the report canonical, for tooling (default: the human table)
+
+example:
+  economy routes --json   # each route tagged module or product
