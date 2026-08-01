@@ -3,7 +3,7 @@
   //
   // The deployable is the composed one-origin site at the repo root: the prerendered docs at /,
   // the console SPA at /console/, and the snippet runner at /runner/ — assembled by
-  // `npm run site` (scripts/compose-site.mjs) and deployed by `npm run site:deploy`, both at the
+  // `npm run site` (site/src/compose.mjs) and deployed by `npm run site:deploy`, both at the
   // repo root. Everything served is pure static files — no Worker, no Functions, no runtime; the
   // apps' build/server/ output is a build-time artifact (it renders the HTML) and never ships.
   //
