@@ -13,12 +13,15 @@
 // anchors can't drift out from under the links. Bump REPO_REF when re-pointing the docs at a newer
 // snapshot, then re-anchor the chips; app/anchors.test.ts fails while they disagree.
 export const REPO_URL = 'https://github.com/pwngh/economy-lab';
-export const REPO_REF = 'ef265294415a29313402a5600b26c287b6fddf92';
+export const REPO_REF = '1538730d3b3553e5bc72953d93a1d08bf89376f6';
 
 /**
- * Turn a `sourceRefs` chip (`path · symbol`, the symbol descriptive only) into a GitHub blob URL at
- * the pinned ref. An optional `#Lnn` line anchor on the path carries straight through to the URL.
- * Returns null when the chip has no path, so the renderer can fall back to a plain (unlinked) label.
+ * Turn a `sourceRefs` chip (`path · symbol`) into a GitHub blob URL at the pinned ref. An optional
+ * `#Lnn` line anchor on the path carries straight through to the URL. Returns null when the chip
+ * has no path, so the renderer can fall back to a plain (unlinked) label.
+ *
+ * The symbol is not decoration: `app/anchors.test.ts` resolves it against the declaration the line
+ * anchor points at, so a chip whose symbol has moved fails rather than linking to the wrong lines.
  */
 export function sourceUrl(ref: string): string | null {
   const path = ref.split('·')[0]?.trim();
