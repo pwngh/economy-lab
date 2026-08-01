@@ -1,0 +1,169 @@
+{
+  "name": "@pwngh/economy",
+  "version": "0.1.0",
+  "description": "Build a credits economy on a double-entry ledger",
+  "license": "MIT",
+  "author": "Preston Neal",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pwngh/economy-lab.git",
+    "directory": "packages/economy"
+  },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "dist",
+    "src",
+    "manifest.json",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p . && node ../../scripts/support/bin-mode.ts",
+    "check": "tsc -p tsconfig.check.json",
+    "generate": "node scripts/generate.ts",
+    "prepublishOnly": "npm run build && npm run check"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^6.0.3"
+  },
+  "sideEffects": [
+    "./src/cli-entry.ts",
+    "./dist/cli-entry.js"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    "./app": {
+      "types": "./dist/core.d.ts",
+      "default": "./dist/core.js"
+    },
+    "./module": {
+      "types": "./dist/core/module.d.ts",
+      "default": "./dist/core/module.js"
+    },
+    "./ops": {
+      "types": "./dist/core/ops.d.ts",
+      "default": "./dist/core/ops.js"
+    },
+    "./auth": {
+      "types": "./dist/auth.d.ts",
+      "default": "./dist/auth.js"
+    },
+    "./money": {
+      "types": "./dist/money.d.ts",
+      "default": "./dist/money.js"
+    },
+    "./money/rate": {
+      "types": "./dist/money/rate.d.ts",
+      "default": "./dist/money/rate.js"
+    },
+    "./money/bps": {
+      "types": "./dist/money/bps.d.ts",
+      "default": "./dist/money/bps.js"
+    },
+    "./money/wire-value": {
+      "types": "./dist/money/wire-value.d.ts",
+      "default": "./dist/money/wire-value.js"
+    },
+    "./receipt": {
+      "types": "./dist/receipt.d.ts",
+      "default": "./dist/receipt.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./events": {
+      "types": "./dist/events.d.ts",
+      "default": "./dist/events.js"
+    },
+    "./webhook": {
+      "types": "./dist/webhook.d.ts",
+      "default": "./dist/webhook.js"
+    },
+    "./test": {
+      "types": "./dist/test.d.ts",
+      "default": "./dist/test.js"
+    },
+    "./ui": {
+      "types": "./dist/ui.d.ts",
+      "default": "./dist/ui.js"
+    },
+    "./ui/core": {
+      "types": "./dist/ui/core.d.ts",
+      "default": "./dist/ui/core.js"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "default": "./dist/cli.js"
+    },
+    "./postgres": {
+      "types": "./dist/postgres.d.ts",
+      "default": "./dist/postgres.js"
+    },
+    "./mysql": {
+      "types": "./dist/mysql.d.ts",
+      "default": "./dist/mysql.js"
+    },
+    "./mysql/mariadb": {
+      "types": "./dist/mysql/mariadb.d.ts",
+      "default": "./dist/mysql/mariadb.js"
+    },
+    "./redis": {
+      "types": "./dist/redis.d.ts",
+      "default": "./dist/redis.js"
+    },
+    "./sqs": {
+      "types": "./dist/sqs.d.ts",
+      "default": "./dist/sqs.js"
+    },
+    "./adapters/express": {
+      "types": "./dist/adapters/express.d.ts",
+      "default": "./dist/adapters/express.js"
+    },
+    "./adapters/fastify": {
+      "types": "./dist/adapters/fastify.d.ts",
+      "default": "./dist/adapters/fastify.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@pwngh/economy-core": "^0.1.0",
+    "@pwngh/economy-auth": "^0.1.0",
+    "@pwngh/economy-money": "^0.1.0",
+    "@pwngh/economy-receipt": "^0.1.0",
+    "@pwngh/economy-client": "^0.1.0",
+    "@pwngh/economy-events": "^0.1.0",
+    "@pwngh/economy-webhook": "^0.1.0",
+    "@pwngh/economy-test": "^0.1.0",
+    "@pwngh/economy-ui": "^0.1.0",
+    "@pwngh/economy-cli": "^0.1.0",
+    "@pwngh/economy-postgres": "^0.1.0",
+    "@pwngh/economy-mysql": "^0.1.0",
+    "@pwngh/economy-redis": "^0.1.0",
+    "@pwngh/economy-sqs": "^0.1.0",
+    "@pwngh/economy-adapters": "^0.1.0"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0",
+    "mariadb": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "mariadb": {
+      "optional": true
+    }
+  },
+  "bin": {
+    "economy": "./dist/cli-entry.js"
+  },
+  "homepage": "https://github.com/pwngh/economy-lab/tree/main/packages/economy#readme"
+}

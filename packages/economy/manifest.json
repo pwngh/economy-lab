@@ -1,0 +1,31 @@
+{
+  "_comment": "The doors. Key = the path a consumer types; value = the package export it re-exports. Every entry is equal — there is no root, no default, and no order. Edit here, then run `npm run generate -w @pwngh/economy` from the repo root; src/ is generated wholesale and is never hand-edited.",
+
+  "economy/app": "@pwngh/economy-core",
+  "economy/module": "@pwngh/economy-core/module",
+  "economy/ops": "@pwngh/economy-core/ops",
+
+  "economy/auth": "@pwngh/economy-auth",
+  "economy/money": "@pwngh/economy-money",
+  "economy/money/rate": "@pwngh/economy-money/rate",
+  "economy/money/bps": "@pwngh/economy-money/bps",
+  "economy/money/wire-value": "@pwngh/economy-money/wire-value",
+  "economy/receipt": "@pwngh/economy-receipt",
+  "economy/client": "@pwngh/economy-client",
+  "economy/events": "@pwngh/economy-events",
+  "economy/webhook": "@pwngh/economy-webhook",
+
+  "economy/test": "@pwngh/economy-test",
+  "economy/ui": "@pwngh/economy-ui",
+  "economy/ui/core": "@pwngh/economy-ui/core",
+  "economy/cli": "@pwngh/economy-cli",
+
+  "economy/postgres": "@pwngh/economy-postgres",
+  "economy/mysql": "@pwngh/economy-mysql",
+  "economy/mysql/mariadb": "@pwngh/economy-mysql/mariadb",
+  "economy/redis": "@pwngh/economy-redis",
+  "economy/sqs": "@pwngh/economy-sqs",
+
+  "economy/adapters/express": "@pwngh/economy-adapters/express",
+  "economy/adapters/fastify": "@pwngh/economy-adapters/fastify"
+}
