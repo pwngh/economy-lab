@@ -1,0 +1,56 @@
+{
+  "name": "create-economy",
+  "version": "0.1.0",
+  "description": "Create a new Economy app",
+  "license": "MIT",
+  "author": "Preston Neal",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pwngh/economy-lab.git",
+    "directory": "packages/create-economy"
+  },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "dist",
+    "src",
+    "templates",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p . && node ../../scripts/support/bin-mode.ts",
+    "test": "node --test-timeout=600000 --test ../../test/create-economy.test.ts",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^6.0.3"
+  },
+  "sideEffects": [
+    "./src/bin.ts",
+    "./dist/bin.js"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "create-economy": "./dist/bin.js"
+  },
+  "keywords": [
+    "create",
+    "scaffold",
+    "starter",
+    "economy",
+    "ledger",
+    "credits",
+    "marketplace"
+  ],
+  "homepage": "https://github.com/pwngh/economy-lab/tree/main/packages/create-economy#readme"
+}

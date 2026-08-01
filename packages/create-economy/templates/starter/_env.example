@@ -1,0 +1,27 @@
+# `economy dev` needs none of this: it runs on a memory store with dev tokens.
+# `economy serve` refuses to bind until every line below is real.
+
+# Names the engine; it opens nothing by itself. The store is three lines the README shows
+# under "Going to production", exported from economy.app.ts; `economy check` refuses until then.
+DATABASE_URL=
+
+WEBHOOK_SECRET=
+SIGNING_SECRET=
+
+# 120 credits to the dollar on the way in, one-for-one at par, $0.005 per credit on the way out.
+CREDIT_BUY_RATE=120
+CREDIT_BUY_SCALE=0
+CREDIT_PAR_RATE=1
+CREDIT_PAR_SCALE=0
+PAYOUT_RATE=5
+PAYOUT_SCALE=3
+
+# How long a card top-up sits immature before it can be paid out.
+MATURITY_HORIZON_CARD_MS=604800000
+
+PROCESSOR_URL=https://payouts.example.com
+
+# Each port is set or explicitly declined; production refuses a missing one either way.
+DISPATCHER_DECLINED=1
+PAYEES_DECLINED=1
+ANCHOR_DECLINED=1
