@@ -111,12 +111,11 @@ export async function runSnippet(block: HTMLElement): Promise<void> {
     report = await snippet(journaling(eco));
   } catch (error) {
     // The real failure, not a curtain: a fault names its code and message verbatim.
-    fault =
-      error instanceof EconomyError
-        ? `${error.code} — ${error.message}`
-        : error instanceof Error
-          ? `${error.name}: ${error.message}`
-          : String(error);
+    fault = EconomyError.is(error)
+      ? `${error.code} — ${error.message}`
+      : error instanceof Error
+        ? `${error.name}: ${error.message}`
+        : String(error);
   }
   const ms = Math.max(1, Math.round(performance.now() - started));
   saveJournal(journal);

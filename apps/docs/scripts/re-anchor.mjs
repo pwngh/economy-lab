@@ -9,86 +9,75 @@
  * @license MIT
  */
 
-// Repairs drifted `#Lnn` sourceRefs chips after a source edit — the write half of the flow
-// whose detection halves are app/anchors.test.ts (symbol within range, against the working
-// tree) and scripts/check-ref.mjs (working tree byte-identical to the pinned REPO_REF).
+// Repairs drifted `#Lnn` chips after a source edit — the write half of the flow whose detection
+// halves are app/anchors.test.ts (the chip resolves to a declaration) and scripts/check-ref.mjs
+// (the working tree is byte-identical to the pinned REPO_REF). It shares app/anchors.ts with the
+// gate, so the tool and the gate cannot disagree about what a chip means.
 //
-// A chip whose range no longer contains its label token gets re-pointed: the token occurrence
-// nearest the old start wins (definition-looking lines first), the range start moves there,
-// and the span is preserved. Chips that still anchor are untouched; a label with no
-// occurrence left in its file is reported, not guessed — that chip needs a human.
+// A chip that already resolves is untouched. A drifted one moves to its symbol's DECLARATION,
+// keeping its span. It never searches for the nearest textual occurrence: doing that once sent a
+// chip eleven lines above its own start, into a neighbouring symbol's @example, where it passed the
+// gate of the day. A symbol with no declaration left, or with more than one and no way to tell them
+// apart, is reported rather than guessed.
 //
 //   npm run anchors:fix        # then re-run `npm test` to confirm, and re-pin after commit
 
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const REPO_ROOT = join(import.meta.dirname, '../../..');
-const CONTENT = join(import.meta.dirname, '../app/content');
+import {
+  CONTENT_DIR,
+  collectChips,
+  defaultContext,
+  labelTarget,
+  resolveChip,
+} from '../app/anchors.ts';
 
-// The same chip grammar anchors.test.ts parses: `path[#Lstart[-Lend]][ · label]`.
-const REF_SHAPE = /^([^#\s·]+)(?:#L(\d+)(?:-L(\d+))?)?(?:\s*·\s*(.+))?$/;
-
-const mdxFiles = (dir) =>
-  readdirSync(dir, { recursive: true, encoding: 'utf8' })
-    .filter((f) => f.endsWith('.mdx'))
-    .map((f) => join(dir, f));
-
-// The page's operation kind counts as a symbol, mirroring the test's pageKind.
-const pageKind = (page) =>
-  (page.split('/').at(-1) ?? page).replace('.mdx', '').replace(/-(\w)/g, (_, c) => c.toUpperCase());
-
-function chipsOf(text) {
-  return [
-    ...text.matchAll(/'((?:src|test|scripts|db)\/[^']+)'/g),
-    ...text.matchAll(/<SourceLink to="([^"]+)"/g),
-  ].flatMap((m) => (m[1] ? [m[1]] : []));
-}
+const inventory = collectChips();
+const ctx = defaultContext();
 
 let fixed = 0;
 let stranded = 0;
-for (const page of mdxFiles(CONTENT)) {
-  let text = readFileSync(page, 'utf8');
-  for (const raw of chipsOf(text)) {
-    const m = REF_SHAPE.exec(raw.trim());
-    if (!m || !m[2] || !m[4]) continue; // no line anchor or no label: nothing to repair
-    const [, path, startS, endS, label] = m;
-    const start = Number(startS);
-    const end = endS ? Number(endS) : start;
-    const lines = readFileSync(join(REPO_ROOT, path), 'utf8').split('\n');
-    const tokens = [...label.trim().matchAll(/[A-Za-z_$][\w$]*/g)].map((t) => t[0]);
-    const candidates = [...tokens, pageKind(page)];
-    const range = lines.slice(start - 1, end).join('\n');
-    if (candidates.some((t) => range.includes(t))) continue; // still anchored
+const edits = new Map();
 
-    const word = new RegExp(`\\b(${candidates.join('|')})\\b`);
-    const defish = /\b(export|const|function|interface|type|class)\b/;
-    const hits = [];
-    lines.forEach((line, i) => {
-      if (word.test(line)) hits.push({ line: i + 1, def: defish.test(line) });
-    });
-    if (hits.length === 0) {
-      console.error(
-        `re-anchor: no occurrence of [${candidates.join(', ')}] left in ${path} (${page.split('/content/')[1]}) — fix by hand`,
-      );
-      stranded += 1;
-      continue;
-    }
-    const best = hits.sort(
-      (a, b) =>
-        Number(b.def) - Number(a.def) || Math.abs(a.line - start) - Math.abs(b.line - start),
-    )[0];
-    const newStart = best.line;
-    const newEnd = newStart + (end - start);
-    const oldAnchor = `#L${start}${endS ? `-L${end}` : ''}`;
-    const newAnchor = `#L${newStart}${endS ? `-L${newEnd}` : ''}`;
-    text = text.replaceAll(raw, raw.replace(oldAnchor, newAnchor));
-    fixed += 1;
-    console.log(
-      `re-anchor: ${page.split('/content/')[1]}: ${path}${oldAnchor} -> ${newAnchor} (${label.trim()})`,
-    );
+for (const chip of inventory.chips) {
+  if (chip.start === null || !chip.label) continue;
+  if (resolveChip(chip, ctx) === null) continue;
+
+  const where = `${chip.page}:${chip.line}`;
+  const target = labelTarget(chip.label);
+  const { declarations } = ctx.read(join(ctx.repoRoot, chip.path));
+  const found = (declarations ?? []).filter((d) => d.name === target);
+  if (found.length === 0) {
+    console.error(`re-anchor: ${where}: ${chip.path} declares no ${target} — fix by hand`);
+    stranded += 1;
+    continue;
   }
-  writeFileSync(page, text);
+  // Several declarations of one name is the case a tool must not pick between: `spend` is both the
+  // function and every `kind: 'spend'` in the file. Nearest-to-where-it-was is a guess, so it asks.
+  if (found.length > 1) {
+    const lines = found.map((d) => `L${d.line}`).join(', ');
+    console.error(`re-anchor: ${where}: ${chip.path} declares ${target} at ${lines} — pick one`);
+    stranded += 1;
+    continue;
+  }
+  const declaration = found[0];
+  const span = (chip.end ?? chip.start) - chip.start;
+  const before = `#L${chip.start}${span ? `-L${chip.end}` : ''}`;
+  const after = `#L${declaration.line}${span ? `-L${declaration.line + span}` : ''}`;
+  const list = edits.get(chip.page) ?? [];
+  list.push({ raw: chip.raw, before, after, target });
+  edits.set(chip.page, list);
+  fixed += 1;
+  console.log(`re-anchor: ${where}: ${chip.path}${before} -> ${after} (${target})`);
+}
+
+for (const [page, list] of edits) {
+  const file = join(CONTENT_DIR, page);
+  let text = readFileSync(file, 'utf8');
+  for (const edit of list)
+    text = text.replaceAll(edit.raw, edit.raw.replace(edit.before, edit.after));
+  writeFileSync(file, text);
 }
 
 console.log(`re-anchor: ${fixed} chip(s) moved, ${stranded} need a human`);

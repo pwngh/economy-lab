@@ -64,7 +64,9 @@ const covered = new Set<string>();
 function payload(name: string): Body {
   covered.add(name);
   const sh = readFileSync(`${DIR}${name}.sh`, 'utf8');
-  const raw = sh.match(/-d '([\s\S]+)'\s*$/)?.[1];
+  // The trailing `# → …` response comment carries no quote, so the pattern runs greedily to the
+  // payload's own closing one.
+  const raw = sh.match(/-d '([\s\S]+)'/)?.[1];
   if (raw === undefined) throw new Error(`${name}.sh carries no -d '…' payload`);
   return JSON.parse(raw) as Body;
 }
@@ -136,7 +138,7 @@ it('grant-promo commits as shown', async () => {
 
 it('spend commits as shown, against a funded buyer', async () => {
   const { economy } = freshEconomy();
-  await seed(economy, seedTopUp('usr_buyer', 5_000n));
+  await seed(economy, seedTopUp('usr_buyer', 60_000n));
   await commitOverHttp(economy, payload('spend'));
 });
 
@@ -158,7 +160,7 @@ it('refund commits as shown, against the sale it names', async () => {
 
 it('clawback commits as shown, against a funded user', async () => {
   const { economy } = freshEconomy();
-  await seed(economy, seedTopUp('usr_a1', 5_000n));
+  await seed(economy, seedTopUp('usr_a1', 60_000n));
   await commitOverHttp(economy, payload('clawback'));
 });
 

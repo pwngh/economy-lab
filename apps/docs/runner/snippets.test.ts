@@ -106,27 +106,37 @@ it('rejection-paused: the window stops the user write and not the settlement', a
   expect(report.lines[1]).toMatch(/rejected \(ECONOMY_PAUSED\) — resumes in ~\d+ min/);
 });
 
-it('recipe promo: the grant draws first and leaves spendable whole', async () => {
+it('recipe promo: the grant draws first and the expiry sweep reclaims the rest', async () => {
   const report = await recipePromo();
-  expect(report.lines[2]).toBe('promo left: CREDIT:50.00 · spendable untouched: CREDIT:100.00');
+  expect(report.lines[2]).toBe('promo left: CREDIT:120.00 · spendable untouched: CREDIT:1200.00');
+  expect(report.lines[3]).toBe(
+    'after the promos sweep at day 31: CREDIT:0.00 — the remainder went home',
+  );
 });
 
-it('recipe repricing: quiesced, then a rebuild mints a new rateId', async () => {
+it('recipe repricing: a real quiesce, then a rebuild mints a new rateId', async () => {
   const report = await recipeRepricing();
-  expect(report.lines[0]).toBe('payouts in flight before repricing: 0 — safe to proceed');
-  expect(report.lines[1]).not.toBe(report.lines[2]);
+  expect(report.lines[0]).toBe('payouts in flight before repricing: 1 — drain before the rebuild');
+  expect(report.lines[1]).toBe('after the unwind: 0 in flight — safe to proceed');
+  expect(report.lines[2]).not.toBe(report.lines[3]);
 });
 
-it('recipe entitlement gate: the sale itself flips read.entitled', async () => {
+it('recipe entitlement gate: the sale flips read.entitled and the refund flips it back', async () => {
   const report = await recipeEntitlementGate();
   expect(report.lines[0]).toBe("entitled('usr_g', 'wrld_cape') before the purchase: false");
   expect(report.lines[2]).toBe("entitled('usr_g', 'wrld_cape') after: true");
+  expect(report.lines[3]).toBe(
+    'after the refund: false — the money left and took the access with it',
+  );
 });
 
-it('recipe fee split: fee off the top, shares of the net, leftover to the house', async () => {
+it('recipe fee split: fee off the top, shares of the net, one refund unwinds it all', async () => {
   const report = await recipeFeeSplit();
   expect(report.lines[1]).toMatch(/artist \(6,000 bps\): {3}CREDIT:/);
   expect(report.lines[3]).toMatch(/house \(fee \+ rounding leftover\): CREDIT:/);
+  expect(report.lines[4]).toBe(
+    'after the refund: artist CREDIT:0.00 · animator CREDIT:0.00 · house CREDIT:0.00',
+  );
 });
 
 it('recipe allowance: the period key absorbs the double fire', async () => {
@@ -134,7 +144,7 @@ it('recipe allowance: the period key absorbs the double fire', async () => {
   expect(report.lines[0]).toBe('2026-07 fired:    committed');
   expect(report.lines[1]).toBe('2026-07 re-fired: duplicate — the key absorbed the retry');
   expect(report.lines[2]).toBe('2026-08 fired:    committed');
-  expect(report.lines[3]).toBe('two months, one retry, balance: CREDIT:100.00');
+  expect(report.lines[3]).toBe('two months, one retry, balance: CREDIT:1200.00');
 });
 
 // Every Runnable a page renders must resolve in the engine's registry, or its Run button

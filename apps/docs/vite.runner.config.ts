@@ -21,8 +21,8 @@ import { defineConfig } from 'vite';
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 const consoleApp = fileURLToPath(new URL('../console/app/', import.meta.url));
 const runnerDir = fileURLToPath(new URL('./runner/', import.meta.url));
-// The shared browser-shim package (driver stubs + node:crypto rejection), aliased instead of
-// reaching into the console app's private dir.
+// The shared browser-shim package (driver stubs, node:crypto and node:http rejections), aliased
+// instead of reaching into the console app's private dir.
 const engineBrowser = fileURLToPath(new URL('../support/engine-browser/', import.meta.url));
 
 // One license header per generated chunk instead of the per-module copies the bundler would
@@ -50,17 +50,12 @@ export default defineConfig({
   plugins: [licenseBanner],
   resolve: {
     alias: [
-      {
-        find: /^#src\/(engines\/postgres|engines\/mysql|adapters\/redis|adapters\/sqs)\.ts$/,
-        replacement: `${engineBrowser}unavailable.ts`,
-      },
       // Bare driver packages src/index.ts dynamic-imports directly; unstubbed, ioredis ships
       // as an unreachable chunk.
-      {
-        find: /^(ioredis|@aws-sdk\/client-sqs)$/,
-        replacement: `${engineBrowser}unavailable.ts`,
-      },
       { find: /^node:crypto$/, replacement: `${engineBrowser}no-node-crypto.ts` },
+      // @pwngh/economy-core's host.js imports createServer at module top, so the bundler resolves
+      // the name even though only App.listen() reaches it. The stub exports it and throws on call.
+      { find: /^node:http$/, replacement: `${engineBrowser}no-node-http.ts` },
       // The published names, as the snippets import them; same sources the #src rules resolve.
       { find: /^@pwngh\/economy-lab\/store-kit$/, replacement: `${repoRoot}src/store-kit.ts` },
       { find: /^@pwngh\/economy-lab\/adapters$/, replacement: `${repoRoot}src/adapters/index.ts` },

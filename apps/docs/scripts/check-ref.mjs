@@ -13,11 +13,12 @@
 // verifies the working tree, so both hold only when every referenced file is byte-identical in
 // the two. This checks exactly that. When it fails the ref is stale: commit, re-pin, re-anchor.
 import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { collectChips } from '../app/anchors.ts';
+
 const REPO_ROOT = join(import.meta.dirname, '../../..');
-const CONTENT = join(import.meta.dirname, '../app/content');
 
 const repoTs = readFileSync(join(import.meta.dirname, '../app/repo.ts'), 'utf8');
 const ref = repoTs.match(/REPO_REF = '([0-9a-f]{40})'/)?.[1];
@@ -40,20 +41,11 @@ try {
   process.exit(1);
 }
 
-// The same reference shapes app/anchors.test.ts collects: sourceRefs chips and SourceLink targets.
-const paths = new Set();
-for (const file of readdirSync(CONTENT, { recursive: true, encoding: 'utf8' })) {
-  if (!file.endsWith('.mdx')) continue;
-  const text = readFileSync(join(CONTENT, file), 'utf8');
-  const raws = [
-    ...text.matchAll(/'((?:src|test|scripts|db)\/[^']+)'/g),
-    ...text.matchAll(/<SourceLink to="([^"]+)"/g),
-  ].flatMap((m) => (m[1] ? [m[1]] : []));
-  for (const raw of raws) {
-    const path = raw.split(/[#·]/)[0]?.trim();
-    if (path) paths.add(path);
-  }
-}
+// The chip roster comes from app/anchors.ts, which the gate also uses, so the two cannot disagree
+// about which files the docs link into. Its own scan missed every `packages/…` chip and every
+// double-quoted one, and a file this gate does not list is one whose links can rot unnoticed.
+const chips = collectChips();
+const paths = new Set(chips.chips.map((chip) => chip.path));
 
 const stale = [];
 for (const path of [...paths].sort()) {

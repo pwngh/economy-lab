@@ -49,5 +49,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['app/**/*.test.ts'],
+    // Dates the generated reference this app links into against the source it documents, and
+    // refuses the run rather than certify the previous build.
+    globalSetup: ['./freshness.setup.ts'],
   },
 });

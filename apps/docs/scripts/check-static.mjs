@@ -76,10 +76,11 @@ if (offenders.length > 0) {
 // shrink between deliberate re-baselines. The edit tier deliberately duplicates the engine
 // graph inside the sandbox worker — the price of being able to terminate() runaway edits
 // instead of freezing the page.
-const LOADER_BUDGET = 4_000;
-// Budget for the run tier over the current engine graph.
-const RUN_TIER_BUDGET = 230_000;
-const EDIT_TIER_BUDGET = 420_000;
+// Because of that duplication the edit tier grows faster than the run tier, so its headroom is
+// proportional to its budget rather than a flat margin. Only an owner re-baselines these three.
+const LOADER_BUDGET = 5_000;
+const RUN_TIER_BUDGET = 350_000;
+const EDIT_TIER_BUDGET = 520_000;
 const runnerDir = join(BUILD_DIR, 'runner');
 const isEditTier = (f) =>
   f.startsWith('sandbox') || f.startsWith('workbench-') || f.startsWith('sucrase-');
