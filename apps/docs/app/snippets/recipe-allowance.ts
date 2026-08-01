@@ -14,14 +14,20 @@ import type { SnippetReport } from './context.ts';
 // what makes the schedule safe: a cron that fires twice, a retried job, a redeployed worker —
 // same period, same key, at most one grant.
 export async function run(): Promise<SnippetReport> {
-  const economy = createEconomy(memoryPorts({ signingKey: 'docs-signing-key' }));
+  // The dev velocity ceiling is sized for small demos; bundle-scale amounts need headroom.
+  const economy = createEconomy(
+    memoryPorts({
+      signingKey: 'docs-signing-key',
+      config: { velocityLimitMinor: 10_000_000n },
+    }),
+  );
   const monthly = (period: string) =>
     economy.submit(
       topUp({
         idempotencyKey: `allowance_usr_kid_${period}`, // the period IS the key
         actor: systemActor('allowance'),
         userId: 'usr_kid',
-        amount: credits(50),
+        amount: credits(600), // the platform's $5 bundle, monthly
         source: 'allowance',
       }),
     );
